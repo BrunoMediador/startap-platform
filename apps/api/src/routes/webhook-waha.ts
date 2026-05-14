@@ -7,11 +7,10 @@ const log = logger.child({ module: 'webhook-waha' });
 
 export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
   app.post('/webhooks/waha', async (req, reply) => {
-    // Valida e parseia payload
     const parsed = WahaWebhookBody.safeParse(req.body);
     if (!parsed.success) {
       log.warn({ errors: parsed.error.flatten() }, 'Payload WAHA inválido');
-      return reply.code(400).send({ error: 'invalid payload' });
+      return reply.code(200).send({ status: 'ignored:invalid-payload' });
     }
 
     // Processa de forma assíncrona, mas await o resultado pra responder com status

@@ -21,7 +21,7 @@ export const WahaWebhookBody = z
             mimetype: z.string().optional(),
           })
           .partial()
-          .optional(),
+          .nullish(),
         _data: z
           .object({
             key: z
@@ -31,12 +31,12 @@ export const WahaWebhookBody = z
                 remoteJidAlt: z.string().optional(),
               })
               .partial()
-              .optional(),
+              .nullish(),
             pushName: z.string().optional(),
             messageTimestamp: z.union([z.number(), z.string()]).optional(),
           })
           .partial()
-          .optional(),
+          .nullish(),
       })
       .passthrough()
       .nullable()
