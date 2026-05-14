@@ -653,6 +653,26 @@ function modelOptions(provider, selected) {
     .join('');
 }
 
+function groupByFlow(bots) {
+  const groups = [];
+  const byId = new Map();
+  for (const bot of bots) {
+    const id = bot.flow_id || bot.slot;
+    if (!byId.has(id)) {
+      const group = {
+        id,
+        name: bot.flow_name || bot.flow_label || bot.display_name,
+        label: bot.flow_label || bot.flow_name || bot.display_name,
+        bots: [],
+      };
+      byId.set(id, group);
+      groups.push(group);
+    }
+    byId.get(id).bots.push(bot);
+  }
+  return groups;
+}
+
 async function loadModelos() {
   const el = $('#bots-list');
   el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Carregando modelos...</div>';
@@ -668,22 +688,47 @@ async function loadModelos() {
     return;
   }
 
-  el.innerHTML = bots.map((bot) => `
-    <div class="px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-      <div class="min-w-0">
-        <div class="font-medium">${esc(bot.display_name)}</div>
-        <div class="text-xs mono mt-0.5" style="color: var(--text-mute)">${esc(bot.slot)}</div>
-      </div>
-      <div class="grid grid-cols-1 sm:grid-cols-[120px_180px_90px_auto] gap-2 items-center">
-        <select id="provider-${esc(bot.slot)}" class="input mono" onchange="changeProvider('${esc(bot.slot)}')">
-          <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
-          <option value="deepseek" ${bot.provider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
-        </select>
-        <select id="model-${esc(bot.slot)}" class="input mono">${modelOptions(bot.provider, bot.model)}</select>
-        <input id="temp-${esc(bot.slot)}" class="input mono" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
-        <button class="btn-primary px-3 py-2 rounded-lg text-xs font-semibold" onclick="saveBot('${esc(bot.slot)}')">Salvar</button>
+  el.innerHTML = groupByFlow(bots).map((group) => `
+    <div class="px-5 py-4" style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <div class="text-xs uppercase font-semibold tracking-wider" style="color: var(--text-mute)">Fluxo</div>
+          <div class="font-bold">${esc(group.label)}</div>
+          <div class="text-xs mono mt-0.5" style="color: var(--text-mute)">${esc(group.name)} · ${esc(group.id)}</div>
+        </div>
+        <span class="badge-active text-[11px] px-2 py-1 rounded-full font-semibold self-start sm:self-auto">
+          ${group.bots.length} ${group.bots.length === 1 ? 'IA/modelo neste fluxo' : 'IAs/modelos neste fluxo'}
+        </span>
       </div>
     </div>
+    ${group.bots.map((bot) => `
+      <div class="px-5 py-4 grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_160px_200px_100px_auto] gap-3 xl:items-center" style="border-bottom: 1px solid var(--border)">
+        <div class="min-w-0">
+          <div class="text-xs uppercase font-semibold tracking-wider" style="color: var(--text-mute)">IA dentro do fluxo</div>
+          <div class="font-medium">${esc(bot.ai_role || bot.display_name)}</div>
+          <div class="text-xs mt-1" style="color: var(--text-dim)">${esc(bot.description || '')}</div>
+          <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">
+            slot: ${esc(bot.slot)} · runtime: ${esc(bot.runtime || '-')}
+          </div>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Provider</div>
+          <select id="provider-${esc(bot.slot)}" class="input mono" onchange="changeProvider('${esc(bot.slot)}')">
+            <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+            <option value="deepseek" ${bot.provider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+          </select>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Modelo usado</div>
+          <select id="model-${esc(bot.slot)}" class="input mono">${modelOptions(bot.provider, bot.model)}</select>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Temp.</div>
+          <input id="temp-${esc(bot.slot)}" class="input mono" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
+        </div>
+        <button class="btn-primary px-3 py-2 rounded-lg text-xs font-semibold xl:self-end" onclick="saveBot('${esc(bot.slot)}')">Salvar</button>
+      </div>
+    `).join('')}
   `).join('');
 }
 

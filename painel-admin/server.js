@@ -51,6 +51,41 @@ const TS_BOTS = [
   },
 ];
 
+const BOT_MODEL_CONTEXT = {
+  'barbearia-cirilo': {
+    flow_id: '0ni38aSspWwhooHd',
+    flow_name: 'TESTE_BARBEARIAS_AGENDAMENTOS',
+    flow_label: 'Barbearia Cirilo',
+    ai_role: 'Atendente de agendamento',
+    runtime: 'BarbeariaCiriloBot',
+    description: 'Conversa com clientes, consulta horários e cria agendamentos no Google Calendar.',
+  },
+  'elenildo-ricardo': {
+    flow_id: 'dlpKXM3gvX2joC1b',
+    flow_name: 'elenildo.ricardo',
+    flow_label: 'Curso de Barbeiro Ricardo',
+    ai_role: 'Vendedor do curso',
+    runtime: 'RicardoBot',
+    description: 'Qualifica interessados, responde objeções, envia materiais e salva leads.',
+  },
+  'startap-ai-lola': {
+    flow_id: 'uUS3Ux1cU2DquKxo',
+    flow_name: 'STARTTAP_AI',
+    flow_label: 'Startap AI',
+    ai_role: 'Lola - prospecção comercial',
+    runtime: 'StartapAiBot.processLola',
+    description: 'Atende prospects da Startap e pausa quando há intervenção humana.',
+  },
+  'startap-ai-samuel': {
+    flow_id: 'uUS3Ux1cU2DquKxo',
+    flow_name: 'STARTTAP_AI',
+    flow_label: 'Startap AI',
+    ai_role: 'Samuel - admin de pausas',
+    runtime: 'StartapAiBot.processSamuel',
+    description: 'Atende o número administrativo e gerencia consultas/remoções da pausa Samuel.',
+  },
+};
+
 const pool = new pg.Pool({
   host: PG_HOST,
   port: Number(PG_PORT),
@@ -164,7 +199,28 @@ app.get('/api/bots', async (req, res) => {
     SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at
     FROM bot_config ORDER BY slot
   `);
-  res.json(r.rows);
+  const flowCounts = r.rows.reduce((acc, row) => {
+    const flowId = BOT_MODEL_CONTEXT[row.slot]?.flow_id || row.slot;
+    acc[flowId] = (acc[flowId] || 0) + 1;
+    return acc;
+  }, {});
+  res.json(
+    r.rows.map((row) => {
+      const context = BOT_MODEL_CONTEXT[row.slot] || {
+        flow_id: row.slot,
+        flow_name: row.slot,
+        flow_label: row.display_name,
+        ai_role: row.display_name,
+        runtime: row.slot,
+        description: 'Configuração de modelo cadastrada no banco.',
+      };
+      return {
+        ...row,
+        ...context,
+        models_in_flow: flowCounts[context.flow_id] || 1,
+      };
+    }),
+  );
 });
 
 app.put('/api/bots/:slot', async (req, res) => {
