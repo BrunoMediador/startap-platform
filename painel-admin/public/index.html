@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Painel Startap</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --bg: #07080a;
+    --bg-elev: #0f1014;
+    --bg-card: #13141a;
+    --bg-hover: #1c1d24;
+    --bg-active: #232530;
+    --border: #1f2128;
+    --border-strong: #2c2f38;
+    --text: #f3f4f7;
+    --text-dim: #a4a7b1;
+    --text-mute: #6a6d77;
+    --accent: #3b82f6;
+  }
+  * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  html, body { background: var(--bg); color: var(--text); }
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv11','ss01','ss03';
+    letter-spacing: -0.011em;
+    min-height: 100vh;
+  }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: .75rem; }
+  .card-elev { background: var(--bg-elev); border: 1px solid var(--border); }
+
+  .tab { transition: all .15s ease; color: var(--text-dim); border-bottom: 2px solid transparent; padding: .625rem 1rem; font-size: .875rem; font-weight: 500; }
+  .tab:hover { color: var(--text); }
+  .tab-active { color: var(--text) !important; border-bottom-color: var(--accent) !important; }
+
+  .btn-primary { background: var(--accent); color: white; transition: all .15s; }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-secondary { background: var(--bg-hover); color: var(--text); border: 1px solid var(--border); transition: all .15s; }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-ghost { color: var(--text-dim); transition: all .15s; }
+  .btn-ghost:hover { color: var(--text); background: var(--bg-hover); }
+  .btn-danger { color: #f87171; transition: all .15s; }
+  .btn-danger:hover { background: rgba(239,68,68,.1); color: #fca5a5; }
+
+  .input { background: var(--bg-elev); border: 1px solid var(--border); border-radius: .5rem;
+    padding: .5rem .75rem; font-size: .8125rem; color: var(--text);
+    transition: all .15s; width: 100%; }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+  .input::placeholder { color: var(--text-mute); }
+
+  .toggle { position: relative; width: 30px; height: 17px; background: var(--border-strong); border-radius: 9999px; cursor: pointer; transition: .15s; flex-shrink: 0; }
+  .toggle.on { background: #10b981; }
+  .toggle::after { content:''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+    background: white; border-radius: 50%; transition: .15s; }
+  .toggle.on::after { left: 15px; }
+
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+
+  .table-row { border-top: 1px solid var(--border); transition: background .1s; }
+  .table-row:hover { background: var(--bg-hover); }
+  .table-row.editing { background: rgba(59,130,246,.08); }
+
+  /* Sidebar item */
+  .side-item { cursor: pointer; transition: all .12s ease; }
+  .side-item:hover { background: var(--bg-hover); }
+  .side-item.active { background: var(--bg-active); }
+  .side-item.active .side-name { color: var(--text); }
+
+  /* Cor por fluxo */
+  .c-0 { --flow-c: #3b82f6; }
+  .c-1 { --flow-c: #10b981; }
+  .c-2 { --flow-c: #f59e0b; }
+  .c-3 { --flow-c: #ef4444; }
+  .c-4 { --flow-c: #8b5cf6; }
+  .c-5 { --flow-c: #06b6d4; }
+  .c-6 { --flow-c: #ec4899; }
+  .c-7 { --flow-c: #f97316; }
+  .c-8 { --flow-c: #84cc16; }
+  .c-9 { --flow-c: #6366f1; }
+  .flow-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--flow-c); flex-shrink: 0; }
+  .flow-bar { width: 3px; background: var(--flow-c); align-self: stretch; border-radius: 3px; }
+  .flow-tag {
+    background: color-mix(in srgb, var(--flow-c) 15%, transparent);
+    color: color-mix(in srgb, var(--flow-c) 75%, white);
+    border: 1px solid color-mix(in srgb, var(--flow-c) 30%, transparent);
+  }
+
+  .badge-active { background: rgba(16,185,129,.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
+  .badge-inactive { background: rgba(107,109,118,.15); color: #9ea0a8; border: 1px solid var(--border-strong); }
+  .badge-error { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+
+  .modal-backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(6px); }
+  .scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+  .scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
+
+  .fade-in { animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body class="scrollbar">
+
+<div class="max-w-7xl mx-auto px-6 py-6">
+  <!-- HEADER -->
+  <header class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M3 12h18M3 6h18M3 18h12" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight">Painel Startap</h1>
+        <p class="text-xs" style="color: var(--text-dim)">Roteamento, status e relatórios</p>
+      </div>
+    </div>
+    <div id="health" class="text-xs mono" style="color: var(--text-mute)"></div>
+  </header>
+
+  <!-- TABS -->
+  <nav class="flex gap-1 mb-6" style="border-bottom: 1px solid var(--border)">
+    <button class="tab tab-active" data-tab="routing">Roteamento</button>
+    <button class="tab" data-tab="status">Status</button>
+    <button class="tab" data-tab="relatorios">Relatórios</button>
+  </nav>
+
+  <!-- ROTEAMENTO: sidebar + detail -->
+  <section id="tab-routing" class="tab-content">
+    <div class="grid grid-cols-12 gap-5">
+
+      <!-- SIDEBAR -->
+      <aside class="col-span-4 lg:col-span-3">
+        <div class="card overflow-hidden">
+          <div class="px-4 py-3 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--text-mute)">Fluxos</div>
+              <div class="text-xs mt-0.5" style="color: var(--text-dim)"><span id="count-flows">0</span> com webhook</div>
+            </div>
+          </div>
+          <div id="side-list" class="max-h-[600px] overflow-y-auto scrollbar"></div>
+        </div>
+
+        <div class="card p-4 mt-3">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-2" style="color: var(--text-mute)">Resumo</div>
+          <div class="space-y-1 text-sm">
+            <div class="flex justify-between"><span style="color: var(--text-dim)">Total de clientes</span><strong id="stat-total">0</strong></div>
+            <div class="flex justify-between"><span style="color: var(--text-dim)">Fluxos com clientes</span><strong id="stat-used">0</strong></div>
+            <div class="flex justify-between"><span style="color: var(--text-dim)">Fluxos vazios</span><strong id="stat-empty">0</strong></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- DETAIL -->
+      <main class="col-span-8 lg:col-span-9">
+        <div id="detail" class="fade-in"></div>
+      </main>
+    </div>
+  </section>
+
+  <!-- STATUS -->
+  <section id="tab-status" class="tab-content hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold">n8n — Workflows</h2>
+          <div id="n8n-summary" class="text-xs" style="color: var(--text-dim)"></div>
+        </div>
+        <div id="n8n-list" class="space-y-0.5"></div>
+      </div>
+      <div class="card p-5">
+        <h2 class="font-semibold mb-4">WAHA — Sessões</h2>
+        <div id="waha-list" class="space-y-3"></div>
+      </div>
+      <div class="card p-5 lg:col-span-2">
+        <h2 class="font-semibold mb-4">Execuções recentes</h2>
+        <div id="exec-list" class="overflow-x-auto scrollbar"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- RELATORIOS -->
+  <section id="tab-relatorios" class="tab-content hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div class="card p-5">
+        <h2 class="font-semibold mb-4">Leads Ricardo</h2>
+        <div id="leads-list" class="text-xs overflow-auto max-h-96 mono scrollbar" style="color: var(--text-dim)"></div>
+      </div>
+      <div class="card p-5">
+        <h2 class="font-semibold mb-4">Agendamentos pendentes</h2>
+        <div id="agendamentos-list" class="text-xs overflow-auto max-h-96 mono scrollbar" style="color: var(--text-dim)"></div>
+      </div>
+      <div class="card p-5 lg:col-span-2">
+        <h2 class="font-semibold mb-4">Mensagens (últimos 14 dias)</h2>
+        <div id="msg-stats"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- MODAL DUPLICATE -->
+<div id="modal-dup" class="hidden fixed inset-0 modal-backdrop z-50 flex items-center justify-center p-4">
+  <div class="card max-w-md w-full p-6">
+    <h3 class="font-bold text-lg mb-2">Número já cadastrado</h3>
+    <p class="text-sm mb-5" style="color: var(--text-dim)">
+      O telefone <span id="dup-tel" class="mono text-white"></span> já está vinculado ao fluxo
+      <strong id="dup-wf" class="text-white"></strong>. Deseja <strong class="text-white">mover</strong> esse número para o fluxo selecionado?
+    </p>
+    <div class="flex gap-2 justify-end">
+      <button id="dup-cancel" class="btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancelar</button>
+      <button id="dup-confirm" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Mover</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="fixed bottom-6 right-6 hidden z-50">
+  <div class="px-4 py-3 rounded-lg shadow-2xl text-sm font-medium"></div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+const api = (p, opts={}) => fetch(p, opts).then(async r => {
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(body.message || body.error || r.statusText); e.body = body; e.status = r.status; throw e; }
+  return body;
+});
+
+let WORKFLOWS = [];
+let ROUTINGS = [];
+let SELECTED = null;
+let PENDING_DUP = null;
+
+function flowColor(id) {
+  let h = 0;
+  for (let i = 0; i < (id||'').length; i++) h = ((h<<5)-h + id.charCodeAt(i))|0;
+  return Math.abs(h) % 10;
+}
+
+function toast(msg, type='ok') {
+  const t = $('#toast');
+  const cls = type==='err' ? 'bg-red-600 text-white' : type==='warn' ? 'bg-amber-500 text-black' : 'bg-emerald-600 text-white';
+  t.firstElementChild.textContent = msg;
+  t.firstElementChild.className = `px-4 py-3 rounded-lg shadow-2xl text-sm font-medium ${cls}`;
+  t.classList.remove('hidden');
+  setTimeout(()=>t.classList.add('hidden'), 3000);
+}
+
+$$('.tab').forEach(b => b.onclick = () => {
+  $$('.tab').forEach(t => t.classList.remove('tab-active'));
+  b.classList.add('tab-active');
+  $$('.tab-content').forEach(c => c.classList.add('hidden'));
+  $('#tab-' + b.dataset.tab).classList.remove('hidden');
+  loadTab(b.dataset.tab);
+});
+
+// ---------- ROUTING ----------
+async function loadAll() {
+  [WORKFLOWS, ROUTINGS] = await Promise.all([
+    api('/api/workflows'),
+    api('/api/routing'),
+  ]);
+  const usable = WORKFLOWS.filter(w => w.has_webhook);
+  if (!SELECTED && usable.length) SELECTED = usable[0].id;
+  renderSidebar();
+  renderDetail();
+  renderStats();
+}
+
+function renderStats() {
+  const usable = WORKFLOWS.filter(w => w.has_webhook);
+  $('#count-flows').textContent = usable.length;
+  $('#stat-total').textContent = ROUTINGS.length;
+  const usedIds = new Set(ROUTINGS.map(r => r.workflow_id));
+  $('#stat-used').textContent = usable.filter(w => usedIds.has(w.id)).length;
+  $('#stat-empty').textContent = usable.filter(w => !usedIds.has(w.id)).length;
+}
+
+function renderSidebar() {
+  const usable = WORKFLOWS.filter(w => w.has_webhook);
+  const counts = {};
+  for (const r of ROUTINGS) counts[r.workflow_id] = (counts[r.workflow_id] || 0) + 1;
+
+  $('#side-list').innerHTML = usable.map(w => {
+    const c = flowColor(w.id);
+    const count = counts[w.id] || 0;
+    const isSel = SELECTED === w.id;
+    return `
+      <div class="side-item c-${c} ${isSel?'active':''} flex items-center gap-3 px-4 py-3" onclick="selectFlow('${w.id}')" style="border-bottom: 1px solid var(--border)">
+        <div class="flow-dot"></div>
+        <div class="flex-1 min-w-0">
+          <div class="side-name text-sm font-medium truncate" style="${isSel?'':'color: var(--text-dim)'}">${w.name}</div>
+          <div class="text-[11px] mt-0.5 flex items-center gap-2" style="color: var(--text-mute)">
+            ${w.active
+              ? '<span style="color:#6ee7b7"><span class="status-dot bg-emerald-500"></span>ativo</span>'
+              : '<span><span class="status-dot bg-gray-500"></span>inativo</span>'}
+          </div>
+        </div>
+        <span class="flow-tag text-[11px] px-2 py-0.5 rounded-full font-semibold mono">${count}</span>
+      </div>
+    `;
+  }).join('') || `<div class="p-6 text-center text-sm" style="color: var(--text-mute)">Nenhum fluxo com webhook</div>`;
+}
+
+window.selectFlow = (id) => { SELECTED = id; renderSidebar(); renderDetail(); };
+
+function renderDetail() {
+  const w = WORKFLOWS.find(x => x.id === SELECTED);
+  if (!w) { $('#detail').innerHTML = `<div class="card p-10 text-center" style="color: var(--text-mute)">Selecione um fluxo à esquerda</div>`; return; }
+  const c = flowColor(w.id);
+  const rows = ROUTINGS.filter(r => r.workflow_id === w.id);
+
+  $('#detail').innerHTML = `
+    <div class="card overflow-hidden c-${c}">
+      <div class="flex">
+        <div class="flow-bar"></div>
+        <div class="flex-1 p-5">
+          <div class="flex items-start justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-1">
+                <h2 class="text-lg font-bold">${w.name}</h2>
+                ${w.active
+                  ? '<span class="badge-active text-[10px] px-2 py-0.5 rounded-full font-semibold">ATIVO</span>'
+                  : '<span class="badge-inactive text-[10px] px-2 py-0.5 rounded-full font-semibold">INATIVO</span>'}
+              </div>
+              <div class="text-[11px] mono" style="color: var(--text-mute)">${w.id}</div>
+              <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">${w.webhook_url || ''}</div>
+            </div>
+            <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5" onclick="showAddForm()">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H4a1 1 0 1 1 0-2h5V4a1 1 0 0 1 1-1z"/></svg>
+              Adicionar cliente
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid var(--border)">
+        ${rows.length === 0 && !document.getElementById('row-new-pending')
+          ? `<div class="px-5 py-10 text-center text-sm" style="color: var(--text-mute)">
+              Nenhum cliente vinculado.<br>
+              <button class="btn-ghost mt-3 px-3 py-1.5 rounded-lg text-xs font-medium" onclick="showAddForm()">+ Adicionar o primeiro</button>
+            </div>`
+          : `<table class="w-full text-sm">
+              <thead>
+                <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
+                  <th class="text-left px-5 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Telefone</th>
+                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Cliente</th>
+                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Ativo</th>
+                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Atualizado</th>
+                  <th class="px-3 py-2.5"></th>
+                </tr>
+              </thead>
+              <tbody id="rows-body">
+                ${rows.map(r => renderRow(r)).join('')}
+              </tbody>
+            </table>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderRow(r) {
+  return `<tr class="table-row" id="row-${r.id}">
+    <td class="px-5 py-3 mono">${r.telefone}</td>
+    <td class="px-3 py-3">${r.nome_cliente || '<span style="color: var(--text-mute)">—</span>'}</td>
+    <td class="px-3 py-3">
+      <div class="toggle ${r.ativo?'on':''}" onclick="toggleAtivo(${r.id}, this)"></div>
+    </td>
+    <td class="px-3 py-3 text-xs" style="color: var(--text-mute)">${new Date(r.atualizado_em || r.criado_em).toLocaleString('pt-BR')}</td>
+    <td class="px-3 py-3 text-right whitespace-nowrap">
+      <button class="btn-ghost px-2 py-1 rounded text-xs font-medium" onclick="editRow(${r.id})">Editar</button>
+      <button class="btn-danger px-2 py-1 rounded text-xs font-medium" onclick="delRow(${r.id})">Remover</button>
+    </td>
+  </tr>`;
+}
+
+function renderRowEditing(r, isNew=false) {
+  const id = isNew ? 'new-pending' : r.id;
+  return `<tr class="table-row editing" id="row-${id}">
+    <td class="px-5 py-2">
+      <input class="input mono" placeholder="5535999998888" value="${r.telefone || ''}" data-field="telefone" />
+    </td>
+    <td class="px-3 py-2">
+      <input class="input" placeholder="Nome (opcional)" value="${r.nome_cliente || ''}" data-field="nome_cliente" />
+    </td>
+    <td class="px-3 py-2">
+      <div class="toggle ${(r.ativo ?? true)?'on':''}" onclick="this.classList.toggle('on')" data-field="ativo"></div>
+    </td>
+    <td class="px-3 py-2 text-xs" style="color: var(--text-mute)">${isNew ? 'novo' : 'editando'}</td>
+    <td class="px-3 py-2 text-right whitespace-nowrap">
+      <button class="btn-primary px-3 py-1.5 rounded text-xs font-semibold" onclick="${isNew?'saveNew()':'saveRow('+r.id+')'}">Salvar</button>
+      <button class="btn-ghost px-2 py-1 rounded text-xs font-medium" onclick="${isNew?'cancelAdd()':'renderDetail()'}">Cancelar</button>
+    </td>
+  </tr>`;
+}
+
+window.showAddForm = () => {
+  // Ensure table exists
+  if (!$('#rows-body')) {
+    const w = WORKFLOWS.find(x => x.id === SELECTED);
+    const c = flowColor(w.id);
+    const detail = $('#detail').firstElementChild;
+    detail.querySelector('div[style*="border-top"]').innerHTML = `
+      <table class="w-full text-sm">
+        <thead>
+          <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
+            <th class="text-left px-5 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Telefone</th>
+            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Cliente</th>
+            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Ativo</th>
+            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Atualizado</th>
+            <th class="px-3 py-2.5"></th>
+          </tr>
+        </thead>
+        <tbody id="rows-body"></tbody>
+      </table>`;
+  }
+  if ($('#row-new-pending')) return;
+  $('#rows-body').insertAdjacentHTML('afterbegin', renderRowEditing({ ativo: true }, true));
+  $('#row-new-pending').querySelector('input').focus();
+};
+
+window.cancelAdd = () => {
+  $('#row-new-pending')?.remove();
+  if (ROUTINGS.filter(r => r.workflow_id === SELECTED).length === 0) renderDetail();
+};
+
+function readEditRow(rowEl) {
+  return {
+    telefone: rowEl.querySelector('[data-field=telefone]').value,
+    nome_cliente: rowEl.querySelector('[data-field=nome_cliente]').value,
+    ativo: rowEl.querySelector('[data-field=ativo]').classList.contains('on'),
+  };
+}
+
+window.saveNew = async () => {
+  const row = $('#row-new-pending');
+  const data = readEditRow(row);
+  if (!data.telefone || data.telefone.replace(/\D/g,'').length < 10) return toast('Telefone inválido', 'err');
+  try {
+    await api('/api/routing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ...data, workflow_id: SELECTED })
+    });
+    toast('Cliente vinculado');
+    await loadAll();
+  } catch (e) {
+    if (e.body?.error === 'duplicate') {
+      PENDING_DUP = { ...data, workflow_id: SELECTED, move: true };
+      $('#dup-tel').textContent = data.telefone;
+      $('#dup-wf').textContent = e.body.existing_workflow;
+      $('#modal-dup').classList.remove('hidden');
+    } else toast(e.message, 'err');
+  }
+};
+
+window.editRow = (id) => {
+  const r = ROUTINGS.find(x => x.id === id);
+  if (!r) return;
+  $('#row-' + id).outerHTML = renderRowEditing(r);
+};
+
+window.saveRow = async (id) => {
+  const r = ROUTINGS.find(x => x.id === id);
+  const row = $('#row-' + id);
+  const data = readEditRow(row);
+  try {
+    await api('/api/routing/' + id, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ...data, workflow_id: r.workflow_id })
+    });
+    toast('Atualizado');
+    await loadAll();
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+window.toggleAtivo = async (id, el) => {
+  const r = ROUTINGS.find(x => x.id === id);
+  const newState = !r.ativo;
+  el.classList.toggle('on');
+  try {
+    await api('/api/routing/' + id, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ telefone: r.telefone, workflow_id: r.workflow_id, nome_cliente: r.nome_cliente, ativo: newState })
+    });
+    r.ativo = newState;
+  } catch (e) { el.classList.toggle('on'); toast(e.message, 'err'); }
+};
+
+window.delRow = async (id) => {
+  const r = ROUTINGS.find(x => x.id === id);
+  if (!confirm(`Remover ${r?.nome_cliente || r?.telefone}?`)) return;
+  await api('/api/routing/' + id, { method: 'DELETE' });
+  toast('Removido');
+  loadAll();
+};
+
+$('#dup-cancel').onclick = () => { $('#modal-dup').classList.add('hidden'); PENDING_DUP = null; };
+$('#dup-confirm').onclick = async () => {
+  $('#modal-dup').classList.add('hidden');
+  try {
+    await api('/api/routing', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(PENDING_DUP)
+    });
+    toast('Número movido');
+    await loadAll();
+  } catch (e) { toast(e.message, 'err'); }
+  PENDING_DUP = null;
+};
+
+// ---------- STATUS ----------
+async function loadStatus() {
+  const s = await api('/api/status');
+  $('#n8n-summary').innerHTML = `<strong style="color:#6ee7b7">${s.n8n.ativos}</strong> ativos / ${s.n8n.total} total`;
+  $('#n8n-list').innerHTML = s.n8n.workflows.map(w => `
+    <div class="flex justify-between items-center py-2" style="border-bottom: 1px solid var(--border)">
+      <span class="text-sm">${w.name}</span>
+      <span class="text-xs ${w.active?'text-emerald-400':''}" style="${!w.active?'color: var(--text-mute)':''}">
+        <span class="status-dot ${w.active?'bg-emerald-500':'bg-gray-500'}"></span>${w.active?'ativo':'inativo'}
+      </span>
+    </div>
+  `).join('');
+  $('#waha-list').innerHTML = s.waha.map(w => `
+    <div class="card-elev p-3 rounded-lg">
+      <div class="flex justify-between items-start">
+        <div>
+          <div class="font-semibold text-sm">${w.name}</div>
+          <div class="text-xs mono mt-0.5" style="color: var(--text-dim)">${w.me || '—'}</div>
+        </div>
+        <span class="text-[11px] px-2 py-0.5 rounded-full font-medium ${w.status==='WORKING'?'badge-active':'badge-error'}">${w.status}</span>
+      </div>
+      <div class="text-[11px] mono mt-2 truncate" style="color: var(--text-mute)">${w.webhook || ''}</div>
+    </div>
+  `).join('');
+  $('#exec-list').innerHTML = `
+    <table class="w-full text-sm">
+      <thead>
+        <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
+          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">ID</th>
+          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Workflow</th>
+          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Status</th>
+          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Início</th>
+        </tr>
+      </thead>
+      <tbody>
+      ${s.execucoes.map(e => `<tr class="table-row">
+        <td class="p-3 mono text-xs">${e.id}</td>
+        <td class="p-3 text-xs mono" style="color: var(--text-dim)">${e.workflowId}</td>
+        <td class="p-3 text-xs">
+          <span class="${e.status==='success'?'text-emerald-400':'text-red-400'}">
+            <span class="status-dot ${e.status==='success'?'bg-emerald-500':'bg-red-500'}"></span>${e.status}
+          </span>
+        </td>
+        <td class="p-3 text-xs" style="color: var(--text-mute)">${new Date(e.startedAt).toLocaleString('pt-BR')}</td>
+      </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+async function loadRelatorios() {
+  const [leads, ag, msg] = await Promise.all([
+    api('/api/leads'), api('/api/agendamentos-pendentes'), api('/api/message-stats')
+  ]);
+  $('#leads-list').innerHTML = leads.length ? `<pre>${JSON.stringify(leads, null, 2)}</pre>` : '<div style="color: var(--text-mute)">Sem leads</div>';
+  $('#agendamentos-list').innerHTML = ag.length ? `<pre>${JSON.stringify(ag, null, 2)}</pre>` : '<div style="color: var(--text-mute)">Sem agendamentos pendentes</div>';
+  $('#msg-stats').innerHTML = msg.length
+    ? msg.map(m => `<div class="flex justify-between py-2" style="border-bottom: 1px solid var(--border)">
+        <span style="color: var(--text-dim)">${m.dia}</span><strong>${m.total}</strong></div>`).join('')
+    : '<div style="color: var(--text-mute)">Sem dados</div>';
+}
+
+function loadTab(t) {
+  if (t === 'routing') loadAll();
+  if (t === 'status') loadStatus();
+  if (t === 'relatorios') loadRelatorios();
+}
+
+loadAll();
+$('#health').textContent = new Date().toLocaleString('pt-BR');
+</script>
+</body>
+</html>
