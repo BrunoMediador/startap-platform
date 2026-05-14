@@ -12,10 +12,10 @@
  *     tools,
  *   });
  */
+import { logger } from '@startap/core/logger';
 import { botConfig, modelUsage } from '@startap/db';
 import { openai } from '@startap/integrations';
 import type { RunAgentOpts, RunAgentResult } from '@startap/integrations/openai';
-import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'run-agent-configured' });
 
@@ -28,12 +28,10 @@ export interface RunAgentConfiguredOpts extends Omit<RunAgentOpts, 'model' | 'ap
   telefone?: string;
 }
 
-export async function runAgentConfigured(
-  opts: RunAgentConfiguredOpts,
-): Promise<RunAgentResult> {
+export async function runAgentConfigured(opts: RunAgentConfiguredOpts): Promise<RunAgentResult> {
   const cfg = await botConfig.getConfig(opts.slot);
 
-  let model = cfg?.model;
+  const model = cfg?.model;
   let apiKey: string | undefined;
   let baseURL: string | undefined;
   let provider: 'openai' | 'deepseek' = 'openai';
