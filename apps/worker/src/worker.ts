@@ -1,11 +1,7 @@
 /**
  * Worker — roda cron jobs.
  *
- * Substitui as triggers Schedule do n8n (Monitor_AntiBot a cada 1min,
- * Limpar_Historico_Chat diário, RELATORIO_BARBEARIA_SAMUEL etc).
- *
- * Usa `croner` para cron schedules. BullMQ pode ser adicionado depois pra
- * filas assíncronas / retry, mas pra cron simples isso basta.
+ * Substitui as triggers Schedule do n8n.
  */
 import { Cron } from 'croner';
 import { logger } from '@startap/core/logger';
@@ -27,13 +23,13 @@ async function main() {
     }
   });
 
-  // Cleanup: todo dia 03:00 BRT
+  // Cleanup: a cada 12 horas (replica n8n Limpar_Historico_Chat)
   new Cron(
-    '0 3 * * *',
+    '0 */12 * * *',
     { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' },
     async () => {
       try {
-        const r = await runCleanupChat(30);
+        const r = await runCleanupChat();
         log.info({ ...r }, 'cleanup cycle');
       } catch (e) {
         log.error({ err: e }, 'cleanup crashed');
