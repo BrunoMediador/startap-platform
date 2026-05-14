@@ -7,24 +7,25 @@ import { wahaWebhookRoute } from './routes/webhook-waha.js';
 import { registerBot } from './router.js';
 import { EchoBot } from './bots/echo.js';
 import { BarbeariaCiriloBot } from './bots/barbearia.js';
+import { RicardoBot } from './bots/ricardo.js';
 
 const log = logger.child({ service: 'api' });
 
 async function main() {
   const app = Fastify({
-    logger: false, // usamos pino direto via child loggers
-    bodyLimit: 5 * 1024 * 1024, // 5MB pra midia base64
+    logger: false,
+    bodyLimit: 5 * 1024 * 1024,
   });
 
   await app.register(sensible);
 
-  // Rotas
   await app.register(healthRoute);
   await app.register(wahaWebhookRoute);
 
   // Bots
   registerBot('echo', new EchoBot());
-  registerBot('0ni38aSspWwhooHd', new BarbeariaCiriloBot()); // TESTE_BARBEARIAS_AGENDAMENTOS (Cirilo)
+  registerBot('0ni38aSspWwhooHd', new BarbeariaCiriloBot());
+  registerBot('dlpKXM3gvX2joC1b', new RicardoBot());
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');
@@ -35,7 +36,6 @@ async function main() {
   await app.listen({ host: '0.0.0.0', port });
   log.info({ port }, 'API rodando');
 
-  // Graceful shutdown
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, async () => {
       log.info({ sig }, 'Shutdown iniciado');
