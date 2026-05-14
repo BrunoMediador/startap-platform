@@ -275,7 +275,7 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
-const api = (p, opts={}) => fetch(p, opts).then(async r => {
+const api = (p, opts={}) => fetch(p, { credentials: 'same-origin', ...opts }).then(async r => {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(body.message || body.error || r.statusText); e.body = body; e.status = r.status; throw e; }
   return body;
@@ -651,8 +651,15 @@ function modelOptions(provider, selected) {
 }
 
 async function loadModelos() {
-  const bots = await api('/api/bots');
   const el = $('#bots-list');
+  el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Carregando modelos...</div>';
+  let bots = [];
+  try {
+    bots = await api('/api/bots');
+  } catch (e) {
+    el.innerHTML = `<div class="p-6 text-sm text-red-300">Falha ao carregar modelos: ${esc(e.message)}</div>`;
+    return;
+  }
   if (!bots.length) {
     el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Nenhum modelo configurado.</div>';
     return;
@@ -701,11 +708,22 @@ window.saveBot = async (slot) => {
 
 // ---------- TOKENS ----------
 async function loadTokens() {
-  const [summary, daily, recent] = await Promise.all([
-    api('/api/usage/summary?days=7'),
-    api('/api/usage/daily?days=14'),
-    api('/api/usage/recent?limit=50'),
-  ]);
+  $('#usage-summary').innerHTML = '<div class="text-sm" style="color: var(--text-mute)">Carregando uso...</div>';
+  $('#usage-daily').innerHTML = '';
+  $('#usage-recent').innerHTML = '';
+  let summary;
+  let daily;
+  let recent;
+  try {
+    [summary, daily, recent] = await Promise.all([
+      api('/api/usage/summary?days=7'),
+      api('/api/usage/daily?days=14'),
+      api('/api/usage/recent?limit=50'),
+    ]);
+  } catch (e) {
+    $('#usage-summary').innerHTML = `<div class="text-sm text-red-300">Falha ao carregar uso: ${esc(e.message)}</div>`;
+    return;
+  }
 
   const totals = summary.rows.reduce((acc, row) => {
     acc.tokens += Number(row.total_tokens || 0);
