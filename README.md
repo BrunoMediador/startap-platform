@@ -6,6 +6,7 @@ Plataforma de bots WhatsApp para a Startap. **Migração do n8n para código Typ
 >
 > 📘 **Como contribuir**: [CONTRIBUTING.md](./CONTRIBUTING.md) — fluxo PR + deploy via `./scripts/deploy.sh`. 
 > 📋 Estado do cutover: [CUTOVER.md](./CUTOVER.md)
+> 🧭 Evolução da plataforma: [docs/platform-architecture.md](./docs/platform-architecture.md), [docs/conversation-scope.md](./docs/conversation-scope.md), [docs/data-model.md](./docs/data-model.md), [docs/operations-runbook.md](./docs/operations-runbook.md)
 
 ---
 
