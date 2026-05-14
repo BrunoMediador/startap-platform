@@ -6,13 +6,14 @@ import { healthRoute } from './routes/health.js';
 import { wahaWebhookRoute } from './routes/webhook-waha.js';
 import { registerBot } from './router.js';
 import { EchoBot } from './bots/echo.js';
+import { BarbeariaCiriloBot } from './bots/barbearia.js';
 
 const log = logger.child({ service: 'api' });
 
 async function main() {
   const app = Fastify({
     logger: false, // usamos pino direto via child loggers
-    bodyLimit: 5 * 1024 * 1024, // 5MB pra mídia base64
+    bodyLimit: 5 * 1024 * 1024, // 5MB pra midia base64
   });
 
   await app.register(sensible);
@@ -21,8 +22,9 @@ async function main() {
   await app.register(healthRoute);
   await app.register(wahaWebhookRoute);
 
-  // Registro de bots (em sessões futuras vão ser registrados de verdade)
+  // Bots
   registerBot('echo', new EchoBot());
+  registerBot('0ni38aSspWwhooHd', new BarbeariaCiriloBot()); // TESTE_BARBEARIAS_AGENDAMENTOS (Cirilo)
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');
