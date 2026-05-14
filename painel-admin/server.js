@@ -129,6 +129,78 @@ app.delete('/api/routing/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- BOT CONFIG (modelos por slot) ----------
+app.get('/api/bots', async (req, res) => {
+  const r = await pool.query(`
+    SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at
+    FROM bot_config ORDER BY slot
+  `);
+  res.json(r.rows);
+});
+
+app.put('/api/bots/:slot', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const { provider, model, temperature } = req.body;
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    if (provider) { sets.push(`provider = ${i++}`); vals.push(provider); }
+    if (model) { sets.push(`model = ${i++}`); vals.push(model); }
+    if (temperature !== undefined) { sets.push(`temperature = ${i++}`); vals.push(Number(temperature)); }
+    if (sets.length === 0) return res.status(400).json({ error: 'nada para atualizar' });
+    sets.push('updated_at = NOW()');
+    vals.push(slot);
+    const r = await pool.query(
+      `UPDATE bot_config SET ${sets.join(', ')} WHERE slot = ${i} RETURNING *`,
+      vals
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'slot nao encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- USAGE (tokens consumidos) ----------
+app.get('/api/usage/summary', async (req, res) => {
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+  const r = await pool.query(`
+    SELECT slot, provider, model,
+           COUNT(*)::int AS calls,
+           SUM(prompt_tokens)::int AS prompt_tokens,
+           SUM(completion_tokens)::int AS completion_tokens,
+           SUM(total_tokens)::int AS total_tokens,
+           ROUND(SUM(cost_usd)::numeric, 4) AS cost_usd
+    FROM model_usage
+    WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
+    GROUP BY slot, provider, model
+    ORDER BY SUM(total_tokens) DESC
+  `, [String(days)]);
+  res.json({ days, rows: r.rows });
+});
+
+app.get('/api/usage/daily', async (req, res) => {
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 14));
+  const r = await pool.query(`
+    SELECT TO_CHAR(DATE_TRUNC('day', created_at), 'YYYY-MM-DD') AS day,
+           SUM(total_tokens)::int AS total_tokens,
+           ROUND(SUM(cost_usd)::numeric, 4) AS cost_usd
+    FROM model_usage
+    WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
+    GROUP BY 1 ORDER BY 1
+  `, [String(days)]);
+  res.json({ days, rows: r.rows });
+});
+
+app.get('/api/usage/recent', async (req, res) => {
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+  const r = await pool.query(`
+    SELECT id, slot, provider, model, total_tokens,
+           ROUND(cost_usd::numeric, 4) AS cost_usd, telefone, created_at
+    FROM model_usage ORDER BY id DESC LIMIT $1
+  `, [limit]);
+  res.json(r.rows);
+});
+
 // ---------- WORKFLOWS COM WEBHOOK ----------
 // Retorna apenas workflows que tem nó Webhook (utilizáveis pelo roteador)
 app.get('/api/workflows', async (req, res) => {

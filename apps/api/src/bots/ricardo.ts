@@ -1,6 +1,7 @@
 import type { BotContext } from '@startap/core/types';
-import { openai, waha } from '@startap/integrations';
+import { waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { runAgentConfigured } from '../lib/run-agent.js';
 import { leads, pausa } from '@startap/db';
 import { BotBase } from './base.js';
 
@@ -153,12 +154,13 @@ export class RicardoBot extends BotBase {
       },
     ];
 
-    const result = await openai.runAgent({
+    const result = await runAgentConfigured({
+      slot: 'elenildo-ricardo',
+      telefone,
       systemPrompt,
       history,
       userMessage: trimmed,
       tools,
-      temperature: 0.5,
       maxTurns: 5,
     });
 

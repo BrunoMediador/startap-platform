@@ -1,6 +1,7 @@
 import type { BotContext } from '@startap/core/types';
-import { gcal, openai, waha } from '@startap/integrations';
+import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
 
 const TZ = 'America/Sao_Paulo';
@@ -280,12 +281,13 @@ export class BarbeariaCiriloBot extends BotBase {
       },
     ];
 
-    const result = await openai.runAgent({
+    const result = await runAgentConfigured({
+      slot: 'barbearia-cirilo',
+      telefone,
       systemPrompt,
       history,
       userMessage: texto,
       tools,
-      temperature: 0.3,
       maxTurns: 5,
     });
 
