@@ -275,11 +275,14 @@
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
-const api = (p, opts={}) => fetch(p, { credentials: 'same-origin', ...opts }).then(async r => {
+const api = (p, opts={}) => {
+  const url = new URL(p, `${window.location.protocol}//${window.location.host}`).toString();
+  return fetch(url, { credentials: 'same-origin', ...opts }).then(async r => {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(body.message || body.error || r.statusText); e.body = body; e.status = r.status; throw e; }
   return body;
-});
+  });
+};
 
 let WORKFLOWS = [];
 let ROUTINGS = [];
