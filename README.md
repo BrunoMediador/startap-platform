@@ -2,7 +2,10 @@
 
 Plataforma de bots WhatsApp para a Startap. **Migração do n8n para código TypeScript.**
 
-> Status: ✅ Produção (2026-05-14) — 3 bots migrados e ativos. Ver CUTOVER.md.
+> Status: ✅ Produção (2026-05-14) — 3 bots ativos.
+>
+> 📘 **Como contribuir**: [CONTRIBUTING.md](./CONTRIBUTING.md) — fluxo PR + deploy via `./scripts/deploy.sh`. 
+> 📋 Estado do cutover: [CUTOVER.md](./CUTOVER.md)
 
 ---
 
