@@ -38,7 +38,9 @@ export const WahaWebhookBody = z
           .partial()
           .optional(),
       })
-      .passthrough(),
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
