@@ -1,6 +1,6 @@
 import type { BotContext } from '@startap/core/types';
-import { openai } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { runAgentConfigured } from '../lib/run-agent.js';
 import { pausa, query } from '@startap/db';
 import { BotBase } from './base.js';
 
@@ -8,8 +8,6 @@ const SAMUEL_PHONE = '553591746797';
 const PAUSE_LOLA_TABLE = 'pause_startap';
 const PAUSE_SAMUEL_TABLE = 'pausa_samuel';
 
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL ?? 'deepseek-chat';
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY ?? '';
 
 const LOLA_PROMPT = [
@@ -164,14 +162,12 @@ export class StartapAiBot extends BotBase {
       return 'Desculpe, estamos com instabilidade no momento. Tente novamente em alguns minutos.';
     }
 
-    const result = await openai.runAgent({
+    const result = await runAgentConfigured({
+      slot: 'startap-ai-lola',
+      telefone,
       systemPrompt: LOLA_PROMPT,
       history,
       userMessage: trimmed,
-      apiKey: DEEPSEEK_API_KEY,
-      baseURL: DEEPSEEK_BASE_URL,
-      model: DEEPSEEK_MODEL,
-      temperature: 0.5,
       maxTurns: 3,
     });
 
@@ -228,12 +224,13 @@ export class StartapAiBot extends BotBase {
       },
     ];
 
-    const result = await openai.runAgent({
+    const result = await runAgentConfigured({
+      slot: 'startap-ai-samuel',
+      telefone,
       systemPrompt,
-      history: fullHistory, // já contém histórico antigo, mensagem atual ainda não está
+      history: fullHistory,
       userMessage: trimmed,
       tools,
-      temperature: 0.3,
       maxTurns: 5,
     });
 

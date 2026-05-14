@@ -127,6 +127,8 @@
   <!-- TABS -->
   <nav class="flex gap-1 mb-6" style="border-bottom: 1px solid var(--border)">
     <button class="tab tab-active" data-tab="routing">Roteamento</button>
+    <button class="tab" data-tab="modelos">Modelos IA</button>
+    <button class="tab" data-tab="tokens">Tokens</button>
     <button class="tab" data-tab="status">Status</button>
     <button class="tab" data-tab="relatorios">Relatórios</button>
   </nav>
@@ -182,6 +184,52 @@
         <h2 class="font-semibold mb-4">Execuções recentes</h2>
         <div id="exec-list" class="overflow-x-auto scrollbar"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- MODELOS -->
+  <section id="tab-modelos" class="tab-content hidden">
+    <div class="card overflow-hidden">
+      <div class="px-5 py-4 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
+        <div>
+          <h2 class="font-semibold">Modelos de IA por fluxo</h2>
+          <div class="text-xs mt-0.5" style="color: var(--text-dim)">Mude o modelo do bot. A mudança vale na próxima mensagem (cache 60s).</div>
+        </div>
+      </div>
+      <div id="bots-list" class="divide-y" style="border-color: var(--border)"></div>
+    </div>
+  </section>
+
+  <!-- TOKENS -->
+  <section id="tab-tokens" class="tab-content hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Total tokens (7 dias)</div>
+        <div id="kpi-tokens" class="text-2xl font-bold mono">—</div>
+      </div>
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Custo estimado (7 dias)</div>
+        <div id="kpi-cost" class="text-2xl font-bold mono">—</div>
+      </div>
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Chamadas (7 dias)</div>
+        <div id="kpi-calls" class="text-2xl font-bold mono">—</div>
+      </div>
+    </div>
+
+    <div class="card p-5 mb-5">
+      <h2 class="font-semibold mb-4">Por fluxo / modelo (7 dias)</h2>
+      <div id="usage-summary" class="overflow-x-auto scrollbar"></div>
+    </div>
+
+    <div class="card p-5 mb-5">
+      <h2 class="font-semibold mb-4">Histórico diário (14 dias)</h2>
+      <div id="usage-daily" class="text-xs mono space-y-0.5" style="color: var(--text-dim)"></div>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="font-semibold mb-4">Últimas 50 chamadas</h2>
+      <div id="usage-recent" class="overflow-x-auto scrollbar"></div>
     </div>
   </section>
 
@@ -576,8 +624,147 @@ async function loadRelatorios() {
     : '<div style="color: var(--text-mute)">Sem dados</div>';
 }
 
+// ---------- MODELOS ----------
+const MODEL_OPTIONS = {
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-5.4'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+};
+
+async function loadModelos() {
+  const bots = await api('/api/bots');
+  const el = $('#bots-list');
+  el.innerHTML = bots.map(b => {
+    const opts = MODEL_OPTIONS[b.provider] || [];
+    const optsHtml = opts.map(m => `<option value="${m}" ${m===b.model?'selected':''}>${m}</option>`).join('');
+    const customOpt = opts.includes(b.model) ? '' : `<option value="${b.model}" selected>${b.model} (custom)</option>`;
+    return `<div class="px-5 py-4 flex items-center justify-between gap-4">
+      <div class="min-w-0 flex-1">
+        <div class="font-medium">${b.display_name}</div>
+        <div class="text-xs mono mt-0.5" style="color: var(--text-mute)">${b.slot}</div>
+      </div>
+      <div class="flex items-center gap-3">
+        <select class="bg-transparent border rounded px-2 py-1 text-xs mono" style="border-color: var(--border-strong); color: var(--text)"
+                onchange="changeProvider('${b.slot}', this.value)">
+          <option value="openai" ${b.provider==='openai'?'selected':''}>OpenAI</option>
+          <option value="deepseek" ${b.provider==='deepseek'?'selected':''}>DeepSeek</option>
+        </select>
+        <select id="model-${b.slot}" class="bg-transparent border rounded px-2 py-1 text-xs mono min-w-[180px]" style="border-color: var(--border-strong); color: var(--text)">
+          ${customOpt}${optsHtml}
+        </select>
+        <input id="temp-${b.slot}" type="number" step="0.1" min="0" max="2" value="${b.temperature}" class="bg-transparent border rounded px-2 py-1 text-xs mono w-16" style="border-color: var(--border-strong); color: var(--text)" />
+        <button class="btn-primary px-3 py-1.5 rounded text-xs font-semibold" onclick="saveBot('${b.slot}')">Salvar</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function changeProvider(slot, provider) {
+  // Atualiza dropdown de modelos quando troca provider
+  const sel = $('#model-' + slot);
+  const opts = MODEL_OPTIONS[provider] || [];
+  sel.innerHTML = opts.map(m => `<option value="${m}">${m}</option>`).join('');
+}
+
+async function saveBot(slot) {
+  const provider = document.querySelector(`select[onchange*="${slot}"]`).value;
+  const model = $('#model-' + slot).value;
+  const temperature = parseFloat($('#temp-' + slot).value);
+  try {
+    const r = await fetch('/api/bots/' + slot, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ provider, model, temperature }),
+    });
+    if (!r.ok) throw new Error((await r.json()).error || 'erro');
+    toast('Modelo atualizado: ' + slot);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+// ---------- TOKENS ----------
+async function loadTokens() {
+  const [summary, daily, recent] = await Promise.all([
+    api('/api/usage/summary?days=7'),
+    api('/api/usage/daily?days=14'),
+    api('/api/usage/recent?limit=50'),
+  ]);
+
+  const totalTokens = summary.rows.reduce((s, r) => s + Number(r.total_tokens||0), 0);
+  const totalCost = summary.rows.reduce((s, r) => s + Number(r.cost_usd||0), 0);
+  const totalCalls = summary.rows.reduce((s, r) => s + Number(r.calls||0), 0);
+  $('#kpi-tokens').textContent = totalTokens.toLocaleString('pt-BR');
+  $('#kpi-cost').textContent = '
+  if (t === 'routing') loadAll();
+  if (t === 'modelos') loadModelos();
+  if (t === 'tokens') loadTokens();
+  if (t === 'status') loadStatus();
+  if (t === 'relatorios') loadRelatorios();
+}
+
+loadAll();
+$('#health').textContent = new Date().toLocaleString('pt-BR');
+</script>
+</body>
+</html>
+ + totalCost.toFixed(4);
+  $('#kpi-calls').textContent = totalCalls.toLocaleString('pt-BR');
+
+  $('#usage-summary').innerHTML = summary.rows.length === 0
+    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas nos últimos 7 dias.</div>'
+    : `<table class="w-full text-sm">
+      <thead><tr style="border-bottom: 1px solid var(--border)">
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Provider</th>
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Chamadas</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens in</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens out</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Total</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Custo (USD)</th>
+      </tr></thead>
+      <tbody>${summary.rows.map(r => `<tr style="border-top: 1px solid var(--border)">
+        <td class="p-2 mono text-xs">${r.slot}</td>
+        <td class="p-2 text-xs">${r.provider}</td>
+        <td class="p-2 mono text-xs">${r.model}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.calls).toLocaleString('pt-BR')}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.prompt_tokens).toLocaleString('pt-BR')}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.completion_tokens).toLocaleString('pt-BR')}</td>
+        <td class="p-2 text-right mono text-xs font-semibold">${Number(r.total_tokens).toLocaleString('pt-BR')}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.cost_usd||0).toFixed(4)}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+
+  $('#usage-daily').innerHTML = daily.rows.length === 0
+    ? '<div style="color: var(--text-mute)">Sem dados</div>'
+    : daily.rows.map(d => `<div class="flex justify-between py-0.5">
+        <span>${d.day}</span>
+        <span><strong style="color: var(--text)">${Number(d.total_tokens).toLocaleString('pt-BR')}</strong> tok / ${Number(d.cost_usd||0).toFixed(4)}</span>
+      </div>`).join('');
+
+  $('#usage-recent').innerHTML = recent.length === 0
+    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas.</div>'
+    : `<table class="w-full text-sm">
+      <thead><tr style="border-bottom: 1px solid var(--border)">
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Quando</th>
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
+        <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Telefone</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens</th>
+        <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">USD</th>
+      </tr></thead>
+      <tbody>${recent.map(r => `<tr style="border-top: 1px solid var(--border)">
+        <td class="p-2 mono text-xs">${new Date(r.created_at).toLocaleString('pt-BR')}</td>
+        <td class="p-2 mono text-xs">${r.slot}</td>
+        <td class="p-2 mono text-xs">${r.model}</td>
+        <td class="p-2 mono text-xs" style="color: var(--text-dim)">${r.telefone||'-'}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.total_tokens).toLocaleString('pt-BR')}</td>
+        <td class="p-2 text-right mono text-xs">${Number(r.cost_usd||0).toFixed(4)}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
+
 function loadTab(t) {
   if (t === 'routing') loadAll();
+  if (t === 'modelos') loadModelos();
+  if (t === 'tokens') loadTokens();
   if (t === 'status') loadStatus();
   if (t === 'relatorios') loadRelatorios();
 }
