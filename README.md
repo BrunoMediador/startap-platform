@@ -2,7 +2,7 @@
 
 Plataforma de bots WhatsApp para a Startap. **Migração do n8n para código TypeScript.**
 
-> Status: 🏗️ Em construção — esqueleto montado, migração de bots em andamento.
+> Status: ✅ Produção (2026-05-14) — 3 bots migrados e ativos. Ver CUTOVER.md.
 
 ---
 
