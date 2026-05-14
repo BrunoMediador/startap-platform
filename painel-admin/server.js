@@ -175,22 +175,22 @@ app.put('/api/bots/:slot', async (req, res) => {
     const vals = [];
     let i = 1;
     if (provider) {
-      sets.push(`provider = ${i++}`);
+      sets.push(`provider = $${i++}`);
       vals.push(provider);
     }
     if (model) {
-      sets.push(`model = ${i++}`);
+      sets.push(`model = $${i++}`);
       vals.push(model);
     }
     if (temperature !== undefined) {
-      sets.push(`temperature = ${i++}`);
+      sets.push(`temperature = $${i++}`);
       vals.push(Number(temperature));
     }
     if (sets.length === 0) return res.status(400).json({ error: 'nada para atualizar' });
     sets.push('updated_at = NOW()');
     vals.push(slot);
     const r = await pool.query(
-      `UPDATE bot_config SET ${sets.join(', ')} WHERE slot = ${i} RETURNING *`,
+      `UPDATE bot_config SET ${sets.join(', ')} WHERE slot = $${i} RETURNING *`,
       vals,
     );
     if (!r.rows.length) return res.status(404).json({ error: 'slot nao encontrado' });
