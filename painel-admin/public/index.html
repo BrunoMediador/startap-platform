@@ -189,15 +189,7 @@
 
   <!-- MODELOS -->
   <section id="tab-modelos" class="tab-content hidden">
-    <div class="card overflow-hidden">
-      <div class="px-5 py-4 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
-        <div>
-          <h2 class="font-semibold">Modelos de IA por fluxo</h2>
-          <div class="text-xs mt-0.5" style="color: var(--text-dim)">Alterações valem nas próximas mensagens processadas pelos bots.</div>
-        </div>
-      </div>
-      <div id="bots-list" class="divide-y" style="border-color: var(--border)"></div>
-    </div>
+    <div id="flows-list" class="space-y-6"></div>
   </section>
 
   <!-- TOKENS -->
@@ -637,100 +629,231 @@ async function loadRelatorios() {
     : '<div style="color: var(--text-mute)">Sem dados</div>';
 }
 
-// ---------- MODELOS ----------
+// ---------- MODELOS / FLUXOS ----------
+// Agrupa bot_config rows por workflow_id (1 fluxo = N slots geralmente 1)
+const FLOW_META = {
+  teste_barbearia: {
+    title: 'teste_barbearia',
+    subtitle: 'Teste — Agendamento de barbearia (Google Calendar)',
+    type: 'teste',
+    workflow_id: '0ni38aSspWwhooHd',
+    has_media: false,
+  },
+  teste_vendas: {
+    title: 'teste_vendas',
+    subtitle: 'Teste — Funil de vendas com videos V1/V2/V3',
+    type: 'teste',
+    workflow_id: 'dlpKXM3gvX2joC1b',
+    has_media: true,
+  },
+  startap: {
+    title: 'startap',
+    subtitle: 'Produção — Prospecção da Startap (Lola)',
+    type: 'producao',
+    workflow_id: 'uUS3Ux1cU2DquKxo',
+    has_media: false,
+  },
+};
+
 const MODEL_OPTIONS = {
-  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-5.4'],
   deepseek: ['deepseek-chat', 'deepseek-reasoner'],
 };
 
-function modelOptions(provider, selected) {
-  const options = MODEL_OPTIONS[provider] || [];
-  const custom = selected && !options.includes(selected)
-    ? `<option value="${esc(selected)}" selected>${esc(selected)} (custom)</option>`
-    : '';
-  return custom + options
-    .map((model) => `<option value="${esc(model)}" ${model === selected ? 'selected' : ''}>${esc(model)}</option>`)
-    .join('');
-}
-
-function groupByFlow(bots) {
-  const groups = [];
-  const byId = new Map();
-  for (const bot of bots) {
-    const id = bot.flow_id || bot.slot;
-    if (!byId.has(id)) {
-      const group = {
-        id,
-        name: bot.flow_name || bot.flow_label || bot.display_name,
-        label: bot.flow_label || bot.flow_name || bot.display_name,
-        bots: [],
-      };
-      byId.set(id, group);
-      groups.push(group);
-    }
-    byId.get(id).bots.push(bot);
-  }
-  return groups;
+function modelOptions(provider, current) {
+  const opts = MODEL_OPTIONS[provider] || [];
+  const html = opts.map(m => `<option value="${m}" ${m===current?'selected':''}>${m}</option>`).join('');
+  const custom = (current && !opts.includes(current)) ? `<option value="${esc(current)}" selected>${esc(current)} (custom)</option>` : '';
+  return custom + html;
 }
 
 async function loadModelos() {
-  const el = $('#bots-list');
-  el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Carregando modelos...</div>';
-  let bots = [];
+  const el = $('#flows-list');
+  el.innerHTML = '<div class="card p-8 text-sm" style="color: var(--text-mute)">Carregando…</div>';
   try {
-    bots = await api('/api/bots');
+    const bots = await api('/api/bots');
+    if (!bots.length) {
+      el.innerHTML = '<div class="card p-8 text-sm" style="color: var(--text-mute)">Nenhum fluxo configurado.</div>';
+      return;
+    }
+    el.innerHTML = bots.map(renderFlowCard).join('');
+    // load prompts and media in parallel
+    bots.forEach((b) => {
+      loadPromptInto(b.slot);
+      if (FLOW_META[b.slot]?.has_media) loadMediaInto(b.slot);
+    });
   } catch (e) {
-    el.innerHTML = `<div class="p-6 text-sm text-red-300">Falha ao carregar modelos: ${esc(e.message)}</div>`;
-    return;
+    el.innerHTML = `<div class="card p-8 text-sm text-red-300">Erro: ${esc(e.message)}</div>`;
   }
-  if (!bots.length) {
-    el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Nenhum modelo configurado.</div>';
-    return;
-  }
+}
 
-  el.innerHTML = groupByFlow(bots).map((group) => `
-    <div class="px-5 py-4" style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div>
-          <div class="text-xs uppercase font-semibold tracking-wider" style="color: var(--text-mute)">Fluxo</div>
-          <div class="font-bold">${esc(group.label)}</div>
-          <div class="text-xs mono mt-0.5" style="color: var(--text-mute)">${esc(group.name)} · ${esc(group.id)}</div>
+function renderFlowCard(bot) {
+  const meta = FLOW_META[bot.slot] || { title: bot.display_name, subtitle: '', type: 'teste', has_media: false };
+  const isTeste = meta.type === 'teste';
+  const badge = isTeste
+    ? '<span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded" style="background: #422; color: #fbbf24">teste</span>'
+    : '<span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded" style="background: #142; color: #34d399">produção</span>';
+
+  return `<div class="card overflow-hidden" data-flow="${esc(bot.slot)}">
+    <header class="px-5 py-4 flex items-center justify-between gap-4" style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
+      <div>
+        <div class="flex items-center gap-2">
+          <div class="font-bold text-lg mono">${esc(meta.title)}</div>
+          ${badge}
         </div>
-        <span class="badge-active text-[11px] px-2 py-1 rounded-full font-semibold self-start sm:self-auto">
-          ${group.bots.length} ${group.bots.length === 1 ? 'IA/modelo neste fluxo' : 'IAs/modelos neste fluxo'}
-        </span>
+        <div class="text-xs mt-0.5" style="color: var(--text-dim)">${esc(meta.subtitle)}</div>
       </div>
-    </div>
-    ${group.bots.map((bot) => `
-      <div class="px-5 py-4 grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_160px_200px_100px_auto] gap-3 xl:items-center" style="border-bottom: 1px solid var(--border)">
-        <div class="min-w-0">
-          <div class="text-xs uppercase font-semibold tracking-wider" style="color: var(--text-mute)">IA dentro do fluxo</div>
-          <div class="font-medium">${esc(bot.ai_role || bot.display_name)}</div>
-          <div class="text-xs mt-1" style="color: var(--text-dim)">${esc(bot.description || '')}</div>
-          <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">
-            slot: ${esc(bot.slot)} · runtime: ${esc(bot.runtime || '-')}
-          </div>
-        </div>
+      <div class="text-right">
+        <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">workflow_id</div>
+        <div class="text-xs mono" style="color: var(--text-dim)">${esc(meta.workflow_id)}</div>
+      </div>
+    </header>
+
+    <!-- Modelo -->
+    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
+      <div class="text-[10px] uppercase font-semibold mb-2" style="color: var(--text-mute)">Modelo IA único usado neste fluxo</div>
+      <div class="grid grid-cols-1 md:grid-cols-[140px_minmax(180px,1fr)_90px_auto] gap-3 items-end">
         <div>
           <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Provider</div>
-          <select id="provider-${esc(bot.slot)}" class="input mono" onchange="changeProvider('${esc(bot.slot)}')">
+          <select id="provider-${esc(bot.slot)}" class="input mono w-full" onchange="changeProvider('${esc(bot.slot)}')">
             <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
             <option value="deepseek" ${bot.provider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
           </select>
         </div>
         <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Modelo usado</div>
-          <select id="model-${esc(bot.slot)}" class="input mono">${modelOptions(bot.provider, bot.model)}</select>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Modelo</div>
+          <select id="model-${esc(bot.slot)}" class="input mono w-full">${modelOptions(bot.provider, bot.model)}</select>
         </div>
         <div>
           <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Temp.</div>
-          <input id="temp-${esc(bot.slot)}" class="input mono" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
+          <input id="temp-${esc(bot.slot)}" class="input mono w-full" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
         </div>
-        <button class="btn-primary px-3 py-2 rounded-lg text-xs font-semibold xl:self-end" onclick="saveBot('${esc(bot.slot)}')">Salvar</button>
+        <button class="btn-primary px-4 py-2 rounded-lg text-xs font-semibold" onclick="saveBot('${esc(bot.slot)}')">Salvar modelo</button>
       </div>
-    `).join('')}
-  `).join('');
+    </div>
+
+    <!-- Prompt -->
+    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">System prompt</div>
+        <div class="flex gap-2">
+          <button class="btn-ghost px-2 py-1 rounded text-[11px]" onclick="reloadPrompt('${esc(bot.slot)}')">Recarregar</button>
+          <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="savePrompt('${esc(bot.slot)}')">Salvar prompt</button>
+        </div>
+      </div>
+      <textarea id="prompt-${esc(bot.slot)}" class="input mono w-full" rows="12" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5; white-space: pre"></textarea>
+      <div class="text-[11px] mt-1" style="color: var(--text-mute)">Use placeholders <code class="mono">{nome}</code>, <code class="mono">{telefone}</code>${bot.slot==='teste_barbearia'?', <code class="mono">{data_atual}</code>, <code class="mono">{ano}</code>, <code class="mono">{agenda}</code>':''} — substituídos em runtime.</div>
+    </div>
+
+    ${meta.has_media ? `
+    <!-- Midias -->
+    <div class="px-5 py-4">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">Mídias do fluxo</div>
+          <div class="text-xs mt-0.5" style="color: var(--text-dim)">O bot envia videos quando o LLM coloca [V1], [V2] ou [V3] no fim da resposta.</div>
+        </div>
+        <button class="btn-secondary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="addMedia('${esc(bot.slot)}')">+ Adicionar mídia</button>
+      </div>
+      <div id="media-${esc(bot.slot)}" class="space-y-2"></div>
+    </div>
+    ` : ''}
+  </div>`;
 }
+
+async function loadPromptInto(slot) {
+  try {
+    const r = await fetch('/api/bots/' + slot + '/prompt', { credentials: 'include' });
+    if (!r.ok) { $('#prompt-' + slot).value = ''; return; }
+    const data = await r.json();
+    $('#prompt-' + slot).value = data.prompt || '';
+  } catch {}
+}
+
+window.reloadPrompt = (slot) => loadPromptInto(slot);
+
+window.savePrompt = async (slot) => {
+  try {
+    const prompt = $('#prompt-' + slot).value;
+    await api('/api/bots/' + slot + '/prompt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    toast('Prompt salvo: ' + slot);
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+async function loadMediaInto(slot) {
+  const el = $('#media-' + slot);
+  if (!el) return;
+  try {
+    const list = await api('/api/bots/' + slot + '/media');
+    if (!list.length) {
+      el.innerHTML = '<div class="text-xs" style="color: var(--text-mute)">Sem mídias cadastradas.</div>';
+      return;
+    }
+    el.innerHTML = list.map(m => `<div class="flex items-center gap-2 p-3 rounded-lg" style="background: var(--bg-elev); border: 1px solid var(--border)">
+      <div class="text-[10px] uppercase font-bold px-2 py-0.5 rounded mono" style="background: var(--bg-card); color: var(--text-dim)">${esc(m.position)}</div>
+      <div class="text-[11px] uppercase" style="color: var(--text-mute)">${esc(m.media_type)}</div>
+      <input class="input mono flex-1 text-xs" data-mid="${m.id}" data-field="url" value="${esc(m.url || '')}" placeholder="https://..." />
+      <input class="input mono text-xs" style="width: 200px" data-mid="${m.id}" data-field="caption" value="${esc(m.caption || '')}" placeholder="caption (texto)" />
+      <button class="btn-primary px-3 py-1.5 rounded text-xs font-semibold" onclick="saveMedia('${esc(slot)}', '${esc(m.position)}', ${m.id})">Salvar</button>
+      <button class="btn-danger px-2 py-1.5 rounded text-xs" onclick="deleteMedia(${m.id}, '${esc(slot)}')" title="Remover">✕</button>
+    </div>`).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="text-xs text-red-300">Erro: ${esc(e.message)}</div>`;
+  }
+}
+
+window.saveMedia = async (slot, position, id) => {
+  try {
+    const url = document.querySelector(`[data-mid="${id}"][data-field="url"]`).value;
+    const caption = document.querySelector(`[data-mid="${id}"][data-field="caption"]`).value;
+    const list = await api('/api/bots/' + slot + '/media');
+    const existing = list.find(m => m.id === id);
+    await api('/api/bots/' + slot + '/media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        position,
+        media_type: existing?.media_type || 'video',
+        url: url || null,
+        caption: caption || null,
+        position_order: existing?.position_order || 0,
+        enabled: existing?.enabled ?? true,
+      }),
+    });
+    toast('Mídia salva');
+    await loadMediaInto(slot);
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+window.deleteMedia = async (id, slot) => {
+  if (!confirm('Remover esta mídia?')) return;
+  try {
+    await api('/api/media/' + id, { method: 'DELETE' });
+    toast('Mídia removida');
+    await loadMediaInto(slot);
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+window.addMedia = async (slot) => {
+  const position = prompt('Posição (ex: V1, V2, V3, POS_VIDEOS):');
+  if (!position) return;
+  const media_type = prompt('Tipo (video, image, file, text):', 'video') || 'video';
+  const url = media_type === 'text' ? null : (prompt('URL:') || null);
+  const caption = media_type === 'text' ? prompt('Texto:') : prompt('Caption (opcional):');
+  try {
+    await api('/api/bots/' + slot + '/media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: position.toUpperCase(), media_type, url, caption, position_order: 99, enabled: true }),
+    });
+    toast('Mídia adicionada');
+    await loadMediaInto(slot);
+  } catch (e) { toast(e.message, 'err'); }
+};
 
 window.changeProvider = (slot) => {
   const provider = $('#provider-' + slot).value;
@@ -742,16 +865,13 @@ window.saveBot = async (slot) => {
     const provider = $('#provider-' + slot).value;
     const model = $('#model-' + slot).value;
     const temperature = Number($('#temp-' + slot).value);
-    await api('/api/bots/' + encodeURIComponent(slot), {
+    await api('/api/bots/' + slot, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider, model, temperature }),
     });
     toast('Modelo atualizado');
-    await loadModelos();
-  } catch (e) {
-    toast(e.message, 'err');
-  }
+  } catch (e) { toast(e.message, 'err'); }
 };
 
 // ---------- TOKENS ----------

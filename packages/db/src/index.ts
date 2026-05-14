@@ -7,6 +7,8 @@ export * as leads from './queries/leads.js';
 export * as agendamento from './queries/agendamento.js';
 export * as botConfig from './queries/bot-config.js';
 export * as modelUsage from './queries/model-usage.js';
+export * as botPrompt from './queries/bot-prompt.js';
+export * as botMedia from './queries/bot-media.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -16,3 +18,4 @@ export type { LeadRicardo } from './queries/leads.js';
 export type { AgendamentoPendente } from './queries/agendamento.js';
 export type { BotConfigRow, Provider } from './queries/bot-config.js';
 export type { LogUsageInput, UsageSummaryRow } from './queries/model-usage.js';
+export type { BotMediaRow, MediaType } from './queries/bot-media.js';

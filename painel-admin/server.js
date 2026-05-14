@@ -28,27 +28,9 @@ const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/wah
 
 // Bots do TS platform (substituem os workflows n8n deletados)
 const TS_BOTS = [
-  {
-    id: '0ni38aSspWwhooHd',
-    name: 'TESTE_BARBEARIAS_AGENDAMENTOS',
-    active: true,
-    webhook_url: TS_WEBHOOK_URL,
-    source: 'ts',
-  },
-  {
-    id: 'dlpKXM3gvX2joC1b',
-    name: 'elenildo.ricardo',
-    active: true,
-    webhook_url: TS_WEBHOOK_URL,
-    source: 'ts',
-  },
-  {
-    id: 'uUS3Ux1cU2DquKxo',
-    name: 'STARTTAP_AI',
-    active: true,
-    webhook_url: TS_WEBHOOK_URL,
-    source: 'ts',
-  },
+  { id: '0ni38aSspWwhooHd', name: 'teste_barbearia', active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
+  { id: 'dlpKXM3gvX2joC1b', name: 'teste_vendas',    active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
+  { id: 'uUS3Ux1cU2DquKxo', name: 'startap',         active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
 ];
 
 const BOT_MODEL_CONTEXT = {
@@ -304,6 +286,71 @@ app.get('/api/usage/recent', async (req, res) => {
     [limit],
   );
   res.json(r.rows);
+});
+
+// ---------- PROMPT ----------
+app.get('/api/bots/:slot/prompt', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT slot, prompt, updated_at FROM bot_prompt WHERE slot = $1', [req.params.slot]);
+    if (!r.rows.length) return res.status(404).json({ error: 'prompt nao definido' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/bots/:slot/prompt', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (typeof prompt !== 'string' || !prompt.length) {
+      return res.status(400).json({ error: 'prompt obrigatorio' });
+    }
+    const r = await pool.query(
+      `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()
+       RETURNING slot, prompt, updated_at`,
+      [req.params.slot, prompt],
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------- MIDIAS ----------
+app.get('/api/bots/:slot/media', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, slot, position, media_type, url, caption, position_order, enabled, updated_at
+       FROM bot_media WHERE slot = $1 ORDER BY position_order, id`,
+      [req.params.slot],
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/bots/:slot/media', async (req, res) => {
+  try {
+    const { position, media_type = 'video', url = null, caption = null, position_order = 0, enabled = true } = req.body;
+    if (!position) return res.status(400).json({ error: 'position obrigatorio' });
+    const r = await pool.query(
+      `INSERT INTO bot_media (slot, position, media_type, url, caption, position_order, enabled, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       ON CONFLICT (slot, position) DO UPDATE SET
+         media_type = EXCLUDED.media_type,
+         url = EXCLUDED.url,
+         caption = EXCLUDED.caption,
+         position_order = EXCLUDED.position_order,
+         enabled = EXCLUDED.enabled,
+         updated_at = NOW()
+       RETURNING *`,
+      [req.params.slot, position, media_type, url, caption, Number(position_order) || 0, !!enabled],
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/media/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM bot_media WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ---------- WORKFLOWS COM WEBHOOK ----------
