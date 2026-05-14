@@ -4,10 +4,7 @@
   "private": true,
   "description": "Plataforma Startap — bots WhatsApp, agendamento, IA. Migrado de n8n.",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "dev:api": "npm -w @startap/api run dev",
     "dev:worker": "npm -w @startap/worker run dev",

@@ -11,10 +11,10 @@ import { query } from '../client.js';
  */
 
 export async function logMessage(telefone: string, sessao: string): Promise<void> {
-  await query(
-    'INSERT INTO message_log (phone, chat_id, created_at) VALUES ($1, $2, NOW())',
-    [telefone, sessao],
-  );
+  await query('INSERT INTO message_log (phone, chat_id, created_at) VALUES ($1, $2, NOW())', [
+    telefone,
+    sessao,
+  ]);
 }
 
 export interface SuspectRow {
@@ -22,10 +22,7 @@ export interface SuspectRow {
   total: number;
 }
 
-export async function findSuspects(
-  thresholdCount = 10,
-  windowSeconds = 60,
-): Promise<SuspectRow[]> {
+export async function findSuspects(thresholdCount = 10, windowSeconds = 60): Promise<SuspectRow[]> {
   const r = await query<{ phone: string; total: string }>(
     `SELECT phone, COUNT(*)::text AS total
      FROM message_log

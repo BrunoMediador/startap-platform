@@ -36,9 +36,7 @@ export async function loadHistory(
      LIMIT $2`,
     [sessionId, limit],
   );
-  return r.rows
-    .reverse()
-    .map((x) => ({ role: x.message.type, content: x.message.data.content }));
+  return r.rows.reverse().map((x) => ({ role: x.message.type, content: x.message.data.content }));
 }
 
 export async function appendMessage(
@@ -48,18 +46,14 @@ export async function appendMessage(
   content: string,
 ): Promise<void> {
   if (!isKnownChatTable(table)) throw new Error(`Tabela inválida: ${table}`);
-  await query(
-    `INSERT INTO ${table} (session_id, message) VALUES ($1, $2)`,
-    [sessionId, JSON.stringify({ type: role, data: { content } })],
-  );
+  await query(`INSERT INTO ${table} (session_id, message) VALUES ($1, $2)`, [
+    sessionId,
+    JSON.stringify({ type: role, data: { content } }),
+  ]);
 }
 
 /** Limpa histórico (mantém só últimas N entradas) — usado pelo cleanup job. */
-export async function pruneHistory(
-  table: string,
-  sessionId: string,
-  keep = 50,
-): Promise<number> {
+export async function pruneHistory(table: string, sessionId: string, keep = 50): Promise<number> {
   if (!isKnownChatTable(table)) throw new Error(`Tabela inválida: ${table}`);
   const r = await query(
     `DELETE FROM ${table}

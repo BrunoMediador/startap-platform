@@ -20,12 +20,12 @@ interface PriceTable {
 }
 
 const PRICING: Record<string, PriceTable> = {
-  'gpt-4o':            { in: 2.50, out: 10.00 },
-  'gpt-4o-mini':       { in: 0.15, out: 0.60 },
-  'gpt-4-turbo':       { in: 10.00, out: 30.00 },
-  'gpt-3.5-turbo':     { in: 0.50, out: 1.50 },
-  'gpt-5.4':           { in: 5.00, out: 20.00 },
-  'deepseek-chat':     { in: 0.27, out: 1.10 },
+  'gpt-4o': { in: 2.5, out: 10.0 },
+  'gpt-4o-mini': { in: 0.15, out: 0.6 },
+  'gpt-4-turbo': { in: 10.0, out: 30.0 },
+  'gpt-3.5-turbo': { in: 0.5, out: 1.5 },
+  'gpt-5.4': { in: 5.0, out: 20.0 },
+  'deepseek-chat': { in: 0.27, out: 1.1 },
   'deepseek-reasoner': { in: 0.55, out: 2.19 },
 };
 
@@ -110,7 +110,9 @@ export async function summaryByPeriod(daysBack: number): Promise<UsageSummaryRow
   }));
 }
 
-export async function dailyTotals(daysBack: number): Promise<Array<{ day: string; total_tokens: number; cost_usd: number }>> {
+export async function dailyTotals(
+  daysBack: number,
+): Promise<Array<{ day: string; total_tokens: number; cost_usd: number }>> {
   const r = await query<{ day: string; total_tokens: string; cost_usd: string | null }>(
     `SELECT TO_CHAR(DATE_TRUNC('day', created_at), 'YYYY-MM-DD') AS day,
             SUM(total_tokens)::text AS total_tokens,
@@ -128,8 +130,26 @@ export async function dailyTotals(daysBack: number): Promise<Array<{ day: string
   }));
 }
 
-export async function recentCalls(limit = 50): Promise<Array<{ id: number; slot: string; model: string; total_tokens: number; cost_usd: number; telefone: string | null; created_at: Date }>> {
-  const r = await query<{ id: string; slot: string; model: string; total_tokens: string; cost_usd: string | null; telefone: string | null; created_at: Date }>(
+export async function recentCalls(limit = 50): Promise<
+  Array<{
+    id: number;
+    slot: string;
+    model: string;
+    total_tokens: number;
+    cost_usd: number;
+    telefone: string | null;
+    created_at: Date;
+  }>
+> {
+  const r = await query<{
+    id: string;
+    slot: string;
+    model: string;
+    total_tokens: string;
+    cost_usd: string | null;
+    telefone: string | null;
+    created_at: Date;
+  }>(
     `SELECT id::text, slot, model, total_tokens::text, cost_usd::text, telefone, created_at
      FROM model_usage
      ORDER BY id DESC

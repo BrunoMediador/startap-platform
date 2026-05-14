@@ -1,7 +1,7 @@
 import type { BotContext } from '@startap/core/types';
+import { pausa, query } from '@startap/db';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { runAgentConfigured } from '../lib/run-agent.js';
-import { pausa, query } from '@startap/db';
 import { BotBase } from './base.js';
 
 const SAMUEL_PHONE = '553591746797';
@@ -97,18 +97,24 @@ function samuelPrompt(relatorioPausas: string): string {
 }
 
 function normalizeLolaCommand(s: string): string {
-  return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s+/g, '');
 }
 
 async function buildRelatorioPausas(): Promise<string> {
   const r = await query<{ numero: string; nome: string | null }>(
-    `SELECT numero, nome FROM pausa_samuel ORDER BY numero`,
+    'SELECT numero, nome FROM pausa_samuel ORDER BY numero',
   );
   if (r.rows.length === 0) {
     return 'Relatorio de Pausas\n\nNenhum numero em pausa no momento.';
   }
   const linhas = r.rows
-    .map((row) => `Nome: ${row.nome ?? 'Sem nome'}\nNumero: ${String(row.numero).replace(/^55/, '')}`)
+    .map(
+      (row) => `Nome: ${row.nome ?? 'Sem nome'}\nNumero: ${String(row.numero).replace(/^55/, '')}`,
+    )
     .join('\n\n');
   return `Relatorio de Pausas - Barbearia Samuel\n\n${linhas}`;
 }
@@ -197,7 +203,7 @@ export class StartapAiBot extends BotBase {
         parameters: { type: 'object', properties: {}, required: [] },
         run: async () => {
           const r = await query<{ numero: string; nome: string | null }>(
-            `SELECT numero, nome FROM pausa_samuel ORDER BY numero`,
+            'SELECT numero, nome FROM pausa_samuel ORDER BY numero',
           );
           return { rows: r.rows };
         },
@@ -210,7 +216,8 @@ export class StartapAiBot extends BotBase {
           properties: {
             numero: {
               type: 'string',
-              description: 'Numero do whatsapp a remover da pausa, apenas digitos ex: 5535999887766',
+              description:
+                'Numero do whatsapp a remover da pausa, apenas digitos ex: 5535999887766',
             },
           },
           required: ['numero'],

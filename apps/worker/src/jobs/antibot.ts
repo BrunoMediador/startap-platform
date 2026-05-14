@@ -37,7 +37,12 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
     }
     if (ALERT_OWNER && ALERT_OWNER !== ALERT_DEV) {
       await waha
-        .sendText({ sessao: ALERT_SESSION, chatId: toChatId(ALERT_OWNER), texto: msg, typing: false })
+        .sendText({
+          sessao: ALERT_SESSION,
+          chatId: toChatId(ALERT_OWNER),
+          texto: msg,
+          typing: false,
+        })
         .catch((e) => log.error(e, 'failed to alert owner'));
     }
   }

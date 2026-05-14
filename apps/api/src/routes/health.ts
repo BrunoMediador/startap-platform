@@ -1,5 +1,5 @@
-import type { FastifyPluginAsync } from 'fastify';
 import { query } from '@startap/db';
+import type { FastifyPluginAsync } from 'fastify';
 
 export const healthRoute: FastifyPluginAsync = async (app) => {
   app.get('/health', async () => {

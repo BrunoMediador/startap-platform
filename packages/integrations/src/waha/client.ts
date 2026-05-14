@@ -67,7 +67,11 @@ export async function sendMedia(opts: {
   type: 'video' | 'image' | 'file';
 }): Promise<void> {
   const endpoint =
-    opts.type === 'video' ? '/api/sendVideo' : opts.type === 'image' ? '/api/sendImage' : '/api/sendFile';
+    opts.type === 'video'
+      ? '/api/sendVideo'
+      : opts.type === 'image'
+        ? '/api/sendImage'
+        : '/api/sendFile';
   await wahaPost(endpoint, {
     session: opts.sessao,
     chatId: opts.chatId,

@@ -1,10 +1,10 @@
+import { logger } from '@startap/core/logger';
 /**
  * Worker — roda cron jobs.
  *
  * Substitui as triggers Schedule do n8n.
  */
 import { Cron } from 'croner';
-import { logger } from '@startap/core/logger';
 import { runAntibot } from './jobs/antibot.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 
@@ -24,18 +24,14 @@ async function main() {
   });
 
   // Cleanup: a cada 12 horas (replica n8n Limpar_Historico_Chat)
-  new Cron(
-    '0 */12 * * *',
-    { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' },
-    async () => {
-      try {
-        const r = await runCleanupChat();
-        log.info({ ...r }, 'cleanup cycle');
-      } catch (e) {
-        log.error({ err: e }, 'cleanup crashed');
-      }
-    },
-  );
+  new Cron('0 */12 * * *', { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' }, async () => {
+    try {
+      const r = await runCleanupChat();
+      log.info({ ...r }, 'cleanup cycle');
+    } catch (e) {
+      log.error({ err: e }, 'cleanup crashed');
+    }
+  });
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {

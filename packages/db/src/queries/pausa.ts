@@ -16,13 +16,13 @@ interface TableSpec {
 }
 
 const TABLES: Record<string, TableSpec> = {
-  'pausa': { col: 'chat_id' },
-  'pausa_samuel': { col: 'numero' },
-  'pausa_samuel_dev': { col: 'numero' },
-  'pausa_cirilo': { col: 'numero' },
-  'pause_ricardo': { col: 'numero' },
-  'pause_startap': { col: 'numero' },
-  'bot_pausa': { col: 'numero_cliente', pausedFlag: { name: 'pausado', value: true } },
+  pausa: { col: 'chat_id' },
+  pausa_samuel: { col: 'numero' },
+  pausa_samuel_dev: { col: 'numero' },
+  pausa_cirilo: { col: 'numero' },
+  pause_ricardo: { col: 'numero' },
+  pause_startap: { col: 'numero' },
+  bot_pausa: { col: 'numero_cliente', pausedFlag: { name: 'pausado', value: true } },
 };
 
 function getSpec(table: string): TableSpec {
@@ -52,20 +52,16 @@ export async function addPause(table: string, telefone: string): Promise<void> {
       [telefone],
     );
   } else {
-    await query(
-      `INSERT INTO ${table} (${col}) VALUES ($1) ON CONFLICT DO NOTHING`,
-      [telefone],
-    );
+    await query(`INSERT INTO ${table} (${col}) VALUES ($1) ON CONFLICT DO NOTHING`, [telefone]);
   }
 }
 
 export async function removePause(table: string, telefone: string): Promise<void> {
   const { col, pausedFlag } = getSpec(table);
   if (pausedFlag) {
-    await query(
-      `UPDATE ${table} SET ${pausedFlag.name} = ${!pausedFlag.value} WHERE ${col} = $1`,
-      [telefone],
-    );
+    await query(`UPDATE ${table} SET ${pausedFlag.name} = ${!pausedFlag.value} WHERE ${col} = $1`, [
+      telefone,
+    ]);
   } else {
     await query(`DELETE FROM ${table} WHERE ${col} = $1`, [telefone]);
   }
@@ -74,8 +70,6 @@ export async function removePause(table: string, telefone: string): Promise<void
 export async function listPauses(table: string): Promise<string[]> {
   const { col, pausedFlag } = getSpec(table);
   const where = pausedFlag ? `WHERE ${pausedFlag.name} = ${pausedFlag.value}` : '';
-  const r = await query<{ v: string }>(
-    `SELECT ${col} AS v FROM ${table} ${where} ORDER BY ${col}`,
-  );
+  const r = await query<{ v: string }>(`SELECT ${col} AS v FROM ${table} ${where} ORDER BY ${col}`);
   return r.rows.map((x) => x.v);
 }

@@ -4,8 +4,8 @@ export interface AgendamentoPendente {
   id?: number;
   telefone: string;
   servico: string;
-  data: string;   // ISO date
-  hora: string;   // HH:mm
+  data: string; // ISO date
+  hora: string; // HH:mm
   duracao_min: number;
   criado_em?: Date;
 }

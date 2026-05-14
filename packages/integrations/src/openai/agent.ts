@@ -1,3 +1,5 @@
+import { logger } from '@startap/core/logger';
+import type { ChatTurn } from '@startap/db';
 /**
  * Agente OpenAI com tool-calling.
  *
@@ -7,8 +9,6 @@
  * Suporta providers compatíveis (DeepSeek, etc) via apiKey/baseURL opcionais.
  */
 import OpenAI from 'openai';
-import type { ChatTurn } from '@startap/db';
-import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'openai-agent' });
 

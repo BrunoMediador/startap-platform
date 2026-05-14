@@ -68,7 +68,7 @@ export async function updateConfig(
     vals.push(patch.temperature);
   }
   if (sets.length === 0) return getConfig(slot);
-  sets.push(`updated_at = NOW()`);
+  sets.push('updated_at = NOW()');
   vals.push(slot);
   await query(`UPDATE bot_config SET ${sets.join(', ')} WHERE slot = $${i}`, vals);
   cache.delete(slot);

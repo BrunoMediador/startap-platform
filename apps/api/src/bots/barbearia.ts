@@ -9,37 +9,53 @@ const CALENDAR_ID = 'cirilosbarbershop01@gmail.com';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
 
-interface ServiceDef { name: string; min: number }
+interface ServiceDef {
+  name: string;
+  min: number;
+}
 const SERVICES: ServiceDef[] = [
-  { name: 'Corte',            min: 40 },
-  { name: 'Barba',            min: 20 },
-  { name: 'Sobrancelha',      min: 20 },
-  { name: 'Corte+Barba',      min: 60 },
-  { name: 'Pezinho',          min: 20 },
-  { name: 'Relaxamento',      min: 40 },
+  { name: 'Corte', min: 40 },
+  { name: 'Barba', min: 20 },
+  { name: 'Sobrancelha', min: 20 },
+  { name: 'Corte+Barba', min: 60 },
+  { name: 'Pezinho', min: 20 },
+  { name: 'Relaxamento', min: 40 },
   { name: 'Corte pigmentado', min: 60 },
 ];
 
 // 1=Seg … 5=Sex, 6=Sab (0=Dom fechado)
 const WORK: Record<number, [number, number]> = {
-  1: [8 * 60, 19 * 60], 2: [8 * 60, 19 * 60], 3: [8 * 60, 19 * 60],
-  4: [8 * 60, 19 * 60], 5: [8 * 60, 19 * 60], 6: [7 * 60, 17 * 60],
+  1: [8 * 60, 19 * 60],
+  2: [8 * 60, 19 * 60],
+  3: [8 * 60, 19 * 60],
+  4: [8 * 60, 19 * 60],
+  5: [8 * 60, 19 * 60],
+  6: [7 * 60, 17 * 60],
 };
 
 function spParts(date: Date) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    weekday: 'short',
     hour12: false,
-  }).formatToParts(date).reduce<Record<string, string>>((a, p) => { a[p.type] = p.value; return a; }, {});
+  })
+    .formatToParts(date)
+    .reduce<Record<string, string>>((a, p) => {
+      a[p.type] = p.value;
+      return a;
+    }, {});
   const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const wd = weekdayNames.indexOf(parts.weekday ?? '');
   return {
     wd,
     key: `${parts.year}-${parts.month}-${parts.day}`,
     label: `${parts.day}/${parts.month}`,
-    mins: parseInt(parts.hour ?? '0') * 60 + parseInt(parts.minute ?? '0'),
+    mins: Number.parseInt(parts.hour ?? '0') * 60 + Number.parseInt(parts.minute ?? '0'),
   };
 }
 
@@ -52,15 +68,23 @@ function formatarAgenda(events: gcal.CalendarEvent[]): string {
 
   const occupied: Record<string, Array<{ s: number; e: number }>> = {};
   for (const ev of events) {
-    const s = new Date(ev.start.dateTime ?? ev.start.date + 'T00:00:00');
-    const e = new Date(ev.end.dateTime ?? ev.end.date + 'T00:00:00');
+    const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
+    const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
     const sp = spParts(s);
     const sep = spParts(e);
     if (!occupied[sp.key]) occupied[sp.key] = [];
     occupied[sp.key].push({ s: sp.mins, e: sep.mins });
   }
 
-  const DIAS = ['DOMINGO', 'SEGUNDA-FEIRA', 'TERCA-FEIRA', 'QUARTA-FEIRA', 'QUINTA-FEIRA', 'SEXTA-FEIRA', 'SABADO'];
+  const DIAS = [
+    'DOMINGO',
+    'SEGUNDA-FEIRA',
+    'TERCA-FEIRA',
+    'QUARTA-FEIRA',
+    'QUINTA-FEIRA',
+    'SEXTA-FEIRA',
+    'SABADO',
+  ];
   const blocks: string[] = [];
 
   for (let offset = 0; offset <= 5; offset++) {
@@ -86,9 +110,11 @@ function formatarAgenda(events: gcal.CalendarEvent[]): string {
     for (const svc of SERVICES) {
       const slots: string[] = [];
       for (let t = minStart; t + svc.min <= wEnd; t += 20) {
-        if (!occ.some(o => t < o.e && (t + svc.min) > o.s)) slots.push(hhmm(t));
+        if (!occ.some((o) => t < o.e && t + svc.min > o.s)) slots.push(hhmm(t));
       }
-      lines.push(`  ${svc.name} (${svc.min}min): ${slots.length ? slots.join(', ') : 'SEM DISPONIBILIDADE'}`);
+      lines.push(
+        `  ${svc.name} (${svc.min}min): ${slots.length ? slots.join(', ') : 'SEM DISPONIBILIDADE'}`,
+      );
     }
     blocks.push(`${label}:\n${lines.join('\n')}`);
   }
@@ -99,7 +125,11 @@ function formatarAgenda(events: gcal.CalendarEvent[]): string {
 function buildSystemPrompt(nomeCliente: string, telefone: string, agenda: string): string {
   const now = new Date();
   const dataAtual = now.toLocaleDateString('pt-BR', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: TZ,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: TZ,
   });
   const ano = now.getFullYear();
 
@@ -173,7 +203,7 @@ function buildSystemPrompt(nomeCliente: string, telefone: string, agenda: string
 function sanitizarResposta(text: string): string {
   return text
     .split('\n')
-    .filter(l => {
+    .filter((l) => {
       const t = l.trim();
       if (t === '') return true;
       if (/^to=functions\./i.test(t)) return false;
@@ -204,7 +234,7 @@ export class BarbeariaCiriloBot extends BotBase {
       const alerta = `O cliente ${pushName} quer cancelar um horario, entre em contato pelo numero: ${telefone}`;
       waha
         .sendText({ sessao: ALERT_SESSION, chatId: ALERT_PHONE, texto: alerta, typing: false })
-        .catch(e => this.log.warn(e, 'Falha ao enviar alerta de cancelamento'));
+        .catch((e) => this.log.warn(e, 'Falha ao enviar alerta de cancelamento'));
       return 'ok! vou avisar o Cirilo, e logo ele entrara em contato!';
     }
 
@@ -232,8 +262,8 @@ export class BarbeariaCiriloBot extends BotBase {
           type: 'object',
           properties: {
             summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
-            start:   { type: 'string', description: 'Inicio ISO 8601 com timezone' },
-            end:     { type: 'string', description: 'Fim ISO 8601 com timezone' },
+            start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
+            end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
           },
           required: ['summary', 'start', 'end'],
         },
@@ -264,14 +294,19 @@ export class BarbeariaCiriloBot extends BotBase {
           const { telefone: tel } = args as { telefone: string };
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const evs = await gcal.listEvents({ timeMin: tMin, timeMax: tMax, calendarId: CALENDAR_ID });
+          const evs = await gcal.listEvents({
+            timeMin: tMin,
+            timeMax: tMax,
+            calendarId: CALENDAR_ID,
+          });
           const phone = tel.replace(/\D/g, '');
           const matching = evs.filter(
-            e => e.summary?.includes(phone) || e.description?.includes(phone),
+            (e) => e.summary?.includes(phone) || e.description?.includes(phone),
           );
-          if (!matching.length) return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
+          if (!matching.length)
+            return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
           return {
-            events: matching.map(e => ({
+            events: matching.map((e) => ({
               summary: e.summary,
               start: e.start.dateTime,
               end: e.end.dateTime,

@@ -17,9 +17,7 @@ export function extractPhone(body: WahaWebhookBody): string | null {
 
   const mode = payload._data?.key?.addressingMode;
   const raw =
-    mode === 'pn'
-      ? payload.from ?? ''
-      : (payload._data?.key?.remoteJidAlt ?? payload.from ?? '');
+    mode === 'pn' ? (payload.from ?? '') : (payload._data?.key?.remoteJidAlt ?? payload.from ?? '');
 
   const cleaned = raw
     .replace('@c.us', '')

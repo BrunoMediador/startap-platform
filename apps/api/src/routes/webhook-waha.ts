@@ -1,6 +1,6 @@
-import type { FastifyPluginAsync } from 'fastify';
 import { logger } from '@startap/core/logger';
 import { WahaWebhookBody } from '@startap/core/types';
+import type { FastifyPluginAsync } from 'fastify';
 import { handleWebhook } from '../router.js';
 
 const log = logger.child({ module: 'webhook-waha' });

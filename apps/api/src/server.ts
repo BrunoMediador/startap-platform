@@ -1,14 +1,14 @@
-import Fastify from 'fastify';
 import sensible from '@fastify/sensible';
 import { logger } from '@startap/core/logger';
-import { config } from './config.js';
-import { healthRoute } from './routes/health.js';
-import { wahaWebhookRoute } from './routes/webhook-waha.js';
-import { registerBot } from './router.js';
-import { EchoBot } from './bots/echo.js';
+import Fastify from 'fastify';
 import { BarbeariaCiriloBot } from './bots/barbearia.js';
+import { EchoBot } from './bots/echo.js';
 import { RicardoBot } from './bots/ricardo.js';
 import { StartapAiBot } from './bots/startap.js';
+import { config } from './config.js';
+import { registerBot } from './router.js';
+import { healthRoute } from './routes/health.js';
+import { wahaWebhookRoute } from './routes/webhook-waha.js';
 
 const log = logger.child({ service: 'api' });
 

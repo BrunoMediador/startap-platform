@@ -1,9 +1,9 @@
-import express from 'express';
-import pg from 'pg';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import auth from 'basic-auth';
+import express from 'express';
 import fetch from 'node-fetch';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import pg from 'pg';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,14 +28,35 @@ const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/wah
 
 // Bots do TS platform (substituem os workflows n8n deletados)
 const TS_BOTS = [
-  { id: '0ni38aSspWwhooHd', name: 'TESTE_BARBEARIAS_AGENDAMENTOS', active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
-  { id: 'dlpKXM3gvX2joC1b', name: 'elenildo.ricardo',              active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
-  { id: 'uUS3Ux1cU2DquKxo', name: 'STARTTAP_AI',                   active: true, webhook_url: TS_WEBHOOK_URL, source: 'ts' },
+  {
+    id: '0ni38aSspWwhooHd',
+    name: 'TESTE_BARBEARIAS_AGENDAMENTOS',
+    active: true,
+    webhook_url: TS_WEBHOOK_URL,
+    source: 'ts',
+  },
+  {
+    id: 'dlpKXM3gvX2joC1b',
+    name: 'elenildo.ricardo',
+    active: true,
+    webhook_url: TS_WEBHOOK_URL,
+    source: 'ts',
+  },
+  {
+    id: 'uUS3Ux1cU2DquKxo',
+    name: 'STARTTAP_AI',
+    active: true,
+    webhook_url: TS_WEBHOOK_URL,
+    source: 'ts',
+  },
 ];
 
 const pool = new pg.Pool({
-  host: PG_HOST, port: Number(PG_PORT),
-  user: PG_USER, password: PG_PASS, database: PG_DB,
+  host: PG_HOST,
+  port: Number(PG_PORT),
+  user: PG_USER,
+  password: PG_PASS,
+  database: PG_DB,
 });
 
 const app = express();
@@ -54,10 +75,10 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 
 const n8nFetch = (p) =>
-  fetch(`${N8N_URL}${p}`, { headers: { 'X-N8N-API-KEY': N8N_API_KEY } }).then(r => r.json());
+  fetch(`${N8N_URL}${p}`, { headers: { 'X-N8N-API-KEY': N8N_API_KEY } }).then((r) => r.json());
 
 const wahaFetch = (p) =>
-  fetch(`${WAHA_URL}${p}`, { headers: { 'X-Api-Key': WAHA_API_KEY } }).then(r => r.json());
+  fetch(`${WAHA_URL}${p}`, { headers: { 'X-Api-Key': WAHA_API_KEY } }).then((r) => r.json());
 
 // ---------- ROUTING CRUD ----------
 app.get('/api/routing', async (req, res) => {
@@ -72,7 +93,8 @@ app.get('/api/routing', async (req, res) => {
 app.post('/api/routing', async (req, res) => {
   try {
     const { telefone, workflow_id, nome_cliente, ativo = true, move = false } = req.body;
-    if (!telefone || !workflow_id) return res.status(400).json({ error: 'telefone e workflow_id obrigatorios' });
+    if (!telefone || !workflow_id)
+      return res.status(400).json({ error: 'telefone e workflow_id obrigatorios' });
     const tel = String(telefone).replace(/\D/g, '');
     if (tel.length < 10) return res.status(400).json({ error: 'telefone invalido' });
 
@@ -80,7 +102,10 @@ app.post('/api/routing', async (req, res) => {
     if (!wf) return res.status(400).json({ error: 'workflow nao encontrado' });
     if (!wf.webhook_url) return res.status(400).json({ error: 'workflow sem webhook publico' });
 
-    const existing = await pool.query('SELECT id, workflow_name FROM routing_clientes WHERE telefone = $1', [tel]);
+    const existing = await pool.query(
+      'SELECT id, workflow_name FROM routing_clientes WHERE telefone = $1',
+      [tel],
+    );
     if (existing.rows.length && !move) {
       return res.status(409).json({
         error: 'duplicate',
@@ -100,10 +125,12 @@ app.post('/api/routing', async (req, res) => {
          nome_cliente=COALESCE(EXCLUDED.nome_cliente, routing_clientes.nome_cliente),
          ativo=EXCLUDED.ativo,
          atualizado_em=NOW()`,
-      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo]
+      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo],
     );
     res.json({ ok: true, moved: existing.rows.length > 0 });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.put('/api/routing/:id', async (req, res) => {
@@ -118,10 +145,12 @@ app.put('/api/routing/:id', async (req, res) => {
          telefone=$1, workflow_id=$2, workflow_name=$3, webhook_url=$4,
          nome_cliente=$5, ativo=$6, atualizado_em=NOW()
        WHERE id=$7`,
-      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo, id]
+      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo, id],
     );
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.delete('/api/routing/:id', async (req, res) => {
@@ -145,25 +174,37 @@ app.put('/api/bots/:slot', async (req, res) => {
     const sets = [];
     const vals = [];
     let i = 1;
-    if (provider) { sets.push(`provider = ${i++}`); vals.push(provider); }
-    if (model) { sets.push(`model = ${i++}`); vals.push(model); }
-    if (temperature !== undefined) { sets.push(`temperature = ${i++}`); vals.push(Number(temperature)); }
+    if (provider) {
+      sets.push(`provider = ${i++}`);
+      vals.push(provider);
+    }
+    if (model) {
+      sets.push(`model = ${i++}`);
+      vals.push(model);
+    }
+    if (temperature !== undefined) {
+      sets.push(`temperature = ${i++}`);
+      vals.push(Number(temperature));
+    }
     if (sets.length === 0) return res.status(400).json({ error: 'nada para atualizar' });
     sets.push('updated_at = NOW()');
     vals.push(slot);
     const r = await pool.query(
       `UPDATE bot_config SET ${sets.join(', ')} WHERE slot = ${i} RETURNING *`,
-      vals
+      vals,
     );
     if (!r.rows.length) return res.status(404).json({ error: 'slot nao encontrado' });
     res.json(r.rows[0]);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---------- USAGE (tokens consumidos) ----------
 app.get('/api/usage/summary', async (req, res) => {
   const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
-  const r = await pool.query(`
+  const r = await pool.query(
+    `
     SELECT slot, provider, model,
            COUNT(*)::int AS calls,
            SUM(prompt_tokens)::int AS prompt_tokens,
@@ -174,30 +215,38 @@ app.get('/api/usage/summary', async (req, res) => {
     WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
     GROUP BY slot, provider, model
     ORDER BY SUM(total_tokens) DESC
-  `, [String(days)]);
+  `,
+    [String(days)],
+  );
   res.json({ days, rows: r.rows });
 });
 
 app.get('/api/usage/daily', async (req, res) => {
   const days = Math.max(1, Math.min(90, Number(req.query.days) || 14));
-  const r = await pool.query(`
+  const r = await pool.query(
+    `
     SELECT TO_CHAR(DATE_TRUNC('day', created_at), 'YYYY-MM-DD') AS day,
            SUM(total_tokens)::int AS total_tokens,
            ROUND(SUM(cost_usd)::numeric, 4) AS cost_usd
     FROM model_usage
     WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
     GROUP BY 1 ORDER BY 1
-  `, [String(days)]);
+  `,
+    [String(days)],
+  );
   res.json({ days, rows: r.rows });
 });
 
 app.get('/api/usage/recent', async (req, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-  const r = await pool.query(`
+  const r = await pool.query(
+    `
     SELECT id, slot, provider, model, total_tokens,
            ROUND(cost_usd::numeric, 4) AS cost_usd, telefone, created_at
     FROM model_usage ORDER BY id DESC LIMIT $1
-  `, [limit]);
+  `,
+    [limit],
+  );
   res.json(r.rows);
 });
 
@@ -206,21 +255,25 @@ app.get('/api/usage/recent', async (req, res) => {
 app.get('/api/workflows', async (req, res) => {
   try {
     const workflows = await fetchAllWorkflows();
-    const slim = workflows.map(w => {
-      const webhookNode = (w.nodes || []).find(n => n.type === 'n8n-nodes-base.webhook');
+    const slim = workflows.map((w) => {
+      const webhookNode = (w.nodes || []).find((n) => n.type === 'n8n-nodes-base.webhook');
       return {
         id: w.id,
         name: w.name,
         active: w.active,
         nodes: w.nodes?.length || 0,
         has_webhook: !!webhookNode,
-        webhook_url: w._tsBot ? w._webhook_url : (webhookNode
-          ? `${N8N_PUBLIC_URL}/webhook/${webhookNode.parameters?.path || webhookNode.webhookId}`
-          : null),
+        webhook_url: w._tsBot
+          ? w._webhook_url
+          : webhookNode
+            ? `${N8N_PUBLIC_URL}/webhook/${webhookNode.parameters?.path || webhookNode.webhookId}`
+            : null,
       };
     });
     res.json(slim);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 async function fetchAllWorkflows() {
@@ -229,11 +282,17 @@ async function fetchAllWorkflows() {
     const data = await n8nFetch('/api/v1/workflows?limit=100');
     n8nData = data.data || [];
   } catch {}
-  const tsAsWorkflow = TS_BOTS.map(b => ({
+  const tsAsWorkflow = TS_BOTS.map((b) => ({
     id: b.id,
     name: b.name,
     active: b.active,
-    nodes: [{ type: 'n8n-nodes-base.webhook', webhookId: 'ts-' + b.id, parameters: { path: 'webhooks/waha' } }],
+    nodes: [
+      {
+        type: 'n8n-nodes-base.webhook',
+        webhookId: `ts-${b.id}`,
+        parameters: { path: 'webhooks/waha' },
+      },
+    ],
     _tsBot: true,
     _webhook_url: b.webhook_url,
   }));
@@ -241,14 +300,14 @@ async function fetchAllWorkflows() {
 }
 
 async function resolveWorkflow(workflow_id) {
-  const tsBot = TS_BOTS.find(b => b.id === workflow_id);
+  const tsBot = TS_BOTS.find((b) => b.id === workflow_id);
   if (tsBot) {
     return { id: tsBot.id, name: tsBot.name, active: tsBot.active, webhook_url: tsBot.webhook_url };
   }
   try {
     const w = await n8nFetch(`/api/v1/workflows/${encodeURIComponent(workflow_id)}`);
     if (!w?.id) return null;
-    const webhookNode = (w.nodes || []).find(n => n.type === 'n8n-nodes-base.webhook');
+    const webhookNode = (w.nodes || []).find((n) => n.type === 'n8n-nodes-base.webhook');
     return {
       id: w.id,
       name: w.name,
@@ -257,7 +316,9 @@ async function resolveWorkflow(workflow_id) {
         ? `${N8N_PUBLIC_URL}/webhook/${webhookNode.parameters?.path || webhookNode.webhookId}`
         : null,
     };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // ---------- SYSTEM STATUS ----------
@@ -271,19 +332,26 @@ app.get('/api/status', async (req, res) => {
     res.json({
       n8n: {
         total: workflows.length,
-        ativos: workflows.filter(w => w.active).length,
-        workflows: workflows.map(w => ({ id: w.id, name: w.name, active: w.active })),
+        ativos: workflows.filter((w) => w.active).length,
+        workflows: workflows.map((w) => ({ id: w.id, name: w.name, active: w.active })),
       },
-      waha: (Array.isArray(sessions) ? sessions : []).map(s => ({
-        name: s.name, status: s.status, me: s.me?.id || null,
+      waha: (Array.isArray(sessions) ? sessions : []).map((s) => ({
+        name: s.name,
+        status: s.status,
+        me: s.me?.id || null,
         webhook: s.config?.webhooks?.[0]?.url,
       })),
-      execucoes: (execs.data || []).map(e => ({
-        id: e.id, workflowId: e.workflowId, status: e.status,
-        startedAt: e.startedAt, finished: e.finished,
+      execucoes: (execs.data || []).map((e) => ({
+        id: e.id,
+        workflowId: e.workflowId,
+        status: e.status,
+        startedAt: e.startedAt,
+        finished: e.finished,
       })),
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ---------- LEADS & RELATORIOS ----------
@@ -291,14 +359,18 @@ app.get('/api/leads', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM leads_ricardo ORDER BY 1 DESC LIMIT 200');
     res.json(r.rows);
-  } catch { res.json([]); }
+  } catch {
+    res.json([]);
+  }
 });
 
 app.get('/api/agendamentos-pendentes', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM agendamento_pendente ORDER BY 1 DESC LIMIT 200');
     res.json(r.rows);
-  } catch { res.json([]); }
+  } catch {
+    res.json([]);
+  }
 });
 
 app.get('/api/message-stats', async (req, res) => {
@@ -309,7 +381,9 @@ app.get('/api/message-stats', async (req, res) => {
       GROUP BY 1 ORDER BY 1 DESC
     `);
     res.json(r.rows);
-  } catch { res.json([]); }
+  } catch {
+    res.json([]);
+  }
 });
 
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));
