@@ -4,7 +4,7 @@
  * Substitui o nó "AI Agent" (LangChain) do n8n. Implementação minimalista
  * usando OpenAI SDK direto + memória Postgres.
  *
- * Loop: chamada -> se tool_call -> executa tool -> resposta -> repete (até max_turns).
+ * Suporta providers compatíveis (DeepSeek, etc) via apiKey/baseURL opcionais.
  */
 import OpenAI from 'openai';
 import type { ChatTurn } from '@startap/db';
@@ -12,38 +12,45 @@ import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'openai-agent' });
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const defaultClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const clientCache = new Map<string, OpenAI>();
+
+function getClient(apiKey?: string, baseURL?: string): OpenAI {
+  if (!apiKey && !baseURL) return defaultClient;
+  const key = `${apiKey ?? ''}|${baseURL ?? ''}`;
+  let c = clientCache.get(key);
+  if (!c) {
+    c = new OpenAI({ apiKey: apiKey ?? process.env.OPENAI_API_KEY, baseURL });
+    clientCache.set(key, c);
+  }
+  return c;
+}
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 
 export interface ToolDefinition<TArgs = unknown, TResult = unknown> {
   name: string;
   description: string;
-  /** Schema JSON dos argumentos (formato OpenAI function calling). */
   parameters: Record<string, unknown>;
-  /** Execução real da tool. */
   run: (args: TArgs) => Promise<TResult>;
 }
 
 export interface RunAgentOpts {
   systemPrompt: string;
-  /** Mensagens passadas (do banco de memória) */
   history: ChatTurn[];
-  /** Mensagem nova do usuário */
   userMessage: string;
   tools?: ToolDefinition[];
   model?: string;
-  /** Limite de iterações tool-call. Default 5. */
   maxTurns?: number;
   temperature?: number;
+  /** Provider compatível com OpenAI (DeepSeek etc). */
+  apiKey?: string;
+  baseURL?: string;
 }
 
 export interface RunAgentResult {
-  /** Resposta final do agente (texto para enviar ao usuário). */
   reply: string;
-  /** Trace das tool calls (debug). */
   toolCalls: Array<{ name: string; args: unknown; result: unknown }>;
-  /** Tokens usados (custo). */
   usage: { prompt: number; completion: number; total: number };
 }
 
@@ -51,6 +58,7 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   const { systemPrompt, history, userMessage, tools = [], maxTurns = 5 } = opts;
   const model = opts.model ?? DEFAULT_MODEL;
   const temperature = opts.temperature ?? 0.4;
+  const client = getClient(opts.apiKey, opts.baseURL);
 
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
@@ -89,7 +97,6 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
     const msg = completion.choices[0]?.message;
     if (!msg) throw new Error('OpenAI sem resposta');
 
-    // Tool calls?
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       messages.push(msg as OpenAI.Chat.ChatCompletionMessageParam);
       for (const call of msg.tool_calls) {
@@ -128,10 +135,9 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
           });
         }
       }
-      continue; // Pede nova chamada com os resultados
+      continue;
     }
 
-    // Sem tool call → resposta final
     return { reply: (msg.content ?? '').trim(), toolCalls: trace, usage };
   }
 

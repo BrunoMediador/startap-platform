@@ -8,6 +8,7 @@ import { registerBot } from './router.js';
 import { EchoBot } from './bots/echo.js';
 import { BarbeariaCiriloBot } from './bots/barbearia.js';
 import { RicardoBot } from './bots/ricardo.js';
+import { StartapAiBot } from './bots/startap.js';
 
 const log = logger.child({ service: 'api' });
 
@@ -26,6 +27,7 @@ async function main() {
   registerBot('echo', new EchoBot());
   registerBot('0ni38aSspWwhooHd', new BarbeariaCiriloBot());
   registerBot('dlpKXM3gvX2joC1b', new RicardoBot());
+  registerBot('uUS3Ux1cU2DquKxo', new StartapAiBot());
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');
