@@ -3,14 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./waha": "./src/waha/index.ts",
-    "./openai": "./src/openai/index.ts",
-    "./whisper": "./src/whisper/index.ts",
-    "./google-calendar": "./src/google-calendar/index.ts"
+    ".": "./dist/index.js",
+    "./waha": "./dist/waha/index.js",
+    "./openai": "./dist/openai/index.js",
+    "./whisper": "./dist/whisper/index.js",
+    "./google-calendar": "./dist/google-calendar/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@startap/core": "*",
