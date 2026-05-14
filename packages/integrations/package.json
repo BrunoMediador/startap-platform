@@ -1,0 +1,19 @@
+{
+  "name": "@startap/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./waha": "./src/waha/index.ts",
+    "./openai": "./src/openai/index.ts",
+    "./whisper": "./src/whisper/index.ts",
+    "./google-calendar": "./src/google-calendar/index.ts"
+  },
+  "dependencies": {
+    "@startap/core": "*",
+    "openai": "^4.78.0"
+  }
+}

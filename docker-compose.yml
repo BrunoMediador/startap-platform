@@ -1,0 +1,44 @@
+services:
+  api:
+    build:
+      context: .
+      args:
+        APP: api
+    container_name: startap-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SERVICE_NAME=api
+    networks: [rede_interna]
+    depends_on: [redis]
+    expose: ["3040"]
+
+  worker:
+    build:
+      context: .
+      args:
+        APP: worker
+    container_name: startap-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SERVICE_NAME=worker
+    networks: [rede_interna]
+    depends_on: [redis]
+
+  redis:
+    image: redis:7-alpine
+    container_name: startap-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    networks: [rede_interna]
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
+
+networks:
+  rede_interna:
+    name: automacoes_rede_interna
+    external: true
