@@ -127,6 +127,8 @@
   <!-- TABS -->
   <nav class="flex gap-1 mb-6" style="border-bottom: 1px solid var(--border)">
     <button class="tab tab-active" data-tab="routing">Roteamento</button>
+    <button class="tab" data-tab="modelos">Modelos IA</button>
+    <button class="tab" data-tab="tokens">Tokens</button>
     <button class="tab" data-tab="status">Status</button>
     <button class="tab" data-tab="relatorios">Relatórios</button>
   </nav>
@@ -182,6 +184,52 @@
         <h2 class="font-semibold mb-4">Execuções recentes</h2>
         <div id="exec-list" class="overflow-x-auto scrollbar"></div>
       </div>
+    </div>
+  </section>
+
+  <!-- MODELOS -->
+  <section id="tab-modelos" class="tab-content hidden">
+    <div class="card overflow-hidden">
+      <div class="px-5 py-4 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
+        <div>
+          <h2 class="font-semibold">Modelos de IA por fluxo</h2>
+          <div class="text-xs mt-0.5" style="color: var(--text-dim)">Alterações valem nas próximas mensagens processadas pelos bots.</div>
+        </div>
+      </div>
+      <div id="bots-list" class="divide-y" style="border-color: var(--border)"></div>
+    </div>
+  </section>
+
+  <!-- TOKENS -->
+  <section id="tab-tokens" class="tab-content hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Total tokens (7 dias)</div>
+        <div id="kpi-tokens" class="text-2xl font-bold mono">—</div>
+      </div>
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Custo estimado (7 dias)</div>
+        <div id="kpi-cost" class="text-2xl font-bold mono">—</div>
+      </div>
+      <div class="card p-5">
+        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Chamadas (7 dias)</div>
+        <div id="kpi-calls" class="text-2xl font-bold mono">—</div>
+      </div>
+    </div>
+
+    <div class="card p-5 mb-5">
+      <h2 class="font-semibold mb-4">Por fluxo / modelo</h2>
+      <div id="usage-summary" class="overflow-x-auto scrollbar"></div>
+    </div>
+
+    <div class="card p-5 mb-5">
+      <h2 class="font-semibold mb-4">Histórico diário</h2>
+      <div id="usage-daily" class="text-xs mono space-y-0.5" style="color: var(--text-dim)"></div>
+    </div>
+
+    <div class="card p-5">
+      <h2 class="font-semibold mb-4">Últimas chamadas</h2>
+      <div id="usage-recent" class="overflow-x-auto scrollbar"></div>
     </div>
   </section>
 
@@ -251,6 +299,16 @@ function toast(msg, type='ok') {
   t.firstElementChild.className = `px-4 py-3 rounded-lg shadow-2xl text-sm font-medium ${cls}`;
   t.classList.remove('hidden');
   setTimeout(()=>t.classList.add('hidden'), 3000);
+}
+
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[ch]));
 }
 
 $$('.tab').forEach(b => b.onclick = () => {
@@ -576,8 +634,144 @@ async function loadRelatorios() {
     : '<div style="color: var(--text-mute)">Sem dados</div>';
 }
 
+// ---------- MODELOS ----------
+const MODEL_OPTIONS = {
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+};
+
+function modelOptions(provider, selected) {
+  const options = MODEL_OPTIONS[provider] || [];
+  const custom = selected && !options.includes(selected)
+    ? `<option value="${esc(selected)}" selected>${esc(selected)} (custom)</option>`
+    : '';
+  return custom + options
+    .map((model) => `<option value="${esc(model)}" ${model === selected ? 'selected' : ''}>${esc(model)}</option>`)
+    .join('');
+}
+
+async function loadModelos() {
+  const bots = await api('/api/bots');
+  const el = $('#bots-list');
+  if (!bots.length) {
+    el.innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Nenhum modelo configurado.</div>';
+    return;
+  }
+
+  el.innerHTML = bots.map((bot) => `
+    <div class="px-5 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div class="min-w-0">
+        <div class="font-medium">${esc(bot.display_name)}</div>
+        <div class="text-xs mono mt-0.5" style="color: var(--text-mute)">${esc(bot.slot)}</div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-[120px_180px_90px_auto] gap-2 items-center">
+        <select id="provider-${esc(bot.slot)}" class="input mono" onchange="changeProvider('${esc(bot.slot)}')">
+          <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+          <option value="deepseek" ${bot.provider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+        </select>
+        <select id="model-${esc(bot.slot)}" class="input mono">${modelOptions(bot.provider, bot.model)}</select>
+        <input id="temp-${esc(bot.slot)}" class="input mono" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
+        <button class="btn-primary px-3 py-2 rounded-lg text-xs font-semibold" onclick="saveBot('${esc(bot.slot)}')">Salvar</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+window.changeProvider = (slot) => {
+  const provider = $('#provider-' + slot).value;
+  $('#model-' + slot).innerHTML = modelOptions(provider, MODEL_OPTIONS[provider]?.[0]);
+};
+
+window.saveBot = async (slot) => {
+  try {
+    const provider = $('#provider-' + slot).value;
+    const model = $('#model-' + slot).value;
+    const temperature = Number($('#temp-' + slot).value);
+    await api('/api/bots/' + encodeURIComponent(slot), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model, temperature }),
+    });
+    toast('Modelo atualizado');
+    await loadModelos();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+};
+
+// ---------- TOKENS ----------
+async function loadTokens() {
+  const [summary, daily, recent] = await Promise.all([
+    api('/api/usage/summary?days=7'),
+    api('/api/usage/daily?days=14'),
+    api('/api/usage/recent?limit=50'),
+  ]);
+
+  const totals = summary.rows.reduce((acc, row) => {
+    acc.tokens += Number(row.total_tokens || 0);
+    acc.cost += Number(row.cost_usd || 0);
+    acc.calls += Number(row.calls || 0);
+    return acc;
+  }, { tokens: 0, cost: 0, calls: 0 });
+
+  $('#kpi-tokens').textContent = totals.tokens.toLocaleString('pt-BR');
+  $('#kpi-cost').textContent = '$' + totals.cost.toFixed(4);
+  $('#kpi-calls').textContent = totals.calls.toLocaleString('pt-BR');
+
+  $('#usage-summary').innerHTML = summary.rows.length === 0
+    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas nos últimos 7 dias.</div>'
+    : `<table class="w-full text-sm">
+        <thead><tr style="border-bottom: 1px solid var(--border)">
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Provider</th>
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
+          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Chamadas</th>
+          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens</th>
+          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">USD</th>
+        </tr></thead>
+        <tbody>${summary.rows.map((row) => `<tr style="border-top: 1px solid var(--border)">
+          <td class="p-2 mono text-xs">${esc(row.slot)}</td>
+          <td class="p-2 text-xs">${esc(row.provider)}</td>
+          <td class="p-2 mono text-xs">${esc(row.model)}</td>
+          <td class="p-2 text-right mono text-xs">${Number(row.calls || 0).toLocaleString('pt-BR')}</td>
+          <td class="p-2 text-right mono text-xs font-semibold">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</td>
+          <td class="p-2 text-right mono text-xs">${Number(row.cost_usd || 0).toFixed(4)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+
+  $('#usage-daily').innerHTML = daily.rows.length === 0
+    ? '<div style="color: var(--text-mute)">Sem dados</div>'
+    : daily.rows.map((row) => `<div class="flex justify-between py-0.5">
+        <span>${esc(row.day)}</span>
+        <span><strong style="color: var(--text)">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</strong> tok / $${Number(row.cost_usd || 0).toFixed(4)}</span>
+      </div>`).join('');
+
+  $('#usage-recent').innerHTML = recent.length === 0
+    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas.</div>'
+    : `<table class="w-full text-sm">
+        <thead><tr style="border-bottom: 1px solid var(--border)">
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Quando</th>
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
+          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Telefone</th>
+          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens</th>
+          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">USD</th>
+        </tr></thead>
+        <tbody>${recent.map((row) => `<tr style="border-top: 1px solid var(--border)">
+          <td class="p-2 mono text-xs">${new Date(row.created_at).toLocaleString('pt-BR')}</td>
+          <td class="p-2 mono text-xs">${esc(row.slot)}</td>
+          <td class="p-2 mono text-xs">${esc(row.model)}</td>
+          <td class="p-2 mono text-xs" style="color: var(--text-dim)">${esc(row.telefone || '-')}</td>
+          <td class="p-2 text-right mono text-xs">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</td>
+          <td class="p-2 text-right mono text-xs">${Number(row.cost_usd || 0).toFixed(4)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+}
+
 function loadTab(t) {
   if (t === 'routing') loadAll();
+  if (t === 'modelos') loadModelos();
+  if (t === 'tokens') loadTokens();
   if (t === 'status') loadStatus();
   if (t === 'relatorios') loadRelatorios();
 }
