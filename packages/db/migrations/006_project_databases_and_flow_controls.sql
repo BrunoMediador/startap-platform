@@ -95,7 +95,7 @@ VALUES
     'ts',
     'chat_histories',
     'active',
-    '{"category":"teste","tables":["chat_memory","routing","bot_prompt","model_usage","flow_logs","agendamento_pendente"]}'::jsonb,
+    '{"category":"teste","tables":["chat_memory","routing","flow_pauses","flow_pause_keywords","bot_prompt","model_usage","flow_logs","agendamento_pendente"]}'::jsonb,
     NOW()
   ),
   (
@@ -106,7 +106,7 @@ VALUES
     'ts',
     'chat_histories_ricardo',
     'active',
-    '{"category":"teste","tables":["chat_memory","routing","bot_prompt","bot_media","model_usage","flow_logs","leads_ricardo"]}'::jsonb,
+    '{"category":"teste","tables":["chat_memory","routing","flow_pauses","flow_pause_keywords","bot_prompt","bot_media","model_usage","flow_logs","leads_ricardo"]}'::jsonb,
     NOW()
   ),
   (
@@ -117,7 +117,7 @@ VALUES
     'ts',
     'chat_histories_vendas_barbearia',
     'active',
-    '{"category":"teste","tables":["chat_memory","routing","bot_prompt","bot_media","model_usage","flow_logs","leads_vendas_barbearia"]}'::jsonb,
+    '{"category":"teste","tables":["chat_memory","routing","flow_pauses","flow_pause_keywords","bot_prompt","bot_media","model_usage","flow_logs","leads_vendas_barbearia"]}'::jsonb,
     NOW()
   ),
   (
@@ -128,7 +128,7 @@ VALUES
     'ts',
     'chat_histories_startap',
     'active',
-    '{"category":"interno","tables":["chat_memory","bot_prompt","model_usage","flow_logs","pause_startap"]}'::jsonb,
+    '{"category":"interno","tables":["chat_memory","flow_pauses","flow_pause_keywords","bot_prompt","model_usage","flow_logs","pause_startap"]}'::jsonb,
     NOW()
   )
 ON CONFLICT (project_id) DO UPDATE SET

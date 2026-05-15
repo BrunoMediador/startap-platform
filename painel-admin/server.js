@@ -136,6 +136,8 @@ const DEFAULT_PROJECT_DATABASES = [
       tables: [
         'chat_memory',
         'routing',
+        'flow_pauses',
+        'flow_pause_keywords',
         'bot_prompt',
         'model_usage',
         'flow_logs',
@@ -156,6 +158,8 @@ const DEFAULT_PROJECT_DATABASES = [
       tables: [
         'chat_memory',
         'routing',
+        'flow_pauses',
+        'flow_pause_keywords',
         'bot_prompt',
         'bot_media',
         'model_usage',
@@ -177,6 +181,8 @@ const DEFAULT_PROJECT_DATABASES = [
       tables: [
         'chat_memory',
         'routing',
+        'flow_pauses',
+        'flow_pause_keywords',
         'bot_prompt',
         'bot_media',
         'model_usage',
@@ -195,7 +201,15 @@ const DEFAULT_PROJECT_DATABASES = [
     status: 'active',
     metadata: {
       category: 'interno',
-      tables: ['chat_memory', 'bot_prompt', 'model_usage', 'flow_logs', 'pause_startap'],
+      tables: [
+        'chat_memory',
+        'flow_pauses',
+        'flow_pause_keywords',
+        'bot_prompt',
+        'model_usage',
+        'flow_logs',
+        'pause_startap',
+      ],
     },
   },
 ];
@@ -203,6 +217,8 @@ const DEFAULT_PROJECT_DATABASES = [
 const DATABASE_TABLES = {
   chat_memory: { label: 'Historico de conversa', type: 'memoria' },
   routing: { label: 'Roteamento', type: 'operacao' },
+  flow_pauses: { label: 'Pausas por fluxo', type: 'operacao' },
+  flow_pause_keywords: { label: 'Palavras-chave de pausa', type: 'config' },
   bot_prompt: { label: 'Prompt', type: 'config' },
   bot_media: { label: 'Midias', type: 'config' },
   model_usage: { label: 'Uso de modelo', type: 'metricas' },
@@ -527,6 +543,59 @@ app.put('/api/bots/:slot/prompt', async (req, res) => {
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- PALAVRAS-CHAVE DE PAUSA POR FLUXO ----------
+app.get('/api/workflows/:workflowId/pause-keywords', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT flow_id, command, keyword, keyword_norm, enabled, updated_at
+       FROM flow_pause_keywords
+       WHERE flow_id = $1
+       ORDER BY command, keyword`,
+      [req.params.workflowId],
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/workflows/:workflowId/pause-keywords', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const rows = normalizePauseKeywordPayload(req.body);
+    await client.query('BEGIN');
+    await client.query('DELETE FROM flow_pause_keywords WHERE flow_id = $1', [
+      req.params.workflowId,
+    ]);
+    for (const row of rows) {
+      await client.query(
+        `INSERT INTO flow_pause_keywords
+           (flow_id, command, keyword, keyword_norm, enabled, updated_at)
+         VALUES ($1,$2,$3,$4,$5,NOW())
+         ON CONFLICT (flow_id, command, keyword_norm) DO UPDATE SET
+           keyword = EXCLUDED.keyword,
+           enabled = EXCLUDED.enabled,
+           updated_at = NOW()`,
+        [req.params.workflowId, row.command, row.keyword, row.keyword_norm, row.enabled],
+      );
+    }
+    await client.query('COMMIT');
+    const saved = await pool.query(
+      `SELECT flow_id, command, keyword, keyword_norm, enabled, updated_at
+       FROM flow_pause_keywords
+       WHERE flow_id = $1
+       ORDER BY command, keyword`,
+      [req.params.workflowId],
+    );
+    res.json(saved.rows);
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -1043,6 +1112,26 @@ function getProjectTablePlan(project, key) {
           'SELECT id, telefone, nome_cliente, workflow_id, workflow_name, ativo, criado_em, atualizado_em FROM routing_clientes WHERE workflow_id = $1 ORDER BY atualizado_em DESC LIMIT $2',
         rowsVals: [project.workflow_id],
       };
+    case 'flow_pauses':
+      return {
+        tableName: 'flow_pauses',
+        countSql:
+          'SELECT COUNT(*)::int AS rows, MAX(updated_at) AS last_at FROM flow_pauses WHERE flow_id = $1 AND active = TRUE',
+        countVals: [project.workflow_id],
+        rowsSql:
+          'SELECT flow_id, flow_name, telefone, session, active, source, reason, created_at, updated_at FROM flow_pauses WHERE flow_id = $1 AND active = TRUE ORDER BY updated_at DESC LIMIT $2',
+        rowsVals: [project.workflow_id],
+      };
+    case 'flow_pause_keywords':
+      return {
+        tableName: 'flow_pause_keywords',
+        countSql:
+          'SELECT COUNT(*)::int AS rows, MAX(updated_at) AS last_at FROM flow_pause_keywords WHERE flow_id = $1',
+        countVals: [project.workflow_id],
+        rowsSql:
+          'SELECT flow_id, command, keyword, keyword_norm, enabled, created_at, updated_at FROM flow_pause_keywords WHERE flow_id = $1 ORDER BY command, keyword LIMIT $2',
+        rowsVals: [project.workflow_id],
+      };
     case 'bot_prompt':
       return {
         tableName: 'bot_prompt',
@@ -1105,6 +1194,42 @@ function directProjectTablePlan(tableName) {
     rowsSql: `SELECT * FROM ${table} ORDER BY 1 DESC LIMIT $1`,
     rowsVals: [],
   };
+}
+
+function normalizePauseKeywordPayload(body) {
+  const rows = Array.isArray(body?.keywords)
+    ? body.keywords
+    : [
+        ...String(body?.pauseKeywords || '')
+          .split(/\r?\n/)
+          .map((keyword) => ({ command: 'pause', keyword })),
+        ...String(body?.resumeKeywords || '')
+          .split(/\r?\n/)
+          .map((keyword) => ({ command: 'resume', keyword })),
+      ];
+  const seen = new Set();
+  const normalized = [];
+  for (const row of rows) {
+    const command = row.command === 'resume' ? 'resume' : 'pause';
+    const keyword = String(row.keyword || '').trim();
+    if (!keyword) continue;
+    const keyword_norm = normalizePauseKeyword(keyword);
+    if (!keyword_norm) continue;
+    const key = `${command}:${keyword_norm}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      command,
+      keyword,
+      keyword_norm,
+      enabled: row.enabled !== false,
+    });
+  }
+  return normalized;
+}
+
+function normalizePauseKeyword(text) {
+  return String(text).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, '');
 }
 
 function safeTableName(tableName) {

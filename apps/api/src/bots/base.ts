@@ -47,7 +47,25 @@ export abstract class BotBase implements Bot {
       session: sessao,
     };
 
-    // 1. Verifica pausa do projeto (se houver)
+    // 1. Verifica pausa independente por fluxo.
+    if (ctx.flowId) {
+      const flowPaused = await pausaQueries
+        .isFlowPaused({ flowId: ctx.flowId, telefone })
+        .catch(() => false);
+      if (flowPaused) {
+        this.log.info({ telefone, flowId: ctx.flowId }, 'Cliente em pausa no fluxo, ignorando');
+        await this.logEvent({
+          ...baseLog,
+          eventType: 'bot.flow-paused',
+          status: 'ignored',
+          message: 'Cliente em pausa neste fluxo',
+          metadata: { flowId: ctx.flowId, pauseScope: 'flow' },
+        });
+        return;
+      }
+    }
+
+    // 2. Verifica pausa legada do projeto (se houver)
     if (this.cfg.pauseTable) {
       const paused = await pausaQueries.isPaused(this.cfg.pauseTable, telefone).catch(() => false);
       if (paused) {
@@ -65,7 +83,7 @@ export abstract class BotBase implements Bot {
 
     const memorySessionId = this.memorySessionId(ctx);
 
-    // 2. Registra mensagem do usuário na memória
+    // 3. Registra mensagem do usuário na memória
     if (texto) {
       await this.appendMemory(ctx, 'human', texto);
       await this.logEvent({
@@ -85,7 +103,7 @@ export abstract class BotBase implements Bot {
       });
     }
 
-    // 3. Delega para implementação específica do bot
+    // 4. Delega para implementação específica do bot
     try {
       const reply = await this.process(ctx);
       if (reply) {

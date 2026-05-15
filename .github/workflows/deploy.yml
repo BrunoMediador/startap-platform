@@ -27,4 +27,4 @@ jobs:
           script: |
             set -e
             cd /opt/automacoes/code
-            ./scripts/deploy.sh
+            bash ./scripts/deploy.sh

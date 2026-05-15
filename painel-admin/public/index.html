@@ -1275,6 +1275,7 @@ async function loadModelos() {
     // load prompts and media in parallel
     bots.forEach((b) => {
       loadPromptInto(b.slot);
+      loadPauseKeywordsInto(b.slot, b.flow_id || FLOW_META[b.slot]?.workflow_id || b.slot);
       if (FLOW_META[b.slot]?.has_media) loadMediaInto(b.slot);
     });
   } catch (e) {
@@ -1327,6 +1328,31 @@ function renderFlowCard(bot) {
       </div>
     </div>
 
+    <!-- Controle de pausa -->
+    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">Controle de pausa</div>
+          <div class="text-xs mt-0.5 mono" style="color: var(--text-dim)">flow_id: ${esc(bot.flow_id || meta.workflow_id)}</div>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn-ghost px-2 py-1 rounded text-[11px]" onclick="reloadPauseKeywords('${esc(bot.slot)}', '${esc(bot.flow_id || meta.workflow_id)}')">Recarregar</button>
+          <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="savePauseKeywords('${esc(bot.slot)}', '${esc(bot.flow_id || meta.workflow_id)}')">Salvar palavras</button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Pausar IA</div>
+          <textarea id="pause-kw-${esc(bot.slot)}" class="input mono w-full" rows="4" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5"></textarea>
+        </div>
+        <div>
+          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Retomar IA</div>
+          <textarea id="resume-kw-${esc(bot.slot)}" class="input mono w-full" rows="4" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5"></textarea>
+        </div>
+      </div>
+      <div id="pause-kw-status-${esc(bot.slot)}" class="text-[11px] mt-1" style="color: var(--text-mute)"></div>
+    </div>
+
     <!-- Prompt -->
     <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
       <div class="flex items-center justify-between mb-2">
@@ -1376,6 +1402,37 @@ window.savePrompt = async (slot) => {
       body: JSON.stringify({ prompt }),
     });
     toast('Prompt salvo: ' + slot);
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+async function loadPauseKeywordsInto(slot, flowId) {
+  try {
+    const list = await api('/api/workflows/' + encodeURIComponent(flowId) + '/pause-keywords');
+    const pause = list.filter((row) => row.command === 'pause' && row.enabled).map((row) => row.keyword);
+    const resume = list.filter((row) => row.command === 'resume' && row.enabled).map((row) => row.keyword);
+    $('#pause-kw-' + slot).value = pause.join('\n');
+    $('#resume-kw-' + slot).value = resume.join('\n');
+    $('#pause-kw-status-' + slot).textContent = `${pause.length} pausa · ${resume.length} retorno`;
+  } catch (e) {
+    $('#pause-kw-status-' + slot).textContent = 'Erro: ' + e.message;
+  }
+}
+
+window.reloadPauseKeywords = (slot, flowId) => loadPauseKeywordsInto(slot, flowId);
+
+window.savePauseKeywords = async (slot, flowId) => {
+  try {
+    const pauseKeywords = $('#pause-kw-' + slot).value;
+    const resumeKeywords = $('#resume-kw-' + slot).value;
+    const saved = await api('/api/workflows/' + encodeURIComponent(flowId) + '/pause-keywords', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pauseKeywords, resumeKeywords }),
+    });
+    const pause = saved.filter((row) => row.command === 'pause' && row.enabled).length;
+    const resume = saved.filter((row) => row.command === 'resume' && row.enabled).length;
+    $('#pause-kw-status-' + slot).textContent = `${pause} pausa · ${resume} retorno`;
+    toast('Palavras-chave salvas: ' + slot);
   } catch (e) { toast(e.message, 'err'); }
 };
 

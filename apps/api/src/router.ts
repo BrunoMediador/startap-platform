@@ -22,6 +22,7 @@ import {
   getStartapManualCommand,
   isStartapSession,
 } from './bots/startap.js';
+import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 
 const log = logger.child({ module: 'router' });
 
@@ -63,9 +64,9 @@ export async function handleWebhook(
       ? getStartapManualCommand(body.payload?.body ?? '')
       : null;
 
-  // 2. Ignora mensagens comuns enviadas pelo próprio bot.
-  // Comandos manuais da Startap precisam passar para pausar/retomar a IA.
-  if (fromMe && !startapManualCommand) {
+  // 2. Mensagens fromMe com texto podem ser comando manual por fluxo.
+  // A decisão final vem depois de extrair o telefone e descobrir o fluxo.
+  if (fromMe && !startapManualCommand && !body.payload?.body) {
     await flowExecutionLog.logFlowEvent({
       ...baseLog,
       eventType: 'router.ignored',
@@ -101,7 +102,10 @@ export async function handleWebhook(
   const phoneLog = { ...baseLog, telefone };
 
   if (startapManualCommand) {
-    await applyStartapManualCommand(startapManualCommand, telefone);
+    await applyStartapManualCommand(startapManualCommand, telefone, {
+      session: sessao,
+      source: 'fromMe',
+    });
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       flowId: STARTAP_WORKFLOW_ID,
@@ -118,6 +122,61 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: `ok:startap-manual-${startapManualCommand}` };
+  }
+
+  if (fromMe) {
+    const route = await findRouteOrStartapFallback(telefone, sessao);
+    const flowManualCommand = route
+      ? await getFlowManualCommandForFlow(route.workflow_id, body.payload?.body ?? '')
+      : null;
+    if (!route) {
+      await flowExecutionLog.logFlowEvent({
+        ...phoneLog,
+        eventType: 'router.manual-pause-no-routing',
+        status: 'ignored',
+        message: 'Comando manual recebido, mas telefone sem rota ativa',
+        metadata: { command: flowManualCommand, source: 'fromMe' },
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: 'ignored:manual-pause-no-routing' };
+    }
+    if (!flowManualCommand) {
+      await flowExecutionLog.logFlowEvent({
+        ...phoneLog,
+        flowId: route.workflow_id,
+        flowName: route.workflow_name,
+        eventType: 'router.ignored',
+        status: 'ignored',
+        message: 'Mensagem enviada pelo próprio bot',
+        metadata: { reason: 'fromMe', routeId: route.id },
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: 'ignored:fromMe' };
+    }
+
+    await applyFlowManualCommand({
+      command: flowManualCommand,
+      flowId: route.workflow_id,
+      flowName: route.workflow_name,
+      telefone,
+      session: sessao,
+      source: 'fromMe',
+      reason: 'Comando manual no WhatsApp',
+    });
+    await flowExecutionLog.logFlowEvent({
+      ...phoneLog,
+      flowId: route.workflow_id,
+      flowName: route.workflow_name,
+      eventType: flowManualCommand === 'pause' ? 'router.manual-pause' : 'router.manual-resume',
+      status: 'success',
+      message:
+        flowManualCommand === 'pause'
+          ? 'Atendente assumiu a conversa neste fluxo'
+          : 'Atendimento humano finalizado; IA do fluxo retomada',
+      metadata: { pauseScope: 'flow', source: 'fromMe' },
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: `ok:manual-${flowManualCommand}` };
   }
 
   await flowExecutionLog.logFlowEvent({
@@ -151,7 +210,9 @@ export async function handleWebhook(
   }
 
   if (isStartapSession(sessao)) {
-    const startapPaused = await pausa.isPaused('pause_startap', telefone).catch(() => false);
+    const startapPaused =
+      (await pausa.isFlowPaused({ flowId: STARTAP_WORKFLOW_ID, telefone }).catch(() => false)) ||
+      (await pausa.isPaused('pause_startap', telefone).catch(() => false));
     if (startapPaused) {
       log.info({ telefone, sessao }, 'Número em pause_startap, ignorando sessão Startap');
       await flowExecutionLog.logFlowEvent({
