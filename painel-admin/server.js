@@ -1234,10 +1234,15 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
 });
 
 app.get('/api/message-stats', async (req, res) => {
+  // Lê de flow_execution_logs (event_type='webhook.received') porque message_log
+  // é zerada a cada hora pelo limpar_historicos.sh (uso anti-bot). flow_execution_logs
+  // preserva 14+ dias e tem índice idx_flow_logs_created.
   try {
     const r = await pool.query(`
       SELECT DATE(created_at) AS dia, COUNT(*) AS total
-      FROM message_log WHERE created_at > NOW() - INTERVAL '14 days'
+      FROM flow_execution_logs
+      WHERE event_type = 'webhook.received'
+        AND created_at > NOW() - INTERVAL '14 days'
       GROUP BY 1 ORDER BY 1 DESC
     `);
     res.json(r.rows);
