@@ -15,6 +15,26 @@ interface TableSpec {
   pausedFlag?: { name: string; value: boolean };
 }
 
+export interface FlowPauseInput {
+  flowId: string;
+  flowName?: string | null;
+  telefone: string;
+  session?: string | null;
+  source?: string | null;
+  reason?: string | null;
+}
+
+export type FlowPauseCommand = 'pause' | 'resume';
+
+export interface FlowPauseKeywordRow {
+  flow_id: string;
+  command: FlowPauseCommand;
+  keyword: string;
+  keyword_norm: string;
+  enabled: boolean;
+  updated_at: Date;
+}
+
 const TABLES: Record<string, TableSpec> = {
   pausa: { col: 'chat_id' },
   pausa_samuel: { col: 'numero' },
@@ -72,4 +92,100 @@ export async function listPauses(table: string): Promise<string[]> {
   const where = pausedFlag ? `WHERE ${pausedFlag.name} = ${pausedFlag.value}` : '';
   const r = await query<{ v: string }>(`SELECT ${col} AS v FROM ${table} ${where} ORDER BY ${col}`);
   return r.rows.map((x) => x.v);
+}
+
+export async function isFlowPaused(input: {
+  flowId: string;
+  telefone: string;
+}): Promise<boolean> {
+  const r = await query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM flow_pauses
+     WHERE flow_id = $1 AND telefone = $2 AND active = TRUE`,
+    [input.flowId, input.telefone],
+  );
+  return Number(r.rows[0]?.count ?? 0) > 0;
+}
+
+export async function addFlowPause(input: FlowPauseInput): Promise<void> {
+  await query(
+    `INSERT INTO flow_pauses
+       (flow_id, flow_name, telefone, session, active, source, reason, updated_at)
+     VALUES ($1,$2,$3,$4,TRUE,$5,$6,NOW())
+     ON CONFLICT (flow_id, telefone) DO UPDATE SET
+       flow_name = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
+       session = COALESCE(EXCLUDED.session, flow_pauses.session),
+       active = TRUE,
+       source = COALESCE(EXCLUDED.source, flow_pauses.source),
+       reason = COALESCE(EXCLUDED.reason, flow_pauses.reason),
+       updated_at = NOW()`,
+    [
+      input.flowId,
+      input.flowName ?? null,
+      input.telefone,
+      input.session ?? null,
+      input.source ?? 'manual',
+      input.reason ?? null,
+    ],
+  );
+}
+
+export async function removeFlowPause(input: {
+  flowId: string;
+  telefone: string;
+  session?: string | null;
+  source?: string | null;
+}): Promise<void> {
+  await query(
+    `UPDATE flow_pauses
+     SET active = FALSE,
+         session = COALESCE($3, session),
+         source = COALESCE($4, source),
+         updated_at = NOW()
+     WHERE flow_id = $1 AND telefone = $2`,
+    [input.flowId, input.telefone, input.session ?? null, input.source ?? 'manual'],
+  );
+}
+
+export async function listFlowPauses(flowId?: string): Promise<
+  Array<{
+    flow_id: string;
+    flow_name: string | null;
+    telefone: string;
+    session: string | null;
+    source: string | null;
+    reason: string | null;
+    updated_at: Date;
+  }>
+> {
+  const vals: string[] = [];
+  const where = flowId ? 'WHERE flow_id = $1 AND active = TRUE' : 'WHERE active = TRUE';
+  if (flowId) vals.push(flowId);
+  const r = await query<{
+    flow_id: string;
+    flow_name: string | null;
+    telefone: string;
+    session: string | null;
+    source: string | null;
+    reason: string | null;
+    updated_at: Date;
+  }>(
+    `SELECT flow_id, flow_name, telefone, session, source, reason, updated_at
+     FROM flow_pauses
+     ${where}
+     ORDER BY flow_name, telefone`,
+    vals,
+  );
+  return r.rows;
+}
+
+export async function listFlowPauseKeywords(flowId: string): Promise<FlowPauseKeywordRow[]> {
+  const r = await query<FlowPauseKeywordRow>(
+    `SELECT flow_id, command, keyword, keyword_norm, enabled, updated_at
+     FROM flow_pause_keywords
+     WHERE flow_id = $1
+     ORDER BY command, keyword`,
+    [flowId],
+  );
+  return r.rows;
 }

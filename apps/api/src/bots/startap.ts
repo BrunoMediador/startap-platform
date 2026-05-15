@@ -1,6 +1,7 @@
 import type { BotContext } from '@startap/core/types';
 import { pausa } from '@startap/db';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -83,9 +84,17 @@ export function getStartapManualCommand(text: string): 'pause' | 'resume' | null
 export async function applyStartapManualCommand(
   command: 'pause' | 'resume',
   telefone: string,
+  opts: { session?: string | null; source?: string | null } = {},
 ): Promise<void> {
-  if (command === 'pause') await pausa.addPause(PAUSE_TABLE, telefone);
-  else await pausa.removePause(PAUSE_TABLE, telefone);
+  await applyFlowManualCommand({
+    command,
+    flowId: STARTAP_WORKFLOW_ID,
+    flowName: STARTAP_WORKFLOW_NAME,
+    telefone,
+    session: opts.session,
+    source: opts.source ?? 'manual',
+    reason: 'Intervencao humana Startap',
+  });
 }
 
 export class StartapBot extends BotBase {
@@ -118,7 +127,10 @@ export class StartapBot extends BotBase {
       return null;
     }
 
-    const paused = await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false);
+    const paused =
+      (await pausa
+        .isFlowPaused({ flowId: ctx.flowId ?? STARTAP_WORKFLOW_ID, telefone })
+        .catch(() => false)) || (await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false));
     if (paused) {
       this.log.info({ telefone }, 'Startap em pausa, ignorando');
       return null;

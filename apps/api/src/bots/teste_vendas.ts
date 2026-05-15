@@ -2,11 +2,14 @@ import type { BotContext } from '@startap/core/types';
 import { botMedia, leads, pausa } from '@startap/db';
 import { waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
 
 const SLOT = 'teste_vendas';
+const WORKFLOW_ID = 'dlpKXM3gvX2joC1b';
+const WORKFLOW_NAME = 'teste_vendas';
 const PAUSE_TABLE = 'pause_ricardo';
 
 const DEFAULT_PROMPT_TPL = [
@@ -72,7 +75,7 @@ export class TesteVendasBot extends BotBase {
     super({
       name: SLOT,
       projectId: SLOT,
-      pauseTable: null,
+      pauseTable: PAUSE_TABLE,
       memoryTable: 'chat_histories_ricardo',
       memoryWindow: 10,
     });
@@ -87,17 +90,35 @@ export class TesteVendasBot extends BotBase {
 
     // Comandos manuais de pausa
     if (lower === 'ricardo aqui!!' || lower === 'startap aqui!!') {
-      await pausa.addPause(PAUSE_TABLE, telefone);
+      await applyFlowManualCommand({
+        command: 'pause',
+        flowId: ctx.flowId ?? WORKFLOW_ID,
+        flowName: ctx.flowName ?? WORKFLOW_NAME,
+        telefone,
+        session: sessao,
+        source: 'manual',
+        reason: 'Comando manual no fluxo Ricardo',
+      });
       this.log.info({ telefone }, 'Pausa manual ativada');
       return null;
     }
     if (lower === 'ricardo voltar!!' || lower === 'startap voltar!!') {
-      await pausa.removePause(PAUSE_TABLE, telefone);
+      await applyFlowManualCommand({
+        command: 'resume',
+        flowId: ctx.flowId ?? WORKFLOW_ID,
+        flowName: ctx.flowName ?? WORKFLOW_NAME,
+        telefone,
+        session: sessao,
+        source: 'manual',
+      });
       this.log.info({ telefone }, 'Pausa manual removida');
       return null;
     }
 
-    const paused = await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false);
+    const paused =
+      (await pausa
+        .isFlowPaused({ flowId: ctx.flowId ?? WORKFLOW_ID, telefone })
+        .catch(() => false)) || (await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false));
     if (paused) {
       this.log.info({ telefone }, 'Cliente em pausa manual, ignorando');
       return null;
