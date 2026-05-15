@@ -1,0 +1,26 @@
+{
+  "name": "startap-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plataforma Startap — bots WhatsApp, agendamento, IA. Migrado de n8n.",
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev:api": "npm -w @startap/api run dev",
+    "dev:worker": "npm -w @startap/worker run dev",
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

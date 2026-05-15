@@ -1,0 +1,22 @@
+{
+  "name": "@startap/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./waha": "./dist/waha/index.js",
+    "./openai": "./dist/openai/index.js",
+    "./whisper": "./dist/whisper/index.js",
+    "./google-calendar": "./dist/google-calendar/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@startap/core": "*",
+    "openai": "^4.78.0"
+  }
+}
