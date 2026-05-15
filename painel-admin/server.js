@@ -300,6 +300,33 @@ app.post('/api/uploads/media', mediaUpload.single('file'), (req, res) => {
   }
 });
 
+// Proxy HTTPS-friendly para midias HTTP internas (resolve mixed-content)
+const ALLOWED_PROXY_HOSTS = ['187.77.242.220', 'localhost', '127.0.0.1', 'nginx-videos'];
+app.get('/media-proxy', async (req, res) => {
+  try {
+    const target = String(req.query.u || '');
+    if (!target) return res.status(400).send('missing u');
+    let parsed;
+    try { parsed = new URL(target); } catch { return res.status(400).send('invalid url'); }
+    if (!ALLOWED_PROXY_HOSTS.includes(parsed.hostname)) {
+      return res.status(403).send('host nao permitido');
+    }
+    const upstream = await fetch(target, { headers: req.headers.range ? { Range: req.headers.range } : {} });
+    res.status(upstream.status);
+    const passHeaders = ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control'];
+    for (const h of passHeaders) {
+      const v = upstream.headers.get(h);
+      if (v) res.setHeader(h, v);
+    }
+    if (!upstream.body) return res.end();
+    upstream.body.pipe(res);
+    upstream.body.on('error', () => res.end());
+  } catch (e) {
+    res.status(502).send('proxy error: ' + e.message);
+  }
+});
+
+
 const n8nFetch = async (p, opts = {}) => {
   const r = await fetch(`${N8N_URL}${p}`, {
     ...opts,
@@ -753,10 +780,12 @@ async function setFlowControl(input) {
 // ---------- SYSTEM STATUS ----------
 app.get('/api/status', async (req, res) => {
   try {
-    const [workflows, sessions, execs] = await Promise.all([
+    const [workflows, sessions, recentLogs] = await Promise.all([
       fetchAllWorkflows(),
       wahaFetch('/api/sessions').catch(() => []),
-      n8nFetch('/api/v1/executions?limit=15').catch(() => ({ data: [] })),
+      pool.query(
+        'SELECT id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, duration_ms, error_summary, created_at FROM flow_execution_logs ORDER BY id DESC LIMIT 15'
+      ).then(r => r.rows).catch(() => []),
     ]);
     res.json({
       n8n: {
@@ -770,13 +799,7 @@ app.get('/api/status', async (req, res) => {
         me: s.me?.id || null,
         webhook: s.config?.webhooks?.[0]?.url,
       })),
-      execucoes: (execs.data || []).map((e) => ({
-        id: e.id,
-        workflowId: e.workflowId,
-        status: e.status,
-        startedAt: e.startedAt,
-        finished: e.finished,
-      })),
+      execucoes: recentLogs,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1275,6 +1298,33 @@ app.use((err, _req, res, _next) => {
   }
   if (err) return res.status(400).json({ error: err.message || 'falha no upload' });
   res.status(500).json({ error: 'erro inesperado' });
+});
+
+
+// ---------- CLEANUP STATUS ----------
+app.get('/api/cleanup/status', async (req, res) => {
+  try {
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setMinutes(0, 0, 0);
+    nextRun.setHours(nextRun.getHours() + 1);
+
+    const [lastRunRes, tablesRes] = await Promise.all([
+      pool.query('SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1').catch(() => ({ rows: [] })),
+      pool.query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name').catch(() => ({ rows: [] })),
+    ]);
+
+    res.json({
+      last_run: lastRunRes.rows[0]?.cleaned_at || null,
+      last_tables_cleaned: lastRunRes.rows[0]?.tables_cleaned || 0,
+      next_run: nextRun.toISOString(),
+      cron: '0 * * * *',
+      interval_minutes: 60,
+      tables: tablesRes.rows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));
