@@ -16,9 +16,6 @@ const {
   PG_USER = 'n8n_user',
   PG_PASS = 'senha_banco_forte_123',
   PG_DB = 'n8n_database',
-  N8N_URL = 'http://n8n:5678',
-  N8N_PUBLIC_URL = 'https://n8n.startap.tech',
-  N8N_API_KEY = '',
   WAHA_URL = 'http://waha:3000',
   WAHA_API_KEY = '',
   ADMIN_USER = 'admin',
@@ -32,7 +29,7 @@ const {
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
-// Bots do TS platform (substituem os workflows n8n deletados)
+// Bots do TS platform
 const TS_BOTS = [
   {
     id: '0ni38aSspWwhooHd',
@@ -325,17 +322,6 @@ app.get('/media-proxy', async (req, res) => {
     res.status(502).send('proxy error: ' + e.message);
   }
 });
-
-
-const n8nFetch = async (p, opts = {}) => {
-  const r = await fetch(`${N8N_URL}${p}`, {
-    ...opts,
-    headers: { 'X-N8N-API-KEY': N8N_API_KEY, ...(opts.headers || {}) },
-  });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.message || body.error || r.statusText);
-  return body;
-};
 
 const wahaFetch = (p) =>
   fetch(`${WAHA_URL}${p}`, { headers: { 'X-Api-Key': WAHA_API_KEY } }).then((r) => r.json());
@@ -640,23 +626,16 @@ app.get('/api/workflows', async (req, res) => {
   try {
     const workflows = await fetchAllWorkflows();
     const slim = workflows.map((w) => {
-      const webhookNode = (w.nodes || []).find((n) => n.type === 'n8n-nodes-base.webhook');
       return {
         id: w.id,
         name: w.name,
         active: w.active,
-        nodes: w.nodes?.length || 0,
-        has_webhook: !!webhookNode,
-        routable: w._tsBot ? !!w._routable : !!webhookNode,
-        source: w._tsBot ? 'ts' : 'n8n',
-        category: w._category || (w._tsBot ? 'teste' : 'n8n'),
+        routable: !!w._routable,
+        source: 'ts',
+        category: w._category || 'teste',
         tags: w._tags || [],
         description: w._description || '',
-        webhook_url: w._tsBot
-          ? w._webhook_url
-          : webhookNode
-            ? `${N8N_PUBLIC_URL}/webhook/${webhookNode.parameters?.path || webhookNode.webhookId}`
-            : null,
+        webhook_url: w._webhook_url || null,
       };
     });
     res.json(slim);
@@ -673,15 +652,11 @@ app.patch('/api/workflows/:id/active', async (req, res) => {
     const wf = workflows.find((w) => w.id === id);
     if (!wf) return res.status(404).json({ error: 'fluxo nao encontrado' });
 
-    if (!wf._tsBot) {
-      const op = active ? 'activate' : 'deactivate';
-      await n8nFetch(`/api/v1/workflows/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
-    }
 
     const saved = await setFlowControl({
       flow_id: id,
       flow_name: wf.name,
-      source: wf._tsBot ? 'ts' : 'n8n',
+      source: 'ts',
       active,
     });
     res.json({ ok: true, flow: saved });
@@ -691,11 +666,6 @@ app.patch('/api/workflows/:id/active', async (req, res) => {
 });
 
 async function fetchAllWorkflows() {
-  let n8nData = [];
-  try {
-    const data = await n8nFetch('/api/v1/workflows?limit=100');
-    n8nData = data.data || [];
-  } catch {}
   const tsAsWorkflow = TS_BOTS.map((b) => ({
     id: b.id,
     name: b.name,
@@ -715,7 +685,7 @@ async function fetchAllWorkflows() {
     _description: b.description,
   }));
   const controls = await getFlowControlMap();
-  return [...tsAsWorkflow, ...n8nData].map((w) => {
+  return tsAsWorkflow.map((w) => {
     const control = controls.get(w.id);
     if (!control) return w;
     return {
@@ -733,21 +703,7 @@ async function resolveWorkflow(workflow_id) {
     if (!tsBot.routable) return null;
     return { id: tsBot.id, name: tsBot.name, active: tsBot.active, webhook_url: tsBot.webhook_url };
   }
-  try {
-    const w = await n8nFetch(`/api/v1/workflows/${encodeURIComponent(workflow_id)}`);
-    if (!w?.id) return null;
-    const webhookNode = (w.nodes || []).find((n) => n.type === 'n8n-nodes-base.webhook');
-    return {
-      id: w.id,
-      name: w.name,
-      active: w.active,
-      webhook_url: webhookNode
-        ? `${N8N_PUBLIC_URL}/webhook/${webhookNode.parameters?.path || webhookNode.webhookId}`
-        : null,
-    };
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 async function getFlowControlMap() {
@@ -788,7 +744,7 @@ app.get('/api/status', async (req, res) => {
       ).then(r => r.rows).catch(() => []),
     ]);
     res.json({
-      n8n: {
+      bots: {
         total: workflows.length,
         ativos: workflows.filter((w) => w.active).length,
         workflows: workflows.map((w) => ({ id: w.id, name: w.name, active: w.active })),
