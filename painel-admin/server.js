@@ -648,6 +648,7 @@ app.get('/api/workflows', async (req, res) => {
         tags: w._tags || [],
         description: w._description || '',
         webhook_url: w._webhook_url || null,
+        has_webhook: !!w._webhook_url,
       };
     });
     res.json(slim);

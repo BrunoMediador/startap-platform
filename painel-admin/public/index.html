@@ -859,7 +859,7 @@ let MODELOS_BOTS = [];
 let MODELOS_SELECTED = null;
 
 function isRoutableFlow(w) {
-  return w?.has_webhook && w?.routable !== false;
+  return (w?.has_webhook || !!w?.webhook_url) && w?.routable !== false;
 }
 
 function toast(msg, type='ok') {
@@ -1451,7 +1451,7 @@ function renderLogFlowOptions() {
   const sel = $('#log-flow');
   if (!sel) return;
   const current = sel.value;
-  const options = WORKFLOWS.filter(w => w.has_webhook).map(w => (
+  const options = WORKFLOWS.filter(isRoutableFlow).map(w => (
     `<option value="${esc(w.id)}">${esc(w.name)}</option>`
   )).join('');
   sel.innerHTML = `<option value="">Todos</option>${options}`;
