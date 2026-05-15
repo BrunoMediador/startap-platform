@@ -304,13 +304,25 @@ app.get('/media-proxy', async (req, res) => {
     const target = String(req.query.u || '');
     if (!target) return res.status(400).send('missing u');
     let parsed;
-    try { parsed = new URL(target); } catch { return res.status(400).send('invalid url'); }
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).send('invalid url');
+    }
     if (!ALLOWED_PROXY_HOSTS.includes(parsed.hostname)) {
       return res.status(403).send('host nao permitido');
     }
-    const upstream = await fetch(target, { headers: req.headers.range ? { Range: req.headers.range } : {} });
+    const upstream = await fetch(target, {
+      headers: req.headers.range ? { Range: req.headers.range } : {},
+    });
     res.status(upstream.status);
-    const passHeaders = ['content-type', 'content-length', 'accept-ranges', 'content-range', 'cache-control'];
+    const passHeaders = [
+      'content-type',
+      'content-length',
+      'accept-ranges',
+      'content-range',
+      'cache-control',
+    ];
     for (const h of passHeaders) {
       const v = upstream.headers.get(h);
       if (v) res.setHeader(h, v);
@@ -319,7 +331,7 @@ app.get('/media-proxy', async (req, res) => {
     upstream.body.pipe(res);
     upstream.body.on('error', () => res.end());
   } catch (e) {
-    res.status(502).send('proxy error: ' + e.message);
+    res.status(502).send(`proxy error: ${e.message}`);
   }
 });
 
@@ -652,7 +664,6 @@ app.patch('/api/workflows/:id/active', async (req, res) => {
     const wf = workflows.find((w) => w.id === id);
     if (!wf) return res.status(404).json({ error: 'fluxo nao encontrado' });
 
-
     const saved = await setFlowControl({
       flow_id: id,
       flow_name: wf.name,
@@ -739,9 +750,12 @@ app.get('/api/status', async (req, res) => {
     const [workflows, sessions, recentLogs] = await Promise.all([
       fetchAllWorkflows(),
       wahaFetch('/api/sessions').catch(() => []),
-      pool.query(
-        'SELECT id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, duration_ms, error_summary, created_at FROM flow_execution_logs ORDER BY id DESC LIMIT 15'
-      ).then(r => r.rows).catch(() => []),
+      pool
+        .query(
+          'SELECT id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, duration_ms, error_summary, created_at FROM flow_execution_logs ORDER BY id DESC LIMIT 15',
+        )
+        .then((r) => r.rows)
+        .catch(() => []),
     ]);
     res.json({
       bots: {
@@ -1261,7 +1275,6 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'erro inesperado' });
 });
 
-
 // ---------- CLEANUP STATUS ----------
 app.get('/api/cleanup/status', async (req, res) => {
   try {
@@ -1271,8 +1284,14 @@ app.get('/api/cleanup/status', async (req, res) => {
     nextRun.setHours(nextRun.getHours() + 1);
 
     const [lastRunRes, tablesRes] = await Promise.all([
-      pool.query('SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1').catch(() => ({ rows: [] })),
-      pool.query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name').catch(() => ({ rows: [] })),
+      pool
+        .query(
+          'SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1',
+        )
+        .catch(() => ({ rows: [] })),
+      pool
+        .query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name')
+        .catch(() => ({ rows: [] })),
     ]);
 
     res.json({

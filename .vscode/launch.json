@@ -5,9 +5,9 @@
       "name": "API (startap-api)",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/api/src/index.ts",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["--loader", "ts-node/esm"],
+      "program": "${workspaceFolder}/apps/api/src/server.ts",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx"],
       "env": {
         "NODE_ENV": "development"
       },
@@ -19,9 +19,9 @@
       "name": "Worker",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/worker/src/index.ts",
-      "runtimeExecutable": "node",
-      "runtimeArgs": ["--loader", "ts-node/esm"],
+      "program": "${workspaceFolder}/apps/worker/src/worker.ts",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx"],
       "envFile": "${workspaceFolder}/.env",
       "outFiles": ["${workspaceFolder}/apps/worker/dist/**/*.js"],
       "skipFiles": ["<node_internals>/**"]
