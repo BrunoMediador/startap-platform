@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-A Startap Platform deve evoluir de bots migrados do n8n para uma plataforma multi-produto, multi-cliente e operacionalmente segura.
+A Startap Platform deve evoluir de bots migrados do automação visual antiga para uma plataforma multi-produto, multi-cliente e operacionalmente segura.
 
 O fluxo alvo e:
 
@@ -31,7 +31,7 @@ O sistema roda em TypeScript/Node com:
 - `packages/integrations`: WAHA, OpenAI, Whisper e Google Calendar.
 - `painel-admin`: painel operacional atual.
 
-Ainda existem hardcodes nos bots e tabelas legadas de memoria vindas da migracao do n8n.
+Ainda existem hardcodes nos bots e tabelas legadas de memoria vindas da migracao do automação visual antiga.
 
 ## Arquitetura Alvo
 

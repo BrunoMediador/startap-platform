@@ -17,7 +17,7 @@ export interface BotConfig {
   projectId: string;
   /** Tabela de pausa específica desse bot (ex: 'pausa_samuel'). Null = sem pausa por projeto. */
   pauseTable: string | null;
-  /** Tabela de memória de chat (ex: 'n8n_chat_histories_ricardo'). */
+  /** Tabela de memória de chat (ex: 'chat_histories_ricardo'). */
   memoryTable: string;
   /** Quantas turnos de memória carregar (default 20). */
   memoryWindow?: number;

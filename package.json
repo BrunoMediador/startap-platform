@@ -2,7 +2,7 @@
   "name": "startap-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Plataforma Startap — bots WhatsApp, agendamento, IA. Migrado de n8n.",
+  "description": "Plataforma Startap — bots WhatsApp, agendamento, IA. Migrado de automação visual antiga.",
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {

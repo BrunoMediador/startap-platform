@@ -5,9 +5,9 @@ const { Pool } = pg;
 export const pool = new Pool({
   host: process.env.PG_HOST ?? 'postgres',
   port: Number(process.env.PG_PORT ?? 5432),
-  user: process.env.PG_USER ?? 'n8n_user',
+  user: process.env.PG_USER ?? 'startap_user',
   password: process.env.PG_PASS ?? '',
-  database: process.env.PG_DB ?? 'n8n_database',
+  database: process.env.PG_DB ?? 'startap_database',
   max: 10,
   idleTimeoutMillis: 30_000,
 });

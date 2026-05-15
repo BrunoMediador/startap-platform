@@ -1,16 +1,16 @@
 import { query } from '../client.js';
 
 /**
- * Memória de chat persistente (substitui o memoryPostgresChat do n8n LangChain).
+ * Memória de chat persistente (substitui o memoryPostgresChat do LangChain legado).
  *
  * Cada bot/projeto tem sua própria tabela:
- *   n8n_chat_histories (default)
- *   n8n_chat_histories_ricardo
- *   n8n_chat_histories_vendas_barbearia
- *   n8n_chat_histories_startap
- *   n8n_chat_histories_controle_de_pause
+ *   chat_histories (default)
+ *   chat_histories_ricardo
+ *   chat_histories_vendas_barbearia
+ *   chat_histories_startap
+ *   chat_histories_controle_de_pause
  *
- * Estrutura da tabela LangChain n8n:
+ * Estrutura da tabela LangChain legado:
  *   id SERIAL PRIMARY KEY
  *   session_id TEXT  (geralmente o telefone)
  *   message JSONB    ({ type: 'human' | 'ai' | 'system', data: { content, ... } })
@@ -105,13 +105,13 @@ export function listKnownChatTables(): string[] {
 }
 
 const KNOWN_CHAT_TABLES = new Set([
-  'n8n_chat_histories',
-  'n8n_chat_histories_ricardo',
-  'n8n_chat_histories_vendas_barbearia',
-  'n8n_chat_histories_startap',
-  'n8n_chat_histories_controle_de_pause',
-  'n8n_chat_histories_controle_de_pausee',
-  'n8n_chat_histories_controle_de_pauseee',
+  'chat_histories',
+  'chat_histories_ricardo',
+  'chat_histories_vendas_barbearia',
+  'chat_histories_startap',
+  'chat_histories_controle_de_pause',
+  'chat_histories_controle_de_pausee',
+  'chat_histories_controle_de_pauseee',
 ]);
 
 function isKnownChatTable(table: string): boolean {

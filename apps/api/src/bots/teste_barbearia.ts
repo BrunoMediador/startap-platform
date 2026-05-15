@@ -191,7 +191,7 @@ export class TesteBarbeariaBot extends BotBase {
       name: SLOT,
       projectId: SLOT,
       pauseTable: 'pausa_cirilo', // mantido pra preservar history
-      memoryTable: 'n8n_chat_histories',
+      memoryTable: 'chat_histories',
       memoryWindow: 10,
     });
   }

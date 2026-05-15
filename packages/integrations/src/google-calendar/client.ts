@@ -3,7 +3,7 @@
  *
  * Substitui os workflows Cirilo_Consultar_Agendamento e Cirilo_Inserir_Agendamento.
  *
- * Usa OAuth2 refresh token (mais simples que service account para n8n migration).
+ * Usa OAuth2 refresh token (mais simples que service account para migração da automação visual).
  */
 import { logger } from '@startap/core/logger';
 

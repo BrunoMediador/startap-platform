@@ -29,53 +29,53 @@ CREATE TABLE IF NOT EXISTS project_databases (
 CREATE INDEX IF NOT EXISTS idx_project_databases_workflow ON project_databases (workflow_id);
 CREATE INDEX IF NOT EXISTS idx_project_databases_slot ON project_databases (slot);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories (
+CREATE TABLE IF NOT EXISTS chat_histories (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_session
-  ON n8n_chat_histories (session_id, id DESC);
+  ON chat_histories (session_id, id DESC);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_ricardo (
+CREATE TABLE IF NOT EXISTS chat_histories_ricardo (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_ricardo_session
-  ON n8n_chat_histories_ricardo (session_id, id DESC);
+  ON chat_histories_ricardo (session_id, id DESC);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_startap (
+CREATE TABLE IF NOT EXISTS chat_histories_startap (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_startap_session
-  ON n8n_chat_histories_startap (session_id, id DESC);
+  ON chat_histories_startap (session_id, id DESC);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_controle_de_pause (
+CREATE TABLE IF NOT EXISTS chat_histories_controle_de_pause (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_controle_pause_session
-  ON n8n_chat_histories_controle_de_pause (session_id, id DESC);
+  ON chat_histories_controle_de_pause (session_id, id DESC);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_controle_de_pausee (
+CREATE TABLE IF NOT EXISTS chat_histories_controle_de_pausee (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_controle_pausee_session
-  ON n8n_chat_histories_controle_de_pausee (session_id, id DESC);
+  ON chat_histories_controle_de_pausee (session_id, id DESC);
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_controle_de_pauseee (
+CREATE TABLE IF NOT EXISTS chat_histories_controle_de_pauseee (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_controle_pauseee_session
-  ON n8n_chat_histories_controle_de_pauseee (session_id, id DESC);
+  ON chat_histories_controle_de_pauseee (session_id, id DESC);
 
 INSERT INTO flow_controls (flow_id, flow_name, source, active, updated_at) VALUES
   ('0ni38aSspWwhooHd', 'teste_barbearia', 'ts', TRUE, NOW()),
@@ -93,7 +93,7 @@ VALUES
     '0ni38aSspWwhooHd',
     'teste_barbearia',
     'ts',
-    'n8n_chat_histories',
+    'chat_histories',
     'active',
     '{"category":"teste","tables":["chat_memory","routing","bot_prompt","model_usage","flow_logs","agendamento_pendente"]}'::jsonb,
     NOW()
@@ -104,7 +104,7 @@ VALUES
     'dlpKXM3gvX2joC1b',
     'teste_vendas',
     'ts',
-    'n8n_chat_histories_ricardo',
+    'chat_histories_ricardo',
     'active',
     '{"category":"teste","tables":["chat_memory","routing","bot_prompt","bot_media","model_usage","flow_logs","leads_ricardo"]}'::jsonb,
     NOW()
@@ -115,7 +115,7 @@ VALUES
     'teste_vendas_barbearia',
     'teste_vendas_barbearia',
     'ts',
-    'n8n_chat_histories_vendas_barbearia',
+    'chat_histories_vendas_barbearia',
     'active',
     '{"category":"teste","tables":["chat_memory","routing","bot_prompt","bot_media","model_usage","flow_logs","leads_vendas_barbearia"]}'::jsonb,
     NOW()
@@ -126,7 +126,7 @@ VALUES
     'uUS3Ux1cU2DquKxo',
     'startap',
     'ts',
-    'n8n_chat_histories_startap',
+    'chat_histories_startap',
     'active',
     '{"category":"interno","tables":["chat_memory","bot_prompt","model_usage","flow_logs","pause_startap"]}'::jsonb,
     NOW()

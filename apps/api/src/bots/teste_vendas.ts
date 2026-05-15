@@ -73,7 +73,7 @@ export class TesteVendasBot extends BotBase {
       name: SLOT,
       projectId: SLOT,
       pauseTable: null,
-      memoryTable: 'n8n_chat_histories_ricardo',
+      memoryTable: 'chat_histories_ricardo',
       memoryWindow: 10,
     });
   }

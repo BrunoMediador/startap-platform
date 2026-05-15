@@ -45,7 +45,7 @@ const DEFAULT_PROMPT_TPL = [
   '',
   '[CAPACIDADES DA STARTAP - use como repertorio, nunca liste tudo de uma vez]',
   '- Assistentes de WhatsApp com IA',
-  '- Automacoes via n8n / TS',
+  '- Automacoes via TypeScript',
   '- Integracao com Google Calendar, ERPs e sistemas customizados',
   '- Bancos de dados em PostgreSQL',
   '- Notificacoes e alertas automaticos',
@@ -88,7 +88,7 @@ export class StartapBot extends BotBase {
       name: SLOT,
       projectId: SLOT,
       pauseTable: null, // gerenciado manualmente
-      memoryTable: 'n8n_chat_histories_startap',
+      memoryTable: 'chat_histories_startap',
       memoryWindow: 15,
     });
   }

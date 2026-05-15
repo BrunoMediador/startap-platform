@@ -1,36 +1,14 @@
-# Dependencies
 node_modules/
-
-# Build
 dist/
 build/
 .turbo/
-*.tsbuildinfo
-
-# Environment (NUNCA commitar segredos)
+coverage/
 .env
 .env.local
 .env.*.local
-
-# Logs
 *.log
-npm-debug.log*
-
-# OS
 .DS_Store
-Thumbs.db
-
-# IDEs
+.vscode/
 .idea/
-*.swp
-*.swo
-
-# Coverage
-coverage/
-
-# Package managers
+*.tsbuildinfo
 .pnpm-store/
-
-# Backups
-*.bak
-*.bak-*

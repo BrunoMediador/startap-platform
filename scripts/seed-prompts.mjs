@@ -6,9 +6,9 @@ import { TESTE_VENDAS_BARBEARIA_DEFAULT_PROMPT } from '/app/apps/api/dist/bots/t
 
 const c = new pg.Client({
   host: 'postgres',
-  user: 'n8n_user',
+  user: 'startap_user',
   password: 'senha_banco_forte_123',
-  database: 'n8n_database',
+  database: 'startap_database',
 });
 await c.connect();
 

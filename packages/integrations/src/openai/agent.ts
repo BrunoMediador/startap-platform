@@ -3,7 +3,7 @@ import type { ChatTurn } from '@startap/db';
 /**
  * Agente OpenAI com tool-calling.
  *
- * Substitui o nó "AI Agent" (LangChain) do n8n. Implementação minimalista
+ * Substitui o nó "AI Agent" (LangChain) do automação visual antiga. Implementação minimalista
  * usando OpenAI SDK direto + memória Postgres.
  *
  * Suporta providers compatíveis (DeepSeek, etc) via apiKey/baseURL opcionais.

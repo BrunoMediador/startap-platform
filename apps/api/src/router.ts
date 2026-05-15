@@ -1,10 +1,10 @@
 /**
- * Router universal — substitui o workflow ROUTER_WAHA (n8n).
+ * Router universal — substitui o workflow ROUTER_WAHA (automação visual antiga).
  *
  * Recebe payload da WAHA, extrai telefone (handling LID/PN addressingMode),
  * busca em routing_clientes qual bot atende esse número, e delega.
  *
- * Diferenças do n8n original:
+ * Diferenças do automação visual antiga original:
  *  - Roteamento dinâmico via map de bots (não HTTP forward externo).
  *  - Suporta múltiplas sessões WAHA na mesma instância.
  *  - Antibot + pausa global aplicados aqui (antes de chegar nos bots).

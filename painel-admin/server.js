@@ -13,9 +13,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const {
   PG_HOST = 'postgres',
   PG_PORT = '5432',
-  PG_USER = 'n8n_user',
+  PG_USER = 'startap_user',
   PG_PASS = 'senha_banco_forte_123',
-  PG_DB = 'n8n_database',
+  PG_DB = 'startap_database',
   WAHA_URL = 'http://waha:3000',
   WAHA_API_KEY = '',
   ADMIN_USER = 'admin',
@@ -29,7 +29,7 @@ const {
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
-// Bots do TS platform
+// Bots da plataforma TypeScript.
 const TS_BOTS = [
   {
     id: '0ni38aSspWwhooHd',
@@ -129,7 +129,7 @@ const DEFAULT_PROJECT_DATABASES = [
     workflow_id: '0ni38aSspWwhooHd',
     slot: 'teste_barbearia',
     source: 'ts',
-    memory_table: 'n8n_chat_histories',
+    memory_table: 'chat_histories',
     status: 'active',
     metadata: {
       category: 'teste',
@@ -149,7 +149,7 @@ const DEFAULT_PROJECT_DATABASES = [
     workflow_id: 'dlpKXM3gvX2joC1b',
     slot: 'teste_vendas',
     source: 'ts',
-    memory_table: 'n8n_chat_histories_ricardo',
+    memory_table: 'chat_histories_ricardo',
     status: 'active',
     metadata: {
       category: 'teste',
@@ -170,7 +170,7 @@ const DEFAULT_PROJECT_DATABASES = [
     workflow_id: 'teste_vendas_barbearia',
     slot: 'teste_vendas_barbearia',
     source: 'ts',
-    memory_table: 'n8n_chat_histories_vendas_barbearia',
+    memory_table: 'chat_histories_vendas_barbearia',
     status: 'active',
     metadata: {
       category: 'teste',
@@ -191,7 +191,7 @@ const DEFAULT_PROJECT_DATABASES = [
     workflow_id: 'uUS3Ux1cU2DquKxo',
     slot: 'startap',
     source: 'ts',
-    memory_table: 'n8n_chat_histories_startap',
+    memory_table: 'chat_histories_startap',
     status: 'active',
     metadata: {
       category: 'interno',
@@ -294,44 +294,6 @@ app.post('/api/uploads/media', mediaUpload.single('file'), (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
-  }
-});
-
-// Proxy HTTPS-friendly para midias HTTP internas (resolve mixed-content)
-const ALLOWED_PROXY_HOSTS = ['187.77.242.220', 'localhost', '127.0.0.1', 'nginx-videos'];
-app.get('/media-proxy', async (req, res) => {
-  try {
-    const target = String(req.query.u || '');
-    if (!target) return res.status(400).send('missing u');
-    let parsed;
-    try {
-      parsed = new URL(target);
-    } catch {
-      return res.status(400).send('invalid url');
-    }
-    if (!ALLOWED_PROXY_HOSTS.includes(parsed.hostname)) {
-      return res.status(403).send('host nao permitido');
-    }
-    const upstream = await fetch(target, {
-      headers: req.headers.range ? { Range: req.headers.range } : {},
-    });
-    res.status(upstream.status);
-    const passHeaders = [
-      'content-type',
-      'content-length',
-      'accept-ranges',
-      'content-range',
-      'cache-control',
-    ];
-    for (const h of passHeaders) {
-      const v = upstream.headers.get(h);
-      if (v) res.setHeader(h, v);
-    }
-    if (!upstream.body) return res.end();
-    upstream.body.pipe(res);
-    upstream.body.on('error', () => res.end());
-  } catch (e) {
-    res.status(502).send(`proxy error: ${e.message}`);
   }
 });
 
@@ -632,8 +594,8 @@ app.delete('/api/media/:id', async (req, res) => {
   }
 });
 
-// ---------- WORKFLOWS COM WEBHOOK ----------
-// Retorna apenas workflows que tem nó Webhook (utilizáveis pelo roteador)
+// ---------- FLUXOS COM WEBHOOK ----------
+// Retorna os fluxos da plataforma utilizáveis pelo roteador.
 app.get('/api/workflows', async (req, res) => {
   try {
     const workflows = await fetchAllWorkflows();
@@ -642,13 +604,14 @@ app.get('/api/workflows', async (req, res) => {
         id: w.id,
         name: w.name,
         active: w.active,
+        nodes: w.nodes?.length || 0,
+        has_webhook: true,
         routable: !!w._routable,
         source: 'ts',
         category: w._category || 'teste',
         tags: w._tags || [],
         description: w._description || '',
-        webhook_url: w._webhook_url || null,
-        has_webhook: !!w._webhook_url,
+        webhook_url: w._webhook_url,
       };
     });
     res.json(slim);
@@ -684,7 +647,7 @@ async function fetchAllWorkflows() {
     active: b.active,
     nodes: [
       {
-        type: 'n8n-nodes-base.webhook',
+        type: 'startap.webhook',
         webhookId: `ts-${b.id}`,
         parameters: { path: 'webhooks/waha' },
       },
@@ -748,18 +711,12 @@ async function setFlowControl(input) {
 // ---------- SYSTEM STATUS ----------
 app.get('/api/status', async (req, res) => {
   try {
-    const [workflows, sessions, recentLogs] = await Promise.all([
+    const [workflows, sessions] = await Promise.all([
       fetchAllWorkflows(),
       wahaFetch('/api/sessions').catch(() => []),
-      pool
-        .query(
-          'SELECT id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, duration_ms, error_summary, created_at FROM flow_execution_logs ORDER BY id DESC LIMIT 15',
-        )
-        .then((r) => r.rows)
-        .catch(() => []),
     ]);
     res.json({
-      bots: {
+      flows: {
         total: workflows.length,
         ativos: workflows.filter((w) => w.active).length,
         workflows: workflows.map((w) => ({ id: w.id, name: w.name, active: w.active })),
@@ -770,7 +727,7 @@ app.get('/api/status', async (req, res) => {
         me: s.me?.id || null,
         webhook: s.config?.webhooks?.[0]?.url,
       })),
-      execucoes: recentLogs,
+      execucoes: [],
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1249,15 +1206,10 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
 });
 
 app.get('/api/message-stats', async (req, res) => {
-  // Lê de flow_execution_logs (event_type='webhook.received') porque message_log
-  // é zerada a cada hora pelo limpar_historicos.sh (uso anti-bot). flow_execution_logs
-  // preserva 14+ dias e tem índice idx_flow_logs_created.
   try {
     const r = await pool.query(`
       SELECT DATE(created_at) AS dia, COUNT(*) AS total
-      FROM flow_execution_logs
-      WHERE event_type = 'webhook.received'
-        AND created_at > NOW() - INTERVAL '14 days'
+      FROM message_log WHERE created_at > NOW() - INTERVAL '14 days'
       GROUP BY 1 ORDER BY 1 DESC
     `);
     res.json(r.rows);
@@ -1274,38 +1226,6 @@ app.use((err, _req, res, _next) => {
   }
   if (err) return res.status(400).json({ error: err.message || 'falha no upload' });
   res.status(500).json({ error: 'erro inesperado' });
-});
-
-// ---------- CLEANUP STATUS ----------
-app.get('/api/cleanup/status', async (req, res) => {
-  try {
-    const now = new Date();
-    const nextRun = new Date(now);
-    nextRun.setMinutes(0, 0, 0);
-    nextRun.setHours(nextRun.getHours() + 1);
-
-    const [lastRunRes, tablesRes] = await Promise.all([
-      pool
-        .query(
-          'SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1',
-        )
-        .catch(() => ({ rows: [] })),
-      pool
-        .query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name')
-        .catch(() => ({ rows: [] })),
-    ]);
-
-    res.json({
-      last_run: lastRunRes.rows[0]?.cleaned_at || null,
-      last_tables_cleaned: lastRunRes.rows[0]?.tables_cleaned || 0,
-      next_run: nextRun.toISOString(),
-      cron: '0 * * * *',
-      interval_minutes: 60,
-      tables: tablesRes.rows,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
 });
 
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));

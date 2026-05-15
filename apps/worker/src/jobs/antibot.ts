@@ -1,7 +1,7 @@
 /**
  * Job antibot — roda a cada 1 minuto.
  *
- * Substitui Monitor_AntiBot do n8n.
+ * Substitui Monitor_AntiBot do automação visual antiga.
  *
  * Detecta números enviando >10 mensagens em 60s, insere em bot_pausa,
  * e notifica dev + dono via WhatsApp.

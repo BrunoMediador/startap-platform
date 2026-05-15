@@ -1,7 +1,7 @@
 import { query } from '../client.js';
 
 /**
- * Antibot (substitui Monitor_AntiBot do n8n).
+ * Antibot (substitui Monitor_AntiBot do automação visual antiga).
  *
  * Detecta numeros que enviam >10 mensagens em 60 segundos e os bloqueia
  * inserindo na tabela bot_pausa.

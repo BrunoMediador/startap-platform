@@ -1,169 +1,116 @@
 # Startap Platform
 
-Plataforma de bots WhatsApp da Startap. Monorepo TypeScript que substitui os workflows n8n.
+Plataforma de bots WhatsApp para a Startap. **Migração do automação visual antiga para código TypeScript.**
 
-**Servidor**: `187.77.242.220` em `/opt/automacoes/code/`
-**Painel**: https://gestao.startap.tech
-
----
-
-## Bots em producao
-
-| Slot | Bot | Funcao | Provider/Modelo |
-|------|-----|--------|-----------------|
-| `teste_barbearia` | TesteBarbeariaBot | Agendamento Google Calendar | openai/gpt-4o |
-| `teste_vendas` | TesteVendasBot | Funil de vendas (videos V1/V2/V3) | openai/gpt-4o |
-| `teste_vendas_barbearia` | TesteVendasBarbeariaBot | Hibrido vendas + barbearia | openai/gpt-4o |
-| `startap` | StartapBot | Lola - prospeccao comercial | deepseek/deepseek-chat |
+> Status: ✅ Produção (2026-05-14) — 3 bots ativos.
+>
+> 📘 **Como contribuir**: [CONTRIBUTING.md](./CONTRIBUTING.md) — fluxo PR + deploy via `./scripts/deploy.sh`. 
+> 📋 Estado do cutover: [CUTOVER.md](./CUTOVER.md)
+> 🧭 Evolução da plataforma: [docs/platform-architecture.md](./docs/platform-architecture.md), [docs/conversation-scope.md](./docs/conversation-scope.md), [docs/data-model.md](./docs/data-model.md), [docs/operations-runbook.md](./docs/operations-runbook.md)
 
 ---
 
 ## Arquitetura
 
 ```
-WAHA (WhatsApp)
-  │ webhook POST /webhooks/waha
-  ▼
-┌──────────────────────────────────────────────────┐
-│  apps/api (Fastify)                              │
-│                                                  │
-│  webhook-waha.ts → router.ts → Bot.handle(ctx)   │
-│    ├─ extrai telefone (LID/PN)                   │
-│    ├─ antibot + pausa global                     │
-│    ├─ busca routing_clientes                     │
-│    ├─ flow_controls (ativar/desativar)            │
-│    └─ delega para o Bot registrado               │
-│                                                  │
-│  BotBase (base.ts):                              │
-│    ├─ pausa por projeto                          │
-│    ├─ memoria de chat (project:session:flow:tel) │
-│    ├─ log de execucao (flow_execution_logs)       │
-│    └─ envio com typing humanizado                │
-└───────┬──────────────────────────────────────────┘
-        │
-        ├→ packages/integrations/waha      (envio WhatsApp)
-        ├→ packages/integrations/openai    (agent tool-calling)
-        ├→ packages/integrations/whisper   (transcricao audio)
-        └→ packages/integrations/google-calendar (agenda)
+┌─────────────────────────────────────────────────────────────┐
+│                          WAHA                                │
+│  (sessões startap, TESTE_STARTAP — WhatsApp engine)         │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ webhook
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  apps/api  (Fastify, TypeScript)                            │
+│                                                              │
+│  POST /webhooks/waha  ─→  Router  ─→  Bot.handle(ctx)       │
+│                              │                               │
+│                              ├─ extrai telefone (LID/PN)    │
+│                              ├─ antibot + pausa global      │
+│                              ├─ busca em routing_clientes   │
+│                              └─ delega para Bot registrado  │
+│                                                              │
+│  Bots:                                                       │
+│   • EchoBot (teste/template)                                 │
+│   • BarbeariaBot     ← TESTE_BARBEARIAS_AGENDAMENTOS         │
+│   • RicardoBot       ← elenildo.ricardo (TESTE_VENDAS_CURSO) │
+│   • StartapMainBot   ← STARTTAP_AI (Lola)                   │
+│   • StartapAdminBot  ← STARTTAP_AI (admin pausa Samuel)     │
+└──────┬──────────────────────────────────────────────────────┘
+       │
+       ├─→  packages/integrations/waha       (sendText, typing, media)
+       ├─→  packages/integrations/openai     (agent com tool-calling)
+       ├─→  packages/integrations/whisper    (transcrição áudio)
+       └─→  packages/integrations/google-calendar (agendamento)
 
-┌──────────────────────────────────────────────────┐
-│  apps/worker (cron jobs)                         │
-│    ├─ antibot        (1min)                      │
-│    └─ cleanup-chat   (diario 03h)                │
-└──────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  apps/worker  (cron jobs)                                   │
+│                                                              │
+│   • antibot         ← Monitor_AntiBot         (a cada 1min) │
+│   • cleanup-chat    ← Limpar_Historico_Chat   (diário 03h)  │
+│   • relatorio       ← RELATORIO_BARBEARIA_SAMUEL (em build) │
+└─────────────────────────────────────────────────────────────┘
 
-┌──────────────────────────────────────────────────┐
-│  painel-admin (Node.js + HTML)                   │
-│    ├─ Roteamento de clientes                     │
-│    ├─ Modelos IA (provider/model/temperature)    │
-│    ├─ Prompts editaveis (placeholders runtime)   │
-│    ├─ Midias editaveis (V1/V2/V3/POS_VIDEOS)    │
-│    ├─ Flow Controls (ativar/desativar fluxos)    │
-│    ├─ Project Databases (bancos logicos)         │
-│    └─ Logs de execucao                           │
-└──────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────┐
-│  Postgres                                        │
-│    routing_clientes, bot_config, bot_prompt,      │
-│    bot_media, flow_controls, project_databases,   │
-│    flow_execution_logs, model_usage,              │
-│    n8n_chat_histories_*, pausa_*, leads_*         │
-└──────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Postgres (compartilhado com automação visual antiga durante migração)          │
+│   routing_clientes  •  pausa_*  •  chat_histories_*     │
+│   message_log  •  bot_pausa  •  leads_ricardo  •  ...        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Stack
 
-| Camada | Tecnologia |
-|--------|------------|
+| Camada | Escolha |
+|--------|---------|
 | Runtime | Node.js 20 LTS |
 | Linguagem | TypeScript 5 (ESM, strict) |
-| HTTP | Fastify 5 + zod |
-| DB | Postgres + pg (queries tipadas, sem ORM) |
-| AI | OpenAI SDK (tool-calling) + DeepSeek |
-| Cron | croner |
-| Cache | Redis 7 |
+| HTTP | Fastify 5 + zod (schema validation) |
+| DB | Postgres + pg (queries cruas, tipadas) |
+| Filas/Cron | croner + (futuro) BullMQ + Redis |
+| AI | OpenAI SDK (tool-calling nativo) |
 | Logs | pino (JSON estruturado) |
-| Linter | biome |
+| Linter/Format | biome |
 | Testes | vitest |
-| Deploy | Docker + Docker Compose |
 
 ---
 
-## Estrutura do monorepo
+## Estrutura de pastas
 
 ```
 startap-platform/
 ├── apps/
-│   ├── api/                  # API Fastify - webhooks WAHA
+│   ├── api/              ← Fastify, recebe webhooks WAHA
 │   │   └── src/
-│   │       ├── server.ts
-│   │       ├── config.ts
-│   │       ├── router.ts     # Router universal (substitui n8n)
+│   │       ├── server.ts        (entry)
+│   │       ├── config.ts        (validação zod)
+│   │       ├── router.ts        ← substitui ROUTER_WAHA do automação visual antiga
 │   │       ├── routes/
 │   │       │   ├── webhook-waha.ts
 │   │       │   └── health.ts
-│   │       ├── bots/
-│   │       │   ├── base.ts   # BotBase (abstrata)
-│   │       │   ├── echo.ts
-│   │       │   ├── startap.ts
-│   │       │   ├── teste_barbearia.ts
-│   │       │   ├── teste_vendas.ts
-│   │       │   └── teste_vendas_barbearia.ts
-│   │       └── lib/
-│   │           ├── render-prompt.ts
-│   │           └── run-agent.ts
-│   └── worker/               # Cron jobs
+│   │       └── bots/
+│   │           ├── base.ts      (classe abstrata)
+│   │           └── echo.ts      (template/teste)
+│   └── worker/           ← cron jobs (antibot, cleanup, relatórios)
 │       └── src/
 │           ├── worker.ts
-│           └── jobs/
-│               ├── antibot.ts
-│               └── cleanup-chat.ts
+│           └── jobs/*.ts
 ├── packages/
-│   ├── core/                 # Tipos + utils compartilhados
+│   ├── core/             ← tipos + utils compartilhados
 │   │   └── src/
-│   │       ├── types.ts
-│   │       ├── phone.ts
-│   │       └── logger.ts
-│   ├── db/                   # Acesso Postgres
-│   │   ├── migrations/       # SQL idempotentes (002-007)
+│   │       ├── types.ts   (WahaWebhookBody, IncomingMessage, Bot)
+│   │       ├── phone.ts   (parser LID/PN com testes)
+│   │       └── logger.ts  (pino)
+│   ├── db/               ← acesso a Postgres
 │   │   └── src/
-│   │       ├── client.ts
-│   │       └── queries/
-│   │           ├── routing.ts
-│   │           ├── pausa.ts
-│   │           ├── chat-memory.ts
-│   │           ├── bot-config.ts
-│   │           ├── bot-prompt.ts
-│   │           ├── bot-media.ts
-│   │           ├── flow-control.ts
-│   │           ├── flow-execution-log.ts
-│   │           ├── model-usage.ts
-│   │           ├── leads.ts
-│   │           ├── antibot.ts
-│   │           └── agendamento.ts
-│   └── integrations/         # Clientes externos
+│   │       ├── client.ts  (Pool)
+│   │       └── queries/   (routing, pausa, chat-memory, antibot, leads, agendamento)
+│   └── integrations/     ← clientes externos
 │       └── src/
-│           ├── waha/
-│           ├── openai/
-│           ├── whisper/
-│           └── google-calendar/
-├── painel-admin/             # Painel administrativo
-│   ├── server.js
-│   ├── public/index.html
-│   └── Dockerfile
-├── n8n-backup/               # JSONs dos workflows originais
-├── scripts/
-│   ├── deploy.sh
-│   └── seed-prompts.mjs
-├── docs/
-│   ├── platform-architecture.md
-│   ├── data-model.md
-│   ├── conversation-scope.md
-│   ├── operations-runbook.md
-│   └── adr/                  # Architecture Decision Records
+│           ├── waha/      (envio mensagens WhatsApp)
+│           ├── openai/    (agent com tool-calling)
+│           ├── whisper/   (transcrição)
+│           └── google-calendar/ (eventos)
 ├── docker-compose.yml
 ├── Dockerfile
 ├── biome.json
@@ -173,53 +120,35 @@ startap-platform/
 
 ---
 
-## Configuracao editavel via painel
+## Mapeamento automação visual antiga → código
 
-O painel (https://gestao.startap.tech) permite editar sem deploy:
-
-- **Prompts**: textarea com placeholders `{nome}`, `{telefone}`, `{data_atual}`, `{ano}`, `{agenda}`
-- **Modelos IA**: provider, model, temperature por bot
-- **Midias**: URLs de videos por posicao (V1/V2/V3/POS_VIDEOS) com contexto
-- **Flow Controls**: ativar/desativar fluxos
-- **Roteamento**: vincular telefones a bots
-
-Cache de 30s. Alteracao reflete em ate 30s sem restart.
-
----
-
-## Tabelas Postgres
-
-### Configuracao
-- `bot_config` — provider/model/temperature por slot
-- `bot_prompt` — system prompt editavel por slot
-- `bot_media` — midias com posicao, contexto e toggle
-
-### Controle
-- `routing_clientes` — telefone → workflow_id
-- `flow_controls` — ativar/desativar fluxos
-- `project_databases` — bancos logicos por projeto
-
-### Operacional
-- `flow_execution_logs` — logs detalhados de cada execucao
-- `model_usage` — tracking de tokens e custo por bot
-- `n8n_chat_histories_*` — memoria de chat por projeto
-- `pausa_*` / `bot_pausa` — controle de pausa por projeto/antibot
-- `leads_*` — leads capturados
-- `message_log` — log de mensagens antibot
-- `agendamento_pendente` — agendamentos aguardando confirmacao
+| Workflow automação visual antiga | Onde foi parar |
+|--------------|----------------|
+| `ROUTER_WAHA` (recebe webhook, roteia) | `apps/api/src/router.ts` + `routes/webhook-waha.ts` |
+| `TESTE_BARBEARIAS_AGENDAMENTOS` | `apps/api/src/bots/barbearia.ts` (a fazer) |
+| `elenildo.ricardo` → `TESTE_VENDAS_CURSO` | `apps/api/src/bots/ricardo.ts` (a fazer) |
+| `STARTTAP_AI` (Lola sales) | `apps/api/src/bots/startap-main.ts` (a fazer) |
+| `STARTTAP_AI` (admin Samuel) | `apps/api/src/bots/startap-admin.ts` (a fazer) |
+| `Cirilo_Consultar_Agendamento` | `packages/integrations/google-calendar/listEvents()` ✅ |
+| `Cirilo_Inserir_Agendamento` | `packages/integrations/google-calendar/createEvent()` ✅ |
+| `ALERTAS_PARA_CLIENTES` | `packages/integrations/waha/sendText()` (chamada direta) ✅ |
+| `Alerta_time_interno` | Error handler global em `apps/api/server.ts` + alertas no worker |
+| `Monitor_AntiBot` | `apps/worker/src/jobs/antibot.ts` ✅ |
+| `Limpar_Historico_Chat` | `apps/worker/src/jobs/cleanup-chat.ts` ✅ |
+| `RELATORIO_BARBEARIA_SAMUEL` | `apps/worker/src/jobs/relatorio.ts` (a fazer) |
 
 ---
 
-## Desenvolvimento local
+## Desenvolvimento
 
 ```bash
-# Instalar dependencias
+# Instala dependências
 npm install
 
-# API em watch mode
+# Roda API em watch mode
 npm run dev:api
 
-# Worker
+# Roda worker
 npm run dev:worker
 
 # Lint
@@ -227,63 +156,55 @@ npm run lint
 
 # Testes
 npm test
-
-# Build
-npm run build
 ```
 
 ---
 
-## Variaveis de ambiente
+## Variáveis de ambiente
 
-Copie `.env.example` para `.env` e preencha:
+Copia `.env.example` para `.env` e preenche. Principais:
 
-| Variavel | Descricao |
-|----------|-----------|
-| `PG_*` | Conexao Postgres |
-| `REDIS_HOST/PORT` | Redis para filas |
-| `WAHA_URL`, `WAHA_API_KEY` | API WhatsApp |
-| `WHISPER_URL` | Whisper ASR |
-| `OPENAI_API_KEY` | OpenAI para bots |
-| `DEEPSEEK_API_KEY` | DeepSeek para Lola |
-| `GOOGLE_OAUTH_*` | Google Calendar |
-| `ADMIN_USER/PASS` | Painel admin |
-| `ALERT_*_PHONE` | Telefones para alertas |
+| Var | Descrição |
+|-----|-----------|
+| `WAHA_URL`, `WAHA_API_KEY` | Acesso à API WAHA |
+| `PG_*` | Conexão Postgres (mesma do automação visual antiga) |
+| `OPENAI_API_KEY` | Chave OpenAI para os bots |
+| `WHISPER_URL` | Endpoint do Whisper ASR |
+| `GOOGLE_OAUTH_*` | Credenciais Google Calendar |
+| `ALERT_DEV_PHONE`, `ALERT_OWNER_PHONE` | Quem recebe alertas do antibot |
 
 ---
 
-## Deploy
+## Roadmap de migração
 
-Fluxo PR-based:
-
-```
-VS Code → branch → push → PR → review → merge → deploy
-```
-
-```bash
-# No servidor, apos merge:
-ssh root@187.77.242.220 "cd /opt/automacoes/code && ./scripts/deploy.sh"
-```
-
-O `deploy.sh` faz: `git pull` → `docker compose build --no-cache` → `docker compose up -d` → health check.
-
----
-
-## Containers Docker
-
-| Container | Porta | Funcao |
-|-----------|-------|--------|
-| `startap-api` | 3040 | API principal |
-| `startap-worker` | - | Jobs em background |
-| `startap-redis` | 6379 | Cache/filas |
-| `automacoes-painel-admin-1` | 3030 | Painel web |
-| `automacoes-waha-1` | 3000 | WhatsApp engine |
-| `automacoes-whisper-1` | 9000 | Transcricao audio |
-| `automacoes-postgres-1` | 5432 | Banco de dados |
-| `automacoes-npm-1` | 80/443 | Nginx Proxy Manager |
+- [x] Esqueleto monorepo
+- [x] `packages/core` (tipos, phone parser, logger)
+- [x] `packages/db` (queries: routing, pausa, chat-memory, antibot, leads, agendamento)
+- [x] `packages/integrations` (WAHA, OpenAI agent, Whisper, Google Calendar)
+- [x] `apps/api` skeleton + Router universal
+- [x] `apps/worker` skeleton + antibot + cleanup
+- [x] Docker setup
+- [ ] Migrar `TESTE_BARBEARIAS_AGENDAMENTOS` → `BarbeariaBot`
+- [ ] Migrar `elenildo.ricardo` → `RicardoBot`
+- [ ] Split + migrar `STARTTAP_AI` → `StartapMainBot` + `StartapAdminBot`
+- [ ] Migrar painel-admin para o monorepo
+- [ ] Job de relatório (RELATORIO_BARBEARIA_SAMUEL)
+- [ ] Big bang cutover: WAHA aponta para `apps/api`, automação visual antiga parado
+- [ ] Remover container automação visual antiga após 1 semana de estabilidade
 
 ---
 
-## Licenca
+## Decisões arquiteturais
 
-Privado. Todos os direitos reservados.
+- **Sem LangChain**: orquestração própria em `packages/integrations/openai/agent.ts`. Loop tool-calling explícito. Mais previsível, sem dependências instáveis.
+- **Postgres direto, sem ORM**: queries cruas com `pg`. Wrapper fino para type safety. Migrate-style evolutivo (mesmas tabelas do automação visual antiga).
+- **Bots como classes**: `BotBase` centraliza pausa, memória, envio. Cada bot só implementa `process()`.
+- **Router universal**: 1 endpoint `/webhooks/waha` para todas as sessões. Roteamento por `body.session` + `telefone` na tabela `routing_clientes`.
+- **Antibot no router**: bloqueio global aplicado antes de qualquer bot. Coerente.
+- **Migração paralela**: automação visual antiga continua rodando até cutover. WAHA aponta para o novo `/webhooks/waha`. Rollback = re-apontar pra automação visual antiga (1 minuto).
+
+---
+
+## Licença
+
+Privado, todos os direitos reservados.

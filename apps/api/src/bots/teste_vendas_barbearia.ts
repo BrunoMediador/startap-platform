@@ -255,7 +255,7 @@ export class TesteVendasBarbeariaBot extends BotBase {
       name: SLOT,
       projectId: SLOT,
       pauseTable: null,
-      memoryTable: 'n8n_chat_histories_vendas_barbearia',
+      memoryTable: 'chat_histories_vendas_barbearia',
       memoryWindow: 12,
     });
   }

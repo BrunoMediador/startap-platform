@@ -4,7 +4,7 @@ import { flowExecutionLog } from '@startap/db';
 /**
  * Worker — roda cron jobs.
  *
- * Substitui as triggers Schedule do n8n.
+ * Substitui as triggers Schedule do automação visual antiga.
  */
 import { Cron } from 'croner';
 import { runAntibot } from './jobs/antibot.js';
@@ -58,7 +58,7 @@ async function main() {
     }
   });
 
-  // Cleanup: a cada 12 horas (replica n8n Limpar_Historico_Chat)
+  // Cleanup: a cada 12 horas (replica automação visual antiga Limpar_Historico_Chat)
   new Cron('0 */12 * * *', { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' }, async () => {
     const executionId = randomUUID();
     const startedAt = Date.now();

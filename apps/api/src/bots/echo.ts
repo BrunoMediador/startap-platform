@@ -11,7 +11,7 @@ export class EchoBot extends BotBase {
       name: 'echo',
       projectId: 'echo',
       pauseTable: null,
-      memoryTable: 'n8n_chat_histories',
+      memoryTable: 'chat_histories',
     });
   }
 

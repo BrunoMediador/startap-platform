@@ -7,13 +7,13 @@ INSERT INTO bot_config (slot, display_name, provider, model, temperature)
 VALUES ('teste_vendas_barbearia', 'Teste — Vendas + Barbearia', 'openai', 'gpt-4o', 0.4)
 ON CONFLICT (slot) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS n8n_chat_histories_vendas_barbearia (
+CREATE TABLE IF NOT EXISTS chat_histories_vendas_barbearia (
   id SERIAL PRIMARY KEY,
   session_id TEXT,
   message JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_chat_histories_vendas_barbearia_session
-  ON n8n_chat_histories_vendas_barbearia (session_id, id DESC);
+  ON chat_histories_vendas_barbearia (session_id, id DESC);
 
 CREATE TABLE IF NOT EXISTS leads_vendas_barbearia (
   id BIGSERIAL PRIMARY KEY,
