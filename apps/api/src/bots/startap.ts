@@ -9,6 +9,12 @@ const SLOT = 'startap';
 const PAUSE_TABLE = 'pause_startap';
 export const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
 export const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
+const STARTAP_SESSION_NAMES = (
+  process.env.STARTAP_WAHA_SESSIONS || 'startap,STARTAP_AI,STARTAP_AI_PROD'
+)
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 
 const DEFAULT_PROMPT_TPL = [
   'Voce e a Lola, consultora de tecnologia da Startap.',
@@ -60,7 +66,7 @@ const DEFAULT_PROMPT_TPL = [
 export function isStartapSession(session: string): boolean {
   // A Lola/Startap deve responder somente na sessao WAHA oficial.
   // Sessoes de teste passam pelo router normal e podem atender qualquer fluxo cadastrado.
-  return session.toLowerCase() === 'startap';
+  return STARTAP_SESSION_NAMES.includes(session.toLowerCase());
 }
 
 export function normalizeLolaCommand(s: string): string {
