@@ -1067,32 +1067,60 @@ async function renderDashCleanup() {
 
 async function renderDashKPIs() {
   const wrap = document.getElementById('dash-kpis');
-  wrap.innerHTML = `
-    <div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>
-    <div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>
-    <div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>
-    <div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>`;
+  const skeleton = `<div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>`;
+  wrap.innerHTML = skeleton.repeat(7);
 
   try {
-    const [statusData, msgStats, usageSummary] = await Promise.allSettled([
+    const [statusData, msgStats, leadsData, agendamentosData, usageSummary] = await Promise.allSettled([
       api('/api/status'),
       api('/api/message-stats'),
+      api('/api/leads'),
+      api('/api/agendamentos-pendentes'),
       api('/api/usage/summary?days=7'),
     ]);
 
-    // /api/status retorna { flows, waha, execucoes } — não sessions/bots
+    // Sessões WAHA
     const sessions = statusData.status === 'fulfilled' ? (statusData.value?.waha || []) : [];
     const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
     const workingSessions = sessArr.filter(s => (s.status || s.state) === 'WORKING').length;
 
+    // Bots ativos
     const flowsData = statusData.status === 'fulfilled' ? statusData.value?.flows : null;
     const activeBots = flowsData?.ativos ?? 0;
 
-    const msgs = msgStats.status === 'fulfilled' ? msgStats.value : null;
-    const msgsToday = msgs?.today ?? msgs?.total ?? '—';
+    // Mensagens: /api/message-stats retorna [{dia, total}] dos ultimos 14d.
+    // Soma hoje (linha cuja DATE == hoje SP) e 7d.
+    const msgs = msgStats.status === 'fulfilled' && Array.isArray(msgStats.value) ? msgStats.value : [];
+    const todayKey = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+    let msgsToday = 0;
+    let msgs7d = 0;
+    const cutoff7d = Date.now() - 7 * 86400000;
+    for (const row of msgs) {
+      const n = Number(row.total) || 0;
+      const diaKey = String(row.dia).slice(0, 10);
+      if (diaKey === todayKey) msgsToday += n;
+      const t = new Date(row.dia).getTime();
+      if (t >= cutoff7d) msgs7d += n;
+    }
 
+    // Leads novos: filtra criado_em >= 24h.
+    const leads = leadsData.status === 'fulfilled' && Array.isArray(leadsData.value) ? leadsData.value : [];
+    const cutoff24h = Date.now() - 86400000;
+    const leads24h = leads.filter(l => {
+      const t = new Date(l.criado_em || l.created_at || 0).getTime();
+      return Number.isFinite(t) && t >= cutoff24h;
+    }).length;
+
+    // Agendamentos pendentes
+    const agendamentos = agendamentosData.status === 'fulfilled' && Array.isArray(agendamentosData.value) ? agendamentosData.value : [];
+    const pendentesCount = agendamentos.length;
+
+    // Custo 7d
     const usage = usageSummary.status === 'fulfilled' ? usageSummary.value : null;
-    const cost7d = usage?.total_cost ?? usage?.cost ?? null;
+    let cost7d = usage?.total_cost ?? usage?.cost ?? null;
+    if (cost7d == null && Array.isArray(usage?.rows)) {
+      cost7d = usage.rows.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+    }
 
     const kpis = [
       {
@@ -1117,8 +1145,29 @@ async function renderDashKPIs() {
         iconBg: 'rgba(139,92,246,0.12)',
       },
       {
-        label: 'Custo 7 dias',
-        value: cost7d != null ? fmtBRL(cost7d) : '—',
+        label: 'Mensagens 7 dias',
+        value: fmtNum(msgs7d),
+        icon: 'message-circle',
+        iconColor: '#06b6d4',
+        iconBg: 'rgba(6,182,212,0.12)',
+      },
+      {
+        label: 'Leads novos (24h)',
+        value: fmtNum(leads24h),
+        icon: 'users',
+        iconColor: '#ec4899',
+        iconBg: 'rgba(236,72,153,0.12)',
+      },
+      {
+        label: 'Agendamentos pendentes',
+        value: fmtNum(pendentesCount),
+        icon: 'clock',
+        iconColor: '#f97316',
+        iconBg: 'rgba(249,115,22,0.12)',
+      },
+      {
+        label: 'Custo 7 dias (USD)',
+        value: cost7d != null ? `$${Number(cost7d).toFixed(2)}` : '—',
         icon: 'zap',
         iconColor: '#f59e0b',
         iconBg: 'rgba(245,158,11,0.12)',
