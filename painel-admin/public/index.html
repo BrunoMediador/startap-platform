@@ -21,6 +21,10 @@
     --text-dim: #a4a7b1;
     --text-mute: #6a6d77;
     --accent: #3b82f6;
+    --surface: #1c1d24;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
   }
   * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
   html, body { background: var(--bg); color: var(--text); }
@@ -103,6 +107,7 @@
 
   .fade-in { animation: fadeIn .2s ease; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @keyframes pulseDot { 0%,100%{opacity:1;} 50%{opacity:.4;} }
 </style>
 </head>
 <body class="scrollbar">
@@ -121,7 +126,15 @@
         <p class="text-xs" style="color: var(--text-dim)">Roteamento, status e relatórios</p>
       </div>
     </div>
-    <div id="health" class="text-xs mono" style="color: var(--text-mute)"></div>
+    <div class="flex items-center gap-3">
+      <div id="health" class="text-xs mono" style="color: var(--text-mute)"></div>
+      <button onclick="toggleCleanupModal()" title="Ver detalhes da limpeza automática"
+        class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs cursor-pointer transition-colors"
+        style="background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);">
+        <span id="cleanup-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);animation:pulseDot 2s infinite;flex-shrink:0;"></span>
+        <span>Limpeza <span class="mono font-semibold" id="cleanup-timer">--:--</span></span>
+      </button>
+    </div>
   </header>
 
   <!-- TABS -->
@@ -406,6 +419,16 @@
       <button id="dup-confirm" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Mover</button>
     </div>
   </div>
+</div>
+
+<!-- CLEANUP DRAWER -->
+<div id="cleanup-modal" class="hidden fixed right-6 top-20 z-50 w-80 max-h-[calc(100vh-96px)] overflow-y-auto rounded-xl shadow-2xl scrollbar"
+  style="background: var(--surface); border: 1px solid var(--border);">
+  <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--border)">
+    <h3 class="text-sm font-semibold">Limpeza de históricos</h3>
+    <button onclick="toggleCleanupModal()" class="text-lg leading-none px-1" style="color: var(--text-dim)">×</button>
+  </div>
+  <div id="cleanup-modal-content" class="px-4 py-3 text-xs" style="color: var(--text-dim)"></div>
 </div>
 
 <!-- TOAST -->
@@ -1699,6 +1722,70 @@ function loadTab(t) {
   if (t === 'bancos') loadBancos();
   if (t === 'relatorios') loadRelatorios();
 }
+
+// ===== CLEANUP COUNTDOWN =====
+let _cleanupData = null;
+
+async function fetchCleanupStatus() {
+  try { _cleanupData = await api('/api/cleanup/status'); } catch {}
+}
+
+function _getNextRun() {
+  if (_cleanupData && _cleanupData.next_run) return new Date(_cleanupData.next_run);
+  const n = new Date(), r = new Date(n);
+  r.setMinutes(0, 0, 0); r.setHours(r.getHours() + 1);
+  return r;
+}
+
+function _tickCleanup() {
+  let diff = _getNextRun() - new Date();
+  if (diff <= 0) { fetchCleanupStatus(); diff = 3600000; }
+  const h = Math.floor(diff / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  const txt = h > 0
+    ? h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0')
+    : String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  const t = $('#cleanup-timer'); if (t) t.textContent = txt;
+  const d = $('#cleanup-dot');
+  if (d) {
+    const mins = diff / 60000;
+    d.style.background = mins < 5 ? 'var(--danger)' : mins < 15 ? 'var(--warning)' : 'var(--success)';
+  }
+}
+
+function toggleCleanupModal() {
+  const m = $('#cleanup-modal');
+  if (!m) return;
+  m.classList.toggle('hidden');
+  if (!m.classList.contains('hidden')) _renderCleanupModal();
+}
+
+function _renderCleanupModal() {
+  const el = $('#cleanup-modal-content');
+  if (!el) return;
+  const d = _cleanupData;
+  if (!d) { el.innerHTML = '<div>Sem dados ainda.</div>'; return; }
+  const lastRun = d.last_run ? new Date(d.last_run).toLocaleString('pt-BR') : 'Nunca';
+  const nextRun = d.next_run ? new Date(d.next_run).toLocaleString('pt-BR') : '--';
+  const rows = (d.tables || []).map(t =>
+    `<div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid var(--border);gap:10px;">
+      <span class="mono" style="color:var(--text);">${esc(t.table_name)}</span>
+      <span style="color:var(--text-dim);text-align:right;">${esc(t.description)}</span>
+    </div>`
+  ).join('');
+  el.innerHTML =
+    `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Último ciclo</span><strong style="color:var(--text);">${esc(lastRun)}</strong></div>` +
+    `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tabelas limpas</span><strong style="color:var(--text);">${d.last_tables_cleaned || 0}</strong></div>` +
+    `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-bottom:10px;"><span>Próximo ciclo</span><strong style="color:var(--text);">${esc(nextRun)}</strong></div>` +
+    `<div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-mute);">Tabelas (${(d.tables||[]).length})</div>` +
+    `<div>${rows}</div>` +
+    `<div style="margin-top:10px;padding-top:8px;font-size:11px;color:var(--text-mute);border-top:1px solid var(--border);">Cron: ${esc(d.cron||'0 * * * *')} · a cada ${d.interval_minutes||60} min</div>`;
+}
+
+fetchCleanupStatus();
+setInterval(_tickCleanup, 1000);
+setInterval(fetchCleanupStatus, 60000);
 
 loadAll();
 $('#health').textContent = new Date().toLocaleString('pt-BR');
