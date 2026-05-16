@@ -1,5 +1,5 @@
 import type { BotContext } from '@startap/core/types';
-import { botMedia, leads, pausa } from '@startap/db';
+import { botMedia, leads } from '@startap/db';
 import { waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { applyFlowManualCommand } from '../lib/manual-pause.js';
@@ -112,15 +112,6 @@ export class TesteVendasBot extends BotBase {
         source: 'manual',
       });
       this.log.info({ telefone }, 'Pausa manual removida');
-      return null;
-    }
-
-    const paused =
-      (await pausa
-        .isFlowPaused({ flowId: ctx.flowId ?? WORKFLOW_ID, telefone })
-        .catch(() => false)) || (await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false));
-    if (paused) {
-      this.log.info({ telefone }, 'Cliente em pausa manual, ignorando');
       return null;
     }
 

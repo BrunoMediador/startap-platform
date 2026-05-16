@@ -1,5 +1,4 @@
 import type { BotContext } from '@startap/core/types';
-import { pausa } from '@startap/db';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { registerBotEntry } from '../registry.js';
@@ -119,15 +118,6 @@ export class StartapBot extends BotBase {
     if (command === 'resume') {
       await applyStartapManualCommand(command, telefone);
       this.log.info({ telefone }, 'Startap retomado apos chat humano');
-      return null;
-    }
-
-    const paused =
-      (await pausa
-        .isFlowPaused({ flowId: ctx.flowId ?? STARTAP_WORKFLOW_ID, telefone })
-        .catch(() => false)) || (await pausa.isPaused(PAUSE_TABLE, telefone).catch(() => false));
-    if (paused) {
-      this.log.info({ telefone }, 'Startap em pausa, ignorando');
       return null;
     }
 
