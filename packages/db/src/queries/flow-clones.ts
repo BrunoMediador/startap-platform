@@ -342,6 +342,20 @@ export async function deleteClone(id: number): Promise<{ slot: string; waha_sess
 }
 
 /**
+ * Retorna o clone associado a uma sessão WAHA dedicada.
+ * Retorna null se nenhum clone estiver vinculado à sessão; lança apenas em falha de DB.
+ */
+export async function getCloneBySession(sessao: string): Promise<CloneRow | null> {
+  const r = await query<CloneRow & { id: string }>(
+    `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
+            personalizacao, waha_sessao, status, created_at, updated_at
+     FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
+    [sessao],
+  );
+  return r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+}
+
+/**
  * Retorna o clone pelo slot (usado pelo dispatcher).
  */
 export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {

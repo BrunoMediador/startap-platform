@@ -1655,21 +1655,16 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
 
-    // Se telefone fornecido, cria/atualiza rota em routing_clientes
+    // telefone é apenas informativo: atualiza cliente_telefone no clone, sem tocar routing_clientes.
+    // Roteamento de clones é feito por sessão WAHA (waha_sessao), não por telefone do cliente final.
     if (telefone && typeof telefone === 'string') {
-      const cloneSlot = r.rows[0].slot;
       await pool.query(
-        `INSERT INTO routing_clientes (telefone, workflow_id, workflow_name, webhook_url, nome_cliente, ativo, atualizado_em)
-         VALUES ($1,$2,$3,$4,$5,TRUE,NOW())
-         ON CONFLICT (telefone) DO UPDATE SET
-           workflow_id = EXCLUDED.workflow_id,
-           workflow_name = EXCLUDED.workflow_name,
-           ativo = TRUE,
-           atualizado_em = NOW()`,
-        [telefone, cloneSlot, r.rows[0].display_name, '', r.rows[0].cliente_nome],
+        `UPDATE flow_clones SET cliente_telefone = $1, updated_at = NOW() WHERE id = $2`,
+        [telefone, id],
       );
     }
 
+    console.log(`[bind-session] Sessão ${r.rows[0].waha_sessao} vinculada ao clone ${r.rows[0].slot} (routing por sessão)`);
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
