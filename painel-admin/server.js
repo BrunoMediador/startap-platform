@@ -310,6 +310,9 @@ app.get('/media-proxy', async (req, res) => {
     } catch {
       return res.status(400).send('invalid url');
     }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return res.status(400).send('Unsupported protocol');
+    }
     if (!ALLOWED_PROXY_HOSTS.includes(parsed.hostname)) {
       return res.status(403).send('host nao permitido');
     }
