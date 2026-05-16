@@ -31,12 +31,16 @@ const log = logger.child({ module: 'router' });
  * Bots com sessão própria (ex: Startap) registram-se via registerBotEntry
  * diretamente ao serem importados.
  */
-export function registerBot(workflowId: string, bot: Bot): void {
+export function registerBot(
+  workflowId: string,
+  bot: Bot,
+  legacyPauseTable: string | null = null,
+): void {
   registerBotEntry({
     workflowId,
     workflowName: workflowId,
     ownedSessions: [],
-    legacyPauseTable: null,
+    legacyPauseTable,
     getManualCommand: () => null,
     applyManualCommand: async () => {},
     bot,
