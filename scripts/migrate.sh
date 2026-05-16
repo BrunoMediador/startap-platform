@@ -9,35 +9,16 @@
 #   - Variáveis opcionais: PG_USER (default: startap_user), PG_DB (default: startap_database).
 #
 # Estratégia de atomicidade:
-#   Cada migration é aplicada em uma única chamada psql que executa:
-#     BEGIN;
-#       <conteúdo do arquivo>
-#       INSERT INTO schema_migrations (filename) VALUES (...) ON CONFLICT DO NOTHING;
-#     COMMIT;
-#   Migrations que já trazem BEGIN/COMMIT próprio resultam em aninhamento benigno:
-#   o segundo BEGIN é no-op com warning no Postgres (não erro), e o COMMIT interno
-#   confirma; o COMMIT externo confirma o INSERT. Isso é seguro para todos os arquivos
-#   do repositório porque eles são idempotentes (IF NOT EXISTS / ON CONFLICT).
+#   Aplicar a migration e registrá-la em schema_migrations são duas chamadas psql
+#   separadas. Se a segunda falhar (extremamente raro), a migration fica aplicada mas
+#   não registrada — a próxima execução a re-aplica como no-op. A segurança vem da
+#   idempotência das migrations, não de atomicidade entre statements.
 #
-# Backfill de estado pré-runner:
-#   Migrations 002-009 foram aplicadas manualmente antes deste runner existir.
-#   Antes do primeiro deploy com este script, o devops deve rodar UMA VEZ:
-#
-#     docker exec -i automacoes-postgres-1 psql -U startap_user -d startap_database <<'SQL'
-#     INSERT INTO schema_migrations (filename) VALUES
-#       ('002_bot_config_and_usage.sql'),
-#       ('003_rename_slots_prompts_media.sql'),
-#       ('004_flow_execution_logs.sql'),
-#       ('005_teste_vendas_barbearia.sql'),
-#       ('006_project_databases_and_flow_controls.sql'),
-#       ('007_bot_media_context.sql'),
-#       ('008_flow_pauses.sql'),
-#       ('009_flow_pause_keywords.sql')
-#     ON CONFLICT DO NOTHING;
-#     SQL
-#
-#   Depois disso, o runner aplica apenas migrations novas (010 em diante).
-#   NÃO executar este backfill após o runner já estar rodando — seria redundante.
+# Primeira execução em banco com migrations já aplicadas manualmente:
+#   O runner re-executa todas as migrations não registradas. Isso é seguro porque
+#   todas as migrations neste repositório são idempotentes (IF NOT EXISTS, ON CONFLICT,
+#   UPDATE ... WHERE). As operações viram no-ops e a transação completa normalmente.
+#   Nenhuma intervenção manual (SSH, backfill) é necessária.
 
 set -euo pipefail
 
@@ -84,15 +65,11 @@ while IFS= read -r -d '' filepath; do
     continue
   fi
 
-  # Aplica o arquivo + registra na schema_migrations em uma unica transacao.
-  # A concatenacao aqui nao envolve input do usuario — filename vem do filesystem local.
-  if psql_exec <<SQL
-BEGIN;
-$(cat "$filepath")
-INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT DO NOTHING;
-COMMIT;
-SQL
-  then
+  # Aplica a migration; se bem-sucedida, registra em schema_migrations.
+  # Duas chamadas psql separadas — ver nota de atomicidade no cabeçalho.
+  # filename vem do filesystem local, nao de input do usuario.
+  if psql_exec --single-transaction < "$filepath"; then
+    psql_exec -c "INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT DO NOTHING;"
     echo "  APPLY OK  $filename"
     applied=$((applied + 1))
   else
