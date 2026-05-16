@@ -296,6 +296,46 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(MEDIA_STORAGE_DIR));
 
+// Proxy HTTPS-friendly para midias HTTP internas (resolve mixed-content).
+// O painel roda em HTTPS; mídias servidas via HTTP dentro dos containers seriam bloqueadas
+// pelo browser por política de mixed-content. Esta rota faz o proxy server-side.
+const ALLOWED_PROXY_HOSTS = ['187.77.242.220', 'localhost', '127.0.0.1', 'nginx-videos'];
+app.get('/media-proxy', async (req, res) => {
+  try {
+    const target = String(req.query.u || '');
+    if (!target) return res.status(400).send('missing u');
+    let parsed;
+    try {
+      parsed = new URL(target);
+    } catch {
+      return res.status(400).send('invalid url');
+    }
+    if (!ALLOWED_PROXY_HOSTS.includes(parsed.hostname)) {
+      return res.status(403).send('host nao permitido');
+    }
+    const upstream = await fetch(target, {
+      headers: req.headers.range ? { Range: req.headers.range } : {},
+    });
+    res.status(upstream.status);
+    const passHeaders = [
+      'content-type',
+      'content-length',
+      'accept-ranges',
+      'content-range',
+      'cache-control',
+    ];
+    for (const h of passHeaders) {
+      const v = upstream.headers.get(h);
+      if (v) res.setHeader(h, v);
+    }
+    if (!upstream.body) return res.end();
+    upstream.body.pipe(res);
+    upstream.body.on('error', () => res.end());
+  } catch (e) {
+    res.status(502).send(`proxy error: ${e.message}`);
+  }
+});
+
 app.post('/api/uploads/media', mediaUpload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'arquivo obrigatorio' });
@@ -780,9 +820,15 @@ async function setFlowControl(input) {
 // ---------- SYSTEM STATUS ----------
 app.get('/api/status', async (req, res) => {
   try {
-    const [workflows, sessions] = await Promise.all([
+    const [workflows, sessions, recentLogs] = await Promise.all([
       fetchAllWorkflows(),
       wahaFetch('/api/sessions').catch(() => []),
+      pool
+        .query(
+          'SELECT id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, duration_ms, error_summary, created_at FROM flow_execution_logs ORDER BY id DESC LIMIT 15',
+        )
+        .then((r) => r.rows)
+        .catch(() => []),
     ]);
     res.json({
       flows: {
@@ -796,7 +842,7 @@ app.get('/api/status', async (req, res) => {
         me: s.me?.id || null,
         webhook: s.config?.webhooks?.[0]?.url,
       })),
-      execucoes: [],
+      execucoes: recentLogs,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1331,15 +1377,52 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
 });
 
 app.get('/api/message-stats', async (req, res) => {
+  // Lê de flow_execution_logs (event_type='webhook.received') porque message_log
+  // é zerada a cada hora pelo limpar_historicos.sh (uso anti-bot). flow_execution_logs
+  // preserva 14+ dias e tem índice idx_flow_logs_created.
   try {
     const r = await pool.query(`
       SELECT DATE(created_at) AS dia, COUNT(*) AS total
-      FROM message_log WHERE created_at > NOW() - INTERVAL '14 days'
+      FROM flow_execution_logs
+      WHERE event_type = 'webhook.received'
+        AND created_at > NOW() - INTERVAL '14 days'
       GROUP BY 1 ORDER BY 1 DESC
     `);
     res.json(r.rows);
   } catch {
     res.json([]);
+  }
+});
+
+// ---------- CLEANUP STATUS ----------
+app.get('/api/cleanup/status', async (req, res) => {
+  try {
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setMinutes(0, 0, 0);
+    nextRun.setHours(nextRun.getHours() + 1);
+
+    const [lastRunRes, tablesRes] = await Promise.all([
+      pool
+        .query(
+          'SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1',
+        )
+        .catch(() => ({ rows: [] })),
+      pool
+        .query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name')
+        .catch(() => ({ rows: [] })),
+    ]);
+
+    res.json({
+      last_run: lastRunRes.rows[0]?.cleaned_at || null,
+      last_tables_cleaned: lastRunRes.rows[0]?.tables_cleaned || 0,
+      next_run: nextRun.toISOString(),
+      cron: '0 * * * *',
+      interval_minutes: 60,
+      tables: tablesRes.rows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
