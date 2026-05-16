@@ -23,6 +23,11 @@ export interface BotConfig {
   memoryWindow?: number;
   /** Quantas entradas manter persistidas por sessão. Default: janela * 3, mínimo 30. */
   memoryRetention?: number;
+  /**
+   * Quando preenchido, substitui o SLOT constante do bot para leitura de
+   * bot_config/bot_prompt/bot_media. Usado pelos clones de fluxo matriz.
+   */
+  slotOverride?: string;
 }
 
 export abstract class BotBase implements Bot {
@@ -30,10 +35,19 @@ export abstract class BotBase implements Bot {
   protected readonly cfg: BotConfig;
   protected readonly log: ReturnType<typeof logger.child>;
 
+  /**
+   * Slot efetivo para leitura de bot_config/bot_prompt/bot_media.
+   * Quando slotOverride está definido (clone de fluxo), retorna o override;
+   * caso contrário retorna cfg.projectId (slot da matriz).
+   */
+  protected get slot(): string {
+    return this.cfg.slotOverride ?? this.cfg.projectId;
+  }
+
   constructor(cfg: BotConfig) {
     this.name = cfg.name;
     this.cfg = cfg;
-    this.log = logger.child({ bot: cfg.name });
+    this.log = logger.child({ bot: cfg.name, slot: this.cfg.slotOverride ?? cfg.name });
   }
 
   async handle(ctx: BotContext): Promise<void> {

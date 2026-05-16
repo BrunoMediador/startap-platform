@@ -186,13 +186,14 @@ function sanitizarResposta(text: string): string {
 }
 
 export class TesteBarbeariaBot extends BotBase {
-  constructor() {
+  constructor(opts?: { slotOverride?: string }) {
     super({
-      name: SLOT,
+      name: opts?.slotOverride ?? SLOT,
       projectId: SLOT,
       pauseTable: null, // migration 008 migrou pausa_cirilo → flow_pauses; legado removido
       memoryTable: 'chat_histories',
       memoryWindow: 10,
+      slotOverride: opts?.slotOverride,
     });
   }
 
@@ -225,7 +226,7 @@ export class TesteBarbeariaBot extends BotBase {
     });
 
     const systemPrompt = await renderPrompt({
-      slot: SLOT,
+      slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
       vars: {
         nome: pushName || telefone,
@@ -304,8 +305,8 @@ export class TesteBarbeariaBot extends BotBase {
     ];
 
     const result = await runAgentConfigured({
-      slot: SLOT,
-      projectId: SLOT,
+      slot: this.slot,
+      projectId: this.slot,
       flowId: ctx.flowId,
       telefone,
       systemPrompt,

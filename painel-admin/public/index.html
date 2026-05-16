@@ -632,6 +632,95 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .kpi-grid { grid-template-columns: 1fr; }
   .kpi-card__value { font-size: 1.375rem; }
 }
+/* ── Clones ──────────────────────────────────────────────────────── */
+.clones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.clone-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  display: flex; flex-direction: column; gap: .75rem;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.clone-card:hover { border-color: var(--border-light); box-shadow: var(--shadow-md); }
+.clone-card__header { display: flex; align-items: center; gap: .75rem; }
+.clone-card__info { flex: 1; min-width: 0; }
+.clone-card__name { font-weight: 600; font-size: .9375rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clone-card__sub  { font-size: .75rem; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clone-card__actions { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
+/* ── Clone wizard ────────────────────────────────────────────────── */
+.modal--lg { max-width: 600px; }
+.wizard-steps {
+  display: flex; align-items: center; gap: .375rem;
+  margin-bottom: 1.25rem;
+}
+.wizard-step {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  font-size: .75rem; font-weight: 700;
+  background: var(--surface-3); color: var(--text-muted);
+  flex-shrink: 0;
+}
+.wizard-step.active { background: var(--primary); color: #fff; }
+.wizard-step.done   { background: var(--success); color: #fff; }
+.wizard-step-sep { flex: 1; height: 2px; background: var(--surface-3); border-radius: 1px; }
+.wizard-step-sep.done { background: var(--success); }
+.wizard-body { min-height: 240px; }
+.wizard-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 1.25rem; gap: .75rem; }
+/* ── Matrix selection cards ─────────────────────────────────────── */
+.matrix-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .75rem;
+}
+.matrix-card {
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: .875rem;
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  text-align: center;
+}
+.matrix-card:hover { border-color: var(--border-light); }
+.matrix-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-glow); }
+.matrix-card__icon { margin: 0 auto .5rem; opacity: .7; }
+.matrix-card.selected .matrix-card__icon { opacity: 1; color: var(--primary); }
+.matrix-card__name { font-weight: 600; font-size: .875rem; margin-bottom: .25rem; }
+.matrix-card__desc { font-size: .75rem; color: var(--text-muted); line-height: 1.4; }
+/* ── Personalization key-value list ─────────────────────────────── */
+.kv-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+.kv-row input { flex: 1; min-width: 0; }
+/* ── QR display ─────────────────────────────────────────────────── */
+.qr-wrap {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 1rem; padding: 1rem 0;
+}
+.qr-wrap img { max-width: 280px; border-radius: var(--radius-md); border: 3px solid var(--primary); }
+.qr-connected {
+  display: flex; flex-direction: column; align-items: center;
+  gap: .75rem; padding: 2rem 0;
+  color: var(--success);
+}
+/* ── Clone config tabs ──────────────────────────────────────────── */
+.clone-config-tab-content { padding-top: .75rem; }
+/* ── Pulsing dot (connected) ────────────────────────────────────── */
+.dot-pulse {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@media (max-width: 768px) {
+  .clones-grid { grid-template-columns: 1fr; }
+  .matrix-cards { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -695,6 +784,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
         </div>
       </div>
       <div id="bots-content"></div>
+    </section>
+    <section class="section" id="sec-clones" aria-label="Clones">
+      <div id="clones-content"></div>
     </section>
     <section class="section" id="sec-execucoes" aria-label="Execuções">
       <!-- TODO seção -->
@@ -762,6 +854,12 @@ const ICONS = {
   'chevron-right': '<polyline points="9 18 15 12 9 6"/>',
   'refresh-cw': '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
   'plus': '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  'git-branch': '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  'users': '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  'qr-code': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="3" height="3"/><rect x="18" y="14" width="3" height="3"/><rect x="14" y="18" width="3" height="3"/><rect x="18" y="18" width="3" height="3"/><rect x="5" y="5" width="3" height="3"/><rect x="16" y="5" width="3" height="3"/><rect x="5" y="16" width="3" height="3"/>',
+  'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  'unlink': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
 };
 
 /* ── icon() helper ──────────────────────────────────────────────── */
@@ -2100,11 +2198,750 @@ async function loadCfgLimpeza(content) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   CLONES
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Helpers de clone ───────────────────────────────────────────── */
+function slugify(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40) || 'clone';
+}
+
+function statusCloneBadge(status) {
+  const map = {
+    'rascunho':       { cls: 'badge--muted',   label: 'Rascunho',       dot: false },
+    'aguardando_qr':  { cls: 'badge--warning',  label: 'Aguardando QR',  dot: true  },
+    'conectado':      { cls: 'badge--success',  label: 'Conectado',      dot: true  },
+    'desconectado':   { cls: 'badge--danger',   label: 'Desconectado',   dot: false },
+    'falhou':         { cls: 'badge--danger',   label: 'Falhou',         dot: false },
+  };
+  const s = map[status] || { cls: 'badge--muted', label: escapeHtml(status || 'Desconhecido'), dot: false };
+  const dotHtml = s.dot && status === 'conectado'
+    ? `<span class="dot-pulse" style="margin-right:3px"></span>`
+    : s.dot ? `<span class="badge--dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:3px;vertical-align:middle"></span>` : '';
+  return `<span class="badge ${s.cls}" style="display:inline-flex;align-items:center;gap:3px">${dotHtml}${escapeHtml(s.label)}</span>`;
+}
+
+/* ── pollQR ─────────────────────────────────────────────────────── */
+let _activeQRPoll = null;
+
+function pollQR(sessionName, onUpdate) {
+  if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+  _activeQRPoll = setInterval(async () => {
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(sessionName)}/qr`);
+      onUpdate(data);
+    } catch (err) {
+      onUpdate({ error: err.message });
+    }
+  }, 2000);
+  return function stop() {
+    if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+  };
+}
+
+/* ── Patch closeModal para parar polling ao fechar ──────────────── */
+const _origCloseModal = closeModal;
+function closeModal() {
+  if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+  _origCloseModal();
+}
+
+/* ── renderClones ───────────────────────────────────────────────── */
+async function renderClones() {
+  const wrap = document.getElementById('clones-content');
+  wrap.innerHTML = `
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="h1">Clones</h1>
+        <p class="muted">Clones de fluxos matriz — um número de WhatsApp por cliente</p>
+      </div>
+      <button class="btn btn--primary" id="btn-novo-clone">${icon('plus', 14)} Clonar fluxo matriz</button>
+    </div>
+    <div id="clones-list"><div class="clones-grid">${'<div class="clone-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:140px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div></div>`;
+
+  wrap.querySelector('#btn-novo-clone').addEventListener('click', () => openCloneWizard());
+
+  try {
+    const clones = await api('/api/clones');
+    const arr = Array.isArray(clones) ? clones : (clones.clones || clones.data || []);
+    renderClonesList(arr, wrap.querySelector('#clones-list'));
+  } catch (err) {
+    wrap.querySelector('#clones-list').innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar clones: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.75rem" onclick="renderClones()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
+  }
+}
+
+function renderClonesList(clones, wrap) {
+  if (!clones.length) {
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state__icon">${icon('git-branch', 48)}</div>
+        <div class="empty-state__title">Nenhum clone criado</div>
+        <p class="empty-state__text">Clone um fluxo matriz para atender um novo cliente no WhatsApp.</p>
+        <button class="btn btn--primary" onclick="openCloneWizard()">${icon('plus',14)} Clonar fluxo matriz</button>
+      </div>`;
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'clones-grid';
+
+  clones.forEach(c => {
+    const card = document.createElement('div');
+    card.className = 'clone-card';
+
+    const header = document.createElement('div');
+    header.className = 'clone-card__header';
+    header.appendChild(botAvatar(c.display_name || c.matriz_slot || 'clone', 40));
+
+    const info = document.createElement('div');
+    info.className = 'clone-card__info';
+    info.innerHTML = `
+      <div class="clone-card__name">${escapeHtml(c.display_name || 'Clone')}</div>
+      <div class="clone-card__sub">${escapeHtml(c.matriz_slot || '')}${c.cliente_nome ? ' — ' + escapeHtml(c.cliente_nome) : ''}</div>`;
+    header.appendChild(info);
+    card.appendChild(header);
+
+    card.insertAdjacentHTML('beforeend', statusCloneBadge(c.status));
+
+    const actions = document.createElement('div');
+    actions.className = 'clone-card__actions';
+
+    const configBtn = document.createElement('button');
+    configBtn.className = 'btn btn--sm';
+    configBtn.innerHTML = `${icon('settings', 13)} Configurar`;
+    configBtn.addEventListener('click', () => openCloneConfigModal(c));
+    actions.appendChild(configBtn);
+
+    const connectBtn = document.createElement('button');
+    connectBtn.className = 'btn btn--sm';
+    if (c.status === 'conectado') {
+      connectBtn.innerHTML = `${icon('check-circle-2', 13)} Conectado`;
+      connectBtn.classList.add('btn--success');
+    } else {
+      connectBtn.innerHTML = `${icon('qr-code', 13)} Conectar WhatsApp`;
+    }
+    connectBtn.addEventListener('click', () => openCloneQRModal(c));
+    actions.appendChild(connectBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn btn--sm btn--ghost btn--icon';
+    delBtn.setAttribute('aria-label', 'Excluir clone');
+    delBtn.style.color = 'var(--danger)';
+    delBtn.innerHTML = icon('trash-2', 14);
+    delBtn.addEventListener('click', () => confirmDeleteClone(c));
+    actions.appendChild(delBtn);
+
+    card.appendChild(actions);
+    grid.appendChild(card);
+  });
+
+  wrap.innerHTML = '';
+  wrap.appendChild(grid);
+}
+
+async function confirmDeleteClone(c) {
+  if (!confirm(`Excluir clone "${c.display_name || c.id}"? Esta ação não pode ser desfeita.`)) return;
+  try {
+    await api(`/api/clones/${c.id}`, { method: 'DELETE' });
+    toast('Clone excluído.', 'success');
+    renderClones();
+  } catch (err) {
+    toast('Erro ao excluir: ' + err.message, 'danger');
+  }
+}
+
+/* ══ WIZARD DE CLONAGEM ════════════════════════════════════════════ */
+const MATRIZ_OPTS = [
+  { slot: 'teste_barbearia',        name: 'Só barbearia',  desc: 'Agendamento de horários com Google Calendar' },
+  { slot: 'teste_vendas',           name: 'Só vendas',     desc: 'Vende o curso de Barbeiro Profissional' },
+  { slot: 'teste_vendas_barbearia', name: 'Misto',         desc: 'Atendimento de agenda + venda de curso no mesmo número' },
+];
+
+let _wizardState = {};
+
+function openCloneWizard(preSelectMatriz) {
+  _wizardState = {
+    step: 1,
+    matriz_slot: preSelectMatriz || null,
+    display_name: '',
+    cliente_nome: '',
+    cliente_telefone: '',
+    personalizacao: {
+      nome_negocio: '',
+      telefone_contato: '',
+      endereco: '',
+      instagram: '',
+    },
+    sessao_name: '',
+    cloneId: null,
+    stopQR: null,
+  };
+  if (preSelectMatriz) _wizardState.step = 2;
+  renderWizardStep();
+}
+
+function renderWizardStep() {
+  const s = _wizardState;
+  const stepCount = 4;
+
+  function stepCircles() {
+    const segs = [];
+    for (let i = 1; i <= stepCount; i++) {
+      const cls = i < s.step ? 'done' : i === s.step ? 'active' : '';
+      const label = i < s.step ? icon('check-circle-2', 14) : String(i);
+      segs.push(`<div class="wizard-step ${cls}" aria-current="${i === s.step ? 'step' : 'false'}">${label}</div>`);
+      if (i < stepCount) {
+        segs.push(`<div class="wizard-step-sep ${i < s.step ? 'done' : ''}"></div>`);
+      }
+    }
+    return segs.join('');
+  }
+
+  let bodyHtml = '';
+  let footerHtml = '';
+
+  if (s.step === 1) {
+    const cards = MATRIZ_OPTS.map(m => `
+      <div class="matrix-card ${s.matriz_slot === m.slot ? 'selected' : ''}" data-slot="${m.slot}" role="button" tabindex="0" aria-pressed="${s.matriz_slot === m.slot}">
+        <div class="matrix-card__icon">${icon('git-branch', 28)}</div>
+        <div class="matrix-card__name">${escapeHtml(m.name)}</div>
+        <div class="matrix-card__desc">${escapeHtml(m.desc)}</div>
+      </div>`).join('');
+    bodyHtml = `
+      <p class="muted" style="margin-bottom:1rem">Escolha qual fluxo vai servir de base para este clone:</p>
+      <div class="matrix-cards" id="wizard-matrix-cards">${cards}</div>`;
+    footerHtml = `
+      <div></div>
+      <button class="btn btn--primary" id="wizard-next-btn" ${!s.matriz_slot ? 'disabled' : ''}>Continuar ${icon('chevron-right', 14)}</button>`;
+
+  } else if (s.step === 2) {
+    bodyHtml = `
+      <div style="display:flex;flex-direction:column;gap:.875rem">
+        <div class="field">
+          <label for="wz-display-name">Nome do clone <span style="color:var(--danger)">*</span></label>
+          <input id="wz-display-name" type="text" placeholder="Ex: Barbearia do João — São Paulo" value="${escapeHtml(s.display_name)}" maxlength="120" />
+        </div>
+        <div class="field">
+          <label for="wz-cliente-nome">Nome do operador</label>
+          <input id="wz-cliente-nome" type="text" placeholder="Ex: João Silva (substitui [Ricardo] no prompt)" value="${escapeHtml(s.cliente_nome)}" maxlength="80" />
+        </div>
+        <div class="field">
+          <label for="wz-cliente-tel">Telefone do cliente (opcional)</label>
+          <input id="wz-cliente-tel" type="tel" placeholder="55119..." value="${escapeHtml(s.cliente_telefone)}" maxlength="20" />
+        </div>
+      </div>`;
+    footerHtml = `
+      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14, true)} Voltar</button>
+      <button class="btn btn--primary" id="wizard-next-btn">Continuar ${icon('chevron-right', 14)}</button>`;
+
+  } else if (s.step === 3) {
+    const kvRows = Object.entries(s.personalizacao).map(([k, v]) => `
+      <div class="kv-row" data-kv>
+        <input type="text" class="kv-key" placeholder="chave" value="${escapeHtml(k)}" style="flex:0 0 130px" />
+        <input type="text" class="kv-val" placeholder="valor" value="${escapeHtml(v)}" />
+        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>
+      </div>`).join('');
+    bodyHtml = `
+      <p class="muted" style="margin-bottom:.875rem">Você pode personalizar dados que aparecem no prompt. Deixe em branco se quiser usar os valores padrão da matriz.</p>
+      <div id="kv-list">${kvRows}</div>
+      <button type="button" class="btn btn--sm" id="btn-add-kv" style="margin-top:.5rem">${icon('plus', 13)} Adicionar campo</button>`;
+    footerHtml = `
+      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14)} Voltar</button>
+      <button class="btn btn--primary" id="wizard-next-btn">Continuar ${icon('chevron-right', 14)}</button>`;
+
+  } else if (s.step === 4) {
+    const suggestedName = 'clone_' + slugify(s.display_name);
+    if (!s.sessao_name) s.sessao_name = suggestedName;
+    bodyHtml = `
+      <div style="display:flex;flex-direction:column;gap:.875rem">
+        <p class="muted">Em qual WhatsApp este clone vai funcionar?</p>
+        <div class="field">
+          <label for="wz-sessao-name">Nome da sessão WAHA</label>
+          <input id="wz-sessao-name" type="text" value="${escapeHtml(s.sessao_name)}" maxlength="60" placeholder="clone_nome_cliente" />
+        </div>
+        <div id="wizard-qr-area"></div>
+      </div>`;
+    footerHtml = `
+      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14)} Voltar</button>
+      <button class="btn btn--primary" id="wizard-create-btn">${icon('qr-code', 14)} Criar sessão e mostrar QR</button>`;
+  }
+
+  const modalHtml = `
+    <div class="modal__header">
+      <span class="modal__title">Clonar fluxo matriz — Passo ${s.step} de ${stepCount}</span>
+      <button class="btn btn--ghost btn--icon" id="wizard-close-btn" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    <div class="wizard-steps">${stepCircles()}</div>
+    <div class="wizard-body" id="wizard-body">${bodyHtml}</div>
+    <div class="wizard-footer">${footerHtml}</div>`;
+
+  // Ensure modal is large
+  const modalEl = document.getElementById('modal-content');
+  modalEl.classList.add('modal--lg');
+  openModal(modalHtml);
+
+  // Wire close
+  document.getElementById('wizard-close-btn')?.addEventListener('click', () => closeModal());
+
+  // Wire step-specific events
+  if (s.step === 1) {
+    document.querySelectorAll('.matrix-card').forEach(card => {
+      card.addEventListener('click', () => {
+        _wizardState.matriz_slot = card.dataset.slot;
+        document.querySelectorAll('.matrix-card').forEach(c => { c.classList.toggle('selected', c.dataset.slot === _wizardState.matriz_slot); c.setAttribute('aria-pressed', c.dataset.slot === _wizardState.matriz_slot); });
+        const nextBtn = document.getElementById('wizard-next-btn');
+        if (nextBtn) nextBtn.disabled = false;
+      });
+      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') card.click(); });
+    });
+  }
+
+  if (s.step === 3) {
+    document.getElementById('btn-add-kv')?.addEventListener('click', () => {
+      const row = document.createElement('div');
+      row.className = 'kv-row';
+      row.setAttribute('data-kv', '');
+      row.innerHTML = `
+        <input type="text" class="kv-key" placeholder="chave" style="flex:0 0 130px" />
+        <input type="text" class="kv-val" placeholder="valor" />
+        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>`;
+      row.querySelector('.kv-del').addEventListener('click', () => row.remove());
+      document.getElementById('kv-list').appendChild(row);
+    });
+
+    document.querySelectorAll('.kv-del').forEach(btn => {
+      btn.addEventListener('click', () => btn.closest('[data-kv]').remove());
+    });
+  }
+
+  if (s.step === 4) {
+    document.getElementById('wizard-create-btn')?.addEventListener('click', () => wizardStep4Create());
+  }
+
+  // Back
+  document.getElementById('wizard-back-btn')?.addEventListener('click', () => {
+    wizardCollectStep();
+    _wizardState.step--;
+    renderWizardStep();
+  });
+
+  // Next
+  document.getElementById('wizard-next-btn')?.addEventListener('click', () => {
+    if (!wizardValidateStep()) return;
+    wizardCollectStep();
+    _wizardState.step++;
+    renderWizardStep();
+  });
+}
+
+function wizardCollectStep() {
+  const s = _wizardState;
+  if (s.step === 2) {
+    s.display_name     = (document.getElementById('wz-display-name')?.value || '').trim();
+    s.cliente_nome     = (document.getElementById('wz-cliente-nome')?.value || '').trim();
+    s.cliente_telefone = (document.getElementById('wz-cliente-tel')?.value || '').trim();
+  } else if (s.step === 3) {
+    s.personalizacao = {};
+    document.querySelectorAll('[data-kv]').forEach(row => {
+      const k = (row.querySelector('.kv-key')?.value || '').trim();
+      const v = (row.querySelector('.kv-val')?.value || '').trim();
+      if (k) s.personalizacao[k] = v;
+    });
+  } else if (s.step === 4) {
+    s.sessao_name = (document.getElementById('wz-sessao-name')?.value || '').trim() || 'clone_' + slugify(s.display_name);
+  }
+}
+
+function wizardValidateStep() {
+  const s = _wizardState;
+  if (s.step === 1 && !s.matriz_slot) { toast('Selecione um fluxo matriz.', 'warning'); return false; }
+  if (s.step === 2) {
+    const name = (document.getElementById('wz-display-name')?.value || '').trim();
+    if (!name) { toast('O nome do clone é obrigatório.', 'warning'); document.getElementById('wz-display-name')?.focus(); return false; }
+  }
+  return true;
+}
+
+async function wizardStep4Create() {
+  const s = _wizardState;
+  s.sessao_name = (document.getElementById('wz-sessao-name')?.value || '').trim() || 'clone_' + slugify(s.display_name);
+
+  const createBtn = document.getElementById('wizard-create-btn');
+  if (createBtn) { createBtn.disabled = true; createBtn.innerHTML = `<div class="spinner" style="width:16px;height:16px"></div> Criando...`; }
+
+  const qrArea = document.getElementById('wizard-qr-area');
+
+  try {
+    // Passo 1: criar clone (rascunho)
+    if (!s.cloneId) {
+      const clone = await api('/api/clones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matriz_slot:    s.matriz_slot,
+          display_name:   s.display_name,
+          cliente_nome:   s.cliente_nome || undefined,
+          cliente_telefone: s.cliente_telefone || undefined,
+          personalizacao: Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+        }),
+      });
+      s.cloneId = clone.id;
+    }
+
+    // Passo 2: criar sessão WAHA
+    try {
+      await api('/api/sessions/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: s.sessao_name }),
+      });
+    } catch (e) {
+      // Sessão pode já existir — ignora erro
+    }
+
+    // Passo 3: bind-session
+    await api(`/api/clones/${s.cloneId}/bind-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessao_name: s.sessao_name, telefone: s.cliente_telefone || undefined }),
+    });
+
+    // Mostrar QR com polling
+    qrArea.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR...</p></div>`;
+
+    if (createBtn) createBtn.style.display = 'none';
+    const backBtn = document.getElementById('wizard-back-btn');
+    if (backBtn) { backBtn.textContent = 'Cancelar e voltar'; }
+
+    s.stopQR = pollQR(s.sessao_name, (data) => {
+      if (data.connected || data.qr === null) {
+        if (s.stopQR) { s.stopQR(); s.stopQR = null; }
+        qrArea.innerHTML = `
+          <div class="qr-connected">
+            <div style="font-size:3rem">${icon('check-circle-2', 56)}</div>
+            <div style="font-weight:700;font-size:1.125rem">WhatsApp conectado!</div>
+            <button class="btn btn--primary" id="wizard-finish-btn">${icon('check-circle-2', 14)} Concluir</button>
+          </div>`;
+        document.getElementById('wizard-finish-btn')?.addEventListener('click', () => {
+          closeModal();
+          toast('Clone criado e conectado com sucesso!', 'success');
+          _rendered['clones'] = false;
+          renderClones();
+        });
+      } else if (data.qr) {
+        qrArea.innerHTML = `
+          <div class="qr-wrap">
+            <img src="${data.qr}" alt="QR Code para conectar WhatsApp" />
+            <p class="muted" style="text-align:center;font-size:.8125rem">Escaneie no WhatsApp do cliente</p>
+          </div>`;
+      } else if (data.error) {
+        qrArea.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>
+          <button class="btn btn--sm" id="wizard-retry-qr-btn">${icon('refresh-cw',14)} Tentar novamente</button>`;
+        document.getElementById('wizard-retry-qr-btn')?.addEventListener('click', wizardStep4Create);
+      }
+    });
+
+  } catch (err) {
+    if (qrArea) qrArea.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
+    if (createBtn) { createBtn.disabled = false; createBtn.innerHTML = `${icon('qr-code',14)} Tentar novamente`; }
+    toast('Erro ao criar clone: ' + err.message, 'danger');
+  }
+}
+
+/* ══ MODAL DE CONFIGURAÇÃO DO CLONE ═══════════════════════════════ */
+function openCloneConfigModal(clone) {
+  let _cfgCloneTab = 'dados';
+
+  function renderConfigModal() {
+    const tabNames = ['dados', 'personalizacao', 'prompt', 'sessao'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', prompt: 'Prompt', sessao: 'Sessão WAHA' };
+
+    const tabsHtml = tabNames.map(t =>
+      `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
+    ).join('');
+
+    const modalHtml = `
+      <div class="modal__header">
+        <span class="modal__title">Configurar — ${escapeHtml(clone.display_name || 'Clone')}</span>
+        <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+      </div>
+      <div class="tabs" id="cfg-clone-tabs" style="margin-bottom:0">${tabsHtml}</div>
+      <div class="clone-config-tab-content" id="cfg-clone-tab-content"></div>`;
+
+    const modalEl = document.getElementById('modal-content');
+    modalEl.classList.add('modal--lg');
+    openModal(modalHtml);
+
+    document.getElementById('cfg-clone-tabs')?.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _cfgCloneTab = btn.dataset.tab;
+        document.querySelectorAll('#cfg-clone-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === _cfgCloneTab));
+        loadCloneConfigTab(_cfgCloneTab, clone);
+      });
+    });
+
+    loadCloneConfigTab(_cfgCloneTab, clone);
+  }
+
+  renderConfigModal();
+}
+
+function loadCloneConfigTab(tab, clone) {
+  const content = document.getElementById('cfg-clone-tab-content');
+  if (!content) return;
+
+  if (tab === 'dados') {
+    content.innerHTML = `
+      <form id="clone-dados-form" style="display:flex;flex-direction:column;gap:.875rem;padding-top:.5rem">
+        <div class="field">
+          <label for="cd-display-name">Nome do clone</label>
+          <input id="cd-display-name" type="text" value="${escapeHtml(clone.display_name || '')}" maxlength="120" />
+        </div>
+        <div class="field">
+          <label for="cd-cliente-nome">Nome do operador</label>
+          <input id="cd-cliente-nome" type="text" value="${escapeHtml(clone.cliente_nome || '')}" maxlength="80" />
+        </div>
+        <div class="field">
+          <label for="cd-cliente-tel">Telefone do cliente</label>
+          <input id="cd-cliente-tel" type="tel" value="${escapeHtml(clone.cliente_telefone || '')}" maxlength="20" />
+        </div>
+        <button type="submit" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar</button>
+      </form>`;
+
+    content.querySelector('#clone-dados-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = ev.target.querySelector('[type=submit]');
+      btn.disabled = true;
+      try {
+        const updated = await api(`/api/clones/${clone.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            display_name:     (content.querySelector('#cd-display-name')?.value || '').trim() || undefined,
+            cliente_nome:     (content.querySelector('#cd-cliente-nome')?.value || '').trim() || undefined,
+            cliente_telefone: (content.querySelector('#cd-cliente-tel')?.value || '').trim() || undefined,
+          }),
+        });
+        Object.assign(clone, updated);
+        toast('Clone atualizado!', 'success');
+        _rendered['clones'] = false;
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally { btn.disabled = false; }
+    });
+
+  } else if (tab === 'personalizacao') {
+    const pers = clone.personalizacao || {};
+    const DEFAULT_KEYS = ['nome_negocio', 'telefone_contato', 'endereco', 'instagram'];
+    const allKeys = Array.from(new Set([...DEFAULT_KEYS, ...Object.keys(pers)]));
+    const kvRows = allKeys.map(k => `
+      <div class="kv-row" data-kv>
+        <input type="text" class="kv-key" placeholder="chave" value="${escapeHtml(k)}" style="flex:0 0 130px" />
+        <input type="text" class="kv-val" placeholder="valor" value="${escapeHtml(pers[k] || '')}" />
+        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>
+      </div>`).join('');
+
+    content.innerHTML = `
+      <div style="padding-top:.5rem">
+        <p class="muted" style="margin-bottom:.875rem">Valores que substituem <code>{{chave}}</code> no prompt do clone.</p>
+        <div id="cfg-kv-list">${kvRows}</div>
+        <button type="button" class="btn btn--sm" id="cfg-btn-add-kv" style="margin-top:.5rem">${icon('plus', 13)} Adicionar campo</button>
+        <div style="margin-top:1rem">
+          <button class="btn btn--primary" id="cfg-save-pers-btn">${icon('check-circle-2', 14)} Salvar personalização</button>
+        </div>
+      </div>`;
+
+    content.querySelectorAll('.kv-del').forEach(btn => btn.addEventListener('click', () => btn.closest('[data-kv]').remove()));
+    content.querySelector('#cfg-btn-add-kv').addEventListener('click', () => {
+      const row = document.createElement('div');
+      row.className = 'kv-row'; row.setAttribute('data-kv', '');
+      row.innerHTML = `
+        <input type="text" class="kv-key" placeholder="chave" style="flex:0 0 130px" />
+        <input type="text" class="kv-val" placeholder="valor" />
+        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>`;
+      row.querySelector('.kv-del').addEventListener('click', () => row.remove());
+      content.querySelector('#cfg-kv-list').appendChild(row);
+    });
+
+    content.querySelector('#cfg-save-pers-btn').addEventListener('click', async () => {
+      const btn = content.querySelector('#cfg-save-pers-btn');
+      btn.disabled = true;
+      try {
+        const newPers = {};
+        content.querySelectorAll('[data-kv]').forEach(row => {
+          const k = (row.querySelector('.kv-key')?.value || '').trim();
+          const v = (row.querySelector('.kv-val')?.value || '').trim();
+          if (k) newPers[k] = v;
+        });
+        const updated = await api(`/api/clones/${clone.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personalizacao: newPers }),
+        });
+        Object.assign(clone, updated);
+        toast('Personalização salva!', 'success');
+        _rendered['clones'] = false;
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally { btn.disabled = false; }
+    });
+
+  } else if (tab === 'prompt') {
+    const promptText = clone.prompt || clone.system_prompt || '';
+    content.innerHTML = `
+      <div style="padding-top:.5rem">
+        <p class="muted" style="margin-bottom:.75rem;display:flex;align-items:center;gap:.375rem">
+          ${icon('alert-triangle', 14)} Para editar, ajuste a personalização — o prompt é regenerado da matriz automaticamente.
+        </p>
+        <textarea rows="16" readonly style="opacity:.7;cursor:default">${escapeHtml(promptText)}</textarea>
+      </div>`;
+
+  } else if (tab === 'sessao') {
+    const sessao = clone.waha_sessao;
+    if (!sessao) {
+      content.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+          <p class="muted">Nenhuma sessão WAHA vinculada ainda.</p>
+          <button class="btn btn--primary" id="cfg-connect-now-btn">${icon('qr-code', 14)} Conectar agora</button>
+        </div>`;
+      content.querySelector('#cfg-connect-now-btn').addEventListener('click', () => {
+        closeModal();
+        openCloneQRModal(clone);
+      });
+    } else {
+      content.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+          <div class="field"><label>Nome da sessão</label><div class="mono">${escapeHtml(sessao)}</div></div>
+          <div class="field"><label>Status</label>${statusCloneBadge(clone.status)}</div>
+          <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+            <button class="btn" id="cfg-reconect-btn">${icon('refresh-cw', 13)} Reconectar</button>
+            <button class="btn btn--danger" id="cfg-disconnect-btn">${icon('unlink', 13)} Desconectar</button>
+          </div>
+          <div id="cfg-sessao-qr"></div>
+        </div>`;
+
+      content.querySelector('#cfg-reconect-btn').addEventListener('click', () => {
+        const qrArea = content.querySelector('#cfg-sessao-qr');
+        qrArea.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR...</p></div>`;
+        _activeQRPoll && clearInterval(_activeQRPoll);
+        _activeQRPoll = null;
+        pollQR(sessao, (data) => {
+          if (data.connected || data.qr === null) {
+            if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+            qrArea.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 40)}<div style="font-weight:600">Conectado!</div></div>`;
+            toast('WhatsApp reconectado!', 'success');
+            clone.status = 'conectado';
+            _rendered['clones'] = false;
+          } else if (data.qr) {
+            qrArea.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
+          }
+        });
+      });
+
+      content.querySelector('#cfg-disconnect-btn').addEventListener('click', async () => {
+        if (!confirm('Desconectar a sessão WAHA deste clone?')) return;
+        try {
+          await api(`/api/sessions/${encodeURIComponent(sessao)}/stop`, { method: 'POST' });
+          toast('Sessão desconectada.', 'success');
+          clone.status = 'desconectado';
+          _rendered['clones'] = false;
+          loadCloneConfigTab('sessao', clone);
+        } catch (err) {
+          toast('Erro: ' + err.message, 'danger');
+        }
+      });
+    }
+  }
+}
+
+/* ══ MODAL QR ISOLADO ════════════════════════════════════════════= */
+function openCloneQRModal(clone) {
+  if (clone.status === 'conectado') {
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">WhatsApp — ${escapeHtml(clone.display_name || 'Clone')}</span>
+        <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+      </div>
+      <div class="qr-connected" style="padding:1.5rem 0">
+        ${icon('check-circle-2', 48)}
+        <div style="font-weight:700">Já conectado</div>
+        <p class="muted">Esta sessão está ativa.</p>
+        <button class="btn btn--danger" id="qr-modal-disconnect">${icon('unlink',13)} Desconectar</button>
+      </div>`);
+    document.getElementById('qr-modal-disconnect')?.addEventListener('click', async () => {
+      try {
+        await api(`/api/sessions/${encodeURIComponent(clone.waha_sessao)}/stop`, { method: 'POST' });
+        toast('Sessão desconectada.', 'success');
+        clone.status = 'desconectado';
+        _rendered['clones'] = false;
+        closeModal();
+        renderClones();
+      } catch (err) { toast('Erro: ' + err.message, 'danger'); }
+    });
+    return;
+  }
+
+  // Sem sessão vinculada: cria nova
+  if (!clone.waha_sessao) {
+    _wizardState = {
+      step: 4,
+      matriz_slot:      clone.matriz_slot,
+      display_name:     clone.display_name || '',
+      cliente_nome:     clone.cliente_nome || '',
+      cliente_telefone: clone.cliente_telefone || '',
+      personalizacao:   clone.personalizacao || {},
+      sessao_name:      'clone_' + slugify(clone.display_name || String(clone.id)),
+      cloneId:          clone.id,
+      stopQR:           null,
+    };
+    renderWizardStep();
+    return;
+  }
+
+  // Tem sessão mas não conectada: abre QR direto
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">Conectar WhatsApp — ${escapeHtml(clone.display_name || 'Clone')}</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    <div id="standalone-qr-area" style="padding:.5rem 0">
+      <div class="qr-wrap">
+        <div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div>
+        <p class="muted">Carregando QR Code...</p>
+      </div>
+    </div>`);
+
+  document.getElementById('modal-content').classList.add('modal--lg');
+
+  pollQR(clone.waha_sessao, (data) => {
+    const area = document.getElementById('standalone-qr-area');
+    if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
+    if (data.connected || data.qr === null) {
+      if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+      area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">WhatsApp conectado!</div><button class="btn btn--primary" onclick="closeModal();renderClones()">Concluir</button></div>`;
+      toast('WhatsApp conectado!', 'success');
+      clone.status = 'conectado';
+      _rendered['clones'] = false;
+    } else if (data.qr) {
+      area.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
+    } else if (data.error) {
+      area.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>`;
+    }
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════
    NAVIGATION
    ══════════════════════════════════════════════════════════════════ */
 const NAV_ITEMS = [
   { id: 'dashboard',     label: 'Dashboard',      icon: 'layout-dashboard', render: renderDashboard },
   { id: 'bots',          label: 'Bots',            icon: 'bot',              render: renderBots },
+  { id: 'clones',        label: 'Clones',          icon: 'git-branch',       render: renderClones },
   { id: 'execucoes',     label: 'Execuções',       icon: 'activity',         render: renderExecucoes },
   { id: 'relatorios',    label: 'Relatórios',      icon: 'bar-chart-2',      render: renderRelatorios },
   { id: 'configuracoes', label: 'Configurações',   icon: 'settings',         render: renderConfig },

@@ -12,7 +12,7 @@
 import { logger } from '@startap/core/logger';
 import { extractPhone } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
-import { antibot, flowExecutionLog, pausa, routing } from '@startap/db';
+import { antibot, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
@@ -23,6 +23,37 @@ import {
   findBotBySession,
   registerBotEntry,
 } from './registry.js';
+
+/** Tipo de fábrica de bot clone: recebe slotOverride, retorna instância Bot. */
+export type CloneBotFactory = (slotOverride: string) => Bot;
+
+/** Map de matrizSlot -> factory. Registrado em server.ts. */
+const cloneFactories = new Map<string, CloneBotFactory>();
+
+/** Registra uma factory de clone para uma matriz. Chamado em server.ts. */
+export function registerCloneFactory(matrizSlot: string, factory: CloneBotFactory): void {
+  cloneFactories.set(matrizSlot, factory);
+  log.info({ matrizSlot }, 'Clone factory registrada');
+}
+
+/**
+ * Resolve um bot clone dinamicamente a partir do workflow_id (slot do clone).
+ * Consulta flow_clones para descobrir matriz_slot e instancia o bot com override.
+ * Retorna null se não encontrar a factory ou o registro no DB.
+ */
+async function resolveCloneBot(cloneSlot: string): Promise<Bot | null> {
+  const cloneRow = await flowClones.getCloneBySlot(cloneSlot).catch(() => null);
+  if (!cloneRow) {
+    log.warn({ cloneSlot }, 'Clone não encontrado em flow_clones');
+    return null;
+  }
+  const factory = cloneFactories.get(cloneRow.matriz_slot);
+  if (!factory) {
+    log.warn({ cloneSlot, matrizSlot: cloneRow.matriz_slot }, 'Nenhuma factory registrada para matriz do clone');
+    return null;
+  }
+  return factory(cloneSlot);
+}
 
 const log = logger.child({ module: 'router' });
 
@@ -283,7 +314,12 @@ export async function handleWebhook(
   });
 
   const entry = findBotByFlowId(route.workflow_id);
-  const bot = entry?.bot ?? null;
+  // Clones têm slot prefixado com "clone_" e não estão no registry estático.
+  // São resolvidos dinamicamente via flow_clones + factory da matriz.
+  const bot: Bot | null =
+    entry?.bot ??
+    (route.workflow_id.startsWith('clone_') ? await resolveCloneBot(route.workflow_id) : null);
+
   if (!bot) {
     log.warn({ workflowId: route.workflow_id, telefone }, 'Bot não encontrado no registry');
     await flowExecutionLog.logFlowEvent({

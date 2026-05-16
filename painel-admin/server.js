@@ -1429,6 +1429,373 @@ app.get('/api/cleanup/status', async (req, res) => {
   }
 });
 
+// ---------- CLONES DE FLUXO MATRIZ ----------
+
+// GET /api/clones — lista todos os clones
+app.get('/api/clones', async (_req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
+             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+             fc.created_at, fc.updated_at,
+             bc.display_name AS matriz_display_name
+      FROM flow_clones fc
+      LEFT JOIN bot_config bc ON bc.slot = fc.matriz_slot
+      ORDER BY fc.created_at DESC
+    `);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/clones — cria clone
+app.post('/api/clones', async (req, res) => {
+  const { matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao } = req.body ?? {};
+  if (!matriz_slot || typeof matriz_slot !== 'string') {
+    return res.status(400).json({ error: 'matriz_slot obrigatório' });
+  }
+  if (!display_name || typeof display_name !== 'string') {
+    return res.status(400).json({ error: 'display_name obrigatório' });
+  }
+
+  // Gera slug único
+  const slug = `clone_${display_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}_${Math.random().toString(36).slice(2, 8)}`;
+  const pers = personalizacao && typeof personalizacao === 'object' ? personalizacao : {};
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Valida matriz
+    const cfgR = await client.query(
+      `SELECT provider, model, temperature FROM bot_config WHERE slot = $1`,
+      [matriz_slot],
+    );
+    if (!cfgR.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `matriz_slot "${matriz_slot}" não encontrado` });
+    }
+    const { provider, model, temperature } = cfgR.rows[0];
+
+    // Insere bot_config do clone
+    await client.query(
+      `INSERT INTO bot_config (slot, display_name, provider, model, temperature, updated_at)
+       VALUES ($1, $2, $3, $4, $5::numeric, NOW())`,
+      [slug, display_name, provider, model, temperature],
+    );
+
+    // Copia e personaliza bot_prompt
+    const promptR = await client.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [matriz_slot]);
+    if (promptR.rows[0]) {
+      let prompt = promptR.rows[0].prompt;
+      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
+      if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+      await client.query(
+        `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())`,
+        [slug, prompt],
+      );
+    }
+
+    // Copia bot_media
+    const mediaR = await client.query(
+      `SELECT position, media_type, url, caption, context, position_order, enabled FROM bot_media WHERE slot = $1`,
+      [matriz_slot],
+    );
+    for (const m of mediaR.rows) {
+      await client.query(
+        `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+        [slug, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled],
+      );
+    }
+
+    // flow_controls
+    await client.query(
+      `INSERT INTO flow_controls (flow_id, flow_name, source, active, updated_at)
+       VALUES ($1, $2, 'clone', TRUE, NOW())
+       ON CONFLICT (flow_id) DO UPDATE SET active = TRUE, updated_at = NOW()`,
+      [slug, display_name],
+    );
+
+    // flow_clones
+    const cloneR = await client.query(
+      `INSERT INTO flow_clones (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,'rascunho',NOW(),NOW())
+       RETURNING *`,
+      [slug, matriz_slot, display_name, cliente_nome ?? null, cliente_telefone ?? null, JSON.stringify(pers)],
+    );
+
+    await client.query('COMMIT');
+    res.status(201).json(cloneR.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/clones/:id
+app.get('/api/clones/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const r = await pool.query(
+      `SELECT fc.*, bc.display_name AS matriz_display_name
+       FROM flow_clones fc
+       LEFT JOIN bot_config bc ON bc.slot = fc.matriz_slot
+       WHERE fc.id = $1`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/clones/:id
+app.patch('/api/clones/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const { display_name, cliente_nome, cliente_telefone, personalizacao, status: newStatus } = req.body ?? {};
+
+  const sets = [];
+  const vals = [];
+  let i = 1;
+
+  if (display_name !== undefined) { sets.push(`display_name = $${i++}`); vals.push(display_name); }
+  if (cliente_nome !== undefined) { sets.push(`cliente_nome = $${i++}`); vals.push(cliente_nome); }
+  if (cliente_telefone !== undefined) { sets.push(`cliente_telefone = $${i++}`); vals.push(cliente_telefone); }
+  if (personalizacao !== undefined) { sets.push(`personalizacao = $${i++}::jsonb`); vals.push(JSON.stringify(personalizacao)); }
+  if (newStatus !== undefined) { sets.push(`status = $${i++}`); vals.push(newStatus); }
+
+  if (sets.length === 0) return res.status(400).json({ error: 'Nenhum campo para atualizar' });
+  sets.push('updated_at = NOW()');
+  vals.push(id);
+
+  try {
+    const r = await pool.query(`UPDATE flow_clones SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`, vals);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+
+    // Re-aplica personalizacao no prompt se personalizacao mudou
+    if (personalizacao !== undefined) {
+      const pers = typeof personalizacao === 'object' ? personalizacao : {};
+      const cloneSlot = r.rows[0].slot;
+      const matrizSlot = r.rows[0].matriz_slot;
+      const promptR = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [matrizSlot]);
+      if (promptR.rows[0]) {
+        let prompt = promptR.rows[0].prompt;
+        prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
+        if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+        await pool.query(
+          `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
+           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
+          [cloneSlot, prompt],
+        );
+      }
+    }
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/clones/:id
+app.delete('/api/clones/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const existing = await pool.query(`SELECT slot, waha_sessao FROM flow_clones WHERE id = $1`, [id]);
+    if (!existing.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    const { slot: cloneSlot, waha_sessao } = existing.rows[0];
+
+    // Tenta logout WAHA se tinha sessão vinculada (erro não bloqueia delete)
+    if (waha_sessao) {
+      await fetch(`${WAHA_URL}/api/sessions/${waha_sessao}/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      }).catch(() => {});
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM flow_controls WHERE flow_id = $1`, [cloneSlot]);
+      await client.query(`DELETE FROM bot_config WHERE slot = $1`, [cloneSlot]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    res.json({ ok: true, slot: cloneSlot });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/clones/:id/bind-session — vincula sessão WAHA ao clone
+app.post('/api/clones/:id/bind-session', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const { sessao_name, telefone } = req.body ?? {};
+  if (!sessao_name || typeof sessao_name !== 'string') {
+    return res.status(400).json({ error: 'sessao_name obrigatório' });
+  }
+  try {
+    const r = await pool.query(
+      `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [sessao_name, id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+
+    // Se telefone fornecido, cria/atualiza rota em routing_clientes
+    if (telefone && typeof telefone === 'string') {
+      const cloneSlot = r.rows[0].slot;
+      await pool.query(
+        `INSERT INTO routing_clientes (telefone, workflow_id, workflow_name, webhook_url, nome_cliente, ativo, atualizado_em)
+         VALUES ($1,$2,$3,$4,$5,TRUE,NOW())
+         ON CONFLICT (telefone) DO UPDATE SET
+           workflow_id = EXCLUDED.workflow_id,
+           workflow_name = EXCLUDED.workflow_name,
+           ativo = TRUE,
+           atualizado_em = NOW()`,
+        [telefone, cloneSlot, r.rows[0].display_name, '', r.rows[0].cliente_nome],
+      );
+    }
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- SESSIONS WAHA ----------
+
+// POST /api/sessions/create
+app.post('/api/sessions/create', async (req, res) => {
+  const { name } = req.body ?? {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name obrigatório' });
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: JSON.stringify({ name, start: true }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
+      return res.status(r.status >= 400 && r.status < 500 ? 400 : 502).json({ error: `WAHA: ${msg}` });
+    }
+    res.json(body);
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// POST /api/sessions/:name/start
+app.post('/api/sessions/:name/start', async (req, res) => {
+  const { name } = req.params;
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions/${name}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: '{}',
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ error: `WAHA: ${body?.message ?? r.status}` });
+    res.json(body);
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// POST /api/sessions/:name/stop
+app.post('/api/sessions/:name/stop', async (req, res) => {
+  const { name } = req.params;
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions/${name}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: '{}',
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      return res.status(502).json({ error: `WAHA: ${body?.message ?? r.status}` });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// GET /api/sessions/:name/status — efeito colateral: atualiza clone se WORKING
+app.get('/api/sessions/:name/status', async (req, res) => {
+  const { name } = req.params;
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return res.status(502).json({ error: `WAHA: ${body?.message ?? r.status}` });
+
+    // Efeito colateral controlado: se sessão WORKING, marca clone como conectado
+    if (body.status === 'WORKING') {
+      await pool
+        .query(`UPDATE flow_clones SET status = 'conectado', updated_at = NOW() WHERE waha_sessao = $1 AND status != 'conectado'`, [name])
+        .catch(() => {});
+    }
+
+    res.json(body);
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// GET /api/sessions/:name/qr — retorna {qr: "data:image/png;base64,..."} | {connected:true}
+app.get('/api/sessions/:name/qr', async (req, res) => {
+  const { name } = req.params;
+  try {
+    // Verifica status primeiro
+    const statusR = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+    });
+    if (statusR.ok) {
+      const st = await statusR.json().catch(() => ({}));
+      if (st.status === 'WORKING') return res.json({ connected: true, qr: null });
+    }
+
+    // Tenta endpoint padrão
+    const endpoints = [`/api/${name}/auth/qr`, `/api/sessions/${name}/auth/qr`];
+    let qrRes = null;
+    for (const ep of endpoints) {
+      const r = await fetch(`${WAHA_URL}${ep}`, {
+        headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+      });
+      if (r.ok) { qrRes = r; break; }
+    }
+    if (!qrRes) return res.status(502).json({ error: 'Não foi possível obter QR da sessão' });
+
+    const ct = qrRes.headers.get('content-type') ?? '';
+    if (ct.includes('image/png')) {
+      const buf = Buffer.from(await qrRes.arrayBuffer());
+      return res.json({ qr: `data:image/png;base64,${buf.toString('base64')}`, connected: false });
+    }
+    const json = await qrRes.json().catch(() => ({}));
+    const raw = json?.value ?? json?.imageBase64 ?? '';
+    const qr = raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`;
+    res.json({ qr, connected: false });
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
 app.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
     const message =
