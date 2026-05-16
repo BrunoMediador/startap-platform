@@ -30,9 +30,9 @@ async function main() {
   // Bots sem sessão própria — lookup via routing_clientes.
   // Startap já está registrado via import './bots/startap.js' acima (registerBotEntry no init).
   registerBot('echo', new EchoBot());
-  registerBot('0ni38aSspWwhooHd', new TesteBarbeariaBot()); // teste_barbearia
-  registerBot('dlpKXM3gvX2joC1b', new TesteVendasBot()); // teste_vendas
-  registerBot(TESTE_VENDAS_BARBEARIA_WORKFLOW_ID, new TesteVendasBarbeariaBot()); // teste_vendas_barbearia
+  registerBot('0ni38aSspWwhooHd', new TesteBarbeariaBot(), 'pausa_cirilo'); // teste_barbearia
+  registerBot('dlpKXM3gvX2joC1b', new TesteVendasBot(), 'pause_ricardo'); // teste_vendas
+  registerBot(TESTE_VENDAS_BARBEARIA_WORKFLOW_ID, new TesteVendasBarbeariaBot()); // teste_vendas_barbearia — sem tabela legada
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');

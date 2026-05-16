@@ -1,12 +1,7 @@
 import { pausa } from '@startap/db';
+import { findBotByFlowId } from '../registry.js';
 
 export type ManualPauseCommand = 'pause' | 'resume';
-
-const LEGACY_PAUSE_BY_FLOW: Record<string, string> = {
-  '0ni38aSspWwhooHd': 'pausa_cirilo',
-  dlpKXM3gvX2joC1b: 'pause_ricardo',
-  uUS3Ux1cU2DquKxo: 'pause_startap',
-};
 
 export function normalizeManualPauseCommand(text: string): string {
   return text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, '');
@@ -81,7 +76,7 @@ export async function applyFlowManualCommand(input: {
     });
   }
 
-  const legacyTable = LEGACY_PAUSE_BY_FLOW[input.flowId];
+  const legacyTable = findBotByFlowId(input.flowId)?.legacyPauseTable ?? null;
   if (!legacyTable) return;
   if (input.command === 'pause') await pausa.addPause(legacyTable, input.telefone);
   else await pausa.removePause(legacyTable, input.telefone);
