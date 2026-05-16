@@ -19,40 +19,35 @@ async function main() {
   new Cron('* * * * *', { name: 'antibot' }, async () => {
     const executionId = randomUUID();
     const startedAt = Date.now();
+    let jobResult: Awaited<ReturnType<typeof runAntibot>> | null = null;
+    let jobError: unknown = null;
+    await flowExecutionLog.logFlowEvent({
+      executionId,
+      flowId: 'worker:antibot',
+      flowName: 'antibot',
+      bot: 'worker',
+      eventType: 'worker.job-started',
+      status: 'running',
+      message: 'Job antibot iniciado',
+    });
     try {
-      await flowExecutionLog.logFlowEvent({
-        executionId,
-        flowId: 'worker:antibot',
-        flowName: 'antibot',
-        bot: 'worker',
-        eventType: 'worker.job-started',
-        status: 'running',
-        message: 'Job antibot iniciado',
-      });
-      const r = await runAntibot();
-      if (r.blocked > 0) log.info({ ...r }, 'antibot cycle');
-      await flowExecutionLog.logFlowEvent({
-        executionId,
-        flowId: 'worker:antibot',
-        flowName: 'antibot',
-        bot: 'worker',
-        eventType: 'worker.job-finished',
-        status: 'success',
-        message: 'Job antibot concluído',
-        metadata: r,
-        durationMs: Date.now() - startedAt,
-      });
+      jobResult = await runAntibot();
+      if (jobResult.blocked > 0) log.info({ ...jobResult }, 'antibot cycle');
     } catch (e) {
+      jobError = e;
       log.error({ err: e }, 'antibot crashed');
+    } finally {
+      // Garante INSERT do status final mesmo que runAntibot lance exceção não capturada.
       await flowExecutionLog.logFlowEvent({
         executionId,
         flowId: 'worker:antibot',
         flowName: 'antibot',
         bot: 'worker',
-        eventType: 'worker.job-failed',
-        status: 'error',
-        message: 'Job antibot falhou',
-        error: e,
+        eventType: jobError ? 'worker.job-failed' : 'worker.job-finished',
+        status: jobError ? 'error' : 'success',
+        message: jobError ? 'Job antibot falhou' : 'Job antibot concluído',
+        ...(jobResult ? { metadata: jobResult } : {}),
+        ...(jobError ? { error: jobError } : {}),
         durationMs: Date.now() - startedAt,
       });
     }
@@ -62,41 +57,40 @@ async function main() {
   new Cron('0 */12 * * *', { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' }, async () => {
     const executionId = randomUUID();
     const startedAt = Date.now();
+    let cleanupResult: Awaited<ReturnType<typeof runCleanupChat>> | null = null;
+    let cleanupError: unknown = null;
+    await flowExecutionLog.logFlowEvent({
+      executionId,
+      flowId: 'worker:cleanup-chat',
+      flowName: 'cleanup-chat',
+      bot: 'worker',
+      eventType: 'worker.job-started',
+      status: 'running',
+      message: 'Job cleanup-chat iniciado',
+    });
     try {
-      await flowExecutionLog.logFlowEvent({
-        executionId,
-        flowId: 'worker:cleanup-chat',
-        flowName: 'cleanup-chat',
-        bot: 'worker',
-        eventType: 'worker.job-started',
-        status: 'running',
-        message: 'Job cleanup-chat iniciado',
-      });
-      const r = await runCleanupChat();
-      log.info({ ...r }, 'cleanup cycle');
+      cleanupResult = await runCleanupChat();
+      log.info({ ...cleanupResult }, 'cleanup cycle');
       const prunedLogs = await flowExecutionLog.pruneOldFlowEvents(14);
-      await flowExecutionLog.logFlowEvent({
-        executionId,
-        flowId: 'worker:cleanup-chat',
-        flowName: 'cleanup-chat',
-        bot: 'worker',
-        eventType: 'worker.job-finished',
-        status: 'success',
-        message: 'Job cleanup-chat concluído',
-        metadata: { ...r, prunedFlowLogs: prunedLogs },
-        durationMs: Date.now() - startedAt,
-      });
+      // Fecha execuções presas em running há mais de 5 minutos (safety net).
+      const closedStale = await flowExecutionLog.closeStaleRunning(5);
+      if (closedStale > 0) log.warn({ closedStale }, 'Execuções presas em running fechadas');
+      Object.assign(cleanupResult as object, { prunedFlowLogs: prunedLogs, closedStale });
     } catch (e) {
+      cleanupError = e;
       log.error({ err: e }, 'cleanup crashed');
+    } finally {
+      // Garante INSERT do status final mesmo que runCleanupChat lance exceção não capturada.
       await flowExecutionLog.logFlowEvent({
         executionId,
         flowId: 'worker:cleanup-chat',
         flowName: 'cleanup-chat',
         bot: 'worker',
-        eventType: 'worker.job-failed',
-        status: 'error',
-        message: 'Job cleanup-chat falhou',
-        error: e,
+        eventType: cleanupError ? 'worker.job-failed' : 'worker.job-finished',
+        status: cleanupError ? 'error' : 'success',
+        message: cleanupError ? 'Job cleanup-chat falhou' : 'Job cleanup-chat concluído',
+        ...(cleanupResult ? { metadata: cleanupResult } : {}),
+        ...(cleanupError ? { error: cleanupError } : {}),
         durationMs: Date.now() - startedAt,
       });
     }

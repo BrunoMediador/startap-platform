@@ -126,6 +126,42 @@ export async function listFlowEvents(input: {
   return r.rows.map(normalizeRow);
 }
 
+/**
+ * Marca como 'error' toda execução cuja última entrada ainda é 'running'
+ * há mais de `thresholdMinutes` minutos. Protege contra crashes de processo
+ * que impedem o INSERT do status final.
+ *
+ * Usa CTE para identificar apenas execution_ids cujo último evento (id DESC)
+ * ainda está em 'running', evitando fechar execuções ainda em andamento.
+ */
+export async function closeStaleRunning(thresholdMinutes = 5): Promise<number> {
+  const mins = Math.max(1, Math.min(1440, thresholdMinutes));
+  const r = await query(
+    `WITH latest AS (
+       SELECT DISTINCT ON (execution_id) execution_id, id, status, created_at
+       FROM flow_execution_logs
+       ORDER BY execution_id, id DESC
+     ),
+     stale AS (
+       SELECT execution_id
+       FROM latest
+       WHERE status = 'running'
+         AND created_at < NOW() - ($1 || ' minutes')::INTERVAL
+     )
+     INSERT INTO flow_execution_logs
+       (execution_id, event_type, status, message, duration_ms)
+     SELECT
+       s.execution_id,
+       'system.stale-closed',
+       'error',
+       'Execução presa em running fechada automaticamente pelo cleanup',
+       NULL
+     FROM stale s`,
+    [String(mins)],
+  );
+  return r.rowCount ?? 0;
+}
+
 export async function pruneOldFlowEvents(daysToKeep = 14): Promise<number> {
   const days = Math.max(1, Math.min(365, daysToKeep));
   const r = await query(
