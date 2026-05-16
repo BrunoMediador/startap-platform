@@ -247,12 +247,20 @@ function isClearCourseIntent(text: string): boolean {
   return course && !barbershop;
 }
 
-async function sendCourseVideos(input: { sessao: string; chatId: string }): Promise<void> {
+async function sendCourseVideos(
+  input: { sessao: string; chatId: string },
+  log: { warn: (obj: Record<string, unknown>, msg: string) => void },
+): Promise<void> {
   const { sessao, chatId } = input;
   const v1 = await botMedia.getByPosition(SLOT, 'V1');
   const v2 = await botMedia.getByPosition(SLOT, 'V2');
   const v3 = await botMedia.getByPosition(SLOT, 'V3');
   const pos = await botMedia.getByPosition(SLOT, 'POS_VIDEOS');
+  if (!v1 && !v2 && !v3) {
+    // positions V1/V2/V3 ausentes — provável desalinhamento entre bot_media e o codigo
+    log.warn({ slot: SLOT }, 'sendCourseVideos: nenhuma midia encontrada para V1/V2/V3 — verificar bot_media.position');
+    return;
+  }
   for (const media of [v1, v2, v3]) {
     if (!media?.url) continue;
     await waha.sendMedia({
@@ -441,7 +449,7 @@ export class TesteVendasBarbeariaBot extends BotBase {
 
     if (shouldSendVideos) {
       setTimeout(() => {
-        sendCourseVideos({ sessao, chatId })
+        sendCourseVideos({ sessao, chatId }, this.log)
           .then(() => this.appendMemory(ctx, 'system', COURSE_VIDEO_MARKER))
           .catch((e) => this.log.error({ err: e, telefone }, 'Falha ao enviar videos do curso'));
       }, 2500);
