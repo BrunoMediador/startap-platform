@@ -24,6 +24,9 @@ git pull --rebase origin main
 echo "==> docker compose build (sem cache pra evitar staleness)"
 docker compose build --no-cache
 
+echo "==> apply migrations"
+bash "$(dirname "$0")/migrate.sh"
+
 echo "==> docker compose up -d"
 docker compose up -d
 
