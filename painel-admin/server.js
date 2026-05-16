@@ -1363,8 +1363,22 @@ function buildFlowLogFilters(query, options = {}) {
 // ---------- LEADS & RELATORIOS ----------
 app.get('/api/leads', async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM leads_ricardo ORDER BY 1 DESC LIMIT 200');
-    res.json(r.rows);
+    const slot = typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
+    let rows = [];
+    if (slot) {
+      const [r1, r2] = await Promise.all([
+        pool.query('SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY id DESC LIMIT 200', [slot, 'leads_ricardo']),
+        pool.query('SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY id DESC LIMIT 200', [slot, 'leads_vendas_barbearia']),
+      ]);
+      rows = [...r1.rows, ...r2.rows].sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime()).slice(0, 200);
+    } else {
+      const [r1, r2] = await Promise.all([
+        pool.query("SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY id DESC LIMIT 200"),
+        pool.query("SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY id DESC LIMIT 200"),
+      ]);
+      rows = [...r1.rows, ...r2.rows].sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime()).slice(0, 200);
+    }
+    res.json(rows);
   } catch {
     res.json([]);
   }

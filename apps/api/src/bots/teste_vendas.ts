@@ -157,6 +157,7 @@ export class TesteVendasBot extends BotBase {
             telefone,
             mensagem_inicial: interesse,
             origem: 'whatsapp',
+            slot: this.slot,
           });
           this.log.info({ telefone, nome }, 'Lead Ricardo salvo');
           return { ok: true };

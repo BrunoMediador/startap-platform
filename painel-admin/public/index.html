@@ -1850,6 +1850,7 @@ const COL_LABELS = {
   created_at: 'Criado em', updated_at: 'Atualizado em',
   servico: 'Serviço', data_solicitada: 'Data solicitada',
   status: 'Status', date: 'Data', count: 'Mensagens', total: 'Total',
+  slot: 'Origem (slot)', _table: 'Tabela',
 };
 
 function colLabel(k) { return COL_LABELS[k] || k.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()); }
@@ -1911,9 +1912,43 @@ async function renderRelatorios() {
 
     try {
       if (tab === 'leads') {
-        const data = await api('/api/leads');
-        const arr = Array.isArray(data) ? data : (data.leads || data.data || []);
-        content.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(arr.length)} lead${arr.length !== 1 ? 's' : ''}</p>${renderGenericTable(arr)}`;
+        // Busca clones + matrizes para popular select de origem
+        let slotOptions = '<option value="">Todos</option>';
+        try {
+          const clones = await api('/api/clones');
+          const matrizes = [
+            { slot: 'teste_vendas', display_name: 'Teste Vendas (matriz)' },
+            { slot: 'teste_vendas_barbearia', display_name: 'Teste Vendas+Barbearia (matriz)' },
+          ];
+          slotOptions += matrizes.map(m => `<option value="${escapeHtml(m.slot)}">${escapeHtml(m.display_name)}</option>`).join('');
+          if (Array.isArray(clones)) {
+            slotOptions += clones.map(c => `<option value="${escapeHtml(c.slot)}">${escapeHtml(c.display_name || c.slot)}</option>`).join('');
+          }
+        } catch { /* sem clones cadastrados, só matrizes */ }
+
+        const renderLeads = async (slotFilter) => {
+          const url = slotFilter ? `/api/leads?slot=${encodeURIComponent(slotFilter)}` : '/api/leads';
+          const data = await api(url);
+          const arr = Array.isArray(data) ? data : (data.leads || data.data || []);
+          const filterDiv = content.querySelector('#leads-slot-filter');
+          const tableDiv = content.querySelector('#leads-table');
+          if (tableDiv) {
+            tableDiv.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(arr.length)} lead${arr.length !== 1 ? 's' : ''}</p>${renderGenericTable(arr, ['_table'])}`;
+          }
+        };
+
+        content.innerHTML = `
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">
+            <label style="font-size:.85rem;color:var(--text-muted)">Filtrar por origem:</label>
+            <select id="leads-slot-filter" class="input" style="width:auto;min-width:220px">${slotOptions}</select>
+          </div>
+          <div id="leads-table"><div class="skeleton-block" style="height:150px"></div></div>`;
+
+        content.querySelector('#leads-slot-filter').addEventListener('change', (ev) => {
+          renderLeads(ev.target.value);
+        });
+
+        await renderLeads('');
       } else if (tab === 'agendamentos') {
         const data = await api('/api/agendamentos-pendentes');
         const arr = Array.isArray(data) ? data : (data.agendamentos || data.data || []);
