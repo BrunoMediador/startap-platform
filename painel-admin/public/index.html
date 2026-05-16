@@ -632,6 +632,17 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .kpi-grid { grid-template-columns: 1fr; }
   .kpi-card__value { font-size: 1.375rem; }
 }
+/* ── Accent button (atalho de clonagem) ─────────────────────────── */
+.btn--accent { background: #059669; border-color: #059669; color: #fff; }
+.btn--accent:hover { background: #047857; border-color: #047857; }
+@media (max-width: 480px) {
+  .btn--accent .btn-label { display: none; }
+  .btn--accent::before { content: '+'; font-size: 1rem; }
+}
+/* ── Grupos da seção Bots ────────────────────────────────────────── */
+.bots-group { margin-bottom: 2rem; }
+.bots-group-header { margin-bottom: 1rem; padding-bottom: .625rem; border-bottom: 1px solid var(--border); }
+.bots-group-header .h2 { margin-bottom: .125rem; }
 /* ── Clones ──────────────────────────────────────────────────────── */
 .clones-grid {
   display: grid;
@@ -777,16 +788,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
       <div id="dash-cleanup-wrap"></div>
     </section>
     <section class="section" id="sec-bots" aria-label="Bots">
-      <div class="section-header">
-        <div class="section-header__left">
-          <h1 class="h1">Bots</h1>
-          <p class="muted">Gerencie seus bots e configurações</p>
-        </div>
-      </div>
       <div id="bots-content"></div>
-    </section>
-    <section class="section" id="sec-clones" aria-label="Clones">
-      <div id="clones-content"></div>
     </section>
     <section class="section" id="sec-execucoes" aria-label="Execuções">
       <!-- TODO seção -->
@@ -1218,25 +1220,50 @@ async function renderDashExec() {
 let _selectedBot = null;
 let _selectedBotTab = 'overview';
 
+const INTERNAL_BOT_SLOT = 'startap';
+const MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
+
 async function renderBots() {
   const wrap = document.getElementById('bots-content');
-  wrap.innerHTML = `<div class="bots-grid">${'<div class="bot-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:120px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(4)}</div>`;
+  const skeletonCard = `<div class="bot-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:120px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>`;
+  wrap.innerHTML = `
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="h1">Bots</h1>
+        <p class="muted">Gerencie bots, matrizes e clones de instâncias</p>
+      </div>
+    </div>
+    <div class="bots-group">
+      <div class="bots-group-header"><span class="h2">Em produção</span><p class="muted">Atende qualquer telefone da sessão STARTAP_AI_PROD</p></div>
+      <div class="bots-grid" id="group-interno">${skeletonCard}</div>
+    </div>
+    <div class="bots-group">
+      <div class="bots-group-header"><span class="h2">Matrizes — para testes</span><p class="muted">Fluxos base que podem ser clonados por cliente</p></div>
+      <div class="bots-grid" id="group-matrizes">${skeletonCard.repeat(3)}</div>
+    </div>
+    <div class="bots-group">
+      <div class="bots-group-header"><span class="h2">Clones — instâncias por cliente</span><p class="muted">Cada clone roda num número de WhatsApp separado</p></div>
+      <div id="group-clones"><div class="clones-grid">${'<div class="clone-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:140px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div></div>
+    </div>`;
 
   try {
-    const bots = await api('/api/bots');
-    const arr = Array.isArray(bots) ? bots : (bots.bots || Object.values(bots));
-    if (!arr.length) {
-      wrap.innerHTML = `<div class="empty-state">${icon('bot-off',40)}<div class="empty-state__title">Nenhum bot encontrado</div><p class="empty-state__text">Nenhum bot cadastrado ainda.</p></div>`;
-      return;
-    }
-    renderBotsList(arr, wrap);
+    const [botsRaw, clonesRaw] = await Promise.all([api('/api/bots'), api('/api/clones').catch(() => [])]);
+    const bots = Array.isArray(botsRaw) ? botsRaw : (botsRaw.bots || Object.values(botsRaw));
+    const clones = Array.isArray(clonesRaw) ? clonesRaw : (clonesRaw.clones || clonesRaw.data || []);
+
+    const interno = bots.filter(b => (b.slot || b.slug) === INTERNAL_BOT_SLOT);
+    const matrizes = bots.filter(b => MATRIZ_SLOTS.includes(b.slot || b.slug));
+
+    _renderBotGroup(interno, document.getElementById('group-interno'), false, clones);
+    _renderBotGroup(matrizes, document.getElementById('group-matrizes'), true, clones);
+    renderBotClones(clones, document.getElementById('group-clones'));
   } catch (err) {
-    console.error('[bots]', err);
-    wrap.innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar bots: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.75rem" onclick="renderBots()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
+    wrap.innerHTML += `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar bots: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.75rem" onclick="renderBots()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
   }
 }
 
-function renderBotsList(bots, wrap) {
+function _renderBotGroup(bots, container, showCloneBtn, allClones) {
+  if (!bots.length) { container.innerHTML = `<p class="muted">Nenhum bot neste grupo.</p>`; return; }
   const grid = document.createElement('div');
   grid.className = 'bots-grid';
 
@@ -1251,8 +1278,12 @@ function renderBotsList(bots, wrap) {
     header.className = 'bot-card__header';
     header.appendChild(botAvatar(bot.slug || bot.slot, 40));
 
+    const isInternal = (bot.slot || bot.slug) === INTERNAL_BOT_SLOT;
+    const cloneCount = allClones.filter(c => c.matriz_slot === (bot.slot || bot.slug)).length;
     const meta = document.createElement('div');
-    meta.innerHTML = `<div class="bot-card__name">${escapeHtml(bot.name || bot.slot)}</div><div class="bot-card__slug">${escapeHtml(bot.slug || bot.slot || '')}</div>`;
+    meta.innerHTML = `
+      <div class="bot-card__name">${escapeHtml(bot.name || bot.slot)}${isInternal ? ` <span class="badge" style="background:rgba(245,158,11,.18);color:#f59e0b;font-size:.6875rem">Interno</span>` : ''}</div>
+      <div class="bot-card__slug">${escapeHtml(bot.slug || bot.slot || '')}${showCloneBtn && cloneCount > 0 ? ` <span class="muted">${cloneCount} clone${cloneCount !== 1 ? 's' : ''} ativo${cloneCount !== 1 ? 's' : ''}</span>` : ''}</div>`;
     header.appendChild(meta);
     card.appendChild(header);
 
@@ -1262,29 +1293,43 @@ function renderBotsList(bots, wrap) {
     const model = bot.model || bot.llm_model || '';
     if (model) card.insertAdjacentHTML('beforeend', `<div class="muted mono">${escapeHtml(model)}</div>`);
 
+    if (showCloneBtn) {
+      const cloneBtn = document.createElement('button');
+      cloneBtn.className = 'btn btn--accent btn--sm';
+      cloneBtn.setAttribute('aria-label', `Clonar matriz ${bot.name || bot.slot}`);
+      cloneBtn.innerHTML = `${icon('git-branch', 13)} <span class="btn-label">Clonar este</span>`;
+      cloneBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openCloneWizard(bot.slot || bot.slug);
+      });
+      card.appendChild(cloneBtn);
+    }
+
     card.addEventListener('click', () => {
       _selectedBot = bot;
-      renderBotsListAndDetail(bots, wrap);
+      const wrap = document.getElementById('bots-content');
+      _renderBotsDetail(bots, wrap, bot);
     });
     card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') card.click(); });
 
     grid.appendChild(card);
   });
 
-  wrap.innerHTML = '';
-  wrap.appendChild(grid);
+  container.innerHTML = '';
+  container.appendChild(grid);
+}
 
-  if (_selectedBot) {
-    const selected = bots.find(b => b.slot === _selectedBot.slot) || bots[0];
-    _selectedBot = selected;
-    const detail = document.createElement('div');
+function _renderBotsDetail(bots, wrap, selectedBot) {
+  let detail = wrap.querySelector('.bot-detail');
+  if (!detail) {
+    detail = document.createElement('div');
     wrap.appendChild(detail);
-    renderBotDetail(selected, detail);
   }
+  renderBotDetail(selectedBot, detail);
 }
 
 function renderBotsListAndDetail(bots, wrap) {
-  renderBotsList(bots, wrap);
+  if (_selectedBot) _renderBotsDetail(bots, wrap, _selectedBot);
 }
 
 function renderBotDetail(bot, container) {
@@ -2286,28 +2331,18 @@ function closeModal() {
   _origCloseModal();
 }
 
-/* ── renderClones ───────────────────────────────────────────────── */
-async function renderClones() {
-  const wrap = document.getElementById('clones-content');
-  wrap.innerHTML = `
-    <div class="section-header">
-      <div class="section-header__left">
-        <h1 class="h1">Clones</h1>
-        <p class="muted">Clones de fluxos matriz — um número de WhatsApp por cliente</p>
-      </div>
-      <button class="btn btn--primary" id="btn-novo-clone">${icon('plus', 14)} Clonar fluxo matriz</button>
-    </div>
-    <div id="clones-list"><div class="clones-grid">${'<div class="clone-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:140px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div></div>`;
-
-  wrap.querySelector('#btn-novo-clone').addEventListener('click', () => openCloneWizard());
-
-  try {
-    const clones = await api('/api/clones');
-    const arr = Array.isArray(clones) ? clones : (clones.clones || clones.data || []);
-    renderClonesList(arr, wrap.querySelector('#clones-list'));
-  } catch (err) {
-    wrap.querySelector('#clones-list').innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar clones: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.75rem" onclick="renderClones()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
+/* ── renderBotClones (grupo interno de Bots) ────────────────────── */
+function renderBotClones(clones, container) {
+  if (!clones.length) {
+    container.innerHTML = `
+      <div class="empty-state" style="padding:1.5rem 0">
+        <div class="empty-state__icon">${icon('git-branch', 40)}</div>
+        <div class="empty-state__title">Nenhum clone criado ainda</div>
+        <p class="empty-state__text">Use o botão "Clonar este" numa matriz acima para criar uma instância por cliente.</p>
+      </div>`;
+    return;
   }
+  renderClonesList(clones, container);
 }
 
 function renderClonesList(clones, wrap) {
@@ -2384,7 +2419,8 @@ async function confirmDeleteClone(c) {
   try {
     await api(`/api/clones/${c.id}`, { method: 'DELETE' });
     toast('Clone excluído.', 'success');
-    renderClones();
+    _rendered['bots'] = false;
+    renderBots();
   } catch (err) {
     toast('Erro ao excluir: ' + err.message, 'danger');
   }
@@ -2665,8 +2701,8 @@ async function wizardStep4Create() {
         document.getElementById('wizard-finish-btn')?.addEventListener('click', () => {
           closeModal();
           toast('Clone criado e conectado com sucesso!', 'success');
-          _rendered['clones'] = false;
-          renderClones();
+          _rendered['bots'] = false;
+          renderBots();
         });
       } else if (data.qr) {
         qrArea.innerHTML = `
@@ -2764,7 +2800,7 @@ function loadCloneConfigTab(tab, clone) {
         });
         Object.assign(clone, updated);
         toast('Clone atualizado!', 'success');
-        _rendered['clones'] = false;
+        _rendered['bots'] = false;
       } catch (err) {
         toast('Erro: ' + err.message, 'danger');
       } finally { btn.disabled = false; }
@@ -2820,7 +2856,7 @@ function loadCloneConfigTab(tab, clone) {
         });
         Object.assign(clone, updated);
         toast('Personalização salva!', 'success');
-        _rendered['clones'] = false;
+        _rendered['bots'] = false;
       } catch (err) {
         toast('Erro: ' + err.message, 'danger');
       } finally { btn.disabled = false; }
@@ -2871,7 +2907,7 @@ function loadCloneConfigTab(tab, clone) {
             qrArea.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 40)}<div style="font-weight:600">Conectado!</div></div>`;
             toast('WhatsApp reconectado!', 'success');
             clone.status = 'conectado';
-            _rendered['clones'] = false;
+            _rendered['bots'] = false;
           } else if (data.qr) {
             qrArea.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
           }
@@ -2884,7 +2920,7 @@ function loadCloneConfigTab(tab, clone) {
           await api(`/api/sessions/${encodeURIComponent(sessao)}/stop`, { method: 'POST' });
           toast('Sessão desconectada.', 'success');
           clone.status = 'desconectado';
-          _rendered['clones'] = false;
+          _rendered['bots'] = false;
           loadCloneConfigTab('sessao', clone);
         } catch (err) {
           toast('Erro: ' + err.message, 'danger');
@@ -2913,9 +2949,9 @@ function openCloneQRModal(clone) {
         await api(`/api/sessions/${encodeURIComponent(clone.waha_sessao)}/stop`, { method: 'POST' });
         toast('Sessão desconectada.', 'success');
         clone.status = 'desconectado';
-        _rendered['clones'] = false;
+        _rendered['bots'] = false;
         closeModal();
-        renderClones();
+        renderBots();
       } catch (err) { toast('Erro: ' + err.message, 'danger'); }
     });
     return;
@@ -2958,10 +2994,10 @@ function openCloneQRModal(clone) {
     if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
     if (data.connected || data.qr === null) {
       if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
-      area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">WhatsApp conectado!</div><button class="btn btn--primary" onclick="closeModal();renderClones()">Concluir</button></div>`;
+      area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">WhatsApp conectado!</div><button class="btn btn--primary" onclick="closeModal();renderBots()">Concluir</button></div>`;
       toast('WhatsApp conectado!', 'success');
       clone.status = 'conectado';
-      _rendered['clones'] = false;
+      _rendered['bots'] = false;
     } else if (data.qr) {
       area.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
     } else if (data.error) {
@@ -2976,13 +3012,14 @@ function openCloneQRModal(clone) {
 const NAV_ITEMS = [
   { id: 'dashboard',     label: 'Dashboard',      icon: 'layout-dashboard', render: renderDashboard },
   { id: 'bots',          label: 'Bots',            icon: 'bot',              render: renderBots },
-  { id: 'clones',        label: 'Clones',          icon: 'git-branch',       render: renderClones },
   { id: 'execucoes',     label: 'Execuções',       icon: 'activity',         render: renderExecucoes },
   { id: 'relatorios',    label: 'Relatórios',      icon: 'bar-chart-2',      render: renderRelatorios },
   { id: 'configuracoes', label: 'Configurações',   icon: 'settings',         render: renderConfig },
 ];
 
-let _activeSection = localStorage.getItem('paineladmin:section') || 'dashboard';
+let _savedSection = localStorage.getItem('paineladmin:section') || 'dashboard';
+if (_savedSection === 'clones') { _savedSection = 'bots'; localStorage.setItem('paineladmin:section', 'bots'); }
+let _activeSection = _savedSection;
 let _rendered = {};
 
 function buildNav() {
