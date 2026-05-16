@@ -9,6 +9,14 @@ on:
     types:
       - completed
 
+# Serializa deploys para o mesmo servidor.
+# Sem isso, dois merges seguidos disparam `docker compose up -d` concorrentes
+# e batem com "container name already in use" (containers órfãos prefixados).
+# cancel-in-progress: false — nunca aborta um deploy no meio; enfileira.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy via SSH
