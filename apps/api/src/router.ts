@@ -12,25 +12,35 @@
 import { logger } from '@startap/core/logger';
 import { extractPhone } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
-import { antibot, flowControl, flowExecutionLog, pausa, routing } from '@startap/db';
+import { antibot, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
-import {
-  STARTAP_WORKFLOW_ID,
-  STARTAP_WORKFLOW_NAME,
-  applyStartapManualCommand,
-  getStartapManualCommand,
-  isStartapSession,
-} from './bots/startap.js';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
+import {
+  type BotEntry,
+  buildFallbackRoute,
+  findBotByFlowId,
+  findBotBySession,
+  registerBotEntry,
+} from './registry.js';
 
 const log = logger.child({ module: 'router' });
 
-/** Mapa em memória dos bots disponíveis — key = workflow_id em routing_clientes. */
-const botRegistry = new Map<string, Bot>();
-
+/**
+ * Registra um bot sem sessão própria (lookup via routing_clientes).
+ * Bots com sessão própria (ex: Startap) registram-se via registerBotEntry
+ * diretamente ao serem importados.
+ */
 export function registerBot(workflowId: string, bot: Bot): void {
-  botRegistry.set(workflowId, bot);
+  registerBotEntry({
+    workflowId,
+    workflowName: workflowId,
+    ownedSessions: [],
+    legacyPauseTable: null,
+    getManualCommand: () => null,
+    applyManualCommand: async () => {},
+    bot,
+  });
   log.info({ workflowId, bot: bot.name }, 'Bot registrado');
 }
 
@@ -59,14 +69,18 @@ export async function handleWebhook(
   }
 
   const fromMe = !!body.payload?.fromMe;
-  const startapManualCommand =
-    fromMe && isStartapSession(body.session)
-      ? getStartapManualCommand(body.payload?.body ?? '')
+  // Detecta bot por sessão antes de extrair telefone — necessário para comandos
+  // manuais de bots com sessão própria (ex: Startap), cujo trigger pode chegar
+  // antes de qualquer informação de roteamento.
+  const sessionEntry = findBotBySession(body.session);
+  const sessionManualCommand =
+    fromMe && sessionEntry
+      ? sessionEntry.getManualCommand(body.payload?.body ?? '')
       : null;
 
   // 2. Mensagens fromMe com texto podem ser comando manual por fluxo.
   // A decisão final vem depois de extrair o telefone e descobrir o fluxo.
-  if (fromMe && !startapManualCommand && !body.payload?.body) {
+  if (fromMe && !sessionManualCommand && !body.payload?.body) {
     await flowExecutionLog.logFlowEvent({
       ...baseLog,
       eventType: 'router.ignored',
@@ -101,31 +115,36 @@ export async function handleWebhook(
   const chatId = body.payload?.from ?? '';
   const phoneLog = { ...baseLog, telefone };
 
-  if (startapManualCommand) {
-    await applyStartapManualCommand(startapManualCommand, telefone, {
+  // Comando manual de bot com sessão própria (ex: "ola!souicaro..." do Startap).
+  // Diferente dos comandos genéricos de fluxo abaixo, este é interpretado pelo
+  // próprio bot sem passar por routing_clientes.
+  if (sessionManualCommand && sessionEntry) {
+    await sessionEntry.applyManualCommand(sessionManualCommand, telefone, {
       session: sessao,
       source: 'fromMe',
     });
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
-      flowId: STARTAP_WORKFLOW_ID,
-      flowName: STARTAP_WORKFLOW_NAME,
-      bot: 'startap',
+      flowId: sessionEntry.workflowId,
+      flowName: sessionEntry.workflowName,
+      bot: sessionEntry.bot.name,
       eventType:
-        startapManualCommand === 'pause' ? 'startap.manual-pause' : 'startap.manual-resume',
+        sessionManualCommand === 'pause'
+          ? `${sessionEntry.bot.name}.manual-pause`
+          : `${sessionEntry.bot.name}.manual-resume`,
       status: 'success',
       message:
-        startapManualCommand === 'pause'
-          ? 'Atendente assumiu a conversa Startap'
-          : 'Atendimento humano finalizado; IA Startap retomada',
-      metadata: { pauseTable: 'pause_startap', source: 'fromMe' },
+        sessionManualCommand === 'pause'
+          ? 'Atendente assumiu a conversa'
+          : 'Atendimento humano finalizado; IA retomada',
+      metadata: { pauseTable: sessionEntry.legacyPauseTable, source: 'fromMe' },
       durationMs: Date.now() - startedAt,
     });
-    return { status: `ok:startap-manual-${startapManualCommand}` };
+    return { status: `ok:${sessionEntry.bot.name}-manual-${sessionManualCommand}` };
   }
 
   if (fromMe) {
-    const route = await findRouteOrStartapFallback(telefone, sessao);
+    const route = await findRoute(telefone, sessao, sessionEntry);
     const flowManualCommand = route
       ? await getFlowManualCommandForFlow(route.workflow_id, body.payload?.body ?? '')
       : null;
@@ -209,29 +228,34 @@ export async function handleWebhook(
     return { status: 'ignored:bot-pausa' };
   }
 
-  if (isStartapSession(sessao)) {
-    const startapPaused =
-      (await pausa.isFlowPaused({ flowId: STARTAP_WORKFLOW_ID, telefone }).catch(() => false)) ||
-      (await pausa.isPaused('pause_startap', telefone).catch(() => false));
-    if (startapPaused) {
-      log.info({ telefone, sessao }, 'Número em pause_startap, ignorando sessão Startap');
+  // Bots com sessão própria têm tabela de pausa legada verificada aqui.
+  // Isso preserva o comportamento anterior onde pause_startap bloqueava
+  // mensagens recebidas na sessão Startap antes do roteamento.
+  if (sessionEntry?.legacyPauseTable) {
+    const sessionPaused =
+      (await pausa
+        .isFlowPaused({ flowId: sessionEntry.workflowId, telefone })
+        .catch(() => false)) ||
+      (await pausa.isPaused(sessionEntry.legacyPauseTable, telefone).catch(() => false));
+    if (sessionPaused) {
+      log.info({ telefone, sessao }, 'Número em pausa de sessão própria, ignorando');
       await flowExecutionLog.logFlowEvent({
         ...phoneLog,
-        flowId: STARTAP_WORKFLOW_ID,
-        flowName: STARTAP_WORKFLOW_NAME,
-        bot: 'startap',
-        eventType: 'router.startap-paused',
+        flowId: sessionEntry.workflowId,
+        flowName: sessionEntry.workflowName,
+        bot: sessionEntry.bot.name,
+        eventType: 'router.session-paused',
         status: 'ignored',
-        message: 'Número em pause_startap, ignorando sessão Startap',
-        metadata: { pauseTable: 'pause_startap' },
+        message: 'Número em pausa de sessão própria, ignorando',
+        metadata: { pauseTable: sessionEntry.legacyPauseTable },
         durationMs: Date.now() - startedAt,
       });
-      return { status: 'ignored:startap-paused' };
+      return { status: 'ignored:session-paused' };
     }
   }
 
   // 6. Busca rota
-  const route = await findRouteOrStartapFallback(telefone, sessao);
+  const route = await findRoute(telefone, sessao, sessionEntry);
   if (!route) {
     log.debug({ telefone, sessao }, 'Telefone sem roteamento configurado');
     await flowExecutionLog.logFlowEvent({
@@ -254,7 +278,8 @@ export async function handleWebhook(
     metadata: { routeId: route.id, active: route.ativo },
   });
 
-  const bot = botRegistry.get(route.workflow_id);
+  const entry = findBotByFlowId(route.workflow_id);
+  const bot = entry?.bot ?? null;
   if (!bot) {
     log.warn({ workflowId: route.workflow_id, telefone }, 'Bot não encontrado no registry');
     await flowExecutionLog.logFlowEvent({
@@ -321,26 +346,18 @@ export async function handleWebhook(
   }
 }
 
-async function findRouteOrStartapFallback(
+/**
+ * Bots com ownedSessions não usam routing_clientes — constroem uma RoutingRow
+ * sintética via buildFallbackRoute. Os demais consultam routing_clientes normalmente.
+ */
+async function findRoute(
   telefone: string,
   sessao: string,
+  sessionEntry: BotEntry | null,
 ): Promise<RoutingRow | null> {
-  if (isStartapSession(sessao)) {
-    const active = await flowControl.isFlowActive(STARTAP_WORKFLOW_ID);
-    if (!active) return null;
-    return {
-      id: 0,
-      telefone,
-      workflow_id: STARTAP_WORKFLOW_ID,
-      workflow_name: STARTAP_WORKFLOW_NAME,
-      webhook_url: null,
-      nome_cliente: null,
-      ativo: true,
-      criado_em: new Date(),
-      atualizado_em: new Date(),
-    };
+  if (sessionEntry) {
+    return buildFallbackRoute(sessionEntry, telefone);
   }
-
   return routing.findRouting(telefone);
 }
 
