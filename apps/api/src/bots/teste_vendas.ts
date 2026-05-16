@@ -71,13 +71,14 @@ function sanitizar(text: string): string {
 }
 
 export class TesteVendasBot extends BotBase {
-  constructor() {
+  constructor(opts?: { slotOverride?: string }) {
     super({
-      name: SLOT,
+      name: opts?.slotOverride ?? SLOT,
       projectId: SLOT,
       pauseTable: PAUSE_TABLE,
       memoryTable: 'chat_histories_ricardo',
       memoryWindow: 10,
+      slotOverride: opts?.slotOverride,
     });
   }
 
@@ -120,11 +121,11 @@ export class TesteVendasBot extends BotBase {
     const hasPriorBotReply = history.some((turn) => turn.role === 'ai');
 
     const basePrompt = await renderPrompt({
-      slot: SLOT,
+      slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
       vars: { nome: pushName || telefone, telefone },
     });
-    const mediaContext = await botMedia.formatContextForPrompt(SLOT);
+    const mediaContext = await botMedia.formatContextForPrompt(this.slot);
     const systemPrompt = mediaContext
       ? [
           basePrompt,
@@ -164,8 +165,8 @@ export class TesteVendasBot extends BotBase {
     ];
 
     const result = await runAgentConfigured({
-      slot: SLOT,
-      projectId: SLOT,
+      slot: this.slot,
+      projectId: this.slot,
       flowId: ctx.flowId,
       telefone,
       systemPrompt,
