@@ -1,1073 +1,1489 @@
 <!DOCTYPE html>
-<html lang="pt-BR" class="dark">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Painel Startap</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.tailwindcss.com"></script>
 <style>
-  :root {
-    --bg: #07080a;
-    --bg-elev: #0f1014;
-    --bg-card: #13141a;
-    --bg-hover: #1c1d24;
-    --bg-active: #232530;
-    --border: #1f2128;
-    --border-strong: #2c2f38;
-    --text: #f3f4f7;
-    --text-dim: #a4a7b1;
-    --text-mute: #6a6d77;
-    --accent: #3b82f6;
-    --surface: #1c1d24;
-    --success: #22c55e;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-  }
-  * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-  html, body { background: var(--bg); color: var(--text); }
-  body {
-    font-family: 'Inter', system-ui, sans-serif;
-    font-feature-settings: 'cv11','ss01','ss03';
-    letter-spacing: -0.011em;
-    min-height: 100vh;
-  }
-  .mono { font-family: 'JetBrains Mono', monospace; }
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface-2: #334155;
+  --border: #334155;
+  --text: #f1f5f9;
+  --text-muted: #94a3b8;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --radius: 8px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --sidebar-w: 240px;
+}
+* { box-sizing: border-box; }
+body { margin:0; font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased; }
+.h1 { font-size:1.5rem; font-weight:600; margin:0 0 var(--space-2); }
+.h2 { font-size:1rem; font-weight:600; margin:0 0 var(--space-2); }
+.muted { color:var(--text-muted); font-size:0.8125rem; }
+.mono { font-family:ui-monospace,"SFMono-Regular",Consolas,monospace; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:var(--space-4); }
+.card-flat { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); }
 
-  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: .75rem; }
-  .card-elev { background: var(--bg-elev); border: 1px solid var(--border); }
+/* Buttons */
+.btn { display:inline-flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-4); border-radius:var(--radius); border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:0.875rem; cursor:pointer; transition:all .15s; font-family:inherit; white-space:nowrap; }
+.btn:hover { background:var(--surface-2); }
+.btn--primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+.btn--primary:hover { background:var(--primary-hover); border-color:var(--primary-hover); }
+.btn--danger { background:var(--danger); border-color:var(--danger); color:#fff; }
+.btn--danger:hover { background:#dc2626; border-color:#dc2626; }
+.btn--ghost { background:transparent; border-color:transparent; }
+.btn--ghost:hover { background:var(--surface-2); border-color:transparent; }
+.btn--sm { padding:var(--space-1) var(--space-3); font-size:0.8125rem; }
 
-  .tab { transition: all .15s ease; color: var(--text-dim); border-bottom: 2px solid transparent; padding: .625rem 1rem; font-size: .875rem; font-weight: 500; }
-  .tab:hover { color: var(--text); }
-  .tab-active { color: var(--text) !important; border-bottom-color: var(--accent) !important; }
+/* Badges */
+.badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:500; }
+.badge--success { background:rgba(16,185,129,0.15); color:var(--success); }
+.badge--danger { background:rgba(239,68,68,0.15); color:var(--danger); }
+.badge--warning { background:rgba(245,158,11,0.15); color:var(--warning); }
+.badge--info { background:rgba(59,130,246,0.15); color:var(--primary); }
+.badge--muted { background:var(--surface-2); color:var(--text-muted); }
 
-  .btn-primary { background: var(--accent); color: white; transition: all .15s; }
-  .btn-primary:hover { background: #2563eb; }
-  .btn-secondary { background: var(--bg-hover); color: var(--text); border: 1px solid var(--border); transition: all .15s; }
-  .btn-secondary:hover { background: var(--border); }
-  .btn-ghost { color: var(--text-dim); transition: all .15s; }
-  .btn-ghost:hover { color: var(--text); background: var(--bg-hover); }
-  .btn-danger { color: #f87171; transition: all .15s; }
-  .btn-danger:hover { background: rgba(239,68,68,.1); color: #fca5a5; }
+/* Skeleton */
+.skeleton { background:linear-gradient(90deg,var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%); background-size:200% 100%; animation:shimmer 1.5s infinite; border-radius:var(--radius); height:1.2em; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
-  .input { background: var(--bg-elev); border: 1px solid var(--border); border-radius: .5rem;
-    padding: .5rem .75rem; font-size: .8125rem; color: var(--text);
-    transition: all .15s; width: 100%; }
-  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
-  .input::placeholder { color: var(--text-mute); }
+/* Empty state */
+.empty-state { text-align:center; padding:var(--space-8); color:var(--text-muted); }
+.empty-state__icon { font-size:2.5rem; margin-bottom:var(--space-2); }
+.empty-state__text { font-size:0.9rem; }
 
-  .toggle { position: relative; width: 30px; height: 17px; background: var(--border-strong); border-radius: 9999px; cursor: pointer; transition: .15s; flex-shrink: 0; }
-  .toggle.on { background: #10b981; }
-  .toggle::after { content:''; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
-    background: white; border-radius: 50%; transition: .15s; }
-  .toggle.on::after { left: 15px; }
+/* Table */
+.table { width:100%; border-collapse:collapse; font-size:0.875rem; }
+.table th,.table td { padding:var(--space-2) var(--space-3); text-align:left; border-bottom:1px solid var(--border); }
+.table th { font-weight:600; color:var(--text-muted); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; background:rgba(0,0,0,0.15); }
+.table tr:hover td { background:rgba(255,255,255,0.02); }
+.table-wrap { overflow-x:auto; }
 
-  .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+/* Forms */
+input, select, textarea {
+  background:var(--bg); color:var(--text); border:1px solid var(--border);
+  border-radius:var(--radius); padding:var(--space-2) var(--space-3);
+  font-size:0.875rem; font-family:inherit; width:100%;
+}
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(59,130,246,0.15); }
+input::placeholder, textarea::placeholder { color:var(--text-muted); }
+label.lbl { display:block; font-size:0.75rem; color:var(--text-muted); margin-bottom:var(--space-1); text-transform:uppercase; letter-spacing:0.05em; }
 
-  .table-row { border-top: 1px solid var(--border); transition: background .1s; }
-  .table-row:hover { background: var(--bg-hover); }
-  .table-row.editing { background: rgba(59,130,246,.08); }
+/* Toggle switch */
+.toggle { position:relative; width:32px; height:18px; background:var(--surface-2); border-radius:9999px; cursor:pointer; transition:.15s; flex-shrink:0; border:none; padding:0; }
+.toggle.on { background:var(--success); }
+.toggle::after { content:''; position:absolute; top:2px; left:2px; width:14px; height:14px; background:white; border-radius:50%; transition:.15s; }
+.toggle.on::after { left:16px; }
 
-  /* Sidebar item */
-  .side-item { cursor: pointer; transition: all .12s ease; }
-  .side-item:hover { background: var(--bg-hover); }
-  .side-item.active { background: var(--bg-active); }
-  .side-item.active .side-name { color: var(--text); }
+/* App Layout */
+.app { display:grid; grid-template-columns:var(--sidebar-w) 1fr; min-height:100vh; }
 
-  /* Cor por fluxo */
-  .c-0 { --flow-c: #3b82f6; }
-  .c-1 { --flow-c: #10b981; }
-  .c-2 { --flow-c: #f59e0b; }
-  .c-3 { --flow-c: #ef4444; }
-  .c-4 { --flow-c: #8b5cf6; }
-  .c-5 { --flow-c: #06b6d4; }
-  .c-6 { --flow-c: #ec4899; }
-  .c-7 { --flow-c: #f97316; }
-  .c-8 { --flow-c: #84cc16; }
-  .c-9 { --flow-c: #6366f1; }
-  .flow-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--flow-c); flex-shrink: 0; }
-  .flow-bar { width: 3px; background: var(--flow-c); align-self: stretch; border-radius: 3px; }
-  .flow-tag {
-    background: color-mix(in srgb, var(--flow-c) 15%, transparent);
-    color: color-mix(in srgb, var(--flow-c) 75%, white);
-    border: 1px solid color-mix(in srgb, var(--flow-c) 30%, transparent);
-  }
+/* Sidebar */
+.sidebar { background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; position:sticky; top:0; height:100vh; overflow-y:auto; }
+.sidebar__brand { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-4); border-bottom:1px solid var(--border); }
+.sidebar__brand-logo { width:32px; height:32px; background:var(--primary); border-radius:var(--radius); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:0.875rem; flex-shrink:0; }
+.sidebar__brand-name { font-weight:700; font-size:0.9375rem; }
+.sidebar__brand-sub { font-size:0.6875rem; color:var(--text-muted); }
+.sidebar__nav { padding:var(--space-3); flex:1; }
+.sidebar__item { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-2) var(--space-3); border-radius:var(--radius); color:var(--text-muted); cursor:pointer; font-size:0.875rem; font-weight:500; transition:all .12s; border:none; background:transparent; width:100%; text-align:left; font-family:inherit; }
+.sidebar__item:hover { background:var(--surface-2); color:var(--text); }
+.sidebar__item--active { background:var(--primary) !important; color:#fff !important; }
+.sidebar__item-icon { font-size:1rem; width:1.25rem; text-align:center; flex-shrink:0; }
+.sidebar__footer { padding:var(--space-3) var(--space-4); border-top:1px solid var(--border); font-size:0.75rem; color:var(--text-muted); }
 
-  .badge-active { background: rgba(16,185,129,.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
-  .badge-inactive { background: rgba(107,109,118,.15); color: #9ea0a8; border: 1px solid var(--border-strong); }
-  .badge-error { background: rgba(239,68,68,.15); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+/* Main content */
+.main { overflow-x:hidden; }
+.page { display:none; padding:var(--space-6); }
+.page--active { display:block; }
+.page-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:var(--space-6); gap:var(--space-4); flex-wrap:wrap; }
+.page-header__title { font-size:1.375rem; font-weight:700; margin:0 0 var(--space-1); }
+.page-header__sub { color:var(--text-muted); font-size:0.875rem; margin:0; }
 
-  .modal-backdrop { background: rgba(0,0,0,.7); backdrop-filter: blur(6px); }
-  .scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-  .scrollbar::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-  .scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
+/* KPI grid */
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:var(--space-4); margin-bottom:var(--space-6); }
+.kpi { padding:var(--space-4); }
+.kpi__label { font-size:0.6875rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em; font-weight:600; }
+.kpi__value { font-size:1.875rem; font-weight:700; margin-top:var(--space-1); line-height:1.1; }
+.kpi__sub { font-size:0.75rem; color:var(--text-muted); margin-top:2px; }
 
-  .fade-in { animation: fadeIn .2s ease; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-  @keyframes pulseDot { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+/* Two-pane */
+.two-pane { display:grid; grid-template-columns:220px 1fr; gap:var(--space-4); }
+.two-pane__list { overflow:hidden; }
+.two-pane__list-item { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-4); cursor:pointer; transition:background .1s; border-bottom:1px solid var(--border); font-size:0.875rem; }
+.two-pane__list-item:hover { background:var(--surface-2); }
+.two-pane__list-item--active { background:rgba(59,130,246,0.12); color:var(--text); }
+.two-pane__list-item--active .two-pane__name { color:var(--text); font-weight:600; }
+.two-pane__name { color:var(--text-muted); }
+
+/* Bot tabs */
+.tab-bar { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:var(--space-4); overflow-x:auto; }
+.tab-btn { padding:var(--space-2) var(--space-4); font-size:0.875rem; font-weight:500; color:var(--text-muted); border:none; background:transparent; cursor:pointer; border-bottom:2px solid transparent; font-family:inherit; white-space:nowrap; transition:all .15s; }
+.tab-btn:hover { color:var(--text); }
+.tab-btn--active { color:var(--text); border-bottom-color:var(--primary); }
+.tab-panel { display:none; }
+.tab-panel--active { display:block; }
+
+/* Mobile hamburger */
+.mobile-toggle { display:none; background:none; border:none; color:var(--text); padding:var(--space-2); cursor:pointer; }
+.mobile-header { display:none; align-items:center; gap:var(--space-3); padding:var(--space-3) var(--space-4); background:var(--surface); border-bottom:1px solid var(--border); }
+.sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:99; }
+
+/* Toast */
+.toast-container { position:fixed; top:var(--space-4); right:var(--space-4); z-index:9999; display:flex; flex-direction:column; gap:var(--space-2); pointer-events:none; }
+.toast { padding:var(--space-3) var(--space-4); border-radius:var(--radius); box-shadow:0 4px 16px rgba(0,0,0,0.4); background:var(--surface); border:1px solid var(--border); min-width:240px; max-width:380px; animation:slideIn .2s ease-out; font-size:0.875rem; pointer-events:auto; }
+.toast--success { border-left:3px solid var(--success); }
+.toast--error { border-left:3px solid var(--danger); }
+.toast--info { border-left:3px solid var(--primary); }
+@keyframes slideIn { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+/* Modal */
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.65); display:flex; align-items:center; justify-content:center; z-index:1000; padding:var(--space-4); backdrop-filter:blur(3px); }
+.modal { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:var(--space-6); max-width:480px; width:100%; max-height:90vh; overflow-y:auto; }
+.modal__header { font-size:1.0625rem; font-weight:700; margin:0 0 var(--space-3); }
+.modal__body { color:var(--text-muted); font-size:0.875rem; margin-bottom:var(--space-4); line-height:1.6; }
+.modal__actions { display:flex; gap:var(--space-2); justify-content:flex-end; margin-top:var(--space-4); }
+
+/* Live badge */
+.live-badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:12px; font-size:0.75rem; font-weight:600; }
+.live-badge--on { background:rgba(16,185,129,0.15); color:var(--success); }
+.live-badge--off { background:var(--surface-2); color:var(--text-muted); }
+.live-dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+.live-dot--pulse { animation:pulseDot 1.5s infinite; }
+@keyframes pulseDot { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+/* Bar chart for message stats */
+.bar-row { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-2) 0; border-bottom:1px solid var(--border); font-size:0.8125rem; }
+.bar-row__date { color:var(--text-muted); min-width:80px; font-size:0.75rem; }
+.bar-row__bar-wrap { flex:1; background:var(--surface-2); border-radius:3px; height:8px; overflow:hidden; }
+.bar-row__bar { height:100%; background:var(--primary); border-radius:3px; min-width:2px; transition:width .3s; }
+.bar-row__val { min-width:40px; text-align:right; font-weight:600; color:var(--text); font-size:0.8125rem; }
+
+/* Status dots */
+.dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex-shrink:0; }
+.dot--green { background:var(--success); }
+.dot--red { background:var(--danger); }
+.dot--yellow { background:var(--warning); }
+.dot--gray { background:var(--text-muted); }
+.dot--blue { background:var(--primary); }
+
+/* Section divider */
+.section-title { font-size:0.6875rem; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); padding:var(--space-3) var(--space-4) var(--space-1); }
+
+/* Responsive */
+@media (max-width:768px) {
+  .app { grid-template-columns:1fr; }
+  .sidebar { position:fixed; left:0; top:0; bottom:0; width:var(--sidebar-w); transform:translateX(-100%); transition:transform .2s; z-index:100; height:100vh; }
+  .sidebar--open { transform:translateX(0); }
+  .mobile-header { display:flex; }
+  .mobile-toggle { display:block; }
+  .sidebar-overlay { display:block; }
+  .main { padding-top:0; }
+  .page { padding:var(--space-4); }
+  .kpi-grid { grid-template-columns:repeat(2,1fr); }
+  .two-pane { grid-template-columns:1fr; }
+  .two-pane__list { max-height:200px; overflow-y:auto; }
+  .page-header { flex-direction:column; }
+}
+@media (min-width:769px) {
+  .sidebar-overlay { display:none !important; }
+  .mobile-header { display:none !important; }
+}
+/* ── Utilitários gerados no cleanup de inline styles ── */
+.flex { display:flex; }
+.flex-col { display:flex; flex-direction:column; }
+.items-center { align-items:center; }
+.items-end { align-items:flex-end; }
+.justify-between { justify-content:space-between; }
+.gap-2 { gap:var(--space-2); }
+.gap-3 { gap:var(--space-3); }
+.gap-4 { gap:var(--space-4); }
+.mt-2 { margin-top:var(--space-2); }
+.mt-3 { margin-top:var(--space-3); }
+.mt-4 { margin-top:var(--space-4); }
+.mb-2 { margin-bottom:var(--space-2); }
+.mb-3 { margin-bottom:var(--space-3); }
+.mb-4 { margin-bottom:var(--space-4); }
+.p-3 { padding:var(--space-3); }
+.p-4 { padding:var(--space-4); }
+.grow { flex-grow:1; }
+.w-full { width:100%; }
+.text-xs { font-size:0.75rem; }
+.text-sm { font-size:0.8125rem; }
+.text-sm-lower { font-size:0.875rem; }
+.text-base-sm { font-size:0.9375rem; }
+.fw-600 { font-weight:600; }
+.fw-700 { font-weight:700; }
+.truncate { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.color-danger { color:var(--danger); }
+.color-success { color:var(--success); }
+.color-muted { color:var(--text-muted); }
+/* card-header: padrão recorrente padding+border+flex */
+.card-header {
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.card-header--plain {
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border);
+}
+.card-header--label {
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border);
+  font-size:0.75rem;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  color:var(--text-muted);
+}
+.card-body { padding:var(--space-4); }
+.card-body--sm { padding:var(--space-3); }
+/* skeleton helpers */
+.skel-20 { height:20px; }
+.skel-24 { height:24px; }
+.skel-52 { height:52px; }
+.skel-56 { height:56px; }
+.skel-m3 { margin:var(--space-3); }
+/* inline-grid helpers */
+.grid-lower { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-4); }
+.grid-auto-fit-140 { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:var(--space-3); }
+.grid-auto-fill-200 { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:var(--space-3); }
+.grid-2-auto { display:grid; grid-template-columns:1fr auto; gap:var(--space-3); align-items:end; }
+.grid-3-auto { display:grid; grid-template-columns:1fr 1fr auto; gap:var(--space-3); align-items:end; }
+.grid-2-col { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-3); }
+.grid-media { display:grid; grid-template-columns:88px 120px 1fr auto; gap:var(--space-3); align-items:start; }
+.grid-log-row { display:grid; grid-template-columns:80px 96px 1fr 110px 80px; gap:var(--space-3); align-items:center; }
+.grid-3-equal { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-3); }
+.pl-0 { padding-left:0; }
+.min-w-0 { min-width:0; }
+.text-align-right { text-align:right; }
+.no-wrap { white-space:nowrap; }
+.section-title { padding-left:0; }
+.kpi-value--lg { font-size:1.25rem; }
+/* lbl-inline: label sem margin-bottom */
+.lbl-inline { margin:0; }
+/* card-table-btn: botão de card para tabelas do banco */
+.card-table-btn { text-align:left; cursor:pointer; transition:border-color .15s; }
+/* row-border: flex row com padding e borda inferior */
+.row-border-sm { padding:var(--space-2) 0; border-bottom:1px solid var(--border); }
+.row-border { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--border); }
+.fw-500 { font-weight:500; }
+.text-7x { font-size:0.7rem; }
+.pt-5 { padding-top:1.25rem; }
+.log-summary-pad { padding:var(--space-2) var(--space-4); }
+.log-detail-pad { padding:var(--space-2) var(--space-4) var(--space-4); }
+.mb-1px { margin-bottom:4px; }
+.ltr-05 { text-transform:uppercase; letter-spacing:0.05em; }
+/* log-detail-pre: pre do detalhe do log */
+.log-detail-pre { background:var(--bg); padding:var(--space-3); border-radius:var(--radius); overflow:auto; max-height:240px; border:1px solid var(--border); color:var(--text-muted); }
+/* json-pre: pre inline para JSON no banco */
+.json-pre { background:var(--bg); padding:var(--space-2); border-radius:4px; max-height:160px; overflow:auto; margin:4px 0 0; }
+.skel-mb-6 { margin-bottom:6px; }
+.skel-mb-8 { margin-bottom:8px; }
+.skel-20 { height:20px; }
 </style>
 </head>
-<body class="scrollbar">
+<body>
 
-<div class="max-w-7xl mx-auto px-6 py-6">
-  <!-- HEADER -->
-  <header class="flex items-center justify-between mb-6">
-    <div class="flex items-center gap-3">
-      <div class="w-9 h-9 rounded-lg bg-blue-600 flex items-center justify-center">
-        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M3 12h18M3 6h18M3 18h12" stroke-linecap="round"/>
-        </svg>
-      </div>
+<!-- Mobile header -->
+<div class="mobile-header" id="mobile-header">
+  <button class="mobile-toggle" onclick="toggleSidebar()" aria-label="Menu">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 5h14a1 1 0 010 2H3a1 1 0 010-2zm0 4h14a1 1 0 010 2H3a1 1 0 010-2zm0 4h14a1 1 0 010 2H3a1 1 0 010-2z"/></svg>
+  </button>
+  <span class="fw-700 text-base-sm">Painel Startap</span>
+</div>
+
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar__brand">
+      <div class="sidebar__brand-logo">ST</div>
       <div>
-        <h1 class="text-xl font-bold tracking-tight">Painel Startap</h1>
-        <p class="text-xs" style="color: var(--text-dim)">Roteamento, status e relatórios</p>
+        <div class="sidebar__brand-name">Startap</div>
+        <div class="sidebar__brand-sub">Painel Admin</div>
       </div>
     </div>
-    <div class="flex items-center gap-3">
-      <div id="health" class="text-xs mono" style="color: var(--text-mute)"></div>
-      <button onclick="toggleCleanupModal()" title="Ver detalhes da limpeza automática"
-        class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs cursor-pointer transition-colors"
-        style="background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);">
-        <span id="cleanup-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);animation:pulseDot 2s infinite;flex-shrink:0;"></span>
-        <span>Limpeza <span class="mono font-semibold" id="cleanup-timer">--:--</span></span>
+    <nav class="sidebar__nav">
+      <div class="section-title pl-0">Principal</div>
+      <button class="sidebar__item sidebar__item--active" data-section="dashboard" onclick="navTo('dashboard')">
+        <span class="sidebar__item-icon">&#9632;</span> Dashboard
       </button>
+      <button class="sidebar__item" data-section="bots" onclick="navTo('bots')">
+        <span class="sidebar__item-icon">&#9654;</span> Bots
+      </button>
+      <button class="sidebar__item" data-section="execucoes" onclick="navTo('execucoes')">
+        <span class="sidebar__item-icon">&#9700;</span> Execucoes
+      </button>
+      <button class="sidebar__item" data-section="relatorios" onclick="navTo('relatorios')">
+        <span class="sidebar__item-icon">&#9650;</span> Relatorios
+      </button>
+      <div class="section-title pl-0 mt-3">Sistema</div>
+      <button class="sidebar__item" data-section="configuracoes" onclick="navTo('configuracoes')">
+        <span class="sidebar__item-icon">&#9881;</span> Configuracoes
+      </button>
+    </nav>
+    <div class="sidebar__footer" id="sidebar-footer">
+      <div id="clock-display" style="font-size:0.6875rem;"></div>
     </div>
-  </header>
+  </aside>
 
-  <!-- TABS -->
-  <nav class="flex gap-1 mb-6" style="border-bottom: 1px solid var(--border)">
-    <button class="tab tab-active" data-tab="routing">Roteamento</button>
-    <button class="tab" data-tab="fluxos">Fluxos</button>
-    <button class="tab" data-tab="modelos">Modelos IA</button>
-    <button class="tab" data-tab="tokens">Tokens</button>
-    <button class="tab" data-tab="status">Status</button>
-    <button class="tab" data-tab="logs">Logs</button>
-    <button class="tab" data-tab="bancos">Bancos</button>
-    <button class="tab" data-tab="relatorios">Relatórios</button>
-  </nav>
+  <!-- MAIN -->
+  <main class="main">
 
-  <!-- ROTEAMENTO: sidebar + detail -->
-  <section id="tab-routing" class="tab-content">
-    <div class="grid grid-cols-12 gap-5">
-
-      <!-- SIDEBAR -->
-      <aside class="col-span-4 lg:col-span-3">
-        <div class="card overflow-hidden">
-          <div class="px-4 py-3 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
-            <div>
-              <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--text-mute)">Fluxos</div>
-              <div class="text-xs mt-0.5" style="color: var(--text-dim)"><span id="count-flows">0</span> com webhook</div>
-            </div>
-          </div>
-          <div id="side-list" class="max-h-[600px] overflow-y-auto scrollbar"></div>
-        </div>
-
-        <div class="card p-4 mt-3">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-2" style="color: var(--text-mute)">Resumo</div>
-          <div class="space-y-1 text-sm">
-            <div class="flex justify-between"><span style="color: var(--text-dim)">Total de clientes</span><strong id="stat-total">0</strong></div>
-            <div class="flex justify-between"><span style="color: var(--text-dim)">Fluxos com clientes</span><strong id="stat-used">0</strong></div>
-            <div class="flex justify-between"><span style="color: var(--text-dim)">Fluxos vazios</span><strong id="stat-empty">0</strong></div>
-          </div>
-        </div>
-      </aside>
-
-      <!-- DETAIL -->
-      <main class="col-span-8 lg:col-span-9">
-        <div id="detail" class="fade-in"></div>
-      </main>
-    </div>
-  </section>
-
-  <!-- FLUXOS -->
-  <section id="tab-fluxos" class="tab-content hidden">
-    <div class="card overflow-hidden">
-      <div class="px-5 py-4 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
+    <!-- DASHBOARD -->
+    <section id="page-dashboard" class="page page--active">
+      <div class="page-header">
         <div>
-          <h2 class="font-semibold">Fluxos</h2>
-          <div class="text-xs mt-0.5" style="color: var(--text-dim)">Catálogo operacional com tags, descrição e roteabilidade</div>
+          <h1 class="page-header__title">Dashboard</h1>
+          <p class="page-header__sub">Visao geral da plataforma em tempo real</p>
         </div>
-        <button class="btn-secondary px-3 py-2 rounded-lg text-xs font-semibold" onclick="loadFluxos()">Atualizar</button>
+        <button class="btn btn--ghost btn--sm" onclick="loadDashboard()">Atualizar</button>
       </div>
-      <div id="flows-catalog" class="grid grid-cols-1 lg:grid-cols-2 gap-3 p-4"></div>
-    </div>
-  </section>
 
-  <!-- LOGS -->
-  <section id="tab-logs" class="tab-content hidden">
-    <div class="flex flex-col gap-3 mb-4">
-      <div class="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-8 gap-3">
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Período</div>
-          <select id="log-hours" class="input mono" onchange="loadLogs(true)">
-            <option value="1">1 hora</option>
-            <option value="6">6 horas</option>
-            <option value="24" selected>24 horas</option>
-            <option value="168">7 dias</option>
-            <option value="336">14 dias</option>
-          </select>
+      <div class="kpi-grid" id="dash-kpis">
+        <div class="card kpi"><div class="kpi__label">Sessoes WAHA</div><div class="skeleton kpi__value" style="width:60px;">&nbsp;</div></div>
+        <div class="card kpi"><div class="kpi__label">Fluxos ativos</div><div class="skeleton kpi__value" style="width:60px;">&nbsp;</div></div>
+        <div class="card kpi"><div class="kpi__label">Mensagens hoje</div><div class="skeleton kpi__value" style="width:60px;">&nbsp;</div></div>
+        <div class="card kpi"><div class="kpi__label">Custo 7 dias (USD)</div><div class="skeleton kpi__value" style="width:80px;">&nbsp;</div></div>
+      </div>
+
+      <div class="grid-lower" id="dash-lower">
+        <div class="card-flat">
+          <div class="card-header">
+            <span class="fw-600 text-base-sm">Sessoes WAHA</span>
+          </div>
+          <div id="dash-waha" class="card-body--sm">
+            <div class="skeleton skel-24 skel-mb-8">&nbsp;</div>
+            <div class="skeleton skel-24">&nbsp;</div>
+          </div>
         </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Status</div>
-          <select id="log-status" class="input mono" onchange="loadLogs(true)">
-            <option value="">Todos</option>
-            <option value="running">running</option>
-            <option value="success">success</option>
-            <option value="error">error</option>
-            <option value="ignored">ignored</option>
-          </select>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Fluxo</div>
-          <select id="log-flow" class="input mono" onchange="loadLogs(true)">
-            <option value="">Todos</option>
-          </select>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Evento</div>
-          <select id="log-event-type" class="input mono" onchange="loadLogs(true)">
-            <option value="">Todos</option>
-            <option value="webhook.received">webhook.received</option>
-            <option value="webhook.invalid-payload">webhook.invalid</option>
-            <option value="router.phone-extracted">router.phone</option>
-            <option value="router.route-found">router.route</option>
-            <option value="router.no-routing">router.no-routing</option>
-            <option value="bot.started">bot.started</option>
-            <option value="bot.finished">bot.finished</option>
-            <option value="bot.failed">bot.failed</option>
-            <option value="worker.job-started">worker.started</option>
-            <option value="worker.job-finished">worker.finished</option>
-            <option value="worker.job-failed">worker.failed</option>
-          </select>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Bot</div>
-          <input id="log-bot" class="input mono" placeholder="worker, startap..." oninput="scheduleLogSearch()" />
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Sessão</div>
-          <input id="log-session" class="input mono" placeholder="TESTE_STARTAP" oninput="scheduleLogSearch()" />
-        </div>
-        <div class="lg:col-span-2">
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Busca</div>
-          <input id="log-search" class="input mono" placeholder="telefone, execução, fluxo, mensagem" oninput="scheduleLogSearch()" />
+        <div class="card-flat">
+          <div class="card-header">
+            <span class="fw-600 text-base-sm">Execucoes recentes</span>
+          </div>
+          <div id="dash-execucoes" class="card-body--sm">
+            <div class="skeleton skel-20 skel-mb-6">&nbsp;</div>
+            <div class="skeleton skel-20 skel-mb-6">&nbsp;</div>
+            <div class="skeleton skel-20">&nbsp;</div>
+          </div>
         </div>
       </div>
-      <div class="flex flex-col md:flex-row md:items-end gap-3">
-        <div class="flex-1">
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Execution ID</div>
-          <input id="log-execution-id" class="input mono" placeholder="cole um execution_id para isolar uma execução" oninput="scheduleLogSearch()" />
+    </section>
+
+    <!-- BOTS -->
+    <section id="page-bots" class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Bots</h1>
+          <p class="page-header__sub">Configuracao de modelos, prompts, midias e roteamento</p>
+        </div>
+      </div>
+      <div class="two-pane">
+        <div class="card-flat two-pane__list" id="bots-list-panel">
+          <div class="card-header--label">Bots</div>
+          <div id="bots-list">
+            <div class="skeleton skel-52 skel-m3">&nbsp;</div>
+            <div class="skeleton skel-52 skel-m3">&nbsp;</div>
+          </div>
+        </div>
+        <div id="bots-detail">
+          <div class="empty-state">
+            <div class="empty-state__icon">&#9654;</div>
+            <div class="empty-state__text">Selecione um bot para configurar</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EXECUCOES (Logs) -->
+    <section id="page-execucoes" class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Execucoes</h1>
+          <p class="page-header__sub">Logs de fluxo com filtros e stream ao vivo</p>
         </div>
         <div class="flex items-center gap-2">
-        <span id="log-live" class="text-[11px] px-2 py-1 rounded-full badge-inactive mono">
-          <span class="status-dot bg-gray-500"></span>offline
-        </span>
-        <button class="btn-secondary px-3 py-2 rounded-lg text-xs font-semibold" onclick="loadLogs(true)">Atualizar</button>
-        <button class="btn-ghost px-3 py-2 rounded-lg text-xs font-semibold" onclick="clearLogFilters()">Limpar filtros</button>
+          <button class="live-badge live-badge--off" id="live-toggle-btn" onclick="toggleLiveStream()">
+            <span class="live-dot" id="live-dot"></span>
+            <span id="live-label">Ao vivo</span>
+          </button>
+          <button class="btn btn--ghost btn--sm" onclick="loadLogs(true)">Atualizar</button>
         </div>
       </div>
-    </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-5 mb-5">
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Execuções</div>
-        <div id="log-kpi-total" class="text-2xl font-bold mono">0</div>
-      </div>
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Sucesso</div>
-        <div id="log-kpi-success" class="text-2xl font-bold mono text-emerald-300">0</div>
-      </div>
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Falhas</div>
-        <div id="log-kpi-error" class="text-2xl font-bold mono text-red-300">0</div>
-      </div>
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">% sucesso</div>
-        <div id="log-kpi-success-rate" class="text-2xl font-bold mono text-emerald-300">0%</div>
-      </div>
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">% falha</div>
-        <div id="log-kpi-error-rate" class="text-2xl font-bold mono text-red-300">0%</div>
-      </div>
-      <div class="card p-4">
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Último evento</div>
-        <div id="log-kpi-last" class="text-sm mono" style="color: var(--text-dim)">—</div>
-      </div>
-    </div>
-
-    <div class="card overflow-hidden">
-      <div class="px-4 py-3 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
-        <h2 class="font-semibold">Execuções dos fluxos</h2>
-        <div class="text-xs mono" style="color: var(--text-mute)">histórico operacional seguro</div>
-      </div>
-      <div id="logs-list" class="divide-y" style="border-color: var(--border)"></div>
-    </div>
-  </section>
-
-  <!-- STATUS -->
-  <section id="tab-status" class="tab-content hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div class="card p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="font-semibold">Fluxos — Plataforma</h2>
-          <div id="flows-summary" class="text-xs" style="color: var(--text-dim)"></div>
-        </div>
-        <div id="flows-status-list" class="space-y-0.5"></div>
-      </div>
-      <div class="card p-5">
-        <h2 class="font-semibold mb-4">WAHA — Sessões</h2>
-        <div id="waha-list" class="space-y-3"></div>
-      </div>
-      <div class="card p-5 lg:col-span-2">
-        <h2 class="font-semibold mb-4">Execuções recentes</h2>
-        <div id="exec-list" class="overflow-x-auto scrollbar"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- MODELOS -->
-  <section id="tab-modelos" class="tab-content hidden">
-    <div id="flows-list" class="space-y-6"></div>
-  </section>
-
-  <!-- TOKENS -->
-  <section id="tab-tokens" class="tab-content hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
-      <div class="card p-5">
-        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Total tokens (7 dias)</div>
-        <div id="kpi-tokens" class="text-2xl font-bold mono">—</div>
-      </div>
-      <div class="card p-5">
-        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Custo estimado (7 dias)</div>
-        <div id="kpi-cost" class="text-2xl font-bold mono">—</div>
-      </div>
-      <div class="card p-5">
-        <div class="text-xs uppercase font-semibold mb-1" style="color: var(--text-mute)">Chamadas (7 dias)</div>
-        <div id="kpi-calls" class="text-2xl font-bold mono">—</div>
-      </div>
-    </div>
-
-    <div class="card p-5 mb-5">
-      <h2 class="font-semibold mb-4">Por fluxo / modelo</h2>
-      <div id="usage-summary" class="overflow-x-auto scrollbar"></div>
-    </div>
-
-    <div class="card p-5 mb-5">
-      <h2 class="font-semibold mb-4">Histórico diário</h2>
-      <div id="usage-daily" class="text-xs mono space-y-0.5" style="color: var(--text-dim)"></div>
-    </div>
-
-    <div class="card p-5">
-      <h2 class="font-semibold mb-4">Últimas chamadas</h2>
-      <div id="usage-recent" class="overflow-x-auto scrollbar"></div>
-    </div>
-  </section>
-
-  <!-- BANCOS -->
-  <section id="tab-bancos" class="tab-content hidden">
-    <div class="grid grid-cols-12 gap-5">
-      <aside class="col-span-12 lg:col-span-3">
-        <div class="card overflow-hidden">
-          <div class="px-4 py-3 flex items-center justify-between" style="border-bottom: 1px solid var(--border)">
-            <div>
-              <div class="text-xs font-semibold uppercase tracking-wider" style="color: var(--text-mute)">Projetos</div>
-              <div class="text-xs mt-0.5" style="color: var(--text-dim)"><span id="db-project-count">0</span> bancos lógicos</div>
-            </div>
-            <button class="btn-ghost px-2 py-1 rounded text-xs" onclick="loadBancos()">↻</button>
+      <!-- Filtros -->
+      <div class="card-flat card-body mb-4">
+        <div class="grid-auto-fit-140 mb-3">
+          <div>
+            <label class="lbl">Periodo</label>
+            <select id="log-hours" onchange="loadLogs(true)">
+              <option value="1">1 hora</option>
+              <option value="6">6 horas</option>
+              <option value="24" selected>24 horas</option>
+              <option value="168">7 dias</option>
+              <option value="336">14 dias</option>
+            </select>
           </div>
-          <div id="db-projects" class="max-h-[680px] overflow-y-auto scrollbar"></div>
+          <div>
+            <label class="lbl">Status</label>
+            <select id="log-status" onchange="loadLogs(true)">
+              <option value="">Todos</option>
+              <option value="running">Em execucao</option>
+              <option value="success">Sucesso</option>
+              <option value="error">Erro</option>
+              <option value="ignored">Ignorado</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Fluxo</label>
+            <select id="log-flow" onchange="loadLogs(true)">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Tipo de evento</label>
+            <select id="log-event-type" onchange="loadLogs(true)">
+              <option value="">Todos</option>
+              <option value="webhook.received">webhook.received</option>
+              <option value="webhook.invalid-payload">webhook.invalid</option>
+              <option value="router.phone-extracted">router.phone</option>
+              <option value="router.route-found">router.route</option>
+              <option value="router.no-routing">router.no-routing</option>
+              <option value="bot.started">bot.started</option>
+              <option value="bot.finished">bot.finished</option>
+              <option value="bot.failed">bot.failed</option>
+              <option value="worker.job-started">worker.started</option>
+              <option value="worker.job-finished">worker.finished</option>
+              <option value="worker.job-failed">worker.failed</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Bot</label>
+            <input id="log-bot" placeholder="startap, worker..." oninput="scheduleLogSearch()" />
+          </div>
+          <div>
+            <label class="lbl">Sessao</label>
+            <input id="log-session" placeholder="TESTE_STARTAP" oninput="scheduleLogSearch()" />
+          </div>
         </div>
-      </aside>
-      <main class="col-span-12 lg:col-span-9">
-        <div id="db-detail" class="space-y-4"></div>
-      </main>
-    </div>
-  </section>
+        <div class="grid-2-auto">
+          <div>
+            <label class="lbl">Busca livre / Execution ID</label>
+            <input id="log-search" placeholder="telefone, mensagem, execution_id, fluxo..." oninput="scheduleLogSearch()" />
+          </div>
+          <button class="btn btn--ghost btn--sm" onclick="clearLogFilters()">Limpar filtros</button>
+        </div>
+      </div>
 
-  <!-- RELATORIOS -->
-  <section id="tab-relatorios" class="tab-content hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <div class="card p-5">
-        <h2 class="font-semibold mb-4">Leads Ricardo</h2>
-        <div id="leads-list" class="text-xs overflow-auto max-h-96 mono scrollbar" style="color: var(--text-dim)"></div>
+      <!-- KPIs logs -->
+      <div class="kpi-grid grid-auto-fit-140 mb-4">
+        <div class="card kpi"><div class="kpi__label">Execucoes</div><div class="kpi__value" id="log-kpi-total">0</div></div>
+        <div class="card kpi"><div class="kpi__label">Sucesso</div><div class="kpi__value color-success" id="log-kpi-success">0</div></div>
+        <div class="card kpi"><div class="kpi__label">Falhas</div><div class="kpi__value color-danger" id="log-kpi-error">0</div></div>
+        <div class="card kpi"><div class="kpi__label">Taxa sucesso</div><div class="kpi__value color-success" id="log-kpi-success-rate">0%</div></div>
+        <div class="card kpi"><div class="kpi__label">Ultimo evento</div><div class="kpi__value mono color-muted" id="log-kpi-last" style="font-size:0.9rem;">—</div></div>
       </div>
-      <div class="card p-5">
-        <h2 class="font-semibold mb-4">Agendamentos pendentes</h2>
-        <div id="agendamentos-list" class="text-xs overflow-auto max-h-96 mono scrollbar" style="color: var(--text-dim)"></div>
-      </div>
-      <div class="card p-5 lg:col-span-2">
-        <h2 class="font-semibold mb-4">Mensagens (últimos 14 dias)</h2>
-        <div id="msg-stats"></div>
-      </div>
-    </div>
-  </section>
-</div>
 
-<!-- MODAL DUPLICATE -->
-<div id="modal-dup" class="hidden fixed inset-0 modal-backdrop z-50 flex items-center justify-center p-4">
-  <div class="card max-w-md w-full p-6">
-    <h3 class="font-bold text-lg mb-2">Número já cadastrado</h3>
-    <p class="text-sm mb-5" style="color: var(--text-dim)">
-      O telefone <span id="dup-tel" class="mono text-white"></span> já está vinculado ao fluxo
-      <strong id="dup-wf" class="text-white"></strong>. Deseja <strong class="text-white">mover</strong> esse número para o fluxo selecionado?
-    </p>
-    <div class="flex gap-2 justify-end">
-      <button id="dup-cancel" class="btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancelar</button>
-      <button id="dup-confirm" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Mover</button>
+      <!-- Tabela de logs -->
+      <div class="card-flat">
+        <div class="card-header--plain fw-600">
+          Registros de execucao
+        </div>
+        <div id="logs-list">
+          <div class="empty-state"><div class="empty-state__text">Nenhum log carregado ainda</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RELATORIOS -->
+    <section id="page-relatorios" class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Relatorios</h1>
+          <p class="page-header__sub">Leads, agendamentos e volume de mensagens</p>
+        </div>
+        <button class="btn btn--ghost btn--sm" onclick="loadRelatorios()">Atualizar</button>
+      </div>
+
+      <div class="tab-bar">
+        <button class="tab-btn tab-btn--active" data-rtab="leads" onclick="switchRelTab('leads')">Leads</button>
+        <button class="tab-btn" data-rtab="agendamentos" onclick="switchRelTab('agendamentos')">Agendamentos pendentes</button>
+        <button class="tab-btn" data-rtab="mensagens" onclick="switchRelTab('mensagens')">Volume de mensagens</button>
+      </div>
+
+      <div id="rel-leads" class="tab-panel tab-panel--active">
+        <div class="card-flat">
+          <div id="leads-content" class="card-body">
+            <div class="skeleton skel-20 skel-mb-8">&nbsp;</div>
+            <div class="skeleton skel-20 skel-mb-8">&nbsp;</div>
+            <div class="skeleton skel-20">&nbsp;</div>
+          </div>
+        </div>
+      </div>
+      <div id="rel-agendamentos" class="tab-panel">
+        <div class="card-flat">
+          <div id="agendamentos-content" class="card-body">
+            <div class="empty-state"><div class="empty-state__text">Carregue os dados primeiro</div></div>
+          </div>
+        </div>
+      </div>
+      <div id="rel-mensagens" class="tab-panel">
+        <div class="card-flat">
+          <div class="card-header--plain fw-600">Volume diario de mensagens (14 dias)</div>
+          <div id="mensagens-content" class="card-body">
+            <div class="empty-state"><div class="empty-state__text">Carregue os dados primeiro</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONFIGURACOES -->
+    <section id="page-configuracoes" class="page">
+      <div class="page-header">
+        <div>
+          <h1 class="page-header__title">Configuracoes</h1>
+          <p class="page-header__sub">Fluxos e limpeza de logs</p>
+        </div>
+      </div>
+
+      <div class="tab-bar">
+        <button class="tab-btn tab-btn--active" data-ctab="fluxos" onclick="switchConfigTab('fluxos')">Fluxos</button>
+        <button class="tab-btn" data-ctab="limpeza" onclick="switchConfigTab('limpeza')">Limpeza</button>
+      </div>
+
+      <div id="cfg-fluxos" class="tab-panel tab-panel--active">
+        <div class="card-flat">
+          <div class="card-header">
+            <span class="fw-600">Fluxos cadastrados</span>
+            <button class="btn btn--ghost btn--sm" onclick="loadConfigFluxos()">Atualizar</button>
+          </div>
+          <div id="config-fluxos-list">
+            <div class="skeleton skel-56 skel-m3">&nbsp;</div>
+            <div class="skeleton skel-56 skel-m3">&nbsp;</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="cfg-limpeza" class="tab-panel">
+        <div class="card" style="max-width:560px">
+          <div class="h2">Limpeza de logs</div>
+          <p class="muted mb-4">Remove registros antigos da tabela <code>flow_execution_logs</code>. Use com cuidado.</p>
+          <div class="flex items-center gap-3 mb-4">
+            <div class="grow">
+              <label class="lbl">Remover logs com mais de (dias)</label>
+              <input type="number" id="prune-days" value="14" min="1" max="365" style="max-width:120px;" />
+            </div>
+            <button class="btn btn--danger" onclick="pruneLogsConfirm()" style="margin-top:1.25rem;">Limpar agora</button>
+          </div>
+          <div id="cleanup-status-detail" class="muted text-sm" style="line-height:1.8;"></div>
+        </div>
+      </div>
+    </section>
+
+  </main><!-- /.main -->
+</div><!-- /.app -->
+
+<!-- MODAL: confirmar delete generico -->
+<div id="modal-confirm" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal__header" id="modal-confirm-title">Confirmar acao</div>
+    <div class="modal__body" id="modal-confirm-body"></div>
+    <div class="modal__actions">
+      <button class="btn" onclick="closeModal('modal-confirm')">Cancelar</button>
+      <button class="btn btn--danger" id="modal-confirm-ok">Confirmar</button>
     </div>
   </div>
 </div>
 
-<!-- CLEANUP DRAWER -->
-<div id="cleanup-modal" class="hidden fixed right-6 top-20 z-50 w-80 max-h-[calc(100vh-96px)] overflow-y-auto rounded-xl shadow-2xl scrollbar"
-  style="background: var(--surface); border: 1px solid var(--border);">
-  <div class="flex items-center justify-between px-4 py-3" style="border-bottom: 1px solid var(--border)">
-    <h3 class="text-sm font-semibold">Limpeza de históricos</h3>
-    <button onclick="toggleCleanupModal()" class="text-lg leading-none px-1" style="color: var(--text-dim)">×</button>
+<!-- MODAL: numero duplicado no roteamento -->
+<div id="modal-dup" class="modal-backdrop" hidden>
+  <div class="modal">
+    <div class="modal__header">Numero ja cadastrado</div>
+    <div class="modal__body">
+      O telefone <strong id="dup-tel" class="mono"></strong> ja esta vinculado ao fluxo
+      <strong id="dup-wf"></strong>. Deseja <strong>mover</strong> esse numero para o fluxo selecionado?
+    </div>
+    <div class="modal__actions">
+      <button class="btn" onclick="closeModal('modal-dup')">Cancelar</button>
+      <button class="btn btn--primary" id="dup-confirm-btn">Mover para novo fluxo</button>
+    </div>
   </div>
-  <div id="cleanup-modal-content" class="px-4 py-3 text-xs" style="color: var(--text-dim)"></div>
 </div>
 
-<!-- TOAST -->
-<div id="toast" class="fixed bottom-6 right-6 hidden z-50">
-  <div class="px-4 py-3 rounded-lg shadow-2xl text-sm font-medium"></div>
+<!-- MODAL: palavras-chave de pausa -->
+<div id="modal-pause-kw" class="modal-backdrop" hidden>
+  <div class="modal" style="max-width:560px">
+    <div class="modal__header" id="pause-kw-title">Palavras-chave de pausa</div>
+    <div class="mb-4">
+      <label class="lbl">Pausar IA (uma por linha)</label>
+      <textarea id="pause-kw-textarea" rows="6" placeholder="pausar&#10;pare&#10;aguarde..." class="mb-3"></textarea>
+      <label class="lbl">Retomar IA (uma por linha)</label>
+      <textarea id="resume-kw-textarea" rows="6" placeholder="retomar&#10;continuar&#10;voltar..."></textarea>
+    </div>
+    <div id="pause-kw-status" class="muted text-sm mb-3"></div>
+    <div class="modal__actions">
+      <button class="btn" onclick="closeModal('modal-pause-kw')">Cancelar</button>
+      <button class="btn btn--primary" id="pause-kw-save-btn">Salvar palavras-chave</button>
+    </div>
+  </div>
 </div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
 
 <script>
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
-const api = (p, opts={}) => {
-  const url = new URL(p, `${window.location.protocol}//${window.location.host}`).toString();
-  return fetch(url, { credentials: 'same-origin', ...opts }).then(async r => {
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(body.message || body.error || r.statusText); e.body = body; e.status = r.status; throw e; }
-  return body;
-  });
+// ============================================================
+// UTILITARIOS
+// ============================================================
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtNum(n) { return Number(n || 0).toLocaleString('pt-BR'); }
+function fmtBRL(n) { return 'US$ ' + Number(n || 0).toFixed(4); }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+function fmtRelative(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return 'agora';
+  if (diff < 3600000) return `ha ${Math.floor(diff/60000)}min`;
+  if (diff < 86400000) return `ha ${Math.floor(diff/3600000)}h`;
+  return `ha ${Math.floor(diff/86400000)}d`;
+}
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+const WAHA_STATUS = {
+  WORKING: {label:'Conectado', cls:'badge--success'},
+  FAILED: {label:'Falhou', cls:'badge--danger'},
+  STARTING: {label:'Iniciando', cls:'badge--warning'},
+  STOPPED: {label:'Parado', cls:'badge--muted'},
+  SCAN_QR_CODE: {label:'Aguardando QR', cls:'badge--warning'},
 };
-const apiUpload = (p, formData) => {
-  const url = new URL(p, `${window.location.protocol}//${window.location.host}`).toString();
-  return fetch(url, { method: 'POST', credentials: 'same-origin', body: formData }).then(async r => {
+function wahaStatusBadge(status) {
+  const s = WAHA_STATUS[status] || {label: escapeHtml(status), cls:'badge--muted'};
+  return `<span class="badge ${s.cls}">${s.label}</span>`;
+}
+
+// ============================================================
+// API
+// ============================================================
+function api(path, opts = {}) {
+  const url = new URL(path, `${location.protocol}//${location.host}`).toString();
+  return fetch(url, { credentials: 'same-origin', ...opts }).then(async r => {
     const body = await r.json().catch(() => ({}));
-    if (!r.ok) { const e = new Error(body.message || body.error || r.statusText); e.body = body; e.status = r.status; throw e; }
+    if (!r.ok) {
+      const e = new Error(body.message || body.error || r.statusText);
+      e.body = body; e.status = r.status;
+      throw e;
+    }
     return body;
   });
+}
+function apiUpload(path, formData) {
+  const url = new URL(path, `${location.protocol}//${location.host}`).toString();
+  return fetch(url, { method:'POST', credentials:'same-origin', body:formData }).then(async r => {
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const e = new Error(body.message || body.error || r.statusText);
+      e.body = body; e.status = r.status;
+      throw e;
+    }
+    return body;
+  });
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+function toast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast toast--${type === 'err' ? 'error' : type === 'ok' ? 'success' : 'info'}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+// ============================================================
+// MODALS
+// ============================================================
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
+let _confirmCallback = null;
+function showConfirm(title, body, cb) {
+  document.getElementById('modal-confirm-title').textContent = title;
+  document.getElementById('modal-confirm-body').innerHTML = body;
+  document.getElementById('modal-confirm').style.display = 'flex';
+  _confirmCallback = cb;
+  document.getElementById('modal-confirm-ok').onclick = () => { closeModal('modal-confirm'); if (_confirmCallback) _confirmCallback(); };
+}
+
+// ============================================================
+// NAVIGATION
+// ============================================================
+const SECTIONS = ['dashboard','bots','execucoes','relatorios','configuracoes'];
+let currentSection = localStorage.getItem('paineladmin:section') || 'dashboard';
+
+function navTo(section) {
+  closeSidebar();
+  currentSection = section;
+  localStorage.setItem('paineladmin:section', section);
+  SECTIONS.forEach(s => {
+    document.getElementById(`page-${s}`).classList.toggle('page--active', s === section);
+  });
+  document.querySelectorAll('.sidebar__item').forEach(btn => {
+    btn.classList.toggle('sidebar__item--active', btn.dataset.section === section);
+  });
+  if (section === 'dashboard') loadDashboard();
+  if (section === 'bots') loadBots();
+  if (section === 'execucoes') loadLogs(false);
+  if (section === 'relatorios') loadRelatorios();
+  if (section === 'configuracoes') loadConfigFluxos();
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('sidebar--open');
+  document.getElementById('sidebar-overlay').style.opacity = document.getElementById('sidebar').classList.contains('sidebar--open') ? '1' : '0';
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('sidebar--open');
+}
+
+// ============================================================
+// CLOCK
+// ============================================================
+function updateClock() {
+  const el = document.getElementById('clock-display');
+  if (el) el.textContent = new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+let _dashData = null;
+
+async function loadDashboard() {
+  try {
+    const [status, usage, msgStats] = await Promise.all([
+      api('/api/status'),
+      api('/api/usage/summary?days=7'),
+      api('/api/message-stats'),
+    ]);
+    _dashData = { status, usage, msgStats };
+    renderDashboard();
+  } catch (e) {
+    console.error(e);
+    toast('Erro ao carregar dashboard: ' + e.message, 'err');
+  }
+}
+
+function renderDashboard() {
+  const { status, usage, msgStats } = _dashData;
+
+  // KPIs
+  const wahaAtivos = (status.waha || []).filter(s => s.status === 'WORKING').length;
+  const fluxosAtivos = status.flows?.ativos || 0;
+  const hoje = new Date().toISOString().slice(0,10);
+  const msgsHoje = msgStats.find(m => String(m.dia).slice(0,10) === hoje)?.total || 0;
+  const custototal = (usage.rows || []).reduce((acc, r) => acc + Number(r.cost_usd || 0), 0);
+
+  document.getElementById('dash-kpis').innerHTML = `
+    <div class="card kpi"><div class="kpi__label">Sessoes WAHA ativas</div><div class="kpi__value">${fmtNum(wahaAtivos)}</div><div class="kpi__sub">de ${fmtNum((status.waha||[]).length)} total</div></div>
+    <div class="card kpi"><div class="kpi__label">Fluxos ativos</div><div class="kpi__value color-success">${fmtNum(fluxosAtivos)}</div><div class="kpi__sub">de ${fmtNum(status.flows?.total||0)} total</div></div>
+    <div class="card kpi"><div class="kpi__label">Mensagens hoje</div><div class="kpi__value">${fmtNum(msgsHoje)}</div><div class="kpi__sub">${fmtDate(new Date().toISOString()).split(' ')[0]}</div></div>
+    <div class="card kpi"><div class="kpi__label">Custo 7 dias (USD)</div><div class="kpi__value mono kpi-value--lg">${fmtBRL(custototal)}</div><div class="kpi__sub">${fmtNum((usage.rows||[]).reduce((a,r)=>a+Number(r.total_tokens||0),0))} tokens</div></div>
+  `;
+
+  // WAHA
+  const wahaHtml = (status.waha || []).length
+    ? (status.waha).map(w => `
+      <div class="flex items-center justify-between row-border-sm">
+        <div>
+          <div class="fw-600 text-sm-lower">${escapeHtml(w.name)}</div>
+          <div class="mono muted text-xs">${escapeHtml(w.me || '—')}</div>
+        </div>
+        ${wahaStatusBadge(w.status)}
+      </div>`).join('')
+    : '<div class="empty-state"><div class="empty-state__text">Nenhuma sessao WAHA encontrada</div></div>';
+  document.getElementById('dash-waha').innerHTML = wahaHtml;
+
+  // Execucoes recentes
+  const execs = (status.execucoes || []).slice(0, 10);
+  const execHtml = execs.length
+    ? execs.map(e => {
+        const statusCls = e.status === 'success' ? 'badge--success' : e.status === 'error' ? 'badge--danger' : e.status === 'running' ? 'badge--info' : 'badge--muted';
+        const statusLabel = {success:'Sucesso',error:'Erro',running:'Em execucao',ignored:'Ignorado'}[e.status] || escapeHtml(e.status);
+        return `<div class="flex items-center gap-2 text-sm row-border-sm">
+          <span class="badge ${statusCls}" style="font-size:0.6875rem">${statusLabel}</span>
+          <span class="mono color-muted text-xs grow truncate min-w-0">${escapeHtml(e.message || e.event_type || e.flow_name || e.id)}</span>
+          <span class="muted no-wrap" style="font-size:0.7rem;">${fmtRelative(e.created_at)}</span>
+        </div>`;
+      }).join('')
+    : '<div class="empty-state"><div class="empty-state__text">Nenhuma execucao recente</div></div>';
+  document.getElementById('dash-execucoes').innerHTML = execHtml;
+}
+
+// ============================================================
+// BOTS
+// ============================================================
+let BOTS_DATA = [];
+let SELECTED_BOT = null;
+let SELECTED_BOT_TAB = 'overview';
+let WORKFLOWS_DATA = [];
+let ROUTINGS_DATA = [];
+let PENDING_DUP = null;
+
+const FLOW_META = {
+  'barbearia-cirilo': { has_media: false },
+  'elenildo-ricardo': { has_media: true },
+  'startap-ai-lola': { has_media: false },
+  'startap-ai-samuel': { has_media: false },
+  'teste_vendas_barbearia': { has_media: true },
+  'teste_barbearia': { has_media: false },
+  'teste_vendas': { has_media: true },
+  'startap': { has_media: false },
+};
+const MODEL_OPTIONS = {
+  openai: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','gpt-3.5-turbo','gpt-5.4'],
+  deepseek: ['deepseek-chat','deepseek-reasoner'],
+};
+function modelOpts(provider, current) {
+  const opts = MODEL_OPTIONS[provider] || [];
+  const custom = (current && !opts.includes(current)) ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (custom)</option>` : '';
+  return custom + opts.map(m => `<option value="${m}" ${m===current?'selected':''}>${m}</option>`).join('');
+}
+
+async function loadBots() {
+  document.getElementById('bots-list').innerHTML = '<div class="skeleton skel-52 skel-m3">&nbsp;</div>'.repeat(3);
+  try {
+    [BOTS_DATA, WORKFLOWS_DATA, ROUTINGS_DATA] = await Promise.all([
+      api('/api/bots'),
+      api('/api/workflows'),
+      api('/api/routing'),
+    ]);
+    renderBotsList();
+    if (SELECTED_BOT) {
+      const bot = BOTS_DATA.find(b => b.slot === SELECTED_BOT);
+      if (bot) renderBotDetail(bot);
+    } else if (BOTS_DATA.length) {
+      SELECTED_BOT = BOTS_DATA[0].slot;
+      renderBotsList();
+      renderBotDetail(BOTS_DATA[0]);
+    }
+  } catch (e) {
+    console.error(e);
+    document.getElementById('bots-list').innerHTML = `<div class="card-body color-danger text-sm-lower">Erro ao carregar bots: ${escapeHtml(e.message)}</div>`;
+    toast('Erro ao carregar bots: ' + e.message, 'err');
+  }
+}
+
+function renderBotsList() {
+  const html = BOTS_DATA.map(bot => {
+    const isSel = bot.slot === SELECTED_BOT;
+    return `<div class="two-pane__list-item ${isSel ? 'two-pane__list-item--active' : ''}" onclick="selectBot('${escapeHtml(bot.slot)}')">
+      <div>
+        <div class="two-pane__name${isSel ? ' fw-600' : ''}">${escapeHtml(bot.display_name || bot.slot)}</div>
+        <div class="muted mono" style="font-size:0.6875rem">${escapeHtml(bot.model || '—')} · ${escapeHtml(bot.provider || '—')}</div>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty-state"><div class="empty-state__text">Nenhum bot cadastrado</div></div>';
+  document.getElementById('bots-list').innerHTML = html;
+}
+
+window.selectBot = (slot) => {
+  SELECTED_BOT = slot;
+  SELECTED_BOT_TAB = 'overview';
+  renderBotsList();
+  const bot = BOTS_DATA.find(b => b.slot === slot);
+  if (bot) renderBotDetail(bot);
 };
 
-let WORKFLOWS = [];
-let ROUTINGS = [];
-let SELECTED = null;
-let PENDING_DUP = null;
-let FLOW_LOGS = [];
-let LOG_SUMMARY = null;
-let LOG_STREAM = null;
-let LOG_SEARCH_TIMER = null;
-let DATABASE_PROJECTS = [];
-let DB_SELECTED_PROJECT = null;
-let DB_SELECTED_TABLE = null;
+function renderBotDetail(bot) {
+  const hasMidia = FLOW_META[bot.slot]?.has_media ?? false;
+  const detail = document.getElementById('bots-detail');
 
-function flowColor(id) {
-  let h = 0;
-  for (let i = 0; i < (id||'').length; i++) h = ((h<<5)-h + id.charCodeAt(i))|0;
-  return Math.abs(h) % 10;
-}
+  const tabsHtml = [
+    ['overview','Visao geral'],
+    ['prompt','Prompt'],
+    ['midias','Midias'],
+    ['roteamento','Roteamento'],
+    ['tokens','Tokens'],
+    ['banco','Banco'],
+  ].filter(([t]) => t !== 'midias' || hasMidia)
+   .map(([t,l]) => `<button class="tab-btn ${t===SELECTED_BOT_TAB?'tab-btn--active':''}" data-btab="${t}" onclick="switchBotTab('${escapeHtml(bot.slot)}','${t}')">${l}</button>`)
+   .join('');
 
-function isRoutableFlow(w) {
-  return w?.has_webhook && w?.routable !== false;
-}
-
-function toast(msg, type='ok') {
-  const t = $('#toast');
-  const cls = type==='err' ? 'bg-red-600 text-white' : type==='warn' ? 'bg-amber-500 text-black' : 'bg-emerald-600 text-white';
-  t.firstElementChild.textContent = msg;
-  t.firstElementChild.className = `px-4 py-3 rounded-lg shadow-2xl text-sm font-medium ${cls}`;
-  t.classList.remove('hidden');
-  setTimeout(()=>t.classList.add('hidden'), 3000);
-}
-
-function esc(v) {
-  return String(v ?? '').replace(/[&<>"']/g, (ch) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[ch]));
-}
-
-$$('.tab').forEach(b => b.onclick = () => {
-  $$('.tab').forEach(t => t.classList.remove('tab-active'));
-  b.classList.add('tab-active');
-  $$('.tab-content').forEach(c => c.classList.add('hidden'));
-  $('#tab-' + b.dataset.tab).classList.remove('hidden');
-  loadTab(b.dataset.tab);
-});
-
-// ---------- ROUTING ----------
-async function loadAll() {
-  try {
-    [WORKFLOWS, ROUTINGS] = await Promise.all([api('/api/workflows'), api('/api/routing')]);
-    const usable = WORKFLOWS.filter(isRoutableFlow);
-    if (SELECTED && !usable.some((w) => w.id === SELECTED)) SELECTED = null;
-    if (!SELECTED && usable.length) SELECTED = usable[0].id;
-    renderSidebar();
-    renderDetail();
-    renderStats();
-  } catch (e) {
-    $('#side-list').innerHTML = `<div class="p-5 text-sm text-red-300">${esc(e.message)}</div>`;
-    $('#detail').innerHTML = `<div class="card p-8 text-sm text-red-300">Falha ao carregar roteamento: ${esc(e.message)}</div>`;
-  }
-}
-
-function renderStats() {
-  const usable = WORKFLOWS.filter(isRoutableFlow);
-  $('#count-flows').textContent = usable.length;
-  $('#stat-total').textContent = ROUTINGS.length;
-  const usedIds = new Set(ROUTINGS.map(r => r.workflow_id));
-  $('#stat-used').textContent = usable.filter(w => usedIds.has(w.id)).length;
-  $('#stat-empty').textContent = usable.filter(w => !usedIds.has(w.id)).length;
-}
-
-function renderSidebar() {
-  const usable = WORKFLOWS.filter(isRoutableFlow);
-  const counts = {};
-  for (const r of ROUTINGS) counts[r.workflow_id] = (counts[r.workflow_id] || 0) + 1;
-
-  $('#side-list').innerHTML = usable.map(w => {
-    const c = flowColor(w.id);
-    const count = counts[w.id] || 0;
-    const isSel = SELECTED === w.id;
-    return `
-      <div class="side-item c-${c} ${isSel?'active':''} flex items-center gap-3 px-4 py-3" onclick="selectFlow('${w.id}')" style="border-bottom: 1px solid var(--border)">
-        <div class="flow-dot"></div>
-        <div class="flex-1 min-w-0">
-          <div class="side-name text-sm font-medium truncate" style="${isSel?'':'color: var(--text-dim)'}">${w.name}</div>
-          <div class="text-[11px] mt-0.5 flex items-center gap-2" style="color: var(--text-mute)">
-            ${w.active
-              ? '<span style="color:#6ee7b7"><span class="status-dot bg-emerald-500"></span>ativo</span>'
-              : '<span><span class="status-dot bg-gray-500"></span>inativo</span>'}
-          </div>
+  detail.innerHTML = `
+    <div class="card-flat">
+      <div class="flex items-center gap-3 row-border">
+        <div class="grow">
+          <div class="fw-700" style="font-size:1.0625rem">${escapeHtml(bot.display_name || bot.slot)}</div>
+          <div class="mono muted text-xs">${escapeHtml(bot.slot)} &middot; ${escapeHtml(bot.flow_name || bot.flow_id || '—')}</div>
         </div>
-        <span class="flow-tag text-[11px] px-2 py-0.5 rounded-full font-semibold mono">${count}</span>
+        <span class="badge badge--muted">${escapeHtml(bot.provider || '—')}</span>
+      </div>
+      <div class="tab-bar" style="padding:0 var(--space-4);margin-bottom:0">${tabsHtml}</div>
+      <div id="bot-tab-content" class="card-body">
+        <div class="skeleton" style="height:40px">&nbsp;</div>
+      </div>
+    </div>
+  `;
+
+  loadBotTabContent(bot, SELECTED_BOT_TAB);
+}
+
+window.switchBotTab = (slot, tab) => {
+  SELECTED_BOT_TAB = tab;
+  document.querySelectorAll('[data-btab]').forEach(b => b.classList.toggle('tab-btn--active', b.dataset.btab === tab));
+  const bot = BOTS_DATA.find(b => b.slot === slot);
+  if (bot) loadBotTabContent(bot, tab);
+};
+
+async function loadBotTabContent(bot, tab) {
+  const container = document.getElementById('bot-tab-content');
+  if (!container) return;
+
+  if (tab === 'overview') {
+    container.innerHTML = `
+      <div class="h2">Modelo de IA</div>
+      <div class="grid-auto-fit-140 mb-4">
+        <div>
+          <label class="lbl">Provider</label>
+          <select id="bot-provider-${escapeHtml(bot.slot)}" onchange="changeBotProvider('${escapeHtml(bot.slot)}')">
+            <option value="openai" ${bot.provider==='openai'?'selected':''}>OpenAI</option>
+            <option value="deepseek" ${bot.provider==='deepseek'?'selected':''}>DeepSeek</option>
+          </select>
+        </div>
+        <div>
+          <label class="lbl">Modelo</label>
+          <select id="bot-model-${escapeHtml(bot.slot)}">${modelOpts(bot.provider, bot.model)}</select>
+        </div>
+        <div>
+          <label class="lbl">Temperatura</label>
+          <input id="bot-temp-${escapeHtml(bot.slot)}" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
+        </div>
+        <div class="flex items-end">
+          <button class="btn btn--primary w-full" onclick="saveBotModel('${escapeHtml(bot.slot)}')">Salvar modelo</button>
+        </div>
+      </div>
+      <div class="h2 mt-4">Descricao</div>
+      <p class="muted">${escapeHtml(bot.description || 'Sem descricao cadastrada.')}</p>
+      <div class="mt-4 grid-2-col">
+        <div class="card p-3">
+          <div class="muted text-xs ltr-05 mb-1px">Papel IA</div>
+          <div class="text-sm-lower">${escapeHtml(bot.ai_role || '—')}</div>
+        </div>
+        <div class="card p-3">
+          <div class="muted text-xs ltr-05 mb-1px">Runtime</div>
+          <div class="mono text-sm">${escapeHtml(bot.runtime || '—')}</div>
+        </div>
       </div>
     `;
-  }).join('') || `<div class="p-6 text-center text-sm" style="color: var(--text-mute)">Nenhum fluxo roteável</div>`;
-}
-
-window.selectFlow = (id) => { SELECTED = id; renderSidebar(); renderDetail(); };
-
-async function loadFluxos() {
-  const el = $('#flows-catalog');
-  el.innerHTML = '<div class="text-sm" style="color: var(--text-mute)">Carregando fluxos...</div>';
-  try {
-    WORKFLOWS = await api('/api/workflows');
-    const grouped = [...WORKFLOWS].sort((a, b) => {
-      const ac = a.category || 'outros';
-      const bc = b.category || 'outros';
-      if (ac !== bc) return ac.localeCompare(bc);
-      return String(a.name).localeCompare(String(b.name));
-    });
-    el.innerHTML = grouped.length
-      ? grouped.map(renderFlowCatalogCard).join('')
-      : '<div class="text-sm" style="color: var(--text-mute)">Nenhum fluxo encontrado.</div>';
-  } catch (e) {
-    el.innerHTML = `<div class="text-sm text-red-300">Erro: ${esc(e.message)}</div>`;
+  } else if (tab === 'prompt') {
+    container.innerHTML = `
+      <div class="flex items-center justify-between mb-3">
+        <div class="h2" style="margin:0">System Prompt</div>
+        <div class="flex gap-2">
+          <button class="btn btn--ghost btn--sm" onclick="loadBotPrompt('${escapeHtml(bot.slot)}')">Recarregar</button>
+          <button class="btn btn--primary btn--sm" onclick="saveBotPrompt('${escapeHtml(bot.slot)}')">Salvar prompt</button>
+        </div>
+      </div>
+      <textarea id="bot-prompt-${escapeHtml(bot.slot)}" rows="20" class="mono text-sm" style="line-height:1.6;white-space:pre;" placeholder="Carregando..."></textarea>
+      <div class="muted mt-2 text-xs">Placeholders substituidos em runtime: <code>{nome}</code>, <code>{telefone}</code>, <code>{data_atual}</code></div>
+    `;
+    loadBotPrompt(bot.slot);
+  } else if (tab === 'midias') {
+    container.innerHTML = `
+      <div class="flex items-center justify-between mb-4">
+        <div class="h2" style="margin:0">Midias do fluxo</div>
+        <button class="btn btn--ghost btn--sm" onclick="addBotMedia('${escapeHtml(bot.slot)}')">+ Adicionar midia</button>
+      </div>
+      <div id="bot-media-${escapeHtml(bot.slot)}">
+        <div class="skeleton" style="height:80px;">&nbsp;</div>
+      </div>
+    `;
+    loadBotMedia(bot.slot);
+  } else if (tab === 'roteamento') {
+    renderBotRoteamento(bot);
+  } else if (tab === 'tokens') {
+    await loadBotTokens(bot.slot, container);
+  } else if (tab === 'banco') {
+    await loadBotBanco(bot, container);
   }
 }
 
-function renderFlowCatalogCard(w) {
-  const c = flowColor(w.id);
-  const tags = Array.isArray(w.tags) ? w.tags : [];
-  const routable = isRoutableFlow(w);
-  return `<div class="card-elev c-${c} rounded-lg p-4">
-    <div class="flex items-start justify-between gap-3">
-      <div class="min-w-0">
-        <div class="flex items-center gap-2 min-w-0">
-          <div class="flow-dot"></div>
-          <h3 class="font-semibold truncate">${esc(w.name)}</h3>
+async function loadBotPrompt(slot) {
+  try {
+    const r = await fetch('/api/bots/' + encodeURIComponent(slot) + '/prompt', { credentials: 'same-origin' });
+    if (!r.ok) { const el = document.getElementById('bot-prompt-' + slot); if (el) el.value = ''; return; }
+    const data = await r.json();
+    const el = document.getElementById('bot-prompt-' + slot);
+    if (el) el.value = data.prompt || '';
+  } catch (e) { console.error(e); }
+}
+
+window.saveBotPrompt = async (slot) => {
+  try {
+    const el = document.getElementById('bot-prompt-' + slot);
+    const prompt = el ? el.value : '';
+    await api('/api/bots/' + encodeURIComponent(slot) + '/prompt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
+    toast('Prompt salvo com sucesso', 'ok');
+  } catch (e) { toast('Erro ao salvar prompt: ' + e.message, 'err'); }
+};
+
+window.changeBotProvider = (slot) => {
+  const prov = document.getElementById('bot-provider-' + slot)?.value;
+  const sel = document.getElementById('bot-model-' + slot);
+  if (sel) sel.innerHTML = modelOpts(prov, MODEL_OPTIONS[prov]?.[0]);
+};
+
+window.saveBotModel = async (slot) => {
+  try {
+    const provider = document.getElementById('bot-provider-' + slot)?.value;
+    const model = document.getElementById('bot-model-' + slot)?.value;
+    const temperature = Number(document.getElementById('bot-temp-' + slot)?.value);
+    await api('/api/bots/' + encodeURIComponent(slot), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model, temperature }),
+    });
+    // update local cache
+    const b = BOTS_DATA.find(x => x.slot === slot);
+    if (b) { b.provider = provider; b.model = model; b.temperature = temperature; }
+    toast('Modelo atualizado', 'ok');
+  } catch (e) { toast('Erro ao salvar modelo: ' + e.message, 'err'); }
+};
+
+async function loadBotMedia(slot) {
+  const container = document.getElementById('bot-media-' + slot);
+  if (!container) return;
+  try {
+    const list = await api('/api/bots/' + encodeURIComponent(slot) + '/media');
+    if (!list.length) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-state__icon">&#9640;</div><div class="empty-state__text">Nenhuma midia cadastrada. Adicione posicoes como V1, V2, V3.</div></div>`;
+      return;
+    }
+    container.innerHTML = list.map(m => renderMediaRow(slot, m)).join('');
+  } catch (e) {
+    container.innerHTML = `<div class="color-danger text-sm-lower">Erro: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderMediaRow(slot, m) {
+  return `<div class="card mb-3">
+    <div class="grid-media mb-3">
+      <div>
+        <label class="lbl">Posicao</label>
+        <input class="mono" data-mid="${m.id}" data-field="position" value="${escapeHtml(m.position)}" readonly style="text-transform:uppercase" />
+      </div>
+      <div>
+        <label class="lbl">Tipo</label>
+        <select data-mid="${m.id}" data-field="media_type">
+          ${['video','image','file','text'].map(t => `<option value="${t}" ${m.media_type===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <div class="flex items-center justify-between mb-1px">
+          <label class="lbl lbl-inline">URL / Arquivo</label>
+          <span class="badge ${m.url ? 'badge--success' : 'badge--muted'}" style="font-size:0.6875rem">${m.url ? 'Arquivo pronto' : 'Sem arquivo'}</span>
         </div>
-        <div class="mono text-[11px] mt-1 truncate" style="color: var(--text-mute)">${esc(w.id)}</div>
+        <div class="flex gap-2">
+          <input data-mid="${m.id}" data-field="url" value="${escapeHtml(m.url || '')}" placeholder="https://... ou use upload" />
+          <label class="btn no-wrap" style="cursor:pointer;">Upload
+            <input type="file" accept="video/*,image/*,.pdf" style="display:none" onchange="uploadBotMediaFile('${escapeHtml(slot)}', ${m.id}, this)" />
+          </label>
+        </div>
       </div>
-      <div class="flex gap-1 shrink-0">
-        <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded ${routable?'badge-active':'badge-inactive'}">${routable?'roteável':'não roteável'}</span>
-        <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded flow-tag">${esc(w.category || 'outros')}</span>
+      <div class="flex-col gap-2 pt-5">
+        <button class="btn btn--primary btn--sm" onclick="saveBotMedia('${escapeHtml(slot)}', ${m.id})">Salvar</button>
+        <button class="btn btn--danger btn--sm" onclick="deleteBotMedia(${m.id}, '${escapeHtml(slot)}')">Remover</button>
       </div>
     </div>
-    <p class="text-sm mt-3 leading-5" style="color: var(--text-dim)">${esc(w.description || 'Sem descrição cadastrada.')}</p>
-    <div class="flex flex-wrap gap-1.5 mt-3">
-      ${tags.length ? tags.map(t => `<span class="text-[11px] px-2 py-0.5 rounded-full badge-inactive">${esc(t)}</span>`).join('') : '<span class="text-[11px]" style="color: var(--text-mute)">Sem tags</span>'}
-    </div>
-    <div class="flex items-center justify-between gap-3 mt-4">
-      <div class="text-[11px]" style="color: var(--text-mute)">
-        <span>${esc(w.source || 'ts')}</span>
-        <span class="mx-1">·</span>
-        <span>${w.active ? 'ativo' : 'inativo'}${w.has_webhook ? ' · webhook' : ''}</span>
+    <div class="grid-2-col mb-2">
+      <div>
+        <label class="lbl">Caption (visivel ao cliente)</label>
+        <textarea rows="2" data-mid="${m.id}" data-field="caption" placeholder="Texto que acompanha a midia">${escapeHtml(m.caption || '')}</textarea>
       </div>
-      <button
-        class="${w.active ? 'btn-secondary' : 'btn-primary'} px-3 py-1.5 rounded-lg text-xs font-semibold"
-        onclick="toggleFlowActive('${esc(w.id)}', ${w.active ? 'false' : 'true'})"
-      >${w.active ? 'Desativar' : 'Ativar'}</button>
+      <div>
+        <label class="lbl">Contexto interno (IA)</label>
+        <textarea rows="2" data-mid="${m.id}" data-field="context" placeholder="Quando usar, assunto, objecoes...">${escapeHtml(m.context || '')}</textarea>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="flex items-center gap-2">
+        <label class="lbl lbl-inline">Ordem</label>
+        <input type="number" data-mid="${m.id}" data-field="position_order" value="${Number(m.position_order||0)}" style="width:72px" />
+      </div>
+      <label class="flex items-center gap-2 text-sm-lower color-muted" style="cursor:pointer">
+        <input type="checkbox" data-mid="${m.id}" data-field="enabled" ${m.enabled?'checked':''} />
+        Midia ativa
+      </label>
     </div>
   </div>`;
 }
 
-window.toggleFlowActive = async (id, active) => {
-  const wf = WORKFLOWS.find(w => w.id === id);
-  if (!wf) return;
+window.saveBotMedia = async (slot, id) => {
   try {
-    await api('/api/workflows/' + encodeURIComponent(id) + '/active', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ active }),
+    const fields = ['position','media_type','url','caption','context','position_order','enabled'];
+    const vals = {};
+    fields.forEach(f => {
+      const el = document.querySelector(`[data-mid="${id}"][data-field="${f}"]`);
+      if (!el) return;
+      if (f === 'enabled') vals[f] = el.checked;
+      else if (f === 'position_order') vals[f] = Number(el.value);
+      else vals[f] = el.value || null;
     });
-    toast(`${active ? 'Fluxo ativado' : 'Fluxo desativado'}: ${wf.name}`);
-    await loadFluxos();
-    if (SELECTED === id || !WORKFLOWS.length) await loadAll();
-  } catch (e) {
-    toast(e.message, 'err');
-  }
+    vals.position = String(vals.position || '').toUpperCase();
+    await api('/api/bots/' + encodeURIComponent(slot) + '/media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vals),
+    });
+    toast('Midia salva', 'ok');
+    await loadBotMedia(slot);
+  } catch (e) { toast('Erro: ' + e.message, 'err'); }
 };
 
-function renderDetail() {
-  const w = WORKFLOWS.find(x => x.id === SELECTED);
-  if (!w) { $('#detail').innerHTML = `<div class="card p-10 text-center" style="color: var(--text-mute)">Selecione um fluxo à esquerda</div>`; return; }
-  const c = flowColor(w.id);
-  const rows = ROUTINGS.filter(r => r.workflow_id === w.id);
+window.uploadBotMediaFile = async (slot, id, input) => {
+  const file = input.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    toast('Enviando arquivo...', 'info');
+    const uploaded = await apiUpload('/api/uploads/media', fd);
+    const urlEl = document.querySelector(`[data-mid="${id}"][data-field="url"]`);
+    if (urlEl) urlEl.value = uploaded.url;
+    await saveBotMedia(slot, id);
+    toast('Upload concluido', 'ok');
+  } catch (e) { toast('Erro no upload: ' + e.message, 'err'); }
+  finally { input.value = ''; }
+};
 
-  $('#detail').innerHTML = `
-    <div class="card overflow-hidden c-${c}">
-      <div class="flex">
-        <div class="flow-bar"></div>
-        <div class="flex-1 p-5">
-          <div class="flex items-start justify-between">
-            <div>
-              <div class="flex items-center gap-2 mb-1">
-                <h2 class="text-lg font-bold">${w.name}</h2>
-                ${w.active
-                  ? '<span class="badge-active text-[10px] px-2 py-0.5 rounded-full font-semibold">ATIVO</span>'
-                  : '<span class="badge-inactive text-[10px] px-2 py-0.5 rounded-full font-semibold">INATIVO</span>'}
-              </div>
-              <div class="text-[11px] mono" style="color: var(--text-mute)">${w.id}</div>
-              <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">${w.webhook_url || ''}</div>
-            </div>
-            <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5" onclick="showAddForm()">
-              <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H4a1 1 0 1 1 0-2h5V4a1 1 0 0 1 1-1z"/></svg>
-              Adicionar cliente
-            </button>
+window.deleteBotMedia = async (id, slot) => {
+  showConfirm('Remover midia', 'Deseja remover esta midia permanentemente?', async () => {
+    try {
+      await api('/api/media/' + id, { method: 'DELETE' });
+      toast('Midia removida', 'ok');
+      await loadBotMedia(slot);
+    } catch (e) { toast('Erro: ' + e.message, 'err'); }
+  });
+};
+
+window.addBotMedia = async (slot) => {
+  try {
+    const list = await api('/api/bots/' + encodeURIComponent(slot) + '/media');
+    const next = ['V1','V2','V3'].find(p => !list.some(m => m.position === p)) || `MIDIA_${list.length + 1}`;
+    await api('/api/bots/' + encodeURIComponent(slot) + '/media', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: next, media_type: 'video', url: null, caption: null, context: null, position_order: list.length + 1, enabled: true }),
+    });
+    toast('Midia adicionada', 'ok');
+    await loadBotMedia(slot);
+  } catch (e) { toast('Erro: ' + e.message, 'err'); }
+};
+
+function renderBotRoteamento(bot) {
+  const container = document.getElementById('bot-tab-content');
+  const flowId = bot.flow_id || bot.slot;
+  const rows = ROUTINGS_DATA.filter(r => r.workflow_id === flowId);
+
+  container.innerHTML = `
+    <div class="flex items-center justify-between mb-4">
+      <div class="h2" style="margin:0">Clientes roteados</div>
+      <button class="btn btn--primary btn--sm" onclick="showAddRouting('${escapeHtml(flowId)}')">+ Adicionar cliente</button>
+    </div>
+    <div id="routing-rows-${escapeHtml(flowId)}">
+      ${rows.length ? renderRoutingTable(rows, flowId) : `<div class="empty-state"><div class="empty-state__icon">&#9644;</div><div class="empty-state__text">Nenhum cliente vinculado a este fluxo.<br>Adicione o primeiro cliente acima.</div></div>`}
+    </div>
+    <div id="routing-add-form-${escapeHtml(flowId)}" class="mt-4" style="display:none;">
+      <div class="card">
+        <div class="h2">Novo cliente</div>
+        <div class="grid-3-auto">
+          <div>
+            <label class="lbl">Telefone</label>
+            <input id="rt-tel-${escapeHtml(flowId)}" class="mono" placeholder="5535999998888" />
+          </div>
+          <div>
+            <label class="lbl">Nome (opcional)</label>
+            <input id="rt-nome-${escapeHtml(flowId)}" placeholder="Cliente A" />
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn--primary" onclick="saveNewRouting('${escapeHtml(flowId)}')">Salvar</button>
+            <button class="btn btn--ghost" onclick="cancelAddRouting('${escapeHtml(flowId)}')">Cancelar</button>
           </div>
         </div>
-      </div>
-
-      <div style="border-top: 1px solid var(--border)">
-        ${rows.length === 0 && !document.getElementById('row-new-pending')
-          ? `<div class="px-5 py-10 text-center text-sm" style="color: var(--text-mute)">
-              Nenhum cliente vinculado.<br>
-              <button class="btn-ghost mt-3 px-3 py-1.5 rounded-lg text-xs font-medium" onclick="showAddForm()">+ Adicionar o primeiro</button>
-            </div>`
-          : `<table class="w-full text-sm">
-              <thead>
-                <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-                  <th class="text-left px-5 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Telefone</th>
-                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Cliente</th>
-                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Ativo</th>
-                  <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Atualizado</th>
-                  <th class="px-3 py-2.5"></th>
-                </tr>
-              </thead>
-              <tbody id="rows-body">
-                ${rows.map(r => renderRow(r)).join('')}
-              </tbody>
-            </table>`}
       </div>
     </div>
   `;
 }
 
-function renderRow(r) {
-  return `<tr class="table-row" id="row-${r.id}">
-    <td class="px-5 py-3 mono">${r.telefone}</td>
-    <td class="px-3 py-3">${r.nome_cliente || '<span style="color: var(--text-mute)">—</span>'}</td>
-    <td class="px-3 py-3">
-      <div class="toggle ${r.ativo?'on':''}" onclick="toggleAtivo(${r.id}, this)"></div>
-    </td>
-    <td class="px-3 py-3 text-xs" style="color: var(--text-mute)">${new Date(r.atualizado_em || r.criado_em).toLocaleString('pt-BR')}</td>
-    <td class="px-3 py-3 text-right whitespace-nowrap">
-      <button class="btn-ghost px-2 py-1 rounded text-xs font-medium" onclick="editRow(${r.id})">Editar</button>
-      <button class="btn-danger px-2 py-1 rounded text-xs font-medium" onclick="delRow(${r.id})">Remover</button>
-    </td>
-  </tr>`;
+function renderRoutingTable(rows, flowId) {
+  return `<div class="table-wrap"><table class="table">
+    <thead><tr>
+      <th>Telefone</th><th>Cliente</th><th>Ativo</th><th>Atualizado</th><th></th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr id="rt-row-${r.id}">
+        <td class="mono">${escapeHtml(r.telefone)}</td>
+        <td>${escapeHtml(r.nome_cliente || '—')}</td>
+        <td><button class="toggle ${r.ativo?'on':''}" onclick="toggleRoutingAtivo(${r.id}, this)"></button></td>
+        <td class="muted text-xs">${fmtDate(r.atualizado_em || r.criado_em)}</td>
+        <td class="text-align-right no-wrap">
+          <button class="btn btn--ghost btn--sm" onclick="editRoutingRow(${r.id}, '${escapeHtml(flowId)}')">Editar</button>
+          <button class="btn btn--sm color-danger" onclick="deleteRoutingRow(${r.id}, '${escapeHtml(r.telefone)}', '${escapeHtml(r.workflow_id || flowId)}')">Remover</button>
+        </td>
+      </tr>`).join('')}
+    </tbody>
+  </table></div>`;
 }
 
-function renderRowEditing(r, isNew=false) {
-  const id = isNew ? 'new-pending' : r.id;
-  return `<tr class="table-row editing" id="row-${id}">
-    <td class="px-5 py-2">
-      <input class="input mono" placeholder="5535999998888" value="${r.telefone || ''}" data-field="telefone" />
-    </td>
-    <td class="px-3 py-2">
-      <input class="input" placeholder="Nome (opcional)" value="${r.nome_cliente || ''}" data-field="nome_cliente" />
-    </td>
-    <td class="px-3 py-2">
-      <div class="toggle ${(r.ativo ?? true)?'on':''}" onclick="this.classList.toggle('on')" data-field="ativo"></div>
-    </td>
-    <td class="px-3 py-2 text-xs" style="color: var(--text-mute)">${isNew ? 'novo' : 'editando'}</td>
-    <td class="px-3 py-2 text-right whitespace-nowrap">
-      <button class="btn-primary px-3 py-1.5 rounded text-xs font-semibold" onclick="${isNew?'saveNew()':'saveRow('+r.id+')'}">Salvar</button>
-      <button class="btn-ghost px-2 py-1 rounded text-xs font-medium" onclick="${isNew?'cancelAdd()':'renderDetail()'}">Cancelar</button>
-    </td>
-  </tr>`;
-}
-
-window.showAddForm = () => {
-  // Ensure table exists
-  if (!$('#rows-body')) {
-    const w = WORKFLOWS.find(x => x.id === SELECTED);
-    const c = flowColor(w.id);
-    const detail = $('#detail').firstElementChild;
-    detail.querySelector('div[style*="border-top"]').innerHTML = `
-      <table class="w-full text-sm">
-        <thead>
-          <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-            <th class="text-left px-5 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Telefone</th>
-            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Cliente</th>
-            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Ativo</th>
-            <th class="text-left px-3 py-2.5 text-[11px] uppercase tracking-wider font-semibold" style="color: var(--text-mute)">Atualizado</th>
-            <th class="px-3 py-2.5"></th>
-          </tr>
-        </thead>
-        <tbody id="rows-body"></tbody>
-      </table>`;
-  }
-  if ($('#row-new-pending')) return;
-  $('#rows-body').insertAdjacentHTML('afterbegin', renderRowEditing({ ativo: true }, true));
-  $('#row-new-pending').querySelector('input').focus();
+window.showAddRouting = (flowId) => {
+  document.getElementById('routing-add-form-' + flowId).style.display = 'block';
+};
+window.cancelAddRouting = (flowId) => {
+  document.getElementById('routing-add-form-' + flowId).style.display = 'none';
 };
 
-window.cancelAdd = () => {
-  $('#row-new-pending')?.remove();
-  if (ROUTINGS.filter(r => r.workflow_id === SELECTED).length === 0) renderDetail();
-};
-
-function readEditRow(rowEl) {
-  return {
-    telefone: rowEl.querySelector('[data-field=telefone]').value,
-    nome_cliente: rowEl.querySelector('[data-field=nome_cliente]').value,
-    ativo: rowEl.querySelector('[data-field=ativo]').classList.contains('on'),
-  };
-}
-
-window.saveNew = async () => {
-  const row = $('#row-new-pending');
-  const data = readEditRow(row);
-  if (!data.telefone || data.telefone.replace(/\D/g,'').length < 10) return toast('Telefone inválido', 'err');
+window.saveNewRouting = async (flowId) => {
+  const telefone = document.getElementById('rt-tel-' + flowId)?.value?.trim();
+  const nome_cliente = document.getElementById('rt-nome-' + flowId)?.value?.trim();
+  if (!telefone || telefone.replace(/\D/g,'').length < 10) { toast('Telefone invalido', 'err'); return; }
   try {
     await api('/api/routing', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ ...data, workflow_id: SELECTED })
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telefone, nome_cliente, workflow_id: flowId, ativo: true }),
     });
-    toast('Cliente vinculado');
-    await loadAll();
+    toast('Cliente vinculado', 'ok');
+    await reloadBotRouting(flowId);
   } catch (e) {
     if (e.body?.error === 'duplicate') {
-      PENDING_DUP = { ...data, workflow_id: SELECTED, move: true };
-      $('#dup-tel').textContent = data.telefone;
-      $('#dup-wf').textContent = e.body.existing_workflow;
-      $('#modal-dup').classList.remove('hidden');
-    } else toast(e.message, 'err');
+      PENDING_DUP = { telefone, nome_cliente, workflow_id: flowId, ativo: true, move: true };
+      document.getElementById('dup-tel').textContent = telefone;
+      document.getElementById('dup-wf').textContent = e.body.existing_workflow;
+      document.getElementById('modal-dup').style.display = 'flex';
+    } else { toast('Erro: ' + e.message, 'err'); }
   }
 };
 
-window.editRow = (id) => {
-  const r = ROUTINGS.find(x => x.id === id);
-  if (!r) return;
-  $('#row-' + id).outerHTML = renderRowEditing(r);
-};
+async function reloadBotRouting(flowId) {
+  ROUTINGS_DATA = await api('/api/routing');
+  const bot = BOTS_DATA.find(b => (b.flow_id || b.slot) === flowId);
+  if (bot) renderBotRoteamento(bot);
+}
 
-window.saveRow = async (id) => {
-  const r = ROUTINGS.find(x => x.id === id);
-  const row = $('#row-' + id);
-  const data = readEditRow(row);
+document.getElementById('dup-confirm-btn').onclick = async () => {
+  closeModal('modal-dup');
   try {
-    await api('/api/routing/' + id, {
-      method: 'PUT', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ ...data, workflow_id: r.workflow_id })
+    await api('/api/routing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(PENDING_DUP),
     });
-    toast('Atualizado');
-    await loadAll();
-  } catch (e) { toast(e.message, 'err'); }
+    toast('Numero movido', 'ok');
+    if (PENDING_DUP) await reloadBotRouting(PENDING_DUP.workflow_id);
+  } catch (e) { toast('Erro: ' + e.message, 'err'); }
+  PENDING_DUP = null;
 };
 
-window.toggleAtivo = async (id, el) => {
-  const r = ROUTINGS.find(x => x.id === id);
+window.toggleRoutingAtivo = async (id, el) => {
+  const r = ROUTINGS_DATA.find(x => x.id === id);
   const newState = !r.ativo;
   el.classList.toggle('on');
   try {
     await api('/api/routing/' + id, {
-      method: 'PUT', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ telefone: r.telefone, workflow_id: r.workflow_id, nome_cliente: r.nome_cliente, ativo: newState })
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telefone: r.telefone, workflow_id: r.workflow_id, nome_cliente: r.nome_cliente, ativo: newState }),
     });
     r.ativo = newState;
-  } catch (e) { el.classList.toggle('on'); toast(e.message, 'err'); }
+  } catch (e) { el.classList.toggle('on'); toast('Erro: ' + e.message, 'err'); }
 };
 
-window.delRow = async (id) => {
-  const r = ROUTINGS.find(x => x.id === id);
-  if (!confirm(`Remover ${r?.nome_cliente || r?.telefone}?`)) return;
-  await api('/api/routing/' + id, { method: 'DELETE' });
-  toast('Removido');
-  loadAll();
+window.deleteRoutingRow = (id, telefone, flowId) => {
+  showConfirm(
+    'Remover vinculo',
+    `Deseja remover o vinculo do numero <strong class="mono">${escapeHtml(telefone)}</strong>?`,
+    async () => {
+      try {
+        await api('/api/routing/' + id, { method: 'DELETE' });
+        toast('Vinculo removido', 'ok');
+        await reloadBotRouting(flowId);
+      } catch (e) { toast('Erro: ' + e.message, 'err'); }
+    }
+  );
 };
 
-$('#dup-cancel').onclick = () => { $('#modal-dup').classList.add('hidden'); PENDING_DUP = null; };
-$('#dup-confirm').onclick = async () => {
-  $('#modal-dup').classList.add('hidden');
+window.editRoutingRow = (id, flowId) => {
+  const r = ROUTINGS_DATA.find(x => x.id === id);
+  if (!r) return;
+  const row = document.getElementById('rt-row-' + id);
+  if (!row) return;
+  row.innerHTML = `
+    <td><input id="edit-tel-${id}" class="mono" value="${escapeHtml(r.telefone)}" /></td>
+    <td><input id="edit-nome-${id}" value="${escapeHtml(r.nome_cliente || '')}" placeholder="Nome opcional" /></td>
+    <td><button class="toggle ${r.ativo?'on':''}" onclick="this.classList.toggle('on')" id="edit-ativo-${id}"></button></td>
+    <td class="muted text-xs">editando</td>
+    <td class="text-align-right no-wrap">
+      <button class="btn btn--primary btn--sm" onclick="saveRoutingRow(${id}, '${escapeHtml(flowId)}')">Salvar</button>
+      <button class="btn btn--ghost btn--sm" onclick="cancelEditRouting(${id}, '${escapeHtml(flowId)}')">Cancelar</button>
+    </td>
+  `;
+};
+
+window.saveRoutingRow = async (id, flowId) => {
+  const r = ROUTINGS_DATA.find(x => x.id === id);
   try {
-    await api('/api/routing', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(PENDING_DUP)
+    const telefone = document.getElementById('edit-tel-' + id)?.value?.trim();
+    const nome_cliente = document.getElementById('edit-nome-' + id)?.value?.trim();
+    const ativo = document.getElementById('edit-ativo-' + id)?.classList.contains('on');
+    await api('/api/routing/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telefone, nome_cliente, ativo, workflow_id: r.workflow_id }),
     });
-    toast('Número movido');
-    await loadAll();
-  } catch (e) { toast(e.message, 'err'); }
-  PENDING_DUP = null;
+    toast('Atualizado', 'ok');
+    await reloadBotRouting(flowId);
+  } catch (e) { toast('Erro: ' + e.message, 'err'); }
 };
 
-// ---------- STATUS ----------
-async function loadStatus() {
-  const s = await api('/api/status');
-  $('#flows-summary').innerHTML = `<strong style="color:#6ee7b7">${s.flows.ativos}</strong> ativos / ${s.flows.total} total`;
-  $('#flows-status-list').innerHTML = s.flows.workflows.map(w => `
-    <div class="flex justify-between items-center py-2" style="border-bottom: 1px solid var(--border)">
-      <span class="text-sm">${w.name}</span>
-      <span class="text-xs ${w.active?'text-emerald-400':''}" style="${!w.active?'color: var(--text-mute)':''}">
-        <span class="status-dot ${w.active?'bg-emerald-500':'bg-gray-500'}"></span>${w.active?'ativo':'inativo'}
-      </span>
-    </div>
-  `).join('');
-  $('#waha-list').innerHTML = s.waha.map(w => `
-    <div class="card-elev p-3 rounded-lg">
-      <div class="flex justify-between items-start">
-        <div>
-          <div class="font-semibold text-sm">${w.name}</div>
-          <div class="text-xs mono mt-0.5" style="color: var(--text-dim)">${w.me || '—'}</div>
-        </div>
-        <span class="text-[11px] px-2 py-0.5 rounded-full font-medium ${w.status==='WORKING'?'badge-active':'badge-error'}">${w.status}</span>
+window.cancelEditRouting = async (id, flowId) => {
+  await reloadBotRouting(flowId);
+};
+
+async function loadBotTokens(slot, container) {
+  container.innerHTML = '<div class="skeleton" style="height:120px;">&nbsp;</div>';
+  try {
+    const data = await api('/api/usage/summary?days=7');
+    const rows = (data.rows || []).filter(r => r.slot === slot);
+    if (!rows.length) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state__text">Nenhum uso de tokens registrado para este bot nos ultimos 7 dias</div></div>';
+      return;
+    }
+    const totals = rows.reduce((a, r) => ({
+      tokens: a.tokens + Number(r.total_tokens||0),
+      cost: a.cost + Number(r.cost_usd||0),
+      calls: a.calls + Number(r.calls||0),
+    }), {tokens:0,cost:0,calls:0});
+    container.innerHTML = `
+      <div class="grid-3-equal mb-4">
+        <div class="card kpi"><div class="kpi__label">Total tokens (7d)</div><div class="kpi__value">${fmtNum(totals.tokens)}</div></div>
+        <div class="card kpi"><div class="kpi__label">Custo USD (7d)</div><div class="kpi__value mono kpi-value--lg">${fmtBRL(totals.cost)}</div></div>
+        <div class="card kpi"><div class="kpi__label">Chamadas (7d)</div><div class="kpi__value">${fmtNum(totals.calls)}</div></div>
       </div>
-      <div class="text-[11px] mono mt-2 truncate" style="color: var(--text-mute)">${w.webhook || ''}</div>
-    </div>
-  `).join('');
-  $('#exec-list').innerHTML = s.execucoes.length ? `
-    <table class="w-full text-sm">
-      <thead>
-        <tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">ID</th>
-          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Workflow</th>
-          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Status</th>
-          <th class="text-left p-3 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Início</th>
-        </tr>
-      </thead>
-      <tbody>
-      ${s.execucoes.map(e => `<tr class="table-row">
-        <td class="p-3 mono text-xs">${e.id}</td>
-        <td class="p-3 text-xs mono" style="color: var(--text-dim)">${e.workflowId}</td>
-        <td class="p-3 text-xs">
-          <span class="${e.status==='success'?'text-emerald-400':'text-red-400'}">
-            <span class="status-dot ${e.status==='success'?'bg-emerald-500':'bg-red-500'}"></span>${e.status}
-          </span>
-        </td>
-        <td class="p-3 text-xs" style="color: var(--text-mute)">${new Date(e.startedAt).toLocaleString('pt-BR')}</td>
-      </tr>`).join('')}
-      </tbody>
-    </table>` : '<div class="p-4 text-sm" style="color: var(--text-mute)">Sem execuções recentes.</div>';
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Provider</th><th>Modelo</th><th>Chamadas</th><th>Tokens</th><th>Custo USD</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td>${escapeHtml(r.provider)}</td>
+          <td class="mono">${escapeHtml(r.model)}</td>
+          <td>${fmtNum(r.calls)}</td>
+          <td class="mono">${fmtNum(r.total_tokens)}</td>
+          <td class="mono">${fmtBRL(r.cost_usd)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    `;
+  } catch (e) {
+    container.innerHTML = `<div class="color-danger">Erro: ${escapeHtml(e.message)}</div>`;
+  }
 }
 
-async function loadRelatorios() {
-  const [leads, ag, msg] = await Promise.all([
-    api('/api/leads'), api('/api/agendamentos-pendentes'), api('/api/message-stats')
-  ]);
-  $('#leads-list').innerHTML = leads.length ? `<pre>${JSON.stringify(leads, null, 2)}</pre>` : '<div style="color: var(--text-mute)">Sem leads</div>';
-  $('#agendamentos-list').innerHTML = ag.length ? `<pre>${JSON.stringify(ag, null, 2)}</pre>` : '<div style="color: var(--text-mute)">Sem agendamentos pendentes</div>';
-  $('#msg-stats').innerHTML = msg.length
-    ? msg.map(m => `<div class="flex justify-between py-2" style="border-bottom: 1px solid var(--border)">
-        <span style="color: var(--text-dim)">${m.dia}</span><strong>${m.total}</strong></div>`).join('')
-    : '<div style="color: var(--text-mute)">Sem dados</div>';
-}
-
-// ---------- BANCOS ----------
-async function loadBancos() {
-  $('#db-projects').innerHTML = '<div class="p-5 text-sm" style="color: var(--text-mute)">Carregando...</div>';
-  $('#db-detail').innerHTML = '';
+async function loadBotBanco(bot, container) {
+  container.innerHTML = '<div class="skeleton" style="height:120px;">&nbsp;</div>';
   try {
     const data = await api('/api/database/projects');
-    DATABASE_PROJECTS = data.projects || [];
-    if (DB_SELECTED_PROJECT && !DATABASE_PROJECTS.some(p => p.project_id === DB_SELECTED_PROJECT)) {
-      DB_SELECTED_PROJECT = null;
-      DB_SELECTED_TABLE = null;
+    const project = (data.projects || []).find(p => p.slot === bot.slot || p.workflow_id === (bot.flow_id || bot.slot));
+    if (!project) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state__text">Nenhum banco associado a este bot</div></div>';
+      return;
     }
-    if (!DB_SELECTED_PROJECT && DATABASE_PROJECTS.length) {
-      DB_SELECTED_PROJECT = DATABASE_PROJECTS[0].project_id;
-      DB_SELECTED_TABLE = DATABASE_PROJECTS[0].tables?.[0]?.key || null;
-    }
-    renderDatabaseProjects();
-    const selected = DATABASE_PROJECTS.find(p => p.project_id === DB_SELECTED_PROJECT);
-    if (selected) {
-      renderDatabaseDetail(selected);
-      if (DB_SELECTED_TABLE) await loadDatabaseTable(selected.project_id, DB_SELECTED_TABLE);
-    } else {
-      $('#db-detail').innerHTML = '<div class="card p-8 text-sm" style="color: var(--text-mute)">Nenhum banco cadastrado.</div>';
-    }
+    const tables = project.tables || [];
+    container.innerHTML = `
+      <div class="h2">Banco: ${escapeHtml(project.display_name)}</div>
+      <div class="muted mb-4">${fmtNum(project.totals?.rows||0)} linhas &middot; ${fmtNum(project.totals?.available_tables||0)} tabelas</div>
+      <div class="grid-auto-fill-200">
+        ${tables.map(t => `<button class="card card-table-btn" onclick="loadBotTableData('${escapeHtml(project.project_id)}','${escapeHtml(t.key)}')" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
+          <div class="fw-600 text-sm-lower mb-1px">${escapeHtml(t.label)}</div>
+          <div class="mono muted text-xs">${escapeHtml(t.table_name)}</div>
+          <div class="mt-2 text-sm"><strong>${fmtNum(t.rows)}</strong> linhas</div>
+        </button>`).join('')}
+      </div>
+      <div id="bot-table-data" class="mt-4"></div>
+    `;
   } catch (e) {
-    $('#db-projects').innerHTML = `<div class="p-5 text-sm text-red-300">Erro: ${esc(e.message)}</div>`;
+    container.innerHTML = `<div class="color-danger">Erro: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-function renderDatabaseProjects() {
-  $('#db-project-count').textContent = DATABASE_PROJECTS.length;
-  $('#db-projects').innerHTML = DATABASE_PROJECTS.map((project) => {
-    const active = project.active !== false;
-    const selected = project.project_id === DB_SELECTED_PROJECT;
-    return `<button class="side-item ${selected ? 'active' : ''} w-full text-left px-4 py-3" onclick="selectDatabaseProject('${esc(project.project_id)}')" style="border-bottom: 1px solid var(--border)">
-      <div class="flex items-center justify-between gap-2">
-        <div class="font-semibold text-sm truncate">${esc(project.display_name)}</div>
-        <span class="text-[10px] px-2 py-0.5 rounded-full ${active ? 'badge-active' : 'badge-inactive'}">${active ? 'ativo' : 'inativo'}</span>
-      </div>
-      <div class="text-[11px] mono mt-1 truncate" style="color: var(--text-mute)">${esc(project.project_id)}</div>
-      <div class="flex justify-between text-[11px] mt-2" style="color: var(--text-dim)">
-        <span>${Number(project.totals?.available_tables || 0)} tabelas</span>
-        <span>${Number(project.totals?.rows || 0).toLocaleString('pt-BR')} linhas</span>
-      </div>
-    </button>`;
-  }).join('') || '<div class="p-6 text-sm text-center" style="color: var(--text-mute)">Sem projetos</div>';
-}
-
-window.selectDatabaseProject = (projectId) => {
-  const project = DATABASE_PROJECTS.find(p => p.project_id === projectId);
-  if (!project) return;
-  DB_SELECTED_PROJECT = projectId;
-  DB_SELECTED_TABLE = project.tables?.[0]?.key || null;
-  renderDatabaseProjects();
-  renderDatabaseDetail(project);
-  if (DB_SELECTED_TABLE) loadDatabaseTable(projectId, DB_SELECTED_TABLE);
-};
-
-function renderDatabaseDetail(project) {
-  const tables = project.tables || [];
-  $('#db-detail').innerHTML = `
-    <div class="card overflow-hidden">
-      <div class="px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3" style="border-bottom: 1px solid var(--border)">
-        <div class="min-w-0">
-          <h2 class="font-semibold truncate">${esc(project.display_name)}</h2>
-          <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">
-            ${esc(project.project_id)} · ${esc(project.workflow_id)} · ${esc(project.memory_table)}
-          </div>
-        </div>
-        <div class="grid grid-cols-3 gap-2 text-center">
-          <div class="card-elev rounded-lg px-3 py-2">
-            <div class="text-[10px] uppercase" style="color: var(--text-mute)">Tabelas</div>
-            <div class="mono font-bold">${Number(project.totals?.available_tables || 0)}</div>
-          </div>
-          <div class="card-elev rounded-lg px-3 py-2">
-            <div class="text-[10px] uppercase" style="color: var(--text-mute)">Linhas</div>
-            <div class="mono font-bold">${Number(project.totals?.rows || 0).toLocaleString('pt-BR')}</div>
-          </div>
-          <div class="card-elev rounded-lg px-3 py-2">
-            <div class="text-[10px] uppercase" style="color: var(--text-mute)">Sessões</div>
-            <div class="mono font-bold">${Number(project.totals?.sessions || 0).toLocaleString('pt-BR')}</div>
-          </div>
-        </div>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
-        ${tables.map(table => renderDatabaseTableCard(project, table)).join('')}
-      </div>
-    </div>
-    <div id="db-table-detail" class="card overflow-hidden">
-      <div class="p-6 text-sm" style="color: var(--text-mute)">Selecione uma tabela.</div>
-    </div>
-  `;
-}
-
-function renderDatabaseTableCard(project, table) {
-  const selected = table.key === DB_SELECTED_TABLE;
-  const unavailable = !table.available;
-  return `<button class="card-elev rounded-lg p-4 text-left ${selected ? 'ring-1 ring-blue-500' : ''}" onclick="loadDatabaseTable('${esc(project.project_id)}', '${esc(table.key)}')" ${unavailable ? 'title="Tabela ainda não existe no banco"' : ''}>
-    <div class="flex items-start justify-between gap-2">
-      <div class="min-w-0">
-        <div class="font-semibold text-sm truncate">${esc(table.label)}</div>
-        <div class="mono text-[11px] mt-1 truncate" style="color: var(--text-mute)">${esc(table.table_name)}</div>
-      </div>
-      <span class="text-[10px] px-2 py-0.5 rounded-full ${unavailable ? 'badge-error' : 'badge-inactive'}">${esc(table.type)}</span>
-    </div>
-    <div class="grid grid-cols-2 gap-2 mt-3 text-[11px]" style="color: var(--text-dim)">
-      <div><span class="mono font-semibold" style="color: var(--text)">${Number(table.rows || 0).toLocaleString('pt-BR')}</span> linhas</div>
-      <div><span class="mono font-semibold" style="color: var(--text)">${Number(table.sessions || 0).toLocaleString('pt-BR')}</span> sessões</div>
-    </div>
-  </button>`;
-}
-
-window.loadDatabaseTable = async (projectId, tableKey) => {
-  DB_SELECTED_PROJECT = projectId;
-  DB_SELECTED_TABLE = tableKey;
-  const project = DATABASE_PROJECTS.find(p => p.project_id === projectId);
-  if (project) {
-    renderDatabaseProjects();
-    renderDatabaseDetail(project);
-  }
-  $('#db-table-detail').innerHTML = '<div class="p-6 text-sm" style="color: var(--text-mute)">Carregando tabela...</div>';
+window.loadBotTableData = async (projectId, tableKey) => {
+  const el = document.getElementById('bot-table-data');
+  if (!el) return;
+  el.innerHTML = '<div class="skeleton" style="height:80px;">&nbsp;</div>';
   try {
-    const data = await api(`/api/database/projects/${encodeURIComponent(projectId)}/tables/${encodeURIComponent(tableKey)}?limit=80`);
-    renderDatabaseRows(data);
+    const data = await api(`/api/database/projects/${encodeURIComponent(projectId)}/tables/${encodeURIComponent(tableKey)}?limit=50`);
+    const rows = data.rows || [];
+    const cols = rows.length ? Object.keys(rows[0]) : [];
+    el.innerHTML = `<div class="h2">${escapeHtml(data.table?.label || tableKey)}</div>
+      ${rows.length ? `<div class="table-wrap"><table class="table">
+        <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${cols.map(c => `<td>${formatDbVal(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table></div>` : '<div class="empty-state"><div class="empty-state__text">Tabela vazia</div></div>'}`;
   } catch (e) {
-    $('#db-table-detail').innerHTML = `<div class="p-6 text-sm text-red-300">Erro: ${esc(e.message)}</div>`;
+    el.innerHTML = `<div class="color-danger">Erro: ${escapeHtml(e.message)}</div>`;
   }
 };
 
-function renderDatabaseRows(data) {
-  const table = data.table || {};
-  const rows = data.rows || [];
-  const columns = rows.length ? Object.keys(rows[0]) : [];
-  $('#db-table-detail').innerHTML = `
-    <div class="px-5 py-4 flex items-center justify-between gap-3" style="border-bottom: 1px solid var(--border)">
-      <div class="min-w-0">
-        <h3 class="font-semibold truncate">${esc(table.label || table.key)}</h3>
-        <div class="text-[11px] mono mt-1" style="color: var(--text-mute)">${esc(table.table_name)} · ${Number(table.rows || 0).toLocaleString('pt-BR')} linhas</div>
-      </div>
-      <button class="btn-secondary px-3 py-2 rounded-lg text-xs font-semibold" onclick="loadDatabaseTable('${esc(data.project.project_id)}', '${esc(table.key)}')">Atualizar</button>
-    </div>
-    ${rows.length ? `
-      <div class="overflow-auto scrollbar">
-        <table class="w-full text-sm">
-          <thead><tr style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-            ${columns.map(col => `<th class="text-left p-3 text-[11px] uppercase font-semibold whitespace-nowrap" style="color: var(--text-mute)">${esc(col)}</th>`).join('')}
-          </tr></thead>
-          <tbody>
-            ${rows.map(row => `<tr class="table-row">${columns.map(col => `<td class="p-3 align-top max-w-[360px]">${formatDbValue(row[col])}</td>`).join('')}</tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    ` : `<div class="p-8 text-center text-sm" style="color: var(--text-mute)">${table.available === false ? 'Tabela indisponível.' : 'Sem registros.'}</div>`}
-  `;
-}
-
-function formatDbValue(value) {
-  if (value === null || value === undefined) return '<span style="color: var(--text-mute)">—</span>';
-  if (typeof value === 'object') {
-    const json = JSON.stringify(value, null, 2);
-    return `<details><summary class="cursor-pointer text-xs mono" style="color: var(--text-dim)">JSON</summary><pre class="mono text-[11px] mt-2 p-2 rounded-lg overflow-auto max-h-64" style="background: var(--bg-elev); color: var(--text-dim); border: 1px solid var(--border)">${esc(json)}</pre></details>`;
+function formatDbVal(v) {
+  if (v === null || v === undefined) return '<span class="muted">—</span>';
+  if (typeof v === 'object') {
+    return `<details><summary class="muted text-xs" style="cursor:pointer">JSON</summary><pre class="mono text-xs json-pre">${escapeHtml(JSON.stringify(v,null,2))}</pre></details>`;
   }
-  const text = String(value);
-  const short = text.length > 180 ? text.slice(0, 180) + '...' : text;
-  return `<div class="mono text-xs break-words" title="${esc(text)}">${esc(short)}</div>`;
+  const text = String(v);
+  return `<span class="mono text-sm" title="${escapeHtml(text)}">${escapeHtml(text.length > 120 ? text.slice(0,120) + '…' : text)}</span>`;
 }
 
-// ---------- LOGS ----------
-async function loadLogs(resetStream=false) {
+// ============================================================
+// LOGS / EXECUCOES
+// ============================================================
+let FLOW_LOGS = [];
+let LOG_SUMMARY = null;
+let LOG_STREAM = null;
+let LOG_SEARCH_TIMER = null;
+
+async function loadLogs(resetStream = false) {
   try {
-    if (!WORKFLOWS.length) {
-      WORKFLOWS = await api('/api/workflows');
+    if (!WORKFLOWS_DATA.length) {
+      WORKFLOWS_DATA = await api('/api/workflows');
+      populateLogFlowFilter();
     }
-    renderLogFlowOptions();
     const params = getLogParams();
     params.set('limit', '150');
     [FLOW_LOGS, LOG_SUMMARY] = await Promise.all([
@@ -1077,88 +1493,154 @@ async function loadLogs(resetStream=false) {
     renderLogs();
     if (resetStream || !LOG_STREAM) connectLogStream();
   } catch (e) {
-    $('#logs-list').innerHTML = `<div class="p-6 text-sm text-red-300">Falha ao carregar logs: ${esc(e.message)}</div>`;
-    setLogLive(false);
+    console.error(e);
+    document.getElementById('logs-list').innerHTML = `<div class="card-body color-danger">Erro ao carregar logs: ${escapeHtml(e.message)}</div>`;
+    setLiveBadge(false);
   }
+}
+
+function populateLogFlowFilter() {
+  const sel = document.getElementById('log-flow');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Todos</option>' + WORKFLOWS_DATA.filter(w => w.has_webhook).map(w => `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)}</option>`).join('');
+  sel.value = [...sel.options].some(o => o.value === cur) ? cur : '';
 }
 
 function getLogParams() {
-  const params = new URLSearchParams();
-  const values = {
-    hours: $('#log-hours')?.value || '24',
-    status: $('#log-status')?.value || '',
-    flow_id: $('#log-flow')?.value || '',
-    event_type: $('#log-event-type')?.value || '',
-    bot: $('#log-bot')?.value?.trim() || '',
-    session: $('#log-session')?.value?.trim() || '',
-    execution_id: $('#log-execution-id')?.value?.trim() || '',
-    q: $('#log-search')?.value?.trim() || '',
+  const p = new URLSearchParams();
+  const map = {
+    hours: document.getElementById('log-hours')?.value || '24',
+    status: document.getElementById('log-status')?.value || '',
+    flow_id: document.getElementById('log-flow')?.value || '',
+    event_type: document.getElementById('log-event-type')?.value || '',
+    bot: (document.getElementById('log-bot')?.value || '').trim(),
+    session: (document.getElementById('log-session')?.value || '').trim(),
+    q: (document.getElementById('log-search')?.value || '').trim(),
   };
-  for (const [key, value] of Object.entries(values)) {
-    if (value) params.set(key, value);
-  }
-  return params;
+  for (const [k,v] of Object.entries(map)) if (v) p.set(k, v);
+  return p;
 }
 
-async function loadLogSummaryOnly() {
-  try {
-    LOG_SUMMARY = await api('/api/flow-logs/summary?' + getLogParams().toString());
-    renderLogs();
-  } catch {}
+function scheduleLogSearch() {
+  clearTimeout(LOG_SEARCH_TIMER);
+  LOG_SEARCH_TIMER = setTimeout(() => loadLogs(true), 350);
 }
 
-function renderLogFlowOptions() {
-  const sel = $('#log-flow');
-  if (!sel) return;
-  const current = sel.value;
-  const options = WORKFLOWS.filter(w => w.has_webhook).map(w => (
-    `<option value="${esc(w.id)}">${esc(w.name)}</option>`
-  )).join('');
-  sel.innerHTML = `<option value="">Todos</option>${options}`;
-  sel.value = [...sel.options].some(o => o.value === current) ? current : '';
+function clearLogFilters() {
+  ['log-hours','log-status','log-flow','log-event-type','log-bot','log-session','log-search'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = id === 'log-hours' ? '24' : '';
+  });
+  loadLogs(true);
 }
 
+function renderLogs() {
+  const s = LOG_SUMMARY || {};
+  document.getElementById('log-kpi-total').textContent = fmtNum(s.executions || 0);
+  document.getElementById('log-kpi-success').textContent = fmtNum(s.success_executions || 0);
+  document.getElementById('log-kpi-error').textContent = fmtNum(s.error_executions || 0);
+  document.getElementById('log-kpi-success-rate').textContent = `${fmtNum(s.success_rate || 0)}%`;
+  document.getElementById('log-kpi-last').textContent = s.last_event_at ? fmtTime(s.last_event_at) : (FLOW_LOGS[0] ? fmtTime(FLOW_LOGS[0].created_at) : '—');
+
+  const list = document.getElementById('logs-list');
+  if (!list) return;
+  list.innerHTML = FLOW_LOGS.length
+    ? FLOW_LOGS.map(renderLogRow).join('')
+    : '<div class="empty-state"><div class="empty-state__icon">&#9700;</div><div class="empty-state__text">Nenhuma execucao encontrada para os filtros selecionados</div></div>';
+}
+
+function renderLogRow(row) {
+  const statusMap = {
+    running: {cls:'badge--info',label:'Em execucao'},
+    success: {cls:'badge--success',label:'Sucesso'},
+    error: {cls:'badge--danger',label:'Erro'},
+    ignored: {cls:'badge--muted',label:'Ignorado'},
+  };
+  const s = statusMap[row.status] || {cls:'badge--muted',label: escapeHtml(row.status)};
+  const duration = row.duration_ms != null ? `${fmtNum(row.duration_ms)}ms` : '';
+  const details = JSON.stringify({
+    id: row.id, execution_id: row.execution_id, flow_id: row.flow_id,
+    event_type: row.event_type, session: row.session, bot: row.bot,
+    duration_ms: row.duration_ms, error_summary: row.error_summary,
+    metadata: row.metadata,
+  }, null, 2);
+  return `<details>
+    <summary class="log-summary-pad" style="list-style:none;cursor:pointer" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background=''">
+      <div class="text-sm grid-log-row">
+        <span class="mono muted text-xs">${fmtTime(row.created_at)}</span>
+        <span class="badge ${s.cls}" style="font-size:0.6875rem">${s.label}</span>
+        <div class="min-w-0">
+          <div class="truncate fw-500">${escapeHtml(row.message || '—')}</div>
+          <div class="mono muted truncate text-7x">${escapeHtml(row.event_type || '')} &middot; ${escapeHtml(row.bot || row.flow_name || '')}</div>
+        </div>
+        <span class="mono muted text-xs truncate">${escapeHtml(row.telefone_masked || '—')}</span>
+        <span class="mono muted text-xs text-align-right">${duration}</span>
+      </div>
+      ${row.error_summary ? `<div class="text-xs color-danger truncate" style="margin-top:4px">${escapeHtml(row.error_summary)}</div>` : ''}
+    </summary>
+    <div class="log-detail-pad">
+      <pre class="mono text-xs log-detail-pre">${escapeHtml(details)}</pre>
+    </div>
+  </details>`;
+}
+
+// SSE stream
 function connectLogStream() {
-  if (LOG_STREAM) LOG_STREAM.close();
-  setLogLive(false);
+  if (LOG_STREAM) { LOG_STREAM.close(); LOG_STREAM = null; }
+  setLiveBadge(false);
   LOG_STREAM = new EventSource('/api/flow-logs/stream', { withCredentials: true });
-  LOG_STREAM.addEventListener('connected', () => setLogLive(true));
-  LOG_STREAM.addEventListener('open', () => setLogLive(true));
-  LOG_STREAM.addEventListener('error', () => setLogLive(false));
-  LOG_STREAM.addEventListener('log', (event) => {
+  LOG_STREAM.addEventListener('connected', () => setLiveBadge(true));
+  LOG_STREAM.addEventListener('open', () => setLiveBadge(true));
+  LOG_STREAM.addEventListener('error', () => setLiveBadge(false));
+  LOG_STREAM.addEventListener('log', (ev) => {
     try {
-      const row = JSON.parse(event.data);
+      const row = JSON.parse(ev.data);
       if (!logMatchesFilters(row)) return;
       FLOW_LOGS = [row, ...FLOW_LOGS.filter(x => x.id !== row.id)].slice(0, 150);
       renderLogs();
-      loadLogSummaryOnly();
-    } catch {}
+      api('/api/flow-logs/summary?' + getLogParams().toString()).then(s => { LOG_SUMMARY = s; renderLogs(); }).catch(() => {});
+    } catch (_) {}
   });
 }
 
-function setLogLive(isLive) {
-  const el = $('#log-live');
-  if (!el) return;
-  el.className = `text-[11px] px-2 py-1 rounded-full mono ${isLive ? 'badge-active' : 'badge-inactive'}`;
-  el.innerHTML = `<span class="status-dot ${isLive ? 'bg-emerald-500' : 'bg-gray-500'}"></span>${isLive ? 'ao vivo' : 'offline'}`;
+let _liveOn = false;
+window.toggleLiveStream = () => {
+  if (_liveOn) {
+    if (LOG_STREAM) { LOG_STREAM.close(); LOG_STREAM = null; }
+    setLiveBadge(false);
+    _liveOn = false;
+  } else {
+    connectLogStream();
+    _liveOn = true;
+  }
+};
+
+function setLiveBadge(on) {
+  _liveOn = on;
+  const btn = document.getElementById('live-toggle-btn');
+  const dot = document.getElementById('live-dot');
+  const lbl = document.getElementById('live-label');
+  if (!btn) return;
+  btn.className = `live-badge ${on ? 'live-badge--on' : 'live-badge--off'}`;
+  if (dot) { dot.className = `live-dot ${on ? 'live-dot--pulse' : ''}`; }
+  if (lbl) lbl.textContent = on ? 'Ao vivo' : 'Ao vivo';
 }
 
 function logMatchesFilters(row) {
-  const hours = Number($('#log-hours')?.value || 24);
-  const status = $('#log-status')?.value || '';
-  const flowId = $('#log-flow')?.value || '';
-  const eventType = $('#log-event-type')?.value || '';
-  const bot = ($('#log-bot')?.value || '').trim().toLowerCase();
-  const session = ($('#log-session')?.value || '').trim().toLowerCase();
-  const executionId = ($('#log-execution-id')?.value || '').trim().toLowerCase();
-  const q = ($('#log-search')?.value || '').trim().toLowerCase();
-  if (hours && Date.now() - new Date(row.created_at).getTime() > hours * 60 * 60 * 1000) return false;
+  const hours = Number(document.getElementById('log-hours')?.value || 24);
+  const status = document.getElementById('log-status')?.value || '';
+  const flowId = document.getElementById('log-flow')?.value || '';
+  const eventType = document.getElementById('log-event-type')?.value || '';
+  const bot = (document.getElementById('log-bot')?.value || '').trim().toLowerCase();
+  const session = (document.getElementById('log-session')?.value || '').trim().toLowerCase();
+  const q = (document.getElementById('log-search')?.value || '').trim().toLowerCase();
+  if (hours && Date.now() - new Date(row.created_at).getTime() > hours * 3600000) return false;
   if (status && row.status !== status) return false;
   if (flowId && row.flow_id !== flowId) return false;
   if (eventType && row.event_type !== eventType) return false;
   if (bot && String(row.bot || '').toLowerCase() !== bot) return false;
   if (session && String(row.session || '').toLowerCase() !== session) return false;
-  if (executionId && String(row.execution_id || '').toLowerCase() !== executionId) return false;
   if (q) {
     const hay = [row.telefone_masked, row.message, row.flow_name, row.event_type, row.execution_id, row.bot, row.session].join(' ').toLowerCase();
     if (!hay.includes(q)) return false;
@@ -1166,629 +1648,203 @@ function logMatchesFilters(row) {
   return true;
 }
 
-function renderLogs() {
-  const list = $('#logs-list');
-  if (!list) return;
-  const summary = LOG_SUMMARY || {};
-  $('#log-kpi-total').textContent = Number(summary.executions || 0).toLocaleString('pt-BR');
-  $('#log-kpi-success').textContent = Number(summary.success_executions || 0).toLocaleString('pt-BR');
-  $('#log-kpi-error').textContent = Number(summary.error_executions || 0).toLocaleString('pt-BR');
-  $('#log-kpi-success-rate').textContent = `${Number(summary.success_rate || 0).toLocaleString('pt-BR')}%`;
-  $('#log-kpi-error-rate').textContent = `${Number(summary.error_rate || 0).toLocaleString('pt-BR')}%`;
-  $('#log-kpi-last').textContent = summary.last_event_at
-    ? new Date(summary.last_event_at).toLocaleTimeString('pt-BR')
-    : (FLOW_LOGS[0] ? new Date(FLOW_LOGS[0].created_at).toLocaleTimeString('pt-BR') : '—');
+// ============================================================
+// RELATORIOS
+// ============================================================
+let _relLoaded = false;
+let _curRelTab = 'leads';
 
-  list.innerHTML = FLOW_LOGS.length
-    ? FLOW_LOGS.map(renderLogRow).join('')
-    : '<div class="p-8 text-center text-sm" style="color: var(--text-mute)">Nenhum log encontrado.</div>';
+function switchRelTab(tab) {
+  _curRelTab = tab;
+  document.querySelectorAll('[data-rtab]').forEach(b => b.classList.toggle('tab-btn--active', b.dataset.rtab === tab));
+  ['leads','agendamentos','mensagens'].forEach(t => {
+    document.getElementById('rel-' + t).classList.toggle('tab-panel--active', t === tab);
+  });
 }
 
-function renderLogRow(row) {
-  const tone = {
-    running: 'text-blue-300 bg-blue-500',
-    success: 'text-emerald-300 bg-emerald-500',
-    error: 'text-red-300 bg-red-500',
-    ignored: 'text-gray-300 bg-gray-500',
-  }[row.status] || 'text-gray-300 bg-gray-500';
-  const duration = row.duration_ms === null || row.duration_ms === undefined ? '' : `${Number(row.duration_ms).toLocaleString('pt-BR')}ms`;
-  const details = {
-    execution_id: row.execution_id,
-    flow_id: row.flow_id,
-    event_type: row.event_type,
-    session: row.session,
-    duration_ms: row.duration_ms,
-    error_summary: row.error_summary,
-    metadata: row.metadata || {},
-  };
-  return `<details class="group">
-    <summary class="list-none cursor-pointer px-4 py-3 hover:bg-[var(--bg-hover)]">
-      <div class="grid grid-cols-[120px_96px_minmax(160px,1fr)_120px_90px] gap-3 items-center text-sm">
-        <div class="mono text-xs" style="color: var(--text-mute)">${new Date(row.created_at).toLocaleTimeString('pt-BR')}</div>
-        <div class="mono text-[11px] ${tone.split(' ')[0]}">
-          <span class="status-dot ${tone.split(' ')[1]}"></span>${esc(row.status)}
-        </div>
-        <div class="min-w-0">
-          <div class="font-medium truncate">${esc(row.message)}</div>
-          <div class="text-[11px] mono truncate" style="color: var(--text-mute)">${esc(row.event_type)} · ${esc(row.bot || row.flow_name || '-')}</div>
-        </div>
-        <div class="mono text-xs truncate" style="color: var(--text-dim)">${esc(row.telefone_masked || '-')}</div>
-        <div class="mono text-xs text-right" style="color: var(--text-mute)">${duration}</div>
-      </div>
-      ${row.error_summary ? `<div class="mt-2 text-xs text-red-300 mono truncate">${esc(row.error_summary)}</div>` : ''}
-    </summary>
-    <div class="px-4 pb-4">
-      <pre class="mono text-[11px] p-3 rounded-lg overflow-auto scrollbar" style="background: var(--bg-elev); color: var(--text-dim); border: 1px solid var(--border)">${esc(JSON.stringify(details, null, 2))}</pre>
-    </div>
-  </details>`;
-}
-
-function scheduleLogSearch() {
-  clearTimeout(LOG_SEARCH_TIMER);
-  LOG_SEARCH_TIMER = setTimeout(() => loadLogs(true), 300);
-}
-
-function clearLogFilters() {
-  $('#log-hours').value = '24';
-  $('#log-status').value = '';
-  $('#log-flow').value = '';
-  $('#log-event-type').value = '';
-  $('#log-bot').value = '';
-  $('#log-session').value = '';
-  $('#log-execution-id').value = '';
-  $('#log-search').value = '';
-  loadLogs(true);
-}
-
-// ---------- MODELOS / FLUXOS ----------
-// Agrupa bot_config rows por workflow_id (1 fluxo = N slots geralmente 1)
-const FLOW_META = {
-  teste_barbearia: {
-    title: 'teste_barbearia',
-    subtitle: 'Teste — Agendamento de barbearia (Google Calendar)',
-    type: 'teste',
-    workflow_id: '0ni38aSspWwhooHd',
-    has_media: false,
-  },
-  teste_vendas: {
-    title: 'teste_vendas',
-    subtitle: 'Teste — Funil de vendas com videos V1/V2/V3',
-    type: 'teste',
-    workflow_id: 'dlpKXM3gvX2joC1b',
-    has_media: true,
-  },
-  teste_vendas_barbearia: {
-    title: 'teste_vendas_barbearia',
-    subtitle: 'Teste — Projeto apartado com proposta mista de curso e barbearia',
-    type: 'teste',
-    workflow_id: 'teste_vendas_barbearia',
-    has_media: true,
-  },
-  startap: {
-    title: 'startap',
-    subtitle: 'Produção — Prospecção da Startap (Lola)',
-    type: 'producao',
-    workflow_id: 'uUS3Ux1cU2DquKxo',
-    has_media: false,
-  },
-};
-
-const MODEL_OPTIONS = {
-  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-5.4'],
-  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
-};
-
-function modelOptions(provider, current) {
-  const opts = MODEL_OPTIONS[provider] || [];
-  const html = opts.map(m => `<option value="${m}" ${m===current?'selected':''}>${m}</option>`).join('');
-  const custom = (current && !opts.includes(current)) ? `<option value="${esc(current)}" selected>${esc(current)} (custom)</option>` : '';
-  return custom + html;
-}
-
-async function loadModelos() {
-  const el = $('#flows-list');
-  el.innerHTML = '<div class="card p-8 text-sm" style="color: var(--text-mute)">Carregando…</div>';
+async function loadRelatorios() {
+  _relLoaded = true;
   try {
-    const bots = await api('/api/bots');
-    if (!bots.length) {
-      el.innerHTML = '<div class="card p-8 text-sm" style="color: var(--text-mute)">Nenhum fluxo configurado.</div>';
-      return;
-    }
-    el.innerHTML = bots.map(renderFlowCard).join('');
-    // load prompts and media in parallel
-    bots.forEach((b) => {
-      loadPromptInto(b.slot);
-      loadPauseKeywordsInto(b.slot, b.flow_id || FLOW_META[b.slot]?.workflow_id || b.slot);
-      if (FLOW_META[b.slot]?.has_media) loadMediaInto(b.slot);
-    });
+    const [leads, ag, msg] = await Promise.all([
+      api('/api/leads'),
+      api('/api/agendamentos-pendentes'),
+      api('/api/message-stats'),
+    ]);
+    renderLeads(leads);
+    renderAgendamentos(ag);
+    renderMsgStats(msg);
   } catch (e) {
-    el.innerHTML = `<div class="card p-8 text-sm text-red-300">Erro: ${esc(e.message)}</div>`;
+    console.error(e);
+    toast('Erro ao carregar relatorios: ' + e.message, 'err');
   }
 }
 
-function renderFlowCard(bot) {
-  const meta = FLOW_META[bot.slot] || { title: bot.display_name, subtitle: '', type: 'teste', has_media: false };
-  const isTeste = meta.type === 'teste';
-  const badge = isTeste
-    ? '<span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded" style="background: #422; color: #fbbf24">teste</span>'
-    : '<span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded" style="background: #142; color: #34d399">produção</span>';
-
-  return `<div class="card overflow-hidden" data-flow="${esc(bot.slot)}">
-    <header class="px-5 py-4 flex items-center justify-between gap-4" style="background: var(--bg-elev); border-bottom: 1px solid var(--border)">
-      <div>
-        <div class="flex items-center gap-2">
-          <div class="font-bold text-lg mono">${esc(meta.title)}</div>
-          ${badge}
-        </div>
-        <div class="text-xs mt-0.5" style="color: var(--text-dim)">${esc(meta.subtitle)}</div>
-      </div>
-      <div class="text-right">
-        <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">workflow_id</div>
-        <div class="text-xs mono" style="color: var(--text-dim)">${esc(meta.workflow_id)}</div>
-      </div>
-    </header>
-
-    <!-- Modelo -->
-    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
-      <div class="text-[10px] uppercase font-semibold mb-2" style="color: var(--text-mute)">Modelo IA único usado neste fluxo</div>
-      <div class="grid grid-cols-1 md:grid-cols-[140px_minmax(180px,1fr)_90px_auto] gap-3 items-end">
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Provider</div>
-          <select id="provider-${esc(bot.slot)}" class="input mono w-full" onchange="changeProvider('${esc(bot.slot)}')">
-            <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
-            <option value="deepseek" ${bot.provider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
-          </select>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Modelo</div>
-          <select id="model-${esc(bot.slot)}" class="input mono w-full">${modelOptions(bot.provider, bot.model)}</select>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Temp.</div>
-          <input id="temp-${esc(bot.slot)}" class="input mono w-full" type="number" min="0" max="2" step="0.1" value="${Number(bot.temperature ?? 0.3)}" />
-        </div>
-        <button class="btn-primary px-4 py-2 rounded-lg text-xs font-semibold" onclick="saveBot('${esc(bot.slot)}')">Salvar modelo</button>
-      </div>
-    </div>
-
-    <!-- Controle de pausa -->
-    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
-      <div class="flex items-center justify-between mb-2">
-        <div>
-          <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">Controle de pausa</div>
-          <div class="text-xs mt-0.5 mono" style="color: var(--text-dim)">flow_id: ${esc(bot.flow_id || meta.workflow_id)}</div>
-        </div>
-        <div class="flex gap-2">
-          <button class="btn-ghost px-2 py-1 rounded text-[11px]" onclick="reloadPauseKeywords('${esc(bot.slot)}', '${esc(bot.flow_id || meta.workflow_id)}')">Recarregar</button>
-          <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="savePauseKeywords('${esc(bot.slot)}', '${esc(bot.flow_id || meta.workflow_id)}')">Salvar palavras</button>
-        </div>
-      </div>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Pausar IA</div>
-          <textarea id="pause-kw-${esc(bot.slot)}" class="input mono w-full" rows="4" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5"></textarea>
-        </div>
-        <div>
-          <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Retomar IA</div>
-          <textarea id="resume-kw-${esc(bot.slot)}" class="input mono w-full" rows="4" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5"></textarea>
-        </div>
-      </div>
-      <div id="pause-kw-status-${esc(bot.slot)}" class="text-[11px] mt-1" style="color: var(--text-mute)"></div>
-    </div>
-
-    <!-- Prompt -->
-    <div class="px-5 py-4" style="border-bottom: 1px solid var(--border)">
-      <div class="flex items-center justify-between mb-2">
-        <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">System prompt</div>
-        <div class="flex gap-2">
-          <button class="btn-ghost px-2 py-1 rounded text-[11px]" onclick="reloadPrompt('${esc(bot.slot)}')">Recarregar</button>
-          <button class="btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="savePrompt('${esc(bot.slot)}')">Salvar prompt</button>
-        </div>
-      </div>
-      <textarea id="prompt-${esc(bot.slot)}" class="input mono w-full" rows="12" placeholder="Carregando..." style="font-size: 12px; line-height: 1.5; white-space: pre"></textarea>
-      <div class="text-[11px] mt-1" style="color: var(--text-mute)">Use placeholders <code class="mono">{nome}</code>, <code class="mono">{telefone}</code>${['teste_barbearia', 'teste_vendas_barbearia'].includes(bot.slot)?', <code class="mono">{data_atual}</code>, <code class="mono">{ano}</code>, <code class="mono">{agenda}</code>':''} — substituídos em runtime.</div>
-    </div>
-
-    ${meta.has_media ? `
-    <!-- Midias -->
-    <div class="px-5 py-4">
-      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-3">
-        <div>
-          <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">Mídias do fluxo</div>
-          <div class="text-xs mt-0.5" style="color: var(--text-dim)">URL ou upload local do vídeo. O contexto é interno e ajuda a IA a decidir quando enviar.</div>
-        </div>
-        <button class="btn-secondary px-3 py-1.5 rounded-lg text-xs font-semibold" onclick="addMedia('${esc(bot.slot)}')">+ Adicionar mídia</button>
-      </div>
-      <div id="media-${esc(bot.slot)}" class="space-y-2"></div>
-    </div>
-    ` : ''}
-  </div>`;
+function renderLeads(rows) {
+  const el = document.getElementById('leads-content');
+  if (!rows.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#9644;</div><div class="empty-state__text">Nenhum lead registrado</div></div>'; return; }
+  const cols = Object.keys(rows[0]);
+  el.innerHTML = `<div class="table-wrap"><table class="table">
+    <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="mono text-sm">${escapeHtml(String(r[c] ?? '—'))}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div>`;
 }
 
-async function loadPromptInto(slot) {
-  try {
-    const r = await fetch('/api/bots/' + slot + '/prompt', { credentials: 'include' });
-    if (!r.ok) { $('#prompt-' + slot).value = ''; return; }
-    const data = await r.json();
-    $('#prompt-' + slot).value = data.prompt || '';
-  } catch {}
+function renderAgendamentos(rows) {
+  const el = document.getElementById('agendamentos-content');
+  if (!rows.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#9644;</div><div class="empty-state__text">Nenhum agendamento pendente</div></div>'; return; }
+  const cols = Object.keys(rows[0]);
+  el.innerHTML = `<div class="table-wrap"><table class="table">
+    <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="mono text-sm">${escapeHtml(String(r[c] ?? '—'))}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div>`;
 }
 
-window.reloadPrompt = (slot) => loadPromptInto(slot);
+function renderMsgStats(rows) {
+  const el = document.getElementById('mensagens-content');
+  if (!rows.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state__icon">&#9650;</div><div class="empty-state__text">Nenhum dado de mensagens nos ultimos 14 dias</div></div>'; return; }
+  const max = Math.max(...rows.map(r => Number(r.total || 0)));
+  el.innerHTML = rows.map(r => {
+    const pct = max > 0 ? Math.round(Number(r.total || 0) / max * 100) : 0;
+    return `<div class="bar-row">
+      <span class="bar-row__date">${escapeHtml(String(r.dia).slice(0,10))}</span>
+      <div class="bar-row__bar-wrap"><div class="bar-row__bar" style="width:${pct}%"></div></div>
+      <span class="bar-row__val">${fmtNum(r.total)}</span>
+    </div>`;
+  }).join('');
+}
 
-window.savePrompt = async (slot) => {
+// ============================================================
+// CONFIGURACOES
+// ============================================================
+let _configFluxosData = [];
+
+function switchConfigTab(tab) {
+  document.querySelectorAll('[data-ctab]').forEach(b => b.classList.toggle('tab-btn--active', b.dataset.ctab === tab));
+  ['fluxos','limpeza'].forEach(t => {
+    document.getElementById('cfg-' + t).classList.toggle('tab-panel--active', t === tab);
+  });
+  if (tab === 'limpeza') loadCleanupStatus();
+}
+
+async function loadConfigFluxos() {
+  const el = document.getElementById('config-fluxos-list');
+  el.innerHTML = '<div class="skeleton skel-56 skel-m3">&nbsp;</div>'.repeat(3);
   try {
-    const prompt = $('#prompt-' + slot).value;
-    await api('/api/bots/' + slot + '/prompt', {
-      method: 'PUT',
+    _configFluxosData = await api('/api/workflows');
+    el.innerHTML = _configFluxosData.map(w => {
+      const flowId = w.flow_id || w.id;
+      return `<div class="flex items-center gap-3 row-border">
+        <div class="grow min-w-0">
+          <div class="fw-600 text-sm-lower truncate">${escapeHtml(w.name)}</div>
+          <div class="mono muted text-xs">${escapeHtml(w.id)} &middot; <span class="${w.routable ? 'badge badge--success' : 'badge badge--muted'}" style="font-size:0.6875rem">${w.routable ? 'Roteavel' : 'Nao roteavel'}</span></div>
+        </div>
+        <button class="toggle ${w.active ? 'on' : ''}" onclick="toggleWorkflowActive('${escapeHtml(w.id)}', this)" title="${w.active ? 'Ativo — clique para desativar' : 'Inativo — clique para ativar'}"></button>
+        <button class="btn btn--ghost btn--sm" onclick="openPauseKeywordsModal('${escapeHtml(w.id)}', '${escapeHtml(w.name)}')">Palavras-chave de pausa</button>
+      </div>`;
+    }).join('') || '<div class="empty-state"><div class="empty-state__text">Nenhum fluxo cadastrado</div></div>';
+  } catch (e) {
+    el.innerHTML = `<div class="card-body color-danger">Erro: ${escapeHtml(e.message)}</div>`;
+    toast('Erro ao carregar fluxos: ' + e.message, 'err');
+  }
+}
+
+window.toggleWorkflowActive = async (id, btn) => {
+  const wf = _configFluxosData.find(w => w.id === id);
+  const newActive = !btn.classList.contains('on');
+  btn.classList.toggle('on');
+  try {
+    await api('/api/workflows/' + encodeURIComponent(id) + '/active', {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ active: newActive }),
     });
-    toast('Prompt salvo: ' + slot);
-  } catch (e) { toast(e.message, 'err'); }
+    if (wf) wf.active = newActive;
+    toast(`Fluxo ${newActive ? 'ativado' : 'desativado'}: ${wf?.name || id}`, 'ok');
+  } catch (e) {
+    btn.classList.toggle('on');
+    toast('Erro: ' + e.message, 'err');
+  }
 };
 
-async function loadPauseKeywordsInto(slot, flowId) {
+// Pause keywords modal
+let _pkwFlowId = null;
+
+window.openPauseKeywordsModal = async (flowId, flowName) => {
+  _pkwFlowId = flowId;
+  document.getElementById('pause-kw-title').textContent = `Palavras-chave: ${flowName}`;
+  document.getElementById('pause-kw-status').textContent = 'Carregando...';
+  document.getElementById('modal-pause-kw').style.display = 'flex';
+  document.getElementById('pause-kw-save-btn').onclick = () => savePauseKeywords(flowId);
   try {
     const list = await api('/api/workflows/' + encodeURIComponent(flowId) + '/pause-keywords');
-    const pause = list.filter((row) => row.command === 'pause' && row.enabled).map((row) => row.keyword);
-    const resume = list.filter((row) => row.command === 'resume' && row.enabled).map((row) => row.keyword);
-    $('#pause-kw-' + slot).value = pause.join('\n');
-    $('#resume-kw-' + slot).value = resume.join('\n');
-    $('#pause-kw-status-' + slot).textContent = `${pause.length} pausa · ${resume.length} retorno`;
+    const pause = list.filter(r => r.command === 'pause' && r.enabled).map(r => r.keyword);
+    const resume = list.filter(r => r.command === 'resume' && r.enabled).map(r => r.keyword);
+    document.getElementById('pause-kw-textarea').value = pause.join('\n');
+    document.getElementById('resume-kw-textarea').value = resume.join('\n');
+    document.getElementById('pause-kw-status').textContent = `${pause.length} pausa · ${resume.length} retorno`;
   } catch (e) {
-    $('#pause-kw-status-' + slot).textContent = 'Erro: ' + e.message;
+    document.getElementById('pause-kw-status').textContent = 'Erro ao carregar: ' + e.message;
   }
-}
+};
 
-window.reloadPauseKeywords = (slot, flowId) => loadPauseKeywordsInto(slot, flowId);
-
-window.savePauseKeywords = async (slot, flowId) => {
+async function savePauseKeywords(flowId) {
   try {
-    const pauseKeywords = $('#pause-kw-' + slot).value;
-    const resumeKeywords = $('#resume-kw-' + slot).value;
+    const pauseKeywords = document.getElementById('pause-kw-textarea').value;
+    const resumeKeywords = document.getElementById('resume-kw-textarea').value;
     const saved = await api('/api/workflows/' + encodeURIComponent(flowId) + '/pause-keywords', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pauseKeywords, resumeKeywords }),
     });
-    const pause = saved.filter((row) => row.command === 'pause' && row.enabled).length;
-    const resume = saved.filter((row) => row.command === 'resume' && row.enabled).length;
-    $('#pause-kw-status-' + slot).textContent = `${pause} pausa · ${resume} retorno`;
-    toast('Palavras-chave salvas: ' + slot);
-  } catch (e) { toast(e.message, 'err'); }
-};
+    const p = saved.filter(r => r.command === 'pause' && r.enabled).length;
+    const r = saved.filter(r => r.command === 'resume' && r.enabled).length;
+    document.getElementById('pause-kw-status').textContent = `${p} pausa · ${r} retorno`;
+    toast('Palavras-chave salvas', 'ok');
+  } catch (e) { toast('Erro: ' + e.message, 'err'); }
+}
 
-async function loadMediaInto(slot) {
-  const el = $('#media-' + slot);
-  if (!el) return;
+async function loadCleanupStatus() {
+  const el = document.getElementById('cleanup-status-detail');
   try {
-    const list = await api('/api/bots/' + slot + '/media');
-    if (!list.length) {
-      el.innerHTML = `<div class="rounded-lg p-4 text-sm" style="background: var(--bg-elev); border: 1px dashed var(--border-strong); color: var(--text-mute)">
-        Nenhuma mídia cadastrada. Adicione uma posição como V1, V2, V3 ou POS_VIDEOS.
-      </div>`;
-      return;
+    const d = await api('/api/cleanup/status');
+    el.innerHTML = `
+      <div><strong>Ultimo ciclo:</strong> ${fmtDate(d.last_run) || 'Nunca'}</div>
+      <div><strong>Tabelas limpas:</strong> ${fmtNum(d.last_tables_cleaned)}</div>
+      <div><strong>Proximo ciclo:</strong> ${fmtDate(d.next_run)}</div>
+      <div><strong>Cron:</strong> <code class="mono">${escapeHtml(d.cron || '0 * * * *')}</code> (a cada ${d.interval_minutes || 60} min)</div>
+      ${d.tables?.length ? `<div class="mt-3"><strong>Tabelas monitoradas (${d.tables.length}):</strong></div>
+        <ul class="mt-2 text-sm" style="margin-bottom:0;padding-left:var(--space-4)">${d.tables.map(t => `<li><code class="mono">${escapeHtml(t.table_name)}</code> — ${escapeHtml(t.description)}</li>`).join('')}</ul>` : ''}
+    `;
+  } catch (e) {
+    el.innerHTML = `<span class="color-danger">Erro ao carregar status: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+window.pruneLogsConfirm = () => {
+  const days = Number(document.getElementById('prune-days')?.value || 14);
+  showConfirm(
+    'Limpar logs antigos',
+    `Tem certeza que deseja excluir todos os logs com mais de <strong>${days} dias</strong>? Esta acao nao pode ser desfeita.`,
+    async () => {
+      try {
+        const r = await api('/api/flow-logs/prune', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ days }),
+        });
+        toast(`${fmtNum(r.deleted)} registros removidos`, 'ok');
+      } catch (e) { toast('Erro: ' + e.message, 'err'); }
     }
-    el.innerHTML = list.map((m) => renderMediaRow(slot, m)).join('');
-  } catch (e) {
-    el.innerHTML = `<div class="text-xs text-red-300">Erro: ${esc(e.message)}</div>`;
-  }
-}
-
-function renderMediaRow(slot, m) {
-  const enabledClass = m.enabled ? 'badge-active' : 'badge-inactive';
-  const urlLabel = m.url ? 'Arquivo pronto' : 'Sem arquivo';
-  return `<div class="rounded-lg p-4" style="background: var(--bg-elev); border: 1px solid var(--border)">
-    <div class="grid grid-cols-1 lg:grid-cols-[88px_120px_1fr_auto] gap-3 items-start">
-      <div>
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Posição</div>
-        <input class="input mono text-xs uppercase" data-mid="${m.id}" data-field="position" value="${esc(m.position)}" readonly />
-      </div>
-      <div>
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Tipo</div>
-        <select class="input mono text-xs" data-mid="${m.id}" data-field="media_type">
-          ${['video', 'image', 'file', 'text'].map((type) => `<option value="${type}" ${m.media_type === type ? 'selected' : ''}>${type}</option>`).join('')}
-        </select>
-      </div>
-      <div>
-        <div class="flex items-center justify-between gap-2 mb-1">
-          <div class="text-[10px] uppercase font-semibold" style="color: var(--text-mute)">Arquivo ou URL</div>
-          <span class="text-[10px] px-2 py-0.5 rounded-full mono ${enabledClass}">${urlLabel}</span>
-        </div>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <input class="input mono text-xs" data-mid="${m.id}" data-field="url" value="${esc(m.url || '')}" placeholder="https://... ou use upload" />
-          <label class="btn-secondary px-3 py-2 rounded-lg text-xs font-semibold text-center cursor-pointer whitespace-nowrap">
-            Upload
-            <input class="hidden" type="file" accept="video/*,image/*,.pdf" onchange="uploadMediaFile('${esc(slot)}', ${m.id}, this)" />
-          </label>
-        </div>
-      </div>
-      <div class="flex lg:flex-col gap-2 lg:pt-5">
-        <button class="btn-primary px-3 py-2 rounded-lg text-xs font-semibold" onclick="saveMedia('${esc(slot)}', ${m.id})">Salvar</button>
-        <button class="btn-danger px-3 py-2 rounded-lg text-xs font-semibold" onclick="deleteMedia(${m.id}, '${esc(slot)}')" title="Remover">Remover</button>
-      </div>
-    </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
-      <div>
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Caption visível ao cliente</div>
-        <textarea class="input text-xs" rows="2" data-mid="${m.id}" data-field="caption" placeholder="Texto que acompanha a mídia no WhatsApp">${esc(m.caption || '')}</textarea>
-      </div>
-      <div>
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Contexto interno para IA</div>
-        <textarea class="input text-xs" rows="2" data-mid="${m.id}" data-field="context" placeholder="Quando usar, assunto do vídeo, objeções que responde, etapa ideal da conversa">${esc(m.context || '')}</textarea>
-      </div>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-[120px_1fr] gap-3 mt-3 items-center">
-      <div>
-        <div class="text-[10px] uppercase font-semibold mb-1" style="color: var(--text-mute)">Ordem</div>
-        <input class="input mono text-xs" type="number" data-mid="${m.id}" data-field="position_order" value="${Number(m.position_order || 0)}" />
-      </div>
-      <label class="inline-flex items-center gap-2 text-xs pt-5" style="color: var(--text-dim)">
-        <input type="checkbox" data-mid="${m.id}" data-field="enabled" ${m.enabled ? 'checked' : ''} />
-        Mídia ativa no fluxo
-      </label>
-    </div>
-  </div>`;
-}
-
-window.saveMedia = async (slot, position, id) => {
-  try {
-    if (id === undefined) {
-      id = position;
-      position = document.querySelector(`[data-mid="${id}"][data-field="position"]`)?.value;
-    }
-    const media_type = document.querySelector(`[data-mid="${id}"][data-field="media_type"]`).value;
-    const url = document.querySelector(`[data-mid="${id}"][data-field="url"]`).value;
-    const caption = document.querySelector(`[data-mid="${id}"][data-field="caption"]`).value;
-    const context = document.querySelector(`[data-mid="${id}"][data-field="context"]`).value;
-    const position_order = Number(document.querySelector(`[data-mid="${id}"][data-field="position_order"]`).value);
-    const enabled = document.querySelector(`[data-mid="${id}"][data-field="enabled"]`).checked;
-    const list = await api('/api/bots/' + slot + '/media');
-    const existing = list.find(m => m.id === id);
-    await api('/api/bots/' + slot + '/media', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        position: String(position || existing?.position || '').toUpperCase(),
-        media_type,
-        url: url || null,
-        caption: caption || null,
-        context: context || null,
-        position_order: Number.isFinite(position_order) ? position_order : existing?.position_order || 0,
-        enabled,
-      }),
-    });
-    toast('Mídia salva');
-    await loadMediaInto(slot);
-  } catch (e) { toast(e.message, 'err'); }
+  );
 };
 
-window.uploadMediaFile = async (slot, id, input) => {
-  const file = input.files?.[0];
-  if (!file) return;
-  const fd = new FormData();
-  fd.append('file', file);
-  try {
-    toast('Enviando arquivo...', 'warn');
-    const uploaded = await apiUpload('/api/uploads/media', fd);
-    document.querySelector(`[data-mid="${id}"][data-field="url"]`).value = uploaded.url;
-    await saveMedia(slot, id);
-    toast('Upload concluído');
-  } catch (e) {
-    toast(e.message, 'err');
-  } finally {
-    input.value = '';
-  }
-};
-
-window.deleteMedia = async (id, slot) => {
-  if (!confirm('Remover esta mídia?')) return;
-  try {
-    await api('/api/media/' + id, { method: 'DELETE' });
-    toast('Mídia removida');
-    await loadMediaInto(slot);
-  } catch (e) { toast(e.message, 'err'); }
-};
-
-window.addMedia = async (slot) => {
-  try {
-    const list = await api('/api/bots/' + slot + '/media');
-    const next = ['V1', 'V2', 'V3'].find((position) => !list.some((m) => m.position === position)) || `MIDIA_${list.length + 1}`;
-    await api('/api/bots/' + slot + '/media', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        position: next,
-        media_type: 'video',
-        url: null,
-        caption: null,
-        context: null,
-        position_order: list.length + 1,
-        enabled: true,
-      }),
-    });
-    toast('Mídia adicionada');
-    await loadMediaInto(slot);
-  } catch (e) { toast(e.message, 'err'); }
-};
-
-window.changeProvider = (slot) => {
-  const provider = $('#provider-' + slot).value;
-  $('#model-' + slot).innerHTML = modelOptions(provider, MODEL_OPTIONS[provider]?.[0]);
-};
-
-window.saveBot = async (slot) => {
-  try {
-    const provider = $('#provider-' + slot).value;
-    const model = $('#model-' + slot).value;
-    const temperature = Number($('#temp-' + slot).value);
-    await api('/api/bots/' + slot, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, model, temperature }),
-    });
-    toast('Modelo atualizado');
-  } catch (e) { toast(e.message, 'err'); }
-};
-
-// ---------- TOKENS ----------
-async function loadTokens() {
-  $('#usage-summary').innerHTML = '<div class="text-sm" style="color: var(--text-mute)">Carregando uso...</div>';
-  $('#usage-daily').innerHTML = '';
-  $('#usage-recent').innerHTML = '';
-  let summary;
-  let daily;
-  let recent;
-  try {
-    [summary, daily, recent] = await Promise.all([
-      api('/api/usage/summary?days=7'),
-      api('/api/usage/daily?days=14'),
-      api('/api/usage/recent?limit=50'),
-    ]);
-  } catch (e) {
-    $('#usage-summary').innerHTML = `<div class="text-sm text-red-300">Falha ao carregar uso: ${esc(e.message)}</div>`;
-    return;
-  }
-
-  const totals = summary.rows.reduce((acc, row) => {
-    acc.tokens += Number(row.total_tokens || 0);
-    acc.cost += Number(row.cost_usd || 0);
-    acc.calls += Number(row.calls || 0);
-    return acc;
-  }, { tokens: 0, cost: 0, calls: 0 });
-
-  $('#kpi-tokens').textContent = totals.tokens.toLocaleString('pt-BR');
-  $('#kpi-cost').textContent = '$' + totals.cost.toFixed(4);
-  $('#kpi-calls').textContent = totals.calls.toLocaleString('pt-BR');
-
-  $('#usage-summary').innerHTML = summary.rows.length === 0
-    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas nos últimos 7 dias.</div>'
-    : `<table class="w-full text-sm">
-        <thead><tr style="border-bottom: 1px solid var(--border)">
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Provider</th>
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
-          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Chamadas</th>
-          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens</th>
-          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">USD</th>
-        </tr></thead>
-        <tbody>${summary.rows.map((row) => `<tr style="border-top: 1px solid var(--border)">
-          <td class="p-2 mono text-xs">${esc(row.slot)}</td>
-          <td class="p-2 text-xs">${esc(row.provider)}</td>
-          <td class="p-2 mono text-xs">${esc(row.model)}</td>
-          <td class="p-2 text-right mono text-xs">${Number(row.calls || 0).toLocaleString('pt-BR')}</td>
-          <td class="p-2 text-right mono text-xs font-semibold">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</td>
-          <td class="p-2 text-right mono text-xs">${Number(row.cost_usd || 0).toFixed(4)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-
-  $('#usage-daily').innerHTML = daily.rows.length === 0
-    ? '<div style="color: var(--text-mute)">Sem dados</div>'
-    : daily.rows.map((row) => `<div class="flex justify-between py-0.5">
-        <span>${esc(row.day)}</span>
-        <span><strong style="color: var(--text)">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</strong> tok / $${Number(row.cost_usd || 0).toFixed(4)}</span>
-      </div>`).join('');
-
-  $('#usage-recent').innerHTML = recent.length === 0
-    ? '<div class="text-sm" style="color: var(--text-mute)">Sem chamadas registradas.</div>'
-    : `<table class="w-full text-sm">
-        <thead><tr style="border-bottom: 1px solid var(--border)">
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Quando</th>
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Fluxo</th>
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Modelo</th>
-          <th class="text-left p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Telefone</th>
-          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">Tokens</th>
-          <th class="text-right p-2 text-[11px] uppercase font-semibold" style="color: var(--text-mute)">USD</th>
-        </tr></thead>
-        <tbody>${recent.map((row) => `<tr style="border-top: 1px solid var(--border)">
-          <td class="p-2 mono text-xs">${new Date(row.created_at).toLocaleString('pt-BR')}</td>
-          <td class="p-2 mono text-xs">${esc(row.slot)}</td>
-          <td class="p-2 mono text-xs">${esc(row.model)}</td>
-          <td class="p-2 mono text-xs" style="color: var(--text-dim)">${esc(row.telefone || '-')}</td>
-          <td class="p-2 text-right mono text-xs">${Number(row.total_tokens || 0).toLocaleString('pt-BR')}</td>
-          <td class="p-2 text-right mono text-xs">${Number(row.cost_usd || 0).toFixed(4)}</td>
-        </tr>`).join('')}</tbody>
-      </table>`;
-}
-
-function loadTab(t) {
-  if (t === 'routing') loadAll();
-  if (t === 'fluxos') loadFluxos();
-  if (t === 'modelos') loadModelos();
-  if (t === 'tokens') loadTokens();
-  if (t === 'status') loadStatus();
-  if (t === 'logs') loadLogs();
-  if (t === 'bancos') loadBancos();
-  if (t === 'relatorios') loadRelatorios();
-}
-
-// ===== CLEANUP COUNTDOWN =====
-let _cleanupData = null;
-
-async function fetchCleanupStatus() {
-  try { _cleanupData = await api('/api/cleanup/status'); } catch {}
-}
-
-function _getNextRun() {
-  if (_cleanupData && _cleanupData.next_run) return new Date(_cleanupData.next_run);
-  const n = new Date(), r = new Date(n);
-  r.setMinutes(0, 0, 0); r.setHours(r.getHours() + 1);
-  return r;
-}
-
-function _tickCleanup() {
-  let diff = _getNextRun() - new Date();
-  if (diff <= 0) { fetchCleanupStatus(); diff = 3600000; }
-  const h = Math.floor(diff / 3600000);
-  const m = Math.floor((diff % 3600000) / 60000);
-  const s = Math.floor((diff % 60000) / 1000);
-  const txt = h > 0
-    ? h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0')
-    : String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-  const t = $('#cleanup-timer'); if (t) t.textContent = txt;
-  const d = $('#cleanup-dot');
-  if (d) {
-    const mins = diff / 60000;
-    d.style.background = mins < 5 ? 'var(--danger)' : mins < 15 ? 'var(--warning)' : 'var(--success)';
-  }
-}
-
-function toggleCleanupModal() {
-  const m = $('#cleanup-modal');
-  if (!m) return;
-  m.classList.toggle('hidden');
-  if (!m.classList.contains('hidden')) _renderCleanupModal();
-}
-
-function _renderCleanupModal() {
-  const el = $('#cleanup-modal-content');
-  if (!el) return;
-  const d = _cleanupData;
-  if (!d) { el.innerHTML = '<div>Sem dados ainda.</div>'; return; }
-  const lastRun = d.last_run ? new Date(d.last_run).toLocaleString('pt-BR') : 'Nunca';
-  const nextRun = d.next_run ? new Date(d.next_run).toLocaleString('pt-BR') : '--';
-  const rows = (d.tables || []).map(t =>
-    `<div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid var(--border);gap:10px;">
-      <span class="mono" style="color:var(--text);">${esc(t.table_name)}</span>
-      <span style="color:var(--text-dim);text-align:right;">${esc(t.description)}</span>
-    </div>`
-  ).join('');
-  el.innerHTML =
-    `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Último ciclo</span><strong style="color:var(--text);">${esc(lastRun)}</strong></div>` +
-    `<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Tabelas limpas</span><strong style="color:var(--text);">${d.last_tables_cleaned || 0}</strong></div>` +
-    `<div style="display:flex;justify-content:space-between;padding:4px 0;margin-bottom:10px;"><span>Próximo ciclo</span><strong style="color:var(--text);">${esc(nextRun)}</strong></div>` +
-    `<div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color:var(--text-mute);">Tabelas (${(d.tables||[]).length})</div>` +
-    `<div>${rows}</div>` +
-    `<div style="margin-top:10px;padding-top:8px;font-size:11px;color:var(--text-mute);border-top:1px solid var(--border);">Cron: ${esc(d.cron||'0 * * * *')} · a cada ${d.interval_minutes||60} min</div>`;
-}
-
-fetchCleanupStatus();
-setInterval(_tickCleanup, 1000);
-setInterval(fetchCleanupStatus, 60000);
-
-loadAll();
-$('#health').textContent = new Date().toLocaleString('pt-BR');
+// ============================================================
+// INIT
+// ============================================================
+(function init() {
+  // Restore section
+  navTo(currentSection);
+})();
 </script>
 </body>
 </html>
