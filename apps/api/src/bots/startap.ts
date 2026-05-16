@@ -2,14 +2,15 @@ import type { BotContext } from '@startap/core/types';
 import { pausa } from '@startap/db';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { applyFlowManualCommand } from '../lib/manual-pause.js';
+import { registerBotEntry } from '../registry.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
 
 const SLOT = 'startap';
 const PAUSE_TABLE = 'pause_startap';
-export const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
-export const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
+const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
+const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
 const STARTAP_SESSION_NAMES = (
   process.env.STARTAP_WAHA_SESSIONS || 'startap,STARTAP_AI,STARTAP_AI_PROD'
 )
@@ -64,24 +65,18 @@ const DEFAULT_PROMPT_TPL = [
   '- Fazer mais de uma pergunta por mensagem',
 ].join('\n');
 
-export function isStartapSession(session: string): boolean {
-  // A Lola/Startap deve responder somente na sessao WAHA oficial.
-  // Sessoes de teste passam pelo router normal e podem atender qualquer fluxo cadastrado.
-  return STARTAP_SESSION_NAMES.includes(session.toLowerCase());
-}
-
-export function normalizeLolaCommand(s: string): string {
+function normalizeLolaCommand(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, '');
 }
 
-export function getStartapManualCommand(text: string): 'pause' | 'resume' | null {
+function getStartapManualCommand(text: string): 'pause' | 'resume' | null {
   const normalized = normalizeLolaCommand(text);
   if (normalized.includes('ola!souicaro,atendenteaquidastartap.')) return 'pause';
   if (normalized.includes('chathumanofinalizado!!')) return 'resume';
   return null;
 }
 
-export async function applyStartapManualCommand(
+async function applyStartapManualCommand(
   command: 'pause' | 'resume',
   telefone: string,
   opts: { session?: string | null; source?: string | null } = {},
@@ -164,3 +159,16 @@ export class StartapBot extends BotBase {
 }
 
 export { DEFAULT_PROMPT_TPL as STARTAP_DEFAULT_PROMPT };
+
+export const startapBotInstance = new StartapBot();
+
+registerBotEntry({
+  workflowId: STARTAP_WORKFLOW_ID,
+  workflowName: STARTAP_WORKFLOW_NAME,
+  ownedSessions: STARTAP_SESSION_NAMES,
+  legacyPauseTable: PAUSE_TABLE,
+  getManualCommand: getStartapManualCommand,
+  applyManualCommand: (command, telefone, opts) =>
+    applyStartapManualCommand(command, telefone, opts),
+  bot: startapBotInstance,
+});

@@ -1,5 +1,6 @@
 import type { WahaWebhookBody } from '@startap/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerBotEntry } from './registry.js';
 
 const mocks = vi.hoisted(() => ({
   logFlowEvent: vi.fn(),
@@ -43,6 +44,20 @@ vi.mock('@startap/integrations', () => ({
 }));
 
 const { handleWebhook } = await import('./router.js');
+
+// Bot stub para sessão 'startap' — simula o que startap.ts faz ao ser importado.
+const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
+const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
+const stubBot = { name: 'startap', handle: vi.fn() };
+registerBotEntry({
+  workflowId: STARTAP_WORKFLOW_ID,
+  workflowName: STARTAP_WORKFLOW_NAME,
+  ownedSessions: ['startap', 'startap_ai', 'startap_ai_prod'],
+  legacyPauseTable: 'pause_startap',
+  getManualCommand: () => null,
+  applyManualCommand: async () => {},
+  bot: stubBot,
+});
 
 function makeBody(session: string): WahaWebhookBody {
   return {
@@ -112,12 +127,15 @@ describe('handleWebhook', () => {
   });
 
   it('usa fallback da Lola somente na sessao startap oficial', async () => {
+    stubBot.handle.mockResolvedValue(undefined);
     const result = await handleWebhook(makeBody('startap'), {
       executionId: 'exec-startap',
       startedAt: 0,
     });
 
-    expect(result).toEqual({ status: 'error:bot-not-registered' });
+    // Sessão 'startap' tem BotEntry no registry → buildFallbackRoute → isFlowActive.
+    // findRouting não é chamado para sessões com entry próprio.
+    expect(result).toEqual({ status: 'ok' });
     expect(mocks.findRouting).not.toHaveBeenCalled();
     expect(mocks.isFlowActive).toHaveBeenCalledWith('uUS3Ux1cU2DquKxo');
     expect(mocks.logFlowEvent).toHaveBeenCalledWith(
