@@ -190,7 +190,7 @@ export class TesteBarbeariaBot extends BotBase {
     super({
       name: SLOT,
       projectId: SLOT,
-      pauseTable: 'pausa_cirilo', // mantido pra preservar history
+      pauseTable: null, // migration 008 migrou pausa_cirilo → flow_pauses; legado removido
       memoryTable: 'chat_histories',
       memoryWindow: 10,
     });
