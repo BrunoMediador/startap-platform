@@ -10,7 +10,7 @@
  * findBotBySession() / findBotByFlowId() / buildFallbackRoute().
  */
 
-import type { RoutingRow } from '@startap/db';
+import type { CloneRow, RoutingRow } from '@startap/db';
 import { flowControl } from '@startap/db';
 import type { Bot } from '@startap/core/types';
 
@@ -99,6 +99,29 @@ export async function buildFallbackRoute(
     workflow_name: entry.workflowName,
     webhook_url: null,
     nome_cliente: null,
+    ativo: true,
+    criado_em: new Date(),
+    atualizado_em: new Date(),
+  };
+}
+
+/**
+ * Constrói uma RoutingRow sintética para um clone, roteado pela sessão WAHA dedicada.
+ * Retorna null se o flow_control do clone estiver inativo.
+ */
+export async function buildCloneRoute(
+  clone: CloneRow,
+  telefone: string,
+): Promise<RoutingRow | null> {
+  const active = await flowControl.isFlowActive(clone.slot);
+  if (!active) return null;
+  return {
+    id: 0,
+    telefone,
+    workflow_id: clone.slot,
+    workflow_name: clone.display_name,
+    webhook_url: null,
+    nome_cliente: clone.cliente_nome,
     ativo: true,
     criado_em: new Date(),
     atualizado_em: new Date(),

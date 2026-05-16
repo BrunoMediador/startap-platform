@@ -18,6 +18,7 @@ import { waha, whisper } from '@startap/integrations';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 import {
   type BotEntry,
+  buildCloneRoute,
   buildFallbackRoute,
   findBotByFlowId,
   findBotBySession,
@@ -387,8 +388,10 @@ export async function handleWebhook(
 }
 
 /**
- * Bots com ownedSessions não usam routing_clientes — constroem uma RoutingRow
- * sintética via buildFallbackRoute. Os demais consultam routing_clientes normalmente.
+ * Prioridade de roteamento:
+ *  1. Sessão própria (bot com ownedSessions, ex: Startap/Lola) → RoutingRow sintética via buildFallbackRoute.
+ *  2. Sessão de clone (waha_sessao em flow_clones) → RoutingRow sintética via buildCloneRoute.
+ *  3. Router por telefone via routing_clientes (matrizes de teste).
  */
 async function findRoute(
   telefone: string,
@@ -398,6 +401,15 @@ async function findRoute(
   if (sessionEntry) {
     return buildFallbackRoute(sessionEntry, telefone);
   }
+
+  const clone = await flowClones.getCloneBySession(sessao).catch((e) => {
+    log.warn({ err: e, sessao }, 'Erro ao buscar clone por sessao');
+    return null;
+  });
+  if (clone) {
+    return buildCloneRoute(clone, telefone);
+  }
+
   return routing.findRouting(telefone);
 }
 
