@@ -241,6 +241,13 @@ const pool = new pg.Pool({
 const app = express();
 app.use(express.json());
 
+// Wrapper para repassar erros assincronos ao error handler global do Express.
+// Express 4 nao captura promises rejeitadas em async handlers; isso fazia
+// endpoints sem try/catch derrubarem o processo. Use asyncHandler(async (req,res) => ...).
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
 fs.mkdirSync(MEDIA_STORAGE_DIR, { recursive: true });
 
 const mediaUpload = multer({
@@ -446,34 +453,37 @@ app.delete('/api/routing/:id', async (req, res) => {
 });
 
 // ---------- BOT CONFIG (modelos por slot) ----------
-app.get('/api/bots', async (req, res) => {
-  const r = await pool.query(`
+app.get(
+  '/api/bots',
+  asyncHandler(async (_req, res) => {
+    const r = await pool.query(`
     SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at
     FROM bot_config ORDER BY slot
   `);
-  const flowCounts = r.rows.reduce((acc, row) => {
-    const flowId = BOT_MODEL_CONTEXT[row.slot]?.flow_id || row.slot;
-    acc[flowId] = (acc[flowId] || 0) + 1;
-    return acc;
-  }, {});
-  res.json(
-    r.rows.map((row) => {
-      const context = BOT_MODEL_CONTEXT[row.slot] || {
-        flow_id: row.slot,
-        flow_name: row.slot,
-        flow_label: row.display_name,
-        ai_role: row.display_name,
-        runtime: row.slot,
-        description: 'Configuração de modelo cadastrada no banco.',
-      };
-      return {
-        ...row,
-        ...context,
-        models_in_flow: flowCounts[context.flow_id] || 1,
-      };
-    }),
-  );
-});
+    const flowCounts = r.rows.reduce((acc, row) => {
+      const flowId = BOT_MODEL_CONTEXT[row.slot]?.flow_id || row.slot;
+      acc[flowId] = (acc[flowId] || 0) + 1;
+      return acc;
+    }, {});
+    res.json(
+      r.rows.map((row) => {
+        const context = BOT_MODEL_CONTEXT[row.slot] || {
+          flow_id: row.slot,
+          flow_name: row.slot,
+          flow_label: row.display_name,
+          ai_role: row.display_name,
+          runtime: row.slot,
+          description: 'Configuração de modelo cadastrada no banco.',
+        };
+        return {
+          ...row,
+          ...context,
+          models_in_flow: flowCounts[context.flow_id] || 1,
+        };
+      }),
+    );
+  }),
+);
 
 app.put('/api/bots/:slot', async (req, res) => {
   try {
@@ -1805,13 +1815,19 @@ app.get('/api/sessions/:name/qr', async (req, res) => {
   }
 });
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   if (err instanceof multer.MulterError) {
     const message =
       err.code === 'LIMIT_FILE_SIZE' ? 'arquivo maior que o limite permitido' : err.message;
     return res.status(400).json({ error: message });
   }
-  if (err) return res.status(400).json({ error: err.message || 'falha no upload' });
+  // Erros propagados por asyncHandler ou next(err): retorna 500 com a mensagem
+  // ao inves de derrubar o processo. Loga no stderr pra investigacao.
+  if (err) {
+    console.error(`[painel] ${req.method} ${req.originalUrl} ->`, err.message);
+    const status = Number(err.statusCode) || 500;
+    return res.status(status).json({ error: err.message || 'erro inesperado' });
+  }
   res.status(500).json({ error: 'erro inesperado' });
 });
 
