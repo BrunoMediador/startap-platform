@@ -685,6 +685,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
       <div class="dash-grid">
         <div class="dash-grid--full" id="dash-exec-wrap"></div>
       </div>
+      <div id="dash-cleanup-wrap"></div>
     </section>
     <section class="section" id="sec-bots" aria-label="Bots">
       <div class="section-header">
@@ -939,6 +940,29 @@ function closeLightbox() {
 async function renderDashboard() {
   renderDashKPIs();
   renderDashSessions();
+  renderDashCleanup();
+}
+
+async function renderDashCleanup() {
+  const wrap = document.getElementById('dash-cleanup-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem"><div class="skeleton" style="width:220px;height:18px"></div></div>`;
+  try {
+    const s = await api('/api/cleanup/status');
+    const nextLabel = s.next_run ? fmtDate(s.next_run) : '—';
+    const lastLabel = s.last_run ? fmtDate(s.last_run) : 'Nunca';
+    wrap.innerHTML = `
+      <div class="card" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        ${icon('trash-2', 16)}
+        <span class="muted" style="font-size:.8125rem">Limpeza de logs</span>
+        <span style="font-size:.8125rem">Última: <span class="mono">${escapeHtml(lastLabel)}</span></span>
+        <span style="font-size:.8125rem">Próxima: <span class="mono">${escapeHtml(nextLabel)}</span></span>
+        <span class="badge badge--muted mono" style="font-size:.75rem">${escapeHtml(s.cron || '—')}</span>
+        <a href="#" class="btn btn--sm btn--ghost" onclick="navigateTo('configuracoes');event.preventDefault()">${icon('settings',13)} Configurar</a>
+      </div>`;
+  } catch (_) {
+    wrap.innerHTML = '';
+  }
 }
 
 async function renderDashKPIs() {
@@ -956,12 +980,13 @@ async function renderDashKPIs() {
       api('/api/usage/summary?days=7'),
     ]);
 
-    const sessions = statusData.status === 'fulfilled' ? (statusData.value?.sessions || statusData.value || []) : [];
+    // /api/status retorna { flows, waha, execucoes } — não sessions/bots
+    const sessions = statusData.status === 'fulfilled' ? (statusData.value?.waha || []) : [];
     const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
     const workingSessions = sessArr.filter(s => (s.status || s.state) === 'WORKING').length;
 
-    const bots = statusData.status === 'fulfilled' ? (statusData.value?.bots || []) : [];
-    const activeBots = Array.isArray(bots) ? bots.filter(b => b.active !== false).length : 0;
+    const flowsData = statusData.status === 'fulfilled' ? statusData.value?.flows : null;
+    const activeBots = flowsData?.ativos ?? 0;
 
     const msgs = msgStats.status === 'fulfilled' ? msgStats.value : null;
     const msgsToday = msgs?.today ?? msgs?.total ?? '—';
@@ -1018,7 +1043,8 @@ async function renderDashSessions() {
 
   try {
     const data = await api('/api/status');
-    const sessions = data?.sessions || data || [];
+    // /api/status retorna { flows, waha, execucoes }
+    const sessions = data?.waha || [];
     const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
 
     if (!sessArr.length) {
@@ -1052,7 +1078,8 @@ async function renderDashExec() {
 
   try {
     const data = await api('/api/status');
-    const execs = data?.executions || data?.recent_executions || [];
+    // /api/status retorna execucoes (não executions/recent_executions)
+    const execs = data?.execucoes || [];
 
     if (!execs.length) {
       wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Últimas execuções</h2><div class="empty-state">${icon('activity',36)}<div class="empty-state__title">Sem execuções recentes</div></div>`;
@@ -1067,9 +1094,9 @@ async function renderDashExec() {
         : `<span class="badge badge--dot badge--warning">Em andamento</span>`;
       return `<tr>
         <td class="mono">${escapeHtml(String(e.id || '—'))}</td>
-        <td>${escapeHtml(e.workflowName || e.workflow || '—')}</td>
+        <td>${escapeHtml(e.flow_name || e.workflowName || e.workflow || '—')}</td>
         <td>${status}</td>
-        <td class="muted">${fmtRelative(e.startedAt || e.created_at)}</td>
+        <td class="muted">${fmtRelative(e.created_at || e.startedAt)}</td>
       </tr>`;
     }).join('');
 
@@ -1895,6 +1922,18 @@ async function loadCfgFluxos(content) {
       badge.textContent = isActive ? 'Ativo' : 'Inativo';
       card.appendChild(badge);
 
+      // Badge de categoria: destaca fluxos internos e indica roteamento
+      if (w.category === 'interno') {
+        const catBadge = document.createElement('span');
+        catBadge.className = 'badge badge--warning';
+        catBadge.textContent = 'Interno';
+        card.appendChild(catBadge);
+      }
+      const routBadge = document.createElement('span');
+      routBadge.className = `badge ${w.routable ? 'badge--info' : 'badge--muted'}`;
+      routBadge.textContent = w.routable ? 'Com roteamento' : 'Sem roteamento';
+      card.appendChild(routBadge);
+
       // Toggle
       const toggleLabel = document.createElement('label');
       toggleLabel.className = 'toggle';
@@ -2019,8 +2058,8 @@ async function loadCfgLimpeza(content) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
         <div class="field"><label>Última execução</label><div class="mono">${fmtDate(s.last_run || s.lastRun)}</div></div>
         <div class="field"><label>Próxima execução</label><div class="mono">${fmtDate(s.next_run || s.nextRun)}</div></div>
-        <div class="field"><label>Intervalo</label><div class="mono">${escapeHtml(s.interval || s.schedule || '—')}</div></div>
-        <div class="field"><label>Tabelas</label><div class="mono">${escapeHtml((s.tables || []).join(', ') || '—')}</div></div>
+        <div class="field"><label>Cron</label><div class="mono">${escapeHtml(s.cron || s.interval || s.schedule || '—')}</div></div>
+        <div class="field"><label>Tabelas</label><div class="mono">${escapeHtml((s.tables || []).map(t => t.table_name || t).join(', ') || '—')}</div></div>
       </div>`;
   } catch (_) {
     content.querySelector('#cfg-cleanup-status').innerHTML = `<h3 class="h3" style="margin-bottom:.5rem">Status do cron de limpeza</h3><p class="muted">Não disponível</p>`;
