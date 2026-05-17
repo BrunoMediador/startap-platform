@@ -108,7 +108,7 @@ export abstract class BotBase implements Bot {
         metadata: {
           memoryTable: this.cfg.memoryTable,
           memoryScope: 'project:session:flowId:telefone',
-          projectId: this.cfg.projectId,
+          projectId: this.slot,
           memoryFlowId: ctx.flowId ?? this.name,
           memorySession: sessao,
           memorySessionHash: this.maskMemorySession(memorySessionId),
@@ -138,7 +138,7 @@ export abstract class BotBase implements Bot {
           metadata: {
             memoryTable: this.cfg.memoryTable,
             memoryScope: 'project:session:flowId:telefone',
-            projectId: this.cfg.projectId,
+            projectId: this.slot,
             memoryFlowId: ctx.flowId ?? this.name,
             memorySession: sessao,
             memorySessionHash: this.maskMemorySession(memorySessionId),
@@ -193,7 +193,7 @@ export abstract class BotBase implements Bot {
 
   private memorySessionId(ctx: BotContext): string {
     const flowId = ctx.flowId || this.name;
-    return `${this.cfg.projectId}:${ctx.message.sessao}:${flowId}:${ctx.message.telefone}`;
+    return `${this.slot}:${ctx.message.sessao}:${flowId}:${ctx.message.telefone}`;
   }
 
   private maskMemorySession(sessionId: string): string {
