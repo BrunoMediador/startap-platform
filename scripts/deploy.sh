@@ -29,6 +29,20 @@ docker compose build --no-cache
 echo "==> apply migrations"
 bash "$(dirname "$0")/migrate.sh"
 
+# Gate defensivo: garante que TODAS as migrations do repo estao registradas em
+# schema_migrations. Protege contra bugs silenciosos no runner (ja aconteceu
+# uma vez — psql_exec consumia stdin do loop e abortava apos 1 iteracao,
+# deixando flow_clones/leads.slot fora de prod). Se este gate falhar, NAO
+# subir nova versao da aplicacao com banco fora-de-sync.
+expected_migrations=$(find packages/db/migrations -maxdepth 1 -name '*.sql' -type f | wc -l)
+applied_migrations=$(docker exec automacoes-postgres-1 psql -U "${PG_USER:-startap_user}" -d "${PG_DB:-startap_database}" -tAc "SELECT COUNT(*) FROM schema_migrations;" </dev/null | tr -d ' ')
+if [ "$applied_migrations" -lt "$expected_migrations" ]; then
+  echo "❌ schema_migrations tem $applied_migrations entradas, esperado $expected_migrations. Abortando deploy pra evitar app rodar com banco fora-de-sync." >&2
+  echo "   Investigue rodando: bash scripts/migrate.sh manualmente e leia o output completo." >&2
+  exit 1
+fi
+echo "✅ schema_migrations sincronizado ($applied_migrations/$expected_migrations)"
+
 echo "==> docker compose up -d"
 docker compose up -d
 
