@@ -1043,25 +1043,64 @@ async function renderDashboard() {
   renderDashCleanup();
 }
 
+let _dashCleanupTimer = null;
+
 async function renderDashCleanup() {
   const wrap = document.getElementById('dash-cleanup-wrap');
   if (!wrap) return;
+  if (_dashCleanupTimer) {
+    clearInterval(_dashCleanupTimer);
+    _dashCleanupTimer = null;
+  }
   wrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem"><div class="skeleton" style="width:220px;height:18px"></div></div>`;
   try {
     const s = await api('/api/cleanup/status');
     const nextLabel = s.next_run ? fmtDate(s.next_run) : '—';
     const lastLabel = s.last_run ? fmtDate(s.last_run) : 'Nunca';
+    const nextRunTs = s.next_run ? new Date(s.next_run).getTime() : null;
+
+    const computeCountdown = () => {
+      if (!nextRunTs) return '—';
+      const diff = nextRunTs - Date.now();
+      if (diff < 0) return 'agora';
+      const totalMin = Math.floor(diff / 60000);
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      if (h > 0) return `${h}h ${m}min`;
+      if (m > 0) return `${m}min`;
+      return `<1min`;
+    };
+
+    const initial = escapeHtml(computeCountdown());
     wrap.innerHTML = `
       <div class="card" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
         ${icon('trash-2', 16)}
         <span class="muted" style="font-size:.8125rem">Limpeza de logs</span>
         <span style="font-size:.8125rem">Última: <span class="mono">${escapeHtml(lastLabel)}</span></span>
-        <span style="font-size:.8125rem">Próxima: <span class="mono">${escapeHtml(nextLabel)}</span></span>
+        <span style="font-size:.8125rem">Próxima em: <span class="mono" id="dash-cleanup-countdown">${initial}</span></span>
+        <span class="muted" style="font-size:.75rem">(${escapeHtml(nextLabel)})</span>
         <span class="badge badge--muted mono" style="font-size:.75rem">${escapeHtml(s.cron || '—')}</span>
         <a href="#" class="btn btn--sm btn--ghost" onclick="navigateTo('configuracoes');event.preventDefault()">${icon('settings',13)} Configurar</a>
       </div>`;
-  } catch (_) {
-    wrap.innerHTML = '';
+
+    // Atualiza countdown a cada 30s. Quando passar do nextRun, re-busca status.
+    // Se o elemento sumir (usuario trocou de aba), encerra o timer.
+    _dashCleanupTimer = setInterval(() => {
+      const el = document.getElementById('dash-cleanup-countdown');
+      if (!el) {
+        clearInterval(_dashCleanupTimer);
+        _dashCleanupTimer = null;
+        return;
+      }
+      if (nextRunTs && Date.now() >= nextRunTs) {
+        renderDashCleanup();
+        return;
+      }
+      el.textContent = computeCountdown();
+    }, 30000);
+  } catch (err) {
+    console.error('[dashboard cleanup]', err);
+    wrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem"><span class="muted" style="font-size:.8125rem">${icon('alert-triangle',14)} Limpeza de logs: nao foi possivel carregar status (${escapeHtml(err.message)})</span></div>`;
   }
 }
 
