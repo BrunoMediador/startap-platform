@@ -34,12 +34,20 @@ if ! docker inspect --format '{{.State.Running}}' "$CONTAINER" 2>/dev/null | gre
   exit 1
 fi
 
-psql_exec() {
+# psql_exec_in: usa -i pra repassar stdin (necessario quando passamos arquivo SQL via "< arquivo").
+# psql_exec:    NAO usa -i. Critico — usar -i em chamadas sem stdin proprio fazia o `docker exec`
+#               consumir a stdin do loop while (que vem do `< <(find ...)`), abortando o loop
+#               apos a primeira iteracao. Sintoma classico: "Migrations: 0 aplicadas, 1 puladas"
+#               mesmo com 13 arquivos no diretorio.
+psql_exec_in() {
   docker exec -i "$CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 "$@"
+}
+psql_exec() {
+  docker exec "$CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 "$@"
 }
 
 # Cria tabela de controle de migrations se nao existir.
-psql_exec <<'SQL'
+psql_exec_in <<'SQL'
 CREATE TABLE IF NOT EXISTS schema_migrations (
   filename   TEXT        PRIMARY KEY,
   applied_at TIMESTAMPTZ DEFAULT NOW()
@@ -56,7 +64,7 @@ failed=0
 while IFS= read -r -d '' filepath; do
   filename="$(basename "$filepath")"
 
-  # Verifica se ja foi aplicada.
+  # Verifica se ja foi aplicada. Sem stdin — usa psql_exec (sem -i).
   already_applied="$(psql_exec -tAc "SELECT COUNT(*) FROM schema_migrations WHERE filename = '$filename';")"
 
   if [ "$already_applied" -gt 0 ]; then
@@ -68,7 +76,9 @@ while IFS= read -r -d '' filepath; do
   # Aplica a migration; se bem-sucedida, registra em schema_migrations.
   # Duas chamadas psql separadas — ver nota de atomicidade no cabeçalho.
   # filename vem do filesystem local, nao de input do usuario.
-  if psql_exec --single-transaction < "$filepath"; then
+  # psql_exec_in (com -i) porque passamos arquivo via stdin redirect.
+  if psql_exec_in --single-transaction < "$filepath"; then
+    # psql_exec (sem -i) porque nao temos stdin aqui — evita o bug.
     psql_exec -c "INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT DO NOTHING;"
     echo "  APPLY OK  $filename"
     applied=$((applied + 1))
