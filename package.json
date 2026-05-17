@@ -11,7 +11,8 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
     "lint": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "scaffold-bot": "tsx --tsconfig scripts/tsconfig.scripts.json scripts/scaffold-bot.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
