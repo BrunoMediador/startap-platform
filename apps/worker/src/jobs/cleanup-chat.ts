@@ -7,6 +7,8 @@
 import { logger } from '@startap/core/logger';
 // importação direta pelo path relativo: contorna bug tsc >=5.8 + NodeNext onde
 // `export * as namespace` perde membros na resolução de tipo do namespace.
+// TODO: voltar pra `import { chatMemory } from '@startap/db'` quando o bug do tsc for resolvido,
+// OU refatorar packages/db/src/index.ts pra usar named exports em vez de namespace.
 import * as chatMemory from '../../../../packages/db/dist/queries/chat-memory.js';
 
 const log = logger.child({ job: 'cleanup-chat' });
