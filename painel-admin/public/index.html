@@ -3190,8 +3190,18 @@ function _buildMediaCardV2(slot, m, idx, arr, coursesArr, parentEl) {
     v.preload = 'metadata';
     v.playsInline = true;
     v.muted = true;
-    // #t=0.1 força browsers a renderizarem o primeiro frame em vez de tela preta
-    v.src = url + (url.includes('#') ? '' : '#t=0.1');
+    v.src = url;
+    // Força decode do primeiro frame após carregar metadata — sem isso vários browsers
+    // (Chrome em alguns casos, Firefox sempre) mantêm o player preto até o user dar play.
+    let seeked = false;
+    v.addEventListener('loadedmetadata', () => {
+      if (seeked) return;
+      seeked = true;
+      try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch (_) {}
+    }, { once: true });
+    v.addEventListener('error', () => {
+      preview.innerHTML = `<div style="color:var(--text-muted);font-size:.75rem;text-align:center;padding:1rem">${icon('alert-triangle', 24)}<br>Não consegui carregar o vídeo</div>`;
+    }, { once: true });
     preview.appendChild(v);
   } else if (isAudio && url) {
     preview.classList.add('media-card-v2__preview--audio');
