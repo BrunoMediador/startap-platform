@@ -46,13 +46,24 @@ echo "✅ schema_migrations sincronizado ($applied_migrations/$expected_migratio
 echo "==> docker compose up -d"
 docker compose up -d
 
-# Painel-admin vive na stack pai (/opt/automacoes/docker-compose.yml)
-if [ -f ../docker-compose.yml ] && docker compose -f ../docker-compose.yml config --services | grep -qx 'painel-admin'; then
-  echo "==> docker compose build painel-admin (stack pai)"
-  docker compose -f ../docker-compose.yml build painel-admin
+# Painel-admin vive na stack pai (/opt/automacoes/docker-compose.yml).
+# Usamos path absoluto para evitar falha silenciosa quando o working dir
+# do caller (ex: GitHub Actions) difere do esperado pelo script.
+STACK_PAI_COMPOSE="/opt/automacoes/docker-compose.yml"
+if [ -f "$STACK_PAI_COMPOSE" ]; then
+  PAINEL_IN_STACK=$(docker compose -f "$STACK_PAI_COMPOSE" config --services 2>/dev/null | grep -cx 'painel-admin' || true)
+  echo "==> painel-admin na stack pai: ${PAINEL_IN_STACK} ocorrencia(s)"
+  if [ "$PAINEL_IN_STACK" -gt 0 ]; then
+    echo "==> docker compose build painel-admin (stack pai)"
+    docker compose -f "$STACK_PAI_COMPOSE" build --no-cache painel-admin
 
-  echo "==> docker compose up -d painel-admin (stack pai)"
-  docker compose -f ../docker-compose.yml up -d painel-admin
+    echo "==> docker compose up -d painel-admin (stack pai)"
+    docker compose -f "$STACK_PAI_COMPOSE" up -d painel-admin
+  else
+    echo "WARN: painel-admin nao encontrado em $STACK_PAI_COMPOSE — pulando rebuild"
+  fi
+else
+  echo "WARN: $STACK_PAI_COMPOSE nao existe — pulando rebuild do painel-admin"
 fi
 
 echo "==> waiting 6s for startup"
