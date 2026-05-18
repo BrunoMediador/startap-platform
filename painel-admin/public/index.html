@@ -2010,6 +2010,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'prompt' ? ' active' : ''}" data-tab="prompt" role="tab" aria-selected="${_selectedBotTab === 'prompt'}">Prompt</button>
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
       <button class="tab-btn${_selectedBotTab === 'routing' ? ' active' : ''}" data-tab="routing" role="tab" aria-selected="${_selectedBotTab === 'routing'}">Roteamento</button>
+      <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
     </div>
     <div id="bot-tab-content"></div>`;
 
@@ -2040,6 +2041,8 @@ async function loadBotTab(slot, tab, el, bot) {
     await renderBotMedia(slot, el);
   } else if (tab === 'routing') {
     await renderBotRouting(slot, el, bot);
+  } else if (tab === 'config-ia') {
+    await renderBotConfigIA(slot, el);
   }
 }
 
@@ -2119,6 +2122,219 @@ async function renderBotPrompt(slot, el) {
   } catch (err) {
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar prompt: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="loadBotTab('${escapeHtml(slot)}','prompt',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
   }
+}
+
+async function renderBotConfigIA(slot, el) {
+  /* ── dados iniciais ──────────────────────────────────────── */
+  let botData = null;
+  let promptData = null;
+  let _dirty = false;
+
+  const MODELS_BY_PROVIDER = {
+    openai:   ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  };
+
+  function markDirty() { _dirty = true; }
+
+  function confirmLeave() {
+    if (_dirty) return window.confirm('Existem mudanças não salvas. Deseja sair mesmo assim?');
+    return true;
+  }
+
+  /* ── render skeleton ─────────────────────────────────────── */
+  el.innerHTML = `<div style="padding:1rem 0"><div class="spinner"></div></div>`;
+
+  try {
+    [botData, promptData] = await Promise.all([
+      api(`/api/bots/${slot}`),
+      api(`/api/bots/${slot}/prompt`).catch(() => ({ prompt: '' })),
+    ]);
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar configurações: ${escapeHtml(err.message)}</p>
+      <button class="btn btn--sm" onclick="renderBotConfigIA('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
+    return;
+  }
+
+  const currentProvider = botData.provider || 'openai';
+  const currentModel    = botData.model || '';
+  const currentTemp     = botData.temperature !== undefined ? botData.temperature : 0.5;
+  const currentPrompt   = promptData.prompt || '';
+
+  /* ── constrói opções de modelo ───────────────────────────── */
+  function buildModelOptions(provider, selectedModel) {
+    const known = MODELS_BY_PROVIDER[provider] || [];
+    const isCustom = selectedModel && !known.includes(selectedModel);
+    let html = known.map(m => `<option value="${escapeHtml(m)}" ${m === selectedModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
+    html += `<option value="__custom__" ${isCustom ? 'selected' : ''}>Outro (personalizado)...</option>`;
+    return html;
+  }
+
+  /* ── markup ──────────────────────────────────────────────── */
+  el.innerHTML = `
+    <div class="config-ia-wrap">
+
+      <!-- Bloco: Prompt -->
+      <div style="margin-bottom:var(--space-6)">
+        <div class="label" style="margin-bottom:var(--space-3)">Prompt de sistema</div>
+        <div class="field">
+          <textarea id="cia-prompt" rows="20"
+            style="font-family:ui-monospace,monospace;font-size:13px;resize:vertical"
+            placeholder="Escreva aqui o prompt de sistema do bot...">${escapeHtml(currentPrompt)}</textarea>
+          <div class="char-count"><span id="cia-prompt-count">${currentPrompt.length}</span> caracteres</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-3);flex-wrap:wrap">
+          <button class="btn btn--primary" id="btn-save-prompt-ia">${icon('check-circle-2',14)} Salvar prompt</button>
+          <button class="btn btn--ghost btn--sm" id="btn-reload-ia">${icon('refresh-cw',14)} Recarregar do servidor</button>
+          <span class="subtle" style="margin-left:auto">Mudanças aplicam em até 30s — testes em andamento podem demorar</span>
+        </div>
+      </div>
+
+      <!-- Bloco: Modelo e Parâmetros -->
+      <div>
+        <div class="label" style="margin-bottom:var(--space-3)">Modelo e parâmetros</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin-bottom:var(--space-4)">
+          <div class="field">
+            <label for="cia-provider">Provider</label>
+            <select id="cia-provider">
+              <option value="openai"   ${currentProvider === 'openai'   ? 'selected' : ''}>OpenAI</option>
+              <option value="deepseek" ${currentProvider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="cia-model">Modelo</label>
+            <select id="cia-model">${buildModelOptions(currentProvider, currentModel)}</select>
+          </div>
+        </div>
+        <div id="cia-custom-model-wrap" style="display:${(MODELS_BY_PROVIDER[currentProvider]||[]).includes(currentModel)?'none':'block'};margin-bottom:var(--space-4)">
+          <div class="field">
+            <label for="cia-model-custom">Modelo personalizado</label>
+            <input id="cia-model-custom" type="text" placeholder="ex: gpt-4o-2024-11-20"
+              value="${escapeHtml((MODELS_BY_PROVIDER[currentProvider]||[]).includes(currentModel) ? '' : currentModel)}" />
+          </div>
+        </div>
+        <div class="field" style="max-width:360px;margin-bottom:var(--space-4)">
+          <label for="cia-temp">Temperatura — <span id="cia-temp-val">${currentTemp}</span></label>
+          <input id="cia-temp" type="range" min="0" max="2" step="0.1" value="${currentTemp}" style="width:100%;accent-color:var(--primary)" />
+          <div style="display:flex;justify-content:space-between">
+            <span class="subtle">0 (determinístico)</span>
+            <span class="subtle">2 (criativo)</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
+          <button class="btn btn--primary" id="btn-save-config-ia">${icon('check-circle-2',14)} Salvar configuração</button>
+        </div>
+        <p class="subtle" style="margin-top:var(--space-3)">Mudanças de modelo e temperatura aplicam em até 60s nos próximos messages do bot</p>
+      </div>
+    </div>`;
+
+  /* ── refs ────────────────────────────────────────────────── */
+  const taPrompt       = el.querySelector('#cia-prompt');
+  const promptCount    = el.querySelector('#cia-prompt-count');
+  const selProvider    = el.querySelector('#cia-provider');
+  const selModel       = el.querySelector('#cia-model');
+  const customWrap     = el.querySelector('#cia-custom-model-wrap');
+  const inputCustom    = el.querySelector('#cia-model-custom');
+  const rangeTemp      = el.querySelector('#cia-temp');
+  const spanTemp       = el.querySelector('#cia-temp-val');
+  const btnSavePrompt  = el.querySelector('#btn-save-prompt-ia');
+  const btnSaveConfig  = el.querySelector('#btn-save-config-ia');
+  const btnReload      = el.querySelector('#btn-reload-ia');
+
+  /* ── interações ──────────────────────────────────────────── */
+  taPrompt.addEventListener('input', () => {
+    promptCount.textContent = taPrompt.value.length;
+    markDirty();
+  });
+
+  rangeTemp.addEventListener('input', () => {
+    spanTemp.textContent = rangeTemp.value;
+    markDirty();
+  });
+
+  selProvider.addEventListener('change', () => {
+    const prov = selProvider.value;
+    selModel.innerHTML = buildModelOptions(prov, '');
+    customWrap.style.display = 'none';
+    inputCustom.value = '';
+    markDirty();
+  });
+
+  selModel.addEventListener('change', () => {
+    const isCustom = selModel.value === '__custom__';
+    customWrap.style.display = isCustom ? 'block' : 'none';
+    if (!isCustom) inputCustom.value = '';
+    markDirty();
+  });
+
+  inputCustom.addEventListener('input', markDirty);
+
+  /* ── helpers ─────────────────────────────────────────────── */
+  function resolvedModel() {
+    return selModel.value === '__custom__' ? inputCustom.value.trim() : selModel.value;
+  }
+
+  /* ── salvar prompt ───────────────────────────────────────── */
+  btnSavePrompt.addEventListener('click', async () => {
+    const promptVal = taPrompt.value;
+    if (!promptVal.trim()) { toast('Prompt não pode estar vazio.', 'danger'); return; }
+    btnSavePrompt.disabled = true;
+    try {
+      await api(`/api/bots/${slot}/prompt`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: promptVal }),
+      });
+      _dirty = false;
+      toast('Prompt salvo — aplica em até 30s nos próximos messages do bot', 'success');
+    } catch (err) {
+      toast('Erro ao salvar prompt: ' + escapeHtml(err.message), 'danger');
+    } finally {
+      btnSavePrompt.disabled = false;
+    }
+  });
+
+  /* ── salvar configuração ─────────────────────────────────── */
+  btnSaveConfig.addEventListener('click', async () => {
+    const model = resolvedModel();
+    if (!model) { toast('Selecione ou informe um modelo.', 'danger'); return; }
+    btnSaveConfig.disabled = true;
+    try {
+      await api(`/api/bots/${slot}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: selProvider.value,
+          model,
+          temperature: Number(rangeTemp.value),
+        }),
+      });
+      _dirty = false;
+      toast('Configuração salva — aplica em até 60s nos próximos messages do bot', 'success');
+    } catch (err) {
+      toast('Erro ao salvar configuração: ' + escapeHtml(err.message), 'danger');
+    } finally {
+      btnSaveConfig.disabled = false;
+    }
+  });
+
+  /* ── recarregar ──────────────────────────────────────────── */
+  btnReload.addEventListener('click', () => {
+    if (confirmLeave()) {
+      _dirty = false;
+      renderBotConfigIA(slot, el);
+    }
+  });
+
+  /* ── guard de saída via navegação de abas ────────────────── */
+  el.closest('.bot-detail')?.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      if (btn.dataset.tab !== 'config-ia' && _dirty) {
+        if (!confirmLeave()) { e.stopImmediatePropagation(); }
+        else { _dirty = false; }
+      }
+    }, true);
+  });
 }
 
 async function renderBotMedia(slot, el) {
