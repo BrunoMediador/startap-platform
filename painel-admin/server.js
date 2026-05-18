@@ -603,10 +603,15 @@ app.get('/api/bots/:slot', async (req, res) => {
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
-    const { provider, model, temperature } = req.body;
+    const { provider, model, temperature, display_name, name } = req.body;
     const sets = [];
     const vals = [];
     let i = 1;
+    const newDisplayName = display_name || name;
+    if (newDisplayName) {
+      sets.push(`display_name = $${i++}`);
+      vals.push(String(newDisplayName).trim());
+    }
     if (provider) {
       sets.push(`provider = $${i++}`);
       vals.push(provider);

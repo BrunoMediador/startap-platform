@@ -1611,7 +1611,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
     </section>
     <section class="section" id="sec-leads" aria-label="Leads">
       <!-- Stub 003-E -->
-      <div class="section-header"><div class="section-header__left"><h1 class="h1">Leads</h1><p class="muted">Gestão completa em 003-E</p></div></div>
+      <div class="section-header"><div class="section-header__left"><h1 class="h1">Leads</h1><p class="muted">Contatos capturados pelos bots</p></div></div>
       <div id="leads-stub-content"></div>
     </section>
     <section class="section" id="sec-execucoes" aria-label="Execuções">
@@ -2517,7 +2517,7 @@ function _renderGroupSummary(el, bots, allClones, { kind }) {
     const totalLeads = bots.reduce((s, b) => s + (Number(b.leads_count) || 0), 0);
     items.push({ val: fmtNum(bots.length), label: bots.length === 1 ? 'bot' : 'bots' });
     items.push({ val: fmtNum(totalMsgs), label: 'msgs hoje' });
-    items.push({ val: fmtNum(totalLeads), label: 'leads' });
+    items.push({ val: fmtNum(totalLeads), label: totalLeads === 1 ? 'lead' : 'leads' });
     if (kind === 'matriz') {
       const totalClones = allClones.filter(c => MATRIZ_SLOTS.includes(c.matriz_slot)).length;
       items.push({ val: fmtNum(totalClones), label: totalClones === 1 ? 'clone gerado' : 'clones gerados' });
@@ -2591,7 +2591,8 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
       : `<span class="bot-row__status-dot" aria-hidden="true"></span><span class="badge badge--muted">Sem sessão</span>`;
     const flowLabel = bot.flow_label || bot.flow_name || '';
     const provider = (bot.provider || '').toLowerCase();
-    const providerLabel = provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : '';
+    const PROVIDER_LABELS = { openai: 'OpenAI', anthropic: 'Anthropic', groq: 'Groq', deepseek: 'DeepSeek' };
+    const providerLabel = PROVIDER_LABELS[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : '');
 
     const meta = document.createElement('div');
     meta.className = 'bot-row__title-meta';
@@ -2811,7 +2812,7 @@ async function renderBotOverview(slot, el, bot) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
         <div class="field">
           <label for="ov-name">Nome</label>
-          <input id="ov-name" name="name" value="${escapeHtml(bot.name || '')}" placeholder="Nome do bot" />
+          <input id="ov-name" name="display_name" value="${escapeHtml(bot.display_name || bot.name || '')}" placeholder="Nome do bot" />
         </div>
         <div class="field">
           <label for="ov-provider">Provider</label>
@@ -2836,7 +2837,7 @@ async function renderBotOverview(slot, el, bot) {
   el.querySelector('#bot-overview-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const fd = new FormData(ev.target);
-    const body = { name: fd.get('name'), provider: fd.get('provider'), model: fd.get('model'), temperature: Number(fd.get('temperature')) };
+    const body = { display_name: fd.get('display_name'), provider: fd.get('provider'), model: fd.get('model'), temperature: Number(fd.get('temperature')) };
     const btn = ev.target.querySelector('[type=submit]');
     btn.disabled = true;
     try {
@@ -4357,7 +4358,7 @@ function renderBarChart(data) {
   const cols = data.map(d => {
     const val = d.count || d.total || 0;
     const pct  = Math.round((val / max) * 100);
-    const lbl  = (() => { try { const dt = new Date(d.date || d.day || d.created_at); return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`; } catch(_){return d.date||'';} })();
+    const lbl  = (() => { try { const dt = new Date(d.date || d.day || d.created_at); if (isNaN(dt.getTime())) return String(d.date || d.day || ''); return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`; } catch(_){return d.date||'';} })();
     return `<div class="bar-chart__col">
       <span class="bar-chart__val">${val}</span>
       <div class="bar-chart__bar" style="height:${pct}%;min-height:2px" title="${val} mensagens"></div>
@@ -4521,7 +4522,7 @@ async function loadCfgFluxos(content) {
 
     wfs.forEach(w => {
       const wId = w.workflow_id || w.id;
-      const clients = routingArr.filter(r => r.workflow_id === wId || r.bot_slot === w.bot_slot).length;
+      const clients = routingArr.filter(r => r.workflow_id === wId).length;
       const isActive = w.active !== false;
 
       const card = document.createElement('div');
@@ -6213,7 +6214,9 @@ function drawBarChart(points, w, h, label) {
   if (points.length >= 2) {
     const fmt = t => {
       const d = new Date(t);
-      return d.getHours !== undefined ? d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('pt-BR', {month:'short',day:'numeric'});
+      // Se o timestamp for só data (ex: "2026-05-04"), usa formato data; caso contrário, hora
+      const isDateOnly = typeof t === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t);
+      return isDateOnly ? d.toLocaleDateString('pt-BR', {day:'2-digit',month:'2-digit'}) : d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
     };
     svg += `<text x="2" y="${h-4}" font-size="9" fill="#9ca3af">${fmt(points[0].t)}</text>`;
     svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="#9ca3af" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
@@ -6313,7 +6316,7 @@ async function _mLoad() {
       api(`/api/metrics/top-errors?period=${_mPeriod}&limit=10`),
     ]);
 
-    const bots  = byBotRes.rows || [];
+    const bots  = (byBotRes.rows || []).filter(b => !String(b.slot || '').startsWith('worker'));
     const erros = errRes.rows   || [];
 
     // sparklines: busca série de mensagens por bot (só os que têm execuções)
@@ -6387,7 +6390,7 @@ function _mRender(bots, erros, sparkMap) {
           <tbody>
             ${bots.map(b => `<tr>
               <td style="white-space:nowrap;font-weight:500">${b.display_name || b.slot}</td>
-              <td style="white-space:nowrap">${spark(b.slot)}&nbsp;<span style="font-variant-numeric:tabular-nums">${Number(b.messages).toLocaleString('pt-BR')}</span></td>
+              <td style="white-space:nowrap">${(() => { const s = spark(b.slot); const n = Number(b.messages); return s.includes('muted') ? `<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>` : `${s}&nbsp;<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>`; })()}</td>
               <td style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
               <td>${successBadge(b.success_rate)}</td>
               <td>${latencyBadge(b.avg_latency_ms)}</td>
