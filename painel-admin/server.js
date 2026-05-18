@@ -1825,6 +1825,231 @@ app.post('/api/clones', async (req, res) => {
   }
 });
 
+// ---------- CLONES COM WAHA ----------
+
+const MATRIZES_ROUTAVEIS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
+
+/**
+ * Deriva o nome da sessão WAHA a partir do slot do clone.
+ * WAHA aceita apenas [a-zA-Z0-9_-], então substitui hífens por underscores
+ * e prefixa com "clone_" para namespacing.
+ */
+function wahaSessionName(slot) {
+  return `clone_${slot.replace(/-/g, '_')}`;
+}
+
+/**
+ * Cria sessão WAHA com webhook configurado. Retorna { ok, status, error }.
+ * Nunca lança — encapsula falha pra o caller decidir.
+ */
+async function createWahaSession(name) {
+  try {
+    const webhookUrl = TS_WEBHOOK_URL;
+    const r = await fetch(`${WAHA_URL}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: JSON.stringify({
+        name,
+        start: true,
+        config: { webhooks: [{ url: webhookUrl, events: ['message', 'session.status'] }] },
+      }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
+      return { ok: false, status: 'failed', error: `WAHA: ${msg}` };
+    }
+    return { ok: true, status: body?.status ?? 'STARTING', error: undefined };
+  } catch (e) {
+    return { ok: false, status: 'failed', error: `Falha ao contatar WAHA: ${e.message}` };
+  }
+}
+
+// POST /api/clones/with-waha — orquestra clone + sessão WAHA em único request.
+// Clone sempre fica em 'rascunho'. Transição para 'active' via POST /api/clones/:id/activate
+// quando UI confirmar QR scan (implementado em 005-D).
+app.post('/api/clones/with-waha', async (req, res) => {
+  const { matriz_slot, novo_slot, display_name, telefone_contato, personalizacao } = req.body ?? {};
+
+  // --- validações ---
+  if (!matriz_slot || typeof matriz_slot !== 'string' || !MATRIZES_ROUTAVEIS.includes(matriz_slot))
+    return res.status(400).json({ error: `matriz_slot inválido. Valores aceitos: ${MATRIZES_ROUTAVEIS.join(', ')}` });
+
+  if (!novo_slot || typeof novo_slot !== 'string' || !/^[a-z0-9-]{3,50}$/.test(novo_slot))
+    return res.status(400).json({ error: 'novo_slot obrigatório: lowercase, hífens e números, 3-50 chars' });
+
+  if (!display_name || typeof display_name !== 'string' || display_name.trim().length === 0 || display_name.length > 100)
+    return res.status(400).json({ error: 'display_name obrigatório (1-100 chars)' });
+
+  // verifica unicidade do slot em bot_config e flow_clones
+  let bcCheck, fcCheck;
+  try {
+    [bcCheck, fcCheck] = await Promise.all([
+      pool.query('SELECT 1 FROM bot_config WHERE slot = $1', [novo_slot]),
+      pool.query('SELECT 1 FROM flow_clones WHERE slot = $1', [novo_slot]),
+    ]);
+  } catch (e) {
+    return res.status(500).json({ error: `clones/with-waha: unicidade: ${e.message}` });
+  }
+
+  if (bcCheck.rows.length > 0 || fcCheck.rows.length > 0)
+    return res.status(409).json({ error: `slot "${novo_slot}" já existe` });
+
+  const pers = personalizacao && typeof personalizacao === 'object' && !Array.isArray(personalizacao)
+    ? personalizacao
+    : {};
+
+  // --- 1. Cria clone via transação ---
+  const cloneClient = await pool.connect();
+  let cloneRow;
+  try {
+    await cloneClient.query('BEGIN');
+
+    const cfgR = await cloneClient.query(
+      'SELECT provider, model, temperature FROM bot_config WHERE slot = $1',
+      [matriz_slot],
+    );
+    if (!cfgR.rows[0]) {
+      await cloneClient.query('ROLLBACK');
+      return res.status(400).json({ error: `matriz_slot "${matriz_slot}" não encontrado em bot_config` });
+    }
+    const { provider, model, temperature } = cfgR.rows[0];
+
+    // Campos de bot_config podem ser sobrescritos por personalizacao
+    const finalProvider = pers.provider ?? provider;
+    const finalModel = pers.model ?? model;
+    const finalTemperature = pers.temperature ?? temperature;
+
+    await cloneClient.query(
+      `INSERT INTO bot_config (slot, display_name, provider, model, temperature, updated_at)
+       VALUES ($1, $2, $3, $4, $5::numeric, NOW())`,
+      [novo_slot, display_name, finalProvider, finalModel, finalTemperature],
+    );
+
+    const promptR = await cloneClient.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [matriz_slot]);
+    if (promptR.rows[0]) {
+      let prompt = promptR.rows[0].prompt;
+      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
+      if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+      await cloneClient.query(
+        'INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())',
+        [novo_slot, prompt],
+      );
+    }
+
+    // bot_media herdado da matriz; campo midia em personalizacao ignorado (escopo futuro)
+    const mediaR = await cloneClient.query(
+      'SELECT position, media_type, url, caption, context, position_order, enabled FROM bot_media WHERE slot = $1',
+      [matriz_slot],
+    );
+    for (const m of mediaR.rows) {
+      await cloneClient.query(
+        `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+        [novo_slot, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled],
+      );
+    }
+
+    await cloneClient.query(
+      `INSERT INTO flow_controls (flow_id, flow_name, source, active, updated_at)
+       VALUES ($1, $2, 'clone', TRUE, NOW())
+       ON CONFLICT (flow_id) DO UPDATE SET active = TRUE, updated_at = NOW()`,
+      [novo_slot, display_name],
+    );
+
+    const cloneR = await cloneClient.query(
+      `INSERT INTO flow_clones
+         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'rascunho', NOW(), NOW())
+       RETURNING id, slot, status`,
+      [novo_slot, matriz_slot, display_name, null, telefone_contato ?? null, JSON.stringify(pers)],
+    );
+
+    await cloneClient.query('COMMIT');
+    cloneRow = cloneR.rows[0];
+  } catch (e) {
+    await cloneClient.query('ROLLBACK');
+    console.error(`[clones/with-waha] falha ao criar clone: ${e.message}`);
+    return res.status(500).json({ error: `clones/with-waha: ${e.message}` });
+  } finally {
+    cloneClient.release();
+  }
+
+  // --- 2. Cria sessão WAHA (falha não reverte o clone — decisão Bruno 005-B) ---
+  const sessaoName = wahaSessionName(novo_slot);
+  const waha = await createWahaSession(sessaoName);
+
+  if (!waha.ok) {
+    console.warn(`[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado mas WAHA falhou: ${waha.error}`);
+    return res.json({
+      clone_id: cloneRow.id,
+      novo_slot,
+      waha_session_name: sessaoName,
+      waha_status: 'failed',
+      waha_error: waha.error,
+      clone_status: 'rascunho',
+    });
+  }
+
+  // --- 3. Vincula sessão ao clone ---
+  await pool
+    .query(
+      `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
+      [sessaoName, cloneRow.id],
+    )
+    .catch((e) => console.error(`[clones/with-waha] falha ao vincular sessão no DB: ${e.message}`));
+
+  console.log(`[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado, sessão WAHA ${sessaoName} iniciada`);
+
+  res.json({
+    clone_id: cloneRow.id,
+    novo_slot,
+    waha_session_name: sessaoName,
+    waha_status: waha.status,
+    clone_status: 'rascunho',
+  });
+});
+
+// POST /api/clones/:id/retry-waha — retenta sessão WAHA para clone em rascunho.
+// Usado quando WAHA falhou na criação original (005-B). 502 se falhar de novo.
+app.post('/api/clones/:id/retry-waha', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  let cloneRow;
+  try {
+    const r = await pool.query(
+      'SELECT id, slot, status, waha_sessao FROM flow_clones WHERE id = $1',
+      [id],
+    );
+    cloneRow = r.rows[0];
+  } catch (e) {
+    return res.status(500).json({ error: `retry-waha: DB: ${e.message}` });
+  }
+
+  if (!cloneRow) return res.status(404).json({ error: 'Clone não encontrado' });
+  if (cloneRow.status !== 'rascunho')
+    return res.status(409).json({ error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho` });
+
+  const sessaoName = cloneRow.waha_sessao ?? wahaSessionName(cloneRow.slot);
+  const waha = await createWahaSession(sessaoName);
+
+  if (!waha.ok) {
+    console.warn(`[retry-waha] clone ${cloneRow.slot} (id=${id}) falhou de novo: ${waha.error}`);
+    return res.status(502).json({ error: waha.error });
+  }
+
+  await pool
+    .query(
+      `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
+      [sessaoName, id],
+    )
+    .catch((e) => console.error(`[retry-waha] falha ao vincular sessão no DB: ${e.message}`));
+
+  console.log(`[retry-waha] clone ${cloneRow.slot} (id=${id}) sessão WAHA ${sessaoName} iniciada`);
+  res.json({ waha_session_name: sessaoName, waha_status: waha.status });
+});
+
 // GET /api/clones/:id
 app.get('/api/clones/:id', async (req, res) => {
   const id = Number(req.params.id);
