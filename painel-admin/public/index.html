@@ -439,7 +439,62 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 .bot-detail__title { font-size: 1.125rem; font-weight: 700; }
 .bot-detail__meta  { font-size: .8125rem; color: var(--text-muted); }
-/* ── Media cards ─────────────────────────────────────────────────────── */
+/* ── Media table (Retool dense) ───────────────────────────────────────── */
+.media-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.media-table th {
+  text-align: left; font-weight: 600; color: var(--text-muted);
+  padding: .4rem .75rem; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.media-table td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.media-table tr:last-child td { border-bottom: none; }
+.media-table tr:hover td { background: var(--bg-2); }
+.media-thumb {
+  width: 40px; height: 40px; object-fit: cover;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  display: block;
+}
+.media-thumb-icon {
+  width: 40px; height: 40px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-2);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+}
+.media-type-badge {
+  display: inline-block; padding: .15rem .45rem;
+  border-radius: var(--radius-sm); font-size: .7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.media-type-badge--image  { background: #d1fae5; color: #065f46; }
+.media-type-badge--video  { background: #dbeafe; color: #1e40af; }
+.media-type-badge--audio  { background: #ede9fe; color: #5b21b6; }
+.media-type-badge--doc    { background: #fef3c7; color: #92400e; }
+.media-type-badge--other  { background: var(--bg-2); color: var(--text-muted); }
+.media-context-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.media-filename-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* dropdown de ações */
+.media-actions-wrap { position: relative; display: inline-block; }
+.media-actions-menu {
+  display: none; position: absolute; right: 0; top: 100%; z-index: 200;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md);
+  min-width: 140px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+}
+.media-actions-menu.open { display: block; }
+.media-actions-menu button {
+  display: flex; align-items: center; gap: .5rem;
+  width: 100%; padding: .5rem .875rem; background: none; border: none;
+  font-size: .8125rem; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.media-actions-menu button:hover { background: var(--bg-2); }
+.media-actions-menu button.danger { color: var(--danger); }
+/* progress bar de upload */
+.upload-progress { height: 4px; background: var(--border); border-radius: 2px; margin-top: .5rem; overflow: hidden; }
+.upload-progress__bar { height: 100%; background: var(--primary); border-radius: 2px; transition: width .2s; width: 0; }
+/* preview no modal */
+.upload-preview { margin-top: .75rem; text-align: center; }
+.upload-preview img { max-height: 120px; max-width: 100%; border-radius: var(--radius-sm); }
+.upload-preview-icon { display: inline-flex; flex-direction: column; align-items: center; gap: .25rem; color: var(--text-muted); font-size: .8rem; }
+/* ── Media cards (legado — mantido pra compat com renderMediaPreview) ─── */
 .media-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -650,6 +705,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .kpi-grid { grid-template-columns: 1fr 1fr; }
   .bots-grid { grid-template-columns: 1fr; }
   .media-grid { grid-template-columns: 1fr; }
+  .media-table .media-context-cell,
+  .media-table th.col-context { display: none; }
   .sessions-grid { grid-template-columns: 1fr; }
   .dash-grid { grid-template-columns: 1fr; }
   .tabs { width: 100%; justify-content: flex-start; overflow-x: auto; }
@@ -2337,62 +2394,175 @@ async function renderBotConfigIA(slot, el) {
   // no escopo de renderBotDetail (usa _configIaDirty global)
 }
 
+// ── helpers de tipo de mídia ─────────────────────────────────────────────
+function mediaMimeToType(mime) {
+  if (!mime) return 'other';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime === 'application/pdf' || mime === 'application/msword' ||
+      mime.includes('wordprocessingml') || mime === 'text/plain') return 'doc';
+  return 'other';
+}
+
+function mediaTypeLabel(t) {
+  return { image: 'Imagem', video: 'Vídeo', audio: 'Áudio', doc: 'Doc', other: 'Outro' }[t] || 'Outro';
+}
+
+function mediaThumbHtml(m) {
+  const t = mediaMimeToType(m.media_type || m.mime_type);
+  if (t === 'image' && m.url) {
+    return `<img src="${escapeHtml(m.url)}" class="media-thumb" alt="" loading="lazy" onerror="this.style.display='none'">`;
+  }
+  const icons = { video: 'film', audio: 'music', doc: 'file-text', other: 'file' };
+  return `<div class="media-thumb-icon">${icon(icons[t] || 'file', 20)}</div>`;
+}
+
+// ── renderBotMedia — tabela densa Retool ─────────────────────────────────
 async function renderBotMedia(slot, el) {
   try {
     const medias = await api(`/api/bots/${slot}/media`);
     const arr = Array.isArray(medias) ? medias : (medias.media || medias.items || []);
 
-    const addBtn = `<button class="btn btn--primary" id="btn-add-media" aria-label="Adicionar mídia">${icon('plus',14)} Adicionar mídia</button>`;
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <span class="muted" style="font-size:.8125rem">${arr.length} mídia${arr.length !== 1 ? 's' : ''}</span>
+      <button class="btn btn--primary btn--sm" id="btn-add-media">${icon('plus',13)} Adicionar mídia</button>
+    </div>`;
 
     if (!arr.length) {
-      el.innerHTML = `<div class="empty-state">${icon('inbox',36)}<div class="empty-state__title">Sem mídias</div><p class="empty-state__text">Nenhuma mídia cadastrada para este bot.</p>${addBtn}</div>`;
+      el.innerHTML = `${header}<div class="empty-state">${icon('inbox',36)}<div class="empty-state__title">Sem mídias</div><p class="empty-state__text">Nenhuma mídia cadastrada para este bot.</p></div>`;
     } else {
-      const grid = document.createElement('div');
-      grid.className = 'media-grid';
-      arr.forEach(m => grid.appendChild(buildMediaCard(m, slot, el)));
-      el.innerHTML = `<div style="display:flex;justify-content:flex-end;margin-bottom:.75rem">${addBtn}</div>`;
-      el.appendChild(grid);
+      const rows = arr.map((m, idx) => {
+        const t = mediaMimeToType(m.media_type || m.mime_type);
+        const name = m.position || m.url?.split('/').pop() || `mídia ${m.id}`;
+        const ctx = m.context || '';
+        const cap = m.caption || '';
+        return `<tr data-id="${m.id}">
+          <td>${mediaThumbHtml(m)}</td>
+          <td class="media-filename-cell" title="${escapeHtml(name)}">${escapeHtml(name)}</td>
+          <td><span class="media-type-badge media-type-badge--${t}">${mediaTypeLabel(t)}</span></td>
+          <td class="media-context-cell col-context" title="${escapeHtml(ctx)}">${escapeHtml(ctx) || '<span class=\'muted\'>—</span>'}</td>
+          <td class="media-filename-cell" title="${escapeHtml(cap)}">${escapeHtml(cap) || '<span class=\'muted\'>—</span>'}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <div class="media-actions-wrap">
+              <button class="btn btn--ghost btn--sm btn--icon js-media-menu-toggle" aria-label="Ações" title="Ações">${icon('more-horizontal',14)}</button>
+              <div class="media-actions-menu" data-menu-id="${m.id}">
+                <button class="js-media-edit" data-id="${m.id}">${icon('edit-2',13)} Editar</button>
+                ${idx > 0 ? `<button class="js-media-move" data-id="${m.id}" data-dir="up">${icon('arrow-up',13)} Mover acima</button>` : ''}
+                ${idx < arr.length - 1 ? `<button class="js-media-move" data-id="${m.id}" data-dir="down">${icon('arrow-down',13)} Mover abaixo</button>` : ''}
+                <button class="js-media-del danger" data-id="${m.id}" data-name="${escapeHtml(name)}">${icon('trash-2',13)} Excluir</button>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      el.innerHTML = `${header}<div style="overflow-x:auto"><table class="media-table">
+        <thead><tr>
+          <th style="width:52px"></th>
+          <th>Arquivo</th>
+          <th>Tipo</th>
+          <th class="col-context">Contexto IA</th>
+          <th>Legenda</th>
+          <th style="width:48px"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
     }
 
     el.querySelector('#btn-add-media').addEventListener('click', () => openAddMediaModal(slot, el));
+
+    // menu toggle
+    el.querySelectorAll('.js-media-menu-toggle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wrap = btn.closest('.media-actions-wrap');
+        const menu = wrap.querySelector('.media-actions-menu');
+        const wasOpen = menu.classList.contains('open');
+        document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
+        if (!wasOpen) menu.classList.add('open');
+      });
+    });
+    document.addEventListener('click', () => {
+      document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
+    }, { once: false });
+
+    // editar
+    el.querySelectorAll('.js-media-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const m = arr.find(x => String(x.id) === String(id));
+        if (m) openEditMediaModal(slot, m, el);
+      });
+    });
+
+    // mover
+    el.querySelectorAll('.js-media-move').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const dir = btn.dataset.dir;
+        const idx = arr.findIndex(x => String(x.id) === String(id));
+        const swapIdx = dir === 'up' ? idx - 1 : idx + 1;
+        if (swapIdx < 0 || swapIdx >= arr.length) return;
+        const a = arr[idx], b = arr[swapIdx];
+        try {
+          await Promise.all([
+            api(`/api/bots/${slot}/media/${a.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position_order: b.position_order ?? swapIdx }) }),
+            api(`/api/bots/${slot}/media/${b.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position_order: a.position_order ?? idx }) }),
+          ]);
+          await renderBotMedia(slot, el);
+        } catch (err) {
+          toast('Erro ao reordenar: ' + err.message, 'danger');
+        }
+      });
+    });
+
+    // excluir
+    el.querySelectorAll('.js-media-del').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Excluir "${btn.dataset.name}"?`)) return;
+        btn.disabled = true;
+        try {
+          await api(`/api/media/${btn.dataset.id}`, { method: 'DELETE' });
+          toast('Mídia excluída.', 'success');
+          await renderBotMedia(slot, el);
+        } catch (err) {
+          toast('Erro ao excluir: ' + err.message, 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+
   } catch (err) {
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar mídias: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="renderBotMedia('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
   }
 }
 
+// buildMediaCard mantido para compatibilidade com renderMediaPreview em outros lugares
 function buildMediaCard(m, slot, parentEl) {
   const card = document.createElement('div');
   card.className = 'media-card';
   const preview = renderMediaPreview(m);
   card.appendChild(preview);
-
   const info = document.createElement('div');
   info.className = 'media-card__info';
   const name = document.createElement('span');
   name.className = 'media-card__name';
-  name.textContent = m.filename || m.name || m.title || 'Mídia';
+  name.textContent = m.position || m.url?.split('/').pop() || 'Mídia';
   info.appendChild(name);
-
-  const delBtn = document.createElement('button');
-  delBtn.className = 'btn btn--ghost btn--sm btn--icon';
-  delBtn.setAttribute('aria-label', 'Excluir mídia');
-  delBtn.innerHTML = icon('trash-2', 14);
-  delBtn.style.color = 'var(--danger)';
-  delBtn.addEventListener('click', async () => {
-    if (!confirm(`Excluir "${m.filename || m.name || 'esta mídia'}"?`)) return;
-    delBtn.disabled = true;
-    try {
-      await api(`/api/media/${m.id}`, { method: 'DELETE' });
-      toast('Mídia excluída.', 'success');
-      await renderBotMedia(slot, parentEl);
-    } catch (err) {
-      toast('Erro ao excluir: ' + err.message, 'danger');
-      delBtn.disabled = false;
-    }
-  });
-  info.appendChild(delBtn);
   card.appendChild(info);
   return card;
+}
+
+function _buildFilePreviewHtml(file) {
+  if (!file) return '';
+  if (file.type.startsWith('image/')) {
+    const url = URL.createObjectURL(file);
+    return `<div class="upload-preview"><img src="${url}" alt="preview"></div>`;
+  }
+  const t = mediaMimeToType(file.type);
+  const icons = { video: 'film', audio: 'music', doc: 'file-text', other: 'file' };
+  return `<div class="upload-preview"><div class="upload-preview-icon">${icon(icons[t]||'file',32)}<span>${escapeHtml(file.name)}</span></div></div>`;
 }
 
 function openAddMediaModal(slot, parentEl) {
@@ -2401,46 +2571,142 @@ function openAddMediaModal(slot, parentEl) {
       <span class="modal__title">Adicionar mídia</span>
       <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
     </div>
-    <div id="upload-status" style="margin-bottom:.75rem"></div>
-    <label class="upload-area" for="media-file-input">
-      <input type="file" id="media-file-input" accept="image/*,video/*,audio/*,.pdf,.doc,.docx" />
+    <div id="upload-status"></div>
+    <label class="upload-area" for="media-file-input" id="upload-label">
+      <input type="file" id="media-file-input" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.txt" />
       ${icon('upload-cloud', 32)}
       <p style="margin:.5rem 0 0">Clique para selecionar ou arraste o arquivo</p>
-      <p class="muted" style="margin:.25rem 0 0">Imagem, vídeo, áudio ou documento</p>
+      <p class="muted" style="margin:.25rem 0 0">Imagem, vídeo, áudio, PDF, Word, TXT</p>
     </label>
-    <button class="btn btn--primary" id="btn-do-upload" style="margin-top:1rem;width:100%" disabled>${icon('upload-cloud',14)} Enviar</button>
+    <div id="upload-file-preview"></div>
+    <div style="margin-top:.875rem">
+      <label class="label" for="media-context-input">Contexto para IA <span style="color:var(--danger)">*</span></label>
+      <textarea id="media-context-input" class="input" rows="3" placeholder="Descreva quando a IA deve enviar esta mídia. Ex: 'Cardápio de cortes com preços. Enviar quando cliente perguntar serviços ou valores.'" style="resize:vertical"></textarea>
+    </div>
+    <div style="margin-top:.625rem">
+      <label class="label" for="media-caption-input">Legenda (opcional)</label>
+      <input id="media-caption-input" class="input" type="text" placeholder="Legenda enviada junto com a mídia">
+    </div>
+    <div id="upload-progress-wrap" style="display:none;margin-top:.75rem">
+      <div class="upload-progress"><div class="upload-progress__bar" id="upload-bar"></div></div>
+      <p class="muted" style="font-size:.75rem;margin:.25rem 0 0" id="upload-label-text">Preparando…</p>
+    </div>
+    <button class="btn btn--primary" id="btn-do-upload" style="margin-top:1rem;width:100%" disabled>${icon('upload-cloud',14)} Upload e adicionar</button>
   `);
 
   const fileInput = document.getElementById('media-file-input');
   const uploadBtn = document.getElementById('btn-do-upload');
   const statusDiv = document.getElementById('upload-status');
+  const previewDiv = document.getElementById('upload-file-preview');
+  const progressWrap = document.getElementById('upload-progress-wrap');
+  const progressBar = document.getElementById('upload-bar');
+  const progressLabel = document.getElementById('upload-label-text');
+  const contextInput = document.getElementById('media-context-input');
+  const captionInput = document.getElementById('media-caption-input');
 
   fileInput.addEventListener('change', () => {
-    uploadBtn.disabled = !fileInput.files.length;
+    const f = fileInput.files[0];
+    if (!f) { previewDiv.innerHTML = ''; uploadBtn.disabled = true; return; }
+    previewDiv.innerHTML = _buildFilePreviewHtml(f);
+    uploadBtn.disabled = false;
   });
 
   uploadBtn.addEventListener('click', async () => {
     if (!fileInput.files.length) return;
+    const context = contextInput.value.trim();
+    if (!context) {
+      contextInput.focus();
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Contexto para IA é obrigatório.</p>`;
+      return;
+    }
     uploadBtn.disabled = true;
-    statusDiv.innerHTML = `<div style="display:flex;align-items:center;gap:.5rem"><div class="spinner"></div> Enviando…</div>`;
+    statusDiv.innerHTML = '';
+    progressWrap.style.display = 'block';
+    progressBar.style.width = '10%';
+    progressLabel.textContent = 'Subindo arquivo…';
+
     try {
       const fd = new FormData();
       fd.append('file', fileInput.files[0]);
+      progressBar.style.width = '40%';
       const uploaded = await api('/api/uploads/media', { method: 'POST', body: fd });
-      const fileId = uploaded.id || uploaded.file_id || uploaded.filename;
+      // file_id garantido pelo backend padronizado
+      const url = uploaded.url;
+      const mime = uploaded.mime_type;
+      if (!url) throw new Error('servidor nao retornou url do arquivo');
+
+      progressBar.style.width = '70%';
+      progressLabel.textContent = 'Registrando mídia…';
 
       await api(`/api/bots/${slot}/media`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: fileId, filename: fileInput.files[0].name }),
+        body: JSON.stringify({
+          url,
+          media_type: mediaMimeToType(mime),
+          context: context,
+          caption: captionInput.value.trim() || null,
+        }),
       });
 
+      progressBar.style.width = '100%';
+      progressLabel.textContent = 'Concluído!';
       toast('Mídia adicionada com sucesso!', 'success');
       closeModal();
       await renderBotMedia(slot, parentEl);
     } catch (err) {
-      statusDiv.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
+      progressWrap.style.display = 'none';
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
       uploadBtn.disabled = false;
+    }
+  });
+}
+
+function openEditMediaModal(slot, m, parentEl) {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">Editar mídia</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    <div id="edit-status"></div>
+    <div style="margin-top:.25rem">
+      <label class="label" for="edit-context-input">Contexto para IA</label>
+      <textarea id="edit-context-input" class="input" rows="3" style="resize:vertical">${escapeHtml(m.context || '')}</textarea>
+    </div>
+    <div style="margin-top:.625rem">
+      <label class="label" for="edit-caption-input">Legenda</label>
+      <input id="edit-caption-input" class="input" type="text" value="${escapeHtml(m.caption || '')}">
+    </div>
+    <div style="margin-top:.625rem">
+      <label class="label" for="edit-order-input">Posição (ordem)</label>
+      <input id="edit-order-input" class="input" type="number" min="0" value="${m.position_order ?? 0}" style="width:100px">
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
+      <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn--primary" id="btn-save-edit">${icon('save',13)} Salvar</button>
+    </div>
+  `);
+
+  document.getElementById('btn-save-edit').addEventListener('click', async () => {
+    const saveBtn = document.getElementById('btn-save-edit');
+    const statusDiv = document.getElementById('edit-status');
+    saveBtn.disabled = true;
+    try {
+      await api(`/api/bots/${slot}/media/${m.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          context: document.getElementById('edit-context-input').value.trim() || null,
+          caption: document.getElementById('edit-caption-input').value.trim() || null,
+          position_order: Number(document.getElementById('edit-order-input').value) || 0,
+        }),
+      });
+      toast('Mídia atualizada.', 'success');
+      closeModal();
+      await renderBotMedia(slot, parentEl);
+    } catch (err) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
+      saveBtn.disabled = false;
     }
   });
 }
