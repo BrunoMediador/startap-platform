@@ -2817,9 +2817,10 @@ async function renderBotOverview(slot, el, bot) {
         <div class="field">
           <label for="ov-provider">Provider</label>
           <select id="ov-provider" name="provider">
-            <option value="openai" ${bot.provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+            <option value="openai"    ${bot.provider === 'openai'    ? 'selected' : ''}>OpenAI</option>
             <option value="anthropic" ${bot.provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
-            <option value="groq" ${bot.provider === 'groq' ? 'selected' : ''}>Groq</option>
+            <option value="deepseek"  ${bot.provider === 'deepseek'  ? 'selected' : ''}>DeepSeek</option>
+            <option value="groq"      ${bot.provider === 'groq'      ? 'selected' : ''}>Groq</option>
           </select>
         </div>
         <div class="field">
@@ -2887,30 +2888,23 @@ async function renderBotPrompt(slot, el) {
 async function renderBotConfigIA(slot, el) {
   /* ── dados iniciais ──────────────────────────────────────── */
   let botData = null;
-  let promptData = null;
   let _dirty = false;
   _configIaDirty = false; // reset ao (re)renderizar a aba
 
   const MODELS_BY_PROVIDER = {
-    openai:   ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-    deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+    openai:    ['gpt-5.4', 'gpt-4o', 'gpt-4o-mini'],
+    anthropic: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    deepseek:  ['deepseek-chat', 'deepseek-reasoner'],
+    groq:      ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'],
   };
 
   function markDirty() { _dirty = true; _configIaDirty = true; }
-
-  function confirmLeave() {
-    if (_dirty) return window.confirm('Existem mudanças não salvas. Deseja sair mesmo assim?');
-    return true;
-  }
 
   /* ── render skeleton ─────────────────────────────────────── */
   el.innerHTML = `<div style="padding:1rem 0"><div class="spinner"></div></div>`;
 
   try {
-    [botData, promptData] = await Promise.all([
-      api(`/api/bots/${slot}`),
-      api(`/api/bots/${slot}/prompt`).catch(() => ({ prompt: '' })),
-    ]);
+    botData = await api(`/api/bots/${slot}`);
   } catch (err) {
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar configurações: ${escapeHtml(err.message)}</p>
       <button class="btn btn--sm" onclick="renderBotConfigIA('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
@@ -2920,7 +2914,6 @@ async function renderBotConfigIA(slot, el) {
   const currentProvider = botData.provider || 'openai';
   const currentModel    = botData.model || '';
   const currentTemp     = botData.temperature !== undefined ? botData.temperature : 0.5;
-  const currentPrompt   = promptData.prompt || '';
 
   /* ── constrói opções de modelo ───────────────────────────── */
   function buildModelOptions(provider, selectedModel) {
@@ -2935,22 +2928,6 @@ async function renderBotConfigIA(slot, el) {
   el.innerHTML = `
     <div class="config-ia-wrap">
 
-      <!-- Bloco: Prompt -->
-      <div style="margin-bottom:var(--space-6)">
-        <div class="label" style="margin-bottom:var(--space-3)">Prompt de sistema</div>
-        <div class="field">
-          <textarea id="cia-prompt" rows="20"
-            style="font-family:ui-monospace,monospace;font-size:13px;resize:vertical"
-            placeholder="Escreva aqui o prompt de sistema do bot...">${escapeHtml(currentPrompt)}</textarea>
-          <div class="char-count"><span id="cia-prompt-count">${currentPrompt.length}</span> caracteres</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-3);flex-wrap:wrap">
-          <button class="btn btn--primary" id="btn-save-prompt-ia">${icon('check-circle-2',14)} Salvar prompt</button>
-          <button class="btn btn--ghost btn--sm" id="btn-reload-ia">${icon('refresh-cw',14)} Recarregar do servidor</button>
-          <span class="subtle" style="margin-left:auto">Mudanças aplicam em até 30s — testes em andamento podem demorar</span>
-        </div>
-      </div>
-
       <!-- Bloco: Modelo e Parâmetros -->
       <div>
         <div class="label" style="margin-bottom:var(--space-3)">Modelo e parâmetros</div>
@@ -2958,8 +2935,10 @@ async function renderBotConfigIA(slot, el) {
           <div class="field">
             <label for="cia-provider">Provider</label>
             <select id="cia-provider">
-              <option value="openai"   ${currentProvider === 'openai'   ? 'selected' : ''}>OpenAI</option>
-              <option value="deepseek" ${currentProvider === 'deepseek' ? 'selected' : ''}>DeepSeek</option>
+              <option value="openai"    ${currentProvider === 'openai'    ? 'selected' : ''}>OpenAI</option>
+              <option value="anthropic" ${currentProvider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+              <option value="deepseek"  ${currentProvider === 'deepseek'  ? 'selected' : ''}>DeepSeek</option>
+              <option value="groq"      ${currentProvider === 'groq'      ? 'selected' : ''}>Groq</option>
             </select>
           </div>
           <div class="field">
@@ -2990,24 +2969,15 @@ async function renderBotConfigIA(slot, el) {
     </div>`;
 
   /* ── refs ────────────────────────────────────────────────── */
-  const taPrompt       = el.querySelector('#cia-prompt');
-  const promptCount    = el.querySelector('#cia-prompt-count');
   const selProvider    = el.querySelector('#cia-provider');
   const selModel       = el.querySelector('#cia-model');
   const customWrap     = el.querySelector('#cia-custom-model-wrap');
   const inputCustom    = el.querySelector('#cia-model-custom');
   const rangeTemp      = el.querySelector('#cia-temp');
   const spanTemp       = el.querySelector('#cia-temp-val');
-  const btnSavePrompt  = el.querySelector('#btn-save-prompt-ia');
   const btnSaveConfig  = el.querySelector('#btn-save-config-ia');
-  const btnReload      = el.querySelector('#btn-reload-ia');
 
   /* ── interações ──────────────────────────────────────────── */
-  taPrompt.addEventListener('input', () => {
-    promptCount.textContent = taPrompt.value.length;
-    markDirty();
-  });
-
   rangeTemp.addEventListener('input', () => {
     spanTemp.textContent = rangeTemp.value;
     markDirty();
@@ -3035,26 +3005,6 @@ async function renderBotConfigIA(slot, el) {
     return selModel.value === '__custom__' ? inputCustom.value.trim() : selModel.value;
   }
 
-  /* ── salvar prompt ───────────────────────────────────────── */
-  btnSavePrompt.addEventListener('click', async () => {
-    const promptVal = taPrompt.value;
-    if (!promptVal.trim()) { toast('Prompt não pode estar vazio.', 'danger'); return; }
-    btnSavePrompt.disabled = true;
-    try {
-      await api(`/api/bots/${slot}/prompt`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptVal }),
-      });
-      _dirty = false; _configIaDirty = false;
-      toast('Prompt salvo — aplica em até 30s nos próximos messages do bot', 'success');
-    } catch (err) {
-      toast('Erro ao salvar prompt: ' + escapeHtml(err.message), 'danger');
-    } finally {
-      btnSavePrompt.disabled = false;
-    }
-  });
-
   /* ── salvar configuração ─────────────────────────────────── */
   btnSaveConfig.addEventListener('click', async () => {
     const model = resolvedModel();
@@ -3079,15 +3029,6 @@ async function renderBotConfigIA(slot, el) {
     }
   });
 
-  /* ── recarregar ──────────────────────────────────────────── */
-  btnReload.addEventListener('click', () => {
-    if (confirmLeave()) {
-      _dirty = false; _configIaDirty = false;
-      renderBotConfigIA(slot, el);
-    }
-  });
-  // guard de saída via navegação de abas é tratado no handler de .tab-btn
-  // no escopo de renderBotDetail (usa _configIaDirty global)
 }
 
 // ── helpers de tipo de mídia ─────────────────────────────────────────────
