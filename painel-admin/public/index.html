@@ -853,6 +853,10 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .clones-grid { grid-template-columns: 1fr; }
   .matrix-cards { grid-template-columns: 1fr; }
 }
+/* ── Métricas 003-I ─────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .m-charts-grid { grid-template-columns: 1fr !important; }
+}
 /* ── Card variants (ADR 0005) ────────────────────────────────────── */
 .card--highlight {
   border-color: var(--primary);
@@ -1193,6 +1197,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
     </section>
     <section class="section" id="sec-roteamento" aria-label="Roteamento">
       <!-- Seção Roteamento — promovida a nível global; renderizada por renderRoteamento() -->
+    </section>
+    <section class="section" id="sec-metricas" aria-label="Métricas">
+      <!-- Seção Métricas — renderizada por renderMetricas() — 003-I -->
     </section>
   </main>
 </div>
@@ -4876,6 +4883,355 @@ function _rtOpenModal(route) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   MÉTRICAS — por bot, timeseries, top erros (003-I)
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── SVG chart helpers (vanilla, sem libs) ───────────────────────── */
+function _chartPad(values) {
+  // Normaliza array de números para escala 0-1; retorna [] se vazio ou tudo zero.
+  if (!values.length) return [];
+  const min = 0;
+  const max = Math.max(...values);
+  if (max === 0) return values.map(() => 0);
+  return values.map(v => (v - min) / (max - min));
+}
+
+function drawSparkline(values, w, h) {
+  const norm = _chartPad(values);
+  if (!norm.length) return `<svg width="${w}" height="${h}"></svg>`;
+  const pts = norm.map((v, i) => {
+    const x = (i / (norm.length - 1 || 1)) * w;
+    const y = h - v * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+    <polyline points="${pts}" fill="none" stroke="#00d9b2" stroke-width="1.5" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function drawBarChart(points, w, h, label) {
+  // points: [{t, value}]
+  if (!points.length) {
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">
+      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#6b7280" font-size="11">Sem dados</text>
+    </svg>`;
+  }
+  const values = points.map(p => Number(p.value) || 0);
+  const max = Math.max(...values, 0.001);
+  const bw = Math.max(1, (w - 4) / values.length - 1);
+  const step = (w - 4) / values.length;
+  const gridY = [0.25, 0.5, 0.75, 1].map(f => (h - 20) - f * (h - 20));
+  let svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">`;
+  // grid lines
+  gridY.forEach(y => {
+    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#374151" stroke-width="0.5"/>`;
+  });
+  // bars
+  values.forEach((v, i) => {
+    const barH = (v / max) * (h - 20);
+    const x = 2 + i * step;
+    const y = (h - 20) - barH;
+    svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${barH.toFixed(1)}" fill="#00d9b2" opacity="0.8" rx="1"/>`;
+  });
+  // x axis labels (first + last)
+  if (points.length >= 2) {
+    const fmt = t => {
+      const d = new Date(t);
+      return d.getHours !== undefined ? d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('pt-BR', {month:'short',day:'numeric'});
+    };
+    svg += `<text x="2" y="${h-4}" font-size="9" fill="#9ca3af">${fmt(points[0].t)}</text>`;
+    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="#9ca3af" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+function drawLineChart(points, w, h, label) {
+  if (!points.length) {
+    return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">
+      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#6b7280" font-size="11">Sem dados</text>
+    </svg>`;
+  }
+  const values = points.map(p => Number(p.value) || 0);
+  const max = Math.max(...values, 0.001);
+  const gridY = [0.25, 0.5, 0.75, 1].map(f => (h - 20) - f * (h - 20));
+  let svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">`;
+  gridY.forEach(y => {
+    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#374151" stroke-width="0.5"/>`;
+  });
+  const pts = values.map((v, i) => {
+    const x = (i / (values.length - 1 || 1)) * w;
+    const y = (h - 20) - (v / max) * (h - 20);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  svg += `<polyline points="${pts}" fill="none" stroke="#00d9b2" stroke-width="2" stroke-linejoin="round"/>`;
+  // dots
+  values.forEach((v, i) => {
+    const x = (i / (values.length - 1 || 1)) * w;
+    const y = (h - 20) - (v / max) * (h - 20);
+    svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#00d9b2"/>`;
+  });
+  if (points.length >= 2) {
+    const fmt = t => {
+      const d = new Date(t);
+      return d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+    };
+    svg += `<text x="2" y="${h-4}" font-size="9" fill="#9ca3af">${fmt(points[0].t)}</text>`;
+    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="#9ca3af" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
+  }
+  svg += '</svg>';
+  return svg;
+}
+
+/* ── State ───────────────────────────────────────────────────────── */
+let _mPeriod     = '24h';
+let _mRefreshId  = null;
+let _mBotMessages = 'all';
+let _mBotCost     = 'all';
+let _mBotLatency  = 'all';
+
+/* ── Render principal ────────────────────────────────────────────── */
+async function renderMetricas() {
+  const sec = document.getElementById('sec-metricas');
+  if (!sec) return;
+  sec.innerHTML = `
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="h1">Métricas</h1>
+        <p class="muted">Desempenho por bot em tempo real</p>
+      </div>
+      <div class="section-header__actions" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <select id="m-period-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.25rem .5rem;font-size:.8125rem;cursor:pointer">
+          <option value="24h">Últimas 24h</option>
+          <option value="7d">Últimos 7 dias</option>
+          <option value="30d">Últimos 30 dias</option>
+        </select>
+        <button id="m-reload-btn" class="btn btn--ghost btn--sm">
+          ${icon('refresh-cw',14)} Recarregar
+        </button>
+      </div>
+    </div>
+    <div id="m-body" style="display:flex;flex-direction:column;gap:1.5rem">
+      <div class="empty-state"><span class="muted">Carregando…</span></div>
+    </div>
+  `;
+
+  document.getElementById('m-period-sel').value = _mPeriod;
+  document.getElementById('m-period-sel').addEventListener('change', e => {
+    _mPeriod = e.target.value;
+    _mLoad();
+  });
+  document.getElementById('m-reload-btn').addEventListener('click', _mLoad);
+
+  // auto-refresh 60s
+  if (_mRefreshId) clearInterval(_mRefreshId);
+  _mRefreshId = setInterval(_mLoad, 60_000);
+
+  await _mLoad();
+}
+
+async function _mLoad() {
+  try {
+    const [byBotRes, errRes] = await Promise.all([
+      api(`/api/metrics/by-bot?period=${_mPeriod}`),
+      api(`/api/metrics/top-errors?period=${_mPeriod}&limit=10`),
+    ]);
+
+    const bots  = byBotRes.rows || [];
+    const erros = errRes.rows   || [];
+
+    // sparklines: busca série de mensagens por bot (só os que têm execuções)
+    const sparkMap = {};
+    await Promise.all(
+      bots.slice(0, 8).map(async b => {
+        try {
+          const s = await api(`/api/metrics/timeseries?metric=messages&period=24h&bot=${encodeURIComponent(b.slot)}`);
+          sparkMap[b.slot] = (s.points || []).map(p => Number(p.value) || 0);
+        } catch { sparkMap[b.slot] = []; }
+      })
+    );
+
+    _mRender(bots, erros, sparkMap);
+    // carrega gráficos timeseries
+    await _mLoadCharts();
+  } catch (e) {
+    document.getElementById('m-body').innerHTML = `<div class="empty-state"><span class="text-danger">Erro: ${e.message}</span></div>`;
+  }
+}
+
+function _mRender(bots, erros, sparkMap) {
+  const body = document.getElementById('m-body');
+  if (!body) return;
+
+  // Totais
+  const totMsg   = bots.reduce((s, b) => s + (Number(b.messages) || 0), 0);
+  const totExec  = bots.reduce((s, b) => s + (Number(b.executions) || 0), 0);
+  const totCost  = bots.reduce((s, b) => s + (Number(b.cost_usd) || 0), 0);
+  const totTkIn  = bots.reduce((s, b) => s + (Number(b.tokens_in) || 0), 0);
+  const totTkOut = bots.reduce((s, b) => s + (Number(b.tokens_out) || 0), 0);
+
+  function successBadge(rate) {
+    if (rate === null || rate === undefined) return '<span class="badge badge--muted">—</span>';
+    const n = Number(rate);
+    const cls = n >= 90 ? 'badge--success' : n >= 70 ? 'badge--warning' : 'badge--danger';
+    return `<span class="badge ${cls}">${n}%</span>`;
+  }
+  function latencyBadge(ms) {
+    if (ms === null || ms === undefined) return '<span class="muted">—</span>';
+    const n = Number(ms);
+    const col = n < 500 ? '#10b981' : n < 2000 ? '#f59e0b' : '#ef4444';
+    return `<span style="color:${col};font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')} ms</span>`;
+  }
+  function spark(slot) {
+    const vals = sparkMap[slot] || [];
+    return vals.length >= 2 ? drawSparkline(vals, 40, 20) : '<span class="muted" style="font-size:.7rem">—</span>';
+  }
+
+  // Bot select options para os gráficos
+  const botOptions = bots.map(b => `<option value="${b.slot}">${b.display_name || b.slot}</option>`).join('');
+
+  body.innerHTML = `
+    <!-- Tabela por bot -->
+    <div class="card" style="overflow-x:auto">
+      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
+        <span class="label">Por Bot</span>
+      </div>
+      ${bots.length === 0
+        ? `<div class="empty-state" style="padding:2rem"><span class="muted">Nenhum dado no período selecionado</span></div>`
+        : `<table class="table" style="min-width:700px">
+          <thead><tr>
+            <th>Bot</th>
+            <th title="Mensagens recebidas">Msgs <span class="muted" style="font-size:.65rem">(24h)</span></th>
+            <th>Exec</th>
+            <th>Sucesso</th>
+            <th>Latência avg</th>
+            <th>Tokens in/out</th>
+            <th>Custo USD</th>
+          </tr></thead>
+          <tbody>
+            ${bots.map(b => `<tr>
+              <td style="white-space:nowrap;font-weight:500">${b.display_name || b.slot}</td>
+              <td style="white-space:nowrap">${spark(b.slot)}&nbsp;<span style="font-variant-numeric:tabular-nums">${Number(b.messages).toLocaleString('pt-BR')}</span></td>
+              <td style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
+              <td>${successBadge(b.success_rate)}</td>
+              <td>${latencyBadge(b.avg_latency_ms)}</td>
+              <td style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
+              <td style="font-variant-numeric:tabular-nums">$${Number(b.cost_usd).toFixed(4)}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot><tr style="border-top:2px solid var(--border);font-weight:600">
+            <td>Total</td>
+            <td>${totMsg.toLocaleString('pt-BR')}</td>
+            <td>${totExec.toLocaleString('pt-BR')}</td>
+            <td>—</td>
+            <td>—</td>
+            <td style="font-size:.8rem">${totTkIn.toLocaleString('pt-BR')} / ${totTkOut.toLocaleString('pt-BR')}</td>
+            <td>$${totCost.toFixed(4)}</td>
+          </tr></tfoot>
+        </table>`
+      }
+    </div>
+
+    <!-- Gráficos timeseries -->
+    <div class="m-charts-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+      <div class="card" id="m-chart-messages">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Mensagens</span>
+          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-messages">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="m-chart-messages-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+      <div class="card" id="m-chart-cost">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Custo USD</span>
+          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-cost">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="m-chart-cost-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+      <div class="card" id="m-chart-latency">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Latência média (ms)</span>
+          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-latency">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="m-chart-latency-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top erros -->
+    <div class="card">
+      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
+        <span class="label">Top erros no período</span>
+      </div>
+      ${erros.length === 0
+        ? `<div class="empty-state" style="padding:1.5rem"><span class="muted">Nenhum erro registrado</span></div>`
+        : `<ul style="list-style:none;margin:0;padding:0">
+          ${erros.map((e, i) => {
+            const msg = e.error_message || '';
+            const trunc = msg.length > 100 ? msg.slice(0, 100) + '…' : msg;
+            const dt = e.last_seen ? new Date(e.last_seen).toLocaleString('pt-BR') : '—';
+            return `<li style="display:flex;gap:.75rem;align-items:flex-start;padding:.625rem 1rem;border-bottom:${i < erros.length-1 ? '1px solid var(--border)' : 'none'}">
+              <span style="min-width:1.5rem;text-align:right;font-variant-numeric:tabular-nums;color:#ef4444;font-weight:600;font-size:.8rem">${e.count}</span>
+              <span title="${msg.replace(/"/g,'&quot;')}" style="flex:1;font-size:.8125rem;word-break:break-word">${trunc}</span>
+              <span style="white-space:nowrap;font-size:.75rem;color:var(--text-muted)">${e.sample_bot ? `<span class="badge badge--muted" style="font-size:.65rem">${e.sample_bot}</span> ` : ''}${dt}</span>
+            </li>`;
+          }).join('')}
+        </ul>`
+      }
+    </div>
+  `;
+
+  // Bind chart bot selects
+  document.getElementById('m-bot-messages')?.addEventListener('change', async e => {
+    _mBotMessages = e.target.value;
+    await _mLoadChart('messages', _mBotMessages, 'm-chart-messages-body');
+  });
+  document.getElementById('m-bot-cost')?.addEventListener('change', async e => {
+    _mBotCost = e.target.value;
+    await _mLoadChart('cost', _mBotCost, 'm-chart-cost-body');
+  });
+  document.getElementById('m-bot-latency')?.addEventListener('change', async e => {
+    _mBotLatency = e.target.value;
+    await _mLoadChart('latency', _mBotLatency, 'm-chart-latency-body');
+  });
+}
+
+async function _mLoadChart(metric, bot, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  try {
+    const url = `/api/metrics/timeseries?metric=${metric}&period=${_mPeriod}&bot=${encodeURIComponent(bot)}`;
+    const data = await api(url);
+    const pts  = data.points || [];
+    const w    = el.clientWidth  || 260;
+    const h    = 80;
+    const chartSvg = metric === 'latency' ? drawLineChart(pts, w, h, metric) : drawBarChart(pts, w, h, metric);
+    el.innerHTML = `<div style="width:100%">${chartSvg}</div>`;
+  } catch {
+    el.innerHTML = `<span class="muted" style="font-size:.8rem">Erro ao carregar</span>`;
+  }
+}
+
+async function _mLoadCharts() {
+  await Promise.all([
+    _mLoadChart('messages', _mBotMessages, 'm-chart-messages-body'),
+    _mLoadChart('cost',     _mBotCost,     'm-chart-cost-body'),
+    _mLoadChart('latency',  _mBotLatency,  'm-chart-latency-body'),
+  ]);
+}
+
+/* ══════════════════════════════════════════════════════════════════
    NAVIGATION — sidebar agrupada (003-D2)
    ══════════════════════════════════════════════════════════════════ */
 const NAV_GROUPS = [
@@ -4884,6 +5240,7 @@ const NAV_GROUPS = [
     label: 'Dashboard',
     items: [
       { id: 'dashboard', label: 'Visão geral', render: renderDashboard },
+      { id: 'metricas',  label: 'Métricas',    render: renderMetricas  },
     ],
   },
   {
@@ -5003,6 +5360,12 @@ function navigateTo(sectionId) {
   if (sectionId !== 'dashboard' && _dashActivityInterval) {
     clearInterval(_dashActivityInterval);
     _dashActivityInterval = null;
+  }
+
+  // Para auto-refresh de métricas ao sair (evita requests fantasma)
+  if (sectionId !== 'metricas' && _mRefreshId) {
+    clearInterval(_mRefreshId);
+    _mRefreshId = null;
   }
 
   // Render if not yet rendered (or always re-render dashboard for freshness)
