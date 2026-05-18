@@ -2014,7 +2014,7 @@ async function renderDashSessions() {
 
       return `<tr>
         <td class="mono" style="font-size:.75rem;color:var(--text)">${name}</td>
-        <td><span class="s-dot ${dotCls}"></span> <span style="font-size:.75rem;color:${isOn ? 'var(--success)' : isWarn ? 'var(--warning)' : 'var(--text-subtle)'}">${stLabel}</span></td>
+        <td><span class="s-dot ${dotCls}"></span> ${statusBadge(st)}</td>
         <td style="font-size:.75rem;color:var(--text-muted)">${lastSeen ? fmtRelative(lastSeen) : '—'}</td>
         <td style="font-size:.75rem;color:var(--text-muted);text-align:center">${escapeHtml(phonesStr)}</td>
         <td><button class="more-btn" title="Ações para ${name}" onclick="navigateTo('bots')" aria-label="Ações">···</button></td>
@@ -4823,7 +4823,7 @@ function renderClonesList(clones, wrap) {
         ${c.cliente_nome ? `<span class="bot-row__sub-item">${icon('users', 11)} ${escapeHtml(c.cliente_nome)}</span>` : ''}
         <span class="bot-row__sub-item">${icon('git-branch', 11)} ${escapeHtml(matrizLabel)}</span>
         ${phoneFmt ? `<span class="bot-row__sub-item">${icon('phone', 11)} ${escapeHtml(phoneFmt)}</span>` : ''}
-        ${c.waha_session ? `<span class="bot-row__sub-item"><code>${escapeHtml(c.waha_session)}</code></span>` : ''}
+        ${c.waha_sessao ? `<span class="bot-row__sub-item"><code>${escapeHtml(c.waha_sessao)}</code></span>` : ''}
       </div>`;
     titleBlock.appendChild(meta);
     row.appendChild(titleBlock);
