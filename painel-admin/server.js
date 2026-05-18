@@ -1777,6 +1777,90 @@ app.get('/api/sessions/:name/status', async (req, res) => {
   }
 });
 
+// POST /api/sessions — body {name} — cria nova sessão com webhook padrão e inicia
+app.post('/api/sessions', async (req, res) => {
+  const { name } = req.body ?? {};
+  if (!name || typeof name !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(name))
+    return res.status(400).json({ error: 'name obrigatório e deve conter apenas letras, números, _ e -' });
+  try {
+    const webhookUrl = `${TS_WEBHOOK_URL}`;
+    const r = await fetch(`${WAHA_URL}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: JSON.stringify({
+        name,
+        start: true,
+        config: {
+          webhooks: [{ url: webhookUrl, events: ['message', 'session.status'] }],
+        },
+      }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
+      console.log(`[sessions] create ${name} -> WAHA erro: ${msg}`);
+      return res.status(r.status >= 400 && r.status < 500 ? 400 : 502).json({ error: `WAHA: ${msg}` });
+    }
+    console.log(`[sessions] criada sessão ${name}`);
+    res.json(body);
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// POST /api/sessions/:name/restart — stop + start sequencial
+app.post('/api/sessions/:name/restart', async (req, res) => {
+  const { name } = req.params;
+  try {
+    const stopR = await fetch(`${WAHA_URL}/api/sessions/${name}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: '{}',
+    });
+    // Ignora erro de stop se a sessão já estava parada (404 é aceitável)
+    if (!stopR.ok && stopR.status !== 404) {
+      const body = await stopR.json().catch(() => ({}));
+      console.log(`[sessions] restart ${name} stop -> WAHA ${stopR.status}: ${body?.message}`);
+    }
+    const startR = await fetch(`${WAHA_URL}/api/sessions/${name}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      body: '{}',
+    });
+    const startBody = await startR.json().catch(() => ({}));
+    if (!startR.ok) {
+      const msg = startBody?.message ?? `HTTP ${startR.status}`;
+      console.log(`[sessions] restart ${name} start -> WAHA erro: ${msg}`);
+      return res.status(502).json({ error: `WAHA: ${msg}` });
+    }
+    console.log(`[sessions] sessão ${name} reiniciada`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// DELETE /api/sessions/:name — apaga sessão completamente
+app.delete('/api/sessions/:name', async (req, res) => {
+  const { name } = req.params;
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      const msg = body?.message ?? `HTTP ${r.status}`;
+      console.log(`[sessions] delete ${name} -> WAHA erro: ${msg}`);
+      return res.status(502).json({ error: `WAHA: ${msg}` });
+    }
+    console.log(`[sessions] sessão ${name} deletada`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
 // GET /api/sessions/:name/qr — retorna {qr: "data:image/png;base64,..."} | {connected:true}
 app.get('/api/sessions/:name/qr', async (req, res) => {
   const { name } = req.params;
