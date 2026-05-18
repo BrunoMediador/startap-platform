@@ -552,6 +552,42 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .upload-preview { margin-top: .75rem; text-align: center; }
 .upload-preview img { max-height: 120px; max-width: 100%; border-radius: var(--radius-sm); }
 .upload-preview-icon { display: inline-flex; flex-direction: column; align-items: center; gap: .25rem; color: var(--text-muted); font-size: .8rem; }
+/* ── Courses table (006-C) ────────────────────────────────────────────── */
+.course-table { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+.course-table th {
+  text-align: left; font-weight: 600; color: var(--text-muted);
+  padding: .4rem .75rem; border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.course-table td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.course-table tr:last-child td { border-bottom: none; }
+.course-table tr:hover td { background: var(--bg-2); }
+.course-slug-badge {
+  display: inline-flex; align-items: center;
+  background: var(--info-bg); color: var(--info);
+  border-radius: var(--radius-sm); padding: .125rem .4rem;
+  font-size: .72rem; font-family: var(--font-mono); white-space: nowrap;
+}
+.course-slug-badge--warning { background: var(--warning-bg); color: var(--warning); }
+.course-media-count { font-size: .8125rem; }
+/* modal de vínculo de mídia */
+.link-media-group { margin-bottom: .75rem; }
+.link-media-group__title {
+  font-size: .6875rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-subtle); margin-bottom: .375rem;
+}
+.link-media-row {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .375rem 0; border-bottom: 1px solid var(--border);
+  font-size: .8125rem;
+}
+.link-media-row:last-child { border-bottom: none; }
+.link-media-row__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-media-row--disabled { opacity: .5; }
+@media (max-width: 640px) {
+  .course-table .col-course-desc,
+  .course-table th.col-course-desc { display: none; }
+}
 /* ── Media cards (legado — mantido pra compat com renderMediaPreview) ─── */
 .media-grid {
   display: grid;
@@ -798,6 +834,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .media-grid { grid-template-columns: 1fr; }
   .media-table .media-context-cell,
   .media-table th.col-context { display: none; }
+  .media-table .col-course,
+  .media-table th.col-course { display: none; }
   .sessions-grid { grid-template-columns: 1fr; }
   .dash-grid { grid-template-columns: 1fr; }
   .tabs { width: 100%; justify-content: flex-start; overflow-x: auto; }
@@ -2329,6 +2367,7 @@ function renderBotDetail(bot, container) {
     <div class="tabs" id="bot-tabs" role="tablist">
       <button class="tab-btn${_selectedBotTab === 'overview' ? ' active' : ''}" data-tab="overview" role="tab" aria-selected="${_selectedBotTab === 'overview'}">Visão geral</button>
       <button class="tab-btn${_selectedBotTab === 'prompt' ? ' active' : ''}" data-tab="prompt" role="tab" aria-selected="${_selectedBotTab === 'prompt'}">Prompt</button>
+      <button class="tab-btn${_selectedBotTab === 'courses' ? ' active' : ''}" data-tab="courses" role="tab" aria-selected="${_selectedBotTab === 'courses'}">Cursos</button>
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
@@ -2363,6 +2402,8 @@ async function loadBotTab(slot, tab, el, bot) {
     await renderBotOverview(slot, el, bot);
   } else if (tab === 'prompt') {
     await renderBotPrompt(slot, el);
+  } else if (tab === 'courses') {
+    await renderBotCourses(slot, el);
   } else if (tab === 'media') {
     await renderBotMedia(slot, el);
   } else if (tab === 'routing') {
@@ -2705,10 +2746,16 @@ async function renderBotMedia(slot, el) {
         const name = m.position || m.url?.split('/').pop() || `mídia ${m.id}`;
         const ctx = m.context || '';
         const cap = m.caption || '';
+        const courseSlug = m.course_slug || null;
+        const isIntro = m.is_course_intro === true || m.is_course_intro === 1;
+        const courseBadge = courseSlug
+          ? `<span class="course-slug-badge">${escapeHtml(courseSlug)}${isIntro ? ' ⭐' : ''}</span>`
+          : `<span class="muted">—</span>`;
         return `<tr data-id="${m.id}">
           <td><button class="btn btn--ghost btn--icon js-media-preview" data-id="${m.id}" title="Visualizar" aria-label="Visualizar" style="padding:0;border:0;background:transparent;cursor:pointer">${mediaThumbHtml(m)}</button></td>
           <td class="media-filename-cell" title="${escapeHtml(name)}">${escapeHtml(name)}</td>
           <td><span class="media-type-badge media-type-badge--${t}">${mediaTypeLabel(t)}</span></td>
+          <td class="col-course">${courseBadge}</td>
           <td class="media-context-cell col-context" title="${escapeHtml(ctx)}">${escapeHtml(ctx) || '<span class=\'muted\'>—</span>'}</td>
           <td class="media-filename-cell" title="${escapeHtml(cap)}">${escapeHtml(cap) || '<span class=\'muted\'>—</span>'}</td>
           <td style="text-align:right;white-space:nowrap">
@@ -2730,6 +2777,7 @@ async function renderBotMedia(slot, el) {
           <th style="width:52px"></th>
           <th>Arquivo</th>
           <th>Tipo</th>
+          <th class="col-course">Curso</th>
           <th class="col-context">Contexto IA</th>
           <th>Legenda</th>
           <th style="width:48px"></th>
@@ -2815,6 +2863,434 @@ async function renderBotMedia(slot, el) {
   }
 }
 
+
+// ── renderBotCourses — aba "Cursos" no drawer do bot (006-C) ─────────────
+async function renderBotCourses(slot, el) {
+  try {
+    const [coursesRes, mediasRes] = await Promise.all([
+      api(`/api/bots/${slot}/courses`),
+      api(`/api/bots/${slot}/media`),
+    ]);
+    const courses = Array.isArray(coursesRes) ? coursesRes : (coursesRes.courses || coursesRes.items || []);
+    const medias  = Array.isArray(mediasRes)  ? mediasRes  : (mediasRes.media  || mediasRes.items  || []);
+
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <span class="muted" style="font-size:.8125rem">${courses.length} curso${courses.length !== 1 ? 's' : ''}</span>
+      <button class="btn btn--primary btn--sm" id="btn-add-course">${icon('plus',13)} Adicionar curso</button>
+    </div>`;
+
+    if (!courses.length) {
+      el.innerHTML = `${header}<div class="empty-state">${icon('book-open',36)}<div class="empty-state__title">Sem cursos</div><p class="empty-state__text">Nenhum curso cadastrado para este bot.</p></div>`;
+    } else {
+      const rows = courses.map(c => {
+        const linked = medias.filter(m => m.course_slug === c.course_slug);
+        const intro  = linked.find(m => m.is_course_intro === true || m.is_course_intro === 1);
+        const count  = linked.length;
+        const noIntroWarning = count > 0 && !intro
+          ? `<span class="badge badge--warning" style="margin-left:.375rem;font-size:.7rem">sem intro</span>`
+          : '';
+        const introCell = intro
+          ? `<span class="muted" style="font-size:.75rem">${escapeHtml(intro.position || `mídia #${intro.id}`)}</span>`
+          : `<span class="muted">—</span>`;
+        const priceDisplay = (c.price != null && c.price >= 0) ? fmtBRL(c.price / 100) : '—';
+        const enabledToggleId = `course-enabled-${c.id}`;
+        return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">
+          <td><button class="btn btn--ghost btn--sm js-course-edit" data-id="${c.id}" style="font-weight:600;color:var(--text)">${escapeHtml(c.name)}</button></td>
+          <td style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
+          <td class="course-media-count"><span>${count}/5</span>${noIntroWarning}</td>
+          <td>${introCell}</td>
+          <td>
+            <label class="toggle">
+              <input type="checkbox" class="js-course-toggle" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" id="${enabledToggleId}" ${c.enabled ? 'checked' : ''}>
+              <span class="toggle__track"></span>
+            </label>
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            <div class="media-actions-wrap">
+              <button class="btn btn--ghost btn--sm btn--icon js-course-menu-toggle" aria-label="Ações" title="Ações">${icon('more-horizontal',14)}</button>
+              <div class="media-actions-menu" data-menu-id="c-${c.id}">
+                <button class="js-course-edit" data-id="${c.id}">${icon('edit-2',13)} Editar</button>
+                <button class="js-course-link" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('link',13)} Vincular mídia</button>
+                <button class="js-course-del danger" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" data-name="${escapeHtml(c.name)}">${icon('trash-2',13)} Excluir</button>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      el.innerHTML = `${header}<div style="overflow-x:auto"><table class="course-table">
+        <thead><tr>
+          <th>Nome</th>
+          <th>Preço</th>
+          <th>Mídias</th>
+          <th>Apresentação</th>
+          <th>Ativo</th>
+          <th style="width:48px"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    }
+
+    el.querySelector('#btn-add-course').addEventListener('click', () => openAddCourseModal(slot, el));
+
+    // menu toggle
+    el.querySelectorAll('.js-course-menu-toggle').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const wrap = btn.closest('.media-actions-wrap');
+        const menu = wrap.querySelector('.media-actions-menu');
+        const wasOpen = menu.classList.contains('open');
+        document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
+        if (!wasOpen) menu.classList.add('open');
+      });
+    });
+
+    // editar (nome clicável + menu)
+    el.querySelectorAll('.js-course-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const c = courses.find(x => String(x.id) === String(id));
+        if (c) openEditCourseModal(slot, c, el);
+      });
+    });
+
+    // vincular mídia
+    el.querySelectorAll('.js-course-link').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openLinkMediaModal(slot, btn.dataset.slug, medias, el);
+      });
+    });
+
+    // toggle ativo
+    el.querySelectorAll('.js-course-toggle').forEach(chk => {
+      chk.addEventListener('change', async () => {
+        const origChecked = !chk.checked;
+        chk.disabled = true;
+        try {
+          await api(`/api/bots/${slot}/courses/${chk.dataset.slug}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: chk.checked }),
+          });
+          toast(chk.checked ? 'Curso ativado.' : 'Curso desativado.', 'success');
+        } catch (err) {
+          chk.checked = origChecked;
+          toast('Erro ao alterar status: ' + err.message, 'danger');
+        } finally {
+          chk.disabled = false;
+        }
+      });
+    });
+
+    // excluir
+    el.querySelectorAll('.js-course-del').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Excluir curso "${btn.dataset.name}"? Esta ação desativa o curso.`)) return;
+        btn.disabled = true;
+        try {
+          await api(`/api/bots/${slot}/courses/${btn.dataset.slug}`, { method: 'DELETE' });
+          toast('Curso excluído.', 'success');
+          await renderBotCourses(slot, el);
+        } catch (err) {
+          toast('Erro ao excluir: ' + err.message, 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar cursos: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="renderBotCourses('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
+  }
+}
+
+function _courseFormHtml(c, isEdit) {
+  const slugField = isEdit
+    ? `<div>
+        <label class="label">Slug do curso</label>
+        <div class="input" style="background:var(--surface-2);color:var(--text-muted);cursor:default">${escapeHtml(c.course_slug || '')}</div>
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">O slug é a identidade do curso e não pode ser alterado.</p>
+      </div>`
+    : `<div>
+        <label class="label" for="course-slug">Slug <span style="color:var(--danger)">*</span></label>
+        <input id="course-slug" class="input" type="text" placeholder="ex: curso-online-degrade" value="${escapeHtml(c.course_slug || '')}">
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">Somente letras minúsculas, números e hífens. Ex: <code>curso-online-degrade</code></p>
+      </div>`;
+  return `
+    <div id="course-form-status"></div>
+    <div style="display:flex;flex-direction:column;gap:.625rem">
+      <div>
+        <label class="label" for="course-name">Nome <span style="color:var(--danger)">*</span></label>
+        <input id="course-name" class="input" type="text" placeholder="Nome do curso" value="${escapeHtml(c.name || '')}">
+      </div>
+      ${slugField}
+      <div>
+        <label class="label" for="course-desc">Descrição</label>
+        <textarea id="course-desc" class="input" rows="2" style="resize:vertical">${escapeHtml(c.description || '')}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem">
+        <div>
+          <label class="label" for="course-price">Preço (R$)</label>
+          <input id="course-price" class="input" type="number" min="0" step="0.01" placeholder="297.00" value="${c.price != null ? (c.price / 100).toFixed(2) : ''}">
+        </div>
+        <div>
+          <label class="label" for="course-order">Posição</label>
+          <input id="course-order" class="input" type="number" min="0" value="${c.position_order ?? 0}" style="width:100%">
+        </div>
+      </div>
+      <div>
+        <label class="label" for="course-duration">Duração (texto livre)</label>
+        <input id="course-duration" class="input" type="text" placeholder="ex: 8 horas" value="${escapeHtml(c.duration || '')}">
+      </div>
+      <div>
+        <label class="toggle">
+          <input type="checkbox" id="course-enabled" ${(c.enabled !== false) ? 'checked' : ''}>
+          <span class="toggle__track"></span>
+          <span>Curso ativo</span>
+        </label>
+      </div>
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
+      <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn--primary" id="btn-save-course">${icon('save',13)} Salvar</button>
+    </div>`;
+}
+
+function openAddCourseModal(slot, parentEl) {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">Adicionar curso</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    ${_courseFormHtml({}, false)}
+  `);
+
+  document.getElementById('btn-save-course').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-course');
+    const statusDiv = document.getElementById('course-form-status');
+    const name  = document.getElementById('course-name').value.trim();
+    const slug  = document.getElementById('course-slug').value.trim();
+    const desc  = document.getElementById('course-desc').value.trim();
+    const priceRaw = document.getElementById('course-price').value;
+    const order = Number(document.getElementById('course-order').value) || 0;
+    const duration = document.getElementById('course-duration').value.trim();
+    const enabled  = document.getElementById('course-enabled').checked;
+
+    if (!name) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Nome é obrigatório.</p>`;
+      return;
+    }
+    if (!slug) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Slug é obrigatório.</p>`;
+      return;
+    }
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Slug inválido. Use letras minúsculas, números e hífens. Ex: <code>curso-online-degrade</code></p>`;
+      return;
+    }
+    const price = priceRaw !== '' ? Math.round(parseFloat(priceRaw) * 100) : 0;
+    if (isNaN(price) || price < 0) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Preço inválido.</p>`;
+      return;
+    }
+
+    btn.disabled = true;
+    statusDiv.innerHTML = '';
+    try {
+      await api(`/api/bots/${slot}/courses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_slug: slug, name, description: desc || null, price, duration: duration || null, position_order: order, enabled }),
+      });
+      toast('Curso adicionado.', 'success');
+      closeModal();
+      await renderBotCourses(slot, parentEl);
+    } catch (err) {
+      const msg = (err.message || '').includes('409') || (err.message || '').toLowerCase().includes('duplicado') || (err.message || '').toLowerCase().includes('já existe')
+        ? 'Já existe um curso com esse slug para este bot.'
+        : err.message;
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(msg)}</p>`;
+      btn.disabled = false;
+    }
+  });
+}
+
+function openEditCourseModal(slot, c, parentEl) {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">Editar curso</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    ${_courseFormHtml(c, true)}
+  `);
+
+  document.getElementById('btn-save-course').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-course');
+    const statusDiv = document.getElementById('course-form-status');
+    const name  = document.getElementById('course-name').value.trim();
+    const desc  = document.getElementById('course-desc').value.trim();
+    const priceRaw = document.getElementById('course-price').value;
+    const order = Number(document.getElementById('course-order').value) || 0;
+    const duration = document.getElementById('course-duration').value.trim();
+    const enabled  = document.getElementById('course-enabled').checked;
+
+    if (!name) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Nome é obrigatório.</p>`;
+      return;
+    }
+    const price = priceRaw !== '' ? Math.round(parseFloat(priceRaw) * 100) : 0;
+    if (isNaN(price) || price < 0) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Preço inválido.</p>`;
+      return;
+    }
+
+    btn.disabled = true;
+    statusDiv.innerHTML = '';
+    try {
+      await api(`/api/bots/${slot}/courses/${c.course_slug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description: desc || null, price, duration: duration || null, position_order: order, enabled }),
+      });
+      toast('Curso atualizado.', 'success');
+      closeModal();
+      await renderBotCourses(slot, parentEl);
+    } catch (err) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
+      btn.disabled = false;
+    }
+  });
+}
+
+function openLinkMediaModal(slot, courseSlug, medias, parentEl) {
+  const videos = medias.filter(m => (m.media_type || '').toLowerCase() === 'video');
+  const linkedHere  = videos.filter(m => m.course_slug === courseSlug);
+  const linkedOther = videos.filter(m => m.course_slug && m.course_slug !== courseSlug);
+  const available   = videos.filter(m => !m.course_slug);
+  const atLimit     = linkedHere.length >= 5;
+
+  function buildRow(m, group) {
+    const name = escapeHtml(m.position || `vídeo #${m.id}`);
+    const isIntro = m.is_course_intro === true || m.is_course_intro === 1;
+    if (group === 'linked') {
+      return `<div class="link-media-row" data-id="${m.id}">
+        <span class="link-media-row__name">${name}</span>
+        <label class="toggle" style="flex-shrink:0;font-size:.75rem">
+          <input type="radio" name="intro-radio" class="js-intro-radio" data-id="${m.id}" ${isIntro ? 'checked' : ''} style="position:absolute;opacity:0;width:0;height:0">
+          <span class="toggle__track"></span>
+          <span>intro</span>
+        </label>
+        <button class="btn btn--ghost btn--sm js-unlink-media" data-id="${m.id}" title="Desvincular">${icon('link-2-off',13)} Desvincular</button>
+      </div>`;
+    }
+    if (group === 'other') {
+      return `<div class="link-media-row link-media-row--disabled" data-id="${m.id}">
+        <span class="link-media-row__name">${name}</span>
+        <span class="course-slug-badge" style="flex-shrink:0">${escapeHtml(m.course_slug)}</span>
+      </div>`;
+    }
+    // available
+    return `<div class="link-media-row" data-id="${m.id}">
+      <span class="link-media-row__name">${name}</span>
+      ${atLimit ? '' : `<button class="btn btn--primary btn--sm js-link-media" data-id="${m.id}" title="Vincular">${icon('link',13)} Vincular</button>`}
+    </div>`;
+  }
+
+  const linkedHtml  = linkedHere.length  ? linkedHere.map(m => buildRow(m, 'linked')).join('')  : `<p class="muted" style="font-size:.8rem;padding:.375rem 0">Nenhuma mídia vinculada.</p>`;
+  const otherHtml   = linkedOther.length ? linkedOther.map(m => buildRow(m, 'other')).join('')  : '';
+  const availHtml   = available.length   ? available.map(m => buildRow(m, 'free')).join('')     : `<p class="muted" style="font-size:.8rem;padding:.375rem 0">Nenhum vídeo disponível.</p>`;
+  const limitHint   = atLimit ? `<p class="muted" style="font-size:.75rem;margin:.25rem 0 .5rem;color:var(--warning)">${icon('alert-triangle',12)} Limite de 5 mídias por curso atingido.</p>` : '';
+
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${icon('link',15)} Vincular mídia — <span class="course-slug-badge">${escapeHtml(courseSlug)}</span></span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    <div id="link-status"></div>
+    <div class="link-media-group">
+      <div class="link-media-group__title">Vinculadas a este curso (${linkedHere.length}/5)</div>
+      ${limitHint}
+      <div id="linked-here-list">${linkedHtml}</div>
+    </div>
+    ${linkedOther.length ? `<div class="link-media-group"><div class="link-media-group__title">Vinculadas a outros cursos (somente leitura)</div>${otherHtml}</div>` : ''}
+    <div class="link-media-group">
+      <div class="link-media-group__title">Disponíveis (biblioteca livre)</div>
+      <div id="available-list">${availHtml}</div>
+    </div>
+    <div style="margin-top:.75rem;display:flex;justify-content:flex-end">
+      <button class="btn btn--ghost" onclick="closeModal()">Fechar</button>
+    </div>
+  `);
+
+  const modalEl = document.getElementById('modal-backdrop');
+
+  // intro radio
+  modalEl.querySelectorAll('.js-intro-radio').forEach(radio => {
+    radio.addEventListener('change', async () => {
+      if (!radio.checked) return;
+      radio.disabled = true;
+      const statusDiv = document.getElementById('link-status');
+      try {
+        await api(`/api/bots/${slot}/media/${radio.dataset.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_course_intro: true, course_slug: courseSlug }),
+        });
+        toast('Vídeo de apresentação definido.', 'success');
+        closeModal();
+        await renderBotCourses(slot, parentEl);
+      } catch (err) {
+        if (statusDiv) statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
+        radio.disabled = false;
+      }
+    });
+  });
+
+  // vincular
+  modalEl.querySelectorAll('.js-link-media').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const statusDiv = document.getElementById('link-status');
+      try {
+        await api(`/api/bots/${slot}/media/${btn.dataset.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ course_slug: courseSlug }),
+        });
+        toast('Mídia vinculada.', 'success');
+        closeModal();
+        const newMedias = await api(`/api/bots/${slot}/media`);
+        const arr = Array.isArray(newMedias) ? newMedias : (newMedias.media || newMedias.items || []);
+        openLinkMediaModal(slot, courseSlug, arr, parentEl);
+      } catch (err) {
+        if (statusDiv) statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // desvincular
+  modalEl.querySelectorAll('.js-unlink-media').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const statusDiv = document.getElementById('link-status');
+      try {
+        await api(`/api/bots/${slot}/media/${btn.dataset.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ course_slug: null, is_course_intro: false }),
+        });
+        toast('Mídia desvinculada.', 'success');
+        closeModal();
+        const newMedias = await api(`/api/bots/${slot}/media`);
+        const arr = Array.isArray(newMedias) ? newMedias : (newMedias.media || newMedias.items || []);
+        openLinkMediaModal(slot, courseSlug, arr, parentEl);
+      } catch (err) {
+        if (statusDiv) statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
+        btn.disabled = false;
+      }
+    });
+  });
+}
 
 function _buildFilePreviewHtml(file) {
   if (!file) return '';
@@ -2924,7 +3400,14 @@ function openAddMediaModal(slot, parentEl) {
   });
 }
 
-function openEditMediaModal(slot, m, parentEl) {
+async function openEditMediaModal(slot, m, parentEl) {
+  const isVideo = (m.media_type || '').toLowerCase() === 'video';
+  const courses = await (async () => { try { return await api(`/api/bots/${slot}/courses`); } catch (_) { return []; } })();
+  const coursesArr = Array.isArray(courses) ? courses : (courses.courses || courses.items || []);
+  const courseSelectOptions = `<option value="">— nenhum / biblioteca livre —</option>` +
+    coursesArr.map(c => `<option value="${escapeHtml(c.course_slug)}" ${m.course_slug === c.course_slug ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.course_slug)})</option>`).join('');
+  const courseSelectDisabled = !isVideo ? 'disabled' : '';
+
   openModal(`
     <div class="modal__header">
       <span class="modal__title">Editar mídia</span>
@@ -2944,6 +3427,18 @@ function openEditMediaModal(slot, m, parentEl) {
       <label class="label" for="edit-order-input">Posição (ordem)</label>
       <input id="edit-order-input" class="input" type="number" min="0" value="${m.position_order ?? 0}" style="width:100px">
     </div>
+    <div style="margin-top:.75rem">
+      <label class="label" for="edit-course-select">Curso vinculado</label>
+      <select id="edit-course-select" class="input" ${courseSelectDisabled}>${courseSelectOptions}</select>
+      ${!isVideo ? `<p class="muted" style="font-size:.75rem;margin:.25rem 0 0">${icon('info',12)} Apenas vídeos podem ser vinculados a cursos.</p>` : ''}
+    </div>
+    <div style="margin-top:.5rem">
+      <label class="toggle" id="edit-intro-label">
+        <input type="checkbox" id="edit-intro-check" ${m.is_course_intro ? 'checked' : ''} ${(!isVideo || !m.course_slug) ? 'disabled' : ''}>
+        <span class="toggle__track"></span>
+        <span>Apresentação principal do curso</span>
+      </label>
+    </div>
     <div style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
       <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
       <button class="btn btn--primary" id="btn-save-edit">${icon('save',13)} Salvar</button>
@@ -2954,19 +3449,38 @@ function openEditMediaModal(slot, m, parentEl) {
   const previewSlot = document.getElementById('edit-media-preview');
   if (previewSlot) previewSlot.appendChild(renderMediaPreview(m));
 
+  // habilita/desabilita checkbox de intro conforme curso selecionado
+  const courseSelect = document.getElementById('edit-course-select');
+  const introCheck = document.getElementById('edit-intro-check');
+  if (courseSelect && introCheck) {
+    courseSelect.addEventListener('change', () => {
+      const hasCourse = !!courseSelect.value;
+      introCheck.disabled = !hasCourse;
+      if (!hasCourse) introCheck.checked = false;
+    });
+  }
+
   document.getElementById('btn-save-edit').addEventListener('click', async () => {
     const saveBtn = document.getElementById('btn-save-edit');
     const statusDiv = document.getElementById('edit-status');
     saveBtn.disabled = true;
     try {
+      const courseSlugVal = (courseSelect && isVideo) ? (courseSelect.value || null) : undefined;
+      const isCourseIntro = (introCheck && isVideo && courseSlugVal) ? introCheck.checked : (courseSlugVal === null ? false : undefined);
+      const body = {
+        context: document.getElementById('edit-context-input').value.trim() || null,
+        caption: document.getElementById('edit-caption-input').value.trim() || null,
+        position_order: Number(document.getElementById('edit-order-input').value) || 0,
+      };
+      if (isVideo) {
+        body.course_slug = courseSlugVal;
+        if (courseSlugVal !== null) body.is_course_intro = introCheck ? introCheck.checked : false;
+        else body.is_course_intro = false;
+      }
       await api(`/api/bots/${slot}/media/${m.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          context: document.getElementById('edit-context-input').value.trim() || null,
-          caption: document.getElementById('edit-caption-input').value.trim() || null,
-          position_order: Number(document.getElementById('edit-order-input').value) || 0,
-        }),
+        body: JSON.stringify(body),
       });
       toast('Mídia atualizada.', 'success');
       closeModal();
