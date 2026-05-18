@@ -1923,10 +1923,10 @@ async function renderDashKPIStrip() {
     const statusData = statusRes.status === 'fulfilled' ? statusRes.value : {};
     const execs = statusData?.execucoes || [];
     const todayCutoff = new Date(); todayCutoff.setHours(0,0,0,0);
-    const execsHj = execs.filter(e => new Date(e.created_at || e.startedAt || 0) >= todayCutoff).length;
-    const execsTotal = execs.length;
-    const execsOk = execs.filter(e => (e.status || '').toLowerCase() === 'success' || e.finished).length;
-    const execRate = execsTotal > 0 ? Math.round((execsOk / execsTotal) * 100) : null;
+    const execsHjArr = execs.filter(e => new Date(e.created_at || e.startedAt || 0) >= todayCutoff);
+    const execsHj = execsHjArr.length;
+    const execsHjOk = execsHjArr.filter(e => (e.status || '').toLowerCase() === 'success').length;
+    const execRate = execsHj > 0 ? Math.round((execsHjOk / execsHj) * 100) : null;
 
     /* Leads 24h */
     const leadsArr = leadsRes.status === 'fulfilled' && Array.isArray(leadsRes.value) ? leadsRes.value : [];
@@ -1953,7 +1953,7 @@ async function renderDashKPIStrip() {
       <div class="kpi-strip__cell">
         <span class="kpi-strip__label">MSG · 7D</span>
         <span class="kpi-strip__value">${fmtNum(msgs7d)}</span>
-        <span class="kpi-strip__sub">${deltaHtml(msgs7dDelta)}${msgs7dDelta != null ? '' : '<span style="color:var(--text-subtle)">vs semana anterior</span>'}</span>
+        <span class="kpi-strip__sub">${msgs7dDelta != null ? deltaHtml(msgs7dDelta) : '<span style="color:var(--text-subtle)">sem dados ant.</span>'}</span>
       </div>
       <div class="kpi-strip__cell">
         <span class="kpi-strip__label">EXEC · HJ</span>
@@ -1987,7 +1987,7 @@ async function renderDashSessions() {
         <button class="btn btn--sm btn--ghost" onclick="navigateTo('sessoes')" style="font-size:.7rem;padding:.2rem .5rem">Ver tudo →</button>
       </div>
       <div class="dash-block__body">
-        <table class="sessions-table"><thead><tr><th>SESSÃO</th><th>STATUS</th><th>ÚLTIMA ATI.</th><th>TELS</th><th></th></tr></thead>
+        <table class="sessions-table"><thead><tr><th>SESSÃO</th><th>STATUS</th><th>ÚLTIMA ATI.</th><th>NÚMERO</th><th></th></tr></thead>
         <tbody>${skRow.repeat(3)}</tbody></table>
       </div>
     </div>`;
@@ -2010,8 +2010,7 @@ async function renderDashSessions() {
       const dotCls = isOn ? 's-dot--on' : isWarn ? 's-dot--warn' : 's-dot--off';
       const stLabel = isOn ? 'ON' : isWarn ? 'AGUARD.' : 'OFF';
       const lastSeen = s.updatedAt || s.updated_at || s.lastActivity || null;
-      const phones = s.phones || s.connected_phones || (s.phone ? 1 : null);
-      const phonesStr = phones != null ? String(phones) : '—';
+      const phonesStr = _fmtPhone(s.me) || (s.me ? s.me.replace(/@.+$/, '') : '—');
 
       return `<tr>
         <td class="mono" style="font-size:.75rem;color:var(--text)">${name}</td>
@@ -2117,7 +2116,7 @@ async function _loadDashActivity() {
       return;
     }
 
-    const rows = execs.slice(0, 10).map(e => {
+    const rows = execs.filter(e => !String(e.flow_id || e.bot || '').startsWith('worker')).slice(0, 10).map(e => {
       const timeStr = (() => {
         try {
           const d = new Date(e.created_at || e.startedAt || Date.now());
