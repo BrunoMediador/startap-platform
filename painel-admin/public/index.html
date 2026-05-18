@@ -1967,7 +1967,7 @@ async function renderDashKPIStrip() {
       </div>
       <div class="kpi-strip__cell">
         <span class="kpi-strip__label">TOKENS · 7D</span>
-        <span class="kpi-strip__value">${cost7d != null ? `$${Number(cost7d).toFixed(2)}` : '—'}</span>
+        <span class="kpi-strip__value">${cost7d != null ? `US$${Number(cost7d).toFixed(2)}` : '—'}</span>
         <span class="kpi-strip__sub"><span style="color:var(--text-subtle)">custo OpenAI</span></span>
       </div>`;
   } catch (err) {
@@ -3381,15 +3381,18 @@ async function renderBotCourses(slot, el) {
         const noIntroWarning = count > 0 && !intro
           ? `<span class="badge badge--warning" style="margin-left:.375rem;font-size:.7rem">sem intro</span>`
           : '';
+        const introLabel = intro
+          ? escapeHtml(intro.caption || intro.context || (intro.position || '').replace(/_/g, ' ') || `mídia #${intro.id}`)
+          : '—';
         const introCell = intro
-          ? `<span class="muted" style="font-size:.75rem">${escapeHtml(intro.position || `mídia #${intro.id}`)}</span>`
+          ? `<span class="muted" style="font-size:.75rem" title="${introLabel}">${introLabel}</span>`
           : `<span class="muted">—</span>`;
         const priceDisplay = (c.price != null && c.price >= 0) ? fmtBRL(c.price / 100) : '—';
         const enabledToggleId = `course-enabled-${c.id}`;
         return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">
           <td><button class="btn btn--ghost btn--sm js-course-edit" data-id="${c.id}" style="font-weight:600;color:var(--text)">${escapeHtml(c.name)}</button></td>
           <td style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
-          <td class="course-media-count"><span>${count}/5</span>${noIntroWarning}</td>
+          <td class="course-media-count" title="${count} de 5 mídias máximas"><span>${count}/5</span>${noIntroWarning}</td>
           <td>${introCell}</td>
           <td>
             <label class="toggle">
@@ -5715,7 +5718,7 @@ async function renderRoteamento() {
     // Popula KPIs
     document.getElementById('rt-kpis').innerHTML = `
       <div class="rt-kpi"><span class="rt-kpi__value">${_rtRoutes.length}</span><span class="rt-kpi__label">Cadastrados</span></div>
-      <div class="rt-kpi"><span class="rt-kpi__value">${_rtWfs.length}</span><span class="rt-kpi__label">Fluxos routáveis</span></div>`;
+      <div class="rt-kpi"><span class="rt-kpi__value">${_rtWfs.length}</span><span class="rt-kpi__label">Fluxos disponíveis</span></div>`;
 
     // Popula select de fluxos
     const sel = document.getElementById('rt-sel-wf');
@@ -5776,10 +5779,10 @@ function _rtRender() {
 
   const tbody = rows.map(r => {
     const id       = r.id;
-    const phone    = escapeHtml(r.telefone || r.phone || '—');
+    const phone    = escapeHtml(_fmtPhone(r.telefone || r.phone) || r.telefone || r.phone || '—');
     const nome     = escapeHtml(r.nome_cliente || r.nome || '—');
     const wfId     = r.workflow_id || '';
-    const wfName   = escapeHtml(r.workflow_name || _rtWfs.find(w => w.id === wfId)?.name || wfId || '—');
+    const wfName   = escapeHtml(_rtWfs.find(w => w.id === wfId)?.name || r.workflow_name || wfId || '—');
     const ativo    = r.ativo !== false;
     const updated  = r.updated_at ? fmtRelative(r.updated_at) : (r.created_at ? fmtRelative(r.created_at) : '—');
     const checked  = _rtSelected.has(id);
@@ -6032,7 +6035,7 @@ function _rtOpenModal(route) {
         <label for="rt-modal-wf">Fluxo de teste <span style="color:var(--danger)">*</span></label>
         <select id="rt-modal-wf">
           <option value="">— selecione um fluxo —</option>
-          ${wfOptions || '<option disabled>Nenhum fluxo routável disponível</option>'}
+          ${wfOptions || '<option disabled>Nenhum fluxo disponível</option>'}
         </select>
       </div>
       ${isEdit ? `<div class="field" style="display:flex;align-items:center;gap:.75rem">
@@ -6326,7 +6329,7 @@ function _mRender(bots, erros, sparkMap) {
             <th>Sucesso</th>
             <th>Latência avg</th>
             <th>Tokens in/out</th>
-            <th>Custo USD</th>
+            <th>Custo (US$)</th>
           </tr></thead>
           <tbody>
             ${bots.map(b => `<tr>
@@ -6336,7 +6339,7 @@ function _mRender(bots, erros, sparkMap) {
               <td>${successBadge(b.success_rate)}</td>
               <td>${latencyBadge(b.avg_latency_ms)}</td>
               <td style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
-              <td style="font-variant-numeric:tabular-nums">$${Number(b.cost_usd).toFixed(4)}</td>
+              <td style="font-variant-numeric:tabular-nums">US$${Number(b.cost_usd).toFixed(4)}</td>
             </tr>`).join('')}
           </tbody>
           <tfoot><tr style="border-top:2px solid var(--border);font-weight:600">
@@ -6346,7 +6349,7 @@ function _mRender(bots, erros, sparkMap) {
             <td>—</td>
             <td>—</td>
             <td style="font-size:.8rem">${totTkIn.toLocaleString('pt-BR')} / ${totTkOut.toLocaleString('pt-BR')}</td>
-            <td>$${totCost.toFixed(4)}</td>
+            <td>US$${totCost.toFixed(4)}</td>
           </tr></tfoot>
         </table>`
       }
@@ -6367,7 +6370,7 @@ function _mRender(bots, erros, sparkMap) {
       </div>
       <div class="card" id="m-chart-cost">
         <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-          <span class="label">Custo USD</span>
+          <span class="label">Custo (US$)</span>
           <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-cost">
             <option value="all">Todos</option>${botOptions}
           </select>
