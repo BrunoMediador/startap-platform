@@ -407,7 +407,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 /* ── Bot cards grid ──────────────────────────────────────────────────── */
 .bots-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
 }
@@ -415,16 +415,64 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 1rem;
+  padding: 1.25rem;
   cursor: pointer;
-  transition: border-color var(--transition), box-shadow var(--transition);
-  display: flex; flex-direction: column; gap: .75rem;
+  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+  display: flex; flex-direction: column; gap: 1rem;
 }
-.bot-card:hover { border-color: var(--border-light); box-shadow: var(--shadow-md); }
+.bot-card:hover {
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
 .bot-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-glow); }
-.bot-card__header { display: flex; align-items: center; gap: .75rem; }
-.bot-card__name   { font-weight: 600; font-size: .9375rem; }
-.bot-card__slug   { font-size: .75rem; color: var(--text-muted); font-family: var(--font-mono); }
+.bot-card__header { display: flex; align-items: flex-start; gap: .875rem; }
+.bot-card__header-meta { flex: 1; min-width: 0; }
+.bot-card__name   { font-weight: 600; font-size: 1rem; display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
+.bot-card__slug   { font-size: .6875rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: .125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bot-card__phone  { font-size: .75rem; color: var(--text-muted); margin-top: .25rem; display: flex; align-items: center; gap: .25rem; }
+.bot-card__status-row { display: flex; align-items: center; gap: .5rem; }
+/* ── Dot pulsante de status ─────────────────────────────────────── */
+.bot-card__dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.bot-card__dot--working {
+  background: var(--success);
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+.bot-card__dot--failed  { background: var(--danger); }
+.bot-card__dot--muted   { background: var(--text-muted); }
+.bot-card__dot--warning { background: var(--warning); animation: dot-pulse 1.2s ease-in-out infinite; }
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: .5; transform: scale(.65); }
+}
+/* ── Mini KPIs ──────────────────────────────────────────────────── */
+.bot-card__kpis {
+  display: flex; gap: .5rem; flex-wrap: wrap;
+}
+.bot-card__kpi {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: .25rem .625rem;
+  font-size: .6875rem;
+  color: var(--text-muted);
+  display: flex; flex-direction: column; align-items: center; gap: .0625rem;
+}
+.bot-card__kpi-val {
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+/* ── Footer de ações ────────────────────────────────────────────── */
+.bot-card__footer {
+  display: flex; gap: .5rem; flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: .25rem;
+  border-top: 1px solid var(--border);
+}
 /* ── Bot detail ─────────────────────────────────────────────────────── */
 .bot-detail {
   background: var(--surface);
@@ -432,12 +480,21 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   border-radius: var(--radius-lg);
   padding: 1.25rem;
 }
+/* Quando renderizado dentro do drawer, herda o estilo do drawer */
+.bot-detail--in-drawer {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
 .bot-detail__header {
   display: flex; align-items: center; gap: 1rem;
   margin-bottom: 1.25rem; padding-bottom: 1rem;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
+/* Oculta o header interno quando dentro do drawer (o drawer já tem o seu próprio) */
+.bot-detail--in-drawer .bot-detail__header { display: none; }
 .bot-detail__title { font-size: 1.125rem; font-weight: 700; }
 .bot-detail__meta  { font-size: .8125rem; color: var(--text-muted); }
 /* ── Media table (Retool dense) ───────────────────────────────────────── */
@@ -693,6 +750,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .drawer-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:900; opacity:0; pointer-events:none; transition:opacity 200ms; }
 .drawer-backdrop.open { opacity:1; pointer-events:auto; }
 .drawer { position:fixed; top:0; right:0; bottom:0; width:min(420px, 90vw); background:var(--surface); border-left:1px solid var(--border); transform:translateX(100%); transition:transform 250ms ease-out; z-index:901; overflow-y:auto; padding:1.5rem; }
+.drawer--wide { width:min(520px, 95vw); }
 .drawer.open { transform:translateX(0); }
 .drawer__header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; padding-bottom:.875rem; border-bottom:1px solid var(--border); }
 .drawer__title { font-weight:700; font-size:1rem; }
@@ -1127,6 +1185,45 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 @media (max-width: 480px) {
   .kpi-strip { grid-template-columns: 1fr 1fr; }
   .dash-metrics-grid { grid-template-columns: 1fr 1fr; }
+}
+/* ── Cleanup countdown widget ────────────────────────────────────── */
+#cleanup-countdown {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  z-index: 400;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: .5rem .875rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .75rem;
+  color: var(--text-muted);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition), color var(--transition);
+  user-select: none;
+}
+#cleanup-countdown:hover {
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+}
+#cleanup-countdown.warning {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+#cleanup-countdown.running {
+  border-color: var(--primary);
+  color: var(--primary);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+#cleanup-countdown__label { font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 640px) {
+  #cleanup-countdown #cleanup-countdown__label { display: none; }
+  #cleanup-countdown { padding: .5rem .625rem; }
 }
 </style>
 </head>
@@ -2025,6 +2122,31 @@ async function renderBots() {
   }
 }
 
+function _botDotClass(status) {
+  if (!status) return 'bot-card__dot--muted';
+  const s = status.toUpperCase();
+  if (s === 'WORKING')   return 'bot-card__dot--working';
+  if (s === 'FAILED')    return 'bot-card__dot--failed';
+  if (s === 'STARTING')  return 'bot-card__dot--warning';
+  return 'bot-card__dot--muted';
+}
+
+function _fmtPhone(raw) {
+  if (!raw) return null;
+  // Remove @c.us or @s.whatsapp.net suffix (WAHA format)
+  const digits = String(raw).replace(/@.+$/, '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  // Brazilian: +55 (XX) XXXXX-XXXX
+  if (digits.startsWith('55') && digits.length >= 12) {
+    const ddd  = digits.slice(2, 4);
+    const rest = digits.slice(4);
+    const part1 = rest.slice(0, rest.length - 4);
+    const part2 = rest.slice(-4);
+    return `+55 (${ddd}) ${part1}-${part2}`;
+  }
+  return `+${digits}`;
+}
+
 function _renderBotGroup(bots, container, showCloneBtn, allClones) {
   if (!bots.length) { container.innerHTML = `<p class="muted">Nenhum bot neste grupo.</p>`; return; }
   const grid = document.createElement('div');
@@ -2037,24 +2159,63 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', `Abrir detalhes do bot ${bot.name || bot.slot}`);
 
+    const isInternal  = (bot.slot || bot.slug) === INTERNAL_BOT_SLOT;
+    const cloneCount  = allClones.filter(c => c.matriz_slot === (bot.slot || bot.slug)).length;
+    const wahaStatus  = bot.waha_status || bot.status || '';
+    const dotClass    = _botDotClass(wahaStatus);
+
+    // ── Header: avatar + meta
     const header = document.createElement('div');
     header.className = 'bot-card__header';
-    header.appendChild(botAvatar(bot.slug || bot.slot, 40));
+    header.appendChild(botAvatar(bot.slug || bot.slot, 60));
 
-    const isInternal = (bot.slot || bot.slug) === INTERNAL_BOT_SLOT;
-    const cloneCount = allClones.filter(c => c.matriz_slot === (bot.slot || bot.slug)).length;
+    const phoneRaw = bot.phone || bot.waha_me?.id || bot.me?.id || null;
+    const phoneFmt = _fmtPhone(phoneRaw);
+    const cloneLabel = showCloneBtn && cloneCount > 0
+      ? `<span class="muted" style="font-size:.65rem">${cloneCount} clone${cloneCount !== 1 ? 's' : ''}</span>`
+      : '';
+    const internalBadge = isInternal
+      ? `<span class="badge" style="background:rgba(245,158,11,.18);color:#f59e0b;font-size:.6rem">Interno</span>`
+      : '';
+
     const meta = document.createElement('div');
+    meta.className = 'bot-card__header-meta';
     meta.innerHTML = `
-      <div class="bot-card__name">${escapeHtml(bot.name || bot.slot)}${isInternal ? ` <span class="badge" style="background:rgba(245,158,11,.18);color:#f59e0b;font-size:.6875rem">Interno</span>` : ''}</div>
-      <div class="bot-card__slug">${escapeHtml(bot.slug || bot.slot || '')}${showCloneBtn && cloneCount > 0 ? ` <span class="muted">${cloneCount} clone${cloneCount !== 1 ? 's' : ''} ativo${cloneCount !== 1 ? 's' : ''}</span>` : ''}</div>`;
+      <div class="bot-card__name">${escapeHtml(bot.name || bot.slot)}${internalBadge}</div>
+      <div class="bot-card__slug">${escapeHtml(bot.slug || bot.slot || '')} ${cloneLabel}</div>
+      ${phoneFmt ? `<div class="bot-card__phone">${icon('phone', 11)} ${escapeHtml(phoneFmt)}</div>` : ''}`;
     header.appendChild(meta);
     card.appendChild(header);
 
-    const st = bot.waha_status || bot.status || '';
-    if (st) card.insertAdjacentHTML('beforeend', statusBadge(st));
+    // ── Status row: dot + badge
+    if (wahaStatus) {
+      const statusRow = document.createElement('div');
+      statusRow.className = 'bot-card__status-row';
+      statusRow.innerHTML = `<span class="bot-card__dot ${dotClass}"></span>${statusBadge(wahaStatus)}`;
+      card.appendChild(statusRow);
+    }
 
+    // ── Mini KPIs (omite campo se ausente)
+    const kpis = [];
+    if (bot.messages_today != null) kpis.push({ val: fmtNum(bot.messages_today), label: 'Msgs hoje' });
+    if (bot.leads_count     != null) kpis.push({ val: fmtNum(bot.leads_count),     label: 'Leads' });
     const model = bot.model || bot.llm_model || '';
-    if (model) card.insertAdjacentHTML('beforeend', `<div class="muted mono">${escapeHtml(model)}</div>`);
+    if (model) kpis.push({ val: escapeHtml(model.replace('gpt-', 'GPT-').replace('claude-', 'Claude ')), label: 'Modelo IA' });
+
+    if (kpis.length) {
+      const kpisEl = document.createElement('div');
+      kpisEl.className = 'bot-card__kpis';
+      kpisEl.innerHTML = kpis.map(k => `
+        <div class="bot-card__kpi">
+          <span class="bot-card__kpi-val">${k.val}</span>
+          <span>${k.label}</span>
+        </div>`).join('');
+      card.appendChild(kpisEl);
+    }
+
+    // ── Footer de ações
+    const footer = document.createElement('div');
+    footer.className = 'bot-card__footer';
 
     if (showCloneBtn) {
       const cloneBtn = document.createElement('button');
@@ -2065,11 +2226,28 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
         e.stopPropagation();
         openCloneWizard(bot.slot || bot.slug);
       });
-      card.appendChild(cloneBtn);
+      footer.appendChild(cloneBtn);
     }
+
+    const detailBtn = document.createElement('button');
+    detailBtn.className = 'btn btn--ghost btn--sm';
+    detailBtn.setAttribute('aria-label', `Ver detalhes do bot ${bot.name || bot.slot}`);
+    detailBtn.innerHTML = `${icon('chevron-right', 13)} Detalhes`;
+    detailBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _selectedBot = bot;
+      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
+      const wrap = document.getElementById('bots-content');
+      _renderBotsDetail(bots, wrap, bot);
+    });
+    footer.appendChild(detailBtn);
+    card.appendChild(footer);
 
     card.addEventListener('click', () => {
       _selectedBot = bot;
+      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
       const wrap = document.getElementById('bots-content');
       _renderBotsDetail(bots, wrap, bot);
     });
@@ -2083,12 +2261,50 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
 }
 
 function _renderBotsDetail(bots, wrap, selectedBot) {
-  let detail = wrap.querySelector('.bot-detail');
-  if (!detail) {
-    detail = document.createElement('div');
-    wrap.appendChild(detail);
-  }
+  // Remove eventual .bot-detail legado no wrap (migração)
+  const legacy = wrap.querySelector('.bot-detail');
+  if (legacy) legacy.remove();
+
+  // Abre o drawer lateral — visível imediatamente, sem scroll
+  const drawerInner = document.getElementById('drawer-inner');
+  drawerInner.innerHTML = '';
+
+  // Header do drawer: avatar + nome + fechar
+  const drawerHeader = document.createElement('div');
+  drawerHeader.className = 'drawer__header';
+  drawerHeader.innerHTML = `
+    <div style="display:flex;align-items:center;gap:.75rem;min-width:0">
+      <div id="bot-drawer-avatar"></div>
+      <div style="min-width:0">
+        <div class="drawer__title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(selectedBot.name || selectedBot.slot || selectedBot.slug)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);font-family:var(--font-mono)">${escapeHtml(selectedBot.slug || selectedBot.slot || '')}</div>
+      </div>
+    </div>
+    <button class="btn btn--ghost btn--sm" id="bot-drawer-close" aria-label="Fechar detalhes do bot" style="flex-shrink:0">&#x2715;</button>`;
+  drawerInner.appendChild(drawerHeader);
+  drawerHeader.querySelector('#bot-drawer-avatar').appendChild(botAvatar(selectedBot.slug || selectedBot.slot, 36));
+
+  // Container do detalhe (sem borda/padding próprios — usa o drawer)
+  const detail = document.createElement('div');
+  detail.className = 'bot-detail bot-detail--in-drawer';
+  drawerInner.appendChild(detail);
+
+  // Renderiza o conteúdo (tabs + aba ativa)
   renderBotDetail(selectedBot, detail);
+
+  // Abre o drawer (mais largo para acomodar forms de 2 colunas)
+  const drawerEl = document.getElementById('drawer');
+  drawerEl.classList.add('open', 'drawer--wide');
+  document.getElementById('drawer-backdrop').classList.add('open');
+
+  // Fechar via botão X do header do drawer
+  drawerHeader.querySelector('#bot-drawer-close').addEventListener('click', () => {
+    closeDrawer();
+    _selectedBot = null;
+    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+  });
+  // Marca o drawer com o tipo para que closeDrawer possa limpar estado de bot
+  document.getElementById('drawer').dataset.drawerType = 'bot';
 }
 
 function renderBotsListAndDetail(bots, wrap) {
@@ -2099,7 +2315,8 @@ function renderBotDetail(bot, container) {
   const slot = bot.slot || bot.slug;
   // aba routing foi removida em 003-F — normaliza para overview
   if (_selectedBotTab === 'routing') _selectedBotTab = 'overview';
-  container.className = 'bot-detail';
+  // Preserva modificadores (ex: bot-detail--in-drawer) já presentes no container
+  if (!container.classList.contains('bot-detail')) container.classList.add('bot-detail');
   container.innerHTML = `
     <div class="bot-detail__header">
       <div id="bot-detail-avatar"></div>
@@ -2757,7 +2974,14 @@ function openDrawer(html) {
   document.getElementById('drawer-backdrop').classList.add('open');
 }
 function closeDrawer() {
-  document.getElementById('drawer').classList.remove('open');
+  const drawerEl = document.getElementById('drawer');
+  // Limpa estado de bot selecionado se o drawer era do tipo bot
+  if (drawerEl.dataset.drawerType === 'bot') {
+    _selectedBot = null;
+    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+    delete drawerEl.dataset.drawerType;
+  }
+  drawerEl.classList.remove('open', 'drawer--wide');
   document.getElementById('drawer-backdrop').classList.remove('open');
   document.getElementById('drawer-inner').innerHTML = '';
 }
@@ -3164,11 +3388,11 @@ async function renderConfig() {
       <div class="section-header__left">
         <span class="section-label">CONFIGURAÇÃO GLOBAL</span>
         <h1 class="h1">Configurações</h1>
-        <p class="muted">Fluxos n8n, manutenção de logs e estado do sistema</p>
+        <p class="muted">Fluxos, manutenção de logs e estado do sistema</p>
       </div>
     </div>
     <div class="tabs" id="cfg-tabs">
-      <button class="tab-btn${_cfgTab==='fluxos'?' active':''}" data-tab="fluxos">Fluxos n8n</button>
+      <button class="tab-btn${_cfgTab==='fluxos'?' active':''}" data-tab="fluxos">Fluxos</button>
       <button class="tab-btn${_cfgTab==='limpeza'?' active':''}" data-tab="limpeza">Limpeza de logs</button>
       <button class="tab-btn${_cfgTab==='sistema'?' active':''}" data-tab="sistema">Sistema</button>
     </div>
@@ -3423,7 +3647,7 @@ async function loadCfgSistema(content) {
       <h3 class="h3" style="margin-bottom:.75rem">Links úteis</h3>
       <div style="display:flex;flex-direction:column;gap:.5rem">
         <a class="btn btn--ghost btn--sm" href="https://gestao.startap.tech" target="_blank" rel="noopener">${icon('external-link',13)} Painel em produção</a>
-        <a class="btn btn--ghost btn--sm" href="https://n8n.startap.tech" target="_blank" rel="noopener">${icon('external-link',13)} n8n</a>
+        <a class="btn btn--ghost btn--sm" href="/api/status" target="_blank" rel="noopener">${icon('external-link',13)} API Status</a>
       </div>
     </div>
   </div>`;
@@ -5314,6 +5538,88 @@ function closeSidebar() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   CLEANUP COUNTDOWN WIDGET
+   ══════════════════════════════════════════════════════════════════ */
+function mountCleanupCountdown() {
+  // Cria o elemento fixo se ainda não existir
+  let widget = document.getElementById('cleanup-countdown');
+  if (!widget) {
+    widget = document.createElement('div');
+    widget.id = 'cleanup-countdown';
+    widget.setAttribute('role', 'button');
+    widget.setAttribute('tabindex', '0');
+    widget.setAttribute('title', 'Ir para configurações de limpeza');
+    widget.setAttribute('aria-label', 'Próxima limpeza automática');
+    widget.innerHTML = `${icon('trash-2', 14)}<span id="cleanup-countdown__label">Carregando...</span>`;
+    document.body.appendChild(widget);
+  }
+
+  const labelEl = () => document.getElementById('cleanup-countdown__label');
+
+  widget.addEventListener('click', () => {
+    navigateTo('configuracoes');
+    // Força aba limpeza após navegação (pequeno delay para render)
+    setTimeout(() => {
+      const btn = document.querySelector('#cfg-tabs [data-tab="limpeza"]');
+      if (btn) btn.click();
+    }, 80);
+  });
+  widget.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') widget.click(); });
+
+  let _nextRun = null; // Date object do próximo run
+  let _tickId  = null;
+  let _fetchId = null;
+
+  function _fmtCountdown(ms) {
+    if (ms <= 0) return null;
+    const totalSec = Math.floor(ms / 1000);
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    if (min > 0) return `${min}min ${String(sec).padStart(2,'0')}s`;
+    return `${sec}s`;
+  }
+
+  function _tick() {
+    const lbl = labelEl();
+    if (!lbl) return;
+    if (!_nextRun) { lbl.textContent = 'Aguardando...'; return; }
+    const ms = _nextRun - Date.now();
+    if (ms <= 0) {
+      // Limpeza em execução (ou passou)
+      lbl.textContent = 'Executando...';
+      widget.className = 'running';
+      // Re-fetch após 30s pra pegar novo next_run
+      clearTimeout(_fetchId);
+      _fetchId = setTimeout(_fetchStatus, 30000);
+      return;
+    }
+    const txt = _fmtCountdown(ms);
+    lbl.textContent = `Prox. limpeza em ${txt}`;
+    widget.className = ms < 60000 ? 'warning' : '';
+  }
+
+  async function _fetchStatus() {
+    try {
+      const s = await api('/api/cleanup/status');
+      const raw = s?.next_run || s?.nextRun;
+      _nextRun = raw ? new Date(raw) : null;
+    } catch (_) {
+      _nextRun = null;
+    }
+    _tick();
+    // Re-sincroniza a cada 5 minutos
+    clearTimeout(_fetchId);
+    _fetchId = setTimeout(_fetchStatus, 5 * 60 * 1000);
+  }
+
+  // Tick a cada 1s
+  _tickId = setInterval(_tick, 1000);
+
+  // Fetch inicial
+  _fetchStatus();
+}
+
+/* ══════════════════════════════════════════════════════════════════
    BOOTSTRAP
    ══════════════════════════════════════════════════════════════════ */
 (function init() {
@@ -5363,6 +5669,9 @@ function closeSidebar() {
     if (_execSSE) { _execSSE.close(); _execSSE = null; }
     if (_dashActivityInterval) { clearInterval(_dashActivityInterval); _dashActivityInterval = null; }
   });
+
+  // Widget de countdown da limpeza automática
+  mountCleanupCountdown();
 })();
 </script>
 </body>
