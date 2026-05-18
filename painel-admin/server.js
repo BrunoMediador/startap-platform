@@ -388,7 +388,9 @@ app.post('/api/uploads/media', mediaUpload.single('file'), (req, res) => {
 });
 
 const wahaFetch = (p) =>
-  fetch(`${WAHA_URL}${p}`, { headers: { 'X-Api-Key': WAHA_API_KEY } }).then((r) => r.json());
+  fetch(`${WAHA_URL}${p}`, {
+    headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+  }).then((r) => r.json());
 
 // ---------- ROUTING CRUD ----------
 app.get('/api/routing', async (req, res) => {
@@ -550,6 +552,19 @@ app.get(
       return acc;
     }, {});
 
+    // Busca status das sessões WAHA para enriquecer cada bot com waha_status/waha_me.
+    // Promise.allSettled garante que falha do WAHA não bloqueia a resposta.
+    const wahaSessionsResult = await Promise.allSettled([wahaFetch('/api/sessions')]);
+    let sessionsByName = {};
+    if (wahaSessionsResult[0].status === 'fulfilled') {
+      const sessions = Array.isArray(wahaSessionsResult[0].value)
+        ? wahaSessionsResult[0].value
+        : [];
+      sessionsByName = Object.fromEntries(sessions.map((s) => [s.name, s]));
+    } else {
+      console.error('wahaFetch /api/sessions falhou:', wahaSessionsResult[0].reason);
+    }
+
     res.json(
       r.rows.map((row) => {
         const context = BOT_MODEL_CONTEXT[row.slot] || {
@@ -568,12 +583,16 @@ app.get(
           ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce((sum, n) => sum + n, 0)
           : 0;
 
+        const wahaSession = sessionsByName[row.slot];
+
         return {
           ...row,
           ...context,
           models_in_flow: flowCounts[flowId] || 1,
           messages_today: msgBySlot[row.slot] ?? 0,
           leads_count: leadsCount,
+          waha_status: wahaSession?.status || null,
+          waha_me: wahaSession?.me?.id || null,
         };
       }),
     );
