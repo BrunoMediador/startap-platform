@@ -1086,9 +1086,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
       <div id="bots-content"></div>
     </section>
     <section class="section" id="sec-sessoes" aria-label="Sessões WAHA">
-      <!-- Stub 003-E -->
-      <div class="section-header"><div class="section-header__left"><h1 class="h1">Sessões WAHA</h1><p class="muted">Gestão completa em 003-E</p></div></div>
-      <div id="sessoes-stub-content"></div>
+      <div id="sessoes-content"></div>
     </section>
     <section class="section" id="sec-leads" aria-label="Leads">
       <!-- Stub 003-E -->
@@ -1621,32 +1619,235 @@ async function _loadDashActivity() {
   }
 }
 
-/* ── Stubs para seções 003-E ─────────────────────────────────────── */
-async function renderSessoesStub() {
-  const wrap = document.getElementById('sessoes-stub-content');
+/* ══════════════════════════════════════════════════════════════════
+   SESSÕES WAHA — gestão completa (003-E)
+   ══════════════════════════════════════════════════════════════════ */
+
+async function renderSessoes() {
+  const wrap = document.getElementById('sessoes-content');
   if (!wrap) return;
-  wrap.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-lg)"></div>`;
+
+  const skRow = `<tr><td colspan="5"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
+  wrap.innerHTML = `
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="h1">Sessões WAHA</h1>
+        <p class="muted">Gerencie conexões WhatsApp — QR, reiniciar e criar novas sessões</p>
+      </div>
+      <div class="section-header__right">
+        <button class="btn btn--primary" onclick="_sessaoNovaModal()" id="btn-nova-sessao">
+          ${icon('plus',14)} Nova sessão
+        </button>
+      </div>
+    </div>
+    <div class="table-wrap" id="sessoes-table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>SESSÃO</th>
+            <th>STATUS</th>
+            <th>ÚLTIMA ATIVIDADE</th>
+            <th>WEBHOOK</th>
+            <th style="width:2.5rem"></th>
+          </tr>
+        </thead>
+        <tbody id="sessoes-tbody">${skRow.repeat(4)}</tbody>
+      </table>
+    </div>`;
+
+  await _sessaoLoadTable();
+}
+
+async function _sessaoLoadTable() {
+  const tbody = document.getElementById('sessoes-tbody');
+  if (!tbody) return;
+  const skRow = `<tr><td colspan="5"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
+  tbody.innerHTML = skRow.repeat(4);
+
   try {
     const data = await api('/api/status');
-    const sessions = data?.waha || [];
-    const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
+    const sessArr = Array.isArray(data?.waha) ? data.waha : Object.values(data?.waha ?? {});
+
     if (!sessArr.length) {
-      wrap.innerHTML = `<div class="empty-state">${icon('wifi-off',36)}<div class="empty-state__title">Nenhuma sessão</div></div>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="activity-empty">${icon('wifi-off',14)} Nenhuma sessão encontrada</td></tr>`;
       return;
     }
-    const rows = sessArr.map(s => {
+
+    tbody.innerHTML = sessArr.map(s => {
+      const name = escapeHtml(s.name || s.session || s.id || 'Sessão');
       const st = s.status || s.state || '';
-      const isOn = st === 'WORKING';
+      const webhook = escapeHtml((s.webhook || '').replace(/^https?:\/\/[^/]+/, '…') || '—');
+      const lastAt = s.updatedAt || s.updated_at || s.lastActivity || null;
+
       return `<tr>
-        <td class="mono" style="font-size:.8125rem">${escapeHtml(s.name||s.session||'Sessão')}</td>
+        <td class="mono" style="font-size:.8125rem;font-weight:500">${name}</td>
         <td>${statusBadge(st)}</td>
-        <td class="muted">${s.updatedAt ? fmtRelative(s.updatedAt) : '—'}</td>
-        <td><button class="btn btn--sm" onclick="navigateTo('bots')">${isOn ? 'Gerenciar' : 'Reconectar'}</button></td>
+        <td style="font-size:.8125rem;color:var(--text-muted)">${lastAt ? fmtRelative(lastAt) : '—'}</td>
+        <td class="mono" style="font-size:.75rem;color:var(--text-subtle);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.webhook||'')}">${webhook}</td>
+        <td>
+          <div class="dropdown" style="position:relative">
+            <button class="more-btn" title="Ações para ${name}"
+              onclick="_sessaoToggleMenu(this,'${name}')" aria-haspopup="true" aria-label="Ações">···</button>
+          </div>
+        </td>
       </tr>`;
     }).join('');
-    wrap.innerHTML = `<div class="table-wrap"><table class="table"><thead><tr><th>Sessão</th><th>Status</th><th>Última atividade</th><th>Ação</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   } catch (err) {
-    wrap.innerHTML = `<div class="alert--danger">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div>`;
+    tbody.innerHTML = `<tr><td colspan="5"><div class="alert--danger" style="margin:.5rem">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div></td></tr>`;
+  }
+}
+
+function _sessaoToggleMenu(btn, sessionName) {
+  // Fecha qualquer menu aberto
+  document.querySelectorAll('.sessao-menu').forEach(m => m.remove());
+
+  const menu = document.createElement('div');
+  menu.className = 'sessao-menu';
+  menu.style.cssText = 'position:absolute;right:0;top:100%;z-index:200;min-width:160px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);padding:.25rem 0';
+
+  const items = [
+    { label: `${icon('qr-code',14)} Ver QR / Reconectar`, action: () => _sessaoAbrirQR(sessionName) },
+    { label: `${icon('refresh-cw',14)} Reiniciar`,         action: () => _sessaoReiniciar(sessionName) },
+    { label: `${icon('power',14)} Derrubar`,               action: () => _sessaoDerrubar(sessionName) },
+    { label: `${icon('trash-2',14)} Deletar`,              action: () => _sessaoDeletar(sessionName), danger: true },
+  ];
+
+  items.forEach(item => {
+    const el = document.createElement('button');
+    el.style.cssText = `display:flex;align-items:center;gap:.5rem;width:100%;padding:.4rem .75rem;background:none;border:none;cursor:pointer;font-size:.8125rem;color:${item.danger ? 'var(--danger)' : 'var(--text)'};text-align:left`;
+    el.innerHTML = item.label;
+    el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-3)');
+    el.addEventListener('mouseleave', () => el.style.background = 'none');
+    el.addEventListener('click', () => { menu.remove(); item.action(); });
+    menu.appendChild(el);
+  });
+
+  btn.parentElement.appendChild(menu);
+
+  // Fecha ao clicar fora
+  const close = (e) => { if (!menu.contains(e.target) && e.target !== btn) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+function _sessaoAbrirQR(sessionName) {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${icon('qr-code',18)} QR — <span class="mono">${escapeHtml(sessionName)}</span></span>
+      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem 0">
+      <div id="sessao-qr-status"></div>
+      <div id="sessao-qr-area" style="width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+        <div class="skeleton" style="width:220px;height:220px;border-radius:var(--radius-md)"></div>
+      </div>
+      <p class="muted" style="font-size:.8125rem;text-align:center">Aponte o WhatsApp para o QR code.<br>A tela atualiza automaticamente.</p>
+    </div>
+  `);
+
+  pollQR(sessionName, (data) => {
+    const area = document.getElementById('sessao-qr-area');
+    const statusEl = document.getElementById('sessao-qr-status');
+    if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
+
+    if (data.connected || data.qr === null) {
+      if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+      if (statusEl) statusEl.innerHTML = `<span class="badge badge--dot badge--success">${icon('check-circle-2',14)} Conectado</span>`;
+      area.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;color:var(--success)">${icon('check-circle-2',48)}<span style="font-weight:600">WhatsApp conectado!</span></div>`;
+      toast(`Sessão ${sessionName} conectada!`, 'success');
+      _sessaoLoadTable();
+      setTimeout(closeModal, 2500);
+      return;
+    }
+
+    if (data.qr) {
+      if (statusEl) statusEl.innerHTML = `<span class="badge badge--dot badge--info">${icon('qr-code',14)} Aguardando scan</span>`;
+      area.innerHTML = `<img src="${escapeHtml(data.qr)}" style="width:220px;height:220px;border-radius:var(--radius-md);image-rendering:pixelated" alt="QR Code">`;
+    }
+  });
+}
+
+async function _sessaoReiniciar(sessionName) {
+  if (!confirm(`Reiniciar sessão "${sessionName}"?`)) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionName)}/restart`, { method: 'POST' });
+    toast(`Sessão ${sessionName} reiniciada`, 'success');
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao reiniciar: ${err.message}`, 'danger');
+  }
+}
+
+async function _sessaoDerrubar(sessionName) {
+  if (!confirm(`Derrubar sessão "${sessionName}"? (pode ser reiniciada depois)`)) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionName)}/stop`, { method: 'POST' });
+    toast(`Sessão ${sessionName} derrubada`, 'info');
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao derrubar: ${err.message}`, 'danger');
+  }
+}
+
+async function _sessaoDeletar(sessionName) {
+  if (!confirm(`DELETAR sessão "${sessionName}"? Esta ação é irreversível.`)) return;
+  if (!confirm(`Confirmar: deletar "${sessionName}" permanentemente?`)) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionName)}`, { method: 'DELETE' });
+    toast(`Sessão ${sessionName} deletada`, 'success');
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao deletar: ${err.message}`, 'danger');
+  }
+}
+
+function _sessaoNovaModal() {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${icon('plus-circle',18)} Nova sessão WAHA</span>
+      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
+    </div>
+    <div style="padding:.25rem 0 .5rem">
+      <label class="label" for="nova-sessao-nome">Nome da sessão</label>
+      <input id="nova-sessao-nome" class="input" type="text" placeholder="ex: barbeiro_joao"
+        style="margin-top:.4rem;width:100%"
+        pattern="[a-zA-Z0-9_-]+" title="Apenas letras, números, _ e -">
+      <p class="muted" style="margin-top:.35rem;font-size:.75rem">Apenas letras, números, _ e -. Sem espaços.</p>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem">
+      <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn--primary" id="btn-criar-sessao-confirm" onclick="_sessaoCriarConfirm()">Criar sessão</button>
+    </div>
+  `);
+  setTimeout(() => {
+    const inp = document.getElementById('nova-sessao-nome');
+    if (inp) inp.focus();
+  }, 50);
+}
+
+async function _sessaoCriarConfirm() {
+  const inp = document.getElementById('nova-sessao-nome');
+  const btn = document.getElementById('btn-criar-sessao-confirm');
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) { inp.focus(); return; }
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+    toast('Nome inválido — use apenas letras, números, _ e -', 'warning');
+    inp.focus();
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Criando…'; }
+  try {
+    await api('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    toast(`Sessão "${name}" criada`, 'success');
+    closeModal();
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao criar: ${err.message}`, 'danger');
+    if (btn) { btn.disabled = false; btn.textContent = 'Criar sessão'; }
   }
 }
 
@@ -3597,7 +3798,7 @@ const NAV_GROUPS = [
     label: 'Operação',
     items: [
       { id: 'bots',       label: 'Bots',          render: renderBots },
-      { id: 'sessoes',    label: 'Sessões WAHA',   render: renderSessoesStub },
+      { id: 'sessoes',    label: 'Sessões WAHA',   render: renderSessoes },
       { id: 'leads',      label: 'Leads',          render: renderLeadsStub },
       { id: 'roteamento', label: 'Roteamento',     render: renderRoteamento },
       { id: 'execucoes',  label: 'Execuções',      render: renderExecucoes },
