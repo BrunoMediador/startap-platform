@@ -2394,7 +2394,7 @@ async function renderLeadsStub() {
     const rows = leads.slice(0, 20).map(l => {
       const nome = escapeHtml(l.nome || l.name || '—');
       const tel  = escapeHtml(l.telefone || l.phone || '—');
-      const bot  = escapeHtml(l.bot_slug || l.source || '—');
+      const bot  = escapeHtml(l.slot || l.bot_slug || l.source || '—');
       const hora = fmtDate(l.criado_em || l.created_at);
       return `<tr><td style="font-weight:500">${nome}</td><td class="mono">${tel}</td><td class="muted">${bot}</td><td class="muted">${escapeHtml(hora)}</td></tr>`;
     }).join('');
@@ -4272,11 +4272,11 @@ async function renderExecucoes() {
    ══════════════════════════════════════════════════════════════════ */
 const COL_LABELS = {
   id: 'ID', nome: 'Nome', telefone: 'Telefone', telefone_masked: 'Telefone',
-  mensagem_inicial: 'Mensagem', origem: 'Origem', criado_em: 'Criado em',
+  mensagem_inicial: 'Mensagem', origem: 'Canal', criado_em: 'Criado em',
   created_at: 'Criado em', updated_at: 'Atualizado em',
   servico: 'Serviço', data_solicitada: 'Data solicitada',
   status: 'Status', date: 'Data', count: 'Mensagens', total: 'Total',
-  slot: 'Origem (slot)', _table: 'Tabela',
+  slot: 'Bot/Fluxo', _table: 'Tabela',
 };
 
 function colLabel(k) { return COL_LABELS[k] || k.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()); }
@@ -4343,6 +4343,7 @@ async function renderRelatorios() {
         try {
           const clones = await api('/api/clones');
           const matrizes = [
+            { slot: 'teste_barbearia', display_name: 'Teste Barbearia (matriz)' },
             { slot: 'teste_vendas', display_name: 'Teste Vendas (matriz)' },
             { slot: 'teste_vendas_barbearia', display_name: 'Teste Vendas+Barbearia (matriz)' },
           ];
@@ -5783,7 +5784,7 @@ function _rtRender() {
     const wfId     = r.workflow_id || '';
     const wfName   = escapeHtml(_rtWfs.find(w => w.id === wfId)?.name || r.workflow_name || wfId || '—');
     const ativo    = r.ativo !== false;
-    const updated  = r.updated_at ? fmtRelative(r.updated_at) : (r.created_at ? fmtRelative(r.created_at) : '—');
+    const updated  = r.atualizado_em ? fmtRelative(r.atualizado_em) : (r.criado_em ? fmtRelative(r.criado_em) : '—');
     const checked  = _rtSelected.has(id);
     const c        = _rtWfColor(wfId);
     return `<tr data-rt-id="${escapeHtml(String(id))}">
