@@ -3092,11 +3092,14 @@ async function renderBotConfigIA(slot, el) {
 // ── helpers de tipo de mídia ─────────────────────────────────────────────
 function mediaMimeToType(mime) {
   if (!mime) return 'other';
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('video/')) return 'video';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime === 'application/pdf' || mime === 'application/msword' ||
-      mime.includes('wordprocessingml') || mime === 'text/plain') return 'doc';
+  // Aceita tanto mime completo ("image/png") quanto a forma curta que o banco guarda ("image").
+  const m = String(mime).toLowerCase();
+  if (m === 'image' || m.startsWith('image/')) return 'image';
+  if (m === 'video' || m.startsWith('video/')) return 'video';
+  if (m === 'audio' || m.startsWith('audio/')) return 'audio';
+  if (m === 'doc' || m === 'document' ||
+      m === 'application/pdf' || m === 'application/msword' ||
+      m.includes('wordprocessingml') || m === 'text/plain') return 'doc';
   return 'other';
 }
 
