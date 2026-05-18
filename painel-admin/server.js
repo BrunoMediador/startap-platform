@@ -122,6 +122,13 @@ const BOT_MODEL_CONTEXT = {
   },
 };
 
+// Mapeamento flow_id → tabela de leads (slots sem leads_table omitidos intencionalmente).
+// Usado em GET /api/bots para popular leads_count sem hardcode inline.
+const FLOW_LEADS_TABLE = {
+  'dlpKXM3gvX2joC1b': 'leads_ricardo',
+  'teste_vendas_barbearia': 'leads_vendas_barbearia',
+};
+
 const DEFAULT_PROJECT_DATABASES = [
   {
     project_id: 'teste_barbearia',
@@ -501,11 +508,46 @@ app.get(
     SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at
     FROM bot_config ORDER BY slot
   `);
+
+    const slots = r.rows.map((row) => row.slot);
+
+    // Agrega KPIs em parallel: messages_today via model_usage (indexed), leads_count via leads_*
+    // model_usage é o proxy correto para mensagens processadas hoje — chat_histories não tem created_at.
+    const [msgRows, leadsRicardoRows, leadsVendasBarbeariaRows] = await Promise.all([
+      pool
+        .query(
+          `SELECT slot, COUNT(*)::int AS cnt
+           FROM model_usage
+           WHERE slot = ANY($1) AND created_at >= CURRENT_DATE
+           GROUP BY slot`,
+          [slots],
+        )
+        .catch(() => ({ rows: [] })),
+      pool
+        .query(`SELECT slot, COUNT(*)::int AS cnt FROM leads_ricardo GROUP BY slot`)
+        .catch(() => ({ rows: [] })),
+      pool
+        .query(`SELECT slot, COUNT(*)::int AS cnt FROM leads_vendas_barbearia GROUP BY slot`)
+        .catch(() => ({ rows: [] })),
+    ]);
+
+    // Mapeia slot → messages_today
+    const msgBySlot = Object.fromEntries(msgRows.rows.map((row) => [row.slot, row.cnt]));
+
+    // Consolida contagens de leads por flow_id (cada tabela usa slot do bot_config como valor da coluna slot)
+    const leadsByLeadsTable = {
+      leads_ricardo: Object.fromEntries(leadsRicardoRows.rows.map((row) => [row.slot, row.cnt])),
+      leads_vendas_barbearia: Object.fromEntries(
+        leadsVendasBarbeariaRows.rows.map((row) => [row.slot, row.cnt]),
+      ),
+    };
+
     const flowCounts = r.rows.reduce((acc, row) => {
       const flowId = BOT_MODEL_CONTEXT[row.slot]?.flow_id || row.slot;
       acc[flowId] = (acc[flowId] || 0) + 1;
       return acc;
     }, {});
+
     res.json(
       r.rows.map((row) => {
         const context = BOT_MODEL_CONTEXT[row.slot] || {
@@ -516,10 +558,23 @@ app.get(
           runtime: row.slot,
           description: 'Configuração de modelo cadastrada no banco.',
         };
+
+        const flowId = context.flow_id;
+        const leadsTable = FLOW_LEADS_TABLE[flowId];
+        // Soma leads de todos os slots que compartilham este bot_config slot na tabela de leads
+        const leadsCount = leadsTable
+          ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce(
+              (sum, n) => sum + n,
+              0,
+            )
+          : 0;
+
         return {
           ...row,
           ...context,
-          models_in_flow: flowCounts[context.flow_id] || 1,
+          models_in_flow: flowCounts[flowId] || 1,
+          messages_today: msgBySlot[row.slot] ?? 0,
+          leads_count: leadsCount,
         };
       }),
     );
