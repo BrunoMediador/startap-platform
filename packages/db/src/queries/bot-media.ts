@@ -19,6 +19,10 @@ export interface BotMediaRow {
   context: string | null;
   position_order: number;
   enabled: boolean;
+  /** Slug do curso ao qual esta mídia pertence. NULL = mídia livre (sem vínculo a curso). */
+  course_slug: string | null;
+  /** Indica se esta mídia é o vídeo de apresentação do curso (intro). Só 1 por (slot, course_slug). */
+  is_course_intro: boolean;
   updated_at: Date;
 }
 
@@ -30,7 +34,8 @@ export async function listBySlot(slot: string): Promise<BotMediaRow[]> {
   if (cached && cached.expiresAt > Date.now()) return cached.rows;
 
   const r = await query<BotMediaRow & { id: string; position_order: string }>(
-    `SELECT id, slot, position, media_type, url, caption, context, position_order, enabled, updated_at
+    `SELECT id, slot, position, media_type, url, caption, context, position_order, enabled,
+            course_slug, is_course_intro, updated_at
      FROM bot_media
      WHERE slot = $1
      ORDER BY position_order, id`,
@@ -40,6 +45,8 @@ export async function listBySlot(slot: string): Promise<BotMediaRow[]> {
     ...row,
     id: Number(row.id),
     position_order: Number(row.position_order),
+    course_slug: row.course_slug ?? null,
+    is_course_intro: row.is_course_intro ?? false,
   })) as BotMediaRow[];
   cache.set(slot, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
   return rows;
@@ -59,18 +66,24 @@ export async function upsertMedia(input: {
   context?: string | null;
   position_order?: number;
   enabled?: boolean;
+  course_slug?: string | null;
+  is_course_intro?: boolean;
 }): Promise<BotMediaRow> {
   const r = await query<BotMediaRow & { id: string; position_order: string }>(
-    `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+    `INSERT INTO bot_media
+       (slot, position, media_type, url, caption, context, position_order, enabled,
+        course_slug, is_course_intro, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
      ON CONFLICT (slot, position) DO UPDATE SET
-       media_type   = EXCLUDED.media_type,
-       url          = EXCLUDED.url,
-       caption      = EXCLUDED.caption,
-       context      = EXCLUDED.context,
+       media_type     = EXCLUDED.media_type,
+       url            = EXCLUDED.url,
+       caption        = EXCLUDED.caption,
+       context        = EXCLUDED.context,
        position_order = EXCLUDED.position_order,
-       enabled      = EXCLUDED.enabled,
-       updated_at   = NOW()
+       enabled        = EXCLUDED.enabled,
+       course_slug    = EXCLUDED.course_slug,
+       is_course_intro = EXCLUDED.is_course_intro,
+       updated_at     = NOW()
      RETURNING *`,
     [
       input.slot,
@@ -81,11 +94,19 @@ export async function upsertMedia(input: {
       input.context ?? null,
       input.position_order ?? 0,
       input.enabled ?? true,
+      input.course_slug ?? null,
+      input.is_course_intro ?? false,
     ],
   );
   cache.delete(input.slot);
   const row = r.rows[0];
-  return { ...row, id: Number(row.id), position_order: Number(row.position_order) } as BotMediaRow;
+  return {
+    ...row,
+    id: Number(row.id),
+    position_order: Number(row.position_order),
+    course_slug: row.course_slug ?? null,
+    is_course_intro: row.is_course_intro ?? false,
+  } as BotMediaRow;
 }
 
 export async function deleteById(id: number): Promise<void> {

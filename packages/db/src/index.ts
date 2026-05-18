@@ -12,6 +12,7 @@ export * as botMedia from './queries/bot-media.js';
 export * as flowExecutionLog from './queries/flow-execution-log.js';
 export * as flowControl from './queries/flow-control.js';
 export * as flowClones from './queries/flow-clones.js';
+export * as botCourses from './queries/bot-courses.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -29,3 +30,4 @@ export type {
 } from './queries/flow-execution-log.js';
 export type { FlowControlRow } from './queries/flow-control.js';
 export type { CloneRow, CloneSummary, CloneStatus } from './queries/flow-clones.js';
+export type { BotCourseRow } from './queries/bot-courses.js';
