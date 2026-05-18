@@ -1044,7 +1044,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .rt-actions-menu button:hover { background:var(--bg-2); }
 .rt-actions-menu button.danger { color:var(--danger); }
 @media (max-width:768px) {
-  .rt-col-updated,.rt-col-ativo { display:none; }
+  .rt-col-updated,.rt-col-ativo,.rt-col-sessao { display:none; }
   .rt-col-nome { max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 }
 /* ── Dashboard grid ─────────────────────────────────────────────────── */
@@ -2174,6 +2174,7 @@ async function renderSessoes() {
         <thead>
           <tr>
             <th>SESSÃO</th>
+            <th>BOT</th>
             <th>STATUS</th>
             <th>ÚLTIMA ATIVIDADE</th>
             <th>WEBHOOK</th>
@@ -2190,26 +2191,46 @@ async function renderSessoes() {
 async function _sessaoLoadTable() {
   const tbody = document.getElementById('sessoes-tbody');
   if (!tbody) return;
-  const skRow = `<tr><td colspan="5"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
+  const skRow = `<tr><td colspan="6"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
   tbody.innerHTML = skRow.repeat(4);
 
   try {
-    const data = await api('/api/status');
+    const [data, botsRaw, clonesRaw] = await Promise.all([
+      api('/api/status'),
+      api('/api/bots').catch(() => []),
+      api('/api/clones').catch(() => []),
+    ]);
     const sessArr = Array.isArray(data?.waha) ? data.waha : Object.values(data?.waha ?? {});
+    const bots   = Array.isArray(botsRaw) ? botsRaw : (botsRaw.bots || []);
+    const clones = Array.isArray(clonesRaw) ? clonesRaw : (clonesRaw.clones || clonesRaw.data || []);
 
     if (!sessArr.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="activity-empty">${icon('wifi-off',14)} Nenhuma sessão encontrada</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="activity-empty">${icon('wifi-off',14)} Nenhuma sessão encontrada</td></tr>`;
       return;
     }
 
     tbody.innerHTML = sessArr.map(s => {
-      const name = escapeHtml(s.name || s.session || s.id || 'Sessão');
+      const rawName = s.name || s.session || s.id || 'Sessão';
+      const name = escapeHtml(rawName);
       const st = s.status || s.state || '';
       const webhook = escapeHtml((s.webhook || '').replace(/^https?:\/\/[^/]+/, '…') || '—');
       const lastAt = s.updatedAt || s.updated_at || s.lastActivity || null;
 
+      // Cruza sessão com bot matriz (slot === session name) ou clone (waha_sessao === session name)
+      const botMatch   = bots.find(b => (b.slot || b.slug) === rawName);
+      const cloneMatch = !botMatch ? clones.find(c => c.waha_sessao === rawName) : null;
+      let botCell;
+      if (botMatch) {
+        botCell = `<span style="font-size:.8125rem;font-weight:500">${escapeHtml(botMatch.display_name || botMatch.name || rawName)}</span>`;
+      } else if (cloneMatch) {
+        botCell = `<span style="font-size:.8125rem">${escapeHtml(cloneMatch.display_name || cloneMatch.cliente_nome || rawName)}</span> <span class="badge badge--muted" style="font-size:.7rem">Clone</span>`;
+      } else {
+        botCell = `<span style="font-size:.8125rem;color:var(--text-subtle)">—</span>`;
+      }
+
       return `<tr>
         <td class="mono" style="font-size:.8125rem;font-weight:500">${name}</td>
+        <td>${botCell}</td>
         <td>${statusBadge(st)}</td>
         <td style="font-size:.8125rem;color:var(--text-muted)">${lastAt ? fmtRelative(lastAt) : '—'}</td>
         <td class="mono" style="font-size:.75rem;color:var(--text-subtle);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.webhook||'')}">${webhook}</td>
@@ -2222,7 +2243,7 @@ async function _sessaoLoadTable() {
       </tr>`;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="alert--danger" style="margin:.5rem">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="alert--danger" style="margin:.5rem">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div></td></tr>`;
   }
 }
 
@@ -2806,9 +2827,21 @@ async function loadBotTab(slot, tab, el, bot) {
 }
 
 async function renderBotOverview(slot, el, bot) {
+  const wahaPhone = _fmtPhone(bot.waha_me);
+  const sessaoHtml = `
+    <div class="field" style="grid-column:1/-1">
+      <label>Sessão WAHA</label>
+      <div style="display:flex;align-items:center;gap:.5rem;padding:.4rem .625rem;background:var(--bg-3);border:1px solid var(--border);border-radius:var(--radius-md);min-height:2rem">
+        <code style="font-size:.8125rem;color:var(--text)">${escapeHtml(bot.slot || slot)}</code>
+        ${statusBadge(bot.waha_status || '')}
+        ${wahaPhone ? `<span style="font-size:.8125rem;color:var(--text-muted);margin-left:.25rem">${icon('phone',12)} ${escapeHtml(wahaPhone)}</span>` : ''}
+      </div>
+    </div>`;
+
   el.innerHTML = `
     <form id="bot-overview-form">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+        ${sessaoHtml}
         <div class="field">
           <label for="ov-name">Nome</label>
           <input id="ov-name" name="display_name" value="${escapeHtml(bot.display_name || bot.name || '')}" placeholder="Nome do bot" />
@@ -5782,7 +5815,10 @@ function _rtRender() {
     const phone    = escapeHtml(_fmtPhone(r.telefone || r.phone) || r.telefone || r.phone || '—');
     const nome     = escapeHtml(r.nome_cliente || r.nome || '—');
     const wfId     = r.workflow_id || '';
-    const wfName   = escapeHtml(_rtWfs.find(w => w.id === wfId)?.name || r.workflow_name || wfId || '—');
+    const wf       = _rtWfs.find(w => w.id === wfId);
+    const wfName   = escapeHtml(wf?.name || r.workflow_name || wfId || '—');
+    // Sessão WAHA: o nome do workflow é o mesmo que o slot/sessão (ex: "teste_barbearia")
+    const sessaoName = escapeHtml(wf?.name || r.workflow_name || '—');
     const ativo    = r.ativo !== false;
     const updated  = r.atualizado_em ? fmtRelative(r.atualizado_em) : (r.criado_em ? fmtRelative(r.criado_em) : '—');
     const checked  = _rtSelected.has(id);
@@ -5796,6 +5832,7 @@ function _rtRender() {
       <td>
         <span class="rt-wf-badge" style="background:${c.bg};color:${c.color}" data-wf-id="${escapeHtml(wfId)}" data-row-id="${escapeHtml(String(id))}" title="Clique para editar workflow">${wfName}</span>
       </td>
+      <td class="rt-col-sessao"><code style="font-size:.75rem;color:var(--text-muted)">${sessaoName}</code></td>
       <td class="rt-col-ativo">
         <label class="toggle" title="${ativo ? 'Ativo' : 'Inativo'}">
           <input type="checkbox" class="rt-toggle-ativo" data-id="${escapeHtml(String(id))}" ${ativo ? 'checked' : ''} />
@@ -5823,6 +5860,7 @@ function _rtRender() {
           <th>TELEFONE</th>
           <th>CLIENTE</th>
           <th>FLUXO</th>
+          <th class="rt-col-sessao">SESSÃO</th>
           <th class="rt-col-ativo">ATIVO</th>
           <th class="rt-col-updated">ATUALIZADO</th>
           <th></th>
