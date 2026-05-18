@@ -480,12 +480,21 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   border-radius: var(--radius-lg);
   padding: 1.25rem;
 }
+/* Quando renderizado dentro do drawer, herda o estilo do drawer */
+.bot-detail--in-drawer {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
 .bot-detail__header {
   display: flex; align-items: center; gap: 1rem;
   margin-bottom: 1.25rem; padding-bottom: 1rem;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
+/* Oculta o header interno quando dentro do drawer (o drawer já tem o seu próprio) */
+.bot-detail--in-drawer .bot-detail__header { display: none; }
 .bot-detail__title { font-size: 1.125rem; font-weight: 700; }
 .bot-detail__meta  { font-size: .8125rem; color: var(--text-muted); }
 /* ── Media table (Retool dense) ───────────────────────────────────────── */
@@ -741,6 +750,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .drawer-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:900; opacity:0; pointer-events:none; transition:opacity 200ms; }
 .drawer-backdrop.open { opacity:1; pointer-events:auto; }
 .drawer { position:fixed; top:0; right:0; bottom:0; width:min(420px, 90vw); background:var(--surface); border-left:1px solid var(--border); transform:translateX(100%); transition:transform 250ms ease-out; z-index:901; overflow-y:auto; padding:1.5rem; }
+.drawer--wide { width:min(520px, 95vw); }
 .drawer.open { transform:translateX(0); }
 .drawer__header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem; padding-bottom:.875rem; border-bottom:1px solid var(--border); }
 .drawer__title { font-weight:700; font-size:1rem; }
@@ -2226,6 +2236,8 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
     detailBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       _selectedBot = bot;
+      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
       const wrap = document.getElementById('bots-content');
       _renderBotsDetail(bots, wrap, bot);
     });
@@ -2234,6 +2246,8 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
 
     card.addEventListener('click', () => {
       _selectedBot = bot;
+      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+      card.classList.add('selected');
       const wrap = document.getElementById('bots-content');
       _renderBotsDetail(bots, wrap, bot);
     });
@@ -2247,12 +2261,50 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
 }
 
 function _renderBotsDetail(bots, wrap, selectedBot) {
-  let detail = wrap.querySelector('.bot-detail');
-  if (!detail) {
-    detail = document.createElement('div');
-    wrap.appendChild(detail);
-  }
+  // Remove eventual .bot-detail legado no wrap (migração)
+  const legacy = wrap.querySelector('.bot-detail');
+  if (legacy) legacy.remove();
+
+  // Abre o drawer lateral — visível imediatamente, sem scroll
+  const drawerInner = document.getElementById('drawer-inner');
+  drawerInner.innerHTML = '';
+
+  // Header do drawer: avatar + nome + fechar
+  const drawerHeader = document.createElement('div');
+  drawerHeader.className = 'drawer__header';
+  drawerHeader.innerHTML = `
+    <div style="display:flex;align-items:center;gap:.75rem;min-width:0">
+      <div id="bot-drawer-avatar"></div>
+      <div style="min-width:0">
+        <div class="drawer__title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(selectedBot.name || selectedBot.slot || selectedBot.slug)}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);font-family:var(--font-mono)">${escapeHtml(selectedBot.slug || selectedBot.slot || '')}</div>
+      </div>
+    </div>
+    <button class="btn btn--ghost btn--sm" id="bot-drawer-close" aria-label="Fechar detalhes do bot" style="flex-shrink:0">&#x2715;</button>`;
+  drawerInner.appendChild(drawerHeader);
+  drawerHeader.querySelector('#bot-drawer-avatar').appendChild(botAvatar(selectedBot.slug || selectedBot.slot, 36));
+
+  // Container do detalhe (sem borda/padding próprios — usa o drawer)
+  const detail = document.createElement('div');
+  detail.className = 'bot-detail bot-detail--in-drawer';
+  drawerInner.appendChild(detail);
+
+  // Renderiza o conteúdo (tabs + aba ativa)
   renderBotDetail(selectedBot, detail);
+
+  // Abre o drawer (mais largo para acomodar forms de 2 colunas)
+  const drawerEl = document.getElementById('drawer');
+  drawerEl.classList.add('open', 'drawer--wide');
+  document.getElementById('drawer-backdrop').classList.add('open');
+
+  // Fechar via botão X do header do drawer
+  drawerHeader.querySelector('#bot-drawer-close').addEventListener('click', () => {
+    closeDrawer();
+    _selectedBot = null;
+    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+  });
+  // Marca o drawer com o tipo para que closeDrawer possa limpar estado de bot
+  document.getElementById('drawer').dataset.drawerType = 'bot';
 }
 
 function renderBotsListAndDetail(bots, wrap) {
@@ -2263,7 +2315,8 @@ function renderBotDetail(bot, container) {
   const slot = bot.slot || bot.slug;
   // aba routing foi removida em 003-F — normaliza para overview
   if (_selectedBotTab === 'routing') _selectedBotTab = 'overview';
-  container.className = 'bot-detail';
+  // Preserva modificadores (ex: bot-detail--in-drawer) já presentes no container
+  if (!container.classList.contains('bot-detail')) container.classList.add('bot-detail');
   container.innerHTML = `
     <div class="bot-detail__header">
       <div id="bot-detail-avatar"></div>
@@ -2921,7 +2974,14 @@ function openDrawer(html) {
   document.getElementById('drawer-backdrop').classList.add('open');
 }
 function closeDrawer() {
-  document.getElementById('drawer').classList.remove('open');
+  const drawerEl = document.getElementById('drawer');
+  // Limpa estado de bot selecionado se o drawer era do tipo bot
+  if (drawerEl.dataset.drawerType === 'bot') {
+    _selectedBot = null;
+    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+    delete drawerEl.dataset.drawerType;
+  }
+  drawerEl.classList.remove('open', 'drawer--wide');
   document.getElementById('drawer-backdrop').classList.remove('open');
   document.getElementById('drawer-inner').innerHTML = '';
 }
