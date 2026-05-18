@@ -217,6 +217,7 @@ textarea, input, select { font-family: inherit; }
   flex-wrap: wrap;
 }
 .section-header__left { display: flex; flex-direction: column; gap: .125rem; }
+.section-label { font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle); margin-bottom: .125rem; }
 /* ── Cards ──────────────────────────────────────────────────────────── */
 .card {
   background: var(--surface);
@@ -2588,21 +2589,6 @@ async function renderBotMedia(slot, el) {
   }
 }
 
-// buildMediaCard mantido para compatibilidade com renderMediaPreview em outros lugares
-function buildMediaCard(m, slot, parentEl) {
-  const card = document.createElement('div');
-  card.className = 'media-card';
-  const preview = renderMediaPreview(m);
-  card.appendChild(preview);
-  const info = document.createElement('div');
-  info.className = 'media-card__info';
-  const name = document.createElement('span');
-  name.className = 'media-card__name';
-  name.textContent = m.position || m.url?.split('/').pop() || 'Mídia';
-  info.appendChild(name);
-  card.appendChild(info);
-  return card;
-}
 
 function _buildFilePreviewHtml(file) {
   if (!file) return '';
@@ -2761,109 +2747,6 @@ function openEditMediaModal(slot, m, parentEl) {
   });
 }
 
-async function renderBotRouting(slot, el, bot) {
-  try {
-    const [routingData, workflowsData] = await Promise.all([
-      api('/api/routing'),
-      api('/api/workflows'),
-    ]);
-    const routes = Array.isArray(routingData) ? routingData : (routingData.routes || routingData.rules || []);
-    const workflows = Array.isArray(workflowsData) ? workflowsData : (workflowsData.workflows || workflowsData.data || []);
-
-    const botWorkflow = workflows.find(w => w.bot_slot === slot || w.slug === slot);
-    const botRoutes = botWorkflow
-      ? routes.filter(r => r.workflow_id === botWorkflow.id || r.bot_slot === slot)
-      : routes.filter(r => r.bot_slot === slot);
-
-    // Apenas workflows roteáveis disponíveis no select
-    const routableWorkflows = workflows.filter(w => w.routable);
-
-    const listHtml = botRoutes.length
-      ? `<div class="card-flat" style="padding:0;margin-bottom:.875rem">
-          <div style="padding:.875rem 1rem;border-bottom:1px solid var(--border)">
-            <span class="label">${botRoutes.length} acesso${botRoutes.length !== 1 ? 's' : ''} vinculado${botRoutes.length !== 1 ? 's' : ''}</span>
-          </div>
-          <div style="padding:.5rem 1rem">
-            ${botRoutes.map(r => `
-              <div class="routing-row">
-                <code class="routing-row__pattern">${escapeHtml(r.telefone || r.pattern || r.keyword || r.trigger || '*')}</code>
-                ${r.nome_cliente ? `<span class="routing-row__target">${escapeHtml(r.nome_cliente)}</span>` : ''}
-                <span class="routing-row__target">${icon('chevron-right', 12)} ${escapeHtml(r.workflow_name || r.target || r.workflow || r.action || '—')}</span>
-              </div>`).join('')}
-          </div>
-        </div>`
-      : `<div class="empty-state" style="padding:1rem 0">
-          ${icon('users',28)}<div class="empty-state__title">Sem acessos</div>
-          <p class="empty-state__text">Adicione um telefone abaixo para liberar acesso ao teste.</p>
-        </div>`;
-
-    const workflowOptions = routableWorkflows
-      .map(w => `<option value="${escapeHtml(w.id)}" ${botWorkflow && w.id === botWorkflow.id ? 'selected' : ''}>${escapeHtml(w.name)}</option>`)
-      .join('');
-
-    el.innerHTML = `
-      ${listHtml}
-      <div class="card-flat" style="padding:.875rem 1rem">
-        <p class="label" style="margin-bottom:.75rem">${icon('user-plus',14)} Liberar acesso</p>
-        <div style="display:flex;flex-direction:column;gap:.5rem">
-          <div class="field">
-            <label for="routing-tel-${slot}">Telefone <span style="color:var(--danger)">*</span></label>
-            <input id="routing-tel-${slot}" type="tel" placeholder="5511999990000" maxlength="15"
-              style="font-family:var(--font-mono,monospace)" />
-          </div>
-          <div class="field">
-            <label for="routing-nome-${slot}">Nome do cliente (opcional)</label>
-            <input id="routing-nome-${slot}" type="text" placeholder="Ex: João da Silva" maxlength="80" />
-          </div>
-          <div class="field">
-            <label for="routing-wf-${slot}">Router de teste <span style="color:var(--danger)">*</span></label>
-            <select id="routing-wf-${slot}">
-              ${workflowOptions || '<option value="">— nenhum router disponível —</option>'}
-            </select>
-          </div>
-          <button id="routing-add-btn-${slot}" class="btn btn--primary btn--sm" style="align-self:flex-start">
-            ${icon('plus',13)} Adicionar acesso
-          </button>
-        </div>
-      </div>`;
-
-    document.getElementById(`routing-add-btn-${slot}`)?.addEventListener('click', async () => {
-      const telRaw = (document.getElementById(`routing-tel-${slot}`)?.value || '').replace(/\D/g, '');
-      const nome = (document.getElementById(`routing-nome-${slot}`)?.value || '').trim();
-      const workflowId = document.getElementById(`routing-wf-${slot}`)?.value;
-
-      if (!telRaw || telRaw.length < 10) {
-        toast('Informe um telefone válido (mínimo 10 dígitos)', 'warning');
-        return;
-      }
-      if (!workflowId) {
-        toast('Selecione um router de teste', 'warning');
-        return;
-      }
-
-      const btn = document.getElementById(`routing-add-btn-${slot}`);
-      if (btn) btn.disabled = true;
-
-      try {
-        await api('/api/routing', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ telefone: telRaw, workflow_id: workflowId, nome_cliente: nome || undefined }),
-        });
-        toast('Acesso liberado com sucesso!', 'success');
-        // Recarrega a seção para refletir o novo registro
-        await renderBotRouting(slot, el, bot);
-      } catch (err) {
-        const msg = err.message || 'Erro desconhecido';
-        toast('Erro: ' + msg, 'danger');
-        if (btn) btn.disabled = false;
-      }
-    });
-
-  } catch (err) {
-    el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar roteamento: ${escapeHtml(err.message)}</p>`;
-  }
-}
 
 /* ══════════════════════════════════════════════════════════════════
    DRAWER
@@ -3279,13 +3162,15 @@ async function renderConfig() {
   sec.innerHTML = `
     <div class="section-header">
       <div class="section-header__left">
+        <span class="section-label">CONFIGURAÇÃO GLOBAL</span>
         <h1 class="h1">Configurações</h1>
-        <p class="muted">Fluxos e manutenção do sistema</p>
+        <p class="muted">Fluxos n8n, manutenção de logs e estado do sistema</p>
       </div>
     </div>
     <div class="tabs" id="cfg-tabs">
-      <button class="tab-btn${_cfgTab==='fluxos'?' active':''}" data-tab="fluxos">Fluxos</button>
+      <button class="tab-btn${_cfgTab==='fluxos'?' active':''}" data-tab="fluxos">Fluxos n8n</button>
       <button class="tab-btn${_cfgTab==='limpeza'?' active':''}" data-tab="limpeza">Limpeza de logs</button>
+      <button class="tab-btn${_cfgTab==='sistema'?' active':''}" data-tab="sistema">Sistema</button>
     </div>
     <div id="cfg-tab-content"><div class="skeleton-block" style="height:200px"></div></div>`;
 
@@ -3298,8 +3183,10 @@ async function renderConfig() {
 
     if (tab === 'fluxos') {
       await loadCfgFluxos(content);
-    } else {
+    } else if (tab === 'limpeza') {
       await loadCfgLimpeza(content);
+    } else {
+      await loadCfgSistema(content);
     }
   }
 
@@ -3527,6 +3414,46 @@ async function loadCfgLimpeza(content) {
       }
     });
   });
+}
+
+async function loadCfgSistema(content) {
+  content.innerHTML = `<div style="display:flex;flex-direction:column;gap:1rem">
+    <div class="card" id="cfg-sys-status"><div class="skeleton" style="height:80px"></div></div>
+    <div class="card" id="cfg-sys-links">
+      <h3 class="h3" style="margin-bottom:.75rem">Links úteis</h3>
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        <a class="btn btn--ghost btn--sm" href="https://gestao.startap.tech" target="_blank" rel="noopener">${icon('external-link',13)} Painel em produção</a>
+        <a class="btn btn--ghost btn--sm" href="https://n8n.startap.tech" target="_blank" rel="noopener">${icon('external-link',13)} n8n</a>
+      </div>
+    </div>
+  </div>`;
+
+  try {
+    const data = await api('/api/status');
+    const sessions = data?.waha || [];
+    const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
+    const online = sessArr.filter(s => (s.status || s.state) === 'WORKING').length;
+    const total  = sessArr.length;
+    const uptime = data?.uptime != null
+      ? (() => {
+          const s = Math.floor(data.uptime);
+          const h = Math.floor(s / 3600);
+          const m = Math.floor((s % 3600) / 60);
+          return h ? `${h}h ${m}min` : `${m}min`;
+        })()
+      : '—';
+
+    content.querySelector('#cfg-sys-status').innerHTML = `
+      <h3 class="h3" style="margin-bottom:.75rem">Estado do sistema</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div class="field"><label>Sessões WAHA ativas</label><div class="mono">${online} / ${total}</div></div>
+        <div class="field"><label>Uptime do servidor</label><div class="mono">${uptime}</div></div>
+        <div class="field"><label>Versão da API</label><div class="mono">${escapeHtml(data?.version || data?.api_version || '—')}</div></div>
+        <div class="field"><label>Ambiente</label><div class="mono">${escapeHtml(data?.env || data?.environment || data?.node_env || '—')}</div></div>
+      </div>`;
+  } catch (_) {
+    content.querySelector('#cfg-sys-status').innerHTML = `<h3 class="h3" style="margin-bottom:.5rem">Estado do sistema</h3><p class="muted">Não disponível</p>`;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════
