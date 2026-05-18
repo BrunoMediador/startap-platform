@@ -1572,6 +1572,8 @@ app.get('/api/metrics/timeseries', async (req, res) => {
     const botParam = req.query.bot && req.query.bot !== 'all' ? req.query.bot : null;
     const trunc    = periodTrunc(period);
     const days     = period === '24h' ? '1' : period === '7d' ? '7' : '30';
+    // DEBT: criar índice em flow_execution_logs(bot) quando volume crescer
+    // (hoje seq scan na coluna; volume atual é baixo, sem impacto perceptível)
     const botFilter = botParam ? 'AND bot = $2' : '';
     const params    = botParam ? [days, botParam] : [days];
 

@@ -5362,6 +5362,12 @@ function navigateTo(sectionId) {
     _dashActivityInterval = null;
   }
 
+  // Para auto-refresh de métricas ao sair (evita requests fantasma)
+  if (sectionId !== 'metricas' && _mRefreshId) {
+    clearInterval(_mRefreshId);
+    _mRefreshId = null;
+  }
+
   // Render if not yet rendered (or always re-render dashboard for freshness)
   const item = NAV_ITEMS_MAP[sectionId];
   if (item && (sectionId === 'dashboard' || !_rendered[sectionId])) {
