@@ -1872,7 +1872,7 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
 
     const [r, c] = await Promise.all([
       pool.query(
-        'SELECT * FROM agendamento_pendente ORDER BY id DESC LIMIT $1 OFFSET $2',
+        'SELECT * FROM agendamento_pendente ORDER BY 1 DESC LIMIT $1 OFFSET $2',
         [limit, offset],
       ),
       pool.query('SELECT COUNT(*)::int AS n FROM agendamento_pendente'),
