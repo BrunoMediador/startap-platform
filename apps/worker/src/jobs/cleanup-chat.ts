@@ -5,7 +5,9 @@
  * em flow_clones.chat_table, mantendo memória curta por sessão.
  */
 import { logger } from '@startap/core/logger';
-import { chatMemory } from '@startap/db';
+// importação direta pelo path relativo: contorna bug tsc >=5.8 + NodeNext onde
+// `export * as namespace` perde membros na resolução de tipo do namespace.
+import * as chatMemory from '../../../../packages/db/dist/queries/chat-memory.js';
 
 const log = logger.child({ job: 'cleanup-chat' });
 const DEFAULT_KEEP = Number.parseInt(process.env.CHAT_MEMORY_RETENTION ?? '50', 10);

@@ -1880,6 +1880,8 @@ async function renderLeadsStub() {
    ══════════════════════════════════════════════════════════════════ */
 let _selectedBot = null;
 let _selectedBotTab = 'overview';
+// flag compartilhada: renderBotConfigIA sinaliza mudanças não salvas pro handler de tab
+let _configIaDirty = false;
 
 const INTERNAL_BOT_SLOT = 'startap';
 const MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
@@ -2018,6 +2020,11 @@ function renderBotDetail(bot, container) {
 
   container.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      // guard: se aba config-ia tiver mudanças não salvas, confirma antes de navegar
+      if (_configIaDirty && btn.dataset.tab !== 'config-ia') {
+        if (!window.confirm('Existem mudanças não salvas. Deseja sair mesmo assim?')) return;
+        _configIaDirty = false;
+      }
       _selectedBotTab = btn.dataset.tab;
       container.querySelectorAll('.tab-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.tab === _selectedBotTab);
@@ -2129,13 +2136,14 @@ async function renderBotConfigIA(slot, el) {
   let botData = null;
   let promptData = null;
   let _dirty = false;
+  _configIaDirty = false; // reset ao (re)renderizar a aba
 
   const MODELS_BY_PROVIDER = {
     openai:   ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
     deepseek: ['deepseek-chat', 'deepseek-reasoner'],
   };
 
-  function markDirty() { _dirty = true; }
+  function markDirty() { _dirty = true; _configIaDirty = true; }
 
   function confirmLeave() {
     if (_dirty) return window.confirm('Existem mudanças não salvas. Deseja sair mesmo assim?');
@@ -2285,7 +2293,7 @@ async function renderBotConfigIA(slot, el) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: promptVal }),
       });
-      _dirty = false;
+      _dirty = false; _configIaDirty = false;
       toast('Prompt salvo — aplica em até 30s nos próximos messages do bot', 'success');
     } catch (err) {
       toast('Erro ao salvar prompt: ' + escapeHtml(err.message), 'danger');
@@ -2309,7 +2317,7 @@ async function renderBotConfigIA(slot, el) {
           temperature: Number(rangeTemp.value),
         }),
       });
-      _dirty = false;
+      _dirty = false; _configIaDirty = false;
       toast('Configuração salva — aplica em até 60s nos próximos messages do bot', 'success');
     } catch (err) {
       toast('Erro ao salvar configuração: ' + escapeHtml(err.message), 'danger');
@@ -2321,20 +2329,12 @@ async function renderBotConfigIA(slot, el) {
   /* ── recarregar ──────────────────────────────────────────── */
   btnReload.addEventListener('click', () => {
     if (confirmLeave()) {
-      _dirty = false;
+      _dirty = false; _configIaDirty = false;
       renderBotConfigIA(slot, el);
     }
   });
-
-  /* ── guard de saída via navegação de abas ────────────────── */
-  el.closest('.bot-detail')?.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      if (btn.dataset.tab !== 'config-ia' && _dirty) {
-        if (!confirmLeave()) { e.stopImmediatePropagation(); }
-        else { _dirty = false; }
-      }
-    }, true);
-  });
+  // guard de saída via navegação de abas é tratado no handler de .tab-btn
+  // no escopo de renderBotDetail (usa _configIaDirty global)
 }
 
 async function renderBotMedia(slot, el) {

@@ -485,6 +485,26 @@ app.get(
   }),
 );
 
+app.get('/api/bots/:slot', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const [cfgR, promptR] = await Promise.all([
+      pool.query(
+        'SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at FROM bot_config WHERE slot = $1',
+        [slot],
+      ),
+      pool.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [slot]),
+    ]);
+    if (!cfgR.rows.length) return res.status(404).json({ error: 'bot nao encontrado' });
+    res.json({
+      ...cfgR.rows[0],
+      prompt: promptR.rows[0]?.prompt ?? '',
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
