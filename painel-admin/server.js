@@ -275,12 +275,26 @@ const mediaUpload = multer({
       '.jpeg',
       '.png',
       '.webp',
+      '.gif',
       '.pdf',
+      '.doc',
+      '.docx',
+      '.txt',
+      '.odt',
+      '.mp3',
+      '.ogg',
+      '.opus',
+      '.aac',
+      '.wav',
     ]);
     if (
       mimetype.startsWith('video/') ||
       mimetype.startsWith('image/') ||
+      mimetype.startsWith('audio/') ||
       mimetype === 'application/pdf' ||
+      mimetype === 'application/msword' ||
+      mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      mimetype === 'text/plain' ||
       allowedExt.has(ext)
     ) {
       cb(null, true);
@@ -350,13 +364,16 @@ app.post('/api/uploads/media', mediaUpload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'arquivo obrigatorio' });
     const base = String(MEDIA_PUBLIC_BASE_URL || '/uploads').replace(/\/$/, '');
+    const url = `${base}/${encodeURIComponent(req.file.filename)}`;
+    // file_id = nome do arquivo salvo em disco (usado pelo POST /api/bots/:slot/media)
     res.json({
       ok: true,
-      file_name: req.file.filename,
+      file_id: req.file.filename,
+      filename: req.file.filename,
       original_name: req.file.originalname,
       mime_type: req.file.mimetype,
       size: req.file.size,
-      url: `${base}/${encodeURIComponent(req.file.filename)}`,
+      url,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -690,14 +707,16 @@ app.post('/api/bots/:slot/media', async (req, res) => {
   try {
     const {
       position,
-      media_type = 'video',
+      media_type = 'image',
       url = null,
       caption = null,
       context = null,
       position_order = 0,
       enabled = true,
     } = req.body;
-    if (!position) return res.status(400).json({ error: 'position obrigatorio' });
+    if (!url) return res.status(400).json({ error: 'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado' });
+    // position nao fornecido: usa timestamp como chave unica
+    const pos = position || `media_${Date.now()}`;
     const r = await pool.query(
       `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
@@ -712,7 +731,7 @@ app.post('/api/bots/:slot/media', async (req, res) => {
        RETURNING *`,
       [
         req.params.slot,
-        position,
+        pos,
         media_type,
         url,
         caption,
@@ -721,6 +740,30 @@ app.post('/api/bots/:slot/media', async (req, res) => {
         !!enabled,
       ],
     );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/bots/:slot/media/:id', async (req, res) => {
+  try {
+    const { caption = null, context = null, position_order, enabled } = req.body;
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    if (caption !== undefined) { fields.push(`caption = $${idx++}`); vals.push(caption); }
+    if (context !== undefined) { fields.push(`context = $${idx++}`); vals.push(context); }
+    if (position_order !== undefined) { fields.push(`position_order = $${idx++}`); vals.push(Number(position_order) || 0); }
+    if (enabled !== undefined) { fields.push(`enabled = $${idx++}`); vals.push(!!enabled); }
+    if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido (caption, context, position_order, enabled)' });
+    fields.push(`updated_at = NOW()`);
+    vals.push(req.params.slot, req.params.id);
+    const r = await pool.query(
+      `UPDATE bot_media SET ${fields.join(', ')} WHERE slot = $${idx++} AND id = $${idx} RETURNING *`,
+      vals,
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'midia nao encontrada' });
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
