@@ -1695,6 +1695,151 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
   }
 });
 
+// ---------- GOOGLE CALENDAR POR CLONE ----------
+
+// PUT /api/clones/:id/gcal — grava credenciais Service Account
+app.put('/api/clones/:id/gcal', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  const { credentials_json, calendar_id } = req.body ?? {};
+  if (!credentials_json || typeof credentials_json !== 'string') {
+    return res.status(400).json({ error: 'credentials_json obrigatório' });
+  }
+  if (!calendar_id || typeof calendar_id !== 'string') {
+    return res.status(400).json({ error: 'calendar_id obrigatório' });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(credentials_json);
+  } catch {
+    return res.status(400).json({ error: 'credentials_json: JSON malformado' });
+  }
+  if (parsed.type !== 'service_account') {
+    return res.status(400).json({ error: 'credentials_json: deve ser do tipo service_account' });
+  }
+
+  const clientEmail = parsed.client_email ?? null;
+  // Loga apenas o client_email — nunca a chave privada
+  console.log(`[gcal] PUT clone ${id}: client_email=${clientEmail}`);
+
+  try {
+    const r = await pool.query(
+      `UPDATE flow_clones
+          SET gcal_credentials_json = $1,
+              gcal_client_email     = $2,
+              gcal_calendar_id      = $3,
+              gcal_status           = 'pending',
+              gcal_connected_at     = NULL,
+              gcal_last_check_at    = NULL,
+              updated_at            = NOW()
+        WHERE id = $4
+        RETURNING id, slot, gcal_client_email, gcal_calendar_id, gcal_status`,
+      [credentials_json, clientEmail, calendar_id.trim(), id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/clones/:id/gcal/status — retorna metadados sem expor o JSON
+app.get('/api/clones/:id/gcal/status', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  try {
+    const r = await pool.query(
+      `SELECT gcal_client_email, gcal_calendar_id, gcal_status, gcal_connected_at, gcal_last_check_at
+         FROM flow_clones WHERE id = $1`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/clones/:id/gcal — remove credenciais
+app.delete('/api/clones/:id/gcal', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  try {
+    const r = await pool.query(
+      `UPDATE flow_clones
+          SET gcal_credentials_json = NULL,
+              gcal_client_email     = NULL,
+              gcal_calendar_id      = NULL,
+              gcal_status           = NULL,
+              gcal_connected_at     = NULL,
+              gcal_last_check_at    = NULL,
+              updated_at            = NOW()
+        WHERE id = $1
+        RETURNING id`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    console.log(`[gcal] DELETE clone ${id}: credenciais removidas`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/clones/:id/gcal/test — testa conexão e atualiza status
+app.post('/api/clones/:id/gcal/test', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  try {
+    const r = await pool.query(
+      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_client_email FROM flow_clones WHERE id = $1`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+
+    const { gcal_credentials_json, gcal_calendar_id, gcal_client_email } = r.rows[0];
+    if (!gcal_credentials_json || !gcal_calendar_id) {
+      return res.status(400).json({ error: 'Credenciais não configuradas' });
+    }
+
+    // Import dinâmico para evitar dependência circular no painel-admin legado
+    // O client.ts compila para packages/integrations/dist/
+    let testResult;
+    try {
+      const { GoogleCalendarClient } = await import('../packages/integrations/dist/google-calendar/client.js');
+      const client = new GoogleCalendarClient({
+        credentialsJson: gcal_credentials_json,
+        calendarId: gcal_calendar_id,
+      });
+      testResult = await client.testConnection();
+    } catch (importErr) {
+      testResult = { ok: false, error: `Falha ao carregar cliente GCal: ${importErr.message}` };
+    }
+
+    const newStatus = testResult.ok ? 'active' : 'invalid';
+    console.log(`[gcal] TEST clone ${id} (${gcal_client_email}): ${newStatus}`);
+
+    await pool.query(
+      `UPDATE flow_clones
+          SET gcal_status        = $1,
+              gcal_last_check_at = NOW(),
+              gcal_connected_at  = CASE WHEN $1 = 'active' AND gcal_connected_at IS NULL THEN NOW() ELSE gcal_connected_at END,
+              updated_at         = NOW()
+        WHERE id = $2`,
+      [newStatus, id],
+    );
+
+    res.json({ ok: testResult.ok, status: newStatus, error: testResult.ok ? undefined : testResult.error });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- SESSIONS WAHA ----------
 
 // POST /api/sessions/create
