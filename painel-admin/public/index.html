@@ -1021,6 +1021,11 @@ function openModal(html) {
   backdrop.classList.add('open');
 }
 function closeModal() {
+  // Para qualquer polling ativo (ex: QR de sessão WAHA) antes de limpar o DOM
+  if (typeof _activeQRPoll !== 'undefined' && _activeQRPoll) {
+    clearInterval(_activeQRPoll);
+    _activeQRPoll = null;
+  }
   document.getElementById('modal-backdrop').classList.remove('open');
   document.getElementById('modal-content').innerHTML = '';
 }
@@ -1676,25 +1681,91 @@ async function renderBotRouting(slot, el, bot) {
       ? routes.filter(r => r.workflow_id === botWorkflow.id || r.bot_slot === slot)
       : routes.filter(r => r.bot_slot === slot);
 
-    if (!botRoutes.length) {
-      el.innerHTML = `<div class="empty-state">${icon('chevron-right',36)}<div class="empty-state__title">Sem roteamento</div><p class="empty-state__text">Nenhuma regra de roteamento para este bot.</p></div>`;
-      return;
-    }
+    // Apenas workflows roteáveis disponíveis no select
+    const routableWorkflows = workflows.filter(w => w.routable);
+
+    const listHtml = botRoutes.length
+      ? `<div class="card-flat" style="padding:0;margin-bottom:.875rem">
+          <div style="padding:.875rem 1rem;border-bottom:1px solid var(--border)">
+            <span class="label">${botRoutes.length} acesso${botRoutes.length !== 1 ? 's' : ''} vinculado${botRoutes.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div style="padding:.5rem 1rem">
+            ${botRoutes.map(r => `
+              <div class="routing-row">
+                <code class="routing-row__pattern">${escapeHtml(r.telefone || r.pattern || r.keyword || r.trigger || '*')}</code>
+                ${r.nome_cliente ? `<span class="routing-row__target">${escapeHtml(r.nome_cliente)}</span>` : ''}
+                <span class="routing-row__target">${icon('chevron-right', 12)} ${escapeHtml(r.workflow_name || r.target || r.workflow || r.action || '—')}</span>
+              </div>`).join('')}
+          </div>
+        </div>`
+      : `<div class="empty-state" style="padding:1rem 0">
+          ${icon('users',28)}<div class="empty-state__title">Sem acessos</div>
+          <p class="empty-state__text">Adicione um telefone abaixo para liberar acesso ao teste.</p>
+        </div>`;
+
+    const workflowOptions = routableWorkflows
+      .map(w => `<option value="${escapeHtml(w.id)}" ${botWorkflow && w.id === botWorkflow.id ? 'selected' : ''}>${escapeHtml(w.name)}</option>`)
+      .join('');
 
     el.innerHTML = `
-      <div class="card-flat" style="padding:0">
-        <div style="padding:.875rem 1rem;border-bottom:1px solid var(--border)">
-          <span class="label">${botRoutes.length} regra${botRoutes.length !== 1 ? 's' : ''}</span>
-        </div>
-        <div style="padding:.5rem 1rem">
-          ${botRoutes.map(r => `
-            <div class="routing-row">
-              <code class="routing-row__pattern">${escapeHtml(r.pattern || r.keyword || r.trigger || '*')}</code>
-              <span class="routing-row__target">${icon('chevron-right', 12)} ${escapeHtml(r.target || r.workflow || r.action || '—')}</span>
-              ${r.priority != null ? `<span class="badge badge--muted">P${r.priority}</span>` : ''}
-            </div>`).join('')}
+      ${listHtml}
+      <div class="card-flat" style="padding:.875rem 1rem">
+        <p class="label" style="margin-bottom:.75rem">${icon('user-plus',14)} Liberar acesso</p>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          <div class="field">
+            <label for="routing-tel-${slot}">Telefone <span style="color:var(--danger)">*</span></label>
+            <input id="routing-tel-${slot}" type="tel" placeholder="5511999990000" maxlength="15"
+              style="font-family:var(--font-mono,monospace)" />
+          </div>
+          <div class="field">
+            <label for="routing-nome-${slot}">Nome do cliente (opcional)</label>
+            <input id="routing-nome-${slot}" type="text" placeholder="Ex: João da Silva" maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="routing-wf-${slot}">Router de teste <span style="color:var(--danger)">*</span></label>
+            <select id="routing-wf-${slot}">
+              ${workflowOptions || '<option value="">— nenhum router disponível —</option>'}
+            </select>
+          </div>
+          <button id="routing-add-btn-${slot}" class="btn btn--primary btn--sm" style="align-self:flex-start">
+            ${icon('plus',13)} Adicionar acesso
+          </button>
         </div>
       </div>`;
+
+    document.getElementById(`routing-add-btn-${slot}`)?.addEventListener('click', async () => {
+      const telRaw = (document.getElementById(`routing-tel-${slot}`)?.value || '').replace(/\D/g, '');
+      const nome = (document.getElementById(`routing-nome-${slot}`)?.value || '').trim();
+      const workflowId = document.getElementById(`routing-wf-${slot}`)?.value;
+
+      if (!telRaw || telRaw.length < 10) {
+        toast('Informe um telefone válido (mínimo 10 dígitos)', 'warning');
+        return;
+      }
+      if (!workflowId) {
+        toast('Selecione um router de teste', 'warning');
+        return;
+      }
+
+      const btn = document.getElementById(`routing-add-btn-${slot}`);
+      if (btn) btn.disabled = true;
+
+      try {
+        await api('/api/routing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telefone: telRaw, workflow_id: workflowId, nome_cliente: nome || undefined }),
+        });
+        toast('Acesso liberado com sucesso!', 'success');
+        // Recarrega a seção para refletir o novo registro
+        await renderBotRouting(slot, el, bot);
+      } catch (err) {
+        const msg = err.message || 'Erro desconhecido';
+        toast('Erro: ' + msg, 'danger');
+        if (btn) btn.disabled = false;
+      }
+    });
+
   } catch (err) {
     console.error('[bot routing]', err);
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar roteamento: ${escapeHtml(err.message)}</p>`;
@@ -2412,12 +2483,7 @@ function pollQR(sessionName, onUpdate) {
   };
 }
 
-/* ── Patch closeModal para parar polling ao fechar ──────────────── */
-const _origCloseModal = closeModal;
-function closeModal() {
-  if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
-  _origCloseModal();
-}
+/* Patch de closeModal removido — lógica consolidada na declaração original acima */
 
 /* ── renderBotClones (grupo interno de Bots) ────────────────────── */
 function renderBotClones(clones, container) {
@@ -2682,8 +2748,9 @@ function renderWizardStep() {
     document.getElementById('wizard-create-btn')?.addEventListener('click', () => wizardStep4Create());
   }
 
-  // Back
+  // Back — step 1 não tem wizard-back-btn no DOM; guard evita decremento abaixo de 1
   document.getElementById('wizard-back-btn')?.addEventListener('click', () => {
+    if (_wizardState.step <= 1) return;
     wizardCollectStep();
     _wizardState.step--;
     renderWizardStep();
