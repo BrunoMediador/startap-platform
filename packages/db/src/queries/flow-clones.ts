@@ -131,7 +131,7 @@ export async function createClone(input: {
       );
     }
 
-    // 3. Copia bot_media
+    // 3. Copia bot_media (inclui course_slug e is_course_intro para preservar vínculos de curso)
     const mediaRes = await client.query<{
       position: string;
       media_type: string;
@@ -140,16 +140,46 @@ export async function createClone(input: {
       context: string | null;
       position_order: number;
       enabled: boolean;
+      course_slug: string | null;
+      is_course_intro: boolean;
     }>(
-      `SELECT position, media_type, url, caption, context, position_order, enabled
+      `SELECT position, media_type, url, caption, context, position_order, enabled,
+              course_slug, is_course_intro
        FROM bot_media WHERE slot = $1`,
       [matrizSlot],
     );
     for (const m of mediaRes.rows) {
       await client.query(
-        `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
-        [slug, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled],
+        `INSERT INTO bot_media
+           (slot, position, media_type, url, caption, context, position_order, enabled,
+            course_slug, is_course_intro, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
+        [slug, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled,
+         m.course_slug ?? null, m.is_course_intro ?? false],
+      );
+    }
+
+    // 3.5. Copia bot_courses (catálogo de cursos da matriz para o clone)
+    const coursesRes = await client.query<{
+      course_slug: string;
+      name: string;
+      description: string | null;
+      price: number;
+      duration: string | null;
+      position_order: number;
+      enabled: boolean;
+    }>(
+      `SELECT course_slug, name, description, price, duration, position_order, enabled
+       FROM bot_courses WHERE slot = $1`,
+      [matrizSlot],
+    );
+    for (const c of coursesRes.rows) {
+      await client.query(
+        `INSERT INTO bot_courses
+           (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
+         ON CONFLICT (slot, course_slug) DO NOTHING`,
+        [slug, c.course_slug, c.name, c.description, c.price, c.duration, c.position_order, c.enabled],
       );
     }
 
