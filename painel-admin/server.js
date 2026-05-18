@@ -1484,6 +1484,182 @@ app.get('/api/message-stats', async (req, res) => {
   }
 });
 
+// ---------- METRICS (003-I) ----------
+
+/**
+ * Retorna um intervalo de datas ISO a partir do query param period (24h|7d|30d).
+ * Default: 24h.
+ */
+function parsePeriodInterval(period) {
+  if (period === '7d')  return '7 days';
+  if (period === '30d') return '30 days';
+  return '1 day'; // default 24h
+}
+
+/**
+ * Granularidade automática: hora para 24h, dia para 7d/30d.
+ */
+function periodTrunc(period) {
+  return period === '24h' || !period ? 'hour' : 'day';
+}
+
+app.get('/api/metrics/by-bot', async (req, res) => {
+  try {
+    const period = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
+    const interval = parsePeriodInterval(period);
+
+    // execuções e latência vêm de flow_execution_logs (bot, status, duration_ms)
+    // tokens/custo vêm de model_usage (slot)
+    // bot_config fornece display_name; LEFT JOIN pois pode haver bots sem config
+    const r = await pool.query(
+      `
+      WITH exec_stats AS (
+        SELECT
+          bot AS slot,
+          COUNT(*)::int                                             AS executions,
+          COUNT(*) FILTER (WHERE status = 'success')::int          AS success_count,
+          ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::int AS avg_latency_ms,
+          COUNT(*) FILTER (WHERE event_type = 'webhook.received')::int AS messages
+        FROM flow_execution_logs
+        WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
+          AND bot IS NOT NULL
+        GROUP BY bot
+      ),
+      usage_stats AS (
+        SELECT
+          slot,
+          SUM(prompt_tokens)::int      AS tokens_in,
+          SUM(completion_tokens)::int  AS tokens_out,
+          ROUND(SUM(cost_usd)::numeric, 6) AS cost_usd
+        FROM model_usage
+        WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
+        GROUP BY slot
+      )
+      SELECT
+        COALESCE(e.slot, u.slot)                AS slot,
+        COALESCE(bc.display_name, e.slot, u.slot) AS display_name,
+        COALESCE(e.messages, 0)                 AS messages,
+        COALESCE(e.executions, 0)               AS executions,
+        CASE
+          WHEN COALESCE(e.executions, 0) = 0 THEN NULL
+          ELSE ROUND((e.success_count::numeric / e.executions) * 100, 1)
+        END                                     AS success_rate,
+        e.avg_latency_ms,
+        COALESCE(u.tokens_in, 0)               AS tokens_in,
+        COALESCE(u.tokens_out, 0)              AS tokens_out,
+        COALESCE(u.cost_usd, 0)               AS cost_usd
+      FROM exec_stats e
+      FULL OUTER JOIN usage_stats u ON e.slot = u.slot
+      LEFT JOIN bot_config bc ON COALESCE(e.slot, u.slot) = bc.slot
+      ORDER BY COALESCE(e.executions, 0) DESC
+      `,
+      // interval multiplier: parsePeriodInterval retorna "1 day"/"7 days"/"30 days"
+      // usamos só o número aqui para evitar cast duplo
+      [interval === '1 day' ? '1' : interval === '7 days' ? '7' : '30'],
+    );
+    res.json({ period, rows: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/metrics/timeseries', async (req, res) => {
+  try {
+    const period   = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
+    const metric   = ['messages', 'cost', 'latency', 'success_rate'].includes(req.query.metric)
+      ? req.query.metric
+      : 'messages';
+    const botParam = req.query.bot && req.query.bot !== 'all' ? req.query.bot : null;
+    const trunc    = periodTrunc(period);
+    const days     = period === '24h' ? '1' : period === '7d' ? '7' : '30';
+    const botFilter = botParam ? 'AND bot = $2' : '';
+    const params    = botParam ? [days, botParam] : [days];
+
+    let sql;
+    if (metric === 'messages') {
+      sql = `
+        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+               COUNT(*)::int AS value
+        FROM flow_execution_logs
+        WHERE event_type = 'webhook.received'
+          AND created_at > NOW() - ($1::text || ' day')::INTERVAL
+          ${botFilter}
+        GROUP BY 1 ORDER BY 1
+      `;
+    } else if (metric === 'cost') {
+      const botCol = botParam ? 'AND slot = $2' : '';
+      const p2     = botParam ? [days, botParam] : [days];
+      const r2 = await pool.query(
+        `
+        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+               ROUND(SUM(cost_usd)::numeric, 6) AS value
+        FROM model_usage
+        WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
+          ${botCol}
+        GROUP BY 1 ORDER BY 1
+        `,
+        p2,
+      );
+      return res.json({ period, metric, bot: req.query.bot || 'all', points: r2.rows });
+    } else if (metric === 'latency') {
+      sql = `
+        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+               ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::int AS value
+        FROM flow_execution_logs
+        WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
+          ${botFilter}
+        GROUP BY 1 ORDER BY 1
+      `;
+    } else {
+      // success_rate
+      sql = `
+        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+               ROUND(
+                 COUNT(*) FILTER (WHERE status = 'success')::numeric / NULLIF(COUNT(*), 0) * 100,
+                 1
+               ) AS value
+        FROM flow_execution_logs
+        WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
+          ${botFilter}
+        GROUP BY 1 ORDER BY 1
+      `;
+    }
+    const r = await pool.query(sql, params);
+    res.json({ period, metric, bot: req.query.bot || 'all', points: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/metrics/top-errors', async (req, res) => {
+  try {
+    const period = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
+    const limit  = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
+    const days   = period === '24h' ? '1' : period === '7d' ? '7' : '30';
+    const r = await pool.query(
+      `
+      SELECT
+        error_summary                             AS error_message,
+        COUNT(*)::int                             AS count,
+        MAX(created_at)                           AS last_seen,
+        (ARRAY_AGG(bot ORDER BY created_at DESC))[1] AS sample_bot
+      FROM flow_execution_logs
+      WHERE status = 'error'
+        AND error_summary IS NOT NULL
+        AND error_summary <> ''
+        AND created_at > NOW() - ($1::text || ' day')::INTERVAL
+      GROUP BY error_summary
+      ORDER BY COUNT(*) DESC
+      LIMIT $2
+      `,
+      [days, limit],
+    );
+    res.json({ period, rows: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- CLEANUP STATUS ----------
 app.get('/api/cleanup/status', async (req, res) => {
   try {
