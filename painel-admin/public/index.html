@@ -639,10 +639,15 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .btn--accent .btn-label { display: none; }
   .btn--accent::before { content: '+'; font-size: 1rem; }
 }
+/* ── Utilitários de layout ───────────────────────────────────────── */
+.row { display: flex; align-items: center; gap: .75rem; }
+.row--wrap { flex-wrap: wrap; }
+.flex-1 { flex: 1; min-width: 0; }
 /* ── Grupos da seção Bots ────────────────────────────────────────── */
 .bots-group { margin-bottom: 2rem; }
 .bots-group-header { margin-bottom: 1rem; padding-bottom: .625rem; border-bottom: 1px solid var(--border); }
 .bots-group-header .h2 { margin-bottom: .125rem; }
+.bots-group-header .label { display: block; font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-subtle, var(--text-muted)); margin-bottom: .25rem; }
 /* ── Clones ──────────────────────────────────────────────────────── */
 .clones-grid {
   display: grid;
@@ -1057,7 +1062,7 @@ async function renderDashCleanup() {
     clearInterval(_dashCleanupTimer);
     _dashCleanupTimer = null;
   }
-  wrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem"><div class="skeleton" style="width:220px;height:18px"></div></div>`;
+  wrap.innerHTML = `<div class="bots-group-header"><span class="label">Sistema</span><h2 class="h2">Manutenção</h2></div><div class="card row row--wrap"><div class="skeleton" style="width:220px;height:18px"></div></div>`;
   try {
     const s = await api('/api/cleanup/status');
     const nextLabel = s.next_run ? fmtDate(s.next_run) : '—';
@@ -1078,7 +1083,8 @@ async function renderDashCleanup() {
 
     const initial = escapeHtml(computeCountdown());
     wrap.innerHTML = `
-      <div class="card" style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <div class="bots-group-header"><span class="label">Sistema</span><h2 class="h2">Manutenção</h2></div>
+      <div class="card row row--wrap">
         ${icon('trash-2', 16)}
         <span class="muted" style="font-size:.8125rem">Limpeza de logs</span>
         <span style="font-size:.8125rem">Última: <span class="mono">${escapeHtml(lastLabel)}</span></span>
@@ -1105,7 +1111,7 @@ async function renderDashCleanup() {
     }, 30000);
   } catch (err) {
     console.error('[dashboard cleanup]', err);
-    wrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem"><span class="muted" style="font-size:.8125rem">${icon('alert-triangle',14)} Limpeza de logs: nao foi possivel carregar status (${escapeHtml(err.message)})</span></div>`;
+    wrap.innerHTML = `<div class="bots-group-header"><span class="label">Sistema</span><h2 class="h2">Manutenção</h2></div><div class="card row"><span class="muted" style="font-size:.8125rem">${icon('alert-triangle',14)} Limpeza de logs: nao foi possivel carregar status (${escapeHtml(err.message)})</span></div>`;
   }
 }
 
@@ -1232,7 +1238,7 @@ async function renderDashKPIs() {
 
 async function renderDashSessions() {
   const wrap = document.getElementById('dash-sessions-wrap');
-  wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Sessões WAHA</h2><div class="sessions-grid">${'<div class="session-card"><div class="skeleton" style="height:20px;width:120px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div>`;
+  wrap.innerHTML = `<div class="bots-group-header"><span class="label">Infraestrutura</span><h2 class="h2">Sessões WAHA</h2></div><div class="sessions-grid">${'<div class="session-card"><div class="skeleton" style="height:20px;width:120px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div>`;
 
   try {
     const data = await api('/api/status');
@@ -1241,7 +1247,7 @@ async function renderDashSessions() {
     const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
 
     if (!sessArr.length) {
-      wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Sessões WAHA</h2><div class="empty-state">${icon('wifi-off', 36)}<div class="empty-state__title">Nenhuma sessão</div><p class="empty-state__text">Nenhuma sessão WAHA encontrada.</p></div>`;
+      wrap.innerHTML = `<div class="bots-group-header"><span class="label">Infraestrutura</span><h2 class="h2">Sessões WAHA</h2></div><div class="empty-state">${icon('wifi-off', 36)}<div class="empty-state__title">Nenhuma sessão</div><p class="empty-state__text">Nenhuma sessão WAHA encontrada.</p></div>`;
       return;
     }
 
@@ -1255,7 +1261,7 @@ async function renderDashSessions() {
       </div>`;
     }).join('');
 
-    wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Sessões WAHA</h2><div class="sessions-grid">${cards}</div>`;
+    wrap.innerHTML = `<div class="bots-group-header"><span class="label">Infraestrutura</span><h2 class="h2">Sessões WAHA</h2></div><div class="sessions-grid">${cards}</div>`;
   } catch (err) {
     console.error('[dashboard sessions]', err);
     wrap.innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar sessões: ${escapeHtml(err.message)}</p></div>`;
@@ -1267,7 +1273,7 @@ async function renderDashSessions() {
 
 async function renderDashExec() {
   const wrap = document.getElementById('dash-exec-wrap');
-  wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Últimas execuções</h2><div class="table-wrap"><div class="skeleton" style="height:200px"></div></div>`;
+  wrap.innerHTML = `<div class="bots-group-header"><span class="label">Atividade</span><h2 class="h2">Últimas execuções</h2></div><div class="table-wrap"><div class="skeleton" style="height:200px"></div></div>`;
 
   try {
     const data = await api('/api/status');
@@ -1275,7 +1281,7 @@ async function renderDashExec() {
     const execs = data?.execucoes || [];
 
     if (!execs.length) {
-      wrap.innerHTML = `<h2 class="h2" style="margin-bottom:.75rem">Últimas execuções</h2><div class="empty-state">${icon('activity',36)}<div class="empty-state__title">Sem execuções recentes</div></div>`;
+      wrap.innerHTML = `<div class="bots-group-header"><span class="label">Atividade</span><h2 class="h2">Últimas execuções</h2></div><div class="empty-state">${icon('activity',36)}<div class="empty-state__title">Sem execuções recentes</div></div>`;
       return;
     }
 
@@ -1294,7 +1300,7 @@ async function renderDashExec() {
     }).join('');
 
     wrap.innerHTML = `
-      <h2 class="h2" style="margin-bottom:.75rem">Últimas execuções</h2>
+      <div class="bots-group-header"><span class="label">Atividade</span><h2 class="h2">Últimas execuções</h2></div>
       <div class="table-wrap">
         <table class="table">
           <thead><tr><th>ID</th><th>Workflow</th><th>Status</th><th>Iniciado</th></tr></thead>
@@ -2142,7 +2148,7 @@ async function renderRelatorios() {
         };
 
         content.innerHTML = `
-          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">
+          <div class="row" style="margin-bottom:.75rem">
             <label style="font-size:.85rem;color:var(--text-muted)">Filtrar por origem:</label>
             <select id="leads-slot-filter" class="input" style="width:auto;min-width:220px">${slotOptions}</select>
           </div>
@@ -2243,14 +2249,14 @@ async function loadCfgFluxos(content) {
       const isActive = w.active !== false;
 
       const card = document.createElement('div');
-      card.className = 'card';
-      card.style.cssText = 'display:flex;align-items:center;gap:1rem;flex-wrap:wrap';
+      card.className = 'card row row--wrap';
 
       const av = botAvatar(w.workflow_id || w.name || 'w', 36);
       card.appendChild(av);
 
       const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:120px';
+      info.className = 'flex-1';
+      info.style.cssText = 'min-width:120px';
       info.innerHTML = `<div class="h3">${escapeHtml(w.name || w.workflow_id || '—')}</div><div class="muted mono" style="font-size:.75rem">${escapeHtml(w.workflow_id || w.source || '')}</div><div class="subtle" style="margin-top:2px">${fmtNum(clients)} cliente${clients !== 1 ? 's' : ''} roteado${clients !== 1 ? 's' : ''}</div>`;
       card.appendChild(info);
 
@@ -2376,7 +2382,7 @@ async function loadCfgLimpeza(content) {
     <div class="card" id="cfg-cleanup-status"><div class="skeleton" style="height:80px"></div></div>
     <div class="card" id="cfg-cleanup-manual">
       <h3 class="h3" style="margin-bottom:.75rem">Limpar logs antigos manualmente</h3>
-      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <div class="row row--wrap">
         <div class="field" style="flex:0 0 auto">
           <label for="cfg-days-input">Manter últimos N dias</label>
           <input type="number" id="cfg-days-input" value="30" min="1" max="365" style="width:100px" />
