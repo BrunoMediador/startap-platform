@@ -443,16 +443,40 @@ app.post('/api/routing', async (req, res) => {
 app.put('/api/routing/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { telefone, workflow_id, nome_cliente, ativo } = req.body;
-    const tel = String(telefone).replace(/\D/g, '');
-    const wf = await resolveWorkflow(workflow_id);
-    if (!wf) return res.status(400).json({ error: 'workflow nao encontrado' });
+    // PATCH semantics: lê o registro atual, faz merge com os campos enviados.
+    // Permite toggles parciais (ex: só `ativo`, só `workflow_id`) sem precisar
+    // mandar o objeto inteiro do front.
+    const cur = await pool.query(
+      `SELECT telefone, workflow_id, workflow_name, webhook_url, nome_cliente, ativo
+       FROM routing_clientes WHERE id = $1`,
+      [id],
+    );
+    if (cur.rowCount === 0) return res.status(404).json({ error: 'rota nao encontrada' });
+    const row = cur.rows[0];
+
+    const telefoneRaw = req.body.telefone !== undefined ? String(req.body.telefone).replace(/\D/g, '') : row.telefone;
+    const wfIdNovo = req.body.workflow_id !== undefined ? req.body.workflow_id : row.workflow_id;
+
+    let wfId = row.workflow_id;
+    let wfName = row.workflow_name;
+    let webhookUrl = row.webhook_url;
+    if (wfIdNovo !== row.workflow_id) {
+      const wf = await resolveWorkflow(wfIdNovo);
+      if (!wf) return res.status(400).json({ error: 'workflow nao encontrado' });
+      wfId = wf.id;
+      wfName = wf.name;
+      webhookUrl = wf.webhook_url;
+    }
+
+    const nomeCliente = req.body.nome_cliente !== undefined ? (req.body.nome_cliente || null) : row.nome_cliente;
+    const ativo = req.body.ativo !== undefined ? !!req.body.ativo : row.ativo;
+
     await pool.query(
       `UPDATE routing_clientes SET
          telefone=$1, workflow_id=$2, workflow_name=$3, webhook_url=$4,
          nome_cliente=$5, ativo=$6, atualizado_em=NOW()
        WHERE id=$7`,
-      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo, id],
+      [telefoneRaw, wfId, wfName, webhookUrl, nomeCliente, ativo, id],
     );
     res.json({ ok: true });
   } catch (e) {
