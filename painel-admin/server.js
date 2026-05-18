@@ -1803,46 +1803,88 @@ app.get('/api/leads', async (req, res) => {
   try {
     const slot =
       typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
+
+    const rawLimit = parseInt(req.query.limit, 10);
+    const rawOffset = parseInt(req.query.offset, 10);
+    // Garante valores seguros sem expor input do usuário no SQL — usa parâmetros
+    const limit = (!isNaN(rawLimit) && rawLimit > 0) ? Math.min(rawLimit, 500) : 50;
+    const offset = (!isNaN(rawOffset) && rawOffset >= 0) ? rawOffset : 0;
+
+    // Cada tabela busca limit+offset pra garantir cobertura ao mesclar e paginar em JS.
+    // O total real vem de COUNT paralelo em ambas as tabelas.
+    const fetchLimit = limit + offset;
+
     let rows = [];
+    let total = 0;
     if (slot) {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, c1, c2] = await Promise.all([
         pool.query(
-          'SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY id DESC LIMIT 200',
-          [slot, 'leads_ricardo'],
+          'SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY criado_em DESC LIMIT $3',
+          [slot, 'leads_ricardo', fetchLimit],
         ),
         pool.query(
-          'SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY id DESC LIMIT 200',
-          [slot, 'leads_vendas_barbearia'],
+          'SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY criado_em DESC LIMIT $3',
+          [slot, 'leads_vendas_barbearia', fetchLimit],
         ),
+        pool.query('SELECT COUNT(*)::int AS n FROM leads_ricardo WHERE slot = $1', [slot]),
+        pool.query('SELECT COUNT(*)::int AS n FROM leads_vendas_barbearia WHERE slot = $1', [slot]),
       ]);
+      total = (c1.rows[0]?.n ?? 0) + (c2.rows[0]?.n ?? 0);
       rows = [...r1.rows, ...r2.rows]
         .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
-        .slice(0, 200);
+        .slice(offset, offset + limit);
     } else {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, c1, c2] = await Promise.all([
         pool.query(
-          "SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY id DESC LIMIT 200",
+          "SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY criado_em DESC LIMIT $1",
+          [fetchLimit],
         ),
         pool.query(
-          "SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY id DESC LIMIT 200",
+          "SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY criado_em DESC LIMIT $1",
+          [fetchLimit],
         ),
+        pool.query('SELECT COUNT(*)::int AS n FROM leads_ricardo'),
+        pool.query('SELECT COUNT(*)::int AS n FROM leads_vendas_barbearia'),
       ]);
+      total = (c1.rows[0]?.n ?? 0) + (c2.rows[0]?.n ?? 0);
       rows = [...r1.rows, ...r2.rows]
         .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
-        .slice(0, 200);
+        .slice(offset, offset + limit);
     }
+
+    // Mantém array no body pra retrocompat com front; metadados de paginação vão no header
+    res.setHeader('X-Total-Count', total);
+    res.setHeader('X-Limit', limit);
+    res.setHeader('X-Offset', offset);
     res.json(rows);
-  } catch {
-    res.json([]);
+  } catch (err) {
+    console.error('[painel] GET /api/leads ->', err.message);
+    res.status(500).json({ error: 'falha ao carregar leads', detail: err.message });
   }
 });
 
 app.get('/api/agendamentos-pendentes', async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM agendamento_pendente ORDER BY 1 DESC LIMIT 200');
+    const rawLimit = parseInt(req.query.limit, 10);
+    const rawOffset = parseInt(req.query.offset, 10);
+    const limit = (!isNaN(rawLimit) && rawLimit > 0) ? Math.min(rawLimit, 500) : 50;
+    const offset = (!isNaN(rawOffset) && rawOffset >= 0) ? rawOffset : 0;
+
+    const [r, c] = await Promise.all([
+      pool.query(
+        'SELECT * FROM agendamento_pendente ORDER BY id DESC LIMIT $1 OFFSET $2',
+        [limit, offset],
+      ),
+      pool.query('SELECT COUNT(*)::int AS n FROM agendamento_pendente'),
+    ]);
+
+    res.setHeader('X-Total-Count', c.rows[0]?.n ?? 0);
+    res.setHeader('X-Limit', limit);
+    res.setHeader('X-Offset', offset);
     res.json(r.rows);
-  } catch {
-    res.json([]);
+  } catch (err) {
+    console.error('[painel] GET /api/agendamentos-pendentes ->', err.message);
+    res.status(500).json({ error: 'falha ao carregar agendamentos pendentes', detail: err.message });
   }
 });
 
@@ -3157,6 +3199,76 @@ app.use((err, req, res, _next) => {
     return res.status(status).json({ error: err.message || 'erro inesperado' });
   }
   res.status(500).json({ error: 'erro inesperado' });
+});
+
+// ---------- SYNC PERIÓDICO WAHA → flow_clones.status ----------
+// Roda a cada 60s pra manter status consistente mesmo sem uso ativo do painel.
+// Só liga se WAHA_URL foi explicitamente configurado (evita ruído em dev local).
+const WAHA_SYNC_INTERVAL_MS = 60_000;
+// Status WAHA → vocabulário do DB. 'rascunho' mantém significado original de
+// "clone criado mas sessão ainda não iniciada".
+const WAHA_STATUS_MAP = {
+  WORKING: 'conectado',
+  FAILED: 'desconectado',
+  STOPPED: 'desconectado',
+  SCAN_QR_CODE: 'aguardando_qr',
+};
+
+let _wahaSyncing = false;
+
+async function syncWahaStatus() {
+  if (_wahaSyncing) return; // evita concurrent runs se WAHA estiver lento
+  _wahaSyncing = true;
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions`, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+    });
+    if (!r.ok) {
+      console.warn(`[waha-sync] /api/sessions retornou ${r.status} — pulando ciclo`);
+      return;
+    }
+    const sessions = await r.json().catch(() => []);
+    if (!Array.isArray(sessions)) return;
+
+    for (const session of sessions) {
+      const wahaStatus = session?.status ?? '';
+      const novoStatus = WAHA_STATUS_MAP[wahaStatus];
+      if (!novoStatus || !session?.name) continue;
+
+      const upd = await pool.query(
+        `UPDATE flow_clones
+            SET status = $1, updated_at = NOW()
+          WHERE waha_sessao = $2
+            AND status IS DISTINCT FROM $1
+          RETURNING id, waha_sessao, status`,
+        [novoStatus, session.name],
+      );
+
+      for (const row of upd.rows) {
+        // Loga transições pra auditoria via docker logs
+        console.log(
+          `[waha-sync] clone id=${row.id} sessao=${row.waha_sessao}: waha=${wahaStatus} → db=${novoStatus}`,
+        );
+      }
+    }
+  } catch (e) {
+    console.warn('[waha-sync] falha no ciclo de sync:', e.message);
+  } finally {
+    _wahaSyncing = false;
+  }
+}
+
+// WAHA_URL tem default 'http://waha:3000'; só inicia sync se foi sobrescrito via env
+// ou se o default resolve (em prod via docker o hostname 'waha' existe).
+// Checamos se a variável foi explicitamente definida no ambiente.
+let _wahaIntervalHandle = null;
+if (process.env.WAHA_URL) {
+  _wahaIntervalHandle = setInterval(syncWahaStatus, WAHA_SYNC_INTERVAL_MS);
+  console.log(`[waha-sync] periodic sync ativo (intervalo ${WAHA_SYNC_INTERVAL_MS / 1000}s)`);
+}
+
+process.on('SIGTERM', () => {
+  if (_wahaIntervalHandle) clearInterval(_wahaIntervalHandle);
 });
 
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));
