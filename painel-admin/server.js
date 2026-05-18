@@ -125,8 +125,8 @@ const BOT_MODEL_CONTEXT = {
 // Mapeamento flow_id → tabela de leads (slots sem leads_table omitidos intencionalmente).
 // Usado em GET /api/bots para popular leads_count sem hardcode inline.
 const FLOW_LEADS_TABLE = {
-  'dlpKXM3gvX2joC1b': 'leads_ricardo',
-  'teste_vendas_barbearia': 'leads_vendas_barbearia',
+  dlpKXM3gvX2joC1b: 'leads_ricardo',
+  teste_vendas_barbearia: 'leads_vendas_barbearia',
 };
 
 const DEFAULT_PROJECT_DATABASES = [
@@ -461,7 +461,8 @@ app.put('/api/routing/:id', async (req, res) => {
     if (cur.rowCount === 0) return res.status(404).json({ error: 'rota nao encontrada' });
     const row = cur.rows[0];
 
-    const telefoneRaw = req.body.telefone !== undefined ? String(req.body.telefone).replace(/\D/g, '') : row.telefone;
+    const telefoneRaw =
+      req.body.telefone !== undefined ? String(req.body.telefone).replace(/\D/g, '') : row.telefone;
     const wfIdNovo = req.body.workflow_id !== undefined ? req.body.workflow_id : row.workflow_id;
 
     let wfId = row.workflow_id;
@@ -475,7 +476,8 @@ app.put('/api/routing/:id', async (req, res) => {
       webhookUrl = wf.webhook_url;
     }
 
-    const nomeCliente = req.body.nome_cliente !== undefined ? (req.body.nome_cliente || null) : row.nome_cliente;
+    const nomeCliente =
+      req.body.nome_cliente !== undefined ? req.body.nome_cliente || null : row.nome_cliente;
     const ativo = req.body.ativo !== undefined ? !!req.body.ativo : row.ativo;
 
     await pool.query(
@@ -563,10 +565,7 @@ app.get(
         const leadsTable = FLOW_LEADS_TABLE[flowId];
         // Soma leads de todos os slots que compartilham este bot_config slot na tabela de leads
         const leadsCount = leadsTable
-          ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce(
-              (sum, n) => sum + n,
-              0,
-            )
+          ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce((sum, n) => sum + n, 0)
           : 0;
 
         return {
@@ -772,7 +771,8 @@ app.put('/api/workflows/:workflowId/pause-keywords', async (req, res) => {
 app.get('/api/bots/:slot/media', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, slot, position, media_type, url, caption, context, position_order, enabled, updated_at
+      `SELECT id, slot, position, media_type, url, caption, context, position_order, enabled,
+              course_slug, is_course_intro, updated_at
        FROM bot_media WHERE slot = $1 ORDER BY position_order, id`,
       [req.params.slot],
     );
@@ -793,7 +793,13 @@ app.post('/api/bots/:slot/media', async (req, res) => {
       position_order = 0,
       enabled = true,
     } = req.body;
-    if (!url) return res.status(400).json({ error: 'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado' });
+    if (!url)
+      return res
+        .status(400)
+        .json({
+          error:
+            'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado',
+        });
     // position nao fornecido: usa timestamp como chave unica
     const pos = position || `media_${Date.now()}`;
     const r = await pool.query(
@@ -826,32 +832,287 @@ app.post('/api/bots/:slot/media', async (req, res) => {
 });
 
 app.put('/api/bots/:slot/media/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { caption = null, context = null, position_order, enabled } = req.body;
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    const { caption, context, position_order, enabled, course_slug, is_course_intro } = req.body;
+
+    // Validações dos novos campos de curso (ADR 0008)
+    if (course_slug !== undefined && course_slug !== null) {
+      // A mídia deve ser do tipo video para ser vinculada a um curso
+      const mediaCheck = await pool.query(
+        `SELECT media_type FROM bot_media WHERE slot = $1 AND id = $2`,
+        [slot, mediaId],
+      );
+      if (!mediaCheck.rows.length) return res.status(404).json({ error: 'midia nao encontrada' });
+      if (mediaCheck.rows[0].media_type !== 'video') {
+        return res
+          .status(400)
+          .json({ error: 'course_slug so pode ser definido em midias do tipo video' });
+      }
+      // Validar que o curso existe neste slot
+      const courseCheck = await pool.query(
+        `SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2`,
+        [slot, course_slug],
+      );
+      if (!courseCheck.rows.length) {
+        return res
+          .status(400)
+          .json({ error: `curso '${course_slug}' nao encontrado no slot '${slot}'` });
+      }
+      // Limite de 5 mídias por curso (exclui a própria mídia)
+      const countCheck = await pool.query(
+        `SELECT COUNT(*) AS total FROM bot_media WHERE slot = $1 AND course_slug = $2 AND id != $3`,
+        [slot, course_slug, mediaId],
+      );
+      if (Number(countCheck.rows[0].total) >= 5) {
+        return res
+          .status(400)
+          .json({ error: `limite de 5 midias por curso atingido para '${course_slug}'` });
+      }
+    }
+
+    if (is_course_intro === true) {
+      // is_course_intro=true exige course_slug setado (na requisição ou já no banco)
+      let effectiveCourseSlug = course_slug;
+      if (effectiveCourseSlug === undefined || effectiveCourseSlug === null) {
+        const cur = await pool.query(
+          `SELECT course_slug FROM bot_media WHERE slot = $1 AND id = $2`,
+          [slot, mediaId],
+        );
+        effectiveCourseSlug = cur.rows[0]?.course_slug ?? null;
+      }
+      if (!effectiveCourseSlug) {
+        return res.status(400).json({ error: 'is_course_intro=true exige course_slug definido' });
+      }
+    }
+
     const fields = [];
     const vals = [];
     let idx = 1;
-    if (caption !== undefined) { fields.push(`caption = $${idx++}`); vals.push(caption); }
-    if (context !== undefined) { fields.push(`context = $${idx++}`); vals.push(context); }
-    if (position_order !== undefined) { fields.push(`position_order = $${idx++}`); vals.push(Number(position_order) || 0); }
-    if (enabled !== undefined) { fields.push(`enabled = $${idx++}`); vals.push(!!enabled); }
-    if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido (caption, context, position_order, enabled)' });
+    if (caption !== undefined) {
+      fields.push(`caption = $${idx++}`);
+      vals.push(caption);
+    }
+    if (context !== undefined) {
+      fields.push(`context = $${idx++}`);
+      vals.push(context);
+    }
+    if (position_order !== undefined) {
+      fields.push(`position_order = $${idx++}`);
+      vals.push(Number(position_order) || 0);
+    }
+    if (enabled !== undefined) {
+      fields.push(`enabled = $${idx++}`);
+      vals.push(!!enabled);
+    }
+    if (course_slug !== undefined) {
+      fields.push(`course_slug = $${idx++}`);
+      vals.push(course_slug ?? null);
+    }
+    if (is_course_intro !== undefined) {
+      fields.push(`is_course_intro = $${idx++}`);
+      vals.push(!!is_course_intro);
+    }
+    if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido' });
     fields.push(`updated_at = NOW()`);
-    vals.push(req.params.slot, req.params.id);
-    const r = await pool.query(
+    vals.push(slot, mediaId);
+
+    await client.query('BEGIN');
+
+    // Se promovendo como intro, zera intro das outras mídias do mesmo curso primeiro (atomic)
+    if (is_course_intro === true) {
+      const effectiveCourseSlug =
+        course_slug !== undefined
+          ? course_slug
+          : (
+              await client.query(`SELECT course_slug FROM bot_media WHERE slot = $1 AND id = $2`, [
+                slot,
+                mediaId,
+              ])
+            ).rows[0]?.course_slug;
+      if (effectiveCourseSlug) {
+        await client.query(
+          `UPDATE bot_media SET is_course_intro = false WHERE slot = $1 AND course_slug = $2 AND id != $3`,
+          [slot, effectiveCourseSlug, mediaId],
+        );
+      }
+    }
+
+    const r = await client.query(
       `UPDATE bot_media SET ${fields.join(', ')} WHERE slot = $${idx++} AND id = $${idx} RETURNING *`,
       vals,
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'midia nao encontrada' });
+    if (!r.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'midia nao encontrada' });
+    }
+    await client.query('COMMIT');
     res.json(r.rows[0]);
   } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
 app.delete('/api/media/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM bot_media WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- CURSOS ----------
+
+app.get('/api/bots/:slot/courses', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at
+       FROM bot_courses
+       WHERE slot = $1
+       ORDER BY position_order, id`,
+      [req.params.slot],
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/bots/:slot/courses', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const {
+      course_slug,
+      name,
+      description = null,
+      price = 0,
+      duration = null,
+      position_order = 0,
+      enabled = true,
+    } = req.body;
+    if (!course_slug || typeof course_slug !== 'string' || !course_slug.trim()) {
+      return res.status(400).json({ error: 'course_slug e obrigatorio' });
+    }
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'name e obrigatorio' });
+    }
+    if (typeof price !== 'number' || !Number.isInteger(price) || price < 0) {
+      return res.status(400).json({ error: 'price deve ser inteiro >= 0 (centavos)' });
+    }
+    const r = await pool.query(
+      `INSERT INTO bot_courses
+         (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+       RETURNING *`,
+      [
+        slot,
+        course_slug.trim(),
+        name.trim(),
+        description,
+        price,
+        duration,
+        Number(position_order) || 0,
+        !!enabled,
+      ],
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    if (e.code === '23505') {
+      return res
+        .status(409)
+        .json({ error: `course_slug '${req.body.course_slug}' ja existe neste slot` });
+    }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/bots/:slot/courses/:id', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const courseId = Number(req.params.id);
+    const { name, description, price, duration, position_order, enabled } = req.body;
+
+    if (
+      price !== undefined &&
+      (typeof price !== 'number' || !Number.isInteger(price) || price < 0)
+    ) {
+      return res.status(400).json({ error: 'price deve ser inteiro >= 0 (centavos)' });
+    }
+
+    const fields = [];
+    const vals = [];
+    let idx = 1;
+    if (name !== undefined) {
+      fields.push(`name = $${idx++}`);
+      vals.push(String(name).trim());
+    }
+    if (description !== undefined) {
+      fields.push(`description = $${idx++}`);
+      vals.push(description ?? null);
+    }
+    if (price !== undefined) {
+      fields.push(`price = $${idx++}`);
+      vals.push(price);
+    }
+    if (duration !== undefined) {
+      fields.push(`duration = $${idx++}`);
+      vals.push(duration ?? null);
+    }
+    if (position_order !== undefined) {
+      fields.push(`position_order = $${idx++}`);
+      vals.push(Number(position_order) || 0);
+    }
+    if (enabled !== undefined) {
+      fields.push(`enabled = $${idx++}`);
+      vals.push(!!enabled);
+    }
+    if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido' });
+    fields.push(`updated_at = NOW()`);
+    vals.push(slot, courseId);
+
+    const r = await pool.query(
+      `UPDATE bot_courses SET ${fields.join(', ')} WHERE slot = $${idx++} AND id = $${idx} RETURNING *`,
+      vals,
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/bots/:slot/courses/:id', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const courseId = Number(req.params.id);
+
+    // Busca o curso para obter o course_slug e validar existência
+    const courseCheck = await pool.query(
+      `SELECT course_slug FROM bot_courses WHERE slot = $1 AND id = $2`,
+      [slot, courseId],
+    );
+    if (!courseCheck.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
+    const { course_slug } = courseCheck.rows[0];
+
+    // Verifica se há mídias vinculadas a este curso
+    const mediaCheck = await pool.query(
+      `SELECT id, position FROM bot_media WHERE slot = $1 AND course_slug = $2`,
+      [slot, course_slug],
+    );
+    if (mediaCheck.rows.length > 0) {
+      return res.status(409).json({
+        error: `curso possui ${mediaCheck.rows.length} midia(s) vinculada(s). Desvincule antes de deletar.`,
+        midias_vinculadas: mediaCheck.rows,
+      });
+    }
+
+    await pool.query(`DELETE FROM bot_courses WHERE slot = $1 AND id = $2`, [slot, courseId]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1515,20 +1776,35 @@ function buildFlowLogFilters(query, options = {}) {
 // ---------- LEADS & RELATORIOS ----------
 app.get('/api/leads', async (req, res) => {
   try {
-    const slot = typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
+    const slot =
+      typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
     let rows = [];
     if (slot) {
       const [r1, r2] = await Promise.all([
-        pool.query('SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY id DESC LIMIT 200', [slot, 'leads_ricardo']),
-        pool.query('SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY id DESC LIMIT 200', [slot, 'leads_vendas_barbearia']),
+        pool.query(
+          'SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY id DESC LIMIT 200',
+          [slot, 'leads_ricardo'],
+        ),
+        pool.query(
+          'SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY id DESC LIMIT 200',
+          [slot, 'leads_vendas_barbearia'],
+        ),
       ]);
-      rows = [...r1.rows, ...r2.rows].sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime()).slice(0, 200);
+      rows = [...r1.rows, ...r2.rows]
+        .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
+        .slice(0, 200);
     } else {
       const [r1, r2] = await Promise.all([
-        pool.query("SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY id DESC LIMIT 200"),
-        pool.query("SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY id DESC LIMIT 200"),
+        pool.query(
+          "SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY id DESC LIMIT 200",
+        ),
+        pool.query(
+          "SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY id DESC LIMIT 200",
+        ),
       ]);
-      rows = [...r1.rows, ...r2.rows].sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime()).slice(0, 200);
+      rows = [...r1.rows, ...r2.rows]
+        .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
+        .slice(0, 200);
     }
     res.json(rows);
   } catch {
@@ -1570,7 +1846,7 @@ app.get('/api/message-stats', async (req, res) => {
  * Default: 24h.
  */
 function parsePeriodInterval(period) {
-  if (period === '7d')  return '7 days';
+  if (period === '7d') return '7 days';
   if (period === '30d') return '30 days';
   return '1 day'; // default 24h
 }
@@ -1644,22 +1920,22 @@ app.get('/api/metrics/by-bot', async (req, res) => {
 
 app.get('/api/metrics/timeseries', async (req, res) => {
   try {
-    const period   = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
-    const metric   = ['messages', 'cost', 'latency', 'success_rate'].includes(req.query.metric)
+    const period = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
+    const metric = ['messages', 'cost', 'latency', 'success_rate'].includes(req.query.metric)
       ? req.query.metric
       : 'messages';
     const botParam = req.query.bot && req.query.bot !== 'all' ? req.query.bot : null;
-    const trunc    = periodTrunc(period);
-    const days     = period === '24h' ? '1' : period === '7d' ? '7' : '30';
+    const trunc = periodTrunc(period);
+    const days = period === '24h' ? '1' : period === '7d' ? '7' : '30';
     // DEBT: criar índice em flow_execution_logs(bot) quando volume crescer
     // (hoje seq scan na coluna; volume atual é baixo, sem impacto perceptível)
     const botFilter = botParam ? 'AND bot = $2' : '';
-    const params    = botParam ? [days, botParam] : [days];
+    const params = botParam ? [days, botParam] : [days];
 
     let sql;
     if (metric === 'messages') {
       sql = `
-        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+        SELECT DATE_TRUNC(${trunc === 'hour' ? "'hour'" : "'day'"}, created_at) AS t,
                COUNT(*)::int AS value
         FROM flow_execution_logs
         WHERE event_type = 'webhook.received'
@@ -1669,10 +1945,10 @@ app.get('/api/metrics/timeseries', async (req, res) => {
       `;
     } else if (metric === 'cost') {
       const botCol = botParam ? 'AND slot = $2' : '';
-      const p2     = botParam ? [days, botParam] : [days];
+      const p2 = botParam ? [days, botParam] : [days];
       const r2 = await pool.query(
         `
-        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+        SELECT DATE_TRUNC(${trunc === 'hour' ? "'hour'" : "'day'"}, created_at) AS t,
                ROUND(SUM(cost_usd)::numeric, 6) AS value
         FROM model_usage
         WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
@@ -1684,7 +1960,7 @@ app.get('/api/metrics/timeseries', async (req, res) => {
       return res.json({ period, metric, bot: req.query.bot || 'all', points: r2.rows });
     } else if (metric === 'latency') {
       sql = `
-        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+        SELECT DATE_TRUNC(${trunc === 'hour' ? "'hour'" : "'day'"}, created_at) AS t,
                ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::int AS value
         FROM flow_execution_logs
         WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
@@ -1694,7 +1970,7 @@ app.get('/api/metrics/timeseries', async (req, res) => {
     } else {
       // success_rate
       sql = `
-        SELECT DATE_TRUNC(${ trunc === 'hour' ? "'hour'" : "'day'" }, created_at) AS t,
+        SELECT DATE_TRUNC(${trunc === 'hour' ? "'hour'" : "'day'"}, created_at) AS t,
                ROUND(
                  COUNT(*) FILTER (WHERE status = 'success')::numeric / NULLIF(COUNT(*), 0) * 100,
                  1
@@ -1715,8 +1991,8 @@ app.get('/api/metrics/timeseries', async (req, res) => {
 app.get('/api/metrics/top-errors', async (req, res) => {
   try {
     const period = ['24h', '7d', '30d'].includes(req.query.period) ? req.query.period : '24h';
-    const limit  = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
-    const days   = period === '24h' ? '1' : period === '7d' ? '7' : '30';
+    const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
+    const days = period === '24h' ? '1' : period === '7d' ? '7' : '30';
     const r = await pool.query(
       `
       SELECT
@@ -1795,7 +2071,8 @@ app.get('/api/clones', async (_req, res) => {
 
 // POST /api/clones — cria clone
 app.post('/api/clones', async (req, res) => {
-  const { matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao } = req.body ?? {};
+  const { matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao } =
+    req.body ?? {};
   if (!matriz_slot || typeof matriz_slot !== 'string') {
     return res.status(400).json({ error: 'matriz_slot obrigatório' });
   }
@@ -1804,7 +2081,10 @@ app.post('/api/clones', async (req, res) => {
   }
 
   // Gera slug único
-  const slug = `clone_${display_name.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 40)}_${Math.random().toString(36).slice(2, 8)}`;
+  const slug = `clone_${display_name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .slice(0, 40)}_${Math.random().toString(36).slice(2, 8)}`;
   const pers = personalizacao && typeof personalizacao === 'object' ? personalizacao : {};
 
   const client = await pool.connect();
@@ -1830,11 +2110,14 @@ app.post('/api/clones', async (req, res) => {
     );
 
     // Copia e personaliza bot_prompt
-    const promptR = await client.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [matriz_slot]);
+    const promptR = await client.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [
+      matriz_slot,
+    ]);
     if (promptR.rows[0]) {
       let prompt = promptR.rows[0].prompt;
-      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
-      if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
+      if (pers['cliente_nome'])
+        prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
       await client.query(
         `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())`,
         [slug, prompt],
@@ -1854,8 +2137,18 @@ app.post('/api/clones', async (req, res) => {
            (slot, position, media_type, url, caption, context, position_order, enabled,
             course_slug, is_course_intro, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
-        [slug, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled,
-         m.course_slug ?? null, m.is_course_intro ?? false],
+        [
+          slug,
+          m.position,
+          m.media_type,
+          m.url,
+          m.caption,
+          m.context,
+          m.position_order,
+          m.enabled,
+          m.course_slug ?? null,
+          m.is_course_intro ?? false,
+        ],
       );
     }
 
@@ -1871,7 +2164,16 @@ app.post('/api/clones', async (req, res) => {
            (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
          ON CONFLICT (slot, course_slug) DO NOTHING`,
-        [slug, c.course_slug, c.name, c.description, c.price, c.duration, c.position_order, c.enabled],
+        [
+          slug,
+          c.course_slug,
+          c.name,
+          c.description,
+          c.price,
+          c.duration,
+          c.position_order,
+          c.enabled,
+        ],
       );
     }
 
@@ -1888,7 +2190,14 @@ app.post('/api/clones', async (req, res) => {
       `INSERT INTO flow_clones (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb,'rascunho',NOW(),NOW())
        RETURNING *`,
-      [slug, matriz_slot, display_name, cliente_nome ?? null, cliente_telefone ?? null, JSON.stringify(pers)],
+      [
+        slug,
+        matriz_slot,
+        display_name,
+        cliente_nome ?? null,
+        cliente_telefone ?? null,
+        JSON.stringify(pers),
+      ],
     );
 
     await client.query('COMMIT');
@@ -1923,7 +2232,10 @@ async function createWahaSession(name) {
     const webhookUrl = TS_WEBHOOK_URL;
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: JSON.stringify({
         name,
         start: true,
@@ -1949,12 +2261,21 @@ app.post('/api/clones/with-waha', async (req, res) => {
 
   // --- validações ---
   if (!matriz_slot || typeof matriz_slot !== 'string' || !MATRIZES_ROUTAVEIS.includes(matriz_slot))
-    return res.status(400).json({ error: `matriz_slot inválido. Valores aceitos: ${MATRIZES_ROUTAVEIS.join(', ')}` });
+    return res
+      .status(400)
+      .json({ error: `matriz_slot inválido. Valores aceitos: ${MATRIZES_ROUTAVEIS.join(', ')}` });
 
   if (!novo_slot || typeof novo_slot !== 'string' || !/^[a-z0-9-]{3,50}$/.test(novo_slot))
-    return res.status(400).json({ error: 'novo_slot obrigatório: lowercase, hífens e números, 3-50 chars' });
+    return res
+      .status(400)
+      .json({ error: 'novo_slot obrigatório: lowercase, hífens e números, 3-50 chars' });
 
-  if (!display_name || typeof display_name !== 'string' || display_name.trim().length === 0 || display_name.length > 100)
+  if (
+    !display_name ||
+    typeof display_name !== 'string' ||
+    display_name.trim().length === 0 ||
+    display_name.length > 100
+  )
     return res.status(400).json({ error: 'display_name obrigatório (1-100 chars)' });
 
   // verifica unicidade do slot em bot_config e flow_clones
@@ -1971,9 +2292,10 @@ app.post('/api/clones/with-waha', async (req, res) => {
   if (bcCheck.rows.length > 0 || fcCheck.rows.length > 0)
     return res.status(409).json({ error: `slot "${novo_slot}" já existe` });
 
-  const pers = personalizacao && typeof personalizacao === 'object' && !Array.isArray(personalizacao)
-    ? personalizacao
-    : {};
+  const pers =
+    personalizacao && typeof personalizacao === 'object' && !Array.isArray(personalizacao)
+      ? personalizacao
+      : {};
 
   // --- 1. Cria clone via transação ---
   const cloneClient = await pool.connect();
@@ -1987,7 +2309,9 @@ app.post('/api/clones/with-waha', async (req, res) => {
     );
     if (!cfgR.rows[0]) {
       await cloneClient.query('ROLLBACK');
-      return res.status(400).json({ error: `matriz_slot "${matriz_slot}" não encontrado em bot_config` });
+      return res
+        .status(400)
+        .json({ error: `matriz_slot "${matriz_slot}" não encontrado em bot_config` });
     }
     const { provider, model, temperature } = cfgR.rows[0];
 
@@ -2002,11 +2326,14 @@ app.post('/api/clones/with-waha', async (req, res) => {
       [novo_slot, display_name, finalProvider, finalModel, finalTemperature],
     );
 
-    const promptR = await cloneClient.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [matriz_slot]);
+    const promptR = await cloneClient.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
+      matriz_slot,
+    ]);
     if (promptR.rows[0]) {
       let prompt = promptR.rows[0].prompt;
-      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
-      if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
+      if (pers['cliente_nome'])
+        prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
       await cloneClient.query(
         'INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())',
         [novo_slot, prompt],
@@ -2026,8 +2353,18 @@ app.post('/api/clones/with-waha', async (req, res) => {
            (slot, position, media_type, url, caption, context, position_order, enabled,
             course_slug, is_course_intro, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
-        [novo_slot, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled,
-         m.course_slug ?? null, m.is_course_intro ?? false],
+        [
+          novo_slot,
+          m.position,
+          m.media_type,
+          m.url,
+          m.caption,
+          m.context,
+          m.position_order,
+          m.enabled,
+          m.course_slug ?? null,
+          m.is_course_intro ?? false,
+        ],
       );
     }
 
@@ -2043,7 +2380,16 @@ app.post('/api/clones/with-waha', async (req, res) => {
            (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
          ON CONFLICT (slot, course_slug) DO NOTHING`,
-        [novo_slot, c.course_slug, c.name, c.description, c.price, c.duration, c.position_order, c.enabled],
+        [
+          novo_slot,
+          c.course_slug,
+          c.name,
+          c.description,
+          c.price,
+          c.duration,
+          c.position_order,
+          c.enabled,
+        ],
       );
     }
 
@@ -2077,7 +2423,9 @@ app.post('/api/clones/with-waha', async (req, res) => {
   const waha = await createWahaSession(sessaoName);
 
   if (!waha.ok) {
-    console.warn(`[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado mas WAHA falhou: ${waha.error}`);
+    console.warn(
+      `[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado mas WAHA falhou: ${waha.error}`,
+    );
     return res.json({
       clone_id: cloneRow.id,
       novo_slot,
@@ -2096,7 +2444,9 @@ app.post('/api/clones/with-waha', async (req, res) => {
     )
     .catch((e) => console.error(`[clones/with-waha] falha ao vincular sessão no DB: ${e.message}`));
 
-  console.log(`[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado, sessão WAHA ${sessaoName} iniciada`);
+  console.log(
+    `[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado, sessão WAHA ${sessaoName} iniciada`,
+  );
 
   res.json({
     clone_id: cloneRow.id,
@@ -2126,7 +2476,11 @@ app.post('/api/clones/:id/retry-waha', async (req, res) => {
 
   if (!cloneRow) return res.status(404).json({ error: 'Clone não encontrado' });
   if (cloneRow.status !== 'rascunho')
-    return res.status(409).json({ error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho` });
+    return res
+      .status(409)
+      .json({
+        error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho`,
+      });
 
   const sessaoName = cloneRow.waha_sessao ?? wahaSessionName(cloneRow.slot);
   const waha = await createWahaSession(sessaoName);
@@ -2170,24 +2524,48 @@ app.get('/api/clones/:id', async (req, res) => {
 app.patch('/api/clones/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
-  const { display_name, cliente_nome, cliente_telefone, personalizacao, status: newStatus } = req.body ?? {};
+  const {
+    display_name,
+    cliente_nome,
+    cliente_telefone,
+    personalizacao,
+    status: newStatus,
+  } = req.body ?? {};
 
   const sets = [];
   const vals = [];
   let i = 1;
 
-  if (display_name !== undefined) { sets.push(`display_name = $${i++}`); vals.push(display_name); }
-  if (cliente_nome !== undefined) { sets.push(`cliente_nome = $${i++}`); vals.push(cliente_nome); }
-  if (cliente_telefone !== undefined) { sets.push(`cliente_telefone = $${i++}`); vals.push(cliente_telefone); }
-  if (personalizacao !== undefined) { sets.push(`personalizacao = $${i++}::jsonb`); vals.push(JSON.stringify(personalizacao)); }
-  if (newStatus !== undefined) { sets.push(`status = $${i++}`); vals.push(newStatus); }
+  if (display_name !== undefined) {
+    sets.push(`display_name = $${i++}`);
+    vals.push(display_name);
+  }
+  if (cliente_nome !== undefined) {
+    sets.push(`cliente_nome = $${i++}`);
+    vals.push(cliente_nome);
+  }
+  if (cliente_telefone !== undefined) {
+    sets.push(`cliente_telefone = $${i++}`);
+    vals.push(cliente_telefone);
+  }
+  if (personalizacao !== undefined) {
+    sets.push(`personalizacao = $${i++}::jsonb`);
+    vals.push(JSON.stringify(personalizacao));
+  }
+  if (newStatus !== undefined) {
+    sets.push(`status = $${i++}`);
+    vals.push(newStatus);
+  }
 
   if (sets.length === 0) return res.status(400).json({ error: 'Nenhum campo para atualizar' });
   sets.push('updated_at = NOW()');
   vals.push(id);
 
   try {
-    const r = await pool.query(`UPDATE flow_clones SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`, vals);
+    const r = await pool.query(
+      `UPDATE flow_clones SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals,
+    );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
 
     // Re-aplica personalizacao no prompt se personalizacao mudou
@@ -2195,11 +2573,14 @@ app.patch('/api/clones/:id', async (req, res) => {
       const pers = typeof personalizacao === 'object' ? personalizacao : {};
       const cloneSlot = r.rows[0].slot;
       const matrizSlot = r.rows[0].matriz_slot;
-      const promptR = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [matrizSlot]);
+      const promptR = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [
+        matrizSlot,
+      ]);
       if (promptR.rows[0]) {
         let prompt = promptR.rows[0].prompt;
-        prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => (pers[k] ?? `{{${k}}}`));
-        if (pers['cliente_nome']) prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+        prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
+        if (pers['cliente_nome'])
+          prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
         await pool.query(
           `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
            ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
@@ -2219,7 +2600,9 @@ app.delete('/api/clones/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
   try {
-    const existing = await pool.query(`SELECT slot, waha_sessao FROM flow_clones WHERE id = $1`, [id]);
+    const existing = await pool.query(`SELECT slot, waha_sessao FROM flow_clones WHERE id = $1`, [
+      id,
+    ]);
     if (!existing.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
     const { slot: cloneSlot, waha_sessao } = existing.rows[0];
 
@@ -2227,7 +2610,10 @@ app.delete('/api/clones/:id', async (req, res) => {
     if (waha_sessao) {
       await fetch(`${WAHA_URL}/api/sessions/${waha_sessao}/logout`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+        },
       }).catch(() => {});
     }
 
@@ -2275,7 +2661,9 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
       );
     }
 
-    console.log(`[bind-session] Sessão ${r.rows[0].waha_sessao} vinculada ao clone ${r.rows[0].slot} (routing por sessão)`);
+    console.log(
+      `[bind-session] Sessão ${r.rows[0].waha_sessao} vinculada ao clone ${r.rows[0].slot} (routing por sessão)`,
+    );
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -2398,7 +2786,9 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     // O client.ts compila para packages/integrations/dist/
     let testResult;
     try {
-      const { GoogleCalendarClient } = await import('../packages/integrations/dist/google-calendar/client.js');
+      const { GoogleCalendarClient } = await import(
+        '../packages/integrations/dist/google-calendar/client.js'
+      );
       const client = new GoogleCalendarClient({
         credentialsJson: gcal_credentials_json,
         calendarId: gcal_calendar_id,
@@ -2421,7 +2811,11 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
       [newStatus, id],
     );
 
-    res.json({ ok: testResult.ok, status: newStatus, error: testResult.ok ? undefined : testResult.error });
+    res.json({
+      ok: testResult.ok,
+      status: newStatus,
+      error: testResult.ok ? undefined : testResult.error,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -2436,13 +2830,18 @@ app.post('/api/sessions/create', async (req, res) => {
   try {
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: JSON.stringify({ name, start: true }),
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) {
       const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
-      return res.status(r.status >= 400 && r.status < 500 ? 400 : 502).json({ error: `WAHA: ${msg}` });
+      return res
+        .status(r.status >= 400 && r.status < 500 ? 400 : 502)
+        .json({ error: `WAHA: ${msg}` });
     }
     res.json(body);
   } catch (e) {
@@ -2456,7 +2855,10 @@ app.post('/api/sessions/:name/start', async (req, res) => {
   try {
     const r = await fetch(`${WAHA_URL}/api/sessions/${name}/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: '{}',
     });
     const body = await r.json().catch(() => ({}));
@@ -2473,7 +2875,10 @@ app.post('/api/sessions/:name/stop', async (req, res) => {
   try {
     const r = await fetch(`${WAHA_URL}/api/sessions/${name}/stop`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: '{}',
     });
     if (!r.ok) {
@@ -2499,7 +2904,10 @@ app.get('/api/sessions/:name/status', async (req, res) => {
     // Efeito colateral controlado: se sessão WORKING, marca clone como conectado
     if (body.status === 'WORKING') {
       await pool
-        .query(`UPDATE flow_clones SET status = 'conectado', updated_at = NOW() WHERE waha_sessao = $1 AND status != 'conectado'`, [name])
+        .query(
+          `UPDATE flow_clones SET status = 'conectado', updated_at = NOW() WHERE waha_sessao = $1 AND status != 'conectado'`,
+          [name],
+        )
         .catch(() => {});
     }
 
@@ -2513,12 +2921,17 @@ app.get('/api/sessions/:name/status', async (req, res) => {
 app.post('/api/sessions', async (req, res) => {
   const { name } = req.body ?? {};
   if (!name || typeof name !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(name))
-    return res.status(400).json({ error: 'name obrigatório e deve conter apenas letras, números, _ e -' });
+    return res
+      .status(400)
+      .json({ error: 'name obrigatório e deve conter apenas letras, números, _ e -' });
   try {
     const webhookUrl = `${TS_WEBHOOK_URL}`;
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: JSON.stringify({
         name,
         start: true,
@@ -2531,7 +2944,9 @@ app.post('/api/sessions', async (req, res) => {
     if (!r.ok) {
       const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
       console.log(`[sessions] create ${name} -> WAHA erro: ${msg}`);
-      return res.status(r.status >= 400 && r.status < 500 ? 400 : 502).json({ error: `WAHA: ${msg}` });
+      return res
+        .status(r.status >= 400 && r.status < 500 ? 400 : 502)
+        .json({ error: `WAHA: ${msg}` });
     }
     console.log(`[sessions] criada sessão ${name}`);
     res.json(body);
@@ -2546,7 +2961,10 @@ app.post('/api/sessions/:name/restart', async (req, res) => {
   try {
     const stopR = await fetch(`${WAHA_URL}/api/sessions/${name}/stop`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: '{}',
     });
     // Ignora erro de stop se a sessão já estava parada (404 é aceitável)
@@ -2556,7 +2974,10 @@ app.post('/api/sessions/:name/restart', async (req, res) => {
     }
     const startR = await fetch(`${WAHA_URL}/api/sessions/${name}/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
       body: '{}',
     });
     const startBody = await startR.json().catch(() => ({}));
@@ -2578,7 +2999,10 @@ app.delete('/api/sessions/:name', async (req, res) => {
   try {
     const r = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
     });
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
@@ -2613,7 +3037,10 @@ app.get('/api/sessions/:name/qr', async (req, res) => {
       const r = await fetch(`${WAHA_URL}${ep}`, {
         headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
       });
-      if (r.ok) { qrRes = r; break; }
+      if (r.ok) {
+        qrRes = r;
+        break;
+      }
     }
     if (!qrRes) return res.status(502).json({ error: 'Não foi possível obter QR da sessão' });
 
@@ -2655,9 +3082,7 @@ app.post('/api/admin/cleanup/run-now', async (req, res) => {
       `SELECT DISTINCT chat_table FROM flow_clones WHERE chat_table IS NOT NULL AND status = 'active'`,
     );
     const validTableRe = /^chat_histories(_[a-z0-9_]+)?$/;
-    const dynTables = dynRes.rows
-      .map((r) => r.chat_table)
-      .filter((t) => validTableRe.test(t));
+    const dynTables = dynRes.rows.map((r) => r.chat_table).filter((t) => validTableRe.test(t));
 
     const allTables = [...new Set([...knownTables, ...dynTables])];
     let deleted = 0;
@@ -2676,7 +3101,10 @@ app.post('/api/admin/cleanup/run-now', async (req, res) => {
           [keep],
         );
         const n = r.rowCount ?? 0;
-        if (n > 0) { per_table[table] = n; deleted += n; }
+        if (n > 0) {
+          per_table[table] = n;
+          deleted += n;
+        }
       } catch (e) {
         console.warn(`[painel] cleanup/run-now: tabela ${table} ->`, e.message);
       }

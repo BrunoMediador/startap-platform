@@ -1,5 +1,5 @@
 import type { BotContext } from '@startap/core/types';
-import { botMedia, leads } from '@startap/db';
+import { botCourses, botMedia, leads } from '@startap/db';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { renderPrompt } from '../lib/render-prompt.js';
@@ -13,7 +13,109 @@ const TZ = 'America/Sao_Paulo';
 const CALENDAR_ID = 'cirilosbarbershop01@gmail.com';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
-const COURSE_VIDEO_MARKER = '[SISTEMA:VIDEOS_CURSO_ENVIADOS]';
+
+// Marcadores que a IA emite no final da resposta (última linha).
+// O parser extrai e remove antes de enviar ao cliente.
+const MARKER_LISTA_CURSOS = '[LISTA_CURSOS]';
+const MARKER_CURSO_RE = /^\[CURSO:([^\]]+)\]$/i;
+const MARKER_VIDEO_RE = /^\[VIDEO:(\d+)\]$/i;
+const MARKER_VIDEOS_CURSO = '[VIDEOS_CURSO]';
+
+interface ParsedMarker {
+  type: 'LISTA_CURSOS' | 'CURSO' | 'VIDEO' | 'VIDEOS_CURSO' | null;
+  courseSlug?: string;
+  mediaId?: number;
+  clean: string;
+}
+
+/** Extrai o marcador da última linha do texto e retorna texto limpo + marcador parseado. */
+function parseMarker(text: string): ParsedMarker {
+  const lines = text.trimEnd().split('\n');
+  const lastLine = lines[lines.length - 1].trim();
+  const textWithoutLast = lines.slice(0, -1).join('\n').trimEnd();
+
+  if (lastLine === MARKER_LISTA_CURSOS) {
+    return { type: 'LISTA_CURSOS', clean: textWithoutLast };
+  }
+  if (lastLine === MARKER_VIDEOS_CURSO) {
+    return { type: 'VIDEOS_CURSO', clean: textWithoutLast };
+  }
+  const cursoMatch = lastLine.match(MARKER_CURSO_RE);
+  if (cursoMatch) {
+    return { type: 'CURSO', courseSlug: cursoMatch[1], clean: textWithoutLast };
+  }
+  const videoMatch = lastLine.match(MARKER_VIDEO_RE);
+  if (videoMatch) {
+    return { type: 'VIDEO', mediaId: Number(videoMatch[1]), clean: textWithoutLast };
+  }
+  return { type: null, clean: text.trim() };
+}
+
+/** Estado conversacional extraído do histórico de memória. */
+interface ConversationState {
+  cursoEscolhido: string | null;
+  mediaIdsSentSet: Set<number>;
+}
+
+/** Lê o estado conversacional do histórico serializado. */
+function parseConversationState(
+  history: Array<{ role: string; content: string }>,
+): ConversationState {
+  let cursoEscolhido: string | null = null;
+  const mediaIdsSentSet = new Set<number>();
+
+  for (const turn of history) {
+    // Estado é persistido como mensagem de sistema com prefixo conhecido
+    if (turn.role === 'system') {
+      const cursoMatch = turn.content.match(/\[STATE:CURSO_ESCOLHIDO:([^\]]+)\]/);
+      if (cursoMatch) cursoEscolhido = cursoMatch[1] === 'null' ? null : cursoMatch[1];
+
+      const videoMatch = turn.content.match(/\[STATE:VIDEO_SENT:(\d+)\]/g);
+      if (videoMatch) {
+        for (const m of videoMatch) {
+          const id = m.match(/\[STATE:VIDEO_SENT:(\d+)\]/)?.[1];
+          if (id) mediaIdsSentSet.add(Number(id));
+        }
+      }
+    }
+  }
+  return { cursoEscolhido, mediaIdsSentSet };
+}
+
+/** Formata preço de centavos para R$. */
+function formatPrice(centavos: number): string {
+  return `R$${(centavos / 100).toFixed(2).replace('.', ',')}`;
+}
+
+/** Formata lista de cursos disponíveis para injeção no prompt. */
+function formatCoursesForPrompt(
+  courses: Awaited<ReturnType<typeof botCourses.listCoursesBySlot>>,
+): string {
+  if (!courses.length) return '(nenhum curso cadastrado)';
+  return courses
+    .filter((c) => c.enabled)
+    .map(
+      (c) =>
+        `- ${c.course_slug}: ${c.name}${c.price ? ` (${formatPrice(c.price)})` : ''}${c.duration ? ` | ${c.duration}` : ''}`,
+    )
+    .join('\n');
+}
+
+/** Formata lista de mídias disponíveis para injeção no prompt. */
+function formatMediaForPrompt(medias: Awaited<ReturnType<typeof botMedia.listBySlot>>): string {
+  const enabled = medias.filter((m) => m.enabled);
+  if (!enabled.length) return '(nenhuma midia cadastrada)';
+  return enabled
+    .map((m) => {
+      const context = m.context || m.caption || '(sem descricao)';
+      if (m.course_slug) {
+        const role = m.is_course_intro ? 'intro' : 'secundario';
+        return `- ID ${m.id} (${m.media_type}, curso: ${m.course_slug}, ${role}): ${context}`;
+      }
+      return `- ID ${m.id} (${m.media_type}, contexto livre): ${context}`;
+    })
+    .join('\n');
+}
 
 interface ServiceDef {
   name: string;
@@ -63,20 +165,52 @@ const DEFAULT_PROMPT_TPL = [
   '- Se o cliente falar de corte, barba, sobrancelha, horario, agenda, marcar, cancelar horario ou servico de barbearia: atue como atendente da barbearia.',
   '- Se estiver ambiguo, como "quanto custa?", pergunte gentilmente: "Posso te ajudar com o curso de barbeiro ou com um agendamento na barbearia?"',
   '',
-  '[SOBRE O CURSO]',
+  '[CURSOS DISPONIVEIS]',
+  '{cursos_disponiveis}',
+  '',
+  '[SOBRE OS CURSOS]',
   'Duracao: 3 meses | 2x por semana',
   'Horarios: Manha 09h-11h | Tarde 15h-17h',
   'Inclui: Apostila completa, fardamento e suporte no grupo de WhatsApp',
   'Diploma valido em mais de 122 paises - trabalha em qualquer lugar do Brasil',
-  'Investimento: Entrada de R$200 + 3x de R$200',
   'Curso pratico, do zero ao profissional',
   '',
-  '[VIDEOS DO CURSO - REGRA IMPORTANTE]',
-  '- SEMPRE que o cliente perguntar sobre o curso pela primeira vez (preco, duracao, como funciona, certificado, conteudo, qualquer duvida sobre o curso), termine sua resposta com [V1] para enviar os videos automaticamente.',
-  '- Tambem use [V1] quando o cliente disser que tem interesse, quer saber mais, ou quer ver como e.',
-  '- Depois que o sistema registrar que os videos ja foram enviados, NUNCA use [V1] para duvidas normais.',
-  '- Se o cliente pedir explicitamente para mandar/ver os videos de novo, termine a resposta com [V1].',
-  '- NUNCA mencione a tag [V1] para o cliente.',
+  '[MIDIAS DA BIBLIOTECA]',
+  '{midias_biblioteca}',
+  '',
+  '[ESTADO DA CONVERSA]',
+  '{estado_conversa}',
+  '',
+  '[MARCADORES DE ACAO - REGRAS CRITICAS]',
+  'Voce pode emitir UM marcador no FINAL da sua resposta (ultima linha), nunca no meio.',
+  'O cliente nunca ve os marcadores — o sistema os remove antes de enviar.',
+  '',
+  'Marcadores disponiveis:',
+  '1. [LISTA_CURSOS] — use quando o cliente pedir para ver os cursos, quiser saber quais sao, ou demonstrar interesse generico.',
+  '   Ao emitir [LISTA_CURSOS], NAO mencione nomes, precos ou descricoes dos cursos no texto da sua resposta.',
+  '   Escreva apenas uma frase curta convidando o cliente a conhecer as opcoes (ex: "Temos algumas opcoes de curso — da uma olhada:").',
+  '   O sistema vai enviar a lista formatada logo apos sua mensagem.',
+  '',
+  '2. [CURSO:<course_slug>] — use quando o cliente escolher explicitamente UM curso especifico.',
+  '   Substitua <course_slug> pelo slug do curso (ex.: [CURSO:curso-presencial-barbearia]).',
+  '   O sistema envia o video de apresentacao do curso escolhido.',
+  '   Exemplo: se o cliente diz "quero saber do presencial", emita [CURSO:curso-presencial-barbearia] no final.',
+  '',
+  '3. [VIDEO:<media_id>] — use quando o cliente fizer uma pergunta contextual e voce identificar uma midia relevante na biblioteca.',
+  '   Substitua <media_id> pelo ID numerico da midia (ex.: [VIDEO:42]).',
+  '   So use este marcador se o contexto da midia for semanticamente relacionado com a pergunta.',
+  '   NUNCA emita [VIDEO:<id>] para uma midia que ja foi enviada nesta conversa (ver ESTADO DA CONVERSA abaixo).',
+  '   Se o cliente pedir explicitamente para ver de novo, voce pode emitir o marcador conscientemente.',
+  '',
+  '4. [VIDEOS_CURSO] — use quando o cliente pedir para ver TODOS os videos do curso ("manda tudo", "envia todos os videos", "quero ver tudo").',
+  '   O sistema envia todos os videos do curso atual em sequencia (intro primeiro).',
+  '   So use se ja houver um CURSO ESCOLHIDO na conversa.',
+  '',
+  'REGRAS ABSOLUTAS DOS MARCADORES:',
+  '- Nunca mencione os marcadores para o cliente.',
+  '- Nunca emita [CURSO:<slug>] sem ter um curso escolhido explicitamente pelo cliente.',
+  '- Nunca emita [VIDEO:<id>] se o id nao existir na biblioteca acima.',
+  '- Se o cliente demonstrou interesse mas ainda nao escolheu um curso: use [LISTA_CURSOS] primeiro.',
   '',
   '[HORARIOS DISPONIVEIS - DADOS ATUALIZADOS AGORA]',
   '{agenda}',
@@ -204,12 +338,6 @@ function formatarAgenda(events: gcal.CalendarEvent[]): string {
   return blocks.join('\n\n') || 'Sem horarios disponiveis.';
 }
 
-function parseVideoTag(text: string): { tag: 'V1' | null; clean: string } {
-  const m = text.match(/\[(V1)\]\s*$/i);
-  if (!m) return { tag: null, clean: text.trim() };
-  return { tag: 'V1', clean: text.slice(0, m.index).trim() };
-}
-
 function sanitizarResposta(text: string): string {
   return text
     .split('\n')
@@ -224,29 +352,6 @@ function sanitizarResposta(text: string): string {
     .trim();
 }
 
-function isExplicitVideoRequest(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    /\b(video|videos|v[íi]deo|v[íi]deos|material|materiais)\b/.test(lower) &&
-    /\b(manda|mandar|envia|enviar|reenviar|ver|assistir|mostra|mostrar|receber|passa|passar)\b/.test(
-      lower,
-    )
-  );
-}
-
-function isClearCourseIntent(text: string): boolean {
-  const lower = text.toLowerCase();
-  const course =
-    /\b(curso|barbeiro profissional|aprender|diploma|matricula|matr[íi]cula|inscri[cç][aã]o|inscrever|aula|apostila|fardamento)\b/.test(
-      lower,
-    );
-  const barbershop =
-    /\b(corte|barba|sobrancelha|pezinho|hor[aá]rio|agenda|agendar|marcar|cancelar|servi[cç]o)\b/.test(
-      lower,
-    );
-  return course && !barbershop;
-}
-
 export class TesteVendasBarbeariaBot extends BotBase {
   constructor(opts?: { slotOverride?: string }) {
     super({
@@ -257,24 +362,6 @@ export class TesteVendasBarbeariaBot extends BotBase {
       memoryWindow: 12,
       slotOverride: opts?.slotOverride,
     });
-  }
-
-  private async sendCourseVideosInstance(input: { sessao: string; chatId: string }): Promise<void> {
-    const { sessao, chatId } = input;
-    const effectiveSlot = this.slot;
-    const v1 = await botMedia.getByPosition(effectiveSlot, 'V1');
-    const v2 = await botMedia.getByPosition(effectiveSlot, 'V2');
-    const v3 = await botMedia.getByPosition(effectiveSlot, 'V3');
-    const pos = await botMedia.getByPosition(effectiveSlot, 'POS_VIDEOS');
-    if (!v1 && !v2 && !v3) {
-      this.log.warn({ slot: effectiveSlot }, 'sendCourseVideos: nenhuma midia encontrada para V1/V2/V3 — verificar bot_media.position');
-      return;
-    }
-    for (const media of [v1, v2, v3]) {
-      if (!media?.url) continue;
-      await waha.sendMedia({ type: 'video', sessao, chatId, url: media.url, caption: media.caption ?? undefined });
-    }
-    if (pos?.caption) await waha.sendText({ sessao, chatId, texto: pos.caption, typing: false });
   }
 
   protected async process(ctx: BotContext): Promise<string | null> {
@@ -305,8 +392,18 @@ export class TesteVendasBarbeariaBot extends BotBase {
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
-    const videosAlreadySent = history.some((turn) => turn.content.includes(COURSE_VIDEO_MARKER));
-    const explicitVideoRequest = isExplicitVideoRequest(trimmed);
+    const state = parseConversationState(history);
+
+    // Carrega dados dinâmicos para o prompt
+    const [courses, allMedia] = await Promise.all([
+      botCourses.listCoursesBySlot(this.slot),
+      botMedia.listBySlot(this.slot),
+    ]);
+
+    const estadoConversa = [
+      `Curso escolhido: ${state.cursoEscolhido ?? 'nenhum ate agora'}`,
+      `Midias ja enviadas nesta conversa: ${state.mediaIdsSentSet.size > 0 ? Array.from(state.mediaIdsSentSet).join(', ') : 'nenhuma'}`,
+    ].join('\n');
 
     const basePrompt = await renderPrompt({
       slot: this.slot,
@@ -317,18 +414,11 @@ export class TesteVendasBarbeariaBot extends BotBase {
         data_atual: dataAtual,
         ano: String(now.getFullYear()),
         agenda,
+        cursos_disponiveis: formatCoursesForPrompt(courses),
+        midias_biblioteca: formatMediaForPrompt(allMedia),
+        estado_conversa: estadoConversa,
       },
     });
-    const mediaContext = await botMedia.formatContextForPrompt(this.slot);
-    const systemPrompt = mediaContext
-      ? [
-          basePrompt,
-          '',
-          '[CONTEXTO INTERNO DAS MIDIAS]',
-          'Use este contexto apenas para decidir se uma tag de video faz sentido na conversa. Nao envie este texto ao cliente.',
-          mediaContext,
-        ].join('\n')
-      : basePrompt;
 
     const tools: ToolDefinition[] = [
       {
@@ -426,7 +516,7 @@ export class TesteVendasBarbeariaBot extends BotBase {
       projectId: this.slot,
       flowId: ctx.flowId,
       telefone,
-      systemPrompt,
+      systemPrompt: basePrompt,
       history,
       userMessage: trimmed,
       tools,
@@ -434,21 +524,152 @@ export class TesteVendasBarbeariaBot extends BotBase {
     });
 
     const sanitized = sanitizarResposta(result.reply);
-    const { tag, clean } = parseVideoTag(sanitized);
-    const shouldSendVideos =
-      explicitVideoRequest ||
-      (tag === 'V1' && !videosAlreadySent) ||
-      (!videosAlreadySent && isClearCourseIntent(trimmed));
+    const { type, courseSlug, mediaId, clean } = parseMarker(sanitized);
+    const replyText = clean || sanitized;
 
-    if (shouldSendVideos) {
+    // Processa marcadores após enviar a resposta de texto
+    if (type !== null) {
+      const effectiveSlot = this.slot;
       setTimeout(() => {
-        this.sendCourseVideosInstance({ sessao, chatId })
-          .then(() => this.appendMemory(ctx, 'system', COURSE_VIDEO_MARKER))
-          .catch((e) => this.log.error({ err: e, telefone }, 'Falha ao enviar videos do curso'));
+        this.handleMarker({
+          type,
+          courseSlug,
+          mediaId,
+          sessao,
+          chatId,
+          effectiveSlot,
+          state,
+          ctx,
+          telefone,
+        }).catch((e) =>
+          this.log.error({ err: e, type, telefone }, 'Falha ao processar marcador do bot'),
+        );
       }, 2500);
     }
 
-    return clean || sanitized;
+    return replyText;
+  }
+
+  private async handleMarker(input: {
+    type: ParsedMarker['type'];
+    courseSlug?: string;
+    mediaId?: number;
+    sessao: string;
+    chatId: string;
+    effectiveSlot: string;
+    state: ConversationState;
+    ctx: BotContext;
+    telefone: string;
+  }): Promise<void> {
+    const { type, courseSlug, mediaId, sessao, chatId, effectiveSlot, state, ctx } = input;
+
+    switch (type) {
+      case 'LISTA_CURSOS': {
+        const courses = await botCourses.listCoursesBySlot(effectiveSlot);
+        const enabled = courses.filter((c) => c.enabled);
+        if (!enabled.length) {
+          this.log.warn({ slot: effectiveSlot }, 'LISTA_CURSOS: nenhum curso habilitado');
+          return;
+        }
+        const lista = enabled
+          .map(
+            (c) =>
+              `• *${c.name}*${c.price ? ` — ${formatPrice(c.price)}` : ''}${c.duration ? ` | ${c.duration}` : ''}${c.description ? `\n  ${c.description}` : ''}`,
+          )
+          .join('\n');
+        await waha.sendText({
+          sessao,
+          chatId,
+          texto: `📚 *Cursos disponíveis:*\n\n${lista}`,
+          typing: false,
+        });
+        break;
+      }
+
+      case 'CURSO': {
+        if (!courseSlug) return;
+
+        // Busca o vídeo intro do curso
+        const allMedia = await botMedia.listBySlot(effectiveSlot);
+        const introMedia = allMedia.find(
+          (m) => m.course_slug === courseSlug && m.is_course_intro && m.enabled && m.url,
+        );
+
+        if (!introMedia) {
+          this.log.warn(
+            { slot: effectiveSlot, courseSlug },
+            'CURSO: sem video intro cadastrado — enviando apenas o texto',
+          );
+        } else {
+          await waha.sendMedia({
+            type: 'video',
+            sessao,
+            chatId,
+            url: introMedia.url!,
+            caption: introMedia.caption ?? undefined,
+          });
+          // Persiste estado: curso escolhido + mídia enviada
+          await this.appendMemory(ctx, 'system', `[STATE:CURSO_ESCOLHIDO:${courseSlug}]`);
+          await this.appendMemory(ctx, 'system', `[STATE:VIDEO_SENT:${introMedia.id}]`);
+        }
+        break;
+      }
+
+      case 'VIDEO': {
+        if (!mediaId) return;
+
+        const allMedia = await botMedia.listBySlot(effectiveSlot);
+        const media = allMedia.find((m) => m.id === mediaId && m.enabled && m.url);
+        if (!media) {
+          this.log.warn({ slot: effectiveSlot, mediaId }, 'VIDEO: midia nao encontrada ou sem url');
+          return;
+        }
+        await waha.sendMedia({
+          type: media.media_type === 'image' ? 'image' : 'video',
+          sessao,
+          chatId,
+          url: media.url!,
+          caption: media.caption ?? undefined,
+        });
+        await this.appendMemory(ctx, 'system', `[STATE:VIDEO_SENT:${mediaId}]`);
+        break;
+      }
+
+      case 'VIDEOS_CURSO': {
+        if (!state.cursoEscolhido) {
+          this.log.warn({ slot: effectiveSlot }, 'VIDEOS_CURSO: sem curso escolhido na sessao');
+          return;
+        }
+        const allMedia = await botMedia.listBySlot(effectiveSlot);
+        // Intro primeiro, depois secundários, apenas habilitados com URL
+        const courseMedia = allMedia
+          .filter((m) => m.course_slug === state.cursoEscolhido && m.enabled && m.url)
+          .sort((a, b) => {
+            if (a.is_course_intro && !b.is_course_intro) return -1;
+            if (!a.is_course_intro && b.is_course_intro) return 1;
+            return a.position_order - b.position_order;
+          });
+
+        if (!courseMedia.length) {
+          this.log.warn(
+            { slot: effectiveSlot, curso: state.cursoEscolhido },
+            'VIDEOS_CURSO: sem midias para o curso',
+          );
+          return;
+        }
+        for (const m of courseMedia) {
+          await waha.sendMedia({
+            type: m.media_type === 'image' ? 'image' : 'video',
+            sessao,
+            chatId,
+            url: m.url!,
+            caption: m.caption ?? undefined,
+          });
+          await this.appendMemory(ctx, 'system', `[STATE:VIDEO_SENT:${m.id}]`);
+        }
+        break;
+      }
+    }
   }
 }
 
