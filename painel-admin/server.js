@@ -509,7 +509,7 @@ app.get(
   '/api/bots',
   asyncHandler(async (_req, res) => {
     const r = await pool.query(`
-    SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at
+    SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at, waha_sessao
     FROM bot_config ORDER BY slot
   `);
 
@@ -583,7 +583,10 @@ app.get(
           ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce((sum, n) => sum + n, 0)
           : 0;
 
-        const wahaSession = sessionsByName[row.slot];
+        // waha_sessao tem precedência sobre slot — fallback garante compatibilidade
+        // com linhas antigas onde a coluna ainda é NULL (antes de rodar a migration 021).
+        const wahaKey = row.waha_sessao || row.slot;
+        const wahaSession = sessionsByName[wahaKey];
 
         return {
           ...row,
@@ -591,6 +594,7 @@ app.get(
           models_in_flow: flowCounts[flowId] || 1,
           messages_today: msgBySlot[row.slot] ?? 0,
           leads_count: leadsCount,
+          waha_sessao: row.waha_sessao || null,
           waha_status: wahaSession?.status || null,
           waha_me: wahaSession?.me?.id || null,
         };
