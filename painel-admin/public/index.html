@@ -473,6 +473,133 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   padding-top: .25rem;
   border-top: 1px solid var(--border);
 }
+/* ── Bot rows (lista densa profissional) ─────────────────────────── */
+.bot-row-list {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow-xs);
+}
+.bot-row {
+  display: flex; align-items: center; gap: 1.25rem;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--transition);
+  position: relative;
+}
+.bot-row:last-child { border-bottom: none; }
+.bot-row:hover { background: var(--surface-2); }
+.bot-row:focus-visible { outline: none; background: var(--surface-2); }
+.bot-row.selected {
+  background: var(--surface-2);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.bot-row__title {
+  display: flex; align-items: center; gap: .75rem;
+  min-width: 0; flex: 1.6 1 240px;
+}
+.bot-row__title-meta { min-width: 0; flex: 1; }
+.bot-row__name {
+  font-weight: 600; font-size: .9375rem;
+  display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap; line-height: 1.25;
+  overflow: hidden;
+}
+.bot-row__name-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 100%;
+}
+.bot-row__sub {
+  font-size: .75rem; color: var(--text-muted);
+  margin-top: .25rem;
+  display: flex; align-items: center; gap: .75rem;
+  flex-wrap: wrap;
+}
+.bot-row__sub-item {
+  display: inline-flex; align-items: center; gap: .25rem;
+}
+.bot-row__sub-item code {
+  font-family: var(--font-mono); font-size: .6875rem;
+  background: var(--bg-2); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.bot-row__status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--text-muted);
+  display: inline-block;
+}
+.bot-row__status-dot--working {
+  background: var(--success);
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+.bot-row__status-dot--failed  { background: var(--danger); }
+.bot-row__status-dot--warning { background: var(--warning); animation: dot-pulse 1.2s ease-in-out infinite; }
+.bot-row__metrics {
+  display: flex; align-items: stretch; gap: 1.5rem;
+  flex-shrink: 0;
+}
+.bot-row__metric {
+  display: flex; flex-direction: column;
+  min-width: 56px;
+}
+.bot-row__metric-val {
+  font-size: 1rem; font-weight: 600; color: var(--text);
+  font-variant-numeric: tabular-nums; line-height: 1.15;
+  white-space: nowrap;
+}
+.bot-row__metric-val--sm {
+  font-size: .8125rem; font-weight: 500; color: var(--text-muted);
+}
+.bot-row__metric-label {
+  font-size: .65rem; color: var(--text-subtle);
+  text-transform: uppercase; letter-spacing: .05em;
+  margin-top: 2px; white-space: nowrap;
+}
+.bot-row__actions {
+  display: flex; align-items: center; gap: .375rem;
+  flex-shrink: 0;
+}
+/* Resumo do grupo (KPIs no header) */
+.bots-group-header__top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+}
+.bots-group-summary {
+  display: flex; align-items: baseline; gap: 1.25rem;
+  flex-wrap: wrap;
+  font-size: .8125rem; color: var(--text-muted);
+}
+.bots-group-summary__item {
+  display: inline-flex; align-items: baseline; gap: .375rem;
+}
+.bots-group-summary__val {
+  font-size: .9375rem; font-weight: 600; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.bots-group-summary__sep {
+  width: 1px; height: 14px; background: var(--border);
+}
+.bot-row__empty {
+  padding: 2rem 1rem; text-align: center;
+  color: var(--text-muted); font-size: .8125rem;
+}
+@media (max-width: 900px) {
+  .bot-row {
+    flex-direction: column; align-items: stretch;
+    gap: .875rem; padding: .875rem 1rem;
+  }
+  .bot-row__metrics {
+    gap: 1rem; flex-wrap: wrap;
+    padding-top: .5rem; border-top: 1px dashed var(--border);
+  }
+  .bot-row__metric { min-width: 70px; }
+  .bot-row__actions { justify-content: flex-end; }
+  .bot-row.selected { box-shadow: inset 0 3px 0 var(--primary); }
+}
 /* ── Bot detail ─────────────────────────────────────────────────────── */
 .bot-detail {
   background: var(--surface);
@@ -2123,25 +2250,66 @@ const MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia
 
 async function renderBots() {
   const wrap = document.getElementById('bots-content');
-  const skeletonCard = `<div class="bot-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:120px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>`;
+  const skeletonRow = `<div class="bot-row" style="cursor:default">
+    <div class="bot-row__title">
+      <div class="skeleton" style="height:44px;width:44px;border-radius:8px"></div>
+      <div style="flex:1">
+        <div class="skeleton" style="width:160px;height:14px;margin-bottom:6px"></div>
+        <div class="skeleton" style="width:120px;height:11px"></div>
+      </div>
+    </div>
+    <div class="bot-row__metrics">
+      <div class="skeleton" style="width:48px;height:28px"></div>
+      <div class="skeleton" style="width:48px;height:28px"></div>
+      <div class="skeleton" style="width:72px;height:28px"></div>
+    </div>
+    <div class="skeleton" style="width:96px;height:30px;border-radius:6px"></div>
+  </div>`;
   wrap.innerHTML = `
     <div class="section-header">
       <div class="section-header__left">
         <h1 class="h1">Bots</h1>
-        <p class="muted">Gerencie bots, matrizes e clones de instâncias</p>
+        <p class="muted">Frota de bots em produção, matrizes para teste e clones por cliente</p>
+      </div>
+      <div class="section-header__right">
+        <button class="btn btn--sm" onclick="renderBots()" aria-label="Atualizar lista de bots">${icon('refresh-cw',13)} Atualizar</button>
       </div>
     </div>
     <div class="bots-group">
-      <div class="bots-group-header"><span class="h2">Em produção</span><p class="muted">Atende qualquer telefone da sessão STARTAP_AI_PROD</p></div>
-      <div class="bots-grid" id="group-interno">${skeletonCard}</div>
+      <div class="bots-group-header">
+        <div class="bots-group-header__top">
+          <div>
+            <span class="h2">Em produção</span>
+            <p class="muted">Atende qualquer telefone da sessão STARTAP_AI_PROD</p>
+          </div>
+          <div class="bots-group-summary" id="summary-interno" aria-live="polite"></div>
+        </div>
+      </div>
+      <div id="group-interno"><div class="bot-row-list">${skeletonRow}</div></div>
     </div>
     <div class="bots-group">
-      <div class="bots-group-header"><span class="h2">Matrizes — para testes</span><p class="muted">Fluxos base que podem ser clonados por cliente</p></div>
-      <div class="bots-grid" id="group-matrizes">${skeletonCard.repeat(3)}</div>
+      <div class="bots-group-header">
+        <div class="bots-group-header__top">
+          <div>
+            <span class="h2">Matrizes — para testes</span>
+            <p class="muted">Fluxos base que podem ser clonados por cliente</p>
+          </div>
+          <div class="bots-group-summary" id="summary-matrizes" aria-live="polite"></div>
+        </div>
+      </div>
+      <div id="group-matrizes"><div class="bot-row-list">${skeletonRow.repeat(3)}</div></div>
     </div>
     <div class="bots-group">
-      <div class="bots-group-header"><span class="h2">Clones — instâncias por cliente</span><p class="muted">Cada clone roda num número de WhatsApp separado</p></div>
-      <div id="group-clones"><div class="clones-grid">${'<div class="clone-card"><div class="skeleton" style="height:40px;width:40px;border-radius:8px;margin-bottom:.75rem"></div><div class="skeleton" style="width:140px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(3)}</div></div>
+      <div class="bots-group-header">
+        <div class="bots-group-header__top">
+          <div>
+            <span class="h2">Clones — instâncias por cliente</span>
+            <p class="muted">Cada clone roda num número de WhatsApp separado</p>
+          </div>
+          <div class="bots-group-summary" id="summary-clones" aria-live="polite"></div>
+        </div>
+      </div>
+      <div id="group-clones"><div class="bot-row-list">${skeletonRow.repeat(2)}</div></div>
     </div>`;
 
   try {
@@ -2155,9 +2323,44 @@ async function renderBots() {
     _renderBotGroup(interno, document.getElementById('group-interno'), false, clones);
     _renderBotGroup(matrizes, document.getElementById('group-matrizes'), true, clones);
     renderBotClones(clones, document.getElementById('group-clones'));
+
+    _renderGroupSummary(document.getElementById('summary-interno'), interno, clones, { kind: 'interno' });
+    _renderGroupSummary(document.getElementById('summary-matrizes'), matrizes, clones, { kind: 'matriz' });
+    _renderGroupSummary(document.getElementById('summary-clones'), [], clones, { kind: 'clones' });
   } catch (err) {
     wrap.innerHTML += `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro ao carregar bots: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.75rem" onclick="renderBots()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
   }
+}
+
+function _renderGroupSummary(el, bots, allClones, { kind }) {
+  if (!el) return;
+  const items = [];
+  if (kind === 'clones') {
+    const total = allClones.length;
+    const conectados = allClones.filter(c => (c.status || '').toLowerCase() === 'conectado').length;
+    const pendentes = total - conectados;
+    items.push({ val: fmtNum(total), label: total === 1 ? 'clone' : 'clones' });
+    if (total) {
+      items.push({ val: fmtNum(conectados), label: 'conectados' });
+      if (pendentes) items.push({ val: fmtNum(pendentes), label: 'pendentes' });
+    }
+  } else {
+    const totalMsgs = bots.reduce((s, b) => s + (Number(b.messages_today) || 0), 0);
+    const totalLeads = bots.reduce((s, b) => s + (Number(b.leads_count) || 0), 0);
+    items.push({ val: fmtNum(bots.length), label: bots.length === 1 ? 'bot' : 'bots' });
+    items.push({ val: fmtNum(totalMsgs), label: 'msgs hoje' });
+    items.push({ val: fmtNum(totalLeads), label: 'leads' });
+    if (kind === 'matriz') {
+      const totalClones = allClones.filter(c => MATRIZ_SLOTS.includes(c.matriz_slot)).length;
+      items.push({ val: fmtNum(totalClones), label: totalClones === 1 ? 'clone gerado' : 'clones gerados' });
+    }
+  }
+  el.innerHTML = items.map((it, i) => `
+    ${i > 0 ? '<span class="bots-group-summary__sep" aria-hidden="true"></span>' : ''}
+    <span class="bots-group-summary__item">
+      <span class="bots-group-summary__val">${it.val}</span>
+      <span>${it.label}</span>
+    </span>`).join('');
 }
 
 function _botDotClass(status) {
@@ -2186,116 +2389,131 @@ function _fmtPhone(raw) {
 }
 
 function _renderBotGroup(bots, container, showCloneBtn, allClones) {
-  if (!bots.length) { container.innerHTML = `<p class="muted">Nenhum bot neste grupo.</p>`; return; }
-  const grid = document.createElement('div');
-  grid.className = 'bots-grid';
+  if (!bots.length) {
+    container.innerHTML = `<div class="bot-row-list"><div class="bot-row__empty">${icon('inbox', 18)} Nenhum bot neste grupo</div></div>`;
+    return;
+  }
+  const list = document.createElement('div');
+  list.className = 'bot-row-list';
 
   bots.forEach(bot => {
-    const card = document.createElement('div');
-    card.className = 'bot-card' + (_selectedBot?.slot === bot.slot ? ' selected' : '');
-    card.setAttribute('role', 'button');
-    card.setAttribute('tabindex', '0');
-    card.setAttribute('aria-label', `Abrir detalhes do bot ${bot.name || bot.slot}`);
+    const row = document.createElement('div');
+    row.className = 'bot-row' + (_selectedBot?.slot === bot.slot ? ' selected' : '');
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-label', `Abrir detalhes do bot ${bot.name || bot.slot}`);
 
     const isInternal  = (bot.slot || bot.slug) === INTERNAL_BOT_SLOT;
     const cloneCount  = allClones.filter(c => c.matriz_slot === (bot.slot || bot.slug)).length;
     const wahaStatus  = bot.waha_status || bot.status || '';
-    const dotClass    = _botDotClass(wahaStatus);
+    const dotClass    = _botDotClass(wahaStatus).replace('bot-card__dot--', 'bot-row__status-dot--');
 
-    // ── Header: avatar + meta
-    const header = document.createElement('div');
-    header.className = 'bot-card__header';
-    header.appendChild(botAvatar(bot.slug || bot.slot, 60));
+    // ── Bloco título: avatar + nome + status + meta
+    const titleBlock = document.createElement('div');
+    titleBlock.className = 'bot-row__title';
+    titleBlock.appendChild(botAvatar(bot.slug || bot.slot, 44));
 
     const phoneRaw = bot.phone || bot.waha_me?.id || bot.me?.id || null;
     const phoneFmt = _fmtPhone(phoneRaw);
-    const cloneLabel = showCloneBtn && cloneCount > 0
-      ? `<span class="muted" style="font-size:.65rem">${cloneCount} clone${cloneCount !== 1 ? 's' : ''}</span>`
-      : '';
     const internalBadge = isInternal
-      ? `<span class="badge" style="background:rgba(245,158,11,.18);color:#f59e0b;font-size:.6rem">Interno</span>`
-      : '';
+      ? `<span class="badge badge--warning">Interno</span>`
+      : (showCloneBtn ? `<span class="badge badge--muted">Matriz</span>` : '');
+    const statusPill = wahaStatus
+      ? `<span class="bot-row__status-dot ${dotClass}" aria-hidden="true"></span>${statusBadge(wahaStatus)}`
+      : `<span class="bot-row__status-dot" aria-hidden="true"></span><span class="badge badge--muted">Sem sessão</span>`;
+    const flowLabel = bot.flow_label || bot.flow_name || '';
+    const provider = (bot.provider || '').toLowerCase();
+    const providerLabel = provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : '';
 
     const meta = document.createElement('div');
-    meta.className = 'bot-card__header-meta';
+    meta.className = 'bot-row__title-meta';
     meta.innerHTML = `
-      <div class="bot-card__name">${escapeHtml(bot.name || bot.slot)}${internalBadge}</div>
-      <div class="bot-card__slug">${escapeHtml(bot.slug || bot.slot || '')} ${cloneLabel}</div>
-      ${phoneFmt ? `<div class="bot-card__phone">${icon('phone', 11)} ${escapeHtml(phoneFmt)}</div>` : ''}`;
-    header.appendChild(meta);
-    card.appendChild(header);
+      <div class="bot-row__name">
+        <span class="bot-row__name-text">${escapeHtml(bot.name || bot.slot)}</span>
+        ${internalBadge}
+        ${statusPill}
+      </div>
+      <div class="bot-row__sub">
+        <span class="bot-row__sub-item"><code>${escapeHtml(bot.slug || bot.slot || '')}</code></span>
+        ${phoneFmt ? `<span class="bot-row__sub-item">${icon('phone', 11)} ${escapeHtml(phoneFmt)}</span>` : ''}
+        ${flowLabel ? `<span class="bot-row__sub-item">${icon('git-branch', 11)} ${escapeHtml(flowLabel)}</span>` : ''}
+        ${providerLabel ? `<span class="bot-row__sub-item">${icon('cpu', 11)} ${escapeHtml(providerLabel)}</span>` : ''}
+      </div>`;
+    titleBlock.appendChild(meta);
+    row.appendChild(titleBlock);
 
-    // ── Status row: dot + badge
-    if (wahaStatus) {
-      const statusRow = document.createElement('div');
-      statusRow.className = 'bot-card__status-row';
-      statusRow.innerHTML = `<span class="bot-card__dot ${dotClass}"></span>${statusBadge(wahaStatus)}`;
-      card.appendChild(statusRow);
+    // ── Strip de métricas
+    const metrics = document.createElement('div');
+    metrics.className = 'bot-row__metrics';
+    const model = bot.model || bot.llm_model || '—';
+    const modelShort = model
+      .replace(/^gpt-/i, 'GPT-')
+      .replace(/^claude-/i, 'Claude ');
+    const items = [
+      { val: fmtNum(bot.messages_today ?? 0), label: 'Msgs hoje' },
+      { val: fmtNum(bot.leads_count ?? 0),    label: 'Leads' },
+      { val: escapeHtml(modelShort), label: 'Modelo', small: true },
+    ];
+    if (showCloneBtn) {
+      items.push({ val: fmtNum(cloneCount), label: cloneCount === 1 ? 'Clone' : 'Clones' });
     }
-
-    // ── Mini KPIs (omite campo se ausente)
-    const kpis = [];
-    if (bot.messages_today != null) kpis.push({ val: fmtNum(bot.messages_today), label: 'Msgs hoje' });
-    if (bot.leads_count     != null) kpis.push({ val: fmtNum(bot.leads_count),     label: 'Leads' });
-    const model = bot.model || bot.llm_model || '';
-    if (model) kpis.push({ val: escapeHtml(model.replace('gpt-', 'GPT-').replace('claude-', 'Claude ')), label: 'Modelo IA' });
-
-    if (kpis.length) {
-      const kpisEl = document.createElement('div');
-      kpisEl.className = 'bot-card__kpis';
-      kpisEl.innerHTML = kpis.map(k => `
-        <div class="bot-card__kpi">
-          <span class="bot-card__kpi-val">${k.val}</span>
-          <span>${k.label}</span>
-        </div>`).join('');
-      card.appendChild(kpisEl);
+    if (bot.updated_at) {
+      items.push({ val: escapeHtml(fmtRelative(bot.updated_at)), label: 'Atualizado', small: true });
     }
+    metrics.innerHTML = items.map(m => `
+      <div class="bot-row__metric">
+        <span class="bot-row__metric-val${m.small ? ' bot-row__metric-val--sm' : ''}">${m.val}</span>
+        <span class="bot-row__metric-label">${m.label}</span>
+      </div>`).join('');
+    row.appendChild(metrics);
 
-    // ── Footer de ações
-    const footer = document.createElement('div');
-    footer.className = 'bot-card__footer';
+    // ── Ações
+    const actions = document.createElement('div');
+    actions.className = 'bot-row__actions';
 
     if (showCloneBtn) {
       const cloneBtn = document.createElement('button');
-      cloneBtn.className = 'btn btn--accent btn--sm';
+      cloneBtn.className = 'btn btn--sm';
       cloneBtn.setAttribute('aria-label', `Clonar matriz ${bot.name || bot.slot}`);
-      cloneBtn.innerHTML = `${icon('git-branch', 13)} <span class="btn-label">Clonar este</span>`;
+      cloneBtn.innerHTML = `${icon('git-branch', 13)} Clonar`;
       cloneBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         openCloneWizard(bot.slot || bot.slug);
       });
-      footer.appendChild(cloneBtn);
+      actions.appendChild(cloneBtn);
     }
 
     const detailBtn = document.createElement('button');
-    detailBtn.className = 'btn btn--ghost btn--sm';
-    detailBtn.setAttribute('aria-label', `Ver detalhes do bot ${bot.name || bot.slot}`);
-    detailBtn.innerHTML = `${icon('chevron-right', 13)} Detalhes`;
+    detailBtn.className = 'btn btn--primary btn--sm';
+    detailBtn.setAttribute('aria-label', `Configurar bot ${bot.name || bot.slot}`);
+    detailBtn.innerHTML = `${icon('settings', 13)} Configurar`;
     detailBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       _selectedBot = bot;
-      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
+      document.querySelectorAll('.bot-row.selected').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
       const wrap = document.getElementById('bots-content');
       _renderBotsDetail(bots, wrap, bot);
     });
-    footer.appendChild(detailBtn);
-    card.appendChild(footer);
+    actions.appendChild(detailBtn);
+    row.appendChild(actions);
 
-    card.addEventListener('click', () => {
+    row.addEventListener('click', () => {
       _selectedBot = bot;
-      document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
-      card.classList.add('selected');
+      document.querySelectorAll('.bot-row.selected').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
       const wrap = document.getElementById('bots-content');
       _renderBotsDetail(bots, wrap, bot);
     });
-    card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') card.click(); });
+    row.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
+    });
 
-    grid.appendChild(card);
+    list.appendChild(row);
   });
 
   container.innerHTML = '';
-  container.appendChild(grid);
+  container.appendChild(list);
 }
 
 function _renderBotsDetail(bots, wrap, selectedBot) {
@@ -2339,7 +2557,7 @@ function _renderBotsDetail(bots, wrap, selectedBot) {
   drawerHeader.querySelector('#bot-drawer-close').addEventListener('click', () => {
     closeDrawer();
     _selectedBot = null;
-    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.bot-card.selected, .bot-row.selected').forEach(c => c.classList.remove('selected'));
   });
   // Marca o drawer com o tipo para que closeDrawer possa limpar estado de bot
   document.getElementById('drawer').dataset.drawerType = 'bot';
@@ -3506,7 +3724,7 @@ function closeDrawer() {
   // Limpa estado de bot selecionado se o drawer era do tipo bot
   if (drawerEl.dataset.drawerType === 'bot') {
     _selectedBot = null;
-    document.querySelectorAll('.bot-card.selected').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.bot-card.selected, .bot-row.selected').forEach(c => c.classList.remove('selected'));
     delete drawerEl.dataset.drawerType;
   }
   drawerEl.classList.remove('open', 'drawer--wide');
@@ -4261,14 +4479,29 @@ function pollQR(sessionName, onUpdate) {
 function renderBotClones(clones, container) {
   if (!clones.length) {
     container.innerHTML = `
-      <div class="empty-state" style="padding:1.5rem 0">
-        <div class="empty-state__icon">${icon('git-branch', 40)}</div>
-        <div class="empty-state__title">Nenhum clone criado ainda</div>
-        <p class="empty-state__text">Use o botão "Clonar este" numa matriz acima para criar uma instância por cliente.</p>
+      <div class="bot-row-list">
+        <div class="bot-row__empty" style="padding:1.5rem 1rem">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem">
+            ${icon('git-branch', 32)}
+            <div style="font-weight:600;color:var(--text)">Nenhum clone criado ainda</div>
+            <p style="margin:0;font-size:.8125rem">Use o botão <b>Clonar</b> numa matriz acima para criar uma instância por cliente.</p>
+          </div>
+        </div>
       </div>`;
     return;
   }
   renderClonesList(clones, container);
+}
+
+function _cloneStatusInfo(status) {
+  const s = (status || '').toLowerCase();
+  const map = {
+    conectado:   { dot: 'bot-row__status-dot--working', cls: 'badge--success', label: 'Conectado' },
+    pendente:    { dot: 'bot-row__status-dot--warning', cls: 'badge--warning', label: 'Aguardando QR' },
+    desconectado:{ dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Desconectado' },
+    falhou:      { dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Falhou' },
+  };
+  return map[s] || { dot: '', cls: 'badge--muted', label: status || 'Sem status' };
 }
 
 function renderClonesList(clones, wrap) {
@@ -4283,61 +4516,93 @@ function renderClonesList(clones, wrap) {
     return;
   }
 
-  const grid = document.createElement('div');
-  grid.className = 'clones-grid';
+  const list = document.createElement('div');
+  list.className = 'bot-row-list';
 
   clones.forEach(c => {
-    const card = document.createElement('div');
-    card.className = 'clone-card';
+    const row = document.createElement('div');
+    row.className = 'bot-row';
+    row.style.cursor = 'default';
 
-    const header = document.createElement('div');
-    header.className = 'clone-card__header';
-    header.appendChild(botAvatar(c.display_name || c.matriz_slot || 'clone', 40));
+    const info = _cloneStatusInfo(c.status);
+    const matrizLabel = (MATRIZ_OPTS || []).find(m => m.slot === c.matriz_slot)?.name || c.matriz_slot || '—';
+    const phoneRaw = c.phone || c.waha_phone || c.waha_me?.id || null;
+    const phoneFmt = _fmtPhone(phoneRaw);
 
-    const info = document.createElement('div');
-    info.className = 'clone-card__info';
-    info.innerHTML = `
-      <div class="clone-card__name">${escapeHtml(c.display_name || 'Clone')}</div>
-      <div class="clone-card__sub">${escapeHtml(c.matriz_slot || '')}${c.cliente_nome ? ' — ' + escapeHtml(c.cliente_nome) : ''}</div>`;
-    header.appendChild(info);
-    card.appendChild(header);
+    // Bloco título
+    const titleBlock = document.createElement('div');
+    titleBlock.className = 'bot-row__title';
+    titleBlock.appendChild(botAvatar(c.display_name || c.matriz_slot || 'clone', 44));
 
-    card.insertAdjacentHTML('beforeend', statusCloneBadge(c.status));
+    const meta = document.createElement('div');
+    meta.className = 'bot-row__title-meta';
+    meta.innerHTML = `
+      <div class="bot-row__name">
+        <span class="bot-row__name-text">${escapeHtml(c.display_name || 'Clone')}</span>
+        <span class="bot-row__status-dot ${info.dot}" aria-hidden="true"></span>
+        <span class="badge badge--dot ${info.cls}">${escapeHtml(info.label)}</span>
+      </div>
+      <div class="bot-row__sub">
+        ${c.cliente_nome ? `<span class="bot-row__sub-item">${icon('users', 11)} ${escapeHtml(c.cliente_nome)}</span>` : ''}
+        <span class="bot-row__sub-item">${icon('git-branch', 11)} ${escapeHtml(matrizLabel)}</span>
+        ${phoneFmt ? `<span class="bot-row__sub-item">${icon('phone', 11)} ${escapeHtml(phoneFmt)}</span>` : ''}
+        ${c.waha_session ? `<span class="bot-row__sub-item"><code>${escapeHtml(c.waha_session)}</code></span>` : ''}
+      </div>`;
+    titleBlock.appendChild(meta);
+    row.appendChild(titleBlock);
 
+    // Métricas (datas relevantes)
+    const metrics = document.createElement('div');
+    metrics.className = 'bot-row__metrics';
+    const mItems = [];
+    if (c.created_at) mItems.push({ val: escapeHtml(fmtRelative(c.created_at)), label: 'Criado', small: true });
+    if (c.updated_at) mItems.push({ val: escapeHtml(fmtRelative(c.updated_at)), label: 'Atualizado', small: true });
+    if (mItems.length) {
+      metrics.innerHTML = mItems.map(m => `
+        <div class="bot-row__metric">
+          <span class="bot-row__metric-val${m.small ? ' bot-row__metric-val--sm' : ''}">${m.val}</span>
+          <span class="bot-row__metric-label">${m.label}</span>
+        </div>`).join('');
+      row.appendChild(metrics);
+    }
+
+    // Ações
     const actions = document.createElement('div');
-    actions.className = 'clone-card__actions';
+    actions.className = 'bot-row__actions';
 
     const configBtn = document.createElement('button');
     configBtn.className = 'btn btn--sm';
+    configBtn.setAttribute('aria-label', `Configurar clone ${c.display_name || c.id}`);
     configBtn.innerHTML = `${icon('settings', 13)} Configurar`;
     configBtn.addEventListener('click', () => openCloneConfigModal(c));
     actions.appendChild(configBtn);
 
     const connectBtn = document.createElement('button');
-    connectBtn.className = 'btn btn--sm';
     if (c.status === 'conectado') {
+      connectBtn.className = 'btn btn--sm';
       connectBtn.innerHTML = `${icon('check-circle-2', 13)} Conectado`;
-      connectBtn.classList.add('btn--success');
     } else {
-      connectBtn.innerHTML = `${icon('qr-code', 13)} Conectar WhatsApp`;
+      connectBtn.className = 'btn btn--primary btn--sm';
+      connectBtn.innerHTML = `${icon('qr-code', 13)} Conectar`;
     }
+    connectBtn.setAttribute('aria-label', `Conectar WhatsApp do clone ${c.display_name || c.id}`);
     connectBtn.addEventListener('click', () => openCloneQRModal(c));
     actions.appendChild(connectBtn);
 
     const delBtn = document.createElement('button');
     delBtn.className = 'btn btn--sm btn--ghost btn--icon';
-    delBtn.setAttribute('aria-label', 'Excluir clone');
+    delBtn.setAttribute('aria-label', `Excluir clone ${c.display_name || c.id}`);
     delBtn.style.color = 'var(--danger)';
     delBtn.innerHTML = icon('trash-2', 14);
     delBtn.addEventListener('click', () => confirmDeleteClone(c));
     actions.appendChild(delBtn);
 
-    card.appendChild(actions);
-    grid.appendChild(card);
+    row.appendChild(actions);
+    list.appendChild(row);
   });
 
   wrap.innerHTML = '';
-  wrap.appendChild(grid);
+  wrap.appendChild(list);
 }
 
 async function confirmDeleteClone(c) {
