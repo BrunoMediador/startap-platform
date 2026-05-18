@@ -53,8 +53,8 @@ async function main() {
     }
   });
 
-  // Cleanup: a cada 12 horas (replica automação visual antiga Limpar_Historico_Chat)
-  new Cron('0 */12 * * *', { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' }, async () => {
+  // Cleanup: a cada 1 hora — cobre clones ativos que antes ficavam 12h sem limpar
+  new Cron('0 * * * *', { name: 'cleanup-chat', timezone: 'America/Sao_Paulo' }, async () => {
     const executionId = randomUUID();
     const startedAt = Date.now();
     let cleanupResult: Awaited<ReturnType<typeof runCleanupChat>> | null = null;

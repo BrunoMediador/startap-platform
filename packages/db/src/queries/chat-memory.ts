@@ -114,6 +114,30 @@ const KNOWN_CHAT_TABLES = new Set([
   'chat_histories_controle_de_pauseee',
 ]);
 
+/** Aceita chat_histories ou chat_histories_<sufixo alfanumérico>. Defesa contra SQL injection. */
+export function isValidChatTableName(table: string): boolean {
+  return /^chat_histories(_[a-z0-9_]+)?$/.test(table);
+}
+
+/** Tabelas de clones ativos registradas em flow_clones.chat_table. */
+export async function getDynamicChatTables(): Promise<string[]> {
+  const r = await query<{ chat_table: string }>(
+    `SELECT DISTINCT chat_table FROM flow_clones WHERE chat_table IS NOT NULL AND status = 'active'`,
+    [],
+  );
+  return r.rows.map((row) => row.chat_table).filter(isValidChatTableName);
+}
+
+/** União de tabelas estáticas conhecidas + tabelas de clones ativos. */
+export async function listAllChatTables(): Promise<string[]> {
+  const dynamic = await getDynamicChatTables();
+  const merged = new Set([...KNOWN_CHAT_TABLES, ...dynamic]);
+  return [...merged];
+}
+
 function isKnownChatTable(table: string): boolean {
-  return KNOWN_CHAT_TABLES.has(table);
+  // Valida tanto contra o set estático quanto contra o padrão de nome seguro,
+  // pois loadHistory/appendMessage/pruneHistory são chamados em runtime com a
+  // tabela já resolvida (pode vir de um clone dinâmico).
+  return KNOWN_CHAT_TABLES.has(table) || isValidChatTableName(table);
 }

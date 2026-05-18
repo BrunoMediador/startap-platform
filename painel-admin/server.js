@@ -2044,6 +2044,65 @@ app.get('/api/sessions/:name/qr', async (req, res) => {
   }
 });
 
+// ---------- ADMIN: CLEANUP MANUAL ----------
+// Lógica inline: replica runCleanupChat usando o pool local do painel.
+// Mantém em sync com apps/worker/src/jobs/cleanup-chat.ts — qualquer mudança
+// no job deve ser refletida aqui também.
+app.post('/api/admin/cleanup/run-now', async (req, res) => {
+  try {
+    const keep = Math.max(1, Math.min(500, Number(req.query.keep) || 50));
+
+    // Tabelas estáticas conhecidas
+    const knownTables = [
+      'chat_histories',
+      'chat_histories_ricardo',
+      'chat_histories_vendas_barbearia',
+      'chat_histories_startap',
+      'chat_histories_controle_de_pause',
+      'chat_histories_controle_de_pausee',
+      'chat_histories_controle_de_pauseee',
+    ];
+
+    // Tabelas dinâmicas de clones ativos
+    const dynRes = await pool.query(
+      `SELECT DISTINCT chat_table FROM flow_clones WHERE chat_table IS NOT NULL AND status = 'active'`,
+    );
+    const validTableRe = /^chat_histories(_[a-z0-9_]+)?$/;
+    const dynTables = dynRes.rows
+      .map((r) => r.chat_table)
+      .filter((t) => validTableRe.test(t));
+
+    const allTables = [...new Set([...knownTables, ...dynTables])];
+    let deleted = 0;
+    const per_table = {};
+
+    for (const table of allTables) {
+      try {
+        const r = await pool.query(
+          `DELETE FROM ${table}
+           WHERE id IN (
+             SELECT id FROM (
+               SELECT id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
+               FROM ${table}
+             ) ranked WHERE rn > $1
+           )`,
+          [keep],
+        );
+        const n = r.rowCount ?? 0;
+        if (n > 0) { per_table[table] = n; deleted += n; }
+      } catch (e) {
+        console.warn(`[painel] cleanup/run-now: tabela ${table} ->`, e.message);
+      }
+    }
+
+    console.log(`[painel] cleanup/run-now tables=${allTables.length} total_deleted=${deleted}`);
+    res.json({ ok: true, deleted, tables: allTables.length, per_table });
+  } catch (e) {
+    console.error('[painel] cleanup/run-now ->', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.use((err, req, res, _next) => {
   if (err instanceof multer.MulterError) {
     const message =
