@@ -1261,6 +1261,7 @@ app.get('/api/status', async (req, res) => {
         name: s.name,
         status: s.status,
         me: s.me?.id || null,
+        updatedAt: s.updatedAt || s.updated_at || null,
         webhook: s.config?.webhooks?.[0]?.url,
       })),
       execucoes: recentLogs,
