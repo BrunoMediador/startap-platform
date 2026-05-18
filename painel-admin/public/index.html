@@ -2706,7 +2706,7 @@ async function renderBotMedia(slot, el) {
         const ctx = m.context || '';
         const cap = m.caption || '';
         return `<tr data-id="${m.id}">
-          <td>${mediaThumbHtml(m)}</td>
+          <td><button class="btn btn--ghost btn--icon js-media-preview" data-id="${m.id}" title="Visualizar" aria-label="Visualizar" style="padding:0;border:0;background:transparent;cursor:pointer">${mediaThumbHtml(m)}</button></td>
           <td class="media-filename-cell" title="${escapeHtml(name)}">${escapeHtml(name)}</td>
           <td><span class="media-type-badge media-type-badge--${t}">${mediaTypeLabel(t)}</span></td>
           <td class="media-context-cell col-context" title="${escapeHtml(ctx)}">${escapeHtml(ctx) || '<span class=\'muted\'>—</span>'}</td>
@@ -2757,6 +2757,15 @@ async function renderBotMedia(slot, el) {
 
     // editar
     el.querySelectorAll('.js-media-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const m = arr.find(x => String(x.id) === String(id));
+        if (m) openEditMediaModal(slot, m, el);
+      });
+    });
+
+    // clicar no thumb abre o modal com player (atalho direto)
+    el.querySelectorAll('.js-media-preview').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id;
         const m = arr.find(x => String(x.id) === String(id));
@@ -2922,7 +2931,8 @@ function openEditMediaModal(slot, m, parentEl) {
       <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
     </div>
     <div id="edit-status"></div>
-    <div style="margin-top:.25rem">
+    <div id="edit-media-preview" style="margin-top:.25rem;display:flex;justify-content:center;background:var(--bg-2);border-radius:var(--radius-md);padding:.5rem"></div>
+    <div style="margin-top:.75rem">
       <label class="label" for="edit-context-input">Contexto para IA</label>
       <textarea id="edit-context-input" class="input" rows="3" style="resize:vertical">${escapeHtml(m.context || '')}</textarea>
     </div>
@@ -2939,6 +2949,10 @@ function openEditMediaModal(slot, m, parentEl) {
       <button class="btn btn--primary" id="btn-save-edit">${icon('save',13)} Salvar</button>
     </div>
   `);
+
+  // Player/preview da mídia — pra revisar vídeo enquanto edita descrição da IA
+  const previewSlot = document.getElementById('edit-media-preview');
+  if (previewSlot) previewSlot.appendChild(renderMediaPreview(m));
 
   document.getElementById('btn-save-edit').addEventListener('click', async () => {
     const saveBtn = document.getElementById('btn-save-edit');
