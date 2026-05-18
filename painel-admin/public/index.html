@@ -808,44 +808,196 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 /* ── Empty state action ──────────────────────────────────────────── */
 .empty-state__action { margin-top: var(--space-2); }
-/* ── Dashboard novo layout (003-D) ───────────────────────────────── */
-.dash-metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
+/* ── Sidebar agrupada (003-D2) ───────────────────────────────────── */
+.nav-group { margin-bottom: .125rem; }
+.nav-group__header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .3125rem .75rem .3125rem .5rem;
+  font-size: .6875rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .1em;
+  color: var(--text-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  user-select: none;
+  gap: .375rem;
+  transition: color var(--transition);
 }
-.dash-two-col {
+.nav-group__header:hover { color: var(--text-muted); }
+.nav-group__chevron {
+  flex-shrink: 0;
+  transition: transform .15s ease;
+  opacity: .5;
+}
+.nav-group.collapsed .nav-group__chevron { transform: rotate(-90deg); }
+.nav-group__items { overflow: hidden; }
+.nav-group.collapsed .nav-group__items { display: none; }
+.nav-item {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .3125rem .5rem .3125rem 1.125rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted); font-size: .8125rem; font-weight: 500;
+  cursor: pointer; border: none; background: transparent;
+  width: 100%; text-align: left;
+  transition: background var(--transition), color var(--transition);
+  margin-bottom: 1px;
+}
+.nav-item:hover { background: rgba(255,255,255,.04); color: var(--text); }
+.nav-item.active {
+  background: rgba(59,130,246,.12);
+  color: var(--primary);
+  font-weight: 600;
+}
+.nav-item .nav-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor; flex-shrink: 0;
+  opacity: 0;
+}
+.nav-item.active .nav-dot { opacity: 1; }
+/* ── KPI Strip (003-D2) ──────────────────────────────────────────── */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+.kpi-strip__cell {
+  padding: .625rem 1rem;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: .125rem;
+}
+.kpi-strip__cell:last-child { border-right: none; }
+.kpi-strip__label {
+  font-size: .6875rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-subtle); white-space: nowrap;
+}
+.kpi-strip__value {
+  font-size: 1.375rem; font-weight: 700;
+  font-family: var(--font-mono); line-height: 1.1;
+  color: var(--text); white-space: nowrap;
+}
+.kpi-strip__sub {
+  font-size: .7rem; color: var(--text-subtle);
+  font-family: var(--font-mono);
+  display: flex; align-items: center; gap: .25rem;
+  white-space: nowrap;
+}
+.kpi-strip__delta--up   { color: var(--success); }
+.kpi-strip__delta--down { color: var(--danger); }
+/* ── Dashboard denso (003-D2) ────────────────────────────────────── */
+.dash-dense-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
+  gap: .75rem;
+  margin-bottom: .75rem;
 }
-.kpi-card__value {
-  font-family: var(--font-mono);
+.dash-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
 }
-/* Bloco de KPI grande (mensagens 7d destaque) */
-.kpi-card--featured {
-  grid-column: span 2;
-  flex-direction: row;
+.dash-block__hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .5rem .875rem;
+  border-bottom: 1px solid var(--border);
+  gap: .5rem;
+}
+.dash-block__title {
+  font-size: .6875rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-subtle);
+}
+.dash-block__body { padding: 0; }
+/* Tabela densa de sessões WAHA */
+.sessions-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.sessions-table th {
+  padding: .3125rem .75rem; text-align: left;
+  font-size: .6rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-subtle);
+  background: rgba(0,0,0,.15); border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.sessions-table td {
+  padding: .4375rem .75rem;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  vertical-align: middle;
+}
+.sessions-table tbody tr:last-child td { border-bottom: none; }
+.sessions-table tbody tr:hover td { background: rgba(255,255,255,.02); }
+/* Status dot inline */
+.s-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; vertical-align: middle; }
+.s-dot--on  { background: var(--success); box-shadow: 0 0 5px rgba(16,185,129,.5); }
+.s-dot--off { background: var(--text-subtle); }
+.s-dot--warn{ background: var(--warning); }
+/* Dropdown stub [...] */
+.more-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--radius-sm);
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer; font-size: .9rem;
+  transition: background var(--transition), color var(--transition);
+  letter-spacing: .1em; line-height: 1; flex-shrink: 0;
+}
+.more-btn:hover { background: var(--surface-2); color: var(--text); }
+/* ── Activity feed (003-D2) ──────────────────────────────────────── */
+.activity-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: .75rem;
+}
+.activity-block__hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .5rem .875rem;
+  border-bottom: 1px solid var(--border);
+  gap: .5rem;
+}
+.activity-block__title {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .6875rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text-subtle);
+}
+.activity-feed { padding: 0; }
+.activity-row {
+  display: grid;
+  grid-template-columns: 3.5rem 5.5rem 1fr 6rem 2.25rem 3.5rem;
   align-items: center;
-  gap: var(--space-6);
+  gap: .25rem;
+  padding: .3125rem .875rem;
+  border-bottom: 1px solid rgba(255,255,255,.03);
+  font-family: var(--font-mono);
+  font-size: .75rem;
+  color: var(--text-muted);
+  transition: background var(--transition);
 }
-.kpi-card--featured .kpi-card__value {
-  font-size: 2.5rem;
-}
-/* Label uppercase rastreável estilo Linear */
+.activity-row:last-child { border-bottom: none; }
+.activity-row:hover { background: rgba(255,255,255,.02); }
+.activity-row__time  { color: var(--text-subtle); }
+.activity-row__phone { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-row__bot   { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-row__status--ok  { color: var(--success); }
+.activity-row__status--err { color: var(--danger); }
+.activity-row__status--run { color: var(--warning); }
+.activity-row__lat   { color: var(--text-subtle); text-align: right; }
+.activity-empty { padding: 1.5rem; text-align: center; color: var(--text-subtle); font-size: .8125rem; }
+/* ── Section block label (mantido do #56) ────────────────────────── */
 .section-block-label {
   font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .1em;
-  color: var(--text-subtle);
-  margin-bottom: var(--space-3);
-  display: block;
+  font-weight: 600; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--text-subtle);
+  margin-bottom: var(--space-3); display: block;
 }
-/* Tabela de leads recentes no dashboard */
-.dash-leads-table td:first-child { color: var(--text); font-weight: 500; }
+/* ── Dash two-col (legado para seções não-dashboard) ─────────────── */
+.dash-two-col {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--space-4); margin-bottom: var(--space-4);
+}
+/* ── kpi-card__value mono (legado) ──────────────────────────────── */
+.kpi-card__value { font-family: var(--font-mono); }
+.kpi-card--featured { grid-column: span 2; flex-direction: row; align-items: center; gap: var(--space-6); }
+.kpi-card--featured .kpi-card__value { font-size: 2.5rem; }
 /* Variação badge inline */
 .kpi-delta {
   display: inline-flex; align-items: center; gap: 3px;
@@ -856,12 +1008,30 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .kpi-delta--up   { background: var(--success-bg); color: var(--success); }
 .kpi-delta--down { background: var(--danger-bg);  color: var(--danger); }
 .kpi-delta--neutral { background: var(--surface-3); color: var(--text-muted); }
+/* Tabela de leads recentes no dashboard */
+.dash-leads-table td:first-child { color: var(--text); font-weight: 500; }
+/* ── Metrics grid (legado KPIs em grid para seção execuções) ──────── */
+.dash-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-4); margin-bottom: var(--space-6);
+}
 @media (max-width: 768px) {
   .dash-two-col { grid-template-columns: 1fr; }
   .kpi-card--featured { grid-column: span 1; flex-direction: column; }
   .kpi-card--featured .kpi-card__value { font-size: 1.75rem; }
+  .kpi-strip { grid-template-columns: 1fr 1fr; }
+  .kpi-strip__cell { border-bottom: 1px solid var(--border); }
+  .kpi-strip__cell:nth-child(even) { border-right: none; }
+  .kpi-strip__cell:last-child { border-bottom: none; }
+  .kpi-strip__cell:nth-last-child(2) { border-bottom: none; }
+  .dash-dense-grid { grid-template-columns: 1fr; }
+  .activity-row { grid-template-columns: 3.5rem 1fr 5rem 2rem; }
+  .activity-row__phone { display: none; }
+  .activity-row__lat   { display: none; }
 }
 @media (max-width: 480px) {
+  .kpi-strip { grid-template-columns: 1fr 1fr; }
   .dash-metrics-grid { grid-template-columns: 1fr 1fr; }
 }
 </style>
@@ -902,30 +1072,28 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   <!-- Main -->
   <main class="main" id="main" role="main">
     <section class="section" id="sec-dashboard" aria-label="Dashboard">
-      <!-- Header -->
-      <div class="section-header">
-        <div class="section-header__left">
-          <h1 class="h1">Dashboard</h1>
-          <p class="muted">Visão geral da operação</p>
-        </div>
-        <button class="btn btn--sm" id="btn-refresh-dash" aria-label="Atualizar dashboard">
-          Atualizar
-        </button>
-      </div>
-      <!-- Bloco MÉTRICAS -->
-      <span class="section-block-label">MÉTRICAS</span>
-      <div id="dash-kpis" class="dash-metrics-grid"></div>
-      <!-- Linha 2: Sessões WAHA + Leads hoje -->
-      <div class="dash-two-col">
+      <!-- KPI Strip -->
+      <div id="dash-kpi-strip" class="kpi-strip"></div>
+      <!-- Sessões WAHA + Leads lado a lado -->
+      <div class="dash-dense-grid">
         <div id="dash-sessions-wrap"></div>
         <div id="dash-leads-wrap"></div>
       </div>
-      <!-- Bloco ATIVIDADE -->
-      <span class="section-block-label">ATIVIDADE</span>
-      <div id="dash-exec-wrap"></div>
+      <!-- Bloco ATIVIDADE AO VIVO -->
+      <div id="dash-activity-block"></div>
     </section>
     <section class="section" id="sec-bots" aria-label="Bots">
       <div id="bots-content"></div>
+    </section>
+    <section class="section" id="sec-sessoes" aria-label="Sessões WAHA">
+      <!-- Stub 003-E -->
+      <div class="section-header"><div class="section-header__left"><h1 class="h1">Sessões WAHA</h1><p class="muted">Gestão completa em 003-E</p></div></div>
+      <div id="sessoes-stub-content"></div>
+    </section>
+    <section class="section" id="sec-leads" aria-label="Leads">
+      <!-- Stub 003-E -->
+      <div class="section-header"><div class="section-header__left"><h1 class="h1">Leads</h1><p class="muted">Gestão completa em 003-E</p></div></div>
+      <div id="leads-stub-content"></div>
     </section>
     <section class="section" id="sec-execucoes" aria-label="Execuções">
       <!-- Seção Execuções — renderizada por renderExecucoes() -->
@@ -1180,170 +1348,120 @@ function closeLightbox() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   DASHBOARD — refatorado em 003-D (Linear-like operacional)
+   DASHBOARD — Retool/Supabase denso (003-D2)
    ══════════════════════════════════════════════════════════════════ */
+let _dashActivityInterval = null;
+
 async function renderDashboard() {
-  renderDashKPIs();
+  renderDashKPIStrip();
   renderDashSessions();
   renderDashLeads();
-  renderDashExec();
+  renderDashActivity();
 }
 
-async function renderDashKPIs() {
-  const wrap = document.getElementById('dash-kpis');
-  const skeletonCard = `<div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:120px"></div></div>`;
-  wrap.innerHTML = skeletonCard.repeat(5);
+/* ── KPI Strip em linha única ────────────────────────────────────── */
+async function renderDashKPIStrip() {
+  const wrap = document.getElementById('dash-kpi-strip');
+  if (!wrap) return;
+  /* Skeleton: 4 células */
+  wrap.innerHTML = [0,1,2,3].map(() =>
+    `<div class="kpi-strip__cell"><div class="skeleton" style="width:4rem;height:.7rem;margin-bottom:.375rem"></div><div class="skeleton" style="width:3rem;height:1.4rem;margin-bottom:.25rem"></div><div class="skeleton" style="width:2.5rem;height:.7rem"></div></div>`
+  ).join('');
 
   try {
-    const [statusData, msgStats, leadsData, agendamentosData, usageSummary] = await Promise.allSettled([
-      api('/api/status'),
+    const [msgStatsRes, leadsRes, usageRes, statusRes] = await Promise.allSettled([
       api('/api/message-stats'),
       api('/api/leads'),
-      api('/api/agendamentos-pendentes'),
       api('/api/usage/summary?days=7'),
+      api('/api/status'),
     ]);
 
-    // Sessões WAHA
-    const sessions = statusData.status === 'fulfilled' ? (statusData.value?.waha || []) : [];
-    const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
-    const workingSessions = sessArr.filter(s => (s.status || s.state) === 'WORKING').length;
-
-    // Bots ativos
-    const flowsData = statusData.status === 'fulfilled' ? statusData.value?.flows : null;
-    const activeBots = flowsData?.ativos ?? 0;
-
-    // Mensagens: /api/message-stats retorna [{dia, total}] dos últimos 14d.
-    const msgs = msgStats.status === 'fulfilled' && Array.isArray(msgStats.value) ? msgStats.value : [];
+    /* Mensagens 7d + variação */
+    const msgs = msgStatsRes.status === 'fulfilled' && Array.isArray(msgStatsRes.value) ? msgStatsRes.value : [];
     const todayKey = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
-    let msgsToday = 0;
-    let msgs7d = 0;
-    let msgs7dPrev = 0;
-    const cutoff7d   = Date.now() - 7 * 86400000;
-    const cutoff14d  = Date.now() - 14 * 86400000;
+    let msgs7d = 0, msgs7dPrev = 0, msgsToday = 0;
+    const cutoff7d = Date.now() - 7 * 86400000;
+    const cutoff14d = Date.now() - 14 * 86400000;
     for (const row of msgs) {
       const n = Number(row.total) || 0;
-      const diaKey = String(row.dia).slice(0, 10);
-      if (diaKey === todayKey) msgsToday += n;
       const t = new Date(row.dia).getTime();
-      if (t >= cutoff7d)  msgs7d     += n;
+      if (String(row.dia).slice(0,10) === todayKey) msgsToday += n;
+      if (t >= cutoff7d) msgs7d += n;
       if (t >= cutoff14d && t < cutoff7d) msgs7dPrev += n;
     }
+    const msgs7dDelta = msgs7dPrev > 0 ? Math.round(((msgs7d - msgs7dPrev) / msgs7dPrev) * 100) : null;
 
-    // Variação percentual mensagens 7d vs semana anterior
-    let msgs7dDelta = null;
-    if (msgs7dPrev > 0) msgs7dDelta = Math.round(((msgs7d - msgs7dPrev) / msgs7dPrev) * 100);
+    /* Execuções hoje */
+    const statusData = statusRes.status === 'fulfilled' ? statusRes.value : {};
+    const execs = statusData?.execucoes || [];
+    const todayCutoff = new Date(); todayCutoff.setHours(0,0,0,0);
+    const execsHj = execs.filter(e => new Date(e.created_at || e.startedAt || 0) >= todayCutoff).length;
+    const execsTotal = execs.length;
+    const execsOk = execs.filter(e => (e.status || '').toLowerCase() === 'success' || e.finished).length;
+    const execRate = execsTotal > 0 ? Math.round((execsOk / execsTotal) * 100) : null;
 
-    // Leads novos: filtra criado_em >= 24h
-    const leads = leadsData.status === 'fulfilled' && Array.isArray(leadsData.value) ? leadsData.value : [];
-    const cutoff24h = Date.now() - 86400000;
-    const leads24h = leads.filter(l => {
+    /* Leads 24h */
+    const leadsArr = leadsRes.status === 'fulfilled' && Array.isArray(leadsRes.value) ? leadsRes.value : [];
+    const leads24h = leadsArr.filter(l => {
       const t = new Date(l.criado_em || l.created_at || 0).getTime();
-      return Number.isFinite(t) && t >= cutoff24h;
+      return Number.isFinite(t) && t >= Date.now() - 86400000;
     }).length;
 
-    // Agendamentos pendentes
-    const agendamentos = agendamentosData.status === 'fulfilled' && Array.isArray(agendamentosData.value) ? agendamentosData.value : [];
-    const pendentesCount = agendamentos.length;
-
-    // Custo 7d
-    const usage = usageSummary.status === 'fulfilled' ? usageSummary.value : null;
+    /* Custo 7d */
+    const usage = usageRes.status === 'fulfilled' ? usageRes.value : null;
     let cost7d = usage?.total_cost ?? usage?.cost ?? null;
     if (cost7d == null && Array.isArray(usage?.rows)) {
-      cost7d = usage.rows.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0);
+      cost7d = usage.rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
     }
 
-    // Badge de variação
-    function deltaBadge(pct) {
+    function deltaHtml(pct) {
       if (pct == null) return '';
-      const cls = pct > 0 ? 'kpi-delta--up' : pct < 0 ? 'kpi-delta--down' : 'kpi-delta--neutral';
-      const arrow = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
-      return `<span class="kpi-delta ${cls}">${arrow} ${Math.abs(pct)}%</span>`;
+      const cls = pct > 0 ? 'kpi-strip__delta--up' : pct < 0 ? 'kpi-strip__delta--down' : '';
+      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '→';
+      return `<span class="${cls}">${arrow} ${Math.abs(pct)}%</span>`;
     }
 
-    // KPI destaque: MENSAGENS · 7d (número grande monospace + variação)
-    const featuredHtml = `
-      <div class="kpi-card kpi-card--featured">
-        <div class="kpi-card__icon" style="background:rgba(6,182,212,0.12);color:#06b6d4;width:44px;height:44px;">${icon('message-circle', 22)}</div>
-        <div>
-          <div class="kpi-card__label" style="margin-bottom:.25rem;">MENSAGENS · 7D</div>
-          <div style="display:flex;align-items:baseline;gap:.5rem;">
-            <div class="kpi-card__value" style="font-size:var(--text-xl)">${escapeHtml(fmtNum(msgs7d))}</div>
-            ${deltaBadge(msgs7dDelta)}
-          </div>
-        </div>
+    wrap.innerHTML = `
+      <div class="kpi-strip__cell">
+        <span class="kpi-strip__label">MSG · 7D</span>
+        <span class="kpi-strip__value">${fmtNum(msgs7d)}</span>
+        <span class="kpi-strip__sub">${deltaHtml(msgs7dDelta)}${msgs7dDelta != null ? '' : '<span style="color:var(--text-subtle)">vs semana anterior</span>'}</span>
+      </div>
+      <div class="kpi-strip__cell">
+        <span class="kpi-strip__label">EXEC · HJ</span>
+        <span class="kpi-strip__value">${fmtNum(execsHj)}</span>
+        <span class="kpi-strip__sub">${execRate != null ? `${execRate}% sucesso` : '—'}</span>
+      </div>
+      <div class="kpi-strip__cell">
+        <span class="kpi-strip__label">LEADS · 24H</span>
+        <span class="kpi-strip__value">${fmtNum(leads24h)}</span>
+        <span class="kpi-strip__sub"><span style="color:var(--text-subtle)">últimas 24h</span></span>
+      </div>
+      <div class="kpi-strip__cell">
+        <span class="kpi-strip__label">TOKENS · 7D</span>
+        <span class="kpi-strip__value">${cost7d != null ? `$${Number(cost7d).toFixed(2)}` : '—'}</span>
+        <span class="kpi-strip__sub"><span style="color:var(--text-subtle)">custo OpenAI</span></span>
       </div>`;
-
-    const kpis = [
-      {
-        label: 'Sessões WAHA',
-        value: sessArr.length ? `${workingSessions}/${sessArr.length}` : '—',
-        icon: 'wifi-off',
-        iconColor: '#3b82f6',
-        iconBg: 'rgba(59,130,246,0.12)',
-        extra: sessArr.length && workingSessions < sessArr.length
-          ? `<span class="badge badge--dot badge--warning" style="font-size:.65rem">${sessArr.length - workingSessions} offline</span>`
-          : '',
-      },
-      {
-        label: 'Mensagens hoje',
-        value: fmtNum(msgsToday),
-        icon: 'zap',
-        iconColor: '#8b5cf6',
-        iconBg: 'rgba(139,92,246,0.12)',
-        extra: '',
-      },
-      {
-        label: 'Leads (24h)',
-        value: fmtNum(leads24h),
-        icon: 'users',
-        iconColor: '#ec4899',
-        iconBg: 'rgba(236,72,153,0.12)',
-        extra: leads24h > 0
-          ? `<a href="#" class="btn btn--ghost btn--sm" style="padding:0;font-size:.75rem;" onclick="navigateTo('relatorios');event.preventDefault()">Ver todos →</a>`
-          : '',
-      },
-      {
-        label: 'Agend. pendentes',
-        value: fmtNum(pendentesCount),
-        icon: 'clock',
-        iconColor: '#f97316',
-        iconBg: 'rgba(249,115,22,0.12)',
-        extra: '',
-      },
-      {
-        label: 'Custo IA · 7d',
-        value: cost7d != null ? `$${Number(cost7d).toFixed(2)}` : '—',
-        icon: 'cpu',
-        iconColor: '#f59e0b',
-        iconBg: 'rgba(245,158,11,0.12)',
-        extra: '',
-      },
-    ];
-
-    const cardsHtml = kpis.map(k => `
-      <div class="kpi-card">
-        <div class="kpi-card__icon" style="background:${k.iconBg};color:${k.iconColor};width:36px;height:36px;">${icon(k.icon, 18)}</div>
-        <div class="kpi-card__value">${escapeHtml(String(k.value))}</div>
-        <div class="kpi-card__label">${escapeHtml(k.label)}</div>
-        ${k.extra}
-      </div>`).join('');
-
-    wrap.innerHTML = featuredHtml + cardsHtml;
-
   } catch (err) {
-    wrap.innerHTML = `<div class="card" style="grid-column:1/-1"><div class="alert--danger">${icon('alert-triangle',14)} Erro ao carregar KPIs: ${escapeHtml(err.message)}</div></div>`;
+    wrap.innerHTML = `<div class="kpi-strip__cell" style="grid-column:1/-1"><span class="kpi-strip__label" style="color:var(--danger)">${icon('alert-triangle',12)} Erro ao carregar KPIs: ${escapeHtml(err.message)}</span></div>`;
   }
 }
 
+/* ── Sessões WAHA — tabela densa ─────────────────────────────────── */
 async function renderDashSessions() {
   const wrap = document.getElementById('dash-sessions-wrap');
-  const skRow = '<div class="status-row"><div class="skeleton" style="width:100px;height:14px"></div><div class="skeleton" style="width:60px;height:18px"></div></div>';
+  if (!wrap) return;
+  const skRow = `<tr><td colspan="5"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
   wrap.innerHTML = `
-    <div class="card card-flat">
-      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
-        <span class="section-block-label" style="margin:0">SESSÕES WAHA</span>
+    <div class="dash-block">
+      <div class="dash-block__hdr">
+        <span class="dash-block__title">SESSÕES WAHA</span>
+        <button class="btn btn--sm btn--ghost" onclick="navigateTo('sessoes')" style="font-size:.7rem;padding:.2rem .5rem">Ver tudo →</button>
       </div>
-      <div style="padding:.25rem 0">${skRow.repeat(3)}</div>
+      <div class="dash-block__body">
+        <table class="sessions-table"><thead><tr><th>SESSÃO</th><th>STATUS</th><th>ÚLTIMA ATI.</th><th>TELS</th><th></th></tr></thead>
+        <tbody>${skRow.repeat(3)}</tbody></table>
+      </div>
     </div>`;
 
   try {
@@ -1352,52 +1470,51 @@ async function renderDashSessions() {
     const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
 
     if (!sessArr.length) {
-      wrap.innerHTML = `
-        <div class="card card-flat">
-          <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
-            <span class="section-block-label" style="margin:0">SESSÕES WAHA</span>
-          </div>
-          <div class="empty-state" style="padding:1.5rem 1rem">${icon('wifi-off', 28)}<div class="empty-state__title">Nenhuma sessão</div></div>
-        </div>`;
+      wrap.querySelector('tbody').innerHTML = `<tr><td colspan="5" class="activity-empty">Nenhuma sessão</td></tr>`;
       return;
     }
 
     const rows = sessArr.map(s => {
       const name = escapeHtml(s.name || s.session || s.id || 'Sessão');
       const st = s.status || s.state || '';
-      const isWorking = st === 'WORKING';
-      const reconectarBtn = !isWorking
-        ? `<button class="btn btn--sm btn--ghost" style="font-size:.75rem;padding:.2rem .5rem" onclick="navigateTo('bots');event.stopPropagation()">Reconectar</button>`
-        : '';
-      return `<div class="status-row" style="padding:.5rem 1rem">
-        <span class="status-row__name">${name}</span>
-        ${statusBadge(st)}
-        ${reconectarBtn}
-      </div>`;
+      const isOn = st === 'WORKING';
+      const isWarn = st === 'STARTING' || st === 'SCAN_QR_CODE';
+      const dotCls = isOn ? 's-dot--on' : isWarn ? 's-dot--warn' : 's-dot--off';
+      const stLabel = isOn ? 'ON' : isWarn ? 'AGUARD.' : 'OFF';
+      const lastSeen = s.updatedAt || s.updated_at || s.lastActivity || null;
+      const phones = s.phones || s.connected_phones || (s.phone ? 1 : null);
+      const phonesStr = phones != null ? String(phones) : '—';
+
+      return `<tr>
+        <td class="mono" style="font-size:.75rem;color:var(--text)">${name}</td>
+        <td><span class="s-dot ${dotCls}"></span> <span style="font-size:.75rem;color:${isOn ? 'var(--success)' : isWarn ? 'var(--warning)' : 'var(--text-subtle)'}">${stLabel}</span></td>
+        <td style="font-size:.75rem;color:var(--text-muted)">${lastSeen ? fmtRelative(lastSeen) : '—'}</td>
+        <td style="font-size:.75rem;color:var(--text-muted);text-align:center">${escapeHtml(phonesStr)}</td>
+        <td><button class="more-btn" title="Ações para ${name}" onclick="navigateTo('bots')" aria-label="Ações">···</button></td>
+      </tr>`;
     }).join('');
 
-    wrap.innerHTML = `
-      <div class="card card-flat">
-        <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
-          <span class="section-block-label" style="margin:0">SESSÕES WAHA</span>
-        </div>
-        ${rows}
-      </div>`;
+    wrap.querySelector('tbody').innerHTML = rows;
   } catch (err) {
-    wrap.innerHTML = `<div class="card"><div class="alert--danger">${icon('alert-triangle',14)} Sessões: ${escapeHtml(err.message)}</div></div>`;
+    wrap.querySelector('tbody').innerHTML = `<tr><td colspan="5" style="padding:.5rem .75rem"><div class="alert--danger" style="font-size:.75rem">${icon('alert-triangle',12)} ${escapeHtml(err.message)}</div></td></tr>`;
   }
 }
 
+/* ── Leads recentes — tabela densa ───────────────────────────────── */
 async function renderDashLeads() {
   const wrap = document.getElementById('dash-leads-wrap');
   if (!wrap) return;
-  const skRow = '<div class="skeleton" style="height:14px;width:100%;margin-bottom:.5rem;border-radius:4px"></div>';
+  const skRow = `<tr><td colspan="3"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
   wrap.innerHTML = `
-    <div class="card card-flat">
-      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-        <span class="section-block-label" style="margin:0">LEADS HOJE</span>
+    <div class="dash-block">
+      <div class="dash-block__hdr">
+        <span class="dash-block__title">LEADS HOJE</span>
+        <button class="btn btn--sm btn--ghost" onclick="navigateTo('leads')" style="font-size:.7rem;padding:.2rem .5rem">Ver tudo →</button>
       </div>
-      <div style="padding:.75rem 1rem">${skRow.repeat(5)}</div>
+      <div class="dash-block__body">
+        <table class="sessions-table"><thead><tr><th>NOME</th><th>BOT</th><th>HÁ</th></tr></thead>
+        <tbody>${skRow.repeat(5)}</tbody></table>
+      </div>
     </div>`;
 
   try {
@@ -1410,82 +1527,150 @@ async function renderDashLeads() {
     });
 
     if (!today.length) {
-      wrap.innerHTML = `
-        <div class="card card-flat">
-          <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-            <span class="section-block-label" style="margin:0">LEADS HOJE</span>
-            <a href="#" class="btn btn--ghost btn--sm" style="font-size:.75rem" onclick="navigateTo('relatorios');event.preventDefault()">Ver todos →</a>
-          </div>
-          <div class="empty-state" style="padding:1.5rem 1rem">${icon('inbox', 24)}<div class="empty-state__title" style="font-size:.875rem">Sem leads nas últimas 24h</div></div>
-        </div>`;
+      wrap.querySelector('tbody').innerHTML = `<tr><td colspan="3" class="activity-empty">Sem leads nas últimas 24h</td></tr>`;
       return;
     }
 
-    const rows = today.slice(0, 5).map(l => {
-      const nome = escapeHtml(l.nome || l.name || '—');
-      const bot  = escapeHtml(l.bot_slug || l.source || '—');
-      const hora = fmtRelative(l.criado_em || l.created_at);
-      return `<tr class="dash-leads-table">
-        <td>${nome}</td>
-        <td class="muted">${bot}</td>
-        <td class="muted" style="text-align:right;white-space:nowrap">${escapeHtml(hora)}</td>
+    const rows = today.slice(0, 8).map(l => {
+      const nome = escapeHtml((l.nome || l.name || '—').slice(0, 22));
+      const bot  = escapeHtml((l.bot_slug || l.source || '—').slice(0, 18));
+      const hora = escapeHtml(fmtRelative(l.criado_em || l.created_at));
+      return `<tr>
+        <td style="font-size:.75rem;color:var(--text);font-weight:500">${nome}</td>
+        <td class="mono" style="font-size:.7rem;color:var(--text-muted)">${bot}</td>
+        <td style="font-size:.7rem;color:var(--text-subtle);white-space:nowrap">${hora}</td>
       </tr>`;
     }).join('');
 
-    wrap.innerHTML = `
-      <div class="card card-flat">
-        <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
-          <span class="section-block-label" style="margin:0">LEADS HOJE <span class="badge badge--success" style="vertical-align:middle;font-size:.6rem">${today.length}</span></span>
-          <a href="#" class="btn btn--ghost btn--sm" style="font-size:.75rem" onclick="navigateTo('relatorios');event.preventDefault()">Ver todos →</a>
-        </div>
-        <div class="table-wrap" style="border:none;border-radius:0">
-          <table class="table" style="font-size:.8125rem">
-            <thead><tr><th>Nome</th><th>Bot</th><th style="text-align:right">Hora</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
-      </div>`;
+    wrap.querySelector('tbody').innerHTML = rows;
   } catch (err) {
-    wrap.innerHTML = `<div class="card"><div class="alert--danger">${icon('alert-triangle',14)} Leads: ${escapeHtml(err.message)}</div></div>`;
+    wrap.querySelector('tbody').innerHTML = `<tr><td colspan="3" style="padding:.5rem .75rem"><div class="alert--danger" style="font-size:.75rem">${icon('alert-triangle',12)} ${escapeHtml(err.message)}</div></td></tr>`;
   }
 }
 
-async function renderDashExec() {
-  const wrap = document.getElementById('dash-exec-wrap');
+/* ── Activity feed — ao vivo ─────────────────────────────────────── */
+async function renderDashActivity() {
+  const wrap = document.getElementById('dash-activity-block');
   if (!wrap) return;
-  wrap.innerHTML = `<div class="table-wrap"><div class="skeleton" style="height:180px"></div></div>`;
+
+  wrap.innerHTML = `
+    <div class="activity-block">
+      <div class="activity-block__hdr">
+        <span class="activity-block__title">
+          <span class="live-dot"></span>
+          ATIVIDADE · ao vivo
+        </span>
+        <button class="btn btn--sm btn--ghost" id="dash-activity-refresh" aria-label="Atualizar atividade" style="font-size:.7rem;padding:.2rem .5rem">${icon('refresh-cw',12)} Atualizar</button>
+      </div>
+      <div class="activity-feed" id="dash-activity-feed">
+        <div class="activity-empty">${icon('activity',20)}<br>Carregando...</div>
+      </div>
+    </div>`;
+
+  wrap.querySelector('#dash-activity-refresh').addEventListener('click', _loadDashActivity);
+
+  await _loadDashActivity();
+
+  /* Polling a cada 12s */
+  if (_dashActivityInterval) clearInterval(_dashActivityInterval);
+  _dashActivityInterval = setInterval(_loadDashActivity, 12000);
+}
+
+async function _loadDashActivity() {
+  const feed = document.getElementById('dash-activity-feed');
+  if (!feed) { clearInterval(_dashActivityInterval); _dashActivityInterval = null; return; }
 
   try {
     const data = await api('/api/status');
     const execs = data?.execucoes || [];
 
     if (!execs.length) {
-      wrap.innerHTML = `<div class="empty-state" style="padding:2rem 1rem">${icon('activity',28)}<div class="empty-state__title">Sem execuções recentes</div></div>`;
+      feed.innerHTML = `<div class="activity-empty">Sem execuções recentes</div>`;
       return;
     }
 
-    const rows = execs.slice(0, 5).map(e => {
-      const status = e.status === 'success' || e.finished
-        ? `<span class="badge badge--dot badge--success">Sucesso</span>`
-        : e.status === 'error' || e.stoppedAt
-        ? `<span class="badge badge--dot badge--danger">Erro</span>`
-        : `<span class="badge badge--dot badge--warning">Andamento</span>`;
-      return `<tr>
-        <td>${escapeHtml(e.flow_name || e.workflowName || e.workflow || '—')}</td>
-        <td>${status}</td>
-        <td class="muted" style="text-align:right;white-space:nowrap">${fmtRelative(e.created_at || e.startedAt)}</td>
-      </tr>`;
+    const rows = execs.slice(0, 10).map(e => {
+      const timeStr = (() => {
+        try {
+          const d = new Date(e.created_at || e.startedAt || Date.now());
+          return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        } catch { return '??:??'; }
+      })();
+      const phone = maskPhone(e.telefone || e.phone || e.from || '');
+      const bot = escapeHtml((e.flow_id || e.workflow_id || e.flow_name || e.workflowName || '—').slice(0, 20));
+      const st = (e.status || '').toLowerCase();
+      const isOk  = st === 'success' || (e.finished && !e.stoppedAt);
+      const isErr = st === 'error' || (e.stoppedAt && !e.finished);
+      const stCls = isOk ? 'activity-row__status--ok' : isErr ? 'activity-row__status--err' : 'activity-row__status--run';
+      const stTxt = isOk ? '✓' : isErr ? '✗' : '…';
+      const dur = e.duration_ms != null ? fmtDuration(e.duration_ms) : (e.duration != null ? fmtDuration(e.duration) : '—');
+
+      return `<div class="activity-row">
+        <span class="activity-row__time">${escapeHtml(timeStr)}</span>
+        <span class="activity-row__phone">${escapeHtml(phone)}</span>
+        <span class="activity-row__bot">→ ${bot}</span>
+        <span class="${stCls}" style="font-size:.8rem">${stTxt}</span>
+        <span></span>
+        <span class="activity-row__lat">${escapeHtml(dur)}</span>
+      </div>`;
     }).join('');
 
-    wrap.innerHTML = `
-      <div class="table-wrap">
-        <table class="table" style="font-size:.8125rem">
-          <thead><tr><th>Workflow</th><th>Status</th><th style="text-align:right">Iniciado</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
+    feed.innerHTML = rows;
   } catch (err) {
-    wrap.innerHTML = `<div class="alert--danger">${icon('alert-triangle',14)} Erro ao carregar execuções: ${escapeHtml(err.message)}</div>`;
+    feed.innerHTML = `<div class="activity-empty" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* ── Stubs para seções 003-E ─────────────────────────────────────── */
+async function renderSessoesStub() {
+  const wrap = document.getElementById('sessoes-stub-content');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-lg)"></div>`;
+  try {
+    const data = await api('/api/status');
+    const sessions = data?.waha || [];
+    const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
+    if (!sessArr.length) {
+      wrap.innerHTML = `<div class="empty-state">${icon('wifi-off',36)}<div class="empty-state__title">Nenhuma sessão</div></div>`;
+      return;
+    }
+    const rows = sessArr.map(s => {
+      const st = s.status || s.state || '';
+      const isOn = st === 'WORKING';
+      return `<tr>
+        <td class="mono" style="font-size:.8125rem">${escapeHtml(s.name||s.session||'Sessão')}</td>
+        <td>${statusBadge(st)}</td>
+        <td class="muted">${s.updatedAt ? fmtRelative(s.updatedAt) : '—'}</td>
+        <td><button class="btn btn--sm" onclick="navigateTo('bots')">${isOn ? 'Gerenciar' : 'Reconectar'}</button></td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `<div class="table-wrap"><table class="table"><thead><tr><th>Sessão</th><th>Status</th><th>Última atividade</th><th>Ação</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } catch (err) {
+    wrap.innerHTML = `<div class="alert--danger">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function renderLeadsStub() {
+  const wrap = document.getElementById('leads-stub-content');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-lg)"></div>`;
+  try {
+    const leadsRaw = await api('/api/leads');
+    const leads = Array.isArray(leadsRaw) ? leadsRaw : [];
+    if (!leads.length) {
+      wrap.innerHTML = `<div class="empty-state">${icon('inbox',36)}<div class="empty-state__title">Nenhum lead</div></div>`;
+      return;
+    }
+    const rows = leads.slice(0, 20).map(l => {
+      const nome = escapeHtml(l.nome || l.name || '—');
+      const tel  = escapeHtml(l.telefone || l.phone || '—');
+      const bot  = escapeHtml(l.bot_slug || l.source || '—');
+      const hora = fmtDate(l.criado_em || l.created_at);
+      return `<tr><td style="font-weight:500">${nome}</td><td class="mono">${tel}</td><td class="muted">${bot}</td><td class="muted">${escapeHtml(hora)}</td></tr>`;
+    }).join('');
+    wrap.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(leads.length)} lead${leads.length !== 1 ? 's' : ''} total</p><div class="table-wrap"><table class="table"><thead><tr><th>Nome</th><th>Telefone</th><th>Bot</th><th>Criado em</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } catch (err) {
+    wrap.innerHTML = `<div class="alert--danger">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -1695,7 +1880,6 @@ async function renderBotOverview(slot, el, bot) {
       await api(`/api/bots/${slot}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       toast('Bot atualizado com sucesso!', 'success');
     } catch (err) {
-      console.error('[bot overview save]', err);
       toast('Erro ao salvar: ' + err.message, 'danger');
     } finally {
       btn.disabled = false;
@@ -1726,14 +1910,12 @@ async function renderBotPrompt(slot, el) {
         await api(`/api/bots/${slot}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: ta.value }) });
         toast('Prompt salvo com sucesso!', 'success');
       } catch (err) {
-        console.error('[bot prompt save]', err);
         toast('Erro ao salvar prompt: ' + err.message, 'danger');
       } finally {
         btn.disabled = false;
       }
     });
   } catch (err) {
-    console.error('[bot prompt]', err);
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar prompt: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="loadBotTab('${escapeHtml(slot)}','prompt',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
   }
 }
@@ -1757,7 +1939,6 @@ async function renderBotMedia(slot, el) {
 
     el.querySelector('#btn-add-media').addEventListener('click', () => openAddMediaModal(slot, el));
   } catch (err) {
-    console.error('[bot media]', err);
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar mídias: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="renderBotMedia('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
   }
 }
@@ -1788,7 +1969,6 @@ function buildMediaCard(m, slot, parentEl) {
       toast('Mídia excluída.', 'success');
       await renderBotMedia(slot, parentEl);
     } catch (err) {
-      console.error('[media delete]', err);
       toast('Erro ao excluir: ' + err.message, 'danger');
       delBtn.disabled = false;
     }
@@ -1842,7 +2022,6 @@ function openAddMediaModal(slot, parentEl) {
       closeModal();
       await renderBotMedia(slot, parentEl);
     } catch (err) {
-      console.error('[media upload]', err);
       statusDiv.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
       uploadBtn.disabled = false;
     }
@@ -1949,7 +2128,6 @@ async function renderBotRouting(slot, el, bot) {
     });
 
   } catch (err) {
-    console.error('[bot routing]', err);
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar roteamento: ${escapeHtml(err.message)}</p>`;
   }
 }
@@ -3404,16 +3582,50 @@ async function renderRoteamento() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   NAVIGATION
+   NAVIGATION — sidebar agrupada (003-D2)
    ══════════════════════════════════════════════════════════════════ */
-const NAV_ITEMS = [
-  { id: 'dashboard',     label: 'Dashboard',    icon: 'layout-dashboard', render: renderDashboard },
-  { id: 'bots',          label: 'Bots',         icon: 'bot',              render: renderBots },
-  { id: 'roteamento',    label: 'Roteamento',   icon: 'git-branch',       render: renderRoteamento },
-  { id: 'execucoes',     label: 'Execuções',    icon: 'activity',         render: renderExecucoes },
-  { id: 'relatorios',    label: 'Relatórios',   icon: 'bar-chart-2',      render: renderRelatorios },
-  { id: 'configuracoes', label: 'Configurações',icon: 'settings',         render: renderConfig },
+const NAV_GROUPS = [
+  {
+    id: 'grp-dashboard',
+    label: 'Dashboard',
+    items: [
+      { id: 'dashboard', label: 'Visão geral', render: renderDashboard },
+    ],
+  },
+  {
+    id: 'grp-operacao',
+    label: 'Operação',
+    items: [
+      { id: 'bots',       label: 'Bots',          render: renderBots },
+      { id: 'sessoes',    label: 'Sessões WAHA',   render: renderSessoesStub },
+      { id: 'leads',      label: 'Leads',          render: renderLeadsStub },
+      { id: 'roteamento', label: 'Roteamento',     render: renderRoteamento },
+      { id: 'execucoes',  label: 'Execuções',      render: renderExecucoes },
+    ],
+  },
+  {
+    id: 'grp-configuracao',
+    label: 'Configuração',
+    items: [
+      { id: 'configuracoes', label: 'Configurações', render: renderConfig },
+      { id: 'relatorios',    label: 'Relatórios',    render: renderRelatorios },
+    ],
+  },
 ];
+
+/* Flat map de id → item para lookup rápido */
+const NAV_ITEMS_MAP = {};
+NAV_GROUPS.forEach(g => g.items.forEach(i => { NAV_ITEMS_MAP[i.id] = i; }));
+
+/* Estado de colapso dos grupos — persiste no localStorage */
+function _loadGroupState() {
+  try { return JSON.parse(localStorage.getItem('paineladmin:nav-groups') || '{}'); } catch { return {}; }
+}
+function _saveGroupState(st) {
+  try { localStorage.setItem('paineladmin:nav-groups', JSON.stringify(st)); } catch {}
+}
+
+let _groupState = _loadGroupState();
 
 let _savedSection = localStorage.getItem('paineladmin:section') || 'dashboard';
 if (_savedSection === 'clones') { _savedSection = 'bots'; localStorage.setItem('paineladmin:section', 'bots'); }
@@ -3423,14 +3635,49 @@ let _rendered = {};
 function buildNav() {
   const nav = document.getElementById('sidebar-nav');
   nav.innerHTML = '';
-  NAV_ITEMS.forEach(item => {
-    const btn = document.createElement('button');
-    btn.className = 'nav-item' + (_activeSection === item.id ? ' active' : '');
-    btn.dataset.section = item.id;
-    btn.innerHTML = `<span class="nav-icon">${icon(item.icon, 18)}</span><span>${item.label}</span>`;
-    btn.addEventListener('click', () => navigateTo(item.id));
-    nav.appendChild(btn);
+
+  NAV_GROUPS.forEach(grp => {
+    const isCollapsed = _groupState[grp.id] === true;
+    const grpEl = document.createElement('div');
+    grpEl.className = 'nav-group' + (isCollapsed ? ' collapsed' : '');
+    grpEl.dataset.group = grp.id;
+
+    /* Cabeçalho do grupo */
+    const hdr = document.createElement('div');
+    hdr.className = 'nav-group__header';
+    hdr.setAttribute('role', 'button');
+    hdr.setAttribute('aria-expanded', String(!isCollapsed));
+    hdr.setAttribute('tabindex', '0');
+    hdr.innerHTML = `<span>${grp.label}</span><span class="nav-group__chevron">${icon('chevron-down', 12)}</span>`;
+    hdr.addEventListener('click', () => toggleNavGroup(grp.id, grpEl, hdr));
+    hdr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNavGroup(grp.id, grpEl, hdr); } });
+
+    /* Itens */
+    const itemsEl = document.createElement('div');
+    itemsEl.className = 'nav-group__items';
+
+    grp.items.forEach(item => {
+      const btn = document.createElement('button');
+      btn.className = 'nav-item' + (_activeSection === item.id ? ' active' : '');
+      btn.dataset.section = item.id;
+      btn.setAttribute('aria-current', _activeSection === item.id ? 'page' : 'false');
+      btn.innerHTML = `<span class="nav-dot"></span><span>${item.label}</span>`;
+      btn.addEventListener('click', () => navigateTo(item.id));
+      itemsEl.appendChild(btn);
+    });
+
+    grpEl.appendChild(hdr);
+    grpEl.appendChild(itemsEl);
+    nav.appendChild(grpEl);
   });
+}
+
+function toggleNavGroup(groupId, grpEl, hdr) {
+  const isNowCollapsed = !grpEl.classList.contains('collapsed');
+  grpEl.classList.toggle('collapsed', isNowCollapsed);
+  hdr.setAttribute('aria-expanded', String(!isNowCollapsed));
+  _groupState[groupId] = isNowCollapsed;
+  _saveGroupState(_groupState);
 }
 
 function navigateTo(sectionId) {
@@ -3444,7 +3691,9 @@ function navigateTo(sectionId) {
 
   // Update nav active state
   document.querySelectorAll('.nav-item').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.section === sectionId);
+    const isActive = btn.dataset.section === sectionId;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-current', isActive ? 'page' : 'false');
   });
 
   // Close mobile sidebar
@@ -3456,8 +3705,14 @@ function navigateTo(sectionId) {
     if (liveBtn) stopExecSSE(liveBtn); else { _execSSE.close(); _execSSE = null; }
   }
 
+  // Para polling de atividade do dashboard ao sair
+  if (sectionId !== 'dashboard' && _dashActivityInterval) {
+    clearInterval(_dashActivityInterval);
+    _dashActivityInterval = null;
+  }
+
   // Render if not yet rendered (or always re-render dashboard for freshness)
-  const item = NAV_ITEMS.find(i => i.id === sectionId);
+  const item = NAV_ITEMS_MAP[sectionId];
   if (item && (sectionId === 'dashboard' || !_rendered[sectionId])) {
     _rendered[sectionId] = true;
     item.render();
@@ -3499,19 +3754,12 @@ function closeSidebar() {
     if (e.target === e.currentTarget) closeLightbox();
   });
 
-  // Refresh dashboard button
-  const refreshBtn = document.getElementById('btn-refresh-dash');
-  if (refreshBtn) {
-    refreshBtn.innerHTML = `${icon('refresh-cw',14)} Atualizar`;
-    refreshBtn.addEventListener('click', renderDashboard);
-  }
-
   // Build navigation
   buildNav();
 
   // Activate stored or default section
   document.getElementById(`sec-${_activeSection}`)?.classList.add('active');
-  const initItem = NAV_ITEMS.find(i => i.id === _activeSection);
+  const initItem = NAV_ITEMS_MAP[_activeSection];
   if (initItem) {
     _rendered[_activeSection] = true;
     initItem.render();
@@ -3526,9 +3774,10 @@ function closeSidebar() {
     }
   });
 
-  // Fechar SSE antes de sair da página
+  // Fechar SSE e polling antes de sair da página
   window.addEventListener('beforeunload', () => {
     if (_execSSE) { _execSSE.close(); _execSSE = null; }
+    if (_dashActivityInterval) { clearInterval(_dashActivityInterval); _dashActivityInterval = null; }
   });
 })();
 </script>
