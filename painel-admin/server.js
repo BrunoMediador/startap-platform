@@ -2110,6 +2110,9 @@ app.get('/api/metrics/top-errors', async (req, res) => {
 });
 
 // ---------- CLEANUP STATUS ----------
+// Nota: cleanup_log era a tabela do n8n (legado). O worker TS (startap-worker) escreve em
+// flow_execution_logs com flow_id='worker:cleanup-chat' e event_type='worker.job-finished'.
+// A tabela cleanup_log parou de ser atualizada em 2026-05-15 quando o n8n foi aposentado.
 app.get('/api/cleanup/status', async (req, res) => {
   try {
     const now = new Date();
@@ -2117,10 +2120,16 @@ app.get('/api/cleanup/status', async (req, res) => {
     nextRun.setMinutes(0, 0, 0);
     nextRun.setHours(nextRun.getHours() + 1);
 
+    // Lê último job-finished do worker TS (substitui cleanup_log do n8n legado).
     const [lastRunRes, tablesRes] = await Promise.all([
       pool
         .query(
-          'SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1',
+          `SELECT created_at AS last_run, metadata
+           FROM flow_execution_logs
+           WHERE flow_id = 'worker:cleanup-chat'
+             AND event_type = 'worker.job-finished'
+             AND status = 'success'
+           ORDER BY id DESC LIMIT 1`,
         )
         .catch(() => ({ rows: [] })),
       pool
@@ -2128,12 +2137,16 @@ app.get('/api/cleanup/status', async (req, res) => {
         .catch(() => ({ rows: [] })),
     ]);
 
+    const lastRow = lastRunRes.rows[0] || null;
+    const meta = lastRow?.metadata || {};
     res.json({
-      last_run: lastRunRes.rows[0]?.cleaned_at || null,
-      last_tables_cleaned: lastRunRes.rows[0]?.tables_cleaned || 0,
+      last_run: lastRow?.last_run || null,
+      last_tables_cleaned: meta.tables ?? 0,
+      last_total_deleted: meta.total_deleted ?? 0,
       next_run: nextRun.toISOString(),
       cron: '0 * * * *',
       interval_minutes: 60,
+      source: 'flow_execution_logs', // indica que usa worker TS, não n8n legado
       tables: tablesRes.rows,
     });
   } catch (e) {
