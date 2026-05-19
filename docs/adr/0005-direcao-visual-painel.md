@@ -1,6 +1,6 @@
 # ADR 0005: Direcao visual e sistema de design do painel admin
 
-**Status:** revisado
+**Status:** Aceita
 **Data:** 2026-05-17
 **Revisado em:** 2026-05-18
 **Autor:** arquiteto
