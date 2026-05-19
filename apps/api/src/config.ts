@@ -17,7 +17,7 @@ const ConfigSchema = z.object({
   WHISPER_URL: z.string().url(),
 
   OPENAI_API_KEY: z.string(),
-  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  OPENAI_MODEL: z.string().default('gpt-5.4'),
 
   ALERT_DEV_PHONE: z.string().optional(),
   ALERT_OWNER_PHONE: z.string().optional(),

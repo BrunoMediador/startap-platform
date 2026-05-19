@@ -26,7 +26,7 @@ function getClient(apiKey?: string, baseURL?: string): OpenAI {
   return c;
 }
 
-const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5.4';
 const DEFAULT_HISTORY_MAX_CHARS = Number.parseInt(
   process.env.AGENT_HISTORY_MAX_CHARS ?? '12000',
   10,
