@@ -1,15 +1,8 @@
 /**
- * Cliente Google Calendar — consulta e cria eventos.
+ * Cliente Google Calendar — consulta e cria eventos via Service Account per-clone.
  *
- * Dois modos de operação:
- *
- * 1. Legacy (env global): usado pelos bots não-clone (startap, matrizes).
- *    Ativado via funções exportadas listEvents/createEvent/deleteEvent sem instância.
- *    Continua funcionando enquanto as env vars GOOGLE_OAUTH_* estiverem presentes.
- *
- * 2. Per-clone (Service Account JSON): instanciar GoogleCalendarClient com
- *    { credentialsJson, calendarId }. Detecta automaticamente se o JSON tem
- *    type === "service_account" e usa JWT/SA via fetch direto no token endpoint.
+ * Único modo de operação: instanciar GoogleCalendarClient com { credentialsJson, calendarId }.
+ * O JSON deve ter type === "service_account". Token obtido via JWT/SA direto no token endpoint.
  */
 import { logger } from '@startap/core/logger';
 
@@ -38,47 +31,15 @@ export interface PerCloneOptions {
   calendarId: string;
 }
 
-export type TestConnectionResult =
-  | { ok: true }
-  | { ok: false; error: string };
+export type TestConnectionResult = { ok: true } | { ok: false; error: string };
 
-// ─── Legacy (OAuth env global) ────────────────────────────────────────────────
+// ─── Per-clone (Service Account) ─────────────────────────────────────────────
 
-const CLIENT_ID      = process.env.GOOGLE_OAUTH_CLIENT_ID      ?? '';
-const CLIENT_SECRET  = process.env.GOOGLE_OAUTH_CLIENT_SECRET  ?? '';
-const REFRESH_TOKEN  = process.env.GOOGLE_OAUTH_REFRESH_TOKEN  ?? '';
-const CALENDAR_ID    = process.env.GOOGLE_CALENDAR_ID          ?? 'primary';
-
-let cachedToken: { token: string; expiresAt: number } | null = null;
-
-async function getLegacyAccessToken(): Promise<string> {
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken.token;
-  }
-  const params = new URLSearchParams({
-    client_id: CLIENT_ID,
-    client_secret: CLIENT_SECRET,
-    refresh_token: REFRESH_TOKEN,
-    grant_type: 'refresh_token',
-  });
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Google OAuth refresh failed: HTTP ${res.status}: ${text}`);
-  }
-  const json = (await res.json()) as { access_token: string; expires_in: number };
-  cachedToken = {
-    token: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000,
-  };
-  return json.access_token;
-}
-
-async function gcalFetch<T = unknown>(path: string, opts: RequestInit = {}, tokenFn: () => Promise<string> = getLegacyAccessToken): Promise<T> {
+async function gcalFetch<T = unknown>(
+  path: string,
+  opts: RequestInit,
+  tokenFn: () => Promise<string>,
+): Promise<T> {
   const token = await tokenFn();
   const url = `https://www.googleapis.com/calendar/v3${path}`;
   const res = await fetch(url, {
@@ -99,58 +60,6 @@ async function gcalFetch<T = unknown>(path: string, opts: RequestInit = {}, toke
   return (await res.json()) as T;
 }
 
-/** Lista eventos entre duas datas (modo legacy). */
-export async function listEvents(opts: {
-  timeMin: string; // ISO
-  timeMax: string; // ISO
-  calendarId?: string;
-}): Promise<CalendarEvent[]> {
-  const cal = opts.calendarId ?? CALENDAR_ID;
-  const qs = new URLSearchParams({
-    timeMin: opts.timeMin,
-    timeMax: opts.timeMax,
-    singleEvents: 'true',
-    orderBy: 'startTime',
-    maxResults: '100',
-  });
-  const json = await gcalFetch<{ items: CalendarEvent[] }>(
-    `/calendars/${encodeURIComponent(cal)}/events?${qs}`,
-  );
-  return json.items ?? [];
-}
-
-/** Cria um evento (modo legacy). */
-export async function createEvent(opts: {
-  summary: string;
-  description?: string;
-  startISO: string;
-  endISO: string;
-  timeZone?: string;
-  calendarId?: string;
-}): Promise<CalendarEvent> {
-  const cal = opts.calendarId ?? CALENDAR_ID;
-  const tz = opts.timeZone ?? 'America/Sao_Paulo';
-  return await gcalFetch<CalendarEvent>(`/calendars/${encodeURIComponent(cal)}/events`, {
-    method: 'POST',
-    body: JSON.stringify({
-      summary: opts.summary,
-      description: opts.description,
-      start: { dateTime: opts.startISO, timeZone: tz },
-      end: { dateTime: opts.endISO, timeZone: tz },
-    }),
-  });
-}
-
-/** Deleta um evento (modo legacy). */
-export async function deleteEvent(eventId: string, calendarId?: string): Promise<void> {
-  const cal = calendarId ?? CALENDAR_ID;
-  await gcalFetch(`/calendars/${encodeURIComponent(cal)}/events/${eventId}`, {
-    method: 'DELETE',
-  });
-}
-
-// ─── Per-clone (Service Account) ─────────────────────────────────────────────
-
 /**
  * Gera um JWT assinado para Service Account usando apenas Web Crypto API
  * (sem dependência de googleapis SDK, mantém bundle leve).
@@ -167,7 +76,7 @@ async function signJwt(payload: Record<string, unknown>, privateKeyPem: string):
     .replace(/-----BEGIN PRIVATE KEY-----/, '')
     .replace(/-----END PRIVATE KEY-----/, '')
     .replace(/\s/g, '');
-  const keyData = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+  const keyData = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
 
   const cryptoKey = await crypto.subtle.importKey(
     'pkcs8',
@@ -184,7 +93,9 @@ async function signJwt(payload: Record<string, unknown>, privateKeyPem: string):
   );
 
   const sig = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 
   return `${signingInput}.${sig}`;
 }
@@ -202,7 +113,7 @@ export class GoogleCalendarClient {
       throw new Error('GoogleCalendarClient: credentialsJson inválido (JSON malformado)');
     }
     const c = parsed as Record<string, unknown>;
-    if (c['type'] !== 'service_account') {
+    if (c.type !== 'service_account') {
       throw new Error('GoogleCalendarClient: credentialsJson deve ser do tipo service_account');
     }
     this.creds = parsed as ServiceAccountCredentials;
