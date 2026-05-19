@@ -8,6 +8,7 @@ import { flowExecutionLog } from '@startap/db';
  */
 import { Cron } from 'croner';
 import { runAntibot } from './jobs/antibot.js';
+import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 
@@ -72,6 +73,9 @@ async function main() {
     try {
       cleanupResult = await runCleanupChat();
       log.info({ ...cleanupResult }, 'cleanup cycle');
+      const botPausaResult = await runCleanupBotPausa();
+      if (botPausaResult.deleted > 0)
+        log.info({ ...botPausaResult }, 'cleanup-bot-pausa cycle');
       const prunedLogs = await flowExecutionLog.pruneOldFlowEvents(14);
       // Fecha execuções presas em running há mais de 5 minutos (safety net).
       const closedStale = await flowExecutionLog.closeStaleRunning(5);
