@@ -104,14 +104,15 @@ export function listKnownChatTables(): string[] {
   return [...KNOWN_CHAT_TABLES];
 }
 
+// Tabelas canônicas de histórico de chat. Clones ativos são listados
+// dinamicamente via getDynamicChatTables() (flow_clones.chat_table).
+// As 3 entradas com typo (controle_de_pause/ee/eee) foram removidas em
+// 2026-05-19: nunca foram criadas via migration e não existem em prod.
 const KNOWN_CHAT_TABLES = new Set([
   'chat_histories',
   'chat_histories_ricardo',
   'chat_histories_vendas_barbearia',
   'chat_histories_startap',
-  'chat_histories_controle_de_pause',
-  'chat_histories_controle_de_pausee',
-  'chat_histories_controle_de_pauseee',
 ]);
 
 /** Aceita chat_histories ou chat_histories_<sufixo alfanumérico>. Defesa contra SQL injection. */

@@ -41,3 +41,16 @@ export async function pruneOldLogs(hoursToKeep = 24): Promise<number> {
   );
   return r.rowCount ?? 0;
 }
+
+/**
+ * Remove entradas antigas de bot_pausa (já desbloqueadas ou ativas há muito tempo).
+ * Requer coluna created_at adicionada em migration 025.
+ * Controlado por BOT_PAUSA_RETENTION_DAYS (default 30).
+ */
+export async function pruneOldBotPausa(daysToKeep = 30): Promise<number> {
+  const r = await query(
+    "DELETE FROM bot_pausa WHERE created_at < NOW() - ($1 || ' days')::INTERVAL",
+    [String(daysToKeep)],
+  );
+  return r.rowCount ?? 0;
+}
