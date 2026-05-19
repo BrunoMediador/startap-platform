@@ -93,6 +93,7 @@ textarea, input, select { font-family: inherit; }
 .h3  { font-size: 1rem;     font-weight: 600; margin: 0; }
 .muted   { color: var(--text-muted); font-size: .8125rem; }
 .subtle  { color: var(--text-subtle); font-size: .75rem; }
+.gcal-error-detail { margin-top: .375rem; font-family: var(--font-mono, monospace); font-size: .75rem; word-break: break-all; color: var(--danger, #ef4444); }
 .mono    { font-family: var(--font-mono); font-size: .8125rem; }
 .label   { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
 /* ── Layout shell ───────────────────────────────────────────────────── */
@@ -5916,7 +5917,7 @@ function loadCloneConfigTab(tab, clone) {
               <div>
                 <div style="font-weight:600;margin-bottom:.25rem">Credenciais inválidas</div>
                 <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email || '—')}</code></div>
-                <div class="muted" style="font-size:.8125rem">Verifique se a agenda foi compartilhada com este e-mail.</div>
+                <div class="muted gcal-error-detail" style="font-size:.8125rem">${data.error ? escapeHtml(data.error) : 'Verifique se a agenda foi compartilhada com o e-mail da Service Account.'}</div>
               </div>
             </div>
             <div style="display:flex;gap:.625rem;flex-wrap:wrap">
