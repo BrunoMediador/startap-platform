@@ -51,12 +51,7 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
 
   const row = result.rows[0];
 
-  if (
-    !row ||
-    row.gcal_status !== 'active' ||
-    !row.gcal_credentials_json ||
-    !row.gcal_calendar_id
-  ) {
+  if (!row || row.gcal_status !== 'active' || !row.gcal_credentials_json || !row.gcal_calendar_id) {
     cache.set(slot, { client: null, expiresAt: now + CACHE_TTL_MS });
     return null;
   }

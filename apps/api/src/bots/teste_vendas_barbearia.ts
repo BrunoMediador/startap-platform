@@ -484,7 +484,13 @@ export class TesteVendasBarbeariaBot extends BotBase {
           const { summary, start, end } = args as { summary: string; start: string; end: string };
           const ev = calClient
             ? await calClient.createEvent({ summary, startISO: start, endISO: end, timeZone: TZ })
-            : await gcal.createEvent({ summary, startISO: start, endISO: end, timeZone: TZ, calendarId: MATRIZ_CALENDAR_ID });
+            : await gcal.createEvent({
+                summary,
+                startISO: start,
+                endISO: end,
+                timeZone: TZ,
+                calendarId: MATRIZ_CALENDAR_ID,
+              });
           this.log.info(
             { eventId: ev.id, summary: ev.summary, telefone },
             'Agendamento criado pelo bot hibrido',
@@ -508,7 +514,11 @@ export class TesteVendasBarbeariaBot extends BotBase {
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
           const evs = calClient
             ? await calClient.listEvents({ timeMin: tMin, timeMax: tMax })
-            : await gcal.listEvents({ timeMin: tMin, timeMax: tMax, calendarId: MATRIZ_CALENDAR_ID });
+            : await gcal.listEvents({
+                timeMin: tMin,
+                timeMax: tMax,
+                calendarId: MATRIZ_CALENDAR_ID,
+              });
           const phone = tel.replace(/\D/g, '');
           const matching = evs.filter(
             (e) => e.summary?.includes(phone) || e.description?.includes(phone),
