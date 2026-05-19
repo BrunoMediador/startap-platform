@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@startap/core": "*",
+    "@startap/db": "^0.1.0",
     "openai": "^4.78.0"
   }
 }
