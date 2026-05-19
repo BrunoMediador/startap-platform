@@ -13,8 +13,6 @@
     "@startap/core": "*",
     "@startap/db": "*",
     "@startap/integrations": "*",
-    "bullmq": "^5.34.0",
-    "ioredis": "^5.4.2",
     "croner": "^9.0.0"
   }
 }
