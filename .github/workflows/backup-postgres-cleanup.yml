@@ -1,0 +1,71 @@
+name: Cleanup Backups Antigos
+
+on:
+  schedule:
+    # Domingos 07:00 UTC — logo após o backup das 06:00
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: backup-postgres-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove dumps > 30 dias (mantém 1 semanal/semana)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout startap-backups
+        uses: actions/checkout@v4
+        with:
+          repository: BrunoMediador/startap-backups
+          token: ${{ secrets.BACKUP_REPO_TOKEN }}
+          path: startap-backups
+          fetch-depth: 0
+
+      - name: Identifica e remove dumps elegíveis
+        id: cleanup
+        run: |
+          cd startap-backups
+
+          # Lista todos os arquivos de dump ordenados por nome (ISO8601 = ordem cronológica)
+          mapfile -t ALL_DUMPS < <(find dumps/ -name '*.sql.gz' | sort)
+
+          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
+          DELETED=0
+          declare -A WEEKLY_KEPT  # chave = YYYY-WW (ano-semana ISO)
+
+          for f in "${ALL_DUMPS[@]}"; do
+            # Extrai YYYY-MM-DD do nome do arquivo: dumps/YYYY/MM/YYYY-MM-DD-HHMMSS.sql.gz
+            BASENAME=$(basename "${f}" .sql.gz)
+            FILE_DATE="${BASENAME:0:10}"   # primeiros 10 chars = YYYY-MM-DD
+
+            # Só processa arquivos mais antigos que 30 dias
+            if [[ "${FILE_DATE}" > "${CUTOFF}" || "${FILE_DATE}" == "${CUTOFF}" ]]; then
+              continue
+            fi
+
+            # Semana ISO (ex: 2026-W20)
+            WEEK=$(date -u -d "${FILE_DATE}" '+%G-W%V')
+
+            if [[ -z "${WEEKLY_KEPT[$WEEK]}" ]]; then
+              # Primeiro dump da semana → mantém como backup semanal
+              WEEKLY_KEPT[$WEEK]="${f}"
+            else
+              # Dump extra desta semana → candidato a remoção
+              git rm "${f}"
+              DELETED=$((DELETED + 1))
+            fi
+          done
+
+          echo "deleted=${DELETED}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit e push (se removeu algo)
+        if: steps.cleanup.outputs.deleted != '0'
+        run: |
+          cd startap-backups
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "cleanup: remove ${{ steps.cleanup.outputs.deleted }} dump(s) > 30 dias (mantém semanais)"
+          git push
