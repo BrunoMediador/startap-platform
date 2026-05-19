@@ -91,7 +91,7 @@ Em `painel-admin/public/index.html` na função `renderGcalContent`, exibir `dat
 ## Definition of Done (DoD)
 
 - [ ] `curl -u admin:*** -X POST https://gestao.startap.tech/api/clones/2/gcal/test` retorna `{"ok":true,"status":"active"}` com a SA `gcal-startap-barbershop` e agenda `startapsuporte@gmail.com`.
-- [ ] `docker exec automacoes-painel-admin-1 ls /app/packages/integrations/dist/google-calendar/client.js` retorna o arquivo (em A) **ou** painel-admin chama apps/api com sucesso (em D).
+- [ ] `docker exec automacoes-painel-admin-1 ls /packages/integrations/dist/google-calendar/client.js` retorna o arquivo (path real é `/packages/...`, não `/app/packages/...` — server.js fica em `/app/server.js` e o import relativo `'../packages/...'` resolve pra raiz). Também: `docker exec automacoes-painel-admin-1 ls /app/node_modules/@startap/core/dist/logger.js` retorna o arquivo (necessário pra resolver `import '@startap/core/logger'` dentro do client.js).
 - [ ] Bot do clone `bruno_barbershop` consegue criar evento de teste na agenda (smoke test: agendar evento via conversa de teste no WAHA, conferir que apareceu em `startapsuporte@gmail.com`).
 - [ ] Frontend mostra mensagem de erro detalhada (não mais texto genérico) quando teste falha.
 - [ ] Build local passa: `npm run build --workspaces` + `docker compose build painel-admin`.
