@@ -7,9 +7,6 @@ import { BotBase } from './base.js';
 
 const SLOT = 'teste_barbearia';
 const TZ = 'America/Sao_Paulo';
-// ID da agenda da matriz Samuel/Cirilo — usado SOMENTE quando o bot roda como matriz (slot === SLOT).
-// Clones devem ter gcal_credentials_json + gcal_calendar_id em flow_clones (migration 018).
-const MATRIZ_CALENDAR_ID = 'cirilosbarbershop01@gmail.com';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
 
@@ -212,30 +209,24 @@ export class TesteBarbeariaBot extends BotBase {
       return 'ok! vou avisar o time, e logo entraremos em contato!';
     }
 
-    // Resolve cliente gcal: per-clone (Service Account do cliente) ou legacy (matriz Samuel).
     const calClient = await gcal.getGcalForSlot(this.slot);
-    const isMatriz = this.slot === SLOT;
-
-    // Clone sem gcal configurado: aborta para não agendar na agenda errada.
-    if (!calClient && !isMatriz) {
+    if (!calClient) {
       this.log.error(
-        { slot: this.slot, reason: 'gcal_not_configured' },
-        'Clone sem gcal configurado — abortando para evitar agendamento na agenda errada',
+        { slot: this.slot },
+        'gcal_not_configured — bot exige Service Account configurada via painel',
       );
-      return 'Desculpe, a agenda deste estabelecimento ainda não foi configurada. Por favor, avise o administrador.';
+      return 'Desculpe, a agenda deste fluxo ainda não foi configurada. Avise o administrador.';
     }
 
     // Buscar agenda
     const now = new Date();
     const timeMin = now.toISOString();
     const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
-    const events = calClient
-      ? await calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
-          throw err;
-        })
-      : await gcal.listEvents({ timeMin, timeMax, calendarId: MATRIZ_CALENDAR_ID });
+    const events = await calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
+      throw err;
+    });
     const agenda = formatarAgenda(events);
 
     const dataAtual = now.toLocaleDateString('pt-BR', {
@@ -278,15 +269,12 @@ export class TesteBarbeariaBot extends BotBase {
         },
         run: async (args: unknown) => {
           const { summary, start, end } = args as { summary: string; start: string; end: string };
-          const ev = calClient
-            ? await calClient.createEvent({ summary, startISO: start, endISO: end, timeZone: TZ })
-            : await gcal.createEvent({
-                summary,
-                startISO: start,
-                endISO: end,
-                timeZone: TZ,
-                calendarId: MATRIZ_CALENDAR_ID,
-              });
+          const ev = await calClient.createEvent({
+            summary,
+            startISO: start,
+            endISO: end,
+            timeZone: TZ,
+          });
           this.log.info({ eventId: ev.id, summary: ev.summary, telefone }, 'Agendamento criado');
           return { ok: true, eventId: ev.id, summary: ev.summary };
         },
@@ -305,13 +293,7 @@ export class TesteBarbeariaBot extends BotBase {
           const { telefone: tel } = args as { telefone: string };
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const evs = calClient
-            ? await calClient.listEvents({ timeMin: tMin, timeMax: tMax })
-            : await gcal.listEvents({
-                timeMin: tMin,
-                timeMax: tMax,
-                calendarId: MATRIZ_CALENDAR_ID,
-              });
+          const evs = await calClient.listEvents({ timeMin: tMin, timeMax: tMax });
           const phone = tel.replace(/\D/g, '');
           const matching = evs.filter(
             (e) => e.summary?.includes(phone) || e.description?.includes(phone),

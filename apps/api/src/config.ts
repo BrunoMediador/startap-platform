@@ -19,11 +19,6 @@ const ConfigSchema = z.object({
   OPENAI_API_KEY: z.string(),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
-  GOOGLE_CALENDAR_ID: z.string().optional(),
-  GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
-  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-  GOOGLE_OAUTH_REFRESH_TOKEN: z.string().optional(),
-
   ALERT_DEV_PHONE: z.string().optional(),
   ALERT_OWNER_PHONE: z.string().optional(),
 });
