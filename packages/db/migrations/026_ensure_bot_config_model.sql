@@ -1,4 +1,4 @@
--- Migration 025: garante coluna model em flow_clones.
+-- Migration 026: garante coluna model em flow_clones.
 -- bot_config.model já existe (usada desde migration 022).
 -- Idempotente via ADD COLUMN IF NOT EXISTS.
 
