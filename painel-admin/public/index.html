@@ -1233,6 +1233,59 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   gap: .75rem; padding: 2rem 0;
   color: var(--success);
 }
+/* ── Step 4 — opções de sessão WAHA ─────────────────────────────── */
+.wz-sessao-opts {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.wz-sessao-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  user-select: none;
+}
+.wz-sessao-opt:hover { border-color: var(--border-light); }
+.wz-sessao-opt.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-glow);
+}
+.wz-opt-radio {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--border-light);
+  margin-top: 2px;
+  transition: border-color var(--transition), background var(--transition);
+}
+.wz-sessao-opt.active .wz-opt-radio {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.wz-opt-body { display: flex; flex-direction: column; gap: .125rem; }
+.wz-opt-body strong { font-size: .875rem; font-weight: 600; color: var(--text); }
+.wz-opt-desc { font-size: .75rem; color: var(--text-muted); line-height: 1.4; }
+.wz-opt-panel { padding-top: .25rem; }
+.wz-opt-panel.hidden { display: none; }
+.wz-pular-info {
+  display: flex;
+  align-items: flex-start;
+  gap: .625rem;
+  padding: .875rem 1rem;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  font-size: .8125rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.wz-pular-info svg { flex-shrink: 0; color: var(--warning); margin-top: 1px; }
+.field-hint { font-size: .75rem; color: var(--text-muted); margin-top: .25rem; display: block; }
 /* ── Clone config tabs ──────────────────────────────────────────── */
 .clone-config-tab-content { padding-top: .75rem; }
 /* ── Pulsing dot (connected) ────────────────────────────────────── */
@@ -1849,7 +1902,9 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let msg = `Erro ${res.status}`;
     try { const j = await res.json(); msg = j.error || j.message || msg; } catch (_) {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -4881,10 +4936,12 @@ function renderBotClones(clones, container) {
 function _cloneStatusInfo(status) {
   const s = (status || '').toLowerCase();
   const map = {
-    conectado:   { dot: 'bot-row__status-dot--working', cls: 'badge--success', label: 'Conectado' },
-    pendente:    { dot: 'bot-row__status-dot--warning', cls: 'badge--warning', label: 'Aguardando QR' },
-    desconectado:{ dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Desconectado' },
-    falhou:      { dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Falhou' },
+    conectado:    { dot: 'bot-row__status-dot--working', cls: 'badge--success', label: 'Conectado' },
+    pendente:     { dot: 'bot-row__status-dot--warning', cls: 'badge--warning', label: 'Aguardando QR' },
+    aguardando_qr:{ dot: 'bot-row__status-dot--warning', cls: 'badge--warning', label: 'Aguardando QR' },
+    desconectado: { dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Desconectado' },
+    falhou:       { dot: 'bot-row__status-dot--failed',  cls: 'badge--danger',  label: 'Falhou' },
+    rascunho:     { dot: 'bot-row__status-dot--warning', cls: 'badge--warning', label: 'Sem sessão WAHA' },
   };
   return map[s] || { dot: '', cls: 'badge--muted', label: status || 'Sem status' };
 }
@@ -5025,6 +5082,7 @@ function openCloneWizard(preSelectMatriz) {
       instagram: '',
     },
     sessao_name: '',
+    waha_option: 'nova',
     cloneId: null,
     stopQR: null,
   };
@@ -5104,18 +5162,66 @@ function renderWizardStep() {
   } else if (s.step === 4) {
     const suggestedName = 'clone_' + slugify(s.display_name);
     if (!s.sessao_name) s.sessao_name = suggestedName;
+    const activeOption = s.waha_option || 'nova';
     bodyHtml = `
-      <div style="display:flex;flex-direction:column;gap:.875rem">
-        <p class="muted">Em qual WhatsApp este clone vai funcionar?</p>
-        <div class="field">
-          <label for="wz-sessao-name">Nome da sessão WAHA</label>
-          <input id="wz-sessao-name" type="text" value="${escapeHtml(s.sessao_name)}" maxlength="60" placeholder="clone_nome_cliente" />
+      <div style="display:flex;flex-direction:column;gap:1rem">
+        <p class="muted" style="margin-bottom:.25rem">Em qual WhatsApp este clone vai funcionar?</p>
+
+        <div class="wz-sessao-opts" role="group" aria-label="Como vincular o WhatsApp">
+          <label class="wz-sessao-opt${activeOption === 'nova' ? ' active' : ''}" data-opt="nova">
+            <span class="wz-opt-radio" aria-hidden="true"></span>
+            <span class="wz-opt-body">
+              <strong>Criar nova sessão WAHA</strong>
+              <span class="wz-opt-desc">Gera um QR code para conectar um WhatsApp novo</span>
+            </span>
+          </label>
+          <label class="wz-sessao-opt${activeOption === 'existente' ? ' active' : ''}" data-opt="existente">
+            <span class="wz-opt-radio" aria-hidden="true"></span>
+            <span class="wz-opt-body">
+              <strong>Vincular sessão existente</strong>
+              <span class="wz-opt-desc">Escolha um WhatsApp já conectado no servidor</span>
+            </span>
+          </label>
+          <label class="wz-sessao-opt${activeOption === 'pular' ? ' active' : ''}" data-opt="pular">
+            <span class="wz-opt-radio" aria-hidden="true"></span>
+            <span class="wz-opt-body">
+              <strong>Finalizar sem sessão</strong>
+              <span class="wz-opt-desc">Clone fica em rascunho — vincule um WhatsApp depois</span>
+            </span>
+          </label>
         </div>
-        <div id="wizard-qr-area"></div>
+
+        <div id="wz-opt-nova" class="wz-opt-panel${activeOption === 'nova' ? '' : ' hidden'}">
+          <div class="field">
+            <label for="wz-sessao-name">Nome da sessão WAHA</label>
+            <input id="wz-sessao-name" type="text" value="${escapeHtml(s.sessao_name)}" maxlength="60" placeholder="clone_nome_cliente" autocomplete="off" />
+            <span class="field-hint">Use apenas letras, números, _ e -</span>
+          </div>
+          <div id="wizard-qr-area"></div>
+        </div>
+
+        <div id="wz-opt-existente" class="wz-opt-panel${activeOption === 'existente' ? '' : ' hidden'}">
+          <div class="field">
+            <label for="wz-sessao-select">Sessão disponível</label>
+            <select id="wz-sessao-select">
+              <option value="">Carregando sessões...</option>
+            </select>
+          </div>
+          <div id="wz-bind-status"></div>
+        </div>
+
+        <div id="wz-opt-pular" class="wz-opt-panel${activeOption === 'pular' ? '' : ' hidden'}">
+          <div class="wz-pular-info">
+            ${icon('alert-triangle', 16)}
+            <span>O clone será criado sem WhatsApp vinculado. Você poderá vincular depois na aba <strong>Sessão WAHA</strong> do clone.</span>
+          </div>
+        </div>
       </div>`;
     footerHtml = `
       <button class="btn" id="wizard-back-btn">${icon('chevron-left', 14)} Voltar</button>
-      <button class="btn btn--primary" id="wizard-create-btn">${icon('qr-code', 14)} Criar sessão e mostrar QR</button>`;
+      <button class="btn btn--primary" id="wizard-create-btn" data-opt="${activeOption}">
+        ${activeOption === 'nova' ? icon('qr-code', 14) + ' Criar sessão e mostrar QR' : activeOption === 'existente' ? icon('link', 14) + ' Vincular sessão' : icon('check', 14) + ' Finalizar sem sessão'}
+      </button>`;
   }
 
   const modalHtml = `
@@ -5167,7 +5273,37 @@ function renderWizardStep() {
   }
 
   if (s.step === 4) {
-    document.getElementById('wizard-create-btn')?.addEventListener('click', () => wizardStep4Create());
+    // Chaveamento entre as 3 opções de sessão
+    document.querySelectorAll('.wz-sessao-opt').forEach(label => {
+      label.addEventListener('click', () => {
+        const opt = label.dataset.opt;
+        _wizardState.waha_option = opt;
+        document.querySelectorAll('.wz-sessao-opt').forEach(l => l.classList.toggle('active', l.dataset.opt === opt));
+        document.querySelectorAll('.wz-opt-panel').forEach(p => p.classList.add('hidden'));
+        const panel = document.getElementById(`wz-opt-${opt}`);
+        if (panel) panel.classList.remove('hidden');
+        // Atualiza label/ícone do botão principal
+        const createBtn = document.getElementById('wizard-create-btn');
+        if (createBtn) {
+          createBtn.dataset.opt = opt;
+          if (opt === 'nova') createBtn.innerHTML = `${icon('qr-code', 14)} Criar sessão e mostrar QR`;
+          else if (opt === 'existente') createBtn.innerHTML = `${icon('link', 14)} Vincular sessão`;
+          else createBtn.innerHTML = `${icon('check', 14)} Finalizar sem sessão`;
+        }
+        // Ao selecionar "existente", carrega lista de sessões
+        if (opt === 'existente') wizardLoadAvailableSessions();
+      });
+    });
+
+    // Carrega sessões disponíveis se opção "existente" já estiver ativa
+    if ((_wizardState.waha_option || 'nova') === 'existente') wizardLoadAvailableSessions();
+
+    document.getElementById('wizard-create-btn')?.addEventListener('click', () => {
+      const opt = _wizardState.waha_option || 'nova';
+      if (opt === 'nova') wizardStep4Create();
+      else if (opt === 'existente') wizardStep4BindExisting();
+      else wizardStep4Skip();
+    });
   }
 
   // Back — step 1 não tem wizard-back-btn no DOM; guard evita decremento abaixo de 1
@@ -5215,6 +5351,7 @@ function wizardValidateStep() {
   return true;
 }
 
+/* ── Opção A: Criar nova sessão WAHA + QR ───────────────────────── */
 async function wizardStep4Create() {
   const s = _wizardState;
   s.sessao_name = (document.getElementById('wz-sessao-name')?.value || '').trim() || 'clone_' + slugify(s.display_name);
@@ -5225,34 +5362,43 @@ async function wizardStep4Create() {
   const qrArea = document.getElementById('wizard-qr-area');
 
   try {
-    // Passo 1: criar clone (rascunho)
+    // Passo 1: criar clone (rascunho) — idempotente: só cria se ainda não tem cloneId
     if (!s.cloneId) {
       const clone = await api('/api/clones', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          matriz_slot:    s.matriz_slot,
-          display_name:   s.display_name,
-          cliente_nome:   s.cliente_nome || undefined,
+          matriz_slot:      s.matriz_slot,
+          display_name:     s.display_name,
+          cliente_nome:     s.cliente_nome || undefined,
           cliente_telefone: s.cliente_telefone || undefined,
-          personalizacao: Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
         }),
       });
       s.cloneId = clone.id;
     }
 
-    // Passo 2: criar sessão WAHA
+    // Passo 2: criar sessão WAHA via endpoint correto (com webhook automático)
+    let sessaoOk = false;
     try {
-      await api('/api/sessions/create', {
+      await api('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: s.sessao_name }),
       });
+      sessaoOk = true;
     } catch (e) {
-      // Sessão pode já existir — ignora erro
+      // 409 = sessão já existe — reutilizamos sem erro
+      if (e.status === 409 || (e.message && e.message.includes('409'))) {
+        sessaoOk = true;
+      } else {
+        throw new Error('Não foi possível criar a sessão WAHA: ' + e.message);
+      }
     }
 
-    // Passo 3: bind-session
+    if (!sessaoOk) throw new Error('Falha desconhecida ao criar sessão WAHA.');
+
+    // Passo 3: bind-session (vincula sessão ao clone no banco)
     await api(`/api/clones/${s.cloneId}/bind-session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5260,18 +5406,18 @@ async function wizardStep4Create() {
     });
 
     // Mostrar QR com polling
-    qrArea.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR...</p></div>`;
+    if (qrArea) qrArea.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR...</p></div>`;
 
     if (createBtn) createBtn.style.display = 'none';
     const backBtn = document.getElementById('wizard-back-btn');
-    if (backBtn) { backBtn.textContent = 'Cancelar e voltar'; }
+    if (backBtn) backBtn.textContent = 'Cancelar e voltar';
 
     s.stopQR = pollQR(s.sessao_name, (data) => {
       if (data.connected || data.qr === null) {
         if (s.stopQR) { s.stopQR(); s.stopQR = null; }
-        qrArea.innerHTML = `
+        if (qrArea) qrArea.innerHTML = `
           <div class="qr-connected">
-            <div style="font-size:3rem">${icon('check-circle-2', 56)}</div>
+            <div>${icon('check-circle-2', 56)}</div>
             <div style="font-weight:700;font-size:1.125rem">WhatsApp conectado!</div>
             <button class="btn btn--primary" id="wizard-finish-btn">${icon('check-circle-2', 14)} Concluir</button>
           </div>`;
@@ -5282,13 +5428,13 @@ async function wizardStep4Create() {
           renderBots();
         });
       } else if (data.qr) {
-        qrArea.innerHTML = `
+        if (qrArea) qrArea.innerHTML = `
           <div class="qr-wrap">
             <img src="${data.qr}" alt="QR Code para conectar WhatsApp" />
             <p class="muted" style="text-align:center;font-size:.8125rem">Escaneie no WhatsApp do cliente</p>
           </div>`;
       } else if (data.error) {
-        qrArea.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>
+        if (qrArea) qrArea.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>
           <button class="btn btn--sm" id="wizard-retry-qr-btn">${icon('refresh-cw',14)} Tentar novamente</button>`;
         document.getElementById('wizard-retry-qr-btn')?.addEventListener('click', wizardStep4Create);
       }
@@ -5296,7 +5442,111 @@ async function wizardStep4Create() {
 
   } catch (err) {
     if (qrArea) qrArea.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
-    if (createBtn) { createBtn.disabled = false; createBtn.innerHTML = `${icon('qr-code',14)} Tentar novamente`; }
+    if (createBtn) { createBtn.disabled = false; createBtn.innerHTML = `${icon('qr-code',14)} Criar sessão e mostrar QR`; }
+    toast('Erro ao criar clone: ' + err.message, 'danger');
+  }
+}
+
+/* ── Carrega sessões disponíveis para o dropdown (Opção B) ──────── */
+async function wizardLoadAvailableSessions() {
+  const select = document.getElementById('wz-sessao-select');
+  if (!select) return;
+  select.innerHTML = `<option value="">Carregando...</option>`;
+  select.disabled = true;
+  try {
+    const sessions = await api('/api/sessions/available');
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+      select.innerHTML = `<option value="">Nenhuma sessão disponível</option>`;
+      return;
+    }
+    select.innerHTML = sessions.map(s => {
+      const label = s.me ? `${escapeHtml(s.name)} (${escapeHtml(s.me)})` : escapeHtml(s.name);
+      const statusLabel = s.status === 'WORKING' ? ' — conectado' : s.status ? ` — ${escapeHtml(s.status)}` : '';
+      return `<option value="${escapeHtml(s.name)}">${label}${statusLabel}</option>`;
+    }).join('');
+  } catch (e) {
+    select.innerHTML = `<option value="">Erro ao carregar sessões</option>`;
+    toast('Não foi possível listar sessões WAHA.', 'warning');
+  } finally {
+    select.disabled = false;
+  }
+}
+
+/* ── Opção B: Vincular sessão WAHA existente ───────────────────── */
+async function wizardStep4BindExisting() {
+  const s = _wizardState;
+  const select = document.getElementById('wz-sessao-select');
+  const chosen = select?.value?.trim();
+  if (!chosen) { toast('Selecione uma sessão WAHA.', 'warning'); return; }
+
+  const createBtn = document.getElementById('wizard-create-btn');
+  const statusDiv = document.getElementById('wz-bind-status');
+  if (createBtn) { createBtn.disabled = true; createBtn.innerHTML = `<div class="spinner" style="width:16px;height:16px"></div> Vinculando...`; }
+
+  try {
+    // Passo 1: criar clone se ainda não existe
+    if (!s.cloneId) {
+      const clone = await api('/api/clones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matriz_slot:      s.matriz_slot,
+          display_name:     s.display_name,
+          cliente_nome:     s.cliente_nome || undefined,
+          cliente_telefone: s.cliente_telefone || undefined,
+          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+        }),
+      });
+      s.cloneId = clone.id;
+    }
+
+    // Passo 2: bind-session direto (sessão já existe e está conectada)
+    await api(`/api/clones/${s.cloneId}/bind-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessao_name: chosen, telefone: s.cliente_telefone || undefined }),
+    });
+
+    closeModal();
+    toast(`Clone criado e vinculado à sessão "${chosen}" com sucesso!`, 'success');
+    _rendered['bots'] = false;
+    renderBots();
+  } catch (err) {
+    if (statusDiv) statusDiv.innerHTML = `<p class="muted" style="color:var(--danger);margin-top:.5rem">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
+    if (createBtn) { createBtn.disabled = false; createBtn.innerHTML = `${icon('link',14)} Vincular sessão`; }
+    toast('Erro ao vincular sessão: ' + err.message, 'danger');
+  }
+}
+
+/* ── Opção C: Finalizar sem sessão WAHA (rascunho) ─────────────── */
+async function wizardStep4Skip() {
+  const s = _wizardState;
+  const createBtn = document.getElementById('wizard-create-btn');
+  if (createBtn) { createBtn.disabled = true; createBtn.innerHTML = `<div class="spinner" style="width:16px;height:16px"></div> Criando...`; }
+
+  try {
+    // Só cria o clone — sem criar sessão, sem bind-session
+    if (!s.cloneId) {
+      const clone = await api('/api/clones', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          matriz_slot:      s.matriz_slot,
+          display_name:     s.display_name,
+          cliente_nome:     s.cliente_nome || undefined,
+          cliente_telefone: s.cliente_telefone || undefined,
+          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+        }),
+      });
+      s.cloneId = clone.id;
+    }
+
+    closeModal();
+    toast('Clone criado. Vincule uma sessão WAHA depois pela aba Sessão.', 'info');
+    _rendered['bots'] = false;
+    renderBots();
+  } catch (err) {
+    if (createBtn) { createBtn.disabled = false; createBtn.innerHTML = `${icon('check',14)} Finalizar sem sessão`; }
     toast('Erro ao criar clone: ' + err.message, 'danger');
   }
 }
@@ -5689,7 +5939,7 @@ function openCloneQRModal(clone) {
     return;
   }
 
-  // Sem sessão vinculada: cria nova
+  // Sem sessão vinculada: abre step 4 com as 3 opções
   if (!clone.waha_sessao) {
     _wizardState = {
       step: 4,
@@ -5699,6 +5949,7 @@ function openCloneQRModal(clone) {
       cliente_telefone: clone.cliente_telefone || '',
       personalizacao:   clone.personalizacao || {},
       sessao_name:      'clone_' + slugify(clone.display_name || String(clone.id)),
+      waha_option:      'nova',
       cloneId:          clone.id,
       stopQR:           null,
     };

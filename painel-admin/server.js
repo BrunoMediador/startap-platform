@@ -3009,6 +3009,48 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
 // POST /api/sessions/create — REMOVIDO (criava sessão sem webhook, bot ficava surdo).
 // Use POST /api/sessions que configura webhook automaticamente.
 
+// GET /api/sessions/available — lista sessões WAHA disponíveis para vincular a um clone
+// Exclui: sessões já vinculadas a clones, sessões das matrizes/sistema
+// Query param opcional: ?excludeCloneId=<id> para ignorar a sessão atual do clone (ao reeditar)
+const SYSTEM_SESSIONS = new Set([
+  'startap',
+  'teste_barbearia',
+  'teste_vendas',
+  'teste_vendas_barbearia',
+]);
+
+app.get('/api/sessions/available', async (req, res) => {
+  try {
+    const excludeCloneId = req.query.excludeCloneId ? Number(req.query.excludeCloneId) : null;
+
+    // Busca sessões WAHA do servidor
+    const wahaResp = await wahaFetch('/api/sessions').catch(() => []);
+    const wahaSessions = Array.isArray(wahaResp) ? wahaResp : [];
+
+    // Busca waha_sessao de todos os clones já vinculados
+    const clonesResult = await pool.query(
+      `SELECT id, waha_sessao FROM flow_clones WHERE waha_sessao IS NOT NULL`,
+    );
+    const boundSessions = new Set(
+      clonesResult.rows
+        .filter((r) => excludeCloneId === null || r.id !== excludeCloneId)
+        .map((r) => r.waha_sessao),
+    );
+
+    const available = wahaSessions
+      .filter((s) => !SYSTEM_SESSIONS.has(s.name) && !boundSessions.has(s.name))
+      .map((s) => ({
+        name: s.name,
+        status: s.status,
+        me: s.me?.id || null,
+      }));
+
+    res.json(available);
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao buscar sessões: ${e.message}` });
+  }
+});
+
 // POST /api/sessions/:name/start
 app.post('/api/sessions/:name/start', async (req, res) => {
   const { name } = req.params;
