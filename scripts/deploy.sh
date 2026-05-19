@@ -89,7 +89,12 @@ if docker ps --format '{{.Names}}' | grep -qx 'automacoes-painel-admin-1'; then
 fi
 
 echo "==> bots registrados:"
-docker logs --since 30s startap-api 2>&1 | grep 'Bot registrado' | wc -l | xargs -I{} echo "  {} bots"
+# awk em vez de `grep | wc -l` porque grep retorna exit 1 quando ha 0 matches —
+# combinado com `set -euo pipefail` no topo, isso aborta o deploy mesmo quando
+# o painel subiu limpo. Em prod com banco vazio (sem clones), 0 matches e estado
+# valido. awk imprime 0 nesses casos e sempre retorna exit 0.
+N=$(docker logs --since 30s startap-api 2>&1 | awk '/Bot registrado/ {n++} END {print n+0}')
+echo "  $N bots"
 
 echo ""
 echo "Deploy completo. Logs: docker logs startap-api -f"
