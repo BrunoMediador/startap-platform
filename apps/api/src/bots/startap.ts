@@ -9,7 +9,8 @@ import { BotBase } from './base.js';
 const SLOT = 'startap';
 const PAUSE_TABLE = 'pause_startap';
 const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
-const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
+// Corrigido de 'STARTTAP_AI' (typo com duplo T) — migration 022 corrigiu registros históricos
+const STARTAP_WORKFLOW_NAME = 'STARTAP_AI';
 const STARTAP_SESSION_NAMES = (
   process.env.STARTAP_WAHA_SESSIONS || 'startap,STARTAP_AI,STARTAP_AI_PROD'
 )
