@@ -47,7 +47,7 @@ const { handleWebhook } = await import('./router.js');
 
 // Bot stub para sessão 'startap' — simula o que startap.ts faz ao ser importado.
 const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
-const STARTAP_WORKFLOW_NAME = 'STARTTAP_AI';
+const STARTAP_WORKFLOW_NAME = 'STARTAP_AI';
 const stubBot = { name: 'startap', handle: vi.fn() };
 registerBotEntry({
   workflowId: STARTAP_WORKFLOW_ID,

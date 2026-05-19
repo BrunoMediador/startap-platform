@@ -14,7 +14,7 @@ const {
   PG_HOST = 'postgres',
   PG_PORT = '5432',
   PG_USER = 'startap_user',
-  PG_PASS = 'senha_banco_forte_123',
+  PG_PASS,
   PG_DB = 'startap_database',
   WAHA_URL = 'http://waha:3000',
   WAHA_API_KEY = '',
@@ -25,6 +25,12 @@ const {
   MEDIA_PUBLIC_BASE_URL = '/uploads',
   MEDIA_UPLOAD_MAX_MB = '250',
 } = process.env;
+
+// PG_PASS não tem default — expor senha no código é proibido (Regra 3 CLAUDE.md).
+// Se ausente em produção, o pool falhará na primeira query com erro claro no stderr.
+if (!PG_PASS) {
+  throw new Error('boot: PG_PASS não definida — configure a variável de ambiente antes de iniciar');
+}
 
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
@@ -97,7 +103,7 @@ const BOT_MODEL_CONTEXT = {
   },
   'startap-ai-lola': {
     flow_id: 'uUS3Ux1cU2DquKxo',
-    flow_name: 'STARTTAP_AI',
+    flow_name: 'STARTAP_AI',
     flow_label: 'Startap AI',
     ai_role: 'Lola - prospecção comercial',
     runtime: 'StartapAiBot.processLola',
@@ -105,7 +111,7 @@ const BOT_MODEL_CONTEXT = {
   },
   'startap-ai-samuel': {
     flow_id: 'uUS3Ux1cU2DquKxo',
-    flow_name: 'STARTTAP_AI',
+    flow_name: 'STARTAP_AI',
     flow_label: 'Startap AI',
     ai_role: 'Samuel - admin de pausas',
     runtime: 'StartapAiBot.processSamuel',
@@ -522,7 +528,8 @@ app.get(
         .query(
           `SELECT slot, COUNT(*)::int AS cnt
            FROM model_usage
-           WHERE slot = ANY($1) AND created_at >= CURRENT_DATE
+           WHERE slot = ANY($1)
+             AND created_at AT TIME ZONE 'America/Sao_Paulo' >= CURRENT_DATE AT TIME ZONE 'America/Sao_Paulo'
            GROUP BY slot`,
           [slots],
         )
@@ -662,10 +669,12 @@ app.put('/api/bots/:slot', async (req, res) => {
 });
 
 // ---------- USAGE (tokens consumidos) ----------
-app.get('/api/usage/summary', async (req, res) => {
-  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
-  const r = await pool.query(
-    `
+app.get(
+  '/api/usage/summary',
+  asyncHandler(async (req, res) => {
+    const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+    const r = await pool.query(
+      `
     SELECT slot, provider, model,
            COUNT(*)::int AS calls,
            SUM(prompt_tokens)::int AS prompt_tokens,
@@ -677,15 +686,18 @@ app.get('/api/usage/summary', async (req, res) => {
     GROUP BY slot, provider, model
     ORDER BY SUM(total_tokens) DESC
   `,
-    [String(days)],
-  );
-  res.json({ days, rows: r.rows });
-});
+      [String(days)],
+    );
+    res.json({ days, rows: r.rows });
+  }),
+);
 
-app.get('/api/usage/daily', async (req, res) => {
-  const days = Math.max(1, Math.min(90, Number(req.query.days) || 14));
-  const r = await pool.query(
-    `
+app.get(
+  '/api/usage/daily',
+  asyncHandler(async (req, res) => {
+    const days = Math.max(1, Math.min(90, Number(req.query.days) || 14));
+    const r = await pool.query(
+      `
     SELECT TO_CHAR(DATE_TRUNC('day', created_at), 'YYYY-MM-DD') AS day,
            SUM(total_tokens)::int AS total_tokens,
            ROUND(SUM(cost_usd)::numeric, 4) AS cost_usd
@@ -693,23 +705,27 @@ app.get('/api/usage/daily', async (req, res) => {
     WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
     GROUP BY 1 ORDER BY 1
   `,
-    [String(days)],
-  );
-  res.json({ days, rows: r.rows });
-});
+      [String(days)],
+    );
+    res.json({ days, rows: r.rows });
+  }),
+);
 
-app.get('/api/usage/recent', async (req, res) => {
-  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-  const r = await pool.query(
-    `
+app.get(
+  '/api/usage/recent',
+  asyncHandler(async (req, res) => {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const r = await pool.query(
+      `
     SELECT id, slot, provider, model, total_tokens,
            ROUND(cost_usd::numeric, 4) AS cost_usd, telefone, created_at
     FROM model_usage ORDER BY id DESC LIMIT $1
   `,
-    [limit],
-  );
-  res.json(r.rows);
-});
+      [limit],
+    );
+    res.json(r.rows);
+  }),
+);
 
 // ---------- PROMPT ----------
 app.get('/api/bots/:slot/prompt', async (req, res) => {
@@ -1654,14 +1670,16 @@ function getProjectTablePlan(project, key) {
         rowsVals: [project.slot],
       };
     case 'flow_logs':
+      // Filtra por bot (slot) que é o campo indexado e mais preciso.
+      // workflow_id nem sempre coincide com o valor gravado em flow_id para clones.
       return {
         tableName: 'flow_execution_logs',
         countSql:
-          'SELECT COUNT(*)::int AS rows, MAX(created_at) AS last_at FROM flow_execution_logs WHERE flow_id = $1 OR bot = $2',
-        countVals: [project.workflow_id, project.slot],
+          'SELECT COUNT(*)::int AS rows, MAX(created_at) AS last_at FROM flow_execution_logs WHERE bot = $1',
+        countVals: [project.slot],
         rowsSql:
-          'SELECT id::text, execution_id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, metadata, duration_ms, error_summary, created_at FROM flow_execution_logs WHERE flow_id = $1 OR bot = $2 ORDER BY id DESC LIMIT $3',
-        rowsVals: [project.workflow_id, project.slot],
+          'SELECT id::text, execution_id::text, flow_id, flow_name, bot, telefone_masked, session, event_type, status, message, metadata, duration_ms, error_summary, created_at FROM flow_execution_logs WHERE bot = $1 ORDER BY id DESC LIMIT $2',
+        rowsVals: [project.slot],
       };
     case 'agendamento_pendente':
       return directProjectTablePlan('agendamento_pendente');
@@ -1898,7 +1916,7 @@ app.get('/api/message-stats', async (req, res) => {
   // preserva 14+ dias e tem índice idx_flow_logs_created.
   try {
     const r = await pool.query(`
-      SELECT DATE(created_at) AS dia, COUNT(*) AS total
+      SELECT DATE(created_at AT TIME ZONE 'America/Sao_Paulo') AS dia, COUNT(*) AS total
       FROM flow_execution_logs
       WHERE event_type = 'webhook.received'
         AND created_at > NOW() - INTERVAL '14 days'
@@ -1942,10 +1960,13 @@ app.get('/api/metrics/by-bot', async (req, res) => {
       WITH exec_stats AS (
         SELECT
           bot AS slot,
-          COUNT(*)::int                                             AS executions,
-          COUNT(*) FILTER (WHERE status = 'success')::int          AS success_count,
+          -- denominador: só eventos 'bot.finished' representam execuções completas
+          COUNT(*) FILTER (WHERE event_type = 'bot.finished')::int  AS executions,
+          -- numerador: execuções finalizadas com status success
+          COUNT(*) FILTER (WHERE event_type = 'bot.finished' AND status = 'success')::int AS success_count,
           ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL))::int AS avg_latency_ms,
-          COUNT(*) FILTER (WHERE event_type = 'webhook.received')::int AS messages
+          -- mensagens: bot.reply-sent ocorre após roteamento, reflete respostas reais
+          COUNT(*) FILTER (WHERE event_type = 'bot.reply-sent')::int AS messages
         FROM flow_execution_logs
         WHERE created_at > NOW() - ($1::text || ' day')::INTERVAL
           AND bot IS NOT NULL
@@ -2644,9 +2665,16 @@ app.patch('/api/clones/:id', async (req, res) => {
       const pers = typeof personalizacao === 'object' ? personalizacao : {};
       const cloneSlot = r.rows[0].slot;
       const matrizSlot = r.rows[0].matriz_slot;
-      const promptR = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [
-        matrizSlot,
-      ]);
+      // Prioriza prompt já existente do clone; só usa matriz como template se clone não tem prompt.
+      // Impede sobrescrever customização prévia ao aplicar personalização novamente.
+      const promptR = await pool.query(
+        `SELECT prompt FROM bot_prompt WHERE slot = $1
+         UNION ALL
+         SELECT prompt FROM bot_prompt WHERE slot = $2
+           AND NOT EXISTS (SELECT 1 FROM bot_prompt WHERE slot = $1)
+         LIMIT 1`,
+        [cloneSlot, matrizSlot],
+      );
       if (promptR.rows[0]) {
         let prompt = promptR.rows[0].prompt;
         prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
@@ -2691,7 +2719,12 @@ app.delete('/api/clones/:id', async (req, res) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Remove todos os dados do clone na mesma transação para evitar órfãos
+      await client.query(`DELETE FROM flow_clones WHERE id = $1`, [id]);
       await client.query(`DELETE FROM flow_controls WHERE flow_id = $1`, [cloneSlot]);
+      await client.query(`DELETE FROM bot_prompt WHERE slot = $1`, [cloneSlot]);
+      await client.query(`DELETE FROM bot_media WHERE slot = $1`, [cloneSlot]);
+      await client.query(`DELETE FROM bot_courses WHERE slot = $1`, [cloneSlot]).catch(() => {});
       await client.query(`DELETE FROM bot_config WHERE slot = $1`, [cloneSlot]);
       await client.query('COMMIT');
     } catch (e) {
@@ -2894,31 +2927,8 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
 
 // ---------- SESSIONS WAHA ----------
 
-// POST /api/sessions/create
-app.post('/api/sessions/create', async (req, res) => {
-  const { name } = req.body ?? {};
-  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name obrigatório' });
-  try {
-    const r = await fetch(`${WAHA_URL}/api/sessions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
-      },
-      body: JSON.stringify({ name, start: true }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
-      return res
-        .status(r.status >= 400 && r.status < 500 ? 400 : 502)
-        .json({ error: `WAHA: ${msg}` });
-    }
-    res.json(body);
-  } catch (e) {
-    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
-  }
-});
+// POST /api/sessions/create — REMOVIDO (criava sessão sem webhook, bot ficava surdo).
+// Use POST /api/sessions que configura webhook automaticamente.
 
 // POST /api/sessions/:name/start
 app.post('/api/sessions/:name/start', async (req, res) => {
