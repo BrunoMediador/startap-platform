@@ -1,0 +1,36 @@
+# Dependências instaladas localmente (reconstruídas no container)
+node_modules
+**/node_modules
+
+# Git e CI
+.git
+.github
+.claude
+
+# Documentação (não vai pra imagem)
+docs
+README.md
+CONTRIBUTING.md
+CUTOVER.md
+
+# Logs
+**/*.log
+
+# Dist locais (builder compila do zero; evita contaminar o cache de layer)
+**/dist
+
+# Secrets e envs locais
+**/.env*
+.env
+
+# Cobertura de testes
+**/coverage
+
+# Worktrees do Claude Code
+.claude/worktrees
+
+# Pasta do time virtual (não é código de produção)
+time-startap
+
+# Outros
+**/*.patch
