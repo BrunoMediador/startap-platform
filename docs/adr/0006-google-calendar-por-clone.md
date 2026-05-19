@@ -6,7 +6,7 @@
 
 ---
 
-**Status:** aceita
+**Status:** Aceita
 **Data:** 2026-05-17
 **Autor:** arquiteto
 **Aprovado por:** Bruno (2026-05-18)

@@ -1,3 +1,9 @@
+> ARQUIVO DUPLICADO — ADR oficial e correto e `docs/adr/0007-isolamento-memoria-por-clone.md`.
+> Mantido apenas como historico do erro de numeracao.
+>
+> Substituido em 2026-05-19 (auditoria Missao 017-C10).
+> Este arquivo foi criado com numero errado (0001 ja pertence ao ADR product-catalog).
+
 # ADR 0001: Isolamento de Memória por Clone via Coluna Discriminadora `scope_id`
 
 > **Quem escreve:** `arquiteto`
