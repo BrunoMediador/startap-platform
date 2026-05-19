@@ -19,7 +19,7 @@ const {
   WAHA_URL = 'http://waha:3000',
   WAHA_API_KEY = '',
   ADMIN_USER = 'admin',
-  ADMIN_PASS = 'admin',
+  ADMIN_PASS,
   PORT = '3030',
   MEDIA_STORAGE_DIR = path.join(__dirname, 'uploads'),
   MEDIA_PUBLIC_BASE_URL = '/uploads',
@@ -30,6 +30,16 @@ const {
 // Se ausente em produção, o pool falhará na primeira query com erro claro no stderr.
 if (!PG_PASS) {
   throw new Error('boot: PG_PASS não definida — configure a variável de ambiente antes de iniciar');
+}
+
+// ADMIN_PASS sem default — fallback 'admin' permitia acesso público (Missão 012-A3).
+if (!ADMIN_PASS) {
+  console.error('[boot] ADMIN_PASS nao definida — defina no .env antes de subir o painel.');
+  process.exit(1);
+}
+if (ADMIN_PASS === 'admin' || ADMIN_PASS.length < 8) {
+  console.error('[boot] ADMIN_PASS fraca demais (default "admin" ou < 8 chars). Use senha forte.');
+  process.exit(1);
 }
 
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
