@@ -20,12 +20,16 @@ COPY apps/worker/package.json        apps/worker/package.json
 # Instala TODAS as deps (incluindo devDeps para o tsc)
 RUN npm ci --no-audit --no-fund
 
-# Copia sources dos pacotes que precisam ser compilados
-COPY packages/core/       packages/core/
+# Copia sources dos pacotes que precisam ser compilados.
+# @startap/db é dep transitiva: integrations/src/openai/agent.ts importa @startap/db
+# (mesmo que o painel só use o cliente gcal, tsc compila o package inteiro).
+COPY packages/core/         packages/core/
+COPY packages/db/           packages/db/
 COPY packages/integrations/ packages/integrations/
 
-# Compila os dois pacotes
+# Compila na ordem das dependências: core -> db -> integrations.
 RUN npm run build -w @startap/core
+RUN npm run build -w @startap/db
 RUN npm run build -w @startap/integrations
 
 # ─────────────────────────────────────────────
