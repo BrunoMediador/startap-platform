@@ -1290,6 +1290,61 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   gap: .75rem; padding: 2rem 0;
   color: var(--success);
 }
+/* ── Pairing code — segmented control + display ─────────────────── */
+.auth-seg {
+  display: flex;
+  background: var(--surface-2);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+  margin-bottom: 1.25rem;
+}
+.auth-seg__btn {
+  flex: 1;
+  padding: .3125rem .75rem;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: .8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.auth-seg__btn.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+.auth-seg__btn:not(.active):hover { color: var(--text); }
+.pairing-code-display {
+  font-family: var(--font-mono);
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: .15em;
+  color: var(--text);
+  text-align: center;
+  padding: 1rem 1.5rem;
+  background: var(--surface-2);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
+  margin: .75rem 0;
+  user-select: all;
+}
+.pairing-instructions {
+  font-size: .8125rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  text-align: center;
+  margin-top: .5rem;
+}
+.pairing-instructions ol {
+  text-align: left;
+  margin: .375rem 0 0;
+  padding-left: 1.25rem;
+  display: inline-block;
+}
 /* ── Step 4 — opções de sessão WAHA ─────────────────────────────── */
 .wz-sessao-opts {
   display: flex;
@@ -1819,6 +1874,9 @@ const ICONS = {
   'edit-2':         '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
   'x-circle':       '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
   'save':           '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+  'smartphone':     '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  'key':            '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6"/><path d="M15.5 7.5l3 3L22 7l-3-3"/>',
+  'loader':         '<line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>',
 };
 
 /* ── icon() helper ──────────────────────────────────────────────── */
@@ -2410,18 +2468,42 @@ function _sessaoToggleMenu(btn, sessionName) {
 function _sessaoAbrirQR(sessionName) {
   openModal(`
     <div class="modal__header">
-      <span class="modal__title">${icon('qr-code',18)} QR — <span class="mono">${escapeHtml(sessionName)}</span></span>
+      <span class="modal__title">${icon('qr-code',18)} Conectar — <span class="mono">${escapeHtml(sessionName)}</span></span>
       <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:center;gap:1rem;padding:1rem 0">
-      <div id="sessao-qr-status"></div>
-      <div id="sessao-qr-area" style="width:220px;height:220px;display:flex;align-items:center;justify-content:center">
-        <div class="skeleton" style="width:220px;height:220px;border-radius:var(--radius-md)"></div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:1rem 0">
+      <div class="auth-seg" role="tablist" aria-label="Método de autenticação">
+        <button class="auth-seg__btn active" id="seg-qr-btn" role="tab" aria-selected="true" aria-controls="sessao-tab-qr">
+          ${icon('qr-code',13)} QR Code
+        </button>
+        <button class="auth-seg__btn" id="seg-pair-btn" role="tab" aria-selected="false" aria-controls="sessao-tab-pair">
+          ${icon('smartphone',13)} Código de pareamento
+        </button>
       </div>
-      <p class="muted" style="font-size:.8125rem;text-align:center">Aponte o WhatsApp para o QR code.<br>A tela atualiza automaticamente.</p>
+
+      <div id="sessao-tab-qr" role="tabpanel" style="display:flex;flex-direction:column;align-items:center;gap:.75rem;width:100%">
+        <div id="sessao-qr-status"></div>
+        <div id="sessao-qr-area" style="width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+          <div class="skeleton" style="width:220px;height:220px;border-radius:var(--radius-md)"></div>
+        </div>
+        <p class="muted" style="font-size:.8125rem;text-align:center">Aponte o WhatsApp para o QR code.<br>A tela atualiza automaticamente.</p>
+      </div>
+
+      <div id="sessao-tab-pair" role="tabpanel" style="display:none;flex-direction:column;align-items:center;gap:.75rem;width:100%">
+        <div style="width:100%;max-width:300px">
+          <label class="muted" style="display:block;margin-bottom:.375rem;font-size:.8125rem">Telefone do cliente (com DDI):</label>
+          <input id="pair-phone-input" type="tel" class="input" placeholder="+55 11 99999-9999"
+            style="width:100%;font-size:1rem" autocomplete="tel" inputmode="tel" />
+        </div>
+        <button class="btn btn--primary" id="pair-generate-btn" style="min-width:160px">
+          ${icon('key',14)} Gerar código
+        </button>
+        <div id="pair-result" style="width:100%;max-width:300px;text-align:center"></div>
+      </div>
     </div>
   `);
 
+  // ── Aba QR: polling ────────────────────────────────────────────
   pollQR(sessionName, (data) => {
     const area = document.getElementById('sessao-qr-area');
     const statusEl = document.getElementById('sessao-qr-status');
@@ -2442,6 +2524,105 @@ function _sessaoAbrirQR(sessionName) {
       area.innerHTML = `<img src="${escapeHtml(data.qr)}" style="width:220px;height:220px;border-radius:var(--radius-md);image-rendering:pixelated" alt="QR Code">`;
     }
   });
+
+  // ── Toggle de abas ─────────────────────────────────────────────
+  document.getElementById('seg-qr-btn')?.addEventListener('click', () => {
+    document.getElementById('seg-qr-btn').classList.add('active');
+    document.getElementById('seg-qr-btn').setAttribute('aria-selected','true');
+    document.getElementById('seg-pair-btn').classList.remove('active');
+    document.getElementById('seg-pair-btn').setAttribute('aria-selected','false');
+    document.getElementById('sessao-tab-qr').style.display = 'flex';
+    document.getElementById('sessao-tab-pair').style.display = 'none';
+  });
+
+  document.getElementById('seg-pair-btn')?.addEventListener('click', () => {
+    document.getElementById('seg-pair-btn').classList.add('active');
+    document.getElementById('seg-pair-btn').setAttribute('aria-selected','true');
+    document.getElementById('seg-qr-btn').classList.remove('active');
+    document.getElementById('seg-qr-btn').setAttribute('aria-selected','false');
+    document.getElementById('sessao-tab-pair').style.display = 'flex';
+    document.getElementById('sessao-tab-qr').style.display = 'none';
+  });
+
+  // ── Gerar pairing code ─────────────────────────────────────────
+  document.getElementById('pair-generate-btn')?.addEventListener('click', () => _gerarPairingCode(sessionName));
+  document.getElementById('pair-phone-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') _gerarPairingCode(sessionName);
+  });
+}
+
+async function _gerarPairingCode(sessionName) {
+  const input = document.getElementById('pair-phone-input');
+  const resultEl = document.getElementById('pair-result');
+  const btn = document.getElementById('pair-generate-btn');
+  if (!input || !resultEl || !btn) return;
+
+  const raw = input.value.trim();
+  // Validação básica: pelo menos 10 dígitos
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 10) {
+    resultEl.innerHTML = `<p style="color:var(--danger);font-size:.8125rem">${icon('alert-triangle',14)} Telefone inválido — informe DDI + DDD + número (ex: +55 11 99999-9999).</p>`;
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = `${icon('loader',14)} Gerando...`;
+  resultEl.innerHTML = `<div class="skeleton-block" style="height:64px;border-radius:var(--radius-md)"></div>`;
+
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sessionName)}/pairing-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber: raw }),
+    });
+
+    const codeText = escapeHtml(data.code || '');
+    resultEl.innerHTML = `
+      <div class="pairing-code-display" id="pair-code-value" title="Clique para selecionar">${codeText}</div>
+      <button class="btn btn--sm btn--ghost" id="pair-copy-btn" style="gap:.375rem">
+        ${icon('copy',13)} Copiar código
+      </button>
+      <div class="pairing-instructions">
+        No WhatsApp do cliente:<br>
+        <ol>
+          <li>Configurações → Aparelhos conectados</li>
+          <li>Conectar um aparelho</li>
+          <li>Conectar com número de telefone</li>
+          <li>Digite o código acima</li>
+        </ol>
+      </div>`;
+
+    document.getElementById('pair-copy-btn')?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.code || '');
+        const copyBtn = document.getElementById('pair-copy-btn');
+        if (copyBtn) {
+          copyBtn.innerHTML = `${icon('check',13)} Copiado!`;
+          setTimeout(() => { if (copyBtn) copyBtn.innerHTML = `${icon('copy',13)} Copiar código`; }, 2000);
+        }
+      } catch (_) {
+        toast('Não foi possível copiar. Selecione o código manualmente.', 'info');
+      }
+    });
+
+  } catch (err) {
+    let msg = err.message || 'Erro desconhecido';
+    if (err.status === 409) {
+      msg = 'Sessão já está conectada ou não está aguardando autenticação.';
+    } else if (err.status === 400) {
+      msg = 'Telefone inválido — informe DDI + DDD + número (ex: +55 11 99999-9999).';
+    }
+    resultEl.innerHTML = `
+      <p style="color:var(--danger);font-size:.8125rem;text-align:center">
+        ${icon('alert-triangle',14)} ${escapeHtml(msg)}
+      </p>`;
+  } finally {
+    // Reabilita após 30s (rate limit WAHA)
+    setTimeout(() => {
+      if (btn) { btn.disabled = false; btn.innerHTML = `${icon('key',14)} Gerar código`; }
+    }, 30000);
+    if (btn) btn.innerHTML = `${icon('clock',14)} Aguarde 30s para novo código`;
+  }
 }
 
 async function _sessaoReiniciar(sessionName) {
@@ -6264,22 +6445,49 @@ function openCloneQRModal(clone) {
     return;
   }
 
-  // Tem sessão mas não conectada: abre QR direto
+  // Tem sessão mas não conectada: abre QR + opção de pairing code
+  const cloneSessao = clone.waha_sessao;
   openModal(`
     <div class="modal__header">
       <span class="modal__title">Conectar WhatsApp — ${escapeHtml(clone.display_name || 'Clone')}</span>
       <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
     </div>
-    <div id="standalone-qr-area" style="padding:.5rem 0">
-      <div class="qr-wrap">
-        <div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div>
-        <p class="muted">Carregando QR Code...</p>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:.5rem 0">
+      <div class="auth-seg" role="tablist" aria-label="Método de autenticação">
+        <button class="auth-seg__btn active" id="clone-seg-qr-btn" role="tab" aria-selected="true" aria-controls="clone-tab-qr">
+          ${icon('qr-code',13)} QR Code
+        </button>
+        <button class="auth-seg__btn" id="clone-seg-pair-btn" role="tab" aria-selected="false" aria-controls="clone-tab-pair">
+          ${icon('smartphone',13)} Código de pareamento
+        </button>
+      </div>
+
+      <div id="clone-tab-qr" role="tabpanel" style="display:flex;flex-direction:column;align-items:center;width:100%">
+        <div id="standalone-qr-area" style="padding:.5rem 0;width:100%;display:flex;justify-content:center">
+          <div class="qr-wrap">
+            <div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div>
+            <p class="muted">Carregando QR Code...</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="clone-tab-pair" role="tabpanel" style="display:none;flex-direction:column;align-items:center;gap:.75rem;width:100%">
+        <div style="width:100%;max-width:300px">
+          <label class="muted" style="display:block;margin-bottom:.375rem;font-size:.8125rem">Telefone do cliente (com DDI):</label>
+          <input id="clone-pair-phone-input" type="tel" class="input" placeholder="+55 11 99999-9999"
+            style="width:100%;font-size:1rem" autocomplete="tel" inputmode="tel" />
+        </div>
+        <button class="btn btn--primary" id="clone-pair-generate-btn" style="min-width:160px">
+          ${icon('key',14)} Gerar código
+        </button>
+        <div id="clone-pair-result" style="width:100%;max-width:300px;text-align:center"></div>
       </div>
     </div>`);
 
   document.getElementById('modal-content').classList.add('modal--lg');
 
-  pollQR(clone.waha_sessao, (data) => {
+  // ── QR polling ─────────────────────────────────────────────────
+  pollQR(cloneSessao, (data) => {
     const area = document.getElementById('standalone-qr-area');
     if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
     if (data.connected || data.qr === null) {
@@ -6294,6 +6502,104 @@ function openCloneQRModal(clone) {
       area.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>`;
     }
   });
+
+  // ── Toggle de abas ─────────────────────────────────────────────
+  document.getElementById('clone-seg-qr-btn')?.addEventListener('click', () => {
+    document.getElementById('clone-seg-qr-btn').classList.add('active');
+    document.getElementById('clone-seg-qr-btn').setAttribute('aria-selected','true');
+    document.getElementById('clone-seg-pair-btn').classList.remove('active');
+    document.getElementById('clone-seg-pair-btn').setAttribute('aria-selected','false');
+    document.getElementById('clone-tab-qr').style.display = 'flex';
+    document.getElementById('clone-tab-pair').style.display = 'none';
+  });
+
+  document.getElementById('clone-seg-pair-btn')?.addEventListener('click', () => {
+    document.getElementById('clone-seg-pair-btn').classList.add('active');
+    document.getElementById('clone-seg-pair-btn').setAttribute('aria-selected','true');
+    document.getElementById('clone-seg-qr-btn').classList.remove('active');
+    document.getElementById('clone-seg-qr-btn').setAttribute('aria-selected','false');
+    document.getElementById('clone-tab-pair').style.display = 'flex';
+    document.getElementById('clone-tab-qr').style.display = 'none';
+  });
+
+  // ── Gerar pairing code (clone) ─────────────────────────────────
+  const cloneGenerateHandler = () => _gerarPairingCodeClone(cloneSessao);
+  document.getElementById('clone-pair-generate-btn')?.addEventListener('click', cloneGenerateHandler);
+  document.getElementById('clone-pair-phone-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') cloneGenerateHandler();
+  });
+}
+
+async function _gerarPairingCodeClone(sessaoName) {
+  const input = document.getElementById('clone-pair-phone-input');
+  const resultEl = document.getElementById('clone-pair-result');
+  const btn = document.getElementById('clone-pair-generate-btn');
+  if (!input || !resultEl || !btn) return;
+
+  const raw = input.value.trim();
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 10) {
+    resultEl.innerHTML = `<p style="color:var(--danger);font-size:.8125rem">${icon('alert-triangle',14)} Telefone inválido — informe DDI + DDD + número (ex: +55 11 99999-9999).</p>`;
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = `${icon('loader',14)} Gerando...`;
+  resultEl.innerHTML = `<div class="skeleton-block" style="height:64px;border-radius:var(--radius-md)"></div>`;
+
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sessaoName)}/pairing-code`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phoneNumber: raw }),
+    });
+
+    const codeText = escapeHtml(data.code || '');
+    resultEl.innerHTML = `
+      <div class="pairing-code-display" title="Clique para selecionar">${codeText}</div>
+      <button class="btn btn--sm btn--ghost" id="clone-pair-copy-btn" style="gap:.375rem">
+        ${icon('copy',13)} Copiar código
+      </button>
+      <div class="pairing-instructions">
+        No WhatsApp do cliente:<br>
+        <ol>
+          <li>Configurações → Aparelhos conectados</li>
+          <li>Conectar um aparelho</li>
+          <li>Conectar com número de telefone</li>
+          <li>Digite o código acima</li>
+        </ol>
+      </div>`;
+
+    document.getElementById('clone-pair-copy-btn')?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.code || '');
+        const copyBtn = document.getElementById('clone-pair-copy-btn');
+        if (copyBtn) {
+          copyBtn.innerHTML = `${icon('check',13)} Copiado!`;
+          setTimeout(() => { if (copyBtn) copyBtn.innerHTML = `${icon('copy',13)} Copiar código`; }, 2000);
+        }
+      } catch (_) {
+        toast('Não foi possível copiar. Selecione o código manualmente.', 'info');
+      }
+    });
+
+  } catch (err) {
+    let msg = err.message || 'Erro desconhecido';
+    if (err.status === 409) {
+      msg = 'Sessão já está conectada ou não está aguardando autenticação.';
+    } else if (err.status === 400) {
+      msg = 'Telefone inválido — informe DDI + DDD + número (ex: +55 11 99999-9999).';
+    }
+    resultEl.innerHTML = `
+      <p style="color:var(--danger);font-size:.8125rem;text-align:center">
+        ${icon('alert-triangle',14)} ${escapeHtml(msg)}
+      </p>`;
+  } finally {
+    setTimeout(() => {
+      if (btn) { btn.disabled = false; btn.innerHTML = `${icon('key',14)} Gerar código`; }
+    }, 30000);
+    if (btn) btn.innerHTML = `${icon('clock',14)} Aguarde 30s para novo código`;
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════

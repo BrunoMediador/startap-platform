@@ -3482,6 +3482,62 @@ app.get('/api/sessions/:name/qr', async (req, res) => {
   }
 });
 
+// POST /api/sessions/:name/pairing-code — solicita pairing code ao WAHA Plus
+// Body: { phoneNumber: string } — E.164 com ou sem +
+app.post('/api/sessions/:name/pairing-code', async (req, res) => {
+  const { name } = req.params;
+  const { phoneNumber } = req.body ?? {};
+
+  // 1. Valida phoneNumber: mínimo 10 dígitos numéricos
+  if (!phoneNumber || typeof phoneNumber !== 'string') {
+    return res.status(400).json({ error: 'phoneNumber inválido' });
+  }
+  const digits = phoneNumber.replace(/[^\d]/g, '');
+  if (digits.length < 10) {
+    return res.status(400).json({ error: 'phoneNumber inválido' });
+  }
+  // 2. Normaliza pra E.164 com +
+  const normalized = phoneNumber.trimStart().startsWith('+')
+    ? phoneNumber.trim()
+    : `+${digits}`;
+
+  try {
+    // 3. Checa status da sessão — deve estar em SCAN_QR_CODE
+    const statusR = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+    });
+    if (statusR.ok) {
+      const st = await statusR.json().catch(() => ({}));
+      if (st.status !== 'SCAN_QR_CODE') {
+        return res.status(409).json({
+          error: 'Sessão não está aguardando autenticação',
+          currentStatus: st.status ?? 'UNKNOWN',
+        });
+      }
+    }
+
+    // 4. Solicita pairing code ao WAHA Plus
+    const codeR = await fetch(`${WAHA_URL}/api/${name}/auth/request-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
+      body: JSON.stringify({ phoneNumber: normalized }),
+    });
+    if (!codeR.ok) {
+      const details = await codeR.text().catch(() => '');
+      return res.status(codeR.status).json({ error: 'WAHA retornou erro', details });
+    }
+
+    // 5. Repassa código ao frontend
+    const data = await codeR.json().catch(() => ({}));
+    return res.json({ code: data.code ?? data, phoneNumber: normalized });
+  } catch (e) {
+    res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
 // ---------- ADMIN: CLEANUP MANUAL ----------
 // Lógica inline: replica runCleanupChat usando o pool local do painel.
 // Mantém em sync com apps/worker/src/jobs/cleanup-chat.ts — qualquer mudança
