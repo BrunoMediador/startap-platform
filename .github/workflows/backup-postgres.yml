@@ -1,0 +1,75 @@
+name: Backup Postgres → startap-backups
+
+on:
+  schedule:
+    # 06:00 UTC = 03:00 BRT — fora do pico de atendimento
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+# Nunca cancela backup em andamento; enfileira se houver sobreposição.
+concurrency:
+  group: backup-postgres
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump → startap-backups
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout startap-backups
+        uses: actions/checkout@v4
+        with:
+          repository: BrunoMediador/startap-backups
+          token: ${{ secrets.BACKUP_REPO_TOKEN }}
+          path: startap-backups
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts
+
+      - name: Dump + compress
+        id: dump
+        run: |
+          TIMESTAMP=$(date -u '+%Y-%m-%d-%H%M%S')
+          YEAR=$(date -u '+%Y')
+          MONTH=$(date -u '+%m')
+          OUTDIR="startap-backups/dumps/${YEAR}/${MONTH}"
+          OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz"
+
+          mkdir -p "${OUTDIR}"
+
+          # pg_dump roda dentro do container; falha visível se SSH cair
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes root@187.77.242.220 \
+            "docker exec automacoes-postgres-1 pg_dump \
+              -U startap_user \
+              -d startap_database \
+              --no-owner --no-acl" \
+            | gzip > "${OUTFILE}"
+
+          # Confirma que o arquivo não está vazio
+          SIZE=$(stat -c%s "${OUTFILE}")
+          if [ "${SIZE}" -lt 1024 ]; then
+            echo "ERRO: dump gerado é menor que 1 KB (${SIZE} bytes) — suspeito de falha silenciosa"
+            exit 1
+          fi
+
+          echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+          echo "outfile=${OUTFILE}" >> "$GITHUB_OUTPUT"
+          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit e push
+        run: |
+          cd startap-backups
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dumps/
+          git commit -m "backup: ${{ steps.dump.outputs.timestamp }} UTC ($(numfmt --to=iec ${{ steps.dump.outputs.size }}))"
+          git push
+
+      - name: Limpa chave SSH
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
