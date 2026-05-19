@@ -537,8 +537,12 @@ export class TesteVendasBarbeariaBot extends BotBase {
     // Processa marcadores após enviar a resposta de texto
     if (type !== null) {
       const effectiveSlot = this.slot;
-      setTimeout(() => {
-        this.handleMarker({
+      // delay explícito: garante que WAHA processe o texto antes de enviar mídia.
+      // await no lugar de setTimeout fire-and-forget — erro agora é capturável (ADR 0010 Opção A).
+      const delay = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+      try {
+        await delay(2500);
+        await this.handleMarker({
           type,
           courseSlug,
           mediaId,
@@ -548,10 +552,10 @@ export class TesteVendasBarbeariaBot extends BotBase {
           state,
           ctx,
           telefone,
-        }).catch((e) =>
-          this.log.error({ err: e, type, telefone }, 'Falha ao processar marcador do bot'),
-        );
-      }, 2500);
+        });
+      } catch (e) {
+        this.log.error({ err: e, type, telefone }, 'Falha ao processar marcador do bot');
+      }
     }
 
     return replyText;
