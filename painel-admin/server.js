@@ -3570,12 +3570,13 @@ app.post('/api/admin/cleanup/run-now', async (req, res) => {
 
     for (const table of allTables) {
       try {
+        const safeTable = safeTableName(table);
         const r = await pool.query(
-          `DELETE FROM ${table}
+          `DELETE FROM ${safeTable}
            WHERE id IN (
              SELECT id FROM (
                SELECT id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
-               FROM ${table}
+               FROM ${safeTable}
              ) ranked WHERE rn > $1
            )`,
           [keep],
