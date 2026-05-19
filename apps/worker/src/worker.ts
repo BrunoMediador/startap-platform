@@ -9,6 +9,7 @@ import { flowExecutionLog } from '@startap/db';
 import { Cron } from 'croner';
 import { runAntibot } from './jobs/antibot.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
+import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -91,6 +92,43 @@ async function main() {
         message: cleanupError ? 'Job cleanup-chat falhou' : 'Job cleanup-chat concluído',
         ...(cleanupResult ? { metadata: cleanupResult } : {}),
         ...(cleanupError ? { error: cleanupError } : {}),
+        durationMs: Date.now() - startedAt,
+      });
+    }
+  });
+
+  // Close-stale-running: a cada 15 min — fecha execs presas em running > CHAT_STALE_RUNNING_MAX_MINUTES (default 30)
+  new Cron('*/15 * * * *', { name: 'close-stale-running' }, async () => {
+    const executionId = randomUUID();
+    const startedAt = Date.now();
+    let staleResult: Awaited<ReturnType<typeof runCloseStaleRunning>> | null = null;
+    let staleError: unknown = null;
+    await flowExecutionLog.logFlowEvent({
+      executionId,
+      flowId: 'worker:close-stale-running',
+      flowName: 'close-stale-running',
+      bot: 'worker',
+      eventType: 'worker.job-started',
+      status: 'running',
+      message: 'Job close-stale-running iniciado',
+    });
+    try {
+      staleResult = await runCloseStaleRunning();
+      if (staleResult.closed > 0) log.warn({ ...staleResult }, 'close-stale-running cycle');
+    } catch (e) {
+      staleError = e;
+      log.error({ err: e }, 'close-stale-running crashed');
+    } finally {
+      await flowExecutionLog.logFlowEvent({
+        executionId,
+        flowId: 'worker:close-stale-running',
+        flowName: 'close-stale-running',
+        bot: 'worker',
+        eventType: staleError ? 'worker.job-failed' : 'worker.job-finished',
+        status: staleError ? 'error' : 'success',
+        message: staleError ? 'Job close-stale-running falhou' : 'Job close-stale-running concluído',
+        ...(staleResult ? { metadata: staleResult } : {}),
+        ...(staleError ? { error: staleError } : {}),
         durationMs: Date.now() - startedAt,
       });
     }
