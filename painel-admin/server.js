@@ -2047,46 +2047,53 @@ app.get('/api/leads', async (req, res) => {
     const limit = !isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 50;
     const offset = !isNaN(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
-    // Cada tabela busca limit+offset pra garantir cobertura ao mesclar e paginar em JS.
-    // O total real vem de COUNT paralelo em ambas as tabelas.
-    const fetchLimit = limit + offset;
-
     let rows = [];
     let total = 0;
     if (slot) {
-      const [r1, r2, c1, c2] = await Promise.all([
+      // UNION ALL no SQL garante ORDER BY/LIMIT/OFFSET globais — sem merge em memória.
+      const [rData, rCount] = await Promise.all([
         pool.query(
-          'SELECT *, $2::text AS _table FROM leads_ricardo WHERE slot = $1 ORDER BY criado_em DESC LIMIT $3',
-          [slot, 'leads_ricardo', fetchLimit],
+          `SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+                  'leads_ricardo'::text AS _table
+             FROM leads_ricardo WHERE slot = $1
+           UNION ALL
+           SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+                  'leads_vendas_barbearia'::text AS _table
+             FROM leads_vendas_barbearia WHERE slot = $1
+           ORDER BY criado_em DESC
+           LIMIT $2 OFFSET $3`,
+          [slot, limit, offset],
         ),
         pool.query(
-          'SELECT *, $2::text AS _table FROM leads_vendas_barbearia WHERE slot = $1 ORDER BY criado_em DESC LIMIT $3',
-          [slot, 'leads_vendas_barbearia', fetchLimit],
+          `SELECT (SELECT COUNT(*)::int FROM leads_ricardo WHERE slot = $1)
+                + (SELECT COUNT(*)::int FROM leads_vendas_barbearia WHERE slot = $1) AS n`,
+          [slot],
         ),
-        pool.query('SELECT COUNT(*)::int AS n FROM leads_ricardo WHERE slot = $1', [slot]),
-        pool.query('SELECT COUNT(*)::int AS n FROM leads_vendas_barbearia WHERE slot = $1', [slot]),
       ]);
-      total = (c1.rows[0]?.n ?? 0) + (c2.rows[0]?.n ?? 0);
-      rows = [...r1.rows, ...r2.rows]
-        .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
-        .slice(offset, offset + limit);
+      rows = rData.rows;
+      total = rCount.rows[0]?.n ?? 0;
     } else {
-      const [r1, r2, c1, c2] = await Promise.all([
+      // UNION ALL no SQL garante ORDER BY/LIMIT/OFFSET globais — sem merge em memória.
+      const [rData, rCount] = await Promise.all([
         pool.query(
-          "SELECT *, 'leads_ricardo' AS _table FROM leads_ricardo ORDER BY criado_em DESC LIMIT $1",
-          [fetchLimit],
+          `SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+                  'leads_ricardo'::text AS _table
+             FROM leads_ricardo
+           UNION ALL
+           SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+                  'leads_vendas_barbearia'::text AS _table
+             FROM leads_vendas_barbearia
+           ORDER BY criado_em DESC
+           LIMIT $1 OFFSET $2`,
+          [limit, offset],
         ),
         pool.query(
-          "SELECT *, 'leads_vendas_barbearia' AS _table FROM leads_vendas_barbearia ORDER BY criado_em DESC LIMIT $1",
-          [fetchLimit],
+          `SELECT (SELECT COUNT(*)::int FROM leads_ricardo)
+                + (SELECT COUNT(*)::int FROM leads_vendas_barbearia) AS n`,
         ),
-        pool.query('SELECT COUNT(*)::int AS n FROM leads_ricardo'),
-        pool.query('SELECT COUNT(*)::int AS n FROM leads_vendas_barbearia'),
       ]);
-      total = (c1.rows[0]?.n ?? 0) + (c2.rows[0]?.n ?? 0);
-      rows = [...r1.rows, ...r2.rows]
-        .sort((a, b) => new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime())
-        .slice(offset, offset + limit);
+      rows = rData.rows;
+      total = rCount.rows[0]?.n ?? 0;
     }
 
     // Mantém array no body pra retrocompat com front; metadados de paginação vão no header
