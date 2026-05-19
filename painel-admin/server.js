@@ -227,6 +227,14 @@ const DEFAULT_PROJECT_DATABASES = [
   },
 ];
 
+// Mapeia o slot do bot para o flow_id usado em flow_pause_keywords / flow_pauses.
+// Matrizes têm flow_id legado (n8n) registrado em DEFAULT_PROJECT_DATABASES;
+// clones usam o próprio slot como flow_id.
+function resolveSlotToFlowId(slot) {
+  const entry = DEFAULT_PROJECT_DATABASES.find((p) => p.slot === slot);
+  return entry?.workflow_id || slot;
+}
+
 const DATABASE_TABLES = {
   chat_memory: { label: 'Historico de conversa', type: 'memoria' },
   routing: { label: 'Roteamento', type: 'operacao' },
@@ -803,6 +811,56 @@ app.put('/api/workflows/:workflowId/pause-keywords', async (req, res) => {
       [req.params.workflowId],
     );
     res.json(saved.rows);
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- PALAVRAS-CHAVE DE PAUSA POR SLOT ----------
+// Atalho que resolve slot → flow_id internamente, evitando que o frontend
+// precise conhecer os flow_ids legados das matrizes.
+
+app.get('/api/bots/:slot/pause-keywords', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const flowId = resolveSlotToFlowId(slot);
+    const result = await pool.query(
+      `SELECT command, keyword
+       FROM flow_pause_keywords
+       WHERE flow_id = $1 AND enabled = TRUE
+       ORDER BY command, keyword`,
+      [flowId],
+    );
+    const pause = result.rows.filter((r) => r.command === 'pause').map((r) => r.keyword);
+    const resume = result.rows.filter((r) => r.command === 'resume').map((r) => r.keyword);
+    res.json({ slot, flow_id: flowId, pause, resume });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/bots/:slot/pause-keywords', async (req, res) => {
+  const { slot } = req.params;
+  const flowId = resolveSlotToFlowId(slot);
+  const rows = normalizePauseKeywordPayload(req.body);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM flow_pause_keywords WHERE flow_id = $1', [flowId]);
+    for (const row of rows) {
+      await client.query(
+        `INSERT INTO flow_pause_keywords (flow_id, command, keyword, keyword_norm, enabled, updated_at)
+         VALUES ($1, $2, $3, $4, TRUE, NOW())
+         ON CONFLICT (flow_id, command, keyword_norm) DO UPDATE
+           SET keyword = EXCLUDED.keyword, enabled = TRUE, updated_at = NOW()`,
+        [flowId, row.command, row.keyword, row.keyword_norm],
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, slot, flow_id: flowId, saved: rows.length });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
