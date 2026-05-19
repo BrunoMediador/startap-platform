@@ -852,8 +852,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   white-space: nowrap;
 }
 .course-table td { padding: .5rem .75rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
-.course-table tr:last-child td { border-bottom: none; }
-.course-table tr:hover td { background: var(--bg-2); }
+.course-table tbody tr:last-child td { border-bottom: none; }
+.course-table .js-course-row:hover td { background: var(--bg-2); }
 .course-slug-badge {
   display: inline-flex; align-items: center;
   background: var(--info-bg); color: var(--info);
@@ -862,6 +862,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 .course-slug-badge--warning { background: var(--warning-bg); color: var(--warning); }
 .course-media-count { font-size: .8125rem; }
+/* sub-linhas de mídias dentro da tabela de cursos */
+.course-media-sub-row td { background: var(--surface-2) !important; border-bottom: 1px solid var(--border); padding-top: .3rem; padding-bottom: .3rem; }
+.course-media-sub-row:hover td { background: var(--bg-2) !important; }
 /* modal de vínculo de mídia */
 .link-media-group { margin-bottom: .75rem; }
 .link-media-group__title {
@@ -879,6 +882,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 @media (max-width: 640px) {
   .course-table .col-course-desc,
   .course-table th.col-course-desc { display: none; }
+  .link-media-row { flex-wrap: wrap; }
+  .link-media-row__name { flex-basis: 100%; }
 }
 /* ── Media cards (legado — mantido pra compat com renderMediaPreview) ─── */
 .media-grid {
@@ -3452,10 +3457,30 @@ async function renderBotCourses(slot, el) {
           ? `<span class="muted" style="font-size:.75rem" title="${introLabel}">${introLabel}</span>`
           : `<span class="muted">—</span>`;
         const priceDisplay = (c.price != null && c.price >= 0) ? fmtBRL(c.price / 100) : '—';
+        const durationDisplay = c.duration ? escapeHtml(c.duration) : '—';
         const enabledToggleId = `course-enabled-${c.id}`;
-        return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">
+
+        // Lista de vídeos vinculados com botão "Definir como apresentação" por linha
+        const linkedVideosHtml = linked.length === 0
+          ? `<tr class="course-media-sub-row"><td colspan="7"><span class="muted" style="font-size:.75rem;padding-left:1.5rem">Nenhuma mídia vinculada.</span></td></tr>`
+          : linked.map(m => {
+            const mName = escapeHtml(m.caption || m.context || (m.position || '').replace(/_/g, ' ') || `Mídia #${m.id}`);
+            const mIsIntro = m.is_course_intro === true || m.is_course_intro === 1;
+            const introBadge = mIsIntro ? `<span class="course-slug-badge course-slug-badge--warning" style="font-size:.7rem">${icon('star',10)} apresentação</span>` : '';
+            const introBtn = !mIsIntro
+              ? `<button class="btn btn--ghost btn--sm js-set-intro" data-media-id="${m.id}" data-course-slug="${escapeHtml(c.course_slug)}" title="Definir como apresentação" style="font-size:.75rem;white-space:nowrap">${icon('star',12)} Definir intro</button>`
+              : '';
+            return `<tr class="course-media-sub-row" data-media-id="${m.id}">
+              <td colspan="2" style="padding-left:2rem;font-size:.75rem;color:var(--text-muted)">${icon('film',11)} ${mName}</td>
+              <td colspan="2" style="font-size:.75rem">${introBadge}</td>
+              <td colspan="3" style="text-align:right">${introBtn}</td>
+            </tr>`;
+          }).join('');
+
+        return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" class="js-course-row">
           <td><button class="btn btn--ghost btn--sm js-course-edit" data-id="${c.id}" style="font-weight:600;color:var(--text)">${escapeHtml(c.name)}</button></td>
           <td style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
+          <td style="color:var(--text-muted);font-size:.8125rem">${durationDisplay}</td>
           <td class="course-media-count" title="${count} de 5 mídias máximas"><span>${count}/5</span>${noIntroWarning}</td>
           <td>${introCell}</td>
           <td>
@@ -3474,13 +3499,15 @@ async function renderBotCourses(slot, el) {
               </div>
             </div>
           </td>
-        </tr>`;
+        </tr>
+        ${linkedVideosHtml}`;
       }).join('');
 
       el.innerHTML = `${header}<div style="overflow-x:auto"><table class="course-table">
         <thead><tr>
           <th>Nome</th>
           <th>Preço</th>
+          <th class="col-course-desc">Duração</th>
           <th>Mídias</th>
           <th>Apresentação</th>
           <th>Ativo</th>
@@ -3552,6 +3579,24 @@ async function renderBotCourses(slot, el) {
           await renderBotCourses(slot, el);
         } catch (err) {
           toast('Erro ao excluir: ' + err.message, 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // definir intro diretamente da linha de mídia expandida
+    el.querySelectorAll('.js-set-intro').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Definir este vídeo como apresentação do curso?')) return;
+        btn.disabled = true;
+        try {
+          await api(`/api/bots/${slot}/courses/${btn.dataset.courseSlug}/intro/${btn.dataset.mediaId}`, {
+            method: 'PUT',
+          });
+          toast('Vídeo de apresentação definido.', 'success');
+          await renderBotCourses(slot, el);
+        } catch (err) {
+          toast('Erro: ' + err.message, 'danger');
           btn.disabled = false;
         }
       });
@@ -3733,14 +3778,13 @@ function openLinkMediaModal(slot, courseSlug, medias, parentEl) {
       || `Mídia #${m.position_order ?? m.position ?? m.id}`);
     const isIntro = m.is_course_intro === true || m.is_course_intro === 1;
     if (group === 'linked') {
+      const introBadge = isIntro
+        ? `<span class="course-slug-badge course-slug-badge--warning" style="font-size:.7rem;flex-shrink:0">${icon('star',10)} apresentação</span>`
+        : `<button class="btn btn--ghost btn--sm js-set-intro-modal" data-id="${m.id}" title="Definir como apresentação" style="font-size:.75rem;flex-shrink:0;white-space:nowrap">${icon('star',12)} Definir intro</button>`;
       return `<div class="link-media-row" data-id="${m.id}">
         <span class="link-media-row__name">${name}</span>
-        <label class="toggle" style="flex-shrink:0;font-size:.75rem">
-          <input type="radio" name="intro-radio" class="js-intro-radio" data-id="${m.id}" ${isIntro ? 'checked' : ''} style="position:absolute;opacity:0;width:0;height:0">
-          <span class="toggle__track"></span>
-          <span>intro</span>
-        </label>
-        <button class="btn btn--ghost btn--sm js-unlink-media" data-id="${m.id}" title="Desvincular">${icon('link-2-off',13)} Desvincular</button>
+        ${introBadge}
+        <button class="btn btn--ghost btn--sm js-unlink-media" data-id="${m.id}" title="Desvincular" style="flex-shrink:0">${icon('link-2-off',13)} Desvincular</button>
       </div>`;
     }
     if (group === 'other') {
@@ -3784,24 +3828,21 @@ function openLinkMediaModal(slot, courseSlug, medias, parentEl) {
 
   const modalEl = document.getElementById('modal-backdrop');
 
-  // intro radio
-  modalEl.querySelectorAll('.js-intro-radio').forEach(radio => {
-    radio.addEventListener('change', async () => {
-      if (!radio.checked) return;
-      radio.disabled = true;
+  // definir apresentação — botão explícito no modal (usa endpoint dedicado /intro/:media_id)
+  modalEl.querySelectorAll('.js-set-intro-modal').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
       const statusDiv = document.getElementById('link-status');
       try {
-        await api(`/api/bots/${slot}/media/${radio.dataset.id}`, {
+        await api(`/api/bots/${slot}/courses/${courseSlug}/intro/${btn.dataset.id}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ is_course_intro: true, course_slug: courseSlug }),
         });
         toast('Vídeo de apresentação definido.', 'success');
         closeModal();
         await renderBotCourses(slot, parentEl);
       } catch (err) {
         if (statusDiv) statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(err.message)}</p>`;
-        radio.disabled = false;
+        btn.disabled = false;
       }
     });
   });

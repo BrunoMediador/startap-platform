@@ -1079,7 +1079,12 @@ app.post('/api/bots/:slot/courses', async (req, res) => {
 app.put('/api/bots/:slot/courses/:id', async (req, res) => {
   try {
     const { slot } = req.params;
-    const courseId = Number(req.params.id);
+    const rawId = req.params.id;
+    // Aceita ID numérico ou course_slug como identificador
+    const byId = /^\d+$/.test(rawId);
+    const whereClause = byId ? 'slot = $1 AND id = $2' : 'slot = $1 AND course_slug = $2';
+    const whereVal = byId ? Number(rawId) : rawId;
+
     const { name, description, price, duration, position_order, enabled } = req.body;
 
     if (
@@ -1118,10 +1123,10 @@ app.put('/api/bots/:slot/courses/:id', async (req, res) => {
     }
     if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido' });
     fields.push(`updated_at = NOW()`);
-    vals.push(slot, courseId);
+    vals.push(slot, whereVal);
 
     const r = await pool.query(
-      `UPDATE bot_courses SET ${fields.join(', ')} WHERE slot = $${idx++} AND id = $${idx} RETURNING *`,
+      `UPDATE bot_courses SET ${fields.join(', ')} WHERE ${whereClause} RETURNING *`,
       vals,
     );
     if (!r.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
@@ -1134,15 +1139,19 @@ app.put('/api/bots/:slot/courses/:id', async (req, res) => {
 app.delete('/api/bots/:slot/courses/:id', async (req, res) => {
   try {
     const { slot } = req.params;
-    const courseId = Number(req.params.id);
+    const rawId = req.params.id;
+    // Aceita ID numérico ou course_slug como identificador
+    const byId = /^\d+$/.test(rawId);
+    const whereClause = byId ? 'slot = $1 AND id = $2' : 'slot = $1 AND course_slug = $2';
+    const whereVal = byId ? Number(rawId) : rawId;
 
     // Busca o curso para obter o course_slug e validar existência
     const courseCheck = await pool.query(
-      `SELECT course_slug FROM bot_courses WHERE slot = $1 AND id = $2`,
-      [slot, courseId],
+      `SELECT id, course_slug FROM bot_courses WHERE ${whereClause}`,
+      [slot, whereVal],
     );
     if (!courseCheck.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
-    const { course_slug } = courseCheck.rows[0];
+    const { id: courseId, course_slug } = courseCheck.rows[0];
 
     // Verifica se há mídias vinculadas a este curso
     const mediaCheck = await pool.query(
@@ -1160,6 +1169,63 @@ app.delete('/api/bots/:slot/courses/:id', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Endpoint dedicado para promover vídeo como apresentação do curso (DoD 006-Fase3)
+// PUT /api/bots/:slot/courses/:course_slug/intro/:media_id
+app.put('/api/bots/:slot/courses/:course_slug/intro/:media_id', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { slot, course_slug, media_id } = req.params;
+    const mediaId = Number(media_id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'media_id invalido' });
+    }
+
+    // Valida que o curso existe neste slot
+    const courseCheck = await pool.query(
+      `SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2`,
+      [slot, course_slug],
+    );
+    if (!courseCheck.rows.length) {
+      return res.status(404).json({ error: `curso '${course_slug}' nao encontrado no slot '${slot}'` });
+    }
+
+    // Valida que a mídia pertence ao curso e é do tipo video
+    const mediaCheck = await pool.query(
+      `SELECT id, media_type, course_slug FROM bot_media WHERE slot = $1 AND id = $2`,
+      [slot, mediaId],
+    );
+    if (!mediaCheck.rows.length) {
+      return res.status(404).json({ error: 'midia nao encontrada' });
+    }
+    const media = mediaCheck.rows[0];
+    if (media.media_type !== 'video') {
+      return res.status(400).json({ error: 'apenas midias do tipo video podem ser definidas como apresentacao' });
+    }
+    if (media.course_slug !== course_slug) {
+      return res.status(400).json({ error: `midia nao esta vinculada ao curso '${course_slug}'` });
+    }
+
+    await client.query('BEGIN');
+    // Zera intro de todas as mídias do curso atomicamente
+    await client.query(
+      `UPDATE bot_media SET is_course_intro = false WHERE slot = $1 AND course_slug = $2`,
+      [slot, course_slug],
+    );
+    // Promove a mídia selecionada
+    const r = await client.query(
+      `UPDATE bot_media SET is_course_intro = true, updated_at = NOW() WHERE slot = $1 AND id = $2 RETURNING *`,
+      [slot, mediaId],
+    );
+    await client.query('COMMIT');
+    res.json(r.rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
