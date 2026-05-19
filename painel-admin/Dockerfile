@@ -62,5 +62,13 @@ COPY --from=builder /monorepo/packages/core/dist         /packages/core/dist
 COPY --from=builder /monorepo/packages/core/package.json /app/node_modules/@startap/core/package.json
 COPY --from=builder /monorepo/packages/core/dist         /app/node_modules/@startap/core/dist
 
+# Symlink /node_modules -> /app/node_modules.
+# client.js está em /packages/integrations/dist/... — fora do /app. Quando ele
+# faz `import '@startap/core/logger'`, Node sobe na hierarquia procurando
+# `node_modules`: /packages/integrations/dist/node_modules, ..., /node_modules.
+# Sem o symlink no FS root, nada é encontrado. ESM ignora NODE_PATH, então
+# precisamos de um node_modules real no caminho de resolução.
+RUN ln -s /app/node_modules /node_modules
+
 EXPOSE 3030
 CMD ["node", "server.js"]
