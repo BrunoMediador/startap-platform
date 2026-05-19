@@ -42,6 +42,73 @@ if (ADMIN_PASS === 'admin' || ADMIN_PASS.length < 8) {
   process.exit(1);
 }
 
+if (!process.env.GCAL_ENCRYPTION_KEY) {
+  throw new Error(
+    'boot: GCAL_ENCRYPTION_KEY não definida — gere com: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
+  );
+}
+
+// ── Criptografia AES-256-GCM para gcal_credentials_json ──────────────────────
+// Espelha packages/core/src/crypto.ts (painel é JS sem build-time dep do core).
+// Chave: GCAL_ENCRYPTION_KEY — 32 bytes hex. Obrigatória; ausência para o boot.
+const _GCAL_ENC_PREFIX = 'enc:v1:';
+
+function _getGcalKey() {
+  const hex = process.env.GCAL_ENCRYPTION_KEY;
+  if (!hex || hex.trim() === '') {
+    throw new Error(
+      'boot: GCAL_ENCRYPTION_KEY ausente — defina 32 bytes hex no .env antes de iniciar',
+    );
+  }
+  const buf = Buffer.from(hex.trim(), 'hex');
+  if (buf.length !== 32) {
+    throw new Error(
+      `boot: GCAL_ENCRYPTION_KEY deve ter 32 bytes (64 chars hex); recebido ${buf.length} bytes`,
+    );
+  }
+  return buf;
+}
+
+function encryptGcalCredentials(plain) {
+  const key = _getGcalKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return (
+    _GCAL_ENC_PREFIX +
+    iv.toString('base64') +
+    ':' +
+    authTag.toString('base64') +
+    ':' +
+    encrypted.toString('base64')
+  );
+}
+
+function decryptGcalCredentials(stored) {
+  if (!stored.startsWith(_GCAL_ENC_PREFIX)) {
+    // Dado legado em texto claro — aceitar durante janela de migração.
+    return stored;
+  }
+  const rest = stored.slice(_GCAL_ENC_PREFIX.length);
+  const parts = rest.split(':');
+  if (parts.length !== 3) {
+    throw new Error('gcal: formato enc:v1 inválido — esperado 3 partes após prefixo');
+  }
+  const [ivB64, authTagB64, ciphertextB64] = parts;
+  const key = _getGcalKey();
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(authTagB64, 'base64');
+  const ciphertext = Buffer.from(ciphertextB64, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+  decipher.setAuthTag(authTag);
+  try {
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+  } catch {
+    throw new Error('gcal: falha na descriptografia — authTag inválido ou dado corrompido');
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
@@ -2976,7 +3043,7 @@ app.put('/api/clones/:id/gcal', async (req, res) => {
               updated_at            = NOW()
         WHERE id = $4
         RETURNING id, slot, gcal_client_email, gcal_calendar_id, gcal_status`,
-      [credentials_json, clientEmail, calendar_id.trim(), id],
+      [encryptGcalCredentials(credentials_json), clientEmail, calendar_id.trim(), id],
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
     res.json(r.rows[0]);
@@ -3055,7 +3122,7 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
         '../packages/integrations/dist/google-calendar/client.js'
       );
       const client = new GoogleCalendarClient({
-        credentialsJson: gcal_credentials_json,
+        credentialsJson: decryptGcalCredentials(gcal_credentials_json),
         calendarId: gcal_calendar_id,
       });
       testResult = await client.testConnection();
@@ -3130,7 +3197,7 @@ app.put('/api/bots/:slot/gcal', async (req, res) => {
               gcal_last_check_at    = NULL
         WHERE slot = $4
         RETURNING slot, gcal_client_email, gcal_calendar_id, gcal_status`,
-      [credentials_json, clientEmail, calendar_id.trim(), slot],
+      [encryptGcalCredentials(credentials_json), clientEmail, calendar_id.trim(), slot],
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -3206,7 +3273,7 @@ app.post('/api/bots/:slot/gcal/test', async (req, res) => {
         '../packages/integrations/dist/google-calendar/client.js'
       );
       const client = new GoogleCalendarClient({
-        credentialsJson: gcal_credentials_json,
+        credentialsJson: decryptGcalCredentials(gcal_credentials_json),
         calendarId: gcal_calendar_id,
       });
       testResult = await client.testConnection();

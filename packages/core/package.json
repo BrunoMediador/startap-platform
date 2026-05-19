@@ -9,7 +9,8 @@
     ".": "./dist/index.js",
     "./phone": "./dist/phone.js",
     "./logger": "./dist/logger.js",
-    "./types": "./dist/types.js"
+    "./types": "./dist/types.js",
+    "./crypto": "./dist/crypto.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

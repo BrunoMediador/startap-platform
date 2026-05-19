@@ -14,6 +14,7 @@
  * Invalidação acontece quando recebemos erro 401/403 do Google (ver invalidateGcalCache).
  */
 import { query } from '@startap/db';
+import { decryptSecret } from '@startap/core';
 import { GoogleCalendarClient } from './client.js';
 
 interface CacheEntry {
@@ -73,7 +74,7 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
   }
 
   const client = new GoogleCalendarClient({
-    credentialsJson: row.gcal_credentials_json,
+    credentialsJson: decryptSecret(row.gcal_credentials_json),
     calendarId: row.gcal_calendar_id,
   });
 
