@@ -836,6 +836,49 @@ app.get(
   }),
 );
 
+// ---------- MODELOS DISPONÍVEIS ----------
+// Allowlist de modelos que o painel expõe para seleção.
+// TODO: puxar lista dinamicamente da OpenAI API quando disponível.
+const MODEL_ALLOWLIST = ['gpt-5.4', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo', 'deepseek-chat'];
+
+app.get(
+  '/api/models',
+  asyncHandler(async (_req, res) => {
+    const models = MODEL_ALLOWLIST.map((id) => {
+      const pricing = MODEL_PRICING[id] ?? { in: null, out: null };
+      return {
+        id,
+        label: id === 'gpt-5.4' ? 'GPT-5.4 (mais inteligente, ~estimado)' : id,
+        isEstimate: pricing.isEstimate ?? false,
+        in: pricing.in,
+        out: pricing.out,
+      };
+    });
+    res.json(models);
+  }),
+);
+
+app.put('/api/bots/:slot/model', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const { model } = req.body ?? {};
+    if (!model || !MODEL_ALLOWLIST.includes(model)) {
+      return res.status(400).json({ error: 'modelo inválido', allowlist: MODEL_ALLOWLIST });
+    }
+    const prev = await pool.query('SELECT model FROM bot_config WHERE slot = $1', [slot]);
+    if (!prev.rows.length) return res.status(404).json({ error: 'slot não encontrado' });
+    const from = prev.rows[0].model;
+    const r = await pool.query(
+      `UPDATE bot_config SET model = $1, updated_at = NOW() WHERE slot = $2 RETURNING *`,
+      [model, slot],
+    );
+    console.log(`[modelChange] slot=${slot} from=${from} to=${model}`);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- PROMPT ----------
 app.get('/api/bots/:slot/prompt', async (req, res) => {
   try {
@@ -1160,8 +1203,22 @@ app.put('/api/bots/:slot/media/:id', async (req, res) => {
 });
 
 app.delete('/api/media/:id', async (req, res) => {
+  // TODO(frontend-pr): remover fallback sem slot quando index.html enviar ?slot=X.
+  // Atualmente o frontend não passa slot; quando passar, a verificação de ownership
+  // garante que um slot não apague mídia de outro.
+  const { slot } = req.query;
   try {
-    await pool.query('DELETE FROM bot_media WHERE id = $1', [req.params.id]);
+    let r;
+    if (slot && typeof slot === 'string') {
+      r = await pool.query(
+        'DELETE FROM bot_media WHERE id = $1 AND slot = $2 RETURNING id',
+        [req.params.id, slot],
+      );
+      if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada ou slot incorreto' });
+    } else {
+      r = await pool.query('DELETE FROM bot_media WHERE id = $1 RETURNING id', [req.params.id]);
+      if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada' });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -3192,6 +3249,35 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
   }
 });
 
+// PUT /api/clones/:id/model — altera modelo de IA do clone
+app.put('/api/clones/:id/model', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const { model } = req.body ?? {};
+  if (!model || !MODEL_ALLOWLIST.includes(model)) {
+    return res.status(400).json({ error: 'modelo inválido', allowlist: MODEL_ALLOWLIST });
+  }
+  try {
+    const prev = await pool.query(
+      `SELECT slot, model, status FROM flow_clones WHERE id = $1`,
+      [id],
+    );
+    if (!prev.rows[0]) return res.status(404).json({ error: 'clone não encontrado' });
+    if (prev.rows[0].status !== 'active') {
+      return res.status(409).json({ error: 'clone não está ativo', status: prev.rows[0].status });
+    }
+    const { slot, model: from } = prev.rows[0];
+    // Atualiza em flow_clones e espelha em bot_config para consistência com runtime do bot
+    await pool.query(`UPDATE flow_clones SET model = $1, updated_at = NOW() WHERE id = $2`, [model, id]);
+    await pool.query(`UPDATE bot_config SET model = $1, updated_at = NOW() WHERE slot = $2`, [model, slot]);
+    console.log(`[modelChange] clone=${id} slot=${slot} from=${from} to=${model}`);
+    const updated = await pool.query(`SELECT * FROM flow_clones WHERE id = $1`, [id]);
+    res.json(updated.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- GOOGLE CALENDAR POR MATRIZ (bot_config) ----------
 
 // PUT /api/bots/:slot/gcal — grava credenciais Service Account na matriz
@@ -3618,18 +3704,21 @@ app.post('/api/sessions/:name/pairing-code', async (req, res) => {
     : `+${digits}`;
 
   try {
-    // 3. Checa status da sessão — deve estar em SCAN_QR_CODE
+    // 3. Checa status da sessão — deve estar em SCAN_QR_CODE.
+    // Status check é obrigatório: sem confirmação do WAHA não prosseguimos.
     const statusR = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
       headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
     });
-    if (statusR.ok) {
-      const st = await statusR.json().catch(() => ({}));
-      if (st.status !== 'SCAN_QR_CODE') {
-        return res.status(409).json({
-          error: 'Sessão não está aguardando autenticação',
-          currentStatus: st.status ?? 'UNKNOWN',
-        });
-      }
+    if (!statusR.ok) {
+      const details = await statusR.text().catch(() => '');
+      return res.status(502).json({ error: 'Falha ao verificar status da sessão no WAHA', details });
+    }
+    const st = await statusR.json().catch(() => ({}));
+    if (st.status !== 'SCAN_QR_CODE') {
+      return res.status(409).json({
+        error: 'Sessão não está aguardando autenticação',
+        currentStatus: st.status ?? 'UNKNOWN',
+      });
     }
 
     // 4. Solicita pairing code ao WAHA Plus
