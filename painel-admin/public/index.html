@@ -141,6 +141,15 @@ textarea, input, select { font-family: inherit; }
 .gcal-instructions li a:hover { text-decoration: underline; }
 .gcal-instructions li code { font-family: var(--font-mono, monospace); font-size: .75rem; background: var(--surface-2); padding: .0625rem .25rem; border-radius: 3px; }
 .gcal-edit-hint { padding: .625rem .75rem; background: var(--surface-2); border-radius: var(--radius-sm); font-size: .8125rem; color: var(--text-muted); margin-bottom: .5rem; border-left: 3px solid var(--primary); }
+.pause-help-block { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.pause-help-block summary { display: flex; align-items: center; gap: .375rem; padding: .625rem .875rem; font-size: .8125rem; font-weight: 600; cursor: pointer; user-select: none; background: var(--surface-2); list-style: none; color: var(--text); }
+.pause-help-block summary::-webkit-details-marker { display: none; }
+.pause-help-block summary::before { content: '▶'; font-size: .625rem; transition: transform .2s; color: var(--text-muted); flex-shrink: 0; }
+.pause-help-block[open] summary::before { transform: rotate(90deg); }
+.pause-help-block__body { padding: .875rem; background: var(--bg-2); }
+.pause-help-block__body ol { margin: 0; padding-left: 1.25rem; display: flex; flex-direction: column; gap: .5rem; font-size: .8125rem; line-height: 1.5; }
+.pause-help-block__body li strong { color: var(--text); }
+.pause-help-block__body li em { font-style: italic; }
 .mono    { font-family: var(--font-mono); font-size: .8125rem; }
 .label   { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
 /* ── Layout shell ───────────────────────────────────────────────────── */
@@ -2909,6 +2918,7 @@ function renderBotDetail(bot, container) {
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'gcal' ? ' active' : ''}" data-tab="gcal" role="tab" aria-selected="${_selectedBotTab === 'gcal'}">${icon('calendar', 13)} Google Calendar</button>` : ''}
+      <button class="tab-btn${_selectedBotTab === 'pausa' ? ' active' : ''}" data-tab="pausa" role="tab" aria-selected="${_selectedBotTab === 'pausa'}">${icon('pause-circle', 13)} Pausa</button>
     </div>
     <div id="bot-tab-content"></div>`;
 
@@ -2968,6 +2978,9 @@ async function loadBotTab(slot, tab, el, bot) {
       container: el,
       reloadFn: null,
     });
+  } else if (tab === 'pausa') {
+    /* ── Palavras-chave de pausa/retomada do bot ── */
+    await _renderPauseTab(el, slot);
   }
 }
 
@@ -5615,6 +5628,80 @@ async function wizardStep4Skip() {
   }
 }
 
+/* ══ HELPER PAUSA (clone + matriz) ═══════════════════════════════
+ *  Renderiza aba Pausa dentro de qualquer container DOM.
+ *  Usa data-role em vez de id+slot para evitar duplicatas.
+ *  slot — valor do slot do bot (ex: "startap", "teste_barbearia")
+ * ================================================================ */
+async function _renderPauseTab(container, slot) {
+  container.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+  let data;
+  try {
+    data = await api(`/api/bots/${encodeURIComponent(slot)}/pause-keywords`);
+  } catch (err) {
+    container.innerHTML = `
+      <div class="card" style="margin-top:.75rem">
+        <p class="muted">${icon('alert-triangle', 14)} Erro ao carregar: ${escapeHtml(err.message)}</p>
+        <button class="btn btn--sm" id="pause-retry-btn" style="margin-top:.5rem">${icon('refresh-cw', 13)} Tentar novamente</button>
+      </div>`;
+    container.querySelector('#pause-retry-btn').addEventListener('click', () => _renderPauseTab(container, slot));
+    return;
+  }
+
+  container.innerHTML = `
+    <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
+      <p class="muted">Quando alguém manda uma das frases abaixo neste chat, o bot pausa de responder para esse cliente. Uma frase de retomada ativa o bot de novo.</p>
+
+      <details class="pause-help-block">
+        <summary>${icon('help-circle', 14)} Como funciona?</summary>
+        <div class="pause-help-block__body">
+          <ol>
+            <li>Cliente ou atendente envia uma das frases de <strong>Pausar</strong> no WhatsApp do bot.</li>
+            <li>O bot para de responder para <em>esse cliente específico</em> — não afeta outros chats.</li>
+            <li>Para retomar, alguém manda uma das frases de <strong>Retomar</strong>.</li>
+            <li>As frases não diferenciam maiúsculas/minúsculas nem acentos. Uma frase por linha.</li>
+          </ol>
+        </div>
+      </details>
+
+      <div class="field">
+        <label>Pausar (uma por linha)</label>
+        <textarea data-role="pause-pause" rows="5" placeholder="startap aqui!!&#10;atendente aqui!!"></textarea>
+      </div>
+
+      <div class="field">
+        <label>Retomar (uma por linha)</label>
+        <textarea data-role="pause-resume" rows="5" placeholder="startap voltar!!&#10;ia voltar!!"></textarea>
+      </div>
+
+      <button class="btn btn--primary" data-role="pause-save">${icon('check-circle-2', 14)} Salvar palavras-chave</button>
+    </div>`;
+
+  const pauseTa  = container.querySelector('[data-role="pause-pause"]');
+  const resumeTa = container.querySelector('[data-role="pause-resume"]');
+  pauseTa.value  = (data?.pause  || []).join('\n');
+  resumeTa.value = (data?.resume || []).join('\n');
+
+  container.querySelector('[data-role="pause-save"]').addEventListener('click', async () => {
+    const btn = container.querySelector('[data-role="pause-save"]');
+    btn.disabled = true;
+    try {
+      const pause  = pauseTa.value.split('\n').map(s => s.trim()).filter(Boolean);
+      const resume = resumeTa.value.split('\n').map(s => s.trim()).filter(Boolean);
+      await api(`/api/bots/${encodeURIComponent(slot)}/pause-keywords`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pause, resume }),
+      });
+      toast('Palavras-chave salvas!', 'success');
+    } catch (err) {
+      toast('Erro: ' + err.message, 'danger');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 /* ══ HELPER GOOGLE CALENDAR (clone + matriz) ══════════════════════
  *  opts.baseUrl      — ex: "/api/clones/42" ou "/api/bots/teste_barbearia"
  *  opts.entityLabel  — ex: "clone" ou "matriz"
@@ -5871,8 +5958,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'prompt', 'sessao', 'gcal'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', prompt: 'Prompt', sessao: 'Sessão WAHA', gcal: 'Google Calendar' };
+    const tabNames = ['dados', 'personalizacao', 'prompt', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', prompt: 'Prompt', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -6126,6 +6213,9 @@ function loadCloneConfigTab(tab, clone) {
       container: content,
       reloadFn: null,
     });
+  } else if (tab === 'pausa') {
+    /* ── Palavras-chave de pausa/retomada do clone ── */
+    _renderPauseTab(content, clone.slot);
   }
 }
 
