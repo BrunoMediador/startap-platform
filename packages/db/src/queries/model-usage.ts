@@ -4,27 +4,37 @@ import type { Provider } from './bot-config.js';
 /**
  * model_usage — log de cada chamada ao LLM, com tokens e custo estimado.
  *
- * Pricing aproximado em USD por 1M tokens (atualizar conforme provedor):
- *   gpt-4o            → in: $2.50, out: $10.00
- *   gpt-4o-mini       → in: $0.15, out: $0.60
- *   gpt-5.4           → in: $5.00, out: $20.00  (estimativa - ajustar quando lancado)
- *   deepseek-chat     → in: $0.27, out: $1.10
- *   deepseek-reasoner → in: $0.55, out: $2.19
+ * Pricing em USD por 1M tokens. Fonte oficial: https://openai.com/api/pricing
+ *   gpt-4o            → in: $2.50, out: $10.00  (oficial, mai/2024)
+ *   gpt-4o-mini       → in: $0.15, out: $0.60   (oficial, jul/2024)
+ *   gpt-4-turbo       → in: $10.00, out: $30.00 (oficial)
+ *   gpt-3.5-turbo     → in: $0.50, out: $1.50   (oficial)
+ *   gpt-5.4           → in: $5.00, out: $20.00  (ESTIMATIVA — OpenAI nao publicou pricing oficial)
+ *   deepseek-chat     → in: $0.27, out: $1.10   (oficial deepseek.com)
+ *   deepseek-reasoner → in: $0.55, out: $2.19   (oficial deepseek.com)
  */
 
-interface PriceTable {
+export interface PriceTable {
   /** USD per 1M input tokens */
   in: number;
   /** USD per 1M output tokens */
   out: number;
+  /**
+   * true quando o pricing nao tem fonte oficial publicada pelo provedor —
+   * frontend deve exibir aviso "~ valor estimado, atualizar quando OpenAI publicar".
+   */
+  isEstimate?: true;
 }
 
-const PRICING: Record<string, PriceTable> = {
+/** Exportado para endpoints que precisam expor metadados de pricing ao frontend. */
+export const PRICING: Record<string, PriceTable> = {
   'gpt-4o': { in: 2.5, out: 10.0 },
   'gpt-4o-mini': { in: 0.15, out: 0.6 },
   'gpt-4-turbo': { in: 10.0, out: 30.0 },
   'gpt-3.5-turbo': { in: 0.5, out: 1.5 },
-  'gpt-5.4': { in: 5.0, out: 20.0 },
+  // Pricing nao publicado pela OpenAI. Placeholder baseado em estimativa interna
+  // (proporcional ao gpt-4o). Remover isEstimate quando OpenAI publicar oficial.
+  'gpt-5.4': { in: 5.0, out: 20.0, isEstimate: true },
   'deepseek-chat': { in: 0.27, out: 1.1 },
   'deepseek-reasoner': { in: 0.55, out: 2.19 },
 };
@@ -132,6 +142,15 @@ export async function dailyTotals(
     total_tokens: Number(row.total_tokens),
     cost_usd: Number(row.cost_usd ?? 0),
   }));
+}
+
+/**
+ * Retorna metadados de pricing por modelo, incluindo flag isEstimate.
+ * Usado pelo endpoint /api/usage/pricing-info para que o frontend
+ * possa exibir aviso visual nos modelos sem pricing oficial.
+ */
+export function getPricingInfo(): Record<string, PriceTable> {
+  return PRICING;
 }
 
 export async function recentCalls(limit = 50): Promise<

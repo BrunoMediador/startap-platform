@@ -812,6 +812,31 @@ app.get(
   }),
 );
 
+/**
+ * Mapa de pricing por modelo — espelho de packages/db/src/queries/model-usage.ts:PRICING.
+ * Manter em sync manualmente ao adicionar/atualizar modelos.
+ * isEstimate: true indica ausência de pricing oficial publicado pelo provedor;
+ * frontend deve exibir aviso "~ valor estimado".
+ */
+const MODEL_PRICING = {
+  'gpt-4o':            { in: 2.5,  out: 10.0 },
+  'gpt-4o-mini':       { in: 0.15, out: 0.6  },
+  'gpt-4-turbo':       { in: 10.0, out: 30.0 },
+  'gpt-3.5-turbo':     { in: 0.5,  out: 1.5  },
+  // Pricing nao publicado pela OpenAI. Placeholder proporcional ao gpt-4o.
+  // Remover isEstimate quando OpenAI publicar oficial.
+  'gpt-5.4':           { in: 5.0,  out: 20.0, isEstimate: true },
+  'deepseek-chat':     { in: 0.27, out: 1.1  },
+  'deepseek-reasoner': { in: 0.55, out: 2.19 },
+};
+
+app.get(
+  '/api/usage/pricing-info',
+  asyncHandler(async (_req, res) => {
+    res.json(MODEL_PRICING);
+  }),
+);
+
 // ---------- PROMPT ----------
 app.get('/api/bots/:slot/prompt', async (req, res) => {
   try {
