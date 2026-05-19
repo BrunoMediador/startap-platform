@@ -942,6 +942,12 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .link-media-row { flex-wrap: wrap; }
   .link-media-row__name { flex-basis: 100%; }
 }
+@media (max-width: 480px) {
+  .course-table .col-course-price,
+  .course-table th.col-course-price,
+  .course-table .col-course-intro,
+  .course-table th.col-course-intro { display: none; }
+}
 /* ── Media cards (legado — mantido pra compat com renderMediaPreview) ─── */
 .media-grid {
   display: grid;
@@ -2752,6 +2758,9 @@ async function renderLeadsStub() {
    ══════════════════════════════════════════════════════════════════ */
 let _selectedBot = null;
 let _selectedBotTab = 'overview';
+// cache de modelos IA carregados de /api/models (sessão)
+let _modelsCache = null;
+
 // flag compartilhada: renderBotConfigIA sinaliza mudanças não salvas pro handler de tab
 let _configIaDirty = false;
 // flag para aba Prompt — mesma proteção de saída sem salvar
@@ -3274,6 +3283,27 @@ async function renderBotPrompt(slot, el) {
   }
 }
 
+/* ── Carrega /api/models com cache de sessão ─────────────────────────── */
+async function loadModels() {
+  if (_modelsCache) return _modelsCache;
+  try {
+    const data = await api('/api/models');
+    _modelsCache = Array.isArray(data) ? data : [];
+  } catch (_e) {
+    _modelsCache = [];
+  }
+  return _modelsCache;
+}
+
+/* ── Formata label de modelo com custo ──────────────────────────────── */
+function modelOptionLabel(m) {
+  if (!m.in && !m.out) return m.label || m.id;
+  const inCost  = m.in  != null ? `$${m.in}`  : '?';
+  const outCost = m.out != null ? `$${m.out}` : '?';
+  const est = m.isEstimate ? ' estimado' : '';
+  return `${m.label || m.id} (${inCost}/${outCost}${est})`;
+}
+
 async function renderBotConfigIA(slot, el) {
   /* ── dados iniciais ──────────────────────────────────────── */
   let botData = null;
@@ -3292,8 +3322,12 @@ async function renderBotConfigIA(slot, el) {
   /* ── render skeleton ─────────────────────────────────────── */
   el.innerHTML = `<div style="padding:1rem 0"><div class="spinner"></div></div>`;
 
+  let apiModels = [];
   try {
-    botData = await api(`/api/bots/${slot}`);
+    [botData, apiModels] = await Promise.all([
+      api(`/api/bots/${slot}`),
+      loadModels(),
+    ]);
   } catch (err) {
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar configurações: ${escapeHtml(err.message)}</p>
       <button class="btn btn--sm" onclick="renderBotConfigIA('${escapeHtml(slot)}',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
@@ -3306,11 +3340,30 @@ async function renderBotConfigIA(slot, el) {
 
   /* ── constrói opções de modelo ───────────────────────────── */
   function buildModelOptions(provider, selectedModel) {
+    // Se /api/models retornou dados, usa eles filtrados por provider
+    const fromApi = apiModels.filter(m => !m.provider || m.provider === provider);
+    if (fromApi.length > 0) {
+      const knownIds = fromApi.map(m => m.id);
+      const isCustom = selectedModel && !knownIds.includes(selectedModel);
+      let html = fromApi.map(m => {
+        const lbl = modelOptionLabel(m);
+        return `<option value="${escapeHtml(m.id)}" ${m.id === selectedModel ? 'selected' : ''}>${escapeHtml(lbl)}</option>`;
+      }).join('');
+      html += `<option value="__custom__" ${isCustom ? 'selected' : ''}>Outro (personalizado)...</option>`;
+      return html;
+    }
+    // fallback: lista estática
     const known = MODELS_BY_PROVIDER[provider] || [];
     const isCustom = selectedModel && !known.includes(selectedModel);
     let html = known.map(m => `<option value="${escapeHtml(m)}" ${m === selectedModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('');
     html += `<option value="__custom__" ${isCustom ? 'selected' : ''}>Outro (personalizado)...</option>`;
     return html;
+  }
+
+  function isKnownModel(provider, model) {
+    const fromApi = apiModels.filter(m => !m.provider || m.provider === provider).map(m => m.id);
+    if (fromApi.length > 0) return fromApi.includes(model);
+    return (MODELS_BY_PROVIDER[provider] || []).includes(model);
   }
 
   /* ── markup ──────────────────────────────────────────────── */
@@ -3331,15 +3384,19 @@ async function renderBotConfigIA(slot, el) {
             </select>
           </div>
           <div class="field">
-            <label for="cia-model">Modelo</label>
+            <label for="cia-model">Modelo IA</label>
             <select id="cia-model">${buildModelOptions(currentProvider, currentModel)}</select>
           </div>
         </div>
-        <div id="cia-custom-model-wrap" style="display:${(MODELS_BY_PROVIDER[currentProvider]||[]).includes(currentModel)?'none':'block'};margin-bottom:var(--space-4)">
+        <div class="config-ia-model-hint" style="display:flex;align-items:flex-start;gap:.375rem;margin-bottom:var(--space-4);padding:.5rem .75rem;background:var(--surface-2);border-radius:var(--radius-md);font-size:.8125rem;color:var(--text-muted)">
+          ${icon('info', 13)}
+          <span>Modelo mais inteligente = melhor resposta, mas custo maior. O custo exibido é por 1M tokens (entrada/saída).</span>
+        </div>
+        <div id="cia-custom-model-wrap" style="display:${isKnownModel(currentProvider,currentModel)?'none':'block'};margin-bottom:var(--space-4)">
           <div class="field">
             <label for="cia-model-custom">Modelo personalizado</label>
             <input id="cia-model-custom" type="text" placeholder="ex: gpt-4o-2024-11-20"
-              value="${escapeHtml((MODELS_BY_PROVIDER[currentProvider]||[]).includes(currentModel) ? '' : currentModel)}" />
+              value="${escapeHtml(isKnownModel(currentProvider,currentModel) ? '' : currentModel)}" />
           </div>
         </div>
         <div class="field" style="max-width:360px;margin-bottom:var(--space-4)">
@@ -3399,18 +3456,38 @@ async function renderBotConfigIA(slot, el) {
     const model = resolvedModel();
     if (!model) { toast('Selecione ou informe um modelo.', 'danger'); return; }
     btnSaveConfig.disabled = true;
+    const provider = selProvider.value;
+    const temperature = Number(rangeTemp.value);
     try {
-      await api(`/api/bots/${slot}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: selProvider.value,
-          model,
-          temperature: Number(rangeTemp.value),
-        }),
-      });
+      // Tenta endpoint dedicado primeiro; cai no PUT geral se 404/405
+      let saved = false;
+      try {
+        await api(`/api/bots/${slot}/model`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        });
+        saved = true;
+      } catch (e) {
+        if (e.status !== 404 && e.status !== 405) throw e;
+      }
+      if (!saved) {
+        await api(`/api/bots/${slot}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, model, temperature }),
+        });
+      } else {
+        // Salva provider e temperatura separadamente via PUT geral
+        await api(`/api/bots/${slot}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, temperature }),
+        });
+      }
       _dirty = false; _configIaDirty = false;
-      toast('Configuração salva — aplica em até 60s nos próximos messages do bot', 'success');
+      const modelLabel = escapeHtml(model);
+      toast(`Modelo atualizado para ${modelLabel}. Próximas mensagens já vão usar.`, 'success');
     } catch (err) {
       toast('Erro ao salvar configuração: ' + escapeHtml(err.message), 'danger');
     } finally {
@@ -3805,10 +3882,10 @@ async function renderBotCourses(slot, el) {
 
         return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" class="js-course-row">
           <td><button class="btn btn--ghost btn--sm js-course-edit" data-id="${c.id}" style="font-weight:600;color:var(--text)">${escapeHtml(c.name)}</button></td>
-          <td style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
-          <td style="color:var(--text-muted);font-size:.8125rem">${durationDisplay}</td>
+          <td class="col-course-price" style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
+          <td class="col-course-desc" style="color:var(--text-muted);font-size:.8125rem">${durationDisplay}</td>
           <td class="course-media-count" title="${count} de 5 mídias máximas"><span>${count}/5</span>${noIntroWarning}</td>
-          <td>${introCell}</td>
+          <td class="col-course-intro">${introCell}</td>
           <td>
             <label class="toggle">
               <input type="checkbox" class="js-course-toggle" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" id="${enabledToggleId}" ${c.enabled ? 'checked' : ''}>
@@ -3832,10 +3909,10 @@ async function renderBotCourses(slot, el) {
       el.innerHTML = `${header}<div style="overflow-x:auto"><table class="course-table">
         <thead><tr>
           <th>Nome</th>
-          <th>Preço</th>
+          <th class="col-course-price">Preço</th>
           <th class="col-course-desc">Duração</th>
           <th>Mídias</th>
-          <th>Apresentação</th>
+          <th class="col-course-intro">Apresentação</th>
           <th>Ativo</th>
           <th style="width:48px"></th>
         </tr></thead>
@@ -5356,6 +5433,8 @@ function openCloneWizard(preSelectMatriz) {
     waha_option: 'nova',
     cloneId: null,
     stopQR: null,
+    modelo_ia: '',      // '' = herdar da matriz
+    modelo_ia_label: '', // label do modelo selecionado
   };
   if (preSelectMatriz) _wizardState.step = 2;
   renderWizardStep();
@@ -5396,6 +5475,12 @@ function renderWizardStep() {
       <button class="btn btn--primary" id="wizard-next-btn" ${!s.matriz_slot ? 'disabled' : ''}>Continuar ${icon('chevron-right', 14)}</button>`;
 
   } else if (s.step === 2) {
+    // Constrói opções do select de modelo no wizard (usa cache se disponível)
+    const wModels = _modelsCache || [];
+    const wModelOpts = wModels.length
+      ? wModels.map(m => `<option value="${escapeHtml(m.id)}" ${s.modelo_ia === m.id ? 'selected' : ''}>${escapeHtml(modelOptionLabel(m))}</option>`).join('')
+      : '';
+    const wMatrizLabel = s.matriz_slot ? s.matriz_slot.replace('teste_','').replace(/_/g,' ') : 'matriz';
     bodyHtml = `
       <div style="display:flex;flex-direction:column;gap:.875rem">
         <div class="field">
@@ -5409,6 +5494,14 @@ function renderWizardStep() {
         <div class="field">
           <label for="wz-cliente-tel">Telefone do cliente (opcional)</label>
           <input id="wz-cliente-tel" type="tel" placeholder="55119..." value="${escapeHtml(s.cliente_telefone)}" maxlength="20" />
+        </div>
+        <div class="field">
+          <label for="wz-modelo-ia">Modelo IA</label>
+          <select id="wz-modelo-ia" ${wModels.length === 0 ? 'disabled' : ''}>
+            <option value="" ${!s.modelo_ia ? 'selected' : ''}>Mesmo da ${escapeHtml(wMatrizLabel)} (padrão)</option>
+            ${wModelOpts}
+          </select>
+          ${wModels.length === 0 ? `<span class="field-hint" id="wz-model-loading">${icon('loader',11)} Carregando modelos...</span>` : '<span class="field-hint">Modelo mais inteligente = melhor resposta, mas custo maior</span>'}
         </div>
       </div>`;
     footerHtml = `
@@ -5525,6 +5618,22 @@ function renderWizardStep() {
     });
   }
 
+  if (s.step === 2) {
+    // Carrega modelos se ainda não estão em cache e preenche o select
+    const wzModelSel = document.getElementById('wz-modelo-ia');
+    if (wzModelSel && !_modelsCache) {
+      loadModels().then(models => {
+        if (!wzModelSel.isConnected) return; // modal pode ter fechado
+        const matrizLabel = (_wizardState.matriz_slot || 'matriz').replace('teste_','').replace(/_/g,' ');
+        wzModelSel.innerHTML = `<option value="">Mesmo da ${escapeHtml(matrizLabel)} (padrão)</option>`
+          + models.map(m => `<option value="${escapeHtml(m.id)}" ${_wizardState.modelo_ia === m.id ? 'selected' : ''}>${escapeHtml(modelOptionLabel(m))}</option>`).join('');
+        wzModelSel.disabled = false;
+        const hint = document.getElementById('wz-model-loading');
+        if (hint) hint.textContent = 'Modelo mais inteligente = melhor resposta, mas custo maior';
+      });
+    }
+  }
+
   if (s.step === 3) {
     document.getElementById('btn-add-kv')?.addEventListener('click', () => {
       const row = document.createElement('div');
@@ -5600,6 +5709,14 @@ function wizardCollectStep() {
     s.display_name     = (document.getElementById('wz-display-name')?.value || '').trim();
     s.cliente_nome     = (document.getElementById('wz-cliente-nome')?.value || '').trim();
     s.cliente_telefone = (document.getElementById('wz-cliente-tel')?.value || '').trim();
+    const wzMdl = document.getElementById('wz-modelo-ia');
+    s.modelo_ia = wzMdl ? (wzMdl.value || '') : '';
+    if (wzMdl && s.modelo_ia) {
+      const opt = wzMdl.options[wzMdl.selectedIndex];
+      s.modelo_ia_label = opt ? opt.textContent : s.modelo_ia;
+    } else {
+      s.modelo_ia_label = '';
+    }
   } else if (s.step === 3) {
     s.personalizacao = {};
     document.querySelectorAll('[data-kv]').forEach(row => {
@@ -5620,6 +5737,21 @@ function wizardValidateStep() {
     if (!name) { toast('O nome do clone é obrigatório.', 'warning'); document.getElementById('wz-display-name')?.focus(); return false; }
   }
   return true;
+}
+
+/* ── Aplica modelo IA ao clone (se escolhido no wizard) ─────────── */
+async function wizardApplyModelToClone(cloneId, model) {
+  if (!model || !cloneId) return;
+  try {
+    await api(`/api/clones/${cloneId}/model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+  } catch (_e) {
+    // não-crítico: clone já foi criado; avisa mas não bloqueia
+    toast('Clone criado, mas não foi possível salvar o modelo IA. Configure depois na aba Configuração IA.', 'warning');
+  }
 }
 
 /* ── Opção A: Criar nova sessão WAHA + QR ───────────────────────── */
@@ -5647,6 +5779,7 @@ async function wizardStep4Create() {
         }),
       });
       s.cloneId = clone.id;
+      if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
     }
 
     // Passo 2: criar sessão WAHA via endpoint correto (com webhook automático)
@@ -5769,6 +5902,7 @@ async function wizardStep4BindExisting() {
         }),
       });
       s.cloneId = clone.id;
+      if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
     }
 
     // Passo 2: bind-session direto (sessão já existe e está conectada)
@@ -5810,6 +5944,7 @@ async function wizardStep4Skip() {
         }),
       });
       s.cloneId = clone.id;
+      if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
     }
 
     closeModal();
