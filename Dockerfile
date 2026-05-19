@@ -35,4 +35,11 @@ COPY --from=build /repo/packages/integrations/package.json ./packages/integratio
 COPY --from=build /repo/apps/${APP}/dist ./app/dist
 COPY --from=build /repo/apps/${APP}/package.json ./app/package.json
 
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD sh -c 'if [ "$APP_NAME" = worker ]; then \
+    pgrep -f "node ./app/dist/worker.js" > /dev/null || exit 1; \
+  else \
+    wget -qO- http://localhost:3040/health || exit 1; \
+  fi'
+
 CMD ["sh", "-c", "if [ \"$APP_NAME\" = worker ]; then node ./app/dist/worker.js; else node ./app/dist/server.js; fi"]

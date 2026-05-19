@@ -12,6 +12,11 @@ services:
     networks: [rede_interna]
     depends_on: [redis]
     expose: ["3040"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3040/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   worker:
     build:
@@ -25,15 +30,25 @@ services:
       - SERVICE_NAME=worker
     networks: [rede_interna]
     depends_on: [redis]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'node ./app/dist/worker.js' > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   redis:
     image: redis:7-alpine
     container_name: startap-redis
     restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
+    command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     networks: [rede_interna]
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   redis_data:

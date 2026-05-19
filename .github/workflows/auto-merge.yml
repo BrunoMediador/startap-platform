@@ -1,0 +1,113 @@
+name: Auto Merge (Modo Viagem)
+
+# Mergeia automaticamente PRs com label `auto-merge-safe`
+# quando o CI passar. Só funciona se modo viagem estiver ativo
+# (presença do arquivo .claude/MODO_VIAGEM_ATIVO).
+
+on:
+  pull_request:
+    types: [labeled, synchronize, reopened, opened]
+  workflow_run:
+    # Dispara apenas quando o workflow "CI" (Build & typecheck) terminar.
+    # check_suite removido: causava race condition — disparava para qualquer check,
+    # incluindo o proprio auto-merge, gerando loops no MODO VIAGEM.
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main to check MODO_VIAGEM_ATIVO
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check if travel mode is active
+        id: travel
+        run: |
+          if [ -f ".claude/MODO_VIAGEM_ATIVO" ]; then
+            echo "active=true" >> $GITHUB_OUTPUT
+            echo "🛫 Modo Viagem ATIVO — auto-merge habilitado"
+          else
+            echo "active=false" >> $GITHUB_OUTPUT
+            echo "🏠 Modo Viagem desativado — auto-merge desligado"
+          fi
+
+      - name: Auto-merge eligible PRs
+        if: steps.travel.outputs.active == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+            });
+
+            for (const pr of prs.data) {
+              const labels = pr.labels.map(l => l.name);
+              if (!labels.includes('auto-merge-safe')) {
+                console.log(`PR #${pr.number}: sem label auto-merge-safe, pula`);
+                continue;
+              }
+
+              // Verifica que o PR não toca em arquivos protegidos
+              const files = await github.rest.pulls.listFiles({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              });
+              const protectedPatterns = [
+                /^packages\/db\/migrations\//,
+                /^\.github\/workflows\//,
+                /^docker-compose\.yml$/,
+                /^Dockerfile$/,
+                /\.env$/,
+              ];
+              const blocked = files.data.find(f =>
+                protectedPatterns.some(p => p.test(f.filename))
+              );
+              if (blocked) {
+                console.log(`PR #${pr.number}: toca arquivo protegido ${blocked.filename}, pula`);
+                continue;
+              }
+
+              // Verifica que CI está verde
+              const checks = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: pr.head.sha,
+              });
+              const failed = checks.data.check_runs.find(c =>
+                c.status === 'completed' &&
+                c.conclusion !== 'success' &&
+                c.conclusion !== 'skipped' &&
+                c.conclusion !== 'neutral'
+              );
+              if (failed) {
+                console.log(`PR #${pr.number}: check ${failed.name} falhou (${failed.conclusion})`);
+                continue;
+              }
+              const pending = checks.data.check_runs.find(c =>
+                c.status !== 'completed'
+              );
+              if (pending) {
+                console.log(`PR #${pr.number}: check ${pending.name} ainda rodando`);
+                continue;
+              }
+
+              // Verde, sem proteção, com label. Mergeia.
+              console.log(`PR #${pr.number}: ✅ TODOS CHECKS VERDES — mergeando`);
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                merge_method: 'squash',
+                commit_title: pr.title + ' (auto-merge modo viagem)',
+              });
+            }

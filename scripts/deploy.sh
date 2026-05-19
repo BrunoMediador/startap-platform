@@ -43,6 +43,31 @@ if [ "$applied_migrations" -lt "$expected_migrations" ]; then
 fi
 echo "✅ schema_migrations sincronizado ($applied_migrations/$expected_migrations)"
 
+# --- Rollback: salva imagens atuais antes de subir nova versao ---
+# Se o health check falhar apos o up, restaura as imagens anteriores.
+ROLLBACK_API=""
+ROLLBACK_WORKER=""
+if docker image inspect startap-api:latest &>/dev/null; then
+  docker tag startap-api:latest startap-api:pre-deploy
+  ROLLBACK_API="startap-api:pre-deploy"
+fi
+if docker image inspect startap-worker:latest &>/dev/null; then
+  docker tag startap-worker:latest startap-worker:pre-deploy
+  ROLLBACK_WORKER="startap-worker:pre-deploy"
+fi
+
+_rollback() {
+  echo "==> ROLLBACK: restaurando imagens anteriores" >&2
+  if [ -n "$ROLLBACK_API" ]; then
+    docker tag "$ROLLBACK_API" startap-api:latest
+  fi
+  if [ -n "$ROLLBACK_WORKER" ]; then
+    docker tag "$ROLLBACK_WORKER" startap-worker:latest
+  fi
+  docker compose up -d
+  echo "==> ROLLBACK concluido. Verifique: docker logs startap-api --tail 30" >&2
+}
+
 echo "==> docker compose up -d"
 docker compose up -d
 
@@ -73,7 +98,8 @@ echo "==> API health check"
 if docker exec automacoes-waha-1 curl -fsS http://startap-api:3040/health > /dev/null; then
   echo "✅ API healthy"
 else
-  echo "❌ API health check failed — verifique 'docker logs startap-api'"
+  echo "❌ API health check failed — iniciando rollback" >&2
+  _rollback
   exit 1
 fi
 
@@ -83,7 +109,7 @@ if docker ps --format '{{.Names}}' | grep -qx 'automacoes-painel-admin-1'; then
   if [ "$PANEL_STATUS" = "200" ] || [ "$PANEL_STATUS" = "401" ]; then
     echo "✅ painel-admin healthy"
   else
-    echo "❌ painel-admin health check failed (HTTP $PANEL_STATUS) — verifique 'docker logs automacoes-painel-admin-1'"
+    echo "❌ painel-admin health check failed (HTTP $PANEL_STATUS) — verifique 'docker logs automacoes-painel-admin-1'" >&2
     exit 1
   fi
 fi
