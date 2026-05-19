@@ -367,6 +367,42 @@ export class TesteVendasBarbeariaBot extends BotBase {
         },
         run: async (args: unknown) => {
           const { summary, start, end } = args as { summary: string; start: string; end: string };
+
+          // Validação server-side: impede criação de evento com overlap real no Calendar.
+          // O LLM pode alucinar disponibilidade — esta verificação é a fonte de verdade.
+          const existing = await calClient.listEvents({ timeMin: start, timeMax: end });
+          const reqStart = new Date(start).getTime();
+          const reqEnd = new Date(end).getTime();
+          const conflito = existing.find((ev) => {
+            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? start).getTime();
+            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? end).getTime();
+            return evStart < reqEnd && evEnd > reqStart;
+          });
+          if (conflito) {
+            this.log.warn(
+              {
+                conflito: {
+                  summary: conflito.summary,
+                  start: conflito.start.dateTime,
+                  end: conflito.end.dateTime,
+                },
+                requestedStart: start,
+                requestedEnd: end,
+                telefone,
+              },
+              'inserir_agendamento bloqueado: conflito detectado server-side (bot hibrido)',
+            );
+            return {
+              ok: false,
+              error: 'CONFLITO',
+              conflito: {
+                summary: conflito.summary,
+                start: conflito.start.dateTime,
+                end: conflito.end.dateTime,
+              },
+            };
+          }
+
           const ev = await calClient.createEvent({
             summary,
             startISO: start,
