@@ -101,11 +101,10 @@ O fix tecnico (PR #44) separa `psql_exec` em duas funcoes:
   - Retornar `{ migrations: { expected: N, applied: M, ok: true/false } }` para inspecao sem SSH
   - Missao: `docs/missoes/NNN-health-migrations.md`
 
-- [ ] **Documentar a armadilha `docker exec -i` + loop while no runbook** — DRI: `infra` — Prazo: 2026-05-20 — Status: pendente
-  - Adicionar secao em `docs/runbooks/migrations.md` explicando o padrao correto
-  - Evita regressao em futuras edicoes do script
+- [x] **Documentar a armadilha `docker exec -i` + loop while no runbook** — DRI: `infra` — Status: **resolvido em [PR #44](https://github.com/BrunoMediador/startap-platform/pull/44)** (comentario no proprio script `migrate.sh`) + PR #47 (este postmortem). Runbook `docs/runbooks/migrations.md` dedicado ainda nao criado — acao aberta para `infra`.
+  - Adicionar secao em `docs/runbooks/migrations.md` explicando o padrao correto — **DRI: `infra` — Prazo: 2026-05-31 — Status: pendente**
 
-- [ ] **Gate de migrations ja esta em prod (PR #45)** — DRI: `infra` — Prazo: concluido — Status: feito
+- [x] **Gate de migrations ja esta em prod (PR #45)** — DRI: `infra` — Status: **resolvido em [PR #45](https://github.com/BrunoMediador/startap-platform/pull/45)**
   - `deploy.sh` aborta se `COUNT(schema_migrations) < N_arquivos`. Ja mergeado e ativo.
 
 ---

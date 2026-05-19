@@ -81,12 +81,14 @@ docker compose -f docker-compose.yml up -d painel-admin
 
 ## Acoes pra evitar que volte (longo prazo)
 
-- [ ] **Substituir path relativo por absoluto no deploy.sh + adicionar log explicito de skip** — DRI: `infra` — Prazo: 2026-05-18 — Status: concluido (PR #infra/fix-deploy-painel-admin)
-  - Missao: (incorporada neste postmortem, sem missao separada — mudanca < 20 linhas)
-- [ ] **Health check de conteudo: verificar Last-Modified no deploy** — adicionar ao final do deploy.sh uma checagem que confirme que o Last-Modified do painel-admin e posterior ao timestamp do git pull. Se for mais antigo, falhar o deploy explicitamente. — DRI: `infra` — Prazo: 2026-05-25 — Status: pendente
+- [x] **Substituir path relativo por absoluto no deploy.sh + adicionar log explicito de skip** — DRI: `infra` — Status: **resolvido em [PR #72](https://github.com/BrunoMediador/startap-platform/pull/72)** (`infra(deploy): corrige skip silencioso do painel-admin no deploy.sh`). `deploy.sh` agora usa `STACK_PAI_COMPOSE="/opt/automacoes/docker-compose.yml"` (path absoluto) e emite `echo WARN` quando pula o rebuild.
+
+- [ ] **Health check de conteudo: verificar Last-Modified no deploy** — adicionar ao final do deploy.sh uma checagem que confirme que o Last-Modified do painel-admin e posterior ao timestamp do git pull. Se for mais antigo, falhar o deploy explicitamente. — DRI: `infra` — Prazo: 2026-05-25 — Status: **pendente**
   - Missao: `docs/missoes/` (criar missao separada)
-- [ ] **Auditoria de PRs #68 e #69** — verificar se as mudancas de `painel-admin/public/` desses PRs chegaram a producao ou se tambem foram puladas. Se nao chegaram, fazer rebuild manual adicional. — DRI: `infra` + Bruno — Prazo: 2026-05-19 — Status: pendente
-- [ ] **Consolidar stacks Docker** — avaliar se faz sentido mover painel-admin para `/opt/automacoes/code/docker-compose.yml` eliminando a logica de "stack pai". Decisao arquitetural: despachar para `arquiteto`. — DRI: `arquiteto` — Prazo: proxima sprint — Status: pendente
+
+- [x] **Auditoria de PRs #68 e #69** — verificar se as mudancas de `painel-admin/public/` desses PRs chegaram a producao. — Status: **resolvido** — rebuild manual pos-incidente recriou o container com codigo dos PRs #67-#71 inclusos (confirmado via Last-Modified e historico de git log).
+
+- [ ] **Consolidar stacks Docker** — avaliar se faz sentido mover painel-admin para `/opt/automacoes/code/docker-compose.yml` eliminando a logica de "stack pai". Decisao arquitetural: despachar para `arquiteto`. — DRI: `arquiteto` — Prazo: proxima sprint — Status: **pendente** (ADR 0009 em [PR #116](https://github.com/BrunoMediador/startap-platform/pull/116) cobre arquitetura do painel mas nao fecha a questao de consolidacao de stacks)
 
 ---
 
@@ -118,6 +120,6 @@ docker compose -f docker-compose.yml up -d painel-admin
 
 - Logs do Actions: run `26049293405` — ausencia das linhas `==> docker compose build/up painel-admin`
 - PR que revelou o incidente: #71 (drawer de bots)
-- PR de fix: `infra/fix-deploy-painel-admin` (pendente review do Bruno)
+- PR de fix: [PR #72](https://github.com/BrunoMediador/startap-platform/pull/72) (`infra(deploy): corrige skip silencioso do painel-admin no deploy.sh`)
 - Ultimo Last-Modified antes da correcao: `Mon, 18 May 2026 15:26:59 GMT`
 - Last-Modified apos correcao: `Mon, 18 May 2026 17:25:42 GMT`
