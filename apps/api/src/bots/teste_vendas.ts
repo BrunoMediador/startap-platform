@@ -6,108 +6,22 @@ import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
+import {
+  type ConversationState,
+  type ParsedMarker,
+  delay,
+  formatCoursesForPrompt,
+  formatMediaForPrompt,
+  formatPrice,
+  parseConversationState,
+  parseMarker,
+  sanitizar,
+} from './lib/vendas-utils.js';
 
 const SLOT = 'teste_vendas';
 const WORKFLOW_ID = 'dlpKXM3gvX2joC1b';
 const WORKFLOW_NAME = 'teste_vendas';
 const PAUSE_TABLE = 'pause_ricardo';
-
-// Marcadores que a IA emite no final da resposta (última linha).
-const MARKER_LISTA_CURSOS = '[LISTA_CURSOS]';
-const MARKER_CURSO_RE = /^\[CURSO:([^\]]+)\]$/i;
-const MARKER_VIDEO_RE = /^\[VIDEO:(\d+)\]$/i;
-const MARKER_VIDEOS_CURSO = '[VIDEOS_CURSO]';
-
-interface ParsedMarker {
-  type: 'LISTA_CURSOS' | 'CURSO' | 'VIDEO' | 'VIDEOS_CURSO' | null;
-  courseSlug?: string;
-  mediaId?: number;
-  clean: string;
-}
-
-/** Extrai o marcador da última linha do texto e retorna texto limpo + marcador parseado. */
-function parseMarker(text: string): ParsedMarker {
-  const lines = text.trimEnd().split('\n');
-  const lastLine = lines[lines.length - 1].trim();
-  const textWithoutLast = lines.slice(0, -1).join('\n').trimEnd();
-
-  if (lastLine === MARKER_LISTA_CURSOS) {
-    return { type: 'LISTA_CURSOS', clean: textWithoutLast };
-  }
-  if (lastLine === MARKER_VIDEOS_CURSO) {
-    return { type: 'VIDEOS_CURSO', clean: textWithoutLast };
-  }
-  const cursoMatch = lastLine.match(MARKER_CURSO_RE);
-  if (cursoMatch) {
-    return { type: 'CURSO', courseSlug: cursoMatch[1], clean: textWithoutLast };
-  }
-  const videoMatch = lastLine.match(MARKER_VIDEO_RE);
-  if (videoMatch) {
-    return { type: 'VIDEO', mediaId: Number(videoMatch[1]), clean: textWithoutLast };
-  }
-  return { type: null, clean: text.trim() };
-}
-
-/** Estado conversacional extraído do histórico de memória. */
-interface ConversationState {
-  cursoEscolhido: string | null;
-  mediaIdsSentSet: Set<number>;
-}
-
-function parseConversationState(
-  history: Array<{ role: string; content: string }>,
-): ConversationState {
-  let cursoEscolhido: string | null = null;
-  const mediaIdsSentSet = new Set<number>();
-
-  for (const turn of history) {
-    if (turn.role === 'system') {
-      const cursoMatch = turn.content.match(/\[STATE:CURSO_ESCOLHIDO:([^\]]+)\]/);
-      if (cursoMatch) cursoEscolhido = cursoMatch[1] === 'null' ? null : cursoMatch[1];
-
-      const videoMatch = turn.content.match(/\[STATE:VIDEO_SENT:(\d+)\]/g);
-      if (videoMatch) {
-        for (const m of videoMatch) {
-          const id = m.match(/\[STATE:VIDEO_SENT:(\d+)\]/)?.[1];
-          if (id) mediaIdsSentSet.add(Number(id));
-        }
-      }
-    }
-  }
-  return { cursoEscolhido, mediaIdsSentSet };
-}
-
-function formatPrice(centavos: number): string {
-  return `R$${(centavos / 100).toFixed(2).replace('.', ',')}`;
-}
-
-function formatCoursesForPrompt(
-  courses: Awaited<ReturnType<typeof botCourses.listCoursesBySlot>>,
-): string {
-  if (!courses.length) return '(nenhum curso cadastrado)';
-  return courses
-    .filter((c) => c.enabled)
-    .map(
-      (c) =>
-        `- ${c.course_slug}: ${c.name}${c.price ? ` (${formatPrice(c.price)})` : ''}${c.duration ? ` | ${c.duration}` : ''}`,
-    )
-    .join('\n');
-}
-
-function formatMediaForPrompt(medias: Awaited<ReturnType<typeof botMedia.listBySlot>>): string {
-  const enabled = medias.filter((m) => m.enabled);
-  if (!enabled.length) return '(nenhuma midia cadastrada)';
-  return enabled
-    .map((m) => {
-      const context = m.context || m.caption || '(sem descricao)';
-      if (m.course_slug) {
-        const role = m.is_course_intro ? 'intro' : 'secundario';
-        return `- ID ${m.id} (${m.media_type}, curso: ${m.course_slug}, ${role}): ${context}`;
-      }
-      return `- ID ${m.id} (${m.media_type}, contexto livre): ${context}`;
-    })
-    .join('\n');
-}
 
 const DEFAULT_PROMPT_TPL = [
   'Voce e um assistente virtual do Curso de Barbeiro Profissional do Ricardo.',
@@ -168,20 +82,6 @@ const DEFAULT_PROMPT_TPL = [
   '4. Maximo 3 linhas por resposta. Uma pergunta por vez.',
   '5. Quando cliente quiser se inscrever -> use ferramenta salvar_lead.',
 ].join('\n');
-
-function sanitizar(text: string): string {
-  return text
-    .split('\n')
-    .filter((l) => {
-      const t = l.trim();
-      if (t === '') return true;
-      if (/^to=functions\./i.test(t)) return false;
-      if (/^\{.*\}$/.test(t)) return false;
-      return true;
-    })
-    .join('\n')
-    .trim();
-}
 
 export class TesteVendasBot extends BotBase {
   constructor(opts?: { slotOverride?: string }) {
@@ -303,9 +203,6 @@ export class TesteVendasBot extends BotBase {
 
     if (type !== null) {
       const effectiveSlot = this.slot;
-      // delay explícito: garante que WAHA processe o texto antes de enviar mídia.
-      // await no lugar de setTimeout fire-and-forget — erro agora é capturável (ADR 0010 Opção A).
-      const delay = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
       try {
         await delay(2500);
         await this.handleMarker({
