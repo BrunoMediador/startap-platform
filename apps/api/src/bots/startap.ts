@@ -1,9 +1,10 @@
 import type { BotContext } from '@startap/core/types';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { config } from '../config.js';
 import { applyFlowManualCommand } from '../lib/manual-pause.js';
-import { registerBotEntry } from '../registry.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
+import { registerBotEntry } from '../registry.js';
 import { BotBase } from './base.js';
 
 const SLOT = 'startap';
@@ -11,10 +12,7 @@ const PAUSE_TABLE = 'pause_startap';
 const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
 // Corrigido de 'STARTTAP_AI' (typo com duplo T) — migration 022 corrigiu registros históricos
 const STARTAP_WORKFLOW_NAME = 'STARTAP_AI';
-const STARTAP_SESSION_NAMES = (
-  process.env.STARTAP_WAHA_SESSIONS || 'startap,STARTAP_AI,STARTAP_AI_PROD'
-)
-  .split(',')
+const STARTAP_SESSION_NAMES = config.STARTAP_WAHA_SESSIONS.split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 

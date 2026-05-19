@@ -10,14 +10,15 @@ import { logger } from '@startap/core/logger';
 import { toChatId } from '@startap/core/phone';
 import { antibot, pausa } from '@startap/db';
 import { waha } from '@startap/integrations';
+import { config } from '../config.js';
 
 const log = logger.child({ job: 'antibot' });
 
 const THRESHOLD = 10; // mensagens
 const WINDOW_SEC = 60;
-const ALERT_DEV = process.env.ALERT_DEV_PHONE ?? '';
-const ALERT_OWNER = process.env.ALERT_OWNER_PHONE ?? '';
-const ALERT_SESSION = process.env.ALERT_SESSION ?? 'startap';
+const ALERT_DEV = config.ALERT_DEV_PHONE ?? '';
+const ALERT_OWNER = config.ALERT_OWNER_PHONE ?? '';
+const ALERT_SESSION = config.ALERT_SESSION;
 
 export async function runAntibot(): Promise<{ blocked: number; pruned: number }> {
   const suspects = await antibot.findSuspects(THRESHOLD, WINDOW_SEC);

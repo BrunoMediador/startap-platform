@@ -11,13 +11,11 @@
  */
 import { logger } from '@startap/core/logger';
 import { flowExecutionLog } from '@startap/db';
+import { config } from '../config.js';
 
 const log = logger.child({ job: 'close-stale-running' });
 
-const MAX_AGE_MINUTES = Math.max(
-  1,
-  Number.parseInt(process.env.CHAT_STALE_RUNNING_MAX_MINUTES ?? '30', 10),
-);
+const MAX_AGE_MINUTES = Math.max(1, config.CHAT_STALE_RUNNING_MAX_MINUTES);
 
 export interface CloseStaleResult extends Record<string, unknown> {
   closed: number;
