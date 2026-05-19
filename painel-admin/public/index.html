@@ -2505,6 +2505,8 @@ let _selectedBotTab = 'overview';
 let _configIaDirty = false;
 // flag para aba Prompt — mesma proteção de saída sem salvar
 let _promptDirty = false;
+// flag equivalente para a aba Prompt do modal de clone
+let _clonePromptDirty = false;
 
 const INTERNAL_BOT_SLOT = 'startap';
 const MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
@@ -5577,6 +5579,10 @@ function openCloneConfigModal(clone) {
 
     document.getElementById('cfg-clone-tabs')?.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        if (_clonePromptDirty && btn.dataset.tab !== 'prompt') {
+          if (!window.confirm('O prompt foi editado mas não salvo. Deseja sair mesmo assim?')) return;
+          _clonePromptDirty = false;
+        }
         _cfgCloneTab = btn.dataset.tab;
         document.querySelectorAll('#cfg-clone-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === _cfgCloneTab));
         loadCloneConfigTab(_cfgCloneTab, clone);
@@ -5690,14 +5696,58 @@ function loadCloneConfigTab(tab, clone) {
     });
 
   } else if (tab === 'prompt') {
-    const promptText = clone.prompt || clone.system_prompt || '';
-    content.innerHTML = `
-      <div style="padding-top:.5rem">
-        <p class="muted" style="margin-bottom:.75rem;display:flex;align-items:center;gap:.375rem">
-          ${icon('alert-triangle', 14)} Para editar, ajuste a personalização — o prompt é regenerado da matriz automaticamente.
-        </p>
-        <textarea rows="16" readonly style="opacity:.7;cursor:default">${escapeHtml(promptText)}</textarea>
-      </div>`;
+    _clonePromptDirty = false;
+    content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    (async () => {
+      try {
+        const data = await api(`/api/bots/${encodeURIComponent(clone.slot)}/prompt`);
+        const promptText = data?.prompt || data?.content || data?.system_prompt || '';
+        content.innerHTML = `
+          <div style="padding-top:.5rem">
+            <p class="muted" style="margin-bottom:.75rem;display:flex;align-items:flex-start;gap:.375rem">
+              ${icon('info', 14)} Você pode editar o prompt do clone diretamente. Atenção: qualquer mudança na aba <strong>Personalização</strong> <em>regenera</em> o prompt a partir da matriz, sobrescrevendo edições manuais.
+            </p>
+            <div class="field">
+              <label for="clone-prompt-ta">Prompt do sistema</label>
+              <textarea id="clone-prompt-ta" rows="16" placeholder="Prompt do clone...">${escapeHtml(promptText)}</textarea>
+              <div class="char-count"><span id="clone-prompt-count">${promptText.length}</span> caracteres</div>
+            </div>
+            <button class="btn btn--primary" id="btn-save-clone-prompt" style="margin-top:.75rem">${icon('check-circle-2', 14)} Salvar prompt</button>
+          </div>`;
+
+        const ta = content.querySelector('#clone-prompt-ta');
+        const countEl = content.querySelector('#clone-prompt-count');
+        ta.addEventListener('input', () => {
+          countEl.textContent = ta.value.length;
+          _clonePromptDirty = true;
+        });
+
+        content.querySelector('#btn-save-clone-prompt').addEventListener('click', async () => {
+          const btn = content.querySelector('#btn-save-clone-prompt');
+          btn.disabled = true;
+          try {
+            await api(`/api/bots/${encodeURIComponent(clone.slot)}/prompt`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt: ta.value }),
+            });
+            _clonePromptDirty = false;
+            toast('Prompt do clone salvo!', 'success');
+          } catch (err) {
+            toast('Erro ao salvar prompt: ' + err.message, 'danger');
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      } catch (err) {
+        content.innerHTML = `
+          <div style="padding-top:.5rem">
+            <p class="muted">${icon('alert-triangle', 14)} Erro ao carregar prompt: ${escapeHtml(err.message)}</p>
+            <button class="btn btn--sm" id="btn-retry-clone-prompt" style="margin-top:.5rem">${icon('refresh-cw', 14)} Tentar novamente</button>
+          </div>`;
+        content.querySelector('#btn-retry-clone-prompt').addEventListener('click', () => loadCloneConfigTab('prompt', clone));
+      }
+    })();
 
   } else if (tab === 'sessao') {
     const sessao = clone.waha_sessao;
