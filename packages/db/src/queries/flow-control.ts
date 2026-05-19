@@ -8,17 +8,30 @@ export interface FlowControlRow {
   updated_at: Date;
 }
 
+const CACHE_TTL_MS = 60_000;
+const activeCache = new Map<string, { value: boolean; expiresAt: number }>();
+
 export async function isFlowActive(flowId: string): Promise<boolean> {
+  const cached = activeCache.get(flowId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
   try {
     const r = await query<Pick<FlowControlRow, 'active'>>(
       'SELECT active FROM flow_controls WHERE flow_id = $1',
       [flowId],
     );
-    return r.rows[0]?.active ?? true;
+    const value = r.rows[0]?.active ?? true;
+    activeCache.set(flowId, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+    return value;
   } catch (e) {
     if (isUndefinedTableError(e)) return true;
     throw e;
   }
+}
+
+export function invalidateFlowControlCache(flowId?: string): void {
+  if (flowId) activeCache.delete(flowId);
+  else activeCache.clear();
 }
 
 export async function setFlowActive(input: {
@@ -38,6 +51,7 @@ export async function setFlowActive(input: {
      RETURNING flow_id, flow_name, source, active, updated_at`,
     [input.flowId, input.flowName, input.source, input.active],
   );
+  invalidateFlowControlCache(input.flowId);
   return r.rows[0];
 }
 

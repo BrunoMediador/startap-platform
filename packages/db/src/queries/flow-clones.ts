@@ -32,6 +32,24 @@ export interface CloneSummary extends CloneRow {
 }
 
 // ---------------------------------------------------------------------------
+// Cache TTL — reduz queries por webhook (hot path: getCloneBySession/BySlot)
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 60_000;
+const bySessionCache = new Map<string, { value: CloneRow | null; expiresAt: number }>();
+const bySlotCache = new Map<string, { value: CloneRow | null; expiresAt: number }>();
+
+export function invalidateCloneCache(opts?: { sessao?: string; slot?: string }): void {
+  if (!opts) {
+    bySessionCache.clear();
+    bySlotCache.clear();
+    return;
+  }
+  if (opts.sessao) bySessionCache.delete(opts.sessao);
+  if (opts.slot) bySlotCache.delete(opts.slot);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers internos
 // ---------------------------------------------------------------------------
 
@@ -318,6 +336,7 @@ export async function updateClone(
     }
   }
 
+  invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
   return row;
 }
 
@@ -328,7 +347,10 @@ export async function setCloneSession(id: number, sessaoName: string): Promise<C
      WHERE id = $2 RETURNING *`,
     [sessaoName, id],
   );
-  return r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  if (!r.rows[0]) return null;
+  const row = normalizeCloneRow(r.rows[0]);
+  invalidateCloneCache({ sessao: sessaoName, slot: row.slot });
+  return row;
 }
 
 export async function setCloneStatus(id: number, status: CloneStatus): Promise<CloneRow | null> {
@@ -336,7 +358,10 @@ export async function setCloneStatus(id: number, status: CloneStatus): Promise<C
     `UPDATE flow_clones SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
     [status, id],
   );
-  return r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  if (!r.rows[0]) return null;
+  const row = normalizeCloneRow(r.rows[0]);
+  invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
+  return row;
 }
 
 /**
@@ -368,34 +393,47 @@ export async function deleteClone(id: number): Promise<{ slot: string; waha_sess
     client.release();
   }
 
+  invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
   return { slot: row.slot, waha_sessao: row.waha_sessao };
 }
 
 /**
  * Retorna o clone associado a uma sessão WAHA dedicada.
  * Retorna null se nenhum clone estiver vinculado à sessão; lança apenas em falha de DB.
+ * Cache TTL de 60s — hot path do router (chamada por webhook).
  */
 export async function getCloneBySession(sessao: string): Promise<CloneRow | null> {
+  const cached = bySessionCache.get(sessao);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
             personalizacao, waha_sessao, status, created_at, updated_at
      FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
     [sessao],
   );
-  return r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  bySessionCache.set(sessao, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  return value;
 }
 
 /**
  * Retorna o clone pelo slot (usado pelo dispatcher).
+ * Cache TTL de 60s — hot path do router ao resolver clone dinamicamente.
  */
 export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
+  const cached = bySlotCache.get(slot);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
             personalizacao, waha_sessao, status, created_at, updated_at
      FROM flow_clones WHERE slot = $1`,
     [slot],
   );
-  return r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+  bySlotCache.set(slot, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  return value;
 }
 
 // ---------------------------------------------------------------------------
