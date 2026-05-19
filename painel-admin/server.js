@@ -2051,13 +2051,15 @@ app.get('/api/leads', async (req, res) => {
     let total = 0;
     if (slot) {
       // UNION ALL no SQL garante ORDER BY/LIMIT/OFFSET globais — sem merge em memória.
+      // leads_ricardo tem 'interesse' (sem 'mensagem_inicial') e não tem coluna 'origem'.
+      // Aliases normalizam para os nomes que o frontend já consome.
       const [rData, rCount] = await Promise.all([
         pool.query(
-          `SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+          `SELECT id::text, nome, telefone, interesse AS mensagem_inicial, NULL::text AS origem, criado_em, slot,
                   'leads_ricardo'::text AS _table
              FROM leads_ricardo WHERE slot = $1
            UNION ALL
-           SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+           SELECT id::text, nome, telefone, mensagem_inicial, origem, criado_em, slot,
                   'leads_vendas_barbearia'::text AS _table
              FROM leads_vendas_barbearia WHERE slot = $1
            ORDER BY criado_em DESC
@@ -2074,13 +2076,15 @@ app.get('/api/leads', async (req, res) => {
       total = rCount.rows[0]?.n ?? 0;
     } else {
       // UNION ALL no SQL garante ORDER BY/LIMIT/OFFSET globais — sem merge em memória.
+      // leads_ricardo tem 'interesse' (sem 'mensagem_inicial') e não tem coluna 'origem'.
+      // Aliases normalizam para os nomes que o frontend já consome.
       const [rData, rCount] = await Promise.all([
         pool.query(
-          `SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+          `SELECT id::text, nome, telefone, interesse AS mensagem_inicial, NULL::text AS origem, criado_em, slot,
                   'leads_ricardo'::text AS _table
              FROM leads_ricardo
            UNION ALL
-           SELECT id, nome, telefone, mensagem_inicial, origem, criado_em, slot,
+           SELECT id::text, nome, telefone, mensagem_inicial, origem, criado_em, slot,
                   'leads_vendas_barbearia'::text AS _table
              FROM leads_vendas_barbearia
            ORDER BY criado_em DESC

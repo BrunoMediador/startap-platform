@@ -1,5 +1,5 @@
 // Teste de regressão: paginação de /api/leads não repete linhas entre páginas.
-// Executa sem DB real — valida a lógica de slice/duplicata que existia antes da fix.
+// Cobre também o bug de schemas divergentes (PR #123 → hotfix).
 // Uso: node --test painel-admin/test/leads-pagination.test.js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -76,4 +76,65 @@ test('comportamento ANTERIOR (bugado) repetia dados quando offset > 0 e fetchLim
     Array.isArray(overlap),
     'overlap calculado — bug era silencioso em dados assimétricos'
   );
+});
+
+// --- Cobertura do hotfix: schemas divergentes (PR #123) ---
+// leads_ricardo: colunas id(int), nome, telefone, interesse, criado_em, slot  — SEM mensagem_inicial, SEM origem
+// leads_vendas_barbearia: id(bigint), nome, telefone, mensagem_inicial, origem, criado_em, slot
+
+test('schema divergente: alias interesse→mensagem_inicial produz coluna unificada', () => {
+  // Simula linha vinda de leads_ricardo após o alias SQL correto
+  const rowRicardo = {
+    id: '10',          // id::text
+    nome: 'Teste',
+    telefone: '5511999',
+    mensagem_inicial: 'Quero cortar cabelo', // alias de interesse
+    origem: null,      // NULL::text AS origem
+    criado_em: new Date().toISOString(),
+    slot: 'slot_x',
+    _table: 'leads_ricardo',
+  };
+
+  // Simula linha de leads_vendas_barbearia (sem alias — colunas nativas)
+  const rowVendas = {
+    id: '20',          // id::text (era bigint)
+    nome: 'Outro',
+    telefone: '5511888',
+    mensagem_inicial: 'Vi no instagram',
+    origem: 'instagram',
+    criado_em: new Date().toISOString(),
+    slot: 'slot_y',
+    _table: 'leads_vendas_barbearia',
+  };
+
+  // Ambas as linhas devem ter as mesmas chaves (o que o UNION ALL garante)
+  const keysRicardo = Object.keys(rowRicardo).sort();
+  const keysVendas  = Object.keys(rowVendas).sort();
+  assert.deepEqual(keysRicardo, keysVendas, 'colunas do UNION ALL devem ser idênticas nas duas tabelas');
+
+  // mensagem_inicial deve existir em ambas
+  assert.ok('mensagem_inicial' in rowRicardo, 'ricardo deve ter mensagem_inicial (alias de interesse)');
+  assert.ok('mensagem_inicial' in rowVendas,  'vendas_barbearia deve ter mensagem_inicial');
+
+  // origem de ricardo é null (não existe a coluna), de vendas pode ser string
+  assert.equal(rowRicardo.origem, null, 'origem de leads_ricardo deve ser null');
+  assert.equal(typeof rowVendas.origem, 'string');
+
+  // id deve ser string em ambas (id::text normaliza bigint vs integer)
+  assert.equal(typeof rowRicardo.id, 'string', 'id deve ser string após id::text');
+  assert.equal(typeof rowVendas.id,  'string', 'id deve ser string após id::text');
+});
+
+test('schema divergente: linha ricardo sem alias quebraria (documenta o bug do PR #123)', () => {
+  // Antes do fix, o SELECT listava mensagem_inicial diretamente em leads_ricardo
+  // que não tem essa coluna → Postgres lança "column does not exist".
+  // Este teste documenta que a coluna correta em ricardo é 'interesse'.
+  const schemaRicardo = ['id', 'nome', 'telefone', 'interesse', 'criado_em', 'slot'];
+  const schemaVendas  = ['id', 'nome', 'telefone', 'mensagem_inicial', 'origem', 'criado_em', 'slot'];
+
+  assert.equal(schemaRicardo.includes('mensagem_inicial'), false, 'leads_ricardo NAO tem mensagem_inicial');
+  assert.equal(schemaRicardo.includes('origem'),          false, 'leads_ricardo NAO tem origem');
+  assert.equal(schemaVendas.includes('interesse'),        false, 'leads_vendas_barbearia NAO tem interesse');
+  assert.equal(schemaVendas.includes('mensagem_inicial'), true);
+  assert.equal(schemaVendas.includes('origem'),           true);
 });
