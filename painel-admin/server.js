@@ -838,12 +838,10 @@ app.post('/api/bots/:slot/media', async (req, res) => {
       enabled = true,
     } = req.body;
     if (!url)
-      return res
-        .status(400)
-        .json({
-          error:
-            'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado',
-        });
+      return res.status(400).json({
+        error:
+          'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado',
+      });
     // position nao fornecido: usa timestamp como chave unica
     const pos = position || `media_${Date.now()}`;
     const r = await pool.query(
@@ -1189,7 +1187,9 @@ app.put('/api/bots/:slot/courses/:course_slug/intro/:media_id', async (req, res)
       [slot, course_slug],
     );
     if (!courseCheck.rows.length) {
-      return res.status(404).json({ error: `curso '${course_slug}' nao encontrado no slot '${slot}'` });
+      return res
+        .status(404)
+        .json({ error: `curso '${course_slug}' nao encontrado no slot '${slot}'` });
     }
 
     // Valida que a mídia pertence ao curso e é do tipo video
@@ -1202,7 +1202,9 @@ app.put('/api/bots/:slot/courses/:course_slug/intro/:media_id', async (req, res)
     }
     const media = mediaCheck.rows[0];
     if (media.media_type !== 'video') {
-      return res.status(400).json({ error: 'apenas midias do tipo video podem ser definidas como apresentacao' });
+      return res
+        .status(400)
+        .json({ error: 'apenas midias do tipo video podem ser definidas como apresentacao' });
     }
     if (media.course_slug !== course_slug) {
       return res.status(400).json({ error: `midia nao esta vinculada ao curso '${course_slug}'` });
@@ -1892,11 +1894,11 @@ app.get('/api/leads', async (req, res) => {
     const slot =
       typeof req.query.slot === 'string' && req.query.slot.trim() ? req.query.slot.trim() : null;
 
-    const rawLimit = parseInt(req.query.limit, 10);
-    const rawOffset = parseInt(req.query.offset, 10);
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const rawOffset = Number.parseInt(req.query.offset, 10);
     // Garante valores seguros sem expor input do usuário no SQL — usa parâmetros
-    const limit = (!isNaN(rawLimit) && rawLimit > 0) ? Math.min(rawLimit, 500) : 50;
-    const offset = (!isNaN(rawOffset) && rawOffset >= 0) ? rawOffset : 0;
+    const limit = !isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 50;
+    const offset = !isNaN(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
     // Cada tabela busca limit+offset pra garantir cobertura ao mesclar e paginar em JS.
     // O total real vem de COUNT paralelo em ambas as tabelas.
@@ -1953,16 +1955,16 @@ app.get('/api/leads', async (req, res) => {
 
 app.get('/api/agendamentos-pendentes', async (req, res) => {
   try {
-    const rawLimit = parseInt(req.query.limit, 10);
-    const rawOffset = parseInt(req.query.offset, 10);
-    const limit = (!isNaN(rawLimit) && rawLimit > 0) ? Math.min(rawLimit, 500) : 50;
-    const offset = (!isNaN(rawOffset) && rawOffset >= 0) ? rawOffset : 0;
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const rawOffset = Number.parseInt(req.query.offset, 10);
+    const limit = !isNaN(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : 50;
+    const offset = !isNaN(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
 
     const [r, c] = await Promise.all([
-      pool.query(
-        'SELECT * FROM agendamento_pendente ORDER BY 1 DESC LIMIT $1 OFFSET $2',
-        [limit, offset],
-      ),
+      pool.query('SELECT * FROM agendamento_pendente ORDER BY 1 DESC LIMIT $1 OFFSET $2', [
+        limit,
+        offset,
+      ]),
       pool.query('SELECT COUNT(*)::int AS n FROM agendamento_pendente'),
     ]);
 
@@ -1972,7 +1974,9 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
     res.json(r.rows);
   } catch (err) {
     console.error('[painel] GET /api/agendamentos-pendentes ->', err.message);
-    res.status(500).json({ error: 'falha ao carregar agendamentos pendentes', detail: err.message });
+    res
+      .status(500)
+      .json({ error: 'falha ao carregar agendamentos pendentes', detail: err.message });
   }
 });
 
@@ -2647,11 +2651,9 @@ app.post('/api/clones/:id/retry-waha', async (req, res) => {
 
   if (!cloneRow) return res.status(404).json({ error: 'Clone não encontrado' });
   if (cloneRow.status !== 'rascunho')
-    return res
-      .status(409)
-      .json({
-        error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho`,
-      });
+    return res.status(409).json({
+      error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho`,
+    });
 
   const sessaoName = cloneRow.waha_sessao ?? wahaSessionName(cloneRow.slot);
   const waha = await createWahaSession(sessaoName);
@@ -2992,6 +2994,156 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
               updated_at         = NOW()
         WHERE id = $2`,
       [newStatus, id],
+    );
+
+    res.json({
+      ok: testResult.ok,
+      status: newStatus,
+      error: testResult.ok ? undefined : testResult.error,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GOOGLE CALENDAR POR MATRIZ (bot_config) ----------
+
+// PUT /api/bots/:slot/gcal — grava credenciais Service Account na matriz
+app.put('/api/bots/:slot/gcal', async (req, res) => {
+  const { slot } = req.params;
+  if (!slot || typeof slot !== 'string') return res.status(400).json({ error: 'slot inválido' });
+
+  const { credentials_json, calendar_id } = req.body ?? {};
+  if (!credentials_json || typeof credentials_json !== 'string') {
+    return res.status(400).json({ error: 'credentials_json obrigatório' });
+  }
+  if (!calendar_id || typeof calendar_id !== 'string') {
+    return res.status(400).json({ error: 'calendar_id obrigatório' });
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(credentials_json);
+  } catch {
+    return res.status(400).json({ error: 'credentials_json: JSON malformado' });
+  }
+  if (parsed.type !== 'service_account') {
+    return res.status(400).json({ error: 'credentials_json: deve ser do tipo service_account' });
+  }
+
+  const clientEmail = parsed.client_email ?? null;
+  // Loga apenas o client_email — nunca a chave privada
+  console.log(`[gcal] PUT matriz ${slot}: client_email=${clientEmail}`);
+
+  try {
+    // Verificar que o slot existe em bot_config antes de gravar
+    const exists = await pool.query(`SELECT 1 FROM bot_config WHERE slot = $1`, [slot]);
+    if (!exists.rows[0]) return res.status(404).json({ error: 'Bot (slot) não encontrado' });
+
+    const r = await pool.query(
+      `UPDATE bot_config
+          SET gcal_credentials_json = $1,
+              gcal_client_email     = $2,
+              gcal_calendar_id      = $3,
+              gcal_status           = 'pending',
+              gcal_connected_at     = NULL,
+              gcal_last_check_at    = NULL
+        WHERE slot = $4
+        RETURNING slot, gcal_client_email, gcal_calendar_id, gcal_status`,
+      [credentials_json, clientEmail, calendar_id.trim(), slot],
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/bots/:slot/gcal/status — retorna metadados sem expor o JSON
+app.get('/api/bots/:slot/gcal/status', async (req, res) => {
+  const { slot } = req.params;
+  if (!slot || typeof slot !== 'string') return res.status(400).json({ error: 'slot inválido' });
+
+  try {
+    const r = await pool.query(
+      `SELECT gcal_status, gcal_client_email, gcal_calendar_id, gcal_connected_at, gcal_last_check_at
+         FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Bot (slot) não encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/bots/:slot/gcal — remove credenciais da matriz
+app.delete('/api/bots/:slot/gcal', async (req, res) => {
+  const { slot } = req.params;
+  if (!slot || typeof slot !== 'string') return res.status(400).json({ error: 'slot inválido' });
+
+  try {
+    const r = await pool.query(
+      `UPDATE bot_config
+          SET gcal_credentials_json = NULL,
+              gcal_client_email     = NULL,
+              gcal_calendar_id      = NULL,
+              gcal_status           = NULL,
+              gcal_connected_at     = NULL,
+              gcal_last_check_at    = NULL
+        WHERE slot = $1
+        RETURNING slot`,
+      [slot],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Bot (slot) não encontrado' });
+    console.log(`[gcal] DELETE matriz ${slot}: credenciais removidas`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/bots/:slot/gcal/test — testa conexão SA da matriz e atualiza status
+app.post('/api/bots/:slot/gcal/test', async (req, res) => {
+  const { slot } = req.params;
+  if (!slot || typeof slot !== 'string') return res.status(400).json({ error: 'slot inválido' });
+
+  try {
+    const r = await pool.query(
+      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_client_email FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Bot (slot) não encontrado' });
+
+    const { gcal_credentials_json, gcal_calendar_id, gcal_client_email } = r.rows[0];
+    if (!gcal_credentials_json || !gcal_calendar_id) {
+      return res.status(400).json({ error: 'Credenciais não configuradas' });
+    }
+
+    // Import dinâmico para evitar dependência circular no painel-admin legado
+    let testResult;
+    try {
+      const { GoogleCalendarClient } = await import(
+        '../packages/integrations/dist/google-calendar/client.js'
+      );
+      const client = new GoogleCalendarClient({
+        credentialsJson: gcal_credentials_json,
+        calendarId: gcal_calendar_id,
+      });
+      testResult = await client.testConnection();
+    } catch (importErr) {
+      testResult = { ok: false, error: `Falha ao carregar cliente GCal: ${importErr.message}` };
+    }
+
+    const newStatus = testResult.ok ? 'active' : 'invalid';
+    console.log(`[gcal] TEST matriz ${slot} (${gcal_client_email}): ${newStatus}`);
+
+    await pool.query(
+      `UPDATE bot_config
+          SET gcal_status        = $1,
+              gcal_last_check_at = NOW(),
+              gcal_connected_at  = CASE WHEN $1 = 'active' AND gcal_connected_at IS NULL THEN NOW() ELSE gcal_connected_at END
+        WHERE slot = $2`,
+      [newStatus, slot],
     );
 
     res.json({

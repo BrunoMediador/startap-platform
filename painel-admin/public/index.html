@@ -94,6 +94,53 @@ textarea, input, select { font-family: inherit; }
 .muted   { color: var(--text-muted); font-size: .8125rem; }
 .subtle  { color: var(--text-subtle); font-size: .75rem; }
 .gcal-error-detail { margin-top: .375rem; font-family: var(--font-mono, monospace); font-size: .75rem; word-break: break-all; color: var(--danger, #ef4444); }
+/* ── Google Calendar — bloco de ajuda e instruções ── */
+.gcal-help-block { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; margin-bottom: .875rem; }
+.gcal-help-block summary {
+  padding: .625rem .875rem;
+  font-size: .8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  background: var(--surface-2);
+  list-style: none;
+  color: var(--text);
+}
+.gcal-help-block summary::-webkit-details-marker { display: none; }
+.gcal-help-block summary::before {
+  content: '▶';
+  font-size: .625rem;
+  transition: transform .2s;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.gcal-help-block[open] summary::before { transform: rotate(90deg); }
+.gcal-help-block__body { padding: .875rem; background: var(--bg-2); }
+.gcal-instructions { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .75rem; counter-reset: gcal-step; }
+.gcal-instructions li { display: flex; gap: .625rem; font-size: .8125rem; line-height: 1.5; counter-increment: gcal-step; }
+.gcal-instructions li::before {
+  content: counter(gcal-step);
+  min-width: 1.375rem;
+  height: 1.375rem;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .6875rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: .0625rem;
+}
+.gcal-instructions li strong { color: var(--text); }
+.gcal-instructions li a { color: var(--primary); text-decoration: none; }
+.gcal-instructions li a:hover { text-decoration: underline; }
+.gcal-instructions li code { font-family: var(--font-mono, monospace); font-size: .75rem; background: var(--surface-2); padding: .0625rem .25rem; border-radius: 3px; }
+.gcal-edit-hint { padding: .625rem .75rem; background: var(--surface-2); border-radius: var(--radius-sm); font-size: .8125rem; color: var(--text-muted); margin-bottom: .5rem; border-left: 3px solid var(--primary); }
 .mono    { font-family: var(--font-mono); font-size: .8125rem; }
 .label   { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
 /* ── Layout shell ───────────────────────────────────────────────────── */
@@ -2835,12 +2882,16 @@ function renderBotsListAndDetail(bots, wrap) {
   if (_selectedBot) _renderBotsDetail(bots, wrap, _selectedBot);
 }
 
+/* Slots de matriz que usam Google Calendar para agendamento */
+const GCAL_MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas_barbearia'];
+
 function renderBotDetail(bot, container) {
   const slot = bot.slot || bot.slug;
   // aba routing foi removida em 003-F — normaliza para overview
   if (_selectedBotTab === 'routing') _selectedBotTab = 'overview';
   // Preserva modificadores (ex: bot-detail--in-drawer) já presentes no container
   if (!container.classList.contains('bot-detail')) container.classList.add('bot-detail');
+  const hasGcal = GCAL_MATRIZ_SLOTS.includes(slot);
   container.innerHTML = `
     <div class="bot-detail__header">
       <div id="bot-detail-avatar"></div>
@@ -2857,6 +2908,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
+      ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'gcal' ? ' active' : ''}" data-tab="gcal" role="tab" aria-selected="${_selectedBotTab === 'gcal'}">${icon('calendar', 13)} Google Calendar</button>` : ''}
     </div>
     <div id="bot-tab-content"></div>`;
 
@@ -2907,6 +2959,15 @@ async function loadBotTab(slot, tab, el, bot) {
     </div>`;
   } else if (tab === 'config-ia') {
     await renderBotConfigIA(slot, el);
+  } else if (tab === 'gcal') {
+    /* ── Google Calendar da matriz — usa helper _renderGcalTab ── */
+    el.innerHTML = '';
+    _renderGcalTab({
+      baseUrl: `/api/bots/${encodeURIComponent(slot)}`,
+      entityLabel: 'matriz',
+      container: el,
+      reloadFn: null,
+    });
   }
 }
 
@@ -5554,6 +5615,237 @@ async function wizardStep4Skip() {
   }
 }
 
+/* ══ HELPER GOOGLE CALENDAR (clone + matriz) ══════════════════════
+ *  opts.baseUrl      — ex: "/api/clones/42" ou "/api/bots/teste_barbearia"
+ *  opts.entityLabel  — ex: "clone" ou "matriz"
+ *  opts.container    — elemento DOM onde renderizar
+ *  opts.reloadFn     — função sem argumentos para recarregar a aba
+ * ================================================================ */
+function _renderGcalTab(opts) {
+  const { baseUrl, entityLabel, container, reloadFn } = opts;
+
+  async function loadTab() {
+    container.innerHTML = `<div style="padding-top:.75rem;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    let data;
+    try {
+      data = await api(`${baseUrl}/gcal/status`);
+    } catch (err) {
+      container.innerHTML = `<p class="muted" style="padding-top:.75rem">${icon('alert-triangle',14)} Erro ao carregar status: ${escapeHtml(err.message)}</p>
+        <button class="btn btn--sm" style="margin-top:.625rem" id="gcal-retry-btn">${icon('refresh-cw',13)} Tentar novamente</button>`;
+      container.querySelector('#gcal-retry-btn').addEventListener('click', loadTab);
+      return;
+    }
+    render(data);
+  }
+
+  function _gcalInstructionsHtml() {
+    return `
+      <details class="gcal-help-block">
+        <summary>${icon('help-circle', 14)} Como obter essas informações?</summary>
+        <div class="gcal-help-block__body">
+          <ol class="gcal-instructions">
+            <li>
+              <div>
+                <strong>Criar Service Account no Google Cloud</strong><br>
+                Entre em <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">console.cloud.google.com → IAM e Admin → Contas de serviço</a>.
+                Clique em <strong>Criar conta de serviço</strong>, dê um nome (ex: <code>Agenda-NomeDoCliente</code>) e clique em Criar.
+                Pule as permissões opcionais e clique em Concluir.
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Baixar a chave JSON</strong><br>
+                Na lista, clique na conta criada → aba <strong>Chaves</strong> → <strong>Adicionar chave</strong> → <strong>Criar nova chave</strong>.
+                Selecione o tipo <strong>JSON</strong> e baixe o arquivo.
+                Cole o conteúdo abaixo ou faça upload do arquivo.
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Compartilhar a agenda com a conta de serviço</strong><br>
+                Após salvar o JSON, vamos exibir o e-mail da conta de serviço aqui.
+                Acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> → clique nos 3 pontos da sua agenda →
+                <strong>Configurações e compartilhamento</strong> → <strong>Compartilhar com pessoas específicas</strong> → Adicionar o e-mail da conta.
+                Permissão necessária: <strong>Fazer alterações em eventos</strong>.
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Pegar o ID da agenda</strong><br>
+                Na mesma tela <em>Configurações e compartilhamento</em>, role até <strong>Integrar agenda</strong>.
+                Copie o <strong>ID da agenda</strong> (geralmente um e-mail ou string longa) e cole no campo abaixo.
+              </div>
+            </li>
+          </ol>
+        </div>
+      </details>`;
+  }
+
+  function _showForm(data, isEdit) {
+    const calId = escapeHtml(data.gcal_calendar_id || '');
+    const editHintHtml = isEdit ? `
+      <div class="gcal-edit-hint">
+        ${icon('info', 13)} Cole um novo JSON da Service Account para substituir o atual.
+        Para manter o JSON, altere apenas o ID da agenda — neste caso você precisa colar o JSON novamente (não armazenamos no formulário).
+      </div>` : '';
+    const descText = isEdit
+      ? `Atualize as credenciais desta ${entityLabel}.`
+      : `Configure uma Service Account para que esta ${entityLabel} use sua própria agenda.`;
+    const btnLabel = isEdit ? `${icon('save', 14)} Salvar alterações` : `${icon('link-2', 14)} Conectar`;
+
+    container.innerHTML = `
+      <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+        <p class="muted">${escapeHtml(descText)}</p>
+        ${_gcalInstructionsHtml()}
+        ${editHintHtml}
+        <div class="field">
+          <label for="gcal-json-file">JSON da Service Account</label>
+          <input type="file" id="gcal-json-file" accept=".json" style="margin-bottom:.375rem" />
+          <textarea id="gcal-json-text" rows="5" placeholder="Ou cole o JSON aqui" style="font-size:.8125rem;font-family:var(--font-mono,monospace)"></textarea>
+        </div>
+        <div class="field">
+          <label for="gcal-calendar-id">ID da agenda</label>
+          <input type="text" id="gcal-calendar-id" placeholder="ex: fulano@gmail.com" value="${calId}" />
+          <span class="field__hint muted" style="font-size:.75rem">Encontre em calendar.google.com → Configurações → ID da agenda</span>
+        </div>
+        <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+          <button class="btn btn--primary" id="gcal-connect-btn">${btnLabel}</button>
+          ${isEdit ? `<button class="btn btn--ghost" id="gcal-cancel-edit-btn">${icon('x', 14)} Cancelar</button>` : ''}
+        </div>
+      </div>`;
+
+    container.querySelector('#gcal-json-file').addEventListener('change', (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => { container.querySelector('#gcal-json-text').value = e.target.result; };
+      reader.readAsText(file);
+    });
+
+    container.querySelector('#gcal-connect-btn').addEventListener('click', async () => {
+      const btn = container.querySelector('#gcal-connect-btn');
+      const jsonText = (container.querySelector('#gcal-json-text')?.value || '').trim();
+      const calendarId = (container.querySelector('#gcal-calendar-id')?.value || '').trim();
+      if (!jsonText) { toast('Cole o JSON da Service Account.', 'warning'); return; }
+      if (!calendarId) { toast('Informe o ID da agenda.', 'warning'); return; }
+      btn.disabled = true;
+      try {
+        const result = await api(`${baseUrl}/gcal`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credentials_json: jsonText, calendar_id: calendarId }),
+        });
+        toast('Credenciais salvas! Clique em "Testar conexão" para validar.', 'success');
+        render({ gcal_client_email: result.gcal_client_email, gcal_calendar_id: result.gcal_calendar_id, gcal_status: 'pending', gcal_connected_at: null, gcal_last_check_at: null });
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+        btn.disabled = false;
+      }
+    });
+
+    if (isEdit) {
+      container.querySelector('#gcal-cancel-edit-btn').addEventListener('click', loadTab);
+    }
+
+    /* bloco de instrução pós-PUT se já temos client_email mas ainda pending */
+    if (data.gcal_client_email && data.gcal_status === 'pending') {
+      const hint = document.createElement('div');
+      hint.style.cssText = 'padding:.75rem;background:var(--surface-2,#f5f5f5);border-radius:var(--radius-sm);margin-top:.25rem';
+      hint.innerHTML = `
+        <p style="margin:0 0 .5rem;font-weight:600">${icon('info', 14)} Credenciais salvas</p>
+        <p class="muted" style="margin:0 0 .5rem;font-size:.85rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></p>
+        <p class="muted" style="margin:0 0 .75rem;font-size:.85rem">Compartilhe a agenda <strong>${escapeHtml(data.gcal_calendar_id || '')}</strong> com este e-mail no Google Calendar (permissão "Fazer alterações nos eventos").</p>
+        <button class="btn btn--sm" id="gcal-test-pending-btn">${icon('zap', 13)} Testar conexão</button>`;
+      container.appendChild(hint);
+      hint.querySelector('#gcal-test-pending-btn').addEventListener('click', () => runTest());
+    }
+  }
+
+  function render(data) {
+    const status = data.gcal_status;
+
+    if (!data.gcal_client_email || !status || status === 'pending') {
+      _showForm(data, false);
+
+    } else if (status === 'active') {
+      const connDate = data.gcal_connected_at ? new Date(data.gcal_connected_at).toLocaleString('pt-BR') : '—';
+      const lastCheck = data.gcal_last_check_at ? new Date(data.gcal_last_check_at).toLocaleString('pt-BR') : '—';
+      container.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+          <div style="padding:.75rem 1rem;background:var(--success-bg,#ecfdf5);border:1px solid var(--success,#22c55e);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+            <span style="color:var(--success,#22c55e);flex-shrink:0">${icon('check-circle-2', 22)}</span>
+            <div>
+              <div style="font-weight:600;margin-bottom:.25rem">Conectado</div>
+              <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></div>
+              <div class="muted" style="font-size:.8125rem">Agenda: <code>${escapeHtml(data.gcal_calendar_id)}</code></div>
+              <div class="muted" style="font-size:.8125rem">Conectado em: ${escapeHtml(connDate)}</div>
+              <div class="muted" style="font-size:.8125rem">Último teste: ${escapeHtml(lastCheck)}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+            <button class="btn btn--sm" id="gcal-retest-btn">${icon('refresh-cw', 13)} Testar de novo</button>
+            <button class="btn btn--sm btn--ghost" id="gcal-edit-btn">${icon('edit-2', 13)} Editar</button>
+            <button class="btn btn--sm btn--ghost" id="gcal-disconnect-btn" style="color:var(--danger)">${icon('trash-2', 13)} Desconectar</button>
+          </div>
+        </div>`;
+      container.querySelector('#gcal-retest-btn').addEventListener('click', () => runTest());
+      container.querySelector('#gcal-edit-btn').addEventListener('click', () => _showForm(data, true));
+      container.querySelector('#gcal-disconnect-btn').addEventListener('click', () => runDisconnect());
+
+    } else if (status === 'invalid') {
+      container.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+          <div style="padding:.75rem 1rem;background:var(--danger-bg,#fef2f2);border:1px solid var(--danger,#ef4444);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+            <span style="color:var(--danger,#ef4444);flex-shrink:0">${icon('x-circle', 22)}</span>
+            <div>
+              <div style="font-weight:600;margin-bottom:.25rem">Credenciais inválidas</div>
+              <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email || '—')}</code></div>
+              <div class="muted gcal-error-detail">${data.error ? escapeHtml(data.error) : 'Verifique se a agenda foi compartilhada com o e-mail da Service Account.'}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+            <button class="btn btn--sm btn--primary" id="gcal-retest-btn">${icon('refresh-cw', 13)} Re-testar</button>
+            <button class="btn btn--sm btn--ghost" id="gcal-edit-btn">${icon('edit-2', 13)} Editar</button>
+            <button class="btn btn--sm btn--ghost" id="gcal-disconnect-btn" style="color:var(--danger)">${icon('trash-2', 13)} Desconectar</button>
+          </div>
+        </div>`;
+      container.querySelector('#gcal-retest-btn').addEventListener('click', () => runTest());
+      container.querySelector('#gcal-edit-btn').addEventListener('click', () => _showForm(data, true));
+      container.querySelector('#gcal-disconnect-btn').addEventListener('click', () => runDisconnect());
+    }
+  }
+
+  async function runTest() {
+    const testBtn = container.querySelector('#gcal-retest-btn') || container.querySelector('#gcal-test-pending-btn');
+    if (testBtn) testBtn.disabled = true;
+    try {
+      const result = await api(`${baseUrl}/gcal/test`, { method: 'POST' });
+      if (result.ok) {
+        toast('Conexão com Google Calendar OK!', 'success');
+      } else {
+        toast('Falha na conexão: ' + (result.error || 'erro desconhecido'), 'danger');
+      }
+      loadTab();
+    } catch (err) {
+      toast('Erro ao testar: ' + err.message, 'danger');
+      if (testBtn) testBtn.disabled = false;
+    }
+  }
+
+  async function runDisconnect() {
+    if (!confirm(`Remover credenciais Google Calendar desta ${entityLabel}?`)) return;
+    try {
+      await api(`${baseUrl}/gcal`, { method: 'DELETE' });
+      toast('Credenciais removidas.', 'success');
+      loadTab();
+    } catch (err) {
+      toast('Erro: ' + err.message, 'danger');
+    }
+  }
+
+  loadTab();
+}
+
 /* ══ MODAL DE CONFIGURAÇÃO DO CLONE ═══════════════════════════════ */
 function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
@@ -5807,159 +6099,13 @@ function loadCloneConfigTab(tab, clone) {
     }
 
   } else if (tab === 'gcal') {
-    /* ── Google Calendar (Service Account por clone) ── */
-    async function loadGcalTab() {
-      content.innerHTML = `<div style="padding-top:.75rem;display:flex;justify-content:center"><div class="spinner"></div></div>`;
-      let gcalData;
-      try {
-        gcalData = await api(`/api/clones/${clone.id}/gcal/status`);
-      } catch (err) {
-        content.innerHTML = `<p class="muted" style="padding-top:.75rem">Erro ao carregar status: ${escapeHtml(err.message)}</p>`;
-        return;
-      }
-      renderGcalContent(gcalData);
-    }
-
-    function renderGcalContent(data) {
-      const status = data.gcal_status;
-
-      if (!data.gcal_client_email || !status || status === 'pending') {
-        /* ── sem credenciais ou pendente: mostrar form ── */
-        content.innerHTML = `
-          <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
-            <p class="muted">Configure uma Service Account para que este clone use sua própria agenda.</p>
-            <div class="field">
-              <label for="gcal-json-file">JSON da Service Account</label>
-              <input type="file" id="gcal-json-file" accept=".json" style="margin-bottom:.375rem" />
-              <textarea id="gcal-json-text" rows="5" placeholder="Ou cole o JSON aqui" style="font-size:.8125rem;font-family:var(--font-mono,monospace)"></textarea>
-            </div>
-            <div class="field">
-              <label for="gcal-calendar-id">ID da agenda</label>
-              <input type="text" id="gcal-calendar-id" placeholder="ex: fulano@gmail.com" value="${escapeHtml(data.gcal_calendar_id || '')}" />
-              <span class="field__hint muted" style="font-size:.75rem">Encontre em calendar.google.com → Configurações → ID da agenda</span>
-            </div>
-            <button class="btn btn--primary" id="gcal-connect-btn">${icon('link-2', 14)} Conectar</button>
-          </div>`;
-
-        content.querySelector('#gcal-json-file').addEventListener('change', (ev) => {
-          const file = ev.target.files[0];
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onload = (e) => { content.querySelector('#gcal-json-text').value = e.target.result; };
-          reader.readAsText(file);
-        });
-
-        content.querySelector('#gcal-connect-btn').addEventListener('click', async () => {
-          const btn = content.querySelector('#gcal-connect-btn');
-          const jsonText = (content.querySelector('#gcal-json-text')?.value || '').trim();
-          const calId = (content.querySelector('#gcal-calendar-id')?.value || '').trim();
-          if (!jsonText) { toast('Cole o JSON da Service Account.', 'warning'); return; }
-          if (!calId) { toast('Informe o ID da agenda.', 'warning'); return; }
-          btn.disabled = true;
-          try {
-            const result = await api(`/api/clones/${clone.id}/gcal`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ credentials_json: jsonText, calendar_id: calId }),
-            });
-            toast('Credenciais salvas! Clique em "Testar conexão" para validar.', 'success');
-            Object.assign(clone, { gcal_client_email: result.gcal_client_email, gcal_calendar_id: result.gcal_calendar_id, gcal_status: 'pending' });
-            renderGcalContent({ gcal_client_email: result.gcal_client_email, gcal_calendar_id: result.gcal_calendar_id, gcal_status: 'pending', gcal_connected_at: null, gcal_last_check_at: null });
-          } catch (err) {
-            toast('Erro: ' + err.message, 'danger');
-            btn.disabled = false;
-          }
-        });
-
-        /* mostra bloco de instrução pós-PUT se já temos client_email mas ainda pending */
-        if (data.gcal_client_email && status === 'pending') {
-          const hint = document.createElement('div');
-          hint.style.cssText = 'padding:.75rem;background:var(--surface-2,#f5f5f5);border-radius:var(--radius-sm);margin-top:.25rem';
-          hint.innerHTML = `
-            <p style="margin:0 0 .5rem;font-weight:600">${icon('info', 14)} Credenciais salvas</p>
-            <p class="muted" style="margin:0 0 .5rem;font-size:.85rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></p>
-            <p class="muted" style="margin:0 0 .75rem;font-size:.85rem">Compartilhe a agenda <strong>${escapeHtml(data.gcal_calendar_id || '')}</strong> com este e-mail no Google Calendar (permissão "Fazer alterações nos eventos").</p>
-            <button class="btn btn--sm" id="gcal-test-pending-btn">${icon('zap', 13)} Testar conexão</button>`;
-          content.appendChild(hint);
-          hint.querySelector('#gcal-test-pending-btn').addEventListener('click', () => runGcalTest());
-        }
-
-      } else if (status === 'active') {
-        /* ── ativo ── */
-        const connDate = data.gcal_connected_at ? new Date(data.gcal_connected_at).toLocaleString('pt-BR') : '—';
-        const lastCheck = data.gcal_last_check_at ? new Date(data.gcal_last_check_at).toLocaleString('pt-BR') : '—';
-        content.innerHTML = `
-          <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
-            <div style="padding:.75rem 1rem;background:var(--success-bg,#ecfdf5);border:1px solid var(--success,#22c55e);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
-              <span style="color:var(--success,#22c55e);flex-shrink:0">${icon('check-circle-2', 22)}</span>
-              <div>
-                <div style="font-weight:600;margin-bottom:.25rem">Conectado</div>
-                <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></div>
-                <div class="muted" style="font-size:.8125rem">Agenda: <code>${escapeHtml(data.gcal_calendar_id)}</code></div>
-                <div class="muted" style="font-size:.8125rem">Conectado em: ${escapeHtml(connDate)}</div>
-                <div class="muted" style="font-size:.8125rem">Último teste: ${escapeHtml(lastCheck)}</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:.625rem;flex-wrap:wrap">
-              <button class="btn btn--sm" id="gcal-retest-btn">${icon('refresh-cw', 13)} Testar de novo</button>
-              <button class="btn btn--sm btn--ghost" id="gcal-disconnect-btn" style="color:var(--danger)">${icon('trash-2', 13)} Desconectar</button>
-            </div>
-          </div>`;
-        content.querySelector('#gcal-retest-btn').addEventListener('click', () => runGcalTest());
-        content.querySelector('#gcal-disconnect-btn').addEventListener('click', () => runGcalDisconnect());
-
-      } else if (status === 'invalid') {
-        /* ── inválido ── */
-        content.innerHTML = `
-          <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
-            <div style="padding:.75rem 1rem;background:var(--danger-bg,#fef2f2);border:1px solid var(--danger,#ef4444);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
-              <span style="color:var(--danger,#ef4444);flex-shrink:0">${icon('x-circle', 22)}</span>
-              <div>
-                <div style="font-weight:600;margin-bottom:.25rem">Credenciais inválidas</div>
-                <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email || '—')}</code></div>
-                <div class="muted gcal-error-detail" style="font-size:.8125rem">${data.error ? escapeHtml(data.error) : 'Verifique se a agenda foi compartilhada com o e-mail da Service Account.'}</div>
-              </div>
-            </div>
-            <div style="display:flex;gap:.625rem;flex-wrap:wrap">
-              <button class="btn btn--sm btn--primary" id="gcal-retest-btn">${icon('refresh-cw', 13)} Re-testar</button>
-              <button class="btn btn--sm btn--ghost" id="gcal-disconnect-btn" style="color:var(--danger)">${icon('trash-2', 13)} Desconectar</button>
-            </div>
-          </div>`;
-        content.querySelector('#gcal-retest-btn').addEventListener('click', () => runGcalTest());
-        content.querySelector('#gcal-disconnect-btn').addEventListener('click', () => runGcalDisconnect());
-      }
-    }
-
-    async function runGcalTest() {
-      const testBtn = content.querySelector('#gcal-retest-btn') || content.querySelector('#gcal-test-pending-btn');
-      if (testBtn) testBtn.disabled = true;
-      try {
-        const result = await api(`/api/clones/${clone.id}/gcal/test`, { method: 'POST' });
-        if (result.ok) {
-          toast('Conexão com Google Calendar OK!', 'success');
-        } else {
-          toast('Falha na conexão: ' + (result.error || 'erro desconhecido'), 'danger');
-        }
-        loadGcalTab();
-      } catch (err) {
-        toast('Erro ao testar: ' + err.message, 'danger');
-        if (testBtn) testBtn.disabled = false;
-      }
-    }
-
-    async function runGcalDisconnect() {
-      if (!confirm('Remover credenciais Google Calendar deste clone?')) return;
-      try {
-        await api(`/api/clones/${clone.id}/gcal`, { method: 'DELETE' });
-        toast('Credenciais removidas.', 'success');
-        Object.assign(clone, { gcal_client_email: null, gcal_calendar_id: null, gcal_status: null });
-        loadGcalTab();
-      } catch (err) {
-        toast('Erro: ' + err.message, 'danger');
-      }
-    }
-
-    loadGcalTab();
+    /* ── Google Calendar (Service Account por clone) — usa helper _renderGcalTab ── */
+    _renderGcalTab({
+      baseUrl: `/api/clones/${clone.id}`,
+      entityLabel: 'clone',
+      container: content,
+      reloadFn: null,
+    });
   }
 }
 
