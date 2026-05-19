@@ -17,19 +17,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout startap-backups
-        uses: actions/checkout@v4
-        with:
-          repository: BrunoMediador/startap-backups
-          token: ${{ secrets.BACKUP_REPO_TOKEN }}
-          path: startap-backups
-
-      - name: Setup SSH
+      - name: Setup SSH (servidor VPS + deploy key startap-backups)
         run: |
           mkdir -p ~/.ssh
+
+          # Chave do servidor VPS (pg_dump)
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts
+
+          # Deploy key do repo startap-backups (push)
+          echo "${{ secrets.BACKUP_REPO_SSH_KEY }}" > ~/.ssh/backup_deploy
+          chmod 600 ~/.ssh/backup_deploy
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+          # Config SSH pra rotear host github.com→backup_deploy
+          cat >> ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/backup_deploy
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Checkout startap-backups (via SSH)
+        run: |
+          git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
 
       - name: Dump + compress
         id: dump
@@ -70,6 +84,6 @@ jobs:
           git commit -m "backup: ${{ steps.dump.outputs.timestamp }} UTC ($(numfmt --to=iec ${{ steps.dump.outputs.size }}))"
           git push
 
-      - name: Limpa chave SSH
+      - name: Limpa chaves SSH
         if: always()
-        run: rm -f ~/.ssh/id_ed25519
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/backup_deploy ~/.ssh/config
