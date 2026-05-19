@@ -670,10 +670,9 @@ app.get(
 
         const flowId = context.flow_id;
         const leadsTable = FLOW_LEADS_TABLE[flowId];
-        // Soma leads de todos os slots que compartilham este bot_config slot na tabela de leads
-        const leadsCount = leadsTable
-          ? Object.values(leadsByLeadsTable[leadsTable] || {}).reduce((sum, n) => sum + n, 0)
-          : 0;
+        // Filtra leads apenas do slot deste bot — Object.values somava todos os slots
+        // da tabela (bug: matrizes com clones inflavam o count do bot original).
+        const leadsCount = leadsTable ? leadsByLeadsTable[leadsTable][row.slot] || 0 : 0;
 
         // waha_sessao tem precedência sobre slot — fallback garante compatibilidade
         // com linhas antigas onde a coluna ainda é NULL (antes de rodar a migration 021).
@@ -2164,14 +2163,16 @@ app.get('/api/agendamentos-pendentes', async (req, res) => {
 });
 
 app.get('/api/message-stats', async (req, res) => {
-  // Lê de flow_execution_logs (event_type='webhook.received') porque message_log
+  // Lê de flow_execution_logs (event_type='bot.reply-sent') porque message_log
   // é zerada a cada hora pelo limpar_historicos.sh (uso anti-bot). flow_execution_logs
   // preserva 14+ dias e tem índice idx_flow_logs_created.
+  // webhook.received inclui session.status e outros eventos não-mensagem; bot.reply-sent
+  // reflete apenas respostas reais enviadas ao usuário.
   try {
     const r = await pool.query(`
       SELECT DATE(created_at AT TIME ZONE 'America/Sao_Paulo') AS dia, COUNT(*) AS total
       FROM flow_execution_logs
-      WHERE event_type = 'webhook.received'
+      WHERE event_type = 'bot.reply-sent'
         AND created_at > NOW() - INTERVAL '14 days'
       GROUP BY 1 ORDER BY 1 DESC
     `);
@@ -2279,11 +2280,13 @@ app.get('/api/metrics/timeseries', async (req, res) => {
 
     let sql;
     if (metric === 'messages') {
+      // bot.reply-sent = respostas reais enviadas; webhook.received incluía session.status
+      // e outros eventos não-mensagem que inflavam o gráfico (bug Missao 013 B2).
       sql = `
         SELECT DATE_TRUNC(${trunc === 'hour' ? "'hour'" : "'day'"}, created_at) AS t,
                COUNT(*)::int AS value
         FROM flow_execution_logs
-        WHERE event_type = 'webhook.received'
+        WHERE event_type = 'bot.reply-sent'
           AND created_at > NOW() - ($1::text || ' day')::INTERVAL
           ${botFilter}
         GROUP BY 1 ORDER BY 1
