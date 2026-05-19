@@ -950,7 +950,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .session-card__name { font-weight: 600; font-size: .9375rem; }
 /* ── Toast ──────────────────────────────────────────────────────────── */
 #toast-container {
-  position: fixed; bottom: 1.25rem; right: 1.25rem;
+  position: fixed; bottom: 5rem; right: 1.25rem;
   display: flex; flex-direction: column; gap: .5rem;
   z-index: 9999;
   max-width: min(360px, calc(100vw - 2.5rem));
@@ -1685,6 +1685,7 @@ const ICONS = {
   'chevron-down': '<polyline points="6 9 12 15 18 9"/>',
   'chevron-up': '<polyline points="18 15 12 9 6 15"/>',
   'chevron-right': '<polyline points="9 18 15 12 9 6"/>',
+  'chevron-left':  '<polyline points="15 18 9 12 15 6"/>',
   'star': '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   'check': '<polyline points="20 6 9 17 4 12"/>',
   'refresh-cw': '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
@@ -1698,6 +1699,11 @@ const ICONS = {
   'phone': '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.6 2.18h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6.09 6.09l.95-.94a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>',
   'user-check': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/>',
   'sliders': '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
+  'power':          '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
+  'more-horizontal':'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  'edit-2':         '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
+  'x-circle':       '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+  'save':           '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
 };
 
 /* ── icon() helper ──────────────────────────────────────────────── */
@@ -1814,7 +1820,11 @@ function fmtBRL(n) {
 
 function fmtDate(d) {
   if (!d) return '—';
-  return new Date(d).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit', month: '2-digit', year: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  }).format(new Date(d));
 }
 
 function fmtRelative(d) {
@@ -2010,7 +2020,8 @@ async function renderDashSessions() {
       const dotCls = isOn ? 's-dot--on' : isWarn ? 's-dot--warn' : 's-dot--off';
       const stLabel = isOn ? 'ON' : isWarn ? 'AGUARD.' : 'OFF';
       const lastSeen = s.updatedAt || s.updated_at || s.lastActivity || null;
-      const phonesStr = _fmtPhone(s.me) || (s.me ? s.me.replace(/@.+$/, '') : '—');
+      const _meRaw = (typeof s.me === 'object' && s.me !== null) ? (s.me.id || '') : (s.me || '');
+      const phonesStr = _fmtPhone(_meRaw) || (_meRaw ? _meRaw.replace(/@.+$/, '') : '—');
 
       return `<tr>
         <td class="mono" style="font-size:.75rem;color:var(--text)">${name}</td>
@@ -2432,6 +2443,8 @@ let _selectedBot = null;
 let _selectedBotTab = 'overview';
 // flag compartilhada: renderBotConfigIA sinaliza mudanças não salvas pro handler de tab
 let _configIaDirty = false;
+// flag para aba Prompt — mesma proteção de saída sem salvar
+let _promptDirty = false;
 
 const INTERNAL_BOT_SLOT = 'startap';
 const MATRIZ_SLOTS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
@@ -2561,6 +2574,9 @@ function _botDotClass(status) {
 }
 
 function _fmtPhone(raw) {
+  if (!raw) return null;
+  // Quando raw é objeto WAHA {id, pushName}, extrai o campo id
+  if (typeof raw === 'object') raw = raw.id || raw.pushName || '';
   if (!raw) return null;
   // Remove @c.us or @s.whatsapp.net suffix (WAHA format)
   const digits = String(raw).replace(/@.+$/, '').replace(/\D/g, '');
@@ -2790,6 +2806,11 @@ function renderBotDetail(bot, container) {
         if (!window.confirm('Existem mudanças não salvas. Deseja sair mesmo assim?')) return;
         _configIaDirty = false;
       }
+      // guard: se aba prompt tiver mudanças não salvas, confirma antes de navegar
+      if (_promptDirty && btn.dataset.tab !== 'prompt') {
+        if (!window.confirm('O prompt foi editado mas não salvo. Deseja sair mesmo assim?')) return;
+        _promptDirty = false;
+      }
       _selectedBotTab = btn.dataset.tab;
       container.querySelectorAll('.tab-btn').forEach(b => {
         b.classList.toggle('active', b.dataset.tab === _selectedBotTab);
@@ -2840,7 +2861,7 @@ async function renderBotOverview(slot, el, bot) {
 
   el.innerHTML = `
     <form id="bot-overview-form">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1rem">
         ${sessaoHtml}
         <div class="field">
           <label for="ov-name">Nome</label>
@@ -2885,6 +2906,7 @@ async function renderBotOverview(slot, el, bot) {
 }
 
 async function renderBotPrompt(slot, el) {
+  _promptDirty = false; // reset ao (re)renderizar a aba
   try {
     const data = await api(`/api/bots/${slot}/prompt`);
     const promptText = data?.prompt || data?.content || data?.system_prompt || '';
@@ -2898,13 +2920,17 @@ async function renderBotPrompt(slot, el) {
 
     const ta = el.querySelector('#prompt-ta');
     const count = el.querySelector('#prompt-count');
-    ta.addEventListener('input', () => { count.textContent = ta.value.length; });
+    ta.addEventListener('input', () => {
+      count.textContent = ta.value.length;
+      _promptDirty = true;
+    });
 
     el.querySelector('#btn-save-prompt').addEventListener('click', async () => {
       const btn = el.querySelector('#btn-save-prompt');
       btn.disabled = true;
       try {
         await api(`/api/bots/${slot}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: ta.value }) });
+        _promptDirty = false;
         toast('Prompt salvo com sucesso!', 'success');
       } catch (err) {
         toast('Erro ao salvar prompt: ' + err.message, 'danger');
@@ -2963,7 +2989,7 @@ async function renderBotConfigIA(slot, el) {
       <!-- Bloco: Modelo e Parâmetros -->
       <div>
         <div class="label" style="margin-bottom:var(--space-3)">Modelo e parâmetros</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin-bottom:var(--space-4)">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--space-4);margin-bottom:var(--space-4)">
           <div class="field">
             <label for="cia-provider">Provider</label>
             <select id="cia-provider">
@@ -3148,7 +3174,9 @@ function _buildMediaCardV2(slot, m, idx, arr, coursesArr, parentEl) {
   const isVideo = t === 'video';
   const isAudio = t === 'audio';
   const isImage = t === 'image';
-  const name = m.position || (m.url ? m.url.split('/').pop().split('?')[0] : '') || `mídia ${m.id}`;
+  const name = m.title || m.nome || m.filename || m.original_name
+    || (m.url ? m.url.split('/').pop().split('?')[0] : '')
+    || `Mídia #${m.position_order ?? m.position ?? m.id}`;
   const ctx = m.context || '';
   const cap = m.caption || '';
   const courseSlug = m.course_slug || null;
@@ -3166,6 +3194,8 @@ function _buildMediaCardV2(slot, m, idx, arr, coursesArr, parentEl) {
     v.controls = true;
     v.preload = 'metadata';
     v.playsInline = true;
+    // Inicia muted para permitir seek de thumbnail sem interação do usuário.
+    // Restaura som antes do play real (assim o usuário ouve o vídeo normalmente).
     v.muted = true;
     v.src = url;
     // Força decode do primeiro frame após carregar metadata — sem isso vários browsers
@@ -3176,6 +3206,8 @@ function _buildMediaCardV2(slot, m, idx, arr, coursesArr, parentEl) {
       seeked = true;
       try { v.currentTime = Math.min(0.1, (v.duration || 1) / 2); } catch (_) {}
     }, { once: true });
+    // Ao usuário dar play, desmuta para que o vídeo reproduza com som.
+    v.addEventListener('play', () => { v.muted = false; }, { once: true });
     v.addEventListener('error', () => {
       preview.innerHTML = `<div style="color:var(--text-muted);font-size:.75rem;text-align:center;padding:1rem">${icon('alert-triangle', 24)}<br>Não consegui carregar o vídeo</div>`;
     }, { once: true });
@@ -3554,7 +3586,7 @@ function _courseFormHtml(c, isEdit) {
         <label class="label" for="course-desc">Descrição</label>
         <textarea id="course-desc" class="input" rows="2" style="resize:vertical">${escapeHtml(c.description || '')}</textarea>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.625rem">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.625rem">
         <div>
           <label class="label" for="course-price">Preço (R$)</label>
           <input id="course-price" class="input" type="number" min="0" step="0.01" placeholder="297.00" value="${c.price != null ? (c.price / 100).toFixed(2) : ''}">
@@ -3696,7 +3728,9 @@ function openLinkMediaModal(slot, courseSlug, medias, parentEl) {
   const atLimit     = linkedHere.length >= 5;
 
   function buildRow(m, group) {
-    const name = escapeHtml(m.position || `vídeo #${m.id}`);
+    const name = escapeHtml(m.title || m.nome || m.filename || m.original_name
+      || (m.url ? m.url.split('/').pop().split('?')[0] : '')
+      || `Mídia #${m.position_order ?? m.position ?? m.id}`);
     const isIntro = m.is_course_intro === true || m.is_course_intro === 1;
     if (group === 'linked') {
       return `<div class="link-media-row" data-id="${m.id}">
@@ -4652,7 +4686,7 @@ async function loadCfgLimpeza(content) {
     const s = status || {};
     content.querySelector('#cfg-cleanup-status').innerHTML = `
       <h3 class="h3" style="margin-bottom:.75rem">Status do cron de limpeza</h3>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem">
         <div class="field"><label>Última execução</label><div class="mono">${fmtDate(s.last_run || s.lastRun)}</div></div>
         <div class="field"><label>Próxima execução</label><div class="mono">${fmtDate(s.next_run || s.nextRun)}</div></div>
         <div class="field"><label>Cron</label><div class="mono">${escapeHtml(s.cron || s.interval || s.schedule || '—')}</div></div>
@@ -4725,7 +4759,7 @@ async function loadCfgSistema(content) {
 
     content.querySelector('#cfg-sys-status').innerHTML = `
       <h3 class="h3" style="margin-bottom:.75rem">Estado do sistema</h3>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem">
         <div class="field"><label>Sessões WAHA ativas</label><div class="mono">${online} / ${total}</div></div>
         <div class="field"><label>Uptime do servidor</label><div class="mono">${uptime}</div></div>
         <div class="field"><label>Versão da API</label><div class="mono">${escapeHtml(data?.version || data?.api_version || '—')}</div></div>
@@ -5008,7 +5042,7 @@ function renderWizardStep() {
         </div>
       </div>`;
     footerHtml = `
-      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14, true)} Voltar</button>
+      <button class="btn" id="wizard-back-btn">${icon('chevron-left', 14)} Voltar</button>
       <button class="btn btn--primary" id="wizard-next-btn">Continuar ${icon('chevron-right', 14)}</button>`;
 
   } else if (s.step === 3) {
@@ -5023,7 +5057,7 @@ function renderWizardStep() {
       <div id="kv-list">${kvRows}</div>
       <button type="button" class="btn btn--sm" id="btn-add-kv" style="margin-top:.5rem">${icon('plus', 13)} Adicionar campo</button>`;
     footerHtml = `
-      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14)} Voltar</button>
+      <button class="btn" id="wizard-back-btn">${icon('chevron-left', 14)} Voltar</button>
       <button class="btn btn--primary" id="wizard-next-btn">Continuar ${icon('chevron-right', 14)}</button>`;
 
   } else if (s.step === 4) {
@@ -5039,7 +5073,7 @@ function renderWizardStep() {
         <div id="wizard-qr-area"></div>
       </div>`;
     footerHtml = `
-      <button class="btn" id="wizard-back-btn">${icon('chevron-right', 14)} Voltar</button>
+      <button class="btn" id="wizard-back-btn">${icon('chevron-left', 14)} Voltar</button>
       <button class="btn btn--primary" id="wizard-create-btn">${icon('qr-code', 14)} Criar sessão e mostrar QR</button>`;
   }
 
