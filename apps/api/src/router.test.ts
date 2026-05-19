@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   listFlowPauseKeywords: vi.fn(),
   findRouting: vi.fn(),
   isFlowActive: vi.fn(),
+  getCloneBySession: vi.fn().mockResolvedValue(null),
+  getCloneBySlot: vi.fn().mockResolvedValue(null),
   sendSeen: vi.fn(),
   downloadMedia: vi.fn(),
   transcribe: vi.fn(),
@@ -33,6 +35,10 @@ vi.mock('@startap/db', () => ({
     listFlowPauseKeywords: mocks.listFlowPauseKeywords,
   },
   routing: { findRouting: mocks.findRouting },
+  flowClones: {
+    getCloneBySession: mocks.getCloneBySession,
+    getCloneBySlot: mocks.getCloneBySlot,
+  },
 }));
 
 vi.mock('@startap/integrations', () => ({
@@ -121,7 +127,7 @@ describe('handleWebhook', () => {
     expect(mocks.logFlowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({
         flowId: 'uUS3Ux1cU2DquKxo',
-        flowName: 'STARTTAP_AI',
+        flowName: 'STARTAP_AI',
       }),
     );
   });
@@ -141,7 +147,7 @@ describe('handleWebhook', () => {
     expect(mocks.logFlowEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         flowId: 'uUS3Ux1cU2DquKxo',
-        flowName: 'STARTTAP_AI',
+        flowName: 'STARTAP_AI',
         eventType: 'router.route-found',
       }),
     );
