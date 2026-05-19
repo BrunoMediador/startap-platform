@@ -16,6 +16,7 @@ import { logger } from '@startap/core/logger';
 import { botConfig, modelUsage } from '@startap/db';
 import { openai } from '@startap/integrations';
 import type { RunAgentOpts, RunAgentResult } from '@startap/integrations/openai';
+import { config } from '../config.js';
 
 const log = logger.child({ module: 'run-agent-configured' });
 
@@ -44,7 +45,7 @@ export async function runAgentConfigured(opts: RunAgentConfiguredOpts): Promise<
   if (cfg) {
     provider = cfg.provider;
     if (cfg.provider === 'deepseek') {
-      apiKey = process.env.DEEPSEEK_API_KEY;
+      apiKey = config.DEEPSEEK_API_KEY;
       baseURL = DEEPSEEK_BASE_URL;
     }
   } else {

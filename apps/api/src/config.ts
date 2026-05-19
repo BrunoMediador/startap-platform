@@ -1,28 +1,15 @@
-import { z } from 'zod';
+import { ConfigSchema } from './config.schema.js';
 
-const ConfigSchema = z.object({
-  NODE_ENV: z.string().default('production'),
-  API_PORT: z.coerce.number().default(3040),
-  LOG_LEVEL: z.string().default('info'),
+export { ConfigSchema } from './config.schema.js';
+export type { Config } from './config.schema.js';
 
-  PG_HOST: z.string(),
-  PG_PORT: z.coerce.number().default(5432),
-  PG_USER: z.string(),
-  PG_PASS: z.string(),
-  PG_DB: z.string(),
-
-  WAHA_URL: z.string().url(),
-  WAHA_API_KEY: z.string(),
-
-  WHISPER_URL: z.string().url(),
-
-  OPENAI_API_KEY: z.string(),
-  OPENAI_MODEL: z.string().default('gpt-5.4'),
-
-  ALERT_DEV_PHONE: z.string().optional(),
-  ALERT_OWNER_PHONE: z.string().optional(),
-});
-
-export type Config = z.infer<typeof ConfigSchema>;
-
-export const config = ConfigSchema.parse(process.env);
+// parse no boot — lança ZodError com campo(s) ausente(s) antes de qualquer request
+export const config = (() => {
+  const result = ConfigSchema.safeParse(process.env);
+  if (!result.success) {
+    // eslint-disable-next-line no-console
+    console.error('Config inválido — verifique as variáveis de ambiente:\n', result.error.format());
+    throw result.error;
+  }
+  return result.data;
+})();

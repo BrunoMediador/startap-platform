@@ -6,9 +6,10 @@
  */
 import { logger } from '@startap/core/logger';
 import { chatMemory } from '@startap/db';
+import { config } from '../config.js';
 
 const log = logger.child({ job: 'cleanup-chat' });
-const DEFAULT_KEEP = Number.parseInt(process.env.CHAT_MEMORY_RETENTION ?? '50', 10);
+const DEFAULT_KEEP = config.CHAT_MEMORY_RETENTION;
 
 export interface CleanupResult extends Record<string, unknown> {
   deleted: number;
