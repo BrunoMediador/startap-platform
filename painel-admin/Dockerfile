@@ -51,5 +51,12 @@ COPY painel-admin/public    ./public
 COPY --from=builder /monorepo/packages/integrations/dist /packages/integrations/dist
 COPY --from=builder /monorepo/packages/core/dist         /packages/core/dist
 
+# client.js (de integrations) faz `import { logger } from '@startap/core/logger'`.
+# Node resolve esse import pelo node_modules — então plantamos @startap/core lá
+# (package.json + dist), usando o `exports` map do core pra resolver `/logger`.
+# pino e zod (deps do core) já estão instalados no node_modules via painel-admin/package.json.
+COPY --from=builder /monorepo/packages/core/package.json /app/node_modules/@startap/core/package.json
+COPY --from=builder /monorepo/packages/core/dist         /app/node_modules/@startap/core/dist
+
 EXPOSE 3030
 CMD ["node", "server.js"]
