@@ -1832,16 +1832,28 @@ function directProjectTablePlan(tableName) {
 }
 
 function normalizePauseKeywordPayload(body) {
-  const rows = Array.isArray(body?.keywords)
-    ? body.keywords
-    : [
-        ...String(body?.pauseKeywords || '')
-          .split(/\r?\n/)
-          .map((keyword) => ({ command: 'pause', keyword })),
-        ...String(body?.resumeKeywords || '')
-          .split(/\r?\n/)
-          .map((keyword) => ({ command: 'resume', keyword })),
-      ];
+  // Aceita três formatos:
+  // 1. { keywords: [{ command, keyword, enabled? }, ...] }
+  // 2. { pause: string[], resume: string[] }              — matching o output do GET
+  // 3. { pauseKeywords: "linha\nlinha", resumeKeywords: "..." }  — legado
+  let rows;
+  if (Array.isArray(body?.keywords)) {
+    rows = body.keywords;
+  } else if (Array.isArray(body?.pause) || Array.isArray(body?.resume)) {
+    rows = [
+      ...(Array.isArray(body.pause) ? body.pause : []).map((keyword) => ({ command: 'pause', keyword })),
+      ...(Array.isArray(body.resume) ? body.resume : []).map((keyword) => ({ command: 'resume', keyword })),
+    ];
+  } else {
+    rows = [
+      ...String(body?.pauseKeywords || '')
+        .split(/\r?\n/)
+        .map((keyword) => ({ command: 'pause', keyword })),
+      ...String(body?.resumeKeywords || '')
+        .split(/\r?\n/)
+        .map((keyword) => ({ command: 'resume', keyword })),
+    ];
+  }
   const seen = new Set();
   const normalized = [];
   for (const row of rows) {
