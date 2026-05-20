@@ -6078,11 +6078,17 @@ function _renderGcalTab(opts) {
             </li>
             <li>
               <div>
-                <strong>Compartilhar a agenda com a conta de serviço</strong><br>
-                Após salvar o JSON, vamos exibir o e-mail da conta de serviço aqui.
-                Acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> → clique nos 3 pontos da sua agenda →
-                <strong>Configurações e compartilhamento</strong> → <strong>Compartilhar com pessoas específicas</strong> → Adicionar o e-mail da conta.
-                Permissão necessária: <strong>Fazer alterações em eventos</strong>.
+                <strong>Compartilhar a agenda com a conta de serviço (obrigatório)</strong><br>
+                <span style="color:var(--danger,#ef4444);font-weight:600">⚠ Sem este passo o teste falha com "Credenciais inválidas" (HTTP 404 do Google).</span><br>
+                Abra o JSON da Service Account e copie o valor do campo <code>client_email</code> (algo como <code>agenda-fulano@projeto.iam.gserviceaccount.com</code>) — você vai precisar dele aqui.<br>
+                Em seguida, acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> <strong>logado na conta dona da agenda do cliente</strong> e:
+                <ol style="margin:.375rem 0 0 1rem;padding:0;font-size:.85rem">
+                  <li>Passe o mouse sobre a agenda do cliente na lista lateral → clique nos 3 pontinhos → <strong>Configurações e compartilhamento</strong>.</li>
+                  <li>Role até <strong>Compartilhar com pessoas e grupos específicos</strong> → <strong>+ Adicionar pessoas e grupos</strong>.</li>
+                  <li>Cole o <code>client_email</code> da Service Account.</li>
+                  <li>Em "Permissões" escolha <strong>Fazer alterações em eventos</strong> (não basta "Ver todos os detalhes").</li>
+                  <li>Clique em <strong>Enviar</strong>.</li>
+                </ol>
               </div>
             </li>
             <li>
