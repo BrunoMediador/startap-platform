@@ -453,6 +453,10 @@ interface SpParts {
 }
 
 function spParts(date: Date): SpParts {
+  // hourCycle: 'h23' forca formato 00-23 (em vez de 24:00 que en-US com
+  // hour12:false produzia a meia-noite). Bug descoberto 2026-05-20: bot
+  // dizia "hoje sem vaga" entre 00:00-00:59 BRT porque mins virava 1456
+  // (24*60+16) e o piso svcStart ficava maior que wEnd, zerando o loop.
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: TZ,
     year: 'numeric',
@@ -461,7 +465,7 @@ function spParts(date: Date): SpParts {
     hour: '2-digit',
     minute: '2-digit',
     weekday: 'short',
-    hour12: false,
+    hourCycle: 'h23',
   })
     .formatToParts(date)
     .reduce<Record<string, string>>((a, p) => {
