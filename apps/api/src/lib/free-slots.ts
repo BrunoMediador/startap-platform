@@ -25,26 +25,27 @@ export interface ScheduleConfig {
   source: 'flow_clones' | 'bot_config' | 'defaults';
 }
 
-// ---- Defaults (preservam comportamento do bot pre-PR-B) ---------------------
+// ---- Defaults (ultimo recurso quando NEM clone NEM matriz tem config) -------
+// Alinhado ao seed da matriz teste_barbearia (migrations 027 + 030): 4 servicos
+// basicos, todos 30min, ter-sab 09-18. Evita que o bot ofereca duracoes que nao
+// existem no negocio quando, por algum motivo (cache obsoleto / clone novo /
+// migration nao aplicada), o loadScheduleConfig caia neste fallback.
 
 const BUILTIN_DEFAULTS: ScheduleConfig = {
   work: {
-    0: null,
-    1: [8 * 60, 19 * 60],
-    2: [8 * 60, 19 * 60],
-    3: [8 * 60, 19 * 60],
-    4: [8 * 60, 19 * 60],
-    5: [8 * 60, 19 * 60],
-    6: [7 * 60, 17 * 60],
+    0: null,                  // domingo: fechado
+    1: null,                  // segunda: fechado
+    2: [9 * 60, 18 * 60],     // terca
+    3: [9 * 60, 18 * 60],     // quarta
+    4: [9 * 60, 18 * 60],     // quinta
+    5: [9 * 60, 18 * 60],     // sexta
+    6: [9 * 60, 18 * 60],     // sabado
   },
   services: [
-    { name: 'Corte', min: 40 },
-    { name: 'Barba', min: 20 },
-    { name: 'Sobrancelha', min: 20 },
-    { name: 'Corte+Barba', min: 60 },
-    { name: 'Pezinho', min: 20 },
-    { name: 'Relaxamento', min: 40 },
-    { name: 'Corte pigmentado', min: 60 },
+    { name: 'Corte', min: 30 },
+    { name: 'Barba', min: 30 },
+    { name: 'Sobrancelha', min: 30 },
+    { name: 'Pezinho', min: 30 },
   ],
   source: 'defaults',
 };
