@@ -1,25 +1,20 @@
 /**
  * Job antibot — roda a cada 1 minuto.
  *
- * Substitui Monitor_AntiBot do automação visual antiga.
+ * Substitui Monitor_AntiBot do automacao visual antiga.
  *
- * Detecta números enviando 6+ mensagens em 60s, grava em flow_pauses
- * (source=antibot) e notifica dev + dono via WhatsApp.
- * Pausa é isolada por fluxo — não afeta outros bots do mesmo número.
+ * Detecta numeros enviando 6+ mensagens em 60s e grava em flow_pauses
+ * (source=antibot) por fluxo. Usa routing_clientes como fonte autoritativa
+ * do flow_id (telefone -> workflow_id), igual ao router de producao.
+ * Pausa e isolada por fluxo — nao afeta outros bots do mesmo numero.
  */
 import { logger } from '@startap/core/logger';
-import { toChatId } from '@startap/core/phone';
-import { antibot, pausa } from '@startap/db';
-import { waha } from '@startap/integrations';
-import { config } from '../config.js';
+import { antibot, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
 const THRESHOLD = 6; // mensagens (>= dispara pausa)
 const WINDOW_SEC = 60;
-const ALERT_DEV = config.ALERT_DEV_PHONE ?? '';
-const ALERT_OWNER = config.ALERT_OWNER_PHONE ?? '';
-const ALERT_SESSION = config.ALERT_SESSION;
 
 export async function runAntibot(): Promise<{ blocked: number; pruned: number }> {
   const suspects = await antibot.findSuspects(THRESHOLD, WINDOW_SEC);
@@ -30,7 +25,10 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
       { telefone: s.telefone, total: s.total, session: s.session },
       'Suspeito bot detectado',
     );
-    const flowId = await pausa.findFlowIdBySession(s.session);
+
+    const route = await routing.findRouting(s.telefone);
+    const flowId = route?.workflow_id ?? null;
+
     if (flowId) {
       await pausa.addFlowPause({
         flowId,
@@ -43,26 +41,8 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
     } else {
       log.warn(
         { session: s.session, telefone: s.telefone },
-        'antibot: flow_id nao encontrado para session — pausa nao gravada',
+        'antibot: flow_id nao encontrado para telefone em routing_clientes — pausa nao gravada',
       );
-    }
-
-    const msg = `🤖 *BOT DETECTADO — AntiBot*\n\nO número \`${s.telefone}\` foi bloqueado automaticamente por enviar ${s.total} mensagens em ${WINDOW_SEC}s.\n\nInserido na lista de pausa.`;
-
-    if (ALERT_DEV) {
-      await waha
-        .sendText({ sessao: ALERT_SESSION, chatId: toChatId(ALERT_DEV), texto: msg, typing: false })
-        .catch((e) => log.error(e, 'failed to alert dev'));
-    }
-    if (ALERT_OWNER && ALERT_OWNER !== ALERT_DEV) {
-      await waha
-        .sendText({
-          sessao: ALERT_SESSION,
-          chatId: toChatId(ALERT_OWNER),
-          texto: msg,
-          typing: false,
-        })
-        .catch((e) => log.error(e, 'failed to alert owner'));
     }
   }
 
