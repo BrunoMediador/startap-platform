@@ -6293,8 +6293,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'prompt', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', prompt: 'Prompt', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'prompt', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', prompt: 'Prompt', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -6424,6 +6424,177 @@ function loadCloneConfigTab(tab, clone) {
         });
         Object.assign(clone, updated);
         toast('Personalização salva!', 'success');
+        _rendered['bots'] = false;
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally { btn.disabled = false; }
+    });
+
+  } else if (tab === 'horarios') {
+    const DIAS = [
+      ['segunda', 'Segunda'],
+      ['terca',   'Terça'],
+      ['quarta',  'Quarta'],
+      ['quinta',  'Quinta'],
+      ['sexta',   'Sexta'],
+      ['sabado',  'Sábado'],
+      ['domingo', 'Domingo'],
+    ];
+    const horarios = clone.horarios_funcionamento || {};
+    const linhas = DIAS.map(([k, label]) => {
+      const d = horarios[k] || {};
+      const fechado = d.fechado === true;
+      const abre = d.abre || '09:00';
+      const fecha = d.fecha || '18:00';
+      return `
+        <div class="hf-row" data-day="${k}" style="display:grid;grid-template-columns:110px 1fr auto;gap:.75rem;align-items:center;padding:.5rem .25rem;border-bottom:1px solid var(--border)">
+          <span style="font-weight:600">${escapeHtml(label)}</span>
+          <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+            <input type="time" class="hf-abre" value="${escapeHtml(abre)}" ${fechado ? 'disabled' : ''} style="width:6.5rem" />
+            <span class="muted">às</span>
+            <input type="time" class="hf-fecha" value="${escapeHtml(fecha)}" ${fechado ? 'disabled' : ''} style="width:6.5rem" />
+          </div>
+          <label style="display:flex;gap:.375rem;align-items:center;font-size:.85rem;cursor:pointer">
+            <input type="checkbox" class="hf-fechado" ${fechado ? 'checked' : ''} />
+            <span>Fechado</span>
+          </label>
+        </div>`;
+    }).join('');
+
+    content.innerHTML = `
+      <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
+        <p class="muted">Horários de atendimento da semana. Esses valores são usados no prompt da IA para que ela só ofereça slots dentro do funcionamento.</p>
+        <div id="hf-list" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.25rem .5rem">${linhas}</div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button id="btn-salvar-horarios" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar horários</button>
+        </div>
+      </div>`;
+
+    // Toggle de "Fechado" desabilita os inputs de horário da linha.
+    content.querySelectorAll('.hf-row').forEach(row => {
+      const cb = row.querySelector('.hf-fechado');
+      cb.addEventListener('change', () => {
+        const abre = row.querySelector('.hf-abre');
+        const fecha = row.querySelector('.hf-fecha');
+        abre.disabled = cb.checked;
+        fecha.disabled = cb.checked;
+      });
+    });
+
+    content.querySelector('#btn-salvar-horarios').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      const novo = {};
+      let erro = null;
+      content.querySelectorAll('.hf-row').forEach(row => {
+        const dia = row.dataset.day;
+        const fechado = row.querySelector('.hf-fechado').checked;
+        const abre = row.querySelector('.hf-abre').value;
+        const fecha = row.querySelector('.hf-fecha').value;
+        if (!fechado && abre && fecha && abre >= fecha) {
+          erro = erro || `${dia}: horário de abertura precisa ser antes do fechamento`;
+        }
+        novo[dia] = fechado
+          ? { abre: null, fecha: null, fechado: true }
+          : { abre: abre || null, fecha: fecha || null, fechado: false };
+      });
+      if (erro) { toast(erro, 'warning'); btn.disabled = false; return; }
+      try {
+        const updated = await api(`/api/clones/${clone.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ horarios_funcionamento: novo }),
+        });
+        Object.assign(clone, updated);
+        toast('Horários salvos! Prompt do bot foi regerado.', 'success');
+        _rendered['bots'] = false;
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally { btn.disabled = false; }
+    });
+
+  } else if (tab === 'servicos') {
+    const servicos = Array.isArray(clone.servicos) ? clone.servicos : [];
+    function renderLinha(s, idx) {
+      const nome = s?.nome || '';
+      const preco = Number.isFinite(Number(s?.preco_cents)) ? (Number(s.preco_cents) / 100).toFixed(2) : '';
+      const dur = Number.isFinite(Number(s?.duracao_min)) ? Number(s.duracao_min) : '';
+      return `
+        <div class="sv-row" data-idx="${idx}" style="display:grid;grid-template-columns:1fr 110px 110px auto;gap:.5rem;align-items:center;padding:.4rem .25rem;border-bottom:1px solid var(--border)">
+          <input type="text" class="sv-nome" placeholder="Ex: Corte" value="${escapeHtml(nome)}" maxlength="60" />
+          <input type="number" class="sv-preco" placeholder="R$ 0,00" value="${preco}" step="0.01" min="0" />
+          <input type="number" class="sv-dur" placeholder="min" value="${dur}" step="1" min="1" max="600" />
+          <button type="button" class="btn btn--ghost btn--sm btn--icon sv-del" aria-label="Remover" style="color:var(--danger)">${icon('trash-2', 13)}</button>
+        </div>`;
+    }
+    const linhasSv = servicos.length > 0
+      ? servicos.map((s, i) => renderLinha(s, i)).join('')
+      : renderLinha({}, 0);
+
+    content.innerHTML = `
+      <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
+        <p class="muted">Serviços que o bot vai oferecer. Cada linha vira uma entrada em [SERVICOS E PRECOS] do prompt.</p>
+        <div style="display:grid;grid-template-columns:1fr 110px 110px auto;gap:.5rem;padding:.25rem;font-size:.75rem;color:var(--text-muted);font-weight:600">
+          <span>Nome</span>
+          <span>Preço (R$)</span>
+          <span>Duração (min)</span>
+          <span></span>
+        </div>
+        <div id="sv-list" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.25rem .5rem">${linhasSv}</div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button type="button" id="btn-add-servico" class="btn">${icon('plus', 13)} Adicionar serviço</button>
+          <button type="button" id="btn-salvar-servicos" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar serviços</button>
+        </div>
+      </div>`;
+
+    function wireRow(row) {
+      row.querySelector('.sv-del').addEventListener('click', () => {
+        row.remove();
+        if (content.querySelectorAll('.sv-row').length === 0) {
+          const novoIdx = 0;
+          content.querySelector('#sv-list').insertAdjacentHTML('beforeend', renderLinha({}, novoIdx));
+          wireRow(content.querySelector(`.sv-row[data-idx="${novoIdx}"]`));
+        }
+      });
+    }
+    content.querySelectorAll('.sv-row').forEach(wireRow);
+
+    content.querySelector('#btn-add-servico').addEventListener('click', () => {
+      const novoIdx = content.querySelectorAll('.sv-row').length;
+      content.querySelector('#sv-list').insertAdjacentHTML('beforeend', renderLinha({}, novoIdx));
+      const novaRow = content.querySelector(`.sv-row[data-idx="${novoIdx}"]`);
+      wireRow(novaRow);
+      novaRow.querySelector('.sv-nome')?.focus();
+    });
+
+    content.querySelector('#btn-salvar-servicos').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      const novo = [];
+      let erro = null;
+      content.querySelectorAll('.sv-row').forEach(row => {
+        const nome = (row.querySelector('.sv-nome').value || '').trim();
+        const precoStr = (row.querySelector('.sv-preco').value || '').trim();
+        const durStr = (row.querySelector('.sv-dur').value || '').trim();
+        if (!nome && !precoStr && !durStr) return; // linha vazia: ignora
+        if (!nome) { erro = erro || 'Cada serviço precisa de um nome.'; return; }
+        const precoReais = Number(precoStr);
+        const dur = Number(durStr);
+        novo.push({
+          nome,
+          preco_cents: Number.isFinite(precoReais) && precoReais >= 0 ? Math.round(precoReais * 100) : 0,
+          duracao_min: Number.isFinite(dur) && dur > 0 ? Math.round(dur) : 30,
+        });
+      });
+      if (erro) { toast(erro, 'warning'); btn.disabled = false; return; }
+      try {
+        const updated = await api(`/api/clones/${clone.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ servicos: novo }),
+        });
+        Object.assign(clone, updated);
+        toast('Serviços salvos! Prompt do bot foi regerado.', 'success');
         _rendered['bots'] = false;
       } catch (err) {
         toast('Erro: ' + err.message, 'danger');
