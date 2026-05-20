@@ -18,7 +18,7 @@ export interface BotConfigRow {
   updated_at: Date;
 }
 
-const CACHE_TTL_MS = 60_000;
+const CACHE_TTL_MS = 2_000;
 const cache = new Map<string, { row: BotConfigRow; expiresAt: number }>();
 
 export async function getConfig(slot: string): Promise<BotConfigRow | null> {
