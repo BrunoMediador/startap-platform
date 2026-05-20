@@ -72,6 +72,12 @@ const DEFAULT_PROMPT_TPL = [
   '3. NUNCA cite precos de outros cursos.',
   '4. Maximo 3 linhas por resposta. Uma pergunta por vez.',
   '5. Quando cliente quiser se inscrever -> use ferramenta salvar_lead.',
+  '',
+  '[COMPORTAMENTO AUTOMATICO DO SISTEMA]',
+  '- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente UM video aleatorio do catalogo daquele curso. Voce nao precisa mencionar nem repetir esse video.',
+  '- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.',
+  '- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).',
+  '- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
 ].join('\n');
 
 export class TesteVendasBot extends BotBase {
@@ -273,25 +279,30 @@ export class TesteVendasBot extends BotBase {
         if (!courseSlug) return;
 
         const allMedia = await botMedia.listBySlot(effectiveSlot);
-        const introMedia = allMedia.find(
-          (m) => m.course_slug === courseSlug && m.is_course_intro && m.enabled && m.url,
+        const candidates = allMedia.filter(
+          (m) => m.course_slug === courseSlug && m.enabled && m.url,
         );
+        const naoEnviadas = candidates.filter(
+          (m) => !state.mediaIdsSentSet.has(m.id),
+        );
+        const pool = naoEnviadas.length > 0 ? naoEnviadas : candidates;
 
-        if (!introMedia) {
+        if (pool.length === 0) {
           this.log.warn(
             { slot: effectiveSlot, courseSlug },
-            'CURSO: sem video intro cadastrado — enviando apenas o texto',
+            'CURSO: sem videos cadastrados para o curso — enviando apenas o texto',
           );
         } else {
+          const escolhido = pool[Math.floor(Math.random() * pool.length)];
           await waha.sendMedia({
             type: 'video',
             sessao,
             chatId,
-            url: introMedia.url!,
-            caption: introMedia.caption ?? undefined,
+            url: escolhido.url!,
+            caption: escolhido.caption ?? undefined,
           });
           await this.appendMemory(ctx, 'system', `[STATE:CURSO_ESCOLHIDO:${courseSlug}]`);
-          await this.appendMemory(ctx, 'system', `[STATE:VIDEO_SENT:${introMedia.id}]`);
+          await this.appendMemory(ctx, 'system', `[STATE:VIDEO_SENT:${escolhido.id}]`);
         }
         break;
       }
