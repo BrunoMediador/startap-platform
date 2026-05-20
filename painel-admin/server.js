@@ -699,7 +699,9 @@ app.get('/api/bots/:slot', async (req, res) => {
     const { slot } = req.params;
     const [cfgR, promptR] = await Promise.all([
       pool.query(
-        'SELECT slot, display_name, provider, model, temperature::float AS temperature, updated_at FROM bot_config WHERE slot = $1',
+        `SELECT slot, display_name, provider, model, temperature::float AS temperature,
+                horarios_funcionamento, servicos, updated_at
+         FROM bot_config WHERE slot = $1`,
         [slot],
       ),
       pool.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [slot]),
@@ -717,7 +719,37 @@ app.get('/api/bots/:slot', async (req, res) => {
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
-    const { provider, model, temperature, display_name, name } = req.body;
+    const {
+      provider,
+      model,
+      temperature,
+      display_name,
+      name,
+      horarios_funcionamento,
+      servicos,
+    } = req.body;
+
+    // Validacao leve dos novos campos (paridade com PATCH /api/clones/:id).
+    if (horarios_funcionamento !== undefined) {
+      if (
+        !horarios_funcionamento ||
+        typeof horarios_funcionamento !== 'object' ||
+        Array.isArray(horarios_funcionamento)
+      ) {
+        return res.status(400).json({ error: 'horarios_funcionamento deve ser objeto' });
+      }
+    }
+    if (servicos !== undefined) {
+      if (!Array.isArray(servicos)) {
+        return res.status(400).json({ error: 'servicos deve ser array' });
+      }
+      for (const s of servicos) {
+        if (!s || typeof s !== 'object' || !s.nome) {
+          return res.status(400).json({ error: 'cada servico precisa de { nome }' });
+        }
+      }
+    }
+
     const sets = [];
     const vals = [];
     let i = 1;
@@ -737,6 +769,14 @@ app.put('/api/bots/:slot', async (req, res) => {
     if (temperature !== undefined) {
       sets.push(`temperature = $${i++}`);
       vals.push(Number(temperature));
+    }
+    if (horarios_funcionamento !== undefined) {
+      sets.push(`horarios_funcionamento = $${i++}::jsonb`);
+      vals.push(JSON.stringify(horarios_funcionamento));
+    }
+    if (servicos !== undefined) {
+      sets.push(`servicos = $${i++}::jsonb`);
+      vals.push(JSON.stringify(servicos));
     }
     if (sets.length === 0) return res.status(400).json({ error: 'nada para atualizar' });
     sets.push('updated_at = NOW()');
@@ -2490,10 +2530,36 @@ const _CLONE_DEFAULTS_BARBEARIA = {
   ],
 };
 
-function getCloneDefaults(matrizSlot) {
+/**
+ * Defaults para clone novo. Hierarquia:
+ *   1) bot_config.horarios_funcionamento + bot_config.servicos da MATRIZ
+ *      (admin edita pelo painel — fonte de verdade quando preenchida).
+ *   2) Hardcoded por matriz (_CLONE_DEFAULTS_BARBEARIA para teste_barbearia).
+ *   3) null/null (outras matrizes — clone nasce com abas em branco).
+ *
+ * Async porque consulta bot_config. Callers precisam awaitar.
+ */
+async function getCloneDefaults(matrizSlot) {
+  try {
+    const r = await pool.query(
+      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+      [matrizSlot],
+    );
+    const row = r.rows[0];
+    if (row && (row.horarios_funcionamento || row.servicos)) {
+      // Falha parcial (so um dos campos): completa com hardcoded da matriz.
+      const fallback = matrizSlot === 'teste_barbearia'
+        ? _CLONE_DEFAULTS_BARBEARIA
+        : { horarios_funcionamento: null, servicos: null };
+      return {
+        horarios_funcionamento: row.horarios_funcionamento ?? fallback.horarios_funcionamento,
+        servicos: row.servicos ?? fallback.servicos,
+      };
+    }
+  } catch (e) {
+    console.warn(`[getCloneDefaults] falha ao ler bot_config da matriz: ${e.message}`);
+  }
   if (matrizSlot === 'teste_barbearia') return _CLONE_DEFAULTS_BARBEARIA;
-  // Outras matrizes (vendas, vendas_barbearia) ainda nao tem defaults — clone
-  // nasce com NULL e o painel oferece as abas em branco.
   return { horarios_funcionamento: null, servicos: null };
 }
 
@@ -2742,7 +2808,7 @@ app.post('/api/clones', async (req, res) => {
     );
 
     // flow_clones — popula horarios e servicos default conforme a matriz.
-    const defaults = getCloneDefaults(matriz_slot);
+    const defaults = await getCloneDefaults(matriz_slot);
     const cloneR = await client.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
@@ -2971,7 +3037,7 @@ app.post('/api/clones/with-waha', async (req, res) => {
 
     // Defaults de horarios/servicos conforme a matriz (memoria: clone novo
     // ja sai oferecendo servicos comuns, evita "Nenhum servico cadastrado").
-    const defaults = getCloneDefaults(matriz_slot);
+    const defaults = await getCloneDefaults(matriz_slot);
     const cloneR = await cloneClient.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,

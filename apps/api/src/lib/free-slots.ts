@@ -12,7 +12,7 @@
  */
 import type { CalendarEvent } from '@startap/integrations/google-calendar';
 import type { HorariosFuncionamento, ServicoConfig } from '@startap/db';
-import { flowClones } from '@startap/db';
+import { flowClones, query } from '@startap/db';
 
 const TZ = 'America/Sao_Paulo';
 
@@ -22,7 +22,7 @@ export interface ScheduleConfig {
   /** Serviços disponíveis (nome + duração em minutos). */
   services: Array<{ name: string; min: number }>;
   /** Origem da config — útil para log/debug. */
-  source: 'flow_clones' | 'defaults';
+  source: 'flow_clones' | 'bot_config' | 'defaults';
 }
 
 // ---- Defaults (preservam comportamento do bot pre-PR-B) ---------------------
@@ -108,26 +108,303 @@ function servicosToServices(
 }
 
 /**
- * Carrega config do slot. Se o slot está em flow_clones e tem horarios+servicos
- * preenchidos, usa-os; caso contrário usa BUILTIN_DEFAULTS.
+ * Le bot_config.horarios_funcionamento + bot_config.servicos diretamente
+ * (queries.bot-config nao retorna esses jsonbs porque outros consumidores
+ * nao precisam). Usado pelo loadScheduleConfig quando o slot e uma matriz.
+ */
+async function loadFromBotConfig(
+  slot: string,
+): Promise<{ work: Record<number, [number, number] | null>; services: Array<{ name: string; min: number }> } | null> {
+  try {
+    const r = await query<{
+      horarios_funcionamento: HorariosFuncionamento | null;
+      servicos: ServicoConfig[] | null;
+    }>(
+      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (!row) return null;
+    const work = horariosToWork(row.horarios_funcionamento);
+    const services = servicosToServices(row.servicos);
+    if (!work || !services || services.length === 0) return null;
+    return { work, services };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Carrega config do slot. Hierarquia (decisao 2026-05-20: matriz tambem
+ * pode ter horarios+servicos pelo painel, e clones herdam):
+ *   1) flow_clones (clone vinculado ao slot)
+ *   2) bot_config (matriz com config preenchida)
+ *   3) BUILTIN_DEFAULTS (hardcoded fallback)
  */
 export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> {
+  // 1) Tenta clone primeiro
   try {
     const clone = await flowClones.getCloneBySlot(slot);
-    if (!clone) return BUILTIN_DEFAULTS;
-
-    const work = horariosToWork(clone.horarios_funcionamento);
-    const services = servicosToServices(clone.servicos);
-
-    // Politica: se UMA das duas configs estiver vazia ou invalida, cai pro
-    // default — evita rodar com config parcial que gera prompt confuso.
-    if (!work || !services || services.length === 0) {
+    if (clone) {
+      const work = horariosToWork(clone.horarios_funcionamento);
+      const services = servicosToServices(clone.servicos);
+      if (work && services && services.length > 0) {
+        return { work, services, source: 'flow_clones' };
+      }
+      // Clone existe mas config incompleta — cai pra matriz (matriz_slot do clone).
+      const matrizCfg = await loadFromBotConfig(clone.matriz_slot);
+      if (matrizCfg) {
+        return { ...matrizCfg, source: 'bot_config' };
+      }
       return BUILTIN_DEFAULTS;
     }
-
-    return { work, services, source: 'flow_clones' };
   } catch {
-    return BUILTIN_DEFAULTS;
+    // Falha de query — cai para os proximos niveis.
+  }
+
+  // 2) Slot pode ser uma matriz rodando direto (ex: teste_barbearia sem clone).
+  const matrizCfg = await loadFromBotConfig(slot);
+  if (matrizCfg) {
+    return { ...matrizCfg, source: 'bot_config' };
+  }
+
+  // 3) Ultimo recurso: hardcoded.
+  return BUILTIN_DEFAULTS;
+}
+
+// ---- Bloco de CONTEXTO (concatenado ao prompt antes de enviar a IA) --------
+//
+// Bruno (2026-05-20): a parte editavel pelo painel (bot_prompt) e SOMENTE
+// persona + regras + fluxo + cartao. Os dados (negocio, horarios, servicos,
+// data, cliente, agenda) sao injetados pelo worker em runtime via este bloco
+// — usuario nao consegue apagar acidentalmente pelo prompt.
+
+interface ContextBlockOpts {
+  /** Slot do bot/clone (necessario para localizar config). */
+  slot: string;
+  /** Nome do cliente final (do pushName do WhatsApp). */
+  nomeCliente: string;
+  /** Telefone do cliente final (E.164 sem formatacao). */
+  telefoneCliente: string;
+  /** Data atual ja formatada em pt-BR. */
+  dataAtual: string;
+  /** Ano (string) para a IA usar nos calculos. */
+  ano: string;
+  /** Tabela de horarios disponiveis ja formatada (vinda de formatarAgendaComConfig). */
+  agendaFormatada: string;
+}
+
+/**
+ * Carrega personalizacao + horarios + servicos do slot.
+ * Hierarquia: flow_clones (clone) -> bot_config (matriz) -> defaults vazios.
+ */
+async function loadEntityForContext(slot: string): Promise<{
+  nomeNegocio: string;
+  endereco: string;
+  instagram: string;
+  telefoneContato: string;
+  horarios: HorariosFuncionamento | null;
+  servicos: ServicoConfig[] | null;
+}> {
+  const empty = {
+    nomeNegocio: '',
+    endereco: '',
+    instagram: '',
+    telefoneContato: '',
+    horarios: null,
+    servicos: null,
+  };
+
+  try {
+    const clone = await flowClones.getCloneBySlot(slot);
+    if (clone) {
+      const pers = (clone.personalizacao ?? {}) as Record<string, string>;
+      const horarios = clone.horarios_funcionamento;
+      const servicos = clone.servicos;
+      // Se clone tem config parcial, completa com bot_config da matriz.
+      let horariosFinal = horarios;
+      let servicosFinal = servicos;
+      if (!horarios || !servicos || servicos.length === 0) {
+        try {
+          const r = await query<{
+            horarios_funcionamento: HorariosFuncionamento | null;
+            servicos: ServicoConfig[] | null;
+          }>(
+            `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+            [clone.matriz_slot],
+          );
+          const matrizRow = r.rows[0];
+          if (matrizRow) {
+            if (!horariosFinal) horariosFinal = matrizRow.horarios_funcionamento;
+            if (!servicosFinal || servicosFinal.length === 0) servicosFinal = matrizRow.servicos;
+          }
+        } catch {
+          /* silent — fallback acima ja cobre */
+        }
+      }
+      return {
+        nomeNegocio: pers['nome_negocio'] ?? '',
+        endereco: pers['endereco'] ?? '',
+        instagram: pers['instagram'] ?? '',
+        telefoneContato: pers['telefone_contato'] ?? '',
+        horarios: horariosFinal,
+        servicos: servicosFinal,
+      };
+    }
+  } catch {
+    /* silent */
+  }
+
+  // Slot e a propria matriz (sem flow_clones) — busca em bot_config.
+  try {
+    const r = await query<{
+      horarios_funcionamento: HorariosFuncionamento | null;
+      servicos: ServicoConfig[] | null;
+    }>(
+      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (row) {
+      return {
+        ...empty,
+        horarios: row.horarios_funcionamento,
+        servicos: row.servicos,
+      };
+    }
+  } catch {
+    /* silent */
+  }
+
+  return empty;
+}
+
+/**
+ * Monta o bloco de CONTEXTO que sera concatenado ao prompt do bot.
+ *
+ * Estrutura fixa, nao editavel pelo usuario do painel — protege contra
+ * remocao acidental de dados importantes (Bruno 2026-05-20).
+ */
+export async function buildContextBlock(opts: ContextBlockOpts): Promise<string> {
+  const e = await loadEntityForContext(opts.slot);
+
+  const negocio: string[] = [];
+  if (e.nomeNegocio) negocio.push(`Nome: ${e.nomeNegocio}`);
+  if (e.endereco) negocio.push(`Endereco: ${e.endereco}`);
+  if (e.instagram) negocio.push(`Instagram: @${e.instagram}`);
+  if (e.telefoneContato) negocio.push(`Telefone: ${e.telefoneContato}`);
+
+  const partes: string[] = [];
+  partes.push('[CONTEXTO - DADOS DO BANCO, NAO REMOVIVEL]');
+  partes.push('');
+  partes.push('[DATA ATUAL]');
+  partes.push(opts.dataAtual);
+  partes.push(`ANO: ${opts.ano} - use SEMPRE este ano ao calcular datas.`);
+  partes.push('');
+  partes.push('[DADOS DO CLIENTE - JA IDENTIFICADO]');
+  partes.push(`NOME: ${opts.nomeCliente}`);
+  partes.push(`WHATSAPP: ${opts.telefoneCliente}`);
+  if (negocio.length > 0) {
+    partes.push('');
+    partes.push('[NEGOCIO]');
+    for (const ln of negocio) partes.push(ln);
+  }
+  partes.push('');
+  partes.push('[FUNCIONAMENTO]');
+  partes.push(renderHorariosFuncionamentoBlock(e.horarios));
+  partes.push('');
+  partes.push('[SERVICOS E PRECOS]');
+  partes.push(renderServicosPrecosBlock(e.servicos));
+  partes.push('');
+  partes.push('[HORARIOS DISPONIVEIS - ATUALIZADO AGORA]');
+  partes.push(opts.agendaFormatada);
+
+  return partes.join('\n');
+}
+
+// ---- Render de blocos {{double_brace}} (paridade com painel-admin) ---------
+// O painel pré-renderiza esses blocos no momento de criar/atualizar clone
+// (regerarPromptClone). Mas a MATRIZ não passa por esse caminho — quando o
+// worker roda pra ela direto, o bot_prompt.matriz ainda tem placeholders
+// literais. Aplicamos a substituição em runtime aqui.
+
+const _DIAS_SEMANA_RENDER: Array<[keyof HorariosFuncionamento, string]> = [
+  ['segunda', 'Segunda'],
+  ['terca', 'Terca'],
+  ['quarta', 'Quarta'],
+  ['quinta', 'Quinta'],
+  ['sexta', 'Sexta'],
+  ['sabado', 'Sabado'],
+  ['domingo', 'Domingo'],
+];
+
+function renderHorariosFuncionamentoBlock(horarios: HorariosFuncionamento | null): string {
+  if (!horarios || typeof horarios !== 'object') return 'Nao configurado.';
+  const linhas: string[] = [];
+  for (const [key, label] of _DIAS_SEMANA_RENDER) {
+    const dia = horarios[key];
+    if (!dia || dia.fechado) {
+      linhas.push(`${label}: fechado`);
+    } else if (dia.abre && dia.fecha) {
+      linhas.push(`${label}: ${dia.abre} as ${dia.fecha}`);
+    } else {
+      linhas.push(`${label}: nao configurado`);
+    }
+  }
+  return linhas.join('\n');
+}
+
+function renderServicosPrecosBlock(servicos: ServicoConfig[] | null): string {
+  if (!Array.isArray(servicos) || servicos.length === 0) return 'Nenhum servico cadastrado.';
+  const linhas = servicos
+    .filter((s) => s && typeof s.nome === 'string' && s.nome.trim() !== '')
+    .map((s) => {
+      const nome = String(s.nome).trim();
+      const preco = Number(s.preco_cents);
+      const dur = Number(s.duracao_min);
+      const precoStr = Number.isFinite(preco) && preco > 0
+        ? `R$${(preco / 100).toFixed(2).replace('.', ',')}`
+        : 'a combinar';
+      const durStr = Number.isFinite(dur) && dur > 0 ? `${dur} min` : 'duracao a combinar';
+      return `${nome}: ${precoStr} (${durStr})`;
+    });
+  return linhas.length > 0 ? linhas.join('\n') : 'Nenhum servico cadastrado.';
+}
+
+/**
+ * Substitui {{horarios_funcionamento_render}} e {{servicos_precos_render}}
+ * no prompt da matriz quando o worker roda pra matriz direto. Idempotente —
+ * se o prompt nao tem esses placeholders, retorna inalterado.
+ */
+export async function aplicarPlaceholdersMatriz(
+  prompt: string,
+  slot: string,
+): Promise<string> {
+  if (!prompt.includes('{{horarios_funcionamento_render}}') &&
+      !prompt.includes('{{servicos_precos_render}}')) {
+    return prompt;
+  }
+  try {
+    const r = await query<{
+      horarios_funcionamento: HorariosFuncionamento | null;
+      servicos: ServicoConfig[] | null;
+    }>(
+      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (!row) return prompt;
+    return prompt
+      .replace(
+        /\{\{horarios_funcionamento_render\}\}/g,
+        renderHorariosFuncionamentoBlock(row.horarios_funcionamento),
+      )
+      .replace(
+        /\{\{servicos_precos_render\}\}/g,
+        renderServicosPrecosBlock(row.servicos),
+      );
+  } catch {
+    return prompt;
   }
 }
 
