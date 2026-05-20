@@ -2467,6 +2467,36 @@ app.get('/api/cleanup/status', async (req, res) => {
   }
 });
 
+// ---------- DEFAULTS POR MATRIZ AO CRIAR CLONE ----------
+// Quando um clone novo nasce, ja vem com horarios e servicos pre-cadastrados
+// para a matriz correspondente. Cliente edita pelo painel quando precisar.
+// Evita que o bot diga "Nenhum servico cadastrado" logo apos a criacao.
+
+const _CLONE_DEFAULTS_BARBEARIA = {
+  horarios_funcionamento: {
+    segunda: { abre: null, fecha: null, fechado: true },
+    terca: { abre: '09:00', fecha: '18:00', fechado: false },
+    quarta: { abre: '09:00', fecha: '18:00', fechado: false },
+    quinta: { abre: '09:00', fecha: '18:00', fechado: false },
+    sexta: { abre: '09:00', fecha: '18:00', fechado: false },
+    sabado: { abre: '09:00', fecha: '18:00', fechado: false },
+    domingo: { abre: null, fecha: null, fechado: true },
+  },
+  servicos: [
+    { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
+    { nome: 'Barba', preco_cents: 5000, duracao_min: 30 },
+    { nome: 'Sobrancelha', preco_cents: 5000, duracao_min: 30 },
+    { nome: 'Pezinho', preco_cents: 5000, duracao_min: 30 },
+  ],
+};
+
+function getCloneDefaults(matrizSlot) {
+  if (matrizSlot === 'teste_barbearia') return _CLONE_DEFAULTS_BARBEARIA;
+  // Outras matrizes (vendas, vendas_barbearia) ainda nao tem defaults — clone
+  // nasce com NULL e o painel oferece as abas em branco.
+  return { horarios_funcionamento: null, servicos: null };
+}
+
 // ---------- RENDER DE PROMPT POR CLONE ----------
 // Helpers para gerar blocos {{horarios_funcionamento_render}} e {{servicos_precos_render}}
 // a partir dos jsonbs flow_clones.horarios_funcionamento e flow_clones.servicos.
@@ -2582,6 +2612,7 @@ app.get('/api/clones', async (_req, res) => {
     const r = await pool.query(`
       SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
              fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+             fc.horarios_funcionamento, fc.servicos,
              fc.created_at, fc.updated_at,
              bc.display_name AS matriz_display_name
       FROM flow_clones fc
@@ -2710,10 +2741,14 @@ app.post('/api/clones', async (req, res) => {
       [slug, display_name],
     );
 
-    // flow_clones
+    // flow_clones — popula horarios e servicos default conforme a matriz.
+    const defaults = getCloneDefaults(matriz_slot);
     const cloneR = await client.query(
-      `INSERT INTO flow_clones (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,'rascunho',NOW(),NOW())
+      `INSERT INTO flow_clones
+         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
+          personalizacao, horarios_funcionamento, servicos,
+          status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,'rascunho',NOW(),NOW())
        RETURNING *`,
       [
         slug,
@@ -2722,10 +2757,19 @@ app.post('/api/clones', async (req, res) => {
         cliente_nome ?? null,
         cliente_telefone ?? null,
         JSON.stringify(pers),
+        defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
+        defaults.servicos ? JSON.stringify(defaults.servicos) : null,
       ],
     );
 
     await client.query('COMMIT');
+
+    // Re-renderiza bot_prompt do clone aplicando defaults + personalizacao.
+    // Sem isso o prompt fica com {{horarios_funcionamento_render}} literal.
+    const rendered = await regerarPromptClone(cloneR.rows[0]);
+    if (!rendered.ok) {
+      console.warn(`[POST /api/clones] regerarPromptClone falhou: ${rendered.error}`);
+    }
     res.status(201).json(cloneR.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
@@ -2925,12 +2969,26 @@ app.post('/api/clones/with-waha', async (req, res) => {
       [novo_slot, display_name],
     );
 
+    // Defaults de horarios/servicos conforme a matriz (memoria: clone novo
+    // ja sai oferecendo servicos comuns, evita "Nenhum servico cadastrado").
+    const defaults = getCloneDefaults(matriz_slot);
     const cloneR = await cloneClient.query(
       `INSERT INTO flow_clones
-         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'rascunho', NOW(), NOW())
-       RETURNING id, slot, status`,
-      [novo_slot, matriz_slot, display_name, null, telefone_contato ?? null, JSON.stringify(pers)],
+         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
+          personalizacao, horarios_funcionamento, servicos,
+          status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, 'rascunho', NOW(), NOW())
+       RETURNING *`,
+      [
+        novo_slot,
+        matriz_slot,
+        display_name,
+        null,
+        telefone_contato ?? null,
+        JSON.stringify(pers),
+        defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
+        defaults.servicos ? JSON.stringify(defaults.servicos) : null,
+      ],
     );
 
     await cloneClient.query('COMMIT');
@@ -2941,6 +2999,14 @@ app.post('/api/clones/with-waha', async (req, res) => {
     return res.status(500).json({ error: `clones/with-waha: ${e.message}` });
   } finally {
     cloneClient.release();
+  }
+
+  // Re-renderiza bot_prompt aplicando horarios+servicos default e personalizacao.
+  // Roda fora da transacao porque flow_clones ja foi commitado e
+  // regerarPromptClone faz seu proprio UPSERT em bot_prompt (idempotente).
+  const renderedPrompt = await regerarPromptClone(cloneRow);
+  if (!renderedPrompt.ok) {
+    console.warn(`[clones/with-waha] regerarPromptClone falhou: ${renderedPrompt.error}`);
   }
 
   // --- 2. Cria sessão WAHA (falha não reverte o clone — decisão Bruno 005-B) ---
