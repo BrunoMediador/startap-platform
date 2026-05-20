@@ -2467,6 +2467,113 @@ app.get('/api/cleanup/status', async (req, res) => {
   }
 });
 
+// ---------- RENDER DE PROMPT POR CLONE ----------
+// Helpers para gerar blocos {{horarios_funcionamento_render}} e {{servicos_precos_render}}
+// a partir dos jsonbs flow_clones.horarios_funcionamento e flow_clones.servicos.
+// Mantemos PT-BR e formato espelhando o prompt legado da matriz teste_barbearia.
+
+const _DIAS_SEMANA = [
+  ['segunda',  'Segunda'],
+  ['terca',    'Terca'],
+  ['quarta',   'Quarta'],
+  ['quinta',   'Quinta'],
+  ['sexta',    'Sexta'],
+  ['sabado',   'Sabado'],
+  ['domingo',  'Domingo'],
+];
+
+function renderHorariosFuncionamento(horarios) {
+  if (!horarios || typeof horarios !== 'object') return 'Nao configurado.';
+  const linhas = [];
+  for (const [key, label] of _DIAS_SEMANA) {
+    const dia = horarios[key];
+    if (!dia || dia.fechado) {
+      linhas.push(`${label}: fechado`);
+    } else if (dia.abre && dia.fecha) {
+      linhas.push(`${label}: ${dia.abre} as ${dia.fecha}`);
+    } else {
+      linhas.push(`${label}: nao configurado`);
+    }
+  }
+  return linhas.join('\n');
+}
+
+function renderServicosPrecos(servicos) {
+  if (!Array.isArray(servicos) || servicos.length === 0) return 'Nenhum servico cadastrado.';
+  return servicos
+    .filter((s) => s && typeof s === 'object' && s.nome)
+    .map((s) => {
+      const nome = String(s.nome).trim();
+      const preco = Number(s.preco_cents);
+      const dur = Number(s.duracao_min);
+      const precoStr = Number.isFinite(preco) && preco > 0
+        ? `R$${(preco / 100).toFixed(2).replace('.', ',')}`
+        : 'a combinar';
+      const durStr = Number.isFinite(dur) && dur > 0 ? `${dur} min` : 'duracao a combinar';
+      return `${nome}: ${precoStr} (${durStr})`;
+    })
+    .join('\n') || 'Nenhum servico cadastrado.';
+}
+
+/**
+ * Aplica os 3 grupos de placeholders {{double_brace}} sobre o template da matriz:
+ *  - personalizacao: { nome_negocio, endereco, instagram, ... }
+ *  - horarios:       jsonb com chaves segunda..domingo
+ *  - servicos:       array [{ nome, preco_cents, duracao_min }]
+ *
+ * Placeholders nao resolvidos sao preservados (formato {{key}}) para nao perder
+ * dado em caso de campo ausente.
+ */
+function renderClonePrompt(matrizPrompt, personalizacao, horarios, servicos) {
+  const pers = personalizacao && typeof personalizacao === 'object' ? personalizacao : {};
+  const ctx = {
+    ...pers,
+    horarios_funcionamento_render: renderHorariosFuncionamento(horarios),
+    servicos_precos_render: renderServicosPrecos(servicos),
+  };
+  let out = matrizPrompt.replace(/\{\{(\w+)\}\}/g, (_, k) =>
+    Object.prototype.hasOwnProperty.call(ctx, k) ? String(ctx[k] ?? '') : `{{${k}}}`,
+  );
+  if (pers['cliente_nome']) {
+    out = out.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
+  }
+  return out;
+}
+
+/**
+ * Re-renderiza o prompt do clone com base no estado atual de flow_clones e
+ * sobrescreve bot_prompt do slot do clone. Idempotente. Usa o prompt da MATRIZ
+ * como template (nao o prompt previamente salvo do clone), porque queremos que
+ * mudancas estruturais na matriz se propaguem para clones quando o usuario
+ * mexer em personalizacao/horarios/servicos.
+ *
+ * Retorna { ok: true, prompt } ou { ok: false, error }.
+ */
+async function regerarPromptClone(cloneRow) {
+  try {
+    const matrizPrompt = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [
+      cloneRow.matriz_slot,
+    ]);
+    if (!matrizPrompt.rows[0]) {
+      return { ok: false, error: `Matriz ${cloneRow.matriz_slot} sem prompt em bot_prompt` };
+    }
+    const prompt = renderClonePrompt(
+      matrizPrompt.rows[0].prompt,
+      cloneRow.personalizacao,
+      cloneRow.horarios_funcionamento,
+      cloneRow.servicos,
+    );
+    await pool.query(
+      `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
+       ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
+      [cloneRow.slot, prompt],
+    );
+    return { ok: true, prompt };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 // ---------- CLONES DE FLUXO MATRIZ ----------
 
 // GET /api/clones — lista todos os clones
@@ -2945,8 +3052,27 @@ app.patch('/api/clones/:id', async (req, res) => {
     cliente_nome,
     cliente_telefone,
     personalizacao,
+    horarios_funcionamento,
+    servicos,
     status: newStatus,
   } = req.body ?? {};
+
+  // Validacao leve dos novos campos.
+  if (horarios_funcionamento !== undefined) {
+    if (!horarios_funcionamento || typeof horarios_funcionamento !== 'object' || Array.isArray(horarios_funcionamento)) {
+      return res.status(400).json({ error: 'horarios_funcionamento deve ser objeto' });
+    }
+  }
+  if (servicos !== undefined) {
+    if (!Array.isArray(servicos)) {
+      return res.status(400).json({ error: 'servicos deve ser array' });
+    }
+    for (const s of servicos) {
+      if (!s || typeof s !== 'object' || !s.nome) {
+        return res.status(400).json({ error: 'cada servico precisa de { nome }' });
+      }
+    }
+  }
 
   const sets = [];
   const vals = [];
@@ -2968,6 +3094,14 @@ app.patch('/api/clones/:id', async (req, res) => {
     sets.push(`personalizacao = $${i++}::jsonb`);
     vals.push(JSON.stringify(personalizacao));
   }
+  if (horarios_funcionamento !== undefined) {
+    sets.push(`horarios_funcionamento = $${i++}::jsonb`);
+    vals.push(JSON.stringify(horarios_funcionamento));
+  }
+  if (servicos !== undefined) {
+    sets.push(`servicos = $${i++}::jsonb`);
+    vals.push(JSON.stringify(servicos));
+  }
   if (newStatus !== undefined) {
     sets.push(`status = $${i++}`);
     vals.push(newStatus);
@@ -2984,35 +3118,36 @@ app.patch('/api/clones/:id', async (req, res) => {
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
 
-    // Re-aplica personalizacao no prompt se personalizacao mudou
-    if (personalizacao !== undefined) {
-      const pers = typeof personalizacao === 'object' ? personalizacao : {};
-      const cloneSlot = r.rows[0].slot;
-      const matrizSlot = r.rows[0].matriz_slot;
-      // Prioriza prompt já existente do clone; só usa matriz como template se clone não tem prompt.
-      // Impede sobrescrever customização prévia ao aplicar personalização novamente.
-      const promptR = await pool.query(
-        `SELECT prompt FROM bot_prompt WHERE slot = $1
-         UNION ALL
-         SELECT prompt FROM bot_prompt WHERE slot = $2
-           AND NOT EXISTS (SELECT 1 FROM bot_prompt WHERE slot = $1)
-         LIMIT 1`,
-        [cloneSlot, matrizSlot],
-      );
-      if (promptR.rows[0]) {
-        let prompt = promptR.rows[0].prompt;
-        prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
-        if (pers['cliente_nome'])
-          prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
-        await pool.query(
-          `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
-           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
-          [cloneSlot, prompt],
-        );
+    // Re-renderiza prompt sempre que algum campo que afeta o prompt mudou.
+    const tocouPrompt =
+      personalizacao !== undefined ||
+      horarios_funcionamento !== undefined ||
+      servicos !== undefined;
+    if (tocouPrompt) {
+      const rendered = await regerarPromptClone(r.rows[0]);
+      if (!rendered.ok) {
+        console.warn(`[clones PATCH] regerarPromptClone falhou: ${rendered.error}`);
       }
     }
 
     res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/clones/:id/regerar-prompt — re-renderiza bot_prompt do clone a partir
+// da matriz e do estado atual de personalizacao/horarios/servicos. Idempotente.
+// Util quando o template da matriz muda e o cliente quer "ressincronizar".
+app.post('/api/clones/:id/regerar-prompt', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const r = await pool.query('SELECT * FROM flow_clones WHERE id = $1', [id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    const result = await regerarPromptClone(r.rows[0]);
+    if (!result.ok) return res.status(500).json({ error: result.error });
+    res.json({ ok: true, slot: r.rows[0].slot, length: result.prompt.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
