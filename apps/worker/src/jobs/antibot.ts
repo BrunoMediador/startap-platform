@@ -4,12 +4,13 @@
  * Substitui Monitor_AntiBot do automacao visual antiga.
  *
  * Detecta numeros enviando 6+ mensagens em 60s e grava em flow_pauses
- * (source=antibot) por fluxo. Usa routing_clientes como fonte autoritativa
- * do flow_id (telefone -> workflow_id), igual ao router de producao.
+ * (source=antibot) por fluxo. Resolve flow_id em duas etapas:
+ *   1. routing_clientes (roteamento por telefone — bots matriz)
+ *   2. flow_clones.getCloneBySession (sessao dedicada — bots clone)
  * Pausa e isolada por fluxo — nao afeta outros bots do mesmo numero.
  */
 import { logger } from '@startap/core/logger';
-import { antibot, pausa, routing } from '@startap/db';
+import { antibot, flowClones, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
@@ -26,8 +27,19 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
       'Suspeito bot detectado',
     );
 
+    // Etapa 1: routing_clientes (bots matriz roteados por telefone)
     const route = await routing.findRouting(s.telefone);
-    const flowId = route?.workflow_id ?? null;
+    let flowId: string | null = route?.workflow_id ?? null;
+
+    // Etapa 2: fallback para clones com sessao WAHA dedicada
+    if (!flowId) {
+      const clone = await flowClones.getCloneBySession(s.session).catch((e: unknown) => {
+        log.warn({ err: e, session: s.session }, 'antibot: erro ao buscar clone por sessao');
+        return null;
+      });
+      // workflow_id de um clone e o seu proprio slot
+      if (clone) flowId = clone.slot;
+    }
 
     if (flowId) {
       await pausa.addFlowPause({
@@ -41,7 +53,7 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
     } else {
       log.warn(
         { session: s.session, telefone: s.telefone },
-        'antibot: flow_id nao encontrado para telefone em routing_clientes — pausa nao gravada',
+        'antibot: flow_id nao encontrado (nem em routing_clientes nem como clone) — pausa nao gravada',
       );
     }
   }
