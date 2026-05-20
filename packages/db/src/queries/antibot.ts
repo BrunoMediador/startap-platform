@@ -3,7 +3,7 @@ import { query } from '../client.js';
 /**
  * Antibot (substitui Monitor_AntiBot do automação visual antiga).
  *
- * Detecta numeros que enviam >10 mensagens em 60 segundos e os bloqueia
+ * Detecta numeros que enviam 6+ mensagens em 60 segundos e os bloqueia
  * inserindo na tabela bot_pausa.
  *
  * Tabela real:
@@ -24,13 +24,13 @@ export interface SuspectRow {
   session: string;
 }
 
-export async function findSuspects(thresholdCount = 10, windowSeconds = 60): Promise<SuspectRow[]> {
+export async function findSuspects(thresholdCount = 6, windowSeconds = 60): Promise<SuspectRow[]> {
   const r = await query<{ phone: string; total: string; chat_id: string }>(
     `SELECT phone, chat_id, COUNT(*)::text AS total
      FROM message_log
      WHERE created_at > NOW() - ($1 || ' seconds')::INTERVAL
      GROUP BY phone, chat_id
-     HAVING COUNT(*) > $2`,
+     HAVING COUNT(*) >= $2`,
     [String(windowSeconds), thresholdCount],
   );
   return r.rows.map((x) => ({ telefone: x.phone, total: Number(x.total), session: x.chat_id }));
