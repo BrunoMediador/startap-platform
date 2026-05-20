@@ -125,6 +125,24 @@ export class TesteBarbeariaBot extends BotBase {
     }
     const agenda = formatarAgendaComConfig(events, scheduleConfig);
 
+    // Log de debug — investigar "bot diz que hoje nao tem vaga mesmo com slots livres".
+    // Inclui: numero de eventos lidos do GCal, dia/hora do now em SP, primeiros
+    // 1500 chars da agenda renderizada. Remover depois de fechar o bug.
+    this.log.info(
+      {
+        slot: this.slot,
+        eventsCount: events.length,
+        eventsResumo: events.slice(0, 5).map((e) => ({
+          start: e.start.dateTime ?? e.start.date,
+          end: e.end.dateTime ?? e.end.date,
+          summary: e.summary,
+        })),
+        nowSP: now.toLocaleString('pt-BR', { timeZone: TZ }),
+        agendaPreview: agenda.slice(0, 1500),
+      },
+      'debug: agenda renderizada',
+    );
+
     const dataAtual = now.toLocaleDateString('pt-BR', {
       weekday: 'long',
       year: 'numeric',
