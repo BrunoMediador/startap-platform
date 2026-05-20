@@ -249,21 +249,6 @@ export async function handleWebhook(
   // 4. Log para antibot
   await antibot.logMessage(telefone, sessao).catch((e) => log.warn(e, 'log msg failed'));
 
-  // 5. Antibot: se está em bot_pausa, ignora
-  const isBlocked = await pausa.isPaused('bot_pausa', telefone).catch(() => false);
-  if (isBlocked) {
-    log.info({ telefone }, 'Número em bot_pausa, ignorando');
-    await flowExecutionLog.logFlowEvent({
-      ...phoneLog,
-      eventType: 'router.blocked',
-      status: 'ignored',
-      message: 'Número em bot_pausa, ignorando',
-      metadata: { pauseTable: 'bot_pausa' },
-      durationMs: Date.now() - startedAt,
-    });
-    return { status: 'ignored:bot-pausa' };
-  }
-
   // Bots com sessão própria têm tabela de pausa legada verificada aqui.
   // Isso preserva o comportamento anterior onde pause_startap bloqueava
   // mensagens recebidas na sessão Startap antes do roteamento.
@@ -302,6 +287,25 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: 'ignored:no-routing' };
+  }
+
+  // 6a. Antibot/pausa por fluxo: gate isolado, não afeta outros bots
+  const isFlowPaused = await pausa
+    .isFlowPaused({ flowId: route.workflow_id, telefone })
+    .catch(() => false);
+  if (isFlowPaused) {
+    log.info({ telefone, flowId: route.workflow_id }, 'Número em pausa de fluxo, ignorando');
+    await flowExecutionLog.logFlowEvent({
+      ...phoneLog,
+      flowId: route.workflow_id,
+      flowName: route.workflow_name,
+      eventType: 'router.blocked',
+      status: 'ignored',
+      message: 'Número em pausa de fluxo, ignorando',
+      metadata: { flowId: route.workflow_id },
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: 'ignored:flow-paused' };
   }
 
   await flowExecutionLog.logFlowEvent({

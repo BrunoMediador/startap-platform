@@ -3,8 +3,9 @@
  *
  * Substitui Monitor_AntiBot do automação visual antiga.
  *
- * Detecta números enviando 6+ mensagens em 60s, insere em bot_pausa,
- * grava em flow_pauses (source=antibot) e notifica dev + dono via WhatsApp.
+ * Detecta números enviando 6+ mensagens em 60s, grava em flow_pauses
+ * (source=antibot) e notifica dev + dono via WhatsApp.
+ * Pausa é isolada por fluxo — não afeta outros bots do mesmo número.
  */
 import { logger } from '@startap/core/logger';
 import { toChatId } from '@startap/core/phone';
@@ -29,10 +30,6 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
       { telefone: s.telefone, total: s.total, session: s.session },
       'Suspeito bot detectado',
     );
-    await pausa.addPause('bot_pausa', s.telefone);
-    blocked++;
-
-    // Dupla gravação: registra pausa também em flow_pauses para gates por fluxo
     const flowId = await pausa.findFlowIdBySession(s.session);
     if (flowId) {
       await pausa.addFlowPause({
@@ -42,10 +39,11 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
         source: 'antibot',
         reason: `flood: ${s.total} msgs em ${WINDOW_SEC}s`,
       });
+      blocked++;
     } else {
       log.warn(
         { session: s.session, telefone: s.telefone },
-        'antibot: flow_id nao encontrado para session — gravando apenas em bot_pausa',
+        'antibot: flow_id nao encontrado para session — pausa nao gravada',
       );
     }
 
