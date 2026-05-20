@@ -103,6 +103,20 @@ export class TesteBarbeariaBot extends BotBase {
       }),
       loadScheduleConfig(this.slot),
     ]);
+    // Log explicito do source — facilita debug quando bot oferecer durações
+    // estranhas ("por que Barba 20min se cadastrei 30?"). source possiveis:
+    //   flow_clones: leu do clone (ok)
+    //   bot_config:  leu da matriz (ok, clone sem config preenchida)
+    //   defaults:    fallback hardcoded (alerta — provavel cache ou query falhou)
+    this.log.info(
+      {
+        slot: this.slot,
+        scheduleSource: scheduleConfig.source,
+        servicosCount: scheduleConfig.services.length,
+        servicosNomes: scheduleConfig.services.map((s) => `${s.name}/${s.min}min`),
+      },
+      'free-slots: schedule carregado',
+    );
     if (scheduleConfig.source === 'defaults' && this.slot !== SLOT) {
       this.log.warn(
         { slot: this.slot },
