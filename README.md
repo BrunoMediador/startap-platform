@@ -169,7 +169,6 @@ Todas as envs consumidas pelo código estão em [.env.example](./.env.example) c
 | `GOOGLE_OAUTH_*` | Google Calendar | Opcional, só pra bots com agenda. |
 | `ADMIN_USER` / `ADMIN_PASS` | Basic auth do painel | Trocar em produção. |
 | `STARTAP_WAHA_SESSIONS` | Lista CSV de sessões do bot Lola | Default `startap`. |
-| `ALERT_DEV_PHONE` / `ALERT_OWNER_PHONE` / `ALERT_SESSION` | Worker antibot | Quem recebe alertas. |
 
 Veja `.env.example` para a lista completa (incluindo opcionais).
 

@@ -179,23 +179,6 @@ export async function listFlowPauses(flowId?: string): Promise<
   return r.rows;
 }
 
-/**
- * Resolve session WAHA -> flow_id via bot_config + project_databases.
- * Usa COALESCE(waha_sessao, slot) para cobrir tanto sessões explícitas quanto implícitas.
- * Retorna null se a sessão não tiver projeto associado (log de aviso fica no chamador).
- */
-export async function findFlowIdBySession(session: string): Promise<string | null> {
-  const r = await query<{ workflow_id: string }>(
-    `SELECT pd.workflow_id
-     FROM project_databases pd
-     JOIN bot_config bc ON bc.slot = pd.slot
-     WHERE COALESCE(bc.waha_sessao, bc.slot) = $1
-     LIMIT 1`,
-    [session],
-  );
-  return r.rows[0]?.workflow_id ?? null;
-}
-
 export async function listFlowPauseKeywords(flowId: string): Promise<FlowPauseKeywordRow[]> {
   const r = await query<FlowPauseKeywordRow>(
     `SELECT flow_id, command, keyword, keyword_norm, enabled, updated_at

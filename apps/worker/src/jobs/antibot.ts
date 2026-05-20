@@ -1,25 +1,21 @@
 /**
  * Job antibot — roda a cada 1 minuto.
  *
- * Substitui Monitor_AntiBot do automação visual antiga.
+ * Substitui Monitor_AntiBot do automacao visual antiga.
  *
- * Detecta números enviando 6+ mensagens em 60s, grava em flow_pauses
- * (source=antibot) e notifica dev + dono via WhatsApp.
- * Pausa é isolada por fluxo — não afeta outros bots do mesmo número.
+ * Detecta numeros enviando 6+ mensagens em 60s e grava em flow_pauses
+ * (source=antibot) por fluxo. Resolve flow_id em duas etapas:
+ *   1. routing_clientes (roteamento por telefone — bots matriz)
+ *   2. flow_clones.getCloneBySession (sessao dedicada — bots clone)
+ * Pausa e isolada por fluxo — nao afeta outros bots do mesmo numero.
  */
 import { logger } from '@startap/core/logger';
-import { toChatId } from '@startap/core/phone';
-import { antibot, pausa } from '@startap/db';
-import { waha } from '@startap/integrations';
-import { config } from '../config.js';
+import { antibot, flowClones, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
 const THRESHOLD = 6; // mensagens (>= dispara pausa)
 const WINDOW_SEC = 60;
-const ALERT_DEV = config.ALERT_DEV_PHONE ?? '';
-const ALERT_OWNER = config.ALERT_OWNER_PHONE ?? '';
-const ALERT_SESSION = config.ALERT_SESSION;
 
 export async function runAntibot(): Promise<{ blocked: number; pruned: number }> {
   const suspects = await antibot.findSuspects(THRESHOLD, WINDOW_SEC);
@@ -30,7 +26,21 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
       { telefone: s.telefone, total: s.total, session: s.session },
       'Suspeito bot detectado',
     );
-    const flowId = await pausa.findFlowIdBySession(s.session);
+
+    // Etapa 1: routing_clientes (bots matriz roteados por telefone)
+    const route = await routing.findRouting(s.telefone);
+    let flowId: string | null = route?.workflow_id ?? null;
+
+    // Etapa 2: fallback para clones com sessao WAHA dedicada
+    if (!flowId) {
+      const clone = await flowClones.getCloneBySession(s.session).catch((e: unknown) => {
+        log.warn({ err: e, session: s.session }, 'antibot: erro ao buscar clone por sessao');
+        return null;
+      });
+      // workflow_id de um clone e o seu proprio slot
+      if (clone) flowId = clone.slot;
+    }
+
     if (flowId) {
       await pausa.addFlowPause({
         flowId,
@@ -43,26 +53,8 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
     } else {
       log.warn(
         { session: s.session, telefone: s.telefone },
-        'antibot: flow_id nao encontrado para session — pausa nao gravada',
+        'antibot: flow_id nao encontrado (nem em routing_clientes nem como clone) — pausa nao gravada',
       );
-    }
-
-    const msg = `🤖 *BOT DETECTADO — AntiBot*\n\nO número \`${s.telefone}\` foi bloqueado automaticamente por enviar ${s.total} mensagens em ${WINDOW_SEC}s.\n\nInserido na lista de pausa.`;
-
-    if (ALERT_DEV) {
-      await waha
-        .sendText({ sessao: ALERT_SESSION, chatId: toChatId(ALERT_DEV), texto: msg, typing: false })
-        .catch((e) => log.error(e, 'failed to alert dev'));
-    }
-    if (ALERT_OWNER && ALERT_OWNER !== ALERT_DEV) {
-      await waha
-        .sendText({
-          sessao: ALERT_SESSION,
-          chatId: toChatId(ALERT_OWNER),
-          texto: msg,
-          typing: false,
-        })
-        .catch((e) => log.error(e, 'failed to alert owner'));
     }
   }
 

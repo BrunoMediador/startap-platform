@@ -5,10 +5,6 @@ const WorkerConfigSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
   SERVICE_NAME: z.string().optional(),
 
-  ALERT_DEV_PHONE: z.string().optional(),
-  ALERT_OWNER_PHONE: z.string().optional(),
-  ALERT_SESSION: z.string().default('startap'),
-
   CHAT_MEMORY_RETENTION: z.coerce.number().int().positive().default(30),
   CHAT_STALE_RUNNING_MAX_MINUTES: z.coerce.number().int().positive().default(30),
 });
