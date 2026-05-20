@@ -495,16 +495,20 @@ const DIAS_LABEL = [
  * Formata a string {agenda} com slots disponíveis por dia e serviço.
  * Passada pronta pra IA — ela não precisa cruzar GCal × horários × duração.
  *
- * Slots iniciam de 20 em 20 min. Próximo slot do dia atual respeita ceil de 10
- * min sobre o relógio (evita oferecer um slot que já começou ou começa em <10min).
+ * O step de cada serviço é igual à própria duração — slots ficam alinhados
+ * (Corte 30min: 09:00, 09:30, 10:00; Barba 20min: 09:00, 09:20, 09:40). Isso
+ * elimina o "gap aparente" que aparecia quando um step fixo (ex: 20min) era
+ * usado para serviços com durações diferentes — Bruno (2026-05-20).
+ *
+ * Próximo slot do dia atual respeita um piso de 10min sobre o relógio (evita
+ * oferecer slot que começa em menos de 10min).
  */
 export function formatarAgendaComConfig(
   events: CalendarEvent[],
   config: ScheduleConfig,
-  opts: { daysAhead?: number; slotStepMin?: number } = {},
+  opts: { daysAhead?: number } = {},
 ): string {
   const daysAhead = opts.daysAhead ?? 5;
-  const stepMin = opts.slotStepMin ?? 20;
   const now = new Date();
 
   const occupied: Record<string, Array<{ s: number; e: number }>> = {};
@@ -528,11 +532,6 @@ export function formatarAgendaComConfig(
     if (!wh) continue;
 
     const [wStart, wEnd] = wh;
-    let minStart = wStart;
-    if (offset === 0) {
-      minStart = Math.max(wStart, Math.ceil((sp.mins + 10) / stepMin) * stepMin);
-    }
-
     const occ = occupied[sp.key] ?? [];
     let label: string;
     if (offset === 0) label = `HOJE (${sp.label})`;
@@ -541,8 +540,18 @@ export function formatarAgendaComConfig(
 
     const lines: string[] = [];
     for (const svc of config.services) {
+      // Step = duracao do servico — alinhado, sem gap entre fim de um
+      // agendamento e inicio do proximo slot oferecido.
+      const step = Math.max(1, svc.min);
+      // Piso de hoje: nao oferecer slot que comeca em menos de 10min,
+      // arredondado para multiplo do step do servico.
+      let svcStart = wStart;
+      if (offset === 0) {
+        svcStart = Math.max(wStart, Math.ceil((sp.mins + 10) / step) * step);
+      }
+
       const slots: string[] = [];
-      for (let t = minStart; t + svc.min <= wEnd; t += stepMin) {
+      for (let t = svcStart; t + svc.min <= wEnd; t += step) {
         if (!occ.some((o) => t < o.e && t + svc.min > o.s)) {
           slots.push(hhmm(t));
         }
