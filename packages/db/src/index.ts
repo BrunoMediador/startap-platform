@@ -29,5 +29,12 @@ export type {
   FlowLogStatus,
 } from './queries/flow-execution-log.js';
 export type { FlowControlRow } from './queries/flow-control.js';
-export type { CloneRow, CloneSummary, CloneStatus } from './queries/flow-clones.js';
+export type {
+  CloneRow,
+  CloneSummary,
+  CloneStatus,
+  HorarioDia,
+  HorariosFuncionamento,
+  ServicoConfig,
+} from './queries/flow-clones.js';
 export type { BotCourseRow } from './queries/bot-courses.js';

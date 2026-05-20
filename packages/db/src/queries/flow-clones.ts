@@ -13,6 +13,28 @@ export type CloneStatus =
   | 'desconectado'
   | 'falhou';
 
+export interface HorarioDia {
+  abre: string | null; // "HH:MM" ou null se fechado
+  fecha: string | null;
+  fechado: boolean;
+}
+
+export interface HorariosFuncionamento {
+  segunda?: HorarioDia;
+  terca?: HorarioDia;
+  quarta?: HorarioDia;
+  quinta?: HorarioDia;
+  sexta?: HorarioDia;
+  sabado?: HorarioDia;
+  domingo?: HorarioDia;
+}
+
+export interface ServicoConfig {
+  nome: string;
+  preco_cents: number;
+  duracao_min: number;
+}
+
 export interface CloneRow {
   id: number;
   slot: string;
@@ -23,6 +45,8 @@ export interface CloneRow {
   personalizacao: Record<string, string>;
   waha_sessao: string | null;
   status: CloneStatus;
+  horarios_funcionamento: HorariosFuncionamento | null;
+  servicos: ServicoConfig[] | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -214,8 +238,7 @@ export async function createClone(input: {
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'rascunho', NOW(), NOW())
-       RETURNING id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-                 personalizacao, waha_sessao, status, created_at, updated_at`,
+       RETURNING *`,
       [slug, matrizSlot, displayName, clienteNome ?? null, clienteTelefone ?? null, JSON.stringify(personalizacao)],
     );
 
@@ -233,6 +256,7 @@ export async function listClones(): Promise<CloneSummary[]> {
   const r = await query<CloneSummary & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.horarios_funcionamento, fc.servicos,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
      FROM flow_clones fc
@@ -249,6 +273,7 @@ export async function getClone(id: number): Promise<CloneSummary | null> {
   const r = await query<CloneSummary & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.horarios_funcionamento, fc.servicos,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
      FROM flow_clones fc
@@ -408,7 +433,9 @@ export async function getCloneBySession(sessao: string): Promise<CloneRow | null
 
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-            personalizacao, waha_sessao, status, created_at, updated_at
+            personalizacao, waha_sessao, status,
+            horarios_funcionamento, servicos,
+            created_at, updated_at
      FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
     [sessao],
   );
@@ -427,7 +454,9 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
 
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-            personalizacao, waha_sessao, status, created_at, updated_at
+            personalizacao, waha_sessao, status,
+            horarios_funcionamento, servicos,
+            created_at, updated_at
      FROM flow_clones WHERE slot = $1`,
     [slot],
   );
@@ -440,6 +469,18 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
 // Normalização de tipos
 // ---------------------------------------------------------------------------
 
+function parseJsonbOrNull<T>(value: unknown): T | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return null;
+    }
+  }
+  return value as T;
+}
+
 function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
   return {
     ...row,
@@ -449,5 +490,7 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
       typeof row.personalizacao === 'string'
         ? (JSON.parse(row.personalizacao) as Record<string, string>)
         : row.personalizacao,
+    horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
+    servicos: parseJsonbOrNull<ServicoConfig[]>(row.servicos),
   };
 }
