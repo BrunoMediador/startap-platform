@@ -25,9 +25,29 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
   let blocked = 0;
 
   for (const s of suspects) {
-    log.warn({ telefone: s.telefone, total: s.total }, 'Suspeito bot detectado');
+    log.warn(
+      { telefone: s.telefone, total: s.total, session: s.session },
+      'Suspeito bot detectado',
+    );
     await pausa.addPause('bot_pausa', s.telefone);
     blocked++;
+
+    // Dupla gravação: registra pausa também em flow_pauses para gates por fluxo
+    const flowId = await pausa.findFlowIdBySession(s.session);
+    if (flowId) {
+      await pausa.addFlowPause({
+        flowId,
+        telefone: s.telefone,
+        session: s.session,
+        source: 'antibot',
+        reason: `flood: ${s.total} msgs em ${WINDOW_SEC}s`,
+      });
+    } else {
+      log.warn(
+        { session: s.session, telefone: s.telefone },
+        'antibot: flow_id nao encontrado para session — gravando apenas em bot_pausa',
+      );
+    }
 
     const msg = `🤖 *BOT DETECTADO — AntiBot*\n\nO número \`${s.telefone}\` foi bloqueado automaticamente por enviar ${s.total} mensagens em ${WINDOW_SEC}s.\n\nInserido na lista de pausa.`;
 
