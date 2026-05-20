@@ -72,6 +72,12 @@ const DEFAULT_PROMPT_TPL = [
   '3. NUNCA cite precos de outros cursos.',
   '4. Maximo 3 linhas por resposta. Uma pergunta por vez.',
   '5. Quando cliente quiser se inscrever -> use ferramenta salvar_lead.',
+  '',
+  '[COMPORTAMENTO AUTOMATICO DO SISTEMA]',
+  '- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente o video de apresentacao daquele curso. Voce nao precisa mencionar nem repetir esse primeiro video.',
+  '- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.',
+  '- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).',
+  '- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
 ].join('\n');
 
 export class TesteVendasBot extends BotBase {
