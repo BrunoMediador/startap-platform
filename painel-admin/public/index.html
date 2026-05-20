@@ -6363,8 +6363,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'media', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', media: 'Mídias', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -6709,6 +6709,10 @@ function loadCloneConfigTab(tab, clone) {
       method: 'PATCH',
       onSaved: (updated) => Object.assign(clone, updated),
     });
+
+  } else if (tab === 'media') {
+    content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    renderBotMedia(clone.slot, content);
 
   } else if (tab === 'prompt') {
     _clonePromptDirty = false;
