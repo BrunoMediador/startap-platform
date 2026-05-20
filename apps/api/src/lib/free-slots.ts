@@ -194,23 +194,38 @@ interface ContextBlockOpts {
   agendaFormatada: string;
 }
 
+// Campos da personalizacao com label especifico no bloco [NEGOCIO].
+// Os demais (qualquer chave que o admin adicionar pelo painel) viram
+// um bloco [OBSERVACOES] no final do contexto.
+const _PERS_LABELS: Record<string, string> = {
+  nome_negocio: 'Nome',
+  endereco: 'Endereco',
+  instagram: 'Instagram',
+  telefone_contato: 'Telefone',
+};
+
+function humanizarChave(key: string): string {
+  // 'horario_feriado' -> 'Horario feriado'
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /**
  * Carrega personalizacao + horarios + servicos do slot.
  * Hierarquia: flow_clones (clone) -> bot_config (matriz) -> defaults vazios.
+ *
+ * O campo `personalizacao` retornado inclui TODAS as chaves do clone (nao
+ * apenas as conhecidas) — admin pode cadastrar observacoes/promocoes/etc
+ * via aba Personalizacao do painel e tudo entra no contexto.
  */
 async function loadEntityForContext(slot: string): Promise<{
-  nomeNegocio: string;
-  endereco: string;
-  instagram: string;
-  telefoneContato: string;
+  personalizacao: Record<string, string>;
   horarios: HorariosFuncionamento | null;
   servicos: ServicoConfig[] | null;
 }> {
   const empty = {
-    nomeNegocio: '',
-    endereco: '',
-    instagram: '',
-    telefoneContato: '',
+    personalizacao: {} as Record<string, string>,
     horarios: null,
     servicos: null,
   };
@@ -243,10 +258,7 @@ async function loadEntityForContext(slot: string): Promise<{
         }
       }
       return {
-        nomeNegocio: pers['nome_negocio'] ?? '',
-        endereco: pers['endereco'] ?? '',
-        instagram: pers['instagram'] ?? '',
-        telefoneContato: pers['telefone_contato'] ?? '',
+        personalizacao: pers,
         horarios: horariosFinal,
         servicos: servicosFinal,
       };
@@ -288,11 +300,28 @@ async function loadEntityForContext(slot: string): Promise<{
 export async function buildContextBlock(opts: ContextBlockOpts): Promise<string> {
   const e = await loadEntityForContext(opts.slot);
 
+  // [NEGOCIO]: campos conhecidos com label fixo. Vazios sao omitidos.
   const negocio: string[] = [];
-  if (e.nomeNegocio) negocio.push(`Nome: ${e.nomeNegocio}`);
-  if (e.endereco) negocio.push(`Endereco: ${e.endereco}`);
-  if (e.instagram) negocio.push(`Instagram: @${e.instagram}`);
-  if (e.telefoneContato) negocio.push(`Telefone: ${e.telefoneContato}`);
+  const persUsadas = new Set<string>();
+  for (const [key, label] of Object.entries(_PERS_LABELS)) {
+    const val = e.personalizacao[key];
+    if (val && String(val).trim() !== '') {
+      const valor = key === 'instagram' ? `@${val}` : val;
+      negocio.push(`${label}: ${valor}`);
+      persUsadas.add(key);
+    }
+  }
+
+  // [OBSERVACOES]: qualquer outra chave que admin cadastrou na aba
+  // Personalizacao (ex: observacoes_gerais, formas_pagamento, promocao_atual,
+  // horario_feriado, etc). Tudo entra no contexto — usuario nao tem como
+  // omitir editando o prompt.
+  const observacoes: string[] = [];
+  for (const [key, val] of Object.entries(e.personalizacao)) {
+    if (persUsadas.has(key)) continue;
+    if (!val || String(val).trim() === '') continue;
+    observacoes.push(`${humanizarChave(key)}: ${val}`);
+  }
 
   const partes: string[] = [];
   partes.push('[CONTEXTO - DADOS DO BANCO, NAO REMOVIVEL]');
@@ -308,6 +337,11 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
     partes.push('');
     partes.push('[NEGOCIO]');
     for (const ln of negocio) partes.push(ln);
+  }
+  if (observacoes.length > 0) {
+    partes.push('');
+    partes.push('[OBSERVACOES E DADOS EXTRAS]');
+    for (const ln of observacoes) partes.push(ln);
   }
   partes.push('');
   partes.push('[FUNCIONAMENTO]');
