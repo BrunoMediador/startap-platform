@@ -3443,7 +3443,7 @@ async function renderBotConfigIA(slot, el) {
         <div style="display:flex;gap:var(--space-3);flex-wrap:wrap">
           <button class="btn btn--primary" id="btn-save-config-ia">${icon('check-circle-2',14)} Salvar configuração</button>
         </div>
-        <p class="subtle" style="margin-top:var(--space-3)">Mudanças de modelo e temperatura aplicam em até 60s nos próximos messages do bot</p>
+        <p class="subtle" style="margin-top:var(--space-3)">Mudanças de modelo e temperatura aplicam na próxima mensagem do bot (cache de 2s)</p>
       </div>
     </div>`;
 
@@ -6326,8 +6326,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'prompt', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', prompt: 'Prompt', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -6726,6 +6726,9 @@ function loadCloneConfigTab(tab, clone) {
         content.querySelector('#btn-retry-clone-prompt').addEventListener('click', () => loadCloneConfigTab('prompt', clone));
       }
     })();
+
+  } else if (tab === 'ia') {
+    renderBotConfigIA(clone.slot, content);
 
   } else if (tab === 'sessao') {
     const sessao = clone.waha_sessao;
