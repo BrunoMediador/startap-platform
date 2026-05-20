@@ -20,18 +20,20 @@ export async function logMessage(telefone: string, sessao: string): Promise<void
 export interface SuspectRow {
   telefone: string;
   total: number;
+  /** Sessão WAHA — valor de message_log.chat_id. Usado para resolver flow_id via bot_config. */
+  session: string;
 }
 
 export async function findSuspects(thresholdCount = 10, windowSeconds = 60): Promise<SuspectRow[]> {
-  const r = await query<{ phone: string; total: string }>(
-    `SELECT phone, COUNT(*)::text AS total
+  const r = await query<{ phone: string; total: string; chat_id: string }>(
+    `SELECT phone, chat_id, COUNT(*)::text AS total
      FROM message_log
      WHERE created_at > NOW() - ($1 || ' seconds')::INTERVAL
-     GROUP BY phone
+     GROUP BY phone, chat_id
      HAVING COUNT(*) > $2`,
     [String(windowSeconds), thresholdCount],
   );
-  return r.rows.map((x) => ({ telefone: x.phone, total: Number(x.total) }));
+  return r.rows.map((x) => ({ telefone: x.phone, total: Number(x.total), session: x.chat_id }));
 }
 
 export async function pruneOldLogs(hoursToKeep = 24): Promise<number> {
