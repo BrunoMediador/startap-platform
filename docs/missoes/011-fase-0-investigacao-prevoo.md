@@ -3,7 +3,7 @@
 **DRI:** infra
 **Agentes envolvidos:** infra (principal), dev-back (valida tamanho do banco e tabelas), arquiteto (decide estratégia de backup)
 **Apetite:** pequeno (1 dia)
-**Status:** pendente
+**Status:** concluída
 **Cliente (persona):** time técnico inteiro — nenhuma missão das ondas 1-4 pode começar com segurança sem este diagnóstico
 **Aberta em:** 2026-05-19
 **PR-FAQ:** N/A (investigação, não feature)
@@ -60,3 +60,4 @@ Esta missão é pequena e cabe em 1 PR:
 ## Atualizações (log)
 
 - **2026-05-19:** Aberta pelo product-owner após auditoria completa de 2026-05-19 identificar VPS 72/100 GB e ausência de backup
+- **2026-05-19:** Concluída — entregues `docs/auditorias/2026-05-19-fase-0-vps-disco-e-backup.md`, `docs/runbooks/backup-postgres.md` e `.github/workflows/backup-postgres.yml`
