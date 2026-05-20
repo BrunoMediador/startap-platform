@@ -2,7 +2,7 @@ import type { BotContext } from '@startap/core/types';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
-  aplicarPlaceholdersMatriz,
+  buildContextBlock,
   formatarAgendaComConfig,
   loadScheduleConfig,
 } from '../lib/free-slots.js';
@@ -15,50 +15,29 @@ const TZ = 'America/Sao_Paulo';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
 
+// Apenas persona + regras + fluxo + cartao. Dados do negocio, horarios,
+// servicos, cliente e agenda sao injetados pelo worker via buildContextBlock
+// (concatenado ao final). Usuario do painel pode editar este template SEM
+// risco de remover dados — eles vem por fora.
 const DEFAULT_PROMPT_TPL = [
-  'Voce e o assistente virtual da Barbearia Startap.',
+  'Voce e o assistente virtual de uma barbearia.',
   'Atenda pelo WhatsApp com simpatia e objetividade. Maximo 3 linhas por resposta.',
   '',
-  '[DATA ATUAL]',
-  '{data_atual}',
-  'ANO: {ano} - use SEMPRE este ano ao calcular datas.',
-  '',
-  '[DADOS DO CLIENTE - JA IDENTIFICADO]',
-  'NOME: {nome}',
-  'WHATSAPP: {telefone}',
-  '',
-  '[HORARIOS DISPONIVEIS - DADOS ATUALIZADOS AGORA]',
-  '{agenda}',
-  '',
-  '[SERVICOS E PRECOS]',
-  'Corte de cabelo: R$35 (30 min)',
-  'Barba: R$35 (30 min)',
-  'Sobrancelha: R$15 (10 min)',
-  'Pacote completo (Corte + Barba + Sobrancelha): R$60 (60 min)',
-  'Alisamento: R$60 (40 min)',
-  'Progressiva: R$100 (40 min)',
-  'Luzes: R$80 (40 min)',
-  'Platinado: R$120 (60 min)',
-  '',
-  '[FUNCIONAMENTO]',
-  'Terca a Sexta: 09h00 as 20h00',
-  'Sabados e Feriados: 08h00 as 18h30',
-  '(Fechado as segundas)',
-  '',
   '[REGRAS CRITICAS - VIOLACAO = ERRO GRAVE]',
-  '1. PROIBIDO perguntar nome ou telefone. Voce ja tem esses dados acima.',
-  '2. Os [HORARIOS DISPONIVEIS] acima sao a UNICA fonte de verdade sobre disponibilidade.',
+  '1. PROIBIDO perguntar nome ou telefone. O contexto abaixo ja tem esses dados.',
+  '2. Os [HORARIOS DISPONIVEIS] no contexto sao a UNICA fonte de verdade sobre disponibilidade.',
   '3. Ao verificar disponibilidade: localize EXATAMENTE a linha do servico solicitado.',
   '4. Se o horario nao aparecer na linha correta -> INDISPONIVEL.',
   '5. Para gravar, DEVE chamar inserir_agendamento. NUNCA confirme sem chamar a ferramenta.',
+  '6. NUNCA ofereca servicos que nao estao em [SERVICOS E PRECOS].',
   '',
   '[FLUXO OBRIGATORIO]',
   '1. Identifique o servico e o horario que o cliente quer.',
   '2. Localize a linha do servico em [HORARIOS DISPONIVEIS].',
   '3. Se nao estiver -> diga que esta ocupado e sugira o mais proximo da mesma linha.',
   '4. Se estiver -> apresente o CARTAO DE CONFIRMACAO e peca SIM.',
-  '5. APOS o SIM: chame inserir_agendamento com Summary: "{nome} - [SERVICO]".',
-  '6. Somente apos confirmacao da ferramenta: "Feito! Ta na agenda, a Startap te espera!"',
+  '5. APOS o SIM: chame inserir_agendamento com Summary: "[Nome do cliente] - [Servico]".',
+  '6. Somente apos confirmacao da ferramenta: "Feito! Ta na agenda, te espera!"',
   '',
   '[CARTAO DE CONFIRMACAO]',
   'DIA / HORARIO / SERVICO / VALOR e pede SIM.',
@@ -140,22 +119,28 @@ export class TesteBarbeariaBot extends BotBase {
       timeZone: TZ,
     });
 
-    const rawPrompt = await renderPrompt({
+    // O bot_prompt no banco contem SOMENTE persona+regras+fluxo+cartao (parte
+    // editavel pelo usuario do painel). Renderiza sem aplicar nenhuma variavel
+    // dinamica — vars dinamicas vao no bloco de contexto separado abaixo.
+    const promptPersona = await renderPrompt({
       slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
-      vars: {
-        nome: pushName || telefone,
-        telefone,
-        data_atual: dataAtual,
-        ano: String(now.getFullYear()),
-        agenda,
-      },
+      vars: {},
     });
 
-    // Para a matriz teste_barbearia rodando direto, o bot_prompt ainda tem
-    // {{horarios_funcionamento_render}} e {{servicos_precos_render}} literais
-    // (clones pre-renderizam isso no painel). Substitui em runtime.
-    const systemPrompt = await aplicarPlaceholdersMatriz(rawPrompt, this.slot);
+    // Bloco de CONTEXTO: dados do banco (negocio, horarios, servicos, cliente,
+    // agenda) montados em runtime e concatenados ao prompt. NAO editavel pelo
+    // usuario do painel — protege contra remocao acidental (Bruno 2026-05-20).
+    const contextBlock = await buildContextBlock({
+      slot: this.slot,
+      nomeCliente: pushName || telefone,
+      telefoneCliente: telefone,
+      dataAtual,
+      ano: String(now.getFullYear()),
+      agendaFormatada: agenda,
+    });
+
+    const systemPrompt = `${promptPersona}\n\n${contextBlock}`;
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);

@@ -172,6 +172,156 @@ export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> 
   return BUILTIN_DEFAULTS;
 }
 
+// ---- Bloco de CONTEXTO (concatenado ao prompt antes de enviar a IA) --------
+//
+// Bruno (2026-05-20): a parte editavel pelo painel (bot_prompt) e SOMENTE
+// persona + regras + fluxo + cartao. Os dados (negocio, horarios, servicos,
+// data, cliente, agenda) sao injetados pelo worker em runtime via este bloco
+// — usuario nao consegue apagar acidentalmente pelo prompt.
+
+interface ContextBlockOpts {
+  /** Slot do bot/clone (necessario para localizar config). */
+  slot: string;
+  /** Nome do cliente final (do pushName do WhatsApp). */
+  nomeCliente: string;
+  /** Telefone do cliente final (E.164 sem formatacao). */
+  telefoneCliente: string;
+  /** Data atual ja formatada em pt-BR. */
+  dataAtual: string;
+  /** Ano (string) para a IA usar nos calculos. */
+  ano: string;
+  /** Tabela de horarios disponiveis ja formatada (vinda de formatarAgendaComConfig). */
+  agendaFormatada: string;
+}
+
+/**
+ * Carrega personalizacao + horarios + servicos do slot.
+ * Hierarquia: flow_clones (clone) -> bot_config (matriz) -> defaults vazios.
+ */
+async function loadEntityForContext(slot: string): Promise<{
+  nomeNegocio: string;
+  endereco: string;
+  instagram: string;
+  telefoneContato: string;
+  horarios: HorariosFuncionamento | null;
+  servicos: ServicoConfig[] | null;
+}> {
+  const empty = {
+    nomeNegocio: '',
+    endereco: '',
+    instagram: '',
+    telefoneContato: '',
+    horarios: null,
+    servicos: null,
+  };
+
+  try {
+    const clone = await flowClones.getCloneBySlot(slot);
+    if (clone) {
+      const pers = (clone.personalizacao ?? {}) as Record<string, string>;
+      const horarios = clone.horarios_funcionamento;
+      const servicos = clone.servicos;
+      // Se clone tem config parcial, completa com bot_config da matriz.
+      let horariosFinal = horarios;
+      let servicosFinal = servicos;
+      if (!horarios || !servicos || servicos.length === 0) {
+        try {
+          const r = await query<{
+            horarios_funcionamento: HorariosFuncionamento | null;
+            servicos: ServicoConfig[] | null;
+          }>(
+            `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+            [clone.matriz_slot],
+          );
+          const matrizRow = r.rows[0];
+          if (matrizRow) {
+            if (!horariosFinal) horariosFinal = matrizRow.horarios_funcionamento;
+            if (!servicosFinal || servicosFinal.length === 0) servicosFinal = matrizRow.servicos;
+          }
+        } catch {
+          /* silent — fallback acima ja cobre */
+        }
+      }
+      return {
+        nomeNegocio: pers['nome_negocio'] ?? '',
+        endereco: pers['endereco'] ?? '',
+        instagram: pers['instagram'] ?? '',
+        telefoneContato: pers['telefone_contato'] ?? '',
+        horarios: horariosFinal,
+        servicos: servicosFinal,
+      };
+    }
+  } catch {
+    /* silent */
+  }
+
+  // Slot e a propria matriz (sem flow_clones) — busca em bot_config.
+  try {
+    const r = await query<{
+      horarios_funcionamento: HorariosFuncionamento | null;
+      servicos: ServicoConfig[] | null;
+    }>(
+      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (row) {
+      return {
+        ...empty,
+        horarios: row.horarios_funcionamento,
+        servicos: row.servicos,
+      };
+    }
+  } catch {
+    /* silent */
+  }
+
+  return empty;
+}
+
+/**
+ * Monta o bloco de CONTEXTO que sera concatenado ao prompt do bot.
+ *
+ * Estrutura fixa, nao editavel pelo usuario do painel — protege contra
+ * remocao acidental de dados importantes (Bruno 2026-05-20).
+ */
+export async function buildContextBlock(opts: ContextBlockOpts): Promise<string> {
+  const e = await loadEntityForContext(opts.slot);
+
+  const negocio: string[] = [];
+  if (e.nomeNegocio) negocio.push(`Nome: ${e.nomeNegocio}`);
+  if (e.endereco) negocio.push(`Endereco: ${e.endereco}`);
+  if (e.instagram) negocio.push(`Instagram: @${e.instagram}`);
+  if (e.telefoneContato) negocio.push(`Telefone: ${e.telefoneContato}`);
+
+  const partes: string[] = [];
+  partes.push('[CONTEXTO - DADOS DO BANCO, NAO REMOVIVEL]');
+  partes.push('');
+  partes.push('[DATA ATUAL]');
+  partes.push(opts.dataAtual);
+  partes.push(`ANO: ${opts.ano} - use SEMPRE este ano ao calcular datas.`);
+  partes.push('');
+  partes.push('[DADOS DO CLIENTE - JA IDENTIFICADO]');
+  partes.push(`NOME: ${opts.nomeCliente}`);
+  partes.push(`WHATSAPP: ${opts.telefoneCliente}`);
+  if (negocio.length > 0) {
+    partes.push('');
+    partes.push('[NEGOCIO]');
+    for (const ln of negocio) partes.push(ln);
+  }
+  partes.push('');
+  partes.push('[FUNCIONAMENTO]');
+  partes.push(renderHorariosFuncionamentoBlock(e.horarios));
+  partes.push('');
+  partes.push('[SERVICOS E PRECOS]');
+  partes.push(renderServicosPrecosBlock(e.servicos));
+  partes.push('');
+  partes.push('[HORARIOS DISPONIVEIS - ATUALIZADO AGORA]');
+  partes.push(opts.agendaFormatada);
+
+  return partes.join('\n');
+}
+
 // ---- Render de blocos {{double_brace}} (paridade com painel-admin) ---------
 // O painel pré-renderiza esses blocos no momento de criar/atualizar clone
 // (regerarPromptClone). Mas a MATRIZ não passa por esse caminho — quando o
