@@ -2962,12 +2962,23 @@ app.post('/api/clones/with-waha', async (req, res) => {
   }
 
   // --- 3. Vincula sessão ao clone ---
-  await pool
-    .query(
-      `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
-      [sessaoName, cloneRow.id],
-    )
-    .catch((e) => console.error(`[clones/with-waha] falha ao vincular sessão no DB: ${e.message}`));
+  // Espelha o nome em bot_config.waha_sessao tambem — sem isso /api/bots
+  // resolve slot como nome de sessao WAHA (404) e mostra status furado
+  // (memoria mapping_slot_waha_sessao).
+  await Promise.all([
+    pool
+      .query(
+        `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
+        [sessaoName, cloneRow.id],
+      )
+      .catch((e) => console.error(`[clones/with-waha] falha ao vincular sessão no DB: ${e.message}`)),
+    pool
+      .query(
+        `UPDATE bot_config SET waha_sessao = $1, updated_at = NOW() WHERE slot = $2`,
+        [sessaoName, cloneRow.slot],
+      )
+      .catch((e) => console.error(`[clones/with-waha] falha ao espelhar waha_sessao em bot_config: ${e.message}`)),
+  ]);
 
   console.log(
     `[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado, sessão WAHA ${sessaoName} iniciada`,
@@ -3013,12 +3024,21 @@ app.post('/api/clones/:id/retry-waha', async (req, res) => {
     return res.status(502).json({ error: waha.error });
   }
 
-  await pool
-    .query(
-      `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
-      [sessaoName, id],
-    )
-    .catch((e) => console.error(`[retry-waha] falha ao vincular sessão no DB: ${e.message}`));
+  // Espelha em bot_config.waha_sessao tambem (memoria mapping_slot_waha_sessao).
+  await Promise.all([
+    pool
+      .query(
+        `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
+        [sessaoName, id],
+      )
+      .catch((e) => console.error(`[retry-waha] falha ao vincular sessão no DB: ${e.message}`)),
+    pool
+      .query(
+        `UPDATE bot_config SET waha_sessao = $1, updated_at = NOW() WHERE slot = $2`,
+        [sessaoName, cloneRow.slot],
+      )
+      .catch((e) => console.error(`[retry-waha] falha ao espelhar waha_sessao em bot_config: ${e.message}`)),
+  ]);
 
   console.log(`[retry-waha] clone ${cloneRow.slot} (id=${id}) sessão WAHA ${sessaoName} iniciada`);
   res.json({ waha_session_name: sessaoName, waha_status: waha.status });
@@ -3214,6 +3234,16 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
       [sessao_name, id],
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+
+    // Espelha em bot_config.waha_sessao tambem (memoria mapping_slot_waha_sessao).
+    await pool
+      .query(
+        `UPDATE bot_config SET waha_sessao = $1, updated_at = NOW() WHERE slot = $2`,
+        [sessao_name, r.rows[0].slot],
+      )
+      .catch((e) =>
+        console.error(`[bind-session] falha ao espelhar waha_sessao em bot_config: ${e.message}`),
+      );
 
     // telefone é apenas informativo: atualiza cliente_telefone no clone, sem tocar routing_clientes.
     // Roteamento de clones é feito por sessão WAHA (waha_sessao), não por telefone do cliente final.
