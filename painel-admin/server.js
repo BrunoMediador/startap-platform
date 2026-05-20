@@ -3490,6 +3490,52 @@ app.delete('/api/clones/:id/gcal', async (req, res) => {
   }
 });
 
+// Helper: traduz erros crus do Google Calendar em hints acionáveis pro painel.
+// Detecta os 3 casos mais comuns que travam clientes novos.
+function enrichGcalError(rawError, credentialsJson) {
+  if (!rawError) return null;
+  const msg = String(rawError);
+  // Extrai numeric_project_id do JSON da SA quando possível, pra montar link direto.
+  let projectId = null;
+  try {
+    const parsed = typeof credentialsJson === 'string' ? JSON.parse(credentialsJson) : credentialsJson;
+    if (parsed && parsed.project_id) projectId = parsed.project_id;
+  } catch { /* ignore */ }
+  const enableLink = projectId
+    ? `https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=${encodeURIComponent(projectId)}`
+    : 'https://console.cloud.google.com/apis/library/calendar-json.googleapis.com';
+
+  if (/accessNotConfigured|SERVICE_DISABLED|Calendar API has not been used/i.test(msg)) {
+    return {
+      code: 'API_DISABLED',
+      hint: `A Google Calendar API está DESABILITADA no projeto do cliente${projectId ? ` (${projectId})` : ''}. Habilite aqui: ${enableLink} — espere ~1min e teste de novo.`,
+      link: enableLink,
+    };
+  }
+  if (/Not Found|notFound|HTTP 404|calendar.*not.*found/i.test(msg)) {
+    return {
+      code: 'CALENDAR_NOT_SHARED',
+      hint: 'A agenda não foi compartilhada com o client_email da Service Account. Vá em calendar.google.com → Configurações da agenda → Compartilhar com pessoas e grupos → cole o client_email com permissão "Fazer alterações em eventos".',
+      link: 'https://calendar.google.com',
+    };
+  }
+  if (/invalid_grant|invalid.{0,5}credentials|unauthorized_client/i.test(msg)) {
+    return {
+      code: 'INVALID_JSON',
+      hint: 'JSON inválido ou expirado. Gere uma nova chave em IAM → Contas de serviço → sua SA → Chaves → Adicionar chave (JSON).',
+      link: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+    };
+  }
+  if (/403|Forbidden|insufficient/i.test(msg)) {
+    return {
+      code: 'INSUFFICIENT_PERMISSIONS',
+      hint: 'Permissões insuficientes. Verifique se a Service Account foi compartilhada com permissão "Fazer alterações em eventos" (não basta "Ver detalhes").',
+      link: 'https://calendar.google.com',
+    };
+  }
+  return null;
+}
+
 // POST /api/clones/:id/gcal/test — testa conexão e atualiza status
 app.post('/api/clones/:id/gcal/test', async (req, res) => {
   const id = Number(req.params.id);
@@ -3536,10 +3582,14 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
       [newStatus, id],
     );
 
+    const enriched = testResult.ok ? null : enrichGcalError(testResult.error, decryptGcalCredentials(gcal_credentials_json));
     res.json({
       ok: testResult.ok,
       status: newStatus,
       error: testResult.ok ? undefined : testResult.error,
+      errorCode: enriched?.code,
+      errorHint: enriched?.hint,
+      errorLink: enriched?.link,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -3715,10 +3765,14 @@ app.post('/api/bots/:slot/gcal/test', async (req, res) => {
       [newStatus, slot],
     );
 
+    const enriched = testResult.ok ? null : enrichGcalError(testResult.error, decryptGcalCredentials(gcal_credentials_json));
     res.json({
       ok: testResult.ok,
       status: newStatus,
       error: testResult.ok ? undefined : testResult.error,
+      errorCode: enriched?.code,
+      errorHint: enriched?.hint,
+      errorLink: enriched?.link,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
