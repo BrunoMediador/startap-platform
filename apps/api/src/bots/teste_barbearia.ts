@@ -1,6 +1,7 @@
 import type { BotContext } from '@startap/core/types';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { formatarAgendaComConfig, loadScheduleConfig } from '../lib/free-slots.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -9,117 +10,6 @@ const SLOT = 'teste_barbearia';
 const TZ = 'America/Sao_Paulo';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
-
-interface ServiceDef {
-  name: string;
-  min: number;
-}
-const SERVICES: ServiceDef[] = [
-  { name: 'Corte', min: 40 },
-  { name: 'Barba', min: 20 },
-  { name: 'Sobrancelha', min: 20 },
-  { name: 'Corte+Barba', min: 60 },
-  { name: 'Pezinho', min: 20 },
-  { name: 'Relaxamento', min: 40 },
-  { name: 'Corte pigmentado', min: 60 },
-];
-
-// 1=Seg … 5=Sex, 6=Sab (0=Dom fechado)
-const WORK: Record<number, [number, number]> = {
-  1: [8 * 60, 19 * 60],
-  2: [8 * 60, 19 * 60],
-  3: [8 * 60, 19 * 60],
-  4: [8 * 60, 19 * 60],
-  5: [8 * 60, 19 * 60],
-  6: [7 * 60, 17 * 60],
-};
-
-function spParts(date: Date) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-    hour12: false,
-  })
-    .formatToParts(date)
-    .reduce<Record<string, string>>((a, p) => {
-      a[p.type] = p.value;
-      return a;
-    }, {});
-  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const wd = weekdayNames.indexOf(parts.weekday ?? '');
-  return {
-    wd,
-    key: `${parts.year}-${parts.month}-${parts.day}`,
-    label: `${parts.day}/${parts.month}`,
-    mins: Number.parseInt(parts.hour ?? '0') * 60 + Number.parseInt(parts.minute ?? '0'),
-  };
-}
-
-function hhmm(m: number) {
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-}
-
-function formatarAgenda(events: gcal.CalendarEvent[]): string {
-  const now = new Date();
-
-  const occupied: Record<string, Array<{ s: number; e: number }>> = {};
-  for (const ev of events) {
-    const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
-    const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
-    const sp = spParts(s);
-    const sep = spParts(e);
-    if (!occupied[sp.key]) occupied[sp.key] = [];
-    occupied[sp.key].push({ s: sp.mins, e: sep.mins });
-  }
-
-  const DIAS = [
-    'DOMINGO',
-    'SEGUNDA-FEIRA',
-    'TERCA-FEIRA',
-    'QUARTA-FEIRA',
-    'QUINTA-FEIRA',
-    'SEXTA-FEIRA',
-    'SABADO',
-  ];
-  const blocks: string[] = [];
-
-  for (let offset = 0; offset <= 5; offset++) {
-    const date = new Date(now);
-    date.setDate(date.getDate() + offset);
-    const sp = spParts(date);
-    const wh = WORK[sp.wd];
-    if (!wh) continue;
-
-    const [wStart, wEnd] = wh;
-    let minStart = wStart;
-    if (offset === 0) minStart = Math.max(wStart, Math.ceil((sp.mins + 10) / 20) * 20);
-
-    const occ = occupied[sp.key] ?? [];
-    let label: string;
-    if (offset === 0) label = `HOJE (${sp.label})`;
-    else if (offset === 1) label = `AMANHA (${sp.label})`;
-    else label = `${DIAS[sp.wd]} (${sp.label})`;
-
-    const lines: string[] = [];
-    for (const svc of SERVICES) {
-      const slots: string[] = [];
-      for (let t = minStart; t + svc.min <= wEnd; t += 20) {
-        if (!occ.some((o) => t < o.e && t + svc.min > o.s)) slots.push(hhmm(t));
-      }
-      lines.push(
-        `  ${svc.name} (${svc.min}min): ${slots.length ? slots.join(', ') : 'SEM DISPONIBILIDADE'}`,
-      );
-    }
-    blocks.push(`${label}:\n${lines.join('\n')}`);
-  }
-
-  return blocks.join('\n\n') || 'Sem horarios disponiveis.';
-}
 
 const DEFAULT_PROMPT_TPL = [
   'Voce e o assistente virtual da Barbearia Startap.',
@@ -222,12 +112,21 @@ export class TesteBarbeariaBot extends BotBase {
     const now = new Date();
     const timeMin = now.toISOString();
     const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
-    const events = await calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
-      throw err;
-    });
-    const agenda = formatarAgenda(events);
+    const [events, scheduleConfig] = await Promise.all([
+      calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
+        throw err;
+      }),
+      loadScheduleConfig(this.slot),
+    ]);
+    if (scheduleConfig.source === 'defaults' && this.slot !== SLOT) {
+      this.log.warn(
+        { slot: this.slot },
+        'free-slots: clone sem horarios/servicos configurados — usando defaults do bot base',
+      );
+    }
+    const agenda = formatarAgendaComConfig(events, scheduleConfig);
 
     const dataAtual = now.toLocaleDateString('pt-BR', {
       weekday: 'long',
