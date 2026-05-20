@@ -1,9 +1,9 @@
 -- Migration 033: adiciona secao [COMPORTAMENTO AUTOMATICO DO SISTEMA] nos prompts
 -- das matrizes teste_vendas e teste_vendas_barbearia (Missao 025).
 --
--- O que muda: instrui a IA que o sistema ja envia o video intro automaticamente
--- ao processar [CURSO:<slug>], e que ela deve usar a biblioteca de midias para
--- envios contextuais adicionais via [VIDEO:<id>].
+-- O que muda: instrui a IA que o sistema ja envia UM video aleatorio do catalogo
+-- ao processar [CURSO:<slug>] (sem filtro is_course_intro), e que ela deve usar
+-- a biblioteca de midias para envios contextuais adicionais via [VIDEO:<id>].
 --
 -- Deteccao custom vs default:
 --   - Aplica UPDATE SOMENTE se o prompt NAO contiver '[COMPORTAMENTO AUTOMATICO DO SISTEMA]'
@@ -16,14 +16,14 @@ BEGIN;
 
 -- 1. Atualiza matriz teste_vendas
 UPDATE bot_prompt
-SET prompt = prompt || E'\n\n[COMPORTAMENTO AUTOMATICO DO SISTEMA]\n- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente o video de apresentacao daquele curso. Voce nao precisa mencionar nem repetir esse primeiro video.\n- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.\n- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).\n- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
+SET prompt = prompt || E'\n\n[COMPORTAMENTO AUTOMATICO DO SISTEMA]\n- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente UM video aleatorio do catalogo daquele curso. Voce nao precisa mencionar nem repetir esse video.\n- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.\n- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).\n- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
     updated_at = NOW()
 WHERE slot = 'teste_vendas'
   AND prompt NOT LIKE '%[COMPORTAMENTO AUTOMATICO DO SISTEMA]%';
 
 -- 2. Atualiza matriz teste_vendas_barbearia
 UPDATE bot_prompt
-SET prompt = prompt || E'\n\n[COMPORTAMENTO AUTOMATICO DO SISTEMA]\n- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente o video de apresentacao daquele curso. Voce nao precisa mencionar nem repetir esse primeiro video.\n- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.\n- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).\n- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
+SET prompt = prompt || E'\n\n[COMPORTAMENTO AUTOMATICO DO SISTEMA]\n- Quando o cliente emitir [CURSO:<slug>], o sistema envia automaticamente UM video aleatorio do catalogo daquele curso. Voce nao precisa mencionar nem repetir esse video.\n- Voce TEM acesso a uma biblioteca de midias listada em [MIDIAS DISPONIVEIS] no contexto. Use-a conforme a conversa pedir: depoimentos, demo de modulo, screenshots, etc.\n- NUNCA repita midias ja enviadas (ids listados em [ESTADO DA CONVERSA] no contexto).\n- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
     updated_at = NOW()
 WHERE slot = 'teste_vendas_barbearia'
   AND prompt NOT LIKE '%[COMPORTAMENTO AUTOMATICO DO SISTEMA]%';
