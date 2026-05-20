@@ -3,8 +3,8 @@
  *
  * Substitui Monitor_AntiBot do automação visual antiga.
  *
- * Detecta números enviando >10 mensagens em 60s, insere em bot_pausa,
- * e notifica dev + dono via WhatsApp.
+ * Detecta números enviando 6+ mensagens em 60s, insere em bot_pausa,
+ * grava em flow_pauses (source=antibot) e notifica dev + dono via WhatsApp.
  */
 import { logger } from '@startap/core/logger';
 import { toChatId } from '@startap/core/phone';
@@ -14,7 +14,7 @@ import { config } from '../config.js';
 
 const log = logger.child({ job: 'antibot' });
 
-const THRESHOLD = 10; // mensagens
+const THRESHOLD = 6; // mensagens (>= dispara pausa)
 const WINDOW_SEC = 60;
 const ALERT_DEV = config.ALERT_DEV_PHONE ?? '';
 const ALERT_OWNER = config.ALERT_OWNER_PHONE ?? '';
