@@ -6090,35 +6090,49 @@ function _renderGcalTab(opts) {
   function _gcalInstructionsHtml() {
     return `
       <details class="gcal-help-block">
-        <summary>${icon('help-circle', 14)} Como obter essas informações?</summary>
+        <summary>${icon('help-circle', 14)} Como obter essas informações? (passo a passo)</summary>
         <div class="gcal-help-block__body">
+          <p class="muted" style="margin:0 0 .75rem 0;font-size:.8125rem">
+            Use uma <strong>conta Gmail nova</strong> dedicada por cliente (ex: <code>agenda.nomedocliente@gmail.com</code>). Faça login nessa conta antes de começar e siga os 6 passos. Cada passo abre num link direto.
+          </p>
           <ol class="gcal-instructions">
             <li>
               <div>
-                <strong>Criar Service Account no Google Cloud</strong><br>
-                Entre em <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">console.cloud.google.com → IAM e Admin → Contas de serviço</a>.
-                Clique em <strong>Criar conta de serviço</strong>, dê um nome (ex: <code>Agenda-NomeDoCliente</code>) e clique em Criar.
-                Pule as permissões opcionais e clique em Concluir.
+                <strong>Criar um projeto no Google Cloud</strong><br>
+                Acesse <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com → Criar projeto</a>.
+                Dê um nome (ex: <code>agenda-nomedocliente</code>) e clique em <strong>Criar</strong>. Aguarde alguns segundos até o projeto ficar pronto e selecione-o no seletor de projetos no topo.
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Habilitar a Google Calendar API</strong><br>
+                <span style="color:var(--danger,#ef4444);font-weight:600">⚠ Sem este passo o teste falha com erro 403 (<code>SERVICE_DISABLED</code> / <code>accessNotConfigured</code>).</span><br>
+                Com o projeto selecionado, abra <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener">console.cloud.google.com → APIs → Google Calendar API</a> e clique em <strong>Ativar / Enable</strong>. Espere ~1 minuto pra propagar.
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Criar a Service Account</strong><br>
+                Vá em <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">IAM e Admin → Contas de serviço</a> (com o projeto certo selecionado no topo).
+                Clique em <strong>+ Criar conta de serviço</strong>, dê um nome (ex: <code>agenda-nomedocliente</code>) e clique em <strong>Concluir</strong>. Pule as permissões opcionais.
               </div>
             </li>
             <li>
               <div>
                 <strong>Baixar a chave JSON</strong><br>
-                Na lista, clique na conta criada → aba <strong>Chaves</strong> → <strong>Adicionar chave</strong> → <strong>Criar nova chave</strong>.
-                Selecione o tipo <strong>JSON</strong> e baixe o arquivo.
-                Cole o conteúdo abaixo ou faça upload do arquivo.
+                Na lista de contas de serviço, clique na conta criada → aba <strong>Chaves</strong> → <strong>Adicionar chave</strong> → <strong>Criar nova chave</strong>.
+                Tipo <strong>JSON</strong> → baixar. Guarde o arquivo (você vai colar o conteúdo abaixo) e abra-o pra copiar o campo <code>client_email</code>.
               </div>
             </li>
             <li>
               <div>
-                <strong>Compartilhar a agenda com a conta de serviço (obrigatório)</strong><br>
-                <span style="color:var(--danger,#ef4444);font-weight:600">⚠ Sem este passo o teste falha com "Credenciais inválidas" (HTTP 404 do Google).</span><br>
-                Abra o JSON da Service Account e copie o valor do campo <code>client_email</code> (algo como <code>agenda-fulano@projeto.iam.gserviceaccount.com</code>) — você vai precisar dele aqui.<br>
-                Em seguida, acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> <strong>logado na conta dona da agenda do cliente</strong> e:
+                <strong>Compartilhar a agenda do cliente com a Service Account</strong><br>
+                <span style="color:var(--danger,#ef4444);font-weight:600">⚠ Sem este passo o teste falha com erro 404 (<code>Calendar not found</code>).</span><br>
+                Acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> <strong>logado na conta Gmail dona da agenda do cliente</strong> e:
                 <ol style="margin:.375rem 0 0 1rem;padding:0;font-size:.85rem">
-                  <li>Passe o mouse sobre a agenda do cliente na lista lateral → clique nos 3 pontinhos → <strong>Configurações e compartilhamento</strong>.</li>
+                  <li>Passe o mouse sobre a agenda na lista lateral → clique nos 3 pontinhos → <strong>Configurações e compartilhamento</strong>.</li>
                   <li>Role até <strong>Compartilhar com pessoas e grupos específicos</strong> → <strong>+ Adicionar pessoas e grupos</strong>.</li>
-                  <li>Cole o <code>client_email</code> da Service Account.</li>
+                  <li>Cole o <code>client_email</code> copiado no passo 4 (ex: <code>agenda-fulano@projeto.iam.gserviceaccount.com</code>).</li>
                   <li>Em "Permissões" escolha <strong>Fazer alterações em eventos</strong> (não basta "Ver todos os detalhes").</li>
                   <li>Clique em <strong>Enviar</strong>.</li>
                 </ol>
@@ -6126,9 +6140,9 @@ function _renderGcalTab(opts) {
             </li>
             <li>
               <div>
-                <strong>Pegar o ID da agenda</strong><br>
-                Na mesma tela <em>Configurações e compartilhamento</em>, role até <strong>Integrar agenda</strong>.
-                Copie o <strong>ID da agenda</strong> (geralmente um e-mail ou string longa) e cole no campo abaixo.
+                <strong>Pegar o ID da agenda e conectar aqui</strong><br>
+                Na mesma tela <em>Configurações e compartilhamento</em>, role até <strong>Integrar agenda</strong> e copie o <strong>ID da agenda</strong> (geralmente um e-mail).
+                Volte aqui, cole o conteúdo do JSON do passo 4 no campo abaixo e o ID da agenda no segundo campo. Clique em <strong>Conectar</strong>.
               </div>
             </li>
           </ol>
@@ -6297,10 +6311,33 @@ function _renderGcalTab(opts) {
       const result = await api(`${baseUrl}/gcal/test`, { method: 'POST' });
       if (result.ok) {
         toast('Conexão com Google Calendar OK!', 'success');
+        loadTab();
+      } else if (result.errorHint) {
+        // Diagnóstico acionável: mostra hint + link clicável em alerta inline
+        toast('Falha na conexão. Veja a instrução abaixo pra resolver.', 'danger');
+        loadTab();
+        setTimeout(() => {
+          const host = container;
+          const existing = host.querySelector('#gcal-error-hint');
+          if (existing) existing.remove();
+          const linkHtml = result.errorLink
+            ? `<a href="${escapeHtml(result.errorLink)}" target="_blank" rel="noopener" class="btn btn--sm" style="margin-top:.5rem;display:inline-block">${icon('external-link', 13)} Abrir no Google Cloud</a>`
+            : '';
+          const codeLabel = result.errorCode ? `<code style="font-size:.7rem;background:var(--surface-2);padding:.0625rem .25rem;border-radius:3px;margin-left:.375rem">${escapeHtml(result.errorCode)}</code>` : '';
+          const hintBlock = document.createElement('div');
+          hintBlock.id = 'gcal-error-hint';
+          hintBlock.style.cssText = 'margin-top:.75rem;padding:.75rem 1rem;background:rgba(239,68,68,.08);border-left:3px solid var(--danger,#ef4444);border-radius:var(--radius-sm)';
+          hintBlock.innerHTML = `
+            <div style="font-weight:600;margin-bottom:.375rem;color:var(--danger,#ef4444)">${icon('alert-triangle', 14)} Como resolver${codeLabel}</div>
+            <p style="margin:0;font-size:.85rem;line-height:1.5">${escapeHtml(result.errorHint)}</p>
+            ${linkHtml}
+            <details style="margin-top:.5rem"><summary class="muted" style="font-size:.75rem;cursor:pointer">Ver erro técnico</summary><div class="gcal-error-detail">${escapeHtml(result.error || '')}</div></details>`;
+          host.appendChild(hintBlock);
+        }, 50);
       } else {
         toast('Falha na conexão: ' + (result.error || 'erro desconhecido'), 'danger');
+        loadTab();
       }
-      loadTab();
     } catch (err) {
       toast('Erro ao testar: ' + err.message, 'danger');
       if (testBtn) testBtn.disabled = false;
