@@ -193,6 +193,21 @@ interface ContextBlockOpts {
   ano: string;
   /** Tabela de horarios disponiveis ja formatada (vinda de formatarAgendaComConfig). */
   agendaFormatada: string;
+  /**
+   * Lista de cursos formatada para IA (usada pelos bots de vendas).
+   * Quando presente, injeta bloco [CURSOS DISPONIVEIS] no contexto.
+   */
+  cursosDisponiveis?: string;
+  /**
+   * Biblioteca de midias formatada para IA (usada pelos bots de vendas).
+   * Quando presente, injeta bloco [MIDIAS DA BIBLIOTECA] no contexto.
+   */
+  midiasDisponiveis?: string;
+  /**
+   * Estado da conversa (curso escolhido, midias ja enviadas).
+   * Quando presente, injeta bloco [ESTADO DA CONVERSA] no contexto.
+   */
+  estadoConversa?: string;
 }
 
 // Campos da personalizacao com label especifico no bloco [NEGOCIO].
@@ -350,9 +365,27 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
   partes.push('');
   partes.push('[SERVICOS E PRECOS]');
   partes.push(renderServicosPrecosBlock(e.servicos));
-  partes.push('');
-  partes.push('[HORARIOS DISPONIVEIS - ATUALIZADO AGORA]');
-  partes.push(opts.agendaFormatada);
+  if (opts.agendaFormatada) {
+    partes.push('');
+    partes.push('[HORARIOS DISPONIVEIS - ATUALIZADO AGORA]');
+    partes.push(opts.agendaFormatada);
+  }
+
+  if (opts.cursosDisponiveis) {
+    partes.push('');
+    partes.push('[CURSOS DISPONIVEIS]');
+    partes.push(opts.cursosDisponiveis);
+  }
+  if (opts.midiasDisponiveis) {
+    partes.push('');
+    partes.push('[MIDIAS DA BIBLIOTECA]');
+    partes.push(opts.midiasDisponiveis);
+  }
+  if (opts.estadoConversa) {
+    partes.push('');
+    partes.push('[ESTADO DA CONVERSA]');
+    partes.push(opts.estadoConversa);
+  }
 
   return partes.join('\n');
 }

@@ -2,6 +2,7 @@ import type { BotContext } from '@startap/core/types';
 import { botCourses, botMedia, leads } from '@startap/db';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { buildContextBlock } from '../lib/free-slots.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -48,32 +49,25 @@ const WORK: Record<number, [number, number]> = {
   6: [7 * 60, 17 * 60],
 };
 
+// Somente persona + regras + marcadores + fluxo de agendamento.
+// Dados dinamicos (cliente, data, cursos, midias, estado, horarios, servicos)
+// sao injetados via buildContextBlock em runtime — protege contra remocao
+// acidental no painel (Bruno 2026-05-20).
 const DEFAULT_PROMPT_TPL = [
   'Voce e o atendente virtual da Startap Barbearia. Sua missao e encantar cada cliente.',
   'Voce atende dois assuntos no mesmo WhatsApp: vendas do Curso de Barbeiro Profissional e agendamento na barbearia.',
   '',
   '[TOM DE VOZ]',
   '- Seja simpatico, acolhedor e profissional. Trate o cliente pelo nome.',
-  '- Use uma saudacao calorosa no primeiro contato (ex.: "Oi {nome}, tudo bem? Que bom falar com voce!").',
+  '- Use uma saudacao calorosa no primeiro contato.',
   '- Demonstre interesse genuino, agradeca o contato e seja prestativo do inicio ao fim.',
   '- Objetividade com gentileza: respostas em ate 3 linhas, uma pergunta por vez.',
   '- Pode usar emojis com moderacao (✂️ 💈 ✨ 😊) para deixar a conversa leve.',
-  '',
-  '[DATA ATUAL]',
-  '{data_atual}',
-  'ANO: {ano} - use SEMPRE este ano ao calcular datas.',
-  '',
-  '[DADOS DO CLIENTE - JA IDENTIFICADO]',
-  'NOME: {nome}',
-  'WHATSAPP: {telefone}',
   '',
   '[TRIAGEM DE INTENCAO]',
   '- Se o cliente falar de curso, formacao, preco do curso, matricula, inscricao, diploma ou aprender barbearia: atue como vendedor do curso.',
   '- Se o cliente falar de corte, barba, sobrancelha, horario, agenda, marcar, cancelar horario ou servico de barbearia: atue como atendente da barbearia.',
   '- Se estiver ambiguo, como "quanto custa?", pergunte gentilmente: "Posso te ajudar com o curso de barbeiro ou com um agendamento na barbearia?"',
-  '',
-  '[CURSOS DISPONIVEIS]',
-  '{cursos_disponiveis}',
   '',
   '[SOBRE OS CURSOS]',
   'Duracao: 3 meses | 2x por semana',
@@ -81,12 +75,6 @@ const DEFAULT_PROMPT_TPL = [
   'Inclui: Apostila completa, fardamento e suporte no grupo de WhatsApp',
   'Diploma valido em mais de 122 paises - trabalha em qualquer lugar do Brasil',
   'Curso pratico, do zero ao profissional',
-  '',
-  '[MIDIAS DA BIBLIOTECA]',
-  '{midias_biblioteca}',
-  '',
-  '[ESTADO DA CONVERSA]',
-  '{estado_conversa}',
   '',
   '[MARCADORES DE ACAO - REGRAS CRITICAS]',
   'Voce pode emitir UM marcador no FINAL da sua resposta (ultima linha), nunca no meio.',
@@ -101,12 +89,11 @@ const DEFAULT_PROMPT_TPL = [
   '2. [CURSO:<course_slug>] — use quando o cliente escolher explicitamente UM curso especifico.',
   '   Substitua <course_slug> pelo slug do curso (ex.: [CURSO:curso-presencial-barbearia]).',
   '   O sistema envia o video de apresentacao do curso escolhido.',
-  '   Exemplo: se o cliente diz "quero saber do presencial", emita [CURSO:curso-presencial-barbearia] no final.',
   '',
   '3. [VIDEO:<media_id>] — use quando o cliente fizer uma pergunta contextual e voce identificar uma midia relevante na biblioteca.',
   '   Substitua <media_id> pelo ID numerico da midia (ex.: [VIDEO:42]).',
   '   So use este marcador se o contexto da midia for semanticamente relacionado com a pergunta.',
-  '   NUNCA emita [VIDEO:<id>] para uma midia que ja foi enviada nesta conversa (ver ESTADO DA CONVERSA abaixo).',
+  '   NUNCA emita [VIDEO:<id>] para uma midia que ja foi enviada nesta conversa (ver [ESTADO DA CONVERSA] no contexto).',
   '   Se o cliente pedir explicitamente para ver de novo, voce pode emitir o marcador conscientemente.',
   '',
   '4. [VIDEOS_CURSO] — use quando o cliente pedir para ver TODOS os videos do curso ("manda tudo", "envia todos os videos", "quero ver tudo").',
@@ -116,32 +103,14 @@ const DEFAULT_PROMPT_TPL = [
   'REGRAS ABSOLUTAS DOS MARCADORES:',
   '- Nunca mencione os marcadores para o cliente.',
   '- Nunca emita [CURSO:<slug>] sem ter um curso escolhido explicitamente pelo cliente.',
-  '- Nunca emita [VIDEO:<id>] se o id nao existir na biblioteca acima.',
+  '- Nunca emita [VIDEO:<id>] se o id nao existir na biblioteca do contexto.',
   '- Se o cliente demonstrou interesse mas ainda nao escolheu um curso: use [LISTA_CURSOS] primeiro.',
   '',
-  '[HORARIOS DISPONIVEIS - DADOS ATUALIZADOS AGORA]',
-  '{agenda}',
-  '',
-  '[SERVICOS E PRECOS DA BARBEARIA]',
-  'Corte de cabelo: R$35 (30 min)',
-  'Barba: R$35 (30 min)',
-  'Sobrancelha: R$15 (10 min)',
-  'Pacote completo (Corte + Barba + Sobrancelha): R$60 (60 min)',
-  'Alisamento: R$60 (40 min)',
-  'Progressiva: R$100 (40 min)',
-  'Luzes: R$80 (40 min)',
-  'Platinado: R$120 (60 min)',
-  '',
-  '[FUNCIONAMENTO DA BARBEARIA]',
-  'Terca a Sexta: 09h00 as 20h00',
-  'Sabados e Feriados: 08h00 as 18h30',
-  '(Fechado as segundas)',
-  '',
   '[REGRAS ABSOLUTAS]',
-  '1. PROIBIDO perguntar nome ou telefone. Voce ja tem esses dados acima.',
+  '1. PROIBIDO perguntar nome ou telefone. Os dados do cliente estao no contexto.',
   '2. NUNCA invente informacoes sobre curso, precos, horarios ou agenda.',
   '3. Para curso: quando cliente quiser se inscrever, use salvar_lead.',
-  '4. Para barbearia: os [HORARIOS DISPONIVEIS] sao a UNICA fonte de verdade.',
+  '4. Para barbearia: os [HORARIOS DISPONIVEIS] no contexto sao a UNICA fonte de verdade.',
   '5. Para agendar: DEVE chamar inserir_agendamento depois do SIM. NUNCA confirme sem ferramenta.',
   '6. Ao verificar disponibilidade, localize EXATAMENTE a linha do servico solicitado.',
   '',
@@ -159,8 +128,8 @@ const DEFAULT_PROMPT_TPL = [
   '──────────────────────',
   '✅ Responda *SIM* para confirmar.',
   '',
-  '4. Apos o SIM, chame inserir_agendamento com Summary: "{nome} - [SERVICO] | WhatsApp: {telefone}".',
-  '5. Somente apos confirmacao da ferramenta, responda com simpatia: "Prontinho, {nome}! Seu horario esta confirmado ✨ A Startap te espera!"',
+  '4. Apos o SIM, chame inserir_agendamento com Summary: "[Nome do cliente] - [SERVICO] | WhatsApp: [telefone]".',
+  '5. Somente apos confirmacao da ferramenta, responda com simpatia: "Prontinho! Seu horario esta confirmado ✨ A Startap te espera!"',
 ].join('\n');
 
 function spParts(date: Date) {
@@ -300,7 +269,7 @@ export class TesteVendasBarbeariaBot extends BotBase {
     const history = fullHistory.slice(0, -1);
     const state = parseConversationState(history);
 
-    // Carrega dados dinâmicos para o prompt
+    // Carrega dados dinamicos para o contexto
     const [courses, allMedia] = await Promise.all([
       botCourses.listCoursesBySlot(this.slot),
       botMedia.listBySlot(this.slot),
@@ -311,20 +280,28 @@ export class TesteVendasBarbeariaBot extends BotBase {
       `Midias ja enviadas nesta conversa: ${state.mediaIdsSentSet.size > 0 ? Array.from(state.mediaIdsSentSet).join(', ') : 'nenhuma'}`,
     ].join('\n');
 
-    const basePrompt = await renderPrompt({
+    // Prompt: somente persona+regras+marcadores (editavel pelo painel sem risco).
+    // Dados do cliente, data, cursos, midias, estado e agenda ficam no bloco de
+    // contexto imutavel — protege contra remocao acidental (Bruno 2026-05-20).
+    const promptPersona = await renderPrompt({
       slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
-      vars: {
-        nome: pushName || telefone,
-        telefone,
-        data_atual: dataAtual,
-        ano: String(now.getFullYear()),
-        agenda,
-        cursos_disponiveis: formatCoursesForPrompt(courses),
-        midias_biblioteca: formatMediaForPrompt(allMedia),
-        estado_conversa: estadoConversa,
-      },
+      vars: {},
     });
+
+    const contextBlock = await buildContextBlock({
+      slot: this.slot,
+      nomeCliente: pushName || telefone,
+      telefoneCliente: telefone,
+      dataAtual,
+      ano: String(now.getFullYear()),
+      agendaFormatada: agenda,
+      cursosDisponiveis: formatCoursesForPrompt(courses),
+      midiasDisponiveis: formatMediaForPrompt(allMedia),
+      estadoConversa,
+    });
+
+    const basePrompt = `${promptPersona}\n\n${contextBlock}`;
 
     const tools: ToolDefinition[] = [
       {

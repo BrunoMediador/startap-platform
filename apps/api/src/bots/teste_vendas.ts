@@ -3,6 +3,7 @@ import { botCourses, botMedia, leads } from '@startap/db';
 import { waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { applyFlowManualCommand } from '../lib/manual-pause.js';
+import { buildContextBlock } from '../lib/free-slots.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -23,16 +24,12 @@ const WORKFLOW_ID = 'dlpKXM3gvX2joC1b';
 const WORKFLOW_NAME = 'teste_vendas';
 const PAUSE_TABLE = 'pause_ricardo';
 
+// Somente persona + regras + marcadores. Dados dinamicos (cliente, cursos,
+// midias, estado da conversa) sao injetados via buildContextBlock em runtime
+// para proteger contra remocao acidental no painel (Bruno 2026-05-20).
 const DEFAULT_PROMPT_TPL = [
   'Voce e um assistente virtual do Curso de Barbeiro Profissional do Ricardo.',
   'Atenda os interessados com simpatia, entusiasmo e objetividade. Maximo 3 linhas por resposta.',
-  '',
-  '[DADOS DO CLIENTE - JA IDENTIFICADO]',
-  'NOME: {nome}',
-  'WHATSAPP: {telefone}',
-  '',
-  '[CURSOS DISPONIVEIS]',
-  '{cursos_disponiveis}',
   '',
   '[SOBRE OS CURSOS]',
   'Duracao: 3 meses | 2x por semana',
@@ -40,12 +37,6 @@ const DEFAULT_PROMPT_TPL = [
   'Inclui: Apostila completa, fardamento e suporte no grupo de WhatsApp',
   'Diploma valido em mais de 122 paises - trabalha em qualquer lugar do Brasil',
   'Curso pratico, do zero ao profissional',
-  '',
-  '[MIDIAS DA BIBLIOTECA]',
-  '{midias_biblioteca}',
-  '',
-  '[ESTADO DA CONVERSA]',
-  '{estado_conversa}',
   '',
   '[MARCADORES DE ACAO - REGRAS CRITICAS]',
   'Voce pode emitir UM marcador no FINAL da sua resposta (ultima linha), nunca no meio.',
@@ -63,7 +54,7 @@ const DEFAULT_PROMPT_TPL = [
   '',
   '3. [VIDEO:<media_id>] — use quando identificar uma midia relevante na biblioteca para a pergunta do cliente.',
   '   Substitua <media_id> pelo ID numerico da midia.',
-  '   NUNCA emita [VIDEO:<id>] para uma midia ja enviada nesta conversa (ver ESTADO DA CONVERSA).',
+  '   NUNCA emita [VIDEO:<id>] para uma midia ja enviada nesta conversa (ver [ESTADO DA CONVERSA] no contexto).',
   '   Se o cliente pedir explicitamente ver de novo, voce pode emitir o marcador conscientemente.',
   '',
   '4. [VIDEOS_CURSO] — use quando o cliente pedir todos os videos do curso ("manda tudo", "envia todos").',
@@ -72,11 +63,11 @@ const DEFAULT_PROMPT_TPL = [
   'REGRAS ABSOLUTAS DOS MARCADORES:',
   '- Nunca mencione os marcadores para o cliente.',
   '- Nunca emita [CURSO:<slug>] sem escolha explicita do cliente.',
-  '- Nunca emita [VIDEO:<id>] se o id nao existir na biblioteca acima.',
+  '- Nunca emita [VIDEO:<id>] se o id nao existir na biblioteca do contexto.',
   '- Se o cliente demonstrou interesse mas nao escolheu curso: use [LISTA_CURSOS] primeiro.',
   '',
   '[REGRAS ABSOLUTAS - VIOLACAO = FALHA CRITICA]',
-  '1. PROIBIDO perguntar nome ou telefone - voce ja tem acima.',
+  '1. PROIBIDO perguntar nome ou telefone - os dados do cliente estao no contexto.',
   '2. NUNCA invente informacoes sobre o curso.',
   '3. NUNCA cite precos de outros cursos.',
   '4. Maximo 3 linhas por resposta. Uma pergunta por vez.',
@@ -133,7 +124,7 @@ export class TesteVendasBot extends BotBase {
     const history = fullHistory.slice(0, -1);
     const state = parseConversationState(history);
 
-    // Carrega dados dinâmicos para o prompt
+    // Carrega dados dinamicos para o contexto
     const [courses, allMedia] = await Promise.all([
       botCourses.listCoursesBySlot(this.slot),
       botMedia.listBySlot(this.slot),
@@ -144,17 +135,37 @@ export class TesteVendasBot extends BotBase {
       `Midias ja enviadas: ${state.mediaIdsSentSet.size > 0 ? Array.from(state.mediaIdsSentSet).join(', ') : 'nenhuma'}`,
     ].join('\n');
 
-    const systemPrompt = await renderPrompt({
+    const now = new Date();
+    const dataAtual = now.toLocaleDateString('pt-BR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    });
+
+    // Prompt: somente persona+regras (editavel pelo painel sem risco).
+    // Dados do cliente, cursos, midias e estado ficam no bloco de contexto
+    // imutavel — protege contra remocao acidental (Bruno 2026-05-20).
+    const promptPersona = await renderPrompt({
       slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
-      vars: {
-        nome: pushName || telefone,
-        telefone,
-        cursos_disponiveis: formatCoursesForPrompt(courses),
-        midias_biblioteca: formatMediaForPrompt(allMedia),
-        estado_conversa: estadoConversa,
-      },
+      vars: {},
     });
+
+    const contextBlock = await buildContextBlock({
+      slot: this.slot,
+      nomeCliente: pushName || telefone,
+      telefoneCliente: telefone,
+      dataAtual,
+      ano: String(now.getFullYear()),
+      agendaFormatada: '',
+      cursosDisponiveis: formatCoursesForPrompt(courses),
+      midiasDisponiveis: formatMediaForPrompt(allMedia),
+      estadoConversa,
+    });
+
+    const systemPrompt = `${promptPersona}\n\n${contextBlock}`;
 
     const tools: ToolDefinition[] = [
       {
