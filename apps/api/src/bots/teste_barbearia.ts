@@ -1,7 +1,11 @@
 import type { BotContext } from '@startap/core/types';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
-import { formatarAgendaComConfig, loadScheduleConfig } from '../lib/free-slots.js';
+import {
+  aplicarPlaceholdersMatriz,
+  formatarAgendaComConfig,
+  loadScheduleConfig,
+} from '../lib/free-slots.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -136,7 +140,7 @@ export class TesteBarbeariaBot extends BotBase {
       timeZone: TZ,
     });
 
-    const systemPrompt = await renderPrompt({
+    const rawPrompt = await renderPrompt({
       slot: this.slot,
       fallback: DEFAULT_PROMPT_TPL,
       vars: {
@@ -147,6 +151,11 @@ export class TesteBarbeariaBot extends BotBase {
         agenda,
       },
     });
+
+    // Para a matriz teste_barbearia rodando direto, o bot_prompt ainda tem
+    // {{horarios_funcionamento_render}} e {{servicos_precos_render}} literais
+    // (clones pre-renderizam isso no painel). Substitui em runtime.
+    const systemPrompt = await aplicarPlaceholdersMatriz(rawPrompt, this.slot);
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
