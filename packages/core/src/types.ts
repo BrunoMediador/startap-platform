@@ -3,39 +3,52 @@
  */
 import { z } from 'zod';
 
-/** Payload bruto que a WAHA envia no webhook (campo de body). */
+/** Payload bruto que a WAHA envia no webhook (campo de body).
+ *
+ * Todos os campos opcionais sao .nullish() (aceitam undefined OU null) porque
+ * a engine NOWEB do WAHA serializa `body: null` para mensagens de audio/midia
+ * — Zod com `.optional()` apenas (que so aceita undefined) rejeitava esses
+ * webhooks como invalid-payload, e o audio nunca chegava no router.
+ * Bruno 2026-05-21: causa raiz de 39 invalid-payloads em prod.
+ *
+ * passthrough em TODOS os niveis (incluindo nested _data) — engines diferentes
+ * do WAHA serializam campos em locais diferentes (ex: NOWEB poe audio em
+ * _data.message.audioMessage; nao podemos stripar isso ao parsear). */
 export const WahaWebhookBody = z
   .object({
     event: z.string(),
     session: z.string(),
     payload: z
       .object({
-        id: z.string().optional(),
-        from: z.string().optional(),
-        fromMe: z.boolean().optional(),
-        body: z.string().optional(),
-        hasMedia: z.boolean().optional(),
+        id: z.string().nullish(),
+        from: z.string().nullish(),
+        fromMe: z.boolean().nullish(),
+        body: z.string().nullish(),
+        hasMedia: z.boolean().nullish(),
         media: z
           .object({
-            url: z.string().optional(),
-            mimetype: z.string().optional(),
+            url: z.string().nullish(),
+            mimetype: z.string().nullish(),
           })
           .partial()
+          .passthrough()
           .nullish(),
         _data: z
           .object({
             key: z
               .object({
-                addressingMode: z.string().optional(),
-                remoteJid: z.string().optional(),
-                remoteJidAlt: z.string().optional(),
+                addressingMode: z.string().nullish(),
+                remoteJid: z.string().nullish(),
+                remoteJidAlt: z.string().nullish(),
               })
               .partial()
+              .passthrough()
               .nullish(),
-            pushName: z.string().optional(),
-            messageTimestamp: z.union([z.number(), z.string()]).optional(),
+            pushName: z.string().nullish(),
+            messageTimestamp: z.union([z.number(), z.string()]).nullish(),
           })
           .partial()
+          .passthrough()
           .nullish(),
       })
       .passthrough()
