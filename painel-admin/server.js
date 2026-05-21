@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import auth from 'basic-auth';
+import cookieParser from 'cookie-parser';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import fetch from 'node-fetch';
 import pg from 'pg';
@@ -346,6 +348,63 @@ const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
+// ── Rate limiters ─────────────────────────────────────────────────────────────
+// authLimiter: protege a camada de Basic-Auth contra brute-force.
+// Conta apenas requisições que resultaram em 401 (skipSuccessfulRequests: true).
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,   // janela de 15 minutos
+  max: 5,                      // 5 tentativas com falha por IP nessa janela
+  skipSuccessfulRequests: true,
+  message: 'Muitas tentativas. Aguarde 15 minutos.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// apiLimiter: limite geral de throughput em todas as rotas /api/*
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,    // janela de 1 minuto
+  max: 100,                    // 100 requisições por IP por minuto
+  message: 'Rate limit excedido.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── CSRF — double-submit cookie pattern ──────────────────────────────────────
+// Sem dependência externa. Geração por crypto.randomBytes + validação manual.
+// O cookie csrf_token NÃO é HttpOnly para que o JS do frontend possa lê-lo.
+// SameSite=Strict + Secure: protege contra envio cross-site em produção.
+const CSRF_COOKIE = 'csrf_token';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+function setCsrfToken(req, res, next) {
+  if (!req.cookies?.[CSRF_COOKIE]) {
+    const token = crypto.randomBytes(24).toString('hex');
+    res.cookie(CSRF_COOKIE, token, {
+      httpOnly: false,       // precisa ser lido pelo JS para injetar no header
+      sameSite: 'strict',
+      secure: IS_PRODUCTION, // HTTPS em prod; desligado em dev local
+    });
+    // Expõe o token na resposta para que o HTML inicial possa embutir na meta tag
+    res.locals.csrfToken = token;
+  } else {
+    res.locals.csrfToken = req.cookies[CSRF_COOKIE];
+  }
+  next();
+}
+
+function csrfProtection(req, res, next) {
+  // Métodos idempotentes: sem verificação
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const cookieToken = req.cookies?.[CSRF_COOKIE];
+  const headerToken = req.get('X-CSRF-Token');
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return res.status(403).json({ error: 'CSRF token inválido' });
+  }
+  next();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 fs.mkdirSync(MEDIA_STORAGE_DIR, { recursive: true });
 
 const mediaUpload = multer({
@@ -402,6 +461,16 @@ const mediaUpload = multer({
   },
 });
 
+// Parseia cookies para uso nos middlewares CSRF e outros
+app.use(cookieParser());
+
+// Injeta (ou renova) o cookie CSRF em toda resposta — deve vir antes do authLimiter
+// para que até respostas 401 já incluam o token (front precisa dele para o próximo POST)
+app.use(setCsrfToken);
+
+// Limiter de brute-force na autenticação — aplicado antes do middleware Basic Auth
+app.use(authLimiter);
+
 // Basic Auth
 app.use((req, res, next) => {
   const creds = auth(req);
@@ -411,6 +480,12 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Limiter geral de throughput em /api/* — após auth para não penalizar tentativas 401
+app.use('/api', apiLimiter);
+
+// CSRF protection em todas as rotas mutativas /api/*
+app.use('/api', csrfProtection);
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(MEDIA_STORAGE_DIR));

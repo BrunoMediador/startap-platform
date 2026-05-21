@@ -2030,8 +2030,21 @@ function fmtRelative(d) {
   return `há ${days} d`;
 }
 
+/** Lê o cookie csrf_token (não-HttpOnly) para injetar em requisições mutativas. */
+function getCsrfToken() {
+  const match = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith('csrf_token='));
+  return match ? decodeURIComponent(match.split('=').slice(1).join('=')) : '';
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, { credentials: 'include', ...opts });
+  const method = (opts.method || 'GET').toUpperCase();
+  const mutative = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  const extraHeaders = mutative ? { 'X-CSRF-Token': getCsrfToken() } : {};
+  const res = await fetch(path, {
+    credentials: 'include',
+    ...opts,
+    headers: { ...(opts.headers || {}), ...extraHeaders },
+  });
   if (!res.ok) {
     let msg = `Erro ${res.status}`;
     try { const j = await res.json(); msg = j.error || j.message || msg; } catch (_) {}
