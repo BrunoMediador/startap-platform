@@ -1122,19 +1122,14 @@ app.put('/api/bots/:slot/media/:id', async (req, res) => {
     const mediaId = Number(req.params.id);
     const { caption, context, position_order, enabled, course_slug, is_course_intro } = req.body;
 
-    // Validações dos novos campos de curso (ADR 0008)
+    // Validações dos novos campos de curso (ADR 0008 / fix decisão #14 — imagens também aceitas)
     if (course_slug !== undefined && course_slug !== null) {
-      // A mídia deve ser do tipo video para ser vinculada a um curso
+      // Confirmar que a mídia existe (independente de tipo)
       const mediaCheck = await pool.query(
         `SELECT media_type FROM bot_media WHERE slot = $1 AND id = $2`,
         [slot, mediaId],
       );
       if (!mediaCheck.rows.length) return res.status(404).json({ error: 'midia nao encontrada' });
-      if (mediaCheck.rows[0].media_type !== 'video') {
-        return res
-          .status(400)
-          .json({ error: 'course_slug so pode ser definido em midias do tipo video' });
-      }
       // Validar que o curso existe neste slot
       const courseCheck = await pool.query(
         `SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2`,

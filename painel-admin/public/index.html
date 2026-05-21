@@ -3794,8 +3794,8 @@ function _toggleMediaCardEdit(card, slot, m, parentEl, coursesArr, triggerBtn) {
     </div>
     <div class="media-card-v2__edit-row">
       <div>
-        <label class="field-label" for="ed-course-${m.id}">Curso vinculado${!isVideo ? ' <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-subtle)">(só vídeos)</span>' : ''}</label>
-        <select id="ed-course-${m.id}" data-field="course_slug" ${!isVideo ? 'disabled' : ''}>${courseOptions}</select>
+        <label class="field-label" for="ed-course-${m.id}">Curso vinculado</label>
+        <select id="ed-course-${m.id}" data-field="course_slug">${courseOptions}</select>
       </div>
       <div class="compact">
         <label class="field-label" for="ed-pos-${m.id}">Posição</label>
@@ -3833,21 +3833,30 @@ function _toggleMediaCardEdit(card, slot, m, parentEl, coursesArr, triggerBtn) {
     const btn = ev.currentTarget;
     btn.disabled = true;
     try {
-      const courseSlugVal = isVideo && courseSel ? (courseSel.value || null) : undefined;
+      // course_slug aceito em qualquer media_type (decisão #14 — fix bug imagem)
+      const courseSlugVal = courseSel ? (courseSel.value || null) : undefined;
+      const wantIntro = isVideo && courseSlugVal && introCheck && introCheck.checked;
       const body = {
         context: (form.querySelector('[data-field="context"]').value || '').trim() || null,
         caption: (form.querySelector('[data-field="caption"]').value || '').trim() || null,
         position_order: Number(form.querySelector('[data-field="position_order"]').value) || 0,
+        course_slug: courseSlugVal,
       };
-      if (isVideo) {
-        body.course_slug = courseSlugVal;
-        body.is_course_intro = courseSlugVal && introCheck ? introCheck.checked : false;
+      // Desmarcando intro existente: envia is_course_intro=false (não bate em UNIQUE — apenas remove)
+      if (isVideo && !wantIntro && m.is_course_intro) {
+        body.is_course_intro = false;
       }
       await api(`/api/bots/${slot}/media/${m.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      // Se quer setar intro: usa endpoint dedicado (atômico — zera outras intros do curso primeiro)
+      if (wantIntro) {
+        await api(`/api/bots/${slot}/courses/${encodeURIComponent(courseSlugVal)}/intro/${m.id}`, {
+          method: 'PUT',
+        });
+      }
       toast('Mídia atualizada.', 'success');
       await renderBotMedia(slot, parentEl);
     } catch (err) {
