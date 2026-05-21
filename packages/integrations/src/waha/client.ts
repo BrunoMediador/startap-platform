@@ -81,11 +81,22 @@ export async function sendMedia(opts: {
 }
 
 /** Baixa mídia (áudio/imagem) recebida — usa o campo media.url do payload WAHA.
- *  Aceita URL absoluta ou path relativo (ex: "/api/files/..."); paths
- *  relativos sao prefixados com WAHA_URL antes do fetch. */
+ *  Aceita URL absoluta, path relativo, ou URL com host localhost/127.0.0.1
+ *  (WAHA serializa media.url como "http://localhost:3000/api/files/..." se
+ *  referenciando a si proprio; dentro do nosso container "localhost" eh a
+ *  api, nao o WAHA — entao reescrevemos o host pro WAHA_URL do docker net). */
 export async function downloadMedia(url: string): Promise<Buffer> {
   if (!url) throw new Error('Download media failed: URL vazia');
-  const fullUrl = /^https?:\/\//i.test(url) ? url : `${WAHA_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+  let fullUrl: string;
+  const localhostMatch = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.exec(url);
+  if (localhostMatch) {
+    const pathAndQuery = localhostMatch[3] ?? '/';
+    fullUrl = `${WAHA_URL}${pathAndQuery}`;
+  } else if (/^https?:\/\//i.test(url)) {
+    fullUrl = url;
+  } else {
+    fullUrl = `${WAHA_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+  }
   const res = await fetch(fullUrl, { headers: { 'X-Api-Key': WAHA_API_KEY } });
   if (!res.ok) throw new Error(`Download media failed: HTTP ${res.status} (url=${fullUrl.slice(0, 80)})`);
   return Buffer.from(await res.arrayBuffer());
