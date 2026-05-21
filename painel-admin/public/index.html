@@ -1075,6 +1075,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   transition: border-color var(--transition), background var(--transition);
 }
 .upload-area:hover { border-color: var(--primary); background: var(--primary-glow); color: var(--text); }
+.upload-area--active { border-color: var(--primary); background: var(--primary-glow); color: var(--text); outline: 2px solid var(--primary); outline-offset: -2px; }
 .upload-area input[type="file"] { display: none; }
 /* ── Divider ────────────────────────────────────────────────────────── */
 .divider { height: 1px; background: var(--border); margin: 1.25rem 0; }
@@ -4409,6 +4410,42 @@ function openAddMediaModal(slot, parentEl) {
     uploadBtn.disabled = false;
   });
 
+
+  // ── Drag-and-drop ───────────────────────────────────────────────────────────────────────
+  const uploadLabel = document.getElementById('upload-label');
+
+  function _handleDropFile(file) {
+    if (!file) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    previewDiv.innerHTML = _buildFilePreviewHtml(file);
+    uploadBtn.disabled = false;
+  }
+
+  uploadLabel.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    uploadLabel.classList.add('upload-area--active');
+  });
+
+  uploadLabel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadLabel.classList.add('upload-area--active');
+  });
+
+  uploadLabel.addEventListener('dragleave', (e) => {
+    if (!uploadLabel.contains(e.relatedTarget)) {
+      uploadLabel.classList.remove('upload-area--active');
+    }
+  });
+
+  uploadLabel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadLabel.classList.remove('upload-area--active');
+    const file = (e.dataTransfer.files && e.dataTransfer.files[0]) || null;
+    _handleDropFile(file);
+  });
+  // ───────────────────────────────────────────────────────────────────────────
   uploadBtn.addEventListener('click', async () => {
     if (!fileInput.files.length) return;
     const context = contextInput.value.trim();
