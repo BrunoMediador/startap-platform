@@ -2,7 +2,11 @@ import type { BotContext } from '@startap/core/types';
 import { botCourses, botMedia, leads } from '@startap/db';
 import { gcal, waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
-import { buildContextBlock } from '../lib/free-slots.js';
+import {
+  buildContextBlock,
+  formatarAgendaComConfig,
+  loadScheduleConfig,
+} from '../lib/free-slots.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -24,30 +28,6 @@ const SLOT = 'teste_vendas_barbearia';
 const TZ = 'America/Sao_Paulo';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
-
-interface ServiceDef {
-  name: string;
-  min: number;
-}
-
-const SERVICES: ServiceDef[] = [
-  { name: 'Corte', min: 40 },
-  { name: 'Barba', min: 20 },
-  { name: 'Sobrancelha', min: 20 },
-  { name: 'Corte+Barba', min: 60 },
-  { name: 'Pezinho', min: 20 },
-  { name: 'Relaxamento', min: 40 },
-  { name: 'Corte pigmentado', min: 60 },
-];
-
-const WORK: Record<number, [number, number]> = {
-  1: [8 * 60, 19 * 60],
-  2: [8 * 60, 19 * 60],
-  3: [8 * 60, 19 * 60],
-  4: [8 * 60, 19 * 60],
-  5: [8 * 60, 19 * 60],
-  6: [7 * 60, 17 * 60],
-};
 
 // Somente persona + regras + marcadores + fluxo de agendamento.
 // Dados dinamicos (cliente, data, cursos, midias, estado, horarios, servicos)
@@ -138,88 +118,6 @@ const DEFAULT_PROMPT_TPL = [
   '- Para enviar uma midia adicional, emita [VIDEO:<media_id>] passando o ID numerico da midia.',
 ].join('\n');
 
-function spParts(date: Date) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-    hour12: false,
-  })
-    .formatToParts(date)
-    .reduce<Record<string, string>>((a, p) => {
-      a[p.type] = p.value;
-      return a;
-    }, {});
-  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const wd = weekdayNames.indexOf(parts.weekday ?? '');
-  return {
-    wd,
-    key: `${parts.year}-${parts.month}-${parts.day}`,
-    label: `${parts.day}/${parts.month}`,
-    mins: Number.parseInt(parts.hour ?? '0') * 60 + Number.parseInt(parts.minute ?? '0'),
-  };
-}
-
-function hhmm(m: number) {
-  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-}
-
-function formatarAgenda(events: gcal.CalendarEvent[]): string {
-  const now = new Date();
-  const occupied: Record<string, Array<{ s: number; e: number }>> = {};
-  for (const ev of events) {
-    const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
-    const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
-    const sp = spParts(s);
-    const sep = spParts(e);
-    if (!occupied[sp.key]) occupied[sp.key] = [];
-    occupied[sp.key].push({ s: sp.mins, e: sep.mins });
-  }
-
-  const dias = [
-    'DOMINGO',
-    'SEGUNDA-FEIRA',
-    'TERCA-FEIRA',
-    'QUARTA-FEIRA',
-    'QUINTA-FEIRA',
-    'SEXTA-FEIRA',
-    'SABADO',
-  ];
-  const blocks: string[] = [];
-  for (let offset = 0; offset <= 5; offset++) {
-    const date = new Date(now);
-    date.setDate(date.getDate() + offset);
-    const sp = spParts(date);
-    const wh = WORK[sp.wd];
-    if (!wh) continue;
-
-    const [wStart, wEnd] = wh;
-    const minStart = offset === 0 ? Math.max(wStart, Math.ceil((sp.mins + 10) / 20) * 20) : wStart;
-    const occ = occupied[sp.key] ?? [];
-    const label =
-      offset === 0
-        ? `HOJE (${sp.label})`
-        : offset === 1
-          ? `AMANHA (${sp.label})`
-          : `${dias[sp.wd]} (${sp.label})`;
-
-    const lines = SERVICES.map((svc) => {
-      const slots: string[] = [];
-      for (let t = minStart; t + svc.min <= wEnd; t += 20) {
-        if (!occ.some((o) => t < o.e && t + svc.min > o.s)) slots.push(hhmm(t));
-      }
-      return `  ${svc.name} (${svc.min}min): ${slots.length ? slots.join(', ') : 'SEM DISPONIBILIDADE'}`;
-    });
-    blocks.push(`${label}:\n${lines.join('\n')}`);
-  }
-
-  return blocks.join('\n\n') || 'Sem horarios disponiveis.';
-}
-
 export class TesteVendasBarbeariaBot extends BotBase {
   constructor(opts?: { slotOverride?: string }) {
     super({
@@ -262,7 +160,17 @@ export class TesteVendasBarbeariaBot extends BotBase {
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
       throw err;
     });
-    const agenda = formatarAgenda(events);
+    // Lê horarios+servicos do clone (flow_clones) ou matriz (bot_config) e
+    // formata agenda respeitando dias fechados. Antes usava WORK/SERVICES
+    // hardcoded que ignoravam config do clone (sábado fechado virava aberto).
+    const scheduleConfig = await loadScheduleConfig(this.slot);
+    if (scheduleConfig.source === 'defaults' && this.slot !== SLOT) {
+      this.log.warn(
+        { slot: this.slot },
+        'free-slots: clone sem horarios/servicos configurados — usando defaults',
+      );
+    }
+    const agenda = formatarAgendaComConfig(events, scheduleConfig);
     const dataAtual = now.toLocaleDateString('pt-BR', {
       weekday: 'long',
       year: 'numeric',
