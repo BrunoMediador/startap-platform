@@ -91,14 +91,45 @@ export async function handleWebhook(
     session: body.session,
   };
 
-  // 1. Ignora eventos não-mensagem
-  if (!['message', 'message.any'].includes(body.event)) {
+  // 1. Aceita qualquer evento de mensagem nova (`message`, `message.any` e
+  // variantes que algumas engines WAHA usam para audio/midia tipo
+  // `message.media`, `message.audio`). Rejeita ack/revoked/reaction que sao
+  // mudancas de estado, nao mensagens novas.
+  //
+  // Bruno 2026-05-21: cliente reportou que audio "nem disparou" — hipotese
+  // de que a engine atual envia audio sob evento diferente de `message`. Em
+  // vez de hardcoded whitelist, usamos prefix `message.` com blacklist de
+  // sub-eventos que sabemos serem nao-incoming. Para diagnostico, quando
+  // dropar, logamos o event + estrutura do payload.
+  const NON_INCOMING_EVENT_SUFFIXES = new Set([
+    'ack',
+    'revoke',
+    'revoked',
+    'reaction',
+    'edited',
+    'waiting',
+  ]);
+  const isMessageEvent =
+    body.event === 'message' ||
+    body.event === 'message.any' ||
+    (typeof body.event === 'string' &&
+      body.event.startsWith('message.') &&
+      !NON_INCOMING_EVENT_SUFFIXES.has(body.event.slice('message.'.length)));
+  if (!isMessageEvent) {
     await flowExecutionLog.logFlowEvent({
       ...baseLog,
       eventType: 'router.ignored',
       status: 'ignored',
       message: 'Evento WAHA ignorado',
-      metadata: { reason: 'event', event: body.event },
+      metadata: {
+        reason: 'event',
+        event: body.event,
+        // Diagnostico audio: se evento rejeitado tem cara de audio, mostra
+        // estrutura do payload para identificar como aceitar futuramente.
+        payloadKeys: body.payload ? Object.keys(body.payload) : [],
+        dataMsgKeys: dumpDataMessageKeys(body.payload),
+        audioMsgPresent: hasAudioMessageNode(body.payload),
+      },
       durationMs: Date.now() - startedAt,
     });
     return { status: 'ignored:event' };
