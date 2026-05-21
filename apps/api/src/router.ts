@@ -243,6 +243,13 @@ export async function handleWebhook(
       hasText: !!body.payload?.body,
       hasMedia: !!body.payload?.hasMedia,
       mediaType: body.payload?.media?.mimetype ?? null,
+      // Diagnostico audio: estrutura completa do payload pra identificar
+      // onde a engine WAHA atual coloca o audio. Volatil — remover apos
+      // bug resolvido. Bruno 2026-05-21.
+      payloadKeys: body.payload ? Object.keys(body.payload) : [],
+      dataMsgKeys: dumpDataMessageKeys(body.payload),
+      rootMimeType: (body.payload as Record<string, unknown> | null | undefined)?.mimeType ?? null,
+      audioMsgPresent: hasAudioMessageNode(body.payload),
     },
   });
 
@@ -579,6 +586,38 @@ function detectAudio(payload: unknown): AudioInfo {
 
 function pickString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * Diagnostico audio (volatil — remover quando bug resolvido): dump das
+ * chaves de payload._data.message com tipos basicos. Util para identificar
+ * em que engine do WAHA estamos e onde audio esta no payload.
+ */
+function dumpDataMessageKeys(payload: unknown): Record<string, string> {
+  if (!payload || typeof payload !== 'object') return {};
+  const _data = (payload as Record<string, unknown>)._data;
+  if (!_data || typeof _data !== 'object') return {};
+  const msg = (_data as Record<string, unknown>).message;
+  if (!msg || typeof msg !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(msg as Record<string, unknown>)) {
+    if (v === null) out[k] = 'null';
+    else if (typeof v === 'object') {
+      const subKeys = Object.keys(v as Record<string, unknown>).slice(0, 8);
+      out[k] = `object{${subKeys.join(',')}}`;
+    } else out[k] = typeof v;
+  }
+  return out;
+}
+
+function hasAudioMessageNode(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const _data = (payload as Record<string, unknown>)._data;
+  if (!_data || typeof _data !== 'object') return false;
+  const msg = (_data as Record<string, unknown>).message;
+  if (!msg || typeof msg !== 'object') return false;
+  const m = msg as Record<string, unknown>;
+  return !!(m.audioMessage || m.pttMessage);
 }
 
 /** Lista chaves de payload._data.message — util para diagnostico. */
