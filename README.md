@@ -123,7 +123,7 @@ startap-platform/
 │   └── public/index.html
 ├── scripts/                  # deploy.sh, migrate.sh, seed-prompts.mjs
 ├── docs/                     # arquitetura, runbook, auditorias
-├── .github/workflows/        # ci.yml, deploy.yml, (auto-merge.yml em MODO VIAGEM)
+├── .github/workflows/        # ci.yml, deploy.yml, cleanup-stale-branches.yml, backup-postgres.yml
 ├── docker-compose.yml
 ├── Dockerfile
 ├── biome.json
