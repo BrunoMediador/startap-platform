@@ -13,13 +13,24 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
     const startedAt = Date.now();
     const parsed = WahaWebhookBody.safeParse(req.body);
     if (!parsed.success) {
-      log.warn({ errors: parsed.error.flatten() }, 'Payload WAHA inválido');
+      const flat = parsed.error.flatten();
+      log.warn({ errors: flat }, 'Payload WAHA inválido');
+      // Re-mapeia fieldErrors para chaves que nao caiam no redactor de
+      // sensitive-keys (palavra "payload"/"body"/"raw" e redactada). Sem
+      // isso vemos so [redacted] no painel e nao conseguimos diagnosticar.
+      const fieldErrorsSafe: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(flat.fieldErrors ?? {})) {
+        fieldErrorsSafe[`field_${key}`] = value;
+      }
       await flowExecutionLog.logFlowEvent({
         executionId,
         eventType: 'webhook.invalid-payload',
         status: 'ignored',
         message: 'Payload WAHA inválido',
-        metadata: { errors: parsed.error.flatten() },
+        metadata: {
+          formErrors: flat.formErrors,
+          ...fieldErrorsSafe,
+        },
         durationMs: Date.now() - startedAt,
       });
       return reply.code(200).send({ status: 'ignored:invalid-payload' });
