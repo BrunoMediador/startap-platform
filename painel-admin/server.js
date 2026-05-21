@@ -1008,21 +1008,122 @@ app.get('/api/bots/:slot/prompt', async (req, res) => {
 });
 
 app.put('/api/bots/:slot/prompt', async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { prompt } = req.body;
-    if (typeof prompt !== 'string' || !prompt.length) {
+    const { prompt: newPrompt } = req.body;
+    if (typeof newPrompt !== 'string' || !newPrompt.length) {
       return res.status(400).json({ error: 'prompt obrigatorio' });
     }
-    const r = await pool.query(
+    const { slot } = req.params;
+    await client.query('BEGIN');
+
+    // Auto-snapshot da versão atual antes de sobrescrever
+    const cur = await client.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [slot]);
+    if (cur.rows.length && cur.rows[0].prompt !== newPrompt) {
+      const max = await client.query(
+        'SELECT COALESCE(MAX(version), 0) AS m FROM bot_prompt_versions WHERE slot = $1',
+        [slot],
+      );
+      await client.query(
+        `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
+        [slot, max.rows[0].m + 1, cur.rows[0].prompt, req.headers['x-admin'] || 'admin', 'auto-snapshot pre-edit'],
+      );
+    }
+
+    const r = await client.query(
       `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()
        RETURNING slot, prompt, updated_at`,
-      [req.params.slot, prompt],
+      [slot, newPrompt],
     );
+    await client.query('COMMIT');
     res.json(r.rows[0]);
   } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
+});
+
+// ---------- VERSOES DE PROMPT ----------
+app.get('/api/bots/:slot/prompt/versions', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const r = await pool.query(
+      `SELECT version, length(prompt) AS len, edited_by, edited_at, comment
+       FROM bot_prompt_versions WHERE slot = $1 ORDER BY version DESC LIMIT 50`,
+      [slot],
+    );
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/bots/:slot/prompt/versions/:version', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const version = Number(req.params.version);
+    const r = await pool.query(
+      `SELECT version, prompt, edited_by, edited_at, comment
+       FROM bot_prompt_versions WHERE slot = $1 AND version = $2`,
+      [slot, version],
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'versao nao encontrada' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/bots/:slot/prompt/rollback/:version', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { slot } = req.params;
+    const version = Number(req.params.version);
+    await client.query('BEGIN');
+
+    const v = await client.query(
+      'SELECT prompt FROM bot_prompt_versions WHERE slot = $1 AND version = $2',
+      [slot, version],
+    );
+    if (!v.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'versao nao encontrada' });
+    }
+
+    const next = await client.query(
+      'SELECT COALESCE(MAX(version), 0) + 1 AS next FROM bot_prompt_versions WHERE slot = $1',
+      [slot],
+    );
+    const nextVersion = Number(next.rows[0].next);
+
+    // Salva versao atual antes de sobrescrever (rollback e undoable)
+    const current = await client.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [slot]);
+    if (current.rows.length) {
+      await client.query(
+        `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
+        [slot, nextVersion, current.rows[0].prompt, 'rollback-from-v' + version, 'snapshot antes do rollback'],
+      );
+    }
+
+    await client.query(
+      'UPDATE bot_prompt SET prompt = $1, updated_at = NOW() WHERE slot = $2',
+      [v.rows[0].prompt, slot],
+    );
+
+    // Registra a versao restaurada como nova entrada
+    await client.query(
+      `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
+       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
+      [slot, nextVersion + 1, v.rows[0].prompt, 'rollback', f'rollback de v{version}'],
+    );
+
+    await client.query('COMMIT');
+    res.json({ ok: true, restored_version: version, new_version: nextVersion + 1 });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally { client.release(); }
 });
 
 // ---------- PALAVRAS-CHAVE DE PAUSA POR FLUXO ----------
@@ -4364,6 +4465,33 @@ if (process.env.WAHA_URL) {
 
 process.on('SIGTERM', () => {
   if (_wahaIntervalHandle) clearInterval(_wahaIntervalHandle);
+});
+
+
+// ---------- CLEANUP STATUS ----------
+app.get('/api/cleanup/status', async (req, res) => {
+  try {
+    const now = new Date();
+    const nextRun = new Date(now);
+    nextRun.setMinutes(0, 0, 0);
+    nextRun.setHours(nextRun.getHours() + 1);
+
+    const [lastRunRes, tablesRes] = await Promise.all([
+      pool.query('SELECT cleaned_at, tables_cleaned FROM cleanup_log ORDER BY cleaned_at DESC LIMIT 1').catch(() => ({ rows: [] })),
+      pool.query('SELECT table_name, description FROM cleanup_historicos ORDER BY table_name').catch(() => ({ rows: [] })),
+    ]);
+
+    res.json({
+      last_run: lastRunRes.rows[0]?.cleaned_at || null,
+      last_tables_cleaned: lastRunRes.rows[0]?.tables_cleaned || 0,
+      next_run: nextRun.toISOString(),
+      cron: '0 * * * *',
+      interval_minutes: 60,
+      tables: tablesRes.rows,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));

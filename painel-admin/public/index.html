@@ -3303,7 +3303,10 @@ async function renderBotPrompt(slot, el) {
         <textarea id="prompt-ta" rows="16" placeholder="Escreva o prompt de sistema do bot aqui...">${escapeHtml(promptText)}</textarea>
         <div class="char-count"><span id="prompt-count">${promptText.length}</span> caracteres</div>
       </div>
-      <button class="btn btn--primary" id="btn-save-prompt" style="margin-top:.75rem">${icon('check-circle-2',14)} Salvar prompt</button>`;
+      <div style="display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap">
+        <button class="btn btn--primary" id="btn-save-prompt">${icon('check-circle-2',14)} Salvar prompt</button>
+        <button class="btn btn--ghost" id="btn-prompt-history">${icon('clock',14)} Historico</button>
+      </div>`;
 
     const ta = el.querySelector('#prompt-ta');
     const count = el.querySelector('#prompt-count');
@@ -3325,8 +3328,106 @@ async function renderBotPrompt(slot, el) {
         btn.disabled = false;
       }
     });
+
+    el.querySelector('#btn-prompt-history').addEventListener('click', () => openPromptHistoryModal(slot, ta.value));
+
   } catch (err) {
     el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar prompt: ${escapeHtml(err.message)}</p><button class="btn btn--sm" onclick="loadBotTab('${escapeHtml(slot)}','prompt',this.parentElement)">${icon('refresh-cw',14)} Tentar novamente</button>`;
+  }
+}
+
+/* ── Modal de Historico de versoes de prompt ────────────────────────── */
+async function openPromptHistoryModal(slot, currentPromptText) {
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${icon('clock', 18)} Historico de versoes — <span class="mono">${escapeHtml(slot)}</span></span>
+      <button class="btn btn--ghost btn--sm" onclick="closeModal()">${icon('x', 14)}</button>
+    </div>
+    <div id="ph-body" style="padding:1rem 0"><div class="spinner"></div></div>`);
+
+  const body = document.getElementById('ph-body');
+  try {
+    const versions = await api(`/api/bots/${slot}/prompt/versions`);
+    if (!versions.length) {
+      body.innerHTML = `<p class="muted">Nenhuma versao salva ainda. Edite e salve o prompt para criar o historico.</p>`;
+      return;
+    }
+    const fmtDate = (s) => new Date(s).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    body.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:.4rem .5rem">Versao</th>
+            <th style="text-align:left;padding:.4rem .5rem">Por</th>
+            <th style="text-align:left;padding:.4rem .5rem">Data</th>
+            <th style="text-align:right;padding:.4rem .5rem">Chars</th>
+            <th style="text-align:left;padding:.4rem .5rem">Comentario</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${versions.map(v => `
+            <tr style="border-bottom:1px solid var(--border)" id="ph-row-${v.version}">
+              <td style="padding:.4rem .5rem"><span class="badge">v${v.version}</span></td>
+              <td style="padding:.4rem .5rem">${escapeHtml(v.edited_by || '-')}</td>
+              <td style="padding:.4rem .5rem;white-space:nowrap">${fmtDate(v.edited_at)}</td>
+              <td style="padding:.4rem .5rem;text-align:right">${v.len}</td>
+              <td style="padding:.4rem .5rem;color:var(--muted);font-size:.8rem">${escapeHtml(v.comment || '')}</td>
+              <td style="padding:.4rem .5rem;text-align:right;white-space:nowrap">
+                <button class="btn btn--ghost btn--sm" onclick="showPromptVersionDiff('${escapeHtml(slot)}', ${v.version}, ${JSON.stringify(currentPromptText).replace(/</g,'\u003c')})">${icon('eye', 13)} Ver</button>
+                <button class="btn btn--sm" style="margin-left:.25rem" onclick="rollbackPromptVersion('${escapeHtml(slot)}', ${v.version})">${icon('rotate-ccw', 13)} Restaurar</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (err) {
+    body.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar historico: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function showPromptVersionDiff(slot, version, currentText) {
+  try {
+    const v = await api(`/api/bots/${slot}/prompt/versions/${version}`);
+    const fmtDate = (s) => new Date(s).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">${icon('git-branch', 18)} v${version} vs Atual — <span class="mono">${escapeHtml(slot)}</span></span>
+        <button class="btn btn--ghost btn--sm" onclick="openPromptHistoryModal('${escapeHtml(slot)}', ${JSON.stringify(currentText).replace(/</g,'\u003c')})">${icon('arrow-left', 14)} Voltar</button>
+      </div>
+      <p style="font-size:.8rem;color:var(--muted);margin:.5rem 0 1rem">
+        v${version} salva em ${fmtDate(v.edited_at)} por ${escapeHtml(v.edited_by || '-')} — ${escapeHtml(v.comment || '')}
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div>
+          <label style="font-size:.8rem;font-weight:600;color:var(--muted)">Versao v${version} (historica)</label>
+          <textarea readonly rows="20" style="width:100%;box-sizing:border-box;font-size:.8rem;font-family:monospace;background:var(--surface-2,#f5f5f5)">${escapeHtml(v.prompt)}</textarea>
+        </div>
+        <div>
+          <label style="font-size:.8rem;font-weight:600;color:var(--muted)">Versao atual (editor)</label>
+          <textarea readonly rows="20" style="width:100%;box-sizing:border-box;font-size:.8rem;font-family:monospace">${escapeHtml(currentText)}</textarea>
+        </div>
+      </div>
+      <div style="margin-top:1rem;display:flex;justify-content:flex-end">
+        <button class="btn btn--primary" onclick="rollbackPromptVersion('${escapeHtml(slot)}', ${version})">${icon('rotate-ccw', 14)} Restaurar esta versao</button>
+      </div>`);
+  } catch (err) {
+    toast('Erro ao carregar versao: ' + err.message, 'danger');
+  }
+}
+
+async function rollbackPromptVersion(slot, version) {
+  if (!window.confirm(`Restaurar v${version}? O prompt atual sera salvo como nova versao antes do rollback.`)) return;
+  try {
+    const result = await api(`/api/bots/${slot}/prompt/rollback/${version}`, { method: 'POST' });
+    closeModal();
+    toast(`Rollback concluido! Prompt restaurado para v${result.restored_version} (nova entrada: v${result.new_version}).`, 'success');
+    // Recarrega aba prompt
+    const el = document.querySelector('.tab-panel[data-tab="prompt"]') ||
+                document.querySelector('[data-active-tab="prompt"]') ||
+                document.getElementById('bot-tab-content');
+    if (el) await renderBotPrompt(slot, el);
+  } catch (err) {
+    toast('Erro no rollback: ' + err.message, 'danger');
   }
 }
 
