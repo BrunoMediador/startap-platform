@@ -3270,17 +3270,14 @@ app.patch('/api/clones/:id', async (req, res) => {
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
 
-    // Re-renderiza prompt sempre que algum campo que afeta o prompt mudou.
-    const tocouPrompt =
-      personalizacao !== undefined ||
-      horarios_funcionamento !== undefined ||
-      servicos !== undefined;
-    if (tocouPrompt) {
-      const rendered = await regerarPromptClone(r.rows[0]);
-      if (!rendered.ok) {
-        console.warn(`[clones PATCH] regerarPromptClone falhou: ${rendered.error}`);
-      }
-    }
+    // NAO regera prompt automaticamente. Bruno 2026-05-21: depois das Missoes
+    // 024/025, horarios+servicos+personalizacao sao lidos de flow_clones em
+    // runtime via buildContextBlock — bot_prompt do clone contem APENAS
+    // persona+regras+fluxo+cartao (parte editavel pelo painel). Auto-regerar
+    // aqui atropelava edicoes manuais do prompt feitas pelo usuario na aba
+    // Prompt do modal (bug: salvava prompt, mexia em horarios, refresh
+    // mostrava prompt revertido pra matriz). Quem quiser ressincronizar da
+    // matriz usa o botao "Regerar Prompt" -> POST /api/clones/:id/regerar-prompt.
 
     res.json(r.rows[0]);
   } catch (e) {

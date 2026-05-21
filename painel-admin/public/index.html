@@ -6724,7 +6724,7 @@ function loadCloneConfigTab(tab, clone) {
         content.innerHTML = `
           <div style="padding-top:.5rem">
             <p class="muted" style="margin-bottom:.75rem;display:flex;align-items:flex-start;gap:.375rem">
-              ${icon('info', 14)} Você pode editar o prompt do clone diretamente. Atenção: qualquer mudança na aba <strong>Personalização</strong> <em>regenera</em> o prompt a partir da matriz, sobrescrevendo edições manuais.
+              ${icon('info', 14)} Você pode editar o prompt do clone diretamente — suas edições ficam salvas. Horários, serviços e personalização são lidos do clone em runtime e <em>não</em> precisam estar no prompt. Para resetar pro template da matriz, use o botão <strong>Regerar Prompt</strong>.
             </p>
             <div class="field">
               <label for="clone-prompt-ta">Prompt do sistema</label>
