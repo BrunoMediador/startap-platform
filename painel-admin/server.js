@@ -1542,6 +1542,7 @@ app.post('/api/bots/:slot/courses', async (req, res) => {
       duration = null,
       position_order = 0,
       enabled = true,
+      details_for_llm = null,
     } = req.body;
     if (!course_slug || typeof course_slug !== 'string' || !course_slug.trim()) {
       return res.status(400).json({ error: 'course_slug e obrigatorio' });
@@ -1554,8 +1555,8 @@ app.post('/api/bots/:slot/courses', async (req, res) => {
     }
     const r = await pool.query(
       `INSERT INTO bot_courses
-         (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+         (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
        RETURNING *`,
       [
         slot,
@@ -1566,6 +1567,7 @@ app.post('/api/bots/:slot/courses', async (req, res) => {
         duration,
         Number(position_order) || 0,
         !!enabled,
+        details_for_llm ?? null,
       ],
     );
     res.status(201).json(r.rows[0]);
@@ -1585,10 +1587,10 @@ app.put('/api/bots/:slot/courses/:id', async (req, res) => {
     const rawId = req.params.id;
     // Aceita ID numérico ou course_slug como identificador
     const byId = /^\d+$/.test(rawId);
-    const whereClause = byId ? 'slot = $1 AND id = $2' : 'slot = $1 AND course_slug = $2';
     const whereVal = byId ? Number(rawId) : rawId;
 
-    const { name, description, price, duration, position_order, enabled } = req.body;
+    const { name, description, price, duration, position_order, enabled, details_for_llm } =
+      req.body;
 
     if (
       price !== undefined &&
@@ -1624,8 +1626,21 @@ app.put('/api/bots/:slot/courses/:id', async (req, res) => {
       fields.push(`enabled = $${idx++}`);
       vals.push(!!enabled);
     }
+    if (details_for_llm !== undefined) {
+      fields.push(`details_for_llm = $${idx++}`);
+      vals.push(details_for_llm ?? null);
+    }
     if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido' });
     fields.push(`updated_at = NOW()`);
+
+    // whereClause construído DEPOIS dos campos do SET para que os índices $N
+    // não colidam com os placeholders dinâmicos do SET (Bug: whereClause usava
+    // $1/$2 fixos enquanto o SET também começava em $1).
+    const slotIdx = idx++;
+    const whereIdx = idx++;
+    const whereClause = byId
+      ? `slot = $${slotIdx} AND id = $${whereIdx}`
+      : `slot = $${slotIdx} AND course_slug = $${whereIdx}`;
     vals.push(slot, whereVal);
 
     const r = await pool.query(
