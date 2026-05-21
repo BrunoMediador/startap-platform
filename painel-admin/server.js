@@ -2874,7 +2874,10 @@ async function createWahaSession(name) {
       body: JSON.stringify({
         name,
         start: true,
-        config: { webhooks: [{ url: webhookUrl, events: ['message', 'session.status'] }] },
+        // events MUST include 'message.any' — engine NOWEB do WAHA so manda
+        // audio/video/imagem sob 'message.any', nao 'message' (que so cobre
+        // texto). Sem isso o bot fica surdo pra audio. Bruno 2026-05-21.
+        config: { webhooks: [{ url: webhookUrl, events: ['message', 'message.any', 'session.status'] }] },
       }),
     });
     const body = await r.json().catch(() => ({}));
@@ -3862,6 +3865,61 @@ app.post('/api/sessions/:name/stop', async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(502).json({ error: `Falha ao contatar WAHA: ${e.message}` });
+  }
+});
+
+// POST /api/sessions/:name/ensure-audio-webhook — adiciona 'message.any' aos
+// events do webhook da sessao no WAHA, caso esteja faltando. Engine NOWEB so
+// envia audio/video/imagem sob 'message.any'. Sessoes criadas antes da
+// correcao deste bug (2026-05-21) tem apenas events:['message','session.status']
+// e nunca recebiam audio. Idempotente.
+app.post('/api/sessions/:name/ensure-audio-webhook', async (req, res) => {
+  const { name } = req.params;
+  try {
+    // 1. Le config atual
+    const getR = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+    });
+    const session = await getR.json().catch(() => null);
+    if (!getR.ok || !session) {
+      return res.status(502).json({ error: `WAHA GET falhou: ${getR.status}` });
+    }
+    const webhooks = Array.isArray(session?.config?.webhooks) ? session.config.webhooks : [];
+    if (webhooks.length === 0) {
+      return res.status(400).json({ error: 'Sessao sem webhooks configurados — recrie a sessao' });
+    }
+
+    // 2. Garante message.any em CADA webhook (caso haja mais de um)
+    let changed = false;
+    const newWebhooks = webhooks.map((w) => {
+      const events = Array.isArray(w.events) ? [...w.events] : [];
+      if (!events.includes('message.any')) {
+        events.push('message.any');
+        changed = true;
+      }
+      return { ...w, events };
+    });
+
+    if (!changed) {
+      return res.json({ ok: true, changed: false, message: 'message.any ja presente em todos os webhooks' });
+    }
+
+    // 3. PUT no WAHA com config atualizado
+    const putR = await fetch(`${WAHA_URL}/api/sessions/${name}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
+      body: JSON.stringify({ config: { ...session.config, webhooks: newWebhooks } }),
+    });
+    const putBody = await putR.json().catch(() => ({}));
+    if (!putR.ok) {
+      return res.status(502).json({ error: `WAHA PUT falhou: ${putBody?.message ?? putR.status}` });
+    }
+    res.json({ ok: true, changed: true, webhooks: newWebhooks });
+  } catch (e) {
+    res.status(502).json({ error: `Falha: ${e.message}` });
   }
 });
 
