@@ -438,46 +438,66 @@ async function buildIncomingMessage(input: {
   let texto = payload?.body ?? '';
   let wasAudio = false;
 
-  // Detecção de áudio: WAHA inconsistente entre versões — checa hasMedia,
-  // mimetype (em media.mimetype) e tambem o payload bruto (mimeType raiz que
-  // algumas versoes usam). Tenta transcrever sempre que parecer ser audio,
-  // mesmo se payload.body vier preenchido com placeholder/label do WAHA.
-  const rootMimeType =
-    typeof (payload as Record<string, unknown> | null | undefined)?.mimeType === 'string'
-      ? ((payload as Record<string, unknown>).mimeType as string)
-      : undefined;
-  const mediaMime = payload?.media?.mimetype ?? rootMimeType;
-  const isAudio = !!mediaMime && mediaMime.startsWith('audio/');
-  const mediaUrl = payload?.media?.url ?? '';
-
-  if (isAudio) {
-    if (!mediaUrl) {
-      log.warn({ telefone, hasMedia: payload?.hasMedia }, 'Audio sem media.url no payload');
+  // WAHA tem 3 engines (WEBJS, NOWEB, GOWS) e cada uma coloca audio em
+  // lugar diferente do payload. Tentamos descobrir mime+url andando por
+  // varios caminhos conhecidos. Bug previo (PR #167): so checava
+  // payload.media.mimetype, perdia messages com payload em _data.message.*.
+  const audioInfo = detectAudio(payload);
+  if (audioInfo.isAudio) {
+    if (!audioInfo.url) {
+      log.warn(
+        {
+          telefone,
+          hasMedia: payload?.hasMedia,
+          mimetype: audioInfo.mimetype,
+          payloadKeys: payload ? Object.keys(payload) : [],
+          dataMsgKeys: getDataMessageKeys(payload),
+        },
+        'Audio detectado mas sem URL para baixar — verificar payload do WAHA',
+      );
       texto = '[audio recebido mas sem url para baixar]';
       wasAudio = true;
     } else {
       try {
-        const audio = await waha.downloadMedia(mediaUrl);
-        const transcribed = await whisper.transcribe(audio, mediaMime);
+        const audio = await waha.downloadMedia(audioInfo.url);
+        const transcribed = await whisper.transcribe(audio, audioInfo.mimetype ?? 'audio/ogg');
         const cleaned = transcribed.trim();
         if (cleaned.length > 0) {
           texto = cleaned;
           wasAudio = true;
-          log.info({ telefone, len: cleaned.length }, 'Áudio transcrito');
+          log.info(
+            { telefone, len: cleaned.length, source: audioInfo.source },
+            'Áudio transcrito',
+          );
         } else {
-          // Whisper devolveu vazio (áudio só com ruído / muito curto). Sem isso
-          // o texto ficava "" e o bot ignorava silenciosamente — cliente
-          // achava que tinha sumido. Manda placeholder para o bot tratar.
-          log.warn({ telefone }, 'Whisper devolveu texto vazio para audio');
+          log.warn(
+            { telefone, source: audioInfo.source },
+            'Whisper devolveu texto vazio para audio',
+          );
           texto = '[audio sem fala identificada]';
           wasAudio = true;
         }
       } catch (e) {
-        log.error({ err: e, telefone, mediaUrl: mediaUrl ? '[present]' : '[missing]' }, 'Falha ao transcrever áudio');
+        log.error(
+          { err: e, telefone, source: audioInfo.source, url: audioInfo.url.slice(0, 80) },
+          'Falha ao transcrever áudio',
+        );
         texto = '[áudio não transcrito]';
         wasAudio = true;
       }
     }
+  } else if (payload?.hasMedia) {
+    // hasMedia=true mas nao detectamos audio — pode ser imagem/video (ok)
+    // ou audio em campo novo que ainda nao conhecemos. Loga estrutura.
+    log.info(
+      {
+        telefone,
+        mediaMime: payload?.media?.mimetype,
+        dataMsgKeys: getDataMessageKeys(payload),
+        payloadKeys: payload ? Object.keys(payload) : [],
+      },
+      'hasMedia=true mas nao classificado como audio',
+    );
   }
 
   return {
@@ -492,4 +512,81 @@ async function buildIncomingMessage(input: {
     wasAudio,
     raw: body,
   };
+}
+
+// --- Detecção de audio em payloads WAHA (multi-engine) ----------------------
+
+interface AudioInfo {
+  isAudio: boolean;
+  mimetype?: string;
+  url?: string;
+  /** Caminho do payload onde foi encontrado (para log/debug). */
+  source?: string;
+}
+
+/**
+ * Anda pelos caminhos conhecidos onde WAHA coloca info de audio, dependendo da
+ * engine (WEBJS/NOWEB/GOWS) e versao. Retorna a primeira combinacao valida de
+ * mimetype audio/* + URL para download.
+ */
+function detectAudio(payload: unknown): AudioInfo {
+  if (!payload || typeof payload !== 'object') return { isAudio: false };
+  const p = payload as Record<string, unknown>;
+
+  // Candidatos: objetos do payload que podem conter audio.
+  const _data = (p._data ?? {}) as Record<string, unknown>;
+  const _msg = (_data.message ?? {}) as Record<string, unknown>;
+
+  type Cand = { node: Record<string, unknown> | undefined; source: string };
+  const cands: Cand[] = [
+    { node: p.media as Record<string, unknown> | undefined, source: 'payload.media' },
+    { node: _msg.audioMessage as Record<string, unknown> | undefined, source: '_data.message.audioMessage' },
+    { node: _msg.pttMessage as Record<string, unknown> | undefined, source: '_data.message.pttMessage' },
+    // Algumas versoes serializam direto na raiz do payload
+    { node: p, source: 'payload (raiz)' },
+  ];
+
+  for (const c of cands) {
+    if (!c.node || typeof c.node !== 'object') continue;
+    const node = c.node;
+    const mime =
+      pickString(node.mimetype) ?? pickString(node.mime) ?? pickString(node.mimeType);
+    if (!mime || !mime.startsWith('audio/')) continue;
+    const url =
+      pickString(node.url) ??
+      pickString(node.fileUrl) ??
+      pickString(node.directPath) ??
+      pickString(node.mediaUrl) ??
+      pickString((p.media as Record<string, unknown> | undefined)?.url) ??
+      '';
+    return { isAudio: true, mimetype: mime, url, source: c.source };
+  }
+
+  // Sinal indireto: pttMessage / audioMessage existe (mesmo sem mimetype legivel).
+  if (_msg.audioMessage || _msg.pttMessage) {
+    const node = (_msg.audioMessage ?? _msg.pttMessage) as Record<string, unknown>;
+    const url = pickString(node.url) ?? pickString(node.mediaUrl) ?? '';
+    return {
+      isAudio: true,
+      mimetype: pickString(node.mimetype) ?? 'audio/ogg',
+      url,
+      source: _msg.audioMessage ? '_data.message.audioMessage (sem mime)' : '_data.message.pttMessage (sem mime)',
+    };
+  }
+
+  return { isAudio: false };
+}
+
+function pickString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** Lista chaves de payload._data.message — util para diagnostico. */
+function getDataMessageKeys(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') return [];
+  const _data = (payload as Record<string, unknown>)._data;
+  if (!_data || typeof _data !== 'object') return [];
+  const msg = (_data as Record<string, unknown>).message;
+  if (!msg || typeof msg !== 'object') return [];
+  return Object.keys(msg);
 }
