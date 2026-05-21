@@ -468,6 +468,19 @@ app.use(cookieParser());
 // para que até respostas 401 já incluam o token (front precisa dele para o próximo POST)
 app.use(setCsrfToken);
 
+// ---------- LOGOUT (antes do authLimiter e do Basic Auth) ----------
+// Retorna 401 com realm "Logout" — diferente do realm "Painel" usado na auth normal.
+// O browser descarta o cache da credencial anterior para o realm "Painel" e exibe
+// o diálogo de login novamente na próxima navegação.
+// Fica antes do authLimiter para não contabilizar como tentativa de brute-force
+// (o 401 desta rota é intencional, não é falha de autenticação).
+app.get('/api/logout', (_req, res) => {
+  res
+    .status(401)
+    .set('WWW-Authenticate', 'Basic realm="Logout", charset="UTF-8"')
+    .json({ logout: true });
+});
+
 // Limiter de brute-force na autenticação — aplicado antes do middleware Basic Auth
 app.use(authLimiter);
 
