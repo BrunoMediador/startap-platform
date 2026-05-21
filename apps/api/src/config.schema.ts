@@ -23,6 +23,9 @@ export const ConfigSchema = z.object({
 
   DEEPSEEK_API_KEY: z.string().optional(),
 
+  REDIS_HOST: z.string().default('redis'),
+  REDIS_PORT: z.coerce.number().default(6379),
+
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 
   ALERT_DEV_PHONE: z.string().optional(),
