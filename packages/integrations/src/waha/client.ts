@@ -80,9 +80,13 @@ export async function sendMedia(opts: {
   });
 }
 
-/** Baixa mídia (áudio/imagem) recebida — usa o campo media.url do payload WAHA. */
+/** Baixa mídia (áudio/imagem) recebida — usa o campo media.url do payload WAHA.
+ *  Aceita URL absoluta ou path relativo (ex: "/api/files/..."); paths
+ *  relativos sao prefixados com WAHA_URL antes do fetch. */
 export async function downloadMedia(url: string): Promise<Buffer> {
-  const res = await fetch(url, { headers: { 'X-Api-Key': WAHA_API_KEY } });
-  if (!res.ok) throw new Error(`Download media failed: HTTP ${res.status}`);
+  if (!url) throw new Error('Download media failed: URL vazia');
+  const fullUrl = /^https?:\/\//i.test(url) ? url : `${WAHA_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+  const res = await fetch(fullUrl, { headers: { 'X-Api-Key': WAHA_API_KEY } });
+  if (!res.ok) throw new Error(`Download media failed: HTTP ${res.status} (url=${fullUrl.slice(0, 80)})`);
   return Buffer.from(await res.arrayBuffer());
 }
