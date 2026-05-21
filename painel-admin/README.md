@@ -23,9 +23,23 @@ O painel permite cadastrar mídias por URL ou enviar um arquivo local para o ser
 No servidor atual, os uploads devem ficar no mesmo diretório servido pelo container `nginx-videos`.
 O painel precisa ter volume de escrita para `/opt/automacoes/videos` e salvar URLs compatíveis com o WAHA.
 
+## Variáveis de ambiente obrigatórias
+
+As variáveis abaixo são lidas via `process.env` — **nunca** usar valores hardcoded.
+Consulte `.env.example` para a lista completa.
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `PG_PASS` | sim | Senha do Postgres — processo aborta no boot se ausente |
+| `ADMIN_PASS` | sim | Senha do basic-auth do painel (min. 8 chars, `!= admin`) |
+| `GCAL_ENCRYPTION_KEY` | sim | Chave AES-256 para credenciais GCal at-rest |
+| `ADMIN_USER` | não | Username do basic-auth (default: `admin`) |
+| `WAHA_API_KEY` | não | API key do WAHA (default: vazio) |
+
 ## Acesso
 - URL: https://gestao.startap.tech (via NPM)
-- Auth: basic auth (usuário admin / senha startap2026)
+- Auth: basic auth — credenciais definidas via `ADMIN_USER` / `ADMIN_PASS` no `.env` do servidor.
+  Nunca compartilhar a senha em documentação; consultar Bruno ou o `.env` no servidor.
 
 ## Bots disponíveis (hardcoded em server.js)
 - `0ni38aSspWwhooHd` → BarbeariaCiriloBot
