@@ -6363,8 +6363,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'media', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', media: 'Mídias', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'cursos', 'media', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', cursos: 'Cursos', media: 'Mídias', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -6710,6 +6710,10 @@ function loadCloneConfigTab(tab, clone) {
       onSaved: (updated) => Object.assign(clone, updated),
     });
 
+  } else if (tab === 'cursos') {
+    content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    renderCloneCourses(clone, content);
+
   } else if (tab === 'media') {
     content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
     renderBotMedia(clone.slot, content);
@@ -6839,6 +6843,356 @@ function loadCloneConfigTab(tab, clone) {
     /* ── Palavras-chave de pausa/retomada do clone ── */
     _renderPauseTab(content, clone.slot);
   }
+}
+
+/* ══ ABA CURSOS — MODAL DE CLONE ════════════════════════════════
+ *  renderCloneCourses(clone, container)
+ *  — Lista cursos do clone via GET /api/bots/<slot>/courses
+ *  — Toggle global "vídeo aleatório no interesse" em personalizacao jsonb
+ *  — Abre modais de add/edit com campo details_for_llm
+ *  — Subview de mídias vinculadas (link/unlink) reutiliza openLinkMediaModal
+ * ================================================================ */
+async function renderCloneCourses(clone, el) {
+  const slot = clone.slot;
+  try {
+    const [coursesRes, mediasRes] = await Promise.all([
+      api(`/api/bots/${encodeURIComponent(slot)}/courses`),
+      api(`/api/bots/${encodeURIComponent(slot)}/media`),
+    ]);
+    const courses = Array.isArray(coursesRes) ? coursesRes : (coursesRes.courses || coursesRes.items || []);
+    const medias  = Array.isArray(mediasRes)  ? mediasRes  : (mediasRes.media  || mediasRes.items  || []);
+
+    // Toggle global: curso_video_aleatorio_no_interesse
+    const pers = (typeof clone.personalizacao === 'object' && clone.personalizacao !== null)
+      ? clone.personalizacao : {};
+    const toggleChecked = pers.curso_video_aleatorio_no_interesse === true ? 'checked' : '';
+
+    const toggleHtml = `
+      <div style="display:flex;align-items:center;gap:.625rem;padding:.625rem .875rem;background:var(--surface-2);border-radius:var(--radius-md);margin-bottom:.875rem">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="clone-curso-video-toggle" ${toggleChecked}>
+          <span class="toggle__track"></span>
+        </label>
+        <div>
+          <div style="font-size:.8125rem;font-weight:500">Enviar vídeo aleatório ao detectar interesse no curso</div>
+          <div class="muted" style="font-size:.75rem">Quando ativado, o bot sorteia um vídeo vinculado ao curso demonstrado pelo cliente.</div>
+        </div>
+      </div>`;
+
+    const header = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <span class="muted" style="font-size:.8125rem">${courses.length} curso${courses.length !== 1 ? 's' : ''}</span>
+        <button class="btn btn--primary btn--sm" id="btn-add-clone-course">${icon('plus',13)} Adicionar curso</button>
+      </div>`;
+
+    if (!courses.length) {
+      el.innerHTML = `${toggleHtml}${header}<div class="empty-state">${icon('book-open',36)}<div class="empty-state__title">Sem cursos</div><p class="empty-state__text">Nenhum curso cadastrado para este clone ainda.</p></div>`;
+    } else {
+      const rows = courses.map(c => {
+        const linked      = medias.filter(m => m.course_slug === c.course_slug);
+        const intro       = linked.find(m => m.is_course_intro === true || m.is_course_intro === 1);
+        const count       = linked.length;
+        const noIntroWarn = count > 0 && !intro
+          ? `<span class="badge badge--warning" style="margin-left:.25rem;font-size:.7rem">sem intro</span>`
+          : '';
+        const priceDisplay    = (c.price != null && c.price >= 0) ? fmtBRL(c.price / 100) : '—';
+        const durationDisplay = c.duration ? escapeHtml(c.duration) : '—';
+        const hasDetails      = c.details_for_llm && c.details_for_llm.trim().length > 0;
+        const detailsBadge    = hasDetails
+          ? `<span class="course-slug-badge" style="font-size:.7rem;margin-left:.25rem" title="Detalhes para o bot preenchidos">${icon('cpu',10)} bot</span>`
+          : `<span class="course-slug-badge badge--warning" style="font-size:.7rem;margin-left:.25rem;opacity:.7" title="Detalhes para o bot vazios — o bot saberá menos sobre este curso">${icon('alert-triangle',10)} sem detalhes</span>`;
+
+        return `<tr data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">
+          <td>
+            <button class="btn btn--ghost btn--sm js-clone-course-edit" data-id="${c.id}" style="font-weight:600;color:var(--text)">${escapeHtml(c.name)}</button>
+            ${detailsBadge}
+          </td>
+          <td style="color:var(--text-muted);font-size:.8125rem">${priceDisplay}</td>
+          <td style="color:var(--text-muted);font-size:.8125rem">${durationDisplay}</td>
+          <td title="${count} de 5 mídias máximas"><span>${count}/5</span>${noIntroWarn}</td>
+          <td>
+            <label class="toggle">
+              <input type="checkbox" class="js-clone-course-toggle" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" ${c.enabled ? 'checked' : ''}>
+              <span class="toggle__track"></span>
+            </label>
+          </td>
+          <td style="text-align:right;white-space:nowrap">
+            <div class="media-actions-wrap">
+              <button class="btn btn--ghost btn--sm btn--icon js-clone-course-menu" aria-label="Ações">${icon('more-horizontal',14)}</button>
+              <div class="media-actions-menu" data-menu-id="cc-${c.id}">
+                <button class="js-clone-course-edit" data-id="${c.id}">${icon('edit-2',13)} Editar</button>
+                <button class="js-clone-course-link" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('link',13)} Mídias</button>
+                <button class="js-clone-course-del danger" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" data-name="${escapeHtml(c.name)}">${icon('trash-2',13)} Excluir</button>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      el.innerHTML = `${toggleHtml}${header}<div style="overflow-x:auto"><table class="course-table">
+        <thead><tr>
+          <th>Nome</th>
+          <th>Preço</th>
+          <th>Duração</th>
+          <th>Mídias</th>
+          <th>Ativo</th>
+          <th style="width:48px"></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+    }
+
+    // ── toggle global vídeo aleatório ──
+    el.querySelector('#clone-curso-video-toggle').addEventListener('change', async (ev) => {
+      const chk = ev.currentTarget;
+      chk.disabled = true;
+      try {
+        const newPers = Object.assign({}, clone.personalizacao || {}, { curso_video_aleatorio_no_interesse: chk.checked });
+        const updated = await api(`/api/clones/${clone.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ personalizacao: newPers }),
+        });
+        Object.assign(clone, updated);
+        toast(chk.checked ? 'Vídeo aleatório ativado.' : 'Vídeo aleatório desativado.', 'success');
+      } catch (err) {
+        chk.checked = !chk.checked;
+        toast('Erro ao salvar: ' + err.message, 'danger');
+      } finally {
+        chk.disabled = false;
+      }
+    });
+
+    el.querySelector('#btn-add-clone-course')?.addEventListener('click', () => {
+      openCloneCourseModal(slot, null, el, clone);
+    });
+
+    // menu dropdown
+    el.querySelectorAll('.js-clone-course-menu').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const wrap = btn.closest('.media-actions-wrap');
+        const menu = wrap.querySelector('.media-actions-menu');
+        const wasOpen = menu.classList.contains('open');
+        document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
+        if (!wasOpen) menu.classList.add('open');
+      });
+    });
+
+    // editar (nome clicável + menu)
+    el.querySelectorAll('.js-clone-course-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const c = courses.find(x => String(x.id) === String(btn.dataset.id));
+        if (c) openCloneCourseModal(slot, c, el, clone);
+      });
+    });
+
+    // mídias
+    el.querySelectorAll('.js-clone-course-link').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openLinkMediaModal(slot, btn.dataset.slug, medias, el);
+      });
+    });
+
+    // toggle ativo
+    el.querySelectorAll('.js-clone-course-toggle').forEach(chk => {
+      chk.addEventListener('change', async () => {
+        const orig = !chk.checked;
+        chk.disabled = true;
+        try {
+          await api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(chk.dataset.slug)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: chk.checked }),
+          });
+          toast(chk.checked ? 'Curso ativado.' : 'Curso desativado.', 'success');
+        } catch (err) {
+          chk.checked = orig;
+          toast('Erro: ' + err.message, 'danger');
+        } finally { chk.disabled = false; }
+      });
+    });
+
+    // excluir
+    el.querySelectorAll('.js-clone-course-del').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm(`Excluir curso "${btn.dataset.name}"?`)) return;
+        btn.disabled = true;
+        try {
+          await api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(btn.dataset.slug)}`, { method: 'DELETE' });
+          toast('Curso excluído.', 'success');
+          await renderCloneCourses(clone, el);
+        } catch (err) {
+          toast('Erro ao excluir: ' + err.message, 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar cursos: ${escapeHtml(err.message)}</p>
+      <button class="btn btn--sm" id="clone-courses-retry">${icon('refresh-cw',14)} Tentar novamente</button>`;
+    el.querySelector('#clone-courses-retry').addEventListener('click', () => renderCloneCourses(clone, el));
+  }
+}
+
+/* ── form de curso do clone (add/edit) com details_for_llm ── */
+function _cloneCourseFormHtml(c, isEdit) {
+  const slugField = isEdit
+    ? `<div>
+        <label class="label">Slug do curso</label>
+        <div class="input" style="background:var(--surface-2);color:var(--text-muted);cursor:default">${escapeHtml(c.course_slug || '')}</div>
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">O slug é a identidade do curso e não pode ser alterado após criação.</p>
+      </div>`
+    : `<div>
+        <label class="label" for="cc-slug">Slug <span style="color:var(--danger)">*</span></label>
+        <input id="cc-slug" class="input" type="text" placeholder="ex: curso-online-degrade" value="${escapeHtml(c.course_slug || '')}">
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">Somente letras minúsculas, números e hífens. Ex: <code>curso-online-degrade</code></p>
+      </div>`;
+
+  return `
+    <div id="cc-form-status"></div>
+    <div style="display:flex;flex-direction:column;gap:.625rem">
+      <div>
+        <label class="label" for="cc-name">Nome <span style="color:var(--danger)">*</span></label>
+        <input id="cc-name" class="input" type="text" placeholder="Nome do curso" value="${escapeHtml(c.name || '')}">
+      </div>
+      ${slugField}
+      <div>
+        <label class="label" for="cc-desc">Descrição curta</label>
+        <textarea id="cc-desc" class="input" rows="2" style="resize:vertical">${escapeHtml(c.description || '')}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.625rem">
+        <div>
+          <label class="label" for="cc-price">Preço (R$)</label>
+          <input id="cc-price" class="input" type="number" min="0" step="0.01" placeholder="297.00" value="${c.price != null ? (c.price / 100).toFixed(2) : ''}">
+        </div>
+        <div>
+          <label class="label" for="cc-order">Posição</label>
+          <input id="cc-order" class="input" type="number" min="0" value="${c.position_order ?? 0}">
+        </div>
+      </div>
+      <div>
+        <label class="label" for="cc-duration">Duração (texto livre)</label>
+        <input id="cc-duration" class="input" type="text" placeholder="ex: Acesso vitalício, ~30h" value="${escapeHtml(c.duration || '')}">
+      </div>
+      <div>
+        <label class="label" for="cc-details">
+          Detalhes para o bot <span class="muted" style="font-size:.75rem;font-weight:400">(details_for_llm)</span>
+        </label>
+        <textarea id="cc-details" class="input" rows="10" style="resize:vertical;font-size:.8125rem"
+          placeholder="Tudo que o bot deve saber sobre o curso: modalidade (online/presencial), certificado (sim/não), parcelamento, próxima turma, carga horária, diferenciais, política de cancelamento, suporte, etc.
+
+Exemplo:
+- Modalidade: online com acesso vitalício
+- Certificado: sim, reconhecido pelo SENAC
+- Parcelamento: 12x R$ 29,90 no cartão
+- Próxima turma: todo mês, início imediato
+- Diferenciais: kit de ferramentas incluso, mentoria ao vivo semanal
+- Cancelamento: 7 dias corridos para reembolso integral"
+        >${escapeHtml(c.details_for_llm || '')}</textarea>
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">${icon('info',11)} Essas informações são injetadas no contexto do bot para que ele responda com precisão sobre o curso.</p>
+      </div>
+      <div>
+        <label class="toggle">
+          <input type="checkbox" id="cc-enabled" ${(c.enabled !== false) ? 'checked' : ''}>
+          <span class="toggle__track"></span>
+          <span>Curso ativo</span>
+        </label>
+      </div>
+    </div>
+    <div style="margin-top:1rem;display:flex;gap:.5rem;justify-content:flex-end">
+      <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn--primary" id="btn-save-clone-course">${icon('save',13)} Salvar</button>
+    </div>`;
+}
+
+function openCloneCourseModal(slot, course, parentEl, clone) {
+  const isEdit = !!course;
+  const c = course || {};
+
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${isEdit ? 'Editar curso' : 'Adicionar curso'}</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+    </div>
+    ${_cloneCourseFormHtml(c, isEdit)}
+  `);
+
+  // auto-preencher slug a partir do nome (somente no modo criação)
+  if (!isEdit) {
+    document.getElementById('cc-name')?.addEventListener('input', (ev) => {
+      const slugEl = document.getElementById('cc-slug');
+      if (!slugEl || slugEl.dataset.manualEdit === '1') return;
+      slugEl.value = ev.target.value
+        .toLowerCase()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+    });
+    document.getElementById('cc-slug')?.addEventListener('input', (ev) => {
+      ev.currentTarget.dataset.manualEdit = ev.currentTarget.value ? '1' : '0';
+    });
+  }
+
+  document.getElementById('btn-save-clone-course').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-clone-course');
+    const statusDiv = document.getElementById('cc-form-status');
+
+    const name     = document.getElementById('cc-name').value.trim();
+    const slug     = isEdit ? c.course_slug : document.getElementById('cc-slug').value.trim();
+    const desc     = document.getElementById('cc-desc').value.trim();
+    const priceRaw = document.getElementById('cc-price').value;
+    const order    = Number(document.getElementById('cc-order').value) || 0;
+    const duration = document.getElementById('cc-duration').value.trim();
+    const details  = document.getElementById('cc-details').value.trim();
+    const enabled  = document.getElementById('cc-enabled').checked;
+
+    if (!name) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Nome é obrigatório.</p>`;
+      return;
+    }
+    if (!isEdit && !slug) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Slug é obrigatório.</p>`;
+      return;
+    }
+    if (!isEdit && !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Slug inválido. Use letras minúsculas, números e hífens.</p>`;
+      return;
+    }
+    const price = priceRaw !== '' ? Math.round(parseFloat(priceRaw) * 100) : 0;
+    if (isNaN(price) || price < 0) {
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Preço inválido.</p>`;
+      return;
+    }
+
+    btn.disabled = true;
+    statusDiv.innerHTML = '';
+    try {
+      const payload = { name, description: desc || null, price, duration: duration || null, position_order: order, details_for_llm: details || null, enabled };
+      if (!isEdit) payload.course_slug = slug;
+
+      await api(
+        isEdit
+          ? `/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(c.course_slug)}`
+          : `/api/bots/${encodeURIComponent(slot)}/courses`,
+        {
+          method: isEdit ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
+      toast(isEdit ? 'Curso atualizado.' : 'Curso adicionado.', 'success');
+      closeModal();
+      await renderCloneCourses(clone, parentEl);
+    } catch (err) {
+      const msg = (err.message || '').includes('409') || (err.message || '').toLowerCase().includes('já existe')
+        ? 'Já existe um curso com esse slug para este bot.'
+        : err.message;
+      statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} ${escapeHtml(msg)}</p>`;
+      btn.disabled = false;
+    }
+  });
 }
 
 /* ══ MODAL QR ISOLADO ════════════════════════════════════════════= */
