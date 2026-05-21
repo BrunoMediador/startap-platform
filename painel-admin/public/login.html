@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Startap — Login</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --brand:      #6366f1;
+      --brand-dark: #4f46e5;
+      --danger:     #ef4444;
+      --text:       #1e293b;
+      --muted:      #64748b;
+      --border:     #e2e8f0;
+      --bg-input:   #f8fafc;
+      --radius:     8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      padding: 1rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.15);
+      padding: 48px 40px 40px;
+      width: 100%;
+      max-width: 400px;
+    }
+
+    .brand {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .brand__logo {
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: var(--brand);
+      line-height: 1;
+    }
+
+    .brand__tagline {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin-top: 6px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .form__group {
+      margin-bottom: 18px;
+    }
+
+    .form__label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .form__input {
+      display: block;
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 0.9375rem;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg-input);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .form__input:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+      background: #fff;
+    }
+
+    .form__input::placeholder {
+      color: #94a3b8;
+    }
+
+    .btn-submit {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 12px 20px;
+      margin-top: 8px;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      font-family: inherit;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+
+    .btn-submit:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+
+    .btn-submit:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .btn-submit:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .alert {
+      display: none;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      line-height: 1.45;
+      margin-top: 16px;
+    }
+
+    .alert--error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+    }
+
+    .alert.is-visible {
+      display: flex;
+    }
+
+    .footer {
+      margin-top: 32px;
+      text-align: center;
+      font-size: 0.75rem;
+      color: #94a3b8;
+    }
+
+    @media (max-width: 480px) {
+      .card {
+        padding: 36px 24px 28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="card" role="main">
+    <div class="brand">
+      <div class="brand__logo">Startap</div>
+      <div class="brand__tagline">Painel de Controle</div>
+    </div>
+
+    <form id="loginForm" novalidate>
+      <div class="form__group">
+        <label class="form__label" for="username">Usuário</label>
+        <input
+          class="form__input"
+          type="text"
+          id="username"
+          name="username"
+          placeholder="admin"
+          autocomplete="username"
+          required
+          autofocus
+        />
+      </div>
+
+      <div class="form__group">
+        <label class="form__label" for="password">Senha</label>
+        <input
+          class="form__input"
+          type="password"
+          id="password"
+          name="password"
+          placeholder="••••••••"
+          autocomplete="current-password"
+          required
+        />
+      </div>
+
+      <button class="btn-submit" type="submit" id="submitBtn">
+        <span id="btnLabel">Entrar</span>
+      </button>
+
+      <div class="alert alert--error" id="errorAlert" role="alert" aria-live="polite">
+        <span id="errorMsg"></span>
+      </div>
+    </form>
+
+    <div class="footer" id="footerVersion"></div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // Lê versão do meta tag injetado pelo servidor (se disponível).
+      // Fallback silencioso caso não exista.
+      const verMeta = document.querySelector('meta[name="app-version"]');
+      if (verMeta && verMeta.content) {
+        document.getElementById('footerVersion').textContent = 'v' + verMeta.content;
+      }
+
+      const form      = document.getElementById('loginForm');
+      const submitBtn = document.getElementById('submitBtn');
+      const btnLabel  = document.getElementById('btnLabel');
+      const errorAlert = document.getElementById('errorAlert');
+      const errorMsg  = document.getElementById('errorMsg');
+
+      function showError(msg) {
+        errorMsg.textContent = msg;
+        errorAlert.classList.add('is-visible');
+      }
+
+      function clearError() {
+        errorAlert.classList.remove('is-visible');
+        errorMsg.textContent = '';
+      }
+
+      function setLoading(loading) {
+        submitBtn.disabled = loading;
+        if (loading) {
+          submitBtn.innerHTML = '<div class="spinner"></div><span>Entrando...</span>';
+        } else {
+          submitBtn.innerHTML = '<span id="btnLabel">Entrar</span>';
+        }
+      }
+
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        clearError();
+
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+
+        if (!username || !password) {
+          showError('Preencha usuário e senha.');
+          return;
+        }
+
+        setLoading(true);
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+          });
+
+          if (res.ok) {
+            // Login bem-sucedido — redireciona para o painel.
+            window.location.href = '/';
+            return;
+          }
+
+          if (res.status === 429) {
+            showError('Muitas tentativas. Aguarde 15 minutos.');
+            return;
+          }
+
+          // 401 ou outro erro
+          let detail = 'Usuário ou senha incorretos.';
+          try {
+            const data = await res.json();
+            if (data && data.error) detail = data.error;
+          } catch (_) { /* ignore */ }
+          showError(detail);
+        } catch (_) {
+          showError('Falha na conexão. Verifique sua internet e tente novamente.');
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      // Se já autenticado, redireciona direto (evita flash da tela de login).
+      // Não bloqueia o carregamento — executa após render.
+      fetch('/api/status', { credentials: 'include', method: 'HEAD' })
+        .then(function (r) {
+          if (r.ok || r.status === 405) {
+            // status 405 = rota existe mas não aceita HEAD — usuário autenticado
+            window.location.replace('/');
+          }
+        })
+        .catch(function () { /* ignore — não autenticado, fica na tela de login */ });
+    })();
+  </script>
+</body>
+</html>
