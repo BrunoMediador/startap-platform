@@ -1115,7 +1115,7 @@ app.post('/api/bots/:slot/prompt/rollback/:version', async (req, res) => {
     await client.query(
       `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
        VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
-      [slot, nextVersion + 1, v.rows[0].prompt, 'rollback', f'rollback de v{version}'],
+      [slot, nextVersion + 1, v.rows[0].prompt, 'rollback', 'rollback de v' + version],
     );
 
     await client.query('COMMIT');
