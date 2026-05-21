@@ -438,15 +438,45 @@ async function buildIncomingMessage(input: {
   let texto = payload?.body ?? '';
   let wasAudio = false;
 
-  if (!texto && payload?.hasMedia && payload?.media?.mimetype?.startsWith('audio/')) {
-    try {
-      const audio = await waha.downloadMedia(payload.media.url ?? '');
-      texto = await whisper.transcribe(audio, payload.media.mimetype);
+  // Detecção de áudio: WAHA inconsistente entre versões — checa hasMedia,
+  // mimetype (em media.mimetype) e tambem o payload bruto (mimeType raiz que
+  // algumas versoes usam). Tenta transcrever sempre que parecer ser audio,
+  // mesmo se payload.body vier preenchido com placeholder/label do WAHA.
+  const rootMimeType =
+    typeof (payload as Record<string, unknown> | null | undefined)?.mimeType === 'string'
+      ? ((payload as Record<string, unknown>).mimeType as string)
+      : undefined;
+  const mediaMime = payload?.media?.mimetype ?? rootMimeType;
+  const isAudio = !!mediaMime && mediaMime.startsWith('audio/');
+  const mediaUrl = payload?.media?.url ?? '';
+
+  if (isAudio) {
+    if (!mediaUrl) {
+      log.warn({ telefone, hasMedia: payload?.hasMedia }, 'Audio sem media.url no payload');
+      texto = '[audio recebido mas sem url para baixar]';
       wasAudio = true;
-      log.info({ telefone, len: texto.length }, 'Áudio transcrito');
-    } catch (e) {
-      log.error({ err: e }, 'Falha ao transcrever áudio');
-      texto = '[áudio não transcrito]';
+    } else {
+      try {
+        const audio = await waha.downloadMedia(mediaUrl);
+        const transcribed = await whisper.transcribe(audio, mediaMime);
+        const cleaned = transcribed.trim();
+        if (cleaned.length > 0) {
+          texto = cleaned;
+          wasAudio = true;
+          log.info({ telefone, len: cleaned.length }, 'Áudio transcrito');
+        } else {
+          // Whisper devolveu vazio (áudio só com ruído / muito curto). Sem isso
+          // o texto ficava "" e o bot ignorava silenciosamente — cliente
+          // achava que tinha sumido. Manda placeholder para o bot tratar.
+          log.warn({ telefone }, 'Whisper devolveu texto vazio para audio');
+          texto = '[audio sem fala identificada]';
+          wasAudio = true;
+        }
+      } catch (e) {
+        log.error({ err: e, telefone, mediaUrl: mediaUrl ? '[present]' : '[missing]' }, 'Falha ao transcrever áudio');
+        texto = '[áudio não transcrito]';
+        wasAudio = true;
+      }
     }
   }
 
