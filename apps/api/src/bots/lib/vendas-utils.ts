@@ -72,14 +72,21 @@ export function formatPrice(centavos: number): string {
 }
 
 export function formatCoursesForPrompt(courses: BotCourseRow[]): string {
-  if (!courses.length) return '(nenhum curso cadastrado)';
-  return courses
-    .filter((c) => c.enabled)
-    .map(
-      (c) =>
-        `- ${c.course_slug}: ${c.name}${c.price ? ` (${formatPrice(c.price)})` : ''}${c.duration ? ` | ${c.duration}` : ''}`,
-    )
-    .join('\n');
+  const enabled = courses.filter((c) => c.enabled);
+  if (!enabled.length) return '(nenhum curso cadastrado)';
+  return enabled
+    .map((c) => {
+      const priceStr = c.price ? ` (${formatPrice(c.price)})` : '';
+      const durStr = c.duration ? ` ${c.duration}` : '';
+      const header = `• ${c.name}${priceStr}${durStr}`;
+      const slug = `  Slug: ${c.course_slug}`;
+      if (c.details_for_llm && c.details_for_llm.trim() !== '') {
+        const indented = c.details_for_llm.trim().split('\n').join('\n  ');
+        return `${header}\n${slug}\n  Detalhes:\n  ${indented}`;
+      }
+      return `${header}\n${slug}`;
+    })
+    .join('\n\n');
 }
 
 export function formatMediaForPrompt(medias: BotMediaRow[]): string {

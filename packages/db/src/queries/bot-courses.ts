@@ -2,6 +2,7 @@
  * bot-courses — catálogo de cursos por slot (multi-tenant).
  *
  * Criado em Missão 006-A. CRUD completo adicionado em 006-B.
+ * details_for_llm adicionado em feat/courses-details-for-llm (decisao #14).
  */
 import { query } from '../client.js';
 
@@ -18,6 +19,12 @@ export interface BotCourseRow {
   enabled: boolean;
   created_at: Date;
   updated_at: Date;
+  /**
+   * Texto livre com detalhes do curso para injetar no contexto do LLM.
+   * NULL para cursos criados antes da migration 034. Formatado como
+   * bullet points ou texto corrido pelo admin.
+   */
+  details_for_llm: string | null;
 }
 
 export interface CreateCourseInput {
@@ -29,6 +36,7 @@ export interface CreateCourseInput {
   duration?: string | null;
   position_order?: number;
   enabled?: boolean;
+  details_for_llm?: string | null;
 }
 
 export interface UpdateCourseInput {
@@ -38,6 +46,7 @@ export interface UpdateCourseInput {
   duration?: string | null;
   position_order?: number;
   enabled?: boolean;
+  details_for_llm?: string | null;
 }
 
 function mapRow(
@@ -61,7 +70,7 @@ function mapRow(
  */
 export async function listCoursesBySlot(slot: string): Promise<BotCourseRow[]> {
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
-    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at
+    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at, details_for_llm
      FROM bot_courses
      WHERE slot = $1
      ORDER BY position_order, id`,
@@ -75,7 +84,7 @@ export async function listCoursesBySlot(slot: string): Promise<BotCourseRow[]> {
  */
 export async function getCourseById(slot: string, id: number): Promise<BotCourseRow | null> {
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
-    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at
+    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at, details_for_llm
      FROM bot_courses
      WHERE slot = $1 AND id = $2`,
     [slot, id],
@@ -91,7 +100,7 @@ export async function getCourseBySlug(
   courseSlug: string,
 ): Promise<BotCourseRow | null> {
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
-    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at
+    `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at, details_for_llm
      FROM bot_courses
      WHERE slot = $1 AND course_slug = $2`,
     [slot, courseSlug],
@@ -105,8 +114,8 @@ export async function getCourseBySlug(
 export async function createCourse(input: CreateCourseInput): Promise<BotCourseRow> {
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
     `INSERT INTO bot_courses
-       (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+       (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
      RETURNING *`,
     [
       input.slot,
@@ -117,6 +126,7 @@ export async function createCourse(input: CreateCourseInput): Promise<BotCourseR
       input.duration ?? null,
       input.position_order ?? 0,
       input.enabled ?? true,
+      input.details_for_llm ?? null,
     ],
   );
   return mapRow(r.rows[0]);
@@ -158,6 +168,10 @@ export async function updateCourse(
   if (input.enabled !== undefined) {
     fields.push(`enabled = $${idx++}`);
     vals.push(input.enabled);
+  }
+  if (input.details_for_llm !== undefined) {
+    fields.push(`details_for_llm = $${idx++}`);
+    vals.push(input.details_for_llm);
   }
 
   if (!fields.length) return null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPrice, parseConversationState, parseMarker, sanitizar } from './vendas-utils.js';
+import { formatCoursesForPrompt, formatPrice, parseConversationState, parseMarker, sanitizar } from './vendas-utils.js';
 
 describe('parseMarker', () => {
   it('retorna null quando não há marcador', () => {
@@ -74,5 +74,67 @@ describe('sanitizar', () => {
   it('preserva linhas normais e linhas vazias', () => {
     const input = 'Linha 1\n\nLinha 2';
     expect(sanitizar(input)).toBe('Linha 1\n\nLinha 2');
+  });
+});
+
+describe('formatCoursesForPrompt', () => {
+  const BASE_COURSE = {
+    id: 1,
+    slot: 'slot-test',
+    course_slug: 'curso-presencial',
+    name: 'Curso Presencial',
+    description: null,
+    price: 150000,
+    duration: 'Presencial, 3 meses',
+    position_order: 0,
+    enabled: true,
+    created_at: new Date(),
+    updated_at: new Date(),
+    details_for_llm: null,
+  };
+
+  it('retorna fallback quando lista vazia', () => {
+    expect(formatCoursesForPrompt([])).toBe('(nenhum curso cadastrado)');
+  });
+
+  it('renderiza curso sem details_for_llm com header + slug apenas', () => {
+    const result = formatCoursesForPrompt([BASE_COURSE]);
+    expect(result).toContain('Curso Presencial (R$1500,00) Presencial, 3 meses');
+    expect(result).toContain('  Slug: curso-presencial');
+    expect(result).not.toContain('Detalhes:');
+  });
+
+  it('renderiza curso com details_for_llm incluindo bloco Detalhes', () => {
+    const course = {
+      ...BASE_COURSE,
+      details_for_llm: 'MODALIDADE: Presencial\nDURACAO: 3 meses\nINCLUI: Apostila',
+    };
+    const result = formatCoursesForPrompt([course]);
+    expect(result).toContain('Curso Presencial (R$1500,00) Presencial, 3 meses');
+    expect(result).toContain('  Slug: curso-presencial');
+    expect(result).toContain('  Detalhes:');
+    expect(result).toContain('  MODALIDADE: Presencial');
+    expect(result).toContain('  DURACAO: 3 meses');
+  });
+
+  it('omite curso desabilitado', () => {
+    const disabled = { ...BASE_COURSE, enabled: false };
+    expect(formatCoursesForPrompt([disabled])).toBe('(nenhum curso cadastrado)');
+  });
+
+  it('separa multiplos cursos com linha em branco', () => {
+    const c2 = {
+      ...BASE_COURSE,
+      id: 2,
+      course_slug: 'curso-online',
+      name: 'Curso Online',
+      price: 29700,
+      duration: 'Online, acesso vitalicio',
+    };
+    const result = formatCoursesForPrompt([BASE_COURSE, c2]);
+    const parts = result.split('\n\n');
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toContain('Curso Presencial');
+    expect(parts[1]).toContain('Curso Online');
   });
 });
