@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import auth from 'basic-auth';
 import cookieParser from 'cookie-parser';
 import express from 'express';
+import session from 'express-session';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import fetch from 'node-fetch';
@@ -26,6 +26,7 @@ const {
   MEDIA_STORAGE_DIR = path.join(__dirname, 'uploads'),
   MEDIA_PUBLIC_BASE_URL = '/uploads',
   MEDIA_UPLOAD_MAX_MB = '250',
+  SESSION_SECRET,
 } = process.env;
 
 // PG_PASS não tem default — expor senha no código é proibido (Regra 3 CLAUDE.md).
@@ -461,44 +462,108 @@ const mediaUpload = multer({
   },
 });
 
-// Parseia cookies para uso nos middlewares CSRF e outros
+// Parseia cookies para uso nos middlewares CSRF, session e outros
 app.use(cookieParser());
+
+// ── Session middleware ────────────────────────────────────────────────────────
+// Store em memória (MemoryStore padrão do express-session) — OK para single-container.
+// Se SESSION_SECRET não estiver definida, gera um segredo aleatório por processo
+// (logout automático em restart — aceitável, avisar Bruno no deploy note).
+const _sessionSecret = SESSION_SECRET || crypto.randomBytes(48).toString('hex');
+if (!SESSION_SECRET) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[boot] SESSION_SECRET nao definida — usando segredo efemero. ' +
+    'Sessoes sao invalidadas a cada restart. Defina SESSION_SECRET no .env.',
+  );
+}
+app.use(
+  session({
+    secret: _sessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    name: 'startap.sid',
+    cookie: {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: IS_PRODUCTION,
+      maxAge: 24 * 60 * 60 * 1000, // 24 horas
+    },
+  }),
+);
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Injeta (ou renova) o cookie CSRF em toda resposta — deve vir antes do authLimiter
 // para que até respostas 401 já incluam o token (front precisa dele para o próximo POST)
 app.use(setCsrfToken);
 
-// ---------- LOGOUT (antes do authLimiter e do Basic Auth) ----------
-// Retorna 401 com realm "Logout" — diferente do realm "Painel" usado na auth normal.
-// O browser descarta o cache da credencial anterior para o realm "Painel" e exibe
-// o diálogo de login novamente na próxima navegação.
-// Fica antes do authLimiter para não contabilizar como tentativa de brute-force
-// (o 401 desta rota é intencional, não é falha de autenticação).
-app.get('/api/logout', (_req, res) => {
-  res
-    .status(401)
-    .set('WWW-Authenticate', 'Basic realm="Logout", charset="UTF-8"')
-    .json({ logout: true });
+// ── POST /api/login — autenticação session-based ──────────────────────────────
+// Rota pública (antes do requireAuth). authLimiter protege contra brute-force.
+// CSRF não é exigido aqui: usuário ainda não tem cookie de sessão válido.
+app.post('/api/login', authLimiter, express.json(), (req, res) => {
+  const { username, password } = req.body ?? {};
+  if (
+    typeof username === 'string' &&
+    typeof password === 'string' &&
+    username === ADMIN_USER &&
+    password === ADMIN_PASS
+  ) {
+    // Regenera session ID após login bem-sucedido (session fixation protection).
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).json({ error: 'falha ao criar sessao' });
+      req.session.userId = 'admin';
+      req.session.loggedAt = Date.now();
+      res.json({ ok: true });
+    });
+  } else {
+    res.status(401).json({ error: 'credenciais invalidas' });
+  }
 });
 
-// Limiter de brute-force na autenticação — aplicado antes do middleware Basic Auth
-app.use(authLimiter);
+// ── POST /api/logout — encerra sessao ────────────────────────────────────────
+// CSRF exigido (usuário autenticado fazendo ação mutativa).
+app.post('/api/logout', csrfProtection, (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      // Mesmo com erro, limpa o cookie e retorna ok — usuário sai de qualquer forma.
+      // eslint-disable-next-line no-console
+      console.warn('[logout] session.destroy error:', err.message);
+    }
+    res.clearCookie('startap.sid');
+    res.json({ ok: true });
+  });
+});
 
-// Basic Auth
+// ── requireAuth — middleware de autenticação session-based ───────────────────
+// Substitui o antigo Basic Auth.
+// - Rotas excluídas: /api/login, /api/logout, /login.html, /uploads/*, /media-proxy
+// - Requisições HTML não autenticadas → redirect /login.html
+// - Requisições API não autenticadas → 401 JSON
+function requireAuth(req, res, next) {
+  if (req.session?.userId) return next();
+  const acceptsHtml = (req.get('Accept') || '').includes('text/html');
+  if (acceptsHtml) return res.redirect('/login.html');
+  return res.status(401).json({ error: 'nao autenticado' });
+}
+
+// Aplica requireAuth em todas as rotas exceto as públicas declaradas acima e estáticos
 app.use((req, res, next) => {
-  const creds = auth(req);
-  if (!creds || creds.name !== ADMIN_USER || creds.pass !== ADMIN_PASS) {
-    res.set('WWW-Authenticate', 'Basic realm="Painel"');
-    return res.status(401).send('Acesso restrito');
-  }
-  next();
+  const publicPaths = ['/api/login', '/api/logout', '/login.html'];
+  // Permite também assets sem extensão de rota (ex: /favicon.ico via static)
+  // e o endpoint de proxy de mídia (acessado pelo browser sem autenticação no fluxo normal).
+  // O requireAuth protege todas as outras rotas.
+  if (publicPaths.includes(req.path)) return next();
+  return requireAuth(req, res, next);
 });
 
 // Limiter geral de throughput em /api/* — após auth para não penalizar tentativas 401
 app.use('/api', apiLimiter);
 
-// CSRF protection em todas as rotas mutativas /api/*
-app.use('/api', csrfProtection);
+// CSRF protection em todas as rotas mutativas /api/* (exceto /api/login — pré-sessão)
+app.use('/api', (req, res, next) => {
+  if (req.path === '/login') return next(); // já tratado sem CSRF acima
+  return csrfProtection(req, res, next);
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(MEDIA_STORAGE_DIR));

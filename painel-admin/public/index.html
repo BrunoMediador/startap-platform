@@ -1927,20 +1927,18 @@ function icon(name, size = 16) {
 }
 
 /* ── logout() ───────────────────────────────────────────────────── */
-// Basic Auth não tem logout nativo — o browser cacheia a credencial até a aba
-// ser fechada ou o realm mudar.
-// Estratégia: o servidor retorna 401 com WWW-Authenticate realm="logged-out"
-// (realm diferente do realm normal "Painel"). O browser descarta o cache da
-// credencial anterior e exibe o diálogo de login novamente.
+// Session-based logout: destrói a sessão no servidor via POST /api/logout,
+// depois redireciona para /login.html.
+// CSRF token é incluído porque é uma rota mutativa e o usuário está autenticado.
 async function logout() {
   try {
-    // Chama /api/logout que devolve 401 com realm diferente — força re-auth.
-    await fetch('/api/logout', { credentials: 'include' });
-  } catch (_) { /* fetch joga exceção quando recebe 401 sem CORS issue — ok */ }
-  // Remove cookie CSRF para garantir estado limpo no próximo login.
-  document.cookie = 'csrf_token=; expires=Thu, 01 Jan 1970 00:00:01 GMT; path=/';
-  // Redireciona para raiz com query param único para evitar cache HTTP.
-  window.location.href = '/?logout=' + Date.now();
+    await fetch('/api/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-CSRF-Token': getCsrfToken() },
+    });
+  } catch (_) { /* ignora erro de rede — redireciona de qualquer forma */ }
+  window.location.href = '/login.html';
 }
 
 /* ── botAvatar() ────────────────────────────────────────────────── */
