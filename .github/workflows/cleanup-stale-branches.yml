@@ -1,0 +1,187 @@
+name: Cleanup Branches Stale (>30d)
+
+on:
+  schedule:
+    # Segunda-feira 04:00 UTC (01:00 BRT) — fora do horário comercial
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run (lista sem apagar)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: cleanup-stale-branches
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    name: Remove branches sem commit há >30d
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Identificar branches stale
+        id: identify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          CUTOFF_DATE=$(date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')
+          CUTOFF_TS=$(date -u -d '30 days ago' '+%s')
+
+          echo "Cutoff: ${CUTOFF_DATE}"
+          echo ""
+
+          STALE_BRANCHES=()
+          SKIPPED=()
+
+          while IFS=$'\t' read -r COMMIT_DATE BRANCH_REF; do
+            BRANCH="${BRANCH_REF#refs/heads/}"
+
+            BRANCH_LOWER=$(echo "${BRANCH}" | tr '[:upper:]' '[:lower:]')
+            if echo "${BRANCH_LOWER}" | grep -qE '^(main|master|develop)$|^(release|prod|infra|hotfix)/'; then
+              SKIPPED+=("${BRANCH} [protegida por nome]")
+              continue
+            fi
+
+            OPEN_PRS=$(gh pr list --head "${BRANCH}" --state open --json number --jq 'length' 2>/dev/null || echo "0")
+            if [[ "${OPEN_PRS}" -gt 0 ]]; then
+              SKIPPED+=("${BRANCH} [tem PR aberto]")
+              continue
+            fi
+
+            BRANCH_TS=$(date -u -d "${COMMIT_DATE}" '+%s' 2>/dev/null || echo "0")
+            if [[ "${BRANCH_TS}" -lt "${CUTOFF_TS}" ]]; then
+              STALE_BRANCHES+=("${BRANCH}|${COMMIT_DATE}")
+            fi
+          done < <(git for-each-ref --format='%(committerdate:iso-strict)%09%(refname)' \
+                     --sort=committerdate refs/remotes/origin/ \
+                   | grep -v 'HEAD' \
+                   | sed 's|refs/remotes/origin/|refs/heads/|')
+
+          printf '%s\n' "${STALE_BRANCHES[@]}" > /tmp/stale_branches.txt || true
+          printf '%s\n' "${SKIPPED[@]}"        > /tmp/skipped_branches.txt || true
+
+          echo "stale_count=${#STALE_BRANCHES[@]}"  >> "$GITHUB_OUTPUT"
+          echo "skipped_count=${#SKIPPED[@]}"       >> "$GITHUB_OUTPUT"
+
+          echo "=== Branches PROTEGIDAS (puladas) ==="
+          cat /tmp/skipped_branches.txt || echo "(nenhuma)"
+          echo ""
+          echo "=== Branches STALE candidatas à exclusão ==="
+          cat /tmp/stale_branches.txt | cut -d'|' -f1 || echo "(nenhuma)"
+
+      - name: Dry-run summary
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        run: |
+          echo "### DRY-RUN — nenhuma branch foi apagada" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Cutoff**: $(date -u -d '30 days ago' '+%Y-%m-%d') (30 dias atrás)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Branches stale encontradas**: ${{ steps.identify.outputs.stale_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -s /tmp/stale_branches.txt ]]; then
+            echo "| Branch | Último commit |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|--------|---------------|" >> "$GITHUB_STEP_SUMMARY"
+            while IFS='|' read -r BRANCH DATE; do
+              echo "| \`${BRANCH}\` | ${DATE} |" >> "$GITHUB_STEP_SUMMARY"
+            done < /tmp/stale_branches.txt
+          else
+            echo "_Nenhuma branch elegível para remoção._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Apagar branches stale
+        id: delete
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          DELETED=()
+          FAILED=()
+
+          if [[ ! -s /tmp/stale_branches.txt ]]; then
+            echo "Nenhuma branch stale para apagar."
+            echo "deleted_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          while IFS='|' read -r BRANCH DATE; do
+            [[ -z "${BRANCH}" ]] && continue
+            if gh api -X DELETE "repos/{owner}/{repo}/git/refs/heads/${BRANCH}" 2>/dev/null; then
+              DELETED+=("${BRANCH}|${DATE}")
+              echo "Apagada: ${BRANCH} (último commit: ${DATE})"
+            else
+              FAILED+=("${BRANCH}")
+              echo "FALHA ao apagar: ${BRANCH}" >&2
+            fi
+          done < /tmp/stale_branches.txt
+
+          echo "deleted_count=${#DELETED[@]}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "${DELETED[@]}" > /tmp/deleted_branches.txt || true
+          printf '%s\n' "${FAILED[@]}"  > /tmp/failed_branches.txt  || true
+
+      - name: Publicar resumo no Actions Summary
+        if: always()
+        run: |
+          IS_DRY=${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+
+          {
+            echo "## Cleanup Branches Stale"
+            echo ""
+            echo "- **Trigger**: \`${{ github.event_name }}\`"
+            echo "- **Cutoff**: $(date -u -d '30 days ago' '+%Y-%m-%d') (30 dias atrás)"
+            echo "- **Modo**: $([ "${IS_DRY}" = 'true' ] && echo 'DRY-RUN (sem exclusão)' || echo 'EXCLUSÃO REAL')"
+            echo ""
+
+            STALE_COUNT=${{ steps.identify.outputs.stale_count }}
+            echo "### Identificadas como stale: ${STALE_COUNT}"
+            echo ""
+
+            if [[ -s /tmp/stale_branches.txt ]]; then
+              echo "| Branch | Último commit |"
+              echo "|--------|---------------|"
+              while IFS='|' read -r B D; do
+                echo "| \`${B}\` | ${D} |"
+              done < /tmp/stale_branches.txt
+            fi
+
+            if [[ "${IS_DRY}" != 'true' ]]; then
+              DELETED_COUNT=${{ steps.delete.outputs.deleted_count || 0 }}
+              echo ""
+              echo "### Apagadas: ${DELETED_COUNT}"
+              if [[ -s /tmp/deleted_branches.txt ]]; then
+                echo "| Branch | Último commit |"
+                echo "|--------|---------------|"
+                while IFS='|' read -r B D; do
+                  echo "| \`${B}\` | ${D} |"
+                done < /tmp/deleted_branches.txt
+              fi
+
+              if [[ -s /tmp/failed_branches.txt ]]; then
+                echo ""
+                echo "### Falhas (nao apagadas):"
+                while read -r B; do
+                  echo "- \`${B}\`"
+                done < /tmp/failed_branches.txt
+              fi
+            fi
+
+            echo ""
+            echo "### Puladas (protegidas): ${{ steps.identify.outputs.skipped_count }}"
+            if [[ -s /tmp/skipped_branches.txt ]]; then
+              while read -r B; do
+                echo "- ${B}"
+              done < /tmp/skipped_branches.txt
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
