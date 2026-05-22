@@ -861,6 +861,7 @@ app.get(
         return {
           ...row,
           ...context,
+          workflow_id: context.flow_id || resolveSlotToFlowId(row.slot),
           models_in_flow: flowCounts[flowId] || 1,
           messages_today: msgBySlot[row.slot] ?? 0,
           leads_count: leadsCount,
