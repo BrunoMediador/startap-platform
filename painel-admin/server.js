@@ -583,7 +583,15 @@ app.use('/api', (req, res, next) => {
   return csrfProtection(req, res, next);
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
+}));
 app.use('/uploads', express.static(MEDIA_STORAGE_DIR));
 
 // Proxy HTTPS-friendly para midias HTTP internas (resolve mixed-content).
