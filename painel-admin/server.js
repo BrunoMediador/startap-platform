@@ -1353,6 +1353,100 @@ app.put('/api/bots/:slot/pause-keywords', async (req, res) => {
   }
 });
 
+// ---------- PAUSAS ATIVAS POR FLUXO ----------
+// flow_pauses guarda quem está pausado pra cada flow_id (matriz, clone ou bot
+// interno). Pausas vêm de comando manual (fromMe), antibot (flood) ou regra.
+// Esses endpoints permitem ao operador ver e despausar pelo painel.
+//
+// LGPD: o GET omite a coluna `session` (operador não precisa) e trunca `reason`
+// a 200 chars pra evitar vazar contexto de conversa em log/proxy. O DELETE
+// registra audit trail em stdout (log estruturado) com telefone mascarado, pra
+// rastreabilidade enquanto não existe tabela pii_access_log dedicada.
+
+function _maskPhoneForLog(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (d.length < 6) return d;
+  return d.slice(0, 4) + '***' + d.slice(-2);
+}
+
+app.get('/api/flows/pauses/summary', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT flow_id, COUNT(*)::int AS active_count
+       FROM flow_pauses
+       WHERE active = true
+       GROUP BY flow_id`,
+    );
+    const map = {};
+    for (const row of r.rows) map[row.flow_id] = row.active_count;
+    res.json(map);
+  } catch (e) {
+    console.error('[flow-pauses-summary]', e);
+    res.status(500).json({ error: 'erro ao consultar pausas' });
+  }
+});
+
+app.get('/api/flows/:flowId/pauses', async (req, res) => {
+  try {
+    const flowId = String(req.params.flowId || '').trim();
+    if (!flowId) return res.status(400).json({ error: 'flowId inválido' });
+    const includeInactive =
+      req.query.includeInactive === 'true' || req.query.includeInactive === '1';
+    const r = await pool.query(
+      `SELECT flow_id, flow_name, telefone, active, source,
+              LEFT(reason, 200) AS reason,
+              created_at, updated_at
+       FROM flow_pauses
+       WHERE flow_id = $1 ${includeInactive ? '' : 'AND active = true'}
+       ORDER BY active DESC, updated_at DESC, created_at DESC
+       LIMIT 500`,
+      [flowId],
+    );
+    res.json({ flow_id: flowId, count: r.rows.length, pauses: r.rows });
+  } catch (e) {
+    console.error('[flow-pauses-list]', e);
+    res.status(500).json({ error: 'erro ao consultar pausas' });
+  }
+});
+
+app.delete('/api/flows/:flowId/pauses/:telefone', async (req, res) => {
+  try {
+    const flowId = String(req.params.flowId || '').trim();
+    if (!flowId) return res.status(400).json({ error: 'flowId inválido' });
+    const phone = String(req.params.telefone || '').replace(/\D/g, '');
+    if (!phone) return res.status(400).json({ error: 'telefone inválido' });
+    const operator = req.session?.userId || 'unknown';
+    const r = await pool.query(
+      `UPDATE flow_pauses
+         SET active = false,
+             updated_at = NOW(),
+             reason = CASE
+               WHEN reason IS NULL OR reason = '' THEN 'despausado via painel'
+               ELSE reason || ' | despausado via painel'
+             END
+       WHERE flow_id = $1 AND telefone = $2 AND active = true
+       RETURNING flow_id, telefone, active, source,
+                 LEFT(reason, 200) AS reason, updated_at`,
+      [flowId, phone],
+    );
+    if (r.rowCount === 0) {
+      return res.status(404).json({ error: 'pausa ativa não encontrada' });
+    }
+    console.log(JSON.stringify({
+      audit: 'flow-pause-deactivated',
+      operator,
+      flow_id: flowId,
+      phone_masked: _maskPhoneForLog(phone),
+      source: r.rows[0].source,
+      at: new Date().toISOString(),
+    }));
+    res.json({ ok: true, pause: r.rows[0] });
+  } catch (e) {
+    console.error('[flow-pauses-delete]', e);
+    res.status(500).json({ error: 'erro ao despausar' });
+  }
+});
+
 // ---------- MIDIAS ----------
 app.get('/api/bots/:slot/media', async (req, res) => {
   try {
