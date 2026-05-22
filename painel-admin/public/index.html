@@ -8702,9 +8702,19 @@ function openCloneQRModal(clone) {
 
       <div id="clone-tab-pair" role="tabpanel" style="display:flex;flex-direction:column;align-items:center;gap:.75rem;width:100%">
         <div style="width:100%;max-width:300px">
-          <label class="muted" style="display:block;margin-bottom:.375rem;font-size:.8125rem">Telefone do cliente (com DDI):</label>
-          <input id="clone-pair-phone-input" type="tel" class="input" placeholder="+55 11 99999-9999"
-            style="width:100%;font-size:1rem" autocomplete="tel" inputmode="tel" />
+          <label class="muted" style="display:block;margin-bottom:.375rem;font-size:.8125rem">Contato para pareamento:</label>
+          <div style="display:flex;gap:.375rem;align-items:center">
+            <select id="clone-pair-phone-select" class="input" disabled
+              aria-label="Selecione o contato para pareamento"
+              style="width:100%;font-size:.9375rem;cursor:pointer">
+              <option value="" disabled selected>Carregando contatos…</option>
+            </select>
+            <button class="btn btn--ghost btn--icon" id="clone-pair-refresh-btn"
+              aria-label="Atualizar lista de contatos" title="Atualizar lista" disabled>
+              ${icon('refresh-cw',14)}
+            </button>
+          </div>
+          <div id="clone-pair-contacts-status" style="font-size:.75rem;margin-top:.25rem;color:var(--muted)"></div>
         </div>
         <button class="btn btn--primary" id="clone-pair-generate-btn" style="min-width:160px">
           ${icon('key',14)} Gerar código
@@ -8823,24 +8833,94 @@ function openCloneQRModal(clone) {
     });
   })();
 
+  // ── Carregar contatos da Lola e popular select ────────────────
+  async function carregarContatosLola() {
+    try {
+      const data = await api('/api/sessions/STARTAP_AI_PROD/recent-contacts?days=7');
+      return data?.contacts || [];
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function _populateContactsSelect(contacts) {
+    const sel = document.getElementById('clone-pair-phone-select');
+    const statusEl = document.getElementById('clone-pair-contacts-status');
+    const refreshBtn = document.getElementById('clone-pair-refresh-btn');
+    if (!sel) return;
+
+    if (contacts === null) {
+      // Erro na busca
+      sel.innerHTML = '<option value="" disabled selected>Falha ao carregar contatos</option>';
+      sel.disabled = true;
+      if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${icon('alert-triangle',12)} Não foi possível carregar contatos. Tente recarregar a página.</span>`;
+      if (refreshBtn) refreshBtn.disabled = false;
+      return;
+    }
+
+    if (contacts.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Nenhum contato com interação nos últimos 7 dias na sessão da Lola</option>';
+      sel.disabled = true;
+      if (statusEl) statusEl.innerHTML = '';
+      if (refreshBtn) refreshBtn.disabled = false;
+      return;
+    }
+
+    const now = Date.now();
+    sel.innerHTML = '<option value="" disabled selected>Selecione um contato da lista</option>';
+    contacts.forEach(c => {
+      const label = c.name ? `${c.name} — ${_fmtPhone(c.phone) || c.phone}` : (_fmtPhone(c.phone) || c.phone);
+      const diffMs = now - new Date(c.last_interaction).getTime();
+      const diffDays = Math.floor(diffMs / 86400000);
+      const diffLabel = diffDays === 0 ? 'hoje' : diffDays === 1 ? 'há 1 dia' : `há ${diffDays} dias`;
+      const opt = document.createElement('option');
+      opt.value = c.phone;
+      opt.textContent = `${label} — ${diffLabel}`;
+      sel.appendChild(opt);
+    });
+    sel.disabled = false;
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--muted)">${contacts.length} contato${contacts.length !== 1 ? 's' : ''} disponíve${contacts.length !== 1 ? 'is' : 'l'}</span>`;
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+
+  async function _fetchAndPopulateContacts() {
+    const sel = document.getElementById('clone-pair-phone-select');
+    const refreshBtn = document.getElementById('clone-pair-refresh-btn');
+    const statusEl = document.getElementById('clone-pair-contacts-status');
+    if (sel) { sel.innerHTML = '<option value="" disabled selected>Carregando contatos…</option>'; sel.disabled = true; }
+    if (refreshBtn) refreshBtn.disabled = true;
+    if (statusEl) statusEl.innerHTML = '';
+    const contacts = await carregarContatosLola();
+    _populateContactsSelect(contacts);
+  }
+
+  // Iniciar carregamento quando modal abre
+  _fetchAndPopulateContacts();
+
+  // Botão atualizar lista
+  document.getElementById('clone-pair-refresh-btn')?.addEventListener('click', () => {
+    _fetchAndPopulateContacts();
+  });
+
   // ── Gerar pairing code (clone) ─────────────────────────────────
   const cloneGenerateHandler = () => _gerarPairingCodeClone(cloneSessao);
   document.getElementById('clone-pair-generate-btn')?.addEventListener('click', cloneGenerateHandler);
-  document.getElementById('clone-pair-phone-input')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') cloneGenerateHandler();
-  });
 }
 
 async function _gerarPairingCodeClone(sessaoName) {
-  const input = document.getElementById('clone-pair-phone-input');
+  const sel = document.getElementById('clone-pair-phone-select');
   const resultEl = document.getElementById('clone-pair-result');
   const btn = document.getElementById('clone-pair-generate-btn');
-  if (!input || !resultEl || !btn) return;
+  if (!sel || !resultEl || !btn) return;
 
-  const raw = input.value.trim();
+  const raw = sel.value?.trim() || '';
+  if (!raw) {
+    toast('Selecione um contato da lista.', 'warning');
+    return;
+  }
   const digits = raw.replace(/\D/g, '');
   if (digits.length < 10) {
-    resultEl.innerHTML = `<p style="color:var(--danger);font-size:.8125rem">${icon('alert-triangle',14)} Telefone inválido — informe DDI + DDD + número (ex: +55 11 99999-9999).</p>`;
+    resultEl.innerHTML = `<p style="color:var(--danger);font-size:.8125rem">${icon('alert-triangle',14)} Telefone inválido — número selecionado não tem dígitos suficientes.</p>`;
     return;
   }
 
