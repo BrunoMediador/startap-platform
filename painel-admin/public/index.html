@@ -954,11 +954,25 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .link-media-row:last-child { border-bottom: none; }
 .link-media-row__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-media-row--disabled { opacity: .5; }
+
+/* ── Seção mídias do curso dentro de Editar curso (cmmgr) ── */
+.cmmgr-row {
+  display: flex; align-items: center; gap: .375rem;
+  padding: .3rem 0; border-bottom: 1px solid var(--border);
+  font-size: .8125rem;
+}
+.cmmgr-row:last-child { border-bottom: none; }
+.cmmgr-row__name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .course-table .col-course-desc,
   .course-table th.col-course-desc { display: none; }
   .link-media-row { flex-wrap: wrap; }
   .link-media-row__name { flex-basis: 100%; }
+  #course-media-mgr { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .course-table .col-course-price,
@@ -4643,8 +4657,8 @@ function _toggleMediaCardEdit(card, slot, m, parentEl, coursesArr, triggerBtn) {
     }
   });
 
-  // foca primeiro campo
-  setTimeout(() => form.querySelector('[data-field="context"]')?.focus(), 30);
+  // foca primeiro campo (title quando presente)
+  setTimeout(() => (form.querySelector('[data-field="title"]') || form.querySelector('[data-field="context"]'))?.focus(), 30);
 }
 
 
@@ -4948,6 +4962,11 @@ function openEditCourseModal(slot, c, parentEl) {
       <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
     </div>
     ${_courseFormHtml(c, true)}
+    <hr style="margin:1rem 0;border:none;border-top:1px solid var(--border)">
+    <div style="font-size:.9375rem;font-weight:600;color:var(--text);margin-bottom:.625rem">${icon('film',14)} Mídias do curso</div>
+    <div id="course-media-mgr" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;min-height:120px">
+      <div style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.8rem">${icon('loader',18)}</div>
+    </div>
   `);
 
   document.getElementById('btn-save-course').addEventListener('click', async () => {
@@ -4986,6 +5005,141 @@ function openEditCourseModal(slot, c, parentEl) {
       btn.disabled = false;
     }
   });
+
+  // Carrega e renderiza seção de mídias vinculadas ao curso
+  _renderCourseMediaMgr(slot, c.course_slug, document.getElementById('course-media-mgr'));
+}
+
+// ── _renderCourseMediaMgr — seção de mídias dentro do modal Editar curso ──
+async function _renderCourseMediaMgr(slot, courseSlug, container) {
+  if (!container) return;
+
+  async function load() {
+    container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.8rem;grid-column:1/-1">${icon('loader',18)}</div>`;
+    let allMedia, linkedMedia;
+    try {
+      const [allRes, linkedRes] = await Promise.all([
+        api(`/api/bots/${slot}/media`),
+        api(`/api/bots/${slot}/media`),
+      ]);
+      // allMedia = tudo da galeria do slot; linkedMedia = filtrado por course_slug
+      allMedia = Array.isArray(allRes) ? allRes : (allRes.media || allRes.items || []);
+      linkedMedia = allMedia.filter(m => m.course_slug === courseSlug);
+    } catch (err) {
+      container.innerHTML = `<p class="muted" style="grid-column:1/-1;font-size:.8rem">${icon('alert-triangle',13)} Erro ao carregar mídias: ${escapeHtml(err.message)}</p>`;
+      return;
+    }
+
+    const linkedIds = new Set(linkedMedia.map(m => String(m.id)));
+    const available = allMedia
+      .filter(m => !linkedIds.has(String(m.id)))
+      .sort((a, b) => {
+        const na = (a.title || a.nome || a.filename || a.original_name || '').toLowerCase();
+        const nb = (b.title || b.nome || b.filename || b.original_name || '').toLowerCase();
+        return na.localeCompare(nb, 'pt-BR');
+      });
+
+    function mediaName(m) {
+      return escapeHtml(m.title || m.nome || m.filename || m.original_name
+        || (m.url ? m.url.split('/').pop().split('?')[0] : '')
+        || `Mídia #${m.id}`);
+    }
+
+    // Coluna esquerda: vinculadas
+    const linkedHtml = linkedMedia.length
+      ? linkedMedia.map(m => `
+          <div class="cmmgr-row" data-id="${m.id}">
+            <span class="cmmgr-row__name" title="${mediaName(m)}">${mediaName(m)}</span>
+            <button class="btn btn--ghost btn--sm cmmgr-btn-remove" data-id="${m.id}" aria-label="Remover ${mediaName(m)}">${icon('x',12)} Remover</button>
+          </div>`).join('')
+      : `<p class="muted" style="font-size:.8rem;padding:.375rem 0">Nenhuma mídia vinculada.</p>`;
+
+    // Coluna direita: disponíveis com busca
+    const availableHtml = available.length
+      ? available.map(m => `
+          <div class="cmmgr-row cmmgr-row--avail" data-id="${m.id}" data-name="${mediaName(m).toLowerCase()}">
+            <span class="cmmgr-row__name" title="${mediaName(m)}">${mediaName(m)}</span>
+            <button class="btn btn--primary btn--sm cmmgr-btn-add" data-id="${m.id}" aria-label="Adicionar ${mediaName(m)}">${icon('plus',12)} Adicionar</button>
+          </div>`).join('')
+      : `<p class="muted cmmgr-empty-avail" style="font-size:.8rem;padding:.375rem 0">Ainda não tem mídia cadastrada nesse fluxo. Vá em Mídias e cadastre antes de continuar.</p>`;
+
+    container.innerHTML = `
+      <div>
+        <div style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:.375rem;text-transform:uppercase;letter-spacing:.03em">Vinculadas (${linkedMedia.length})</div>
+        <div id="cmmgr-linked">${linkedHtml}</div>
+      </div>
+      <div>
+        <div style="font-size:.75rem;font-weight:600;color:var(--text-muted);margin-bottom:.375rem;text-transform:uppercase;letter-spacing:.03em">Galeria disponível (${available.length})</div>
+        <input class="input" id="cmmgr-search" type="search" placeholder="Buscar por nome…" style="margin-bottom:.375rem;font-size:.8rem" aria-label="Buscar mídia disponível">
+        <div id="cmmgr-avail">${availableHtml}</div>
+      </div>`;
+
+    // Busca client-side
+    const searchInput = container.querySelector('#cmmgr-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const q = searchInput.value.toLowerCase().trim();
+        container.querySelectorAll('.cmmgr-row--avail').forEach(row => {
+          const n = row.dataset.name || '';
+          row.style.display = !q || n.includes(q) ? '' : 'none';
+        });
+        const emptyMsg = container.querySelector('.cmmgr-empty-avail');
+        if (emptyMsg) return;
+        const anyVisible = Array.from(container.querySelectorAll('.cmmgr-row--avail')).some(r => r.style.display !== 'none');
+        let noMatch = container.querySelector('#cmmgr-no-match');
+        if (!anyVisible && q) {
+          if (!noMatch) {
+            noMatch = document.createElement('p');
+            noMatch.id = 'cmmgr-no-match';
+            noMatch.className = 'muted';
+            noMatch.style.cssText = 'font-size:.8rem;padding:.375rem 0';
+            noMatch.textContent = 'Nenhuma mídia encontrada com esse nome.';
+            container.querySelector('#cmmgr-avail').appendChild(noMatch);
+          }
+        } else if (noMatch) {
+          noMatch.remove();
+        }
+      });
+    }
+
+    // Remover vínculo
+    container.querySelectorAll('.cmmgr-btn-remove').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await api(`/api/bots/${slot}/gallery/${btn.dataset.id}/link/${encodeURIComponent(courseSlug)}`, {
+            method: 'DELETE',
+          });
+          toast('Mídia removida do curso.', 'success');
+          await load();
+        } catch (err) {
+          toast('Erro ao remover: ' + escapeHtml(err.message), 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Adicionar vínculo
+    container.querySelectorAll('.cmmgr-btn-add').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          await api(`/api/bots/${slot}/gallery/${btn.dataset.id}/link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ course_slug: courseSlug }),
+          });
+          toast('Mídia adicionada ao curso.', 'success');
+          await load();
+        } catch (err) {
+          toast('Erro ao adicionar: ' + escapeHtml(err.message), 'danger');
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  await load();
 }
 
 function openLinkMediaModal(slot, courseSlug, medias, parentEl) {
