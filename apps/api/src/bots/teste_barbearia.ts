@@ -1,5 +1,5 @@
 import type { BotContext } from '@startap/core/types';
-import { gcal, waha } from '@startap/integrations';
+import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
   buildContextBlock,
@@ -12,8 +12,6 @@ import { BotBase } from './base.js';
 
 const SLOT = 'teste_barbearia';
 const TZ = 'America/Sao_Paulo';
-const ALERT_PHONE = '553591746797@c.us';
-const ALERT_SESSION = 'startap';
 
 /**
  * SEED inicial — em runtime o prompt vem só do banco (bot_prompt).
@@ -75,12 +73,15 @@ export class TesteBarbeariaBot extends BotBase {
     const { telefone, texto, pushName } = ctx.message;
     if (!texto.trim()) return null;
 
-    // Cancelamento
+    // Cancelamento — deteccao mantida; envio de alerta pausado (Bruno 2026-05-22).
+    // Numero 553591746797@c.us removido: nao existe mais e feature nao e vendida ao cliente.
+    // TODO: quando feature for retomada, ler bot_config.alert_destination por clone
+    //       e enviar via waha.sendText para o destino configurado (sem hardcode).
     if (texto.trim() === 'Cancelar') {
-      const alerta = `O cliente ${pushName} quer cancelar um horario, entre em contato pelo numero: ${telefone}`;
-      waha
-        .sendText({ sessao: ALERT_SESSION, chatId: ALERT_PHONE, texto: alerta, typing: false })
-        .catch((e) => this.log.warn(e, 'Falha ao enviar alerta de cancelamento'));
+      this.log.info(
+        { slot: this.slot, telefone, pushName },
+        'cancelamento detectado — feature de alerta pausada (Bruno 2026-05-22). TODO: implementar handoff pro dono do bot via bot_config.alert_destination quando feature for retomada.',
+      );
       return 'ok! vou avisar o time, e logo entraremos em contato!';
     }
 
