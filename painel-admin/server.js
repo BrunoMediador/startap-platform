@@ -5182,6 +5182,146 @@ app.post('/api/sessions/:name/pairing-code', async (req, res) => {
   }
 });
 
+// GET /api/sessions/:name/recent-contacts?days=7
+// Lista contatos individuais (sem grupos) que interagiram com a sessao
+// nos ultimos N dias, ordenados por interacao mais recente.
+// Sem cache — bate no WAHA fresh a cada chamada (on-demand pelo frontend).
+app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
+  const { name } = req.params;
+
+  // Valida :name — apenas alfanumerico + _ e -
+  if (!name || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+    return res.status(400).json({ error: 'name invalido' });
+  }
+
+  // Valida ?days — default 7, max 30, inteiro positivo
+  const rawDays = req.query.days !== undefined ? Number(req.query.days) : 7;
+  if (!Number.isFinite(rawDays) || rawDays < 1 || rawDays > 30 || !Number.isInteger(rawDays)) {
+    return res.status(400).json({ error: 'days deve ser inteiro entre 1 e 30' });
+  }
+  const days = rawDays;
+
+  const TIMEOUT_MS = 8_000;
+  const ENRICH_LIMIT = 30; // maximo de chats que tentamos buscar pushName
+  const RESPONSE_LIMIT = 100;
+
+  try {
+    // 1. Busca lista de chats da sessao no WAHA
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    let chatsRaw;
+    try {
+      const r = await fetch(`${WAHA_URL}/api/${name}/chats`, {
+        headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        console.log(`[recent-contacts] WAHA /chats ${name} -> ${r.status}: ${body?.message ?? ''}`);
+        return res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+      }
+      chatsRaw = await r.json().catch(() => []);
+    } catch (fetchErr) {
+      clearTimeout(timer);
+      const isTimeout = fetchErr.name === 'AbortError';
+      console.log(`[recent-contacts] WAHA /chats ${name} -> ${isTimeout ? 'timeout' : fetchErr.message}`);
+      return res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+    }
+
+    if (!Array.isArray(chatsRaw)) chatsRaw = [];
+
+    // 2. Calcula corte de tempo (seconds epoch)
+    const nowSec = Math.floor(Date.now() / 1000);
+    const cutoffSec = nowSec - days * 86400;
+
+    // 3. Filtra: apenas individuais (@s.whatsapp.net ou @c.us), dentro da janela
+    const filtered = chatsRaw.filter((chat) => {
+      const id = chat?.id ?? '';
+      // Exclui grupos
+      if (id.endsWith('@g.us')) return false;
+      // Aceita apenas contatos individuais
+      if (!id.endsWith('@s.whatsapp.net') && !id.endsWith('@c.us')) return false;
+
+      // conversationTimestamp pode vir em segundos ou ms
+      let ts = chat?.conversationTimestamp ?? chat?.timestamp ?? 0;
+      // Normaliza: se ts > 1e12 assume milissegundos
+      if (ts > 1e12) ts = Math.floor(ts / 1000);
+      return ts >= cutoffSec;
+    });
+
+    // 4. Extrai telefone limpo e timestamp normalizado
+    const mapped = filtered.map((chat) => {
+      const id = chat?.id ?? '';
+      const phone = id.replace(/@s\.whatsapp\.net$|@c\.us$/, '');
+      let ts = chat?.conversationTimestamp ?? chat?.timestamp ?? 0;
+      if (ts > 1e12) ts = Math.floor(ts / 1000);
+      return { phone, chatId: id, ts, name: chat?.name ?? null };
+    });
+
+    // 5. Ordena por ts DESC
+    mapped.sort((a, b) => b.ts - a.ts);
+
+    // 6. Limita a RESPONSE_LIMIT antes de enriquecer
+    const limited = mapped.slice(0, RESPONSE_LIMIT);
+
+    // 7. Tenta enriquecer com pushName para os primeiros ENRICH_LIMIT chats
+    //    Usa GET /api/{name}/chats/{chatId} — endpoint WAHA Plus para metadata do chat.
+    //    Se falhar (404, erro, timeout), cai para name: null sem derrubar a resposta.
+    const enrichBatch = limited.slice(0, ENRICH_LIMIT);
+    const enrichResults = await Promise.allSettled(
+      enrichBatch.map(async (item) => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3_000);
+        try {
+          const r = await fetch(
+            `${WAHA_URL}/api/${name}/chats/${encodeURIComponent(item.chatId)}`,
+            {
+              headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+              signal: ctrl.signal,
+            },
+          );
+          clearTimeout(t);
+          if (!r.ok) return null;
+          const data = await r.json().catch(() => null);
+          // WAHA Plus retorna { name, id, ... } ou { pushName, ... }
+          return data?.name ?? data?.pushName ?? null;
+        } catch {
+          clearTimeout(t);
+          return null;
+        }
+      }),
+    );
+
+    // 8. Monta response final
+    const contacts = limited.map((item, idx) => {
+      let resolvedName = item.name; // nome que ja veio no /chats (pushName inline)
+      if (idx < ENRICH_LIMIT) {
+        const settled = enrichResults[idx];
+        if (settled?.status === 'fulfilled' && settled.value) {
+          resolvedName = settled.value;
+        }
+      }
+      return {
+        phone: item.phone,
+        name: resolvedName ?? null,
+        last_interaction: new Date(item.ts * 1000).toISOString(),
+      };
+    });
+
+    res.json({
+      session: name,
+      days,
+      count: contacts.length,
+      contacts,
+    });
+  } catch (e) {
+    console.error(`[recent-contacts] erro inesperado ${name}:`, e.message);
+    res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+  }
+});
+
 // ---------- ADMIN: CLEANUP MANUAL ----------
 // Lógica inline: replica runCleanupChat usando o pool local do painel.
 // Mantém em sync com apps/worker/src/jobs/cleanup-chat.ts — qualquer mudança
