@@ -1,15 +1,21 @@
 /**
- * per-clone.ts — resolve o GoogleCalendarClient correto para um slot de clone.
+ * per-clone.ts — resolve o GoogleCalendarClient correto para um slot (clone ou matriz).
  *
- * Por que existe: cada clone tem Service Account própria gravada em flow_clones.
- * Este helper faz o lookup SOMENTE em flow_clones e retorna o client já bound ao
- * calendarId correto, ou null quando o clone ainda não tem gcal configurado.
+ * REGRA DE ROTEAMENTO (dois caminhos distintos):
  *
- * ISOLAMENTO: NÃO há fallback para bot_config (matriz). Se o clone não tiver
- * gcal_status='active' + gcal_credentials_json + gcal_calendar_id em flow_clones,
- * retorna null. Isso evita que clones sem GCal próprio usem silenciosamente a
- * agenda da matriz (vazamento cross-tenant). Callers já tratam null retornando
- * mensagem de erro ao usuário (ver teste_barbearia.ts e teste_vendas_barbearia.ts).
+ * 1. CLONES (slot começa com "clone_"):
+ *    Lookup SOMENTE em flow_clones. Se não achar gcal_status='active' +
+ *    gcal_credentials_json + gcal_calendar_id, retorna null.
+ *    SEM fallback para bot_config — evita que clone sem GCal próprio use
+ *    silenciosamente a agenda da matriz (vazamento cross-tenant inaceitável).
+ *    Cirilo e Ricardo continuam isolados.
+ *
+ * 2. MATRIZES / BOTS INTERNOS (slot NÃO começa com "clone_"):
+ *    Lookup em bot_config WHERE slot=$1. Matrizes (teste_barbearia,
+ *    teste_vendas_barbearia, etc.) e bots internos (startap) têm GCal
+ *    configurado diretamente nessa tabela. Não há risco cross-tenant porque
+ *    bot_config é keyed por slot — não existe "outra fonte" que vaze.
+ *    Se gcal_status != 'active' ou creds ausentes, retorna null normalmente.
  *
  * Cache em memória de 5 minutos por slot evita SELECT a cada turno de chat.
  * Invalidação acontece quando recebemos erro 401/403 do Google (ver invalidateGcalCache).
@@ -35,14 +41,12 @@ interface GcalRow {
 }
 
 /**
- * Retorna GoogleCalendarClient bound ao slot do clone, ou null se:
- * - O slot não existe em flow_clones.
- * - gcal_status != 'active'.
- * - gcal_credentials_json ou gcal_calendar_id estão ausentes.
+ * Retorna GoogleCalendarClient bound ao slot, ou null se GCal não configurado.
  *
- * NUNCA faz fallback para bot_config (matriz): cada clone deve ter suas próprias
- * credenciais GCal. Sem isso, clones sem GCal próprio usariam silenciosamente a
- * agenda da matriz — vazamento cross-tenant inaceitável.
+ * - Clones (slot começa com "clone_"): busca em flow_clones. Sem fallback.
+ * - Matrizes/bots internos (demais slots): busca em bot_config.
+ *
+ * Retorna null se gcal_status != 'active' ou creds ausentes (em qualquer caminho).
  */
 export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient | null> {
   const now = Date.now();
@@ -51,16 +55,33 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
     return cached.client;
   }
 
-  // Lookup exclusivo em flow_clones — sem fallback para bot_config.
-  const result = await query<GcalRow>(
-    `SELECT gcal_credentials_json, gcal_calendar_id, gcal_status
-     FROM flow_clones
-     WHERE slot = $1
-     LIMIT 1`,
-    [slot],
-  );
+  const isClone = slot.startsWith('clone_');
 
-  const row = result.rows[0];
+  let row: GcalRow | undefined;
+
+  if (isClone) {
+    // Clones: lookup exclusivo em flow_clones — sem fallback para bot_config.
+    // Garante isolamento: clone sem GCal próprio nunca usa agenda da matriz.
+    const result = await query<GcalRow>(
+      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_status
+       FROM flow_clones
+       WHERE slot = $1
+       LIMIT 1`,
+      [slot],
+    );
+    row = result.rows[0];
+  } else {
+    // Matrizes e bots internos: lookup em bot_config.
+    // Não há risco cross-tenant — bot_config é keyed por slot único.
+    const result = await query<GcalRow>(
+      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_status
+       FROM bot_config
+       WHERE slot = $1
+       LIMIT 1`,
+      [slot],
+    );
+    row = result.rows[0];
+  }
 
   if (!row || row.gcal_status !== 'active' || !row.gcal_credentials_json || !row.gcal_calendar_id) {
     cache.set(slot, { client: null, expiresAt: now + CACHE_TTL_MS });
