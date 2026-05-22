@@ -4736,7 +4736,6 @@ async function renderBotCourses(slot, el) {
               <button class="btn btn--ghost btn--sm btn--icon js-course-menu-toggle" aria-label="Ações" title="Ações">${icon('more-horizontal',14)}</button>
               <div class="media-actions-menu" data-menu-id="c-${c.id}">
                 <button class="js-course-edit" data-id="${c.id}">${icon('edit-2',13)} Editar</button>
-                <button class="js-course-galeria btn--ghost" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('image',13)} Galeria</button>
                 <button class="js-course-del danger" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" data-name="${escapeHtml(c.name)}">${icon('trash-2',13)} Excluir</button>
               </div>
             </div>
@@ -4779,15 +4778,6 @@ async function renderBotCourses(slot, el) {
         const id = btn.dataset.id;
         const c = courses.find(x => String(x.id) === String(id));
         if (c) openEditCourseModal(slot, c, el);
-      });
-    });
-
-    // galeria inline
-    el.querySelectorAll('.js-course-galeria').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
-        _galOpenCoursePanel(slot, btn.dataset.slug, el);
       });
     });
 
@@ -10051,8 +10041,6 @@ function mountCleanupCountdown() {
   let _replaceId = null;
   let _activeKebab = null;
   let _uploadQueue = [];
-  let _courseMediaState = {}; // { [slug]: { selected: Set<id>, introId: id|null } }
-
   // ─── Helpers de modal ───────────────────────────────────────────
   function openModal(id) {
     const el = document.getElementById(id);
@@ -10630,175 +10618,6 @@ function mountCleanupCountdown() {
       extraBtn.onclick = () => { closeModal('gal-modal-confirm'); onExtra(); };
     }
     openModal('gal-modal-confirm');
-  }
-
-  // ─── Monkey-patch renderBotCourses: painel multi-select de galeria ──
-  // Aguarda renderBotCourses existir (é definida antes no mesmo arquivo)
-  // Patch _patchRenderBotCourses removido: botão "Galeria" agora está diretamente
-  // no menu três pontinhos como .js-course-galeria (PR fix/painel-curso-midia-completar).
-  // O listener de .js-course-galeria está em renderBotCourses junto com os outros listeners.
-
-  // ─── Painel inline multi-select de galeria p/ curso ─────────────
-  async function _galOpenCoursePanel(slot, slug, tableEl) {
-    // Fecha painel se já aberto para este slug
-    const existing = tableEl.querySelector('#course-gal-panel-' + CSS.escape(slug));
-    if (existing) { existing.remove(); return; }
-
-    // Fecha outros painéis abertos
-    tableEl.querySelectorAll('[id^="course-gal-panel-"]').forEach(p => p.remove());
-
-    const row = tableEl.querySelector(`tr[data-slug="${CSS.escape(slug)}"]`);
-    if (!row) return;
-
-    const panel = document.createElement('tr');
-    panel.id = 'course-gal-panel-' + slug;
-    panel.innerHTML = `<td colspan="7" style="padding:.75rem 1.25rem;background:var(--surface-2,var(--bg-3))">
-      <div id="cgp-inner-${escapeHtml(slug)}" style="min-height:80px;display:flex;align-items:center;justify-content:center">${icon('loader',20)}</div>
-      <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem">
-        <button class="btn btn--sm" id="cgp-cancel-${escapeHtml(slug)}">${icon('x',12)} Cancelar</button>
-        <button class="btn btn--primary btn--sm" id="cgp-save-${escapeHtml(slug)}">${icon('save',12)} Salvar</button>
-      </div>
-    </td>`;
-    row.parentNode.insertBefore(panel, row.nextSibling);
-
-    document.getElementById('cgp-cancel-' + slug)?.addEventListener('click', () => panel.remove());
-    document.getElementById('cgp-save-' + slug)?.addEventListener('click', () => _galSaveCourseMedia(slot, slug, panel));
-
-    // Inicializa estado
-    if (!_courseMediaState[slug]) _courseMediaState[slug] = { selected: new Set(), introId: null };
-
-    await _galRenderCoursePanel(slot, slug, document.getElementById('cgp-inner-' + slug));
-  }
-
-  async function _galRenderCoursePanel(slot, slug, innerEl) {
-    if (!innerEl) return;
-    try {
-      // Carrega galeria (usa cache _media se disponível e do mesmo slot)
-      let allMedia = _media.length && _slot === slot ? _media : [];
-      if (!allMedia.length) {
-        const data = await api(`/api/bots/${encodeURIComponent(slot)}/gallery`);
-        allMedia = Array.isArray(data) ? data : [];
-        if (_slot === slot) _media = allMedia;
-      }
-      // Carrega mídias já vinculadas ao curso
-      const mediasRes = await api(`/api/bots/${slot}/media`);
-      const allBotMedia = Array.isArray(mediasRes) ? mediasRes : (mediasRes.media || mediasRes.items || []);
-      const linked = allBotMedia.filter(m => m.course_slug === slug);
-      const linkedIds = new Set(linked.map(m => String(m.id)));
-      const introMedia = linked.find(m => m.is_course_intro === true || m.is_course_intro === 1);
-
-      const state = _courseMediaState[slug];
-      // Inicializa seleção com os já vinculados
-      if (state.selected.size === 0 && linkedIds.size > 0) {
-        linkedIds.forEach(id => state.selected.add(id));
-        state.introId = introMedia ? String(introMedia.id) : null;
-      }
-
-      _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
-    } catch(err) {
-      innerEl.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar: ${escapeHtml(err.message)}</p>`;
-    }
-  }
-
-  function _galRenderCoursePanelContent(allMedia, slug, innerEl, state) {
-    const sel = Array.from(state.selected);
-    const avail = allMedia.filter(m => !state.selected.has(String(m.id)));
-    const selMedia = allMedia.filter(m => state.selected.has(String(m.id)));
-
-    function mediaRow(m, isSel) {
-      const id = String(m.id);
-      const isIntro = state.introId === id;
-      const title = escapeHtml(m.title || m.file_name || ('Mídia #' + m.id));
-      const typeIcon = (m.mime_type||'').startsWith('video') ? icon('film',11) : icon('image',11);
-      const thumbHtml = (m.mime_type||'').startsWith('image') && m.url
-        ? `<img class="gal-thumb-mini" src="${escapeHtml(m.url)}" alt="${title}" loading="lazy"/>`
-        : `<div class="gal-thumb-mini">${typeIcon}</div>`;
-      const cbHtml = `<div class="gal-cb${isSel?' gal-cb--checked':''}" aria-label="${isSel?'Remover':'Adicionar'}">${isSel?icon('check',9):''}</div>`;
-      const starHtml = isSel ? `<button class="star-btn-v2 ${isIntro?'star-btn-v2--active':'star-btn-v2--inactive'}" data-media-id="${id}" title="${isIntro?'Apresentação do curso':'Definir como apresentação'}">${icon('star',13)}</button>` : '';
-      return `<div class="course-media-mli ${isSel?'course-media-mli--sel':'course-media-mli--avail'}" data-media-id="${id}" data-is-sel="${isSel?'1':'0'}" role="checkbox" aria-checked="${isSel}" tabindex="0">
-        ${cbHtml}${thumbHtml}
-        <span style="font-size:.8125rem;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</span>
-        <span style="font-size:.6875rem;color:var(--text-muted)">${_fmtSize(m.file_size||0)}</span>
-        ${starHtml}
-      </div>`;
-    }
-
-    const selHtml = selMedia.length
-      ? selMedia.map(m => mediaRow(m, true)).join('')
-      : `<p class="muted" style="padding:.5rem .75rem;font-size:.75rem">Nenhuma mídia selecionada.</p>`;
-    const availHtml = avail.length
-      ? avail.map(m => mediaRow(m, false)).join('')
-      : `<p class="muted" style="padding:.5rem .75rem;font-size:.75rem">Todas as mídias já estão selecionadas.</p>`;
-
-    innerEl.innerHTML = `
-      <div style="border:1px solid var(--border);border-radius:.5rem;overflow:hidden">
-        <div class="gal-subheader">Selecionadas (${selMedia.length})</div>
-        <div id="cgp-sel-${escapeHtml(slug)}">${selHtml}</div>
-        <div class="gal-subheader">Disponíveis (${avail.length})</div>
-        <div id="cgp-avail-${escapeHtml(slug)}">${availHtml}</div>
-      </div>`;
-
-    // Wire clicks (toggle seleção) e star (intro)
-    innerEl.querySelectorAll('.course-media-mli').forEach(row => {
-      row.addEventListener('click', (e) => {
-        const mediaId = row.dataset.mediaId;
-        const isSel = row.dataset.isSel === '1';
-        if (e.target.closest('.star-btn-v2')) return; // Tratado separadamente
-        if (isSel) {
-          state.selected.delete(mediaId);
-          if (state.introId === mediaId) state.introId = null;
-        } else {
-          state.selected.add(mediaId);
-        }
-        _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
-      });
-      row.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
-      });
-    });
-
-    innerEl.querySelectorAll('.star-btn-v2').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const mediaId = btn.dataset.mediaId;
-        if (state.introId === mediaId) {
-          // Clicou na estrela ativa: aviso antes de remover
-          _galConfirm({
-            title: 'Remover vídeo de apresentação?',
-            body: 'O curso ficará sem vídeo de apresentação. Deseja continuar?',
-            okLabel: 'Remover',
-            onOk: () => {
-              state.introId = null;
-              _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
-            }
-          });
-        } else {
-          state.introId = mediaId;
-          _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
-        }
-      });
-    });
-  }
-
-  async function _galSaveCourseMedia(slot, slug, panelRow) {
-    const state = _courseMediaState[slug];
-    if (!state) return;
-    const mediaIds = Array.from(state.selected).map(Number).filter(Boolean);
-    const introMediaId = state.introId ? Number(state.introId) : null;
-    try {
-      await api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(slug)}/media`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ media_ids: mediaIds, intro_media_id: introMediaId }),
-      });
-      panelRow.remove();
-      delete _courseMediaState[slug];
-      toast('Mídias do curso atualizadas.', 'success');
-      // Recarrega galeria para atualizar course_count
-      await _galLoad(slot);
-    } catch(err) {
-      toast('Erro ao salvar mídias: ' + err.message, 'danger');
-    }
   }
 
   // ─── Expor API pública ───────────────────────────────────────────
