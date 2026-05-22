@@ -8239,21 +8239,8 @@ function loadCloneConfigTab(tab, clone) {
         </div>`;
 
       content.querySelector('#cfg-reconect-btn').addEventListener('click', () => {
-        const qrArea = content.querySelector('#cfg-sessao-qr');
-        qrArea.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR...</p></div>`;
-        _activeQRPoll && clearInterval(_activeQRPoll);
-        _activeQRPoll = null;
-        pollQR(sessao, (data) => {
-          if (data.connected || data.qr === null) {
-            if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
-            qrArea.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 40)}<div style="font-weight:600">Conectado!</div></div>`;
-            toast('WhatsApp reconectado!', 'success');
-            clone.status = 'conectado';
-            _rendered['bots'] = false;
-          } else if (data.qr) {
-            qrArea.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
-          }
-        });
+        closeModal();
+        openCloneQRModal(clone);
       });
 
       content.querySelector('#cfg-disconnect-btn').addEventListener('click', async () => {
@@ -8696,15 +8683,15 @@ function openCloneQRModal(clone) {
     </div>
     <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:.5rem 0">
       <div class="auth-seg" role="tablist" aria-label="Método de autenticação">
-        <button class="auth-seg__btn active" id="clone-seg-qr-btn" role="tab" aria-selected="true" aria-controls="clone-tab-qr">
+        <button class="auth-seg__btn" id="clone-seg-qr-btn" role="tab" aria-selected="false" aria-controls="clone-tab-qr">
           ${icon('qr-code',13)} QR Code
         </button>
-        <button class="auth-seg__btn" id="clone-seg-pair-btn" role="tab" aria-selected="false" aria-controls="clone-tab-pair">
+        <button class="auth-seg__btn active" id="clone-seg-pair-btn" role="tab" aria-selected="true" aria-controls="clone-tab-pair">
           ${icon('smartphone',13)} Código de pareamento
         </button>
       </div>
 
-      <div id="clone-tab-qr" role="tabpanel" style="display:flex;flex-direction:column;align-items:center;width:100%">
+      <div id="clone-tab-qr" role="tabpanel" style="display:none;flex-direction:column;align-items:center;width:100%">
         <div id="standalone-qr-area" style="padding:.5rem 0;width:100%;display:flex;justify-content:center">
           <div class="qr-wrap">
             <div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div>
@@ -8713,7 +8700,7 @@ function openCloneQRModal(clone) {
         </div>
       </div>
 
-      <div id="clone-tab-pair" role="tabpanel" style="display:none;flex-direction:column;align-items:center;gap:.75rem;width:100%">
+      <div id="clone-tab-pair" role="tabpanel" style="display:flex;flex-direction:column;align-items:center;gap:.75rem;width:100%">
         <div style="width:100%;max-width:300px">
           <label class="muted" style="display:block;margin-bottom:.375rem;font-size:.8125rem">Telefone do cliente (com DDI):</label>
           <input id="clone-pair-phone-input" type="tel" class="input" placeholder="+55 11 99999-9999"
@@ -8727,23 +8714,6 @@ function openCloneQRModal(clone) {
     </div>`);
 
   document.getElementById('modal-content').classList.add('modal--lg');
-
-  // ── QR polling ─────────────────────────────────────────────────
-  pollQR(cloneSessao, (data) => {
-    const area = document.getElementById('standalone-qr-area');
-    if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
-    if (data.connected || data.qr === null) {
-      if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
-      area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">WhatsApp conectado!</div><button class="btn btn--primary" onclick="closeModal();renderBots()">Concluir</button></div>`;
-      toast('WhatsApp conectado!', 'success');
-      clone.status = 'conectado';
-      _rendered['bots'] = false;
-    } else if (data.qr) {
-      area.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
-    } else if (data.error) {
-      area.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>`;
-    }
-  });
 
   // ── Toggle de abas ─────────────────────────────────────────────
   document.getElementById('clone-seg-qr-btn')?.addEventListener('click', () => {
@@ -8763,6 +8733,95 @@ function openCloneQRModal(clone) {
     document.getElementById('clone-tab-pair').style.display = 'flex';
     document.getElementById('clone-tab-qr').style.display = 'none';
   });
+
+  // ── Auto-restart se FAILED/STOPPED + gate de status ──────────
+  const pairBtn = document.getElementById('clone-pair-generate-btn');
+  if (pairBtn) pairBtn.disabled = true;
+
+  (async () => {
+    let statusData;
+    try {
+      statusData = await api(`/api/sessions/${encodeURIComponent(cloneSessao)}/status`);
+    } catch (err) {
+      toast('Não foi possível verificar status da sessão. Tente reconectar manualmente.', 'danger');
+      if (pairBtn) pairBtn.disabled = false;
+      return;
+    }
+
+    const st = statusData?.status;
+
+    if (st === 'WORKING') {
+      // Já conectada — não deve estar neste ramo, mas cobre borda
+      const area = document.getElementById('standalone-qr-area');
+      if (area) area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">Sessão já conectada</div><p class="muted">Desconecte primeiro para reautenticar.</p></div>`;
+      const pairResult = document.getElementById('clone-pair-result');
+      if (pairResult) pairResult.innerHTML = `<p style="color:var(--warning);font-size:.8125rem;text-align:center">${icon('info',14)} Sessão já conectada — desconecte primeiro para reautenticar.</p>`;
+      return;
+    }
+
+    if (st === 'FAILED' || st === 'STOPPED') {
+      // Mostrar overlay de restart no QR area e no pair result
+      const area = document.getElementById('standalone-qr-area');
+      const pairResult = document.getElementById('clone-pair-result');
+      const restartMsg = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Reiniciando sessão... (pode levar até 15s)</p></div>`;
+      if (area) area.innerHTML = restartMsg;
+      if (pairResult) pairResult.innerHTML = `<p class="muted" style="font-size:.8125rem;text-align:center">${icon('loader',14)} Reiniciando sessão...</p>`;
+
+      try {
+        await api(`/api/sessions/${encodeURIComponent(cloneSessao)}/restart`, { method: 'POST' });
+      } catch (err) {
+        const msg = err.status === 502
+          ? 'Serviço WAHA indisponível. Aguarde alguns segundos e tente novamente.'
+          : (err.message || 'Erro ao reiniciar sessão.');
+        toast(msg, 'danger');
+        if (area) area.innerHTML = `<p class="muted" style="color:var(--danger);text-align:center">${icon('alert-triangle',14)} ${escapeHtml(msg)}</p>`;
+        if (pairResult) pairResult.innerHTML = '';
+        if (pairBtn) pairBtn.disabled = false;
+        // Ainda exibe o modal para o operador tentar novamente
+        return;
+      }
+
+      // Poll até SCAN_QR_CODE ou timeout 20s
+      const deadline = Date.now() + 20000;
+      await new Promise((resolve) => {
+        const ticker = setInterval(async () => {
+          try {
+            const s = await api(`/api/sessions/${encodeURIComponent(cloneSessao)}/status`);
+            if (s?.status === 'SCAN_QR_CODE' || s?.status === 'STARTING' || Date.now() >= deadline) {
+              clearInterval(ticker);
+              resolve();
+            }
+          } catch (_) {
+            if (Date.now() >= deadline) { clearInterval(ticker); resolve(); }
+          }
+        }, 1500);
+      });
+
+      // Limpar overlay
+      if (area) area.innerHTML = `<div class="qr-wrap"><div class="skeleton-block" style="width:200px;height:200px;border-radius:var(--radius-md)"></div><p class="muted">Carregando QR Code...</p></div>`;
+      if (pairResult) pairResult.innerHTML = '';
+    }
+
+    // Sessão pronta (SCAN_QR_CODE, STARTING ou outro estado não-bloqueante)
+    if (pairBtn) pairBtn.disabled = false;
+
+    // ── QR polling ──────────────────────────────────────────────
+    pollQR(cloneSessao, (data) => {
+      const area = document.getElementById('standalone-qr-area');
+      if (!area) { if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; } return; }
+      if (data.connected || data.qr === null) {
+        if (_activeQRPoll) { clearInterval(_activeQRPoll); _activeQRPoll = null; }
+        area.innerHTML = `<div class="qr-connected">${icon('check-circle-2', 48)}<div style="font-weight:700">WhatsApp conectado!</div><button class="btn btn--primary" onclick="closeModal();renderBots()">Concluir</button></div>`;
+        toast('WhatsApp conectado!', 'success');
+        clone.status = 'conectado';
+        _rendered['bots'] = false;
+      } else if (data.qr) {
+        area.innerHTML = `<div class="qr-wrap"><img src="${data.qr}" alt="QR Code" /><p class="muted" style="font-size:.8125rem">Escaneie no WhatsApp do cliente</p></div>`;
+      } else if (data.error) {
+        area.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(data.error)}</p>`;
+      }
+    });
+  })();
 
   // ── Gerar pairing code (clone) ─────────────────────────────────
   const cloneGenerateHandler = () => _gerarPairingCodeClone(cloneSessao);
@@ -8786,8 +8845,51 @@ async function _gerarPairingCodeClone(sessaoName) {
   }
 
   btn.disabled = true;
-  btn.innerHTML = `${icon('loader',14)} Gerando...`;
+  btn.innerHTML = `${icon('loader',14)} Verificando sessão...`;
   resultEl.innerHTML = `<div class="skeleton-block" style="height:64px;border-radius:var(--radius-md)"></div>`;
+
+  // Gate: se sessão saiu de SCAN_QR_CODE desde que o modal abriu, restart + retry
+  try {
+    const statusCheck = await api(`/api/sessions/${encodeURIComponent(sessaoName)}/status`);
+    const currentSt = statusCheck?.status;
+    if (currentSt === 'WORKING') {
+      resultEl.innerHTML = `<p style="color:var(--warning);font-size:.8125rem;text-align:center">${icon('info',14)} Sessão já conectada — desconecte primeiro para reautenticar.</p>`;
+      btn.disabled = false;
+      btn.innerHTML = `${icon('key',14)} Gerar código`;
+      return;
+    }
+    if (currentSt === 'FAILED' || currentSt === 'STOPPED') {
+      resultEl.innerHTML = `<p class="muted" style="font-size:.8125rem;text-align:center">${icon('loader',14)} Reiniciando sessão... (pode levar até 15s)</p>`;
+      try {
+        await api(`/api/sessions/${encodeURIComponent(sessaoName)}/restart`, { method: 'POST' });
+        const deadline2 = Date.now() + 20000;
+        await new Promise((resolve) => {
+          const ticker = setInterval(async () => {
+            try {
+              const s = await api(`/api/sessions/${encodeURIComponent(sessaoName)}/status`);
+              if (s?.status === 'SCAN_QR_CODE' || s?.status === 'STARTING' || Date.now() >= deadline2) {
+                clearInterval(ticker); resolve();
+              }
+            } catch (_) { if (Date.now() >= deadline2) { clearInterval(ticker); resolve(); } }
+          }, 1500);
+        });
+        resultEl.innerHTML = '';
+      } catch (restartErr) {
+        const restartMsg = restartErr.status === 502
+          ? 'Serviço WAHA indisponível. Aguarde e tente novamente.'
+          : (restartErr.message || 'Erro ao reiniciar sessão.');
+        toast(restartMsg, 'danger');
+        resultEl.innerHTML = `<p style="color:var(--danger);font-size:.8125rem;text-align:center">${icon('alert-triangle',14)} ${escapeHtml(restartMsg)}</p>`;
+        btn.disabled = false;
+        btn.innerHTML = `${icon('key',14)} Gerar código`;
+        return;
+      }
+    }
+  } catch (statusErr) {
+    // Falha no check de status: continua tentando gerar o código
+  }
+
+  btn.innerHTML = `${icon('loader',14)} Gerando...`;
 
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(sessaoName)}/pairing-code`, {
