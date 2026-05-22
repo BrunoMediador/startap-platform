@@ -1451,14 +1451,15 @@ app.delete('/api/flows/:flowId/pauses/:telefone', async (req, res) => {
 app.get('/api/bots/:slot/media', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, slot, position, media_type, url, caption, context, position_order, enabled,
+      `SELECT id, slot, position, title, media_type, url, caption, context, position_order, enabled,
               course_slug, is_course_intro, updated_at
        FROM bot_media WHERE slot = $1 ORDER BY position_order, id`,
       [req.params.slot],
     );
     res.json(r.rows);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[media-get]', e);
+    res.status(500).json({ error: 'erro ao listar midias' });
   }
 });
 
@@ -1466,6 +1467,7 @@ app.post('/api/bots/:slot/media', async (req, res) => {
   try {
     const {
       position,
+      title = null,
       media_type = 'image',
       url = null,
       caption = null,
@@ -1478,12 +1480,19 @@ app.post('/api/bots/:slot/media', async (req, res) => {
         error:
           'url obrigatoria: faca upload antes via POST /api/uploads/media e passe o campo url retornado',
       });
+    if (title !== null && title !== undefined) {
+      if (typeof title !== 'string') return res.status(400).json({ error: 'title deve ser string' });
+      if (title.length > 200) return res.status(400).json({ error: 'title excede 200 caracteres' });
+    }
     // position nao fornecido: usa timestamp como chave unica
     const pos = position || `media_${Date.now()}`;
+    // title nao fornecido: usa position como fallback legivel
+    const effectiveTitle = (title !== null && title !== undefined) ? title.trim() || null : pos;
     const r = await pool.query(
-      `INSERT INTO bot_media (slot, position, media_type, url, caption, context, position_order, enabled, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      `INSERT INTO bot_media (slot, position, title, media_type, url, caption, context, position_order, enabled, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
        ON CONFLICT (slot, position) DO UPDATE SET
+         title = COALESCE(EXCLUDED.title, bot_media.title),
          media_type = EXCLUDED.media_type,
          url = EXCLUDED.url,
          caption = EXCLUDED.caption,
@@ -1495,6 +1504,7 @@ app.post('/api/bots/:slot/media', async (req, res) => {
       [
         req.params.slot,
         pos,
+        effectiveTitle,
         media_type,
         url,
         caption,
@@ -1505,7 +1515,8 @@ app.post('/api/bots/:slot/media', async (req, res) => {
     );
     res.json(r.rows[0]);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[media-post]', e);
+    res.status(500).json({ error: 'erro ao criar midia' });
   }
 });
 
@@ -1514,7 +1525,13 @@ app.put('/api/bots/:slot/media/:id', async (req, res) => {
   try {
     const { slot } = req.params;
     const mediaId = Number(req.params.id);
-    const { caption, context, position_order, enabled, course_slug, is_course_intro } = req.body;
+    const { caption, context, position_order, enabled, course_slug, is_course_intro, title } = req.body;
+
+    // Validação de title (opcional, máx 200 chars)
+    if (title !== undefined && title !== null) {
+      if (typeof title !== 'string') return res.status(400).json({ error: 'title deve ser string' });
+      if (title.length > 200) return res.status(400).json({ error: 'title excede 200 caracteres' });
+    }
 
     // Validações dos novos campos de curso (ADR 0008 / fix decisão #14 — imagens também aceitas)
     if (course_slug !== undefined && course_slug !== null) {
@@ -1564,6 +1581,10 @@ app.put('/api/bots/:slot/media/:id', async (req, res) => {
     const fields = [];
     const vals = [];
     let idx = 1;
+    if (title !== undefined) {
+      fields.push(`title = $${idx++}`);
+      vals.push(title !== null ? String(title).trim() || null : null);
+    }
     if (caption !== undefined) {
       fields.push(`caption = $${idx++}`);
       vals.push(caption);
@@ -1625,7 +1646,8 @@ app.put('/api/bots/:slot/media/:id', async (req, res) => {
     res.json(r.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: e.message });
+    console.error('[media-put]', e);
+    res.status(500).json({ error: 'erro ao atualizar midia' });
   } finally {
     client.release();
   }
@@ -2015,16 +2037,43 @@ app.put('/api/bots/:slot/courses/:course_slug/media', async (req, res) => {
 
 app.get('/api/bots/:slot/courses', async (req, res) => {
   try {
+    // Inclui linked_media_count e linked_media_ids via bot_media_courses (N:N, Migration 036).
+    // Usa UNION com bot_media legado para cobrir período de transição entre as tabelas.
+    // linked_media_ids: array de IDs únicos (sem duplicatas entre as duas fontes).
     const r = await pool.query(
-      `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at
-       FROM bot_courses
-       WHERE slot = $1
-       ORDER BY position_order, id`,
+      `SELECT
+         bc.id,
+         bc.slot,
+         bc.course_slug,
+         bc.name,
+         bc.description,
+         bc.price,
+         bc.duration,
+         bc.position_order,
+         bc.enabled,
+         bc.details_for_llm,
+         bc.created_at,
+         bc.updated_at,
+         COUNT(DISTINCT combined.mid)::int    AS linked_media_count,
+         COALESCE(
+           ARRAY_AGG(DISTINCT combined.mid) FILTER (WHERE combined.mid IS NOT NULL),
+           ARRAY[]::int[]
+         )                                    AS linked_media_ids
+       FROM bot_courses bc
+       LEFT JOIN (
+         SELECT course_slug, media_id AS mid FROM bot_media_courses WHERE slot = $1
+         UNION
+         SELECT course_slug, id        AS mid FROM bot_media          WHERE slot = $1 AND course_slug IS NOT NULL
+       ) AS combined ON combined.course_slug = bc.course_slug
+       WHERE bc.slot = $1
+       GROUP BY bc.id
+       ORDER BY bc.position_order, bc.id`,
       [req.params.slot],
     );
     res.json(r.rows);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[courses-get]', e);
+    res.status(500).json({ error: 'erro ao listar cursos' });
   }
 });
 
@@ -2168,22 +2217,31 @@ app.delete('/api/bots/:slot/courses/:id', async (req, res) => {
     if (!courseCheck.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
     const { id: courseId, course_slug } = courseCheck.rows[0];
 
-    // Verifica se há mídias vinculadas a este curso
-    const mediaCheck = await pool.query(
-      `SELECT id, position FROM bot_media WHERE slot = $1 AND course_slug = $2`,
+    // Conta vínculos em bot_media_courses (tabela N:N, Migration 036) E em bot_media legado.
+    // Ambas as fontes coexistem durante fase de transição — bloqueio em qualquer uma delas.
+    const linkCountResult = await pool.query(
+      `SELECT COUNT(*)::int AS total
+         FROM (
+           SELECT media_id AS mid FROM bot_media_courses WHERE slot = $1 AND course_slug = $2
+           UNION
+           SELECT id        AS mid FROM bot_media          WHERE slot = $1 AND course_slug = $2
+         ) AS combined`,
       [slot, course_slug],
     );
-    if (mediaCheck.rows.length > 0) {
+    const linked_media_count = linkCountResult.rows[0].total;
+    if (linked_media_count > 0) {
       return res.status(409).json({
-        error: `curso possui ${mediaCheck.rows.length} midia(s) vinculada(s). Desvincule antes de deletar.`,
-        midias_vinculadas: mediaCheck.rows,
+        error: `Nao e possivel excluir o curso`,
+        linked_media_count,
+        message: `Curso tem ${linked_media_count} midia(s) vinculada(s). Desvincule antes de excluir.`,
       });
     }
 
     await pool.query(`DELETE FROM bot_courses WHERE slot = $1 AND id = $2`, [slot, courseId]);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    console.error('[courses-delete]', e);
+    res.status(500).json({ error: 'erro ao excluir curso' });
   }
 });
 
