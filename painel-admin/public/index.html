@@ -375,6 +375,8 @@ textarea, input, select { font-family: inherit; }
 .badge--success { background: var(--success-bg); color: var(--success); }
 .badge--danger  { background: var(--danger-bg);  color: var(--danger); }
 .badge--warning { background: var(--warning-bg); color: var(--warning); }
+.btn--warning { background: var(--warning); border-color: var(--warning); color: #1a1a1a; }
+.btn--warning:hover { background: #d97706; border-color: #d97706; }
 .badge--info    { background: var(--info-bg);    color: var(--info); }
 .badge--muted   { background: var(--surface-3);  color: var(--text-muted); }
 .badge--dot::before {
@@ -1348,6 +1350,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .clone-card__actions { display: flex; align-items: center; gap: .375rem; flex-wrap: wrap; }
 /* ── Clone wizard ────────────────────────────────────────────────── */
 .modal--lg { max-width: 600px; }
+.modal--xl { max-width: 680px; }
+@media (max-width: 720px) { .modal--xl { max-width: 95vw; } }
 .wizard-steps {
   display: flex; align-items: center; gap: .375rem;
   margin-bottom: 1.25rem;
@@ -4805,14 +4809,19 @@ async function renderBotCourses(slot, el) {
     // excluir
     el.querySelectorAll('.js-course-del').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm(`Excluir curso "${btn.dataset.name}"? Esta ação desativa o curso.`)) return;
+        if (!confirm(`Excluir curso "${btn.dataset.name}"? Esta ação não pode ser desfeita.`)) return;
         btn.disabled = true;
         try {
           await api(`/api/bots/${slot}/courses/${btn.dataset.slug}`, { method: 'DELETE' });
           toast('Curso excluído.', 'success');
           await renderBotCourses(slot, el);
         } catch (err) {
-          toast('Erro ao excluir: ' + err.message, 'danger');
+          if (err.status === 409 || (err.data && err.data.linked_media_count != null)) {
+            const count = err.data?.linked_media_count ?? '?';
+            toast(`Não é possível excluir: o curso tem ${count} mídia${count !== 1 ? 's' : ''} vinculada${count !== 1 ? 's' : ''}. Remova-as pelo modal de Editar antes de excluir.`, 'warning');
+          } else {
+            toast('Erro ao excluir: ' + err.message, 'danger');
+          }
           btn.disabled = false;
         }
       });
@@ -4880,6 +4889,23 @@ function _courseFormHtml(c, isEdit) {
         <input id="course-duration" class="input" type="text" placeholder="ex: 8 horas" value="${escapeHtml(c.duration || '')}">
       </div>
       <div>
+        <label class="label" for="course-details">
+          Detalhes para o LLM <span class="muted" style="font-size:.75rem;font-weight:400">(details_for_llm)</span>
+        </label>
+        <textarea id="course-details" class="input" rows="10" style="resize:vertical;font-size:.8125rem"
+          placeholder="Tudo que o bot deve saber sobre o curso: modalidade (online/presencial), certificado (sim/não), parcelamento, próxima turma, carga horária, diferenciais, política de cancelamento, suporte, etc.
+
+Exemplo:
+- Modalidade: online com acesso vitalício
+- Certificado: sim, reconhecido pelo SENAC
+- Parcelamento: 12x R$ 29,90 no cartão
+- Próxima turma: todo mês, início imediato
+- Diferenciais: kit de ferramentas incluso, mentoria ao vivo semanal
+- Cancelamento: 7 dias corridos para reembolso integral"
+        >${escapeHtml(c.details_for_llm || '')}</textarea>
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">${icon('info',11)} Essas informações são injetadas no contexto do bot para que ele responda com precisão sobre o curso.</p>
+      </div>
+      <div>
         <label class="toggle">
           <input type="checkbox" id="course-enabled" ${(c.enabled !== false) ? 'checked' : ''}>
           <span class="toggle__track"></span>
@@ -4912,6 +4938,7 @@ function openAddCourseModal(slot, parentEl) {
     const order = Number(document.getElementById('course-order').value) || 0;
     const duration = document.getElementById('course-duration').value.trim();
     const enabled  = document.getElementById('course-enabled').checked;
+    const details  = document.getElementById('course-details').value.trim();
 
     if (!name) {
       statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Nome é obrigatório.</p>`;
@@ -4937,7 +4964,7 @@ function openAddCourseModal(slot, parentEl) {
       await api(`/api/bots/${slot}/courses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ course_slug: slug, name, description: desc || null, price, duration: duration || null, position_order: order, enabled }),
+        body: JSON.stringify({ course_slug: slug, name, description: desc || null, price, duration: duration || null, position_order: order, enabled, details_for_llm: details || null }),
       });
       toast('Curso adicionado.', 'success');
       closeModal();
@@ -4975,6 +5002,7 @@ function openEditCourseModal(slot, c, parentEl) {
     const order = Number(document.getElementById('course-order').value) || 0;
     const duration = document.getElementById('course-duration').value.trim();
     const enabled  = document.getElementById('course-enabled').checked;
+    const details  = document.getElementById('course-details').value.trim();
 
     if (!name) {
       statusDiv.innerHTML = `<p style="color:var(--danger);font-size:.8rem;margin-bottom:.5rem">${icon('alert-triangle',13)} Nome é obrigatório.</p>`;
@@ -4992,7 +5020,7 @@ function openEditCourseModal(slot, c, parentEl) {
       await api(`/api/bots/${slot}/courses/${c.course_slug}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: desc || null, price, duration: duration || null, position_order: order, enabled }),
+        body: JSON.stringify({ name, description: desc || null, price, duration: duration || null, position_order: order, enabled, details_for_llm: details || null }),
       });
       toast('Curso atualizado.', 'success');
       closeModal();
@@ -6408,6 +6436,7 @@ function openFlowPausesModal(flowId, label) {
     </div>
     <div id="fp-list" style="max-height:60vh;overflow:auto"></div>
   `);
+  document.getElementById('modal-content').classList.add('modal--xl');
 
   const listEl = document.getElementById('fp-list');
   const incEl  = document.getElementById('fp-include-inactive');
@@ -6473,12 +6502,36 @@ function openFlowPausesModal(flowId, label) {
           const source = btn.dataset.source;
           if (!phone) return;
           if (source === 'fromMe') {
-            const ok = confirm(
-              `Atenção: este número foi pausado porque o operador respondeu manualmente pelo WhatsApp.\n\n` +
-              `Despausar faz o bot voltar a responder esse contato — pode atrapalhar conversas pessoais ` +
-              `do dono (família, fornecedores, amigos do mesmo número).\n\nDespausar mesmo assim?`
-            );
-            if (!ok) return;
+            openModal(`
+              <div class="modal__header">
+                <span class="modal__title">${icon('alert-triangle', 16)} Despausar contato pessoal?</span>
+                <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+              </div>
+              <p style="font-size:.9rem;line-height:1.55;margin-bottom:1.25rem">
+                Esse número foi pausado quando o dono respondeu manualmente pelo WhatsApp. Despausar pode fazer o bot atender contatos pessoais (família, fornecedores). Tem certeza?
+              </p>
+              <div style="display:flex;gap:.5rem;justify-content:flex-end">
+                <button class="btn btn--ghost" id="fp-fromme-cancel">Cancelar</button>
+                <button class="btn btn--danger" id="fp-fromme-confirm">Despausar mesmo assim</button>
+              </div>
+            `);
+            document.getElementById('fp-fromme-cancel').addEventListener('click', closeModal);
+            document.getElementById('fp-fromme-confirm').addEventListener('click', async () => {
+              closeModal();
+              btn.disabled = true;
+              try {
+                await api(`/api/flows/${encodeURIComponent(flowId)}/pauses/${encodeURIComponent(phone)}`, {
+                  method: 'DELETE',
+                });
+                toast(`Despausado: ${_fmtPhone(phone) || phone}`, 'success');
+                _decrementPauseBadge(flowId);
+                await reload();
+              } catch (err) {
+                toast('Erro ao despausar: ' + err.message, 'danger');
+                btn.disabled = false;
+              }
+            });
+            return;
           }
           btn.disabled = true;
           try {
