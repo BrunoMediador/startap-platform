@@ -847,8 +847,8 @@ app.get(
           description: 'Configuração de modelo cadastrada no banco.',
         };
 
-        const flowId = context.flow_id;
-        const leadsTable = FLOW_LEADS_TABLE[flowId];
+        const resolvedFlowId = resolveSlotToFlowId(row.slot);
+        const leadsTable = FLOW_LEADS_TABLE[resolvedFlowId];
         // Filtra leads apenas do slot deste bot — Object.values somava todos os slots
         // da tabela (bug: matrizes com clones inflavam o count do bot original).
         const leadsCount = leadsTable ? leadsByLeadsTable[leadsTable][row.slot] || 0 : 0;
@@ -861,8 +861,9 @@ app.get(
         return {
           ...row,
           ...context,
-          workflow_id: context.flow_id || resolveSlotToFlowId(row.slot),
-          models_in_flow: flowCounts[flowId] || 1,
+          flow_id: resolvedFlowId,
+          workflow_id: resolvedFlowId,
+          models_in_flow: flowCounts[resolvedFlowId] || 1,
           messages_today: msgBySlot[row.slot] ?? 0,
           leads_count: leadsCount,
           waha_sessao: row.waha_sessao || null,
