@@ -2,8 +2,8 @@ import type { BotContext } from '@startap/core/types';
 import { botCourses, botMedia, leads } from '@startap/db';
 import { waha } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
-import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { buildContextBlock } from '../lib/free-slots.js';
+import { applyFlowManualCommand } from '../lib/manual-pause.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -24,9 +24,12 @@ const WORKFLOW_ID = 'dlpKXM3gvX2joC1b';
 const WORKFLOW_NAME = 'teste_vendas';
 const PAUSE_TABLE = 'pause_ricardo';
 
-// Somente persona + regras + marcadores. Dados dinamicos (cliente, cursos,
-// midias, estado da conversa) sao injetados via buildContextBlock em runtime
-// para proteger contra remocao acidental no painel (Bruno 2026-05-20).
+/**
+ * SEED inicial — em runtime o prompt vem só do banco (bot_prompt).
+ * Este template é referência para popular o banco em setup inicial; não é usado em execução.
+ * Somente persona + regras + marcadores. Dados dinâmicos (cliente, cursos,
+ * mídias, estado da conversa) são injetados via buildContextBlock em runtime.
+ */
 const DEFAULT_PROMPT_TPL = [
   'Voce e um assistente virtual do Curso de Barbeiro Profissional do Ricardo.',
   'Atenda os interessados com simpatia, entusiasmo e objetividade. Maximo 3 linhas por resposta.',
@@ -153,11 +156,13 @@ export class TesteVendasBot extends BotBase {
     // Prompt: somente persona+regras (editavel pelo painel sem risco).
     // Dados do cliente, cursos, midias e estado ficam no bloco de contexto
     // imutavel — protege contra remocao acidental (Bruno 2026-05-20).
-    const promptPersona = await renderPrompt({
-      slot: this.slot,
-      fallback: DEFAULT_PROMPT_TPL,
-      vars: {},
-    });
+    let promptPersona: string;
+    try {
+      promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
+    } catch (err) {
+      this.log.error({ err, slot: this.slot, telefone }, 'renderPrompt falhou — bot nao responde');
+      return null;
+    }
 
     const contextBlock = await buildContextBlock({
       slot: this.slot,
@@ -282,9 +287,7 @@ export class TesteVendasBot extends BotBase {
         const candidates = allMedia.filter(
           (m) => m.course_slug === courseSlug && m.enabled && m.url,
         );
-        const naoEnviadas = candidates.filter(
-          (m) => !state.mediaIdsSentSet.has(m.id),
-        );
+        const naoEnviadas = candidates.filter((m) => !state.mediaIdsSentSet.has(m.id));
         const pool = naoEnviadas.length > 0 ? naoEnviadas : candidates;
 
         if (pool.length === 0) {
