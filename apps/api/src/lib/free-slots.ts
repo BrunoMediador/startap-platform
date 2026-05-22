@@ -6,9 +6,10 @@
  * consumir. A IA não precisa "raciocinar disponibilidade" — recebe a tabela
  * já filtrada e formatada por serviço e dia.
  *
- * Fallback: se o slot não está em flow_clones (caso da matriz teste_barbearia
- * rodando direto, ou clone sem config), usa BUILTIN_DEFAULTS — mantém compat
- * com o comportamento anterior do bot.
+ * Sem fallback silencioso: se o slot não tem horários/serviços configurados
+ * em flow_clones ou bot_config, loadScheduleConfig lança erro explícito.
+ * O bot deve tratar esse erro e silenciar a resposta ao cliente (não enviar
+ * horários fictícios de uma barbearia que não é a do cliente).
  */
 import type { CalendarEvent } from '@startap/integrations/google-calendar';
 import type { HorariosFuncionamento, ServicoConfig } from '@startap/db';
@@ -22,16 +23,20 @@ export interface ScheduleConfig {
   /** Serviços disponíveis (nome + duração em minutos). */
   services: Array<{ name: string; min: number }>;
   /** Origem da config — útil para log/debug. */
-  source: 'flow_clones' | 'bot_config' | 'defaults';
+  source: 'flow_clones' | 'bot_config';
 }
 
-// ---- Defaults (ultimo recurso quando NEM clone NEM matriz tem config) -------
+// ---- Seed (referência para popular banco em setup inicial — NÃO usar em runtime) ---
 // Alinhado ao seed da matriz teste_barbearia (migrations 027 + 030): 4 servicos
-// basicos, todos 30min, ter-sab 09-18. Evita que o bot ofereca duracoes que nao
-// existem no negocio quando, por algum motivo (cache obsoleto / clone novo /
-// migration nao aplicada), o loadScheduleConfig caia neste fallback.
+// basicos, todos 30min, ter-sab 09-18.
+//
+// IMPORTANTE: esta constante existe APENAS como referência documental e para
+// scripts de seed do banco. Nunca deve ser usada como fallback em runtime.
+// Se loadScheduleConfig cair aqui, significa que o banco está mal configurado
+// e o bot NÃO deve responder com dados fictícios.
 
-const BUILTIN_DEFAULTS: ScheduleConfig = {
+/** @deprecated SEED — não usar em runtime. Populando banco via scripts de seed apenas. */
+export const BUILTIN_DEFAULTS_SEED = {
   work: {
     0: null,                  // domingo: fechado
     1: null,                  // segunda: fechado
@@ -40,14 +45,13 @@ const BUILTIN_DEFAULTS: ScheduleConfig = {
     4: [9 * 60, 18 * 60],     // quinta
     5: [9 * 60, 18 * 60],     // sexta
     6: [9 * 60, 18 * 60],     // sabado
-  },
+  } as Record<number, [number, number] | null>,
   services: [
     { name: 'Corte', min: 30 },
     { name: 'Barba', min: 30 },
     { name: 'Sobrancelha', min: 30 },
     { name: 'Pezinho', min: 30 },
   ],
-  source: 'defaults',
 };
 
 // ---- Conversão jsonb -> ScheduleConfig --------------------------------------
@@ -140,7 +144,11 @@ async function loadFromBotConfig(
  * pode ter horarios+servicos pelo painel, e clones herdam):
  *   1) flow_clones (clone vinculado ao slot)
  *   2) bot_config (matriz com config preenchida)
- *   3) BUILTIN_DEFAULTS (hardcoded fallback)
+ *   3) Erro explícito — sem fallback silencioso (V3 2026-05-22)
+ *
+ * @throws Error quando o slot não tem horários/serviços configurados nem
+ *   em flow_clones nem em bot_config. O caller deve capturar e silenciar
+ *   a resposta ao cliente, logando o erro com slot + telefone.
  */
 export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> {
   // 1) Tenta clone primeiro
@@ -157,10 +165,14 @@ export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> 
       if (matrizCfg) {
         return { ...matrizCfg, source: 'bot_config' };
       }
-      return BUILTIN_DEFAULTS;
+      throw new Error(
+        `Configuração de horários/serviços ausente para o slot '${slot}' (clone de '${clone.matriz_slot}') — configure no painel antes de ativar`,
+      );
     }
-  } catch {
-    // Falha de query — cai para os proximos niveis.
+  } catch (err) {
+    // Re-throw erros explícitos de config ausente.
+    if (err instanceof Error && err.message.includes('horários/serviços ausente')) throw err;
+    // Falha de query de DB — cai para os proximos niveis.
   }
 
   // 2) Slot pode ser uma matriz rodando direto (ex: teste_barbearia sem clone).
@@ -169,8 +181,10 @@ export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> 
     return { ...matrizCfg, source: 'bot_config' };
   }
 
-  // 3) Ultimo recurso: hardcoded.
-  return BUILTIN_DEFAULTS;
+  // 3) Sem config — erro explícito. Não usar defaults fictícios em runtime.
+  throw new Error(
+    `Configuração de horários/serviços ausente para o slot '${slot}' — configure no painel antes de ativar`,
+  );
 }
 
 // ---- Bloco de CONTEXTO (concatenado ao prompt antes de enviar a IA) --------

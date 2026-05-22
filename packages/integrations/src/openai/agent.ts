@@ -26,7 +26,13 @@ function getClient(apiKey?: string, baseURL?: string): OpenAI {
   return c;
 }
 
-const DEFAULT_MODEL = process.env.OPENAI_MODEL ?? 'gpt-5.4';
+/**
+ * EXAMPLE_MODEL — referência documental apenas.
+ * NÃO usar em runtime como fallback: se opts.model for undefined/null,
+ * runAgent lança erro explícito para forçar configuração correta no banco.
+ * @see run-agent.ts que lê bot_config.model antes de chamar runAgent
+ */
+export const EXAMPLE_MODEL = 'gpt-4o';
 const DEFAULT_HISTORY_MAX_CHARS = Number.parseInt(
   process.env.AGENT_HISTORY_MAX_CHARS ?? '12000',
   10,
@@ -66,7 +72,13 @@ export interface RunAgentResult {
 
 export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   const { systemPrompt, history, userMessage, tools = [], maxTurns = 5 } = opts;
-  const model = opts.model ?? DEFAULT_MODEL;
+
+  if (!opts.model || opts.model.trim() === '') {
+    throw new Error(
+      'Modelo OpenAI ausente — configure bot_config.model no painel antes de ativar o bot',
+    );
+  }
+  const model = opts.model;
   const temperature = opts.temperature ?? 0.4;
   const client = getClient(opts.apiKey, opts.baseURL);
   const compactHistory = limitHistoryByChars(

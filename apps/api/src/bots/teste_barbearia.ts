@@ -97,19 +97,28 @@ export class TesteBarbeariaBot extends BotBase {
     const now = new Date();
     const timeMin = now.toISOString();
     const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
-    const [events, scheduleConfig] = await Promise.all([
-      calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
-        throw err;
-      }),
-      loadScheduleConfig(this.slot),
-    ]);
+
+    let scheduleConfig: import('../lib/free-slots.js').ScheduleConfig;
+    try {
+      scheduleConfig = await loadScheduleConfig(this.slot);
+    } catch (err) {
+      this.log.error(
+        { err: err instanceof Error ? err.message : String(err), slot: this.slot, telefone },
+        'free-slots: configuração ausente — bot não responde para evitar dados fictícios',
+      );
+      return null;
+    }
+
+    const events = await calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
+      throw err;
+    });
+
     // Log explicito do source — facilita debug quando bot oferecer durações
     // estranhas ("por que Barba 20min se cadastrei 30?"). source possiveis:
     //   flow_clones: leu do clone (ok)
     //   bot_config:  leu da matriz (ok, clone sem config preenchida)
-    //   defaults:    fallback hardcoded (alerta — provavel cache ou query falhou)
     this.log.info(
       {
         slot: this.slot,
@@ -119,12 +128,6 @@ export class TesteBarbeariaBot extends BotBase {
       },
       'free-slots: schedule carregado',
     );
-    if (scheduleConfig.source === 'defaults' && this.slot !== SLOT) {
-      this.log.warn(
-        { slot: this.slot },
-        'free-slots: clone sem horarios/servicos configurados — usando defaults do bot base',
-      );
-    }
     const agenda = formatarAgendaComConfig(events, scheduleConfig);
 
     const dataAtual = now.toLocaleDateString('pt-BR', {

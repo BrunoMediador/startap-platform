@@ -173,14 +173,17 @@ export class TesteVendasBarbeariaBot extends BotBase {
       throw err;
     });
     // Lê horarios+servicos do clone (flow_clones) ou matriz (bot_config) e
-    // formata agenda respeitando dias fechados. Antes usava WORK/SERVICES
-    // hardcoded que ignoravam config do clone (sábado fechado virava aberto).
-    const scheduleConfig = await loadScheduleConfig(this.slot);
-    if (scheduleConfig.source === 'defaults' && this.slot !== SLOT) {
-      this.log.warn(
-        { slot: this.slot },
-        'free-slots: clone sem horarios/servicos configurados — usando defaults',
+    // formata agenda respeitando dias fechados. Sem fallback silencioso —
+    // slot sem config lança erro e o bot silencia (não envia dados fictícios).
+    let scheduleConfig: import('../lib/free-slots.js').ScheduleConfig;
+    try {
+      scheduleConfig = await loadScheduleConfig(this.slot);
+    } catch (err) {
+      this.log.error(
+        { err: err instanceof Error ? err.message : String(err), slot: this.slot, telefone },
+        'free-slots: configuração ausente — bot não responde para evitar dados fictícios',
       );
+      return null;
     }
     const agenda = formatarAgendaComConfig(events, scheduleConfig);
     const dataAtual = now.toLocaleDateString('pt-BR', {

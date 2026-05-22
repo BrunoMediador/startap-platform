@@ -36,20 +36,29 @@ export interface RunAgentConfiguredOpts extends Omit<RunAgentOpts, 'model' | 'ap
 export async function runAgentConfigured(opts: RunAgentConfiguredOpts): Promise<RunAgentResult> {
   const cfg = await botConfig.getConfig(opts.slot);
 
-  const model = cfg?.model;
+  if (!cfg) {
+    // Sem config no banco: lançar erro explícito — não chamar runAgent com model undefined.
+    throw new Error(
+      `Modelo OpenAI ausente para o slot '${opts.slot}' — bot_config sem entry. Configure no painel antes de ativar`,
+    );
+  }
+
+  if (!cfg.model || cfg.model.trim() === '') {
+    throw new Error(
+      `Modelo OpenAI ausente para o slot '${opts.slot}' — configure bot_config.model no painel antes de ativar`,
+    );
+  }
+
+  const model = cfg.model;
   let apiKey: string | undefined;
   let baseURL: string | undefined;
   let provider: 'openai' | 'deepseek' = 'openai';
   const temperature = opts.temperature ?? cfg?.temperature ?? 0.3;
 
-  if (cfg) {
-    provider = cfg.provider;
-    if (cfg.provider === 'deepseek') {
-      apiKey = config.DEEPSEEK_API_KEY;
-      baseURL = DEEPSEEK_BASE_URL;
-    }
-  } else {
-    log.warn({ slot: opts.slot }, 'bot_config sem entry — usando OPENAI_MODEL default');
+  provider = cfg.provider;
+  if (cfg.provider === 'deepseek') {
+    apiKey = config.DEEPSEEK_API_KEY;
+    baseURL = DEEPSEEK_BASE_URL;
   }
 
   const result = await openai.runAgent({
