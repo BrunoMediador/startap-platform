@@ -4481,8 +4481,8 @@ function _buildMediaCardV2(slot, m, idx, arr, coursesArr, parentEl) {
         <span class="media-card-v2__meta-val${!ctx ? ' media-card-v2__meta-val--empty' : ''}" title="${escapeHtml(ctx)}">${ctx ? escapeHtml(ctx) : 'Sem contexto'}</span>
       </div>
       <div class="media-card-v2__meta-row">
-        <span class="media-card-v2__meta-label">Legenda</span>
-        <span class="media-card-v2__meta-val${!cap ? ' media-card-v2__meta-val--empty' : ''}" title="${escapeHtml(cap)}">${cap ? escapeHtml(cap) : 'Sem legenda'}</span>
+        <span class="media-card-v2__meta-label">Descrição</span>
+        <span class="media-card-v2__meta-val${!cap ? ' media-card-v2__meta-val--empty' : ''}" title="${escapeHtml(cap)}">${cap ? escapeHtml(cap) : 'Sem descrição'}</span>
       </div>
     </div>`;
   card.appendChild(body);
@@ -4577,12 +4577,16 @@ function _toggleMediaCardEdit(card, slot, m, parentEl, coursesArr, triggerBtn) {
   form.className = 'media-card-v2__edit-form';
   form.innerHTML = `
     <div>
-      <label class="field-label" for="ed-ctx-${m.id}">Contexto para IA</label>
-      <textarea id="ed-ctx-${m.id}" data-field="context" placeholder="Quando a IA deve enviar essa mídia?">${escapeHtml(m.context || '')}</textarea>
+      <label class="field-label" for="ed-title-${m.id}">Título</label>
+      <input id="ed-title-${m.id}" data-field="title" type="text" value="${escapeHtml(m.title || '')}" placeholder="Nome legível da mídia (exibido no painel)">
     </div>
     <div>
-      <label class="field-label" for="ed-cap-${m.id}">Legenda</label>
-      <input id="ed-cap-${m.id}" data-field="caption" type="text" value="${escapeHtml(m.caption || '')}" placeholder="Texto que vai junto da mídia">
+      <label class="field-label" for="ed-cap-${m.id}">Descrição</label>
+      <input id="ed-cap-${m.id}" data-field="caption" type="text" value="${escapeHtml(m.caption || '')}" placeholder="Texto que vai junto da mídia no WhatsApp">
+    </div>
+    <div>
+      <label class="field-label" for="ed-ctx-${m.id}">Contexto para IA</label>
+      <textarea id="ed-ctx-${m.id}" data-field="context" placeholder="Quando a IA deve enviar essa mídia?">${escapeHtml(m.context || '')}</textarea>
     </div>
     <div class="media-card-v2__edit-row">
       <div>
@@ -4629,6 +4633,7 @@ function _toggleMediaCardEdit(card, slot, m, parentEl, coursesArr, triggerBtn) {
       const courseSlugVal = courseSel ? (courseSel.value || null) : undefined;
       const wantIntro = isVideo && courseSlugVal && introCheck && introCheck.checked;
       const body = {
+        title: (form.querySelector('[data-field="title"]').value || '').trim() || null,
         context: (form.querySelector('[data-field="context"]').value || '').trim() || null,
         caption: (form.querySelector('[data-field="caption"]').value || '').trim() || null,
         position_order: Number(form.querySelector('[data-field="position_order"]').value) || 0,
@@ -4731,7 +4736,7 @@ async function renderBotCourses(slot, el) {
               <button class="btn btn--ghost btn--sm btn--icon js-course-menu-toggle" aria-label="Ações" title="Ações">${icon('more-horizontal',14)}</button>
               <div class="media-actions-menu" data-menu-id="c-${c.id}">
                 <button class="js-course-edit" data-id="${c.id}">${icon('edit-2',13)} Editar</button>
-                <button class="js-course-link" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('link',13)} Vincular mídia</button>
+                <button class="js-course-galeria btn--ghost" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('image',13)} Galeria</button>
                 <button class="js-course-del danger" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" data-name="${escapeHtml(c.name)}">${icon('trash-2',13)} Excluir</button>
               </div>
             </div>
@@ -4777,10 +4782,12 @@ async function renderBotCourses(slot, el) {
       });
     });
 
-    // vincular mídia
-    el.querySelectorAll('.js-course-link').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openLinkMediaModal(slot, btn.dataset.slug, medias, el);
+    // galeria inline
+    el.querySelectorAll('.js-course-galeria').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.media-actions-menu.open').forEach(m => m.classList.remove('open'));
+        _galOpenCoursePanel(slot, btn.dataset.slug, el);
       });
     });
 
@@ -10627,35 +10634,9 @@ function mountCleanupCountdown() {
 
   // ─── Monkey-patch renderBotCourses: painel multi-select de galeria ──
   // Aguarda renderBotCourses existir (é definida antes no mesmo arquivo)
-  // Patch: adiciona botão "Vincular da galeria" na linha de cada curso
-  // que abre um painel inline com multi-select das mídias da galeria.
-  (function _patchRenderBotCourses() {
-    const _origRenderBotCourses = window.renderBotCourses;
-    if (typeof _origRenderBotCourses !== 'function') {
-      // Tenta novamente após DOMContentLoaded caso o script seja executado antes
-      document.addEventListener('DOMContentLoaded', _patchRenderBotCourses);
-      return;
-    }
-    window.renderBotCourses = async function(slot, el) {
-      await _origRenderBotCourses(slot, el);
-      // Adiciona botão "Galeria" em cada linha de curso
-      el.querySelectorAll('.js-course-link').forEach(btn => {
-        if (btn.dataset.galeriaPatchDone) return;
-        btn.dataset.galeriaPatchDone = '1';
-        const galBtn = document.createElement('button');
-        galBtn.className = 'btn btn--ghost btn--sm';
-        galBtn.style.marginLeft = '.375rem';
-        galBtn.innerHTML = `${icon('image',13)} Galeria`;
-        galBtn.title = 'Vincular mídias da galeria';
-        galBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const slug = btn.dataset.slug;
-          _galOpenCoursePanel(slot, slug, el);
-        });
-        btn.parentNode.insertBefore(galBtn, btn.nextSibling);
-      });
-    };
-  })();
+  // Patch _patchRenderBotCourses removido: botão "Galeria" agora está diretamente
+  // no menu três pontinhos como .js-course-galeria (PR fix/painel-curso-midia-completar).
+  // O listener de .js-course-galeria está em renderBotCourses junto com os outros listeners.
 
   // ─── Painel inline multi-select de galeria p/ curso ─────────────
   async function _galOpenCoursePanel(slot, slug, tableEl) {
