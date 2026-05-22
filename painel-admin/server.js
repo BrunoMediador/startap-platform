@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import express from 'express';
 import session from 'express-session';
 import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
 import multer from 'multer';
 import fetch from 'node-fetch';
 import pg from 'pg';
@@ -340,7 +341,24 @@ const pool = new pg.Pool({
 });
 
 const app = express();
+
+// ── Trust proxy ───────────────────────────────────────────────────────────────
+// O painel está atrás do Nginx Proxy Manager. Sem trust proxy o express-rate-limit
+// lança "ValidationError: The 'X-Forwarded-For' header is set but the Express
+// 'trust proxy' setting is false" a cada requisição, e req.ip sempre devolve
+// o IP interno do proxy em vez do IP real do operador.
+// Valor 1 = confiar exatamente 1 nível de proxy (NPM) — nunca colocar true em prod.
+app.set('trust proxy', 1);
+
 app.use(express.json());
+
+// ── Access log estruturado (Morgan) ──────────────────────────────────────────
+// Registra todas as requisições HTTP do painel para auditoria do operador.
+// Formato custom: ISO timestamp + método + path + status + duração + IP real.
+// IP real só fica correto após trust proxy acima.
+morgan.token('iso', () => new Date().toISOString());
+app.use(morgan(':iso :method :url :status :response-time ms - :remote-addr'));
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Wrapper para repassar erros assincronos ao error handler global do Express.
 // Express 4 nao captura promises rejeitadas em async handlers; isso fazia
@@ -1088,25 +1106,51 @@ app.get('/api/bots/:slot/prompt', async (req, res) => {
 app.put('/api/bots/:slot/prompt', async (req, res) => {
   const client = await pool.connect();
   try {
-    const { prompt: newPrompt } = req.body;
+    const { prompt: newPrompt, comment: editComment } = req.body;
     if (typeof newPrompt !== 'string' || !newPrompt.length) {
       return res.status(400).json({ error: 'prompt obrigatorio' });
     }
     const { slot } = req.params;
+    const editedBy = req.headers['x-admin'] || 'admin';
+
     await client.query('BEGIN');
 
-    // Auto-snapshot da versão atual antes de sobrescrever
+    // Auto-snapshot: grava versão da cópia ATUAL antes de sobrescrever.
+    // Só cria snapshot se o prompt de fato mudou (evita versões duplicadas).
+    // Usa INSERT ... RETURNING para detectar colisão de (slot, version):
+    //   - ON CONFLICT DO NOTHING + rowCount === 0 significa race condition → reloga e continua.
+    // Se a tabela bot_prompt_versions não existir (42P01), o erro sobe para o catch
+    // principal e faz ROLLBACK — nunca salva prompt sem versioning.
+    let versionSaved = null;
     const cur = await client.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [slot]);
     if (cur.rows.length && cur.rows[0].prompt !== newPrompt) {
-      const max = await client.query(
+      const maxRes = await client.query(
         'SELECT COALESCE(MAX(version), 0) AS m FROM bot_prompt_versions WHERE slot = $1',
         [slot],
       );
-      await client.query(
+      const nextVersion = Number(maxRes.rows[0].m) + 1;
+      const insRes = await client.query(
         `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
-        [slot, max.rows[0].m + 1, cur.rows[0].prompt, req.headers['x-admin'] || 'admin', 'auto-snapshot pre-edit'],
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (slot, version) DO NOTHING
+         RETURNING version`,
+        [
+          slot,
+          nextVersion,
+          cur.rows[0].prompt,
+          editedBy,
+          editComment || 'auto-snapshot pre-edit',
+        ],
       );
+      if (insRes.rowCount === 0) {
+        // Colisão de versão: registra aviso mas não bloqueia a edição do prompt.
+        // Ocorre em raros casos de race condition (dois PUTs simultâneos no mesmo slot).
+        console.warn(
+          `[PUT /api/bots/${slot}/prompt] versioning: conflito na versao ${nextVersion} — ON CONFLICT DO NOTHING ativado. Prompt salvo sem snapshot desta edicao.`,
+        );
+      } else {
+        versionSaved = insRes.rows[0].version;
+      }
     }
 
     const r = await client.query(
@@ -1116,9 +1160,11 @@ app.put('/api/bots/:slot/prompt', async (req, res) => {
       [slot, newPrompt],
     );
     await client.query('COMMIT');
-    res.json(r.rows[0]);
+    // Inclui version_saved na resposta para que o frontend possa confirmar que o snapshot foi criado.
+    res.json({ ...r.rows[0], version_saved: versionSaved });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
+    console.error(`[PUT /api/bots/${req.params.slot}/prompt] erro transacional: ${e.message}`);
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
@@ -2035,6 +2081,208 @@ app.post('/api/flow-logs/prune', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ---------- EXECUTIONS (agrupado por execution_id) ----------
+// flow_execution_logs registra eventos individuais de uma mesma conversa
+// sob o mesmo execution_id (UUID gerado pelo worker TS no início do processamento).
+// Estes endpoints agrupam os eventos para alimentar a tela de fluxograma do painel.
+
+/**
+ * Mascara telefone para exibição no painel.
+ * Entrada: qualquer string (ex: "5511999887766", "+5511999887766", "11999887766")
+ * Saída:   "+55 XX XXXXX-XXXX" ou a string original se não reconhecer o padrão.
+ */
+function maskPhone(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  // Formato BR: 55 + DDD (2) + número (8 ou 9)
+  if (digits.length === 13 && digits.startsWith('55')) {
+    const ddd = digits.slice(2, 4);
+    const num = digits.slice(4);
+    const formatted = num.length === 9
+      ? `${num.slice(0, 5)}-${num.slice(5)}`
+      : `${num.slice(0, 4)}-${num.slice(4)}`;
+    return `+55 ${ddd} ${formatted}`;
+  }
+  if (digits.length === 11) {
+    const ddd = digits.slice(0, 2);
+    const num = digits.slice(2);
+    const formatted = num.length === 9
+      ? `${num.slice(0, 5)}-${num.slice(5)}`
+      : `${num.slice(0, 4)}-${num.slice(4)}`;
+    return `+55 ${ddd} ${formatted}`;
+  }
+  // Fallback: retorna como veio (já pode estar mascarado por telefone_masked)
+  return raw;
+}
+
+/**
+ * Determina status final de uma execução a partir do array de eventos ordenados.
+ * Lógica: último evento com status definido tem precedência.
+ * Se algum evento é 'error' → 'error'; se todos success → 'success'; senão 'running'.
+ */
+function resolveExecutionStatus(events) {
+  if (!events || events.length === 0) return 'running';
+  // Percorre do mais recente ao mais antigo
+  for (let i = events.length - 1; i >= 0; i--) {
+    const s = events[i].status;
+    if (s === 'error') return 'error';
+    if (s === 'ignored') return 'ignored';
+    if (s === 'success') return 'success';
+  }
+  return 'running';
+}
+
+// GET /api/executions — lista execuções agrupadas por execution_id
+// Filtros: ?slot=, ?from=, ?to=, ?status=error|success|running|ignored, ?limit=50
+// Retorna: array de { id, slot, telefone_mascarado, started_at, duration_ms, status_final, events_count }
+app.get(
+  '/api/executions',
+  asyncHandler(async (req, res) => {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+    const slot = req.query.slot ? String(req.query.slot) : null;
+    const from = req.query.from ? String(req.query.from) : null;
+    const to = req.query.to ? String(req.query.to) : null;
+    const statusFilter = ['error', 'success', 'running', 'ignored'].includes(req.query.status)
+      ? req.query.status
+      : null;
+
+    const where = ['execution_id IS NOT NULL'];
+    const vals = [];
+    let idx = 1;
+
+    if (slot) {
+      where.push(`bot = $${idx++}`);
+      vals.push(slot);
+    }
+    if (from) {
+      where.push(`created_at >= $${idx++}`);
+      vals.push(from);
+    }
+    if (to) {
+      where.push(`created_at <= $${idx++}`);
+      vals.push(to);
+    }
+
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+
+    // Agrupa por execution_id:
+    // - started_at = MIN(created_at) do grupo
+    // - finished_at = MAX(created_at) do grupo
+    // - duration_ms = diferença entre os dois em ms
+    // - status_final: determinado pelo último evento não-null do grupo
+    // - telefone_masked: primeiro valor não-null do grupo
+    // - bot: slot do bot
+    // - events_count: total de eventos no grupo
+    const r = await pool.query(
+      `SELECT
+         (ARRAY_AGG(execution_id::text ORDER BY id ASC))[1] AS id,
+         (ARRAY_AGG(bot ORDER BY id ASC))[1]                AS slot,
+         (ARRAY_AGG(telefone_masked ORDER BY
+           CASE WHEN telefone_masked IS NOT NULL THEN 0 ELSE 1 END, id ASC))[1] AS telefone_masked,
+         MIN(created_at)                                     AS started_at,
+         MAX(created_at)                                     AS finished_at,
+         EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at)) * 1000)::int AS duration_ms,
+         COUNT(*)::int                                       AS events_count,
+         (ARRAY_AGG(status ORDER BY id DESC))[1]             AS status_final
+       FROM flow_execution_logs
+       ${whereSql}
+       GROUP BY execution_id
+       ORDER BY MIN(created_at) DESC
+       LIMIT $${idx}`,
+      [...vals, limit],
+    );
+
+    // Aplica filtro de status_final em memória (evita subquery correlacionada pesada)
+    // e mascara telefone.
+    const rows = r.rows
+      .filter((row) => !statusFilter || row.status_final === statusFilter)
+      .map((row) => ({
+        id: row.id,
+        slot: row.slot,
+        telefone_mascarado: maskPhone(row.telefone_masked),
+        started_at: row.started_at,
+        finished_at: row.finished_at,
+        duration_ms: row.duration_ms ?? 0,
+        status_final: row.status_final ?? 'running',
+        events_count: row.events_count,
+      }));
+
+    res.json(rows);
+  }),
+);
+
+// GET /api/executions/:id — detalhe de uma execução com todos os eventos
+// :id = execution_id (UUID como string)
+// Retorna: { id, slot, telefone_mascarado, started_at, finished_at, duration_ms,
+//            status_final, events: [{ event_type, status, duration_ms, message, created_at }] }
+app.get(
+  '/api/executions/:id',
+  asyncHandler(async (req, res) => {
+    const execId = String(req.params.id);
+    // Valida formato UUID básico (evita SQL injection mesmo com query parametrizada)
+    if (!/^[0-9a-f-]{8,64}$/i.test(execId)) {
+      return res.status(400).json({ error: 'execution_id inválido' });
+    }
+
+    const r = await pool.query(
+      `SELECT id::text, execution_id::text, flow_id, flow_name, bot,
+              telefone_masked, session, event_type, status,
+              message, metadata, duration_ms, error_summary, created_at
+       FROM flow_execution_logs
+       WHERE execution_id::text = $1
+       ORDER BY id ASC`,
+      [execId],
+    );
+
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: 'execução não encontrada' });
+    }
+
+    const events = r.rows;
+    const first = events[0];
+    const last = events[events.length - 1];
+    const startedAt = first.created_at;
+    const finishedAt = last.created_at;
+    const durationMs =
+      finishedAt && startedAt
+        ? Math.round((new Date(finishedAt) - new Date(startedAt)))
+        : null;
+    const statusFinal = resolveExecutionStatus(events);
+
+    // Trunca payload de metadata para não explodir a resposta (máx 500 chars por evento)
+    const eventsOut = events.map((e) => {
+      let payloadStr = null;
+      if (e.metadata && typeof e.metadata === 'object' && Object.keys(e.metadata).length > 0) {
+        payloadStr = JSON.stringify(e.metadata).slice(0, 500);
+      }
+      return {
+        id: Number(e.id),
+        event_type: e.event_type,
+        status: e.status,
+        message: e.message ?? null,
+        error_summary: e.error_summary ?? null,
+        duration_ms: e.duration_ms ?? null,
+        payload: payloadStr,
+        created_at: e.created_at,
+      };
+    });
+
+    res.json({
+      id: execId,
+      slot: first.bot,
+      flow_id: first.flow_id,
+      flow_name: first.flow_name,
+      session: first.session,
+      telefone_mascarado: maskPhone(first.telefone_masked),
+      started_at: startedAt,
+      finished_at: finishedAt,
+      duration_ms: durationMs,
+      status_final: statusFinal,
+      events: eventsOut,
+    });
+  }),
+);
 
 // ---------- DATABASE BROWSER ----------
 app.get('/api/database/projects', async (req, res) => {

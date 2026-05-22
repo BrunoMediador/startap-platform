@@ -1034,7 +1034,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   display: flex; flex-direction: column; gap: .5rem;
 }
 .session-card__name { font-weight: 600; font-size: .9375rem; }
-/* ── Toast ──────────────────────────────────────────────────────────── */
+/* ── Toast (bottom-right, alertas gerais) ────────────────────────── */
 #toast-container {
   position: fixed; bottom: 5rem; right: 1.25rem;
   display: flex; flex-direction: column; gap: .5rem;
@@ -1057,6 +1057,77 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+/* ── Cleanup toast (topo centralizado, glass morphism) ────────────── */
+#cleanup-toast {
+  position: fixed;
+  top: 1rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-120%);
+  z-index: 10000;
+  width: min(480px, 90vw);
+  background: rgba(20, 20, 30, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04);
+  padding: .875rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  font-size: .875rem;
+  font-weight: 500;
+  color: var(--text);
+  transition: transform 200ms ease-out, opacity 300ms ease;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+#cleanup-toast.ct--visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+#cleanup-toast.ct--hiding {
+  transform: translateX(-50%) translateY(-20%);
+  opacity: 0;
+  pointer-events: none;
+}
+#cleanup-toast__icon { flex-shrink: 0; display: flex; align-items: center; }
+#cleanup-toast__body { flex: 1; min-width: 0; }
+#cleanup-toast__text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#cleanup-toast__sub  { font-size: .75rem; color: var(--text-muted); margin-top: .125rem; }
+#cleanup-toast__action { flex-shrink: 0; }
+/* Barra de progresso na borda inferior */
+#cleanup-toast__bar {
+  position: absolute;
+  bottom: 0; left: 0;
+  height: 2px;
+  background: var(--primary);
+  width: 0%;
+  transition: width .4s ease;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+/* Spinner inline */
+@keyframes ct-spin { to { transform: rotate(360deg); } }
+.ct-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,0.15);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: ct-spin .6s linear infinite;
+  flex-shrink: 0;
+}
+/* Auto-dismiss progress bar */
+@keyframes ct-dismiss {
+  from { width: 100%; }
+  to   { width: 0%; }
+}
+#cleanup-toast.ct--autodismiss #cleanup-toast__bar {
+  background: var(--success);
+  width: 100%;
+  animation: ct-dismiss 4s linear forwards;
 }
 /* ── Modal ──────────────────────────────────────────────────────────── */
 #modal-backdrop {
@@ -1835,8 +1906,18 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 <aside class="drawer" id="drawer" role="complementary" aria-label="Detalhes">
   <div id="drawer-inner"></div>
 </aside>
-<!-- ── Toast container ───────────────────────────────────────────── -->
+<!-- ── Toast container (alertas gerais, bottom-right) ────────────── -->
 <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+<!-- ── Cleanup toast (topo centralizado, glass morphism) ─────────── -->
+<div id="cleanup-toast" role="status" aria-live="assertive" aria-atomic="true">
+  <div id="cleanup-toast__icon"></div>
+  <div id="cleanup-toast__body">
+    <div id="cleanup-toast__text"></div>
+    <div id="cleanup-toast__sub"></div>
+  </div>
+  <div id="cleanup-toast__action"></div>
+  <div id="cleanup-toast__bar"></div>
+</div>
 <!-- ── Modal backdrop ───────────────────────────────────────────── -->
 <div id="modal-backdrop" role="dialog" aria-modal="true" aria-label="Modal">
   <div class="modal" id="modal-content"></div>
@@ -2094,7 +2175,7 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-/* ── Toast ─────────────────────────────────────────────────────── */
+/* ── Toast (alertas gerais bottom-right) ──────────────────────── */
 function toast(msg, type = 'info') {
   const container = document.getElementById('toast-container');
   const el = document.createElement('div');
@@ -2103,6 +2184,149 @@ function toast(msg, type = 'info') {
   el.innerHTML = `${icon(iconName, 16)}<span>${escapeHtml(msg)}</span>`;
   container.appendChild(el);
   setTimeout(() => el.remove(), 4500);
+}
+
+/* ── Cleanup Toast (topo centralizado, glass morphism) ────────── */
+const _ct = (() => {
+  let _dismissTimer = null;
+  let _hideTimer    = null;
+
+  function _el(id) { return document.getElementById(id); }
+
+  function _show() {
+    const el = _el('cleanup-toast');
+    if (!el) return;
+    clearTimeout(_dismissTimer);
+    clearTimeout(_hideTimer);
+    el.classList.remove('ct--hiding', 'ct--autodismiss');
+    // Force reflow para re-triggar animação
+    void el.offsetWidth;
+    el.classList.add('ct--visible');
+  }
+
+  function _hide() {
+    const el = _el('cleanup-toast');
+    if (!el) return;
+    clearTimeout(_dismissTimer);
+    el.classList.add('ct--hiding');
+    _hideTimer = setTimeout(() => {
+      el.classList.remove('ct--visible', 'ct--hiding', 'ct--autodismiss');
+      // Limpar conteúdo
+      const iconEl  = _el('cleanup-toast__icon');
+      const textEl  = _el('cleanup-toast__text');
+      const subEl   = _el('cleanup-toast__sub');
+      const actEl   = _el('cleanup-toast__action');
+      const barEl   = _el('cleanup-toast__bar');
+      if (iconEl)  iconEl.innerHTML  = '';
+      if (textEl)  textEl.textContent = '';
+      if (subEl)   subEl.textContent  = '';
+      if (actEl)   actEl.innerHTML   = '';
+      if (barEl)   { barEl.style.width = '0%'; barEl.style.background = ''; }
+    }, 350);
+  }
+
+  function _setContent({ iconHtml, text, sub = '', actionHtml = '', barPct = null, barColor = null }) {
+    const iconEl = _el('cleanup-toast__icon');
+    const textEl = _el('cleanup-toast__text');
+    const subEl  = _el('cleanup-toast__sub');
+    const actEl  = _el('cleanup-toast__action');
+    const barEl  = _el('cleanup-toast__bar');
+    if (iconEl) iconEl.innerHTML       = iconHtml || '';
+    if (textEl) textEl.textContent     = text     || '';
+    if (subEl)  subEl.textContent      = sub      || '';
+    if (actEl)  actEl.innerHTML        = actionHtml || '';
+    if (barEl) {
+      if (barPct !== null) {
+        barEl.style.width      = barPct + '%';
+        barEl.style.background = barColor || 'var(--primary)';
+        barEl.style.animation  = 'none';
+      } else {
+        barEl.style.width = '0%';
+      }
+    }
+  }
+
+  return {
+    /** Mostra estado "Iniciando limpeza..." com spinner */
+    starting() {
+      _setContent({
+        iconHtml: '<div class="ct-spinner"></div>',
+        text: 'Limpando chats antigos...',
+        sub:  '',
+        barPct: 2,
+      });
+      _show();
+    },
+
+    /** Atualiza para estado em progresso com contagem */
+    progress(done, total) {
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      _setContent({
+        iconHtml: '<div class="ct-spinner"></div>',
+        text: 'Limpando chats antigos...',
+        sub:  `${done} / ${total} mensagens`,
+        barPct: Math.max(pct, 4),
+      });
+      _show();
+    },
+
+    /** Mostra sucesso e auto-dismiss em 4s */
+    success(count, elapsed) {
+      const timeStr = elapsed != null ? ` em ${elapsed}` : '';
+      _setContent({
+        iconHtml: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+        text: `Limpeza concluída — ${count} mensagens${timeStr}`,
+        sub:  '',
+        barPct: 100,
+        barColor: 'var(--success)',
+      });
+      _show();
+      const el = _el('cleanup-toast');
+      if (el) {
+        el.classList.add('ct--autodismiss');
+        // Remove a barEl inline style para deixar CSS animation rodar
+        const barEl = _el('cleanup-toast__bar');
+        if (barEl) { barEl.style.width = ''; barEl.style.background = ''; barEl.style.animation = ''; }
+      }
+      _dismissTimer = setTimeout(_hide, 4000);
+    },
+
+    /** Mostra erro com botão "tentar novamente" */
+    error(msg, retryFn) {
+      const btnId = 'ct-retry-btn';
+      _setContent({
+        iconHtml: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+        text: msg || 'Erro na limpeza',
+        sub:  '',
+        actionHtml: `<button id="${btnId}" class="btn btn--ghost" style="font-size:.75rem;padding:.25rem .625rem;white-space:nowrap" aria-label="Tentar novamente a limpeza">Tentar novamente</button>`,
+        barPct: 100,
+        barColor: 'var(--danger)',
+      });
+      _show();
+      // Bind retry
+      const btn = _el(btnId);
+      if (btn && typeof retryFn === 'function') {
+        btn.addEventListener('click', () => { _hide(); setTimeout(retryFn, 100); }, { once: true });
+      } else if (btn) {
+        // Sem retryFn: dispara o mesmo evento da limpeza inicial
+        btn.addEventListener('click', () => { _hide(); setTimeout(triggerCleanupNow, 100); }, { once: true });
+      }
+    },
+
+    hide: _hide,
+  };
+})();
+
+/** Dispara limpeza manual via endpoint (fallback do botão retry) */
+async function triggerCleanupNow() {
+  _ct.starting();
+  try {
+    const result = await api('/api/cleanup/run', { method: 'POST' });
+    const deleted = result?.deleted ?? result?.count ?? 0;
+    _ct.success(deleted);
+  } catch (err) {
+    _ct.error('Erro ao executar limpeza: ' + (err?.message || 'desconhecido'));
+  }
 }
 
 /* ── Modal ─────────────────────────────────────────────────────── */
@@ -5388,18 +5612,23 @@ async function loadCfgLimpeza(content) {
     document.getElementById('confirm-prune-btn').addEventListener('click', async () => {
       const btn = document.getElementById('confirm-prune-btn');
       btn.disabled = true;
+      closeModal();
+      // Usa o toast moderno no topo para dar feedback visual rico
+      _ct.starting();
       try {
         const result = await api('/api/flow-logs/prune', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ days }),
         });
-        const deleted = result?.deleted ?? result?.count ?? '?';
-        toast(`Limpeza concluída: ${deleted} registro(s) removido(s).`, 'success');
-        closeModal();
+        const deleted = result?.deleted ?? result?.count ?? 0;
+        _ct.success(deleted);
       } catch (err) {
-        toast('Erro na limpeza: ' + err.message, 'danger');
-        btn.disabled = false;
+        _ct.error('Erro na limpeza: ' + err.message, () => {
+          // Retry: reabre o modal de confirmação
+          const pruneBtn = document.getElementById('cfg-prune-btn');
+          if (pruneBtn) pruneBtn.click();
+        });
       }
     });
   });
@@ -8608,9 +8837,15 @@ function mountCleanupCountdown() {
   });
   widget.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') widget.click(); });
 
-  let _nextRun = null; // Date object do próximo run
-  let _tickId  = null;
-  let _fetchId = null;
+  let _nextRun       = null; // Date object do próximo run
+  let _tickId        = null;
+  let _fetchId       = null;
+  let _runningCount  = 0;   // Quantas vezes consecutivas ficamos em "running"
+  // FIX: limite de tentativas em estado "running" para evitar loop visual infinito.
+  // Após MAX_RUNNING_POLLS re-fetches sem next_run futuro, o widget para de
+  // mostrar "Executando..." e volta para "Aguardando..." — corrige o bug onde
+  // o frontend ficava em loop "excluindo, excluindo..." sem parar sozinho.
+  const MAX_RUNNING_POLLS = 6; // 6 × 30s = 3 minutos máximo em "running"
 
   function _fmtCountdown(ms) {
     if (ms <= 0) return null;
@@ -8624,17 +8859,29 @@ function mountCleanupCountdown() {
   function _tick() {
     const lbl = labelEl();
     if (!lbl) return;
-    if (!_nextRun) { lbl.textContent = 'Aguardando...'; return; }
+    if (!_nextRun) { lbl.textContent = 'Aguardando...'; widget.className = ''; return; }
     const ms = _nextRun - Date.now();
     if (ms <= 0) {
-      // Limpeza em execução (ou passou)
-      lbl.textContent = 'Executando...';
-      widget.className = 'running';
-      // Re-fetch após 30s pra pegar novo next_run
-      clearTimeout(_fetchId);
-      _fetchId = setTimeout(_fetchStatus, 30000);
+      // FIX: só entra em modo "running" se ainda não esgotou o limite de polls.
+      // Sem esse limite, o widget ficava preso em "Executando..." em loop visual
+      // mesmo após a limpeza terminar — usuário precisava de F5 para sair.
+      if (_runningCount < MAX_RUNNING_POLLS) {
+        lbl.textContent = 'Executando...';
+        widget.className = 'running';
+        _runningCount++;
+        clearTimeout(_fetchId);
+        _fetchId = setTimeout(_fetchStatus, 30000);
+      } else {
+        // Esgotou tentativas — para o loop, mostra estado neutro
+        // O próximo fetch periódico (5min) vai restaurar quando API tiver novo next_run
+        lbl.textContent = 'Aguardando...';
+        widget.className = '';
+        _nextRun = null; // Reseta para aguardar novo ciclo
+      }
       return;
     }
+    // Temos next_run futuro válido — reseta contador de running
+    _runningCount = 0;
     const txt = _fmtCountdown(ms);
     lbl.textContent = `Prox. limpeza em ${txt}`;
     widget.className = ms < 60000 ? 'warning' : '';
@@ -8644,7 +8891,16 @@ function mountCleanupCountdown() {
     try {
       const s = await api('/api/cleanup/status');
       const raw = s?.next_run || s?.nextRun;
-      _nextRun = raw ? new Date(raw) : null;
+      const parsed = raw ? new Date(raw) : null;
+      // FIX: só aceita next_run se for futuro (evita travar em valor de passado)
+      if (parsed && parsed.getTime() > Date.now()) {
+        _nextRun = parsed;
+        _runningCount = 0; // Nova execução agendada — reseta contador
+      } else if (_runningCount === 0) {
+        // Fetch inicial sem next_run futuro — espera
+        _nextRun = null;
+      }
+      // Se _runningCount > 0, mantém _nextRun como está (null) e deixa _tick decidir
     } catch (_) {
       _nextRun = null;
     }
