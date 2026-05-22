@@ -1821,6 +1821,287 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   #cleanup-countdown #cleanup-countdown__label { display: none; }
   #cleanup-countdown { padding: .5rem .625rem; }
 }
+
+/* ── Execuções v2 — lista refatorada ─────────────────────────────── */
+.exec-list-table tbody tr { cursor: pointer; transition: background var(--transition); }
+.exec-list-table tbody tr:hover td { background: rgba(255,255,255,.03); }
+.exec-duration-badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 7px; border-radius: var(--radius-full);
+  font-size: .6875rem; font-weight: 600; font-family: var(--font-mono);
+}
+.exec-duration-badge--fast   { background: var(--success-bg); color: var(--success); }
+.exec-duration-badge--medium { background: var(--warning-bg); color: var(--warning); }
+.exec-duration-badge--slow   { background: var(--danger-bg);  color: var(--danger); }
+.exec-duration-badge--none   { background: var(--surface-3);  color: var(--text-muted); }
+.exec-date-filters {
+  display: flex; align-items: center; gap: .375rem; flex-wrap: wrap;
+}
+.exec-date-filters input[type="date"] {
+  width: auto; min-width: 140px; height: 32px;
+  padding: .25rem .5rem; font-size: .8125rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text);
+}
+.exec-date-filters input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.6);
+}
+
+/* ── Tela detalhe de execução (overlay full-screen) ──────────────── */
+#exec-detail-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 600;
+  background: var(--bg);
+  flex-direction: column;
+  overflow: hidden;
+}
+#exec-detail-overlay.open { display: flex; }
+
+/* Header do detalhe */
+.exec-detail-header {
+  display: flex; align-items: center; gap: .875rem;
+  padding: .875rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: .625rem;
+}
+.exec-detail-header__back {
+  display: inline-flex; align-items: center; gap: .375rem;
+  padding: .375rem .75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: .8125rem; font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.exec-detail-header__back:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-light); }
+.exec-detail-header__back:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.exec-detail-header__meta {
+  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; flex: 1; min-width: 0;
+}
+.exec-detail-header__id {
+  font-family: var(--font-mono); font-size: .8125rem; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px;
+}
+.exec-detail-header__actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+
+/* Body 2-colunas */
+.exec-detail-body {
+  display: flex; flex: 1; overflow: hidden;
+}
+.exec-detail-left {
+  flex: 0 0 60%;
+  overflow-y: auto;
+  max-height: calc(100vh - 56px);
+  padding: 1.25rem 1.5rem;
+  border-right: 1px solid var(--border);
+}
+.exec-detail-right {
+  flex: 0 0 40%;
+  overflow-y: auto;
+  max-height: calc(100vh - 56px);
+  padding: 1.25rem 1.5rem;
+  display: flex; flex-direction: column; gap: 1rem;
+}
+@media (max-width: 768px) {
+  .exec-detail-body { flex-direction: column; overflow: auto; }
+  .exec-detail-left  { flex: none; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+  .exec-detail-right { flex: none; max-height: none; }
+}
+
+/* Fluxograma — cards de evento */
+.exec-flow {
+  display: flex; flex-direction: column; gap: 0;
+  position: relative;
+}
+.exec-flow-node {
+  position: relative;
+  padding-left: 1.5rem;
+}
+/* linha vertical conectora */
+.exec-flow-node:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: .6875rem;
+  top: 2.25rem;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+/* dot no topo da linha */
+.exec-flow-node__dot {
+  position: absolute;
+  left: .375rem;
+  top: .875rem;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid;
+  background: var(--bg-2);
+  z-index: 1;
+}
+.exec-flow-node__dot--success { border-color: var(--success); background: var(--success-bg); }
+.exec-flow-node__dot--error   { border-color: var(--danger);  background: var(--danger-bg); }
+.exec-flow-node__dot--warning { border-color: var(--warning); background: var(--warning-bg); }
+.exec-flow-node__dot--muted   { border-color: var(--text-subtle); background: var(--surface-2); }
+
+.exec-event-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid;
+  border-radius: var(--radius-md);
+  margin-bottom: .625rem;
+  overflow: hidden;
+  transition: box-shadow var(--transition), border-color var(--transition);
+}
+.exec-event-card:hover { box-shadow: var(--shadow-sm); }
+.exec-event-card--success { border-left-color: var(--success); }
+.exec-event-card--error   { border-left-color: var(--danger); }
+.exec-event-card--warning { border-left-color: var(--warning); }
+.exec-event-card--muted   { border-left-color: var(--text-subtle); }
+
+.exec-event-card__header {
+  display: flex; align-items: center; gap: .625rem;
+  padding: .625rem .875rem;
+  cursor: pointer;
+  user-select: none;
+}
+.exec-event-card__icon {
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: .75rem;
+}
+.exec-event-card__icon--success { background: var(--success-bg); color: var(--success); }
+.exec-event-card__icon--error   { background: var(--danger-bg);  color: var(--danger); }
+.exec-event-card__icon--warning { background: var(--warning-bg); color: var(--warning); }
+.exec-event-card__icon--muted   { background: var(--surface-2);  color: var(--text-muted); }
+
+.exec-event-card__name {
+  font-size: .8125rem; font-weight: 600; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.exec-event-card__dur {
+  font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted);
+  flex-shrink: 0;
+}
+.exec-event-card__chevron {
+  flex-shrink: 0; color: var(--text-subtle);
+  transition: transform 200ms ease-out;
+}
+.exec-event-card.expanded .exec-event-card__chevron { transform: rotate(90deg); }
+
+.exec-event-card__body {
+  display: none;
+  padding: 0 .875rem .875rem;
+  border-top: 1px solid var(--border);
+}
+.exec-event-card.expanded .exec-event-card__body { display: block; }
+
+.exec-event-card__payload-preview {
+  font-family: var(--font-mono);
+  font-size: .75rem;
+  color: var(--text-muted);
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+  padding: .625rem;
+  margin-top: .625rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+.exec-event-card__timestamp {
+  font-size: .75rem; color: var(--text-subtle);
+  font-family: var(--font-mono); margin-top: .375rem;
+}
+
+/* Coluna direita — bolhas de chat */
+.exec-chat-panel__title {
+  font-size: .6875rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--text-subtle); margin-bottom: .625rem;
+}
+.exec-chat-bubbles {
+  display: flex; flex-direction: column; gap: .75rem;
+}
+.exec-bubble {
+  max-width: 80%;
+  padding: .625rem .875rem;
+  border-radius: var(--radius-lg);
+  font-size: .875rem; line-height: 1.5;
+}
+.exec-bubble--incoming {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-sm);
+  align-self: flex-start;
+}
+.exec-bubble--outgoing {
+  background: rgba(59,130,246,.15);
+  border: 1px solid rgba(59,130,246,.25);
+  border-bottom-right-radius: var(--radius-sm);
+  align-self: flex-end;
+  text-align: right;
+}
+.exec-bubble__label {
+  display: block; font-size: .6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  margin-bottom: .25rem; opacity: .7;
+}
+.exec-bubble--incoming .exec-bubble__label { color: var(--text-muted); }
+.exec-bubble--outgoing .exec-bubble__label { color: var(--primary); }
+.exec-bubble--empty {
+  color: var(--text-subtle); font-style: italic; font-size: .8125rem;
+  background: transparent; border: none; padding: 0;
+}
+
+/* Modal Prism JSON full */
+#prism-modal-backdrop {
+  display: none;
+  position: fixed; inset: 0; z-index: 700;
+  background: rgba(0,0,0,.8);
+  align-items: center; justify-content: center;
+  padding: 1rem;
+}
+#prism-modal-backdrop.open { display: flex; }
+.prism-modal {
+  background: #1e1e2e;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  width: 100%; max-width: 860px;
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+  box-shadow: var(--shadow-lg);
+}
+.prism-modal__header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .875rem 1.25rem;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  flex-shrink: 0;
+}
+.prism-modal__title { font-size: .9375rem; font-weight: 600; color: #cdd6f4; }
+.prism-modal__body {
+  overflow: auto; flex: 1;
+  padding: 1rem 1.25rem;
+}
+.prism-modal__body pre {
+  margin: 0; font-family: var(--font-mono); font-size: .8125rem;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+  color: #cdd6f4;
+}
+
+/* Skeleton execuções lista */
+.exec-skel-row {
+  display: grid; grid-template-columns: 100px 120px 1fr 80px 80px 60px;
+  gap: 1rem; padding: .625rem .875rem;
+  border-bottom: 1px solid var(--border);
+}
+.exec-skel-row:last-child { border-bottom: none; }
 </style>
 </head>
 <body>
@@ -1922,6 +2203,20 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 <div id="modal-backdrop" role="dialog" aria-modal="true" aria-label="Modal">
   <div class="modal" id="modal-content"></div>
 </div>
+<!-- ── Prism JSON Modal ───────────────────────────────────────── -->
+<div id="prism-modal-backdrop" role="dialog" aria-modal="true" aria-label="Ver JSON completo">
+  <div class="prism-modal" id="prism-modal-content">
+    <div class="prism-modal__header">
+      <span class="prism-modal__title" id="prism-modal-title">JSON</span>
+      <button class="btn btn--ghost btn--sm btn--icon" onclick="closePrismModal()" aria-label="Fechar JSON" id="prism-modal-close">&#x2715;</button>
+    </div>
+    <div class="prism-modal__body">
+      <pre id="prism-modal-code"></pre>
+    </div>
+  </div>
+</div>
+<!-- ── Exec detail overlay ────────────────────────────────────────── -->
+<div id="exec-detail-overlay" role="region" aria-label="Detalhe de execução"></div>
 <!-- ── Lightbox ──────────────────────────────────────────────────── -->
 <div class="lightbox" id="lightbox" role="dialog" aria-label="Visualizar imagem">
   <button class="lightbox__close" id="lightbox-close" aria-label="Fechar visualização">&#x2715;</button>
@@ -4979,7 +5274,7 @@ document.getElementById('drawer-backdrop').addEventListener('click', closeDrawer
    EXECUÇÕES
    ══════════════════════════════════════════════════════════════════ */
 let _execSSE = null;
-let _execFilters = { hours: '24', status: '', bot: '', q: '' };
+let _execFilters = { from: '', to: '', status: '', slot: '' };
 let _execLogs = [];
 
 function maskPhone(p) {
@@ -4992,6 +5287,14 @@ function fmtDuration(ms) {
   if (!ms && ms !== 0) return '—';
   if (ms < 1000) return ms + 'ms';
   return (ms / 1000).toFixed(1) + 's';
+}
+
+function execDurationBadge(ms) {
+  if (!ms && ms !== 0) return `<span class="exec-duration-badge exec-duration-badge--none">—</span>`;
+  const label = fmtDuration(ms);
+  if (ms < 2000)  return `<span class="exec-duration-badge exec-duration-badge--fast">${label}</span>`;
+  if (ms < 5000)  return `<span class="exec-duration-badge exec-duration-badge--medium">${label}</span>`;
+  return `<span class="exec-duration-badge exec-duration-badge--slow">${label}</span>`;
 }
 
 function execStatusBadge(st) {
@@ -5016,57 +5319,151 @@ function execStatusIcon(st) {
   return `<span style="color:var(--text-subtle)">${icon('minus', 14)}</span>`;
 }
 
-function buildExecRow(e) {
-  const tr = document.createElement('tr');
-  tr.style.cursor = 'pointer';
-  const phone = maskPhone(e.telefone || e.phone || e.from || '');
-  const dur = fmtDuration(e.duration_ms || e.duration || null);
-  const msg = escapeHtml((e.mensagem || e.message || e.event_type || '').slice(0, 60));
-  tr.innerHTML = `
-    <td>${execStatusIcon(e.status)}</td>
-    <td class="mono">${escapeHtml(fmtDate(e.created_at || e.timestamp))}</td>
-    <td><div style="display:flex;align-items:center;gap:.375rem">${botAvatar(e.flow_id || e.workflow_id || e.bot || 'bot', 20).outerHTML}<span class="mono" style="font-size:.75rem">${escapeHtml((e.flow_id || e.workflow_id || '—').slice(0,16))}</span></div></td>
-    <td><span class="badge badge--muted" style="font-family:var(--font-mono)">${escapeHtml(e.event_type || '—')}</span></td>
-    <td class="mono">${escapeHtml(phone)}</td>
-    <td class="mono">${escapeHtml(dur)}</td>
-    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)">${msg}</td>`;
-
-  tr.addEventListener('click', () => {
-    const meta = e.metadata || e.meta || {};
-    openDrawer(`
-      <div class="drawer__header">
-        <span class="drawer__title">Detalhe da execução</span>
-        <button class="btn btn--ghost btn--icon" onclick="closeDrawer()" aria-label="Fechar">${icon('x', 16)}</button>
-      </div>
-      <div class="drawer__body">
-        <div style="display:flex;flex-direction:column;gap:.75rem">
-          <div>${execStatusBadge(e.status)}</div>
-          <div class="field"><label>Horário</label><div class="mono">${escapeHtml(fmtDate(e.created_at || e.timestamp))}</div></div>
-          <div class="field"><label>Flow</label><div class="mono">${escapeHtml(e.flow_id || e.workflow_id || '—')}</div></div>
-          <div class="field"><label>Evento</label><div class="mono">${escapeHtml(e.event_type || '—')}</div></div>
-          <div class="field"><label>Telefone</label><div class="mono">${escapeHtml(e.telefone || e.phone || e.from || '—')}</div></div>
-          <div class="field"><label>Duração</label><div class="mono">${escapeHtml(fmtDuration(e.duration_ms || e.duration || null))}</div></div>
-          ${e.error_summary ? `<div class="field"><label>Erro</label><div class="mono" style="color:var(--danger)">${escapeHtml(e.error_summary)}</div></div>` : ''}
-          ${e.mensagem || e.message ? `<div class="field"><label>Mensagem</label><div class="mono">${escapeHtml(e.mensagem || e.message)}</div></div>` : ''}
-          <div class="field"><label>Metadata</label><pre>${escapeHtml(JSON.stringify(meta, null, 2))}</pre></div>
-        </div>
-      </div>`);
+/* ── Prism lazy loader ──────────────────────────────────────────── */
+function loadPrismJSON() {
+  if (window.Prism) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css';
+    document.head.appendChild(css);
+    /* core first, then json component */
+    const core = document.createElement('script');
+    core.src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js';
+    core.onload = () => {
+      const json = document.createElement('script');
+      json.src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js';
+      json.onload = resolve;
+      json.onerror = reject;
+      document.head.appendChild(json);
+    };
+    core.onerror = reject;
+    document.head.appendChild(core);
   });
-  return tr;
 }
 
-function renderExecTable(logs) {
-  if (!logs.length) {
-    return `<div class="empty-state">${icon('inbox', 36)}<div class="empty-state__title">Nenhuma execução no período</div><p class="empty-state__text">Ajuste os filtros ou aguarde novas execuções.</p></div>`;
+function closePrismModal() {
+  document.getElementById('prism-modal-backdrop').classList.remove('open');
+  document.getElementById('prism-modal-code').textContent = '';
+}
+
+async function openPrismModal(title, jsonObj) {
+  const raw = typeof jsonObj === 'string' ? jsonObj : JSON.stringify(jsonObj, null, 2);
+  document.getElementById('prism-modal-title').textContent = title || 'JSON';
+  const codeEl = document.getElementById('prism-modal-code');
+  codeEl.textContent = raw;
+  document.getElementById('prism-modal-backdrop').classList.add('open');
+  try {
+    await loadPrismJSON();
+    codeEl.className = 'language-json';
+    window.Prism.highlightElement(codeEl);
+  } catch (e) { /* fallback: plain text already set */ }
+}
+
+/* ── Event type label map ────────────────────────────────────────── */
+const EVENT_TYPE_LABELS = {
+  'webhook.received':   'Webhook recebido',
+  'message.received':  'Mensagem recebida',
+  'audio.download':    'Download de áudio',
+  'audio.transcribe':  'Transcrição de áudio',
+  'message.normalize': 'Normalização de mensagem',
+  'bot.check':         'Verificação de bot',
+  'pause.read':        'Leitura de pausa',
+  'pause.gate':        'Gate de pausa',
+  'cancel.detect':     'Detecção de cancelamento',
+  'ai.agent':          'Agente IA',
+  'ai.response':       'Resposta da IA',
+  'reply.send':        'Envio de resposta',
+  'reply.sent':        'Resposta enviada',
+  'calendar.create':   'Criação de agendamento',
+  'calendar.check':    'Verificação de disponibilidade',
+  'pending.read':      'Leitura de pendente',
+  'pending.save':      'Salvar pendente',
+  'pending.delete':    'Deletar pendente',
+  'slot.available':    'Horário disponível',
+  'slot.busy':         'Horário ocupado',
+  'ignored':           'Ignorado',
+  'error':             'Erro',
+};
+
+function eventTypeLabel(type) {
+  return EVENT_TYPE_LABELS[type] || (type || '—').replace(/[._-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function eventTypeIcon(type, status) {
+  const t = (type || '').toLowerCase();
+  const st = (status || '').toLowerCase();
+  if (t.includes('webhook') || t.includes('message.received')) return icon('zap', 14);
+  if (t.includes('audio'))   return icon('mic', 14);
+  if (t.includes('ai') || t.includes('agent')) return icon('cpu', 14);
+  if (t.includes('reply') || t.includes('send')) return icon('message-circle', 14);
+  if (t.includes('calendar')) return icon('calendar', 14);
+  if (t.includes('pause'))   return icon('pause-circle', 14);
+  if (t.includes('cancel'))  return icon('x-circle', 14);
+  if (t.includes('pending') || t.includes('slot')) return icon('clock', 14);
+  if (st === 'error')        return icon('alert-triangle', 14);
+  return icon('activity', 14);
+}
+
+function eventStatusClass(status) {
+  const k = (status || '').toLowerCase();
+  if (k === 'success' || k === 'ok') return 'success';
+  if (k === 'error' || k === 'failed') return 'error';
+  if (k === 'warning' || k === 'running') return 'warning';
+  return 'muted';
+}
+
+/* ── Extract message / reply from events array ───────────────────── */
+function extractChatFromEvents(events) {
+  /* "mensagem original": first payload that has a text/body field */
+  let incoming = null;
+  let outgoing = null;
+
+  for (const ev of (events || [])) {
+    const p = ev.payload || {};
+    /* candidate for incoming message */
+    if (!incoming) {
+      const txt = p.body || p.text || p.mensagem || p.message || p.content
+        || p.transcription || p.transcript || null;
+      if (txt && typeof txt === 'string') {
+        incoming = txt;
+      }
+    }
+    /* candidate for outgoing reply */
+    const type = (ev.event_type || '').toLowerCase();
+    if (type.includes('reply') || type.includes('send') || type.includes('resposta')) {
+      const txt = p.body || p.text || p.mensagem || p.message || p.content || p.reply || null;
+      if (txt && typeof txt === 'string') {
+        outgoing = txt;
+      }
+    }
   }
-  const rows = logs.map(e => buildExecRow(e).outerHTML).join('');
-  return `<div class="table-wrap"><table class="table">
-    <thead><tr>
-      <th style="width:32px"></th>
-      <th>Hora</th><th>Flow</th><th>Evento</th><th>Telefone</th><th>Duração</th><th>Mensagem</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+  return { incoming, outgoing };
+}
+
+function buildExecRow(e) {
+  const tr = document.createElement('tr');
+  const phone = maskPhone(e.telefone_mascarado || e.telefone || e.phone || e.from || '');
+  const slot  = e.slot || e.flow_id || e.workflow_id || e.bot || '—';
+  const dur   = e.duration_ms ?? e.duration ?? null;
+  const ts    = e.started_at  || e.created_at || e.timestamp;
+  const cnt   = e.events_count ?? '—';
+
+  tr.innerHTML = `
+    <td class="mono" style="font-size:.75rem;color:var(--text-muted)">${escapeHtml(fmtDate(ts))}</td>
+    <td>
+      <div style="display:flex;align-items:center;gap:.375rem">
+        ${botAvatar(slot, 20).outerHTML}
+        <span class="mono" style="font-size:.75rem">${escapeHtml(slot.slice(0,20))}</span>
+      </div>
+    </td>
+    <td class="mono" style="font-size:.75rem">${escapeHtml(phone)}</td>
+    <td>${execDurationBadge(dur)}</td>
+    <td>${execStatusBadge(e.status_final || e.status)}</td>
+    <td style="color:var(--text-muted);font-size:.75rem;text-align:right">${escapeHtml(String(cnt))}</td>`;
+
+  tr.addEventListener('click', () => openExecDetail(e.id || e.execution_id || e._id));
+  return tr;
 }
 
 async function loadExecData() {
@@ -5075,103 +5472,104 @@ async function loadExecData() {
   const kpiWrap   = sec.querySelector('#exec-kpis');
   if (!tableWrap) return;
 
-  tableWrap.innerHTML = `<div class="skeleton-block" style="height:220px"></div>`;
+  /* skeleton */
+  const skelRow = `<div class="exec-skel-row">${Array(6).fill('<div class="skeleton"></div>').join('')}</div>`;
+  tableWrap.innerHTML = `<div class="card-flat" style="overflow:hidden">${skelRow.repeat(8)}</div>`;
   kpiWrap.innerHTML   = `<div class="kpi-grid">${'<div class="kpi-card"><div class="skeleton" style="height:28px;width:80px;margin-bottom:.5rem"></div><div class="skeleton" style="width:80px"></div></div>'.repeat(4)}</div>`;
 
-  const { hours, status, bot, q } = _execFilters;
+  const { from, to, status, slot } = _execFilters;
   const params = new URLSearchParams();
-  if (hours)  params.set('hours',  hours);
+  if (from)   params.set('from',   from);
+  if (to)     params.set('to',     to);
   if (status) params.set('status', status);
-  if (bot)    params.set('bot',    bot);
-  if (q)      params.set('q',      q);
-  const qs = params.toString() ? '?' + params.toString() : '';
+  if (slot)   params.set('slot',   slot);
+  params.set('limit', '50');
+  const qs = '?' + params.toString();
 
   try {
-    const [logs, summary] = await Promise.allSettled([
-      api('/api/flow-logs' + qs),
-      api('/api/flow-logs/summary' + qs),
-    ]);
-
-    const arr = logs.status === 'fulfilled' ? (Array.isArray(logs.value) ? logs.value : (logs.value?.data || logs.value?.logs || [])) : [];
+    const data = await api('/api/executions' + qs);
+    const arr = Array.isArray(data) ? data : (data.data || data.executions || []);
     _execLogs = arr;
 
-    const sum = summary.status === 'fulfilled' ? summary.value : {};
-    const total   = sum?.total   ?? arr.length;
-    const success = sum?.success ?? arr.filter(e => (e.status || '').toLowerCase() === 'success').length;
-    const errors  = sum?.errors  ?? arr.filter(e => (e.status || '').toLowerCase() === 'error').length;
+    /* KPIs calculados do lado cliente */
+    const total   = arr.length;
+    const success = arr.filter(e => (e.status_final || e.status || '').toLowerCase() === 'success').length;
+    const errors  = arr.filter(e => (e.status_final || e.status || '').toLowerCase() === 'error').length;
     const rate    = total > 0 ? Math.round((success / total) * 100) : 0;
     const rateColor = rate >= 90 ? 'var(--success)' : rate >= 70 ? 'var(--warning)' : 'var(--danger)';
 
     kpiWrap.innerHTML = `<div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--info-bg);color:var(--info)">${icon('activity',18)}</div><div class="kpi-card__value">${fmtNum(total)}</div><div class="kpi-card__label">Total</div></div>
+      <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--info-bg);color:var(--info)">${icon('activity',18)}</div><div class="kpi-card__value">${fmtNum(total)}</div><div class="kpi-card__label">Total no período</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--success-bg);color:var(--success)">${icon('check-circle-2',18)}</div><div class="kpi-card__value">${fmtNum(success)}</div><div class="kpi-card__label">Sucesso</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--danger-bg);color:var(--danger)">${icon('alert-triangle',18)}</div><div class="kpi-card__value">${fmtNum(errors)}</div><div class="kpi-card__label">Erros</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--warning-bg);color:var(--warning)">${icon('zap',18)}</div><div class="kpi-card__value" style="color:${rateColor}">${rate}%</div><div class="kpi-card__label">Taxa de sucesso</div></div>
     </div>`;
 
-    // Re-render rows with real DOM nodes so event listeners work
     if (!arr.length) {
       tableWrap.innerHTML = `<div class="empty-state">${icon('inbox',36)}<div class="empty-state__title">Nenhuma execução no período</div><p class="empty-state__text">Ajuste os filtros ou aguarde novas execuções.</p></div>`;
-    } else {
-      const tableEl = document.createElement('div');
-      tableEl.className = 'table-wrap';
-      const tbl = document.createElement('table');
-      tbl.className = 'table';
-      tbl.innerHTML = `<thead><tr><th style="width:32px"></th><th>Hora</th><th>Flow</th><th>Evento</th><th>Telefone</th><th>Duração</th><th>Mensagem</th></tr></thead>`;
-      const tbody = document.createElement('tbody');
-      arr.forEach(e => tbody.appendChild(buildExecRow(e)));
-      tbl.appendChild(tbody);
-      tableEl.appendChild(tbl);
-      tableWrap.innerHTML = '';
-      tableWrap.appendChild(tableEl);
+      return;
     }
+
+    const tableEl = document.createElement('div');
+    tableEl.className = 'table-wrap';
+    const tbl = document.createElement('table');
+    tbl.className = 'table exec-list-table';
+    tbl.innerHTML = `<thead><tr>
+      <th>Horário</th>
+      <th>Slot / Bot</th>
+      <th>Telefone</th>
+      <th>Duração</th>
+      <th>Status</th>
+      <th style="text-align:right">Eventos</th>
+    </tr></thead>`;
+    const tbody = document.createElement('tbody');
+    arr.forEach(e => tbody.appendChild(buildExecRow(e)));
+    tbl.appendChild(tbody);
+    tableEl.appendChild(tbl);
+    tableWrap.innerHTML = '';
+    tableWrap.appendChild(tableEl);
+
   } catch (err) {
-    tableWrap.innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.5rem" onclick="loadExecData()">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
+    if (err.status === 401) { window.location.href = '/login.html'; return; }
+    tableWrap.innerHTML = `<div class="card" style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <span>${icon('alert-triangle',16)}</span>
+      <span style="flex:1">Falha ao carregar execuções. ${escapeHtml(err.message)}</span>
+      <button class="btn btn--sm" onclick="loadExecData()">${icon('refresh-cw',14)} Tentar novamente</button>
+    </div>`;
   }
 }
 
 function startExecSSE(liveBtn) {
-  if (_execSSE) return;
-  _execSSE = new EventSource('/api/flow-logs/stream');
-  _execSSE.onmessage = (ev) => {
-    try {
-      const e = JSON.parse(ev.data);
-      const tbody = document.querySelector('#sec-execucoes .table tbody');
-      if (tbody) {
-        const firstRow = buildExecRow(e);
-        tbody.insertBefore(firstRow, tbody.firstChild);
-        // Trim to 100
-        while (tbody.children.length > 100) tbody.removeChild(tbody.lastChild);
-      }
-    } catch (e) { console.warn('[execSSE] payload invalido:', e?.message); }
-  };
-  _execSSE.onerror = () => { stopExecSSE(liveBtn); };
-  liveBtn.classList.add('btn--success');
-  liveBtn.innerHTML = `<span class="live-dot"></span> Ao vivo`;
+  /* SSE desativado na v2 — usa atualização manual */
+  toast('Monitoramento ao vivo desativado nesta versão. Use "Atualizar".', 'info');
 }
 
 function stopExecSSE(liveBtn) {
   if (_execSSE) { _execSSE.close(); _execSSE = null; }
-  liveBtn.classList.remove('btn--success');
-  liveBtn.innerHTML = `${icon('activity', 14)} Ao vivo`;
 }
 
 async function renderExecucoes() {
   const sec = document.querySelector('#sec-execucoes');
+
+  /* Datas padrão: últimas 24h */
+  const nowDate  = new Date();
+  const fromDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const toVal    = nowDate.toISOString().slice(0,16);
+  const fromVal  = fromDate.toISOString().slice(0,16);
+  _execFilters.from = fromVal;
+  _execFilters.to   = toVal;
+
   sec.innerHTML = `
     <div class="section-header">
       <div class="section-header__left">
         <h1 class="h1">Execuções</h1>
-        <p class="muted">Log de execuções dos bots</p>
+        <p class="muted">Log de execuções agrupadas por conversa</p>
       </div>
     </div>
     <div class="filter-bar" id="exec-filter-bar">
-      <div class="pill-group" id="exec-period-pills">
-        <button class="pill" data-h="1">1h</button>
-        <button class="pill" data-h="6">6h</button>
-        <button class="pill active" data-h="24">24h</button>
-        <button class="pill" data-h="168">7d</button>
-      </div>
+      <select id="exec-filter-slot" aria-label="Filtrar por slot" style="width:auto;flex:0 0 auto">
+        <option value="">Todos os slots</option>
+      </select>
       <select id="exec-filter-status" aria-label="Filtrar por status" style="width:auto;flex:0 0 auto">
         <option value="">Todos os status</option>
         <option value="success">Sucesso</option>
@@ -5179,58 +5577,205 @@ async function renderExecucoes() {
         <option value="running">Em andamento</option>
         <option value="ignored">Ignorado</option>
       </select>
-      <select id="exec-filter-bot" aria-label="Filtrar por bot" style="width:auto;flex:0 0 auto">
-        <option value="">Todos os bots</option>
-      </select>
-      <input type="text" id="exec-search" placeholder="Buscar…" aria-label="Busca livre" style="max-width:180px" />
-      <button class="btn btn--sm" id="exec-live-btn" aria-label="Ativar monitoramento ao vivo">${icon('activity',14)} Ao vivo</button>
-      <button class="btn btn--sm btn--ghost btn--icon" id="exec-refresh-btn" aria-label="Recarregar execuções">${icon('refresh-cw',14)}</button>
+      <div class="exec-date-filters">
+        <span style="font-size:.75rem;color:var(--text-muted);white-space:nowrap">De</span>
+        <input type="datetime-local" id="exec-filter-from" value="${fromVal}" aria-label="Data inicial" />
+        <span style="font-size:.75rem;color:var(--text-muted);white-space:nowrap">até</span>
+        <input type="datetime-local" id="exec-filter-to" value="${toVal}" aria-label="Data final" />
+      </div>
+      <button class="btn btn--sm btn--primary" id="exec-refresh-btn" aria-label="Atualizar lista de execuções">
+        ${icon('refresh-cw',14)} Atualizar
+      </button>
     </div>
     <div id="exec-kpis"></div>
     <div id="exec-table-wrap"><div class="skeleton-block" style="height:220px"></div></div>`;
 
-  // Populate bot filter
+  /* Popular select de slots via /api/clones */
   try {
-    const wfs = await api('/api/workflows');
-    const arr = Array.isArray(wfs) ? wfs : (wfs.workflows || wfs.data || []);
-    const sel = sec.querySelector('#exec-filter-bot');
-    arr.forEach(w => {
+    const clones = await api('/api/clones');
+    const arr = Array.isArray(clones) ? clones : (clones.data || clones.clones || []);
+    const sel = sec.querySelector('#exec-filter-slot');
+    arr.forEach(c => {
       const opt = document.createElement('option');
-      opt.value = w.workflow_id || w.id || w.slug || w.name;
-      opt.textContent = w.name || w.workflow_id || w.id;
+      opt.value = c.slot;
+      opt.textContent = c.display_name || c.slot;
       sel.appendChild(opt);
     });
-  } catch (e) { console.warn('[execFilter] falha ao carregar workflows:', e?.message); }
+  } catch (e) { console.warn('[execFilter] falha ao carregar clones:', e?.message); }
 
-  // Period pills
-  sec.querySelector('#exec-period-pills').addEventListener('click', (ev) => {
-    const btn = ev.target.closest('.pill');
-    if (!btn) return;
-    sec.querySelectorAll('#exec-period-pills .pill').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    _execFilters.hours = btn.dataset.h;
-    loadExecData();
-  });
-
-  // Filters
+  sec.querySelector('#exec-filter-slot').addEventListener('change', (ev) => { _execFilters.slot = ev.target.value; loadExecData(); });
   sec.querySelector('#exec-filter-status').addEventListener('change', (ev) => { _execFilters.status = ev.target.value; loadExecData(); });
-  sec.querySelector('#exec-filter-bot').addEventListener('change', (ev) => { _execFilters.bot = ev.target.value; loadExecData(); });
-  let _execDebounce;
-  sec.querySelector('#exec-search').addEventListener('input', (ev) => {
-    clearTimeout(_execDebounce);
-    _execDebounce = setTimeout(() => { _execFilters.q = ev.target.value; loadExecData(); }, 450);
-  });
-
-  // Live toggle
-  const liveBtn = sec.querySelector('#exec-live-btn');
-  liveBtn.addEventListener('click', () => {
-    if (_execSSE) stopExecSSE(liveBtn); else startExecSSE(liveBtn);
-  });
-
-  // Refresh
+  sec.querySelector('#exec-filter-from').addEventListener('change', (ev) => { _execFilters.from = ev.target.value; });
+  sec.querySelector('#exec-filter-to').addEventListener('change', (ev) => { _execFilters.to = ev.target.value; });
   sec.querySelector('#exec-refresh-btn').addEventListener('click', loadExecData);
 
   loadExecData();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   TELA DETALHE DE EXECUÇÃO (overlay full-screen)
+   ══════════════════════════════════════════════════════════════════ */
+
+async function openExecDetail(execId) {
+  if (!execId) { toast('ID de execução inválido', 'danger'); return; }
+  const overlay = document.getElementById('exec-detail-overlay');
+  overlay.classList.add('open');
+
+  /* skeleton enquanto carrega */
+  overlay.innerHTML = `
+    <div class="exec-detail-header">
+      <button class="exec-detail-header__back" onclick="closeExecDetail()" aria-label="Voltar para lista de execuções">
+        ${icon('chevron-left',14)} Voltar
+      </button>
+      <div class="skeleton" style="width:240px;height:20px"></div>
+    </div>
+    <div class="exec-detail-body">
+      <div class="exec-detail-left">
+        <div class="skeleton-block" style="height:320px"></div>
+      </div>
+      <div class="exec-detail-right">
+        <div class="skeleton-block" style="height:180px"></div>
+      </div>
+    </div>`;
+
+  let exec;
+  try {
+    exec = await api('/api/executions/' + encodeURIComponent(execId));
+  } catch (err) {
+    if (err.status === 401) { window.location.href = '/login.html'; return; }
+    overlay.innerHTML = `
+      <div class="exec-detail-header">
+        <button class="exec-detail-header__back" onclick="closeExecDetail()">${icon('chevron-left',14)} Voltar</button>
+      </div>
+      <div style="padding:2rem">
+        <div class="card" style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+          ${icon('alert-triangle',16)}
+          <span>Falha ao carregar detalhe. ${escapeHtml(err.message)}</span>
+          <button class="btn btn--sm" onclick="openExecDetail('${escapeHtml(execId)}')">${icon('refresh-cw',14)} Tentar novamente</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  renderExecDetail(overlay, exec);
+}
+
+function closeExecDetail() {
+  const overlay = document.getElementById('exec-detail-overlay');
+  overlay.classList.remove('open');
+  overlay.innerHTML = '';
+}
+
+function renderExecDetail(overlay, exec) {
+  const events  = exec.events || [];
+  const status  = exec.status_final || exec.status || '';
+  const slot    = exec.slot || exec.flow_id || '—';
+  const phone   = maskPhone(exec.telefone_mascarado || exec.telefone || exec.phone || '');
+  const dur     = exec.duration_ms ?? exec.duration ?? null;
+  const startTs = exec.started_at  || exec.created_at || '';
+  const endTs   = exec.finished_at || '';
+  const execId  = exec.id || exec.execution_id || '';
+
+  /* Chat extraction */
+  const { incoming, outgoing } = extractChatFromEvents(events);
+
+  /* Fluxograma */
+  const flowNodes = events.map((ev, idx) => {
+    const st        = eventStatusClass(ev.status);
+    const typeLabel = eventTypeLabel(ev.event_type);
+    const evDur     = ev.duration_ms ?? null;
+    const payloadPreview = ev.payload
+      ? JSON.stringify(ev.payload, null, 2).slice(0, 400) + (JSON.stringify(ev.payload).length > 400 ? '\n…' : '')
+      : null;
+
+    return `
+      <div class="exec-flow-node" role="listitem">
+        <div class="exec-flow-node__dot exec-flow-node__dot--${st}" aria-hidden="true"></div>
+        <div class="exec-event-card exec-event-card--${st}" data-ev-idx="${idx}">
+          <div class="exec-event-card__header" role="button" tabindex="0"
+               aria-expanded="false" aria-controls="exec-ev-body-${idx}"
+               onclick="toggleExecEvent(this)"
+               onkeydown="if(event.key==='Enter'||event.key===' '){toggleExecEvent(this);event.preventDefault()}">
+            <div class="exec-event-card__icon exec-event-card__icon--${st}" aria-hidden="true">
+              ${eventTypeIcon(ev.event_type, ev.status)}
+            </div>
+            <span class="exec-event-card__name">${escapeHtml(typeLabel)}</span>
+            ${execStatusBadge(ev.status)}
+            ${evDur !== null ? `<span class="exec-event-card__dur">${escapeHtml(fmtDuration(evDur))}</span>` : ''}
+            <span class="exec-event-card__chevron" aria-hidden="true">${icon('chevron-right',14)}</span>
+          </div>
+          <div class="exec-event-card__body" id="exec-ev-body-${idx}" role="region" aria-label="Payload do evento ${escapeHtml(typeLabel)}">
+            ${ev.created_at ? `<div class="exec-event-card__timestamp">${icon('clock',11)} ${escapeHtml(fmtDate(ev.created_at))}</div>` : ''}
+            ${payloadPreview
+              ? `<pre class="exec-event-card__payload-preview">${escapeHtml(payloadPreview)}</pre>
+                 <button class="btn btn--sm btn--ghost" style="margin-top:.5rem"
+                   onclick="openPrismModal('${escapeHtml(typeLabel)} — payload', ${JSON.stringify(ev.payload).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026')})"
+                   aria-label="Ver JSON completo do evento ${escapeHtml(typeLabel)}">
+                   ${icon('maximize-2',12)} Ver JSON completo
+                 </button>`
+              : `<p class="muted" style="margin:.5rem 0 0">Sem payload</p>`}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="exec-detail-header">
+      <button class="exec-detail-header__back" onclick="closeExecDetail()" aria-label="Voltar para lista de execuções">
+        ${icon('chevron-left',14)} Voltar
+      </button>
+      <div class="exec-detail-header__meta">
+        <span class="exec-detail-header__id" title="${escapeHtml(execId)}">${icon('git-branch',12)} ${escapeHtml(execId.slice(0,32))}</span>
+        ${botAvatar(slot, 22).outerHTML}
+        <span class="mono" style="font-size:.8125rem">${escapeHtml(slot)}</span>
+        <span class="badge badge--muted">${escapeHtml(phone)}</span>
+        ${execStatusBadge(status)}
+        ${dur !== null ? execDurationBadge(dur) : ''}
+        ${startTs ? `<span style="font-size:.75rem;color:var(--text-subtle)">${icon('clock',11)} ${escapeHtml(fmtDate(startTs))}</span>` : ''}
+      </div>
+      <div class="exec-detail-header__actions">
+        <button class="btn btn--sm" onclick="openPrismModal('Execução completa — raw JSON', ${JSON.stringify(exec).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026')})"
+          aria-label="Ver raw JSON da execução">
+          ${icon('file-text',14)} Raw JSON
+        </button>
+      </div>
+    </div>
+    <div class="exec-detail-body">
+      <!-- COLUNA ESQUERDA: fluxograma -->
+      <div class="exec-detail-left">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+          <span class="label">Fluxo — ${events.length} evento${events.length !== 1 ? 's' : ''}</span>
+        </div>
+        ${events.length
+          ? `<div class="exec-flow" role="list" aria-label="Eventos da execução">${flowNodes}</div>`
+          : `<div class="empty-state">${icon('inbox',28)}<div class="empty-state__title">Sem eventos</div><p class="empty-state__text">Nenhum evento registrado nesta execução.</p></div>`}
+      </div>
+      <!-- COLUNA DIREITA: bolhas de chat -->
+      <div class="exec-detail-right">
+        <div class="exec-chat-panel__title">${icon('message-circle',12)} Conversa</div>
+        <div class="exec-chat-bubbles" role="log" aria-label="Troca de mensagens da execução">
+          ${incoming
+            ? `<div class="exec-bubble exec-bubble--incoming">
+                 <span class="exec-bubble__label">Cliente</span>
+                 ${escapeHtml(incoming)}
+               </div>`
+            : `<div class="exec-bubble exec-bubble--empty">Mensagem do cliente não identificada no payload.</div>`}
+          ${outgoing
+            ? `<div class="exec-bubble exec-bubble--outgoing">
+                 <span class="exec-bubble__label">Bot</span>
+                 ${escapeHtml(outgoing)}
+               </div>`
+            : `<div class="exec-bubble exec-bubble--empty" style="align-self:flex-end;text-align:right">Resposta do bot não identificada.</div>`}
+        </div>
+        ${endTs ? `<div style="font-size:.75rem;color:var(--text-subtle);margin-top:.75rem">${icon('clock',11)} Finalizado ${escapeHtml(fmtDate(endTs))}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function toggleExecEvent(headerEl) {
+  const card = headerEl.closest('.exec-event-card');
+  const expanded = card.classList.toggle('expanded');
+  headerEl.setAttribute('aria-expanded', String(expanded));
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -8772,10 +9317,10 @@ function navigateTo(sectionId) {
   // Close mobile sidebar
   closeSidebar();
 
-  // Fecha SSE se sair da seção execuções
-  if (sectionId !== 'execucoes' && _execSSE) {
-    const liveBtn = document.querySelector('#exec-live-btn');
-    if (liveBtn) stopExecSSE(liveBtn); else { _execSSE.close(); _execSSE = null; }
+  // Fecha SSE / detalhe overlay se sair da seção execuções
+  if (sectionId !== 'execucoes') {
+    if (_execSSE) { _execSSE.close(); _execSSE = null; }
+    closeExecDetail();
   }
 
   // Para polling de atividade do dashboard ao sair
@@ -8936,6 +9481,11 @@ function mountCleanupCountdown() {
     if (e.target === e.currentTarget) closeModal();
   });
 
+  // Prism JSON modal — click backdrop to close
+  document.getElementById('prism-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closePrismModal();
+  });
+
   // Lightbox close
   document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
   document.getElementById('lightbox').addEventListener('click', (e) => {
@@ -8953,9 +9503,14 @@ function mountCleanupCountdown() {
     initItem.render();
   }
 
-  // Keyboard ESC closes modal / lightbox / drawer
+  // Keyboard ESC closes modal / lightbox / drawer / exec-detail / prism
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      /* close in reverse z-order: highest first */
+      const prismOpen = document.getElementById('prism-modal-backdrop')?.classList.contains('open');
+      if (prismOpen) { closePrismModal(); return; }
+      const execDetailOpen = document.getElementById('exec-detail-overlay')?.classList.contains('open');
+      if (execDetailOpen) { closeExecDetail(); return; }
       closeModal();
       closeLightbox();
       closeDrawer();
