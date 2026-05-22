@@ -28,7 +28,6 @@ vi.mock('../config.js', () => ({
     REDIS_HOST: 'redis',
     REDIS_PORT: 6379,
     STARTAP_WAHA_SESSIONS: 'startap',
-    ALERT_SESSION: 'startap',
     AGENT_HISTORY_MAX_CHARS: 12000,
     AGENT_TOOL_RESULT_MAX_CHARS: 6000,
     CHAT_MEMORY_RETENTION: 30,

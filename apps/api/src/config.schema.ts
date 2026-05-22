@@ -28,10 +28,6 @@ export const ConfigSchema = z.object({
 
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 
-  ALERT_DEV_PHONE: z.string().optional(),
-  ALERT_OWNER_PHONE: z.string().optional(),
-  ALERT_SESSION: z.string().default('startap'),
-
   CHAT_MEMORY_RETENTION: z.coerce.number().int().positive().default(30),
   CHAT_STALE_RUNNING_MAX_MINUTES: z.coerce.number().int().positive().default(30),
 

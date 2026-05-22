@@ -28,7 +28,6 @@ describe('ConfigSchema', () => {
   it('aceita env mínimo válido com defaults', () => {
     const result = ConfigSchema.parse(VALID_BASE);
     expect(result.OPENAI_MODEL).toBe('gpt-5.4');
-    expect(result.ALERT_SESSION).toBe('startap');
     expect(result.CHAT_MEMORY_RETENTION).toBe(30);
     expect(result.CHAT_STALE_RUNNING_MAX_MINUTES).toBe(30);
     expect(result.STARTAP_WAHA_SESSIONS).toBe('startap,STARTAP_AI,STARTAP_AI_PROD');
