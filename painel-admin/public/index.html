@@ -2102,6 +2102,70 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   border-bottom: 1px solid var(--border);
 }
 .exec-skel-row:last-child { border-bottom: none; }
+
+/* ─── GALERIA DE MIDIA (fase 2) ──────────────────────────────── */
+.gallery-tab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 1rem; margin-top: .75rem; }
+@media (max-width: 767px) { .gallery-tab-grid { grid-template-columns: repeat(2,1fr); } }
+
+.gmc { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md, .5rem); overflow: visible; transition: border-color .15s, box-shadow .15s; position: relative; }
+.gmc:hover { border-color: var(--border-light); box-shadow: var(--shadow-md); }
+.gmc__thumb { aspect-ratio: 16/9; background: var(--surface-2); overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md, .5rem) var(--radius-md, .5rem) 0 0; }
+.gmc__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.gmc__play { position: absolute; width: 26px; height: 26px; background: rgba(0,0,0,.55); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.gmc__body { padding: .5rem .625rem .625rem; }
+.gmc__title { font-size: .8125rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gmc__title-input { font-size: .8125rem; font-weight: 500; background: var(--surface-2); border: 1px solid var(--accent); border-radius: .375rem; padding: .125rem .375rem; color: var(--text); width: 100%; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.gmc__meta { display: flex; align-items: center; gap: .375rem; margin-top: .25rem; flex-wrap: wrap; }
+.gmc__badge-video { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(139,92,246,.2); color: #c4b5fd; border: 1px solid rgba(139,92,246,.3); }
+.gmc__badge-image { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(16,185,129,.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
+.gmc__badge-courses { font-size: .6875rem; background: rgba(59,130,246,.12); color: #93c5fd; border: 1px solid rgba(59,130,246,.25); padding: .1rem .5rem; border-radius: 9999px; cursor: pointer; transition: background .12s; border-style: solid; white-space: nowrap; }
+.gmc__badge-courses:hover { background: rgba(59,130,246,.2); }
+.gmc__badge-unlinked { font-size: .6875rem; background: rgba(245,158,11,.12); color: #fcd34d; border: 1px solid rgba(245,158,11,.25); padding: .1rem .5rem; border-radius: 9999px; white-space: nowrap; }
+.gmc__kebab { position: absolute; top: .375rem; right: .375rem; width: 24px; height: 24px; background: rgba(0,0,0,.6); border-radius: .375rem; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity .12s; border: none; color: white; z-index: 10; }
+.gmc:hover .gmc__kebab, .gmc__kebab:focus { opacity: 1; }
+.gmc__kebab:focus { outline: 2px solid var(--accent); }
+.gmc__menu { position: absolute; top: 1.75rem; right: 0; background: var(--surface); border: 1px solid var(--border-light); border-radius: .5rem; box-shadow: var(--shadow-lg); z-index: 300; min-width: 176px; overflow: hidden; }
+.gmc__menu-item { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; font-size: .8125rem; cursor: pointer; transition: background .1s; color: var(--text); white-space: nowrap; border: none; background: none; width: 100%; text-align: left; }
+.gmc__menu-item:hover:not(.gmc__menu-item--disabled) { background: var(--surface-2); }
+.gmc__menu-item--danger { color: var(--danger, #f87171); }
+.gmc__menu-item--danger:hover:not(.gmc__menu-item--disabled) { background: rgba(239,68,68,.1); }
+.gmc__menu-item--disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+.gmc__menu-sep { border-top: 1px solid var(--border); margin: .25rem 0; }
+
+.gal-drop-zone { border: 2px dashed var(--border-light); border-radius: .625rem; padding: 2rem 1.5rem; text-align: center; transition: all .15s; cursor: pointer; }
+.gal-drop-zone.drag-over { border-color: var(--accent); background: rgba(59,130,246,.06); }
+
+.gal-upload-item { display: flex; align-items: flex-start; gap: .75rem; padding: .625rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: .5rem; }
+.gal-upload-item--success { border-left: 3px solid var(--success, #10b981); }
+.gal-upload-item--error { border-left: 3px solid var(--danger, #ef4444); background: rgba(239,68,68,.04); }
+.gal-upload-item--uploading { border-left: 3px solid var(--accent); }
+.gal-upload-item--pending { border-left: 3px solid var(--border-light); }
+.gal-pb-track { height: 4px; border-radius: 9999px; background: var(--border-light); overflow: hidden; margin-top: .4rem; }
+.gal-pb-fill { height: 100%; background: var(--accent); border-radius: 9999px; transition: width 200ms ease; }
+
+.course-media-mli { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; cursor: pointer; transition: background .1s; }
+.course-media-mli:hover { background: var(--surface-2); }
+.course-media-mli--sel { background: rgba(59,130,246,.06); border-left: 2px solid var(--accent); }
+.course-media-mli--avail { border-left: 2px solid transparent; }
+.star-btn-v2 { background: none; border: none; cursor: pointer; padding: .125rem; display: flex; align-items: center; flex-shrink: 0; transition: transform .1s; }
+.star-btn-v2:hover { transform: scale(1.15); }
+.star-btn-v2--active svg { color: #f59e0b; fill: #f59e0b; }
+.star-btn-v2--inactive svg { color: var(--text-muted); fill: none; }
+.gal-cb { width: 15px; height: 15px; border-radius: .25rem; border: 1.5px solid var(--border-light); background: var(--surface-2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .12s; }
+.gal-cb--checked { background: var(--accent); border-color: var(--accent); }
+.gal-thumb-mini { width: 48px; height: 27px; border-radius: .25rem; flex-shrink: 0; background: var(--surface-2); display: flex; align-items: center; justify-content: center; overflow: hidden; object-fit: cover; }
+.gal-subheader { background: var(--surface-2); padding: .3rem .75rem; font-size: .6875rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; }
+.gal-ctrl-bar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.gal-ctrl-sel { background: var(--surface-2); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem; font-size: .8125rem; color: var(--text); cursor: pointer; }
+.gal-ctrl-sel:focus { outline: none; border-color: var(--accent); }
+.gal-search-wrap { position: relative; }
+.gal-search-input { background: var(--surface-2); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem .35rem 1.8rem; font-size: .8125rem; color: var(--text); transition: border-color .15s; min-width: 160px; }
+.gal-search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+.gal-search-icon { position: absolute; left: .45rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); }
+
+/* usage modal */
+.usage-course-card { padding: .625rem .75rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; border-bottom: 1px solid var(--border); }
+
 </style>
 </head>
 <body>
@@ -3689,6 +3753,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'prompt' ? ' active' : ''}" data-tab="prompt" role="tab" aria-selected="${_selectedBotTab === 'prompt'}">Prompt</button>
       <button class="tab-btn${_selectedBotTab === 'courses' ? ' active' : ''}" data-tab="courses" role="tab" aria-selected="${_selectedBotTab === 'courses'}">Cursos</button>
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
+      <button class="tab-btn${_selectedBotTab === 'galeria' ? ' active' : ''}" data-tab="galeria" role="tab" aria-selected="${_selectedBotTab === 'galeria'}">${icon('image',13)} Galeria</button>
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'horarios' ? ' active' : ''}" data-tab="horarios" role="tab" aria-selected="${_selectedBotTab === 'horarios'}">Horários</button>` : ''}
@@ -3735,6 +3800,8 @@ async function loadBotTab(slot, tab, el, bot) {
     await renderBotCourses(slot, el);
   } else if (tab === 'media') {
     await renderBotMedia(slot, el);
+  } else if (tab === 'galeria') {
+    await renderBotGaleria(slot, el);
   } else if (tab === 'routing') {
     // aba removida em 003-F: roteamento virou seção global
     el.innerHTML = `<div class="empty-state" style="padding:2rem 0">
@@ -7336,7 +7403,7 @@ function openCloneConfigModal(clone) {
 
   function renderConfigModal() {
     const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'cursos', 'media', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', cursos: 'Cursos', media: 'Mídias', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', cursos: 'Cursos', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -9526,6 +9593,742 @@ function mountCleanupCountdown() {
   // Widget de countdown da limpeza automática
   mountCleanupCountdown();
 })();
+
+// ════════════════════════════════════════════════════════════════
+// GALERIA DE MÍDIA — FASE 2
+// Consome: GET/PUT/DELETE /api/bots/:slot/gallery/*
+//          GET /api/bots/:slot/gallery/:id/usage
+//          POST/DELETE /api/bots/:slot/gallery/:id/link/:course_slug
+//          PUT /api/bots/:slot/courses/:slug/media
+// ════════════════════════════════════════════════════════════════
+
+let _galSlot = null;
+let _galMedia = [];
+let _galReplaceId = null;
+let _galActiveKebab = null;
+let _galUploadQueue = [];
+
+// ─── renderBotGaleria: entry point from loadBotTab ───────────────
+async function renderBotGaleria(slot, el) {
+  _galSlot = slot;
+  _galMedia = [];
+  el.innerHTML = `
+    <div class="gal-ctrl-bar" style="margin-top:.5rem">
+      <button class="btn btn--primary btn--sm" id="gal-btn-upload" aria-label="Subir mídia">
+        ${icon('upload', 13)} Subir mídia
+      </button>
+      <select id="gal-filter-type" class="gal-ctrl-sel" aria-label="Filtrar tipo">
+        <option value="">Todos</option>
+        <option value="video">Vídeo</option>
+        <option value="image">Imagem</option>
+      </select>
+      <div class="gal-search-wrap">
+        <svg class="gal-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input id="gal-search" class="gal-search-input" type="text" placeholder="Buscar por título..." aria-label="Buscar mídia"/>
+      </div>
+      <select id="gal-sort" class="gal-ctrl-sel" aria-label="Ordenar">
+        <option value="date_desc">Mais recente</option>
+        <option value="date_asc">Mais antigo</option>
+        <option value="name_asc">Nome A-Z</option>
+        <option value="size_desc">Maior tamanho</option>
+      </select>
+    </div>
+    <div id="gal-grid-container"></div>`;
+
+  el.querySelector('#gal-btn-upload').onclick = () => galOpenUpload(slot);
+  el.querySelector('#gal-filter-type').onchange = () => _galRender();
+  el.querySelector('#gal-search').oninput = () => _galRender();
+  el.querySelector('#gal-sort').onchange = () => _galRender();
+
+  await _galLoad(slot);
+}
+
+async function _galLoad(slot) {
+  const cont = document.getElementById('gal-grid-container');
+  if (!cont) return;
+  cont.innerHTML = `<div class="empty-state" style="padding:2rem 0">${icon('loader', 20)}<span class="muted">Carregando galeria...</span></div>`;
+  try {
+    const data = await api(`/api/bots/${encodeURIComponent(slot)}/gallery`);
+    _galMedia = Array.isArray(data) ? data : [];
+    _galRender();
+  } catch(e) {
+    cont.innerHTML = `<div class="empty-state">${icon('alert-triangle',28)}<p class="empty-state__title">Não foi possível carregar as mídias</p><button class="btn btn--sm" onclick="_galLoad('${escapeHtml(slot)}')">${icon('refresh-cw',13)} Tentar novamente</button></div>`;
+  }
+}
+
+function _galRender() {
+  const cont = document.getElementById('gal-grid-container');
+  if (!cont) return;
+  const search = (document.getElementById('gal-search')?.value || '').toLowerCase();
+  const type = document.getElementById('gal-filter-type')?.value || '';
+  const sort = document.getElementById('gal-sort')?.value || 'date_desc';
+
+  let items = [..._galMedia];
+  if (type === 'video') items = items.filter(m => (m.mime_type||'').startsWith('video'));
+  else if (type === 'image') items = items.filter(m => (m.mime_type||'').startsWith('image'));
+  if (search) items = items.filter(m => ((m.title||'')+(m.file_name||'')).toLowerCase().includes(search));
+  items.sort((a,b) => {
+    if (sort === 'date_desc') return new Date(b.created_at||0) - new Date(a.created_at||0);
+    if (sort === 'date_asc')  return new Date(a.created_at||0) - new Date(b.created_at||0);
+    if (sort === 'name_asc')  return (a.title||'').localeCompare(b.title||'');
+    if (sort === 'size_desc') return (b.file_size||0) - (a.file_size||0);
+    return 0;
+  });
+
+  if (_galMedia.length === 0) {
+    cont.innerHTML = `<div class="empty-state">${icon('film',36)}<div class="empty-state__title">Nenhuma mídia na galeria ainda</div><p class="empty-state__text" style="max-width:32ch">Suba vídeos ou imagens para começar. Mídias ficam disponíveis para vincular a cursos.</p><button class="btn btn--primary btn--sm" onclick="galOpenUpload('${escapeHtml(_galSlot)}')">${icon('upload',13)} Subir primeira mídia</button></div>`;
+    return;
+  }
+  if (items.length === 0) {
+    cont.innerHTML = `<div class="empty-state">${icon('search',32)}<div class="empty-state__title">Nenhuma mídia encontrada</div><button class="btn btn--sm" onclick="document.getElementById('gal-search').value='';document.getElementById('gal-filter-type').value='';_galRender()">Limpar filtros</button></div>`;
+    return;
+  }
+  cont.innerHTML = `<div class="gallery-tab-grid">${items.map(m => _galCard(m)).join('')}</div>`;
+}
+
+function _galCard(m) {
+  const isVid = (m.mime_type||'').startsWith('video');
+  const cnt   = m.courses_count || 0;
+  const date  = m.created_at ? new Date(m.created_at).toLocaleDateString('pt-BR',{day:'numeric',month:'short'}) : '';
+  const size  = _galFmtBytes(m.file_size||0);
+  const thumb = m.thumbnail_url
+    ? `<img src="${escapeHtml(m.thumbnail_url)}" alt="${escapeHtml(m.title||'')}" loading="lazy" style="width:100%;height:100%;object-fit:cover"/>`
+    : `<span style="color:var(--text-muted);opacity:.5">${icon(isVid?'film':'image', 28)}</span>`;
+  const play = isVid ? `<div class="gmc__play">${icon('play',10)}</div>` : '';
+  const badgeCls = isVid ? 'gmc__badge-video' : 'gmc__badge-image';
+  const coursesBadge = cnt > 0
+    ? `<button class="gmc__badge-courses" onclick="galOpenUsage(${m.id})" aria-label="Ver onde está sendo usada">em ${cnt} ${cnt===1?'curso':'cursos'}</button>`
+    : `<span class="gmc__badge-unlinked">não vinculado</span>`;
+  const delEnabled = cnt === 0;
+  const delItem = delEnabled
+    ? `<button class="gmc__menu-item gmc__menu-item--danger" onclick="_galKebabClose();galDeleteMedia(${m.id})">${icon('trash-2',13)} Excluir</button>`
+    : `<button class="gmc__menu-item gmc__menu-item--danger gmc__menu-item--disabled" title="Desvincule dos cursos primeiro" aria-disabled="true">${icon('trash-2',13)} Excluir</button>`;
+
+  return `<div class="gmc" id="gmc-${m.id}">
+  <div class="gmc__thumb">${thumb}${play}</div>
+  <div class="gmc__body">
+    <div id="gmc-title-wrap-${m.id}"><div class="gmc__title">${escapeHtml(m.title||m.file_name||'Sem título')}</div></div>
+    <div class="gmc__meta">
+      <span class="${badgeCls}">${isVid?'vídeo':'imagem'}</span>
+      <span class="mono muted" style="font-size:.6875rem">${size}</span>
+      <span class="muted" style="font-size:.6875rem">${date}</span>
+    </div>
+    <div style="margin-top:.375rem">${coursesBadge}</div>
+  </div>
+  <button class="gmc__kebab" id="gmc-kebab-${m.id}" onclick="_galKebabToggle(event,${m.id})" aria-label="Opções da mídia" aria-haspopup="true">
+    ${icon('more-vertical',14)}
+  </button>
+  <div id="gmc-menu-${m.id}" class="gmc__menu hidden" role="menu" style="position:absolute;top:2rem;right:.375rem">
+    <button class="gmc__menu-item" onclick="_galKebabClose();galStartRename(${m.id})" role="menuitem">${icon('edit-2',13)} Renomear</button>
+    <button class="gmc__menu-item" onclick="_galKebabClose();galOpenReplace(${m.id})" role="menuitem">${icon('refresh-cw',13)} Substituir arquivo</button>
+    <button class="gmc__menu-item" onclick="_galKebabClose();galCopyUrl(${m.id})" role="menuitem">${icon('link',13)} Copiar URL</button>
+    <div class="gmc__menu-sep"></div>
+    ${delItem}
+  </div>
+</div>`;
+}
+
+function _galFmtBytes(b) {
+  if (!b) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+// ─── Kebab menu ──────────────────────────────────────────────────
+function _galKebabToggle(e, id) {
+  e.stopPropagation();
+  if (_galActiveKebab && _galActiveKebab !== id) _galKebabClose();
+  const menu = document.getElementById('gmc-menu-' + id);
+  if (!menu) return;
+  const hidden = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !hidden);
+  _galActiveKebab = hidden ? id : null;
+}
+function _galKebabClose() {
+  if (_galActiveKebab !== null) {
+    const m = document.getElementById('gmc-menu-' + _galActiveKebab);
+    if (m) m.classList.add('hidden');
+    _galActiveKebab = null;
+  }
+}
+document.addEventListener('click', () => { if (_galActiveKebab !== null) _galKebabClose(); });
+
+// ─── Rename inline ───────────────────────────────────────────────
+function galStartRename(id) {
+  const m = _galMedia.find(x => x.id === id);
+  if (!m) return;
+  const wrap = document.getElementById('gmc-title-wrap-' + id);
+  if (!wrap) return;
+  const orig = m.title || m.file_name || '';
+  wrap.innerHTML = `<input class="gmc__title-input" id="gmc-inp-${id}" maxlength="80" value="${escapeHtml(orig)}" placeholder="Nome da mídia..."/><div id="gmc-err-${id}" style="font-size:.625rem;color:var(--danger,#f87171);min-height:.875rem"></div>`;
+  const inp = document.getElementById('gmc-inp-' + id);
+  if (!inp) return;
+  inp.focus(); inp.select();
+  inp.onblur  = () => _galCommitRename(id, orig);
+  inp.onkeydown = (e) => { if(e.key==='Enter'){e.preventDefault();inp.blur();} if(e.key==='Escape'){_galCancelRename(id,orig);} };
+}
+function _galCancelRename(id, orig) {
+  const wrap = document.getElementById('gmc-title-wrap-' + id);
+  if (wrap) wrap.innerHTML = `<div class="gmc__title">${escapeHtml(orig)}</div>`;
+}
+async function _galCommitRename(id, orig) {
+  const inp = document.getElementById('gmc-inp-' + id);
+  if (!inp) return;
+  const val = inp.value.trim();
+  const errEl = document.getElementById('gmc-err-' + id);
+  if (!val) { _galCancelRename(id, orig); return; }
+  if (/[\/\\<>]/.test(val)) { if(errEl) errEl.textContent = 'Título não pode conter /, \\, <, >'; return; }
+  inp.disabled = true;
+  try {
+    await api(`/api/bots/${encodeURIComponent(_galSlot)}/gallery/${id}/rename`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ title: val })
+    });
+    const m = _galMedia.find(x => x.id === id);
+    if (m) m.title = val;
+    const wrap = document.getElementById('gmc-title-wrap-' + id);
+    if (wrap) wrap.innerHTML = `<div class="gmc__title">${escapeHtml(val)}</div>`;
+    showToast('Renomeado');
+  } catch(e) {
+    if (errEl) errEl.textContent = 'Não foi possível salvar';
+    inp.disabled = false;
+  }
+}
+
+function galCopyUrl(id) {
+  const m = _galMedia.find(x => x.id === id);
+  const url = m?.url || m?.file_url || '';
+  if (url) navigator.clipboard?.writeText(url).then(() => showToast('URL copiada')).catch(() => showToast('Falha ao copiar','error'));
+  else showToast('URL não disponível','error');
+}
+
+async function galDeleteMedia(id) {
+  try {
+    await api(`/api/bots/${encodeURIComponent(_galSlot)}/gallery/${id}`, { method: 'DELETE' });
+    _galMedia = _galMedia.filter(x => x.id !== id);
+    _galRender();
+    showToast('Mídia excluída');
+  } catch(e) {
+    if (e.status === 409) {
+      const courses = e.body?.courses || [];
+      const list = courses.map(c => `<li>${escapeHtml(c.course_name||c.course_slug||'')}</li>`).join('');
+      _galShowConfirm(
+        'Não é possível excluir esta mídia',
+        `Esta mídia está vinculada a cursos:<ul style="margin:.5rem 0 .5rem 1.25rem;font-size:.875rem">${list}</ul>Desvincule primeiro para poder excluir.`,
+        () => galOpenUsage(id), 'Ver onde está sendo usada',
+        null, null
+      );
+    } else { showToast(e.message || 'Erro ao excluir','error'); }
+  }
+}
+
+// ─── Upload em lote ──────────────────────────────────────────────
+function galOpenUpload(slot) {
+  _galSlot = slot;
+  _galUploadQueue = [];
+  document.getElementById('gal-upload-queue').innerHTML = '';
+  document.getElementById('gal-done-count').textContent = '0';
+  document.getElementById('gal-finish-btn').disabled = true;
+  document.getElementById('gal-file-input').value = '';
+  document.getElementById('gal-modal-upload').classList.remove('hidden');
+  _galSetupDrop('gal-drop-zone', galHandleFiles);
+}
+function galCloseUpload() {
+  document.getElementById('gal-modal-upload').classList.add('hidden');
+}
+
+function galHandleFiles(files) {
+  Array.from(files).forEach(file => {
+    const qid = 'gq-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+    const title = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+    const isVid = file.type.startsWith('video');
+    const entry = { qid, file, title, state: 'pending', progress: 0, xhr: null };
+    _galUploadQueue.push(entry);
+    _galRenderQueueItem(entry, isVid);
+    _galDoUpload(qid);
+  });
+}
+
+function _galRenderQueueItem(entry, isVid) {
+  const queue = document.getElementById('gal-upload-queue');
+  if (!queue) return;
+  const div = document.createElement('div');
+  div.className = 'gal-upload-item gal-upload-item--pending';
+  div.id = entry.qid;
+  div.innerHTML = `
+    <div style="width:56px;height:40px;border-radius:.375rem;background:var(--surface-2);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+      ${icon(isVid?'film':'image', 18)}
+    </div>
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem">
+        <input class="gmc__title-input" style="flex:1;font-size:.75rem" id="gq-title-${entry.qid}" maxlength="80" value="${escapeHtml(entry.title)}" placeholder="Nome da mídia..."/>
+        <span class="${isVid?'gmc__badge-video':'gmc__badge-image'}" style="flex-shrink:0">${isVid?'vídeo':'imagem'}</span>
+      </div>
+      <div class="gal-pb-track"><div id="gq-bar-${entry.qid}" class="gal-pb-fill" style="width:0%"></div></div>
+      <div id="gq-status-${entry.qid}" style="font-size:.6875rem;margin-top:.25rem;color:var(--text-muted)">Na fila...</div>
+    </div>
+    <button onclick="_galRemoveQueueItem('${entry.qid}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);padding:.25rem;flex-shrink:0;align-self:flex-start" aria-label="Remover da fila">&#x2715;</button>`;
+  const inp = div.querySelector(`#gq-title-${entry.qid}`);
+  if (inp) inp.onchange = () => { entry.title = inp.value; };
+  queue.appendChild(div);
+}
+
+function _galRemoveQueueItem(qid) {
+  const e = _galUploadQueue.find(x => x.qid === qid);
+  if (e?.xhr) e.xhr.abort();
+  _galUploadQueue = _galUploadQueue.filter(x => x.qid !== qid);
+  const el = document.getElementById(qid);
+  if (el) el.remove();
+  _galUpdateFinishBtn();
+}
+function galCancelAll() {
+  _galUploadQueue.forEach(e => { if(e.xhr) e.xhr.abort(); });
+  _galUploadQueue = [];
+  const q = document.getElementById('gal-upload-queue');
+  if (q) q.innerHTML = '';
+  _galUpdateFinishBtn();
+}
+function _galUpdateFinishBtn() {
+  const done = _galUploadQueue.filter(e => e.state === 'success').length;
+  const btn = document.getElementById('gal-finish-btn');
+  const cnt = document.getElementById('gal-done-count');
+  if (cnt) cnt.textContent = done;
+  if (btn) btn.disabled = done === 0;
+}
+function galFinishUpload() {
+  galCloseUpload();
+  _galRender();
+}
+
+async function _galDoUpload(qid) {
+  const entry = _galUploadQueue.find(e => e.qid === qid);
+  if (!entry) return;
+  entry.state = 'uploading';
+  const el = document.getElementById(qid);
+  if (el) el.className = 'gal-upload-item gal-upload-item--uploading';
+  const bar = document.getElementById('gq-bar-' + qid);
+  const sta = document.getElementById('gq-status-' + qid);
+  const inp = document.getElementById('gq-title-' + qid);
+  const title = inp ? inp.value.trim() : entry.title;
+  const fd = new FormData();
+  fd.append('file', entry.file);
+  fd.append('title', title || entry.file.name);
+
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest();
+    entry.xhr = xhr;
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) { const p = Math.round(ev.loaded/ev.total*100); if(bar) bar.style.width=p+'%'; if(sta) sta.textContent=p+'% — '+_galFmtBytes(entry.file.size); }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        entry.state = 'success';
+        if(el) el.className='gal-upload-item gal-upload-item--success';
+        if(bar) bar.style.width='100%';
+        if(sta){sta.textContent='✓ Concluído — '+_galFmtBytes(entry.file.size);sta.style.color='var(--success,#10b981)';}
+        try { const resp = JSON.parse(xhr.responseText); if(resp?.id) _galMedia.push(resp); } catch(_){}
+      } else {
+        entry.state = 'error';
+        if(el) el.className='gal-upload-item gal-upload-item--error';
+        let msg='Erro no upload'; try{ const b=JSON.parse(xhr.responseText); msg=b.message||b.error||msg; }catch(_){}
+        if(sta){sta.textContent='✗ '+msg;sta.style.color='var(--danger,#f87171)';}
+      }
+      _galUpdateFinishBtn(); resolve();
+    };
+    xhr.onerror = () => {
+      entry.state='error';
+      if(el) el.className='gal-upload-item gal-upload-item--error';
+      if(sta){sta.textContent='✗ Erro de rede';sta.style.color='var(--danger,#f87171)';}
+      _galUpdateFinishBtn(); resolve();
+    };
+    xhr.open('POST', `/api/bots/${encodeURIComponent(_galSlot)}/gallery/upload`);
+    xhr.withCredentials = true;
+    xhr.send(fd);
+  });
+}
+
+// ─── Replace ─────────────────────────────────────────────────────
+function galOpenReplace(id) {
+  _galReplaceId = id;
+  document.getElementById('gal-replace-prog').style.display = 'none';
+  document.getElementById('gal-replace-bar').style.width = '0%';
+  document.getElementById('gal-replace-input').value = '';
+  document.getElementById('gal-modal-replace').classList.remove('hidden');
+  _galSetupDrop('gal-replace-zone', (files) => galExecuteReplace(files[0]));
+}
+async function galExecuteReplace(file) {
+  if (!file || !_galReplaceId) return;
+  const prog = document.getElementById('gal-replace-prog');
+  const bar  = document.getElementById('gal-replace-bar');
+  const sta  = document.getElementById('gal-replace-status');
+  prog.style.display = 'block';
+  return new Promise(resolve => {
+    const fd = new FormData(); fd.append('file', file);
+    const xhr = new XMLHttpRequest();
+    xhr.upload.onprogress = (e) => { if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);bar.style.width=p+'%';sta.textContent='Enviando '+p+'%...';} };
+    xhr.onload = () => {
+      if(xhr.status>=200 && xhr.status<300){
+        document.getElementById('gal-modal-replace').classList.add('hidden');
+        showToast('Arquivo atualizado. Vínculos preservados.');
+        _galLoad(_galSlot);
+      } else { sta.textContent='Erro no upload'; sta.style.color='var(--danger,#f87171)'; showToast('Erro ao substituir','error'); }
+      resolve();
+    };
+    xhr.onerror = () => { sta.textContent='Erro de rede'; resolve(); };
+    xhr.open('PUT', `/api/bots/${encodeURIComponent(_galSlot)}/gallery/${_galReplaceId}/replace`);
+    xhr.withCredentials = true;
+    xhr.send(fd);
+  });
+}
+
+// ─── Usage modal ─────────────────────────────────────────────────
+async function galOpenUsage(id) {
+  const m = _galMedia.find(x => x.id === id);
+  const title = document.getElementById('gal-usage-title');
+  if (title) title.textContent = (m?.title||m?.file_name||'Mídia') + ' — onde está sendo usada';
+  const body   = document.getElementById('gal-usage-body');
+  const footer = document.getElementById('gal-usage-footer');
+  body.innerHTML   = `<p class="muted" style="padding:1rem">Carregando...</p>`;
+  footer.innerHTML = '';
+  document.getElementById('gal-modal-usage').classList.remove('hidden');
+  try {
+    const data = await api(`/api/bots/${encodeURIComponent(_galSlot)}/gallery/${id}/usage`);
+    const courses = Array.isArray(data) ? data : (data.courses||[]);
+    if (courses.length === 0) {
+      body.innerHTML = `<div class="empty-state" style="padding:2rem">${icon('link-2',28)}<p class="empty-state__title">Não vinculada a nenhum curso</p><p class="empty-state__text">Você pode excluí-la com segurança.</p></div>`;
+      footer.innerHTML = `<div></div><button onclick="galDeleteMedia(${id});document.getElementById('gal-modal-usage').classList.add('hidden')" class="btn btn--sm" style="background:rgba(239,68,68,.15);color:var(--danger,#f87171)">${icon('trash-2',13)} Excluir mídia</button>`;
+    } else {
+      const rows = courses.map(c => {
+        const badge = c.is_intro
+          ? `<span class="badge badge--warning" style="font-size:.65rem">${icon('star',10)} Apresentação</span>`
+          : `<span class="badge" style="font-size:.65rem">bônus</span>`;
+        return `<div class="usage-course-card">
+          <div style="min-width:0"><p style="font-size:.875rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(c.course_name||c.course_slug||'')}</p><p class="mono muted" style="font-size:.6875rem">${escapeHtml(c.course_slug||'')}</p></div>
+          <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">${badge}<button onclick="document.getElementById('gal-modal-usage').classList.add('hidden')" class="btn btn--ghost btn--sm" style="font-size:.75rem">${icon('external-link',11)} Editar</button></div>
+        </div>`;
+      }).join('');
+      body.innerHTML = `<div style="border:1px solid var(--border);border-radius:var(--radius-md,.5rem);overflow:hidden"><div class="gal-subheader">Cursos que usam esta mídia (${courses.length})</div>${rows}</div>`;
+      footer.innerHTML = `<button onclick="_galConfirmUnlinkAll(${id})" class="btn btn--sm" style="border:1px solid var(--danger,#f87171);color:var(--danger,#f87171)">${icon('unlink',13)} Desvincular de todos</button><button class="btn btn--sm" disabled style="opacity:.4;cursor:not-allowed" title="Desvincule dos cursos antes de excluir">${icon('trash-2',13)} Excluir mídia</button>`;
+    }
+  } catch(e) {
+    body.innerHTML = `<p class="muted" style="color:var(--danger,#f87171);padding:1rem">Falha: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function _galConfirmUnlinkAll(id) {
+  const m = _galMedia.find(x => x.id === id);
+  _galShowConfirm(
+    'Confirmar desvinculação',
+    `Remover "<b>${escapeHtml(m?.title||m?.file_name||'')}</b>" de todos os cursos?<br><span style="font-size:.8125rem;color:var(--text-muted)">A mídia continuará na galeria.</span>`,
+    null, null,
+    async () => {
+      try {
+        const usage = await api(`/api/bots/${encodeURIComponent(_galSlot)}/gallery/${id}/usage`);
+        const courses = Array.isArray(usage) ? usage : (usage.courses||[]);
+        await Promise.all(courses.map(c => api(`/api/bots/${encodeURIComponent(_galSlot)}/gallery/${id}/link/${encodeURIComponent(c.course_slug)}`, {method:'DELETE'})));
+        showToast('Mídia desvinculada de todos os cursos');
+        const m = _galMedia.find(x => x.id === id); if(m) m.courses_count = 0;
+        document.getElementById('gal-modal-usage').classList.add('hidden');
+        _galRender();
+      } catch(e) { showToast(e.message||'Erro','error'); }
+    }, 'Desvincular de todos'
+  );
+}
+
+// ─── Confirm modal helper ────────────────────────────────────────
+function _galShowConfirm(title, body, extraCb, extraLabel, okCb, okLabel) {
+  document.getElementById('gal-confirm-title').textContent = title;
+  document.getElementById('gal-confirm-body').innerHTML = body || '';
+  const okBtn     = document.getElementById('gal-confirm-ok');
+  const cancelBtn = document.getElementById('gal-confirm-cancel');
+  const extraBtn  = document.getElementById('gal-confirm-extra');
+  okBtn.textContent = okLabel || 'Confirmar';
+  if (okCb) { okBtn.classList.remove('hidden'); okBtn.onclick = () => { document.getElementById('gal-modal-confirm').classList.add('hidden'); okCb(); }; }
+  else { okBtn.classList.add('hidden'); }
+  if (extraCb && extraLabel) { extraBtn.textContent=extraLabel; extraBtn.classList.remove('hidden'); extraBtn.onclick=()=>{document.getElementById('gal-modal-confirm').classList.add('hidden');extraCb();}; }
+  else { extraBtn.classList.add('hidden'); }
+  cancelBtn.onclick = () => document.getElementById('gal-modal-confirm').classList.add('hidden');
+  document.getElementById('gal-modal-confirm').classList.remove('hidden');
+}
+
+// ─── Drop zone helper ────────────────────────────────────────────
+function _galSetupDrop(zoneId, onFiles) {
+  const zone = document.getElementById(zoneId);
+  if (!zone) return;
+  zone.ondragover  = (e) => { e.preventDefault(); zone.classList.add('drag-over'); };
+  zone.ondragleave = ()  => zone.classList.remove('drag-over');
+  zone.ondrop      = (e) => { e.preventDefault(); zone.classList.remove('drag-over'); if(e.dataTransfer?.files?.length) onFiles(e.dataTransfer.files); };
+}
+
+// ════════════════════════════════════════════════════════════════
+// CURSOS — Upgrade da aba com multi-select de mídias
+// Injeta a seção de mídias no form de edição/criação de curso
+// sem substituir a lógica existente de renderBotCourses.
+// ════════════════════════════════════════════════════════════════
+let _cursoSelectedIds = new Set();
+let _cursoIntroId     = null;
+let _cursoGalleryAll  = [];
+
+// Chamado quando clica "Vincular mídia" ou ao abrir form de edição do curso
+async function renderCourseMediaSection(slot, courseSlug, container) {
+  container.innerHTML = `<p class="muted" style="font-size:.8125rem">Carregando mídias...</p>`;
+
+  // load gallery + existing media_ids
+  let galleryAll = [], selectedIds = new Set(), introId = null;
+  try {
+    const [gallery, courseData] = await Promise.all([
+      api(`/api/bots/${encodeURIComponent(slot)}/gallery`),
+      courseSlug ? api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(courseSlug)}`) : Promise.resolve(null),
+    ]);
+    galleryAll = Array.isArray(gallery) ? gallery : [];
+    if (courseData?.media_ids) courseData.media_ids.forEach(id => selectedIds.add(Number(id)));
+    if (courseData?.intro_media_id) introId = Number(courseData.intro_media_id);
+  } catch(e) {
+    container.innerHTML = `<p class="muted" style="font-size:.8125rem;color:var(--danger,#f87171)">Erro ao carregar mídias: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  _cursoSelectedIds = selectedIds;
+  _cursoIntroId     = introId;
+  _cursoGalleryAll  = galleryAll;
+
+  if (galleryAll.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding:1.5rem">${icon('film',28)}<p class="empty-state__title" style="font-size:.875rem">Galeria vazia</p><p class="empty-state__text" style="font-size:.75rem">Suba mídias na aba Galeria primeiro.</p></div>`;
+    return;
+  }
+  _renderCourseMediaList(slot, courseSlug, container);
+}
+
+function _renderCourseMediaList(slot, courseSlug, container) {
+  const selMedia = _cursoGalleryAll.filter(m => _cursoSelectedIds.has(Number(m.id)));
+  const avilMedia = _cursoGalleryAll.filter(m => !_cursoSelectedIds.has(Number(m.id)));
+  const counter = `<p style="font-size:.75rem;color:var(--text-muted);margin-bottom:.5rem">${_cursoSelectedIds.size} de ${_cursoGalleryAll.length} selecionadas</p>`;
+
+  const mkItem = (m, isSel) => {
+    const isVid = (m.mime_type||'').startsWith('video');
+    const isIntro = isSel && Number(m.id) === _cursoIntroId;
+    const thumb = m.thumbnail_url
+      ? `<img src="${escapeHtml(m.thumbnail_url)}" alt="" class="gal-thumb-mini"/>`
+      : `<div class="gal-thumb-mini">${icon(isVid?'film':'image',14)}</div>`;
+    const starCls  = isIntro ? 'star-btn-v2 star-btn-v2--active' : 'star-btn-v2 star-btn-v2--inactive';
+    const starFill = isIntro ? '#f59e0b' : 'none';
+    const starClr  = isIntro ? '#f59e0b' : 'var(--text-muted)';
+    const cbCls    = isSel ? 'gal-cb gal-cb--checked' : 'gal-cb';
+    const cbCheck  = isSel ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>` : '';
+
+    return `<div class="course-media-mli ${isSel?'course-media-mli--sel':'course-media-mli--avail'}" id="cmli-${m.id}" onclick="_cmliToggle(${m.id})">
+      <div class="${cbCls}" id="cmli-cb-${m.id}">${cbCheck}</div>
+      <button class="${starCls}" id="cmli-star-${m.id}" onclick="event.stopPropagation();_cmliToggleIntro(${m.id})" title="${isIntro?'Remover como apresentação':'Marcar como apresentação do curso'}" aria-label="${isIntro?'Remover como apresentação':'Marcar como apresentação'}">
+        <svg width="15" height="15" viewBox="0 0 24 24" stroke="${starClr}" stroke-width="2" fill="${starFill}"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      </button>
+      ${thumb}
+      <div style="flex:1;min-width:0">
+        <p style="font-size:.8125rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.title||m.file_name||'Sem título')}</p>
+        <p style="font-size:.6875rem;color:var(--text-muted)">${isVid?'Vídeo':'Imagem'} — ${_galFmtBytes(m.file_size||0)}${isIntro?'<span style="color:var(--success,#10b981);margin-left:.375rem">✓ Apresentação</span>':''}</p>
+      </div>
+    </div>`;
+  };
+
+  const selSection = selMedia.length > 0
+    ? `<div class="gal-subheader">Selecionadas (${selMedia.length})</div>${selMedia.map(m => mkItem(m,true)).join('')}`
+    : '';
+  const emptyNote = selMedia.length === 0 ? `<p style="font-size:.75rem;color:var(--text-muted);padding:.5rem .75rem">Nenhuma mídia selecionada. Isso é permitido — o bot vai falar do curso sem enviar mídia.</p>` : '';
+  const avilSection = avilMedia.length > 0
+    ? `<div class="gal-subheader">Disponíveis na galeria (${avilMedia.length})</div>${avilMedia.map(m => mkItem(m,false)).join('')}`
+    : '';
+
+  container.innerHTML = counter + `<div style="border:1px solid var(--border);border-radius:var(--radius-md,.5rem);overflow:hidden">${selSection}${emptyNote}${avilSection}</div>`;
+}
+
+function _cmliToggle(mediaId) {
+  const id = Number(mediaId);
+  const mli = document.getElementById('cmli-' + mediaId);
+  const cb  = document.getElementById('cmli-cb-' + mediaId);
+  if (_cursoSelectedIds.has(id)) {
+    if (_cursoIntroId === id) {
+      // show inline warn
+      let w = document.getElementById('cmli-warn-' + mediaId);
+      if (!w) {
+        w = document.createElement('div');
+        w.id = 'cmli-warn-' + mediaId;
+        w.style.cssText = 'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:.375rem;padding:.375rem .75rem;margin:.25rem .75rem;font-size:.75rem;color:#fcd34d';
+        w.innerHTML = `Esta mídia é a apresentação. <button onclick="_cmliForceRemove(${mediaId})" style="background:none;border:none;cursor:pointer;color:var(--accent);font-size:.75rem;font-weight:600">Sim, remover</button>`;
+        mli?.parentNode?.insertBefore(w, mli.nextSibling);
+      }
+      return;
+    }
+    _cursoSelectedIds.delete(id);
+    mli?.classList.replace('course-media-mli--sel','course-media-mli--avail');
+    if(cb){cb.classList.remove('gal-cb--checked');cb.innerHTML='';}
+  } else {
+    _cursoSelectedIds.add(id);
+    mli?.classList.replace('course-media-mli--avail','course-media-mli--sel');
+    if(cb){cb.classList.add('gal-cb--checked');cb.innerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';}
+  }
+  const warn = document.getElementById('cmli-warn-' + mediaId);
+  if (warn) warn.remove();
+}
+
+function _cmliForceRemove(mediaId) {
+  const id = Number(mediaId);
+  if (_cursoIntroId === id) { _cursoIntroId = null; _cmliSetStar(mediaId, false); }
+  _cursoSelectedIds.delete(id);
+  const mli = document.getElementById('cmli-' + mediaId);
+  const cb  = document.getElementById('cmli-cb-' + mediaId);
+  mli?.classList.replace('course-media-mli--sel','course-media-mli--avail');
+  if(cb){cb.classList.remove('gal-cb--checked');cb.innerHTML='';}
+  const warn = document.getElementById('cmli-warn-' + mediaId);
+  if (warn) warn.remove();
+}
+
+function _cmliToggleIntro(mediaId) {
+  const id = Number(mediaId);
+  if (!_cursoSelectedIds.has(id)) {
+    _cursoSelectedIds.add(id);
+    const mli = document.getElementById('cmli-' + mediaId);
+    const cb  = document.getElementById('cmli-cb-' + mediaId);
+    mli?.classList.replace('course-media-mli--avail','course-media-mli--sel');
+    if(cb){cb.classList.add('gal-cb--checked');cb.innerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';}
+  }
+  if (_cursoIntroId === id) { _cursoIntroId = null; _cmliSetStar(mediaId, false); }
+  else { const prev = _cursoIntroId; _cursoIntroId = id; if(prev) _cmliSetStar(prev, false); _cmliSetStar(mediaId, true); }
+}
+
+function _cmliSetStar(mediaId, active) {
+  const btn = document.getElementById('cmli-star-' + mediaId);
+  if (!btn) return;
+  btn.className = active ? 'star-btn-v2 star-btn-v2--active' : 'star-btn-v2 star-btn-v2--inactive';
+  const fill = active ? '#f59e0b' : 'none';
+  const clr  = active ? '#f59e0b' : 'var(--text-muted)';
+  btn.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" stroke="${clr}" stroke-width="2" fill="${fill}"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+  btn.title = active ? 'Remover como apresentação' : 'Marcar como apresentação do curso';
+}
+
+// saveCourseMedia: chamado pelo botão "Salvar mídias" no form do curso
+async function saveCourseMedia(slot, courseSlug) {
+  const mediaIds = Array.from(_cursoSelectedIds);
+  try {
+    await api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(courseSlug)}/media`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ media_ids: mediaIds, intro_media_id: _cursoIntroId || null })
+    });
+    showToast('Mídias do curso salvas');
+    _galLoad(slot);
+  } catch(e) { showToast(e.message || 'Erro ao salvar mídias','error'); }
+}
+
+// Monkey-patch: inject media section into course edit form when it opens
+// We hook into existing renderBotCourses by intercepting "js-course-link" clicks
+// and replacing that action with our richer multi-select panel.
+(function patchCourseMedia() {
+  const orig = window.renderBotCourses;
+  if (typeof orig !== 'function') return;
+  window.renderBotCourses = async function(slot, el) {
+    await orig(slot, el);
+    // After render, replace js-course-link buttons behaviour
+    el.querySelectorAll('.js-course-link').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const slug = btn.dataset.slug;
+        if (!slug) return;
+        // Find or create a media section below the row
+        const row = el.querySelector(`tr[data-slug="${CSS.escape(slug)}"]`);
+        if (!row) return;
+        const existing = el.querySelector('#course-media-panel-' + CSS.escape(slug));
+        if (existing) { existing.remove(); return; }
+        const panel = document.createElement('tr');
+        panel.id = 'course-media-panel-' + slug;
+        panel.innerHTML = `<td colspan="7" style="padding:.75rem 1.25rem;background:var(--surface-2)">
+          <div id="cmp-inner-${escapeHtml(slug)}"></div>
+          <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem">
+            <button onclick="this.closest('tr').remove()" class="btn btn--sm">${icon('x',12)} Cancelar</button>
+            <button onclick="saveCourseMedia('${escapeHtml(slot)}','${escapeHtml(slug)}');this.closest('tr').remove()" class="btn btn--primary btn--sm">${icon('save',12)} Salvar mídias do curso</button>
+          </div>
+        </td>`;
+        row.parentNode.insertBefore(panel, row.nextSibling);
+        renderCourseMediaSection(slot, slug, document.getElementById('cmp-inner-' + slug));
+      }, { once: false });
+    });
+  };
+})();
+
 </script>
+
+<!-- ═══ GALERIA FASE 2: MODAL UPLOAD EM LOTE ═══════════════════ -->
+<div id="gal-modal-upload" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="gal-upload-title" style="position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;padding:1rem">
+  <div class="modal" style="max-width:640px;width:100%;max-height:87vh;display:flex;flex-direction:column">
+    <div class="modal__header" style="flex-shrink:0">
+      <h3 class="modal__title" id="gal-upload-title">Subir mídias</h3>
+      <button class="modal__close" onclick="galCloseUpload()" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal__body" style="flex:1;overflow-y:auto">
+      <div id="gal-drop-zone" class="gal-drop-zone" role="button" tabindex="0" aria-label="Área de upload — arraste ou clique" onclick="document.getElementById('gal-file-input').click()" onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('gal-file-input').click()">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin:0 auto .5rem;display:block;color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p style="font-size:.875rem;font-weight:500;color:var(--text-dim)">Arraste arquivos aqui</p>
+        <p style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">ou <span style="color:var(--accent)">selecionar arquivos</span></p>
+        <p style="font-size:.75rem;margin-top:.5rem;color:var(--text-muted)">MP4 · MOV · WebM · JPG · PNG · WebP — máx 200 MB</p>
+      </div>
+      <input id="gal-file-input" type="file" style="display:none" multiple accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp" onchange="galHandleFiles(this.files)"/>
+      <div id="gal-upload-queue" style="margin-top:.5rem"></div>
+    </div>
+    <div class="modal__footer" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center">
+      <button onclick="galCancelAll()" class="btn btn--ghost btn--sm" style="color:var(--danger,#f87171)">Cancelar todos</button>
+      <button id="gal-finish-btn" onclick="galFinishUpload()" class="btn btn--primary btn--sm" disabled>
+        Concluir (<span id="gal-done-count" class="mono">0</span> prontos)
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ GALERIA FASE 2: MODAL SUBSTITUIR ════════════════════════ -->
+<div id="gal-modal-replace" class="modal-backdrop hidden" role="dialog" aria-modal="true" style="position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;padding:1rem">
+  <div class="modal" style="max-width:400px;width:100%">
+    <div class="modal__header">
+      <h3 class="modal__title">Substituir arquivo</h3>
+      <button class="modal__close" onclick="document.getElementById('gal-modal-replace').classList.add('hidden')" aria-label="Fechar">&times;</button>
+    </div>
+    <div class="modal__body">
+      <p style="font-size:.875rem;color:var(--text-dim);margin-bottom:.75rem">Selecione um novo arquivo. ID, título e vínculos serão mantidos.</p>
+      <div id="gal-replace-zone" class="gal-drop-zone" onclick="document.getElementById('gal-replace-input').click()" role="button" tabindex="0">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin:0 auto .375rem;display:block;color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p style="font-size:.875rem;color:var(--text-dim)">Clique ou arraste o arquivo</p>
+      </div>
+      <input id="gal-replace-input" type="file" style="display:none" onchange="galExecuteReplace(this.files[0])"/>
+      <div id="gal-replace-prog" style="display:none;margin-top:.75rem">
+        <div class="gal-pb-track"><div id="gal-replace-bar" class="gal-pb-fill" style="width:0%"></div></div>
+        <div id="gal-replace-status" style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">Enviando...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ GALERIA FASE 2: MODAL ONDE ESTÁ SENDO USADA ════════════ -->
+<div id="gal-modal-usage" class="modal-backdrop hidden" role="dialog" aria-modal="true" style="position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;padding:1rem">
+  <div class="modal" style="max-width:480px;width:100%;max-height:82vh;display:flex;flex-direction:column">
+    <div class="modal__header" style="flex-shrink:0">
+      <h3 class="modal__title" id="gal-usage-title">Onde está sendo usada</h3>
+      <button class="modal__close" onclick="document.getElementById('gal-modal-usage').classList.add('hidden')" aria-label="Fechar">&times;</button>
+    </div>
+    <div id="gal-usage-body" class="modal__body" style="flex:1;overflow-y:auto"></div>
+    <div id="gal-usage-footer" class="modal__footer" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap"></div>
+  </div>
+</div>
+
+<!-- ═══ GALERIA FASE 2: MODAL CONFIRMAÇÃO ═══════════════════════ -->
+<div id="gal-modal-confirm" class="modal-backdrop hidden" role="dialog" aria-modal="true" style="position:fixed;inset:0;z-index:700;display:flex;align-items:center;justify-content:center;padding:1rem">
+  <div class="modal" style="max-width:440px;width:100%">
+    <div class="modal__header">
+      <h3 class="modal__title" id="gal-confirm-title"></h3>
+      <button class="modal__close" onclick="document.getElementById('gal-modal-confirm').classList.add('hidden')" aria-label="Fechar">&times;</button>
+    </div>
+    <div id="gal-confirm-body" class="modal__body" style="font-size:.875rem;color:var(--text-dim)"></div>
+    <div class="modal__footer" style="display:flex;justify-content:flex-end;gap:.5rem;flex-wrap:wrap">
+      <button id="gal-confirm-extra" class="btn btn--sm hidden"></button>
+      <button id="gal-confirm-cancel" class="btn btn--sm">Cancelar</button>
+      <button id="gal-confirm-ok" class="btn btn--primary btn--sm">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
