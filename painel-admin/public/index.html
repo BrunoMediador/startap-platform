@@ -8307,7 +8307,6 @@ async function renderCloneCourses(clone, el) {
               <button class="btn btn--ghost btn--sm btn--icon js-clone-course-menu" aria-label="Ações">${icon('more-horizontal',14)}</button>
               <div class="media-actions-menu" data-menu-id="cc-${c.id}">
                 <button class="js-clone-course-edit" data-id="${c.id}">${icon('edit-2',13)} Editar</button>
-                <button class="js-clone-course-link" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}">${icon('link',13)} Mídias</button>
                 <button class="js-clone-course-del danger" data-id="${c.id}" data-slug="${escapeHtml(c.course_slug)}" data-name="${escapeHtml(c.name)}">${icon('trash-2',13)} Excluir</button>
               </div>
             </div>
@@ -8373,13 +8372,6 @@ async function renderCloneCourses(clone, el) {
       });
     });
 
-    // mídias
-    el.querySelectorAll('.js-clone-course-link').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openLinkMediaModal(slot, btn.dataset.slug, medias, el);
-      });
-    });
-
     // toggle ativo
     el.querySelectorAll('.js-clone-course-toggle').forEach(chk => {
       chk.addEventListener('change', async () => {
@@ -8409,7 +8401,12 @@ async function renderCloneCourses(clone, el) {
           toast('Curso excluído.', 'success');
           await renderCloneCourses(clone, el);
         } catch (err) {
-          toast('Erro ao excluir: ' + err.message, 'danger');
+          if (err.status === 409 || (err.data && err.data.linked_media_count != null)) {
+            const count = err.data?.linked_media_count ?? '?';
+            toast(`Não é possível excluir: o curso tem ${count} mídia${count !== 1 ? 's' : ''} vinculada${count !== 1 ? 's' : ''}. Remova-as pelo modal de Editar antes de excluir.`, 'warning');
+          } else {
+            toast('Erro ao excluir: ' + err.message, 'danger');
+          }
           btn.disabled = false;
         }
       });
@@ -8503,6 +8500,12 @@ function openCloneCourseModal(slot, course, parentEl, clone) {
       <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
     </div>
     ${_cloneCourseFormHtml(c, isEdit)}
+    ${isEdit ? `
+    <hr style="margin:1rem 0;border:none;border-top:1px solid var(--border)">
+    <div style="font-size:.9375rem;font-weight:600;color:var(--text);margin-bottom:.625rem">${icon('film',14)} Mídias do curso</div>
+    <div id="course-media-mgr" style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;min-height:120px">
+      <div style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:.8rem">${icon('loader',18)}</div>
+    </div>` : ''}
   `);
 
   // auto-preencher slug a partir do nome (somente no modo criação)
@@ -8519,6 +8522,11 @@ function openCloneCourseModal(slot, course, parentEl, clone) {
     document.getElementById('cc-slug')?.addEventListener('input', (ev) => {
       ev.currentTarget.dataset.manualEdit = ev.currentTarget.value ? '1' : '0';
     });
+  }
+
+  // Carrega seção de mídias vinculadas (somente no modo editar)
+  if (isEdit) {
+    _renderCourseMediaMgr(slot, c.course_slug, document.getElementById('course-media-mgr'));
   }
 
   document.getElementById('btn-save-clone-course').addEventListener('click', async () => {
