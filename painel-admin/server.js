@@ -1519,7 +1519,7 @@ app.delete('/api/media/:id', async (req, res) => {
 app.get('/api/bots/:slot/courses', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at
+      `SELECT id, slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at
        FROM bot_courses
        WHERE slot = $1
        ORDER BY position_order, id`,
@@ -3040,15 +3040,15 @@ app.post('/api/clones', async (req, res) => {
 
     // Copia bot_courses (catálogo de cursos da matriz para o clone)
     const coursesR = await client.query(
-      `SELECT course_slug, name, description, price, duration, position_order, enabled
+      `SELECT course_slug, name, description, price, duration, position_order, enabled, details_for_llm
        FROM bot_courses WHERE slot = $1`,
       [matriz_slot],
     );
     for (const c of coursesR.rows) {
       await client.query(
         `INSERT INTO bot_courses
-           (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
+           (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
          ON CONFLICT (slot, course_slug) DO NOTHING`,
         [
           slug,
@@ -3059,6 +3059,7 @@ app.post('/api/clones', async (req, res) => {
           c.duration,
           c.position_order,
           c.enabled,
+          c.details_for_llm ?? null,
         ],
       );
     }
@@ -3272,15 +3273,15 @@ app.post('/api/clones/with-waha', async (req, res) => {
 
     // Copia bot_courses (catálogo de cursos da matriz para o clone)
     const coursesR = await cloneClient.query(
-      `SELECT course_slug, name, description, price, duration, position_order, enabled
+      `SELECT course_slug, name, description, price, duration, position_order, enabled, details_for_llm
        FROM bot_courses WHERE slot = $1`,
       [matriz_slot],
     );
     for (const c of coursesR.rows) {
       await cloneClient.query(
         `INSERT INTO bot_courses
-           (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
+           (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
          ON CONFLICT (slot, course_slug) DO NOTHING`,
         [
           novo_slot,
@@ -3291,6 +3292,7 @@ app.post('/api/clones/with-waha', async (req, res) => {
           c.duration,
           c.position_order,
           c.enabled,
+          c.details_for_llm ?? null,
         ],
       );
     }
