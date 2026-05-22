@@ -1560,6 +1560,363 @@ app.delete('/api/media/:id', async (req, res) => {
   }
 });
 
+// ---------- GALERIA DE MÍDIA (Fase 1 — Migration 036) ----------
+// Endpoints novos que operam sobre bot_media_courses (N:N).
+// Os endpoints legados /api/bots/:slot/media e /api/media/:id continuam intactos
+// para retrocompatibilidade até a fase 2 fazer o cutover.
+
+// GET /api/bots/:slot/gallery
+// Lista todas as mídias do clone com contagem de cursos vinculados.
+app.get('/api/bots/:slot/gallery', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const r = await pool.query(
+      `SELECT
+         bm.id,
+         bm.slot,
+         bm.position,
+         bm.title,
+         bm.media_type,
+         bm.url,
+         bm.caption,
+         bm.context,
+         bm.position_order,
+         bm.enabled,
+         bm.updated_at,
+         COUNT(bmc.id)::int AS courses_count
+       FROM bot_media bm
+       LEFT JOIN bot_media_courses bmc ON bmc.media_id = bm.id AND bmc.slot = bm.slot
+       WHERE bm.slot = $1
+       GROUP BY bm.id
+       ORDER BY bm.position_order, bm.id`,
+      [slot],
+    );
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/bots/:slot/gallery/:id/rename
+// Atualiza o título (campo title) de uma mídia da galeria.
+app.put('/api/bots/:slot/gallery/:id/rename', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+    const { title } = req.body ?? {};
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ error: 'title obrigatório e não pode ser vazio' });
+    }
+    if (title.length > 200) {
+      return res.status(400).json({ error: 'title excede 200 caracteres' });
+    }
+    const r = await pool.query(
+      `UPDATE bot_media SET title = $1, updated_at = NOW()
+       WHERE slot = $2 AND id = $3
+       RETURNING id, slot, position, title, media_type, url, position_order, enabled, updated_at`,
+      [title.trim(), slot, mediaId],
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/bots/:slot/gallery/:id/replace
+// Substitui o arquivo de uma mídia mantendo ID, title e vínculos de curso.
+// Multipart: campo "file" (mesmos filtros do mediaUpload).
+app.put('/api/bots/:slot/gallery/:id/replace', mediaUpload.single('file'), async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'arquivo obrigatório (campo "file")' });
+
+    // Deriva media_type a partir do mimetype do novo arquivo
+    const mime = String(req.file.mimetype || '').toLowerCase();
+    let media_type = 'file';
+    if (mime.startsWith('video/')) media_type = 'video';
+    else if (mime.startsWith('image/')) media_type = 'image';
+    else if (mime.startsWith('audio/')) media_type = 'audio';
+
+    const base = String(MEDIA_PUBLIC_BASE_URL || '/uploads').replace(/\/$/, '');
+    const url = `${base}/${encodeURIComponent(req.file.filename)}`;
+
+    const r = await pool.query(
+      `UPDATE bot_media
+          SET url = $1, media_type = $2, updated_at = NOW()
+        WHERE slot = $3 AND id = $4
+        RETURNING id, slot, position, title, media_type, url, position_order, enabled, updated_at`,
+      [url, media_type, slot, mediaId],
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+    res.json({ ...r.rows[0], size: req.file.size, original_name: req.file.originalname });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/bots/:slot/gallery/:id
+// Exclui mídia apenas se não houver vínculos em bot_media_courses.
+// Retorna 409 com lista de cursos vinculados se houver bloqueio.
+app.delete('/api/bots/:slot/gallery/:id', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+
+    // Verifica vínculos ativos em bot_media_courses
+    const linkCheck = await pool.query(
+      `SELECT bmc.course_slug, bc.name AS course_name
+         FROM bot_media_courses bmc
+         LEFT JOIN bot_courses bc ON bc.slot = bmc.slot AND bc.course_slug = bmc.course_slug
+        WHERE bmc.slot = $1 AND bmc.media_id = $2`,
+      [slot, mediaId],
+    );
+    if (linkCheck.rows.length > 0) {
+      return res.status(409).json({
+        error: `mídia vinculada a ${linkCheck.rows.length} curso(s). Remova os vínculos antes de excluir.`,
+        cursos_vinculados: linkCheck.rows,
+      });
+    }
+
+    const r = await pool.query(
+      'DELETE FROM bot_media WHERE slot = $1 AND id = $2 RETURNING id',
+      [slot, mediaId],
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada' });
+    res.json({ ok: true, id: mediaId });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/bots/:slot/gallery/:id/usage
+// Lista cursos onde a mídia está vinculada via bot_media_courses.
+app.get('/api/bots/:slot/gallery/:id/usage', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+
+    // Confirma existência da mídia no slot
+    const mediaCheck = await pool.query(
+      'SELECT id, title, position, media_type FROM bot_media WHERE slot = $1 AND id = $2',
+      [slot, mediaId],
+    );
+    if (!mediaCheck.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+
+    const r = await pool.query(
+      `SELECT
+         bmc.id AS link_id,
+         bmc.course_slug,
+         bc.name AS course_name,
+         bmc.is_intro,
+         bmc.position_order,
+         bmc.created_at AS linked_at
+       FROM bot_media_courses bmc
+       LEFT JOIN bot_courses bc ON bc.slot = bmc.slot AND bc.course_slug = bmc.course_slug
+       WHERE bmc.slot = $1 AND bmc.media_id = $2
+       ORDER BY bmc.position_order, bmc.created_at`,
+      [slot, mediaId],
+    );
+    res.json({
+      media: mediaCheck.rows[0],
+      courses: r.rows,
+      total: r.rows.length,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/bots/:slot/gallery/:id/link
+// Cria vínculo entre mídia e curso em bot_media_courses.
+// Body: { course_slug, is_intro?: bool, position_order?: int }
+app.post('/api/bots/:slot/gallery/:id/link', async (req, res) => {
+  try {
+    const { slot } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+    const { course_slug, is_intro = false, position_order = 0 } = req.body ?? {};
+    if (!course_slug || typeof course_slug !== 'string' || !course_slug.trim()) {
+      return res.status(400).json({ error: 'course_slug obrigatório' });
+    }
+
+    // Valida existência da mídia no slot
+    const mediaCheck = await pool.query(
+      'SELECT id FROM bot_media WHERE slot = $1 AND id = $2',
+      [slot, mediaId],
+    );
+    if (!mediaCheck.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+
+    // Valida existência do curso no slot
+    const courseCheck = await pool.query(
+      'SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2',
+      [slot, course_slug.trim()],
+    );
+    if (!courseCheck.rows.length) {
+      return res.status(404).json({ error: `curso '${course_slug}' não encontrado no slot '${slot}'` });
+    }
+
+    // Se is_intro=true, zera outros intros deste curso antes (transação)
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (is_intro === true) {
+        await client.query(
+          `UPDATE bot_media_courses SET is_intro = FALSE
+           WHERE slot = $1 AND course_slug = $2 AND is_intro = TRUE`,
+          [slot, course_slug.trim()],
+        );
+      }
+
+      const r = await client.query(
+        `INSERT INTO bot_media_courses (slot, media_id, course_slug, is_intro, position_order, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING *`,
+        [slot, mediaId, course_slug.trim(), !!is_intro, Number(position_order) || 0],
+      );
+
+      await client.query('COMMIT');
+      res.status(201).json(r.rows[0]);
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (e.code === '23505') {
+        return res.status(409).json({
+          error: `vínculo já existe: mídia ${mediaId} já está vinculada ao curso '${course_slug}'`,
+        });
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/bots/:slot/gallery/:id/link/:course_slug
+// Remove vínculo específico entre mídia e curso.
+app.delete('/api/bots/:slot/gallery/:id/link/:course_slug', async (req, res) => {
+  try {
+    const { slot, course_slug } = req.params;
+    const mediaId = Number(req.params.id);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) {
+      return res.status(400).json({ error: 'id inválido' });
+    }
+
+    const r = await pool.query(
+      `DELETE FROM bot_media_courses
+       WHERE slot = $1 AND media_id = $2 AND course_slug = $3
+       RETURNING id`,
+      [slot, mediaId, course_slug],
+    );
+    if (!r.rowCount) {
+      return res.status(404).json({ error: 'vínculo não encontrado' });
+    }
+    res.json({ ok: true, link_id: r.rows[0].id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/bots/:slot/courses/:course_slug/media
+// Sincroniza atomicamente a lista completa de mídias de um curso.
+// Body: { media_ids: number[], intro_media_id?: number }
+// Substitui todos os vínculos existentes do curso pelos fornecidos.
+app.put('/api/bots/:slot/courses/:course_slug/media', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { slot, course_slug } = req.params;
+    const { media_ids, intro_media_id } = req.body ?? {};
+
+    if (!Array.isArray(media_ids)) {
+      return res.status(400).json({ error: 'media_ids deve ser um array de inteiros' });
+    }
+    for (const id of media_ids) {
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ error: `media_ids contém valor inválido: ${id}` });
+      }
+    }
+    if (intro_media_id !== undefined && intro_media_id !== null) {
+      if (!Number.isInteger(intro_media_id) || intro_media_id <= 0) {
+        return res.status(400).json({ error: 'intro_media_id inválido' });
+      }
+      if (media_ids.length > 0 && !media_ids.includes(intro_media_id)) {
+        return res.status(400).json({ error: 'intro_media_id deve estar presente em media_ids' });
+      }
+    }
+
+    // Valida existência do curso
+    const courseCheck = await pool.query(
+      'SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2',
+      [slot, course_slug],
+    );
+    if (!courseCheck.rows.length) {
+      return res.status(404).json({ error: `curso '${course_slug}' não encontrado no slot '${slot}'` });
+    }
+
+    // Valida que todas as mídias fornecidas pertencem ao slot
+    if (media_ids.length > 0) {
+      const mediaCheck = await pool.query(
+        'SELECT id FROM bot_media WHERE slot = $1 AND id = ANY($2::int[])',
+        [slot, media_ids],
+      );
+      if (mediaCheck.rows.length !== media_ids.length) {
+        const found = new Set(mediaCheck.rows.map((r) => r.id));
+        const missing = media_ids.filter((id) => !found.has(id));
+        return res.status(400).json({
+          error: `mídia(s) não encontrada(s) no slot '${slot}': ${missing.join(', ')}`,
+        });
+      }
+    }
+
+    await client.query('BEGIN');
+
+    // Remove todos os vínculos atuais do curso
+    await client.query(
+      'DELETE FROM bot_media_courses WHERE slot = $1 AND course_slug = $2',
+      [slot, course_slug],
+    );
+
+    // Insere novos vínculos preservando position_order pela posição no array
+    const inserted = [];
+    for (let i = 0; i < media_ids.length; i++) {
+      const mid = media_ids[i];
+      const isIntro = intro_media_id != null ? mid === intro_media_id : false;
+      const r = await client.query(
+        `INSERT INTO bot_media_courses (slot, media_id, course_slug, is_intro, position_order, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING *`,
+        [slot, mid, course_slug, isIntro, i],
+      );
+      inserted.push(r.rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.json({ ok: true, course_slug, total: inserted.length, links: inserted });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------- CURSOS ----------
 
 app.get('/api/bots/:slot/courses', async (req, res) => {
