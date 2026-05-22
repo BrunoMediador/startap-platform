@@ -2102,6 +2102,86 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   border-bottom: 1px solid var(--border);
 }
 .exec-skel-row:last-child { border-bottom: none; }
+
+/* ─── GALERIA DE MÍDIA v2 ──────────────────────────────────────── */
+/* Modal base — display:none por padrão, .open ativa */
+.gal-modal {
+  display: none;
+  position: fixed; inset: 0; z-index: 600;
+  background: rgba(0,0,0,.65);
+  align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.gal-modal.open { display: flex; }
+.gal-modal--z700 { z-index: 700; }
+
+/* Grid de cards */
+.gallery-tab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 1rem; margin-top: .75rem; }
+@media (max-width: 767px) { .gallery-tab-grid { grid-template-columns: repeat(2,1fr); } }
+
+/* Card de mídia */
+.gmc { background: var(--surface,var(--bg-2)); border: 1px solid var(--border); border-radius: var(--radius-md,.5rem); overflow: visible; transition: border-color .15s, box-shadow .15s; position: relative; }
+.gmc:hover { border-color: var(--border-light,var(--border)); box-shadow: var(--shadow-md,0 4px 12px rgba(0,0,0,.3)); }
+.gmc__thumb { aspect-ratio: 16/9; background: var(--surface-2,var(--bg-3)); overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md,.5rem) var(--radius-md,.5rem) 0 0; }
+.gmc__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.gmc__play { position: absolute; width: 26px; height: 26px; background: rgba(0,0,0,.55); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.gmc__body { padding: .5rem .625rem .625rem; }
+.gmc__title { font-size: .8125rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gmc__title-input { font-size: .8125rem; font-weight: 500; background: var(--surface-2,var(--bg-3)); border: 1px solid var(--accent,#3b82f6); border-radius: .375rem; padding: .125rem .375rem; color: var(--text); width: 100%; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.gmc__meta { display: flex; align-items: center; gap: .375rem; margin-top: .25rem; flex-wrap: wrap; }
+.gmc__badge-video { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(139,92,246,.2); color: #c4b5fd; border: 1px solid rgba(139,92,246,.3); }
+.gmc__badge-image { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(16,185,129,.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
+.gmc__badge-courses { font-size: .6875rem; background: rgba(59,130,246,.12); color: #93c5fd; border: 1px solid rgba(59,130,246,.25); padding: .1rem .5rem; border-radius: 9999px; cursor: pointer; transition: background .12s; white-space: nowrap; }
+.gmc__badge-courses:hover { background: rgba(59,130,246,.2); }
+.gmc__badge-unlinked { font-size: .6875rem; background: rgba(245,158,11,.12); color: #fcd34d; border: 1px solid rgba(245,158,11,.25); padding: .1rem .5rem; border-radius: 9999px; white-space: nowrap; }
+.gmc__kebab { position: absolute; top: .375rem; right: .375rem; width: 24px; height: 24px; background: rgba(0,0,0,.6); border-radius: .375rem; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity .12s; border: none; color: white; z-index: 10; }
+.gmc:hover .gmc__kebab, .gmc__kebab:focus { opacity: 1; }
+.gmc__kebab:focus { outline: 2px solid var(--accent,#3b82f6); }
+.gmc__menu { position: absolute; top: 1.75rem; right: 0; background: var(--surface,var(--bg-2)); border: 1px solid var(--border-light,var(--border)); border-radius: .5rem; box-shadow: var(--shadow-lg,0 8px 24px rgba(0,0,0,.4)); z-index: 300; min-width: 176px; overflow: hidden; display: none; }
+.gmc__menu.open { display: block; }
+.gmc__menu-item { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; font-size: .8125rem; cursor: pointer; transition: background .1s; color: var(--text); white-space: nowrap; border: none; background: none; width: 100%; text-align: left; }
+.gmc__menu-item:hover:not(.gmc__menu-item--disabled) { background: var(--surface-2,var(--bg-3)); }
+.gmc__menu-item--danger { color: var(--danger,#f87171); }
+.gmc__menu-item--danger:hover:not(.gmc__menu-item--disabled) { background: rgba(239,68,68,.1); }
+.gmc__menu-item--disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
+.gmc__menu-sep { border-top: 1px solid var(--border); margin: .25rem 0; }
+
+/* Drop zone */
+.gal-drop-zone { border: 2px dashed var(--border-light,var(--border)); border-radius: .625rem; padding: 2rem 1.5rem; text-align: center; transition: all .15s; cursor: pointer; }
+.gal-drop-zone.drag-over { border-color: var(--accent,#3b82f6); background: rgba(59,130,246,.06); }
+
+/* Upload queue item */
+.gal-upload-item { display: flex; align-items: flex-start; gap: .75rem; padding: .625rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--surface-2,var(--bg-3)); margin-bottom: .5rem; }
+.gal-upload-item--success { border-left: 3px solid var(--success,#10b981); }
+.gal-upload-item--error { border-left: 3px solid var(--danger,#ef4444); background: rgba(239,68,68,.04); }
+.gal-upload-item--uploading { border-left: 3px solid var(--accent,#3b82f6); }
+.gal-upload-item--pending { border-left: 3px solid var(--border-light,var(--border)); }
+.gal-pb-track { height: 4px; border-radius: 9999px; background: var(--border-light,var(--border)); overflow: hidden; margin-top: .4rem; }
+.gal-pb-fill { height: 100%; background: var(--accent,#3b82f6); border-radius: 9999px; transition: width 200ms ease; }
+
+/* Curso multi-select panel */
+.course-media-mli { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; cursor: pointer; transition: background .1s; }
+.course-media-mli:hover { background: var(--surface-2,var(--bg-3)); }
+.course-media-mli--sel { background: rgba(59,130,246,.06); border-left: 2px solid var(--accent,#3b82f6); }
+.course-media-mli--avail { border-left: 2px solid transparent; }
+.star-btn-v2 { background: none; border: none; cursor: pointer; padding: .125rem; display: flex; align-items: center; flex-shrink: 0; transition: transform .1s; }
+.star-btn-v2:hover { transform: scale(1.15); }
+.star-btn-v2--active svg { color: #f59e0b; fill: #f59e0b; }
+.star-btn-v2--inactive svg { color: var(--text-muted); fill: none; }
+.gal-cb { width: 15px; height: 15px; border-radius: .25rem; border: 1.5px solid var(--border-light,var(--border)); background: var(--surface-2,var(--bg-3)); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .12s; }
+.gal-cb--checked { background: var(--accent,#3b82f6); border-color: var(--accent,#3b82f6); }
+.gal-thumb-mini { width: 48px; height: 27px; border-radius: .25rem; flex-shrink: 0; background: var(--surface-2,var(--bg-3)); display: flex; align-items: center; justify-content: center; overflow: hidden; object-fit: cover; }
+.gal-subheader { background: var(--surface-2,var(--bg-3)); padding: .3rem .75rem; font-size: .6875rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; }
+.gal-ctrl-bar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.gal-ctrl-sel { background: var(--surface-2,var(--bg-3)); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem; font-size: .8125rem; color: var(--text); cursor: pointer; }
+.gal-ctrl-sel:focus { outline: none; border-color: var(--accent,#3b82f6); }
+.gal-search-wrap { position: relative; }
+.gal-search-input { background: var(--surface-2,var(--bg-3)); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem .35rem 1.8rem; font-size: .8125rem; color: var(--text); transition: border-color .15s; min-width: 160px; }
+.gal-search-input:focus { outline: none; border-color: var(--accent,#3b82f6); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+.gal-search-icon { position: absolute; left: .45rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); }
+
+/* Usage modal card */
+.usage-course-card { padding: .625rem .75rem; display: flex; align-items: center; justify-content: space-between; gap: .5rem; border-bottom: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -3712,6 +3792,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'prompt' ? ' active' : ''}" data-tab="prompt" role="tab" aria-selected="${_selectedBotTab === 'prompt'}">Prompt</button>
       <button class="tab-btn${_selectedBotTab === 'courses' ? ' active' : ''}" data-tab="courses" role="tab" aria-selected="${_selectedBotTab === 'courses'}">Cursos</button>
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
+      <button class="tab-btn${_selectedBotTab === 'galeria' ? ' active' : ''}" data-tab="galeria" role="tab" aria-selected="${_selectedBotTab === 'galeria'}">${icon('image',13)} Galeria</button>
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'horarios' ? ' active' : ''}" data-tab="horarios" role="tab" aria-selected="${_selectedBotTab === 'horarios'}">Horários</button>` : ''}
@@ -3758,6 +3839,8 @@ async function loadBotTab(slot, tab, el, bot) {
     await renderBotCourses(slot, el);
   } else if (tab === 'media') {
     await renderBotMedia(slot, el);
+  } else if (tab === 'galeria') {
+    await window.GalleryV2.renderBotGaleria(slot, el);
   } else if (tab === 'routing') {
     // aba removida em 003-F: roteamento virou seção global
     el.innerHTML = `<div class="empty-state" style="padding:2rem 0">
@@ -7511,8 +7594,8 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'cursos', 'media', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', cursos: 'Cursos', media: 'Mídias', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'cursos', 'media', 'galeria', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', cursos: 'Cursos', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
 
     const tabsHtml = tabNames.map(t =>
       `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
@@ -7865,6 +7948,10 @@ function loadCloneConfigTab(tab, clone) {
   } else if (tab === 'media') {
     content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
     renderBotMedia(clone.slot, content);
+
+  } else if (tab === 'galeria') {
+    content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    window.GalleryV2.renderBotGaleria(clone.slot, content);
 
   } else if (tab === 'prompt') {
     _clonePromptDirty = false;
@@ -9701,6 +9788,889 @@ function mountCleanupCountdown() {
 
   // Widget de countdown da limpeza automática
   mountCleanupCountdown();
+})();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+  GALERIA DE MÍDIA v2 — MODAIS HTML
+  Todos começam com class="gal-modal" (display:none por padrão no CSS).
+  A classe .open ativa display:flex via CSS — sem style inline de display.
+  ═══════════════════════════════════════════════════════════════ -->
+
+<!-- MODAL: Upload em lote -->
+<div id="gal-modal-upload" class="gal-modal" role="dialog" aria-modal="true" aria-labelledby="gal-upload-title">
+  <div class="modal" style="max-width:640px;width:100%;max-height:87vh;display:flex;flex-direction:column">
+    <div class="modal__header" style="flex-shrink:0">
+      <h3 class="modal__title" id="gal-upload-title">Subir mídias</h3>
+      <button class="btn btn--ghost btn--icon" id="gal-upload-close-btn" aria-label="Fechar">&#x2715;</button>
+    </div>
+    <div class="modal__body" style="flex:1;overflow-y:auto">
+      <div id="gal-drop-zone" class="gal-drop-zone" role="button" tabindex="0" aria-label="Área de upload — arraste ou clique">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin:0 auto .5rem;display:block;color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p style="font-size:.875rem;font-weight:500;color:var(--text-dim,var(--text))">Arraste arquivos aqui</p>
+        <p style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">ou <span style="color:var(--accent,#3b82f6)">selecionar arquivos</span></p>
+        <p style="font-size:.75rem;margin-top:.5rem;color:var(--text-muted)">MP4 · MOV · WebM · JPG · PNG · WebP — máx 200 MB</p>
+      </div>
+      <input id="gal-file-input" type="file" style="display:none" multiple accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"/>
+      <div id="gal-upload-queue" style="margin-top:.5rem"></div>
+    </div>
+    <div class="modal__footer" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center">
+      <button id="gal-cancel-all-btn" class="btn btn--ghost btn--sm" style="color:var(--danger,#f87171)">Cancelar todos</button>
+      <button id="gal-finish-btn" class="btn btn--primary btn--sm" disabled>
+        Concluir (<span id="gal-done-count" class="mono">0</span> prontos)
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Substituir arquivo -->
+<div id="gal-modal-replace" class="gal-modal" role="dialog" aria-modal="true" aria-label="Substituir arquivo">
+  <div class="modal" style="max-width:400px;width:100%">
+    <div class="modal__header">
+      <h3 class="modal__title">Substituir arquivo</h3>
+      <button class="btn btn--ghost btn--icon" id="gal-replace-close-btn" aria-label="Fechar">&#x2715;</button>
+    </div>
+    <div class="modal__body">
+      <p style="font-size:.875rem;color:var(--text-dim,var(--text));margin-bottom:.75rem">Selecione um novo arquivo. ID, título e vínculos serão mantidos.</p>
+      <div id="gal-replace-zone" class="gal-drop-zone" role="button" tabindex="0" aria-label="Área de upload para substituição">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin:0 auto .375rem;display:block;color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p style="font-size:.875rem;color:var(--text-dim,var(--text))">Clique ou arraste o arquivo</p>
+      </div>
+      <input id="gal-replace-input" type="file" style="display:none" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"/>
+      <div id="gal-replace-prog" style="display:none;margin-top:.75rem">
+        <div class="gal-pb-track"><div id="gal-replace-bar" class="gal-pb-fill" style="width:0%"></div></div>
+        <div id="gal-replace-status" style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">Enviando...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Onde a mídia está sendo usada -->
+<div id="gal-modal-usage" class="gal-modal" role="dialog" aria-modal="true" aria-labelledby="gal-usage-title">
+  <div class="modal" style="max-width:480px;width:100%;max-height:82vh;display:flex;flex-direction:column">
+    <div class="modal__header" style="flex-shrink:0">
+      <h3 class="modal__title" id="gal-usage-title">Onde está sendo usada</h3>
+      <button class="btn btn--ghost btn--icon" id="gal-usage-close-btn" aria-label="Fechar">&#x2715;</button>
+    </div>
+    <div id="gal-usage-body" class="modal__body" style="flex:1;overflow-y:auto"></div>
+    <div id="gal-usage-footer" class="modal__footer" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap"></div>
+  </div>
+</div>
+
+<!-- MODAL: Confirmação genérica -->
+<div id="gal-modal-confirm" class="gal-modal gal-modal--z700" role="dialog" aria-modal="true" aria-labelledby="gal-confirm-title">
+  <div class="modal" style="max-width:440px;width:100%">
+    <div class="modal__header">
+      <h3 class="modal__title" id="gal-confirm-title"></h3>
+      <button class="btn btn--ghost btn--icon" id="gal-confirm-close-btn" aria-label="Fechar">&#x2715;</button>
+    </div>
+    <div id="gal-confirm-body" class="modal__body" style="font-size:.875rem;color:var(--text-dim,var(--text))"></div>
+    <div class="modal__footer" style="display:flex;justify-content:flex-end;gap:.5rem;flex-wrap:wrap">
+      <button id="gal-confirm-extra" class="btn btn--sm" style="display:none"></button>
+      <button id="gal-confirm-cancel" class="btn btn--sm">Cancelar</button>
+      <button id="gal-confirm-ok" class="btn btn--primary btn--sm">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+  GALERIA DE MÍDIA v2 — JAVASCRIPT ISOLADO
+  Namespace: window.GalleryV2
+  Sem acoplamento com funções globais do painel legado.
+  Acesso a helpers globais (api, toast, icon, escapeHtml) via referência direta — eles
+  já existem no escopo global do arquivo e não precisam ser redeclarados.
+  ═══════════════════════════════════════════════════════════════ -->
+<script>
+(function() {
+  'use strict';
+
+  // ─── Estado interno ─────────────────────────────────────────────
+  let _slot = null;
+  let _media = [];
+  let _replaceId = null;
+  let _activeKebab = null;
+  let _uploadQueue = [];
+  let _courseMediaState = {}; // { [slug]: { selected: Set<id>, introId: id|null } }
+
+  // ─── Helpers de modal ───────────────────────────────────────────
+  function openModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('open');
+  }
+  function closeModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('open');
+  }
+  function closeAllGalModals() {
+    document.querySelectorAll('.gal-modal').forEach(m => m.classList.remove('open'));
+  }
+
+  // Click fora fecha o modal (click no backdrop, não no conteúdo)
+  document.addEventListener('click', (e) => {
+    document.querySelectorAll('.gal-modal.open').forEach(modal => {
+      if (e.target === modal) modal.classList.remove('open');
+    });
+  });
+
+  // ESC fecha qualquer modal galeria aberto
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllGalModals();
+  });
+
+  // Fechar kebab ao clicar fora
+  document.addEventListener('click', (e) => {
+    if (_activeKebab && !_activeKebab.contains(e.target)) {
+      _activeKebab.classList.remove('open');
+      _activeKebab = null;
+    }
+  });
+
+  // Wiring botões fixos dos modais (fechar, cancelar, etc.)
+  function _wireStaticButtons() {
+    // Upload modal
+    const uploadClose = document.getElementById('gal-upload-close-btn');
+    if (uploadClose) uploadClose.addEventListener('click', () => closeModal('gal-modal-upload'));
+
+    const cancelAll = document.getElementById('gal-cancel-all-btn');
+    if (cancelAll) cancelAll.addEventListener('click', _galCancelAll);
+
+    const finishBtn = document.getElementById('gal-finish-btn');
+    if (finishBtn) finishBtn.addEventListener('click', _galFinishUpload);
+
+    const fileInput = document.getElementById('gal-file-input');
+    if (fileInput) fileInput.addEventListener('change', (e) => _galHandleFiles(e.target.files));
+
+    const dropZone = document.getElementById('gal-drop-zone');
+    if (dropZone) {
+      dropZone.addEventListener('click', () => document.getElementById('gal-file-input')?.click());
+      dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') document.getElementById('gal-file-input')?.click(); });
+      dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+      dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+      dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); _galHandleFiles(e.dataTransfer.files); });
+    }
+
+    // Replace modal
+    const replaceClose = document.getElementById('gal-replace-close-btn');
+    if (replaceClose) replaceClose.addEventListener('click', () => closeModal('gal-modal-replace'));
+
+    const replaceZone = document.getElementById('gal-replace-zone');
+    if (replaceZone) {
+      replaceZone.addEventListener('click', () => document.getElementById('gal-replace-input')?.click());
+      replaceZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') document.getElementById('gal-replace-input')?.click(); });
+    }
+    const replaceInput = document.getElementById('gal-replace-input');
+    if (replaceInput) replaceInput.addEventListener('change', (e) => _galExecuteReplace(e.target.files[0]));
+
+    // Usage modal
+    const usageClose = document.getElementById('gal-usage-close-btn');
+    if (usageClose) usageClose.addEventListener('click', () => closeModal('gal-modal-usage'));
+
+    // Confirm modal
+    const confirmClose = document.getElementById('gal-confirm-close-btn');
+    if (confirmClose) confirmClose.addEventListener('click', () => closeModal('gal-modal-confirm'));
+
+    const confirmCancel = document.getElementById('gal-confirm-cancel');
+    if (confirmCancel) confirmCancel.addEventListener('click', () => closeModal('gal-modal-confirm'));
+  }
+
+  // Wire na carga do DOM
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _wireStaticButtons);
+  } else {
+    _wireStaticButtons();
+  }
+
+  // ─── renderBotGaleria: entry point do loadBotTab/loadCloneConfigTab ──
+  async function renderBotGaleria(slot, el) {
+    _slot = slot;
+    _media = [];
+    el.innerHTML = `
+      <div class="gal-ctrl-bar" style="margin-top:.5rem">
+        <button class="btn btn--primary btn--sm" id="gal-btn-upload" aria-label="Subir mídia">
+          ${icon('upload', 13)} Subir mídia
+        </button>
+        <select id="gal-filter-type" class="gal-ctrl-sel" aria-label="Filtrar tipo">
+          <option value="">Todos</option>
+          <option value="video">Vídeo</option>
+          <option value="image">Imagem</option>
+        </select>
+        <div class="gal-search-wrap">
+          <svg class="gal-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="gal-search" class="gal-search-input" type="text" placeholder="Buscar por título..." aria-label="Buscar mídia"/>
+        </div>
+        <select id="gal-sort" class="gal-ctrl-sel" aria-label="Ordenar">
+          <option value="date_desc">Mais recente</option>
+          <option value="date_asc">Mais antigo</option>
+          <option value="name_asc">Nome A-Z</option>
+          <option value="size_desc">Maior tamanho</option>
+        </select>
+      </div>
+      <div id="gal-grid-container"></div>`;
+
+    el.querySelector('#gal-btn-upload').addEventListener('click', () => _galOpenUpload(slot));
+    el.querySelector('#gal-filter-type').addEventListener('change', _galRender);
+    el.querySelector('#gal-search').addEventListener('input', _galRender);
+    el.querySelector('#gal-sort').addEventListener('change', _galRender);
+
+    await _galLoad(slot);
+  }
+
+  async function _galLoad(slot) {
+    const cont = document.getElementById('gal-grid-container');
+    if (!cont) return;
+    cont.innerHTML = `<div class="empty-state" style="padding:2rem 0">${icon('loader', 20)}<span class="muted">Carregando galeria...</span></div>`;
+    try {
+      const data = await api(`/api/bots/${encodeURIComponent(slot)}/gallery`);
+      _media = Array.isArray(data) ? data : [];
+      _galRender();
+    } catch(e) {
+      cont.innerHTML = `<div class="empty-state">${icon('alert-triangle',28)}<p class="empty-state__title">Não foi possível carregar as mídias</p><button class="btn btn--sm" id="gal-retry-btn">${icon('refresh-cw',13)} Tentar novamente</button></div>`;
+      const retryBtn = document.getElementById('gal-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', () => _galLoad(slot));
+    }
+  }
+
+  function _galRender() {
+    const cont = document.getElementById('gal-grid-container');
+    if (!cont) return;
+    const search = (document.getElementById('gal-search')?.value || '').toLowerCase();
+    const type   = document.getElementById('gal-filter-type')?.value || '';
+    const sort   = document.getElementById('gal-sort')?.value || 'date_desc';
+
+    let items = [..._media];
+    if (type === 'video') items = items.filter(m => (m.mime_type||'').startsWith('video'));
+    else if (type === 'image') items = items.filter(m => (m.mime_type||'').startsWith('image'));
+    if (search) items = items.filter(m => ((m.title||'')+(m.file_name||'')).toLowerCase().includes(search));
+    items.sort((a,b) => {
+      if (sort === 'date_desc') return new Date(b.created_at||0) - new Date(a.created_at||0);
+      if (sort === 'date_asc')  return new Date(a.created_at||0) - new Date(b.created_at||0);
+      if (sort === 'name_asc')  return (a.title||a.file_name||'').localeCompare(b.title||b.file_name||'');
+      if (sort === 'size_desc') return (b.file_size||0) - (a.file_size||0);
+      return 0;
+    });
+
+    if (!items.length) {
+      const isEmpty = !_media.length;
+      cont.innerHTML = `<div class="empty-state" style="padding:2rem 0">${icon(isEmpty?'image':'search',36)}<p class="empty-state__title">${isEmpty?'Nenhuma mídia ainda':'Sem resultados'}</p><p class="empty-state__text">${isEmpty?'Faça upload do primeiro arquivo.':'Tente outros filtros.'}</p>${isEmpty?`<button class="btn btn--primary btn--sm empty-state__action" id="gal-empty-upload">${icon('upload',13)} Subir mídia</button>`:''}</div>`;
+      if (isEmpty) {
+        document.getElementById('gal-empty-upload')?.addEventListener('click', () => _galOpenUpload(_slot));
+      }
+      return;
+    }
+
+    cont.innerHTML = `<div class="gallery-tab-grid">${items.map(m => _galCardHtml(m)).join('')}</div>`;
+
+    // Wire kebab menus
+    cont.querySelectorAll('.gmc__kebab').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const menu = btn.nextElementSibling;
+        const isOpen = menu.classList.contains('open');
+        if (_activeKebab) { _activeKebab.classList.remove('open'); }
+        if (!isOpen) { menu.classList.add('open'); _activeKebab = menu; }
+        else { _activeKebab = null; }
+      });
+    });
+
+    // Wire renomear inline
+    cont.querySelectorAll('.gmc__menu-item[data-action="rename"]').forEach(btn => {
+      btn.addEventListener('click', () => { closeAllGalKebabs(); _galStartRename(btn.dataset.id); });
+    });
+
+    // Wire substituir
+    cont.querySelectorAll('.gmc__menu-item[data-action="replace"]').forEach(btn => {
+      btn.addEventListener('click', () => { closeAllGalKebabs(); _galOpenReplace(Number(btn.dataset.id)); });
+    });
+
+    // Wire copiar URL
+    cont.querySelectorAll('.gmc__menu-item[data-action="copy-url"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        closeAllGalKebabs();
+        const m = _media.find(x => String(x.id) === btn.dataset.id);
+        if (m?.url) { navigator.clipboard.writeText(m.url).then(() => toast('URL copiada!','success')).catch(() => toast('Erro ao copiar URL','danger')); }
+      });
+    });
+
+    // Wire excluir
+    cont.querySelectorAll('.gmc__menu-item[data-action="delete"]').forEach(btn => {
+      btn.addEventListener('click', () => { closeAllGalKebabs(); _galDeleteMedia(Number(btn.dataset.id)); });
+    });
+
+    // Wire badge de cursos (abre usage modal)
+    cont.querySelectorAll('.gmc__badge-courses').forEach(btn => {
+      btn.addEventListener('click', () => _galOpenUsage(Number(btn.dataset.id)));
+    });
+  }
+
+  function closeAllGalKebabs() {
+    document.querySelectorAll('.gmc__menu.open').forEach(m => m.classList.remove('open'));
+    _activeKebab = null;
+  }
+
+  function _galCardHtml(m) {
+    const isVideo = (m.mime_type||'').startsWith('video');
+    const isImage = (m.mime_type||'').startsWith('image');
+    const typeBadge = isVideo ? `<span class="gmc__badge-video">vídeo</span>` : isImage ? `<span class="gmc__badge-image">imagem</span>` : '';
+    const sizeStr = m.file_size ? _fmtSize(m.file_size) : '';
+    const title = escapeHtml(m.title || m.file_name || `Mídia #${m.id}`);
+    const courseCount = m.course_count || 0;
+    const courseBadge = courseCount > 0
+      ? `<button class="gmc__badge-courses" data-id="${m.id}" aria-label="Ver onde está sendo usada">${icon('link',10)} em ${courseCount} curso${courseCount>1?'s':''}</button>`
+      : `<span class="gmc__badge-unlinked">${icon('unlink',10)} não vinculado</span>`;
+
+    const thumbHtml = isVideo
+      ? `<div class="gmc__thumb">${icon('film',28)}<span class="gmc__play">${icon('play',12)}</span></div>`
+      : isImage
+        ? `<div class="gmc__thumb"><img src="${escapeHtml(m.url||'')}" alt="${title}" loading="lazy" onerror="this.parentElement.innerHTML='${icon('image',28)}'"/></div>`
+        : `<div class="gmc__thumb">${icon('file',28)}</div>`;
+
+    const canDelete = courseCount === 0;
+    const deleteClass = canDelete ? 'gmc__menu-item--danger' : 'gmc__menu-item--disabled gmc__menu-item--danger';
+    const deleteTitle = canDelete ? 'Excluir' : 'Excluir (desvincule dos cursos primeiro)';
+
+    return `<div class="gmc" data-media-id="${m.id}">
+      ${thumbHtml}
+      <button class="gmc__kebab" aria-label="Ações" aria-haspopup="true">${icon('more-vertical',14)}</button>
+      <div class="gmc__menu" role="menu">
+        <button class="gmc__menu-item" data-action="rename" data-id="${m.id}" role="menuitem">${icon('edit-2',13)} Renomear</button>
+        <button class="gmc__menu-item" data-action="replace" data-id="${m.id}" role="menuitem">${icon('refresh-cw',13)} Substituir arquivo</button>
+        <button class="gmc__menu-item" data-action="copy-url" data-id="${m.id}" role="menuitem">${icon('copy',13)} Copiar URL</button>
+        <div class="gmc__menu-sep"></div>
+        <button class="gmc__menu-item ${deleteClass}" data-action="delete" data-id="${m.id}" role="menuitem" title="${deleteTitle}">${icon('trash-2',13)} Excluir</button>
+      </div>
+      <div class="gmc__body">
+        <div class="gmc__title" id="gmc-title-${m.id}">${title}</div>
+        <div class="gmc__meta">
+          ${typeBadge}
+          ${sizeStr ? `<span style="font-size:.6875rem;color:var(--text-muted)">${sizeStr}</span>` : ''}
+          ${courseBadge}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function _fmtSize(bytes) {
+    if (bytes >= 1e9) return (bytes/1e9).toFixed(1) + ' GB';
+    if (bytes >= 1e6) return (bytes/1e6).toFixed(1) + ' MB';
+    if (bytes >= 1e3) return (bytes/1e3).toFixed(0) + ' KB';
+    return bytes + ' B';
+  }
+
+  // ─── Renomear inline ─────────────────────────────────────────────
+  function _galStartRename(id) {
+    const titleEl = document.getElementById('gmc-title-' + id);
+    if (!titleEl) return;
+    const m = _media.find(x => String(x.id) === String(id));
+    const oldTitle = m?.title || m?.file_name || '';
+    titleEl.innerHTML = `<input class="gmc__title-input" id="gmc-rename-input-${id}" value="${escapeHtml(oldTitle)}" maxlength="200" aria-label="Novo título"/>`;
+    const input = document.getElementById('gmc-rename-input-' + id);
+    if (!input) return;
+    input.focus();
+    input.select();
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const newTitle = input.value.trim();
+        if (!newTitle || newTitle === oldTitle) { _galRender(); return; }
+        try {
+          await api(`/api/bots/${encodeURIComponent(_slot)}/gallery/${id}/rename`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle }) });
+          const idx = _media.findIndex(x => String(x.id) === String(id));
+          if (idx >= 0) _media[idx].title = newTitle;
+          toast('Título atualizado.', 'success');
+        } catch(err) { toast('Erro ao renomear: ' + err.message, 'danger'); }
+        _galRender();
+      } else if (e.key === 'Escape') {
+        _galRender();
+      }
+    });
+    input.addEventListener('blur', () => {
+      // Pequeno delay para não conflitar com keydown Enter
+      setTimeout(() => {
+        const current = document.getElementById('gmc-rename-input-' + id);
+        if (current) _galRender();
+      }, 150);
+    });
+  }
+
+  // ─── Upload em lote ─────────────────────────────────────────────
+  function _galOpenUpload(slot) {
+    _uploadQueue = [];
+    _slot = slot;
+    document.getElementById('gal-upload-queue').innerHTML = '';
+    const finishBtn = document.getElementById('gal-finish-btn');
+    if (finishBtn) { finishBtn.disabled = true; }
+    const doneCount = document.getElementById('gal-done-count');
+    if (doneCount) doneCount.textContent = '0';
+    const fileInput = document.getElementById('gal-file-input');
+    if (fileInput) fileInput.value = '';
+    openModal('gal-modal-upload');
+  }
+
+  function _galHandleFiles(fileList) {
+    if (!fileList?.length) return;
+    Array.from(fileList).forEach(f => {
+      const id = 'up-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      _uploadQueue.push({ id, file: f, title: f.name.replace(/\.[^.]+$/, ''), status: 'pending', progress: 0 });
+    });
+    _galRenderQueue();
+    _galAutoUpload();
+  }
+
+  function _galRenderQueue() {
+    const cont = document.getElementById('gal-upload-queue');
+    if (!cont) return;
+    cont.innerHTML = _uploadQueue.map(item => {
+      const statusClass = `gal-upload-item--${item.status}`;
+      const statusIcon = item.status === 'success' ? icon('check-circle-2',14) : item.status === 'error' ? icon('x-circle',14) : item.status === 'uploading' ? icon('loader',14) : icon('clock',14);
+      const pbHtml = (item.status === 'uploading' || item.status === 'success')
+        ? `<div class="gal-pb-track"><div class="gal-pb-fill" id="pb-fill-${item.id}" style="width:${item.progress}%"></div></div>`
+        : '';
+      const errMsg = item.error ? `<div style="font-size:.72rem;color:var(--danger,#f87171);margin-top:.25rem">${escapeHtml(item.error)}</div>` : '';
+      return `<div class="gal-upload-item ${statusClass}" id="up-item-${item.id}">
+        <div style="flex:1;min-width:0">
+          <input class="gal-upload-title-input" value="${escapeHtml(item.title)}" data-upload-id="${item.id}" maxlength="200" style="background:transparent;border:none;color:var(--text);font-size:.8125rem;font-weight:500;width:100%;outline:none;border-bottom:1px solid var(--border);padding-bottom:.125rem" aria-label="Título do arquivo"/>
+          <div style="font-size:.6875rem;color:var(--text-muted);margin-top:.2rem">${escapeHtml(item.file.name)} — ${_fmtSize(item.file.size)}</div>
+          ${pbHtml}${errMsg}
+        </div>
+        <div style="flex-shrink:0;display:flex;align-items:center;gap:.25rem;color:${item.status==='success'?'var(--success,#10b981)':item.status==='error'?'var(--danger,#f87171)':'var(--text-muted)'}">${statusIcon}</div>
+      </div>`;
+    }).join('');
+
+    // Wire title inputs
+    cont.querySelectorAll('.gal-upload-title-input').forEach(input => {
+      input.addEventListener('change', (e) => {
+        const item = _uploadQueue.find(x => x.id === e.target.dataset.uploadId);
+        if (item) item.title = e.target.value.trim() || item.file.name;
+      });
+    });
+
+    _galUpdateFinishBtn();
+  }
+
+  function _galUpdateFinishBtn() {
+    const doneCount = _uploadQueue.filter(x => x.status === 'success').length;
+    const doneEl = document.getElementById('gal-done-count');
+    if (doneEl) doneEl.textContent = doneCount;
+    const finishBtn = document.getElementById('gal-finish-btn');
+    if (finishBtn) finishBtn.disabled = doneCount === 0;
+  }
+
+  async function _galAutoUpload() {
+    const pending = _uploadQueue.filter(x => x.status === 'pending');
+    for (const item of pending) {
+      item.status = 'uploading';
+      item.progress = 0;
+      _galRenderQueue();
+      try {
+        await _galUploadOne(item);
+        item.status = 'success';
+        item.progress = 100;
+      } catch(err) {
+        item.status = 'error';
+        item.error = err.message;
+      }
+      _galRenderQueue();
+    }
+  }
+
+  function _galUploadOne(item) {
+    return new Promise((resolve, reject) => {
+      const fd = new FormData();
+      fd.append('file', item.file);
+      fd.append('title', item.title);
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          item.progress = Math.round(e.loaded / e.total * 95);
+          const fill = document.getElementById('pb-fill-' + item.id);
+          if (fill) fill.style.width = item.progress + '%';
+        }
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            _media.unshift(res);
+          } catch(_) {}
+          resolve();
+        } else {
+          try {
+            const e = JSON.parse(xhr.responseText);
+            reject(new Error(e.message || e.error || ('HTTP ' + xhr.status)));
+          } catch(_) { reject(new Error('HTTP ' + xhr.status)); }
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('Falha na rede')));
+      xhr.open('POST', `/api/bots/${encodeURIComponent(_slot)}/gallery/upload`);
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+      if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+      xhr.send(fd);
+    });
+  }
+
+  function _galCancelAll() {
+    _uploadQueue = _uploadQueue.filter(x => x.status !== 'pending');
+    _galRenderQueue();
+  }
+
+  function _galFinishUpload() {
+    closeModal('gal-modal-upload');
+    _galRender();
+  }
+
+  // ─── Substituir arquivo ─────────────────────────────────────────
+  function _galOpenReplace(id) {
+    _replaceId = id;
+    document.getElementById('gal-replace-prog').style.display = 'none';
+    document.getElementById('gal-replace-bar').style.width = '0%';
+    document.getElementById('gal-replace-status').textContent = 'Enviando...';
+    const replaceInput = document.getElementById('gal-replace-input');
+    if (replaceInput) replaceInput.value = '';
+    openModal('gal-modal-replace');
+  }
+
+  async function _galExecuteReplace(file) {
+    if (!file || !_replaceId) return;
+    const progEl = document.getElementById('gal-replace-prog');
+    progEl.style.display = 'block';
+    const fd = new FormData();
+    fd.append('file', file);
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 95);
+        document.getElementById('gal-replace-bar').style.width = pct + '%';
+      }
+    });
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          const idx = _media.findIndex(x => x.id === _replaceId);
+          if (idx >= 0) Object.assign(_media[idx], res);
+        } catch(_) {}
+        closeModal('gal-modal-replace');
+        _galRender();
+        toast('Arquivo substituído com sucesso.', 'success');
+      } else {
+        document.getElementById('gal-replace-status').textContent = 'Erro: ' + xhr.status;
+        toast('Falha ao substituir arquivo.', 'danger');
+      }
+    });
+    xhr.addEventListener('error', () => {
+      document.getElementById('gal-replace-status').textContent = 'Falha na rede';
+      toast('Erro de rede ao substituir arquivo.', 'danger');
+    });
+    xhr.open('PUT', `/api/bots/${encodeURIComponent(_slot)}/gallery/${_replaceId}/replace`);
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+    xhr.send(fd);
+  }
+
+  // ─── Usage modal ─────────────────────────────────────────────────
+  async function _galOpenUsage(id) {
+    const body = document.getElementById('gal-usage-body');
+    const footer = document.getElementById('gal-usage-footer');
+    const titleEl = document.getElementById('gal-usage-title');
+    const m = _media.find(x => x.id === id);
+    if (titleEl) titleEl.textContent = m?.title || m?.file_name || 'Onde está sendo usada';
+    body.innerHTML = `<div style="padding:1rem;display:flex;justify-content:center">${icon('loader',20)}</div>`;
+    footer.innerHTML = '';
+    openModal('gal-modal-usage');
+    try {
+      const usage = await api(`/api/bots/${encodeURIComponent(_slot)}/gallery/${id}/usage`);
+      const courses = Array.isArray(usage) ? usage : (usage.courses || []);
+      if (!courses.length) {
+        body.innerHTML = `<div class="empty-state" style="padding:1.5rem">${icon('unlink',28)}<p class="empty-state__title">Não está em nenhum curso</p></div>`;
+        footer.innerHTML = `<div></div><button class="btn btn--sm" style="background:rgba(239,68,68,.15);color:var(--danger,#f87171)" id="gal-usage-delete-btn">${icon('trash-2',13)} Excluir mídia</button>`;
+        document.getElementById('gal-usage-delete-btn')?.addEventListener('click', () => { closeModal('gal-modal-usage'); _galDeleteMedia(id); });
+        return;
+      }
+      body.innerHTML = courses.map(c => {
+        const badge = c.is_intro ? `<span class="course-slug-badge course-slug-badge--warning" style="font-size:.7rem">${icon('star',10)} Apresentação</span>` : `<span class="course-slug-badge" style="font-size:.7rem">Bônus</span>`;
+        return `<div class="usage-course-card">
+          <span style="font-size:.875rem">${escapeHtml(c.name || c.course_slug)}</span>
+          <div style="display:flex;align-items:center;gap:.5rem;flex-shrink:0">${badge}</div>
+        </div>`;
+      }).join('');
+      footer.innerHTML = `
+        <button class="btn btn--ghost btn--sm" id="gal-usage-unlink-all-btn">${icon('unlink',13)} Desvincular de todos</button>
+        <div></div>`;
+      document.getElementById('gal-usage-unlink-all-btn')?.addEventListener('click', () => {
+        _galConfirm({
+          title: 'Desvincular de todos os cursos?',
+          body: 'A mídia ficará disponível na galeria mas não estará em nenhum curso.',
+          okLabel: 'Desvincular',
+          onOk: async () => {
+            try {
+              for (const c of courses) {
+                await api(`/api/bots/${encodeURIComponent(_slot)}/gallery/${id}/link/${encodeURIComponent(c.course_slug)}`, { method: 'DELETE' });
+              }
+              const idx = _media.findIndex(x => x.id === id);
+              if (idx >= 0) _media[idx].course_count = 0;
+              closeModal('gal-modal-usage');
+              _galRender();
+              toast('Mídia desvinculada de todos os cursos.', 'success');
+            } catch(err) { toast('Erro ao desvincular: ' + err.message, 'danger'); }
+          }
+        });
+      });
+    } catch(err) {
+      body.innerHTML = `<p class="muted" style="padding:1rem">${icon('alert-triangle',14)} Erro ao carregar uso: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  // ─── Excluir mídia ────────────────────────────────────────────────
+  function _galDeleteMedia(id) {
+    const m = _media.find(x => x.id === id);
+    if (!m) return;
+    const courseCount = m.course_count || 0;
+    if (courseCount > 0) {
+      _galConfirm({
+        title: 'Mídia vinculada a cursos',
+        body: `Esta mídia está em ${courseCount} curso${courseCount>1?'s':''}. Desvincule antes de excluir.`,
+        okLabel: null,
+      });
+      return;
+    }
+    _galConfirm({
+      title: 'Excluir mídia?',
+      body: `"${escapeHtml(m.title || m.file_name)}" será removida permanentemente.`,
+      okLabel: 'Excluir',
+      onOk: async () => {
+        try {
+          await api(`/api/bots/${encodeURIComponent(_slot)}/gallery/${id}`, { method: 'DELETE' });
+          _media = _media.filter(x => x.id !== id);
+          _galRender();
+          toast('Mídia excluída.', 'success');
+        } catch(err) { toast('Erro ao excluir: ' + err.message, 'danger'); }
+      }
+    });
+  }
+
+  // ─── Confirm modal helper ────────────────────────────────────────
+  function _galConfirm({ title, body, okLabel, onOk, extraLabel, onExtra }) {
+    document.getElementById('gal-confirm-title').textContent = title || '';
+    document.getElementById('gal-confirm-body').textContent = body || '';
+    const okBtn    = document.getElementById('gal-confirm-ok');
+    const extraBtn = document.getElementById('gal-confirm-extra');
+    // Reset
+    okBtn.style.display = '';
+    extraBtn.style.display = 'none';
+    if (okLabel) {
+      okBtn.textContent = okLabel;
+      okBtn.onclick = () => { closeModal('gal-modal-confirm'); if (onOk) onOk(); };
+    } else {
+      okBtn.style.display = 'none';
+    }
+    if (extraLabel && onExtra) {
+      extraBtn.textContent = extraLabel;
+      extraBtn.style.display = '';
+      extraBtn.onclick = () => { closeModal('gal-modal-confirm'); onExtra(); };
+    }
+    openModal('gal-modal-confirm');
+  }
+
+  // ─── Monkey-patch renderBotCourses: painel multi-select de galeria ──
+  // Aguarda renderBotCourses existir (é definida antes no mesmo arquivo)
+  // Patch: adiciona botão "Vincular da galeria" na linha de cada curso
+  // que abre um painel inline com multi-select das mídias da galeria.
+  (function _patchRenderBotCourses() {
+    const _origRenderBotCourses = window.renderBotCourses;
+    if (typeof _origRenderBotCourses !== 'function') {
+      // Tenta novamente após DOMContentLoaded caso o script seja executado antes
+      document.addEventListener('DOMContentLoaded', _patchRenderBotCourses);
+      return;
+    }
+    window.renderBotCourses = async function(slot, el) {
+      await _origRenderBotCourses(slot, el);
+      // Adiciona botão "Galeria" em cada linha de curso
+      el.querySelectorAll('.js-course-link').forEach(btn => {
+        if (btn.dataset.galeriaPatchDone) return;
+        btn.dataset.galeriaPatchDone = '1';
+        const galBtn = document.createElement('button');
+        galBtn.className = 'btn btn--ghost btn--sm';
+        galBtn.style.marginLeft = '.375rem';
+        galBtn.innerHTML = `${icon('image',13)} Galeria`;
+        galBtn.title = 'Vincular mídias da galeria';
+        galBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const slug = btn.dataset.slug;
+          _galOpenCoursePanel(slot, slug, el);
+        });
+        btn.parentNode.insertBefore(galBtn, btn.nextSibling);
+      });
+    };
+  })();
+
+  // ─── Painel inline multi-select de galeria p/ curso ─────────────
+  async function _galOpenCoursePanel(slot, slug, tableEl) {
+    // Fecha painel se já aberto para este slug
+    const existing = tableEl.querySelector('#course-gal-panel-' + CSS.escape(slug));
+    if (existing) { existing.remove(); return; }
+
+    // Fecha outros painéis abertos
+    tableEl.querySelectorAll('[id^="course-gal-panel-"]').forEach(p => p.remove());
+
+    const row = tableEl.querySelector(`tr[data-slug="${CSS.escape(slug)}"]`);
+    if (!row) return;
+
+    const panel = document.createElement('tr');
+    panel.id = 'course-gal-panel-' + slug;
+    panel.innerHTML = `<td colspan="7" style="padding:.75rem 1.25rem;background:var(--surface-2,var(--bg-3))">
+      <div id="cgp-inner-${escapeHtml(slug)}" style="min-height:80px;display:flex;align-items:center;justify-content:center">${icon('loader',20)}</div>
+      <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem">
+        <button class="btn btn--sm" id="cgp-cancel-${escapeHtml(slug)}">${icon('x',12)} Cancelar</button>
+        <button class="btn btn--primary btn--sm" id="cgp-save-${escapeHtml(slug)}">${icon('save',12)} Salvar</button>
+      </div>
+    </td>`;
+    row.parentNode.insertBefore(panel, row.nextSibling);
+
+    document.getElementById('cgp-cancel-' + slug)?.addEventListener('click', () => panel.remove());
+    document.getElementById('cgp-save-' + slug)?.addEventListener('click', () => _galSaveCourseMedia(slot, slug, panel));
+
+    // Inicializa estado
+    if (!_courseMediaState[slug]) _courseMediaState[slug] = { selected: new Set(), introId: null };
+
+    await _galRenderCoursePanel(slot, slug, document.getElementById('cgp-inner-' + slug));
+  }
+
+  async function _galRenderCoursePanel(slot, slug, innerEl) {
+    if (!innerEl) return;
+    try {
+      // Carrega galeria (usa cache _media se disponível e do mesmo slot)
+      let allMedia = _media.length && _slot === slot ? _media : [];
+      if (!allMedia.length) {
+        const data = await api(`/api/bots/${encodeURIComponent(slot)}/gallery`);
+        allMedia = Array.isArray(data) ? data : [];
+        if (_slot === slot) _media = allMedia;
+      }
+      // Carrega mídias já vinculadas ao curso
+      const mediasRes = await api(`/api/bots/${slot}/media`);
+      const allBotMedia = Array.isArray(mediasRes) ? mediasRes : (mediasRes.media || mediasRes.items || []);
+      const linked = allBotMedia.filter(m => m.course_slug === slug);
+      const linkedIds = new Set(linked.map(m => String(m.id)));
+      const introMedia = linked.find(m => m.is_course_intro === true || m.is_course_intro === 1);
+
+      const state = _courseMediaState[slug];
+      // Inicializa seleção com os já vinculados
+      if (state.selected.size === 0 && linkedIds.size > 0) {
+        linkedIds.forEach(id => state.selected.add(id));
+        state.introId = introMedia ? String(introMedia.id) : null;
+      }
+
+      _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
+    } catch(err) {
+      innerEl.innerHTML = `<p class="muted">${icon('alert-triangle',14)} Erro ao carregar: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function _galRenderCoursePanelContent(allMedia, slug, innerEl, state) {
+    const sel = Array.from(state.selected);
+    const avail = allMedia.filter(m => !state.selected.has(String(m.id)));
+    const selMedia = allMedia.filter(m => state.selected.has(String(m.id)));
+
+    function mediaRow(m, isSel) {
+      const id = String(m.id);
+      const isIntro = state.introId === id;
+      const title = escapeHtml(m.title || m.file_name || ('Mídia #' + m.id));
+      const typeIcon = (m.mime_type||'').startsWith('video') ? icon('film',11) : icon('image',11);
+      const thumbHtml = (m.mime_type||'').startsWith('image') && m.url
+        ? `<img class="gal-thumb-mini" src="${escapeHtml(m.url)}" alt="${title}" loading="lazy"/>`
+        : `<div class="gal-thumb-mini">${typeIcon}</div>`;
+      const cbHtml = `<div class="gal-cb${isSel?' gal-cb--checked':''}" aria-label="${isSel?'Remover':'Adicionar'}">${isSel?icon('check',9):''}</div>`;
+      const starHtml = isSel ? `<button class="star-btn-v2 ${isIntro?'star-btn-v2--active':'star-btn-v2--inactive'}" data-media-id="${id}" title="${isIntro?'Apresentação do curso':'Definir como apresentação'}">${icon('star',13)}</button>` : '';
+      return `<div class="course-media-mli ${isSel?'course-media-mli--sel':'course-media-mli--avail'}" data-media-id="${id}" data-is-sel="${isSel?'1':'0'}" role="checkbox" aria-checked="${isSel}" tabindex="0">
+        ${cbHtml}${thumbHtml}
+        <span style="font-size:.8125rem;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</span>
+        <span style="font-size:.6875rem;color:var(--text-muted)">${_fmtSize(m.file_size||0)}</span>
+        ${starHtml}
+      </div>`;
+    }
+
+    const selHtml = selMedia.length
+      ? selMedia.map(m => mediaRow(m, true)).join('')
+      : `<p class="muted" style="padding:.5rem .75rem;font-size:.75rem">Nenhuma mídia selecionada.</p>`;
+    const availHtml = avail.length
+      ? avail.map(m => mediaRow(m, false)).join('')
+      : `<p class="muted" style="padding:.5rem .75rem;font-size:.75rem">Todas as mídias já estão selecionadas.</p>`;
+
+    innerEl.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:.5rem;overflow:hidden">
+        <div class="gal-subheader">Selecionadas (${selMedia.length})</div>
+        <div id="cgp-sel-${escapeHtml(slug)}">${selHtml}</div>
+        <div class="gal-subheader">Disponíveis (${avail.length})</div>
+        <div id="cgp-avail-${escapeHtml(slug)}">${availHtml}</div>
+      </div>`;
+
+    // Wire clicks (toggle seleção) e star (intro)
+    innerEl.querySelectorAll('.course-media-mli').forEach(row => {
+      row.addEventListener('click', (e) => {
+        const mediaId = row.dataset.mediaId;
+        const isSel = row.dataset.isSel === '1';
+        if (e.target.closest('.star-btn-v2')) return; // Tratado separadamente
+        if (isSel) {
+          state.selected.delete(mediaId);
+          if (state.introId === mediaId) state.introId = null;
+        } else {
+          state.selected.add(mediaId);
+        }
+        _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
+      });
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
+      });
+    });
+
+    innerEl.querySelectorAll('.star-btn-v2').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mediaId = btn.dataset.mediaId;
+        if (state.introId === mediaId) {
+          // Clicou na estrela ativa: aviso antes de remover
+          _galConfirm({
+            title: 'Remover vídeo de apresentação?',
+            body: 'O curso ficará sem vídeo de apresentação. Deseja continuar?',
+            okLabel: 'Remover',
+            onOk: () => {
+              state.introId = null;
+              _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
+            }
+          });
+        } else {
+          state.introId = mediaId;
+          _galRenderCoursePanelContent(allMedia, slug, innerEl, state);
+        }
+      });
+    });
+  }
+
+  async function _galSaveCourseMedia(slot, slug, panelRow) {
+    const state = _courseMediaState[slug];
+    if (!state) return;
+    const mediaIds = Array.from(state.selected).map(Number).filter(Boolean);
+    const introMediaId = state.introId ? Number(state.introId) : null;
+    try {
+      await api(`/api/bots/${encodeURIComponent(slot)}/courses/${encodeURIComponent(slug)}/media`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_ids: mediaIds, intro_media_id: introMediaId }),
+      });
+      panelRow.remove();
+      delete _courseMediaState[slug];
+      toast('Mídias do curso atualizadas.', 'success');
+      // Recarrega galeria para atualizar course_count
+      await _galLoad(slot);
+    } catch(err) {
+      toast('Erro ao salvar mídias: ' + err.message, 'danger');
+    }
+  }
+
+  // ─── Expor API pública ───────────────────────────────────────────
+  window.GalleryV2 = {
+    renderBotGaleria,
+  };
+
 })();
 </script>
 </body>
