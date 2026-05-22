@@ -1,14 +1,15 @@
 /**
- * per-clone.ts — resolve o GoogleCalendarClient correto para um slot (clone ou matriz).
+ * per-clone.ts — resolve o GoogleCalendarClient correto para um slot de clone.
  *
- * Por que existe: bots usam Service Account própria gravada em flow_clones (clones) ou
- * bot_config (matrizes). Este helper faz o lookup em ambas as tabelas e retorna o client
- * já bound ao calendarId correto, ou null quando o slot ainda não tem gcal configurado.
+ * Por que existe: cada clone tem Service Account própria gravada em flow_clones.
+ * Este helper faz o lookup SOMENTE em flow_clones e retorna o client já bound ao
+ * calendarId correto, ou null quando o clone ainda não tem gcal configurado.
  *
- * Estratégia de lookup:
- *   1. Tenta flow_clones WHERE slot = $1 (caso clone).
- *   2. Se não houver row, tenta bot_config WHERE slot = $1 (caso matriz).
- *   3. Em qualquer caso: gcal_status='active' + JSON + calendar_id são obrigatórios.
+ * ISOLAMENTO: NÃO há fallback para bot_config (matriz). Se o clone não tiver
+ * gcal_status='active' + gcal_credentials_json + gcal_calendar_id em flow_clones,
+ * retorna null. Isso evita que clones sem GCal próprio usem silenciosamente a
+ * agenda da matriz (vazamento cross-tenant). Callers já tratam null retornando
+ * mensagem de erro ao usuário (ver teste_barbearia.ts e teste_vendas_barbearia.ts).
  *
  * Cache em memória de 5 minutos por slot evita SELECT a cada turno de chat.
  * Invalidação acontece quando recebemos erro 401/403 do Google (ver invalidateGcalCache).
@@ -34,10 +35,14 @@ interface GcalRow {
 }
 
 /**
- * Retorna GoogleCalendarClient bound ao slot, ou null se:
- * - O slot não existe em flow_clones nem em bot_config.
+ * Retorna GoogleCalendarClient bound ao slot do clone, ou null se:
+ * - O slot não existe em flow_clones.
  * - gcal_status != 'active'.
  * - gcal_credentials_json ou gcal_calendar_id estão ausentes.
+ *
+ * NUNCA faz fallback para bot_config (matriz): cada clone deve ter suas próprias
+ * credenciais GCal. Sem isso, clones sem GCal próprio usariam silenciosamente a
+ * agenda da matriz — vazamento cross-tenant inaceitável.
  */
 export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient | null> {
   const now = Date.now();
@@ -46,25 +51,14 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
     return cached.client;
   }
 
-  // 1ª tentativa: clone
-  let result = await query<GcalRow>(
+  // Lookup exclusivo em flow_clones — sem fallback para bot_config.
+  const result = await query<GcalRow>(
     `SELECT gcal_credentials_json, gcal_calendar_id, gcal_status
      FROM flow_clones
      WHERE slot = $1
      LIMIT 1`,
     [slot],
   );
-
-  // 2ª tentativa: matriz (bot_config)
-  if (!result.rows[0]) {
-    result = await query<GcalRow>(
-      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_status
-       FROM bot_config
-       WHERE slot = $1
-       LIMIT 1`,
-      [slot],
-    );
-  }
 
   const row = result.rows[0];
 
