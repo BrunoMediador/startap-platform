@@ -73,6 +73,6 @@ RUN ln -s /app/node_modules /node_modules
 EXPOSE 3030
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:3030/api/status || exit 1
+  CMD wget -qO- http://127.0.0.1:3030/login.html || exit 1
 
 CMD ["node", "server.js"]
