@@ -16,6 +16,10 @@ const STARTAP_SESSION_NAMES = config.STARTAP_WAHA_SESSIONS.split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
+/**
+ * SEED inicial — em runtime o prompt vem só do banco (bot_prompt).
+ * Este template é referência para popular o banco em setup inicial; não é usado em execução.
+ */
 const DEFAULT_PROMPT_TPL = [
   'Voce e a Lola, consultora de tecnologia da Startap.',
   'Seu unico objetivo e entender o negocio do cliente, mostrar como a Startap pode ajudar e capturar os dados de contato para o time humano fechar.',
@@ -123,11 +127,16 @@ export class StartapBot extends BotBase {
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
 
-    const systemPrompt = await renderPrompt({
-      slot: SLOT,
-      fallback: DEFAULT_PROMPT_TPL,
-      vars: { nome: pushName || telefone, telefone },
-    });
+    let systemPrompt: string;
+    try {
+      systemPrompt = await renderPrompt({
+        slot: SLOT,
+        vars: { nome: pushName || telefone, telefone },
+      });
+    } catch (err) {
+      this.log.error({ err, slot: SLOT, telefone }, 'renderPrompt falhou — bot nao responde');
+      return null;
+    }
 
     const tools: ToolDefinition[] = [];
 

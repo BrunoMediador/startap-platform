@@ -15,10 +15,12 @@ const TZ = 'America/Sao_Paulo';
 const ALERT_PHONE = '553591746797@c.us';
 const ALERT_SESSION = 'startap';
 
-// Apenas persona + regras + fluxo + cartao. Dados do negocio, horarios,
-// servicos, cliente e agenda sao injetados pelo worker via buildContextBlock
-// (concatenado ao final). Usuario do painel pode editar este template SEM
-// risco de remover dados — eles vem por fora.
+/**
+ * SEED inicial — em runtime o prompt vem só do banco (bot_prompt).
+ * Este template é referência para popular o banco em setup inicial; não é usado em execução.
+ * Apenas persona + regras + fluxo + cartao. Dados do negocio, horarios,
+ * servicos, cliente e agenda sao injetados pelo worker via buildContextBlock.
+ */
 const DEFAULT_PROMPT_TPL = [
   'Voce e o assistente virtual de uma barbearia.',
   'Atenda pelo WhatsApp com simpatia e objetividade. Maximo 3 linhas por resposta.',
@@ -133,14 +135,16 @@ export class TesteBarbeariaBot extends BotBase {
       timeZone: TZ,
     });
 
-    // O bot_prompt no banco contem SOMENTE persona+regras+fluxo+cartao (parte
-    // editavel pelo usuario do painel). Renderiza sem aplicar nenhuma variavel
-    // dinamica — vars dinamicas vao no bloco de contexto separado abaixo.
-    const promptPersona = await renderPrompt({
-      slot: this.slot,
-      fallback: DEFAULT_PROMPT_TPL,
-      vars: {},
-    });
+    // O bot_prompt no banco contém SOMENTE persona+regras+fluxo+cartão (parte
+    // editável pelo usuário do painel). Renderiza sem vars dinâmicas —
+    // vars dinâmicas vão no bloco de contexto separado abaixo.
+    let promptPersona: string;
+    try {
+      promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
+    } catch (err) {
+      this.log.error({ err, slot: this.slot, telefone }, 'renderPrompt falhou — bot nao responde');
+      return null;
+    }
 
     // Bloco de CONTEXTO: dados do banco (negocio, horarios, servicos, cliente,
     // agenda) montados em runtime e concatenados ao prompt. NAO editavel pelo
