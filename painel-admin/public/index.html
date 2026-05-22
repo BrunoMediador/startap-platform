@@ -3407,16 +3407,21 @@ async function renderBots() {
     </div>`;
 
   try {
-    const [botsRaw, clonesRaw] = await Promise.all([api('/api/bots'), api('/api/clones').catch(() => [])]);
+    const [botsRaw, clonesRaw, pausesSummaryRaw] = await Promise.all([
+      api('/api/bots'),
+      api('/api/clones').catch(() => []),
+      api('/api/flows/pauses/summary').catch(() => ({})),
+    ]);
     const bots = Array.isArray(botsRaw) ? botsRaw : (botsRaw.bots || Object.values(botsRaw));
     const clones = Array.isArray(clonesRaw) ? clonesRaw : (clonesRaw.clones || clonesRaw.data || []);
+    const pausesByFlow = (pausesSummaryRaw && typeof pausesSummaryRaw === 'object') ? pausesSummaryRaw : {};
 
     const interno = bots.filter(b => (b.slot || b.slug) === INTERNAL_BOT_SLOT);
     const matrizes = bots.filter(b => MATRIZ_SLOTS.includes(b.slot || b.slug));
 
-    _renderBotGroup(interno, document.getElementById('group-interno'), false, clones);
-    _renderBotGroup(matrizes, document.getElementById('group-matrizes'), true, clones);
-    renderBotClones(clones, document.getElementById('group-clones'));
+    _renderBotGroup(interno, document.getElementById('group-interno'), false, clones, pausesByFlow);
+    _renderBotGroup(matrizes, document.getElementById('group-matrizes'), true, clones, pausesByFlow);
+    renderBotClones(clones, document.getElementById('group-clones'), pausesByFlow);
 
     _renderGroupSummary(document.getElementById('summary-interno'), interno, clones, { kind: 'interno' });
     _renderGroupSummary(document.getElementById('summary-matrizes'), matrizes, clones, { kind: 'matriz' });
@@ -3485,7 +3490,8 @@ function _fmtPhone(raw) {
   return `+${digits}`;
 }
 
-function _renderBotGroup(bots, container, showCloneBtn, allClones) {
+function _renderBotGroup(bots, container, showCloneBtn, allClones, pausesByFlow) {
+  pausesByFlow = pausesByFlow || {};
   if (!bots.length) {
     container.innerHTML = `<div class="bot-row-list"><div class="bot-row__empty">${icon('inbox', 18)} Nenhum bot neste grupo</div></div>`;
     return;
@@ -3580,6 +3586,23 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones) {
       });
       actions.appendChild(cloneBtn);
     }
+
+    const botFlowId = bot.flow_id || bot.workflow_id || bot.slot || bot.slug;
+    const pauseCount = Number(pausesByFlow[botFlowId] || 0);
+    const pausesBtn = document.createElement('button');
+    pausesBtn.className = 'btn btn--sm' + (pauseCount > 0 ? ' btn--warning' : '');
+    pausesBtn.dataset.flowPauseId = botFlowId;
+    pausesBtn.dataset.flowPauseCount = String(pauseCount);
+    pausesBtn.setAttribute('aria-label', `Ver pausados do fluxo ${bot.name || bot.slot}`);
+    pausesBtn.title = pauseCount > 0
+      ? `${pauseCount} número${pauseCount === 1 ? '' : 's'} pausado${pauseCount === 1 ? '' : 's'} neste fluxo`
+      : 'Nenhum número pausado neste fluxo';
+    pausesBtn.innerHTML = `${icon('pause', 13)} Pausados${pauseCount > 0 ? ` <span class="badge badge--danger fp-count-badge" style="margin-left:.25rem">${pauseCount}</span>` : ''}`;
+    pausesBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openFlowPausesModal(botFlowId, bot.name || bot.slot);
+    });
+    actions.appendChild(pausesBtn);
 
     const detailBtn = document.createElement('button');
     detailBtn.className = 'btn btn--primary btn--sm';
@@ -6109,6 +6132,144 @@ function openPauseKeywordsModal(workflowId) {
     });
 }
 
+// Atualiza o badge "[N]" do botão Pausados no row externo sem recarregar tudo.
+// Procura todos os botões aria-label que casam com o flowId via dataset.
+function _decrementPauseBadge(flowId) {
+  document.querySelectorAll(`[data-flow-pause-id="${CSS.escape(flowId)}"]`).forEach(btn => {
+    const cur = Number(btn.dataset.flowPauseCount || 0);
+    const next = Math.max(0, cur - 1);
+    btn.dataset.flowPauseCount = String(next);
+    const badge = btn.querySelector('.fp-count-badge');
+    if (next === 0) {
+      btn.classList.remove('btn--warning');
+      if (badge) badge.remove();
+    } else if (badge) {
+      badge.textContent = String(next);
+    }
+  });
+}
+
+// ── Modal: ver e gerenciar números pausados num fluxo ───────────────────────
+// flow_pauses guarda pausas vindas de comando manual (fromMe), antibot (flood)
+// ou regra. O operador usa isso pra descobrir por que um número não está
+// recebendo resposta e despausar quando a pausa veio de teste antigo.
+function openFlowPausesModal(flowId, label) {
+  const safeLabel = escapeHtml(label || flowId || '—');
+  openModal(`
+    <div class="modal__header">
+      <span class="modal__title">${icon('pause', 16)} Pausados — ${safeLabel}</span>
+      <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x',16)}</button>
+    </div>
+    <div class="muted" style="font-size:.8125rem;margin-bottom:.75rem">
+      Flow ID: <code>${escapeHtml(flowId)}</code>
+    </div>
+    <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.75rem">
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer">
+        <input type="checkbox" id="fp-include-inactive" />
+        <span>Mostrar histórico (incluir já despausados)</span>
+      </label>
+      <button class="btn btn--ghost btn--sm" id="fp-reload-btn" style="margin-left:auto">
+        ${icon('refresh-cw', 12)} Recarregar
+      </button>
+    </div>
+    <div id="fp-list" style="max-height:60vh;overflow:auto"></div>
+  `);
+
+  const listEl = document.getElementById('fp-list');
+  const incEl  = document.getElementById('fp-include-inactive');
+
+  async function reload() {
+    listEl.innerHTML = `<div style="text-align:center;padding:1rem"><div class="spinner" style="margin:auto"></div></div>`;
+    try {
+      const q = incEl.checked ? '?includeInactive=true' : '';
+      const data = await api(`/api/flows/${encodeURIComponent(flowId)}/pauses${q}`);
+      const pauses = Array.isArray(data?.pauses) ? data.pauses : [];
+      if (!pauses.length) {
+        listEl.innerHTML = `<p class="muted" style="padding:1rem;text-align:center">
+          ${icon('check-circle-2',14)} Nenhum número pausado${incEl.checked ? ' no histórico' : ' ativo'}.
+        </p>`;
+        return;
+      }
+      const sourceTip = {
+        antibot:  'Pausa automática por flood (6+ msgs em 60s).',
+        fromMe:   'Pausado quando o operador respondeu manualmente pelo WhatsApp. CUIDADO: despausar pode fazer o bot atender contatos pessoais.',
+        manual:   'Pausa criada via API/painel.',
+      };
+      listEl.innerHTML = `
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:.85rem;min-width:560px">
+            <thead>
+              <tr style="text-align:left;border-bottom:1px solid var(--border)">
+                <th style="padding:.4rem .5rem">Telefone</th>
+                <th style="padding:.4rem .5rem">Origem</th>
+                <th style="padding:.4rem .5rem">Motivo</th>
+                <th style="padding:.4rem .5rem">Quando</th>
+                <th style="padding:.4rem .5rem;text-align:right">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="fp-tbody">
+              ${pauses.map(p => {
+                const src = p.source || '—';
+                const badgeCls = src === 'antibot' ? 'badge--warning'
+                              : src === 'fromMe'  ? 'badge--danger'
+                              : 'badge--muted';
+                const tip = sourceTip[src] || '';
+                return `
+                <tr data-phone="${escapeHtml(p.telefone)}" data-source="${escapeHtml(src)}" style="border-bottom:1px solid var(--border)">
+                  <td style="padding:.5rem"><code>${escapeHtml(_fmtPhone(p.telefone) || p.telefone)}</code></td>
+                  <td style="padding:.5rem">
+                    <span class="badge ${badgeCls}" title="${escapeHtml(tip)}">${escapeHtml(src)}</span>
+                  </td>
+                  <td style="padding:.5rem;max-width:280px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.reason || '')}">${escapeHtml(p.reason || '—')}</td>
+                  <td style="padding:.5rem;font-size:.75rem" class="muted mono">${escapeHtml(fmtRelative(p.updated_at || p.created_at))}</td>
+                  <td style="padding:.5rem;text-align:right">
+                    ${p.active
+                      ? `<button class="btn btn--sm fp-unpause-btn" data-phone="${escapeHtml(p.telefone)}" data-source="${escapeHtml(src)}">${icon('play', 12)} Despausar</button>`
+                      : `<span class="badge badge--muted">despausado</span>`}
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+      listEl.querySelectorAll('.fp-unpause-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const phone = btn.dataset.phone;
+          const source = btn.dataset.source;
+          if (!phone) return;
+          if (source === 'fromMe') {
+            const ok = confirm(
+              `Atenção: este número foi pausado porque o operador respondeu manualmente pelo WhatsApp.\n\n` +
+              `Despausar faz o bot voltar a responder esse contato — pode atrapalhar conversas pessoais ` +
+              `do dono (família, fornecedores, amigos do mesmo número).\n\nDespausar mesmo assim?`
+            );
+            if (!ok) return;
+          }
+          btn.disabled = true;
+          try {
+            await api(`/api/flows/${encodeURIComponent(flowId)}/pauses/${encodeURIComponent(phone)}`, {
+              method: 'DELETE',
+            });
+            toast(`Despausado: ${_fmtPhone(phone) || phone}`, 'success');
+            _decrementPauseBadge(flowId);
+            await reload();
+          } catch (err) {
+            toast('Erro ao despausar: ' + err.message, 'danger');
+            btn.disabled = false;
+          }
+        });
+      });
+    } catch (err) {
+      listEl.innerHTML = `<p class="muted" style="padding:1rem">${icon('alert-triangle',14)} Erro: ${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  incEl.addEventListener('change', reload);
+  document.getElementById('fp-reload-btn').addEventListener('click', reload);
+  reload();
+}
+
 async function loadCfgLimpeza(content) {
   content.innerHTML = `<div style="display:flex;flex-direction:column;gap:1rem">
     <div class="card" id="cfg-cleanup-status"><div class="skeleton" style="height:80px"></div></div>
@@ -6269,7 +6430,7 @@ function pollQR(sessionName, onUpdate) {
 /* Patch de closeModal removido — lógica consolidada na declaração original acima */
 
 /* ── renderBotClones (grupo interno de Bots) ────────────────────── */
-function renderBotClones(clones, container) {
+function renderBotClones(clones, container, pausesByFlow) {
   if (!clones.length) {
     container.innerHTML = `
       <div class="bot-row-list">
@@ -6283,7 +6444,7 @@ function renderBotClones(clones, container) {
       </div>`;
     return;
   }
-  renderClonesList(clones, container);
+  renderClonesList(clones, container, pausesByFlow);
 }
 
 function _cloneStatusInfo(status) {
@@ -6299,7 +6460,8 @@ function _cloneStatusInfo(status) {
   return map[s] || { dot: '', cls: 'badge--muted', label: status || 'Sem status' };
 }
 
-function renderClonesList(clones, wrap) {
+function renderClonesList(clones, wrap, pausesByFlow) {
+  pausesByFlow = pausesByFlow || {};
   if (!clones.length) {
     wrap.innerHTML = `
       <div class="empty-state">
@@ -6364,6 +6526,20 @@ function renderClonesList(clones, wrap) {
     // Ações
     const actions = document.createElement('div');
     actions.className = 'bot-row__actions';
+
+    const cloneFlowId = c.slot || c.flow_id || c.workflow_id;
+    const pauseCount = Number(pausesByFlow[cloneFlowId] || 0);
+    const pausesBtn = document.createElement('button');
+    pausesBtn.className = 'btn btn--sm' + (pauseCount > 0 ? ' btn--warning' : '');
+    pausesBtn.dataset.flowPauseId = cloneFlowId;
+    pausesBtn.dataset.flowPauseCount = String(pauseCount);
+    pausesBtn.setAttribute('aria-label', `Ver pausados do clone ${c.display_name || c.id}`);
+    pausesBtn.title = pauseCount > 0
+      ? `${pauseCount} número${pauseCount === 1 ? '' : 's'} pausado${pauseCount === 1 ? '' : 's'} neste clone`
+      : 'Nenhum número pausado neste clone';
+    pausesBtn.innerHTML = `${icon('pause', 13)} Pausados${pauseCount > 0 ? ` <span class="badge badge--danger fp-count-badge" style="margin-left:.25rem">${pauseCount}</span>` : ''}`;
+    pausesBtn.addEventListener('click', () => openFlowPausesModal(cloneFlowId, c.display_name || cloneFlowId));
+    actions.appendChild(pausesBtn);
 
     const configBtn = document.createElement('button');
     configBtn.className = 'btn btn--sm';
