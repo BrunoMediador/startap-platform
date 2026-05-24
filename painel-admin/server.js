@@ -126,31 +126,8 @@ const TS_BOTS = [
     source: 'ts',
     routable: true,
     category: 'teste',
-    tags: ['barbearia', 'agenda'],
-    description: 'Teste de atendimento para barbearia com consulta de agenda e Google Calendar.',
-  },
-  {
-    id: 'dlpKXM3gvX2joC1b',
-    name: 'teste_vendas',
-    active: true,
-    webhook_url: TS_WEBHOOK_URL,
-    source: 'ts',
-    routable: true,
-    category: 'teste',
-    tags: ['vendas', 'curso'],
-    description: 'Teste de vendas do curso de barbeiro com captura de lead e midias.',
-  },
-  {
-    id: 'teste_vendas_barbearia',
-    name: 'teste_vendas_barbearia',
-    active: true,
-    webhook_url: TS_WEBHOOK_URL,
-    source: 'ts',
-    routable: true,
-    category: 'teste',
-    tags: ['vendas', 'barbearia', 'proposta-mista'],
-    description:
-      'Projeto apartado de teste com proposta mista: vende curso e agenda servicos de barbearia.',
+    tags: ['servicos', 'agenda'],
+    description: 'Matriz genérica de atendimento de serviços com consulta de agenda e Google Calendar.',
   },
   {
     id: 'uUS3Ux1cU2DquKxo',
@@ -198,28 +175,18 @@ const BOT_MODEL_CONTEXT = {
     runtime: 'StartapAiBot.processSamuel',
     description: 'Atende o número administrativo e gerencia consultas/remoções da pausa Samuel.',
   },
-  teste_vendas_barbearia: {
-    flow_id: 'teste_vendas_barbearia',
-    flow_name: 'teste_vendas_barbearia',
-    flow_label: 'Teste — Vendas + Barbearia',
-    ai_role: 'Atendente hibrido de vendas e agenda',
-    runtime: 'TesteVendasBarbeariaBot',
-    description:
-      'Projeto de teste apartado com proposta mista: vende curso e agenda servicos de barbearia.',
-  },
 };
 
 // Mapeamento flow_id → tabela de leads (slots sem leads_table omitidos intencionalmente).
 // Usado em GET /api/bots para popular leads_count sem hardcode inline.
 const FLOW_LEADS_TABLE = {
   dlpKXM3gvX2joC1b: 'leads_ricardo',
-  teste_vendas_barbearia: 'leads_vendas_barbearia',
 };
 
 const DEFAULT_PROJECT_DATABASES = [
   {
     project_id: 'teste_barbearia',
-    display_name: 'Teste - Barbearia',
+    display_name: 'Atendimento de Serviços',
     workflow_id: '0ni38aSspWwhooHd',
     slot: 'teste_barbearia',
     source: 'ts',
@@ -236,52 +203,6 @@ const DEFAULT_PROJECT_DATABASES = [
         'model_usage',
         'flow_logs',
         'agendamento_pendente',
-      ],
-    },
-  },
-  {
-    project_id: 'teste_vendas',
-    display_name: 'Teste - Vendas Curso',
-    workflow_id: 'dlpKXM3gvX2joC1b',
-    slot: 'teste_vendas',
-    source: 'ts',
-    memory_table: 'chat_histories_ricardo',
-    status: 'active',
-    metadata: {
-      category: 'teste',
-      tables: [
-        'chat_memory',
-        'routing',
-        'flow_pauses',
-        'flow_pause_keywords',
-        'bot_prompt',
-        'bot_media',
-        'model_usage',
-        'flow_logs',
-        'leads_ricardo',
-      ],
-    },
-  },
-  {
-    project_id: 'teste_vendas_barbearia',
-    display_name: 'Teste - Vendas + Barbearia',
-    workflow_id: 'teste_vendas_barbearia',
-    slot: 'teste_vendas_barbearia',
-    source: 'ts',
-    memory_table: 'chat_histories_vendas_barbearia',
-    status: 'active',
-    metadata: {
-      category: 'teste',
-      tables: [
-        'chat_memory',
-        'routing',
-        'flow_pauses',
-        'flow_pause_keywords',
-        'bot_prompt',
-        'bot_media',
-        'model_usage',
-        'flow_logs',
-        'leads_vendas_barbearia',
       ],
     },
   },
@@ -327,7 +248,6 @@ const DATABASE_TABLES = {
   flow_logs: { label: 'Logs de fluxo', type: 'operacao' },
   agendamento_pendente: { label: 'Agendamentos pendentes', type: 'negocio' },
   leads_ricardo: { label: 'Leads Ricardo', type: 'negocio' },
-  leads_vendas_barbearia: { label: 'Leads Vendas + Barbearia', type: 'negocio' },
   pause_startap: { label: 'Pausa Startap', type: 'operacao' },
 };
 
@@ -787,7 +707,7 @@ app.get(
 
     // Agrega KPIs em parallel: messages_today via model_usage (indexed), leads_count via leads_*
     // model_usage é o proxy correto para mensagens processadas hoje — chat_histories não tem created_at.
-    const [msgRows, leadsRicardoRows, leadsVendasBarbeariaRows] = await Promise.all([
+    const [msgRows, leadsRicardoRows] = await Promise.all([
       pool
         .query(
           `SELECT slot, COUNT(*)::int AS cnt
@@ -801,9 +721,6 @@ app.get(
       pool
         .query(`SELECT slot, COUNT(*)::int AS cnt FROM leads_ricardo GROUP BY slot`)
         .catch(() => ({ rows: [] })),
-      pool
-        .query(`SELECT slot, COUNT(*)::int AS cnt FROM leads_vendas_barbearia GROUP BY slot`)
-        .catch(() => ({ rows: [] })),
     ]);
 
     // Mapeia slot → messages_today
@@ -812,9 +729,6 @@ app.get(
     // Consolida contagens de leads por flow_id (cada tabela usa slot do bot_config como valor da coluna slot)
     const leadsByLeadsTable = {
       leads_ricardo: Object.fromEntries(leadsRicardoRows.rows.map((row) => [row.slot, row.cnt])),
-      leads_vendas_barbearia: Object.fromEntries(
-        leadsVendasBarbeariaRows.rows.map((row) => [row.slot, row.cnt]),
-      ),
     };
 
     const flowCounts = r.rows.reduce((acc, row) => {
@@ -1874,455 +1788,14 @@ app.get('/api/bots/:slot/gallery/:id/usage', async (req, res) => {
   }
 });
 
-// POST /api/bots/:slot/gallery/:id/link
-// Cria vínculo entre mídia e curso em bot_media_courses.
-// Body: { course_slug, is_intro?: bool, position_order?: int }
-app.post('/api/bots/:slot/gallery/:id/link', async (req, res) => {
-  try {
-    const { slot } = req.params;
-    const mediaId = Number(req.params.id);
-    if (!Number.isInteger(mediaId) || mediaId <= 0) {
-      return res.status(400).json({ error: 'id inválido' });
-    }
-    const { course_slug, is_intro = false, position_order = 0 } = req.body ?? {};
-    if (!course_slug || typeof course_slug !== 'string' || !course_slug.trim()) {
-      return res.status(400).json({ error: 'course_slug obrigatório' });
-    }
-
-    // Valida existência da mídia no slot
-    const mediaCheck = await pool.query(
-      'SELECT id FROM bot_media WHERE slot = $1 AND id = $2',
-      [slot, mediaId],
-    );
-    if (!mediaCheck.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
-
-    // Valida existência do curso no slot
-    const courseCheck = await pool.query(
-      'SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2',
-      [slot, course_slug.trim()],
-    );
-    if (!courseCheck.rows.length) {
-      return res.status(404).json({ error: `curso '${course_slug}' não encontrado no slot '${slot}'` });
-    }
-
-    // Se is_intro=true, zera outros intros deste curso antes (transação)
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      if (is_intro === true) {
-        await client.query(
-          `UPDATE bot_media_courses SET is_intro = FALSE
-           WHERE slot = $1 AND course_slug = $2 AND is_intro = TRUE`,
-          [slot, course_slug.trim()],
-        );
-      }
-
-      const r = await client.query(
-        `INSERT INTO bot_media_courses (slot, media_id, course_slug, is_intro, position_order, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [slot, mediaId, course_slug.trim(), !!is_intro, Number(position_order) || 0],
-      );
-
-      await client.query('COMMIT');
-      res.status(201).json(r.rows[0]);
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      if (e.code === '23505') {
-        return res.status(409).json({
-          error: `vínculo já existe: mídia ${mediaId} já está vinculada ao curso '${course_slug}'`,
-        });
-      }
-      throw e;
-    } finally {
-      client.release();
-    }
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// DELETE /api/bots/:slot/gallery/:id/link/:course_slug
-// Remove vínculo específico entre mídia e curso.
-app.delete('/api/bots/:slot/gallery/:id/link/:course_slug', async (req, res) => {
-  try {
-    const { slot, course_slug } = req.params;
-    const mediaId = Number(req.params.id);
-    if (!Number.isInteger(mediaId) || mediaId <= 0) {
-      return res.status(400).json({ error: 'id inválido' });
-    }
-
-    const r = await pool.query(
-      `DELETE FROM bot_media_courses
-       WHERE slot = $1 AND media_id = $2 AND course_slug = $3
-       RETURNING id`,
-      [slot, mediaId, course_slug],
-    );
-    if (!r.rowCount) {
-      return res.status(404).json({ error: 'vínculo não encontrado' });
-    }
-    res.json({ ok: true, link_id: r.rows[0].id });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// PUT /api/bots/:slot/courses/:course_slug/media
-// Sincroniza atomicamente a lista completa de mídias de um curso.
-// Body: { media_ids: number[], intro_media_id?: number }
-// Substitui todos os vínculos existentes do curso pelos fornecidos.
-app.put('/api/bots/:slot/courses/:course_slug/media', async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { slot, course_slug } = req.params;
-    const { media_ids, intro_media_id } = req.body ?? {};
-
-    if (!Array.isArray(media_ids)) {
-      return res.status(400).json({ error: 'media_ids deve ser um array de inteiros' });
-    }
-    for (const id of media_ids) {
-      if (!Number.isInteger(id) || id <= 0) {
-        return res.status(400).json({ error: `media_ids contém valor inválido: ${id}` });
-      }
-    }
-    if (intro_media_id !== undefined && intro_media_id !== null) {
-      if (!Number.isInteger(intro_media_id) || intro_media_id <= 0) {
-        return res.status(400).json({ error: 'intro_media_id inválido' });
-      }
-      if (media_ids.length > 0 && !media_ids.includes(intro_media_id)) {
-        return res.status(400).json({ error: 'intro_media_id deve estar presente em media_ids' });
-      }
-    }
-
-    // Valida existência do curso
-    const courseCheck = await pool.query(
-      'SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2',
-      [slot, course_slug],
-    );
-    if (!courseCheck.rows.length) {
-      return res.status(404).json({ error: `curso '${course_slug}' não encontrado no slot '${slot}'` });
-    }
-
-    // Valida que todas as mídias fornecidas pertencem ao slot
-    if (media_ids.length > 0) {
-      const mediaCheck = await pool.query(
-        'SELECT id FROM bot_media WHERE slot = $1 AND id = ANY($2::int[])',
-        [slot, media_ids],
-      );
-      if (mediaCheck.rows.length !== media_ids.length) {
-        const found = new Set(mediaCheck.rows.map((r) => r.id));
-        const missing = media_ids.filter((id) => !found.has(id));
-        return res.status(400).json({
-          error: `mídia(s) não encontrada(s) no slot '${slot}': ${missing.join(', ')}`,
-        });
-      }
-    }
-
-    await client.query('BEGIN');
-
-    // Remove todos os vínculos atuais do curso
-    await client.query(
-      'DELETE FROM bot_media_courses WHERE slot = $1 AND course_slug = $2',
-      [slot, course_slug],
-    );
-
-    // Insere novos vínculos preservando position_order pela posição no array
-    const inserted = [];
-    for (let i = 0; i < media_ids.length; i++) {
-      const mid = media_ids[i];
-      const isIntro = intro_media_id != null ? mid === intro_media_id : false;
-      const r = await client.query(
-        `INSERT INTO bot_media_courses (slot, media_id, course_slug, is_intro, position_order, created_at)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         RETURNING *`,
-        [slot, mid, course_slug, isIntro, i],
-      );
-      inserted.push(r.rows[0]);
-    }
-
-    await client.query('COMMIT');
-    res.json({ ok: true, course_slug, total: inserted.length, links: inserted });
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
-});
-
-// ---------- CURSOS ----------
-
-app.get('/api/bots/:slot/courses', async (req, res) => {
-  try {
-    // Inclui linked_media_count e linked_media_ids via bot_media_courses (N:N, Migration 036).
-    // Usa UNION com bot_media legado para cobrir período de transição entre as tabelas.
-    // linked_media_ids: array de IDs únicos (sem duplicatas entre as duas fontes).
-    const r = await pool.query(
-      `SELECT
-         bc.id,
-         bc.slot,
-         bc.course_slug,
-         bc.name,
-         bc.description,
-         bc.price,
-         bc.duration,
-         bc.position_order,
-         bc.enabled,
-         bc.details_for_llm,
-         bc.created_at,
-         bc.updated_at,
-         COUNT(DISTINCT combined.mid)::int    AS linked_media_count,
-         COALESCE(
-           ARRAY_AGG(DISTINCT combined.mid) FILTER (WHERE combined.mid IS NOT NULL),
-           ARRAY[]::int[]
-         )                                    AS linked_media_ids
-       FROM bot_courses bc
-       LEFT JOIN (
-         SELECT course_slug, media_id AS mid FROM bot_media_courses WHERE slot = $1
-         UNION
-         SELECT course_slug, id        AS mid FROM bot_media          WHERE slot = $1 AND course_slug IS NOT NULL
-       ) AS combined ON combined.course_slug = bc.course_slug
-       WHERE bc.slot = $1
-       GROUP BY bc.id
-       ORDER BY bc.position_order, bc.id`,
-      [req.params.slot],
-    );
-    res.json(r.rows);
-  } catch (e) {
-    console.error('[courses-get]', e);
-    res.status(500).json({ error: 'erro ao listar cursos' });
-  }
-});
-
-app.post('/api/bots/:slot/courses', async (req, res) => {
-  try {
-    const { slot } = req.params;
-    const {
-      course_slug,
-      name,
-      description = null,
-      price = 0,
-      duration = null,
-      position_order = 0,
-      enabled = true,
-      details_for_llm = null,
-    } = req.body;
-    if (!course_slug || typeof course_slug !== 'string' || !course_slug.trim()) {
-      return res.status(400).json({ error: 'course_slug e obrigatorio' });
-    }
-    if (!name || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({ error: 'name e obrigatorio' });
-    }
-    if (typeof price !== 'number' || !Number.isInteger(price) || price < 0) {
-      return res.status(400).json({ error: 'price deve ser inteiro >= 0 (centavos)' });
-    }
-    const r = await pool.query(
-      `INSERT INTO bot_courses
-         (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-       RETURNING *`,
-      [
-        slot,
-        course_slug.trim(),
-        name.trim(),
-        description,
-        price,
-        duration,
-        Number(position_order) || 0,
-        !!enabled,
-        details_for_llm ?? null,
-      ],
-    );
-    res.status(201).json(r.rows[0]);
-  } catch (e) {
-    if (e.code === '23505') {
-      return res
-        .status(409)
-        .json({ error: `course_slug '${req.body.course_slug}' ja existe neste slot` });
-    }
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.put('/api/bots/:slot/courses/:id', async (req, res) => {
-  try {
-    const { slot } = req.params;
-    const rawId = req.params.id;
-    // Aceita ID numérico ou course_slug como identificador
-    const byId = /^\d+$/.test(rawId);
-    const whereVal = byId ? Number(rawId) : rawId;
-
-    const { name, description, price, duration, position_order, enabled, details_for_llm } =
-      req.body;
-
-    if (
-      price !== undefined &&
-      (typeof price !== 'number' || !Number.isInteger(price) || price < 0)
-    ) {
-      return res.status(400).json({ error: 'price deve ser inteiro >= 0 (centavos)' });
-    }
-
-    const fields = [];
-    const vals = [];
-    let idx = 1;
-    if (name !== undefined) {
-      fields.push(`name = $${idx++}`);
-      vals.push(String(name).trim());
-    }
-    if (description !== undefined) {
-      fields.push(`description = $${idx++}`);
-      vals.push(description ?? null);
-    }
-    if (price !== undefined) {
-      fields.push(`price = $${idx++}`);
-      vals.push(price);
-    }
-    if (duration !== undefined) {
-      fields.push(`duration = $${idx++}`);
-      vals.push(duration ?? null);
-    }
-    if (position_order !== undefined) {
-      fields.push(`position_order = $${idx++}`);
-      vals.push(Number(position_order) || 0);
-    }
-    if (enabled !== undefined) {
-      fields.push(`enabled = $${idx++}`);
-      vals.push(!!enabled);
-    }
-    if (details_for_llm !== undefined) {
-      fields.push(`details_for_llm = $${idx++}`);
-      vals.push(details_for_llm ?? null);
-    }
-    if (!fields.length) return res.status(400).json({ error: 'nenhum campo editavel fornecido' });
-    fields.push(`updated_at = NOW()`);
-
-    // whereClause construído DEPOIS dos campos do SET para que os índices $N
-    // não colidam com os placeholders dinâmicos do SET (Bug: whereClause usava
-    // $1/$2 fixos enquanto o SET também começava em $1).
-    const slotIdx = idx++;
-    const whereIdx = idx++;
-    const whereClause = byId
-      ? `slot = $${slotIdx} AND id = $${whereIdx}`
-      : `slot = $${slotIdx} AND course_slug = $${whereIdx}`;
-    vals.push(slot, whereVal);
-
-    const r = await pool.query(
-      `UPDATE bot_courses SET ${fields.join(', ')} WHERE ${whereClause} RETURNING *`,
-      vals,
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
-    res.json(r.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.delete('/api/bots/:slot/courses/:id', async (req, res) => {
-  try {
-    const { slot } = req.params;
-    const rawId = req.params.id;
-    // Aceita ID numérico ou course_slug como identificador
-    const byId = /^\d+$/.test(rawId);
-    const whereClause = byId ? 'slot = $1 AND id = $2' : 'slot = $1 AND course_slug = $2';
-    const whereVal = byId ? Number(rawId) : rawId;
-
-    // Busca o curso para obter o course_slug e validar existência
-    const courseCheck = await pool.query(
-      `SELECT id, course_slug FROM bot_courses WHERE ${whereClause}`,
-      [slot, whereVal],
-    );
-    if (!courseCheck.rows.length) return res.status(404).json({ error: 'curso nao encontrado' });
-    const { id: courseId, course_slug } = courseCheck.rows[0];
-
-    // Conta vínculos em bot_media_courses (tabela N:N, Migration 036) E em bot_media legado.
-    // Ambas as fontes coexistem durante fase de transição — bloqueio em qualquer uma delas.
-    const linkCountResult = await pool.query(
-      `SELECT COUNT(*)::int AS total
-         FROM (
-           SELECT media_id AS mid FROM bot_media_courses WHERE slot = $1 AND course_slug = $2
-           UNION
-           SELECT id        AS mid FROM bot_media          WHERE slot = $1 AND course_slug = $2
-         ) AS combined`,
-      [slot, course_slug],
-    );
-    const linked_media_count = linkCountResult.rows[0].total;
-    if (linked_media_count > 0) {
-      return res.status(409).json({
-        error: `Nao e possivel excluir o curso`,
-        linked_media_count,
-        message: `Curso tem ${linked_media_count} midia(s) vinculada(s). Desvincule antes de excluir.`,
-      });
-    }
-
-    await pool.query(`DELETE FROM bot_courses WHERE slot = $1 AND id = $2`, [slot, courseId]);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[courses-delete]', e);
-    res.status(500).json({ error: 'erro ao excluir curso' });
-  }
-});
-
-// Endpoint dedicado para promover vídeo como apresentação do curso (DoD 006-Fase3)
+// ---------- ROTAS DE CURSOS REMOVIDAS (Fase 2 — descontinuação vertical vendas) ----------
+// As rotas POST/DELETE /api/bots/:slot/gallery/:id/link,
+// PUT /api/bots/:slot/courses/:course_slug/media,
+// GET/POST/PUT/DELETE /api/bots/:slot/courses e
 // PUT /api/bots/:slot/courses/:course_slug/intro/:media_id
-app.put('/api/bots/:slot/courses/:course_slug/intro/:media_id', async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const { slot, course_slug, media_id } = req.params;
-    const mediaId = Number(media_id);
-    if (!Number.isInteger(mediaId) || mediaId <= 0) {
-      return res.status(400).json({ error: 'media_id invalido' });
-    }
-
-    // Valida que o curso existe neste slot
-    const courseCheck = await pool.query(
-      `SELECT id FROM bot_courses WHERE slot = $1 AND course_slug = $2`,
-      [slot, course_slug],
-    );
-    if (!courseCheck.rows.length) {
-      return res
-        .status(404)
-        .json({ error: `curso '${course_slug}' nao encontrado no slot '${slot}'` });
-    }
-
-    // Valida que a mídia pertence ao curso e é do tipo video
-    const mediaCheck = await pool.query(
-      `SELECT id, media_type, course_slug FROM bot_media WHERE slot = $1 AND id = $2`,
-      [slot, mediaId],
-    );
-    if (!mediaCheck.rows.length) {
-      return res.status(404).json({ error: 'midia nao encontrada' });
-    }
-    const media = mediaCheck.rows[0];
-    if (media.media_type !== 'video') {
-      return res
-        .status(400)
-        .json({ error: 'apenas midias do tipo video podem ser definidas como apresentacao' });
-    }
-    if (media.course_slug !== course_slug) {
-      return res.status(400).json({ error: `midia nao esta vinculada ao curso '${course_slug}'` });
-    }
-
-    await client.query('BEGIN');
-    // Zera intro de todas as mídias do curso atomicamente
-    await client.query(
-      `UPDATE bot_media SET is_course_intro = false WHERE slot = $1 AND course_slug = $2`,
-      [slot, course_slug],
-    );
-    // Promove a mídia selecionada
-    const r = await client.query(
-      `UPDATE bot_media SET is_course_intro = true, updated_at = NOW() WHERE slot = $1 AND id = $2 RETURNING *`,
-      [slot, mediaId],
-    );
-    await client.query('COMMIT');
-    res.json(r.rows[0]);
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
-});
+// foram removidas neste PR. A UI de cursos foi removida simultaneamente.
+// Dados em bot_courses/bot_media_courses permanecem no banco até a Fase 3 (limpeza de banco).
+// ---------- FIM PLACEHOLDER ----------
 
 // ---------- FLUXOS COM WEBHOOK ----------
 // Retorna os fluxos da plataforma utilizáveis pelo roteador.
@@ -3048,8 +2521,6 @@ function getProjectTablePlan(project, key) {
       return directProjectTablePlan('agendamento_pendente');
     case 'leads_ricardo':
       return directProjectTablePlan('leads_ricardo');
-    case 'leads_vendas_barbearia':
-      return directProjectTablePlan('leads_vendas_barbearia');
     case 'pause_startap':
       return directProjectTablePlan('pause_startap');
     default:
@@ -3218,42 +2689,29 @@ app.get('/api/leads', async (req, res) => {
           `SELECT id::text, nome, telefone, interesse AS mensagem_inicial, NULL::text AS origem, criado_em, slot,
                   'leads_ricardo'::text AS _table
              FROM leads_ricardo WHERE slot = $1
-           UNION ALL
-           SELECT id::text, nome, telefone, mensagem_inicial, origem, criado_em, slot,
-                  'leads_vendas_barbearia'::text AS _table
-             FROM leads_vendas_barbearia WHERE slot = $1
            ORDER BY criado_em DESC
            LIMIT $2 OFFSET $3`,
           [slot, limit, offset],
         ),
         pool.query(
-          `SELECT (SELECT COUNT(*)::int FROM leads_ricardo WHERE slot = $1)
-                + (SELECT COUNT(*)::int FROM leads_vendas_barbearia WHERE slot = $1) AS n`,
+          `SELECT COUNT(*)::int AS n FROM leads_ricardo WHERE slot = $1`,
           [slot],
         ),
       ]);
       rows = rData.rows;
       total = rCount.rows[0]?.n ?? 0;
     } else {
-      // UNION ALL no SQL garante ORDER BY/LIMIT/OFFSET globais — sem merge em memória.
-      // leads_ricardo tem 'interesse' (sem 'mensagem_inicial') e não tem coluna 'origem'.
-      // Aliases normalizam para os nomes que o frontend já consome.
       const [rData, rCount] = await Promise.all([
         pool.query(
           `SELECT id::text, nome, telefone, interesse AS mensagem_inicial, NULL::text AS origem, criado_em, slot,
                   'leads_ricardo'::text AS _table
              FROM leads_ricardo
-           UNION ALL
-           SELECT id::text, nome, telefone, mensagem_inicial, origem, criado_em, slot,
-                  'leads_vendas_barbearia'::text AS _table
-             FROM leads_vendas_barbearia
            ORDER BY criado_em DESC
            LIMIT $1 OFFSET $2`,
           [limit, offset],
         ),
         pool.query(
-          `SELECT (SELECT COUNT(*)::int FROM leads_ricardo)
-                + (SELECT COUNT(*)::int FROM leads_vendas_barbearia) AS n`,
+          `SELECT COUNT(*)::int AS n FROM leads_ricardo`,
         ),
       ]);
       rows = rData.rows;
@@ -3813,32 +3271,6 @@ app.post('/api/clones', async (req, res) => {
       );
     }
 
-    // Copia bot_courses (catálogo de cursos da matriz para o clone)
-    const coursesR = await client.query(
-      `SELECT course_slug, name, description, price, duration, position_order, enabled, details_for_llm
-       FROM bot_courses WHERE slot = $1`,
-      [matriz_slot],
-    );
-    for (const c of coursesR.rows) {
-      await client.query(
-        `INSERT INTO bot_courses
-           (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
-         ON CONFLICT (slot, course_slug) DO NOTHING`,
-        [
-          slug,
-          c.course_slug,
-          c.name,
-          c.description,
-          c.price,
-          c.duration,
-          c.position_order,
-          c.enabled,
-          c.details_for_llm ?? null,
-        ],
-      );
-    }
-
     // flow_controls
     await client.query(
       `INSERT INTO flow_controls (flow_id, flow_name, source, active, updated_at)
@@ -3887,7 +3319,7 @@ app.post('/api/clones', async (req, res) => {
 
 // ---------- CLONES COM WAHA ----------
 
-const MATRIZES_ROUTAVEIS = ['teste_barbearia', 'teste_vendas', 'teste_vendas_barbearia'];
+const MATRIZES_ROUTAVEIS = ['teste_barbearia'];
 
 /**
  * Deriva o nome da sessão WAHA a partir do slot do clone.
@@ -4042,32 +3474,6 @@ app.post('/api/clones/with-waha', async (req, res) => {
           m.enabled,
           m.course_slug ?? null,
           m.is_course_intro ?? false,
-        ],
-      );
-    }
-
-    // Copia bot_courses (catálogo de cursos da matriz para o clone)
-    const coursesR = await cloneClient.query(
-      `SELECT course_slug, name, description, price, duration, position_order, enabled, details_for_llm
-       FROM bot_courses WHERE slot = $1`,
-      [matriz_slot],
-    );
-    for (const c of coursesR.rows) {
-      await cloneClient.query(
-        `INSERT INTO bot_courses
-           (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
-         ON CONFLICT (slot, course_slug) DO NOTHING`,
-        [
-          novo_slot,
-          c.course_slug,
-          c.name,
-          c.description,
-          c.price,
-          c.duration,
-          c.position_order,
-          c.enabled,
-          c.details_for_llm ?? null,
         ],
       );
     }
@@ -4376,7 +3782,6 @@ app.delete('/api/clones/:id', async (req, res) => {
       await client.query(`DELETE FROM flow_controls WHERE flow_id = $1`, [cloneSlot]);
       await client.query(`DELETE FROM bot_prompt WHERE slot = $1`, [cloneSlot]);
       await client.query(`DELETE FROM bot_media WHERE slot = $1`, [cloneSlot]);
-      await client.query(`DELETE FROM bot_courses WHERE slot = $1`, [cloneSlot]).catch(() => {});
       await client.query(`DELETE FROM bot_config WHERE slot = $1`, [cloneSlot]);
       await client.query('COMMIT');
     } catch (e) {
@@ -4831,8 +4236,6 @@ app.post('/api/bots/:slot/gcal/test', async (req, res) => {
 const SYSTEM_SESSIONS = new Set([
   'startap',
   'teste_barbearia',
-  'teste_vendas',
-  'teste_vendas_barbearia',
 ]);
 
 app.get('/api/sessions/available', async (req, res) => {
