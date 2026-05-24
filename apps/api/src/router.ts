@@ -10,7 +10,7 @@
  *  - Antibot + pausa global aplicados aqui (antes de chegar nos bots).
  */
 import { logger } from '@startap/core/logger';
-import { extractPhone } from '@startap/core/phone';
+import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
 import { antibot, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
@@ -176,6 +176,31 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: 'ignored:no-phone' };
+  }
+
+  // 3a. Filtro de grupo — deve vir ANTES de qualquer log com telefone,
+  // antibot ou chamada de bot. Mensagens de grupo são ignoradas em TODOS os
+  // clones (Ricardo, Cirilo, Lola, matrizes de teste). Critérios:
+  //  - payload.from termina em @g.us (chatId de grupo explícito)
+  //  - payload.from começa com 120363 (JID grupo padrão NOWEB/Baileys)
+  //  - campo participant presente e não vazio (exclusivo de msgs em grupo)
+  // IDs de 22+ dígitos (ex: 5592813522781591200729) são LIDs de participante
+  // de grupo — sempre acompanhados de participant, cobertos pelo critério 3.
+  if (isGroupChat(body)) {
+    const groupFrom = body.payload?.from ?? 'unknown';
+    log.info({ ...baseLog, groupFrom }, 'Mensagem de grupo ignorada');
+    await flowExecutionLog.logFlowEvent({
+      ...baseLog,
+      eventType: 'router.ignored',
+      status: 'ignored',
+      message: 'Mensagem de grupo ignorada',
+      metadata: {
+        reason: 'group-chat',
+        groupFrom,
+      },
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: 'ignored:group-chat' };
   }
 
   const sessao = body.session;

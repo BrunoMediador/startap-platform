@@ -38,3 +38,38 @@ export function toChatId(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   return `${digits}@c.us`;
 }
+
+/**
+ * Detecta se um payload WAHA é de um grupo (não chat 1:1).
+ *
+ * Critérios (qualquer um basta):
+ *  1. payload.from termina em @g.us  — chatId explícito de grupo
+ *  2. payload.from começa com 120363 — JID de grupo padrão NOWEB/Baileys
+ *  3. payload.participant está presente e não vazio — campo só existe em msgs de grupo
+ *
+ * IDs de ~22+ dígitos (ex: 5592813522781591200729) são LIDs malformados gerados
+ * pelo NOWEB para participantes de grupo — eles SEMPRE vêm acompanhados de
+ * `participant`, portanto já são capturados pelo critério 3.
+ *
+ * @returns true se for mensagem de grupo — deve ser ignorada pelo router.
+ */
+export function isGroupChat(body: WahaWebhookBody): boolean {
+  const payload = body.payload;
+  if (!payload) return false;
+
+  const from = payload.from ?? '';
+
+  // Critério 1: @g.us explícito
+  if (from.endsWith('@g.us')) return true;
+
+  // Critério 2: JID de grupo NOWEB começa com 120363 (antes de @)
+  const jidLocal = from.split('@')[0] ?? '';
+  if (jidLocal.startsWith('120363')) return true;
+
+  // Critério 3: campo participant presente — exclusivo de mensagens em grupo
+  const p = payload as Record<string, unknown>;
+  const participant = p['participant'];
+  if (typeof participant === 'string' && participant.length > 0) return true;
+
+  return false;
+}
