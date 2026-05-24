@@ -1379,6 +1379,84 @@ app.delete('/api/flows/:flowId/pauses/:telefone', async (req, res) => {
   }
 });
 
+// POST /api/flows/:flowId/pauses
+// Cria ou reativa a pausa de um numero num fluxo via painel.
+// Espelha a logica de validacao do DELETE acima.
+// source = 'manual-painel' para rastreabilidade (distinto de 'fromMe'/'antibot'/'manual').
+app.post('/api/flows/:flowId/pauses', async (req, res) => {
+  try {
+    const flowId = String(req.params.flowId || '').trim();
+    if (!flowId) return res.status(400).json({ error: 'flowId invalido' });
+
+    // Validar telefone: somente digitos, minimo 10 (DDD+numero), maximo 15 (DDI+DDD+numero)
+    const rawPhone = String(req.body?.telefone ?? '');
+    const phone = rawPhone.replace(/\D/g, '');
+    if (!phone || phone.length < 10 || phone.length > 15) {
+      return res.status(400).json({
+        error:
+          'telefone invalido — envie somente digitos com DDI+DDD+numero (ex: 5511999999999)',
+      });
+    }
+
+    const operator = req.session?.userId || 'unknown';
+
+    // Resolver session (waha_sessao) e flow_name a partir do flowId.
+    // Estrategia: busca em bot_config pelo slot (flowId e o slot para clones;
+    // para matrizes o slot tambem coincide com o workflow_id em project_databases).
+    // Fallback gracioso: se nao encontrar, insere com session/flow_name NULL --
+    // igual ao que addFlowPause() na packages/db faz em runtime.
+    const botRow = await pool
+      .query(
+        `SELECT b.slot, b.display_name, b.waha_sessao
+         FROM bot_config b
+         WHERE b.slot = $1
+         LIMIT 1`,
+        [flowId],
+      )
+      .then((r) => r.rows[0] ?? null)
+      .catch(() => null);
+
+    const session = botRow?.waha_sessao ?? null;
+    const flowName = botRow?.display_name ?? null;
+
+    const r = await pool.query(
+      `INSERT INTO flow_pauses
+         (flow_id, flow_name, telefone, session, active, source, reason, updated_at)
+       VALUES ($1, $2, $3, $4, TRUE, 'manual-painel', 'Pausado via painel', NOW())
+       ON CONFLICT (flow_id, telefone) DO UPDATE
+         SET active      = TRUE,
+             flow_name   = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
+             session     = COALESCE(EXCLUDED.session,   flow_pauses.session),
+             source      = 'manual-painel',
+             reason      = CASE
+               WHEN flow_pauses.reason IS NULL OR flow_pauses.reason = ''
+               THEN 'Pausado via painel'
+               ELSE flow_pauses.reason || ' | reativado via painel'
+             END,
+             updated_at  = NOW()
+       RETURNING flow_id, flow_name, telefone, active, source,
+                 LEFT(reason, 200) AS reason, updated_at`,
+      [flowId, flowName, phone, session],
+    );
+
+    console.log(
+      JSON.stringify({
+        audit: 'flow-pause-created',
+        operator,
+        flow_id: flowId,
+        phone_masked: _maskPhoneForLog(phone),
+        session,
+        at: new Date().toISOString(),
+      }),
+    );
+
+    res.status(201).json({ ok: true, pausa: r.rows[0] });
+  } catch (e) {
+    console.error('[flow-pauses-create]', e);
+    res.status(500).json({ error: 'erro ao pausar numero' });
+  }
+});
+
 // ---------- MIDIAS ----------
 app.get('/api/bots/:slot/media', async (req, res) => {
   try {
