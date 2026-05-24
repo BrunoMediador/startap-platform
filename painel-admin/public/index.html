@@ -3636,7 +3636,7 @@ function _renderBotGroup(bots, container, showCloneBtn, allClones, pausesByFlow)
     pausesBtn.innerHTML = `${icon('pause', 13)} Pausados${pauseCount > 0 ? ` <span class="badge badge--danger fp-count-badge" style="margin-left:.25rem">${pauseCount}</span>` : ''}`;
     pausesBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      openFlowPausesModal(botFlowId, bot.display_name || bot.name || bot.slot);
+      openFlowPausesModal(botFlowId, bot.display_name || bot.name || bot.slot, bot.waha_sessao || bot.slot);
     });
     actions.appendChild(pausesBtn);
 
@@ -5746,11 +5746,29 @@ function _decrementPauseBadge(flowId) {
   });
 }
 
+// Incrementa o badge "[N]" do botao Pausados — simétrico ao _decrementPauseBadge.
+function _incrementPauseBadge(flowId) {
+  document.querySelectorAll(`[data-flow-pause-id="${CSS.escape(flowId)}"]`).forEach(btn => {
+    const cur = Number(btn.dataset.flowPauseCount || 0);
+    const next = cur + 1;
+    btn.dataset.flowPauseCount = String(next);
+    btn.classList.add('btn--warning');
+    let badge = btn.querySelector('.fp-count-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'badge badge--danger fp-count-badge';
+      badge.style.marginLeft = '.25rem';
+      btn.appendChild(badge);
+    }
+    badge.textContent = String(next);
+  });
+}
+
 // ── Modal: ver e gerenciar números pausados num fluxo ───────────────────────
 // flow_pauses guarda pausas vindas de comando manual (fromMe), antibot (flood)
 // ou regra. O operador usa isso pra descobrir por que um número não está
 // recebendo resposta e despausar quando a pausa veio de teste antigo.
-function openFlowPausesModal(flowId, label) {
+function openFlowPausesModal(flowId, label, wahaSessao) {
   const safeLabel = escapeHtml(label || flowId || '—');
   openModal(`
     <div class="modal__header">
@@ -5770,6 +5788,25 @@ function openFlowPausesModal(flowId, label) {
       </button>
     </div>
     <div id="fp-list" style="max-height:60vh;overflow:auto"></div>
+    <hr style="margin:.75rem 0;border:none;border-top:1px solid var(--border)">
+    <div id="fp-pause-section">
+      <div style="font-size:.875rem;font-weight:600;margin-bottom:.5rem">${icon('pause-circle', 14)} Pausar número</div>
+      <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <label for="fp-pause-select" style="font-size:.8125rem;display:block;margin-bottom:.25rem">Contato recente (últimos 7 dias)</label>
+          <select id="fp-pause-select" class="field__input" style="width:100%" disabled aria-label="Selecionar contato para pausar">
+            <option value="" disabled selected>Carregando contatos...</option>
+          </select>
+        </div>
+        <button class="btn btn--warning btn--sm" id="fp-pause-confirm-btn" disabled aria-label="Confirmar pausa do número selecionado">
+          ${icon('pause', 13)} Pausar
+        </button>
+        <button class="btn btn--ghost btn--sm" id="fp-pause-refresh-btn" aria-label="Recarregar lista de contatos">
+          ${icon('refresh-cw', 12)}
+        </button>
+      </div>
+      <div id="fp-pause-contacts-status" style="font-size:.75rem;margin-top:.25rem;min-height:1rem"></div>
+    </div>
   `);
   document.getElementById('modal-content').classList.add('modal--xl');
 
@@ -5890,6 +5927,93 @@ function openFlowPausesModal(flowId, label) {
   incEl.addEventListener('change', reload);
   document.getElementById('fp-reload-btn').addEventListener('click', reload);
   reload();
+
+  // Seção Pausar número
+  (function _initPauseSection() {
+    const sel        = document.getElementById('fp-pause-select');
+    const pauseBtn   = document.getElementById('fp-pause-confirm-btn');
+    const refreshBtn = document.getElementById('fp-pause-refresh-btn');
+    const statusEl   = document.getElementById('fp-pause-contacts-status');
+
+    async function _loadContacts() {
+      if (sel)        { sel.innerHTML = '<option value="" disabled selected>Carregando contatos...</option>'; sel.disabled = true; }
+      if (pauseBtn)   pauseBtn.disabled = true;
+      if (refreshBtn) refreshBtn.disabled = true;
+      if (statusEl)   statusEl.innerHTML = '';
+
+      if (!wahaSessao) {
+        if (sel)        sel.innerHTML = '<option value="" disabled selected>Sessão WAHA não disponível</option>';
+        if (statusEl)   statusEl.innerHTML = '<span style="color:var(--muted)">Nenhuma sessão WAHA configurada.</span>';
+        if (refreshBtn) refreshBtn.disabled = false;
+        return;
+      }
+
+      try {
+        const data = await api(`/api/sessions/${encodeURIComponent(wahaSessao)}/recent-contacts?days=7`);
+        const contacts = data?.contacts || [];
+
+        if (contacts.length === 0) {
+          if (sel)      sel.innerHTML = '<option value="" disabled selected>Nenhum contato nos últimos 7 dias</option>';
+          if (statusEl) statusEl.innerHTML = '<span style="color:var(--muted)">Sem interações recentes nesta sessão.</span>';
+          if (refreshBtn) refreshBtn.disabled = false;
+          return;
+        }
+
+        const now = Date.now();
+        if (sel) {
+          sel.innerHTML = '<option value="" disabled selected>Selecione um contato</option>';
+          contacts.forEach(c => {
+            const phoneLabel = _fmtPhone(c.phone) || c.phone;
+            const label = c.name ? (c.name + ' - ' + phoneLabel) : phoneLabel;
+            const diffMs    = now - new Date(c.last_interaction).getTime();
+            const diffDays  = Math.floor(diffMs / 86400000);
+            const diffLabel = diffDays === 0 ? 'hoje' : diffDays === 1 ? 'há 1 dia' : ('há ' + diffDays + ' dias');
+            const opt = document.createElement('option');
+            opt.value = c.phone;
+            opt.textContent = label + ' — ' + diffLabel;
+            sel.appendChild(opt);
+          });
+          sel.disabled = false;
+        }
+        const n = contacts.length;
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--muted)">${n} contato${n !== 1 ? 's' : ''} disponível${n !== 1 ? 'is' : ''}</span>`;
+        if (refreshBtn) refreshBtn.disabled = false;
+      } catch (err) {
+        if (sel)      { sel.innerHTML = '<option value="" disabled selected>Falha ao carregar contatos</option>'; sel.disabled = true; }
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">${icon('alert-triangle', 12)} Erro: ${escapeHtml(err.message)}</span>`;
+        if (refreshBtn) refreshBtn.disabled = false;
+      }
+    }
+
+    if (sel)        sel.addEventListener('change', () => { if (pauseBtn) pauseBtn.disabled = !sel.value; });
+    if (refreshBtn) refreshBtn.addEventListener('click', _loadContacts);
+
+    if (pauseBtn) pauseBtn.addEventListener('click', async () => {
+      const telefone = sel ? sel.value : '';
+      if (!telefone) return;
+      pauseBtn.disabled = true;
+      try {
+        const resp = await api(`/api/flows/${encodeURIComponent(flowId)}/pauses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telefone }),
+        });
+        // Backend (PR #224) responde 201 com { ok: true, pausa: {...} }
+        if (resp?.ok || resp?.pausa) {
+          toast(`Pausado: ${_fmtPhone(telefone) || telefone}`, 'success');
+          _incrementPauseBadge(flowId);
+          if (sel) sel.value = '';
+          pauseBtn.disabled = true;
+          await reload();
+        }
+      } catch (err) {
+        toast('Erro ao pausar: ' + err.message, 'danger');
+        pauseBtn.disabled = false;
+      }
+    });
+
+    _loadContacts();
+  })();
 }
 
 async function loadCfgLimpeza(content) {
@@ -6160,7 +6284,7 @@ function renderClonesList(clones, wrap, pausesByFlow) {
       ? `${pauseCount} número${pauseCount === 1 ? '' : 's'} pausado${pauseCount === 1 ? '' : 's'} neste clone`
       : 'Nenhum número pausado neste clone';
     pausesBtn.innerHTML = `${icon('pause', 13)} Pausados${pauseCount > 0 ? ` <span class="badge badge--danger fp-count-badge" style="margin-left:.25rem">${pauseCount}</span>` : ''}`;
-    pausesBtn.addEventListener('click', () => openFlowPausesModal(cloneFlowId, c.display_name || cloneFlowId));
+    pausesBtn.addEventListener('click', () => openFlowPausesModal(cloneFlowId, c.display_name || cloneFlowId, c.waha_sessao || cloneFlowId));
     actions.appendChild(pausesBtn);
 
     const configBtn = document.createElement('button');
