@@ -100,7 +100,7 @@ describe('handleWebhook', () => {
     mocks.removePause.mockResolvedValue(undefined);
     mocks.listFlowPauseKeywords.mockResolvedValue([
       {
-        flow_id: 'dlpKXM3gvX2joC1b',
+        flow_id: 'flow-generica-001',
         command: 'pause',
         keyword: 'startap aqui!!',
         keyword_norm: 'startapaqui!!',
@@ -153,15 +153,15 @@ describe('handleWebhook', () => {
     );
   });
 
-  it('pausa separadamente o fluxo roteado em comando manual fromMe', async () => {
+  it('pausa fluxo roteado via routing_clientes em comando manual fromMe', async () => {
     const body = makeBody('TESTE_STARTAP');
     body.payload!.fromMe = true;
     body.payload!.body = 'startap aqui!!';
     mocks.findRouting.mockResolvedValue({
       id: 10,
       telefone: '553598877248',
-      workflow_id: 'dlpKXM3gvX2joC1b',
-      workflow_name: 'teste_vendas',
+      workflow_id: 'flow-generica-001',
+      workflow_name: 'fluxo_generico',
       webhook_url: 'http://api/webhooks/waha',
       nome_cliente: 'Teste',
       ativo: true,
@@ -177,7 +177,7 @@ describe('handleWebhook', () => {
     expect(result).toEqual({ status: 'ok:manual-pause' });
     expect(mocks.addFlowPause).toHaveBeenCalledWith(
       expect.objectContaining({
-        flowId: 'dlpKXM3gvX2joC1b',
+        flowId: 'flow-generica-001',
         telefone: '553598877248',
       }),
     );
@@ -267,7 +267,7 @@ describe('handleWebhook', () => {
     mocks.findRouting.mockResolvedValue({
       id: 99,
       telefone: '553598877248',
-      workflow_id: 'dlpKXM3gvX2joC1b',
+      workflow_id: 'flow-generica-001',
       workflow_name: 'teste_barbearia',
       webhook_url: null,
       nome_cliente: 'Cliente Individual',
@@ -277,7 +277,7 @@ describe('handleWebhook', () => {
     });
     const botHandle = vi.fn().mockResolvedValue(undefined);
     const { registerBot } = await import('./router.js');
-    registerBot('dlpKXM3gvX2joC1b', { name: 'teste_barbearia', handle: botHandle });
+    registerBot('flow-generica-001', { name: 'fluxo_generico', handle: botHandle });
 
     const body: WahaWebhookBody = {
       event: 'message',
