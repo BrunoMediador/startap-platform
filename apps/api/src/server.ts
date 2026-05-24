@@ -5,11 +5,6 @@ import { EchoBot } from './bots/echo.js';
 // Importar startap.ts dispara registerBotEntry no módulo (efeito colateral de init).
 import './bots/startap.js';
 import { TesteBarbeariaBot } from './bots/teste_barbearia.js';
-import { TesteVendasBot } from './bots/teste_vendas.js';
-import {
-  TESTE_VENDAS_BARBEARIA_WORKFLOW_ID,
-  TesteVendasBarbeariaBot,
-} from './bots/teste_vendas_barbearia.js';
 import { config } from './config.js';
 import { registerBot, registerCloneFactory } from './router.js';
 import { healthRoute } from './routes/health.js';
@@ -31,13 +26,9 @@ async function main() {
   // Startap já está registrado via import './bots/startap.js' acima (registerBotEntry no init).
   registerBot('echo', new EchoBot());
   registerBot('0ni38aSspWwhooHd', new TesteBarbeariaBot(), 'pausa_cirilo'); // teste_barbearia
-  registerBot('dlpKXM3gvX2joC1b', new TesteVendasBot(), 'pause_ricardo'); // teste_vendas
-  registerBot(TESTE_VENDAS_BARBEARIA_WORKFLOW_ID, new TesteVendasBarbeariaBot()); // teste_vendas_barbearia — sem tabela legada
 
   // Factories de clones — uma por matriz. O dispatcher instancia dinamicamente com slotOverride.
   registerCloneFactory('teste_barbearia', (slotOverride) => new TesteBarbeariaBot({ slotOverride }));
-  registerCloneFactory('teste_vendas', (slotOverride) => new TesteVendasBot({ slotOverride }));
-  registerCloneFactory('teste_vendas_barbearia', (slotOverride) => new TesteVendasBarbeariaBot({ slotOverride }));
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');
