@@ -4675,6 +4675,12 @@ app.post('/api/sessions/:name/pairing-code', async (req, res) => {
 // Lista contatos individuais (sem grupos) que interagiram com a sessao
 // nos ultimos N dias, ordenados por interacao mais recente.
 // Sem cache — bate no WAHA fresh a cada chamada (on-demand pelo frontend).
+//
+// Estrategia: tenta WAHA /chats primeiro (funciona quando config.noweb.store.enabled=True,
+// ex: Lola/STARTAP_AI_PROD). Se WAHA retornar qualquer erro (400 "store disabled", 502,
+// timeout), cai automaticamente para fallback no banco: busca telefones distintos em
+// message_log WHERE chat_id = :name AND created_at > now() - N days.
+// Isso garante que sessoes sem store (Cirilo, Carlos, matrizes) tambem listem contatos.
 app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
   const { name } = req.params;
 
@@ -4694,12 +4700,62 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
   const ENRICH_LIMIT = 30; // maximo de chats que tentamos buscar pushName
   const RESPONSE_LIMIT = 100;
 
+  // ── helper: fallback via banco ───────────────────────────────────────────────────────
+  // Busca os telefones que conversaram com esta sessao nos ultimos N dias a partir
+  // de message_log (chat_id = nome da sessao WAHA). Filtros:
+  //   - phone com ate 15 digitos (telefones reais BR/internacionais; >15 sao IDs de grupo)
+  //   - exclui o proprio numero do bot (busca waha_sessao=name em bot_config)
+  // Retorna array no mesmo shape { phone, name, last_interaction } que o caminho WAHA.
+  async function fallbackFromDB() {
+    // Descobre o numero do proprio bot pra excluir da lista (coluna opcional).
+    // Se coluna waha_number nao existir, botPhone fica null e o filtro e ignorado.
+    let botPhone = null;
+    try {
+      const botRow = await pool.query(
+        `SELECT b.waha_number
+         FROM bot_config b
+         WHERE b.waha_sessao = $1
+         LIMIT 1`,
+        [name],
+      );
+      botPhone = botRow.rows[0]?.waha_number ?? null;
+    } catch (_) {
+      // coluna waha_number pode nao existir — ignora, nao filtra pelo numero do bot
+    }
+
+    // Busca contatos distintos, mais recente interacao primeiro.
+    // Todos os parametros sao parametrizados — sem interpolacao de input do usuario.
+    // LENGTH(phone) <= 15 exclui IDs de grupo WhatsApp (normalmente >15 digitos).
+    const dbRows = await pool.query(
+      `SELECT
+         phone,
+         MAX(created_at) AS last_at
+       FROM message_log
+       WHERE chat_id = $1
+         AND created_at > NOW() - ($2 || ' days')::interval
+         AND LENGTH(phone) <= 15
+         AND ($3::text IS NULL OR phone <> $3)
+       GROUP BY phone
+       ORDER BY last_at DESC
+       LIMIT $4`,
+      [name, String(days), botPhone, RESPONSE_LIMIT],
+    );
+
+    return dbRows.rows.map((row) => ({
+      phone: row.phone,
+      name: null,   // message_log nao guarda nome — compativel com shape WAHA (name nullable)
+      last_interaction: new Date(row.last_at).toISOString(),
+    }));
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   try {
-    // 1. Busca lista de chats da sessao no WAHA
+    // 1. Tenta WAHA /chats — funciona quando store habilitado (ex: STARTAP_AI_PROD/Lola)
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    let chatsRaw;
+    let wahaOk = false;
+    let chatsRaw = [];
     try {
       const r = await fetch(`${WAHA_URL}/api/${name}/chats`, {
         headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
@@ -4708,39 +4764,55 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
       clearTimeout(timer);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        console.log(`[recent-contacts] WAHA /chats ${name} -> ${r.status}: ${body?.message ?? ''}`);
-        return res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+        console.log(`[recent-contacts] WAHA /chats ${name} -> ${r.status}: ${body?.message ?? ''} — usando fallback DB`);
+        // nao retorna 502 aqui; cai pro fallback do banco abaixo
+      } else {
+        chatsRaw = await r.json().catch(() => []);
+        wahaOk = true;
       }
-      chatsRaw = await r.json().catch(() => []);
     } catch (fetchErr) {
       clearTimeout(timer);
       const isTimeout = fetchErr.name === 'AbortError';
-      console.log(`[recent-contacts] WAHA /chats ${name} -> ${isTimeout ? 'timeout' : fetchErr.message}`);
-      return res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+      console.log(`[recent-contacts] WAHA /chats ${name} -> ${isTimeout ? 'timeout' : fetchErr.message} — usando fallback DB`);
+      // nao retorna erro; cai pro fallback do banco abaixo
     }
 
+    // 2. Se WAHA falhou por qualquer motivo (store off, timeout, rede), usa banco
+    if (!wahaOk) {
+      try {
+        const contacts = await fallbackFromDB();
+        console.log(`[recent-contacts] fallback DB ${name}: ${contacts.length} contatos`);
+        return res.json({
+          session: name,
+          days,
+          count: contacts.length,
+          contacts,
+          source: 'db',  // informativo para debug; ignorado pelo frontend
+        });
+      } catch (dbErr) {
+        console.error(`[recent-contacts] fallback DB ${name} falhou:`, dbErr.message);
+        return res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
+      }
+    }
+
+    // 3. Caminho WAHA (store habilitado): processa chatsRaw como antes
     if (!Array.isArray(chatsRaw)) chatsRaw = [];
 
-    // 2. Calcula corte de tempo (seconds epoch)
+    // Calcula corte de tempo (seconds epoch)
     const nowSec = Math.floor(Date.now() / 1000);
     const cutoffSec = nowSec - days * 86400;
 
-    // 3. Filtra: apenas individuais (@s.whatsapp.net ou @c.us), dentro da janela
+    // Filtra: apenas individuais (@s.whatsapp.net ou @c.us), dentro da janela
     const filtered = chatsRaw.filter((chat) => {
       const id = chat?.id ?? '';
-      // Exclui grupos
       if (id.endsWith('@g.us')) return false;
-      // Aceita apenas contatos individuais
       if (!id.endsWith('@s.whatsapp.net') && !id.endsWith('@c.us')) return false;
-
-      // conversationTimestamp pode vir em segundos ou ms
       let ts = chat?.conversationTimestamp ?? chat?.timestamp ?? 0;
-      // Normaliza: se ts > 1e12 assume milissegundos
       if (ts > 1e12) ts = Math.floor(ts / 1000);
       return ts >= cutoffSec;
     });
 
-    // 4. Extrai telefone limpo e timestamp normalizado
+    // Extrai telefone limpo e timestamp normalizado
     const mapped = filtered.map((chat) => {
       const id = chat?.id ?? '';
       const phone = id.replace(/@s\.whatsapp\.net$|@c\.us$/, '');
@@ -4749,13 +4821,10 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
       return { phone, chatId: id, ts, name: chat?.name ?? null };
     });
 
-    // 5. Ordena por ts DESC
     mapped.sort((a, b) => b.ts - a.ts);
-
-    // 6. Limita a RESPONSE_LIMIT antes de enriquecer
     const limited = mapped.slice(0, RESPONSE_LIMIT);
 
-    // 7. Tenta enriquecer com pushName para os primeiros ENRICH_LIMIT chats
+    // Enriquece com pushName para os primeiros ENRICH_LIMIT chats
     //    Usa GET /api/{name}/chats/{chatId} — endpoint WAHA Plus para metadata do chat.
     //    Se falhar (404, erro, timeout), cai para name: null sem derrubar a resposta.
     const enrichBatch = limited.slice(0, ENRICH_LIMIT);
@@ -4783,7 +4852,7 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
       }),
     );
 
-    // 8. Monta response final
+    // Monta response final
     const contacts = limited.map((item, idx) => {
       let resolvedName = item.name; // nome que ja veio no /chats (pushName inline)
       if (idx < ENRICH_LIMIT) {
@@ -4804,13 +4873,13 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
       days,
       count: contacts.length,
       contacts,
+      source: 'waha',
     });
   } catch (e) {
     console.error(`[recent-contacts] erro inesperado ${name}:`, e.message);
     res.status(502).json({ error: 'nao foi possivel buscar contatos agora' });
   }
 });
-
 // ---------- ADMIN: CLEANUP MANUAL ----------
 // Lógica inline: replica runCleanupChat usando o pool local do painel.
 // Mantém em sync com apps/worker/src/jobs/cleanup-chat.ts — qualquer mudança
