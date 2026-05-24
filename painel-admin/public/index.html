@@ -6010,7 +6010,7 @@ async function loadCfgSistema(content) {
 function slugify(s) {
   return String(s || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[Ì€-Í¯]/g, '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, 40) || 'clone';
