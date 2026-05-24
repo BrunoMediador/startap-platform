@@ -3813,6 +3813,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'galeria' ? ' active' : ''}" data-tab="galeria" role="tab" aria-selected="${_selectedBotTab === 'galeria'}">${icon('image',13)} Galeria</button>
       <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
+      <button class="tab-btn${_selectedBotTab === 'personalizacao' ? ' active' : ''}" data-tab="personalizacao" role="tab" aria-selected="${_selectedBotTab === 'personalizacao'}">Personalização</button>
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'horarios' ? ' active' : ''}" data-tab="horarios" role="tab" aria-selected="${_selectedBotTab === 'horarios'}">Horários</button>` : ''}
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'servicos' ? ' active' : ''}" data-tab="servicos" role="tab" aria-selected="${_selectedBotTab === 'servicos'}">Serviços</button>` : ''}
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'gcal' ? ' active' : ''}" data-tab="gcal" role="tab" aria-selected="${_selectedBotTab === 'gcal'}">${icon('calendar', 13)} Google Calendar</button>` : ''}
@@ -3891,6 +3892,22 @@ async function loadBotTab(slot, tab, el, bot) {
     try {
       const fresh = await api(`/api/bots/${encodeURIComponent(slot)}`);
       _renderServicosTab({
+        container: el,
+        entity: fresh,
+        savePath: `/api/bots/${encodeURIComponent(slot)}`,
+        method: 'PUT',
+        onSaved: (updated) => Object.assign(bot, updated),
+      });
+    } catch (err) {
+      el.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} Falha ao carregar: ${escapeHtml(err.message)}</p>`;
+    }
+  } else if (tab === 'personalizacao') {
+    // Aba "Personalizacao" da matriz — le de bot_config.personalizacao.
+    // O endpoint GET /api/bots/:slot retorna o campo; PUT aceita o update.
+    el.innerHTML = `<div style="padding:1rem 0"><div class="spinner"></div></div>`;
+    try {
+      const fresh = await api(`/api/bots/${encodeURIComponent(slot)}`);
+      _renderPersonalizacaoTab({
         container: el,
         entity: fresh,
         savePath: `/api/bots/${encodeURIComponent(slot)}`,
@@ -8027,6 +8044,79 @@ function _renderServicosTab(opts) {
   });
 }
 
+/**
+ * Helper reutilizavel: renderiza editor de chave-valor de personalizacao.
+ * Usado pela aba "Personalizacao" da matriz (loadBotTab) e do clone (loadCloneConfigTab).
+ *
+ * opts:
+ *   container  — HTMLElement alvo
+ *   entity     — objeto com .personalizacao (objeto ou null)
+ *   savePath   — string URL do endpoint
+ *   method     — 'PUT' (matriz) ou 'PATCH' (clone)
+ *   onSaved    — callback(updated) chamado apos salvar com sucesso
+ */
+function _renderPersonalizacaoTab(opts) {
+  const { container, entity, savePath, method, onSaved } = opts;
+  const pers = (entity && typeof entity.personalizacao === 'object' && entity.personalizacao !== null)
+    ? entity.personalizacao : {};
+  const DEFAULT_KEYS = ['nome_negocio', 'telefone_contato', 'endereco', 'instagram'];
+  const allKeys = Array.from(new Set([...DEFAULT_KEYS, ...Object.keys(pers)]));
+
+  function makeRow(k, v) {
+    const row = document.createElement('div');
+    row.className = 'kv-row';
+    row.setAttribute('data-kv', '');
+    row.innerHTML = `
+      <input type="text" class="kv-key" placeholder="chave" value="${escapeHtml(k)}" style="flex:0 0 130px" />
+      <input type="text" class="kv-val" placeholder="valor" value="${escapeHtml(v)}" />
+      <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>`;
+    row.querySelector('.kv-del').addEventListener('click', () => row.remove());
+    return row;
+  }
+
+  container.innerHTML = `
+    <div style="padding-top:.5rem">
+      <p class="muted" style="margin-bottom:.875rem">Valores que substituem <code>{{chave}}</code> no prompt.</p>
+      <div id="pers-kv-list" style="display:flex;flex-direction:column;gap:.375rem"></div>
+      <button type="button" class="btn btn--sm" id="pers-btn-add" style="margin-top:.5rem">${icon('plus', 13)} Adicionar campo</button>
+      <div style="margin-top:1rem">
+        <button class="btn btn--primary" id="pers-save-btn">${icon('check-circle-2', 14)} Salvar personalizacao</button>
+      </div>
+    </div>`;
+
+  const list = container.querySelector('#pers-kv-list');
+  allKeys.forEach(k => list.appendChild(makeRow(k, pers[k] || '')));
+
+  container.querySelector('#pers-btn-add').addEventListener('click', () => {
+    const row = makeRow('', '');
+    list.appendChild(row);
+    row.querySelector('.kv-key').focus();
+  });
+
+  container.querySelector('#pers-save-btn').addEventListener('click', async () => {
+    const btn = container.querySelector('#pers-save-btn');
+    btn.disabled = true;
+    try {
+      const newPers = {};
+      container.querySelectorAll('[data-kv]').forEach(row => {
+        const k = (row.querySelector('.kv-key')?.value || '').trim();
+        const v = (row.querySelector('.kv-val')?.value || '').trim();
+        if (k) newPers[k] = v;
+      });
+      const updated = await api(savePath, {
+        method: method || 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personalizacao: newPers }),
+      });
+      if (typeof onSaved === 'function') onSaved(updated);
+      toast('Personalizacao salva!', 'success');
+      _rendered['bots'] = false;
+    } catch (err) {
+      toast('Erro: ' + err.message, 'danger');
+    } finally { btn.disabled = false; }
+  });
+}
+
 function loadCloneConfigTab(tab, clone) {
   const content = document.getElementById('cfg-clone-tab-content');
   if (!content) return;
@@ -8072,59 +8162,13 @@ function loadCloneConfigTab(tab, clone) {
     });
 
   } else if (tab === 'personalizacao') {
-    const pers = clone.personalizacao || {};
-    const DEFAULT_KEYS = ['nome_negocio', 'telefone_contato', 'endereco', 'instagram'];
-    const allKeys = Array.from(new Set([...DEFAULT_KEYS, ...Object.keys(pers)]));
-    const kvRows = allKeys.map(k => `
-      <div class="kv-row" data-kv>
-        <input type="text" class="kv-key" placeholder="chave" value="${escapeHtml(k)}" style="flex:0 0 130px" />
-        <input type="text" class="kv-val" placeholder="valor" value="${escapeHtml(pers[k] || '')}" />
-        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>
-      </div>`).join('');
-
-    content.innerHTML = `
-      <div style="padding-top:.5rem">
-        <p class="muted" style="margin-bottom:.875rem">Valores que substituem <code>{{chave}}</code> no prompt do clone.</p>
-        <div id="cfg-kv-list">${kvRows}</div>
-        <button type="button" class="btn btn--sm" id="cfg-btn-add-kv" style="margin-top:.5rem">${icon('plus', 13)} Adicionar campo</button>
-        <div style="margin-top:1rem">
-          <button class="btn btn--primary" id="cfg-save-pers-btn">${icon('check-circle-2', 14)} Salvar personalização</button>
-        </div>
-      </div>`;
-
-    content.querySelectorAll('.kv-del').forEach(btn => btn.addEventListener('click', () => btn.closest('[data-kv]').remove()));
-    content.querySelector('#cfg-btn-add-kv').addEventListener('click', () => {
-      const row = document.createElement('div');
-      row.className = 'kv-row'; row.setAttribute('data-kv', '');
-      row.innerHTML = `
-        <input type="text" class="kv-key" placeholder="chave" style="flex:0 0 130px" />
-        <input type="text" class="kv-val" placeholder="valor" />
-        <button type="button" class="btn btn--ghost btn--sm btn--icon kv-del" aria-label="Remover campo" style="color:var(--danger)">${icon('trash-2', 13)}</button>`;
-      row.querySelector('.kv-del').addEventListener('click', () => row.remove());
-      content.querySelector('#cfg-kv-list').appendChild(row);
-    });
-
-    content.querySelector('#cfg-save-pers-btn').addEventListener('click', async () => {
-      const btn = content.querySelector('#cfg-save-pers-btn');
-      btn.disabled = true;
-      try {
-        const newPers = {};
-        content.querySelectorAll('[data-kv]').forEach(row => {
-          const k = (row.querySelector('.kv-key')?.value || '').trim();
-          const v = (row.querySelector('.kv-val')?.value || '').trim();
-          if (k) newPers[k] = v;
-        });
-        const updated = await api(`/api/clones/${clone.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ personalizacao: newPers }),
-        });
-        Object.assign(clone, updated);
-        toast('Personalização salva!', 'success');
-        _rendered['bots'] = false;
-      } catch (err) {
-        toast('Erro: ' + err.message, 'danger');
-      } finally { btn.disabled = false; }
+    // Usa helper compartilhado — elimina duplicacao com a aba da matriz.
+    _renderPersonalizacaoTab({
+      container: content,
+      entity: clone,
+      savePath: `/api/clones/${clone.id}`,
+      method: 'PATCH',
+      onSaved: (updated) => Object.assign(clone, updated),
     });
 
   } else if (tab === 'horarios') {

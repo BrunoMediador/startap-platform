@@ -908,6 +908,7 @@ app.put('/api/bots/:slot', async (req, res) => {
       name,
       horarios_funcionamento,
       servicos,
+      personalizacao,
     } = req.body;
 
     // Validacao leve dos novos campos (paridade com PATCH /api/clones/:id).
@@ -958,6 +959,13 @@ app.put('/api/bots/:slot', async (req, res) => {
     if (servicos !== undefined) {
       sets.push(`servicos = $${i++}::jsonb`);
       vals.push(JSON.stringify(servicos));
+    }
+    if (personalizacao !== undefined) {
+      if (!personalizacao || typeof personalizacao !== 'object' || Array.isArray(personalizacao)) {
+        return res.status(400).json({ error: 'personalizacao deve ser objeto' });
+      }
+      sets.push(`personalizacao = $${i++}::jsonb`);
+      vals.push(JSON.stringify(personalizacao));
     }
     if (sets.length === 0) return res.status(400).json({ error: 'nada para atualizar' });
     sets.push('updated_at = NOW()');
