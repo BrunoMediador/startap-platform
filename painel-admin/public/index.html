@@ -6239,11 +6239,15 @@ function renderClonesList(clones, wrap, pausesByFlow) {
 
     const meta = document.createElement('div');
     meta.className = 'bot-row__title-meta';
+    const suspendedBadge = c.flow_enabled === false
+      ? `<span class="badge badge--danger" style="font-size:.6rem;letter-spacing:.04em" title="${c.suspended_reason ? 'Motivo: ' + escapeHtml(c.suspended_reason) : 'Fluxo suspenso'}">${icon('pause-circle', 10)} SUSPENSO</span>`
+      : '';
     meta.innerHTML = `
       <div class="bot-row__name">
         <span class="bot-row__name-text">${escapeHtml(c.display_name || 'Clone')}</span>
         <span class="bot-row__status-dot ${info.dot}" aria-hidden="true"></span>
         <span class="badge badge--dot ${info.cls}">${escapeHtml(info.label)}</span>
+        ${suspendedBadge}
       </div>
       <div class="bot-row__sub">
         ${c.cliente_nome ? `<span class="bot-row__sub-item">${icon('users', 11)} ${escapeHtml(c.cliente_nome)}</span>` : ''}
@@ -7252,17 +7256,146 @@ function _renderGcalTab(opts) {
   loadTab();
 }
 
+/* ══ ABA SUSPENSÃO DE FLUXO ════════════════════════════════════════
+ *  Permite suspender/reativar o fluxo de IA do clone sem desconectar
+ *  o WhatsApp (WAHA permanece conectado). Usado para controle de billing.
+ *  clone objeto: deve ter .id, .display_name, .flow_enabled,
+ *                .suspended_reason, .suspended_at
+ * ================================================================ */
+function _renderSuspensaoTab(container, clone) {
+  function render() {
+    // flow_enabled pode ser undefined em clones legados (coluna ainda não existe)
+    // Nesses casos, tratamos como ativo (true) por segurança.
+    const enabled = clone.flow_enabled !== false;
+    const reason  = clone.suspended_reason || null;
+    const since   = clone.suspended_at ? fmtDate(clone.suspended_at) : null;
+    const nome    = escapeHtml(clone.display_name || clone.slot || 'este clone');
+
+    if (enabled) {
+      container.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:1rem">
+          <div class="card" style="border-color:var(--success);background:var(--success-bg);display:flex;align-items:center;gap:.75rem">
+            <div style="color:var(--success);flex-shrink:0">${icon('check-circle-2', 22)}</div>
+            <div>
+              <div style="font-weight:600;color:var(--success)">Fluxo ativo</div>
+              <div class="muted" style="margin-top:.125rem">O bot está respondendo normalmente para os clientes.</div>
+            </div>
+          </div>
+          <p class="muted" style="margin:0">${icon('info', 13)} Use o botão abaixo para suspender o fluxo de IA deste clone. O WhatsApp permanece conectado — o bot apenas para de responder até ser reativado.</p>
+          <button class="btn btn--danger" id="btn-suspender-fluxo" style="width:100%;justify-content:center;font-size:.9375rem;padding:.625rem">
+            ${icon('pause-circle', 16)} Suspender fluxo
+          </button>
+        </div>`;
+
+      container.querySelector('#btn-suspender-fluxo').addEventListener('click', () => {
+        openSuspendModal();
+      });
+
+    } else {
+      container.innerHTML = `
+        <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:1rem">
+          <div class="card" style="border-color:var(--danger);background:var(--danger-bg);display:flex;flex-direction:column;gap:.5rem">
+            <div style="display:flex;align-items:center;gap:.75rem">
+              <div style="color:var(--danger);flex-shrink:0">${icon('pause-circle', 26)}</div>
+              <div>
+                <div style="font-size:1.125rem;font-weight:700;color:var(--danger);letter-spacing:.01em">FLUXO SUSPENSO</div>
+                <div class="muted" style="margin-top:.125rem">O bot não está respondendo. WhatsApp continua conectado.</div>
+              </div>
+            </div>
+            ${reason ? `<div style="padding:.5rem .75rem;background:rgba(0,0,0,.25);border-radius:var(--radius-sm);font-size:.8125rem"><span style="color:var(--text-muted)">Motivo:</span> ${escapeHtml(reason)}</div>` : ''}
+            ${since  ? `<div style="font-size:.75rem;color:var(--text-subtle)">Suspenso em: ${escapeHtml(since)}</div>` : ''}
+          </div>
+          <button class="btn btn--success" id="btn-reativar-fluxo" style="width:100%;justify-content:center;font-size:.9375rem;padding:.625rem">
+            ${icon('play-circle', 16)} Reativar fluxo
+          </button>
+        </div>`;
+
+      container.querySelector('#btn-reativar-fluxo').addEventListener('click', async () => {
+        if (!confirm(`Tem certeza que quer reativar o bot do clone "${clone.display_name || clone.slot}"?`)) return;
+        const btn = container.querySelector('#btn-reativar-fluxo');
+        btn.disabled = true;
+        try {
+          const updated = await api(`/api/clones/${clone.id}/resume`, { method: 'POST' });
+          clone.flow_enabled     = updated.flow_enabled;
+          clone.suspended_reason = updated.suspended_reason;
+          clone.suspended_at     = updated.suspended_at;
+          toast(`Fluxo de ${nome} reativado!`, 'success');
+          _rendered['bots'] = false;
+          render();
+        } catch (err) {
+          toast('Erro ao reativar: ' + err.message, 'danger');
+          btn.disabled = false;
+        }
+      });
+    }
+  }
+
+  function openSuspendModal() {
+    const nome = escapeHtml(clone.display_name || clone.slot || 'este clone');
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">${icon('pause-circle', 16)} Suspender fluxo — ${nome}</span>
+        <button class="btn btn--ghost btn--icon" onclick="closeModal()" aria-label="Fechar">${icon('x', 16)}</button>
+      </div>
+      <div style="padding:1rem;display:flex;flex-direction:column;gap:1rem">
+        <div class="card" style="border-color:var(--warning);background:var(--warning-bg);font-size:.875rem">
+          ${icon('alert-triangle', 14)} O bot vai <strong>parar de responder</strong> imediatamente. O WhatsApp <strong>não</strong> será desconectado.
+        </div>
+        <div class="field">
+          <label for="suspend-reason-input">Motivo da suspensão <span class="muted">(opcional)</span></label>
+          <input id="suspend-reason-input" type="text" placeholder="Ex: inadimplência, férias do cliente, cancelamento temporário" maxlength="200" />
+        </div>
+        <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+          <button class="btn btn--danger" id="btn-confirm-suspend" style="flex:1;justify-content:center">
+            ${icon('pause-circle', 14)} Confirmar suspensão
+          </button>
+          <button class="btn" onclick="closeModal()" style="flex:1;justify-content:center">
+            ${icon('x', 14)} Cancelar
+          </button>
+        </div>
+      </div>`);
+
+    document.getElementById('btn-confirm-suspend').addEventListener('click', async () => {
+      const btn    = document.getElementById('btn-confirm-suspend');
+      const reason = (document.getElementById('suspend-reason-input')?.value || '').trim();
+      btn.disabled = true;
+      try {
+        const updated = await api(`/api/clones/${clone.id}/suspend`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason || undefined }),
+        });
+        clone.flow_enabled     = updated.flow_enabled;
+        clone.suspended_reason = updated.suspended_reason;
+        clone.suspended_at     = updated.suspended_at;
+        closeModal();
+        toast(`Fluxo de ${clone.display_name || clone.slot} suspenso. Reabra o clone para ver o novo estado.`, 'warning');
+        _rendered['bots'] = false;
+      } catch (err) {
+        toast('Erro ao suspender: ' + err.message, 'danger');
+        btn.disabled = false;
+      }
+    });
+  }
+
+  render();
+}
+
 /* ══ MODAL DE CONFIGURAÇÃO DO CLONE ═══════════════════════════════ */
 function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'media', 'galeria', 'prompt', 'ia', 'sessao', 'gcal', 'pausa'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa' };
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'media', 'galeria', 'prompt', 'ia', 'sessao', 'gcal', 'pausa', 'suspensao'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa', suspensao: '⏸ Suspensão' };
 
-    const tabsHtml = tabNames.map(t =>
-      `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}">${escapeHtml(tabLabels[t])}</button>`
-    ).join('');
+    const tabsHtml = tabNames.map(t => {
+      // Aba Suspensão ganha cor de danger quando fluxo está suspenso (aviso visual permanente)
+      const extraStyle = (t === 'suspensao' && clone.flow_enabled === false && _cfgCloneTab !== t)
+        ? ' style="color:var(--danger)"'
+        : '';
+      return `<button class="tab-btn${_cfgCloneTab === t ? ' active' : ''}" data-tab="${t}"${extraStyle}>${escapeHtml(tabLabels[t])}</button>`;
+    }).join('');
 
     const modalHtml = `
       <div class="modal__header">
@@ -7750,6 +7883,10 @@ function loadCloneConfigTab(tab, clone) {
   } else if (tab === 'pausa') {
     /* ── Palavras-chave de pausa/retomada do clone ── */
     _renderPauseTab(content, clone.slot);
+
+  } else if (tab === 'suspensao') {
+    /* ── Controle de fluxo por billing: suspender/reativar sem mexer no WAHA ── */
+    _renderSuspensaoTab(content, clone);
   }
 }
 

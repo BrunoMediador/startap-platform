@@ -3253,6 +3253,7 @@ app.get('/api/clones', async (_req, res) => {
     const r = await pool.query(`
       SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
              fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+             fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
              fc.horarios_funcionamento, fc.servicos,
              fc.created_at, fc.updated_at,
              bc.display_name AS matriz_display_name
@@ -3710,7 +3711,12 @@ app.get('/api/clones/:id', async (req, res) => {
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
   try {
     const r = await pool.query(
-      `SELECT fc.*, bc.display_name AS matriz_display_name
+      `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
+              fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+              fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
+              fc.horarios_funcionamento, fc.servicos,
+              fc.created_at, fc.updated_at,
+              bc.display_name AS matriz_display_name
        FROM flow_clones fc
        LEFT JOIN bot_config bc ON bc.slot = fc.matriz_slot
        WHERE fc.id = $1`,
@@ -3872,6 +3878,87 @@ app.delete('/api/clones/:id', async (req, res) => {
     res.json({ ok: true, slot: cloneSlot });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/clones/:id/suspend — suspende fluxo do clone sem desconectar WAHA
+// Body opcional: { reason?: string }
+// Preserva a sessão WAHA intacta; apenas marca flow_enabled=false no banco.
+// Registra em flow_suspension_log para auditoria.
+app.post('/api/clones/:id/suspend', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() || null : null;
+  const actor = req.session?.userId ?? 'admin';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      `UPDATE flow_clones
+          SET flow_enabled      = FALSE,
+              suspended_reason  = $2,
+              suspended_at      = NOW(),
+              updated_at        = NOW()
+        WHERE id = $1
+    RETURNING id, slot, flow_enabled, suspended_reason, suspended_at`,
+      [id, reason],
+    );
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Clone não encontrado' });
+    }
+    const { slot } = r.rows[0];
+    await client.query(
+      `INSERT INTO flow_suspension_log (slot, action, reason, actor) VALUES ($1, 'suspend', $2, $3)`,
+      [slot, reason, actor],
+    );
+    await client.query('COMMIT');
+    console.log(`[suspend] clone ${slot} (id=${id}) suspenso por ${actor} — motivo: ${reason ?? '(sem motivo)'}`);
+    res.json({ ok: true, ...r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/clones/:id/resume — reativa fluxo do clone
+// Registra em flow_suspension_log para auditoria.
+app.post('/api/clones/:id/resume', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const actor = req.session?.userId ?? 'admin';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(
+      `UPDATE flow_clones
+          SET flow_enabled      = TRUE,
+              suspended_reason  = NULL,
+              suspended_at      = NULL,
+              updated_at        = NOW()
+        WHERE id = $1
+    RETURNING id, slot, flow_enabled, suspended_reason, suspended_at`,
+      [id],
+    );
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Clone não encontrado' });
+    }
+    const { slot } = r.rows[0];
+    await client.query(
+      `INSERT INTO flow_suspension_log (slot, action, reason, actor) VALUES ($1, 'resume', NULL, $2)`,
+      [slot, actor],
+    );
+    await client.query('COMMIT');
+    console.log(`[resume] clone ${slot} (id=${id}) reativado por ${actor}`);
+    res.json({ ok: true, ...r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 
