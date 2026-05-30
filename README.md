@@ -208,6 +208,14 @@ Rollback manual: revert do commit ruim na main → CI → deploy. Detalhes em [C
 - Roteamento usa `waha_sessao` (não telefone) — múltiplos clientes com mesmo telefone em sessões diferentes funcionam.
 - Leads ficam isolados por `slot` (PR #32).
 
+### Suspender fluxo sem desconectar WhatsApp (migration 038)
+
+`flow_clones` ganhou `flow_enabled boolean DEFAULT true`. Quando `false`, o router silencia o bot completamente (sem resposta ao cliente) mas a sessão WAHA permanece conectada — ao reativar, basta 1 clique, sem novo QR/pairing.
+
+- **Painel admin**: `POST /api/clones/:id/suspend` (body `{ reason? }`) e `POST /api/clones/:id/resume`.
+- **Auditoria**: toda ação registrada em `flow_suspension_log` (actor = userId da sessão admin).
+- **Rollback**: revert PR + `prisma migrate resolve` não se aplica (sem ORM). SQL de rollback está no cabeçalho de `038_flow_enabled.sql`.
+
 ## Operações
 
 Veja [docs/operations-runbook.md](./docs/operations-runbook.md). Resumo:

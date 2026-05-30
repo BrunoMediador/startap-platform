@@ -45,6 +45,10 @@ export interface CloneRow {
   personalizacao: Record<string, string>;
   waha_sessao: string | null;
   status: CloneStatus;
+  /** false = fluxo suspenso por billing/férias — WAHA permanece conectado */
+  flow_enabled: boolean;
+  suspended_reason: string | null;
+  suspended_at: Date | null;
   horarios_funcionamento: HorariosFuncionamento | null;
   servicos: ServicoConfig[] | null;
   created_at: Date;
@@ -256,6 +260,7 @@ export async function listClones(): Promise<CloneSummary[]> {
   const r = await query<CloneSummary & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
@@ -273,6 +278,7 @@ export async function getClone(id: number): Promise<CloneSummary | null> {
   const r = await query<CloneSummary & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
@@ -434,6 +440,7 @@ export async function getCloneBySession(sessao: string): Promise<CloneRow | null
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
             personalizacao, waha_sessao, status,
+            flow_enabled, suspended_reason, suspended_at,
             horarios_funcionamento, servicos,
             created_at, updated_at
      FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
@@ -455,6 +462,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
             personalizacao, waha_sessao, status,
+            flow_enabled, suspended_reason, suspended_at,
             horarios_funcionamento, servicos,
             created_at, updated_at
      FROM flow_clones WHERE slot = $1`,
@@ -463,6 +471,115 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
   bySlotCache.set(slot, { value, expiresAt: Date.now() + CACHE_TTL_MS });
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Suspender / reativar fluxo (billing, inadimplência, férias)
+// ---------------------------------------------------------------------------
+
+export interface SuspensionLogEntry {
+  id: number;
+  slot: string;
+  action: 'suspend' | 'resume';
+  reason: string | null;
+  actor: string;
+  created_at: Date;
+}
+
+/**
+ * Suspende o fluxo de um clone: flow_enabled=false, WAHA permanece conectado.
+ * Registra em flow_suspension_log para auditoria.
+ * Idempotente: se já suspenso, apenas atualiza reason/actor no log.
+ */
+export async function suspendClone(opts: {
+  slot: string;
+  reason?: string | null;
+  actor: string;
+}): Promise<CloneRow | null> {
+  const { slot, reason, actor } = opts;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query<CloneRow & { id: string }>(
+      `UPDATE flow_clones
+       SET flow_enabled = false,
+           suspended_reason = $1,
+           suspended_at = NOW(),
+           updated_at = NOW()
+       WHERE slot = $2
+       RETURNING *`,
+      [reason ?? null, slot],
+    );
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    await client.query(
+      `INSERT INTO flow_suspension_log (slot, action, reason, actor)
+       VALUES ($1, 'suspend', $2, $3)`,
+      [slot, reason ?? null, actor],
+    );
+
+    await client.query('COMMIT');
+    const row = normalizeCloneRow(r.rows[0]);
+    invalidateCloneCache({ slot, sessao: row.waha_sessao ?? undefined });
+    return row;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Reativa o fluxo de um clone: flow_enabled=true, limpa suspended_reason/at.
+ * Registra em flow_suspension_log para auditoria.
+ */
+export async function resumeClone(opts: {
+  slot: string;
+  actor: string;
+}): Promise<CloneRow | null> {
+  const { slot, actor } = opts;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query<CloneRow & { id: string }>(
+      `UPDATE flow_clones
+       SET flow_enabled = true,
+           suspended_reason = NULL,
+           suspended_at = NULL,
+           updated_at = NOW()
+       WHERE slot = $1
+       RETURNING *`,
+      [slot],
+    );
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    await client.query(
+      `INSERT INTO flow_suspension_log (slot, action, reason, actor)
+       VALUES ($1, 'resume', NULL, $2)`,
+      [slot, actor],
+    );
+
+    await client.query('COMMIT');
+    const row = normalizeCloneRow(r.rows[0]);
+    invalidateCloneCache({ slot, sessao: row.waha_sessao ?? undefined });
+    return row;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +607,11 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
       typeof row.personalizacao === 'string'
         ? (JSON.parse(row.personalizacao) as Record<string, string>)
         : row.personalizacao,
+    // flow_enabled vem como boolean do pg; fallback true para rows sem a coluna
+    // (antes da migration 038 ser aplicada em dev)
+    flow_enabled: (row as unknown as { flow_enabled?: unknown }).flow_enabled !== false,
+    suspended_reason: (row as unknown as { suspended_reason?: unknown }).suspended_reason as string | null ?? null,
+    suspended_at: (row as unknown as { suspended_at?: unknown }).suspended_at as Date | null ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
     servicos: parseJsonbOrNull<ServicoConfig[]>(row.servicos),
   };
