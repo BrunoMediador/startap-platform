@@ -371,6 +371,40 @@ export async function handleWebhook(
     return { status: 'ignored:flow-paused' };
   }
 
+  // 6b. Gate de suspensão de fluxo (billing/inadimplência).
+  // Aplica apenas para clones (slot prefixado com "clone_").
+  // flow_enabled=false → silêncio total; sessão WAHA permanece intacta.
+  // Usa getCloneBySlot com cache TTL 60s — sem overhead extra no hot path.
+  if (route.workflow_id.startsWith('clone_')) {
+    const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
+    if (cloneForGate?.flow_enabled === false) {
+      log.info(
+        {
+          telefone,
+          flowId: route.workflow_id,
+          suspendedReason: cloneForGate.suspended_reason,
+          suspendedAt: cloneForGate.suspended_at,
+        },
+        'Fluxo suspenso, ignorando',
+      );
+      await flowExecutionLog.logFlowEvent({
+        ...phoneLog,
+        flowId: route.workflow_id,
+        flowName: route.workflow_name,
+        eventType: 'router.flow-suspended',
+        status: 'ignored',
+        message: 'Fluxo suspenso, ignorando',
+        metadata: {
+          flowId: route.workflow_id,
+          suspendedReason: cloneForGate.suspended_reason,
+          suspendedAt: cloneForGate.suspended_at?.toISOString() ?? null,
+        },
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: 'ignored:flow-suspended' };
+    }
+  }
+
   await flowExecutionLog.logFlowEvent({
     ...phoneLog,
     flowId: route.workflow_id,

@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   sendSeen: vi.fn(),
   downloadMedia: vi.fn(),
   transcribe: vi.fn(),
+  // @startap/core/phone — necessário mockar pois o módulo ESM não resolve em Vitest sem build
+  extractPhone: vi.fn(),
+  isGroupChat: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -47,6 +50,11 @@ vi.mock('@startap/integrations', () => ({
     downloadMedia: mocks.downloadMedia,
   },
   whisper: { transcribe: mocks.transcribe },
+}));
+
+vi.mock('@startap/core/phone', () => ({
+  extractPhone: mocks.extractPhone,
+  isGroupChat: mocks.isGroupChat,
 }));
 
 const { handleWebhook } = await import('./router.js');
@@ -111,6 +119,13 @@ describe('handleWebhook', () => {
     mocks.findRouting.mockResolvedValue(null);
     mocks.isFlowActive.mockResolvedValue(true);
     mocks.sendSeen.mockResolvedValue(undefined);
+    // Defaults para mocks de @startap/core/phone
+    // extractPhone extrai '553598877248' do payload padrão de makeBody()
+    mocks.extractPhone.mockReturnValue('553598877248');
+    mocks.isGroupChat.mockReturnValue(false);
+    // getCloneBySession e getCloneBySlot: nenhum clone por padrão
+    mocks.getCloneBySession.mockResolvedValue(null);
+    mocks.getCloneBySlot.mockResolvedValue(null);
   });
 
   it('nao usa fallback da Lola para sessao de teste do router', async () => {
@@ -185,6 +200,7 @@ describe('handleWebhook', () => {
   });
 
   it('ignora mensagem de grupo com @g.us no from', async () => {
+    mocks.isGroupChat.mockReturnValue(true);
     const body: WahaWebhookBody = {
       event: 'message',
       session: 'STARTAP_AI_PROD',
@@ -212,6 +228,7 @@ describe('handleWebhook', () => {
   });
 
   it('ignora mensagem de grupo com JID 120363 (NOWEB sem @g.us)', async () => {
+    mocks.isGroupChat.mockReturnValue(true);
     const body: WahaWebhookBody = {
       event: 'message',
       session: 'ricardo_curso_barbearia',
@@ -237,6 +254,7 @@ describe('handleWebhook', () => {
   });
 
   it('ignora mensagem de grupo com campo participant preenchido (LID de 22 digitos)', async () => {
+    mocks.isGroupChat.mockReturnValue(true);
     const body = {
       event: 'message',
       session: 'ricardo_curso_barbearia',
@@ -260,6 +278,100 @@ describe('handleWebhook', () => {
     expect(result).toEqual({ status: 'ignored:group-chat' });
     expect(mocks.logMessage).not.toHaveBeenCalled();
     expect(mocks.sendSeen).not.toHaveBeenCalled();
+  });
+
+  // --- Testes: gate de suspensão de fluxo (flow_enabled) ---
+
+  it('ignora mensagem quando flow_enabled=false (fluxo suspenso por billing)', async () => {
+    // Sessão de clone com flow_enabled=false
+    const cloneSlot = 'clone_cirilobarbearia_c8w2f0';
+    mocks.getCloneBySession.mockResolvedValue({
+      id: 42,
+      slot: cloneSlot,
+      matriz_slot: 'teste_barbearia',
+      display_name: 'Barbearia Cirilo',
+      cliente_nome: 'Cirilo',
+      cliente_telefone: null,
+      personalizacao: {},
+      waha_sessao: 'cirilobarbearia',
+      status: 'conectado',
+      flow_enabled: false,
+      suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
+      suspended_at: new Date('2026-05-30T10:00:00Z'),
+      horarios_funcionamento: null,
+      servicos: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      id: 42,
+      slot: cloneSlot,
+      matriz_slot: 'teste_barbearia',
+      display_name: 'Barbearia Cirilo',
+      cliente_nome: 'Cirilo',
+      cliente_telefone: null,
+      personalizacao: {},
+      waha_sessao: 'cirilobarbearia',
+      status: 'conectado',
+      flow_enabled: false,
+      suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
+      suspended_at: new Date('2026-05-30T10:00:00Z'),
+      horarios_funcionamento: null,
+      servicos: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+
+    const body = makeBody('cirilobarbearia');
+
+    const result = await handleWebhook(body, { executionId: 'exec-suspended-1', startedAt: 0 });
+
+    expect(result).toEqual({ status: 'ignored:flow-suspended' });
+    // Bot nunca é chamado
+    expect(mocks.sendSeen).not.toHaveBeenCalled();
+    // Log de execução deve registrar o evento de suspensão
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: cloneSlot,
+        eventType: 'router.flow-suspended',
+        status: 'ignored',
+      }),
+    );
+  });
+
+  it('processa mensagem normalmente quando flow_enabled=true (fluxo ativo)', async () => {
+    const cloneSlot = 'clone_cirilobarbearia_c8w2f0';
+    const activeClone = {
+      id: 42,
+      slot: cloneSlot,
+      matriz_slot: 'teste_barbearia',
+      display_name: 'Barbearia Cirilo',
+      cliente_nome: 'Cirilo',
+      cliente_telefone: null,
+      personalizacao: {},
+      waha_sessao: 'cirilobarbearia',
+      status: 'conectado',
+      flow_enabled: true,
+      suspended_reason: null,
+      suspended_at: null,
+      horarios_funcionamento: null,
+      servicos: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    mocks.getCloneBySession.mockResolvedValue(activeClone);
+    mocks.getCloneBySlot.mockResolvedValue(activeClone);
+
+    // Clone sem factory registrada → bot-not-registered (mas não suspended)
+    const body = makeBody('cirilobarbearia');
+
+    const result = await handleWebhook(body, { executionId: 'exec-active-clone-1', startedAt: 0 });
+
+    // Não deve retornar suspended — pode retornar bot-not-registered (sem factory)
+    expect(result.status).not.toBe('ignored:flow-suspended');
+    expect(mocks.logFlowEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.flow-suspended' }),
+    );
   });
 
   it('nao ignora conversa 1:1 valida (regressao)', async () => {
