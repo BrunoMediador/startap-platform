@@ -56,6 +56,30 @@ services:
       timeout: 5s
       retries: 3
 
+  portal-web:
+    build:
+      context: .
+      dockerfile: apps/portal-web/Dockerfile
+    container_name: startap-portal-web
+    restart: unless-stopped
+    # Mesmo env_file dos demais; o Next so usa PORTAL_API_URL (rede interna).
+    env_file: .env
+    environment:
+      - SERVICE_NAME=portal-web
+      - NODE_ENV=production
+      # O Next fala com o portal-api pela rede interna (sem CORS, mesmo dominio
+      # publico via NPM). NAO expoe o portal-api a internet.
+      - PORTAL_API_URL=http://startap-portal-api:3051
+    networks: [rede_interna]
+    depends_on: [portal-api]
+    # Unico container do portal exposto: o NPM roteia app.startap.tech -> aqui.
+    expose: ["3050"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3050/ > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   redis:
     image: redis:7-alpine
     container_name: startap-redis
