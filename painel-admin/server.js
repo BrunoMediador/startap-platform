@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import bcrypt from 'bcryptjs';
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import session from 'express-session';
@@ -5138,6 +5139,307 @@ app.get('/api/cleanup/status', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================================
+// PORTAL DO CLIENTE — gestao de usuarios e billing (Missao 009 / ADR 0012)
+// Backend apenas; a UI vem depois (frontend-engineer). Todas as rotas atras do
+// requireAuth global + CSRF para mutacoes (igual ao restante do painel).
+// ============================================================================
+
+const BCRYPT_COST = 12;
+const PORTAL_USERNAME_RE = /^[a-zA-Z0-9._-]{3,80}$/;
+
+// Gera senha aleatoria legivel (sem caracteres ambiguos) para criacao de user.
+function _genPortalPassword() {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  const bytes = crypto.randomBytes(14);
+  for (let i = 0; i < 14; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+// ---------- GET /api/portal-users — lista users do portal (sem hash) ----------
+app.get('/api/portal-users', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, slot, username, display_name, active, must_change_password,
+              last_login_at, created_at, updated_at
+       FROM portal_users
+       ORDER BY created_at DESC`,
+    );
+    res.json({ count: r.rows.length, users: r.rows });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'portal-users-list', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao listar usuarios do portal' }));
+    res.status(500).json({ error: 'erro ao listar usuarios do portal' });
+  }
+});
+
+// ---------- POST /api/portal-users — cria user (senha fornecida ou gerada) ----
+// Body: { slot, username, display_name?, password? }
+// Retorna a senha em claro UMA UNICA VEZ quando gerada (nunca persistida em claro).
+app.post('/api/portal-users', async (req, res) => {
+  try {
+    const slot = String(req.body?.slot ?? '').trim();
+    const username = String(req.body?.username ?? '').trim();
+    const displayName = req.body?.display_name != null ? String(req.body.display_name).trim() : null;
+    const providedPassword = req.body?.password != null ? String(req.body.password) : null;
+
+    if (!slot) return res.status(400).json({ error: 'slot obrigatorio' });
+    if (!PORTAL_USERNAME_RE.test(username)) {
+      return res.status(400).json({ error: 'username invalido (3-80 chars: letras, numeros, . _ -)' });
+    }
+    if (providedPassword != null && providedPassword.length < 8) {
+      return res.status(400).json({ error: 'senha deve ter ao menos 8 caracteres' });
+    }
+
+    // slot precisa existir em flow_clones (FK garante, mas damos erro claro antes).
+    const cloneRow = await pool.query(`SELECT slot FROM flow_clones WHERE slot = $1`, [slot]);
+    if (cloneRow.rowCount === 0) {
+      return res.status(404).json({ error: 'slot (fluxo) nao encontrado' });
+    }
+
+    // username unico (case-insensitive).
+    const dupe = await pool.query(
+      `SELECT 1 FROM portal_users WHERE lower(username) = lower($1) LIMIT 1`,
+      [username],
+    );
+    if (dupe.rowCount > 0) {
+      return res.status(409).json({ error: 'username ja existe' });
+    }
+
+    const plainPassword = providedPassword ?? _genPortalPassword();
+    const generated = providedPassword == null;
+    const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_COST);
+
+    const client = await pool.connect();
+    let userRow;
+    try {
+      await client.query('BEGIN');
+      const ins = await client.query(
+        `INSERT INTO portal_users
+           (slot, username, password_hash, display_name, must_change_password, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, TRUE, NOW(), NOW())
+         RETURNING id, slot, username, display_name, active, must_change_password,
+                   last_login_at, created_at, updated_at`,
+        [slot, username, passwordHash, displayName],
+      );
+      userRow = ins.rows[0];
+      await client.query(
+        `INSERT INTO portal_user_clones (user_id, slot, role, created_at)
+         VALUES ($1, $2, 'owner', NOW())
+         ON CONFLICT (user_id, slot) DO NOTHING`,
+        [userRow.id, slot],
+      );
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    console.log(JSON.stringify({
+      audit: 'portal-user-created',
+      operator: req.session?.userId || 'unknown',
+      user_id: userRow.id,
+      slot,
+      username,
+      password_generated: generated,
+      at: new Date().toISOString(),
+    }));
+
+    // Senha em claro retornada SO agora (gerada) — UI deve mostrar uma vez.
+    res.status(201).json({
+      ok: true,
+      user: userRow,
+      generated_password: generated ? plainPassword : undefined,
+    });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'portal-users-create', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao criar usuario do portal' }));
+    res.status(500).json({ error: 'erro ao criar usuario do portal' });
+  }
+});
+
+// ---------- PATCH /api/portal-users/:id — ativar/desativar ou reset de senha ---
+// Body (qualquer combinacao): { active?: bool, reset_password?: bool, password?: string }
+// Nao ha DELETE — desativacao apenas (ADR 0012).
+app.patch('/api/portal-users/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'id invalido' });
+
+    const exists = await pool.query(`SELECT id, username FROM portal_users WHERE id = $1`, [id]);
+    if (exists.rowCount === 0) return res.status(404).json({ error: 'usuario nao encontrado' });
+
+    const operator = req.session?.userId || 'unknown';
+    let response = {};
+
+    // 1. ativar/desativar
+    if (req.body?.active !== undefined) {
+      const active = req.body.active === true || req.body.active === 'true';
+      const r = await pool.query(
+        `UPDATE portal_users
+           SET active = $2,
+               failed_attempts = CASE WHEN $2 THEN failed_attempts ELSE 0 END,
+               locked_until = CASE WHEN $2 THEN locked_until ELSE NULL END,
+               updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, slot, username, display_name, active, must_change_password,
+                   last_login_at, created_at, updated_at`,
+        [id, active],
+      );
+      response.user = r.rows[0];
+      console.log(JSON.stringify({
+        audit: active ? 'portal-user-activated' : 'portal-user-deactivated',
+        operator, user_id: id, at: new Date().toISOString(),
+      }));
+    }
+
+    // 2. reset de senha (gera nova se nao fornecida; retorna em claro uma vez)
+    if (req.body?.reset_password === true || req.body?.reset_password === 'true' || req.body?.password != null) {
+      const provided = req.body?.password != null ? String(req.body.password) : null;
+      if (provided != null && provided.length < 8) {
+        return res.status(400).json({ error: 'senha deve ter ao menos 8 caracteres' });
+      }
+      const plain = provided ?? _genPortalPassword();
+      const generated = provided == null;
+      const hash = await bcrypt.hash(plain, BCRYPT_COST);
+      const r = await pool.query(
+        `UPDATE portal_users
+           SET password_hash = $2, must_change_password = TRUE,
+               failed_attempts = 0, locked_until = NULL, updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, slot, username, display_name, active, must_change_password,
+                   last_login_at, created_at, updated_at`,
+        [id, hash],
+      );
+      response.user = r.rows[0];
+      if (generated) response.generated_password = plain;
+      console.log(JSON.stringify({
+        audit: 'portal-user-password-reset',
+        operator, user_id: id, password_generated: generated, at: new Date().toISOString(),
+      }));
+    }
+
+    if (Object.keys(response).length === 0) {
+      return res.status(400).json({ error: 'nada para atualizar (use active e/ou reset_password/password)' });
+    }
+    res.json({ ok: true, ...response });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'portal-users-patch', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao atualizar usuario do portal' }));
+    res.status(500).json({ error: 'erro ao atualizar usuario do portal' });
+  }
+});
+
+// ---------- GET /api/billing — lista billing por slot ----------
+app.get('/api/billing', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT slot,
+              to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
+              amount_cents, last_payment_at, status, notes, created_at, updated_at
+       FROM client_billing
+       ORDER BY next_due_date NULLS LAST, slot`,
+    );
+    res.json({ count: r.rows.length, billing: r.rows });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'billing-list', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao listar billing' }));
+    res.status(500).json({ error: 'erro ao listar billing' });
+  }
+});
+
+// ---------- PUT /api/billing/:slot — define/atualiza ou registra pagamento -----
+// Body: { next_due_date?, amount_cents?, status?, notes?, register_payment?, cycle_months? }
+// register_payment=true: grava last_payment_at=now(), status='active' e avanca
+// next_due_date em cycle_months (default 1), preservando o dia.
+app.put('/api/billing/:slot', async (req, res) => {
+  try {
+    const slot = String(req.params.slot ?? '').trim();
+    if (!slot) return res.status(400).json({ error: 'slot invalido' });
+
+    const cloneRow = await pool.query(`SELECT slot FROM flow_clones WHERE slot = $1`, [slot]);
+    if (cloneRow.rowCount === 0) return res.status(404).json({ error: 'slot (fluxo) nao encontrado' });
+
+    const operator = req.session?.userId || 'unknown';
+    const registerPayment = req.body?.register_payment === true || req.body?.register_payment === 'true';
+
+    // Validacoes leves dos campos opcionais.
+    const nextDueDate = req.body?.next_due_date != null ? String(req.body.next_due_date) : null;
+    if (nextDueDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate)) {
+      return res.status(400).json({ error: 'next_due_date deve ser YYYY-MM-DD' });
+    }
+    let amountCents = null;
+    if (req.body?.amount_cents != null) {
+      amountCents = Number(req.body.amount_cents);
+      if (!Number.isInteger(amountCents) || amountCents < 0) {
+        return res.status(400).json({ error: 'amount_cents deve ser inteiro >= 0 (centavos)' });
+      }
+    }
+    const status = req.body?.status != null ? String(req.body.status) : null;
+    if (status != null && !['active', 'overdue', 'suspended'].includes(status)) {
+      return res.status(400).json({ error: 'status invalido (active|overdue|suspended)' });
+    }
+    const notes = req.body?.notes != null ? String(req.body.notes) : null;
+    if (notes != null && notes.length > 2000) {
+      return res.status(400).json({ error: 'notes deve ter no maximo 2000 caracteres' });
+    }
+
+    if (registerPayment) {
+      // Avanca o vencimento em cycle_months (default 1) a partir do vencimento
+      // atual (ou hoje, se ainda nao houver). Logica de avanco em SQL para nao
+      // depender de helpers TS aqui (espelha advanceDueDate de packages/db).
+      let cycleMonths = req.body?.cycle_months != null ? Number(req.body.cycle_months) : 1;
+      if (!Number.isInteger(cycleMonths) || cycleMonths < 1 || cycleMonths > 36) cycleMonths = 1;
+
+      const r = await pool.query(
+        `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes,
+                                     last_payment_at, created_at, updated_at)
+         VALUES (
+           $1,
+           (COALESCE($2::date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           $4, 'active', $5, NOW(), NOW(), NOW()
+         )
+         ON CONFLICT (slot) DO UPDATE SET
+           next_due_date   = (COALESCE(client_billing.next_due_date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           amount_cents    = COALESCE($4, client_billing.amount_cents),
+           status          = 'active',
+           notes           = COALESCE($5, client_billing.notes),
+           last_payment_at = NOW(),
+           updated_at      = NOW()
+         RETURNING slot, to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
+                   amount_cents, last_payment_at, status, notes, updated_at`,
+        [slot, nextDueDate, String(cycleMonths), amountCents, notes],
+      );
+      console.log(JSON.stringify({
+        audit: 'billing-payment-registered', operator, slot,
+        cycle_months: cycleMonths, at: new Date().toISOString(),
+      }));
+      return res.json({ ok: true, billing: r.rows[0] });
+    }
+
+    // Sem pagamento: upsert dos campos informados (COALESCE preserva existentes).
+    const r = await pool.query(
+      `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes, created_at, updated_at)
+       VALUES ($1, $2::date, $3, COALESCE($4, 'active'), $5, NOW(), NOW())
+       ON CONFLICT (slot) DO UPDATE SET
+         next_due_date = COALESCE($2::date, client_billing.next_due_date),
+         amount_cents  = COALESCE($3, client_billing.amount_cents),
+         status        = COALESCE($4, client_billing.status),
+         notes         = COALESCE($5, client_billing.notes),
+         updated_at    = NOW()
+       RETURNING slot, to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
+                 amount_cents, last_payment_at, status, notes, updated_at`,
+      [slot, nextDueDate, amountCents, status, notes],
+    );
+    console.log(JSON.stringify({
+      audit: 'billing-updated', operator, slot, at: new Date().toISOString(),
+    }));
+    res.json({ ok: true, billing: r.rows[0] });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'billing-put', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao atualizar billing' }));
+    res.status(500).json({ error: 'erro ao atualizar billing' });
   }
 });
 
