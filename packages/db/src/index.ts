@@ -13,6 +13,9 @@ export * as flowExecutionLog from './queries/flow-execution-log.js';
 export * as flowControl from './queries/flow-control.js';
 export * as flowClones from './queries/flow-clones.js';
 export * as botCourses from './queries/bot-courses.js';
+export * as portalConfig from './queries/portal-config.js';
+export * as portalUsers from './queries/portal-users.js';
+export * as clientBilling from './queries/client-billing.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -38,3 +41,6 @@ export type {
   ServicoConfig,
 } from './queries/flow-clones.js';
 export type { BotCourseRow } from './queries/bot-courses.js';
+export type { PortalPausaRow } from './queries/portal-config.js';
+export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';
+export type { ClientBillingRow, BillingStatus } from './queries/client-billing.js';
