@@ -5171,7 +5171,7 @@ app.get('/api/portal-users', async (_req, res) => {
     );
     res.json({ count: r.rows.length, users: r.rows });
   } catch (e) {
-    console.error('[portal-users-list]', e.message);
+    console.error(JSON.stringify({ at: 'portal-users-list', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao listar usuarios do portal' }));
     res.status(500).json({ error: 'erro ao listar usuarios do portal' });
   }
 });
@@ -5257,7 +5257,7 @@ app.post('/api/portal-users', async (req, res) => {
       generated_password: generated ? plainPassword : undefined,
     });
   } catch (e) {
-    console.error('[portal-users-create]', e.message);
+    console.error(JSON.stringify({ at: 'portal-users-create', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao criar usuario do portal' }));
     res.status(500).json({ error: 'erro ao criar usuario do portal' });
   }
 });
@@ -5328,7 +5328,7 @@ app.patch('/api/portal-users/:id', async (req, res) => {
     }
     res.json({ ok: true, ...response });
   } catch (e) {
-    console.error('[portal-users-patch]', e.message);
+    console.error(JSON.stringify({ at: 'portal-users-patch', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao atualizar usuario do portal' }));
     res.status(500).json({ error: 'erro ao atualizar usuario do portal' });
   }
 });
@@ -5345,7 +5345,7 @@ app.get('/api/billing', async (_req, res) => {
     );
     res.json({ count: r.rows.length, billing: r.rows });
   } catch (e) {
-    console.error('[billing-list]', e.message);
+    console.error(JSON.stringify({ at: 'billing-list', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao listar billing' }));
     res.status(500).json({ error: 'erro ao listar billing' });
   }
 });
@@ -5382,6 +5382,9 @@ app.put('/api/billing/:slot', async (req, res) => {
       return res.status(400).json({ error: 'status invalido (active|overdue|suspended)' });
     }
     const notes = req.body?.notes != null ? String(req.body.notes) : null;
+    if (notes != null && notes.length > 2000) {
+      return res.status(400).json({ error: 'notes deve ter no maximo 2000 caracteres' });
+    }
 
     if (registerPayment) {
       // Avanca o vencimento em cycle_months (default 1) a partir do vencimento
@@ -5435,7 +5438,7 @@ app.put('/api/billing/:slot', async (req, res) => {
     }));
     res.json({ ok: true, billing: r.rows[0] });
   } catch (e) {
-    console.error('[billing-put]', e.message);
+    console.error(JSON.stringify({ at: 'billing-put', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao atualizar billing' }));
     res.status(500).json({ error: 'erro ao atualizar billing' });
   }
 });
