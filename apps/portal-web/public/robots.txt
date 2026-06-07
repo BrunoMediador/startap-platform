@@ -1,0 +1,3 @@
+# Portal do Cliente — area logada, nao indexar.
+User-agent: *
+Disallow: /
