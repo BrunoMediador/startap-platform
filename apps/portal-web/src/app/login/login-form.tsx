@@ -60,8 +60,8 @@ export function LoginForm() {
   }
 
   return (
-    <main className="flex min-h-dvh items-stretch justify-center bg-brand md:items-center md:bg-bg md:p-6">
-      <div className="relative flex w-full max-w-[440px] flex-col overflow-hidden bg-brand px-6 pb-7 pt-8 text-white md:rounded-card md:px-7 md:shadow-raised">
+    <main className="flex min-h-dvh items-stretch justify-center bg-brand-fill md:items-center md:bg-bg md:p-6">
+      <div className="relative flex w-full max-w-[440px] flex-col overflow-hidden bg-brand-fill px-6 pb-7 pt-8 text-white md:rounded-card md:px-7 md:shadow-elev">
         {/* anel decorativo (sem glassmorphism) */}
         <div
           aria-hidden
@@ -87,7 +87,7 @@ export function LoginForm() {
 
         <form
           onSubmit={onSubmit}
-          className="relative z-10 mt-7 rounded-[22px] bg-surface p-5 text-ink shadow-login"
+          className="relative z-10 mt-7 rounded-[22px] border border-line-strong bg-surface p-5 text-ink shadow-elev"
           noValidate
         >
           <div className="mb-3.5">

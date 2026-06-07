@@ -96,7 +96,8 @@ export function Overlay({
     // biome-ignore lint/a11y/useKeyWithClickEvents: overlay de fundo; o conteudo trata teclado e Esc fecha
     <div
       className={cn(
-        'fixed inset-0 z-40 flex bg-ink/40',
+        // Overlay mais forte no escuro (spec 1.A.6 / D12): black/55 vs ink/40 do claro.
+        'fixed inset-0 z-40 flex bg-black/55',
         variant === 'sheet' ? 'items-end' : 'items-center justify-center px-6',
       )}
       onClick={(e) => {
@@ -111,9 +112,10 @@ export function Overlay({
         aria-labelledby={ariaLabelledBy}
         onKeyDown={onKeyDown}
         className={cn(
+          // Flutuante (spec 1.A.6): surface-elev + borda forte + sombra so pra descolar do overlay.
           variant === 'sheet'
-            ? 'w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] rounded-t-[22px] bg-surface pb-[calc(14px+env(safe-area-inset-bottom))] shadow-raised'
-            : 'w-full max-w-[330px] animate-[modalIn_180ms_var(--ease-out-soft)] rounded-[20px] bg-surface p-[22px_20px_18px] shadow-raised',
+            ? 'w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev'
+            : 'w-full max-w-[330px] animate-[modalIn_180ms_var(--ease-out-soft)] rounded-[20px] border border-line-strong bg-surface-elev p-[22px_20px_18px] shadow-elev',
         )}
       >
         {children}

@@ -142,7 +142,7 @@ export default function HorariosPage() {
       <button
         type="button"
         onClick={aplicarTodos}
-        className="mb-3.5 inline-flex items-center gap-1.5 rounded-pill bg-brand-50 px-3.5 py-2 text-[13px] font-semibold text-brand outline-none transition-colors hover:bg-[#e3daf9] focus-visible:ring-2 focus-visible:ring-brand"
+        className="mb-3.5 inline-flex items-center gap-1.5 rounded-pill bg-brand-soft px-3.5 py-2 text-[13px] font-semibold text-brand outline-none transition-colors hover:bg-brand-soft-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
       >
         <IconCopy size={15} />
         Aplicar a todos os dias
@@ -156,7 +156,7 @@ export default function HorariosPage() {
             <div
               key={dia}
               className={cn(
-                'flex min-h-16 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-[15px] py-3.5 last:border-b-0',
+                'flex min-h-16 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line-soft px-[15px] py-3.5 transition-colors last:border-b-0 hover:bg-surface-hover',
                 fechado && 'opacity-60',
               )}
             >
@@ -225,7 +225,7 @@ function TimeSelect({
       aria-label={label}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-[42px] min-w-[78px] cursor-pointer appearance-none rounded-[10px] border-[1.5px] border-line bg-surface px-2.5 text-center font-display text-[15px] font-semibold text-ink outline-none focus:border-brand focus:shadow-focus"
+      className="h-[42px] min-w-[78px] cursor-pointer appearance-none rounded-[10px] border-[1.5px] border-line-strong bg-surface-sunken px-2.5 text-center font-display text-[15px] font-semibold text-ink outline-none transition-colors hover:border-[#534b70] focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus"
     >
       {TIMES.map((t) => (
         <option key={t} value={t}>

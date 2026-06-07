@@ -6,12 +6,13 @@ import { cn } from '@/lib/cn';
 
 type BadgeTone = 'ok' | 'danger' | 'warn' | 'amber' | 'info';
 
+// Pares bg+texto, todos AA sobre escuro (spec 1.A.4).
 const TONES: Record<BadgeTone, string> = {
-  ok: 'bg-ok-bg text-ok',
-  danger: 'bg-danger-bg text-danger',
-  warn: 'bg-warn-bg text-warn',
-  amber: 'bg-amber-bg text-amber',
-  info: 'bg-brand-50 text-brand',
+  ok: 'bg-ok-soft text-ok',
+  danger: 'bg-danger-soft text-danger',
+  warn: 'bg-warn-soft text-warn',
+  amber: 'bg-amber-soft text-amber',
+  info: 'bg-brand-soft text-brand',
 };
 
 export function Badge({ tone, children }: { tone: BadgeTone; children: React.ReactNode }) {

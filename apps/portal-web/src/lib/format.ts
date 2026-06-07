@@ -56,20 +56,50 @@ export function initials(name: string | null | undefined): string {
 }
 
 /**
- * Mascara um telefone (apenas digitos) no formato "(11) 9••••-••42".
- * Mostra DDD + os 2 ultimos digitos; o meio vira bullets. LGPD-friendly na UI.
+ * Normaliza um telefone pra so digitos, sem DDI 55 (numero BR). Usado pra
+ * comparar contatos x pausas (join client-side) sem depender de formatacao.
+ * Ex: "+55 (35) 99115-327" -> "3599115327".
  */
-export function maskPhoneDisplay(raw: string): string {
+export function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '');
-  // Remove DDI 55 quando presente (numero BR).
-  const local = digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
-  if (local.length < 4) return raw;
-  const ddd = local.slice(0, 2);
-  const last2 = local.slice(-2);
-  const middleLen = Math.max(local.length - 4, 0);
-  // Quebra os bullets em dois blocos pra lembrar o formato 9XXXX-XXXX.
-  const firstBlock = '•'.repeat(Math.max(middleLen - 2, 1));
-  return `(${ddd}) 9${firstBlock}-••${last2}`;
+  return digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
+}
+
+/**
+ * Formata um telefone COMPLETO e legivel pra exibir ao DONO do bot (ele ve os
+ * proprios clientes — mascarar e regra de LOG no backend, nao de tela do dono).
+ * Ex: "5535999115327" -> "+55 (35) 99115-327" · "11999990007" -> "(11) 99999-0007".
+ * Numeros fora do padrao BR caem num fallback que so insere espacos a cada grupo.
+ */
+export function formatPhoneDisplay(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 0) return raw;
+  const hasDDI = digits.length > 11 && digits.startsWith('55');
+  const local = hasDDI ? digits.slice(2) : digits;
+  const ddi = hasDDI ? '+55 ' : '';
+
+  // Celular BR (11 digitos: DDD + 9 + 8) -> (DD) 9XXXX-XXXX.
+  if (local.length === 11) {
+    const ddd = local.slice(0, 2);
+    const part1 = local.slice(2, 7);
+    const part2 = local.slice(7);
+    return `${ddi}(${ddd}) ${part1}-${part2}`;
+  }
+  // Fixo BR (10 digitos: DDD + 8) -> (DD) XXXX-XXXX.
+  if (local.length === 10) {
+    const ddd = local.slice(0, 2);
+    const part1 = local.slice(2, 6);
+    const part2 = local.slice(6);
+    return `${ddi}(${ddd}) ${part1}-${part2}`;
+  }
+  // Fora do padrao: agrupa em DDD + resto pra continuar legivel, sem mascarar.
+  if (local.length > 6) {
+    const ddd = local.slice(0, 2);
+    const rest = local.slice(2);
+    const split = Math.ceil(rest.length / 2);
+    return `${ddi}(${ddd}) ${rest.slice(0, split)}-${rest.slice(split)}`;
+  }
+  return `${ddi}${local}`;
 }
 
 /** "YYYY-MM-DD" -> "18 de junho". Retorna null se invalido. */

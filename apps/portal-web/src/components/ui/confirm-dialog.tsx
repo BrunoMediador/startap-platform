@@ -47,7 +47,7 @@ export function ConfirmDialog({
       initialFocusRef={cancelRef}
     >
       {icon && (
-        <div className="mb-3.5 flex size-12 items-center justify-center rounded-[14px] bg-brand-50 text-brand">
+        <div className="mb-3.5 flex size-12 items-center justify-center rounded-[14px] bg-brand-soft text-brand">
           {icon}
         </div>
       )}

@@ -178,7 +178,7 @@ export default function ServicosPage() {
             <button
               type="button"
               onClick={startAdd}
-              className="flex h-[52px] w-full items-center justify-center gap-2 rounded-card border-[1.5px] border-dashed border-line bg-surface font-display text-[15px] font-semibold text-brand outline-none transition-colors hover:border-brand hover:bg-brand-50 focus-visible:ring-2 focus-visible:ring-brand"
+              className="flex h-[52px] w-full items-center justify-center gap-2 rounded-card border-[1.5px] border-dashed border-line-strong bg-surface font-display text-[15px] font-semibold text-brand outline-none transition-colors hover:border-brand hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
             >
               <IconPlus size={20} />
               Adicionar serviço
@@ -202,9 +202,11 @@ export default function ServicosPage() {
 }
 
 function ReadRow({ servico, onEdit }: { servico: Servico; onEdit: () => void }) {
+  // Linha de lista (spec 1.A.8): hover "acende" a linha inteira (surface-hover) +
+  // revela o lapis (opacity-0 -> 100). No mobile, active da o mesmo feedback.
   return (
-    <div className="flex min-h-16 items-center gap-3.5 border-b border-line p-[15px] last:border-b-0">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-brand-50 text-brand">
+    <div className="group flex min-h-16 items-center gap-3.5 border-b border-line-soft p-[15px] transition-colors last:border-b-0 hover:bg-surface-hover active:bg-surface-hover">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-brand-soft text-brand">
         <IconScissors size={20} />
       </span>
       <div className="min-w-0 flex-1">
@@ -218,7 +220,7 @@ function ReadRow({ servico, onEdit }: { servico: Servico; onEdit: () => void }) 
         type="button"
         aria-label={`Editar ${servico.nome}`}
         onClick={onEdit}
-        className="flex size-11 shrink-0 items-center justify-center rounded-[11px] border border-line text-ink-soft outline-none transition-colors hover:border-transparent hover:bg-brand-50 hover:text-brand focus-visible:ring-2 focus-visible:ring-brand"
+        className="flex size-11 shrink-0 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100"
       >
         <IconPencil size={18} />
       </button>
@@ -246,7 +248,7 @@ function EditRow({
   isNew?: boolean;
 }) {
   return (
-    <div className="flex animate-[rowIn_180ms_var(--ease-out-soft)] flex-col gap-3 border-b border-line bg-brand-50 p-[15px] last:border-b-0">
+    <div className="flex animate-[rowIn_180ms_var(--ease-out-soft)] flex-col gap-3 border-b border-line-soft bg-brand-soft p-[15px] last:border-b-0">
       <span className="font-display text-[12px] font-bold uppercase tracking-[0.06em] text-brand">
         {isNew ? 'Novo serviço' : 'Editando serviço'}
       </span>

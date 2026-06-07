@@ -1,45 +1,63 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Design tokens — Portal "Cadencia" + acento ambar
-   Fonte unica de verdade: docs/design/portal-cliente/design-spec-cadencia.md secao 1.
+   Design tokens — Portal "Cadencia Noturna" (TEMA ESCURO, dark-only)
+   Fonte unica de verdade: docs/design/portal-cliente/design-spec-cadencia.md
+   secao 1.A (escuro, producao v1.1). O tema claro (1.1) esta DESCONTINUADO.
    Tailwind v4 @theme (config CSS-first). Cada token vira utilitario:
-   bg-brand, text-ink-soft, rounded-card, shadow-card, font-display, etc.
+   bg-surface, bg-surface-hover, text-ink-soft, border-line-strong, etc.
    ============================================================ */
 @theme {
-  /* --- Cores: Marca (roxo SOLIDO) --- */
-  --color-brand: #6431d6;
-  --color-brand-700: #4e22b0;
-  --color-brand-600: #6431d6;
-  --color-brand-50: #efeafb;
+  /* --- Superficies (elevacao por TOM, nao por sombra — spec 1.A.6) --- */
+  --color-bg: #14121c; /* fundo geral — quase-preto roxeado */
+  --color-surface: #1e1b2b; /* card, lista, input em repouso */
+  --color-surface-hover: #2c2740; /* HOVER perceptivel (spec 1.A.2) */
+  --color-surface-elev: #262237; /* modal / bottom sheet / popover */
+  --color-surface-elev-hover: #332d4a; /* hover de itens dentro de modal/sheet */
+  --color-surface-sunken: #0f0d17; /* trilho de switch off, track, input afundado */
 
-  /* --- Ambar (acento RESTRITO: vencimento <=5d, badge editorial, agora) --- */
-  --color-amber: #b5751f;
-  --color-amber-700: #90550f;
-  --color-amber-bg: #f6e7ce;
+  /* --- Bordas / linhas --- */
+  --color-line: #332e45; /* borda/divisor padrao sobre surface */
+  --color-line-soft: #28243a; /* divisor interno discreto (linhas de lista) */
+  --color-line-strong: #433c5c; /* borda de input/card elevado em repouso */
 
-  /* --- Tinta (texto) --- */
-  --color-ink: #1a1530;
-  --color-ink-soft: #6b6485;
-  --color-ink-faint: #9a93b0;
+  /* --- Tinta (texto) sobre escuro --- */
+  --color-ink: #f3f1fa; /* tinta principal — titulos, numeros, corpo forte */
+  --color-ink-soft: #b4aecb; /* secundaria — legendas, descricoes, meta */
+  --color-ink-faint: #807a95; /* terciaria — labels uppercase, placeholders, nav off */
 
-  /* --- Superficies --- */
-  --color-bg: #f4f2fb;
-  --color-surface: #ffffff;
-  --color-line: #e7e3f2;
+  /* --- Marca — roxo Startap sobre escuro (DOIS roxos, papeis distintos) --- */
+  --color-brand: #9a7cf0; /* roxo claro de ACAO — botao primario, links, foco */
+  --color-brand-600: #8b66ee; /* hover do primario (mais saturado) */
+  --color-brand-700: #7c54e6; /* active/pressed */
+  --color-brand-fill: #6431d6; /* roxo SOLIDO — fundo de card de marca/billing */
+  --color-brand-fill-hover: #5526c0; /* hover do card de marca clicavel */
+  --color-brand-soft: #231c3d; /* fundo roxo escuro p/ icones, nav ativo, badge-info */
+  --color-brand-soft-hover: #2e2550; /* hover de superficie roxa suave */
 
-  /* --- Sucesso (verde-escuro AA) --- */
-  --color-ok: #18794e;
-  --color-ok-bg: #ddf3e7;
+  /* --- Ambar — alerta de vencimento sobre escuro (acento RESTRITO) --- */
+  --color-amber: #e0a23c; /* ambar de TEXTO/icone/borda sobre escuro */
+  --color-amber-fill: #b5751f; /* ambar SOLIDO — fundo do card de vencimento */
+  --color-amber-soft: #2e2310; /* fundo ambar escuro p/ badge "Vence em 3 dias" */
+  --color-amber-ink: #1a1208; /* texto escuro pra cima de amber-fill */
 
-  /* --- Aviso (pausado/atencao) --- */
-  --color-warn: #8a5300;
-  --color-warn-bg: #fbefd6;
+  /* --- Sucesso (status conectado, salvo) --- */
+  --color-ok: #4ed88f; /* verde claro AA — core do pulse, texto de badge */
+  --color-ok-soft: #0f2a1e; /* fundo de badge "Conectado" */
 
-  /* --- Erro/destrutivo --- */
-  --color-danger: #c2261b;
-  --color-danger-700: #9e1a12;
-  --color-danger-bg: #fce6e4;
+  /* --- Aviso (pausado/atencao — distinto do ambar por contexto) --- */
+  --color-warn: #e0a23c;
+  --color-warn-soft: #2e2310;
+
+  /* --- Erro/destrutivo (desconectado, remover, falha) --- */
+  --color-danger: #ff6b5e; /* vermelho-coral claro AA — texto/borda */
+  --color-danger-600: #f0594b; /* hover */
+  --color-danger-fill: #c2261b; /* vermelho SOLIDO — fundo do card vencido */
+  --color-danger-soft: #33161a; /* fundo de badge "Desconectado" */
+
+  /* --- Skeleton / shimmer escuro --- */
+  --color-skeleton: #262237; /* bloco base do skeleton */
+  --color-skeleton-hi: #332d4a; /* realce do shimmer */
 
   /* --- Tipografia (Sora display / Inter body, via next/font) --- */
   --font-display: var(--font-sora), "Sora", system-ui, sans-serif;
@@ -52,11 +70,10 @@
   --radius-field: 12px;
   --radius-pill: 999px;
 
-  /* --- Sombras --- */
-  --shadow-card: 0 4px 18px rgba(40, 20, 90, 0.05);
-  --shadow-raised: 0 12px 40px rgba(40, 20, 90, 0.16);
-  --shadow-login: 0 18px 40px rgba(30, 10, 70, 0.28);
-  --shadow-focus: 0 0 0 4px #efeafb;
+  /* --- Sombras (escuro: coadjuvante — elevacao e por tom, spec 1.A.6) --- */
+  --shadow-card: none; /* cards no escuro NAO usam sombra */
+  --shadow-elev: 0 8px 32px rgba(0, 0, 0, 0.45); /* so modal/sheet/popover */
+  --shadow-focus: 0 0 0 4px rgba(154, 124, 240, 0.18); /* glow de foco */
 
   /* --- Motion --- */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
@@ -67,6 +84,7 @@
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 300ms;
+  color-scheme: dark;
 }
 
 * {
@@ -76,6 +94,11 @@
 html,
 body {
   height: 100%;
+}
+
+html {
+  color-scheme: dark;
+  background: var(--color-bg);
 }
 
 body {
@@ -97,7 +120,7 @@ body {
   }
 }
 
-/* Shimmer do skeleton (spec 6.14). */
+/* Shimmer do skeleton (spec 1.A.5). */
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -117,12 +140,13 @@ body {
   animation: ring 2.4s ease-out infinite;
 }
 
+/* Skeleton escuro: gradiente skeleton -> skeleton-hi -> skeleton (spec 1.A.5). */
 .skeleton {
   background: linear-gradient(
     90deg,
-    rgba(231, 227, 242, 0.6) 25%,
-    rgba(231, 227, 242, 0.25) 37%,
-    rgba(231, 227, 242, 0.6) 63%
+    var(--color-skeleton) 25%,
+    var(--color-skeleton-hi) 50%,
+    var(--color-skeleton) 75%
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s linear infinite;
