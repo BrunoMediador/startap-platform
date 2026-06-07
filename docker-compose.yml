@@ -36,6 +36,26 @@ services:
       timeout: 5s
       retries: 3
 
+  portal-api:
+    build:
+      context: .
+      dockerfile: apps/portal-api/Dockerfile
+    container_name: startap-portal-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - SERVICE_NAME=portal-api
+    networks: [rede_interna]
+    depends_on: [redis]
+    # Nao exposto publicamente (ADR 0012, Decisao 5): so o portal-web (Next) fala
+    # com ele pela rede interna. A internet so ve o Next.
+    expose: ["3051"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3051/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   redis:
     image: redis:7-alpine
     container_name: startap-redis
