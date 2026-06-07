@@ -13,6 +13,13 @@ import { config } from '../config.js';
 const log = logger.child({ service: 'portal-api', module: 'session' });
 
 const KEY_PREFIX = 'portal:sess:';
+// Indice por user: set dos session ids ativos daquele user. Permite invalidar
+// as DEMAIS sessoes (troca de senha) sem SCAN no keyspace inteiro.
+const USER_INDEX_PREFIX = 'portal:sess:user:';
+
+function userIndexKey(userId: number): string {
+  return USER_INDEX_PREFIX + userId;
+}
 
 export interface SessionData {
   userId: number;
@@ -45,12 +52,13 @@ function newSessionId(): string {
 /** Cria uma sessao no Redis e retorna o id (a ser gravado no cookie). */
 export async function createSession(data: SessionData): Promise<string> {
   const sid = newSessionId();
-  await getRedis().set(
-    KEY_PREFIX + sid,
-    JSON.stringify(data),
-    'EX',
-    config.PORTAL_SESSION_TTL_SECONDS,
-  );
+  const r = getRedis();
+  await r.set(KEY_PREFIX + sid, JSON.stringify(data), 'EX', config.PORTAL_SESSION_TTL_SECONDS);
+  // Indexa a sessao no set do user. TTL do set > TTL da sessao para nao expirar
+  // o indice no meio de uma sessao deslizante (sliding); membros stale sao
+  // ignorados na invalidacao (SISMEMBER da sessao real confirma).
+  await r.sadd(userIndexKey(data.userId), sid);
+  await r.expire(userIndexKey(data.userId), config.PORTAL_SESSION_TTL_SECONDS * 2);
   return sid;
 }
 
@@ -69,10 +77,47 @@ export async function getSession(sid: string): Promise<SessionData | null> {
   }
 }
 
-/** Destroi a sessao (logout / revogacao). Idempotente. */
+/** Destroi a sessao (logout / revogacao). Idempotente. Remove do indice do user. */
 export async function destroySession(sid: string): Promise<void> {
   if (!sid) return;
-  await getRedis().del(KEY_PREFIX + sid);
+  const r = getRedis();
+  // Le o userId (se ainda existir) para limpar o indice tambem.
+  const raw = await r.get(KEY_PREFIX + sid);
+  await r.del(KEY_PREFIX + sid);
+  if (raw) {
+    try {
+      const data = JSON.parse(raw) as SessionData;
+      await r.srem(userIndexKey(data.userId), sid);
+    } catch {
+      // payload corrompido: a sessao ja foi removida; ignora o indice.
+    }
+  }
+}
+
+/**
+ * Invalida TODAS as sessoes do user, exceto `keepSid`. Usado na troca de senha
+ * self-service (derruba outros dispositivos, mantem o atual). Retorna quantas
+ * sessoes foram destruidas.
+ *
+ * Caveat documentado: sessoes criadas ANTES deste deploy nao estao no indice
+ * (portal:sess:user:*) e expiram apenas pelo TTL normal — sao raras (TTL 7d) e
+ * o caminho seguro continua sendo o usuario trocar a senha + as novas sessoes
+ * ja entrarem indexadas. Sem SCAN no keyspace (barato e bounded ao user).
+ */
+export async function invalidateOtherUserSessions(
+  userId: number,
+  keepSid: string,
+): Promise<number> {
+  const r = getRedis();
+  const sids = await r.smembers(userIndexKey(userId));
+  let destroyed = 0;
+  for (const sid of sids) {
+    if (sid === keepSid) continue;
+    const removed = await r.del(KEY_PREFIX + sid);
+    await r.srem(userIndexKey(userId), sid);
+    if (removed > 0) destroyed += 1;
+  }
+  return destroyed;
 }
 
 /** Fecha a conexao Redis (shutdown/testes). */

@@ -22,6 +22,8 @@ export interface TenantContext {
   slot: string;
   userId: number;
   username: string;
+  /** session id da requisicao atual (para preservar a sessao corrente em revogacoes). */
+  sid: string;
 }
 
 // Decora FastifyRequest com `tenant` (preenchido pelo withTenant).
@@ -67,7 +69,7 @@ export async function withTenant(req: FastifyRequest, reply: FastifyReply): Prom
     return;
   }
 
-  req.tenant = { slot, userId: session.userId, username: session.username };
+  req.tenant = { slot, userId: session.userId, username: session.username, sid };
 }
 
 /** Helper para rotas: garante que o tenant foi injetado (lanca caso contrario). */

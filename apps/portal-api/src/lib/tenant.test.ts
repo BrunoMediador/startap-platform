@@ -109,7 +109,12 @@ describe('withTenant', () => {
     // nao houve resposta de erro
     expect(result.code).toBe(200);
     // @ts-expect-error tenant nao tipado no fake
-    expect(req.tenant).toEqual({ slot: 'clone_atual', userId: 42, username: 'cirilo' });
+    expect(req.tenant).toEqual({
+      slot: 'clone_atual',
+      userId: 42,
+      username: 'cirilo',
+      sid: 'sid-from-cookie',
+    });
     expect(getSlotMock).toHaveBeenCalledWith(42);
   });
 });

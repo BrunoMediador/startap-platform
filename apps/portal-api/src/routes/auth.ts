@@ -1,9 +1,10 @@
 /**
  * Rotas de autenticacao do portal (ADR 0012, Decisao 2).
  *
- * POST /auth/login   — username+senha, bcrypt compare, lockout progressivo.
- * POST /auth/logout  — destroi a sessao no Redis e limpa o cookie.
- * GET  /auth/me      — dados do user logado (exige withTenant).
+ * POST /auth/login            — username+senha, bcrypt compare, lockout progressivo.
+ * POST /auth/logout           — destroi a sessao no Redis e limpa o cookie.
+ * GET  /auth/me               — dados do user logado (exige withTenant).
+ * POST /auth/change-password  — troca de senha self-service (exige withTenant).
  *
  * Lockout: PORTAL_LOGIN_MAX_ATTEMPTS erradas => trava PORTAL_LOGIN_LOCK_MINUTES.
  * Respostas de erro sao genericas (nao revelam se o username existe).
@@ -14,7 +15,7 @@ import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { createSession, destroySession } from '../lib/session.js';
+import { createSession, destroySession, invalidateOtherUserSessions } from '../lib/session.js';
 import { SESSION_COOKIE, requireTenant, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'auth' });
@@ -22,6 +23,13 @@ const log = logger.child({ service: 'portal-api', module: 'auth' });
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(80),
   password: z.string().min(1).max(200),
+});
+
+// new_password: min 8, max 72 (limite real do bcrypt — bytes alem de 72 sao
+// silenciosamente ignorados; cortamos no schema para nao dar falsa seguranca).
+export const changePasswordSchema = z.object({
+  current_password: z.string().min(1).max(200),
+  new_password: z.string().min(8).max(72),
 });
 
 function cookieSecure(): boolean {
@@ -128,5 +136,63 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       username: tenant.username,
       slot: tenant.slot,
     });
+  });
+
+  // Troca de senha self-service. Autenticada (withTenant). Confere a senha atual
+  // antes de trocar, limpa must_change_password e derruba as DEMAIS sessoes do
+  // user (mantem a atual). Rate limit herdado do escopo /auth/* (10/min por IP).
+  app.post('/auth/change-password', { preHandler: withTenant }, async (req, reply) => {
+    const tenant = requireTenant(req);
+
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'nova senha deve ter entre 8 e 72 caracteres' });
+    }
+    const { current_password, new_password } = parsed.data;
+
+    let user: Awaited<ReturnType<typeof portalUsers.findPortalUserAuthById>>;
+    try {
+      user = await portalUsers.findPortalUserAuthById(tenant.userId);
+    } catch (e) {
+      const err = e as { code?: string; constraint?: string };
+      log.error(
+        { userId: tenant.userId, pgCode: err.code, pgConstraint: err.constraint },
+        'falha ao carregar user para troca de senha',
+      );
+      return reply.code(500).send({ error: 'erro ao trocar senha' });
+    }
+
+    // withTenant ja garantiu sessao + slot ativo; este null seria corrida rara.
+    if (!user || !user.active) {
+      return reply.code(403).send({ error: 'usuario indisponivel' });
+    }
+
+    const ok = await bcrypt.compare(current_password, user.password_hash);
+    if (!ok) {
+      log.warn({ userId: tenant.userId }, 'troca de senha negada — senha atual incorreta');
+      return reply.code(401).send({ error: 'senha atual incorreta' });
+    }
+
+    if (current_password === new_password) {
+      return reply.code(400).send({ error: 'a nova senha deve ser diferente da atual' });
+    }
+
+    try {
+      const hash = await bcrypt.hash(new_password, config.PORTAL_BCRYPT_COST);
+      await portalUsers.changePortalUserPassword(tenant.userId, hash);
+    } catch (e) {
+      const err = e as { code?: string; constraint?: string };
+      log.error(
+        { userId: tenant.userId, pgCode: err.code, pgConstraint: err.constraint },
+        'falha ao gravar nova senha',
+      );
+      return reply.code(500).send({ error: 'erro ao trocar senha' });
+    }
+
+    // Derruba outras sessoes (outros dispositivos); mantem a atual ativa.
+    const revoked = await invalidateOtherUserSessions(tenant.userId, tenant.sid).catch(() => -1);
+    log.info({ userId: tenant.userId, otherSessionsRevoked: revoked }, 'senha trocada');
+
+    return reply.code(200).send({ ok: true });
   });
 };

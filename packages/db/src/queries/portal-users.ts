@@ -171,6 +171,41 @@ export async function findPortalUserForAuth(username: string): Promise<PortalUse
   return { ...r.rows[0], id: Number(r.rows[0].id) };
 }
 
+/** Busca user por id com campos de auth (inclui hash). So uso interno (troca de senha self-service). */
+export async function findPortalUserAuthById(id: number): Promise<PortalUserAuthRow | null> {
+  const r = await query<PortalUserAuthRow & { id: string }>(
+    `SELECT id, slot, username, password_hash, display_name, active, must_change_password,
+            failed_attempts, locked_until, last_login_at, created_at, updated_at
+     FROM portal_users
+     WHERE id = $1`,
+    [id],
+  );
+  if (!r.rows[0]) return null;
+  return { ...r.rows[0], id: Number(r.rows[0].id) };
+}
+
+/**
+ * Troca de senha pelo proprio user (self-service). Diferente de resetPortalUserPassword:
+ * limpa must_change_password (FALSE) pois o user escolheu a senha conscientemente.
+ * Hash ja vem calculado pela camada de aplicacao (portal-api, mesmo bcrypt cost).
+ */
+export async function changePortalUserPassword(
+  id: number,
+  passwordHash: string,
+): Promise<PortalUserRow | null> {
+  const r = await query<PortalUserRow & { id: string }>(
+    `UPDATE portal_users
+       SET password_hash = $2,
+           must_change_password = FALSE,
+           updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, slot, username, display_name, active, must_change_password,
+               last_login_at, created_at, updated_at`,
+    [id, passwordHash],
+  );
+  return r.rows[0] ? normalize(r.rows[0]) : null;
+}
+
 /**
  * Resolve o slot do user a partir de portal_user_clones (fonte do withTenant).
  * Na v1 retorna no maximo 1 slot. Null se o user nao tem vinculo ou esta inativo.
