@@ -62,8 +62,9 @@ services:
       dockerfile: apps/portal-web/Dockerfile
     container_name: startap-portal-web
     restart: unless-stopped
-    # Mesmo env_file dos demais; o Next so usa PORTAL_API_URL (rede interna).
-    env_file: .env
+    # Sem env_file: o Next so precisa de PORTAL_API_URL (rede interna). Herdar o
+    # .env inteiro exporia segredos desnecessarios (PORTAL_SESSION_SECRET, chaves
+    # OpenAI etc.) num container que so faz proxy. So o necessario abaixo.
     environment:
       - SERVICE_NAME=portal-web
       - NODE_ENV=production
