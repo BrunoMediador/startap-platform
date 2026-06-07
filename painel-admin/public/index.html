@@ -2216,6 +2216,13 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
     <section class="section" id="sec-metricas" aria-label="Métricas">
       <!-- Seção Métricas — renderizada por renderMetricas() — 003-I -->
     </section>
+    <!-- Portal do Cliente — Missão 009 (renderizadas por window.PortalAdmin) -->
+    <section class="section" id="sec-portal-usuarios" aria-label="Usuários do portal">
+      <div id="portal-usuarios-content"></div>
+    </section>
+    <section class="section" id="sec-portal-cobranca" aria-label="Cobrança por fluxo">
+      <div id="portal-cobranca-content"></div>
+    </section>
   </main>
 </div>
 <!-- ── Drawer lateral ────────────────────────────────────────────── -->
@@ -9149,6 +9156,17 @@ const NAV_GROUPS = [
       { id: 'relatorios',    label: 'Relatórios',    render: renderRelatorios },
     ],
   },
+  {
+    // Missão 009 — Portal do Cliente. render delega ao IIFE window.PortalAdmin
+    // (definido mais abaixo no arquivo); chamada é lazy/runtime, então a ordem
+    // de definição não importa.
+    id: 'grp-portal',
+    label: 'Portal do Cliente',
+    items: [
+      { id: 'portal-usuarios', label: 'Usuários do portal', render: () => window.PortalAdmin.renderUsuarios() },
+      { id: 'portal-cobranca', label: 'Cobrança',           render: () => window.PortalAdmin.renderCobranca() },
+    ],
+  },
 ];
 
 /* Flat map de id â†’ item para lookup rápido */
@@ -9381,6 +9399,595 @@ function mountCleanupCountdown() {
   // Fetch inicial
   _fetchStatus();
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   PORTAL DO CLIENTE — admin (Missão 009)
+   IIFE namespaced. Não vaza funções no escopo global; reaproveita helpers
+   existentes (api, toast, openModal/closeModal, escapeHtml, icon, fmtBRL,
+   fmtDate, fmtRelative). Renderiza duas seções:
+     • PortalAdmin.renderUsuarios()  → gestão de usuários do portal
+     • PortalAdmin.renderCobranca()  → cobrança/vencimento por fluxo
+   Consome endpoints prontos do backend (server.js ~5163):
+     GET/POST /api/portal-users · PATCH /api/portal-users/:id
+     GET /api/billing · PUT /api/billing/:slot
+   ══════════════════════════════════════════════════════════════════ */
+window.PortalAdmin = (() => {
+  'use strict';
+
+  /* ---------- util locais (sem poluir escopo global) ---------- */
+
+  // Busca clones para popular selects de slot. Normaliza array/obj.
+  async function _fetchClones() {
+    const c = await api('/api/clones');
+    return Array.isArray(c) ? c : (c.data || c.clones || []);
+  }
+
+  // Mapa slot -> display_name (para rotular tabelas pelo nome do cliente).
+  let _cloneLabelCache = null;
+  async function _cloneLabels() {
+    if (_cloneLabelCache) return _cloneLabelCache;
+    const map = {};
+    try {
+      const arr = await _fetchClones();
+      arr.forEach(c => { if (c.slot) map[c.slot] = c.display_name || c.slot; });
+    } catch (_) { /* fallback: usa o próprio slot como label */ }
+    _cloneLabelCache = map;
+    return map;
+  }
+
+  function _skeleton(h = 220) {
+    return `<div class="skeleton-block" style="height:${h}px"></div>`;
+  }
+
+  function _errorBlock(msg, retryFn) {
+    const id = 'pa-retry-' + Math.random().toString(36).slice(2);
+    setTimeout(() => {
+      const b = document.getElementById(id);
+      if (b && typeof retryFn === 'function') b.addEventListener('click', retryFn);
+    }, 0);
+    return `<div class="card"><p class="muted">${icon('alert-triangle', 14)} ${escapeHtml(msg)}</p>
+      <button class="btn btn--sm" id="${id}" style="margin-top:.75rem">${icon('refresh-cw', 14)} Tentar novamente</button></div>`;
+  }
+
+  function _emptyState(title, text, iconName = 'inbox') {
+    return `<div class="empty-state">
+      <div class="empty-state__icon">${icon(iconName, 40)}</div>
+      <div class="empty-state__title">${escapeHtml(title)}</div>
+      <div class="empty-state__text">${escapeHtml(text)}</div>
+    </div>`;
+  }
+
+  // Modal genérico com header + corpo. Reusa openModal/closeModal globais.
+  function _modal(title, bodyHtml) {
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">${escapeHtml(title)}</span>
+        <button class="btn btn--ghost btn--sm btn--icon" aria-label="Fechar" id="pa-modal-close">&#x2715;</button>
+      </div>
+      <div id="pa-modal-body">${bodyHtml}</div>`);
+    const c = document.getElementById('pa-modal-close');
+    if (c) c.addEventListener('click', closeModal);
+  }
+
+  // Modal de "senha gerada — copie agora" (exibida UMA vez).
+  function _showGeneratedPassword(username, password) {
+    _modal('Senha gerada', `
+      <p class="muted" style="font-size:.875rem;margin-bottom:.75rem">
+        Senha do usuário <strong>${escapeHtml(username)}</strong>. ${icon('alert-triangle', 13)}
+        <strong>Copie agora</strong> — ela não será exibida novamente.
+      </p>
+      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:1rem">
+        <input type="text" id="pa-genpass" readonly value="${escapeHtml(password)}"
+               class="mono" style="font-family:var(--font-mono)" aria-label="Senha gerada" />
+        <button class="btn btn--primary btn--sm" id="pa-genpass-copy" style="white-space:nowrap">
+          ${icon('copy', 13)} Copiar
+        </button>
+      </div>
+      <div style="text-align:right">
+        <button class="btn btn--sm" id="pa-genpass-done">Fechar</button>
+      </div>`);
+    const inp = document.getElementById('pa-genpass');
+    const copyBtn = document.getElementById('pa-genpass-copy');
+    const doneBtn = document.getElementById('pa-genpass-done');
+    if (copyBtn) copyBtn.addEventListener('click', async () => {
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(password);
+        else { inp.select(); document.execCommand('copy'); }
+        copyBtn.innerHTML = `${icon('check-circle-2', 13)} Copiado`;
+        toast('Senha copiada', 'success');
+      } catch (_) {
+        inp.select();
+        toast('Selecione e copie manualmente (Ctrl+C)', 'warning');
+      }
+    });
+    if (doneBtn) doneBtn.addEventListener('click', closeModal);
+    if (inp) { inp.focus(); inp.select(); }
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     SEÇÃO A — USUÁRIOS DO PORTAL
+     ════════════════════════════════════════════════════════════ */
+
+  async function renderUsuarios() {
+    const wrap = document.getElementById('portal-usuarios-content');
+    if (!wrap) return;
+    wrap.innerHTML = `
+      <div class="section-header">
+        <div class="section-header__left">
+          <h1 class="h1">Usuários do portal</h1>
+          <p class="muted">Acessos do Portal do Cliente (app.startap.tech) por fluxo</p>
+        </div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn--sm" id="pa-users-refresh" aria-label="Atualizar lista">${icon('refresh-cw', 13)} Atualizar</button>
+          <button class="btn btn--sm btn--primary" id="pa-users-new" aria-label="Criar usuário">${icon('plus', 13)} Novo usuário</button>
+        </div>
+      </div>
+      <div id="pa-users-table">${_skeleton()}</div>`;
+
+    document.getElementById('pa-users-refresh')?.addEventListener('click', renderUsuarios);
+    document.getElementById('pa-users-new')?.addEventListener('click', _openCreateUserModal);
+
+    const tableEl = document.getElementById('pa-users-table');
+    try {
+      const [resp, labels] = await Promise.all([api('/api/portal-users'), _cloneLabels()]);
+      const users = resp.users || [];
+      if (users.length === 0) {
+        tableEl.innerHTML = _emptyState('Nenhum usuário ainda',
+          'Crie o primeiro acesso do portal para um cliente.', 'users');
+        return;
+      }
+      tableEl.innerHTML = _renderUsersTable(users, labels);
+      _wireUserRowActions(tableEl);
+    } catch (err) {
+      tableEl.innerHTML = _errorBlock('Erro ao carregar usuários: ' + err.message, renderUsuarios);
+    }
+  }
+
+  function _renderUsersTable(users, labels) {
+    const rows = users.map(u => {
+      const cliente = labels[u.slot] || u.slot;
+      const statusBadge = u.active
+        ? `<span class="badge badge--success">Ativo</span>`
+        : `<span class="badge badge--muted">Inativo</span>`;
+      const mustChange = u.must_change_password
+        ? ` <span class="badge badge--warning" title="Precisa trocar a senha no próximo login">trocar senha</span>` : '';
+      const last = u.last_login_at ? fmtRelative(u.last_login_at) : '—';
+      const toggleLabel = u.active ? 'Desativar' : 'Ativar';
+      const toggleClass = u.active ? 'btn--ghost' : 'btn--success';
+      return `<tr>
+        <td>${escapeHtml(u.username)}${mustChange}</td>
+        <td>${escapeHtml(cliente)}<br><span class="muted mono" style="font-size:.75rem">${escapeHtml(u.slot)}</span></td>
+        <td>${statusBadge}</td>
+        <td title="${u.last_login_at ? escapeHtml(fmtDate(u.last_login_at)) : 'nunca'}">${escapeHtml(last)}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn btn--sm ${toggleClass}" data-act="toggle" data-id="${u.id}" data-active="${u.active}">${toggleLabel}</button>
+          <button class="btn btn--sm" data-act="reset" data-id="${u.id}" data-user="${escapeHtml(u.username)}">Resetar senha</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return `<div class="table-wrap"><table class="table">
+      <thead><tr>
+        <th>Usuário</th><th>Cliente / slot</th><th>Status</th><th>Último login</th><th style="text-align:right">Ações</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  }
+
+  function _wireUserRowActions(tableEl) {
+    tableEl.querySelectorAll('button[data-act="toggle"]').forEach(btn => {
+      btn.addEventListener('click', () => _toggleUser(Number(btn.dataset.id), btn.dataset.active === 'true'));
+    });
+    tableEl.querySelectorAll('button[data-act="reset"]').forEach(btn => {
+      btn.addEventListener('click', () => _resetUserPassword(Number(btn.dataset.id), btn.dataset.user));
+    });
+  }
+
+  async function _openCreateUserModal() {
+    _modal('Novo usuário do portal', `
+      <form id="pa-user-form" autocomplete="off">
+        <div class="field" style="margin-bottom:.875rem">
+          <label for="pa-uf-slot">Fluxo (cliente)</label>
+          <select id="pa-uf-slot" required><option value="">Carregando fluxos…</option></select>
+        </div>
+        <div class="field" style="margin-bottom:.875rem">
+          <label for="pa-uf-username">Usuário</label>
+          <input type="text" id="pa-uf-username" required minlength="3" maxlength="80"
+                 pattern="[a-zA-Z0-9._-]{3,80}" placeholder="ex: cirilo" autocomplete="off" />
+          <span class="field-hint">3–80 caracteres: letras, números, ponto, traço ou underline.</span>
+        </div>
+        <div class="field" style="margin-bottom:.875rem">
+          <label for="pa-uf-display">Nome de exibição (opcional)</label>
+          <input type="text" id="pa-uf-display" maxlength="120" placeholder="ex: Barbearia do Cirilo" />
+        </div>
+        <div class="field" style="margin-bottom:1rem">
+          <label for="pa-uf-pass">Senha (opcional)</label>
+          <input type="text" id="pa-uf-pass" minlength="8" maxlength="200"
+                 placeholder="deixe vazio para gerar automaticamente" autocomplete="new-password" />
+          <span class="field-hint">Se vazia, geramos uma senha e a mostramos uma única vez.</span>
+        </div>
+        <div id="pa-uf-error" class="muted" style="color:var(--danger);font-size:.8125rem;margin-bottom:.5rem;display:none"></div>
+        <div style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button type="button" class="btn btn--sm" id="pa-uf-cancel">Cancelar</button>
+          <button type="submit" class="btn btn--sm btn--primary" id="pa-uf-submit">Criar usuário</button>
+        </div>
+      </form>`);
+
+    // Popular select de slots.
+    const sel = document.getElementById('pa-uf-slot');
+    try {
+      const clones = await _fetchClones();
+      if (clones.length === 0) {
+        sel.innerHTML = '<option value="">Nenhum fluxo disponível</option>';
+      } else {
+        sel.innerHTML = '<option value="">Selecione um fluxo…</option>' +
+          clones.map(c => `<option value="${escapeHtml(c.slot)}">${escapeHtml(c.display_name || c.slot)} (${escapeHtml(c.slot)})</option>`).join('');
+      }
+    } catch (_) {
+      sel.innerHTML = '<option value="">Erro ao carregar fluxos</option>';
+    }
+
+    document.getElementById('pa-uf-cancel')?.addEventListener('click', closeModal);
+    document.getElementById('pa-user-form')?.addEventListener('submit', _submitCreateUser);
+  }
+
+  async function _submitCreateUser(ev) {
+    ev.preventDefault();
+    const errEl = document.getElementById('pa-uf-error');
+    const submitBtn = document.getElementById('pa-uf-submit');
+    const slot = document.getElementById('pa-uf-slot').value.trim();
+    const username = document.getElementById('pa-uf-username').value.trim();
+    const displayName = document.getElementById('pa-uf-display').value.trim();
+    const password = document.getElementById('pa-uf-pass').value;
+
+    errEl.style.display = 'none';
+    if (!slot) { errEl.textContent = 'Selecione o fluxo.'; errEl.style.display = 'block'; return; }
+    if (!/^[a-zA-Z0-9._-]{3,80}$/.test(username)) {
+      errEl.textContent = 'Usuário inválido (3–80 chars: letras, números, . _ -).'; errEl.style.display = 'block'; return;
+    }
+    if (password && password.length < 8) {
+      errEl.textContent = 'Senha deve ter ao menos 8 caracteres.'; errEl.style.display = 'block'; return;
+    }
+
+    const body = { slot, username };
+    if (displayName) body.display_name = displayName;
+    if (password) body.password = password;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Criando…';
+    try {
+      const resp = await api('/api/portal-users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      closeModal();
+      toast('Usuário criado', 'success');
+      if (resp.generated_password) {
+        _showGeneratedPassword(username, resp.generated_password);
+      }
+      renderUsuarios();
+    } catch (err) {
+      errEl.textContent = err.message || 'Erro ao criar usuário';
+      errEl.style.display = 'block';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Criar usuário';
+    }
+  }
+
+  async function _toggleUser(id, currentlyActive) {
+    const next = !currentlyActive;
+    try {
+      await api(`/api/portal-users/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: next }),
+      });
+      toast(next ? 'Usuário ativado' : 'Usuário desativado', 'success');
+      renderUsuarios();
+    } catch (err) {
+      toast('Erro: ' + err.message, 'danger');
+    }
+  }
+
+  async function _resetUserPassword(id, username) {
+    _modal('Resetar senha', `
+      <p class="muted" style="font-size:.875rem;margin-bottom:.875rem">
+        Resetar a senha de <strong>${escapeHtml(username)}</strong>. O usuário precisará trocá-la no próximo login.
+      </p>
+      <div class="field" style="margin-bottom:1rem">
+        <label for="pa-rp-pass">Nova senha (opcional)</label>
+        <input type="text" id="pa-rp-pass" minlength="8" maxlength="200"
+               placeholder="deixe vazio para gerar automaticamente" autocomplete="new-password" />
+        <span class="field-hint">Se vazia, geramos uma senha e a mostramos uma única vez.</span>
+      </div>
+      <div id="pa-rp-error" class="muted" style="color:var(--danger);font-size:.8125rem;margin-bottom:.5rem;display:none"></div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end">
+        <button type="button" class="btn btn--sm" id="pa-rp-cancel">Cancelar</button>
+        <button type="button" class="btn btn--sm btn--warning" id="pa-rp-submit">Resetar senha</button>
+      </div>`);
+    document.getElementById('pa-rp-cancel')?.addEventListener('click', closeModal);
+    document.getElementById('pa-rp-submit')?.addEventListener('click', async () => {
+      const errEl = document.getElementById('pa-rp-error');
+      const submitBtn = document.getElementById('pa-rp-submit');
+      const password = document.getElementById('pa-rp-pass').value;
+      errEl.style.display = 'none';
+      if (password && password.length < 8) {
+        errEl.textContent = 'Senha deve ter ao menos 8 caracteres.'; errEl.style.display = 'block'; return;
+      }
+      const body = password ? { password } : { reset_password: true };
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Resetando…';
+      try {
+        const resp = await api(`/api/portal-users/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        closeModal();
+        toast('Senha resetada', 'success');
+        if (resp.generated_password) _showGeneratedPassword(username, resp.generated_password);
+        renderUsuarios();
+      } catch (err) {
+        errEl.textContent = err.message || 'Erro ao resetar senha';
+        errEl.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Resetar senha';
+      }
+    });
+  }
+
+  /* ════════════════════════════════════════════════════════════
+     SEÇÃO B — COBRANÇA POR FLUXO
+     ════════════════════════════════════════════════════════════ */
+
+  // Calcula dias restantes até next_due_date (YYYY-MM-DD) em horário local.
+  function _daysUntil(dateStr) {
+    if (!dateStr) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const due = new Date(y, m - 1, d);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((due - today) / 86400000);
+  }
+
+  // Badge de vencimento conforme dias restantes / status.
+  function _dueBadge(dateStr, status) {
+    if (status === 'suspended') return `<span class="badge badge--muted">Suspenso</span>`;
+    const days = _daysUntil(dateStr);
+    if (days == null) return `<span class="badge badge--muted">Sem vencimento</span>`;
+    if (days < 0) return `<span class="badge badge--danger">Vencido há ${Math.abs(days)}d</span>`;
+    if (days === 0) return `<span class="badge badge--danger">Vence hoje</span>`;
+    if (days <= 5) return `<span class="badge badge--warning">Vence em ${days}d</span>`;
+    return `<span class="badge badge--success">Em dia (${days}d)</span>`;
+  }
+
+  function _fmtDueDate(dateStr) {
+    if (!dateStr) return '—';
+    const [y, m, d] = dateStr.split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  async function renderCobranca() {
+    const wrap = document.getElementById('portal-cobranca-content');
+    if (!wrap) return;
+    wrap.innerHTML = `
+      <div class="section-header">
+        <div class="section-header__left">
+          <h1 class="h1">Cobrança por fluxo</h1>
+          <p class="muted">Valor, vencimento e pagamentos de cada cliente</p>
+        </div>
+        <button class="btn btn--sm" id="pa-bill-refresh" aria-label="Atualizar">${icon('refresh-cw', 13)} Atualizar</button>
+      </div>
+      <div id="pa-bill-table">${_skeleton()}</div>`;
+    document.getElementById('pa-bill-refresh')?.addEventListener('click', renderCobranca);
+
+    const tableEl = document.getElementById('pa-bill-table');
+    try {
+      const [resp, clones, labels] = await Promise.all([api('/api/billing'), _fetchClones(), _cloneLabels()]);
+      const billing = resp.billing || [];
+      const billingBySlot = {};
+      billing.forEach(b => { billingBySlot[b.slot] = b; });
+      // Lista todos os fluxos; mostra os sem billing como "não configurado".
+      const slots = clones.map(c => c.slot).filter(Boolean);
+      // Inclui slots de billing que por acaso não estejam mais em clones (defensivo).
+      billing.forEach(b => { if (!slots.includes(b.slot)) slots.push(b.slot); });
+
+      if (slots.length === 0) {
+        tableEl.innerHTML = _emptyState('Nenhum fluxo',
+          'Sem fluxos cadastrados para cobrar.', 'file-text');
+        return;
+      }
+      tableEl.innerHTML = _renderBillingTable(slots, billingBySlot, labels);
+      _wireBillingRowActions(tableEl, billingBySlot, labels);
+    } catch (err) {
+      tableEl.innerHTML = _errorBlock('Erro ao carregar cobrança: ' + err.message, renderCobranca);
+    }
+  }
+
+  function _renderBillingTable(slots, billingBySlot, labels) {
+    const rows = slots.map(slot => {
+      const b = billingBySlot[slot] || null;
+      const cliente = labels[slot] || slot;
+      const valor = b && b.amount_cents != null ? fmtBRL(b.amount_cents / 100) : '—';
+      const venc = b ? _fmtDueDate(b.next_due_date) : '—';
+      const badge = b ? _dueBadge(b.next_due_date, b.status) : `<span class="badge badge--muted">Não configurado</span>`;
+      const lastPay = b && b.last_payment_at ? fmtRelative(b.last_payment_at) : '—';
+      return `<tr>
+        <td>${escapeHtml(cliente)}<br><span class="muted mono" style="font-size:.75rem">${escapeHtml(slot)}</span></td>
+        <td>${valor}</td>
+        <td>${venc}</td>
+        <td>${badge}</td>
+        <td title="${b && b.last_payment_at ? escapeHtml(fmtDate(b.last_payment_at)) : 'sem pagamentos'}">${escapeHtml(lastPay)}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn btn--sm btn--success" data-act="pay" data-slot="${escapeHtml(slot)}">${icon('check-circle-2', 13)} Pagamento</button>
+          <button class="btn btn--sm" data-act="edit" data-slot="${escapeHtml(slot)}">Editar</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return `<div class="table-wrap"><table class="table">
+      <thead><tr>
+        <th>Cliente / slot</th><th>Valor</th><th>Vencimento</th><th>Situação</th><th>Último pagamento</th><th style="text-align:right">Ações</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+  }
+
+  function _wireBillingRowActions(tableEl, billingBySlot, labels) {
+    tableEl.querySelectorAll('button[data-act="pay"]').forEach(btn => {
+      btn.addEventListener('click', () => _openRegisterPayment(btn.dataset.slot, billingBySlot[btn.dataset.slot], labels));
+    });
+    tableEl.querySelectorAll('button[data-act="edit"]').forEach(btn => {
+      btn.addEventListener('click', () => _openEditBilling(btn.dataset.slot, billingBySlot[btn.dataset.slot], labels));
+    });
+  }
+
+  function _openRegisterPayment(slot, billing, labels) {
+    const cliente = (labels && labels[slot]) || slot;
+    const curAmount = billing && billing.amount_cents != null ? (billing.amount_cents / 100).toFixed(2) : '';
+    const curVenc = billing ? _fmtDueDate(billing.next_due_date) : '—';
+    _modal('Registrar pagamento', `
+      <p class="muted" style="font-size:.875rem;margin-bottom:.875rem">
+        Cliente <strong>${escapeHtml(cliente)}</strong> (<span class="mono">${escapeHtml(slot)}</span>).
+        Vencimento atual: <strong>${escapeHtml(curVenc)}</strong>. O registro avança o vencimento e marca como ativo.
+      </p>
+      <div class="field" style="margin-bottom:.875rem">
+        <label for="pa-pay-cycle">Avançar quantos meses</label>
+        <input type="number" id="pa-pay-cycle" min="1" max="36" step="1" value="1" />
+        <span class="field-hint">Padrão: 1 mês, preservando o dia do vencimento.</span>
+      </div>
+      <div class="field" style="margin-bottom:.875rem">
+        <label for="pa-pay-amount">Valor cobrado (R$, opcional)</label>
+        <input type="number" id="pa-pay-amount" min="0" step="0.01" placeholder="${curAmount || 'ex: 99.90'}" value="${curAmount}" />
+        <span class="field-hint">Atualiza o valor mensal do fluxo. Vazio mantém o atual.</span>
+      </div>
+      <div class="field" style="margin-bottom:1rem">
+        <label for="pa-pay-notes">Notas (opcional)</label>
+        <input type="text" id="pa-pay-notes" maxlength="500" placeholder="ex: PIX recebido" />
+      </div>
+      <div id="pa-pay-error" class="muted" style="color:var(--danger);font-size:.8125rem;margin-bottom:.5rem;display:none"></div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end">
+        <button type="button" class="btn btn--sm" id="pa-pay-cancel">Cancelar</button>
+        <button type="button" class="btn btn--sm btn--success" id="pa-pay-submit">${icon('check-circle-2', 13)} Confirmar pagamento</button>
+      </div>`);
+    document.getElementById('pa-pay-cancel')?.addEventListener('click', closeModal);
+    document.getElementById('pa-pay-submit')?.addEventListener('click', async () => {
+      const errEl = document.getElementById('pa-pay-error');
+      const submitBtn = document.getElementById('pa-pay-submit');
+      errEl.style.display = 'none';
+      const cycle = parseInt(document.getElementById('pa-pay-cycle').value, 10);
+      if (!Number.isInteger(cycle) || cycle < 1 || cycle > 36) {
+        errEl.textContent = 'Meses deve ser inteiro entre 1 e 36.'; errEl.style.display = 'block'; return;
+      }
+      const body = { register_payment: true, cycle_months: cycle };
+      const amountRaw = document.getElementById('pa-pay-amount').value;
+      if (amountRaw !== '') {
+        const amt = Number(amountRaw);
+        if (isNaN(amt) || amt < 0) { errEl.textContent = 'Valor inválido.'; errEl.style.display = 'block'; return; }
+        body.amount_cents = Math.round(amt * 100);
+      }
+      const notes = document.getElementById('pa-pay-notes').value.trim();
+      if (notes) body.notes = notes;
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Registrando…';
+      try {
+        await api(`/api/billing/${encodeURIComponent(slot)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        closeModal();
+        toast('Pagamento registrado', 'success');
+        renderCobranca();
+      } catch (err) {
+        errEl.textContent = err.message || 'Erro ao registrar pagamento';
+        errEl.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Confirmar pagamento';
+      }
+    });
+  }
+
+  function _openEditBilling(slot, billing, labels) {
+    const cliente = (labels && labels[slot]) || slot;
+    const curAmount = billing && billing.amount_cents != null ? (billing.amount_cents / 100).toFixed(2) : '';
+    const curDue = billing && billing.next_due_date ? billing.next_due_date : '';
+    const curStatus = billing && billing.status ? billing.status : 'active';
+    const curNotes = billing && billing.notes ? billing.notes : '';
+    const opt = (v, label) => `<option value="${v}"${curStatus === v ? ' selected' : ''}>${label}</option>`;
+    _modal('Editar cobrança', `
+      <p class="muted" style="font-size:.875rem;margin-bottom:.875rem">
+        Cliente <strong>${escapeHtml(cliente)}</strong> (<span class="mono">${escapeHtml(slot)}</span>).
+      </p>
+      <div class="field" style="margin-bottom:.875rem">
+        <label for="pa-eb-amount">Valor mensal (R$)</label>
+        <input type="number" id="pa-eb-amount" min="0" step="0.01" value="${curAmount}" placeholder="ex: 99.90" />
+      </div>
+      <div class="field" style="margin-bottom:.875rem">
+        <label for="pa-eb-due">Próximo vencimento</label>
+        <input type="date" id="pa-eb-due" value="${escapeHtml(curDue)}" />
+      </div>
+      <div class="field" style="margin-bottom:.875rem">
+        <label for="pa-eb-status">Status</label>
+        <select id="pa-eb-status">
+          ${opt('active', 'Ativo')}${opt('overdue', 'Vencido')}${opt('suspended', 'Suspenso')}
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:1rem">
+        <label for="pa-eb-notes">Notas (opcional)</label>
+        <input type="text" id="pa-eb-notes" maxlength="500" value="${escapeHtml(curNotes)}" />
+      </div>
+      <div id="pa-eb-error" class="muted" style="color:var(--danger);font-size:.8125rem;margin-bottom:.5rem;display:none"></div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end">
+        <button type="button" class="btn btn--sm" id="pa-eb-cancel">Cancelar</button>
+        <button type="button" class="btn btn--sm btn--primary" id="pa-eb-submit">Salvar</button>
+      </div>`);
+    document.getElementById('pa-eb-cancel')?.addEventListener('click', closeModal);
+    document.getElementById('pa-eb-submit')?.addEventListener('click', async () => {
+      const errEl = document.getElementById('pa-eb-error');
+      const submitBtn = document.getElementById('pa-eb-submit');
+      errEl.style.display = 'none';
+      const body = {};
+      const amountRaw = document.getElementById('pa-eb-amount').value;
+      if (amountRaw !== '') {
+        const amt = Number(amountRaw);
+        if (isNaN(amt) || amt < 0) { errEl.textContent = 'Valor inválido.'; errEl.style.display = 'block'; return; }
+        body.amount_cents = Math.round(amt * 100);
+      }
+      const due = document.getElementById('pa-eb-due').value;
+      if (due) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { errEl.textContent = 'Data inválida.'; errEl.style.display = 'block'; return; }
+        body.next_due_date = due;
+      }
+      body.status = document.getElementById('pa-eb-status').value;
+      const notes = document.getElementById('pa-eb-notes').value.trim();
+      body.notes = notes;
+
+      if (Object.keys(body).length === 0) { errEl.textContent = 'Nada para salvar.'; errEl.style.display = 'block'; return; }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Salvando…';
+      try {
+        await api(`/api/billing/${encodeURIComponent(slot)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        closeModal();
+        toast('Cobrança atualizada', 'success');
+        renderCobranca();
+      } catch (err) {
+        errEl.textContent = err.message || 'Erro ao salvar';
+        errEl.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Salvar';
+      }
+    });
+  }
+
+  return { renderUsuarios, renderCobranca };
+})();
 
 /* ══════════════════════════════════════════════════════════════════
    BOOTSTRAP
