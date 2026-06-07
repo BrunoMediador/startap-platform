@@ -3,6 +3,7 @@
  * SEM botao de reativar — so o Bruno reativa (regra de negocio). Sem dark pattern.
  */
 import { IconAlert } from '@/components/icons';
+import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 
 export function SuspendedNotice() {
   return (
@@ -17,7 +18,7 @@ export function SuspendedNotice() {
           pela nossa equipe.
         </p>
         <a
-          href="https://wa.me/5500000000000"
+          href={SUPORTE_WHATSAPP_URL}
           className="mt-2 inline-block font-display text-[13px] font-semibold text-brand outline-none focus-visible:underline"
         >
           Falar com o suporte

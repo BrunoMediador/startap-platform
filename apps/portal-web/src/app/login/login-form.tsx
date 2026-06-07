@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { LoginErrorBody, LoginResponse } from '@/lib/api-types';
+import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 /**
  * Login (spec 7 / direcao-1-cadencia.html). Painel roxo solido com hero + card
  * branco. POST /auth/login -> cookie httpOnly de sessao (setado pela API). Trata:
@@ -132,7 +133,7 @@ export function LoginForm() {
           <p className="mt-3.5 text-center text-[13px] text-ink-soft">
             Esqueceu a senha?{' '}
             <a
-              href="https://wa.me/5500000000000"
+              href={SUPORTE_WHATSAPP_URL}
               className="font-semibold text-brand outline-none focus-visible:underline"
             >
               Falar com o suporte
