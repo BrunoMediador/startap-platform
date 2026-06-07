@@ -24,11 +24,20 @@ export function BottomNav() {
             href={href}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex min-h-11 flex-1 flex-col items-center justify-center gap-1 py-1 text-[10.5px] font-semibold outline-none focus-visible:rounded-card-sm focus-visible:ring-2 focus-visible:ring-brand',
-              active ? 'text-brand' : 'text-ink-faint',
+              // Bottom nav (spec 1.A.8): ativo = roxo + bloco brand-soft atras do
+              // icone; inativo "acende" no toque (active:bg-surface-hover).
+              'group flex min-h-11 flex-1 flex-col items-center justify-center gap-1 py-1 text-[10.5px] font-semibold outline-none transition-colors focus-visible:rounded-card-sm focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset',
+              active ? 'text-brand' : 'text-ink-faint active:text-ink-soft',
             )}
           >
-            <Icon size={22} />
+            <span
+              className={cn(
+                'flex items-center justify-center rounded-[10px] px-3 py-0.5 transition-colors',
+                active ? 'bg-brand-soft' : 'group-active:bg-surface-hover',
+              )}
+            >
+              <Icon size={22} />
+            </span>
             {label}
           </Link>
         );
