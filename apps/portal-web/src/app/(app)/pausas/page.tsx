@@ -8,26 +8,37 @@ import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import type { PausaRow, RecentContact } from '@/lib/api-types';
-import { formatPausadoHa, initials, maskPhoneDisplay } from '@/lib/format';
-import { useAddPausa, usePausas, useRemovePausa } from '@/lib/queries';
+import { formatPausadoHa, formatPhoneDisplay, initials, normalizePhone } from '@/lib/format';
+import { useAddPausa, useContatos, usePausas, useRemovePausa } from '@/lib/queries';
 /**
  * Pausas (spec 6.9/6.10 + 3.5). Lista de pausados + "Pausar um número" (abre
  * sheet de contatos recentes, SEM digitacao livre). Pausar E despausar SEMPRE com
  * CONFIRMACAO explicita (D5 — efeito real no atendimento). Nao otimista: chama,
  * confirma com toast, a lista revalida via invalidateQueries.
+ *
+ * Feedback de uso real (Bruno): o dono precisa RECONHECER quem esta pausado, entao:
+ *  - mostra NOME + numero COMPLETO formatado (sem mascara — o dono ve os proprios
+ *    clientes; mascarar e regra de LOG no backend, nao de tela);
+ *  - junta /portal/pausas (so telefone) com /portal/contatos (telefone + nome) por
+ *    telefone normalizado pra exibir o nome tambem nos pausados;
+ *  - o sheet de contatos esconde quem ja esta pausado.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ContactSheet } from './contact-sheet';
 
-/** Nome amigavel de uma pausa (reason pode trazer contexto; senao usa o numero). */
-function nomePausa(p: PausaRow): string {
-  return maskPhoneDisplay(p.telefone);
+/** Nome amigavel de um contato/pausa, com fallback. */
+function displayName(name: string | null | undefined): string {
+  const trimmed = name?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : 'Contato';
 }
 
 export default function PausasPage() {
   const { slot } = useTenant();
   const toast = useToast();
   const pausasQ = usePausas(slot);
+  // Contatos sempre habilitado nesta tela: precisamos do mapa telefone->nome
+  // pra exibir o nome nos pausados (join client-side) e pra abrir o sheet.
+  const contatosQ = useContatos(slot, true);
   const addPausa = useAddPausa(slot);
   const removePausa = useRemovePausa(slot);
 
@@ -38,6 +49,29 @@ export default function PausasPage() {
   const [despausando, setDespausando] = useState<PausaRow | null>(null);
 
   const pausas = pausasQ.data?.pausas ?? [];
+  const contatos = useMemo(() => contatosQ.data?.contacts ?? [], [contatosQ.data]);
+
+  // Mapa telefone-normalizado -> nome do contato (join pra nomear os pausados).
+  const nomePorTelefone = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of contatos) {
+      const key = normalizePhone(c.phone);
+      const nome = c.name?.trim();
+      if (key && nome) map.set(key, nome);
+    }
+    return map;
+  }, [contatos]);
+
+  // Conjunto de telefones ja pausados (normalizados) — filtra o sheet (item 4).
+  const pausadosSet = useMemo(
+    () => new Set(pausas.map((p) => normalizePhone(p.telefone))),
+    [pausas],
+  );
+
+  /** Nome a exibir pra um pausado: do join (se houver) ou null (mostra so o numero). */
+  function nomePausado(p: PausaRow): string | null {
+    return nomePorTelefone.get(normalizePhone(p.telefone)) ?? null;
+  }
 
   function onSelectContato(c: RecentContact) {
     setSheetOpen(false);
@@ -50,7 +84,7 @@ export default function PausasPage() {
     addPausa.mutate(c.phone, {
       onSuccess: () => {
         setPausando(null);
-        toast.success(`${c.name ?? 'Contato'} pausado`);
+        toast.success(`${displayName(c.name)} pausado`);
       },
       onError: () => {
         setPausando(null);
@@ -62,10 +96,11 @@ export default function PausasPage() {
   function confirmDespausar() {
     const p = despausando;
     if (!p) return;
+    const rotulo = nomePausado(p) ?? formatPhoneDisplay(p.telefone);
     removePausa.mutate(p.telefone, {
       onSuccess: () => {
         setDespausando(null);
-        toast.success(`${nomePausa(p)} despausado`);
+        toast.success(`${rotulo} despausado`);
       },
       onError: () => {
         setDespausando(null);
@@ -73,6 +108,8 @@ export default function PausasPage() {
       },
     });
   }
+
+  const despausandoNome = despausando ? nomePausado(despausando) : null;
 
   return (
     <>
@@ -98,37 +135,54 @@ export default function PausasPage() {
       ) : (
         <>
           <div className="mb-3.5 overflow-hidden rounded-card border border-line bg-surface">
-            {pausas.map((p) => (
-              <div
-                key={p.telefone}
-                className="flex min-h-16 items-center gap-3.5 border-b border-line px-[15px] py-3.5 last:border-b-0"
-              >
-                <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-warn-bg text-warn">
-                  <IconPause size={20} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="font-display text-[15px] font-semibold text-ink">
-                    {nomePausa(p)}
-                  </div>
-                  <div className="mt-0.5 text-[12.5px] text-ink-soft">
-                    {formatPausadoHa(p.updated_at)}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDespausando(p)}
-                  className="h-10 shrink-0 rounded-[11px] border border-line bg-surface px-4 font-display text-[13.5px] font-semibold text-brand outline-none transition-colors hover:border-transparent hover:bg-brand-50 focus-visible:ring-2 focus-visible:ring-brand"
+            {pausas.map((p) => {
+              const nome = nomePausado(p);
+              const numero = formatPhoneDisplay(p.telefone);
+              return (
+                <div
+                  key={p.telefone}
+                  className="group flex min-h-16 items-center gap-3.5 border-b border-line-soft px-[15px] py-3.5 transition-colors last:border-b-0 hover:bg-surface-hover"
                 >
-                  Despausar
-                </button>
-              </div>
-            ))}
+                  <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-warn-soft font-display text-[14px] font-bold text-warn">
+                    {nome ? initials(nome) : <IconPause size={20} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {nome ? (
+                      <>
+                        <div className="truncate font-display text-[15px] font-semibold text-ink">
+                          {nome}
+                        </div>
+                        <div className="mt-0.5 text-[12.5px] tabular-nums text-ink-soft">
+                          {numero} · {formatPausadoHa(p.updated_at)}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="truncate font-display text-[15px] font-semibold tabular-nums text-ink">
+                          {numero}
+                        </div>
+                        <div className="mt-0.5 text-[12.5px] text-ink-soft">
+                          {formatPausadoHa(p.updated_at)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDespausando(p)}
+                    className="h-10 shrink-0 rounded-[11px] border border-line-strong bg-surface px-4 font-display text-[13.5px] font-semibold text-brand outline-none transition-colors hover:bg-surface-elev-hover hover:border-line-strong focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                  >
+                    Despausar
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           <button
             type="button"
             onClick={() => setSheetOpen(true)}
-            className="flex h-[52px] w-full items-center justify-center gap-2.5 rounded-card bg-brand font-display text-[15px] font-semibold text-white outline-none transition-[transform,background-color] duration-[120ms] hover:bg-brand-700 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+            className="flex h-[52px] w-full items-center justify-center gap-2.5 rounded-card bg-brand font-display text-[15px] font-semibold text-bg outline-none transition-[transform,background-color] duration-[120ms] hover:bg-brand-600 active:scale-[0.98] active:bg-brand-700 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
             <IconPause size={20} />
             Pausar um número
@@ -139,6 +193,7 @@ export default function PausasPage() {
       <ContactSheet
         open={sheetOpen}
         slot={slot}
+        pausadosSet={pausadosSet}
         onClose={() => setSheetOpen(false)}
         onSelect={onSelectContato}
       />
@@ -146,7 +201,7 @@ export default function PausasPage() {
       <ConfirmDialog
         open={pausando !== null}
         icon={<IconPause size={24} />}
-        title={`Pausar atendimento de ${pausando?.name ?? 'esse contato'}?`}
+        title={`Pausar atendimento de ${pausando ? displayName(pausando.name) : 'esse contato'}?`}
         description="O robô vai parar de responder esse contato até você despausar."
         confirmLabel="Pausar"
         loading={addPausa.isPending}
@@ -157,7 +212,10 @@ export default function PausasPage() {
       <ConfirmDialog
         open={despausando !== null}
         icon={<IconPlay size={24} />}
-        title={`Voltar a atender ${despausando ? nomePausa(despausando) : 'esse contato'}?`}
+        title={`Voltar a atender ${
+          despausandoNome ??
+          (despausando ? formatPhoneDisplay(despausando.telefone) : 'esse contato')
+        }?`}
         description="O robô vai responder esse contato normalmente de novo."
         confirmLabel="Despausar"
         loading={removePausa.isPending}

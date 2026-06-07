@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatDuracao,
+  formatPhoneDisplay,
   formatPrecoCents,
   initials,
-  maskPhoneDisplay,
+  normalizePhone,
   parsePrecoToCents,
 } from './format';
 
@@ -46,18 +47,31 @@ describe('initials', () => {
   });
 });
 
-describe('maskPhoneDisplay (LGPD na UI)', () => {
-  it('mascara o meio, mantem DDD e 2 ultimos digitos', () => {
-    const masked = maskPhoneDisplay('5511999990042');
-    expect(masked).toContain('(11)');
-    expect(masked).toContain('42');
-    expect(masked).toContain('•');
-    // nunca expoe a sequencia inteira
-    expect(masked).not.toContain('99999');
+describe('formatPhoneDisplay (numero COMPLETO pro dono — sem mascara)', () => {
+  it('celular BR com DDI -> +55 (DD) 9XXXX-XXXX, numero inteiro visivel', () => {
+    const out = formatPhoneDisplay('5535991153270');
+    expect(out).toBe('+55 (35) 99115-3270');
+    // nunca esconde digitos: o dono ve o numero completo do proprio cliente
+    expect(out).not.toContain('•');
   });
-  it('lida com numero sem DDI', () => {
-    const masked = maskPhoneDisplay('11999990007');
-    expect(masked).toContain('(11)');
-    expect(masked).toContain('07');
+  it('celular BR sem DDI -> (DD) 9XXXX-XXXX', () => {
+    expect(formatPhoneDisplay('11999990007')).toBe('(11) 99999-0007');
+  });
+  it('fixo BR (10 digitos) -> (DD) XXXX-XXXX', () => {
+    expect(formatPhoneDisplay('1133224455')).toBe('(11) 3322-4455');
+  });
+  it('aceita entrada ja formatada e devolve formato canonico', () => {
+    expect(formatPhoneDisplay('+55 (35) 99115-3270')).toBe('+55 (35) 99115-3270');
+  });
+});
+
+describe('normalizePhone (join contatos x pausas)', () => {
+  it('tira DDI 55 e qualquer formatacao', () => {
+    expect(normalizePhone('+55 (35) 99115-3270')).toBe('35991153270');
+    expect(normalizePhone('5535991153270')).toBe('35991153270');
+    expect(normalizePhone('35991153270')).toBe('35991153270');
+  });
+  it('numeros equivalentes (com/sem DDI) normalizam igual', () => {
+    expect(normalizePhone('5511999990007')).toBe(normalizePhone('11999990007'));
   });
 });
