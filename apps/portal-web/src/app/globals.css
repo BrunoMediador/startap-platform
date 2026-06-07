@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Design tokens — Portal "Cadencia" + acento ambar
+   Fonte unica de verdade: docs/design/portal-cliente/design-spec-cadencia.md secao 1.
+   Tailwind v4 @theme (config CSS-first). Cada token vira utilitario:
+   bg-brand, text-ink-soft, rounded-card, shadow-card, font-display, etc.
+   ============================================================ */
+@theme {
+  /* --- Cores: Marca (roxo SOLIDO) --- */
+  --color-brand: #6431d6;
+  --color-brand-700: #4e22b0;
+  --color-brand-600: #6431d6;
+  --color-brand-50: #efeafb;
+
+  /* --- Ambar (acento RESTRITO: vencimento <=5d, badge editorial, agora) --- */
+  --color-amber: #b5751f;
+  --color-amber-700: #90550f;
+  --color-amber-bg: #f6e7ce;
+
+  /* --- Tinta (texto) --- */
+  --color-ink: #1a1530;
+  --color-ink-soft: #6b6485;
+  --color-ink-faint: #9a93b0;
+
+  /* --- Superficies --- */
+  --color-bg: #f4f2fb;
+  --color-surface: #ffffff;
+  --color-line: #e7e3f2;
+
+  /* --- Sucesso (verde-escuro AA) --- */
+  --color-ok: #18794e;
+  --color-ok-bg: #ddf3e7;
+
+  /* --- Aviso (pausado/atencao) --- */
+  --color-warn: #8a5300;
+  --color-warn-bg: #fbefd6;
+
+  /* --- Erro/destrutivo --- */
+  --color-danger: #c2261b;
+  --color-danger-700: #9e1a12;
+  --color-danger-bg: #fce6e4;
+
+  /* --- Tipografia (Sora display / Inter body, via next/font) --- */
+  --font-display: var(--font-sora), "Sora", system-ui, sans-serif;
+  --font-sans: var(--font-inter), "Inter", system-ui, sans-serif;
+
+  /* --- Raios --- */
+  --radius-card: 18px;
+  --radius-card-sm: 12px;
+  --radius-btn: 13px;
+  --radius-field: 12px;
+  --radius-pill: 999px;
+
+  /* --- Sombras --- */
+  --shadow-card: 0 4px 18px rgba(40, 20, 90, 0.05);
+  --shadow-raised: 0 12px 40px rgba(40, 20, 90, 0.16);
+  --shadow-login: 0 18px 40px rgba(30, 10, 70, 0.28);
+  --shadow-focus: 0 0 0 4px #efeafb;
+
+  /* --- Motion --- */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Duracoes nomeadas (spec 1.8) — usadas em transition-[duration] inline-token. */
+:root {
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 300ms;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Anel concentrico do status ativo (spec 6.4). */
+@keyframes ring {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+/* Shimmer do skeleton (spec 6.14). */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-ring::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--color-ok);
+  opacity: 0.4;
+  animation: ring 2.4s ease-out infinite;
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(231, 227, 242, 0.6) 25%,
+    rgba(231, 227, 242, 0.25) 37%,
+    rgba(231, 227, 242, 0.6) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+
+/* Spinner do botao loading. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.animate-spin-token {
+  animation: spin 0.7s linear infinite;
+}
+
+/* Entrada de sheet (sobe de baixo) e modal (fade+scale) — spec 4. */
+@keyframes sheetIn {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* Entrada de linha (add servico): fade+slide curto. */
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* prefers-reduced-motion: corta pulse/shimmer/spin e instantaneiza transicoes (spec 1.8 + 5). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

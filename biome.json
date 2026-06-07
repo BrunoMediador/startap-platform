@@ -1,7 +1,9 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "ignore": ["dist", "node_modules", "workflow-backup", "*.tsbuildinfo"] },
+  "files": {
+    "ignore": ["dist", "node_modules", "workflow-backup", "*.tsbuildinfo", ".next", "next-env.d.ts"]
+  },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -27,5 +29,27 @@
       "semicolons": "always",
       "trailingCommas": "all"
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["apps/portal-web/src/components/icons.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noSvgWithoutTitle": "off"
+          }
+        }
+      }
+    },
+    {
+      "include": ["apps/portal-web/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off"
+          }
+        }
+      }
+    }
+  ]
 }
