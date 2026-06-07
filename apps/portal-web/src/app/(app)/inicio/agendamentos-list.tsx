@@ -40,7 +40,7 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
             idx === 0 && 'border-l-[3px] border-l-amber',
           )}
         >
-          <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] bg-brand-50 font-display text-[13px] font-bold text-brand">
+          <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] bg-brand-soft font-display text-[13px] font-bold text-brand">
             {initials(ag.titulo)}
           </span>
           <div className="min-w-0 flex-1">

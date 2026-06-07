@@ -41,10 +41,10 @@ const COPY: Record<BotState, { title: string; sub: string }> = {
 function Pulse({ state }: { state: BotState }) {
   const tone =
     state === 'ativo'
-      ? { bg: 'bg-ok-bg', core: 'bg-ok' }
+      ? { bg: 'bg-ok-soft', core: 'bg-ok' }
       : state === 'pausado'
-        ? { bg: 'bg-warn-bg', core: 'bg-warn' }
-        : { bg: 'bg-danger-bg', core: 'bg-danger' };
+        ? { bg: 'bg-warn-soft', core: 'bg-warn' }
+        : { bg: 'bg-danger-soft', core: 'bg-danger' };
   return (
     <span
       className={cn(
@@ -93,7 +93,7 @@ export function StatusHero({
           aria-label="Atualizar status"
           onClick={onRefresh}
           disabled={refreshing}
-          className="flex size-11 items-center justify-center rounded-card-sm border border-line text-ink-soft outline-none transition-colors hover:bg-brand-50 hover:text-brand focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-60"
+          className="flex size-11 items-center justify-center rounded-card-sm border border-line-strong bg-surface-sunken text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-60"
         >
           <IconRefresh size={18} className={refreshing ? 'animate-spin-token' : undefined} />
         </button>

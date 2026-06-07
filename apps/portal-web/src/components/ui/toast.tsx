@@ -3,9 +3,10 @@
 import { IconCheck } from '@/components/icons';
 import { cn } from '@/lib/cn';
 /**
- * Toast (spec 6.12). Sucesso = bg-ink role=status; erro = bg-danger role=alert,
- * com acao opcional "Tentar de novo". Posicao: inferior acima da bottom nav
- * (mobile) / canto inferior direito (desktop). Sucesso 2.5s, erro 4s.
+ * Toast (spec 6.12 / 1.A.8). Sucesso = surface-elev role=status; erro =
+ * danger-fill role=alert, com acao opcional "Tentar de novo". Posicao: inferior
+ * acima da bottom nav (mobile) / canto inferior direito (desktop). Sucesso 2.5s,
+ * erro 4s.
  *
  * Implementacao propria (zero dependencia runtime) via context + portal simples.
  */
@@ -66,13 +67,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             role={t.kind === 'success' ? 'status' : 'alert'}
             className={cn(
-              'pointer-events-auto flex w-full max-w-[360px] items-center gap-2.5 rounded-card-sm px-4 py-3 text-[14px] font-medium text-white shadow-raised',
-              t.kind === 'success' ? 'bg-ink' : 'bg-danger',
+              // Escuro (spec 6.12 / 1.A.8): sucesso = surface-elev + tinta clara;
+              // erro = vermelho solido (danger-fill) + texto branco AA.
+              'pointer-events-auto flex w-full max-w-[360px] items-center gap-2.5 rounded-card-sm border px-4 py-3 text-[14px] font-medium shadow-elev',
+              t.kind === 'success'
+                ? 'border-line-strong bg-surface-elev text-ink'
+                : 'border-transparent bg-danger-fill text-white',
             )}
           >
             {t.kind === 'success' && (
-              <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ok">
-                <IconCheck size={12} className="text-white" />
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-ok-soft">
+                <IconCheck size={12} className="text-ok" />
               </span>
             )}
             <span className="flex-1">{t.message}</span>

@@ -43,9 +43,12 @@ export const Input = forwardRef<HTMLInputElement, FieldProps>(function Input(
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errId : undefined}
           className={cn(
-            'h-[50px] w-full rounded-field border-[1.5px] border-line bg-surface px-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint',
-            'focus:border-brand focus:shadow-focus',
-            'disabled:cursor-not-allowed disabled:bg-bg disabled:text-ink-faint',
+            // Escuro (spec 1.A.3): input "afundado" (surface-sunken) + borda visivel,
+            // hover realca a borda, foco com ring 3px brand + glow.
+            'h-[50px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint',
+            'hover:border-[#534b70]',
+            'focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus',
+            'disabled:cursor-not-allowed disabled:bg-bg disabled:text-ink-faint disabled:border-line',
             prefix && 'pl-[34px]',
             suffix && 'pr-12',
             error && 'border-danger',

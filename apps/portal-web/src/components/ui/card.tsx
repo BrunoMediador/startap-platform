@@ -12,7 +12,8 @@ export function Card({ className, padded = true, children, ...props }: CardProps
   return (
     <div
       className={cn(
-        'rounded-card border border-line bg-surface shadow-card',
+        // Escuro (spec 1.A.6): elevacao por tom+borda, sem sombra.
+        'rounded-card border border-line bg-surface',
         padded && 'p-5',
         className,
       )}
@@ -44,13 +45,14 @@ export function MetricCard({
   const cls =
     'block rounded-card-sm border border-line bg-surface p-4 transition-colors duration-[120ms]';
   if (href) {
+    // Card clicavel (spec 1.A.8): hover "acende" (surface-hover) + borda forte.
     return (
       <a
         href={href}
         aria-label={ariaLabel ?? caption}
         className={cn(
           cls,
-          'hover:bg-brand-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2',
+          'cursor-pointer hover:bg-surface-hover hover:border-line-strong active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
         )}
       >
         {inner}

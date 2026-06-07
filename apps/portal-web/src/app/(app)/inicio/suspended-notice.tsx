@@ -7,7 +7,7 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 
 export function SuspendedNotice() {
   return (
-    <div className="mb-3.5 flex items-start gap-3 rounded-card border border-warn/25 bg-warn-bg px-4 py-4">
+    <div className="mb-3.5 flex items-start gap-3 rounded-card border border-warn/30 bg-warn-soft px-4 py-4">
       <IconAlert size={22} className="mt-0.5 shrink-0 text-warn" />
       <div>
         <h2 className="font-display text-[15px] font-semibold text-ink">

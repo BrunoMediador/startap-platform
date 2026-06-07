@@ -16,15 +16,17 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   loadingLabel?: string;
 }
 
+// Estados completos no escuro: spec 1.A.8. Primario = texto escuro sobre roxo
+// claro (D8); foco com ring-offset no fundo da app (--color-bg).
 const VARIANTS: Record<Variant, string> = {
   primary:
-    'bg-brand text-white hover:bg-brand-700 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:bg-brand/40 disabled:text-white/70',
+    'bg-brand text-bg hover:bg-brand-600 active:bg-brand-700 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:bg-brand/35 disabled:text-ink-faint',
   secondary:
-    'bg-surface text-brand border border-line hover:bg-brand-50 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:text-ink-faint disabled:border-line disabled:opacity-60',
+    'bg-surface text-brand border border-line-strong hover:bg-surface-hover hover:border-line-strong active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:text-ink-faint disabled:border-line disabled:opacity-60',
   destructive:
-    'bg-surface text-danger border border-danger/30 hover:bg-danger/10 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 disabled:opacity-60',
+    'bg-surface text-danger border border-danger/40 hover:bg-danger/12 hover:border-danger/60 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-55',
   ghost:
-    'bg-transparent text-brand hover:bg-brand-50 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:opacity-50',
+    'bg-transparent text-brand hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-50',
 };
 
 const SIZES: Record<Size, string> = {

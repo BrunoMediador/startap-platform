@@ -4,9 +4,9 @@
  * Card de billing (spec 6.6 + 3.2). Tom por regra D1 (computeBillingView):
  *   roxo (>=6d) · ambar (1..5d) · vermelho (vencido). Sem billing => roxo "em dia".
  *
- * Contraste (spec 8 + D2): no card ambar, texto pequeno (meta) usa tinta escura
- * (#3A2602) — branco pequeno sobre ambar nao passa AA. Numero grande e label
- * passam por tamanho. Barra de progresso com aria-label textual.
+ * Contraste (spec 1.A.9 + D2): no card ambar (solido), TODO o texto usa tinta
+ * escura (amber-ink #1A1208) — branco sobre ambar reprova AA. Roxo/vermelho
+ * solidos usam texto branco (AA). Barra de progresso com aria-label textual.
  */
 import { Card } from '@/components/ui/card';
 import type { StatusBilling } from '@/lib/api-types';
@@ -18,25 +18,34 @@ interface BillingCardProps {
   billing: StatusBilling | null;
 }
 
+// Cards de marca/billing seguem com fundo SOLIDO colorido mesmo no tema escuro
+// (spec 1.A.9 / D10) — sao o ponto focal da Home sobre o fundo apagado.
 const SURFACE: Record<BillingTone, string> = {
-  brand: 'bg-brand text-white',
-  amber: 'bg-amber text-white',
-  danger: 'bg-danger text-white',
-  neutral: 'bg-brand text-white',
+  brand: 'bg-brand-fill text-white',
+  amber: 'bg-amber-fill text-amber-ink',
+  danger: 'bg-danger-fill text-white',
+  neutral: 'bg-brand-fill text-white',
 };
 
-/** Cor da meta (texto pequeno) — escura no ambar pra contraste (D2). */
+/** Cor da meta (texto pequeno) — escura no ambar pra contraste (D2/1.A.9). */
 const META: Record<BillingTone, string> = {
   brand: 'text-white/[0.82]',
-  amber: 'text-[#3A2602]',
+  amber: 'text-amber-ink/85',
   danger: 'text-white/[0.85]',
   neutral: 'text-white/[0.82]',
 };
 const LABEL: Record<BillingTone, string> = {
   brand: 'text-white/70',
-  amber: 'text-[#3A2602]',
+  amber: 'text-amber-ink/80',
   danger: 'text-white/75',
   neutral: 'text-white/70',
+};
+/** Cor do numero/titulo forte — escuro no ambar, branco no roxo/vermelho (1.A.9). */
+const STRONG: Record<BillingTone, string> = {
+  brand: 'text-white',
+  amber: 'text-amber-ink',
+  danger: 'text-white',
+  neutral: 'text-white',
 };
 
 export function BillingCard({ billing }: BillingCardProps) {
@@ -86,11 +95,21 @@ export function BillingCard({ billing }: BillingCardProps) {
       </div>
 
       {view.vencido ? (
-        <div className="relative z-10 mt-1.5 font-display text-[26px] font-bold tracking-[-0.02em] text-white">
+        <div
+          className={cn(
+            'relative z-10 mt-1.5 font-display text-[26px] font-bold tracking-[-0.02em]',
+            STRONG[tone],
+          )}
+        >
           {titleVencido}
         </div>
       ) : (
-        <div className="relative z-10 mt-1.5 font-display text-[34px] font-bold leading-none tracking-[-0.02em] text-white">
+        <div
+          className={cn(
+            'relative z-10 mt-1.5 font-display text-[34px] font-bold leading-none tracking-[-0.02em]',
+            STRONG[tone],
+          )}
+        >
           {big}{' '}
           <span className="text-[15px] font-medium opacity-90">
             {dias === 1 ? 'dia restante' : 'dias restantes'}
@@ -116,12 +135,18 @@ export function BillingCard({ billing }: BillingCardProps) {
       {/* Barra de progresso do ciclo (decorativa-informativa, aria textual). */}
       {!view.vencido && (
         <div
-          className="relative z-10 mt-3.5 h-1.5 overflow-hidden rounded-pill bg-white/[0.22]"
+          className={cn(
+            'relative z-10 mt-3.5 h-1.5 overflow-hidden rounded-pill',
+            tone === 'amber' ? 'bg-amber-ink/20' : 'bg-white/[0.22]',
+          )}
           role="img"
           aria-label={`${dias} de 30 dias restantes`}
         >
           <span
-            className="block h-full rounded-pill bg-white"
+            className={cn(
+              'block h-full rounded-pill',
+              tone === 'amber' ? 'bg-amber-ink' : 'bg-white',
+            )}
             style={{ width: `${Math.max(0, Math.min(100, (dias / 30) * 100))}%` }}
           />
         </div>

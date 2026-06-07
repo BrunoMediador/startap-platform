@@ -23,18 +23,20 @@ export function Switch({ checked, onChange, label, disabled }: SwitchProps) {
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="relative inline-flex h-11 w-11 shrink-0 items-center justify-center outline-none disabled:cursor-not-allowed disabled:opacity-60"
+      className="group relative inline-flex h-11 w-11 shrink-0 items-center justify-center outline-none disabled:cursor-not-allowed disabled:opacity-60"
     >
+      {/* Escuro (spec 1.A.8): OFF trilho afundado + borda forte + knob ink-soft;
+          ON trilho roxo-acao + knob na cor do fundo. Foco visivel no trilho. */}
       <span
         className={cn(
-          'relative block h-7 w-[46px] rounded-pill transition-colors duration-[180ms] ease-[var(--ease-out-soft)]',
-          checked ? 'bg-brand' : 'bg-line',
+          'relative block h-7 w-[46px] rounded-pill border transition-colors duration-[180ms] ease-[var(--ease-out-soft)] group-focus-visible:ring-2 group-focus-visible:ring-brand group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-bg',
+          checked ? 'border-brand bg-brand' : 'border-line-strong bg-surface-sunken',
         )}
       >
         <span
           className={cn(
-            'absolute top-[3px] size-[22px] rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-[left] duration-[180ms] ease-[var(--ease-out-soft)]',
-            checked ? 'left-[21px]' : 'left-[3px]',
+            'absolute top-[3px] size-[22px] rounded-full transition-[left,background-color] duration-[180ms] ease-[var(--ease-out-soft)]',
+            checked ? 'left-[21px] bg-bg' : 'left-[3px] bg-ink-soft',
           )}
         />
       </span>

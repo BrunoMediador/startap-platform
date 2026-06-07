@@ -26,7 +26,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  themeColor: '#6431D6',
+  // Tema escuro "Cadencia Noturna" — barra do navegador acompanha o fundo da app.
+  themeColor: '#14121C',
+  colorScheme: 'dark',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
