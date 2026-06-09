@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Startap — Login</title>
+  <!-- Favicons Constelação-S (rebrand F4). Página pré-sessão: ícones liberados no
+       auth-gate do server.js (allowlist, igual às fontes). -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <!-- Fontes auto-hospedadas (rebrand Cadência F1) — sem CDN. Servidas de
        /fonts/ (express.static), liberadas no auth-gate por serem públicas. -->
   <link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
@@ -83,15 +89,14 @@
       text-align: center;
       margin-bottom: 22px;
     }
+    /* F4: símbolo Constelação-S solto (Opção A) — sem quadrado roxo nem glow.
+       Vira só wrapper de tamanho centrado. */
     .brand__dot {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 40px; height: 40px;
-      border-radius: 11px;
-      background: var(--c-brand-fill);
-      box-shadow: 0 0 0 1px rgba(154,124,240,.35), 0 8px 24px rgba(100,49,214,.45);
-      margin-bottom: 12px;
+      width: 52px; height: 52px;
+      margin-bottom: 10px;
     }
     .brand__logo {
       font-family: var(--font-display);
@@ -101,6 +106,8 @@
       color: var(--c-ink);
       line-height: 1;
     }
+    /* F4: "ap" do wordmark em roxo brand, casando com o lockup Constelação-S. */
+    .brand__logo .wm-ap { color: var(--c-brand); }
     .brand__tagline {
       font-size: 0.75rem;
       color: var(--c-ink-soft);
@@ -243,12 +250,30 @@
   <div class="card" role="main">
     <div class="brand">
       <div class="brand__dot" aria-hidden="true">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2C8 2 4 5.5 4 10c0 3 1.5 5.5 4 7l4 5 4-5c2.5-1.5 4-4 4-7 0-4.5-4-8-8-8z"/>
-          <circle cx="12" cy="10" r="3" fill="white" stroke="none"/>
+        <!-- F4: símbolo Constelação-S solto (mark-constelacao.svg, viewBox 64).
+             S de nós roxos com 1 nó âmbar de destaque. Sem contêiner roxo. -->
+        <svg width="48" height="48" viewBox="0 0 64 64">
+          <defs>
+            <linearGradient id="lgCsLine" x1="44" y1="17" x2="20" y2="47" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#B59CF7"/>
+              <stop offset="1" stop-color="#6431D6"/>
+            </linearGradient>
+            <radialGradient id="lgCsGlow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0" stop-color="#E0A23C" stop-opacity="0.42"/>
+              <stop offset="0.55" stop-color="#E0A23C" stop-opacity="0.14"/>
+              <stop offset="1" stop-color="#E0A23C" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <path d="M44 17 L20 24 L44 40 L20 47" fill="none" stroke="url(#lgCsLine)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+          <circle cx="20" cy="24" r="4.7" fill="#9A7CF0"/>
+          <circle cx="44" cy="40" r="4.7" fill="#7E5CE8"/>
+          <circle cx="20" cy="47" r="4.7" fill="#6431D6"/>
+          <circle cx="44" cy="17" r="13" fill="url(#lgCsGlow)"/>
+          <circle cx="44" cy="17" r="5.6" fill="#E0A23C"/>
+          <circle cx="44" cy="17" r="2.1" fill="#F6D9A3"/>
         </svg>
       </div>
-      <div class="brand__logo">Startap</div>
+      <div class="brand__logo">Start<span class="wm-ap">ap</span></div>
       <div class="brand__tagline">Painel de gestão</div>
     </div>
 

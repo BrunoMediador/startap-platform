@@ -576,6 +576,12 @@ app.use((req, res, next) => {
   // fontes; sem esta liberação o browser receberia 401 ao buscá-las e o login
   // cairia no fallback system-ui. Confinado a GET /fonts/ — nada mais é liberado.
   if (req.method === 'GET' && req.path.startsWith('/fonts/')) return next();
+  // Favicons/ícones da marca (rebrand F4): mesmo caso das fontes — o /login.html
+  // pré-sessão os referencia no <head>. Sem isto, o browser tomaria 401 ao buscá-los
+  // (requisição de ícone não manda Accept: text/html, então cai no ramo 401 JSON).
+  // Allowlist explícita de arquivos públicos não sensíveis em public/ — nada mais.
+  const PUBLIC_ICONS = ['/favicon.svg', '/favicon.ico', '/favicon-16.png', '/favicon-32.png', '/apple-touch-icon.png'];
+  if (req.method === 'GET' && PUBLIC_ICONS.includes(req.path)) return next();
   return requireAuth(req, res, next);
 });
 

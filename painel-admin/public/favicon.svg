@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="Startap">
+  <title>Startap — favicon Constelacao-S</title>
+  <path d="M23 9 L10 14 L22 23" fill="none" stroke="#9A7CF0"
+        stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="10" cy="14" r="5" fill="#9A7CF0"/>
+  <circle cx="22" cy="23" r="5" fill="#6431D6"/>
+  <circle cx="23" cy="9" r="5.4" fill="#E0A23C"/>
+</svg>
