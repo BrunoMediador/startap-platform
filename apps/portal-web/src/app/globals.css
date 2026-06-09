@@ -346,9 +346,11 @@ body {
 
 /* ============================================================
    PAINEL v2 — POLISH (spec 1.D). Fundo vivo (constelacao do login) em TODO o
-   shell autenticado, montado uma vez no (app)/layout. Aurora SO no hero da
-   Inicio; glow roxo SO nos cards-heroi; stagger de entrada no mount. Tudo
-   gated por reduced-motion. Tema unico escuro — sem variantes de tema claro.
+   shell autenticado, montado uma vez no (app)/layout. Glow roxo SO nos
+   cards-heroi; stagger de entrada no mount. Tudo gated por reduced-motion.
+   Tema unico escuro — sem variantes de tema claro. (Aurora local da Inicio foi
+   removida: confinada ao retangulo do hero, criava "caixa" em volta da saudacao
+   depois que a constelacao virou fundo global — contraste vem da .app-vignette.)
    ============================================================ */
 
 /* Fundo vivo full-viewport FIXO do shell: cobre toda a area visivel ATRAS do
@@ -377,28 +379,8 @@ body {
     ), linear-gradient(180deg, rgba(20, 18, 28, 0.28) 0%, rgba(20, 18, 28, 0) 22%);
 }
 
-/* --- Hero-zone (1.D.1): aurora + conteudo, so na Inicio. --- */
-.hero-zone {
-  position: relative;
-  z-index: 1;
-}
-.hero-aurora {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(
-      80% 120% at 12% 0%,
-      rgba(100, 49, 214, 0.22) 0%,
-      rgba(20, 18, 28, 0) 60%
-    ), radial-gradient(60% 90% at 95% 8%, rgba(224, 162, 60, 0.06) 0%, rgba(20, 18, 28, 0) 55%);
-}
-.hero-content {
-  position: relative;
-  z-index: 2;
-}
 /* --- Escala de elevacao dos cards-heroi (1.D.2/1.D.4). --- */
-/* E1: status-hero — relevo preto, SEM cor (descola da hero-zone viva). */
+/* E1: status-hero — relevo preto, SEM cor (descola do fundo vivo). */
 .hero-e1 {
   box-shadow: 0 0 0 1px rgba(154, 124, 240, 0.04), 0 18px 40px rgba(0, 0, 0, 0.3);
 }
