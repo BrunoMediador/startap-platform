@@ -22,6 +22,7 @@ const VALID_BASE = {
   WAHA_API_KEY: 'key',
   WHISPER_URL: 'http://whisper:9000',
   OPENAI_API_KEY: 'sk-test',
+  ABACATEPAY_API_KEY: 'abacate-dev-key',
 };
 
 describe('ConfigSchema', () => {
@@ -42,6 +43,16 @@ describe('ConfigSchema', () => {
 
   it('falha se WAHA_URL não for URL válida', () => {
     expect(() => ConfigSchema.parse({ ...VALID_BASE, WAHA_URL: 'not-a-url' })).toThrow(z.ZodError);
+  });
+
+  it('falha se ABACATEPAY_API_KEY ausente (C9 — boot fail sem secret)', () => {
+    const { ABACATEPAY_API_KEY: _omit, ...rest } = VALID_BASE;
+    expect(() => ConfigSchema.parse(rest)).toThrow(z.ZodError);
+  });
+
+  it('ABACATEPAY_BASE_URL tem default https://api.abacatepay.com', () => {
+    const result = ConfigSchema.parse(VALID_BASE);
+    expect(result.ABACATEPAY_BASE_URL).toBe('https://api.abacatepay.com');
   });
 
   it('aceita DEEPSEEK_API_KEY opcional', () => {
