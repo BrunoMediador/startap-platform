@@ -1645,6 +1645,46 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 .kpi-strip__delta--up   { color: var(--success); }
 .kpi-strip__delta--down { color: var(--danger); }
+/* ── Visão Geral (rebrand F2 §4.1) ───────────────────────────────── */
+/* Card-heroi do status geral (kit §6 "Card-heroi E1"): elevação por glow
+   contido — única exceção a "sem sombra" no escuro. */
+.vg-hero {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 0 0 1px rgba(154,124,240,.04), 0 18px 40px rgba(0,0,0,.3);
+}
+.vg-hero__main { display: flex; align-items: center; gap: .75rem; }
+.vg-hero__dot {
+  width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+}
+.vg-hero__dot--ok   { background: var(--success); box-shadow: 0 0 8px rgba(78,216,143,.55); }
+.vg-hero__dot--warn { background: var(--warning); box-shadow: 0 0 8px rgba(224,162,60,.5); }
+.vg-hero__dot--off  { background: var(--text-subtle); }
+.vg-hero__headline {
+  font-family: var(--font-display, var(--font-sans));
+  font-size: 1.0625rem; font-weight: 600; color: var(--text); line-height: 1.2;
+}
+.vg-hero__sub { font-size: .8125rem; color: var(--text-muted); margin-top: 2px; }
+.vg-hero__meta {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .8125rem; color: var(--text-muted); flex-wrap: wrap;
+}
+.vg-hero__sep { color: var(--text-subtle); }
+/* Grid inferior: Mensagens 14d + Agendamentos pendentes lado a lado */
+.vg-bottom-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+  margin-bottom: .75rem;
+}
+@media (max-width: 860px) {
+  .vg-bottom-grid { grid-template-columns: 1fr; }
+}
 /* ── Dashboard denso (003-D2) ────────────────────────────────────── */
 .dash-dense-grid {
   display: grid;
@@ -2241,33 +2281,21 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   </nav>
   <!-- Main -->
   <main class="main" id="main" role="main">
-    <section class="section" id="sec-dashboard" aria-label="Dashboard">
-      <!-- KPI Strip -->
-      <div id="dash-kpi-strip" class="kpi-strip"></div>
-      <!-- Sessões WAHA + Leads lado a lado -->
-      <div class="dash-dense-grid">
-        <div id="dash-sessions-wrap"></div>
-        <div id="dash-leads-wrap"></div>
-      </div>
-      <!-- Bloco ATIVIDADE AO VIVO -->
-      <div id="dash-activity-block"></div>
+    <!-- Rebrand F2 §4.1 — Visão Geral funde Dashboard + Métricas + (partes de) Relatórios.
+         O conteúdo é renderizado por renderVisaoGeral(). Hierarquia (3 níveis):
+         1) Status geral + KPI strip · 2) Métricas por bot · 3) Mensagens 14d + Agendamentos. -->
+    <section class="section" id="sec-visao-geral" aria-label="Visão Geral">
+      <div id="visao-geral-content"></div>
     </section>
     <section class="section" id="sec-bots" aria-label="Bots">
       <div id="bots-content"></div>
     </section>
-    <section class="section" id="sec-sessoes" aria-label="Sessões WAHA">
+    <!-- Rebrand F2 §4.3 — WAHA consolida TODO conteúdo de sessões WhatsApp num lugar. -->
+    <section class="section" id="sec-waha" aria-label="WAHA — Sessões WhatsApp">
       <div id="sessoes-content"></div>
-    </section>
-    <section class="section" id="sec-leads" aria-label="Leads">
-      <!-- Stub 003-E -->
-      <div class="section-header"><div class="section-header__left"><h1 class="h1">Leads</h1><p class="muted">Contatos capturados pelos bots</p></div></div>
-      <div id="leads-stub-content"></div>
     </section>
     <section class="section" id="sec-execucoes" aria-label="Execuções">
       <!-- Seção Execuções — renderizada por renderExecucoes() -->
-    </section>
-    <section class="section" id="sec-relatorios" aria-label="Relatórios">
-      <!-- Seção Relatórios — renderizada por renderRelatorios() -->
     </section>
     <section class="section" id="sec-configuracoes" aria-label="Configurações">
       <!-- Seção Configurações — renderizada por renderConfig() -->
@@ -2275,9 +2303,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
     <section class="section" id="sec-roteamento" aria-label="Roteamento">
       <!-- Seção Roteamento — promovida a nível global; renderizada por renderRoteamento() -->
     </section>
-    <section class="section" id="sec-metricas" aria-label="Métricas">
-      <!-- Seção Métricas — renderizada por renderMetricas() — 003-I -->
-    </section>
+    <!-- Rebrand F2 §1.3 — sec-metricas removida (conteúdo migrou pra Visão Geral). -->
     <!-- Portal do Cliente — Missão 009 (renderizadas por window.PortalAdmin) -->
     <section class="section" id="sec-portal-usuarios" aria-label="Usuários do portal">
       <div id="portal-usuarios-content"></div>
@@ -2400,6 +2426,7 @@ const ICONS = {
   'calendar':       '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
   'book-open':      '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
   'log-out':        '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  'volume-2':       '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>',
 };
 
 /* ── icon() helper ──────────────────────────────────────────────── */
@@ -2755,15 +2782,152 @@ function closeLightbox() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   DASHBOARD — Retool/Supabase denso (003-D2)
-   ══════════════════════════════════════════════════════════════════ */
-let _dashActivityInterval = null;
+   VISÃO GERAL — "o geral de verdade" (rebrand F2 §4.1)
+   Funde 3 telas antigas: dashboard (KPI strip + atividade ao vivo)
+   + métricas (tabela por bot, sparklines, gráficos, top-errors)
+   + partes de relatórios (Mensagens 14d + Agendamentos pendentes).
+   Hierarquia: 1) status+KPIs · 2) métricas por bot · 3) gráfico 14d + agendamentos.
 
-async function renderDashboard() {
+   TIMERS — REGRA P0 (spec §1.4): a Visão Geral tinha DOIS intervals na v1
+   (atividade do dashboard 12s + refresh de métricas 60s). Agora unificados num
+   ÚNICO controlador `_vgRefreshId` (60s) que recarrega métricas + agendamentos,
+   e o feed de atividade mantém seu próprio polling rápido (12s) em
+   `_dashActivityInterval`. navigateTo() desliga AMBOS ao sair de 'visao-geral'.
+   ══════════════════════════════════════════════════════════════════ */
+let _dashActivityInterval = null;   // feed de atividade ao vivo (12s)
+let _vgRefreshId = null;            // refresh de métricas + agendamentos (60s)
+let _vgPeriod = '24h';             // seletor de período da Visão Geral (24h/7d/30d)
+
+async function renderVisaoGeral() {
+  const wrap = document.getElementById('visao-geral-content');
+  if (!wrap) return;
+
+  wrap.innerHTML = `
+    <div class="section-header">
+      <div class="section-header__left">
+        <span class="section-label">PAINEL</span>
+        <h1 class="h1">Visão Geral</h1>
+        <p class="muted">Status geral, desempenho por bot e movimento recente — tudo num lugar</p>
+      </div>
+      <div class="section-header__actions" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <select id="vg-period-sel" aria-label="Período das métricas" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.3rem .6rem;font-size:.8125rem;cursor:pointer">
+          <option value="24h">Últimas 24h</option>
+          <option value="7d">Últimos 7 dias</option>
+          <option value="30d">Últimos 30 dias</option>
+        </select>
+        <button id="vg-reload-btn" class="btn btn--ghost btn--sm" aria-label="Atualizar Visão Geral">
+          ${icon('refresh-cw',14)} Atualizar
+        </button>
+      </div>
+    </div>
+
+    <!-- Nível 1: status geral (card-heroi) + KPI strip -->
+    <div id="vg-status-hero" class="vg-hero" aria-live="polite"></div>
+    <div id="dash-kpi-strip" class="kpi-strip"></div>
+
+    <!-- Nível 2: métricas por bot + gráficos timeseries + top erros -->
+    <div id="vg-metrics-body" style="display:flex;flex-direction:column;gap:1rem;margin-bottom:.75rem">
+      <div class="card"><div class="empty-state" style="padding:1.5rem"><span class="muted">Carregando métricas…</span></div></div>
+    </div>
+
+    <!-- Nível 3: Mensagens 14d (de Relatórios) + Agendamentos pendentes (de Relatórios) -->
+    <div class="vg-bottom-grid">
+      <div id="vg-msgs14" class="dash-block"></div>
+      <div id="vg-agendamentos" class="dash-block"></div>
+    </div>
+
+    <!-- Atividade ao vivo (mantida do dashboard) -->
+    <div id="dash-activity-block"></div>
+  `;
+
+  /* Seletor de período + recarregar */
+  const periodSel = wrap.querySelector('#vg-period-sel');
+  periodSel.value = _vgPeriod;
+  periodSel.addEventListener('change', e => { _vgPeriod = e.target.value; _vgLoadMetrics(); });
+  wrap.querySelector('#vg-reload-btn').addEventListener('click', _vgReloadAll);
+
+  /* Carrega cada bloco (independentes — cada um com seu loading/erro/empty) */
+  renderVGStatusHero();
   renderDashKPIStrip();
-  renderDashSessions();
-  renderDashLeads();
-  renderDashActivity();
+  _vgLoadMetrics();
+  _vgLoadMensagens14();
+  _vgLoadAgendamentos();
+  renderDashActivity();   // arma seu próprio polling 12s em _dashActivityInterval
+
+  /* Timer único de refresh (60s): métricas + agendamentos + status hero.
+     Atividade ao vivo segue no seu polling rápido (12s) dentro de renderDashActivity. */
+  if (_vgRefreshId) clearInterval(_vgRefreshId);
+  _vgRefreshId = setInterval(() => {
+    if (!document.getElementById('vg-metrics-body')) {
+      clearInterval(_vgRefreshId); _vgRefreshId = null; return;
+    }
+    renderVGStatusHero();
+    renderDashKPIStrip();
+    _vgLoadMetrics();
+    _vgLoadAgendamentos();
+  }, 60_000);
+}
+
+function _vgReloadAll() {
+  renderVGStatusHero();
+  renderDashKPIStrip();
+  _vgLoadMetrics();
+  _vgLoadMensagens14();
+  _vgLoadAgendamentos();
+}
+
+/* ── Status geral (card-heroi) — o "tudo operando?" de relance ───── */
+async function renderVGStatusHero() {
+  const el = document.getElementById('vg-status-hero');
+  if (!el) return;
+  if (!el.dataset.loaded) {
+    el.innerHTML = `<div class="vg-hero__skel skeleton" style="height:64px"></div>`;
+  }
+  try {
+    const data = await api('/api/status');
+    const sessions = Array.isArray(data?.waha) ? data.waha : Object.values(data?.waha ?? {});
+    const total = sessions.length;
+    const conectadas = sessions.filter(s => (s.status || s.state) === 'WORKING').length;
+    // /api/status expõe os fluxos sob data.flows.workflows (com .active)
+    const workflows = Array.isArray(data?.flows?.workflows) ? data.flows.workflows : [];
+    const botsAtivos = workflows.filter(w => w.active !== false).length;
+    const botsPausados = workflows.filter(w => w.active === false).length;
+
+    const allOk = total > 0 && conectadas === total;
+    const someOk = conectadas > 0;
+    const dotCls = allOk ? 'vg-hero__dot--ok' : someOk ? 'vg-hero__dot--warn' : 'vg-hero__dot--off';
+    const headline = allOk ? 'Tudo operando'
+      : someOk ? 'Operando parcialmente'
+      : total === 0 ? 'Sem sessões configuradas' : 'Atenção — sessões desconectadas';
+
+    el.dataset.loaded = '1';
+    el.innerHTML = `
+      <div class="vg-hero__main">
+        <span class="vg-hero__dot ${dotCls}"></span>
+        <div>
+          <div class="vg-hero__headline">${headline}</div>
+          <div class="vg-hero__sub">${botsAtivos} bot${botsAtivos!==1?'s':''} ativo${botsAtivos!==1?'s':''}${botsPausados>0?` · ${botsPausados} pausado${botsPausados!==1?'s':''}`:''}</div>
+        </div>
+      </div>
+      <div class="vg-hero__meta">
+        <span>API ok</span>
+        <span class="vg-hero__sep">·</span>
+        <span>WAHA ${conectadas}/${total} conectada${conectadas!==1?'s':''}</span>
+        <span class="vg-hero__sep">·</span>
+        <span>worker ok</span>
+      </div>`;
+  } catch (err) {
+    el.dataset.loaded = '1';
+    el.innerHTML = `
+      <div class="vg-hero__main">
+        <span class="vg-hero__dot vg-hero__dot--off"></span>
+        <div>
+          <div class="vg-hero__headline">Não foi possível ler o status</div>
+          <div class="vg-hero__sub">${escapeHtml(err.message)}</div>
+        </div>
+      </div>
+      <button class="btn btn--sm btn--ghost" onclick="renderVGStatusHero()">${icon('refresh-cw',13)} Tentar de novo</button>`;
+  }
 }
 
 /* ── KPI Strip em linha única ────────────────────────────────────── */
@@ -2854,104 +3018,281 @@ async function renderDashKPIStrip() {
   }
 }
 
-/* ── Sessões WAHA — tabela densa ─────────────────────────────────── */
-async function renderDashSessions() {
-  const wrap = document.getElementById('dash-sessions-wrap');
-  if (!wrap) return;
-  const skRow = `<tr><td colspan="5"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
-  wrap.innerHTML = `
-    <div class="dash-block">
-      <div class="dash-block__hdr">
-        <span class="dash-block__title">SESSÕES WAHA</span>
-        <button class="btn btn--sm btn--ghost" onclick="navigateTo('sessoes')" style="font-size:.7rem;padding:.2rem .5rem">Ver tudo â†’</button>
-      </div>
-      <div class="dash-block__body">
-        <table class="sessions-table"><thead><tr><th>SESSÃO</th><th>STATUS</th><th>ÚLTIMA ATI.</th><th>NÚMERO</th><th></th></tr></thead>
-        <tbody>${skRow.repeat(3)}</tbody></table>
-      </div>
-    </div>`;
+/* ══════════════════════════════════════════════════════════════════
+   VISÃO GERAL — bloco MÉTRICAS POR BOT (absorvido de renderMetricas)
+   Tabela por bot (msgs/exec/%sucesso/latência/tokens/custo) + sparklines
+   + gráficos timeseries (messages/cost/latency) + top-errors.
+   Endpoints: /api/metrics/by-bot · /api/metrics/timeseries · /api/metrics/top-errors
+   ══════════════════════════════════════════════════════════════════ */
+let _vgBotMessages = 'all';
+let _vgBotCost     = 'all';
+let _vgBotLatency  = 'all';
 
+async function _vgLoadMetrics() {
+  const body = document.getElementById('vg-metrics-body');
+  if (!body) return;
   try {
-    const data = await api('/api/status');
-    const sessions = data?.waha || [];
-    const sessArr = Array.isArray(sessions) ? sessions : Object.values(sessions);
+    const [byBotRes, errRes] = await Promise.all([
+      api(`/api/metrics/by-bot?period=${_vgPeriod}`),
+      api(`/api/metrics/top-errors?period=${_vgPeriod}&limit=10`),
+    ]);
 
-    if (!sessArr.length) {
-      wrap.querySelector('tbody').innerHTML = `<tr><td colspan="5" class="activity-empty">Nenhuma sessão</td></tr>`;
-      return;
-    }
+    const bots  = (byBotRes.rows || []).filter(b => !String(b.slot || '').startsWith('worker'));
+    const erros = errRes.rows || [];
 
-    const rows = sessArr.map(s => {
-      const name = escapeHtml(s.name || s.session || s.id || 'Sessão');
-      const st = s.status || s.state || '';
-      const isOn = st === 'WORKING';
-      const isWarn = st === 'STARTING' || st === 'SCAN_QR_CODE';
-      const dotCls = isOn ? 's-dot--on' : isWarn ? 's-dot--warn' : 's-dot--off';
-      const stLabel = isOn ? 'ON' : isWarn ? 'AGUARD.' : 'OFF';
-      const lastSeen = s.updatedAt || s.updated_at || s.lastActivity || null;
-      const _meRaw = (typeof s.me === 'object' && s.me !== null) ? (s.me.id || '') : (s.me || '');
-      const phonesStr = _fmtPhone(_meRaw) || (_meRaw ? _meRaw.replace(/@.+$/, '') : '—');
+    // sparklines: série de mensagens por bot (24h)
+    const sparkMap = {};
+    await Promise.all(
+      bots.slice(0, 8).map(async b => {
+        try {
+          const s = await api(`/api/metrics/timeseries?metric=messages&period=24h&bot=${encodeURIComponent(b.slot)}`);
+          sparkMap[b.slot] = (s.points || []).map(p => Number(p.value) || 0);
+        } catch { sparkMap[b.slot] = []; }
+      })
+    );
 
-      return `<tr>
-        <td class="mono" style="font-size:.75rem;color:var(--text)">${name}</td>
-        <td><span class="s-dot ${dotCls}"></span> ${statusBadge(st)}</td>
-        <td style="font-size:.75rem;color:var(--text-muted)">${lastSeen ? fmtRelative(lastSeen) : '—'}</td>
-        <td style="font-size:.75rem;color:var(--text-muted);text-align:center">${escapeHtml(phonesStr)}</td>
-        <td><button class="more-btn" title="Ações para ${name}" onclick="navigateTo('bots')" aria-label="Ações">···</button></td>
-      </tr>`;
-    }).join('');
-
-    wrap.querySelector('tbody').innerHTML = rows;
-  } catch (err) {
-    wrap.querySelector('tbody').innerHTML = `<tr><td colspan="5" style="padding:.5rem .75rem"><div class="alert--danger" style="font-size:.75rem">${icon('alert-triangle',12)} ${escapeHtml(err.message)}</div></td></tr>`;
+    _vgRenderMetrics(bots, erros, sparkMap);
+    await _vgLoadCharts();
+  } catch (e) {
+    body.innerHTML = `<div class="card"><div class="empty-state" style="padding:1.5rem"><span style="color:var(--danger)">${icon('alert-triangle',14)} Não foi possível carregar as métricas: ${escapeHtml(e.message)}</span><div style="margin-top:.75rem"><button class="btn btn--sm btn--ghost" onclick="_vgLoadMetrics()">${icon('refresh-cw',13)} Tentar de novo</button></div></div></div>`;
   }
 }
 
-/* ── Leads recentes — tabela densa ───────────────────────────────── */
-async function renderDashLeads() {
-  const wrap = document.getElementById('dash-leads-wrap');
-  if (!wrap) return;
-  const skRow = `<tr><td colspan="3"><div class="skeleton" style="height:14px;width:100%"></div></td></tr>`;
-  wrap.innerHTML = `
-    <div class="dash-block">
-      <div class="dash-block__hdr">
-        <span class="dash-block__title">LEADS HOJE</span>
-        <button class="btn btn--sm btn--ghost" onclick="navigateTo('leads')" style="font-size:.7rem;padding:.2rem .5rem">Ver tudo â†’</button>
-      </div>
-      <div class="dash-block__body">
-        <table class="sessions-table"><thead><tr><th>NOME</th><th>BOT</th><th>HÁ</th></tr></thead>
-        <tbody>${skRow.repeat(5)}</tbody></table>
-      </div>
-    </div>`;
+function _vgRenderMetrics(bots, erros, sparkMap) {
+  const body = document.getElementById('vg-metrics-body');
+  if (!body) return;
 
+  const totMsg   = bots.reduce((s, b) => s + (Number(b.messages) || 0), 0);
+  const totExec  = bots.reduce((s, b) => s + (Number(b.executions) || 0), 0);
+  const totCost  = bots.reduce((s, b) => s + (Number(b.cost_usd) || 0), 0);
+  const totTkIn  = bots.reduce((s, b) => s + (Number(b.tokens_in) || 0), 0);
+  const totTkOut = bots.reduce((s, b) => s + (Number(b.tokens_out) || 0), 0);
+
+  function successBadge(rate) {
+    if (rate === null || rate === undefined) return '<span class="badge badge--muted">—</span>';
+    const n = Number(rate);
+    const cls = n >= 90 ? 'badge--success' : n >= 70 ? 'badge--warning' : 'badge--danger';
+    return `<span class="badge ${cls}">${n}%</span>`;
+  }
+  function latencyBadge(ms) {
+    if (ms === null || ms === undefined) return '<span class="muted">—</span>';
+    const n = Number(ms);
+    // F4 vai tokenizar; por ora mantém var() (já roxo/verde Cadência)
+    const col = n < 500 ? 'var(--success)' : n < 2000 ? 'var(--warning)' : 'var(--danger)';
+    return `<span style="color:${col};font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')} ms</span>`;
+  }
+  function spark(slot) {
+    const vals = sparkMap[slot] || [];
+    return vals.length >= 2 ? drawSparkline(vals, 40, 20) : '<span class="muted" style="font-size:.7rem">—</span>';
+  }
+
+  const botOptions = bots.map(b => `<option value="${b.slot}">${b.display_name || b.slot}</option>`).join('');
+
+  body.innerHTML = `
+    <!-- Tabela por bot -->
+    <div class="card" style="overflow-x:auto;padding:0">
+      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
+        <span class="label">Métricas por bot</span>
+      </div>
+      ${bots.length === 0
+        ? `<div class="empty-state" style="padding:2rem">${icon('bar-chart-2',32)}<div class="empty-state__title">Sem dados no período selecionado</div></div>`
+        : `<table class="table" style="min-width:700px">
+          <thead><tr>
+            <th>Bot</th>
+            <th title="Mensagens recebidas (24h)">Msgs <span class="muted" style="font-size:.65rem">(24h)</span></th>
+            <th>Exec</th>
+            <th>Sucesso</th>
+            <th>Latência avg</th>
+            <th>Tokens in/out</th>
+            <th>Custo (US$)</th>
+          </tr></thead>
+          <tbody>
+            ${bots.map(b => `<tr>
+              <td style="white-space:nowrap;font-weight:500">${escapeHtml(b.display_name || b.slot)}</td>
+              <td style="white-space:nowrap">${(() => { const s = spark(b.slot); const n = Number(b.messages); return s.includes('muted') ? `<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>` : `${s}&nbsp;<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>`; })()}</td>
+              <td style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
+              <td>${successBadge(b.success_rate)}</td>
+              <td>${latencyBadge(b.avg_latency_ms)}</td>
+              <td style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
+              <td style="font-variant-numeric:tabular-nums">US$${Number(b.cost_usd).toFixed(4)}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot><tr style="border-top:2px solid var(--border);font-weight:600">
+            <td>Total</td>
+            <td>${totMsg.toLocaleString('pt-BR')}</td>
+            <td>${totExec.toLocaleString('pt-BR')}</td>
+            <td>—</td>
+            <td>—</td>
+            <td style="font-size:.8rem">${totTkIn.toLocaleString('pt-BR')} / ${totTkOut.toLocaleString('pt-BR')}</td>
+            <td>US$${totCost.toFixed(4)}</td>
+          </tr></tfoot>
+        </table>`
+      }
+    </div>
+
+    <!-- Gráficos timeseries -->
+    <div class="m-charts-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+      <div class="card" id="vg-chart-messages" style="padding:0">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Mensagens</span>
+          <select aria-label="Filtrar mensagens por bot" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="vg-bot-messages">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="vg-chart-messages-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+      <div class="card" id="vg-chart-cost" style="padding:0">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Custo (US$)</span>
+          <select aria-label="Filtrar custo por bot" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="vg-bot-cost">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="vg-chart-cost-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+      <div class="card" id="vg-chart-latency" style="padding:0">
+        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
+          <span class="label">Latência média (ms)</span>
+          <select aria-label="Filtrar latência por bot" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="vg-bot-latency">
+            <option value="all">Todos</option>${botOptions}
+          </select>
+        </div>
+        <div id="vg-chart-latency-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
+          <span class="muted" style="font-size:.8rem">…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top erros -->
+    <div class="card" style="padding:0">
+      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
+        <span class="label">Top erros no período</span>
+      </div>
+      ${erros.length === 0
+        ? `<div class="empty-state" style="padding:1.5rem"><span class="muted">Nenhum erro registrado</span></div>`
+        : `<ul style="list-style:none;margin:0;padding:0">
+          ${erros.map((e, i) => {
+            const msg = e.error_message || '';
+            const trunc = msg.length > 100 ? msg.slice(0, 100) + '…' : msg;
+            const dt = e.last_seen ? new Date(e.last_seen).toLocaleString('pt-BR') : '—';
+            return `<li style="display:flex;gap:.75rem;align-items:flex-start;padding:.625rem 1rem;border-bottom:${i < erros.length-1 ? '1px solid var(--border)' : 'none'}">
+              <span style="min-width:1.5rem;text-align:right;font-variant-numeric:tabular-nums;color:var(--danger);font-weight:600;font-size:.8rem">${e.count}</span>
+              <span title="${escapeHtml(msg)}" style="flex:1;font-size:.8125rem;word-break:break-word">${escapeHtml(trunc)}</span>
+              <span style="white-space:nowrap;font-size:.75rem;color:var(--text-muted)">${e.sample_bot ? `<span class="badge badge--muted" style="font-size:.65rem">${escapeHtml(e.sample_bot)}</span> ` : ''}${escapeHtml(dt)}</span>
+            </li>`;
+          }).join('')}
+        </ul>`
+      }
+    </div>
+  `;
+
+  // Preserva a seleção de bot dos gráficos através do auto-refresh de 60s
+  // (o HTML é reconstruído, então re-aplica o valor salvo no <select>).
+  const selMsg = document.getElementById('vg-bot-messages');
+  const selCost = document.getElementById('vg-bot-cost');
+  const selLat = document.getElementById('vg-bot-latency');
+  if (selMsg)  selMsg.value  = _vgBotMessages;
+  if (selCost) selCost.value = _vgBotCost;
+  if (selLat)  selLat.value  = _vgBotLatency;
+
+  // Bind chart bot selects
+  selMsg?.addEventListener('change', async e => {
+    _vgBotMessages = e.target.value;
+    await _vgLoadChart('messages', _vgBotMessages, 'vg-chart-messages-body');
+  });
+  selCost?.addEventListener('change', async e => {
+    _vgBotCost = e.target.value;
+    await _vgLoadChart('cost', _vgBotCost, 'vg-chart-cost-body');
+  });
+  selLat?.addEventListener('change', async e => {
+    _vgBotLatency = e.target.value;
+    await _vgLoadChart('latency', _vgBotLatency, 'vg-chart-latency-body');
+  });
+}
+
+async function _vgLoadChart(metric, bot, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
   try {
-    const leadsRaw = await api('/api/leads');
-    const leads = Array.isArray(leadsRaw) ? leadsRaw : [];
-    const cutoff24h = Date.now() - 86400000;
-    const today = leads.filter(l => {
-      const t = new Date(l.criado_em || l.created_at || 0).getTime();
-      return Number.isFinite(t) && t >= cutoff24h;
-    });
+    const url = `/api/metrics/timeseries?metric=${metric}&period=${_vgPeriod}&bot=${encodeURIComponent(bot)}`;
+    const data = await api(url);
+    const pts  = data.points || [];
+    const w    = el.clientWidth  || 260;
+    const h    = 80;
+    const chartSvg = metric === 'latency' ? drawLineChart(pts, w, h, metric) : drawBarChart(pts, w, h, metric);
+    el.innerHTML = `<div style="width:100%">${chartSvg}</div>`;
+  } catch {
+    el.innerHTML = `<span class="muted" style="font-size:.8rem">Erro ao carregar</span>`;
+  }
+}
 
-    if (!today.length) {
-      wrap.querySelector('tbody').innerHTML = `<tr><td colspan="3" class="activity-empty">Sem leads nas últimas 24h</td></tr>`;
-      return;
-    }
+async function _vgLoadCharts() {
+  await Promise.all([
+    _vgLoadChart('messages', _vgBotMessages, 'vg-chart-messages-body'),
+    _vgLoadChart('cost',     _vgBotCost,     'vg-chart-cost-body'),
+    _vgLoadChart('latency',  _vgBotLatency,  'vg-chart-latency-body'),
+  ]);
+}
 
-    const rows = today.slice(0, 8).map(l => {
-      const nome = escapeHtml((l.nome || l.name || '—').slice(0, 22));
-      const bot  = escapeHtml((l.bot_slug || l.source || '—').slice(0, 18));
-      const hora = escapeHtml(fmtRelative(l.criado_em || l.created_at));
-      return `<tr>
-        <td style="font-size:.75rem;color:var(--text);font-weight:500">${nome}</td>
-        <td class="mono" style="font-size:.7rem;color:var(--text-muted)">${bot}</td>
-        <td style="font-size:.7rem;color:var(--text-subtle);white-space:nowrap">${hora}</td>
-      </tr>`;
-    }).join('');
-
-    wrap.querySelector('tbody').innerHTML = rows;
+/* ══════════════════════════════════════════════════════════════════
+   VISÃO GERAL — Mensagens 14 dias (absorvido de renderRelatorios)
+   Endpoint: /api/message-stats
+   ══════════════════════════════════════════════════════════════════ */
+async function _vgLoadMensagens14() {
+  const wrap = document.getElementById('vg-msgs14');
+  if (!wrap) return;
+  wrap.innerHTML = `
+    <div class="dash-block__hdr">
+      <span class="dash-block__title">MENSAGENS · 14 DIAS</span>
+    </div>
+    <div class="dash-block__body" style="padding:1rem"><div class="skeleton-block" style="height:140px"></div></div>`;
+  try {
+    const data = await api('/api/message-stats');
+    const arr = Array.isArray(data) ? data : (data.stats || data.data || data.daily || []);
+    wrap.querySelector('.dash-block__body').innerHTML = renderBarChart(arr);
   } catch (err) {
-    wrap.querySelector('tbody').innerHTML = `<tr><td colspan="3" style="padding:.5rem .75rem"><div class="alert--danger" style="font-size:.75rem">${icon('alert-triangle',12)} ${escapeHtml(err.message)}</div></td></tr>`;
+    wrap.querySelector('.dash-block__body').innerHTML = `<div class="empty-state" style="padding:1rem">${icon('alert-triangle',20)}<div class="empty-state__title">Não foi possível carregar Mensagens 14d</div><button class="btn btn--sm btn--ghost" style="margin-top:.5rem" onclick="_vgLoadMensagens14()">${icon('refresh-cw',13)} Tentar de novo</button></div>`;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   VISÃO GERAL — Agendamentos pendentes (absorvido de renderRelatorios)
+   Endpoint: /api/agendamentos-pendentes
+   ══════════════════════════════════════════════════════════════════ */
+async function _vgLoadAgendamentos() {
+  const wrap = document.getElementById('vg-agendamentos');
+  if (!wrap) return;
+  const hadContent = !!wrap.dataset.loaded;
+  if (!hadContent) {
+    wrap.innerHTML = `
+      <div class="dash-block__hdr">
+        <span class="dash-block__title">AGENDAMENTOS PENDENTES</span>
+      </div>
+      <div class="dash-block__body" style="padding:1rem"><div class="skeleton-block" style="height:140px"></div></div>`;
+  }
+  try {
+    const data = await api('/api/agendamentos-pendentes');
+    const arr = Array.isArray(data) ? data : (data.agendamentos || data.data || []);
+    wrap.dataset.loaded = '1';
+    wrap.innerHTML = `
+      <div class="dash-block__hdr">
+        <span class="dash-block__title">AGENDAMENTOS PENDENTES</span>
+        <span class="badge badge--muted" style="font-size:.65rem">${fmtNum(arr.length)}</span>
+      </div>
+      <div class="dash-block__body" style="padding:${arr.length ? '0' : '1rem'};overflow-x:auto">${
+        arr.length
+          ? renderGenericTable(arr)
+          : `<div class="empty-state" style="padding:.5rem">${icon('calendar',28)}<div class="empty-state__title">Nenhum agendamento pendente</div></div>`
+      }</div>`;
+  } catch (err) {
+    wrap.dataset.loaded = '1';
+    wrap.innerHTML = `
+      <div class="dash-block__hdr"><span class="dash-block__title">AGENDAMENTOS PENDENTES</span></div>
+      <div class="dash-block__body" style="padding:1rem"><div class="empty-state">${icon('alert-triangle',20)}<div class="empty-state__title">Não foi possível carregar Agendamentos</div><button class="btn btn--sm btn--ghost" style="margin-top:.5rem" onclick="_vgLoadAgendamentos()">${icon('refresh-cw',13)} Tentar de novo</button></div></div>`;
   }
 }
 
@@ -3029,8 +3370,24 @@ async function _loadDashActivity() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   SESSÕES WAHA — gestão completa (003-E)
+   WAHA — gestão completa de sessões WhatsApp (003-E · rebrand F2 §4.3)
    ══════════════════════════════════════════════════════════════════ */
+
+/* Status WAHA com clareza A11y (spec §4.3): dot colorido + label textual.
+   Pré-setup esperado (FAILED/STOPPED) NÃO usa vermelho — usa neutro
+   "Desconectada", porque sessão aguardando QR/recém-criada é estado normal,
+   não erro. Vermelho fica reservado só para falha real visível (raro aqui). */
+function wahaStatusBadge(wahaStatus) {
+  const map = {
+    'WORKING':      { cls: 'badge--success', label: 'Conectada' },
+    'STARTING':     { cls: 'badge--warning', label: 'Iniciando' },
+    'SCAN_QR_CODE': { cls: 'badge--warning', label: 'Aguardando QR' },
+    'STOPPED':      { cls: 'badge--muted',   label: 'Desconectada' },
+    'FAILED':       { cls: 'badge--muted',   label: 'Desconectada' },
+  };
+  const s = map[wahaStatus] || { cls: 'badge--muted', label: wahaStatus || 'Desconhecido' };
+  return `<span class="badge badge--dot ${s.cls}">${escapeHtml(s.label)}</span>`;
+}
 
 async function renderSessoes() {
   const wrap = document.getElementById('sessoes-content');
@@ -3040,10 +3397,14 @@ async function renderSessoes() {
   wrap.innerHTML = `
     <div class="section-header">
       <div class="section-header__left">
-        <h1 class="h1">Sessões WAHA</h1>
-        <p class="muted">Gerencie conexões WhatsApp — QR, reiniciar e criar novas sessões</p>
+        <span class="section-label">WHATSAPP</span>
+        <h1 class="h1">WAHA — Sessões WhatsApp</h1>
+        <p class="muted">Tudo de WhatsApp num lugar — conectar (QR / código), iniciar, reiniciar, derrubar, webhook de áudio e criar novas sessões</p>
       </div>
       <div class="section-header__right">
+        <button class="btn btn--ghost btn--sm" onclick="_sessaoLoadTable()" aria-label="Atualizar sessões">
+          ${icon('refresh-cw',13)} Atualizar
+        </button>
         <button class="btn btn--primary" onclick="_sessaoNovaModal()" id="btn-nova-sessao">
           ${icon('plus',14)} Nova sessão
         </button>
@@ -3111,7 +3472,7 @@ async function _sessaoLoadTable() {
       return `<tr>
         <td class="mono" style="font-size:.8125rem;font-weight:500">${name}</td>
         <td>${botCell}</td>
-        <td>${statusBadge(st)}</td>
+        <td>${wahaStatusBadge(st)}</td>
         <td style="font-size:.8125rem;color:var(--text-muted)">${lastAt ? fmtRelative(lastAt) : '—'}</td>
         <td class="mono" style="font-size:.75rem;color:var(--text-subtle);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.webhook||'')}">${webhook}</td>
         <td>
@@ -3135,18 +3496,30 @@ function _sessaoToggleMenu(btn, sessionName) {
   menu.className = 'sessao-menu';
   menu.style.cssText = 'position:absolute;right:0;top:100%;z-index:200;min-width:160px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);padding:.25rem 0';
 
+  // Ações WAHA — TODAS preservadas/consolidadas (spec §4.3):
+  // QR · pairing-code (dentro do modal de QR) · iniciar · reiniciar · derrubar ·
+  // garantir webhook de áudio · deletar.
   const items = [
-    { label: `${icon('qr-code',14)} Ver QR / Reconectar`, action: () => _sessaoAbrirQR(sessionName) },
-    { label: `${icon('refresh-cw',14)} Reiniciar`,         action: () => _sessaoReiniciar(sessionName) },
-    { label: `${icon('power',14)} Derrubar`,               action: () => _sessaoDerrubar(sessionName) },
-    { label: `${icon('trash-2',14)} Deletar`,              action: () => _sessaoDeletar(sessionName), danger: true },
+    { label: `${icon('qr-code',14)} Ver QR / Reconectar`,        action: () => _sessaoAbrirQR(sessionName) },
+    { label: `${icon('play',14)} Iniciar`,                       action: () => _sessaoIniciar(sessionName) },
+    { label: `${icon('refresh-cw',14)} Reiniciar`,               action: () => _sessaoReiniciar(sessionName) },
+    { label: `${icon('power',14)} Derrubar`,                     action: () => _sessaoDerrubar(sessionName) },
+    { label: `${icon('volume-2',14)} Garantir webhook de áudio`, action: () => _sessaoGarantirAudio(sessionName) },
+    { sep: true },
+    { label: `${icon('trash-2',14)} Deletar`,                    action: () => _sessaoDeletar(sessionName), danger: true },
   ];
 
   items.forEach(item => {
+    if (item.sep) {
+      const hr = document.createElement('div');
+      hr.style.cssText = 'height:1px;background:var(--border);margin:.25rem 0';
+      menu.appendChild(hr);
+      return;
+    }
     const el = document.createElement('button');
     el.style.cssText = `display:flex;align-items:center;gap:.5rem;width:100%;padding:.4rem .75rem;background:none;border:none;cursor:pointer;font-size:.8125rem;color:${item.danger ? 'var(--danger)' : 'var(--text)'};text-align:left`;
     el.innerHTML = item.label;
-    el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-3)');
+    el.addEventListener('mouseenter', () => el.style.background = 'var(--surface-3)');
     el.addEventListener('mouseleave', () => el.style.background = 'none');
     el.addEventListener('click', () => { menu.remove(); item.action(); });
     menu.appendChild(el);
@@ -3319,6 +3692,16 @@ async function _gerarPairingCode(sessionName) {
   }
 }
 
+async function _sessaoIniciar(sessionName) {
+  try {
+    await api(`/api/sessions/${encodeURIComponent(sessionName)}/start`, { method: 'POST' });
+    toast(`Sessão ${sessionName} iniciada`, 'success');
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao iniciar: ${err.message}`, 'danger');
+  }
+}
+
 async function _sessaoReiniciar(sessionName) {
   if (!confirm(`Reiniciar sessão "${sessionName}"?`)) return;
   try {
@@ -3327,6 +3710,22 @@ async function _sessaoReiniciar(sessionName) {
     await _sessaoLoadTable();
   } catch (err) {
     toast(`Erro ao reiniciar: ${err.message}`, 'danger');
+  }
+}
+
+// Garante que o webhook da sessão escuta 'message.any' (necessário p/ áudio na
+// engine NOWEB). Idempotente no backend (POST /api/sessions/:name/ensure-audio-webhook).
+async function _sessaoGarantirAudio(sessionName) {
+  try {
+    const r = await api(`/api/sessions/${encodeURIComponent(sessionName)}/ensure-audio-webhook`, { method: 'POST' });
+    if (r && r.changed === false) {
+      toast(`Webhook de áudio já estava OK em "${sessionName}"`, 'info');
+    } else {
+      toast(`Webhook de áudio garantido em "${sessionName}"`, 'success');
+    }
+    await _sessaoLoadTable();
+  } catch (err) {
+    toast(`Erro ao garantir webhook de áudio: ${err.message}`, 'danger');
   }
 }
 
@@ -3404,30 +3803,9 @@ async function _sessaoCriarConfirm() {
   }
 }
 
-async function renderLeadsStub() {
-  const wrap = document.getElementById('leads-stub-content');
-  if (!wrap) return;
-  wrap.innerHTML = `<div class="skeleton" style="height:220px;border-radius:var(--radius-lg)"></div>`;
-  try {
-    const leadsRaw = await api('/api/leads');
-    const leads = Array.isArray(leadsRaw) ? leadsRaw : [];
-    if (!leads.length) {
-      wrap.innerHTML = `<div class="empty-state">${icon('inbox',36)}<div class="empty-state__title">Nenhum lead</div></div>`;
-      return;
-    }
-    const rows = leads.slice(0, 20).map(l => {
-      const nome = escapeHtml(l.nome || l.name || '—');
-      const tel  = escapeHtml(l.telefone || l.phone || '—');
-      const bot  = escapeHtml(l.slot || l.bot_slug || l.source || '—');
-      const hora = fmtDate(l.criado_em || l.created_at);
-      return `<tr><td style="font-weight:500">${nome}</td><td class="mono">${tel}</td><td class="muted">${bot}</td><td class="muted">${escapeHtml(hora)}</td></tr>`;
-    }).join('');
-    const truncMsg = leads.length > 20 ? `<p class="muted" style="font-size:.8125rem;margin-bottom:.5rem">Exibindo ${Math.min(20, leads.length)} de ${fmtNum(leads.length)} leads</p>` : '';
-    wrap.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(leads.length)} lead${leads.length !== 1 ? 's' : ''} total</p>${truncMsg}<div class="table-wrap"><table class="table"><thead><tr><th>Nome</th><th>Telefone</th><th>Bot</th><th>Criado em</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  } catch (err) {
-    wrap.innerHTML = `<div class="alert--danger">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</div>`;
-  }
-}
+/* renderLeadsStub removida na F2: a <section id="sec-leads"> saiu do DOM, o item
+   `leads` saiu de NAV_HIDDEN_ITEMS e os botões "Ver tudo →" que chamavam
+   navigateTo('leads') foram removidos junto com o bloco de leads do dashboard. */
 
 /* ══════════════════════════════════════════════════════════════════
    BOTS
@@ -5511,92 +5889,11 @@ function renderBarChart(data) {
   return `<div class="bar-chart">${cols}</div>`;
 }
 
-let _relTab = localStorage.getItem('paineladmin:rel-tab') || 'leads';
-
-async function renderRelatorios() {
-  const sec = document.querySelector('#sec-relatorios');
-  sec.innerHTML = `
-    <div class="section-header">
-      <div class="section-header__left">
-        <h1 class="h1">Relatórios</h1>
-        <p class="muted">Leads, agendamentos e mensagens</p>
-      </div>
-    </div>
-    <div class="tabs" id="rel-tabs">
-      <button class="tab-btn${_relTab==='leads'?' active':''}" data-tab="leads">Leads</button>
-      <button class="tab-btn${_relTab==='agendamentos'?' active':''}" data-tab="agendamentos">Agendamentos pendentes</button>
-      <button class="tab-btn${_relTab==='mensagens'?' active':''}" data-tab="mensagens">Mensagens (14 dias)</button>
-    </div>
-    <div id="rel-tab-content"><div class="skeleton-block" style="height:200px"></div></div>`;
-
-  async function loadRelTab(tab) {
-    _relTab = tab;
-    localStorage.setItem('paineladmin:rel-tab', tab);
-    sec.querySelectorAll('#rel-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-    const content = sec.querySelector('#rel-tab-content');
-    content.innerHTML = `<div class="skeleton-block" style="height:200px"></div>`;
-
-    try {
-      if (tab === 'leads') {
-        // Busca clones + matrizes para popular select de origem
-        let slotOptions = '<option value="">Todos</option>';
-        try {
-          const clones = await api('/api/clones');
-          const matrizes = [
-            { slot: 'teste_barbearia', display_name: 'Teste Barbearia (matriz)' },
-            { slot: 'teste_vendas', display_name: 'Teste Vendas (matriz)' },
-            { slot: 'teste_vendas_barbearia', display_name: 'Teste Vendas+Barbearia (matriz)' },
-          ];
-          slotOptions += matrizes.map(m => `<option value="${escapeHtml(m.slot)}">${escapeHtml(m.display_name)}</option>`).join('');
-          if (Array.isArray(clones)) {
-            slotOptions += clones.map(c => `<option value="${escapeHtml(c.slot)}">${escapeHtml(c.display_name || c.slot)}</option>`).join('');
-          }
-        } catch { /* sem clones cadastrados, só matrizes */ }
-
-        const renderLeads = async (slotFilter) => {
-          const url = slotFilter ? `/api/leads?slot=${encodeURIComponent(slotFilter)}` : '/api/leads';
-          const data = await api(url);
-          const arr = Array.isArray(data) ? data : (data.leads || data.data || []);
-          const filterDiv = content.querySelector('#leads-slot-filter');
-          const tableDiv = content.querySelector('#leads-table');
-          if (tableDiv) {
-            tableDiv.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(arr.length)} lead${arr.length !== 1 ? 's' : ''}</p>${renderGenericTable(arr, ['_table'])}`;
-          }
-        };
-
-        content.innerHTML = `
-          <div class="row" style="margin-bottom:.75rem">
-            <label style="font-size:.85rem;color:var(--text-muted)">Filtrar por origem:</label>
-            <select id="leads-slot-filter" class="input" style="width:auto;min-width:220px">${slotOptions}</select>
-          </div>
-          <div id="leads-table"><div class="skeleton-block" style="height:150px"></div></div>`;
-
-        content.querySelector('#leads-slot-filter').addEventListener('change', (ev) => {
-          renderLeads(ev.target.value);
-        });
-
-        await renderLeads('');
-      } else if (tab === 'agendamentos') {
-        const data = await api('/api/agendamentos-pendentes');
-        const arr = Array.isArray(data) ? data : (data.agendamentos || data.data || []);
-        content.innerHTML = `<p class="muted" style="margin-bottom:.75rem">${fmtNum(arr.length)} agendamento${arr.length !== 1 ? 's' : ''}</p>${renderGenericTable(arr)}`;
-      } else if (tab === 'mensagens') {
-        const data = await api('/api/message-stats');
-        const arr = Array.isArray(data) ? data : (data.stats || data.data || data.daily || []);
-        content.innerHTML = `<div class="card" style="padding:1.25rem">${renderBarChart(arr)}</div>`;
-      }
-    } catch (err) {
-      content.innerHTML = `<div class="card"><p class="muted">${icon('alert-triangle',14)} Erro: ${escapeHtml(err.message)}</p><button class="btn btn--sm" style="margin-top:.5rem" onclick="(${loadRelTab.toString()})('${tab}')">${icon('refresh-cw',14)} Tentar novamente</button></div>`;
-    }
-  }
-
-  sec.querySelector('#rel-tabs').addEventListener('click', (ev) => {
-    const btn = ev.target.closest('.tab-btn');
-    if (btn) loadRelTab(btn.dataset.tab);
-  });
-
-  loadRelTab(_relTab);
-}
+/* renderRelatorios removida na F2: a <section id="sec-relatorios"> saiu do DOM.
+   Suas partes úteis migraram pra Visão Geral — Mensagens 14d (_vgLoadMensagens14)
+   e Agendamentos pendentes (_vgLoadAgendamentos). A aba "Leads" foi descartada
+   junto com o stub de leads (decisão de produto). renderBarChart/renderGenericTable
+   continuam vivos (reutilizados pela Visão Geral). */
 
 /* ══════════════════════════════════════════════════════════════════
    CONFIGURAÇÕES
@@ -8939,281 +9236,34 @@ function drawLineChart(points, w, h, label) {
   return svg;
 }
 
-/* ── State ───────────────────────────────────────────────────────── */
-let _mPeriod     = '24h';
-let _mRefreshId  = null;
-let _mBotMessages = 'all';
-let _mBotCost     = 'all';
-let _mBotLatency  = 'all';
-
-/* ── Render principal ────────────────────────────────────────────── */
-async function renderMetricas() {
-  const sec = document.getElementById('sec-metricas');
-  if (!sec) return;
-  sec.innerHTML = `
-    <div class="section-header">
-      <div class="section-header__left">
-        <h1 class="h1">Métricas</h1>
-        <p class="muted">Desempenho por bot em tempo real</p>
-      </div>
-      <div class="section-header__actions" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-        <select id="m-period-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.25rem .5rem;font-size:.8125rem;cursor:pointer">
-          <option value="24h">Últimas 24h</option>
-          <option value="7d">Últimos 7 dias</option>
-          <option value="30d">Últimos 30 dias</option>
-        </select>
-        <button id="m-reload-btn" class="btn btn--ghost btn--sm">
-          ${icon('refresh-cw',14)} Recarregar
-        </button>
-      </div>
-    </div>
-    <div id="m-body" style="display:flex;flex-direction:column;gap:1.5rem">
-      <div class="empty-state"><span class="muted">Carregando…</span></div>
-    </div>
-  `;
-
-  document.getElementById('m-period-sel').value = _mPeriod;
-  document.getElementById('m-period-sel').addEventListener('change', e => {
-    _mPeriod = e.target.value;
-    _mLoad();
-  });
-  document.getElementById('m-reload-btn').addEventListener('click', _mLoad);
-
-  // auto-refresh 60s
-  if (_mRefreshId) clearInterval(_mRefreshId);
-  _mRefreshId = setInterval(_mLoad, 60_000);
-
-  await _mLoad();
-}
-
-async function _mLoad() {
-  try {
-    const [byBotRes, errRes] = await Promise.all([
-      api(`/api/metrics/by-bot?period=${_mPeriod}`),
-      api(`/api/metrics/top-errors?period=${_mPeriod}&limit=10`),
-    ]);
-
-    const bots  = (byBotRes.rows || []).filter(b => !String(b.slot || '').startsWith('worker'));
-    const erros = errRes.rows   || [];
-
-    // sparklines: busca série de mensagens por bot (só os que têm execuções)
-    const sparkMap = {};
-    await Promise.all(
-      bots.slice(0, 8).map(async b => {
-        try {
-          const s = await api(`/api/metrics/timeseries?metric=messages&period=24h&bot=${encodeURIComponent(b.slot)}`);
-          sparkMap[b.slot] = (s.points || []).map(p => Number(p.value) || 0);
-        } catch { sparkMap[b.slot] = []; }
-      })
-    );
-
-    _mRender(bots, erros, sparkMap);
-    // carrega gráficos timeseries
-    await _mLoadCharts();
-  } catch (e) {
-    document.getElementById('m-body').innerHTML = `<div class="empty-state"><span class="text-danger">Erro: ${e.message}</span></div>`;
-  }
-}
-
-function _mRender(bots, erros, sparkMap) {
-  const body = document.getElementById('m-body');
-  if (!body) return;
-
-  // Totais
-  const totMsg   = bots.reduce((s, b) => s + (Number(b.messages) || 0), 0);
-  const totExec  = bots.reduce((s, b) => s + (Number(b.executions) || 0), 0);
-  const totCost  = bots.reduce((s, b) => s + (Number(b.cost_usd) || 0), 0);
-  const totTkIn  = bots.reduce((s, b) => s + (Number(b.tokens_in) || 0), 0);
-  const totTkOut = bots.reduce((s, b) => s + (Number(b.tokens_out) || 0), 0);
-
-  function successBadge(rate) {
-    if (rate === null || rate === undefined) return '<span class="badge badge--muted">—</span>';
-    const n = Number(rate);
-    const cls = n >= 90 ? 'badge--success' : n >= 70 ? 'badge--warning' : 'badge--danger';
-    return `<span class="badge ${cls}">${n}%</span>`;
-  }
-  function latencyBadge(ms) {
-    if (ms === null || ms === undefined) return '<span class="muted">—</span>';
-    const n = Number(ms);
-    const col = n < 500 ? '#10b981' : n < 2000 ? '#f59e0b' : '#ef4444';
-    return `<span style="color:${col};font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')} ms</span>`;
-  }
-  function spark(slot) {
-    const vals = sparkMap[slot] || [];
-    return vals.length >= 2 ? drawSparkline(vals, 40, 20) : '<span class="muted" style="font-size:.7rem">—</span>';
-  }
-
-  // Bot select options para os gráficos
-  const botOptions = bots.map(b => `<option value="${b.slot}">${b.display_name || b.slot}</option>`).join('');
-
-  body.innerHTML = `
-    <!-- Tabela por bot -->
-    <div class="card" style="overflow-x:auto">
-      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
-        <span class="label">Por Bot</span>
-      </div>
-      ${bots.length === 0
-        ? `<div class="empty-state" style="padding:2rem"><span class="muted">Nenhum dado no período selecionado</span></div>`
-        : `<table class="table" style="min-width:700px">
-          <thead><tr>
-            <th>Bot</th>
-            <th title="Mensagens recebidas">Msgs <span class="muted" style="font-size:.65rem">(24h)</span></th>
-            <th>Exec</th>
-            <th>Sucesso</th>
-            <th>Latência avg</th>
-            <th>Tokens in/out</th>
-            <th>Custo (US$)</th>
-          </tr></thead>
-          <tbody>
-            ${bots.map(b => `<tr>
-              <td style="white-space:nowrap;font-weight:500">${b.display_name || b.slot}</td>
-              <td style="white-space:nowrap">${(() => { const s = spark(b.slot); const n = Number(b.messages); return s.includes('muted') ? `<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>` : `${s}&nbsp;<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>`; })()}</td>
-              <td style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
-              <td>${successBadge(b.success_rate)}</td>
-              <td>${latencyBadge(b.avg_latency_ms)}</td>
-              <td style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
-              <td style="font-variant-numeric:tabular-nums">US$${Number(b.cost_usd).toFixed(4)}</td>
-            </tr>`).join('')}
-          </tbody>
-          <tfoot><tr style="border-top:2px solid var(--border);font-weight:600">
-            <td>Total</td>
-            <td>${totMsg.toLocaleString('pt-BR')}</td>
-            <td>${totExec.toLocaleString('pt-BR')}</td>
-            <td>—</td>
-            <td>—</td>
-            <td style="font-size:.8rem">${totTkIn.toLocaleString('pt-BR')} / ${totTkOut.toLocaleString('pt-BR')}</td>
-            <td>US$${totCost.toFixed(4)}</td>
-          </tr></tfoot>
-        </table>`
-      }
-    </div>
-
-    <!-- Gráficos timeseries -->
-    <div class="m-charts-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
-      <div class="card" id="m-chart-messages">
-        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-          <span class="label">Mensagens</span>
-          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-messages">
-            <option value="all">Todos</option>${botOptions}
-          </select>
-        </div>
-        <div id="m-chart-messages-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
-          <span class="muted" style="font-size:.8rem">…</span>
-        </div>
-      </div>
-      <div class="card" id="m-chart-cost">
-        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-          <span class="label">Custo (US$)</span>
-          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-cost">
-            <option value="all">Todos</option>${botOptions}
-          </select>
-        </div>
-        <div id="m-chart-cost-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
-          <span class="muted" style="font-size:.8rem">…</span>
-        </div>
-      </div>
-      <div class="card" id="m-chart-latency">
-        <div style="padding:.625rem .75rem .25rem;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border)">
-          <span class="label">Latência média (ms)</span>
-          <select style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-md);padding:.15rem .4rem;font-size:.75rem;cursor:pointer;max-width:120px" id="m-bot-latency">
-            <option value="all">Todos</option>${botOptions}
-          </select>
-        </div>
-        <div id="m-chart-latency-body" style="padding:.5rem;min-height:90px;display:flex;align-items:center;justify-content:center">
-          <span class="muted" style="font-size:.8rem">…</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Top erros -->
-    <div class="card">
-      <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
-        <span class="label">Top erros no período</span>
-      </div>
-      ${erros.length === 0
-        ? `<div class="empty-state" style="padding:1.5rem"><span class="muted">Nenhum erro registrado</span></div>`
-        : `<ul style="list-style:none;margin:0;padding:0">
-          ${erros.map((e, i) => {
-            const msg = e.error_message || '';
-            const trunc = msg.length > 100 ? msg.slice(0, 100) + '…' : msg;
-            const dt = e.last_seen ? new Date(e.last_seen).toLocaleString('pt-BR') : '—';
-            return `<li style="display:flex;gap:.75rem;align-items:flex-start;padding:.625rem 1rem;border-bottom:${i < erros.length-1 ? '1px solid var(--border)' : 'none'}">
-              <span style="min-width:1.5rem;text-align:right;font-variant-numeric:tabular-nums;color:#ef4444;font-weight:600;font-size:.8rem">${e.count}</span>
-              <span title="${msg.replace(/"/g,'&quot;')}" style="flex:1;font-size:.8125rem;word-break:break-word">${trunc}</span>
-              <span style="white-space:nowrap;font-size:.75rem;color:var(--text-muted)">${e.sample_bot ? `<span class="badge badge--muted" style="font-size:.65rem">${e.sample_bot}</span> ` : ''}${dt}</span>
-            </li>`;
-          }).join('')}
-        </ul>`
-      }
-    </div>
-  `;
-
-  // Bind chart bot selects
-  document.getElementById('m-bot-messages')?.addEventListener('change', async e => {
-    _mBotMessages = e.target.value;
-    await _mLoadChart('messages', _mBotMessages, 'm-chart-messages-body');
-  });
-  document.getElementById('m-bot-cost')?.addEventListener('change', async e => {
-    _mBotCost = e.target.value;
-    await _mLoadChart('cost', _mBotCost, 'm-chart-cost-body');
-  });
-  document.getElementById('m-bot-latency')?.addEventListener('change', async e => {
-    _mBotLatency = e.target.value;
-    await _mLoadChart('latency', _mBotLatency, 'm-chart-latency-body');
-  });
-}
-
-async function _mLoadChart(metric, bot, containerId) {
-  const el = document.getElementById(containerId);
-  if (!el) return;
-  try {
-    const url = `/api/metrics/timeseries?metric=${metric}&period=${_mPeriod}&bot=${encodeURIComponent(bot)}`;
-    const data = await api(url);
-    const pts  = data.points || [];
-    const w    = el.clientWidth  || 260;
-    const h    = 80;
-    const chartSvg = metric === 'latency' ? drawLineChart(pts, w, h, metric) : drawBarChart(pts, w, h, metric);
-    el.innerHTML = `<div style="width:100%">${chartSvg}</div>`;
-  } catch {
-    el.innerHTML = `<span class="muted" style="font-size:.8rem">Erro ao carregar</span>`;
-  }
-}
-
-async function _mLoadCharts() {
-  await Promise.all([
-    _mLoadChart('messages', _mBotMessages, 'm-chart-messages-body'),
-    _mLoadChart('cost',     _mBotCost,     'm-chart-cost-body'),
-    _mLoadChart('latency',  _mBotLatency,  'm-chart-latency-body'),
-  ]);
-}
-
+/* renderMetricas + helpers (_mLoad/_mRender/_mLoadChart/_mLoadCharts) e o state
+   _m* foram REMOVIDOS na F2. O conteúdo de métricas vive agora na Visão Geral
+   (_vgLoadMetrics/_vgRenderMetrics/_vgLoadChart/_vgLoadCharts), com um único timer
+   _vgRefreshId. Os helpers de desenho (drawSparkline/drawBarChart/drawLineChart)
+   são compartilhados e seguem vivos logo acima. */
 /* ══════════════════════════════════════════════════════════════════
    NAVIGATION — sidebar agrupada (003-D2)
    ══════════════════════════════════════════════════════════════════ */
-/* Rebrand F1 §1.2 — nav rumo aos 3 grupos / 7 abas (Visão · Operação · Negócio).
-   TRAVA DE SEGURANÇA (F1 = só rebrand + scaffolding): nenhuma função existente
-   pode ficar inacessível. Por isso, nesta F1:
-     - Leads REMOVIDA (stub confirmado inútil).
-     - "Sessões WAHA" → renomeada "WAHA" (id `sessoes` mantido; renomear pra
-       `sec-waha` é trabalho de conteúdo da F2).
-     - "Usuários do portal" → renomeada "Clientes" (id `portal-usuarios` mantido;
-       merge com Cobrança é F3).
-   DESVIO CONSCIENTE da spec (avisado ao PM): a spec colapsa Métricas, Relatórios
-   e Cobrança JÁ na F1 (o conteúdo migra pra Visão Geral/Clientes em F2/F3). Como
-   essas fusões ainda não foram feitas, removê-las do menu agora deixaria
-   renderMetricas/renderRelatorios/renderCobranca órfãos (telas inacessíveis).
-   Então elas FICAM alcançáveis, marcadas "(migra F2/F3)", dentro do grupo que
-   será o lar futuro. F2/F3 removem o item + a <section> quando fundir o conteúdo.
-   IDs de seção NÃO mudam aqui → NAV_GROUPS ↔ sec-id ↔ teardown seguem em sync. */
+/* Rebrand F2 §1.2/§1.3 — nav consolidada (Visão · Operação · Negócio).
+   F2 fechou as fusões da coluna "Visão":
+     - "Visão Geral" agora é renderVisaoGeral, id `visao-geral`, sec `sec-visao-geral`.
+       Absorveu Métricas + (Mensagens 14d / Agendamentos de) Relatórios.
+     - Métricas e Relatórios SAÍRAM do menu E do DOM (sections removidas, renders
+       mortas deletadas). Não há mais item órfão nem NAV_HIDDEN_ITEMS pra elas.
+     - "WAHA" agora tem id `waha`, sec `sec-waha` (renomeado de `sessoes`); absorveu
+       o bloco de sessões que vivia no dashboard.
+     - Leads totalmente removida (item, section, stub e os botões "Ver tudo →").
+   Pendências de F3 (não tocar agora): Execuções (redesenho), Clientes (merge
+   portal-usuarios + portal-cobranca). Por isso `portal-cobranca` SEGUE alcançável,
+   marcada "(migra F3)".
+   NAV_GROUPS ↔ sec-id ↔ teardown 100% em sync (ver navigateTo + migração de
+   localStorage abaixo). */
 const NAV_GROUPS = [
   {
     id: 'grp-visao',
     label: 'Visão',
     items: [
-      { id: 'dashboard', label: 'Visão Geral', render: renderDashboard },
-      // Migram pra Visão Geral na F2 — mantidas alcançáveis até lá.
-      { id: 'metricas',   label: 'Métricas (migra F2)',   render: renderMetricas },
-      { id: 'relatorios', label: 'Relatórios (migra F2)', render: renderRelatorios },
+      { id: 'visao-geral', label: 'Visão Geral', render: renderVisaoGeral },
     ],
   },
   {
@@ -9221,7 +9271,7 @@ const NAV_GROUPS = [
     label: 'Operação',
     items: [
       { id: 'bots',       label: 'Bots',       render: renderBots },
-      { id: 'sessoes',    label: 'WAHA',       render: renderSessoes },
+      { id: 'waha',       label: 'WAHA',       render: renderSessoes },
       { id: 'execucoes',  label: 'Execuções',  render: renderExecucoes },
       { id: 'roteamento', label: 'Roteamento', render: renderRoteamento },
     ],
@@ -9239,16 +9289,10 @@ const NAV_GROUPS = [
   },
 ];
 
-/* Itens ALCANÇÁVEIS por navigateTo() mas SEM botão no menu lateral (F1).
-   `leads` saiu do menu (stub removido), porém o bloco "LEADS HOJE" do dashboard
-   ainda tem um "Ver tudo →" que chama navigateTo('leads'). Mantê-lo aqui evita
-   tela em branco silenciosa (sem entrada em NAV_ITEMS_MAP → render nunca dispara
-   e a <section> abre vazia). A <section id="sec-leads"> e renderLeadsStub seguem
-   no DOM/código exatamente por isso. F2 reescreve o dashboard e aí Leads some de
-   vez (item + section + render + o botão do dashboard). */
-const NAV_HIDDEN_ITEMS = [
-  { id: 'leads', label: 'Leads', render: renderLeadsStub },
-];
+/* Itens ALCANÇÁVEIS por navigateTo() mas SEM botão no menu lateral.
+   F2 esvaziou a lista (leads removida de vez). Mantida como array vazio para o
+   resto da máquina de nav (NAV_ITEMS_MAP.forEach) seguir funcionando. */
+const NAV_HIDDEN_ITEMS = [];
 
 /* Flat map de id â†’ item para lookup rápido (inclui itens ocultos navegáveis) */
 const NAV_ITEMS_MAP = {};
@@ -9265,15 +9309,27 @@ function _saveGroupState(st) {
 
 let _groupState = _loadGroupState();
 
-let _savedSection = localStorage.getItem('paineladmin:section') || 'dashboard';
-if (_savedSection === 'clones') { _savedSection = 'bots'; localStorage.setItem('paineladmin:section', 'bots'); }
-// Defensivo (F1): se a seção salva não existe mais (ex.: id removido em fase
-// futura), cai pra 'dashboard' em vez de abrir tela em branco. Os renames de
-// sec-id da spec (dashboard→visao-geral, sessoes→waha…) acontecem em F2/F3;
-// quando vierem, suas migrações de string entram aqui.
+let _savedSection = localStorage.getItem('paineladmin:section') || 'visao-geral';
+// Migração de ids antigos → novos (spec §1.4). Quem tinha 'dashboard'/'metricas'/
+// 'relatorios'/'leads' salvo cai na nova "Visão Geral"; 'sessoes' vira 'waha';
+// 'clones' (legado) vira 'bots'.
+const _SECTION_MIGRATIONS = {
+  clones: 'bots',
+  dashboard: 'visao-geral',
+  metricas: 'visao-geral',
+  relatorios: 'visao-geral',
+  leads: 'visao-geral',
+  sessoes: 'waha',
+};
+if (_SECTION_MIGRATIONS[_savedSection]) {
+  _savedSection = _SECTION_MIGRATIONS[_savedSection];
+  localStorage.setItem('paineladmin:section', _savedSection);
+}
+// Defensivo: se a seção salva não existe mais no DOM, cai na Visão Geral em vez
+// de abrir tela em branco.
 if (!document.getElementById(`sec-${_savedSection}`)) {
-  _savedSection = 'dashboard';
-  localStorage.setItem('paineladmin:section', 'dashboard');
+  _savedSection = 'visao-geral';
+  localStorage.setItem('paineladmin:section', 'visao-geral');
 }
 let _activeSection = _savedSection;
 let _rendered = {};
@@ -9351,21 +9407,18 @@ function navigateTo(sectionId) {
     closeExecDetail();
   }
 
-  // Para polling de atividade do dashboard ao sair
-  if (sectionId !== 'dashboard' && _dashActivityInterval) {
-    clearInterval(_dashActivityInterval);
-    _dashActivityInterval = null;
+  // Teardown da VISÃO GERAL (spec §1.4): ao SAIR de 'visao-geral', desliga TODOS
+  // os timers que ela arma — o polling rápido de atividade (12s, _dashActivityInterval)
+  // E o refresh único de métricas+agendamentos (60s, _vgRefreshId). Não vaza
+  // polling em background. Ambos são religados por renderVisaoGeral ao voltar.
+  if (sectionId !== 'visao-geral') {
+    if (_dashActivityInterval) { clearInterval(_dashActivityInterval); _dashActivityInterval = null; }
+    if (_vgRefreshId) { clearInterval(_vgRefreshId); _vgRefreshId = null; }
   }
 
-  // Para auto-refresh de métricas ao sair (evita requests fantasma)
-  if (sectionId !== 'metricas' && _mRefreshId) {
-    clearInterval(_mRefreshId);
-    _mRefreshId = null;
-  }
-
-  // Render if not yet rendered (or always re-render dashboard for freshness)
+  // Render if not yet rendered (Visão Geral sempre re-renderiza p/ dados frescos)
   const item = NAV_ITEMS_MAP[sectionId];
-  if (item && (sectionId === 'dashboard' || !_rendered[sectionId])) {
+  if (item && (sectionId === 'visao-geral' || !_rendered[sectionId])) {
     _rendered[sectionId] = true;
     item.render();
   }
@@ -10316,6 +10369,7 @@ window.PainelBg = (function () {
   window.addEventListener('beforeunload', () => {
     if (_execSSE) { _execSSE.close(); _execSSE = null; }
     if (_dashActivityInterval) { clearInterval(_dashActivityInterval); _dashActivityInterval = null; }
+    if (_vgRefreshId) { clearInterval(_vgRefreshId); _vgRefreshId = null; }
   });
 
   // Widget de countdown da limpeza automática
