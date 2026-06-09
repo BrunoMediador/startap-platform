@@ -145,14 +145,14 @@ export default function ServicosPage() {
         <ErrorState onRetry={() => servicosQ.refetch()} />
       ) : servicos.length === 0 && editing !== 'new' ? (
         <EmptyState
-          icon={<IconScissors size={48} />}
+          icon={<IconScissors size={26} />}
           title="Nenhum serviço cadastrado"
-          description="Adicione os serviços que o robô pode agendar."
+          description="Adicione os serviços que o robô pode agendar. O robô usa essa lista pra marcar atendimentos no WhatsApp."
           action={{ label: 'Adicionar serviço', onClick: startAdd }}
         />
       ) : (
         <>
-          <div className="mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
+          <div className="stagger stagger-2 mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
             {servicos.map((s, idx) =>
               editing === idx ? (
                 <EditRow

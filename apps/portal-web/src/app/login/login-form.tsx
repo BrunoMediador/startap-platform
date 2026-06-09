@@ -1,5 +1,6 @@
 'use client';
 
+import { ParticleField } from '@/components/fx/particle-field';
 import { Brandmark, IconEye, IconEyeOff, IconInfo, IconLock, IconUser } from '@/components/icons';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { LoginErrorBody, LoginResponse } from '@/lib/api-types';
@@ -19,7 +20,6 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
  */
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { ParticleField } from './particle-field';
 
 export function LoginForm() {
   const router = useRouter();

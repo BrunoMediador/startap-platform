@@ -148,7 +148,7 @@ export default function HorariosPage() {
         Aplicar a todos os dias
       </button>
 
-      <div className="overflow-hidden rounded-card border border-line bg-surface">
+      <div className="stagger stagger-2 overflow-hidden rounded-card border border-line bg-surface">
         {DIAS_SEMANA.map((dia) => {
           const d = semana[dia];
           const fechado = d.fechado;

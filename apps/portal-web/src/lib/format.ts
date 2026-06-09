@@ -208,3 +208,13 @@ export function saudacao(date = new Date()): string {
   if (h < 18) return 'Boa tarde';
   return 'Boa noite';
 }
+
+const DIAS_SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+/** Data por extenso pra saudacao editorial (1.D.3): "Segunda, 9 de junho". */
+export function dataPorExtenso(date = new Date()): string {
+  const dia = DIAS_SEMANA[date.getDay()];
+  const num = date.getDate();
+  const mes = MESES[date.getMonth()];
+  return `${dia}, ${num} de ${mes}`;
+}

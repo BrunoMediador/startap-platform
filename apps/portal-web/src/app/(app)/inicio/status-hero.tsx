@@ -13,7 +13,6 @@
  * reload da pagina ja recarregam tudo — o botao era redundante (feedback Bruno).
  */
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
 import type { StatusResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 
@@ -53,7 +52,9 @@ function Pulse({ state }: { state: BotState }) {
         state === 'ativo' && 'animate-ring',
       )}
     >
-      <span className={cn('size-[13px] rounded-full', tone.core)} />
+      <span
+        className={cn('size-[13px] rounded-full', tone.core, state === 'ativo' && 'pulse-glow')}
+      />
     </span>
   );
 }
@@ -63,7 +64,9 @@ export function StatusHero({ status }: { status: StatusResponse }) {
   const copy = COPY[state];
 
   return (
-    <Card className="mb-3.5">
+    // Card-heroi E1 (1.D.4): borda line-strong + relevo preto (sem cor) pra
+    // descolar da hero-zone viva. Margem fica por conta do grid do hero.
+    <div className="hero-e1 relative h-full overflow-hidden rounded-card border border-line-strong bg-surface p-[18px]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3.5">
           <Pulse state={state} />
@@ -78,6 +81,6 @@ export function StatusHero({ status }: { status: StatusResponse }) {
           {state === 'pausado' && <Badge tone="warn">Pausado</Badge>}
         </div>
       </div>
-    </Card>
+    </div>
   );
 }

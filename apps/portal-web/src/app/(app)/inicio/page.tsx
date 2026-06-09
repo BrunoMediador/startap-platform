@@ -12,11 +12,9 @@ import { MetricCard } from '@/components/ui/card';
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { agruparAgendamentos } from '@/lib/agendamentos';
-import { saudacao } from '@/lib/format';
 import { useAgendamentos, useStatus } from '@/lib/queries';
 import { AgendamentosList } from './agendamentos-list';
-import { BillingCard } from './billing-card';
-import { StatusHero } from './status-hero';
+import { HeroZone } from './hero-zone';
 import { SuspendedNotice } from './suspended-notice';
 
 export default function InicioPage() {
@@ -25,15 +23,20 @@ export default function InicioPage() {
   const agendamentos = useAgendamentos(slot);
 
   if (status.isPending) {
+    // Shape do skeleton casa com o conteudo real (1.D.6): kicker+saudacao,
+    // status-hero + billing, metricas, lista.
     return (
       <>
-        <div className="mb-4">
-          <Skeleton className="mb-2 h-3 w-20" />
-          <Skeleton className="h-6 w-44" />
+        <div className="mb-4 pt-1.5">
+          <Skeleton className="mb-2.5 h-3 w-24" />
+          <Skeleton className="h-7 w-56" />
+          <Skeleton className="mt-2 h-3.5 w-44" />
         </div>
         <span className="sr-only">Carregando seu painel…</span>
-        <Skeleton className="mb-3.5 h-[112px] w-full rounded-card" />
-        <Skeleton className="mb-3.5 h-[130px] w-full rounded-card" />
+        <div className="mb-[18px] grid gap-3.5 min-[1100px]:grid-cols-2">
+          <Skeleton className="h-[92px] w-full rounded-card" />
+          <Skeleton className="h-[140px] w-full rounded-card" />
+        </div>
         <div className="mb-[18px] grid grid-cols-2 gap-3">
           <Skeleton className="h-[74px] rounded-card-sm" />
           <Skeleton className="h-[74px] rounded-card-sm" />
@@ -61,22 +64,14 @@ export default function InicioPage() {
 
   return (
     <>
-      <div className="mb-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-          {saudacao()}
-        </div>
-        <h1 className="mt-0.5 font-display text-[20px] font-bold tracking-[-0.01em] text-ink">
-          {nome}
-        </h1>
-      </div>
-
       {!data.flow_enabled && <SuspendedNotice />}
 
-      <StatusHero status={data} />
+      {/* Hero-zone (1.D): saudacao editorial + status (E1) + billing (E2),
+          com aurora + canvas ambient + fade. Stagger interno nos cards-heroi. */}
+      <HeroZone status={data} businessName={nome} />
 
-      <BillingCard billing={data.billing} />
-
-      <div className="mb-[18px] grid grid-cols-2 gap-3">
+      {/* Metricas (E0) — stagger 3 no mount. */}
+      <div className="stagger stagger-3 mb-[18px] grid grid-cols-2 gap-3">
         <MetricCard
           value={data.pausas_ativas}
           caption={data.pausas_ativas === 1 ? 'Número pausado' : 'Números pausados'}
@@ -86,7 +81,7 @@ export default function InicioPage() {
         <MetricCard value={proximosCount} caption="Próximos agendamentos" />
       </div>
 
-      <div className="mx-0.5 mb-[11px] mt-1">
+      <div className="stagger stagger-4 mx-0.5 mb-[11px] mt-1">
         <h2 className="font-display text-[15px] font-semibold text-ink">Agendamentos</h2>
       </div>
 
@@ -101,7 +96,9 @@ export default function InicioPage() {
           onRetry={() => agendamentos.refetch()}
         />
       ) : (
-        <AgendamentosList data={agendamentos.data} />
+        <div className="stagger stagger-4">
+          <AgendamentosList data={agendamentos.data} />
+        </div>
       )}
     </>
   );

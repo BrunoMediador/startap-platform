@@ -8,7 +8,7 @@
  * escura (amber-ink #1A1208) — branco sobre ambar reprova AA. Roxo/vermelho
  * solidos usam texto branco (AA). Barra de progresso com aria-label textual.
  */
-import { Card } from '@/components/ui/card';
+import { IconWallet } from '@/components/icons';
 import type { StatusBilling } from '@/lib/api-types';
 import { type BillingTone, computeBillingView } from '@/lib/billing';
 import { cn } from '@/lib/cn';
@@ -56,23 +56,15 @@ export function BillingCard({ billing }: BillingCardProps) {
   // Sem dados de billing — informativo, sem alarme (spec 3.2).
   if (!view.hasDueDate) {
     return (
-      <Card padded={false} className={cn('relative mb-3.5 overflow-hidden p-5', SURFACE.brand)}>
-        <Decor />
-        <div
-          className={cn(
-            'relative z-10 text-[11px] font-semibold uppercase tracking-[0.08em]',
-            LABEL.brand,
-          )}
-        >
-          Sua mensalidade
-        </div>
+      <BillingShell tone="brand">
+        <BillingHeader label={LABEL.brand} tone="brand" />
         <div className="relative z-10 mt-1.5 font-display text-[20px] font-bold text-white">
           Mensalidade em dia
         </div>
         <p className={cn('relative z-10 mt-1 text-[13px]', META.brand)}>
           Pagamento controlado pelo suporte
         </p>
-      </Card>
+      </BillingShell>
     );
   }
 
@@ -83,16 +75,8 @@ export function BillingCard({ billing }: BillingCardProps) {
   const titleVencido = 'Mensalidade vencida';
 
   return (
-    <Card padded={false} className={cn('relative mb-3.5 overflow-hidden p-5', SURFACE[tone])}>
-      <Decor />
-      <div
-        className={cn(
-          'relative z-10 text-[11px] font-semibold uppercase tracking-[0.08em]',
-          LABEL[tone],
-        )}
-      >
-        Sua mensalidade
-      </div>
+    <BillingShell tone={tone}>
+      <BillingHeader label={LABEL[tone]} tone={tone} />
 
       {view.vencido ? (
         <div
@@ -151,7 +135,47 @@ export function BillingCard({ billing }: BillingCardProps) {
           />
         </div>
       )}
-    </Card>
+    </BillingShell>
+  );
+}
+
+/**
+ * Casca do billing (heroi E2, 1.D.2/1.D.4): fundo solido por tom + glow roxo
+ * contido (hero-e2) + filete de marca branco no topo (billing-filete) + circulo
+ * decorativo. h-full pra esticar junto do status no grid de 2 colunas (lg).
+ */
+function BillingShell({ tone, children }: { tone: BillingTone; children: React.ReactNode }) {
+  return (
+    <section
+      aria-label="Sua mensalidade"
+      className={cn(
+        'hero-e2 billing-filete relative h-full overflow-hidden rounded-card p-5',
+        SURFACE[tone],
+      )}
+    >
+      <Decor />
+      {children}
+    </section>
+  );
+}
+
+/** Linha de topo do billing (1.D.4): label + icone de contexto (carteira). */
+function BillingHeader({ label, tone }: { label: string; tone: BillingTone }) {
+  return (
+    <div className="relative z-10 flex items-start justify-between gap-3">
+      <span className={cn('text-[11px] font-semibold uppercase tracking-[0.08em]', label)}>
+        Sua mensalidade
+      </span>
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-[34px] shrink-0 items-center justify-center rounded-[10px]',
+          tone === 'amber' ? 'bg-amber-ink/12 text-amber-ink' : 'bg-white/[0.14] text-white',
+        )}
+      >
+        <IconWallet size={18} />
+      </span>
+    </div>
   );
 }
 
