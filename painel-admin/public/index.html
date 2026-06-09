@@ -4,50 +4,72 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Startap — Painel</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<!-- Fontes auto-hospedadas (rebrand Cadência F1) — sem CDN externo. woff2 latin
+     servidos por painel-admin/public/fonts/ via express.static. Sora (display),
+     Inter (corpo), JetBrains Mono (mono). -->
+<link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/sora-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
 <style>
-/* ── Tokens — ADR 0005 Opção C (Linear-like operacional) ─────────── */
+/* ── @font-face — fontes locais (rebrand Cadência F1) ─────────────────── */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Sora'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/sora-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Sora'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/sora-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/sora-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/sora-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2'); }
+/* ── Tokens — Rebrand "Cadência Noturna" (F1) ─────────────────────────
+   Nomes de token PRESERVADOS do ADR 0005 (--bg, --surface, --primary…) — só os
+   VALORES trocam, pra reskin propagar sem reescrever 10k linhas. Mapa de-para na
+   design-spec-gestao-v2.md §2. Tokens NOVOS da Cadência (--brand-fill etc.)
+   adicionados ao fim de cada grupo. Identidade-fonte: portal globals.css. ── */
 :root {
   /* Backgrounds */
-  --bg:            #0a0a0a;
-  --bg-2:          #111111;
+  --bg:            #14121c;   /* era #0a0a0a — fundo geral roxeado (--c-bg) */
+  --bg-2:          #0f0d17;   /* era #111111 — superfície afundada (--c-surface-sunken) */
   /* Surfaces */
-  --surface:       #111827;
-  --surface-2:     #1e293b;
-  --surface-3:     #253347;
+  --surface:       #1e1b2b;   /* era #111827 — card/lista/input (--c-surface) */
+  --surface-2:     #262237;   /* era #1e293b — elevado/popover (--c-surface-elev) */
+  --surface-3:     #2c2740;   /* era #253347 — hover (--c-surface-hover) */
   /* Borders */
-  --border:        #1e3a5f;
-  --border-light:  #2d4a6e;
+  --border:        #332e45;   /* era #1e3a5f — (--c-line) */
+  --border-light:  #433c5c;   /* era #2d4a6e — (--c-line-strong) */
   /* Text */
-  --text:          #f1f5f9;
-  --text-muted:    #94a3b8;
-  --text-subtle:   #64748b;
-  /* Primary */
-  --primary:       #3b82f6;
-  --primary-hover: #2563eb;
-  --primary-glow:  rgba(59,130,246,0.15);
+  --text:          #f3f1fa;   /* era #f1f5f9 — (--c-ink) */
+  --text-muted:    #b4aecb;   /* era #94a3b8 — (--c-ink-soft) */
+  --text-subtle:   #807a95;   /* era #64748b — (--c-ink-faint) */
+  /* Primary — roxo claro de AÇÃO (texto/ícone/borda/foco) */
+  --primary:       #9a7cf0;   /* era #3b82f6 — (--c-brand) */
+  --primary-hover: #8b66ee;   /* era #2563eb — (--c-brand-600) */
+  --primary-glow:  rgba(154,124,240,0.18);  /* era rgba(59,130,246,.15) — (--c-shadow-focus) */
+  /* Brand fill — roxo SÓLIDO de FUNDO de botão primário/badge (texto #14121c) */
+  --brand-fill:        #6431d6;   /* NOVO — (--c-brand-fill) */
+  --brand-fill-hover:  #5526c0;   /* NOVO — hover do fill */
+  --brand-soft:        #231c3d;   /* NOVO — chip/badge brand suave */
+  --brand-on-fill:     #14121c;   /* NOVO — texto sobre brand-fill (escuro, não branco) */
   /* Semantic */
-  --success:       #10b981;
-  --success-bg:    rgba(16,185,129,0.12);
-  --danger:        #ef4444;
-  --danger-bg:     rgba(239,68,68,0.12);
-  --warning:       #f59e0b;
-  --warning-bg:    rgba(245,158,11,0.12);
-  --info:          #38bdf8;
-  --info-bg:       rgba(56,189,248,0.12);
-  /* Radius */
-  --radius-sm:     4px;
-  --radius-md:     8px;
-  --radius-lg:     10px;
-  --radius-xl:     14px;
-  --radius-full:   9999px;
-  /* Shadows */
-  --shadow-xs:     0 1px 2px rgba(0,0,0,0.5);
-  --shadow-sm:     0 2px 4px rgba(0,0,0,0.4);
-  --shadow-md:     0 4px 12px rgba(0,0,0,0.3);
-  --shadow-lg:     0 8px 32px rgba(0,0,0,0.4);
+  --success:       #4ed88f;   /* era #10b981 — (--c-ok) */
+  --success-bg:    #0f2a1e;   /* era rgba(16,185,129,.12) — (--c-ok-soft) */
+  --danger:        #ff6b5e;   /* era #ef4444 — (--c-danger) */
+  --danger-bg:     #33161a;   /* era rgba(239,68,68,.12) — (--c-danger-soft) */
+  --warning:       #e0a23c;   /* era #f59e0b — (--c-warn / --c-amber) */
+  --warning-bg:    #2e2310;   /* era rgba(245,158,11,.12) — (--c-warn-soft) */
+  --info:          #9a7cf0;   /* era #38bdf8 — Cadência não tem ciano: usa brand */
+  --info-bg:       #231c3d;   /* era rgba(56,189,248,.12) — (--c-brand-soft) */
+  /* Radius (aproxima do portal) */
+  --radius-sm:     8px;       /* era 4px */
+  --radius-md:     12px;      /* era 8px — (--radius-field/card-sm) */
+  --radius-lg:     13px;      /* era 10px — (--radius-btn) */
+  --radius-xl:     18px;      /* era 14px — (--radius-card) */
+  --radius-full:   999px;     /* era 9999px — (--radius-pill) */
+  /* Shadows (escuro = sem sombra em card; só modal/popover) */
+  --shadow-xs:     none;                          /* era 0 1px 2px rgba(0,0,0,.5) */
+  --shadow-sm:     none;                          /* era 0 2px 4px rgba(0,0,0,.4) */
+  --shadow-md:     0 8px 32px rgba(0,0,0,0.45);   /* era 0 4px 12px — só modal/popover */
+  --shadow-lg:     0 8px 32px rgba(0,0,0,0.45);   /* era 0 8px 32px — modal/sheet */
   /* Spacing (escala 4px) */
   --space-1:  .25rem;
   --space-2:  .5rem;
@@ -69,15 +91,23 @@
   --sidebar-w: 240px;
   --header-h:  56px;
   --transition:.15s ease;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Famílias — auto-hospedadas (sem CDN). Sora display + Inter corpo + JBM mono */
+  --font-display: 'Sora', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans:    'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
 }
 /* ── Reset ──────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
-html { font-size: 14px; }
+/* Cor-base fica no HTML (não no body). O body é bloco em fluxo e seu background
+   é pintado DEPOIS dos descendentes com z-index negativo (ordem de pintura CSS
+   2.1) — se opaco, tampa o canvas `.app-bg` (z-index:-1) em toda a área. Mesmo
+   gotcha que o portal resolveu (ver reference_portal_web_fundo_vivo). Por isso:
+   --bg só no html → dark sólido sem flash; constelação aparece nos vãos. */
+html { font-size: 14px; background: var(--bg); }
 body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg);
+  font-family: var(--font-sans);
+  /* SEM background aqui de propósito (ver html acima) — não tampar o canvas. */
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
@@ -87,10 +117,35 @@ a:hover { text-decoration: underline; }
 img, video, audio { max-width: 100%; display: block; }
 button { font-family: inherit; cursor: pointer; }
 textarea, input, select { font-family: inherit; }
+/* ── Fundo vivo (constelação) — rebrand F1 §3 ───────────────────────────
+   Canvas FIXO full-viewport montado UMA vez no boot (não por aba). z-index:-1
+   → fica abaixo dos blocos em fluxo (sidebar/topbar/cards são surface SÓLIDO e
+   cobrem; partículas só aparecem nos vãos) mas acima do bg do html. Não
+   clicável. Vinheta logo acima (mesmo z-index, depois no DOM) garante AA do
+   texto que rola por cima. Eco do portal globals.css 359-378. */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.app-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 120% at 50% 0%, rgba(20,18,28,0) 32%, rgba(20,18,28,.55) 100%),
+    linear-gradient(180deg, rgba(20,18,28,.28) 0%, rgba(20,18,28,0) 22%);
+}
 /* ── Typography ─────────────────────────────────────────────────────── */
-.h1  { font-size: 1.5rem;   font-weight: 700; margin: 0 0 .5rem; line-height: 1.2; }
-.h2  { font-size: 1.125rem; font-weight: 600; margin: 0 0 .5rem; }
-.h3  { font-size: 1rem;     font-weight: 600; margin: 0; }
+/* Títulos em Sora (display); corpo herda Inter via body. (rebrand F1 §2.6) */
+.h1  { font-family: var(--font-display); font-size: 1.5rem;   font-weight: 700; margin: 0 0 .5rem; line-height: 1.2; letter-spacing: -.01em; }
+.h2  { font-family: var(--font-display); font-size: 1.125rem; font-weight: 600; margin: 0 0 .5rem; }
+.h3  { font-family: var(--font-display); font-size: 1rem;     font-weight: 600; margin: 0; }
 .muted   { color: var(--text-muted); font-size: .8125rem; }
 .subtle  { color: var(--text-subtle); font-size: .75rem; }
 .gcal-error-detail { margin-top: .375rem; font-family: var(--font-mono, monospace); font-size: .75rem; word-break: break-all; color: var(--danger, #ef4444); }
@@ -220,7 +275,8 @@ textarea, input, select { font-family: inherit; }
 .nav-item.active {
   background: var(--primary-glow);
   color: var(--primary);
-  border: 1px solid rgba(59,130,246,0.2);
+  /* F1: era rgba(59,130,246,.2) azul — agora roxo brand p/ não destoar da nav. */
+  border: 1px solid rgba(154,124,240,0.24);
 }
 .nav-item .nav-icon { flex-shrink: 0; opacity: .8; }
 .nav-item.active .nav-icon { opacity: 1; }
@@ -2141,6 +2197,12 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 </style>
 </head>
 <body>
+<!-- ── Fundo vivo (constelação) — rebrand F1 §3 ───────────────────────────
+     Canvas + vinheta montados UMA vez, ATRÁS de todo o conteúdo (z-index:-1).
+     Decorativo: aria-hidden + tabindex -1 + pointer-events:none. A animação é
+     dirigida pelo IIFE window.PainelBg (definido no fim do <script>). -->
+<canvas id="app-bg" class="app-bg" aria-hidden="true" tabindex="-1"></canvas>
+<div class="app-vignette" aria-hidden="true"></div>
 <!-- ── Sidebar backdrop (mobile) ─────────────────────────────────── -->
 <div class="sidebar-backdrop" id="sidebar-backdrop" aria-hidden="true"></div>
 <!-- ── Mobile header ────────────────────────────────────────────── -->
@@ -9128,50 +9190,70 @@ async function _mLoadCharts() {
 /* ══════════════════════════════════════════════════════════════════
    NAVIGATION — sidebar agrupada (003-D2)
    ══════════════════════════════════════════════════════════════════ */
+/* Rebrand F1 §1.2 — nav rumo aos 3 grupos / 7 abas (Visão · Operação · Negócio).
+   TRAVA DE SEGURANÇA (F1 = só rebrand + scaffolding): nenhuma função existente
+   pode ficar inacessível. Por isso, nesta F1:
+     - Leads REMOVIDA (stub confirmado inútil).
+     - "Sessões WAHA" → renomeada "WAHA" (id `sessoes` mantido; renomear pra
+       `sec-waha` é trabalho de conteúdo da F2).
+     - "Usuários do portal" → renomeada "Clientes" (id `portal-usuarios` mantido;
+       merge com Cobrança é F3).
+   DESVIO CONSCIENTE da spec (avisado ao PM): a spec colapsa Métricas, Relatórios
+   e Cobrança JÁ na F1 (o conteúdo migra pra Visão Geral/Clientes em F2/F3). Como
+   essas fusões ainda não foram feitas, removê-las do menu agora deixaria
+   renderMetricas/renderRelatorios/renderCobranca órfãos (telas inacessíveis).
+   Então elas FICAM alcançáveis, marcadas "(migra F2/F3)", dentro do grupo que
+   será o lar futuro. F2/F3 removem o item + a <section> quando fundir o conteúdo.
+   IDs de seção NÃO mudam aqui → NAV_GROUPS ↔ sec-id ↔ teardown seguem em sync. */
 const NAV_GROUPS = [
   {
-    id: 'grp-dashboard',
-    label: 'Dashboard',
+    id: 'grp-visao',
+    label: 'Visão',
     items: [
-      { id: 'dashboard', label: 'Visão geral', render: renderDashboard },
-      { id: 'metricas',  label: 'Métricas',    render: renderMetricas  },
+      { id: 'dashboard', label: 'Visão Geral', render: renderDashboard },
+      // Migram pra Visão Geral na F2 — mantidas alcançáveis até lá.
+      { id: 'metricas',   label: 'Métricas (migra F2)',   render: renderMetricas },
+      { id: 'relatorios', label: 'Relatórios (migra F2)', render: renderRelatorios },
     ],
   },
   {
     id: 'grp-operacao',
     label: 'Operação',
     items: [
-      { id: 'bots',       label: 'Bots',          render: renderBots },
-      { id: 'sessoes',    label: 'Sessões WAHA',   render: renderSessoes },
-      { id: 'leads',      label: 'Leads',          render: renderLeadsStub },
-      { id: 'roteamento', label: 'Roteamento',     render: renderRoteamento },
-      { id: 'execucoes',  label: 'Execuções',      render: renderExecucoes },
+      { id: 'bots',       label: 'Bots',       render: renderBots },
+      { id: 'sessoes',    label: 'WAHA',       render: renderSessoes },
+      { id: 'execucoes',  label: 'Execuções',  render: renderExecucoes },
+      { id: 'roteamento', label: 'Roteamento', render: renderRoteamento },
     ],
   },
   {
-    id: 'grp-configuracao',
-    label: 'Configuração',
+    id: 'grp-negocio',
+    label: 'Negócio',
     items: [
-      { id: 'configuracoes', label: 'Configurações', render: renderConfig },
-      { id: 'relatorios',    label: 'Relatórios',    render: renderRelatorios },
-    ],
-  },
-  {
-    // Missão 009 — Portal do Cliente. render delega ao IIFE window.PortalAdmin
-    // (definido mais abaixo no arquivo); chamada é lazy/runtime, então a ordem
-    // de definição não importa.
-    id: 'grp-portal',
-    label: 'Portal do Cliente',
-    items: [
-      { id: 'portal-usuarios', label: 'Usuários do portal', render: () => window.PortalAdmin.renderUsuarios() },
-      { id: 'portal-cobranca', label: 'Cobrança',           render: () => window.PortalAdmin.renderCobranca() },
+      // "Clientes" = usuários do portal hoje; funde com Cobrança na F3.
+      { id: 'portal-usuarios', label: 'Clientes',          render: () => window.PortalAdmin.renderUsuarios() },
+      // Migra pra dentro de Clientes na F3 — mantida alcançável até lá.
+      { id: 'portal-cobranca', label: 'Cobrança (migra F3)', render: () => window.PortalAdmin.renderCobranca() },
+      { id: 'configuracoes',   label: 'Configurações',     render: renderConfig },
     ],
   },
 ];
 
-/* Flat map de id â†’ item para lookup rápido */
+/* Itens ALCANÇÁVEIS por navigateTo() mas SEM botão no menu lateral (F1).
+   `leads` saiu do menu (stub removido), porém o bloco "LEADS HOJE" do dashboard
+   ainda tem um "Ver tudo →" que chama navigateTo('leads'). Mantê-lo aqui evita
+   tela em branco silenciosa (sem entrada em NAV_ITEMS_MAP → render nunca dispara
+   e a <section> abre vazia). A <section id="sec-leads"> e renderLeadsStub seguem
+   no DOM/código exatamente por isso. F2 reescreve o dashboard e aí Leads some de
+   vez (item + section + render + o botão do dashboard). */
+const NAV_HIDDEN_ITEMS = [
+  { id: 'leads', label: 'Leads', render: renderLeadsStub },
+];
+
+/* Flat map de id â†’ item para lookup rápido (inclui itens ocultos navegáveis) */
 const NAV_ITEMS_MAP = {};
 NAV_GROUPS.forEach(g => g.items.forEach(i => { NAV_ITEMS_MAP[i.id] = i; }));
+NAV_HIDDEN_ITEMS.forEach(i => { NAV_ITEMS_MAP[i.id] = i; });
 
 /* Estado de colapso dos grupos — persiste no localStorage */
 function _loadGroupState() {
@@ -9185,6 +9267,14 @@ let _groupState = _loadGroupState();
 
 let _savedSection = localStorage.getItem('paineladmin:section') || 'dashboard';
 if (_savedSection === 'clones') { _savedSection = 'bots'; localStorage.setItem('paineladmin:section', 'bots'); }
+// Defensivo (F1): se a seção salva não existe mais (ex.: id removido em fase
+// futura), cai pra 'dashboard' em vez de abrir tela em branco. Os renames de
+// sec-id da spec (dashboard→visao-geral, sessoes→waha…) acontecem em F2/F3;
+// quando vierem, suas migrações de string entram aqui.
+if (!document.getElementById(`sec-${_savedSection}`)) {
+  _savedSection = 'dashboard';
+  localStorage.setItem('paineladmin:section', 'dashboard');
+}
 let _activeSection = _savedSection;
 let _rendered = {};
 
@@ -9990,9 +10080,187 @@ window.PortalAdmin = (() => {
 })();
 
 /* ══════════════════════════════════════════════════════════════════
+   FUNDO VIVO (constelação) — rebrand F1 §3
+   Porte JS-puro da ParticleField do portal (apps/portal-web/.../particle-field
+   .tsx), variante 'appbg'. Canvas 2D vanilla, sem libs. IIFE namespaced
+   (window.PainelBg) — NÃO toca o escopo global existente. Montado UMA vez no
+   boot; persiste por toda a sessão (single-page real: o painel troca .section
+   via JS, nunca remonta). Parâmetros VIVID idênticos ao portal (decisão Bruno:
+   "vivo igual ao portal").
+   Performance/A11y P0: pausa por Page Visibility; DPR cap 2; resize debounce
+   150ms; prefers-reduced-motion → 1 frame estático sem loop, reage em runtime.
+   ══════════════════════════════════════════════════════════════════ */
+window.PainelBg = (function () {
+  'use strict';
+
+  // Vivacidade nível-portal (particle-field.tsx VIVID). cursorLink ligado.
+  var CFG = {
+    density: 14000, maxDesktop: 90, maxMobile: 45, minCount: 14,
+    speed: 0.32, radiusMin: 1.1, radiusMax: 2.3,
+    linkDesktop: 130, linkMobile: 100, pointAlpha: 0.85, lineAlpha: 0.34,
+    cursorLink: true,
+  };
+  var SHARED = { amberEvery: 9, cursorRadius: 160, cursorAlpha: 0.45, dprCap: 2, mobileBreakpoint: 880 };
+  var PURPLE = '#9A7CF0', AMBER = '#E0A23C';
+
+  function rand(min, max) { return Math.random() * (max - min) + min; }
+
+  var _started = false;
+
+  function mount() {
+    if (_started) return;
+    var canvas = document.getElementById('app-bg');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    _started = true;
+
+    var motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var reduced = motionQuery.matches;
+
+    var W = 0, H = 0;
+    var particles = [];
+    var mouse = { x: null, y: null };
+    var rafId = null, running = false, resizeTimer = null;
+
+    function isMobile() { return window.innerWidth <= SHARED.mobileBreakpoint; }
+
+    function targetCount() {
+      var area = W * H;
+      var density = area / CFG.density;
+      var cap = isMobile() ? CFG.maxMobile : CFG.maxDesktop;
+      return Math.max(CFG.minCount, Math.min(cap, Math.round(density)));
+    }
+
+    function linkDist() { return isMobile() ? CFG.linkMobile : CFG.linkDesktop; }
+
+    function makeParticle() {
+      var amber = Math.random() < 1 / SHARED.amberEvery;
+      var vx = rand(-CFG.speed, CFG.speed) || 0.08;
+      var vy = rand(-CFG.speed, CFG.speed) || 0.08;
+      return {
+        x: Math.random() * W, y: Math.random() * H,
+        vx: Math.max(-CFG.speed, Math.min(CFG.speed, vx)),
+        vy: Math.max(-CFG.speed, Math.min(CFG.speed, vy)),
+        r: rand(CFG.radiusMin, CFG.radiusMax),
+        color: amber ? AMBER : PURPLE,
+      };
+    }
+
+    function build() {
+      var n = targetCount();
+      particles = [];
+      for (var i = 0; i < n; i++) particles.push(makeParticle());
+    }
+
+    function resize() {
+      var dpr = Math.min(window.devicePixelRatio || 1, SHARED.dprCap);
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = Math.floor(W * dpr);
+      canvas.height = Math.floor(H * dpr);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      build();
+      if (reduced) step(); // 1 frame estático
+    }
+
+    function step() {
+      ctx.clearRect(0, 0, W, H);
+      var dist = linkDist();
+      var p, a, b;
+      for (var k = 0; k < particles.length; k++) {
+        p = particles[k];
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < -10) p.x = W + 10; else if (p.x > W + 10) p.x = -10;
+        if (p.y < -10) p.y = H + 10; else if (p.y > H + 10) p.y = -10;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = CFG.pointAlpha;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      var mobile = isMobile();
+      for (a = 0; a < particles.length; a++) {
+        var pa = particles[a];
+        for (b = a + 1; b < particles.length; b++) {
+          var pb = particles[b];
+          var dx = pa.x - pb.x, dy = pa.y - pb.y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < dist * dist) {
+            var d = Math.sqrt(d2);
+            var alpha = (1 - d / dist) * CFG.lineAlpha;
+            ctx.strokeStyle = 'rgba(154,124,240,' + alpha.toFixed(3) + ')';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(pa.x, pa.y);
+            ctx.lineTo(pb.x, pb.y);
+            ctx.stroke();
+          }
+        }
+        if (CFG.cursorLink && mouse.x !== null && mouse.y !== null && !mobile) {
+          var mdx = pa.x - mouse.x, mdy = pa.y - mouse.y;
+          var md2 = mdx * mdx + mdy * mdy;
+          var mr = SHARED.cursorRadius;
+          if (md2 < mr * mr) {
+            var ma = (1 - Math.sqrt(md2) / mr) * SHARED.cursorAlpha;
+            ctx.strokeStyle = 'rgba(224,162,60,' + ma.toFixed(3) + ')';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(pa.x, pa.y);
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function loop() { if (!running) return; step(); rafId = requestAnimationFrame(loop); }
+    function start() { if (reduced || running) return; running = true; loop(); }
+    function stop() { running = false; if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; } }
+
+    function onVisibility() { if (document.hidden) stop(); else start(); }
+    function onMouseMove(e) { mouse.x = e.clientX; mouse.y = e.clientY; }
+    function onMouseLeave() { mouse.x = null; mouse.y = null; }
+    function onResize() {
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(function () {
+        resize();
+        if (reduced) stop(); else start();
+      }, 150);
+    }
+    function onMotionChange(e) {
+      reduced = e.matches;
+      if (reduced) { stop(); resize(); } else { resize(); start(); }
+    }
+
+    document.addEventListener('visibilitychange', onVisibility);
+    if (CFG.cursorLink) {
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseleave', onMouseLeave);
+    }
+    window.addEventListener('resize', onResize);
+    // addEventListener('change') é o caminho moderno; sem fallback p/ Safari<14
+    // (target ESNext, browsers atuais — Regra de ouro 4).
+    motionQuery.addEventListener('change', onMotionChange);
+
+    resize();
+    if (!reduced) start(); else step();
+  }
+
+  return { mount: mount };
+})();
+
+/* ══════════════════════════════════════════════════════════════════
    BOOTSTRAP
    ══════════════════════════════════════════════════════════════════ */
 (function init() {
+  // Fundo vivo (constelação) — monta UMA vez no boot, atrás de todo o conteúdo.
+  if (window.PainelBg) window.PainelBg.mount();
+
   // Hamburger icon
   const hambBtn = document.getElementById('btn-hamburger');
   if (hambBtn) {
