@@ -171,7 +171,7 @@ export default function PausasPage() {
         <ErrorState onRetry={() => pausasQ.refetch()} />
       ) : pausas.length === 0 ? (
         <EmptyState
-          icon={<IconPause size={48} />}
+          icon={<IconPause size={26} />}
           title="Nenhum número pausado"
           description="Quando precisar atender alguém manualmente, pause o robô para esse contato aqui."
           action={{ label: 'Pausar um número', onClick: () => setSheetOpen(true) }}
@@ -206,7 +206,7 @@ export default function PausasPage() {
               </p>
             </div>
           ) : (
-            <div className="mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
+            <div className="stagger stagger-2 mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
               {visiveis.map((p) => {
                 const nome = nomePausado(p);
                 const numero = formatPhoneDisplay(p.telefone);

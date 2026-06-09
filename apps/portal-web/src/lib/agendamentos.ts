@@ -87,3 +87,76 @@ export function agruparAgendamentos(
 export function totalAgendamentos(g: GruposAgendamentos): number {
   return g.hoje.length + g.proximos.length + g.recentes.length;
 }
+
+// ── Filtros + paginacao da Inicio (leva 3, BLOCO B) ──────────────────────────
+
+/** Periodo selecionavel nas abas: Todos / Hoje / Proximos / Recentes. */
+export type PeriodoFiltro = 'todos' | 'hoje' | 'proximos' | 'recentes';
+
+export interface FiltroAgendamentos {
+  /** Aba de periodo (default 'todos'). */
+  periodo: PeriodoFiltro;
+  /** Texto livre — filtra por `titulo` (case/acento-insensitive). '' = sem filtro. */
+  busca: string;
+  /** Data exata "YYYY-MM-DD" — mostra so os desse dia. '' = sem filtro. */
+  data: string;
+}
+
+/** Normaliza texto pra busca: lowercase + remove acentos (NFD + strip combining). */
+export function normalizar(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '') // remove diacriticos (acentos) — robusto, sem char raw
+    .trim();
+}
+
+/** "YYYY-MM-DD" local de um Date (sem fuso UTC). */
+function ymdLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Aplica os 3 filtros COMBINAVEIS (periodo E busca E data) sobre a lista crua,
+ * ja na ordem de exibicao (Hoje/Proximos ASC, Recentes DESC, na sequencia
+ * hoje -> proximos -> recentes). Pura (testavel). `now` injetavel pra teste.
+ *
+ * - periodo: 'todos' nao filtra; senao mantem so o grupo escolhido.
+ * - busca: compara `titulo` normalizado (case/acento-insensitive) por substring.
+ * - data: mantem so eventos cujo dia local == a data "YYYY-MM-DD" informada.
+ */
+export function filtrarAgendamentos(
+  agendamentos: Agendamento[],
+  filtro: FiltroAgendamentos,
+  now = new Date(),
+): Agendamento[] {
+  const grupos = agruparAgendamentos(agendamentos, now);
+  const ordenados: Agendamento[] =
+    filtro.periodo === 'hoje'
+      ? grupos.hoje
+      : filtro.periodo === 'proximos'
+        ? grupos.proximos
+        : filtro.periodo === 'recentes'
+          ? grupos.recentes
+          : [...grupos.hoje, ...grupos.proximos, ...grupos.recentes];
+
+  const buscaNorm = normalizar(filtro.busca);
+  const data = filtro.data.trim();
+
+  return ordenados.filter((ag) => {
+    if (buscaNorm && !normalizar(ag.titulo).includes(buscaNorm)) return false;
+    if (data) {
+      const d = parseInicio(ag.inicio);
+      if (!d || ymdLocal(d) !== data) return false;
+    }
+    return true;
+  });
+}
+
+/** True se algum dos 3 filtros esta ativo (distingue empty "filtro" x "janela"). */
+export function temFiltroAtivo(filtro: FiltroAgendamentos): boolean {
+  return filtro.periodo !== 'todos' || filtro.busca.trim() !== '' || filtro.data.trim() !== '';
+}

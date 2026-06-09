@@ -424,3 +424,135 @@ html.theme-transition body *::after {
     box-shadow: none;
   }
 }
+
+/* ============================================================
+   PAINEL v2 — POLISH (spec 1.D). "Vida" SO no hero da Inicio; glow
+   roxo SO nos cards-heroi; stagger de entrada no mount. Tudo gated por
+   reduced-motion. No tema CLARO: canvas off, glow roxo off, aurora sutil
+   (1.D.8) — o polish estrutural (tipografia, filete, empty, hover) fica.
+   ============================================================ */
+
+/* --- Hero-zone (1.D.1): 3 camadas atras de saudacao+status, so na Inicio. --- */
+.hero-zone {
+  position: relative;
+  z-index: 1;
+}
+.hero-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.hero-aurora {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+      80% 120% at 12% 0%,
+      rgba(100, 49, 214, 0.22) 0%,
+      rgba(20, 18, 28, 0) 60%
+    ), radial-gradient(60% 90% at 95% 8%, rgba(224, 162, 60, 0.06) 0%, rgba(20, 18, 28, 0) 55%);
+}
+/* Mascara que devolve o fundo solido conforme desce -> legibilidade do resto. */
+.hero-fade {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  height: 120px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(20, 18, 28, 0), var(--color-bg));
+}
+.hero-content {
+  position: relative;
+  z-index: 2;
+}
+/* Tema claro: aurora bem mais sutil sobre lavanda; canvas fica off via JS. */
+[data-theme="light"] .hero-aurora {
+  background: radial-gradient(
+      80% 120% at 12% 0%,
+      rgba(100, 49, 214, 0.08) 0%,
+      rgba(244, 242, 251, 0) 60%
+    ), radial-gradient(60% 90% at 95% 8%, rgba(181, 117, 31, 0.04) 0%, rgba(244, 242, 251, 0) 55%);
+}
+[data-theme="light"] .hero-fade {
+  background: linear-gradient(180deg, rgba(244, 242, 251, 0), var(--color-bg));
+}
+
+/* --- Escala de elevacao dos cards-heroi (1.D.2/1.D.4). --- */
+/* E1: status-hero — relevo preto, SEM cor (descola da hero-zone viva). */
+.hero-e1 {
+  box-shadow: 0 0 0 1px rgba(154, 124, 240, 0.04), 0 18px 40px rgba(0, 0, 0, 0.3);
+}
+/* E2: billing — glow roxo CONTIDO (mais discreto que o login). */
+.hero-e2 {
+  box-shadow: 0 0 0 1px rgba(154, 124, 240, 0.18), 0 22px 50px rgba(100, 49, 214, 0.3);
+}
+/* No claro a elevacao e por sombra neutra (1.D.8): glow roxo perde sentido. */
+[data-theme="light"] .hero-e1 {
+  box-shadow: var(--c-shadow-card);
+}
+[data-theme="light"] .hero-e2 {
+  box-shadow: var(--c-shadow-card);
+}
+
+/* Filete de marca branco no topo do billing (1.D.4) — eco do login. */
+.billing-filete::before {
+  content: "";
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 0;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55) 40%, transparent);
+}
+
+/* Glow do core do pulse ativo (1.D.4) — off em reduced-motion. */
+.pulse-glow {
+  box-shadow: 0 0 12px rgba(78, 216, 143, 0.6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse-glow {
+    box-shadow: none;
+  }
+}
+
+/* --- Stagger de entrada (1.D.6): so no mount, cortado em reduced-motion. --- */
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.stagger {
+  opacity: 0;
+  animation: riseIn var(--duration-base) var(--ease-out-soft) forwards;
+}
+.stagger-1 {
+  animation-delay: 0s;
+}
+.stagger-2 {
+  animation-delay: 0.06s;
+}
+.stagger-3 {
+  animation-delay: 0.12s;
+}
+.stagger-4 {
+  animation-delay: 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stagger {
+    opacity: 1;
+    animation: none;
+  }
+}

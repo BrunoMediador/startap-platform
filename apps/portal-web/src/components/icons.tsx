@@ -331,6 +331,16 @@ export function IconClock(props: IconProps) {
   );
 }
 
+/** Cartao/carteira — icone de contexto do card de billing (1.D.4). */
+export function IconWallet(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="5" width="18" height="14" rx="2.5" stroke="currentColor" strokeWidth={2} />
+      <path d="M3 10h18" stroke="currentColor" strokeWidth={2} />
+    </svg>
+  );
+}
+
 /** Brandmark Startap (circulo aberto + ponto). cor herda de currentColor. */
 export function Brandmark({ size = 14, color }: { size?: number; color?: string }) {
   const stroke = color ?? 'currentColor';
