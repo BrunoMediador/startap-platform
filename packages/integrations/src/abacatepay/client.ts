@@ -25,7 +25,12 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 export interface AbacatePayConfig {
-  apiKey: string;
+  /**
+   * Pode ser undefined: pagamento e feature DORMENTE e a key e OPCIONAL no boot dos apps
+   * (postmortem P0 2026-06-09). O construtor valida e lanca AbacatePayNotConfiguredError
+   * se faltar — falha SO no ponto de uso, nunca no boot do app.
+   */
+  apiKey: string | undefined;
   /** Default https://api.abacatepay.com. O ambiente e definido pela CHAVE, nao pela URL. */
   baseUrl?: string;
 }
@@ -58,6 +63,23 @@ export interface PixChargeStatusResult {
 
 /** Status da AbacatePay normalizado em minusculas no nosso lado. */
 export type PixChargeStatus = 'pending' | 'paid' | 'expired' | 'cancelled' | 'refunded' | string;
+
+/**
+ * Erro tipado: a feature de pagamento foi acionada SEM ABACATEPAY_API_KEY configurada.
+ *
+ * A key e OPCIONAL no boot dos apps (feature dormente — postmortem P0 2026-06-09). A
+ * exigencia mora aqui, no PONTO DE USO: ao instanciar o cliente pra falar com o gateway,
+ * se a chave faltar, falha alta e explicita — mas SO quando a feature realmente roda,
+ * nunca no boot do app. Mensagem nao carrega segredo.
+ */
+export class AbacatePayNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'AbacatePay nao configurado: defina ABACATEPAY_API_KEY no ambiente antes de gerar/consultar cobrancas PIX.',
+    );
+    this.name = 'AbacatePayNotConfiguredError';
+  }
+}
 
 /** Erro tipado de chamada a API — nunca carrega a apiKey. */
 export class AbacatePayError extends Error {
@@ -103,7 +125,9 @@ export class AbacatePayClient {
 
   constructor(cfg: AbacatePayConfig) {
     if (!cfg.apiKey) {
-      throw new Error('AbacatePayClient: apiKey ausente (defina ABACATEPAY_API_KEY)');
+      // Ponto de uso: a feature foi acionada sem a chave. Falha tipada e explicita aqui,
+      // nunca no boot do app (key e opcional no config — postmortem P0 2026-06-09).
+      throw new AbacatePayNotConfiguredError();
     }
     this.apiKey = cfg.apiKey;
     this.baseUrl = (cfg.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');

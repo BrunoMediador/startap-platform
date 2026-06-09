@@ -13,6 +13,8 @@ import { z } from 'zod';
 // sem acionar o IIFE (que falha sem envs obrigatórias no ambiente CI).
 import { ConfigSchema } from './config.schema.js';
 
+// ABACATEPAY_API_KEY NAO esta aqui de proposito: pagamento e feature dormente e a key
+// e OPCIONAL no boot (postmortem P0 2026-06-09). O env minimo valido NAO precisa dela.
 const VALID_BASE = {
   PG_HOST: 'localhost',
   PG_USER: 'user',
@@ -22,7 +24,6 @@ const VALID_BASE = {
   WAHA_API_KEY: 'key',
   WHISPER_URL: 'http://whisper:9000',
   OPENAI_API_KEY: 'sk-test',
-  ABACATEPAY_API_KEY: 'abacate-dev-key',
 };
 
 describe('ConfigSchema', () => {
@@ -45,12 +46,19 @@ describe('ConfigSchema', () => {
     expect(() => ConfigSchema.parse({ ...VALID_BASE, WAHA_URL: 'not-a-url' })).toThrow(z.ZodError);
   });
 
-  it('falha se ABACATEPAY_API_KEY ausente (C9 — boot fail sem secret)', () => {
-    const { ABACATEPAY_API_KEY: _omit, ...rest } = VALID_BASE;
-    expect(() => ConfigSchema.parse(rest)).toThrow(z.ZodError);
+  it('VALIDA OK sem ABACATEPAY_API_KEY — boot nao falha (corretiva postmortem P0)', () => {
+    // Regressao do incidente 2026-06-09: a key obrigatoria no boot derrubou api/worker.
+    // Agora a feature dormente NAO acopla o uptime do core. App sobe sem a chave.
+    const result = ConfigSchema.parse(VALID_BASE);
+    expect(result.ABACATEPAY_API_KEY).toBeUndefined();
   });
 
-  it('ABACATEPAY_BASE_URL tem default https://api.abacatepay.com', () => {
+  it('aceita ABACATEPAY_API_KEY quando presente (feature ativa)', () => {
+    const result = ConfigSchema.parse({ ...VALID_BASE, ABACATEPAY_API_KEY: 'abacate-dev-key' });
+    expect(result.ABACATEPAY_API_KEY).toBe('abacate-dev-key');
+  });
+
+  it('ABACATEPAY_BASE_URL mantem default mesmo sem a key', () => {
     const result = ConfigSchema.parse(VALID_BASE);
     expect(result.ABACATEPAY_BASE_URL).toBe('https://api.abacatepay.com');
   });
