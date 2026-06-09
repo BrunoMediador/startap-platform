@@ -1,14 +1,13 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Design tokens — Portal "Cadencia" (TOGGLE de tema, spec 1.C)
+   Design tokens — Portal "Cadencia Noturna" (TEMA UNICO ESCURO)
    Fonte unica de verdade: docs/design/portal-cliente/design-spec-cadencia.md
-     - 1.A  -> tema ESCURO "Cadencia Noturna" (DEFAULT)
-     - 1.1  -> tema CLARO (reativado pelo toggle; gaps em 1.C.4)
-   Mecanica (1.C.1): cada token e uma CSS var resolvida por [data-theme].
-   O @theme abaixo aponta os utilitarios Tailwind (bg-surface, text-ink-soft...)
-   pras vars de tema; os dois token-sets vivem em [data-theme="dark"|"light"].
-   Trocar o atributo no <html> troca o set inteiro, sem duplicar classe.
+     - 1.A -> tema ESCURO "Cadencia Noturna" (unico tema do app)
+   O app NAO tem mais toggle claro/escuro (decisao Bruno): e sempre escuro. O
+   <html> carrega data-theme="dark" fixo so pra blindar o CSS. O @theme abaixo
+   aponta os utilitarios Tailwind (bg-surface, text-ink-soft...) pras CSS vars
+   do set escuro, definidas em :root.
    ============================================================ */
 @theme {
   /* --- Superficies --- */
@@ -73,7 +72,7 @@
   --radius-field: 12px;
   --radius-pill: 999px;
 
-  /* --- Sombras (resolvidas por tema; ver [data-theme] — spec 1.C.5) --- */
+  /* --- Sombras (tema escuro unico: elevacao por tom; ver :root abaixo) --- */
   --shadow-card: var(--c-shadow-card);
   --shadow-elev: var(--c-shadow-elev);
   --shadow-focus: var(--c-shadow-focus);
@@ -83,9 +82,9 @@
 }
 
 /* ============================================================
-   TEMA ESCURO "Cadencia Noturna" (spec 1.A) — DEFAULT.
-   data-theme="dark" no <html>; tambem cobre [data-theme] ausente
-   (boot script seta sempre, mas isto blinda contra falha do script).
+   TEMA ESCURO "Cadencia Noturna" (spec 1.A) — TEMA UNICO do app.
+   Definido em :root (e em [data-theme="dark"] por redundancia — o <html>
+   carrega esse atributo fixo). Nao ha mais tema claro.
    ============================================================ */
 :root,
 [data-theme="dark"] {
@@ -151,76 +150,6 @@
   color-scheme: dark;
 }
 
-/* ============================================================
-   TEMA CLARO (spec 1.1 + gaps 1.C.4) — ativo via data-theme="light".
-   Os 7 GAPS criados aqui (1.C.4): surface-hover, surface-elev-hover,
-   surface-sunken, line-soft, line-strong, brand-soft-hover, skeleton/-hi.
-   O critico e surface-hover #F0EDFB (hover perceptivel no claro, 1.A.2).
-   Elevacao no claro e por SOMBRA, nao por tom (spec 1.C.5).
-   ============================================================ */
-[data-theme="light"] {
-  /* superficies */
-  --c-bg: #f4f2fb; /* lavanda quase-branco — fundo da app (1.1) */
-  --c-surface: #ffffff; /* cards, inputs, listas (1.1) */
-  --c-surface-hover: #f0edfb; /* GAP 1.C.4: hover perceptivel (lavanda 1 passo) */
-  --c-surface-elev: #ffffff; /* modal/sheet/popover (elevacao por sombra) */
-  --c-surface-elev-hover: #f4f2fb; /* GAP: item dentro de dropdown/sheet */
-  --c-surface-sunken: #ece9f6; /* GAP: poco (track switch off, input afundado) */
-
-  /* bordas / linhas */
-  --c-line: #e7e3f2; /* borda/divisor padrao (1.1) */
-  --c-line-soft: #efecf7; /* GAP: divisor interno mais claro que line */
-  --c-line-strong: #d8d2ea; /* GAP: borda de input/card elevado */
-
-  /* tinta sobre claro */
-  --c-ink: #1a1530; /* tinta principal (1.1) */
-  --c-ink-soft: #6b6485; /* secundaria (1.1) */
-  --c-ink-faint: #9a93b0; /* terciaria (1.1) */
-
-  /* marca — no claro o roxo de acao E o roxo solido sao o mesmo #6431d6 (1.1) */
-  --c-brand: #6431d6; /* CTA/links/foco (1.1) */
-  --c-brand-600: #6431d6; /* alias do DEFAULT (1.1) */
-  --c-brand-700: #4e22b0; /* hover/pressed (1.1) */
-  --c-brand-fill: #6431d6; /* fundo de card de marca/billing */
-  --c-brand-fill-hover: #4e22b0; /* hover do card de marca clicavel */
-  --c-brand-soft: #efeafb; /* fundo de icones, nav ativo, badge-info (brand-50) */
-  --c-brand-soft-hover: #e4dcf8; /* GAP: hover de card de metrica que linka */
-
-  /* ambar */
-  --c-amber: #b5751f; /* texto/borda ambar (1.1) */
-  --c-amber-fill: #b5751f; /* fundo ambar solido (texto escuro por cima) */
-  --c-amber-soft: #f6e7ce; /* fundo de badge/card de aviso (1.1 amber-bg) */
-  --c-amber-ink: #1a1208; /* texto escuro sobre ambar (mesmo valor dos 2 temas) */
-
-  /* sucesso */
-  --c-ok: #18794e; /* verde-escuro AA sobre branco (1.1) */
-  --c-ok-soft: #ddf3e7; /* fundo de badge conectado (1.1 ok-bg) */
-
-  /* aviso */
-  --c-warn: #8a5300; /* aviso AA sobre branco (1.1) */
-  --c-warn-soft: #fbefd6; /* fundo de badge pausado (1.1 warn-bg) */
-
-  /* erro/destrutivo */
-  --c-danger: #c2261b; /* vermelho AA sobre branco (1.1) */
-  --c-danger-600: #9e1a12; /* GAP: hover destrutivo (reusa danger-700 do 1.1) */
-  --c-danger-fill: #c2261b; /* fundo do card vencido (texto branco AA) */
-  --c-danger-soft: #fce6e4; /* fundo de badge desconectado (1.1 danger-bg) */
-
-  /* skeleton (GAP) */
-  --c-skeleton: #ece9f6;
-  --c-skeleton-hi: #f6f4fc;
-
-  /* sombras — no claro a elevacao e por SOMBRA (spec 1.6 / 1.C.5) */
-  --c-shadow-card: 0 1px 2px rgba(26, 21, 48, 0.04), 0 4px 16px rgba(26, 21, 48, 0.06);
-  --c-shadow-elev: 0 12px 40px rgba(26, 21, 48, 0.16);
-  --c-shadow-focus: 0 0 0 4px rgba(100, 49, 214, 0.16);
-
-  /* borda do hover do input no claro */
-  --c-input-hover-border: #c4bbe0;
-
-  color-scheme: light;
-}
-
 /* Duracoes nomeadas (spec 1.8) — usadas em transition-[duration] inline-token. */
 :root {
   --duration-fast: 120ms;
@@ -246,19 +175,6 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-}
-
-/* Transicao suave SO no instante da troca de tema (spec 1.C.1): JS adiciona
-   .theme-transition no <html> durante ~220ms, depois remove. Como e transitorio,
-   nao atrapalha os hovers de 120ms dos componentes no uso normal. */
-html.theme-transition,
-html.theme-transition body,
-html.theme-transition body *,
-html.theme-transition body *::before,
-html.theme-transition body *::after {
-  transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
-  transition-duration: var(--duration-base) !important;
-  transition-timing-function: var(--ease-out-soft) !important;
 }
 
 /* Anel concentrico do status ativo (spec 6.4). */
@@ -358,10 +274,9 @@ html.theme-transition body *::after {
 }
 
 /* ============================================================
-   LOGIN v2 (spec 1.B) — classes login-only. O login e SEMPRE escuro
-   (vitrine da identidade Noturna, 1.C.6): o wrapper força data-theme="dark".
-   Estes efeitos (glow do card, vinheta, filete, glow do dot/botao) sao
-   excecoes JUSTIFICADAS a regra "card simples nao tem sombra" (1.A.6),
+   LOGIN v2 (spec 1.B) — classes login-only. App e sempre escuro (Cadencia
+   Noturna). Estes efeitos (glow do card, vinheta, filete, glow do dot/botao)
+   sao excecoes JUSTIFICADAS a regra "card simples nao tem sombra" (1.A.6),
    porque o card flutua sobre o canvas animado.
    ============================================================ */
 
@@ -426,33 +341,18 @@ html.theme-transition body *::after {
 }
 
 /* ============================================================
-   PAINEL v2 — POLISH (spec 1.D). "Vida" SO no hero da Inicio; glow
-   roxo SO nos cards-heroi; stagger de entrada no mount. Tudo gated por
-   reduced-motion. No tema CLARO: canvas off, glow roxo off, aurora sutil
-   (1.D.8) — o polish estrutural (tipografia, filete, empty, hover) fica.
+   PAINEL v2 — POLISH (spec 1.D). Fundo vivo (constelacao do login) em TODO o
+   shell autenticado, montado uma vez no (app)/layout. Aurora SO no hero da
+   Inicio; glow roxo SO nos cards-heroi; stagger de entrada no mount. Tudo
+   gated por reduced-motion. Tema unico escuro — sem variantes de tema claro.
    ============================================================ */
 
-/* --- Hero-zone (1.D.1): 3 camadas atras de saudacao+status, so na Inicio. --- */
-.hero-zone {
-  position: relative;
-  z-index: 1;
-}
-.hero-fx {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-/* Fundo full-viewport FIXO da Inicio: cobre toda a area visivel ATRAS do
-   conteudo em fluxo. z-index:-1 -> fica abaixo dos blocos em fluxo (cards
-   opacos cobrem; particulas so aparecem nos vaos) mas acima do bg do body.
-   Renderizado fora de qualquer stacking context (direto no <main>) pra que o
-   z negativo valha. Nao clicavel; a sidebar/topbar/bottom-nav (sticky, z>=20)
-   ficam por cima e seguem clicaveis. */
-.hero-bg {
+/* Fundo vivo full-viewport FIXO do shell: cobre toda a area visivel ATRAS do
+   conteudo em fluxo. z-index:-1 -> fica abaixo dos blocos em fluxo (cards/
+   sidebar opacos cobrem; particulas so aparecem nos vaos) mas acima do bg do
+   body. Nao clicavel; sidebar/topbar/bottom-nav (sticky, z>=20) ficam por cima
+   e seguem clicaveis. Montado no shell -> persiste entre rotas, sem remount. */
+.app-bg {
   position: fixed;
   inset: 0;
   z-index: -1;
@@ -460,6 +360,23 @@ html.theme-transition body *::after {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+/* Vinheta sobre o canvas (eco do .login-vignette, calibrada p/ tela inteira):
+   escurece bordas/topo pra garantir contraste AA do texto que rola sobre a
+   constelacao densa. Fica logo acima do canvas (z-[-1] tambem, depois dele no
+   DOM) e ainda atras do conteudo em fluxo. */
+.app-vignette {
+  background: radial-gradient(
+      120% 120% at 50% 0%,
+      rgba(20, 18, 28, 0) 32%,
+      rgba(20, 18, 28, 0.55) 100%
+    ), linear-gradient(180deg, rgba(20, 18, 28, 0.28) 0%, rgba(20, 18, 28, 0) 22%);
+}
+
+/* --- Hero-zone (1.D.1): aurora + conteudo, so na Inicio. --- */
+.hero-zone {
+  position: relative;
+  z-index: 1;
 }
 .hero-aurora {
   position: absolute;
@@ -476,14 +393,6 @@ html.theme-transition body *::after {
   position: relative;
   z-index: 2;
 }
-/* Tema claro: aurora bem mais sutil sobre lavanda; canvas fica off via JS. */
-[data-theme="light"] .hero-aurora {
-  background: radial-gradient(
-      80% 120% at 12% 0%,
-      rgba(100, 49, 214, 0.08) 0%,
-      rgba(244, 242, 251, 0) 60%
-    ), radial-gradient(60% 90% at 95% 8%, rgba(181, 117, 31, 0.04) 0%, rgba(244, 242, 251, 0) 55%);
-}
 /* --- Escala de elevacao dos cards-heroi (1.D.2/1.D.4). --- */
 /* E1: status-hero — relevo preto, SEM cor (descola da hero-zone viva). */
 .hero-e1 {
@@ -492,13 +401,6 @@ html.theme-transition body *::after {
 /* E2: billing — glow roxo CONTIDO (mais discreto que o login). */
 .hero-e2 {
   box-shadow: 0 0 0 1px rgba(154, 124, 240, 0.18), 0 22px 50px rgba(100, 49, 214, 0.3);
-}
-/* No claro a elevacao e por sombra neutra (1.D.8): glow roxo perde sentido. */
-[data-theme="light"] .hero-e1 {
-  box-shadow: var(--c-shadow-card);
-}
-[data-theme="light"] .hero-e2 {
-  box-shadow: var(--c-shadow-card);
 }
 
 /* Filete de marca branco no topo do billing (1.D.4) — eco do login. */

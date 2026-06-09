@@ -67,7 +67,8 @@ export default function InicioPage() {
       {!data.flow_enabled && <SuspendedNotice />}
 
       {/* Hero-zone (1.D): saudacao editorial + status (E1) + billing (E2),
-          com aurora + canvas ambient + fade. Stagger interno nos cards-heroi. */}
+          com aurora de topo + fade. Stagger interno nos cards-heroi. O fundo
+          vivo (constelacao) vem do shell (app)/layout, nao daqui. */}
       <HeroZone status={data} businessName={nome} />
 
       {/* Metricas (E0) — stagger 3 no mount. */}

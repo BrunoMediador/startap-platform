@@ -5,8 +5,7 @@
  *
  * Polish v2 (1.D.5): empty state caprichado — card surface com halo radial roxo
  * atras de um icone-chip 56px (brand-soft + borda line-strong). E o lugar onde o
- * vazio "respira". O `icon` deve vir em ~26px (cabe no chip). O halo fica mais
- * fraco no tema claro (gerido no CSS via [data-theme]).
+ * vazio "respira". O `icon` deve vir em ~26px (cabe no chip).
  */
 import { Button } from './button';
 
