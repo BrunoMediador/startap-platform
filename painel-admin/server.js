@@ -2336,7 +2336,8 @@ function resolveExecutionStatus(events) {
 
 // GET /api/executions — lista execuções agrupadas por execution_id
 // Filtros: ?slot=, ?from=, ?to=, ?status=error|success|running|ignored, ?limit=50
-// Retorna: array de { id, slot, telefone_mascarado, started_at, duration_ms, status_final, events_count }
+// Retorna: array de { id, slot, telefone_mascarado, started_at, duration_ms, status_final, events_count, gatilho }
+//   gatilho = event_type do PRIMEIRO evento da execução (entrada do fluxo); null se sem eventos
 app.get(
   '/api/executions',
   asyncHandler(async (req, res) => {
@@ -2385,7 +2386,8 @@ app.get(
          MAX(created_at)                                     AS finished_at,
          EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at)) * 1000)::int AS duration_ms,
          COUNT(*)::int                                       AS events_count,
-         (ARRAY_AGG(status ORDER BY id DESC))[1]             AS status_final
+         (ARRAY_AGG(status ORDER BY id DESC))[1]             AS status_final,
+         (ARRAY_AGG(event_type ORDER BY id ASC))[1]          AS gatilho
        FROM flow_execution_logs
        ${whereSql}
        GROUP BY execution_id
@@ -2407,6 +2409,7 @@ app.get(
         duration_ms: row.duration_ms ?? 0,
         status_final: row.status_final ?? 'running',
         events_count: row.events_count,
+        gatilho: row.gatilho ?? null,
       }));
 
     res.json(rows);
