@@ -4,6 +4,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Startap — Painel</title>
+<!-- Favicons Constelação-S (rebrand F4) — servidos de public/. Allowlist no auth-gate do server.js. -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 <!-- Fontes auto-hospedadas (rebrand Cadência F1) — sem CDN externo. woff2 latin
      servidos por painel-admin/public/fonts/ via express.static. Sora (display),
      Inter (corpo), JetBrains Mono (mono). -->
@@ -148,7 +153,7 @@ textarea, input, select { font-family: inherit; }
 .h3  { font-family: var(--font-display); font-size: 1rem;     font-weight: 600; margin: 0; }
 .muted   { color: var(--text-muted); font-size: .8125rem; }
 .subtle  { color: var(--text-subtle); font-size: .75rem; }
-.gcal-error-detail { margin-top: .375rem; font-family: var(--font-mono, monospace); font-size: .75rem; word-break: break-all; color: var(--danger, #ef4444); }
+.gcal-error-detail { margin-top: .375rem; font-family: var(--font-mono, monospace); font-size: .75rem; word-break: break-all; color: var(--danger); }
 /* ── Google Calendar — bloco de ajuda e instruções ── */
 .gcal-help-block { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; margin-bottom: .875rem; }
 .gcal-help-block summary {
@@ -230,9 +235,8 @@ textarea, input, select { font-family: inherit; }
   text-decoration: none;
 }
 .sidebar__logo-icon {
+  /* F4: Constelação-S solto (Opção A) — sem quadrado roxo. Vira só wrapper de tamanho. */
   width: 32px; height: 32px;
-  background: var(--primary);
-  border-radius: var(--radius-md);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
@@ -242,6 +246,8 @@ textarea, input, select { font-family: inherit; }
   color: var(--text);
   letter-spacing: -.01em;
 }
+/* F4: "ap" do wordmark em roxo brand, casando com o lockup Constelação-S. */
+.sidebar__logo-wordmark .wm-ap { color: var(--primary); }
 .sidebar__logo-sub {
   font-size: .6875rem;
   color: var(--text-muted);
@@ -302,7 +308,7 @@ textarea, input, select { font-family: inherit; }
 }
 .sidebar__logout-btn:hover {
   opacity: 1;
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 /* ── Mobile header ──────────────────────────────────────────────────── */
 .mobile-header {
@@ -415,7 +421,8 @@ textarea, input, select { font-family: inherit; }
 .btn--primary { background: var(--primary); border-color: var(--primary); color: #fff; }
 .btn--primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .btn--danger  { background: var(--danger);  border-color: var(--danger);  color: #fff; }
-.btn--danger:hover  { background: #dc2626;  border-color: #dc2626; }
+/* F4: hover sem hex off-brand — escurece o token danger via brightness. */
+.btn--danger:hover  { filter: brightness(0.92); }
 .btn--success { background: var(--success); border-color: var(--success); color: #fff; }
 .btn--ghost   { background: transparent; border-color: transparent; }
 .btn--ghost:hover { background: var(--surface-2); }
@@ -431,8 +438,8 @@ textarea, input, select { font-family: inherit; }
 .badge--success { background: var(--success-bg); color: var(--success); }
 .badge--danger  { background: var(--danger-bg);  color: var(--danger); }
 .badge--warning { background: var(--warning-bg); color: var(--warning); }
-.btn--warning { background: var(--warning); border-color: var(--warning); color: #1a1a1a; }
-.btn--warning:hover { background: #d97706; border-color: #d97706; }
+.btn--warning { background: var(--warning); border-color: var(--warning); color: var(--bg); }
+.btn--warning:hover { filter: brightness(0.92); }
 .badge--info    { background: var(--info-bg);    color: var(--info); }
 .badge--muted   { background: var(--surface-3);  color: var(--text-muted); }
 .badge--dot::before {
@@ -783,11 +790,14 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   border-radius: var(--radius-sm); font-size: .7rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: .03em;
 }
-.media-type-badge--image  { background: #d1fae5; color: #065f46; }
-.media-type-badge--video  { background: #dbeafe; color: #1e40af; }
-.media-type-badge--audio  { background: #ede9fe; color: #5b21b6; }
-.media-type-badge--doc    { background: #fef3c7; color: #92400e; }
-.media-type-badge--other  { background: var(--bg-2); color: var(--text-muted); }
+/* F4: eram badges de tema CLARO (bg pastel + texto escuro) — quebravam sobre o
+   surface escuro da Cadência. Reescritos com soft-bg + texto-token, mantendo as
+   4 categorias distinguíveis pelas cores da paleta. */
+.media-type-badge--image  { background: var(--success-bg); color: var(--success); }
+.media-type-badge--video  { background: var(--brand-soft);  color: var(--primary); }
+.media-type-badge--audio  { background: var(--warning-bg); color: var(--warning); }
+.media-type-badge--doc    { background: var(--bg-2);       color: var(--text); }
+.media-type-badge--other  { background: var(--bg-2);       color: var(--text-muted); }
 .media-context-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .media-filename-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ── Media grid v2 (cards com player inline + edição in-place) ──────── */
@@ -1306,8 +1316,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .kpi-card__value { font-size: 1.375rem; }
 }
 /* ── Accent button (atalho de clonagem) ─────────────────────────── */
-.btn--accent { background: #059669; border-color: #059669; color: #fff; }
-.btn--accent:hover { background: #047857; border-color: #047857; }
+/* F4: era verde #059669 off-brand. Ação de criar → fill brand roxo (texto escuro). */
+.btn--accent { background: var(--brand-fill); border-color: var(--brand-fill); color: var(--brand-on-fill); }
+.btn--accent:hover { background: var(--brand-fill-hover); border-color: var(--brand-fill-hover); }
 @media (max-width: 480px) {
   .btn--accent .btn-label { display: none; }
   .btn--accent::before { content: '+'; font-size: 1rem; }
@@ -1603,7 +1614,8 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 .nav-item:hover { background: rgba(255,255,255,.04); color: var(--text); }
 .nav-item.active {
-  background: rgba(59,130,246,.12);
+  /* F4: era rgba(59,130,246,.12) azul — roxo brand p/ casar com a nav. */
+  background: rgba(154,124,240,.12);
   color: var(--primary);
   font-weight: 600;
 }
@@ -1727,7 +1739,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .sessions-table tbody tr:hover td { background: rgba(255,255,255,.02); }
 /* Status dot inline */
 .s-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; vertical-align: middle; }
-.s-dot--on  { background: var(--success); box-shadow: 0 0 5px rgba(16,185,129,.5); }
+.s-dot--on  { background: var(--success); box-shadow: 0 0 5px rgba(78,216,143,.5); }
 .s-dot--off { background: var(--text-subtle); }
 .s-dot--warn{ background: var(--warning); }
 /* Dropdown stub [...] */
@@ -2094,8 +2106,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   align-self: flex-start;
 }
 .exec-bubble--outgoing {
-  background: rgba(59,130,246,.15);
-  border: 1px solid rgba(59,130,246,.25);
+  /* F4: bolha do bot — era azul; agora roxo brand. */
+  background: rgba(154,124,240,.15);
+  border: 1px solid rgba(154,124,240,.25);
   border-bottom-right-radius: var(--radius-sm);
   align-self: flex-end;
   text-align: right;
@@ -2283,6 +2296,36 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   .cli-menu__pop { right: auto; left: 0; }
 }
 
+/* Métricas por bot (Visão Geral) — cards empilhados no mobile (F4). Mesmo padrão
+   da tabela de Clientes; neutraliza o min-width:700px e o overflow-x do card. */
+@media (max-width: 767px) {
+  .mbb-card { overflow-x: visible !important; }
+  .mbb-table { min-width: auto !important; }
+  .mbb-table thead { display: none; }
+  .mbb-table, .mbb-table tbody, .mbb-table tr { display: block; }
+  .mbb-table tr {
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    margin: .5rem; padding: .25rem .5rem; background: var(--surface);
+  }
+  .mbb-table td {
+    display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+    border-bottom: 1px solid var(--border); padding: .5rem .375rem; text-align: right;
+    min-width: 0;
+  }
+  .mbb-table tr td:last-child { border-bottom: none; }
+  .mbb-table td::before {
+    content: attr(data-label); font-size: .6875rem; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--text-subtle); font-weight: 600;
+    text-align: left; white-space: nowrap; flex-shrink: 0;
+  }
+  /* Linha "Total" (tfoot) — sem data-label, vira card resumo no fim. */
+  .mbb-table tfoot { display: block; }
+  .mbb-table tfoot tr {
+    border-color: var(--border-light); margin-top: .25rem;
+  }
+  .mbb-table tfoot td { justify-content: flex-end; }
+}
+
 /* ─── GALERIA DE MÍDIA v2 ──────────────────────────────────────── */
 /* Modal base — display:none por padrão, .open ativa */
 .gal-modal {
@@ -2307,57 +2350,58 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .gmc__play { position: absolute; width: 26px; height: 26px; background: rgba(0,0,0,.55); border-radius: 50%; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 .gmc__body { padding: .5rem .625rem .625rem; }
 .gmc__title { font-size: .8125rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gmc__title-input { font-size: .8125rem; font-weight: 500; background: var(--surface-2,var(--bg-3)); border: 1px solid var(--accent,#3b82f6); border-radius: .375rem; padding: .125rem .375rem; color: var(--text); width: 100%; outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+.gmc__title-input { font-size: .8125rem; font-weight: 500; background: var(--surface-2,var(--bg-3)); border: 1px solid var(--primary); border-radius: .375rem; padding: .125rem .375rem; color: var(--text); width: 100%; outline: none; box-shadow: 0 0 0 3px var(--primary-glow); }
 .gmc__meta { display: flex; align-items: center; gap: .375rem; margin-top: .25rem; flex-wrap: wrap; }
-.gmc__badge-video { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(139,92,246,.2); color: #c4b5fd; border: 1px solid rgba(139,92,246,.3); }
-.gmc__badge-image { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: rgba(16,185,129,.2); color: #6ee7b7; border: 1px solid rgba(16,185,129,.3); }
-.gmc__badge-courses { font-size: .6875rem; background: rgba(59,130,246,.12); color: #93c5fd; border: 1px solid rgba(59,130,246,.25); padding: .1rem .5rem; border-radius: 9999px; cursor: pointer; transition: background .12s; white-space: nowrap; }
-.gmc__badge-courses:hover { background: rgba(59,130,246,.2); }
-.gmc__badge-unlinked { font-size: .6875rem; background: rgba(245,158,11,.12); color: #fcd34d; border: 1px solid rgba(245,158,11,.25); padding: .1rem .5rem; border-radius: 9999px; white-space: nowrap; }
+/* F4: badges tokenizados — eram hex/rgba off-brand (roxo cru, verde/azul/âmbar). */
+.gmc__badge-video { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: var(--brand-soft); color: var(--primary); border: 1px solid rgba(154,124,240,.3); }
+.gmc__badge-image { font-size: .5625rem; font-weight: 700; padding: .1rem .375rem; border-radius: .25rem; text-transform: uppercase; letter-spacing: .04em; background: var(--success-bg); color: var(--success); border: 1px solid rgba(78,216,143,.3); }
+.gmc__badge-courses { font-size: .6875rem; background: var(--brand-soft); color: var(--primary); border: 1px solid rgba(154,124,240,.25); padding: .1rem .5rem; border-radius: 9999px; cursor: pointer; transition: background .12s; white-space: nowrap; }
+.gmc__badge-courses:hover { background: rgba(154,124,240,.2); }
+.gmc__badge-unlinked { font-size: .6875rem; background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(224,162,60,.25); padding: .1rem .5rem; border-radius: 9999px; white-space: nowrap; }
 .gmc__kebab { position: absolute; top: .375rem; right: .375rem; width: 24px; height: 24px; background: rgba(0,0,0,.6); border-radius: .375rem; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transition: opacity .12s; border: none; color: white; z-index: 10; }
 .gmc:hover .gmc__kebab, .gmc__kebab:focus { opacity: 1; }
-.gmc__kebab:focus { outline: 2px solid var(--accent,#3b82f6); }
+.gmc__kebab:focus { outline: 2px solid var(--primary); }
 .gmc__menu { position: absolute; top: 1.75rem; right: 0; background: var(--surface,var(--bg-2)); border: 1px solid var(--border-light,var(--border)); border-radius: .5rem; box-shadow: var(--shadow-lg,0 8px 24px rgba(0,0,0,.4)); z-index: 300; min-width: 176px; overflow: hidden; display: none; }
 .gmc__menu.open { display: block; }
 .gmc__menu-item { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; font-size: .8125rem; cursor: pointer; transition: background .1s; color: var(--text); white-space: nowrap; border: none; background: none; width: 100%; text-align: left; }
 .gmc__menu-item:hover:not(.gmc__menu-item--disabled) { background: var(--surface-2,var(--bg-3)); }
-.gmc__menu-item--danger { color: var(--danger,#f87171); }
-.gmc__menu-item--danger:hover:not(.gmc__menu-item--disabled) { background: rgba(239,68,68,.1); }
+.gmc__menu-item--danger { color: var(--danger); }
+.gmc__menu-item--danger:hover:not(.gmc__menu-item--disabled) { background: rgba(255,107,94,.1); }
 .gmc__menu-item--disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
 .gmc__menu-sep { border-top: 1px solid var(--border); margin: .25rem 0; }
 
 /* Drop zone */
 .gal-drop-zone { border: 2px dashed var(--border-light,var(--border)); border-radius: .625rem; padding: 2rem 1.5rem; text-align: center; transition: all .15s; cursor: pointer; }
-.gal-drop-zone.drag-over { border-color: var(--accent,#3b82f6); background: rgba(59,130,246,.06); }
+.gal-drop-zone.drag-over { border-color: var(--primary); background: rgba(154,124,240,.08); }
 
 /* Upload queue item */
 .gal-upload-item { display: flex; align-items: flex-start; gap: .75rem; padding: .625rem; border-radius: .5rem; border: 1px solid var(--border); background: var(--surface-2,var(--bg-3)); margin-bottom: .5rem; }
-.gal-upload-item--success { border-left: 3px solid var(--success,#10b981); }
-.gal-upload-item--error { border-left: 3px solid var(--danger,#ef4444); background: rgba(239,68,68,.04); }
-.gal-upload-item--uploading { border-left: 3px solid var(--accent,#3b82f6); }
+.gal-upload-item--success { border-left: 3px solid var(--success); }
+.gal-upload-item--error { border-left: 3px solid var(--danger); background: rgba(255,107,94,.06); }
+.gal-upload-item--uploading { border-left: 3px solid var(--primary); }
 .gal-upload-item--pending { border-left: 3px solid var(--border-light,var(--border)); }
 .gal-pb-track { height: 4px; border-radius: 9999px; background: var(--border-light,var(--border)); overflow: hidden; margin-top: .4rem; }
-.gal-pb-fill { height: 100%; background: var(--accent,#3b82f6); border-radius: 9999px; transition: width 200ms ease; }
+.gal-pb-fill { height: 100%; background: var(--primary); border-radius: 9999px; transition: width 200ms ease; }
 
 /* Curso multi-select panel */
 .course-media-mli { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; cursor: pointer; transition: background .1s; }
 .course-media-mli:hover { background: var(--surface-2,var(--bg-3)); }
-.course-media-mli--sel { background: rgba(59,130,246,.06); border-left: 2px solid var(--accent,#3b82f6); }
+.course-media-mli--sel { background: rgba(154,124,240,.08); border-left: 2px solid var(--primary); }
 .course-media-mli--avail { border-left: 2px solid transparent; }
 .star-btn-v2 { background: none; border: none; cursor: pointer; padding: .125rem; display: flex; align-items: center; flex-shrink: 0; transition: transform .1s; }
 .star-btn-v2:hover { transform: scale(1.15); }
-.star-btn-v2--active svg { color: #f59e0b; fill: #f59e0b; }
+.star-btn-v2--active svg { color: var(--warning); fill: var(--warning); }
 .star-btn-v2--inactive svg { color: var(--text-muted); fill: none; }
 .gal-cb { width: 15px; height: 15px; border-radius: .25rem; border: 1.5px solid var(--border-light,var(--border)); background: var(--surface-2,var(--bg-3)); display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .12s; }
-.gal-cb--checked { background: var(--accent,#3b82f6); border-color: var(--accent,#3b82f6); }
+.gal-cb--checked { background: var(--primary); border-color: var(--primary); }
 .gal-thumb-mini { width: 48px; height: 27px; border-radius: .25rem; flex-shrink: 0; background: var(--surface-2,var(--bg-3)); display: flex; align-items: center; justify-content: center; overflow: hidden; object-fit: cover; }
 .gal-subheader { background: var(--surface-2,var(--bg-3)); padding: .3rem .75rem; font-size: .6875rem; font-weight: 600; text-transform: uppercase; color: var(--text-muted); letter-spacing: .05em; }
 .gal-ctrl-bar { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
 .gal-ctrl-sel { background: var(--surface-2,var(--bg-3)); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem; font-size: .8125rem; color: var(--text); cursor: pointer; }
-.gal-ctrl-sel:focus { outline: none; border-color: var(--accent,#3b82f6); }
+.gal-ctrl-sel:focus { outline: none; border-color: var(--primary); }
 .gal-search-wrap { position: relative; }
 .gal-search-input { background: var(--surface-2,var(--bg-3)); border: 1px solid var(--border); border-radius: .5rem; padding: .35rem .6rem .35rem 1.8rem; font-size: .8125rem; color: var(--text); transition: border-color .15s; min-width: 160px; }
-.gal-search-input:focus { outline: none; border-color: var(--accent,#3b82f6); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+.gal-search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
 .gal-search-icon { position: absolute; left: .45rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); }
 
 /* Usage modal card */
@@ -2386,13 +2430,31 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
   <nav class="sidebar" id="sidebar" aria-label="Navegação principal">
     <a class="sidebar__logo" href="#" aria-label="Startap Painel">
       <div class="sidebar__logo-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2C8 2 4 5.5 4 10c0 3 1.5 5.5 4 7l4 5 4-5c2.5-1.5 4-4 4-7 0-4.5-4-8-8-8z"/>
-          <circle cx="12" cy="10" r="3" fill="white" stroke="none"/>
+        <!-- F4: símbolo Constelação-S solto (mark-constelacao.svg, viewBox 64). S de nós
+             roxos com 1 nó âmbar de destaque. Sem contêiner roxo (Opção A). -->
+        <svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+            <linearGradient id="sbCsLine" x1="44" y1="17" x2="20" y2="47" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#B59CF7"/>
+              <stop offset="1" stop-color="#6431D6"/>
+            </linearGradient>
+            <radialGradient id="sbCsGlow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0" stop-color="#E0A23C" stop-opacity="0.42"/>
+              <stop offset="0.55" stop-color="#E0A23C" stop-opacity="0.14"/>
+              <stop offset="1" stop-color="#E0A23C" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <path d="M44 17 L20 24 L44 40 L20 47" fill="none" stroke="url(#sbCsLine)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+          <circle cx="20" cy="24" r="4.7" fill="#9A7CF0"/>
+          <circle cx="44" cy="40" r="4.7" fill="#7E5CE8"/>
+          <circle cx="20" cy="47" r="4.7" fill="#6431D6"/>
+          <circle cx="44" cy="17" r="13" fill="url(#sbCsGlow)"/>
+          <circle cx="44" cy="17" r="5.6" fill="#E0A23C"/>
+          <circle cx="44" cy="17" r="2.1" fill="#F6D9A3"/>
         </svg>
       </div>
       <div>
-        <span class="sidebar__logo-wordmark">Startap</span>
+        <span class="sidebar__logo-wordmark">Start<span class="wm-ap">ap</span></span>
         <span class="sidebar__logo-sub">Painel Admin</span>
       </div>
     </a>
@@ -2578,7 +2640,10 @@ async function logout() {
 
 /* ── botAvatar() ────────────────────────────────────────────────── */
 function botAvatar(slug, size = 40) {
-  const PALETTE = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#ec4899','#06b6d4','#f97316'];
+  // F4: paleta determinística re-tonalizada pra família Cadência (era arco-íris
+  // off-brand azul/ciano/rosa). Cores escuras o bastante p/ a letra branca manter
+  // contraste; identidade por slug preservada (mesmo slug → mesma cor).
+  const PALETTE = ['#6431d6','#7e5ce8','#8b66ee','#5526c0','#b07b2e','#2f9e6b','#c44e44','#9a7cf0'];
   let hash = 0;
   for (let i = 0; i < (slug || '').length; i++) hash = (hash * 31 + slug.charCodeAt(i)) >>> 0;
   const color = PALETTE[hash % PALETTE.length];
@@ -3226,14 +3291,15 @@ function _vgRenderMetrics(bots, erros, sparkMap) {
   const botOptions = bots.map(b => `<option value="${b.slot}">${b.display_name || b.slot}</option>`).join('');
 
   body.innerHTML = `
-    <!-- Tabela por bot -->
-    <div class="card" style="overflow-x:auto;padding:0">
+    <!-- Tabela por bot — F4: vira cards empilhados no mobile (data-label + media query),
+         em vez de scroll horizontal. Classe .mbb-card/.mbb-table escopam o responsivo. -->
+    <div class="card mbb-card" style="overflow-x:auto;padding:0">
       <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid var(--border)">
         <span class="label">Métricas por bot</span>
       </div>
       ${bots.length === 0
         ? `<div class="empty-state" style="padding:2rem">${icon('bar-chart-2',32)}<div class="empty-state__title">Sem dados no período selecionado</div></div>`
-        : `<table class="table" style="min-width:700px">
+        : `<table class="table mbb-table" style="min-width:700px">
           <thead><tr>
             <th>Bot</th>
             <th title="Mensagens recebidas (24h)">Msgs <span class="muted" style="font-size:.65rem">(24h)</span></th>
@@ -3245,13 +3311,13 @@ function _vgRenderMetrics(bots, erros, sparkMap) {
           </tr></thead>
           <tbody>
             ${bots.map(b => `<tr>
-              <td style="white-space:nowrap;font-weight:500">${escapeHtml(b.display_name || b.slot)}</td>
-              <td style="white-space:nowrap">${(() => { const s = spark(b.slot); const n = Number(b.messages); return s.includes('muted') ? `<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>` : `${s}&nbsp;<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>`; })()}</td>
-              <td style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
-              <td>${successBadge(b.success_rate)}</td>
-              <td>${latencyBadge(b.avg_latency_ms)}</td>
-              <td style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
-              <td style="font-variant-numeric:tabular-nums">US$${Number(b.cost_usd).toFixed(4)}</td>
+              <td data-label="Bot" style="white-space:nowrap;font-weight:500">${escapeHtml(b.display_name || b.slot)}</td>
+              <td data-label="Msgs (24h)" style="white-space:nowrap">${(() => { const s = spark(b.slot); const n = Number(b.messages); return s.includes('muted') ? `<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>` : `${s}&nbsp;<span style="font-variant-numeric:tabular-nums">${n.toLocaleString('pt-BR')}</span>`; })()}</td>
+              <td data-label="Exec" style="font-variant-numeric:tabular-nums">${Number(b.executions).toLocaleString('pt-BR')}</td>
+              <td data-label="Sucesso">${successBadge(b.success_rate)}</td>
+              <td data-label="Latência avg">${latencyBadge(b.avg_latency_ms)}</td>
+              <td data-label="Tokens in/out" style="font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap">${Number(b.tokens_in).toLocaleString('pt-BR')} / ${Number(b.tokens_out).toLocaleString('pt-BR')}</td>
+              <td data-label="Custo (US$)" style="font-variant-numeric:tabular-nums">US$${Number(b.cost_usd).toFixed(4)}</td>
             </tr>`).join('')}
           </tbody>
           <tfoot><tr style="border-top:2px solid var(--border);font-weight:600">
@@ -4617,7 +4683,7 @@ async function showPromptVersionDiff(slot, version, currentText) {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
         <div>
           <label style="font-size:.8rem;font-weight:600;color:var(--muted)">Versao v${version} (historica)</label>
-          <textarea readonly rows="20" style="width:100%;box-sizing:border-box;font-size:.8rem;font-family:monospace;background:var(--surface-2,#f5f5f5)">${escapeHtml(v.prompt)}</textarea>
+          <textarea readonly rows="20" style="width:100%;box-sizing:border-box;font-size:.8rem;font-family:monospace;background:var(--surface-2)">${escapeHtml(v.prompt)}</textarea>
         </div>
         <div>
           <label style="font-size:.8rem;font-weight:600;color:var(--muted)">Versao atual (editor)</label>
@@ -7611,7 +7677,7 @@ function _renderGcalTab(opts) {
             <li>
               <div>
                 <strong>Habilitar a Google Calendar API</strong><br>
-                <span style="color:var(--danger,#ef4444);font-weight:600">âš  Sem este passo o teste falha com erro 403 (<code>SERVICE_DISABLED</code> / <code>accessNotConfigured</code>).</span><br>
+                <span style="color:var(--danger);font-weight:600">âš  Sem este passo o teste falha com erro 403 (<code>SERVICE_DISABLED</code> / <code>accessNotConfigured</code>).</span><br>
                 Com o projeto selecionado, abra <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener">console.cloud.google.com â†’ APIs â†’ Google Calendar API</a> e clique em <strong>Ativar / Enable</strong>. Espere ~1 minuto pra propagar.
               </div>
             </li>
@@ -7632,7 +7698,7 @@ function _renderGcalTab(opts) {
             <li>
               <div>
                 <strong>Compartilhar a agenda do cliente com a Service Account</strong><br>
-                <span style="color:var(--danger,#ef4444);font-weight:600">âš  Sem este passo o teste falha com erro 404 (<code>Calendar not found</code>).</span><br>
+                <span style="color:var(--danger);font-weight:600">âš  Sem este passo o teste falha com erro 404 (<code>Calendar not found</code>).</span><br>
                 Acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> <strong>logado na conta Gmail dona da agenda do cliente</strong> e:
                 <ol style="margin:.375rem 0 0 1rem;padding:0;font-size:.85rem">
                   <li>Passe o mouse sobre a agenda na lista lateral â†’ clique nos 3 pontinhos â†’ <strong>Configurações e compartilhamento</strong>.</li>
@@ -7672,8 +7738,8 @@ function _renderGcalTab(opts) {
       const connDate = data.gcal_connected_at ? new Date(data.gcal_connected_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
       const lastCheck = data.gcal_last_check_at ? new Date(data.gcal_last_check_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
       return `
-      <div style="padding:.75rem 1rem;background:var(--surface-2,#f5f5f5);border:1px solid var(--info,#3b82f6);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
-        <span style="color:var(--info,#3b82f6);flex-shrink:0">${icon('link-2', 20)}</span>
+      <div style="padding:.75rem 1rem;background:var(--surface-2);border:1px solid var(--info);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+        <span style="color:var(--info);flex-shrink:0">${icon('link-2', 20)}</span>
         <div>
           <div style="font-weight:600;margin-bottom:.25rem">Atualmente vinculado</div>
           <div class="muted" style="font-size:.8125rem">E-mail SA: <code>${escapeHtml(data.gcal_client_email)}</code></div>
@@ -7743,7 +7809,7 @@ function _renderGcalTab(opts) {
     /* bloco de instrução pós-PUT se já temos client_email mas ainda pending */
     if (data.gcal_client_email && data.gcal_status === 'pending') {
       const hint = document.createElement('div');
-      hint.style.cssText = 'padding:.75rem;background:var(--surface-2,#f5f5f5);border-radius:var(--radius-sm);margin-top:.25rem';
+      hint.style.cssText = 'padding:.75rem;background:var(--surface-2);border-radius:var(--radius-sm);margin-top:.25rem';
       hint.innerHTML = `
         <p style="margin:0 0 .5rem;font-weight:600">${icon('info', 14)} Credenciais salvas</p>
         <p class="muted" style="margin:0 0 .5rem;font-size:.85rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></p>
@@ -7765,8 +7831,8 @@ function _renderGcalTab(opts) {
       const lastCheck = data.gcal_last_check_at ? new Date(data.gcal_last_check_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
       container.innerHTML = `
         <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
-          <div style="padding:.75rem 1rem;background:var(--success-bg,#ecfdf5);border:1px solid var(--success,#22c55e);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
-            <span style="color:var(--success,#22c55e);flex-shrink:0">${icon('check-circle-2', 22)}</span>
+          <div style="padding:.75rem 1rem;background:var(--success-bg);border:1px solid var(--success);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+            <span style="color:var(--success);flex-shrink:0">${icon('check-circle-2', 22)}</span>
             <div>
               <div style="font-weight:600;margin-bottom:.25rem">Conectado</div>
               <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email)}</code></div>
@@ -7788,8 +7854,8 @@ function _renderGcalTab(opts) {
     } else if (status === 'invalid') {
       container.innerHTML = `
         <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
-          <div style="padding:.75rem 1rem;background:var(--danger-bg,#fef2f2);border:1px solid var(--danger,#ef4444);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
-            <span style="color:var(--danger,#ef4444);flex-shrink:0">${icon('x-circle', 22)}</span>
+          <div style="padding:.75rem 1rem;background:var(--danger-bg);border:1px solid var(--danger);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+            <span style="color:var(--danger);flex-shrink:0">${icon('x-circle', 22)}</span>
             <div>
               <div style="font-weight:600;margin-bottom:.25rem">Credenciais inválidas</div>
               <div class="muted" style="font-size:.8125rem">Email: <code>${escapeHtml(data.gcal_client_email || '—')}</code></div>
@@ -7831,9 +7897,9 @@ function _renderGcalTab(opts) {
           const codeLabel = result.errorCode ? `<code style="font-size:.7rem;background:var(--surface-2);padding:.0625rem .25rem;border-radius:3px;margin-left:.375rem">${escapeHtml(result.errorCode)}</code>` : '';
           const hintBlock = document.createElement('div');
           hintBlock.id = 'gcal-error-hint';
-          hintBlock.style.cssText = 'margin-top:.75rem;padding:.75rem 1rem;background:rgba(239,68,68,.08);border-left:3px solid var(--danger,#ef4444);border-radius:var(--radius-sm)';
+          hintBlock.style.cssText = 'margin-top:.75rem;padding:.75rem 1rem;background:rgba(255,107,94,.08);border-left:3px solid var(--danger);border-radius:var(--radius-sm)';
           hintBlock.innerHTML = `
-            <div style="font-weight:600;margin-bottom:.375rem;color:var(--danger,#ef4444)">${icon('alert-triangle', 14)} Como resolver${codeLabel}</div>
+            <div style="font-weight:600;margin-bottom:.375rem;color:var(--danger)">${icon('alert-triangle', 14)} Como resolver${codeLabel}</div>
             <p style="margin:0;font-size:.85rem;line-height:1.5">${escapeHtml(result.errorHint)}</p>
             ${linkHtml}
             <details style="margin-top:.5rem"><summary class="muted" style="font-size:.75rem;cursor:pointer">Ver erro técnico</summary><div class="gcal-error-detail">${escapeHtml(result.error || '')}</div></details>`;
@@ -8910,13 +8976,15 @@ let _rtSelected = new Set();
 let _rtDebounce = null;
 
 // Paleta de cores para badges de workflow (determinístico por id)
+// F4: badges de workflow re-tonalizados pra família Cadência (eram azul/ciano/rosa
+// off-brand). Soft-bg + texto claro; distinguíveis e on-brand. Determinístico por id.
 const RT_WF_COLORS = [
-  { bg:'rgba(59,130,246,.18)',  color:'#60a5fa' },
-  { bg:'rgba(16,185,129,.18)',  color:'#34d399' },
-  { bg:'rgba(245,158,11,.18)',  color:'#fbbf24' },
-  { bg:'rgba(139,92,246,.18)', color:'#a78bfa' },
-  { bg:'rgba(236,72,153,.18)', color:'#f472b6' },
-  { bg:'rgba(6,182,212,.18)',  color:'#22d3ee' },
+  { bg:'rgba(154,124,240,.18)', color:'#b9a4f5' },
+  { bg:'rgba(78,216,143,.18)',  color:'#7fe6ad' },
+  { bg:'rgba(224,162,60,.18)',  color:'#ecc079' },
+  { bg:'rgba(100,49,214,.22)',  color:'#a98cf2' },
+  { bg:'rgba(255,107,94,.18)',  color:'#ff9b91' },
+  { bg:'rgba(126,92,232,.20)',  color:'#c4b1f7' },
 ];
 function _rtWfColor(wfId) {
   let h = 0;
@@ -9379,6 +9447,24 @@ function _rtOpenModal(route) {
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── SVG chart helpers (vanilla, sem libs) ───────────────────────── */
+/* F4: cores dos gráficos vêm dos tokens da Cadência (era teal #00d9b2 + greys
+   off-brand). SVG é montado como string e injetado via innerHTML; CSS var() em
+   atributo de apresentação (fill/stroke) não é confiável cross-browser, então
+   resolvemos o valor computado dos tokens uma vez. Cache lazy — recalcula se
+   _chartColors() for chamado antes do CSS aplicar. */
+function _chartColors() {
+  if (_chartColors._c) return _chartColors._c;
+  const cs = getComputedStyle(document.documentElement);
+  const pick = (name, fb) => (cs.getPropertyValue(name).trim() || fb);
+  const c = {
+    line:  pick('--primary', '#9a7cf0'),     // linha/barra → roxo brand
+    grid:  pick('--border', '#332e45'),       // grades
+    axis:  pick('--text-subtle', '#807a95'),  // rótulos de eixo
+    empty: pick('--text-subtle', '#807a95'),  // "Sem dados"
+  };
+  _chartColors._c = c;
+  return c;
+}
 function _chartPad(values) {
   // Normaliza array de números para escala 0-1; retorna [] se vazio ou tudo zero.
   if (!values.length) return [];
@@ -9396,16 +9482,18 @@ function drawSparkline(values, w, h) {
     const y = h - v * h;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
+  const C = _chartColors();
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
-    <polyline points="${pts}" fill="none" stroke="#00d9b2" stroke-width="1.5" stroke-linejoin="round"/>
+    <polyline points="${pts}" fill="none" stroke="${C.line}" stroke-width="1.5" stroke-linejoin="round"/>
   </svg>`;
 }
 
 function drawBarChart(points, w, h, label) {
   // points: [{t, value}]
+  const C = _chartColors();
   if (!points.length) {
     return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">
-      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#6b7280" font-size="11">Sem dados</text>
+      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="${C.empty}" font-size="11">Sem dados</text>
     </svg>`;
   }
   const values = points.map(p => Number(p.value) || 0);
@@ -9416,14 +9504,14 @@ function drawBarChart(points, w, h, label) {
   let svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">`;
   // grid lines
   gridY.forEach(y => {
-    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#374151" stroke-width="0.5"/>`;
+    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="${C.grid}" stroke-width="0.5"/>`;
   });
   // bars
   values.forEach((v, i) => {
     const barH = (v / max) * (h - 20);
     const x = 2 + i * step;
     const y = (h - 20) - barH;
-    svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${barH.toFixed(1)}" fill="#00d9b2" opacity="0.8" rx="1"/>`;
+    svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${barH.toFixed(1)}" fill="${C.line}" opacity="0.85" rx="1"/>`;
   });
   // x axis labels (first + last)
   if (points.length >= 2) {
@@ -9433,17 +9521,18 @@ function drawBarChart(points, w, h, label) {
       const isDateOnly = typeof t === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(t);
       return isDateOnly ? d.toLocaleDateString('pt-BR', {day:'2-digit',month:'2-digit'}) : d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
     };
-    svg += `<text x="2" y="${h-4}" font-size="9" fill="#9ca3af">${fmt(points[0].t)}</text>`;
-    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="#9ca3af" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
+    svg += `<text x="2" y="${h-4}" font-size="9" fill="${C.axis}">${fmt(points[0].t)}</text>`;
+    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="${C.axis}" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
   }
   svg += '</svg>';
   return svg;
 }
 
 function drawLineChart(points, w, h, label) {
+  const C = _chartColors();
   if (!points.length) {
     return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">
-      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#6b7280" font-size="11">Sem dados</text>
+      <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="${C.empty}" font-size="11">Sem dados</text>
     </svg>`;
   }
   const values = points.map(p => Number(p.value) || 0);
@@ -9451,27 +9540,27 @@ function drawLineChart(points, w, h, label) {
   const gridY = [0.25, 0.5, 0.75, 1].map(f => (h - 20) - f * (h - 20));
   let svg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="${label||''}">`;
   gridY.forEach(y => {
-    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="#374151" stroke-width="0.5"/>`;
+    svg += `<line x1="0" y1="${y.toFixed(1)}" x2="${w}" y2="${y.toFixed(1)}" stroke="${C.grid}" stroke-width="0.5"/>`;
   });
   const pts = values.map((v, i) => {
     const x = (i / (values.length - 1 || 1)) * w;
     const y = (h - 20) - (v / max) * (h - 20);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  svg += `<polyline points="${pts}" fill="none" stroke="#00d9b2" stroke-width="2" stroke-linejoin="round"/>`;
+  svg += `<polyline points="${pts}" fill="none" stroke="${C.line}" stroke-width="2" stroke-linejoin="round"/>`;
   // dots
   values.forEach((v, i) => {
     const x = (i / (values.length - 1 || 1)) * w;
     const y = (h - 20) - (v / max) * (h - 20);
-    svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#00d9b2"/>`;
+    svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="${C.line}"/>`;
   });
   if (points.length >= 2) {
     const fmt = t => {
       const d = new Date(t);
       return d.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
     };
-    svg += `<text x="2" y="${h-4}" font-size="9" fill="#9ca3af">${fmt(points[0].t)}</text>`;
-    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="#9ca3af" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
+    svg += `<text x="2" y="${h-4}" font-size="9" fill="${C.axis}">${fmt(points[0].t)}</text>`;
+    svg += `<text x="${w-2}" y="${h-4}" font-size="9" fill="${C.axis}" text-anchor="end">${fmt(points[points.length-1].t)}</text>`;
   }
   svg += '</svg>';
   return svg;
@@ -10676,14 +10765,14 @@ window.PainelBg = (function () {
       <div id="gal-drop-zone" class="gal-drop-zone" role="button" tabindex="0" aria-label="Área de upload — arraste ou clique">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin:0 auto .5rem;display:block;color:var(--text-muted)"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <p style="font-size:.875rem;font-weight:500;color:var(--text-dim,var(--text))">Arraste arquivos aqui</p>
-        <p style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">ou <span style="color:var(--accent,#3b82f6)">selecionar arquivos</span></p>
+        <p style="font-size:.75rem;margin-top:.25rem;color:var(--text-muted)">ou <span style="color:var(--primary)">selecionar arquivos</span></p>
         <p style="font-size:.75rem;margin-top:.5rem;color:var(--text-muted)">MP4 · MOV · WebM · JPG · PNG · WebP — máx 200 MB</p>
       </div>
       <input id="gal-file-input" type="file" style="display:none" multiple accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp"/>
       <div id="gal-upload-queue" style="margin-top:.5rem"></div>
     </div>
     <div class="modal__footer" style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center">
-      <button id="gal-cancel-all-btn" class="btn btn--ghost btn--sm" style="color:var(--danger,#f87171)">Cancelar todos</button>
+      <button id="gal-cancel-all-btn" class="btn btn--ghost btn--sm" style="color:var(--danger)">Cancelar todos</button>
       <button id="gal-finish-btn" class="btn btn--primary btn--sm" disabled>
         Concluir (<span id="gal-done-count" class="mono">0</span> prontos)
       </button>
@@ -11091,14 +11180,14 @@ window.PainelBg = (function () {
       const pbHtml = (item.status === 'uploading' || item.status === 'success')
         ? `<div class="gal-pb-track"><div class="gal-pb-fill" id="pb-fill-${item.id}" style="width:${item.progress}%"></div></div>`
         : '';
-      const errMsg = item.error ? `<div style="font-size:.72rem;color:var(--danger,#f87171);margin-top:.25rem">${escapeHtml(item.error)}</div>` : '';
+      const errMsg = item.error ? `<div style="font-size:.72rem;color:var(--danger);margin-top:.25rem">${escapeHtml(item.error)}</div>` : '';
       return `<div class="gal-upload-item ${statusClass}" id="up-item-${item.id}">
         <div style="flex:1;min-width:0">
           <input class="gal-upload-title-input" value="${escapeHtml(item.title)}" data-upload-id="${item.id}" maxlength="200" style="background:transparent;border:none;color:var(--text);font-size:.8125rem;font-weight:500;width:100%;outline:none;border-bottom:1px solid var(--border);padding-bottom:.125rem" aria-label="Título do arquivo"/>
           <div style="font-size:.6875rem;color:var(--text-muted);margin-top:.2rem">${escapeHtml(item.file.name)} — ${_fmtSize(item.file.size)}</div>
           ${pbHtml}${errMsg}
         </div>
-        <div style="flex-shrink:0;display:flex;align-items:center;gap:.25rem;color:${item.status==='success'?'var(--success,#10b981)':item.status==='error'?'var(--danger,#f87171)':'var(--text-muted)'}">${statusIcon}</div>
+        <div style="flex-shrink:0;display:flex;align-items:center;gap:.25rem;color:${item.status==='success'?'var(--success)':item.status==='error'?'var(--danger)':'var(--text-muted)'}">${statusIcon}</div>
       </div>`;
     }).join('');
 
@@ -11248,7 +11337,7 @@ window.PainelBg = (function () {
       const courses = Array.isArray(usage) ? usage : (usage.courses || []);
       if (!courses.length) {
         body.innerHTML = `<div class="empty-state" style="padding:1.5rem">${icon('unlink',28)}<p class="empty-state__title">Não está em nenhum curso</p></div>`;
-        footer.innerHTML = `<div></div><button class="btn btn--sm" style="background:rgba(239,68,68,.15);color:var(--danger,#f87171)" id="gal-usage-delete-btn">${icon('trash-2',13)} Excluir mídia</button>`;
+        footer.innerHTML = `<div></div><button class="btn btn--sm" style="background:rgba(255,107,94,.15);color:var(--danger)" id="gal-usage-delete-btn">${icon('trash-2',13)} Excluir mídia</button>`;
         document.getElementById('gal-usage-delete-btn')?.addEventListener('click', () => { closeModal('gal-modal-usage'); _galDeleteMedia(id); });
         return;
       }
