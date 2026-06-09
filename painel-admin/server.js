@@ -401,6 +401,85 @@ const mediaUpload = multer({
   },
 });
 
+// ── Helpers de arquivo físico de mídia ────────────────────────────────────────
+// A coluna bot_media.url guarda OU um caminho local de upload nosso
+// (ex.: "/uploads/1700000000-abc.png", prefixo MEDIA_PUBLIC_BASE_URL) OU uma
+// URL externa (http(s)://... — WAHA, CDN). Só apagamos do disco arquivos LOCAIS
+// dentro de MEDIA_STORAGE_DIR. Qualquer coisa fora dali é ignorada (anti
+// path-traversal e proteção contra apagar arquivo de terceiro).
+//
+// IMPORTANTE: estes helpers são puros e replicados em test/media-unlink.test.js
+// ("espelha a lógica em server.js — manter em sync", padrão de models.test.js).
+const _MEDIA_PUBLIC_BASE = String(MEDIA_PUBLIC_BASE_URL || '/uploads').replace(/\/$/, '');
+
+/**
+ * Resolve o caminho absoluto do arquivo físico a partir de uma url de bot_media.
+ * Retorna o path absoluto SOMENTE se a url for um upload local nosso e o caminho
+ * resolvido estiver contido em MEDIA_STORAGE_DIR. Caso contrário retorna null
+ * (url externa, prefixo diferente, ou tentativa de escapar do diretório).
+ *
+ * @param {string} url       valor de bot_media.url
+ * @param {string} storageDir diretório base de uploads (MEDIA_STORAGE_DIR)
+ * @param {string} publicBase prefixo público das urls locais (sem barra final)
+ * @returns {string|null}
+ */
+function resolveLocalMediaPath(url, storageDir, publicBase) {
+  if (!url || typeof url !== 'string') return null;
+  // URL externa (http://, https://, //host) nunca é arquivo local nosso.
+  if (/^([a-z][a-z0-9+.-]*:)?\/\//i.test(url)) return null;
+  const prefix = `${publicBase}/`;
+  if (!url.startsWith(prefix)) return null;
+  // Tudo após o prefixo é o nome do arquivo (decodificado — urls são encodeURIComponent na gravação).
+  let filename;
+  try {
+    filename = decodeURIComponent(url.slice(prefix.length));
+  } catch {
+    return null; // url malformada
+  }
+  if (!filename) return null;
+  // Bloqueia separadores/escape explícitos antes mesmo de resolver.
+  if (filename.includes('/') || filename.includes('\\') || filename.includes('\0')) return null;
+  const baseAbs = path.resolve(storageDir);
+  const candidate = path.resolve(baseAbs, filename);
+  // Confinamento: candidate precisa estar DENTRO de baseAbs.
+  const rel = path.relative(baseAbs, candidate);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return candidate;
+}
+
+/**
+ * Apaga o arquivo físico de uma mídia local de forma idempotente e segura.
+ * - Só toca em arquivos dentro de MEDIA_STORAGE_DIR (via resolveLocalMediaPath).
+ * - ENOENT é tratado como sucesso (arquivo já não existe).
+ * - Qualquer outra falha de FS é logada e NÃO propaga (a remoção lógica no banco
+ *   já aconteceu; um erro de disco não deve derrubar o request).
+ * @param {string} url valor de bot_media.url
+ * @returns {Promise<'deleted'|'skipped'|'missing'|'error'>}
+ */
+async function unlinkLocalMedia(url) {
+  const abs = resolveLocalMediaPath(url, MEDIA_STORAGE_DIR, _MEDIA_PUBLIC_BASE);
+  if (!abs) return 'skipped'; // url externa ou fora do storage — nada a fazer
+  try {
+    await fs.promises.unlink(abs);
+    return 'deleted';
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return 'missing';
+    console.error('[media-unlink]', JSON.stringify({ at: 'unlinkLocalMedia', code: e?.code, msg: e?.message }));
+    return 'error';
+  }
+}
+
+/**
+ * Calcula órfãos: arquivos presentes no disco que NÃO estão no conjunto de
+ * nomes referenciados pelo banco. Puro/sem I/O para ser testável.
+ * @param {string[]} filesOnDisk    nomes de arquivo (basename) presentes em uploads/
+ * @param {Set<string>} referenced  basenames referenciados por bot_media (locais)
+ * @returns {string[]} basenames órfãos
+ */
+function computeOrphans(filesOnDisk, referenced) {
+  return filesOnDisk.filter((name) => !referenced.has(name));
+}
+
 // Parseia cookies para uso nos middlewares CSRF, session e outros
 app.use(cookieParser());
 
@@ -1673,13 +1752,20 @@ app.delete('/api/media/:id', async (req, res) => {
     let r;
     if (slot && typeof slot === 'string') {
       r = await pool.query(
-        'DELETE FROM bot_media WHERE id = $1 AND slot = $2 RETURNING id',
+        'DELETE FROM bot_media WHERE id = $1 AND slot = $2 RETURNING id, url',
         [req.params.id, slot],
       );
       if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada ou slot incorreto' });
     } else {
-      r = await pool.query('DELETE FROM bot_media WHERE id = $1 RETURNING id', [req.params.id]);
+      r = await pool.query('DELETE FROM bot_media WHERE id = $1 RETURNING id, url', [req.params.id]);
       if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada' });
+    }
+    // Remove o arquivo físico só se nenhuma outra linha ainda referencia a mesma url
+    // (proteção contra arquivo compartilhado). Idempotente; falha de FS não derruba o request.
+    const delUrl = r.rows[0]?.url;
+    if (delUrl) {
+      const stillUsed = await pool.query('SELECT 1 FROM bot_media WHERE url = $1 LIMIT 1', [delUrl]);
+      if (!stillUsed.rowCount) await unlinkLocalMedia(delUrl);
     }
     res.json({ ok: true });
   } catch (e) {
@@ -1775,6 +1861,14 @@ app.put('/api/bots/:slot/gallery/:id/replace', mediaUpload.single('file'), async
     const base = String(MEDIA_PUBLIC_BASE_URL || '/uploads').replace(/\/$/, '');
     const url = `${base}/${encodeURIComponent(req.file.filename)}`;
 
+    // Captura a url ANTES do UPDATE para apagar o arquivo antigo (senão vira órfão).
+    const prev = await pool.query(
+      'SELECT url FROM bot_media WHERE slot = $1 AND id = $2',
+      [slot, mediaId],
+    );
+    if (!prev.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+    const oldUrl = prev.rows[0].url;
+
     const r = await pool.query(
       `UPDATE bot_media
           SET url = $1, media_type = $2, updated_at = NOW()
@@ -1783,6 +1877,18 @@ app.put('/api/bots/:slot/gallery/:id/replace', mediaUpload.single('file'), async
       [url, media_type, slot, mediaId],
     );
     if (!r.rows.length) return res.status(404).json({ error: 'mídia não encontrada' });
+
+    // Apaga o arquivo antigo só se nenhuma outra linha ainda o referencia
+    // (proteção contra arquivo compartilhado entre slots/posições) e se for
+    // diferente do novo. Idempotente; falha de FS não derruba o request.
+    if (oldUrl && oldUrl !== url) {
+      const stillUsed = await pool.query(
+        'SELECT 1 FROM bot_media WHERE url = $1 LIMIT 1',
+        [oldUrl],
+      );
+      if (!stillUsed.rowCount) await unlinkLocalMedia(oldUrl);
+    }
+
     res.json({ ...r.rows[0], size: req.file.size, original_name: req.file.originalname });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1816,10 +1922,17 @@ app.delete('/api/bots/:slot/gallery/:id', async (req, res) => {
     }
 
     const r = await pool.query(
-      'DELETE FROM bot_media WHERE slot = $1 AND id = $2 RETURNING id',
+      'DELETE FROM bot_media WHERE slot = $1 AND id = $2 RETURNING id, url',
       [slot, mediaId],
     );
     if (!r.rowCount) return res.status(404).json({ error: 'mídia não encontrada' });
+    // Remove o arquivo físico só se nenhuma outra linha ainda referencia a mesma url
+    // (proteção contra arquivo compartilhado). Idempotente; falha de FS não derruba o request.
+    const delUrl = r.rows[0]?.url;
+    if (delUrl) {
+      const stillUsed = await pool.query('SELECT 1 FROM bot_media WHERE url = $1 LIMIT 1', [delUrl]);
+      if (!stillUsed.rowCount) await unlinkLocalMedia(delUrl);
+    }
     res.json({ ok: true, id: mediaId });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -5440,6 +5553,96 @@ app.put('/api/billing/:slot', async (req, res) => {
   } catch (e) {
     console.error(JSON.stringify({ at: 'billing-put', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao atualizar billing' }));
     res.status(500).json({ error: 'erro ao atualizar billing' });
+  }
+});
+
+// ============================================================================
+// GC de uploads órfãos (fix vazamento de disco — Missão uploads-disk-leak)
+// ----------------------------------------------------------------------------
+// Arquivos em MEDIA_STORAGE_DIR que não têm linha correspondente em bot_media
+// ficaram órfãos antes do fix de unlink no delete/replace. Este endpoint lista
+// (dry-run por padrão) e só apaga com { confirm: true } no corpo.
+// Atrás do requireAuth global + CSRF (igual ao resto do painel).
+// NUNCA apaga arquivo referenciado por alguma linha de mídia.
+// ============================================================================
+app.post('/api/admin/uploads/gc-orphans', async (req, res) => {
+  const confirm = req.body?.confirm === true;
+  try {
+    // 1) Lista arquivos físicos no diretório de uploads (só arquivos, não subdirs).
+    let dirEntries;
+    try {
+      dirEntries = await fs.promises.readdir(MEDIA_STORAGE_DIR, { withFileTypes: true });
+    } catch (e) {
+      if (e?.code === 'ENOENT') {
+        return res.json({ ok: true, dry_run: !confirm, uploads_dir: MEDIA_STORAGE_DIR, orphans: [], orphan_count: 0, orphan_bytes: 0, deleted: 0 });
+      }
+      throw e;
+    }
+    const filesOnDisk = dirEntries.filter((d) => d.isFile()).map((d) => d.name);
+
+    // 2) Conjunto de basenames referenciados pelo banco (apenas uploads locais nossos).
+    const referenced = new Set();
+    const rows = await pool.query('SELECT DISTINCT url FROM bot_media WHERE url IS NOT NULL');
+    for (const { url } of rows.rows) {
+      const abs = resolveLocalMediaPath(url, MEDIA_STORAGE_DIR, _MEDIA_PUBLIC_BASE);
+      if (abs) referenced.add(path.basename(abs));
+    }
+
+    // 3) Órfãos = no disco e não referenciados.
+    const orphanNames = computeOrphans(filesOnDisk, referenced);
+
+    // 4) Coleta tamanho de cada órfão (e total) para o relatório.
+    const orphans = [];
+    let orphanBytes = 0;
+    for (const name of orphanNames) {
+      const abs = path.join(MEDIA_STORAGE_DIR, name);
+      let size = null;
+      try {
+        const st = await fs.promises.stat(abs);
+        size = st.size;
+        orphanBytes += st.size;
+      } catch { /* sumiu entre readdir e stat — ignora */ }
+      orphans.push({ filename: name, size_bytes: size });
+    }
+
+    // 5) Dry-run por padrão: só apaga com confirm explícito.
+    let deleted = 0;
+    if (confirm) {
+      for (const name of orphanNames) {
+        // Reconfirma segurança: o nome veio de readdir do próprio storage, mas
+        // resolvemos o caminho de novo para barrar qualquer coisa estranha.
+        const localUrl = `${_MEDIA_PUBLIC_BASE}/${encodeURIComponent(name)}`;
+        const abs = resolveLocalMediaPath(localUrl, MEDIA_STORAGE_DIR, _MEDIA_PUBLIC_BASE);
+        if (!abs) continue; // defensivo
+        try {
+          await fs.promises.unlink(abs);
+          deleted++;
+        } catch (e) {
+          if (e?.code === 'ENOENT') { deleted++; continue; }
+          console.error('[gc-orphans]', JSON.stringify({ filename: name, code: e?.code, msg: e?.message }));
+        }
+      }
+      console.log(JSON.stringify({
+        audit: 'uploads-gc-orphans', operator: req.session?.userId || 'unknown',
+        deleted, orphan_count: orphanNames.length, orphan_bytes: orphanBytes,
+        at: new Date().toISOString(),
+      }));
+    }
+
+    res.json({
+      ok: true,
+      dry_run: !confirm,
+      uploads_dir: MEDIA_STORAGE_DIR,
+      total_files: filesOnDisk.length,
+      referenced_count: referenced.size,
+      orphan_count: orphanNames.length,
+      orphan_bytes: orphanBytes,
+      orphans,
+      deleted,
+    });
+  } catch (e) {
+    console.error('[gc-orphans]', JSON.stringify({ at: 'gc-orphans', code: e?.code, msg: e?.message }));
+    res.status(500).json({ error: 'erro ao coletar/limpar órfãos de uploads' });
   }
 });
 
