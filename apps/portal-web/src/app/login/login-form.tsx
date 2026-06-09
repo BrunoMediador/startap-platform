@@ -201,10 +201,9 @@ export function LoginForm() {
 
 function Wordmark() {
   return (
-    <div className="inline-flex items-center gap-[11px] font-display text-[20px] font-bold tracking-[-0.01em] text-ink md:text-[22px]">
-      <span className="login-dot-glow flex size-[34px] items-center justify-center rounded-[10px] bg-brand-fill">
-        <Brandmark size={18} color="#fff" />
-      </span>
+    <div className="inline-flex items-center gap-[10px] font-display text-[20px] font-bold tracking-[-0.01em] text-ink md:text-[22px]">
+      {/* Opcao A: simbolo Constelacao-S solto (sem quadrado roxo). */}
+      <Brandmark size={36} />
       <span>
         Start<span className="text-brand">ap</span>
       </span>

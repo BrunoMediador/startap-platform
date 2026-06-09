@@ -17,10 +17,9 @@ export function Topbar({ businessName }: { businessName: string }) {
 
   return (
     <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-surface px-5 py-4 md:hidden">
-      <div className="inline-flex items-center gap-2.5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
-        <span className="login-dot-glow flex size-[30px] items-center justify-center rounded-[9px] bg-brand-fill">
-          <Brandmark size={15} color="#fff" />
-        </span>
+      {/* Brandmark: simbolo Constelacao-S solto (Opcao A, sem quadrado roxo). */}
+      <div className="inline-flex items-center gap-2 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
+        <Brandmark size={30} />
         <span>
           Start<span className="text-brand">ap</span>
         </span>
