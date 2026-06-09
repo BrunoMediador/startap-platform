@@ -171,7 +171,11 @@ html {
 }
 
 body {
-  background: var(--color-bg);
+  /* SEM background aqui de proposito: o bg opaco do body (bloco in-flow) e
+     pintado DEPOIS dos descendentes com z-index negativo (CSS 2.1 painting
+     order), entao tampava o canvas `.app-bg` (z-[-1]) do shell em toda a area.
+     A cor base fica no `html` (acima) -> dark solido sem flash de branco; o
+     canvas appbg fica visivel nos vaos de TODA tela autenticada. */
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
