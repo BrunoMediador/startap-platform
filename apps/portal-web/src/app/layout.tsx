@@ -1,19 +1,28 @@
 import { Providers } from '@/components/providers';
 import type { Metadata, Viewport } from 'next';
-import { Inter, Sora } from 'next/font/google';
+import localFont from 'next/font/local';
 import './globals.css';
 
-// Sora (display) e Inter (body) via next/font — sem FOUT, display swap (spec 1.3).
-const sora = Sora({
-  subsets: ['latin'],
-  weight: ['500', '600', '700'],
+// Sora (display) e Inter (body) auto-hospedadas via next/font/local — sem FOUT,
+// display swap (spec 1.3). Os woff2 (subset latin, OFL-1.1) sao vendorados em
+// ./fonts pra o build NAO depender do Google Fonts (ETIMEDOUT travava o deploy
+// no VPS, que roda next build sem acesso confiavel a rede externa).
+const sora = localFont({
+  src: [
+    { path: './fonts/sora-latin-500-normal.woff2', weight: '500', style: 'normal' },
+    { path: './fonts/sora-latin-600-normal.woff2', weight: '600', style: 'normal' },
+    { path: './fonts/sora-latin-700-normal.woff2', weight: '700', style: 'normal' },
+  ],
   variable: '--font-sora',
   display: 'swap',
 });
 
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+const inter = localFont({
+  src: [
+    { path: './fonts/inter-latin-400-normal.woff2', weight: '400', style: 'normal' },
+    { path: './fonts/inter-latin-500-normal.woff2', weight: '500', style: 'normal' },
+    { path: './fonts/inter-latin-600-normal.woff2', weight: '600', style: 'normal' },
+  ],
   variable: '--font-inter',
   display: 'swap',
 });
