@@ -12,8 +12,7 @@ export function Card({ className, padded = true, children, ...props }: CardProps
   return (
     <div
       className={cn(
-        // Elevacao por TEMA (spec 1.C.5): escuro = tom+borda (shadow-card=none);
-        // claro = sombra (shadow-card resolve a sombra via [data-theme="light"]).
+        // Elevacao no escuro (tema unico): por tom+borda — shadow-card=none.
         'rounded-card border border-line bg-surface shadow-card',
         padded && 'p-5',
         className,

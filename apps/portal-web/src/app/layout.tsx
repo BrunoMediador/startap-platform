@@ -1,5 +1,4 @@
 import { Providers } from '@/components/providers';
-import { THEME_BOOT_SCRIPT } from '@/lib/theme';
 import type { Metadata, Viewport } from 'next';
 import { Inter, Sora } from 'next/font/google';
 import './globals.css';
@@ -27,28 +26,16 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  // Default escuro "Cadencia Noturna"; muda conforme o tema (1.C). A barra do
-  // navegador acompanha o fundo da app no claro/escuro.
-  themeColor: [
-    { media: '(prefers-color-scheme: dark)', color: '#14121C' },
-    { media: '(prefers-color-scheme: light)', color: '#F4F2FB' },
-  ],
+  // Tema unico escuro "Cadencia Noturna": a barra do navegador acompanha o
+  // fundo da app (#14121C) sempre — nao ha mais opcao de tema claro.
+  themeColor: '#14121C',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  // data-theme default "dark" no SSR; o boot script (sincrono, antes do paint)
-  // sobrescreve com a escolha persistida pra evitar flash (spec 1.C.1).
+  // Tema unico escuro: data-theme="dark" fixo no <html> (blinda o CSS). Nao ha
+  // mais escolha persistida nem boot script — o app e sempre Cadencia Noturna.
   return (
-    <html
-      lang="pt-BR"
-      data-theme="dark"
-      suppressHydrationWarning
-      className={`${sora.variable} ${inter.variable}`}
-    >
-      <head>
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: script de boot sincrono e self-contained (THEME_BOOT_SCRIPT), sem input do usuario — necessario pra setar data-theme antes do paint e evitar FOUC (spec 1.C.1) */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
-      </head>
+    <html lang="pt-BR" data-theme="dark" className={`${sora.variable} ${inter.variable}`}>
       <body>
         <Providers>{children}</Providers>
       </body>

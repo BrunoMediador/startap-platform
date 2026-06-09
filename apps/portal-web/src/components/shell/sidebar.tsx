@@ -9,17 +9,17 @@ import { useLogout } from '@/lib/use-logout';
  *
  * BLOCO A (fix): a sidebar agora e `sticky top-0 h-dvh` (antes esticava com o
  * conteudo e empurrava o rodape "Sair" pro fim do scroll). O <nav> rola
- * internamente (`overflow-y-auto`); o rodape (avatar + nome + toggle + sair)
- * fica SEMPRE visivel, independente do tamanho da lista. Sidebar e a coluna de
- * conteudo sao irmaos num flex row (ver layout do grupo (app)).
+ * internamente (`overflow-y-auto`); o rodape (avatar + nome + sair) fica SEMPRE
+ * visivel, independente do tamanho da lista. Sidebar e a coluna de conteudo sao
+ * irmaos num flex row (ver layout do grupo (app)).
  *
  * 1.D.7: brandmark com glow, item ativo com barra 3px. Rodape SEM rotulo de
- * plano (decisao Bruno — nao ha planos ainda): so avatar + nome + toggle + sair.
+ * plano (decisao Bruno — nao ha planos ainda) e SEM toggle de tema (o app e
+ * sempre escuro): so avatar + nome + sair.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { NAV_ITEMS } from './nav-items';
-import { ThemeToggle } from './theme-toggle';
 
 export function Sidebar({ businessName }: { businessName: string }) {
   const pathname = usePathname();
@@ -75,7 +75,6 @@ export function Sidebar({ businessName }: { businessName: string }) {
             {businessName}
           </span>
         </div>
-        <ThemeToggle variant="sidebar" />
         <button
           type="button"
           onClick={logout}
