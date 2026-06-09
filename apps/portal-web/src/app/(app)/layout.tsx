@@ -20,8 +20,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <SessionProvider slot={session.slot} username={session.username}>
       {/* Shell em flex row (1.D.7): sidebar e a coluna de conteudo sao IRMAOS.
           A pagina inteira rola; a sidebar fica sticky/h-dvh com rodape sempre
-          visivel (fix do BLOCO A — antes esticava com o conteudo). */}
-      <div className="flex min-h-dvh bg-bg">
+          visivel (fix do BLOCO A — antes esticava com o conteudo).
+          SEM bg-bg aqui: o `body` ja pinta `--color-bg` (no-op visual em todas
+          as rotas). Deixar o shell transparente permite que o fundo fixo da
+          Inicio (canvas fullbg, z-index:-1) apareca nos vaos atras do conteudo;
+          nas outras rotas o canvas nem monta, entao nada muda. */}
+      <div className="flex min-h-dvh">
         <Sidebar businessName={businessName} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar businessName={businessName} />
