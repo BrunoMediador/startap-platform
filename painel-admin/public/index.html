@@ -2155,6 +2155,134 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 }
 .exec-skel-row:last-child { border-bottom: none; }
 
+/* ── Execuções v2 — agrupamento por bot (rebrand F3 §4.5) ────────── */
+.exec-group { margin-bottom: 1rem; }
+.exec-group:last-child { margin-bottom: 0; }
+.exec-group__head {
+  display: flex; align-items: center; gap: .625rem; flex-wrap: wrap;
+  padding: .625rem .875rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+.exec-group__title {
+  display: flex; align-items: center; gap: .5rem;
+  font-weight: 600; font-size: .9375rem; color: var(--text);
+}
+.exec-group__slot {
+  font-family: var(--font-mono); font-size: .75rem;
+  color: var(--text-muted); font-weight: 500;
+}
+.exec-group__stats {
+  margin-left: auto; display: flex; align-items: center; gap: .625rem;
+  font-size: .75rem; color: var(--text-muted); white-space: nowrap;
+}
+.exec-group__rate {
+  font-variant-numeric: tabular-nums; font-weight: 600;
+  font-family: var(--font-mono);
+}
+.exec-group__rate--ok   { color: var(--success); }
+.exec-group__rate--warn { color: var(--warning); }
+.exec-group__rate--bad  { color: var(--danger); }
+.exec-group .table-wrap { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+/* Gatilho — chip do evento que disparou a execução */
+.exec-trigger {
+  display: inline-flex; align-items: center; gap: .3rem;
+  font-size: .75rem; color: var(--text-muted);
+}
+.exec-trigger--none { color: var(--text-subtle); }
+.exec-row__chevron { color: var(--text-subtle); }
+.exec-list-table tbody tr:hover .exec-row__chevron { color: var(--primary); }
+
+/* Execuções — cards empilhados no mobile (não scroll horizontal de tabela) */
+.exec-card { display: none; }
+@media (max-width: 767px) {
+  .exec-group .table-wrap { display: none; }
+  .exec-group__cards { display: flex; flex-direction: column; gap: .5rem;
+    padding: .625rem; background: var(--surface); border: 1px solid var(--border);
+    border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
+  .exec-card {
+    display: block; cursor: pointer;
+    padding: .625rem .75rem; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: var(--radius-md);
+  }
+  .exec-card:hover { border-color: var(--border-light); }
+  .exec-card__top { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+  .exec-card__time { font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); }
+  .exec-card__phone { font-family: var(--font-mono); font-size: .8125rem; color: var(--text); margin: .25rem 0; }
+  .exec-card__meta { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: .75rem; }
+}
+@media (min-width: 768px) {
+  .exec-group__cards { display: none; }
+}
+
+/* ── Clientes v2 — menu de ações por cliente (rebrand F3 §4.7) ──────
+   Usa <details>/<summary> nativo: sem JS de posicionamento, acessível por
+   teclado, fecha no Esc/blur do browser. Duas seções no popover (Portal /
+   Cobrança). */
+.cli-menu { position: relative; display: inline-block; }
+.cli-menu > summary {
+  list-style: none; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-light); background: transparent;
+  color: var(--text-muted);
+}
+.cli-menu > summary::-webkit-details-marker { display: none; }
+.cli-menu > summary:hover { background: var(--surface-3); color: var(--text); }
+.cli-menu[open] > summary { background: var(--surface-3); color: var(--text); }
+.cli-menu__pop {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 50;
+  min-width: 210px; padding: .375rem;
+  background: var(--surface-2); border: 1px solid var(--border-light);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-md);
+  text-align: left;
+}
+.cli-menu__section {
+  font-size: .625rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-subtle); font-weight: 700;
+  padding: .375rem .5rem .25rem;
+}
+.cli-menu__section + .cli-menu__item { margin-top: 0; }
+.cli-menu__sep { height: 1px; background: var(--border); margin: .375rem 0; }
+.cli-menu__item {
+  display: flex; align-items: center; gap: .5rem; width: 100%;
+  padding: .4rem .5rem; border: none; background: transparent;
+  color: var(--text); font-size: .8125rem; text-align: left;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.cli-menu__item:hover { background: var(--surface-3); }
+.cli-menu__item--danger { color: var(--danger); }
+.cli-menu__item[disabled] { opacity: .45; cursor: not-allowed; }
+/* badge de acesso ao portal (login) */
+.cli-access { display: inline-flex; align-items: center; gap: .375rem; }
+.cli-access__user { font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); }
+.cli-sub { color: var(--text-muted); font-family: var(--font-mono); font-size: .72rem; }
+
+/* Clientes — cards empilhados no mobile (sem scroll horizontal de tabela) */
+@media (max-width: 767px) {
+  .cli-table-wrap { border: none; }
+  .cli-table-wrap .table thead { display: none; }
+  .cli-table-wrap .table, .cli-table-wrap .table tbody, .cli-table-wrap .table tr { display: block; }
+  .cli-table-wrap .table tr {
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    margin-bottom: .625rem; padding: .25rem .5rem;
+    background: var(--surface);
+  }
+  .cli-table-wrap .table td {
+    display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+    border-bottom: 1px solid var(--border); padding: .5rem .375rem; text-align: right;
+  }
+  .cli-table-wrap .table tr td:last-child { border-bottom: none; }
+  .cli-table-wrap .table td::before {
+    content: attr(data-label); font-size: .6875rem; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--text-subtle); font-weight: 600;
+    text-align: left; white-space: nowrap;
+  }
+  .cli-menu__pop { right: auto; left: 0; }
+}
+
 /* ─── GALERIA DE MÍDIA v2 ──────────────────────────────────────── */
 /* Modal base — display:none por padrão, .open ativa */
 .gal-modal {
@@ -2304,12 +2432,11 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
       <!-- Seção Roteamento — promovida a nível global; renderizada por renderRoteamento() -->
     </section>
     <!-- Rebrand F2 §1.3 — sec-metricas removida (conteúdo migrou pra Visão Geral). -->
-    <!-- Portal do Cliente — Missão 009 (renderizadas por window.PortalAdmin) -->
-    <section class="section" id="sec-portal-usuarios" aria-label="Usuários do portal">
-      <div id="portal-usuarios-content"></div>
-    </section>
-    <section class="section" id="sec-portal-cobranca" aria-label="Cobrança por fluxo">
-      <div id="portal-cobranca-content"></div>
+    <!-- Clientes — rebrand F3 §4.7: funde Usuários do portal + Cobrança numa
+         visão por cliente/slot (login do portal + cobrança juntos). As antigas
+         sec-portal-usuarios e sec-portal-cobranca foram absorvidas aqui. -->
+    <section class="section" id="sec-clientes" aria-label="Clientes">
+      <div id="clientes-content"></div>
     </section>
   </main>
 </div>
@@ -2562,6 +2689,16 @@ function fmtDate(d) {
     timeZone: 'America/Sao_Paulo',
     day: '2-digit', month: '2-digit', year: '2-digit',
     hour: '2-digit', minute: '2-digit',
+  }).format(new Date(d));
+}
+
+/* Só HH:MM:SS — usado na lista de execuções (a data do grupo é implícita pelo
+   filtro de período). */
+function fmtTime(d) {
+  if (!d) return '—';
+  return new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).format(new Date(d));
 }
 
@@ -5344,6 +5481,21 @@ let _execSSE = null;
 let _execFilters = { from: '', to: '', status: '', slot: '' };
 let _execLogs = [];
 
+/* Cache de rótulos slot→display_name p/ cabeçalhos de grupo das execuções.
+   Compartilha o /api/clones já consumido pelo filtro de slot. */
+let _execCloneLabelCache = null;
+async function _execCloneLabels() {
+  if (_execCloneLabelCache) return _execCloneLabelCache;
+  const map = {};
+  try {
+    const c = await api('/api/clones');
+    const arr = Array.isArray(c) ? c : (c.data || c.clones || []);
+    arr.forEach(x => { if (x.slot) map[x.slot] = x.display_name || x.slot; });
+  } catch (_) { /* fallback: usa o próprio slot */ }
+  _execCloneLabelCache = map;
+  return map;
+}
+
 function maskPhone(p) {
   const s = String(p || '');
   if (s.length < 6) return s || '—';
@@ -5508,29 +5660,124 @@ function extractChatFromEvents(events) {
   return { incoming, outgoing };
 }
 
+/* Gatilho (evento que disparou a execução). O backend NÃO expõe isso na lista
+   /api/executions hoje — ele agrega por execution_id e descarta o event_type do
+   1º evento. Quando o backend passar a expor um campo (gatilho/trigger/
+   first_event_type/entry_event), esta função o rotula automaticamente. Sem o
+   dado, devolve null → a UI mostra "—" graciosamente (não inventa). */
+function execTrigger(e) {
+  const raw = e.gatilho || e.trigger || e.first_event_type || e.entry_event
+    || e.trigger_event || null;
+  if (!raw) return null;
+  return { type: raw, label: eventTypeLabel(raw), icon: eventTypeIcon(raw) };
+}
+
+function execTriggerCell(e) {
+  const t = execTrigger(e);
+  if (!t) return `<span class="exec-trigger exec-trigger--none" title="Dado de gatilho ainda não exposto pelo backend">—</span>`;
+  return `<span class="exec-trigger" title="${escapeHtml(t.label)}">${t.icon} ${escapeHtml(t.label)}</span>`;
+}
+
 function buildExecRow(e) {
   const tr = document.createElement('tr');
   const phone = maskPhone(e.telefone_mascarado || e.telefone || e.phone || e.from || '');
-  const slot  = e.slot || e.flow_id || e.workflow_id || e.bot || '—';
   const dur   = e.duration_ms ?? e.duration ?? null;
   const ts    = e.started_at  || e.created_at || e.timestamp;
-  const cnt   = e.events_count ?? '—';
 
   tr.innerHTML = `
-    <td class="mono" style="font-size:.75rem;color:var(--text-muted)">${escapeHtml(fmtDate(ts))}</td>
-    <td>
-      <div style="display:flex;align-items:center;gap:.375rem">
-        ${botAvatar(slot, 20).outerHTML}
-        <span class="mono" style="font-size:.75rem">${escapeHtml(slot.slice(0,20))}</span>
-      </div>
-    </td>
+    <td class="mono" style="font-size:.75rem;color:var(--text-muted)">${escapeHtml(fmtTime(ts))}</td>
     <td class="mono" style="font-size:.75rem">${escapeHtml(phone)}</td>
+    <td>${execTriggerCell(e)}</td>
     <td>${execDurationBadge(dur)}</td>
     <td>${execStatusBadge(e.status_final || e.status)}</td>
-    <td style="color:var(--text-muted);font-size:.75rem;text-align:right">${escapeHtml(String(cnt))}</td>`;
+    <td style="text-align:right"><span class="exec-row__chevron">${icon('chevron-right',16)}</span></td>`;
 
   tr.addEventListener('click', () => openExecDetail(e.id || e.execution_id || e._id));
   return tr;
+}
+
+/* Card mobile de uma execução (1 card por linha — sem scroll horizontal). */
+function buildExecCard(e) {
+  const div = document.createElement('div');
+  div.className = 'exec-card';
+  const phone = maskPhone(e.telefone_mascarado || e.telefone || e.phone || e.from || '');
+  const dur   = e.duration_ms ?? e.duration ?? null;
+  const ts    = e.started_at  || e.created_at || e.timestamp;
+  div.innerHTML = `
+    <div class="exec-card__top">
+      <span class="exec-card__time">${escapeHtml(fmtTime(ts))}</span>
+      <span class="exec-row__chevron">${icon('chevron-right',16)}</span>
+    </div>
+    <div class="exec-card__phone">${escapeHtml(phone)}</div>
+    <div class="exec-card__meta">
+      ${execTriggerCell(e)} · ${execDurationBadge(dur)} · ${execStatusBadge(e.status_final || e.status)}
+    </div>`;
+  div.addEventListener('click', () => openExecDetail(e.id || e.execution_id || e._id));
+  return div;
+}
+
+/* Agrupa execuções por slot/bot, preservando a ordem de chegada (mais recente
+   primeiro). Cada grupo carrega nome amigável, slot e %sucesso. */
+function groupExecsByBot(arr, labels) {
+  const order = [];
+  const map = {};
+  arr.forEach(e => {
+    const slot = e.slot || e.flow_id || e.workflow_id || e.bot || '—';
+    if (!map[slot]) { map[slot] = { slot, name: (labels && labels[slot]) || slot, execs: [] }; order.push(slot); }
+    map[slot].execs.push(e);
+  });
+  return order.map(slot => {
+    const g = map[slot];
+    const total = g.execs.length;
+    const ok = g.execs.filter(e => (e.status_final || e.status || '').toLowerCase() === 'success').length;
+    g.total = total;
+    g.rate = total > 0 ? Math.round((ok / total) * 100) : 0;
+    return g;
+  });
+}
+
+function buildExecGroup(g) {
+  const wrap = document.createElement('div');
+  wrap.className = 'exec-group';
+  const rateCls = g.rate >= 90 ? 'exec-group__rate--ok' : g.rate >= 70 ? 'exec-group__rate--warn' : 'exec-group__rate--bad';
+
+  const head = document.createElement('div');
+  head.className = 'exec-group__head';
+  head.innerHTML = `
+    <span class="exec-group__title">${botAvatar(g.slot, 22).outerHTML} ${escapeHtml(g.name)}</span>
+    <span class="exec-group__slot">${escapeHtml(g.slot)}</span>
+    <span class="exec-group__stats">
+      <span>${g.total} exec</span>
+      <span class="exec-group__rate ${rateCls}">${g.rate}%✓</span>
+    </span>`;
+  wrap.appendChild(head);
+
+  /* Tabela (desktop) */
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'table-wrap';
+  const tbl = document.createElement('table');
+  tbl.className = 'table exec-list-table';
+  tbl.innerHTML = `<thead><tr>
+    <th>Horário</th>
+    <th>Conversa</th>
+    <th>Gatilho</th>
+    <th>Duração</th>
+    <th>Status</th>
+    <th style="text-align:right"></th>
+  </tr></thead>`;
+  const tbody = document.createElement('tbody');
+  g.execs.forEach(e => tbody.appendChild(buildExecRow(e)));
+  tbl.appendChild(tbody);
+  tableWrap.appendChild(tbl);
+  wrap.appendChild(tableWrap);
+
+  /* Cards (mobile) */
+  const cards = document.createElement('div');
+  cards.className = 'exec-group__cards';
+  g.execs.forEach(e => cards.appendChild(buildExecCard(e)));
+  wrap.appendChild(cards);
+
+  return wrap;
 }
 
 async function loadExecData() {
@@ -5554,7 +5801,12 @@ async function loadExecData() {
   const qs = '?' + params.toString();
 
   try {
-    const data = await api('/api/executions' + qs);
+    /* Carrega execuções + rótulos de clones em paralelo (nome amigável do bot
+       no cabeçalho do grupo). Falha de rótulo não derruba a lista — cai no slot. */
+    const [data, labels] = await Promise.all([
+      api('/api/executions' + qs),
+      _execCloneLabels().catch(() => ({})),
+    ]);
     const arr = Array.isArray(data) ? data : (data.data || data.executions || []);
     _execLogs = arr;
 
@@ -5565,8 +5817,10 @@ async function loadExecData() {
     const rate    = total > 0 ? Math.round((success / total) * 100) : 0;
     const rateColor = rate >= 90 ? 'var(--success)' : rate >= 70 ? 'var(--warning)' : 'var(--danger)';
 
+    /* Spec §2.3: sem azul/ciano informativo na Cadência — o "total" neutro usa
+       texto-muted (não compete com o CTA roxo). */
     kpiWrap.innerHTML = `<div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--info-bg);color:var(--info)">${icon('activity',18)}</div><div class="kpi-card__value">${fmtNum(total)}</div><div class="kpi-card__label">Total no período</div></div>
+      <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--surface-3);color:var(--text-muted)">${icon('activity',18)}</div><div class="kpi-card__value">${fmtNum(total)}</div><div class="kpi-card__label">Total no período</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--success-bg);color:var(--success)">${icon('check-circle-2',18)}</div><div class="kpi-card__value">${fmtNum(success)}</div><div class="kpi-card__label">Sucesso</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--danger-bg);color:var(--danger)">${icon('alert-triangle',18)}</div><div class="kpi-card__value">${fmtNum(errors)}</div><div class="kpi-card__label">Erros</div></div>
       <div class="kpi-card"><div class="kpi-card__icon" style="background:var(--warning-bg);color:var(--warning)">${icon('zap',18)}</div><div class="kpi-card__value" style="color:${rateColor}">${rate}%</div><div class="kpi-card__label">Taxa de sucesso</div></div>
@@ -5577,24 +5831,11 @@ async function loadExecData() {
       return;
     }
 
-    const tableEl = document.createElement('div');
-    tableEl.className = 'table-wrap';
-    const tbl = document.createElement('table');
-    tbl.className = 'table exec-list-table';
-    tbl.innerHTML = `<thead><tr>
-      <th>Horário</th>
-      <th>Slot / Bot</th>
-      <th>Telefone</th>
-      <th>Duração</th>
-      <th>Status</th>
-      <th style="text-align:right">Eventos</th>
-    </tr></thead>`;
-    const tbody = document.createElement('tbody');
-    arr.forEach(e => tbody.appendChild(buildExecRow(e)));
-    tbl.appendChild(tbody);
-    tableEl.appendChild(tbl);
+    /* Agrupa por bot: cada grupo tem cabeçalho (nome + slot + %sucesso) e suas
+       linhas → "quem rodou o quê" óbvio de cara (spec §4.5). */
+    const groups = groupExecsByBot(arr, labels);
     tableWrap.innerHTML = '';
-    tableWrap.appendChild(tableEl);
+    groups.forEach(g => tableWrap.appendChild(buildExecGroup(g)));
 
   } catch (err) {
     if (err.status === 401) { window.location.href = '/login.html'; return; }
@@ -5630,7 +5871,7 @@ async function renderExecucoes() {
     <div class="section-header">
       <div class="section-header__left">
         <h1 class="h1">Execuções</h1>
-        <p class="muted">Log de execuções agrupadas por conversa</p>
+        <p class="muted">Execuções agrupadas por bot — veja quem rodou o quê</p>
       </div>
     </div>
     <div class="filter-bar" id="exec-filter-bar">
@@ -9253,9 +9494,13 @@ function drawLineChart(points, w, h, label) {
      - "WAHA" agora tem id `waha`, sec `sec-waha` (renomeado de `sessoes`); absorveu
        o bloco de sessões que vivia no dashboard.
      - Leads totalmente removida (item, section, stub e os botões "Ver tudo →").
-   Pendências de F3 (não tocar agora): Execuções (redesenho), Clientes (merge
-   portal-usuarios + portal-cobranca). Por isso `portal-cobranca` SEGUE alcançável,
-   marcada "(migra F3)".
+   F3 (este PR):
+     - Execuções redesenhada (agrupa por bot + coluna Gatilho).
+     - "Clientes" agora é id `clientes`, sec `sec-clientes`, render
+       PortalAdmin.renderClientes() — FUNDE usuários do portal + cobrança numa
+       linha por cliente/slot. A antiga "Cobrança (migra F3)" SAIU do menu e do
+       DOM; renderUsuarios/renderCobranca seguem internas (reusadas dentro da
+       visão fundida), mas não há mais item/section/id `portal-*`.
    NAV_GROUPS ↔ sec-id ↔ teardown 100% em sync (ver navigateTo + migração de
    localStorage abaixo). */
 const NAV_GROUPS = [
@@ -9280,11 +9525,9 @@ const NAV_GROUPS = [
     id: 'grp-negocio',
     label: 'Negócio',
     items: [
-      // "Clientes" = usuários do portal hoje; funde com Cobrança na F3.
-      { id: 'portal-usuarios', label: 'Clientes',          render: () => window.PortalAdmin.renderUsuarios() },
-      // Migra pra dentro de Clientes na F3 — mantida alcançável até lá.
-      { id: 'portal-cobranca', label: 'Cobrança (migra F3)', render: () => window.PortalAdmin.renderCobranca() },
-      { id: 'configuracoes',   label: 'Configurações',     render: renderConfig },
+      // "Clientes" funde login do portal + cobrança numa linha por cliente/slot.
+      { id: 'clientes',      label: 'Clientes',      render: () => window.PortalAdmin.renderClientes() },
+      { id: 'configuracoes', label: 'Configurações', render: renderConfig },
     ],
   },
 ];
@@ -9312,7 +9555,8 @@ let _groupState = _loadGroupState();
 let _savedSection = localStorage.getItem('paineladmin:section') || 'visao-geral';
 // Migração de ids antigos → novos (spec §1.4). Quem tinha 'dashboard'/'metricas'/
 // 'relatorios'/'leads' salvo cai na nova "Visão Geral"; 'sessoes' vira 'waha';
-// 'clones' (legado) vira 'bots'.
+// 'clones' (legado) vira 'bots'. F3: 'portal-usuarios' e 'portal-cobranca' viram
+// a "Clientes" fundida ('clientes').
 const _SECTION_MIGRATIONS = {
   clones: 'bots',
   dashboard: 'visao-geral',
@@ -9320,6 +9564,8 @@ const _SECTION_MIGRATIONS = {
   relatorios: 'visao-geral',
   leads: 'visao-geral',
   sessoes: 'waha',
+  'portal-usuarios': 'clientes',
+  'portal-cobranca': 'clientes',
 };
 if (_SECTION_MIGRATIONS[_savedSection]) {
   _savedSection = _SECTION_MIGRATIONS[_savedSection];
@@ -9544,15 +9790,21 @@ function mountCleanupCountdown() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   PORTAL DO CLIENTE — admin (Missão 009)
+   CLIENTES — admin (Missão 009 + rebrand F3 §4.7)
    IIFE namespaced. Não vaza funções no escopo global; reaproveita helpers
    existentes (api, toast, openModal/closeModal, escapeHtml, icon, fmtBRL,
-   fmtDate, fmtRelative). Renderiza duas seções:
-     • PortalAdmin.renderUsuarios()  → gestão de usuários do portal
-     • PortalAdmin.renderCobranca()  → cobrança/vencimento por fluxo
+   fmtDate, fmtRelative). Expõe:
+     • PortalAdmin.renderClientes() → visão FUNDIDA por cliente/slot: login do
+       portal (status, último login) + cobrança (valor, vencimento, situação,
+       último pagamento). Substitui as antigas renderUsuarios/renderCobranca
+       (que viravam DUAS abas). Todas as ações preservadas: criar/ativar/
+       desativar/resetar senha de acesso; registrar pagamento; editar
+       valor/vencimento.
+     • renderUsuarios/renderCobranca seguem exportadas (compat) e apenas
+       delegam pra renderClientes.
    Consome endpoints prontos do backend (server.js ~5163):
      GET/POST /api/portal-users · PATCH /api/portal-users/:id
-     GET /api/billing · PUT /api/billing/:slot
+     GET /api/billing · PUT /api/billing/:slot · GET /api/clones
    ══════════════════════════════════════════════════════════════════ */
 window.PortalAdmin = (() => {
   'use strict';
@@ -9648,84 +9900,185 @@ window.PortalAdmin = (() => {
   }
 
   /* ════════════════════════════════════════════════════════════
-     SEÇÃO A — USUÁRIOS DO PORTAL
+     CLIENTES — visão fundida (login do portal + cobrança por slot)
      ════════════════════════════════════════════════════════════ */
 
-  async function renderUsuarios() {
-    const wrap = document.getElementById('portal-usuarios-content');
+  /* Junta usuários do portal (por slot) + billing (por slot) + clones (lista de
+     slots + nome amigável) numa linha por cliente. Um cliente pode ter login mas
+     não cobrança, cobrança mas não login, ou nenhum dos dois (clone só). */
+  function _mergeClientes(users, billing, clones) {
+    const byUser = {};   // slot -> primeiro usuário do portal daquele slot
+    users.forEach(u => { if (u.slot && !byUser[u.slot]) byUser[u.slot] = u; });
+    const byBill = {};
+    billing.forEach(b => { if (b.slot) byBill[b.slot] = b; });
+
+    const order = [];
+    const seen = new Set();
+    // Ordem base: clones (todos os fluxos), depois slots órfãos de billing/users.
+    clones.forEach(c => { if (c.slot && !seen.has(c.slot)) { order.push(c.slot); seen.add(c.slot); } });
+    users.forEach(u => { if (u.slot && !seen.has(u.slot)) { order.push(u.slot); seen.add(u.slot); } });
+    billing.forEach(b => { if (b.slot && !seen.has(b.slot)) { order.push(b.slot); seen.add(b.slot); } });
+
+    const nameBySlot = {};
+    clones.forEach(c => { if (c.slot) nameBySlot[c.slot] = c.display_name || c.slot; });
+
+    return order.map(slot => ({
+      slot,
+      name: nameBySlot[slot] || (byUser[slot] && byUser[slot].display_name) || slot,
+      user: byUser[slot] || null,
+      billing: byBill[slot] || null,
+    }));
+  }
+
+  async function renderClientes() {
+    const wrap = document.getElementById('clientes-content');
     if (!wrap) return;
     wrap.innerHTML = `
       <div class="section-header">
         <div class="section-header__left">
-          <h1 class="h1">Usuários do portal</h1>
-          <p class="muted">Acessos do Portal do Cliente (app.startap.tech) por fluxo</p>
+          <h1 class="h1">Clientes</h1>
+          <p class="muted">Acesso ao portal + cobrança de cada cliente, num lugar só</p>
         </div>
         <div style="display:flex;gap:.5rem">
-          <button class="btn btn--sm" id="pa-users-refresh" aria-label="Atualizar lista">${icon('refresh-cw', 13)} Atualizar</button>
-          <button class="btn btn--sm btn--primary" id="pa-users-new" aria-label="Criar usuário">${icon('plus', 13)} Novo usuário</button>
+          <button class="btn btn--sm" id="pa-cli-refresh" aria-label="Atualizar lista">${icon('refresh-cw', 13)} Atualizar</button>
+          <button class="btn btn--sm btn--primary" id="pa-cli-new" aria-label="Criar acesso ao portal">${icon('plus', 13)} Novo acesso</button>
         </div>
       </div>
-      <div id="pa-users-table">${_skeleton()}</div>`;
+      <div id="pa-cli-table">${_skeleton()}</div>`;
 
-    document.getElementById('pa-users-refresh')?.addEventListener('click', renderUsuarios);
-    document.getElementById('pa-users-new')?.addEventListener('click', _openCreateUserModal);
+    document.getElementById('pa-cli-refresh')?.addEventListener('click', renderClientes);
+    document.getElementById('pa-cli-new')?.addEventListener('click', _openCreateUserModal);
 
-    const tableEl = document.getElementById('pa-users-table');
+    const tableEl = document.getElementById('pa-cli-table');
     try {
-      const [resp, labels] = await Promise.all([api('/api/portal-users'), _cloneLabels()]);
-      const users = resp.users || [];
-      if (users.length === 0) {
-        tableEl.innerHTML = _emptyState('Nenhum usuário ainda',
+      const [uResp, bResp, clones] = await Promise.all([
+        api('/api/portal-users'),
+        api('/api/billing'),
+        _fetchClones(),
+      ]);
+      const users   = uResp.users   || [];
+      const billing = bResp.billing || [];
+      const rows = _mergeClientes(users, billing, clones);
+      if (rows.length === 0) {
+        tableEl.innerHTML = _emptyState('Nenhum cliente ainda',
           'Crie o primeiro acesso do portal para um cliente.', 'users');
         return;
       }
-      tableEl.innerHTML = _renderUsersTable(users, labels);
-      _wireUserRowActions(tableEl);
+      tableEl.innerHTML = _renderClientesTable(rows);
+      _wireClienteRowActions(tableEl, rows);
     } catch (err) {
-      tableEl.innerHTML = _errorBlock('Erro ao carregar usuários: ' + err.message, renderUsuarios);
+      tableEl.innerHTML = _errorBlock('Erro ao carregar clientes: ' + err.message, renderClientes);
     }
   }
 
-  function _renderUsersTable(users, labels) {
-    const rows = users.map(u => {
-      const cliente = labels[u.slot] || u.slot;
-      const statusBadge = u.active
-        ? `<span class="badge badge--success">Ativo</span>`
-        : `<span class="badge badge--muted">Inativo</span>`;
-      const mustChange = u.must_change_password
-        ? ` <span class="badge badge--warning" title="Precisa trocar a senha no próximo login">trocar senha</span>` : '';
-      const last = u.last_login_at ? fmtRelative(u.last_login_at) : '—';
-      const toggleLabel = u.active ? 'Desativar' : 'Ativar';
-      const toggleClass = u.active ? 'btn--ghost' : 'btn--success';
+  // Badge de acesso ao portal (login).
+  function _accessCell(u) {
+    if (!u) return `<span class="cli-access"><span class="badge badge--muted">Sem acesso</span></span>`;
+    const badge = u.active
+      ? `<span class="badge badge--success badge--dot">Ativo</span>`
+      : `<span class="badge badge--muted badge--dot">Inativo</span>`;
+    const mustChange = u.must_change_password
+      ? ` <span class="badge badge--warning" title="Precisa trocar a senha no próximo login">trocar senha</span>` : '';
+    return `<span class="cli-access">${badge}${mustChange} <span class="cli-access__user">@${escapeHtml(u.username)}</span></span>`;
+  }
+
+  function _renderClientesTable(rows) {
+    const trs = rows.map((c, i) => {
+      const u = c.user;
+      const b = c.billing;
+      const lastLogin = u && u.last_login_at ? fmtRelative(u.last_login_at) : '—';
+      const lastLoginTitle = u && u.last_login_at ? escapeHtml(fmtDate(u.last_login_at)) : 'nunca';
+      const valor = b && b.amount_cents != null ? fmtBRL(b.amount_cents / 100) : '—';
+      const venc  = b ? _fmtDueDate(b.next_due_date) : '—';
+      const sitBadge = b ? _dueBadge(b.next_due_date, b.status)
+        : `<span class="badge badge--muted">Não configurado</span>`;
       return `<tr>
-        <td>${escapeHtml(u.username)}${mustChange}</td>
-        <td>${escapeHtml(cliente)}<br><span class="muted mono" style="font-size:.75rem">${escapeHtml(u.slot)}</span></td>
-        <td>${statusBadge}</td>
-        <td title="${u.last_login_at ? escapeHtml(fmtDate(u.last_login_at)) : 'nunca'}">${escapeHtml(last)}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn btn--sm ${toggleClass}" data-act="toggle" data-id="${u.id}" data-active="${u.active}">${toggleLabel}</button>
-          <button class="btn btn--sm" data-act="reset" data-id="${u.id}" data-user="${escapeHtml(u.username)}">Resetar senha</button>
-        </td>
+        <td data-label="Cliente">${escapeHtml(c.name)}<br><span class="cli-sub">${escapeHtml(c.slot)}</span></td>
+        <td data-label="Acesso portal" title="Último login: ${lastLoginTitle}">${_accessCell(u)}</td>
+        <td data-label="Valor">${valor}</td>
+        <td data-label="Vencimento">${venc}</td>
+        <td data-label="Situação">${sitBadge}</td>
+        <td data-label="Ações" style="text-align:right">${_clienteMenu(c, i)}</td>
       </tr>`;
     }).join('');
-    return `<div class="table-wrap"><table class="table">
+    return `<div class="table-wrap cli-table-wrap"><table class="table">
       <thead><tr>
-        <th>Usuário</th><th>Cliente / slot</th><th>Status</th><th>Último login</th><th style="text-align:right">Ações</th>
+        <th>Cliente / slot</th><th>Acesso portal</th><th>Valor</th><th>Vencimento</th><th>Situação</th><th style="text-align:right">Ações</th>
       </tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${trs}</tbody>
     </table></div>`;
   }
 
-  function _wireUserRowActions(tableEl) {
-    tableEl.querySelectorAll('button[data-act="toggle"]').forEach(btn => {
-      btn.addEventListener('click', () => _toggleUser(Number(btn.dataset.id), btn.dataset.active === 'true'));
+  /* Menu [⋯] por cliente — duas seções (Portal / Cobrança). <details> nativo:
+     sem JS de posicionamento, fecha no Esc/blur do browser. */
+  function _clienteMenu(c, i) {
+    const u = c.user;
+    const hasUser = !!u;
+    const portalItems = hasUser ? `
+        <button type="button" class="cli-menu__item${u.active ? ' cli-menu__item--danger' : ''}" data-act="toggle" data-idx="${i}">
+          ${icon('power', 14)} ${u.active ? 'Desativar acesso' : 'Ativar acesso'}
+        </button>
+        <button type="button" class="cli-menu__item" data-act="reset" data-idx="${i}">
+          ${icon('key', 14)} Resetar senha
+        </button>`
+      : `
+        <button type="button" class="cli-menu__item" data-act="create" data-idx="${i}">
+          ${icon('user-check', 14)} Criar acesso
+        </button>`;
+    return `<details class="cli-menu">
+      <summary aria-label="Ações do cliente ${escapeHtml(c.name)}" title="Ações">${icon('more-horizontal', 16)}</summary>
+      <div class="cli-menu__pop" role="menu">
+        <div class="cli-menu__section">Portal</div>
+        ${portalItems}
+        <div class="cli-menu__sep"></div>
+        <div class="cli-menu__section">Cobrança</div>
+        <button type="button" class="cli-menu__item" data-act="pay" data-idx="${i}">
+          ${icon('check-circle-2', 14)} Registrar pagamento
+        </button>
+        <button type="button" class="cli-menu__item" data-act="edit" data-idx="${i}">
+          ${icon('edit-2', 14)} Editar valor/vencimento
+        </button>
+      </div>
+    </details>`;
+  }
+
+  function _wireClienteRowActions(tableEl, rows) {
+    // Fecha qualquer menu aberto ao clicar fora (UX de popover).
+    const closeAll = (except) => {
+      tableEl.querySelectorAll('details.cli-menu[open]').forEach(d => { if (d !== except) d.open = false; });
+    };
+    tableEl.querySelectorAll('details.cli-menu').forEach(d => {
+      d.querySelector('summary')?.addEventListener('click', () => { closeAll(d); });
     });
-    tableEl.querySelectorAll('button[data-act="reset"]').forEach(btn => {
-      btn.addEventListener('click', () => _resetUserPassword(Number(btn.dataset.id), btn.dataset.user));
+    document.addEventListener('click', (ev) => {
+      if (!ev.target.closest('details.cli-menu')) closeAll(null);
+    }, { capture: true });
+
+    const labels = {};
+    rows.forEach(r => { labels[r.slot] = r.name; });
+
+    tableEl.querySelectorAll('.cli-menu__item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const c = rows[Number(btn.dataset.idx)];
+        if (!c) return;
+        closeAll(null);
+        switch (btn.dataset.act) {
+          case 'create': _openCreateUserModal(c.slot); break;
+          case 'toggle': _toggleUser(c.user.id, c.user.active); break;
+          case 'reset':  _resetUserPassword(c.user.id, c.user.username); break;
+          case 'pay':    _openRegisterPayment(c.slot, c.billing, labels); break;
+          case 'edit':   _openEditBilling(c.slot, c.billing, labels); break;
+        }
+      });
     });
   }
 
-  async function _openCreateUserModal() {
+  /* Compat: callers antigos (e qualquer migração de id) chamam renderUsuarios/
+     renderCobranca — ambos agora abrem a visão fundida de Clientes. */
+  function renderUsuarios() { return renderClientes(); }
+  function renderCobranca() { return renderClientes(); }
+
+  async function _openCreateUserModal(presetSlot) {
     _modal('Novo usuário do portal', `
       <form id="pa-user-form" autocomplete="off">
         <div class="field" style="margin-bottom:.875rem">
@@ -9763,8 +10116,10 @@ window.PortalAdmin = (() => {
         sel.innerHTML = '<option value="">Nenhum fluxo disponível</option>';
       } else {
         sel.innerHTML = '<option value="">Selecione um fluxo…</option>' +
-          clones.map(c => `<option value="${escapeHtml(c.slot)}">${escapeHtml(c.display_name || c.slot)} (${escapeHtml(c.slot)})</option>`).join('');
+          clones.map(c => `<option value="${escapeHtml(c.slot)}"${presetSlot === c.slot ? ' selected' : ''}>${escapeHtml(c.display_name || c.slot)} (${escapeHtml(c.slot)})</option>`).join('');
       }
+      // Se o cliente foi aberto pelo menu "Criar acesso", já vem pré-selecionado.
+      if (presetSlot) sel.value = presetSlot;
     } catch (_) {
       sel.innerHTML = '<option value="">Erro ao carregar fluxos</option>';
     }
@@ -9808,7 +10163,7 @@ window.PortalAdmin = (() => {
       if (resp.generated_password) {
         _showGeneratedPassword(username, resp.generated_password);
       }
-      renderUsuarios();
+      renderClientes();
     } catch (err) {
       errEl.textContent = err.message || 'Erro ao criar usuário';
       errEl.style.display = 'block';
@@ -9826,7 +10181,7 @@ window.PortalAdmin = (() => {
         body: JSON.stringify({ active: next }),
       });
       toast(next ? 'Usuário ativado' : 'Usuário desativado', 'success');
-      renderUsuarios();
+      renderClientes();
     } catch (err) {
       toast('Erro: ' + err.message, 'danger');
     }
@@ -9869,7 +10224,7 @@ window.PortalAdmin = (() => {
         closeModal();
         toast('Senha resetada', 'success');
         if (resp.generated_password) _showGeneratedPassword(username, resp.generated_password);
-        renderUsuarios();
+        renderClientes();
       } catch (err) {
         errEl.textContent = err.message || 'Erro ao resetar senha';
         errEl.style.display = 'block';
@@ -9880,7 +10235,8 @@ window.PortalAdmin = (() => {
   }
 
   /* ════════════════════════════════════════════════════════════
-     SEÇÃO B — COBRANÇA POR FLUXO
+     COBRANÇA — helpers + modais (a TABELA de cobrança foi fundida na de
+     Clientes; estes helpers e os modais de pagamento/edição seguem em uso).
      ════════════════════════════════════════════════════════════ */
 
   // Calcula dias restantes até next_due_date (YYYY-MM-DD) em horário local.
@@ -9909,80 +10265,6 @@ window.PortalAdmin = (() => {
     if (!dateStr) return '—';
     const [y, m, d] = dateStr.split('-');
     return `${d}/${m}/${y}`;
-  }
-
-  async function renderCobranca() {
-    const wrap = document.getElementById('portal-cobranca-content');
-    if (!wrap) return;
-    wrap.innerHTML = `
-      <div class="section-header">
-        <div class="section-header__left">
-          <h1 class="h1">Cobrança por fluxo</h1>
-          <p class="muted">Valor, vencimento e pagamentos de cada cliente</p>
-        </div>
-        <button class="btn btn--sm" id="pa-bill-refresh" aria-label="Atualizar">${icon('refresh-cw', 13)} Atualizar</button>
-      </div>
-      <div id="pa-bill-table">${_skeleton()}</div>`;
-    document.getElementById('pa-bill-refresh')?.addEventListener('click', renderCobranca);
-
-    const tableEl = document.getElementById('pa-bill-table');
-    try {
-      const [resp, clones, labels] = await Promise.all([api('/api/billing'), _fetchClones(), _cloneLabels()]);
-      const billing = resp.billing || [];
-      const billingBySlot = {};
-      billing.forEach(b => { billingBySlot[b.slot] = b; });
-      // Lista todos os fluxos; mostra os sem billing como "não configurado".
-      const slots = clones.map(c => c.slot).filter(Boolean);
-      // Inclui slots de billing que por acaso não estejam mais em clones (defensivo).
-      billing.forEach(b => { if (!slots.includes(b.slot)) slots.push(b.slot); });
-
-      if (slots.length === 0) {
-        tableEl.innerHTML = _emptyState('Nenhum fluxo',
-          'Sem fluxos cadastrados para cobrar.', 'file-text');
-        return;
-      }
-      tableEl.innerHTML = _renderBillingTable(slots, billingBySlot, labels);
-      _wireBillingRowActions(tableEl, billingBySlot, labels);
-    } catch (err) {
-      tableEl.innerHTML = _errorBlock('Erro ao carregar cobrança: ' + err.message, renderCobranca);
-    }
-  }
-
-  function _renderBillingTable(slots, billingBySlot, labels) {
-    const rows = slots.map(slot => {
-      const b = billingBySlot[slot] || null;
-      const cliente = labels[slot] || slot;
-      const valor = b && b.amount_cents != null ? fmtBRL(b.amount_cents / 100) : '—';
-      const venc = b ? _fmtDueDate(b.next_due_date) : '—';
-      const badge = b ? _dueBadge(b.next_due_date, b.status) : `<span class="badge badge--muted">Não configurado</span>`;
-      const lastPay = b && b.last_payment_at ? fmtRelative(b.last_payment_at) : '—';
-      return `<tr>
-        <td>${escapeHtml(cliente)}<br><span class="muted mono" style="font-size:.75rem">${escapeHtml(slot)}</span></td>
-        <td>${valor}</td>
-        <td>${venc}</td>
-        <td>${badge}</td>
-        <td title="${b && b.last_payment_at ? escapeHtml(fmtDate(b.last_payment_at)) : 'sem pagamentos'}">${escapeHtml(lastPay)}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn btn--sm btn--success" data-act="pay" data-slot="${escapeHtml(slot)}">${icon('check-circle-2', 13)} Pagamento</button>
-          <button class="btn btn--sm" data-act="edit" data-slot="${escapeHtml(slot)}">Editar</button>
-        </td>
-      </tr>`;
-    }).join('');
-    return `<div class="table-wrap"><table class="table">
-      <thead><tr>
-        <th>Cliente / slot</th><th>Valor</th><th>Vencimento</th><th>Situação</th><th>Último pagamento</th><th style="text-align:right">Ações</th>
-      </tr></thead>
-      <tbody>${rows}</tbody>
-    </table></div>`;
-  }
-
-  function _wireBillingRowActions(tableEl, billingBySlot, labels) {
-    tableEl.querySelectorAll('button[data-act="pay"]').forEach(btn => {
-      btn.addEventListener('click', () => _openRegisterPayment(btn.dataset.slot, billingBySlot[btn.dataset.slot], labels));
-    });
-    tableEl.querySelectorAll('button[data-act="edit"]').forEach(btn => {
-      btn.addEventListener('click', () => _openEditBilling(btn.dataset.slot, billingBySlot[btn.dataset.slot], labels));
-    });
   }
 
   function _openRegisterPayment(slot, billing, labels) {
@@ -10042,7 +10324,7 @@ window.PortalAdmin = (() => {
         });
         closeModal();
         toast('Pagamento registrado', 'success');
-        renderCobranca();
+        renderClientes();
       } catch (err) {
         errEl.textContent = err.message || 'Erro ao registrar pagamento';
         errEl.style.display = 'block';
@@ -10119,7 +10401,7 @@ window.PortalAdmin = (() => {
         });
         closeModal();
         toast('Cobrança atualizada', 'success');
-        renderCobranca();
+        renderClientes();
       } catch (err) {
         errEl.textContent = err.message || 'Erro ao salvar';
         errEl.style.display = 'block';
@@ -10129,7 +10411,7 @@ window.PortalAdmin = (() => {
     });
   }
 
-  return { renderUsuarios, renderCobranca };
+  return { renderClientes, renderUsuarios, renderCobranca };
 })();
 
 /* ══════════════════════════════════════════════════════════════════
