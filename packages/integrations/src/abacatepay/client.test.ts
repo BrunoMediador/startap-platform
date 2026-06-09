@@ -10,7 +10,7 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 
-import { AbacatePayClient, AbacatePayError } from './client.js';
+import { AbacatePayClient, AbacatePayError, AbacatePayNotConfiguredError } from './client.js';
 
 const fetchMock = vi.fn();
 
@@ -134,8 +134,24 @@ describe('AbacatePayClient.getChargeStatus', () => {
   });
 });
 
-describe('AbacatePayClient construtor', () => {
-  it('lanca se apiKey ausente', () => {
-    expect(() => new AbacatePayClient({ apiKey: '' })).toThrow(/apiKey ausente/);
+describe('AbacatePayClient construtor (validacao no ponto de uso)', () => {
+  // Postmortem P0 2026-06-09: a key e OPCIONAL no boot dos apps. A exigencia mora aqui —
+  // ao instanciar o cliente pra usar a feature, key ausente = erro tipado e explicito.
+  it('lanca AbacatePayNotConfiguredError se apiKey for string vazia', () => {
+    expect(() => new AbacatePayClient({ apiKey: '' })).toThrow(AbacatePayNotConfiguredError);
+  });
+
+  it('lanca AbacatePayNotConfiguredError se apiKey for undefined (key opcional no boot)', () => {
+    expect(() => new AbacatePayClient({ apiKey: undefined })).toThrow(AbacatePayNotConfiguredError);
+  });
+
+  it('a mensagem do erro nao vaza segredo e e clara', () => {
+    try {
+      new AbacatePayClient({ apiKey: undefined });
+      expect.unreachable('deveria ter lancado');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AbacatePayNotConfiguredError);
+      expect((err as Error).message).toMatch(/ABACATEPAY_API_KEY/);
+    }
   });
 });

@@ -34,10 +34,14 @@ export const ConfigSchema = z.object({
   GCAL_ENCRYPTION_KEY: z.string().optional(),
 
   // ── AbacatePay (pagamento PIX — ADR 0013) ──────────────────────────────────
-  // C9 (threat-model): boot FALHA se a key estiver ausente. O ambiente Dev/Prod e
-  // definido PELA CHAVE (nao pela URL) — Dev nunca vira Prod sem rotacionar a key.
-  // A key NUNCA e logada nem hardcoded (vai so no header Authorization do cliente).
-  ABACATEPAY_API_KEY: z.string().min(1, 'ABACATEPAY_API_KEY ausente'),
+  // OPCIONAL no boot. Pagamento (F1) e feature DORMENTE — sem webhook nem cron ativos
+  // em prod hoje. Tornar a key obrigatoria no boot acoplou o uptime dos bots a uma
+  // config nao usada e derrubou api/worker no incidente P0 de 2026-06-09 (loop de
+  // restart). Corretiva nº1 do postmortem: segredo de feature INATIVA = opcional no
+  // boot, validado no PONTO DE USO. O AbacatePayClient lanca AbacatePayNotConfiguredError
+  // se for usado sem a chave — falha alta e explicita SO quando a feature roda.
+  // Ambiente Dev/Prod e definido PELA CHAVE (nao pela URL). NUNCA logada nem hardcoded.
+  ABACATEPAY_API_KEY: z.string().min(1).optional(),
   ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
 
   SERVICE_NAME: z.string().optional(),

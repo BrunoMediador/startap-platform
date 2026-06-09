@@ -13,6 +13,20 @@ Cliente + servico de geracao idempotente de cobranca PIX. ADR 0013, Fase 1 (fund
 
 A key vai **so** no header `Authorization: Bearer`, nunca em log. Ambiente Dev/Prod e definido **pela CHAVE**, nao pela URL.
 
+## Config: opcional no boot, exigida no uso
+
+`ABACATEPAY_API_KEY` e **OPCIONAL** no boot de `apps/api` e `apps/worker` (Zod `.optional()`).
+Pagamento e feature **dormente** (sem webhook/cron ativos em prod) — torna-la obrigatoria no
+boot acoplou o uptime dos bots a uma config nao usada e causou o incidente P0 de
+**2026-06-09** (api/worker em loop de restart, bots fora ~6min; postmortem
+`docs/startap/postmortems/2026-06-09-api-worker-loop-abacatepay-env.md`).
+
+A exigencia vive no **ponto de uso**: `new AbacatePayClient({ apiKey })` lanca
+`AbacatePayNotConfiguredError` (erro tipado, sem vazar segredo) se a chave faltar — falha
+alta e explicita **so quando a feature roda**, nunca no boot. Quando o pagamento for
+ATIVADO, basta preencher a env. Principio: *segredo de feature inativa = opcional no boot,
+validado no uso; segredo de feature ativa = obrigatorio.*
+
 ## O que NAO tem aqui (fases seguintes)
 
 - Webhook (`POST /webhooks/abacatepay`), validacao HMAC + query secret, dedupe, auto-resume → **F2** (`apps/api`).
@@ -36,8 +50,9 @@ A key vai **so** no header `Authorization: Bearer`, nunca em log. Ambiente Dev/P
 3. **Gerar uma cobranca** via REPL/script Node (ainda nao ha endpoint — F3/F4):
    ```ts
    import { AbacatePayClient, ensurePixChargeForCycle } from '@startap/integrations/abacatepay';
+   // Sem a key, o construtor lanca AbacatePayNotConfiguredError (esperado fora do smoke).
    const client = new AbacatePayClient({
-     apiKey: process.env.ABACATEPAY_API_KEY!,
+     apiKey: process.env.ABACATEPAY_API_KEY,
      baseUrl: process.env.ABACATEPAY_BASE_URL,
    });
    const { charge, created } = await ensurePixChargeForCycle(client, {
