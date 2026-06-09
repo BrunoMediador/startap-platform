@@ -571,6 +571,11 @@ app.use((req, res, next) => {
   // e o endpoint de proxy de mídia (acessado pelo browser sem autenticação no fluxo normal).
   // O requireAuth protege todas as outras rotas.
   if (publicPaths.includes(req.path)) return next();
+  // Fontes locais (.woff2) servidas de public/fonts/ são assets decorativos não
+  // sensíveis. A página /login.html é PÚBLICA (pré-sessão) e referencia essas
+  // fontes; sem esta liberação o browser receberia 401 ao buscá-las e o login
+  // cairia no fallback system-ui. Confinado a GET /fonts/ — nada mais é liberado.
+  if (req.method === 'GET' && req.path.startsWith('/fonts/')) return next();
   return requireAuth(req, res, next);
 });
 
@@ -589,6 +594,10 @@ app.use(express.static(path.join(__dirname, 'public'), {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+    } else if (filePath.endsWith('.woff2')) {
+      // Fontes locais são imutáveis (versionadas por peso no nome do arquivo) —
+      // cache longo evita rebuscar a cada navegação e elimina flash de fonte.
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     }
   },
 }));

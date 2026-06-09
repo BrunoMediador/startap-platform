@@ -1,100 +1,167 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Startap — Login</title>
+  <!-- Fontes auto-hospedadas (rebrand Cadência F1) — sem CDN. Servidas de
+       /fonts/ (express.static), liberadas no auth-gate por serem públicas. -->
+  <link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/sora-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
   <style>
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-latin-400-normal.woff2') format('woff2'); }
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-latin-500-normal.woff2') format('woff2'); }
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-latin-600-normal.woff2') format('woff2'); }
+    @font-face { font-family: 'Sora'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/sora-latin-600-normal.woff2') format('woff2'); }
+    @font-face { font-family: 'Sora'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/sora-latin-700-normal.woff2') format('woff2'); }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Tokens Cadência Noturna — espelho do portal globals.css (tema único escuro). */
     :root {
-      --brand:      #6366f1;
-      --brand-dark: #4f46e5;
-      --danger:     #ef4444;
-      --text:       #1e293b;
-      --muted:      #64748b;
-      --border:     #e2e8f0;
-      --bg-input:   #f8fafc;
-      --radius:     8px;
+      --c-bg:            #14121c;
+      --c-surface:       #1e1b2b;
+      --c-surface-sunken:#0f0d17;
+      --c-line:          #332e45;
+      --c-line-strong:   #433c5c;
+      --c-ink:           #f3f1fa;
+      --c-ink-soft:      #b4aecb;
+      --c-ink-faint:     #807a95;
+      --c-brand:         #9a7cf0;
+      --c-brand-fill:    #6431d6;
+      --c-brand-fill-hover:#5526c0;
+      --c-brand-on-fill: #14121c;
+      --c-danger:        #ff6b5e;
+      --c-danger-soft:   #33161a;
+      --radius-card:     22px;
+      --radius-field:    12px;
+      --font-display: 'Sora', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-sans:    'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
 
+    /* Cor-base no html (não no body) — body opaco tamparia o canvas z-index:-1
+       (mesmo gotcha do portal). Aqui o canvas é z-index:0 e o conteúdo z-index:2,
+       então o body só não pode ter background opaco POR CIMA do canvas. */
+    html { background: var(--c-bg); }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-family: var(--font-sans);
       min-height: 100dvh;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
       padding: 1rem;
+      color: var(--c-ink);
       -webkit-font-smoothing: antialiased;
+      position: relative;
+      overflow: hidden;
     }
 
-    .card {
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.15);
-      padding: 48px 40px 40px;
+    /* Constelação — full-screen, atrás do conteúdo (z-index:0). */
+    #login-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      display: block;
       width: 100%;
-      max-width: 400px;
+      height: 100%;
+      pointer-events: none;
+    }
+    /* Vinheta — escurece as bordas pra garantir contraste AA do texto sobre as
+       partículas (eco do .login-vignette do portal). z-index:1, acima do canvas
+       e abaixo do card. */
+    .login-vignette {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background:
+        radial-gradient(90% 70% at 50% 38%, rgba(20,18,28,0) 35%, rgba(20,18,28,.62) 100%),
+        radial-gradient(60% 70% at 18% 25%, rgba(100,49,214,.12) 0%, rgba(20,18,28,0) 70%);
     }
 
     .brand {
       text-align: center;
-      margin-bottom: 32px;
+      margin-bottom: 22px;
     }
-
+    .brand__dot {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px; height: 40px;
+      border-radius: 11px;
+      background: var(--c-brand-fill);
+      box-shadow: 0 0 0 1px rgba(154,124,240,.35), 0 8px 24px rgba(100,49,214,.45);
+      margin-bottom: 12px;
+    }
     .brand__logo {
-      font-size: 2rem;
-      font-weight: 800;
-      letter-spacing: -0.04em;
-      color: var(--brand);
+      font-family: var(--font-display);
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--c-ink);
       line-height: 1;
     }
-
     .brand__tagline {
-      font-size: 0.8125rem;
-      color: var(--muted);
-      margin-top: 6px;
-      letter-spacing: 0.06em;
+      font-size: 0.75rem;
+      color: var(--c-ink-soft);
+      margin-top: 8px;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       font-weight: 500;
     }
 
-    .form__group {
-      margin-bottom: 18px;
+    /* Card escuro que "acende" sobre o fundo vivo (glow contido + filete). */
+    .card {
+      position: relative;
+      z-index: 2;
+      background: var(--c-surface);
+      border: 1px solid var(--c-line-strong);
+      border-radius: var(--radius-card);
+      box-shadow:
+        0 0 0 1px rgba(154,124,240,.06),
+        0 24px 60px rgba(0,0,0,.45),
+        0 0 80px rgba(100,49,214,.10);
+      padding: 34px 30px 28px;
+      width: 100%;
+      max-width: 400px;
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      left: 30px; right: 30px; top: 0;
+      height: 2px;
+      border-radius: 0 0 2px 2px;
+      background: linear-gradient(90deg, transparent, #9a7cf0 30%, #e0a23c 85%, transparent);
+      opacity: 0.55;
     }
 
+    .form__group { margin-bottom: 18px; }
     .form__label {
       display: block;
       font-size: 0.8125rem;
       font-weight: 600;
-      color: var(--text);
+      color: var(--c-ink);
       margin-bottom: 6px;
     }
-
     .form__input {
       display: block;
       width: 100%;
-      padding: 10px 14px;
+      height: 52px;
+      padding: 0 14px;
       font-size: 0.9375rem;
       font-family: inherit;
-      color: var(--text);
-      background: var(--bg-input);
-      border: 1.5px solid var(--border);
-      border-radius: var(--radius);
+      color: var(--c-ink);
+      background: var(--c-surface-sunken);
+      border: 1.5px solid var(--c-line-strong);
+      border-radius: var(--radius-field);
       outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
     }
-
     .form__input:focus {
-      border-color: var(--brand);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-      background: #fff;
+      border-color: var(--c-brand);
+      box-shadow: 0 0 0 4px rgba(154,124,240,.18);
     }
-
-    .form__input::placeholder {
-      color: #94a3b8;
-    }
+    .form__input::placeholder { color: var(--c-ink-faint); }
 
     .btn-submit {
       display: flex;
@@ -102,88 +169,87 @@
       justify-content: center;
       gap: 8px;
       width: 100%;
-      padding: 12px 20px;
+      height: 52px;
       margin-top: 8px;
       font-size: 0.9375rem;
       font-weight: 600;
-      font-family: inherit;
-      color: #fff;
-      background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+      font-family: var(--font-display);
+      color: var(--c-brand-on-fill);
+      background: var(--c-brand-fill);
       border: none;
-      border-radius: var(--radius);
+      border-radius: 13px;
       cursor: pointer;
-      transition: opacity 0.15s, transform 0.1s;
+      box-shadow: 0 8px 22px rgba(154,124,240,.28), 0 0 0 1px rgba(154,124,240,.20);
+      transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
     }
-
     .btn-submit:hover:not(:disabled) {
-      opacity: 0.9;
+      background: var(--c-brand-fill-hover);
+      box-shadow: 0 10px 28px rgba(154,124,240,.36);
       transform: translateY(-1px);
     }
-
-    .btn-submit:active:not(:disabled) {
-      transform: translateY(0);
-    }
-
-    .btn-submit:disabled {
-      opacity: 0.65;
-      cursor: not-allowed;
-    }
+    .btn-submit:active:not(:disabled) { transform: translateY(0); }
+    .btn-submit:disabled { opacity: 0.65; cursor: not-allowed; }
 
     .spinner {
       width: 16px;
       height: 16px;
-      border: 2px solid rgba(255, 255, 255, 0.35);
-      border-top-color: #fff;
+      border: 2px solid rgba(20,18,28,0.35);
+      border-top-color: var(--c-brand-on-fill);
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       flex-shrink: 0;
     }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     .alert {
       display: none;
       align-items: flex-start;
       gap: 8px;
       padding: 10px 14px;
-      border-radius: var(--radius);
+      border-radius: var(--radius-field);
       font-size: 0.8125rem;
       font-weight: 500;
       line-height: 1.45;
       margin-top: 16px;
     }
-
     .alert--error {
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      color: #b91c1c;
+      background: var(--c-danger-soft);
+      border: 1px solid rgba(255,107,94,.4);
+      color: var(--c-danger);
     }
-
-    .alert.is-visible {
-      display: flex;
-    }
+    .alert.is-visible { display: flex; }
 
     .footer {
-      margin-top: 32px;
+      margin-top: 28px;
       text-align: center;
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: var(--c-ink-faint);
     }
 
     @media (max-width: 480px) {
-      .card {
-        padding: 36px 24px 28px;
-      }
+      .card { padding: 30px 22px 24px; }
+    }
+    /* prefers-reduced-motion: o canvas não roda o loop (JS); só corta o spinner. */
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation-duration: 0.001ms; }
     }
   </style>
 </head>
 <body>
+  <!-- Fundo vivo (constelação) + vinheta — decorativo, não interativo. -->
+  <canvas id="login-bg" aria-hidden="true" tabindex="-1"></canvas>
+  <div class="login-vignette" aria-hidden="true"></div>
+
   <div class="card" role="main">
     <div class="brand">
+      <div class="brand__dot" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2C8 2 4 5.5 4 10c0 3 1.5 5.5 4 7l4 5 4-5c2.5-1.5 4-4 4-7 0-4.5-4-8-8-8z"/>
+          <circle cx="12" cy="10" r="3" fill="white" stroke="none"/>
+        </svg>
+      </div>
       <div class="brand__logo">Startap</div>
-      <div class="brand__tagline">Painel de Controle</div>
+      <div class="brand__tagline">Painel de gestão</div>
     </div>
 
     <form id="loginForm" novalidate>
@@ -230,8 +296,8 @@
     (function () {
       'use strict';
 
+      // ── Login (lógica PRESERVADA da v1): POST /api/login, redirect /, 429/401 ──
       // Lê versão do meta tag injetado pelo servidor (se disponível).
-      // Fallback silencioso caso não exista.
       const verMeta = document.querySelector('meta[name="app-version"]');
       if (verMeta && verMeta.content) {
         document.getElementById('footerVersion').textContent = 'v' + verMeta.content;
@@ -239,7 +305,6 @@
 
       const form      = document.getElementById('loginForm');
       const submitBtn = document.getElementById('submitBtn');
-      const btnLabel  = document.getElementById('btnLabel');
       const errorAlert = document.getElementById('errorAlert');
       const errorMsg  = document.getElementById('errorMsg');
 
@@ -284,7 +349,6 @@
           });
 
           if (res.ok) {
-            // Login bem-sucedido — redireciona para o painel.
             window.location.href = '/';
             return;
           }
@@ -294,7 +358,6 @@
             return;
           }
 
-          // 401 ou outro erro
           let detail = 'Usuário ou senha incorretos.';
           try {
             const data = await res.json();
@@ -309,15 +372,128 @@
       });
 
       // Se já autenticado, redireciona direto (evita flash da tela de login).
-      // Não bloqueia o carregamento — executa após render.
       fetch('/api/status', { credentials: 'include', method: 'HEAD' })
         .then(function (r) {
           if (r.ok || r.status === 405) {
-            // status 405 = rota existe mas não aceita HEAD — usuário autenticado
             window.location.replace('/');
           }
         })
         .catch(function () { /* ignore — não autenticado, fica na tela de login */ });
+
+      // ── Fundo vivo (constelação) — porte JS-puro da ParticleField, variante
+      //    'login' (canvas z-0, conteúdo z-2, cursorLink). Mesma vivacidade do
+      //    portal. Performance/A11y: Page Visibility, DPR cap, reduced-motion. ──
+      (function constellation() {
+        const canvas = document.getElementById('login-bg');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const CFG = {
+          density: 14000, maxDesktop: 90, maxMobile: 45, minCount: 14,
+          speed: 0.32, radiusMin: 1.1, radiusMax: 2.3,
+          linkDesktop: 130, linkMobile: 100, pointAlpha: 0.85, lineAlpha: 0.34,
+          cursorLink: true,
+        };
+        const SHARED = { amberEvery: 9, cursorRadius: 160, cursorAlpha: 0.45, dprCap: 2, mobileBreakpoint: 880 };
+        const PURPLE = '#9A7CF0', AMBER = '#E0A23C';
+        const rand = (min, max) => Math.random() * (max - min) + min;
+
+        const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+        let reduced = motionQuery.matches;
+        let W = 0, H = 0, particles = [], rafId = null, running = false, resizeTimer = null;
+        const mouse = { x: null, y: null };
+        const isMobile = () => window.innerWidth <= SHARED.mobileBreakpoint;
+
+        function targetCount() {
+          const cap = isMobile() ? CFG.maxMobile : CFG.maxDesktop;
+          return Math.max(CFG.minCount, Math.min(cap, Math.round((W * H) / CFG.density)));
+        }
+        const linkDist = () => (isMobile() ? CFG.linkMobile : CFG.linkDesktop);
+
+        function makeParticle() {
+          const amber = Math.random() < 1 / SHARED.amberEvery;
+          const vx = rand(-CFG.speed, CFG.speed) || 0.08;
+          const vy = rand(-CFG.speed, CFG.speed) || 0.08;
+          return {
+            x: Math.random() * W, y: Math.random() * H,
+            vx: Math.max(-CFG.speed, Math.min(CFG.speed, vx)),
+            vy: Math.max(-CFG.speed, Math.min(CFG.speed, vy)),
+            r: rand(CFG.radiusMin, CFG.radiusMax),
+            color: amber ? AMBER : PURPLE,
+          };
+        }
+        function build() {
+          const n = targetCount();
+          particles = [];
+          for (let i = 0; i < n; i++) particles.push(makeParticle());
+        }
+        function resize() {
+          const dpr = Math.min(window.devicePixelRatio || 1, SHARED.dprCap);
+          W = window.innerWidth; H = window.innerHeight;
+          canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
+          canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          build();
+          if (reduced) step();
+        }
+        function step() {
+          ctx.clearRect(0, 0, W, H);
+          const dist = linkDist();
+          for (const p of particles) {
+            p.x += p.vx; p.y += p.vy;
+            if (p.x < -10) p.x = W + 10; else if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10; else if (p.y > H + 10) p.y = -10;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = p.color; ctx.globalAlpha = CFG.pointAlpha; ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+          const mobile = isMobile();
+          for (let a = 0; a < particles.length; a++) {
+            const pa = particles[a];
+            for (let b = a + 1; b < particles.length; b++) {
+              const pb = particles[b];
+              const dx = pa.x - pb.x, dy = pa.y - pb.y, d2 = dx * dx + dy * dy;
+              if (d2 < dist * dist) {
+                const alpha = (1 - Math.sqrt(d2) / dist) * CFG.lineAlpha;
+                ctx.strokeStyle = 'rgba(154,124,240,' + alpha.toFixed(3) + ')';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+              }
+            }
+            if (CFG.cursorLink && mouse.x !== null && mouse.y !== null && !mobile) {
+              const mdx = pa.x - mouse.x, mdy = pa.y - mouse.y, md2 = mdx * mdx + mdy * mdy;
+              const mr = SHARED.cursorRadius;
+              if (md2 < mr * mr) {
+                const ma = (1 - Math.sqrt(md2) / mr) * SHARED.cursorAlpha;
+                ctx.strokeStyle = 'rgba(224,162,60,' + ma.toFixed(3) + ')';
+                ctx.lineWidth = 1;
+                ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(mouse.x, mouse.y); ctx.stroke();
+              }
+            }
+          }
+          ctx.globalAlpha = 1;
+        }
+        function loop() { if (!running) return; step(); rafId = requestAnimationFrame(loop); }
+        function start() { if (reduced || running) return; running = true; loop(); }
+        function stop() { running = false; if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; } }
+
+        document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); else start(); });
+        window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+        window.addEventListener('mouseleave', () => { mouse.x = null; mouse.y = null; });
+        window.addEventListener('resize', () => {
+          if (resizeTimer !== null) clearTimeout(resizeTimer);
+          resizeTimer = window.setTimeout(() => { resize(); if (reduced) stop(); else start(); }, 150);
+        });
+        motionQuery.addEventListener('change', (e) => {
+          reduced = e.matches;
+          if (reduced) { stop(); resize(); } else { resize(); start(); }
+        });
+
+        resize();
+        if (!reduced) start(); else step();
+      })();
     })();
   </script>
 </body>
