@@ -18,6 +18,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <SessionProvider slot={session.slot} username={session.username}>
+      {/* Shell em flex row (1.D.7): sidebar e a coluna de conteudo sao IRMAOS.
+          A pagina inteira rola; a sidebar fica sticky/h-dvh com rodape sempre
+          visivel (fix do BLOCO A — antes esticava com o conteudo). */}
       <div className="flex min-h-dvh bg-bg">
         <Sidebar businessName={businessName} />
         <div className="flex min-w-0 flex-1 flex-col">

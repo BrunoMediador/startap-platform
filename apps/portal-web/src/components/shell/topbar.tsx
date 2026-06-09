@@ -16,12 +16,14 @@ export function Topbar({ businessName }: { businessName: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <header className="flex items-center justify-between border-b border-line bg-surface px-5 py-4 md:hidden">
+    <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-surface px-5 py-4 md:hidden">
       <div className="inline-flex items-center gap-2.5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
-        <span className="flex size-[26px] items-center justify-center rounded-[8px] bg-brand-fill">
-          <Brandmark size={14} color="#fff" />
+        <span className="login-dot-glow flex size-[30px] items-center justify-center rounded-[9px] bg-brand-fill">
+          <Brandmark size={15} color="#fff" />
         </span>
-        Startap
+        <span>
+          Start<span className="text-brand">ap</span>
+        </span>
       </div>
 
       <div className="relative">
@@ -31,7 +33,7 @@ export function Topbar({ businessName }: { businessName: string }) {
           aria-expanded={menuOpen}
           aria-label="Menu da conta"
           onClick={() => setMenuOpen((v) => !v)}
-          className="flex size-[38px] items-center justify-center rounded-[11px] bg-brand-soft font-display text-[15px] font-bold text-brand outline-none transition-colors hover:bg-brand-soft-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          className="flex size-[38px] items-center justify-center rounded-[11px] border border-line-strong bg-brand-soft font-display text-[15px] font-bold text-brand outline-none transition-colors hover:bg-brand-soft-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           {initials(businessName)}
         </button>

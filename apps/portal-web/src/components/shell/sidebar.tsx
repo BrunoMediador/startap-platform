@@ -5,9 +5,16 @@ import { cn } from '@/lib/cn';
 import { initials } from '@/lib/format';
 import { useLogout } from '@/lib/use-logout';
 /**
- * Sidebar desktop (>=md) — spec 6.13. 240px, brand no topo, 4 itens como linhas,
- * ativo com bg-brand-soft + barra 3px a esquerda. Avatar do negocio, toggle de
- * tema (1.C.2) e sair no rodape. Escondida em <md (la vale a bottom nav).
+ * Sidebar desktop (>=md) — spec 6.13 + polish 1.D.7.
+ *
+ * BLOCO A (fix): a sidebar agora e `sticky top-0 h-dvh` (antes esticava com o
+ * conteudo e empurrava o rodape "Sair" pro fim do scroll). O <nav> rola
+ * internamente (`overflow-y-auto`); o rodape (avatar + nome + toggle + sair)
+ * fica SEMPRE visivel, independente do tamanho da lista. Sidebar e a coluna de
+ * conteudo sao irmaos num flex row (ver layout do grupo (app)).
+ *
+ * 1.D.7: brandmark com glow, item ativo com barra 3px. Rodape SEM rotulo de
+ * plano (decisao Bruno — nao ha planos ainda): so avatar + nome + toggle + sair.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -19,15 +26,22 @@ export function Sidebar({ businessName }: { businessName: string }) {
   const { logout, pending } = useLogout();
 
   return (
-    <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-surface md:flex">
-      <div className="flex items-center gap-2.5 px-5 py-5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
-        <span className="flex size-[26px] items-center justify-center rounded-[8px] bg-brand-fill">
-          <Brandmark size={14} color="#fff" />
+    <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-line bg-surface md:flex">
+      {/* Brandmark com glow (1.D.7) — eco do dot do login. */}
+      <div className="flex items-center gap-2.5 border-b border-line-soft px-5 py-5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
+        <span className="login-dot-glow flex size-[30px] items-center justify-center rounded-[9px] bg-brand-fill">
+          <Brandmark size={15} color="#fff" />
         </span>
-        Startap
+        <span>
+          Start<span className="text-brand">ap</span>
+        </span>
       </div>
 
-      <nav aria-label="Navegação principal" className="flex flex-1 flex-col gap-1 px-3 py-2">
+      {/* nav rola internamente se a lista crescer — rodape nunca some (BLOCO A). */}
+      <nav
+        aria-label="Navegação principal"
+        className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 py-3"
+      >
         {NAV_ITEMS.map(({ href, label, Icon }) => {
           const active = pathname === href;
           return (
@@ -38,7 +52,7 @@ export function Sidebar({ businessName }: { businessName: string }) {
               className={cn(
                 // Sidebar (spec 1.A.8): ativo = bloco roxo-suave + barra 3px;
                 // inativo hover "acende" (surface-hover) e clareia o texto.
-                'relative flex items-center gap-3 rounded-card-sm px-3 py-2.5 text-[14px] font-semibold outline-none transition-colors duration-[120ms] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset',
+                'relative flex items-center gap-3 rounded-card-sm px-3 py-2.5 font-display text-[14px] font-semibold outline-none transition-colors duration-[120ms] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset',
                 active
                   ? 'bg-brand-soft text-brand before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-r before:bg-brand'
                   : 'text-ink-soft hover:bg-surface-hover hover:text-ink',
@@ -51,12 +65,13 @@ export function Sidebar({ businessName }: { businessName: string }) {
         })}
       </nav>
 
-      <div className="border-t border-line p-3">
+      <div className="shrink-0 border-t border-line-soft p-3">
+        {/* Rodape: avatar + nome do negocio (sem rotulo de plano — decisao Bruno). */}
         <div className="flex items-center gap-3 px-2 py-2">
-          <span className="flex size-9 items-center justify-center rounded-card-sm bg-brand-soft font-display text-[14px] font-bold text-brand">
+          <span className="flex size-9 items-center justify-center rounded-card-sm border border-line-strong bg-brand-soft font-display text-[14px] font-bold text-brand">
             {initials(businessName)}
           </span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-ink">
+          <span className="min-w-0 flex-1 truncate font-display text-[13.5px] font-semibold text-ink">
             {businessName}
           </span>
         </div>
