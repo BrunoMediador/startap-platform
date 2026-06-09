@@ -114,20 +114,6 @@ export function IconCheck(props: IconProps) {
   );
 }
 
-export function IconRefresh(props: IconProps) {
-  return (
-    <svg {...base(props)}>
-      <path
-        d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 export function IconPlay(props: IconProps) {
   return (
     <svg {...base(props)}>

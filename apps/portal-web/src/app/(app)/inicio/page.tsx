@@ -5,8 +5,8 @@ import { useTenant } from '@/components/shell/session-context';
  * Home / Status (spec 7, hierarquia 3 niveis: status > vencimento > metricas/listas).
  *
  * Estados: loading (skeleton + texto contextual), error (retry), conteudo.
- * Auto-refresh do status a cada 60s em foco (useStatus, spec D6) + refresh manual
- * no status-hero. Suspensao por inadimplencia mostra aviso informativo (D3).
+ * Auto-refresh do status a cada 60s em foco (useStatus, spec D6); recarregar a
+ * pagina busca tudo. Suspensao por inadimplencia mostra aviso informativo (D3).
  */
 import { MetricCard } from '@/components/ui/card';
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton';
@@ -62,7 +62,7 @@ export default function InicioPage() {
 
       {!data.flow_enabled && <SuspendedNotice />}
 
-      <StatusHero status={data} onRefresh={() => status.refetch()} refreshing={status.isFetching} />
+      <StatusHero status={data} />
 
       <BillingCard billing={data.billing} />
 

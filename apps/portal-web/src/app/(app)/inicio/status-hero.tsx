@@ -1,6 +1,5 @@
 'use client';
 
-import { IconRefresh } from '@/components/icons';
 /**
  * Status-hero da Home (spec 6.4 + 3.1). Mapeia o estado do bot a partir do
  * /portal/status:
@@ -10,7 +9,8 @@ import { IconRefresh } from '@/components/icons';
  *   - waha.status SCAN_QR/FAILED/...      -> "Bot desconectado" (danger).
  *   - waha.status unknown e sem sessao    -> "Bot desconectado" generico.
  *
- * Botao de refresh manual (spec 4): gira 300ms e dispara refetch.
+ * Sem botao de refresh manual: o auto-refresh de 60s em foco (useStatus) e o
+ * reload da pagina ja recarregam tudo — o botao era redundante (feedback Bruno).
  */
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -58,15 +58,7 @@ function Pulse({ state }: { state: BotState }) {
   );
 }
 
-export function StatusHero({
-  status,
-  onRefresh,
-  refreshing,
-}: {
-  status: StatusResponse;
-  onRefresh: () => void;
-  refreshing: boolean;
-}) {
+export function StatusHero({ status }: { status: StatusResponse }) {
   const state = resolveState(status);
   const copy = COPY[state];
 
@@ -85,18 +77,6 @@ export function StatusHero({
           {state === 'desconectado' && <Badge tone="danger">Desconectado</Badge>}
           {state === 'pausado' && <Badge tone="warn">Pausado</Badge>}
         </div>
-      </div>
-
-      <div className="mt-3 flex justify-end">
-        <button
-          type="button"
-          aria-label="Atualizar status"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="flex size-11 items-center justify-center rounded-card-sm border border-line-strong bg-surface-sunken text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:opacity-60"
-        >
-          <IconRefresh size={18} className={refreshing ? 'animate-spin-token' : undefined} />
-        </button>
       </div>
     </Card>
   );
