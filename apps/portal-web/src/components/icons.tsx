@@ -5,7 +5,7 @@
  * noSvgWithoutTitle e desligado para este arquivo via override no biome.json
  * (o aria-hidden vai no spread, fora do alcance da analise estatica do Biome).
  */
-import type { SVGProps } from 'react';
+import { type SVGProps, useId } from 'react';
 
 interface IconProps extends SVGProps<SVGSVGElement> {
   size?: number;
@@ -314,20 +314,96 @@ export function IconWallet(props: IconProps) {
   );
 }
 
-/** Brandmark Startap (circulo aberto + ponto). cor herda de currentColor. */
-export function Brandmark({ size = 14, color }: { size?: number; color?: string }) {
-  const stroke = color ?? 'currentColor';
+/**
+ * Brandmark Startap — simbolo Constelacao-S (Opcao A, solto). 5 nos em
+ * ziguezague que o olho le como "S"; o no superior em ambar e o ponto focal.
+ * Cores fixas (roxo #9A7CF0 -> #6431D6 descendo, ambar #E0A23C): a marca tem
+ * paleta propria e NAO herda `color`. O `id` randomico evita colisao de
+ * <defs> quando o simbolo aparece >1x na mesma pagina (login + sidebar/topbar).
+ * Pensado p/ fundo escuro (app e sempre escuro). Fonte: mark-constelacao.svg.
+ * Min. recomendado 24px; abaixo disso usar `BrandmarkMini`.
+ */
+export function Brandmark({ size = 32 }: { size?: number; color?: string }) {
+  const uid = useId();
+  const line = `csLine-${uid}`;
+  const glow = `csGlow-${uid}`;
   return (
-    <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden>
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden>
+      <defs>
+        <linearGradient id={line} x1="44" y1="17" x2="20" y2="47" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#B59CF7" />
+          <stop offset="1" stopColor="#6431D6" />
+        </linearGradient>
+        <radialGradient id={glow} cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#E0A23C" stopOpacity="0.42" />
+          <stop offset="0.55" stopColor="#E0A23C" stopOpacity="0.14" />
+          <stop offset="1" stopColor="#E0A23C" stopOpacity="0" />
+        </radialGradient>
+      </defs>
       <path
-        d="M2 7c0-2.8 2.2-5 5-5s5 2.2 5 5-2.2 5-5 5"
+        d="M44 17 L20 24 L44 40 L20 47"
         fill="none"
-        stroke={stroke}
-        strokeWidth={2}
+        stroke={`url(#${line})`}
+        strokeWidth={2.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={0.9}
+      />
+      <circle cx="20" cy="24" r="4.7" fill="#9A7CF0" />
+      <circle cx="44" cy="40" r="4.7" fill="#7E5CE8" />
+      <circle cx="20" cy="47" r="4.7" fill="#6431D6" />
+      <circle cx="44" cy="17" r="13" fill={`url(#${glow})`} />
+      <circle cx="44" cy="17" r="5.6" fill="#E0A23C" />
+      <circle cx="44" cy="17" r="2.1" fill="#F6D9A3" />
+    </svg>
+  );
+}
+
+/**
+ * Variante simplificada (3 nos, cores chapadas, sem gradiente/glow) p/ uso em
+ * tamanhos pequenos onde o simbolo completo vira mancha. Fonte:
+ * mark-constelacao-favicon.svg.
+ */
+export function BrandmarkMini({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden>
+      <path
+        d="M23 9 L10 14 L22 23"
+        fill="none"
+        stroke="#9A7CF0"
+        strokeWidth={3}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="7" cy="7" r="1.6" fill={stroke} />
+      <circle cx="10" cy="14" r="5" fill="#9A7CF0" />
+      <circle cx="22" cy="23" r="5" fill="#6431D6" />
+      <circle cx="23" cy="9" r="5.4" fill="#E0A23C" />
+    </svg>
+  );
+}
+
+/**
+ * Brandmark monocromatico — 1 cor chapada via `currentColor`. No de destaque
+ * vira anel (preserva o "ponto especial" sem depender de cor). Para casos
+ * 1-cor (impressao, herdar tinta do contexto). Fonte: mono-constelacao.svg.
+ */
+export function BrandmarkMono({ size = 32, color }: { size?: number; color?: string }) {
+  const c = color ?? 'currentColor';
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden>
+      <path
+        d="M44 17 L20 24 L44 40 L20 47"
+        fill="none"
+        stroke={c}
+        strokeWidth={2.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="20" cy="24" r="4.6" fill={c} />
+      <circle cx="44" cy="40" r="4.6" fill={c} />
+      <circle cx="20" cy="47" r="4.6" fill={c} />
+      <circle cx="44" cy="17" r="6" fill="none" stroke={c} strokeWidth={2.6} />
+      <circle cx="44" cy="17" r="1.6" fill={c} />
     </svg>
   );
 }

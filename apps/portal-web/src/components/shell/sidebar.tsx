@@ -27,11 +27,9 @@ export function Sidebar({ businessName }: { businessName: string }) {
 
   return (
     <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-line bg-surface md:flex">
-      {/* Brandmark com glow (1.D.7) — eco do dot do login. */}
-      <div className="flex items-center gap-2.5 border-b border-line-soft px-5 py-5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
-        <span className="login-dot-glow flex size-[30px] items-center justify-center rounded-[9px] bg-brand-fill">
-          <Brandmark size={15} color="#fff" />
-        </span>
+      {/* Brandmark: simbolo Constelacao-S solto (Opcao A, sem quadrado roxo). */}
+      <div className="flex items-center gap-2 border-b border-line-soft px-5 py-5 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
+        <Brandmark size={30} />
         <span>
           Start<span className="text-brand">ap</span>
         </span>

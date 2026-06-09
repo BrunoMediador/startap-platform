@@ -303,10 +303,8 @@ body {
   }
 }
 
-/* Glow do dot da brandmark (spec 1.B.5). */
-.login-dot-glow {
-  box-shadow: 0 0 0 1px rgba(154, 124, 240, 0.35), 0 8px 24px rgba(100, 49, 214, 0.45);
-}
+/* (.login-dot-glow removido — Opcao A: simbolo Constelacao-S solto, sem o
+   quadrado roxo + glow que envolvia a brandmark no login/sidebar/topbar.) */
 
 /* Glow do card de login — "acende" sobre o fundo vivo (spec 1.B.6). */
 .login-card-glow {
