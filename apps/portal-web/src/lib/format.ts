@@ -135,6 +135,46 @@ export function formatDiaRelativo(iso: string | null): string {
 }
 
 /**
+ * Rotulo de DIA pt-BR pra um agendamento (item 1). Aceita ISO datetime OU date
+ * puro "YYYY-MM-DD". Usa "hoje"/"amanhã"/"ontem" quando perto; senao "9 de jun".
+ * Date puro vira meia-noite LOCAL (nao UTC) pra a comparacao de dia bater.
+ */
+export function formatAgendamentoDia(inicio: string | null, now = new Date()): string {
+  const d = parseLocalDate(inicio);
+  if (!d) return 'Sem data';
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(d) - startOf(now)) / 86_400_000);
+  if (diffDays === 0) return 'Hoje';
+  if (diffDays === 1) return 'Amanhã';
+  if (diffDays === -1) return 'Ontem';
+  return d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' }).replace('.', '');
+}
+
+/**
+ * Hora pt-BR "14:30" pra um agendamento. Date puro (sem hora) -> "" (dia inteiro).
+ * Distingue de formatHora (que devolve "--:--" em null) pra nao poluir a UI.
+ */
+export function formatAgendamentoHora(inicio: string | null): string {
+  if (!inicio) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(inicio)) return ''; // date puro: sem horario
+  const d = new Date(inicio);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+/** ISO datetime ou date puro "YYYY-MM-DD" -> Date local (helper interno). */
+function parseLocalDate(inicio: string | null): Date | null {
+  if (!inicio) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(inicio);
+  if (m) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(inicio);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
  * Tempo decorrido desde `iso` ate agora, em pt-BR curto:
  * "agora", "há 5 min", "há 3 h", "há 2 dias", "ontem".
  */

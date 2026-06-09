@@ -11,6 +11,7 @@ import { useTenant } from '@/components/shell/session-context';
 import { MetricCard } from '@/components/ui/card';
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
+import { agruparAgendamentos } from '@/lib/agendamentos';
 import { saudacao } from '@/lib/format';
 import { useAgendamentos, useStatus } from '@/lib/queries';
 import { AgendamentosList } from './agendamentos-list';
@@ -49,6 +50,15 @@ export default function InicioPage() {
   const data = status.data;
   const nome = data.display_name ?? 'Seu negócio';
 
+  // "Proximos" no metric = hoje + futuro (a janela do backend traz tambem
+  // recentes/-7d, que nao contam como "proximos"). gcal off -> "—".
+  const ag = agendamentos.data;
+  let proximosCount: number | string = '—';
+  if (ag?.gcal_configured) {
+    const g = agruparAgendamentos(ag.agendamentos);
+    proximosCount = g.hoje.length + g.proximos.length;
+  }
+
   return (
     <>
       <div className="mb-4">
@@ -73,14 +83,11 @@ export default function InicioPage() {
           href="/pausas"
           ariaLabel={`${data.pausas_ativas} números pausados — ver pausas`}
         />
-        <MetricCard
-          value={agendamentos.data?.gcal_configured ? agendamentos.data.count : '—'}
-          caption="Próximos agendamentos"
-        />
+        <MetricCard value={proximosCount} caption="Próximos agendamentos" />
       </div>
 
       <div className="mx-0.5 mb-[11px] mt-1">
-        <h2 className="font-display text-[15px] font-semibold text-ink">Próximos agendamentos</h2>
+        <h2 className="font-display text-[15px] font-semibold text-ink">Agendamentos</h2>
       </div>
 
       {agendamentos.isPending ? (
