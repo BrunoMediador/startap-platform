@@ -6,13 +6,18 @@
  * #E0A23C) que driftam e se ligam por linhas quando proximos. Decorativo:
  * aria-hidden, nao tabavel, nao intercepta toque/clique.
  *
- * Dois modos (prop `variant`):
+ * Tres modos (prop `variant`):
  *  - 'login' (default): full-screen `fixed inset:0`, densidade cheia, linha ao
  *    cursor no desktop. Dimensionado pelo viewport.
  *  - 'ambient' (painel hero, 1.D.1): confinado ao HOST (parent), ~3x menos denso,
  *    teto 22 desk/12 mob, drift/alpha menores, SEM linha ao cursor, suprimido no
  *    tema CLARO (rede roxa clara sobre lavanda nao compensa — 1.D.8). Dimensionado
  *    pelo getBoundingClientRect do host.
+ *  - 'fullbg' (fundo da Inicio): mesma vibe calma do ambient (sem cursor, off no
+ *    claro), MAS dimensionado pelo VIEWPORT inteiro (`fixed inset:0`, z baixo) e
+ *    com teto maior (76 desk/36 mob) e ALPHA mais baixo — e fundo de tela de
+ *    trabalho, fica ATRAS dos cards (que tem surface solido) e nao pode competir
+ *    com o texto. So a Inicio o monta; ao sair da rota ele desmonta.
  *
  * Performance/A11y (P0, identicas nos dois modos):
  *  - pausa quando a aba sai de foco (Page Visibility);
@@ -22,7 +27,7 @@
  */
 import { useEffect, useRef } from 'react';
 
-type Variant = 'login' | 'ambient';
+type Variant = 'login' | 'ambient' | 'fullbg';
 
 interface VariantCfg {
   density: number; // px² por particula
@@ -81,6 +86,26 @@ const VARIANTS: Record<Variant, VariantCfg> = {
     lineAlpha: 0.2, // rede mais fantasma
     cursorLink: false, // painel nao e vitrine
     confined: true, // dimensiona pelo host
+    lightOff: true, // off no claro (1.D.8)
+  },
+  // Fundo full-viewport da Inicio: mesma calma do ambient, dimensionado pelo
+  // viewport inteiro (nao confinado). Densidade calibrada p/ ~76 num desktop
+  // ~1440x900 sem ultrapassar o teto; alpha MAIS baixo que o ambient porque e
+  // fundo atras dos cards e nao pode ofuscar o texto que rola por cima.
+  fullbg: {
+    density: 17000, // viewport grande -> preenche bem, sem virar sopa de pontos
+    maxDesktop: 76, // teto p/ telas enormes (4k) — performance + nao poluir
+    maxMobile: 36,
+    minCount: 10,
+    speed: 0.18, // drift calmo, fundo de tela de trabalho
+    radiusMin: 1.0,
+    radiusMax: 2.0,
+    linkDesktop: 120,
+    linkMobile: 90,
+    pointAlpha: 0.42, // mais discreto que o ambient (0.55) — e FUNDO
+    lineAlpha: 0.14, // rede ainda mais fantasma
+    cursorLink: false, // painel nao e vitrine
+    confined: false, // dimensiona pelo VIEWPORT
     lightOff: true, // off no claro (1.D.8)
   },
 };
@@ -330,9 +355,14 @@ export function ParticleField({ variant = 'login' }: { variant?: Variant }) {
     };
   }, [variant]);
 
-  // Login: full-screen fixed. Ambient: confinado ao host (.hero-fx via CSS).
-  const className =
-    variant === 'login' ? 'pointer-events-none fixed inset-0 z-0 block h-full w-full' : 'hero-fx';
+  // Ambient: confinado ao host (.hero-fx via CSS).
+  // Login: full-screen fixed em z-0 (o conteudo do login fica em z-[2]).
+  // Fullbg: full-screen fixed em z-[-1] -> ATRAS do conteudo em fluxo da Inicio
+  //   (cards opacos cobrem; particulas so aparecem nos vaos). `.hero-bg` no CSS.
+  let className: string;
+  if (variant === 'ambient') className = 'hero-fx';
+  else if (variant === 'fullbg') className = 'hero-bg';
+  else className = 'pointer-events-none fixed inset-0 z-0 block h-full w-full';
 
   return (
     <canvas
