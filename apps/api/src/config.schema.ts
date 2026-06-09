@@ -33,6 +33,13 @@ export const ConfigSchema = z.object({
 
   GCAL_ENCRYPTION_KEY: z.string().optional(),
 
+  // ── AbacatePay (pagamento PIX — ADR 0013) ──────────────────────────────────
+  // C9 (threat-model): boot FALHA se a key estiver ausente. O ambiente Dev/Prod e
+  // definido PELA CHAVE (nao pela URL) — Dev nunca vira Prod sem rotacionar a key.
+  // A key NUNCA e logada nem hardcoded (vai so no header Authorization do cliente).
+  ABACATEPAY_API_KEY: z.string().min(1, 'ABACATEPAY_API_KEY ausente'),
+  ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

@@ -10,7 +10,8 @@
     "./waha": "./dist/waha/index.js",
     "./openai": "./dist/openai/index.js",
     "./whisper": "./dist/whisper/index.js",
-    "./google-calendar": "./dist/google-calendar/index.js"
+    "./google-calendar": "./dist/google-calendar/index.js",
+    "./abacatepay": "./dist/abacatepay/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
