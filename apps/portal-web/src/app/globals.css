@@ -1,63 +1,66 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Design tokens — Portal "Cadencia Noturna" (TEMA ESCURO, dark-only)
+   Design tokens — Portal "Cadencia" (TOGGLE de tema, spec 1.C)
    Fonte unica de verdade: docs/design/portal-cliente/design-spec-cadencia.md
-   secao 1.A (escuro, producao v1.1). O tema claro (1.1) esta DESCONTINUADO.
-   Tailwind v4 @theme (config CSS-first). Cada token vira utilitario:
-   bg-surface, bg-surface-hover, text-ink-soft, border-line-strong, etc.
+     - 1.A  -> tema ESCURO "Cadencia Noturna" (DEFAULT)
+     - 1.1  -> tema CLARO (reativado pelo toggle; gaps em 1.C.4)
+   Mecanica (1.C.1): cada token e uma CSS var resolvida por [data-theme].
+   O @theme abaixo aponta os utilitarios Tailwind (bg-surface, text-ink-soft...)
+   pras vars de tema; os dois token-sets vivem em [data-theme="dark"|"light"].
+   Trocar o atributo no <html> troca o set inteiro, sem duplicar classe.
    ============================================================ */
 @theme {
-  /* --- Superficies (elevacao por TOM, nao por sombra — spec 1.A.6) --- */
-  --color-bg: #14121c; /* fundo geral — quase-preto roxeado */
-  --color-surface: #1e1b2b; /* card, lista, input em repouso */
-  --color-surface-hover: #2c2740; /* HOVER perceptivel (spec 1.A.2) */
-  --color-surface-elev: #262237; /* modal / bottom sheet / popover */
-  --color-surface-elev-hover: #332d4a; /* hover de itens dentro de modal/sheet */
-  --color-surface-sunken: #0f0d17; /* trilho de switch off, track, input afundado */
+  /* --- Superficies --- */
+  --color-bg: var(--c-bg);
+  --color-surface: var(--c-surface);
+  --color-surface-hover: var(--c-surface-hover);
+  --color-surface-elev: var(--c-surface-elev);
+  --color-surface-elev-hover: var(--c-surface-elev-hover);
+  --color-surface-sunken: var(--c-surface-sunken);
 
   /* --- Bordas / linhas --- */
-  --color-line: #332e45; /* borda/divisor padrao sobre surface */
-  --color-line-soft: #28243a; /* divisor interno discreto (linhas de lista) */
-  --color-line-strong: #433c5c; /* borda de input/card elevado em repouso */
+  --color-line: var(--c-line);
+  --color-line-soft: var(--c-line-soft);
+  --color-line-strong: var(--c-line-strong);
 
-  /* --- Tinta (texto) sobre escuro --- */
-  --color-ink: #f3f1fa; /* tinta principal — titulos, numeros, corpo forte */
-  --color-ink-soft: #b4aecb; /* secundaria — legendas, descricoes, meta */
-  --color-ink-faint: #807a95; /* terciaria — labels uppercase, placeholders, nav off */
+  /* --- Tinta (texto) --- */
+  --color-ink: var(--c-ink);
+  --color-ink-soft: var(--c-ink-soft);
+  --color-ink-faint: var(--c-ink-faint);
 
-  /* --- Marca — roxo Startap sobre escuro (DOIS roxos, papeis distintos) --- */
-  --color-brand: #9a7cf0; /* roxo claro de ACAO — botao primario, links, foco */
-  --color-brand-600: #8b66ee; /* hover do primario (mais saturado) */
-  --color-brand-700: #7c54e6; /* active/pressed */
-  --color-brand-fill: #6431d6; /* roxo SOLIDO — fundo de card de marca/billing */
-  --color-brand-fill-hover: #5526c0; /* hover do card de marca clicavel */
-  --color-brand-soft: #231c3d; /* fundo roxo escuro p/ icones, nav ativo, badge-info */
-  --color-brand-soft-hover: #2e2550; /* hover de superficie roxa suave */
+  /* --- Marca — roxo Startap (DOIS roxos, papeis distintos) --- */
+  --color-brand: var(--c-brand);
+  --color-brand-600: var(--c-brand-600);
+  --color-brand-700: var(--c-brand-700);
+  --color-brand-fill: var(--c-brand-fill);
+  --color-brand-fill-hover: var(--c-brand-fill-hover);
+  --color-brand-soft: var(--c-brand-soft);
+  --color-brand-soft-hover: var(--c-brand-soft-hover);
 
-  /* --- Ambar — alerta de vencimento sobre escuro (acento RESTRITO) --- */
-  --color-amber: #e0a23c; /* ambar de TEXTO/icone/borda sobre escuro */
-  --color-amber-fill: #b5751f; /* ambar SOLIDO — fundo do card de vencimento */
-  --color-amber-soft: #2e2310; /* fundo ambar escuro p/ badge "Vence em 3 dias" */
-  --color-amber-ink: #1a1208; /* texto escuro pra cima de amber-fill */
+  /* --- Ambar — alerta de vencimento (acento RESTRITO) --- */
+  --color-amber: var(--c-amber);
+  --color-amber-fill: var(--c-amber-fill);
+  --color-amber-soft: var(--c-amber-soft);
+  --color-amber-ink: var(--c-amber-ink);
 
   /* --- Sucesso (status conectado, salvo) --- */
-  --color-ok: #4ed88f; /* verde claro AA — core do pulse, texto de badge */
-  --color-ok-soft: #0f2a1e; /* fundo de badge "Conectado" */
+  --color-ok: var(--c-ok);
+  --color-ok-soft: var(--c-ok-soft);
 
   /* --- Aviso (pausado/atencao — distinto do ambar por contexto) --- */
-  --color-warn: #e0a23c;
-  --color-warn-soft: #2e2310;
+  --color-warn: var(--c-warn);
+  --color-warn-soft: var(--c-warn-soft);
 
   /* --- Erro/destrutivo (desconectado, remover, falha) --- */
-  --color-danger: #ff6b5e; /* vermelho-coral claro AA — texto/borda */
-  --color-danger-600: #f0594b; /* hover */
-  --color-danger-fill: #c2261b; /* vermelho SOLIDO — fundo do card vencido */
-  --color-danger-soft: #33161a; /* fundo de badge "Desconectado" */
+  --color-danger: var(--c-danger);
+  --color-danger-600: var(--c-danger-600);
+  --color-danger-fill: var(--c-danger-fill);
+  --color-danger-soft: var(--c-danger-soft);
 
-  /* --- Skeleton / shimmer escuro --- */
-  --color-skeleton: #262237; /* bloco base do skeleton */
-  --color-skeleton-hi: #332d4a; /* realce do shimmer */
+  /* --- Skeleton / shimmer --- */
+  --color-skeleton: var(--c-skeleton);
+  --color-skeleton-hi: var(--c-skeleton-hi);
 
   /* --- Tipografia (Sora display / Inter body, via next/font) --- */
   --font-display: var(--font-sora), "Sora", system-ui, sans-serif;
@@ -70,13 +73,152 @@
   --radius-field: 12px;
   --radius-pill: 999px;
 
-  /* --- Sombras (escuro: coadjuvante — elevacao e por tom, spec 1.A.6) --- */
-  --shadow-card: none; /* cards no escuro NAO usam sombra */
-  --shadow-elev: 0 8px 32px rgba(0, 0, 0, 0.45); /* so modal/sheet/popover */
-  --shadow-focus: 0 0 0 4px rgba(154, 124, 240, 0.18); /* glow de foco */
+  /* --- Sombras (resolvidas por tema; ver [data-theme] — spec 1.C.5) --- */
+  --shadow-card: var(--c-shadow-card);
+  --shadow-elev: var(--c-shadow-elev);
+  --shadow-focus: var(--c-shadow-focus);
 
   /* --- Motion --- */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ============================================================
+   TEMA ESCURO "Cadencia Noturna" (spec 1.A) — DEFAULT.
+   data-theme="dark" no <html>; tambem cobre [data-theme] ausente
+   (boot script seta sempre, mas isto blinda contra falha do script).
+   ============================================================ */
+:root,
+[data-theme="dark"] {
+  /* superficies (elevacao por TOM, nao por sombra — spec 1.A.6) */
+  --c-bg: #14121c; /* fundo geral — quase-preto roxeado */
+  --c-surface: #1e1b2b; /* card, lista, input em repouso */
+  --c-surface-hover: #2c2740; /* HOVER perceptivel (spec 1.A.2) */
+  --c-surface-elev: #262237; /* modal / bottom sheet / popover */
+  --c-surface-elev-hover: #332d4a; /* hover de itens dentro de modal/sheet */
+  --c-surface-sunken: #0f0d17; /* trilho de switch off, track, input afundado */
+
+  /* bordas / linhas */
+  --c-line: #332e45;
+  --c-line-soft: #28243a;
+  --c-line-strong: #433c5c;
+
+  /* tinta sobre escuro */
+  --c-ink: #f3f1fa;
+  --c-ink-soft: #b4aecb;
+  --c-ink-faint: #807a95;
+
+  /* marca — roxo claro de ACAO + roxo SOLIDO de fundo */
+  --c-brand: #9a7cf0;
+  --c-brand-600: #8b66ee;
+  --c-brand-700: #7c54e6;
+  --c-brand-fill: #6431d6;
+  --c-brand-fill-hover: #5526c0;
+  --c-brand-soft: #231c3d;
+  --c-brand-soft-hover: #2e2550;
+
+  /* ambar */
+  --c-amber: #e0a23c;
+  --c-amber-fill: #b5751f;
+  --c-amber-soft: #2e2310;
+  --c-amber-ink: #1a1208;
+
+  /* sucesso */
+  --c-ok: #4ed88f;
+  --c-ok-soft: #0f2a1e;
+
+  /* aviso */
+  --c-warn: #e0a23c;
+  --c-warn-soft: #2e2310;
+
+  /* erro/destrutivo */
+  --c-danger: #ff6b5e;
+  --c-danger-600: #f0594b;
+  --c-danger-fill: #c2261b;
+  --c-danger-soft: #33161a;
+
+  /* skeleton */
+  --c-skeleton: #262237;
+  --c-skeleton-hi: #332d4a;
+
+  /* sombras — coadjuvante no escuro: elevacao e por tom (spec 1.A.6 / 1.C.5) */
+  --c-shadow-card: none; /* card no escuro NAO usa sombra */
+  --c-shadow-elev: 0 8px 32px rgba(0, 0, 0, 0.45); /* so modal/sheet/popover */
+  --c-shadow-focus: 0 0 0 4px rgba(154, 124, 240, 0.18);
+
+  /* glow do hover do input (spec 1.A.3 — borda realca pra #534b70) */
+  --c-input-hover-border: #534b70;
+
+  color-scheme: dark;
+}
+
+/* ============================================================
+   TEMA CLARO (spec 1.1 + gaps 1.C.4) — ativo via data-theme="light".
+   Os 7 GAPS criados aqui (1.C.4): surface-hover, surface-elev-hover,
+   surface-sunken, line-soft, line-strong, brand-soft-hover, skeleton/-hi.
+   O critico e surface-hover #F0EDFB (hover perceptivel no claro, 1.A.2).
+   Elevacao no claro e por SOMBRA, nao por tom (spec 1.C.5).
+   ============================================================ */
+[data-theme="light"] {
+  /* superficies */
+  --c-bg: #f4f2fb; /* lavanda quase-branco — fundo da app (1.1) */
+  --c-surface: #ffffff; /* cards, inputs, listas (1.1) */
+  --c-surface-hover: #f0edfb; /* GAP 1.C.4: hover perceptivel (lavanda 1 passo) */
+  --c-surface-elev: #ffffff; /* modal/sheet/popover (elevacao por sombra) */
+  --c-surface-elev-hover: #f4f2fb; /* GAP: item dentro de dropdown/sheet */
+  --c-surface-sunken: #ece9f6; /* GAP: poco (track switch off, input afundado) */
+
+  /* bordas / linhas */
+  --c-line: #e7e3f2; /* borda/divisor padrao (1.1) */
+  --c-line-soft: #efecf7; /* GAP: divisor interno mais claro que line */
+  --c-line-strong: #d8d2ea; /* GAP: borda de input/card elevado */
+
+  /* tinta sobre claro */
+  --c-ink: #1a1530; /* tinta principal (1.1) */
+  --c-ink-soft: #6b6485; /* secundaria (1.1) */
+  --c-ink-faint: #9a93b0; /* terciaria (1.1) */
+
+  /* marca — no claro o roxo de acao E o roxo solido sao o mesmo #6431d6 (1.1) */
+  --c-brand: #6431d6; /* CTA/links/foco (1.1) */
+  --c-brand-600: #6431d6; /* alias do DEFAULT (1.1) */
+  --c-brand-700: #4e22b0; /* hover/pressed (1.1) */
+  --c-brand-fill: #6431d6; /* fundo de card de marca/billing */
+  --c-brand-fill-hover: #4e22b0; /* hover do card de marca clicavel */
+  --c-brand-soft: #efeafb; /* fundo de icones, nav ativo, badge-info (brand-50) */
+  --c-brand-soft-hover: #e4dcf8; /* GAP: hover de card de metrica que linka */
+
+  /* ambar */
+  --c-amber: #b5751f; /* texto/borda ambar (1.1) */
+  --c-amber-fill: #b5751f; /* fundo ambar solido (texto escuro por cima) */
+  --c-amber-soft: #f6e7ce; /* fundo de badge/card de aviso (1.1 amber-bg) */
+  --c-amber-ink: #1a1208; /* texto escuro sobre ambar (mesmo valor dos 2 temas) */
+
+  /* sucesso */
+  --c-ok: #18794e; /* verde-escuro AA sobre branco (1.1) */
+  --c-ok-soft: #ddf3e7; /* fundo de badge conectado (1.1 ok-bg) */
+
+  /* aviso */
+  --c-warn: #8a5300; /* aviso AA sobre branco (1.1) */
+  --c-warn-soft: #fbefd6; /* fundo de badge pausado (1.1 warn-bg) */
+
+  /* erro/destrutivo */
+  --c-danger: #c2261b; /* vermelho AA sobre branco (1.1) */
+  --c-danger-600: #9e1a12; /* GAP: hover destrutivo (reusa danger-700 do 1.1) */
+  --c-danger-fill: #c2261b; /* fundo do card vencido (texto branco AA) */
+  --c-danger-soft: #fce6e4; /* fundo de badge desconectado (1.1 danger-bg) */
+
+  /* skeleton (GAP) */
+  --c-skeleton: #ece9f6;
+  --c-skeleton-hi: #f6f4fc;
+
+  /* sombras — no claro a elevacao e por SOMBRA (spec 1.6 / 1.C.5) */
+  --c-shadow-card: 0 1px 2px rgba(26, 21, 48, 0.04), 0 4px 16px rgba(26, 21, 48, 0.06);
+  --c-shadow-elev: 0 12px 40px rgba(26, 21, 48, 0.16);
+  --c-shadow-focus: 0 0 0 4px rgba(100, 49, 214, 0.16);
+
+  /* borda do hover do input no claro */
+  --c-input-hover-border: #c4bbe0;
+
+  color-scheme: light;
 }
 
 /* Duracoes nomeadas (spec 1.8) — usadas em transition-[duration] inline-token. */
@@ -84,7 +226,6 @@
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 300ms;
-  color-scheme: dark;
 }
 
 * {
@@ -97,7 +238,6 @@ body {
 }
 
 html {
-  color-scheme: dark;
   background: var(--color-bg);
 }
 
@@ -106,6 +246,19 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Transicao suave SO no instante da troca de tema (spec 1.C.1): JS adiciona
+   .theme-transition no <html> durante ~220ms, depois remove. Como e transitorio,
+   nao atrapalha os hovers de 120ms dos componentes no uso normal. */
+html.theme-transition,
+html.theme-transition body,
+html.theme-transition body *,
+html.theme-transition body *::before,
+html.theme-transition body *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
+  transition-duration: var(--duration-base) !important;
+  transition-timing-function: var(--ease-out-soft) !important;
 }
 
 /* Anel concentrico do status ativo (spec 6.4). */
