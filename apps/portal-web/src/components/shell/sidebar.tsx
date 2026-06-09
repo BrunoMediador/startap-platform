@@ -6,12 +6,13 @@ import { initials } from '@/lib/format';
 import { useLogout } from '@/lib/use-logout';
 /**
  * Sidebar desktop (>=md) — spec 6.13. 240px, brand no topo, 4 itens como linhas,
- * ativo com bg-brand-soft + barra 3px a esquerda. Avatar do negocio + sair no
- * rodape. Escondida em <md (la vale a bottom nav).
+ * ativo com bg-brand-soft + barra 3px a esquerda. Avatar do negocio, toggle de
+ * tema (1.C.2) e sair no rodape. Escondida em <md (la vale a bottom nav).
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { NAV_ITEMS } from './nav-items';
+import { ThemeToggle } from './theme-toggle';
 
 export function Sidebar({ businessName }: { businessName: string }) {
   const pathname = usePathname();
@@ -59,6 +60,7 @@ export function Sidebar({ businessName }: { businessName: string }) {
             {businessName}
           </span>
         </div>
+        <ThemeToggle variant="sidebar" />
         <button
           type="button"
           onClick={logout}

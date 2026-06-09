@@ -4,10 +4,12 @@ import { Brandmark, IconLogout } from '@/components/icons';
 import { initials } from '@/lib/format';
 import { useLogout } from '@/lib/use-logout';
 /**
- * Topbar (spec 2). Mobile: brand a esquerda + avatar a direita (abre menu de
- * sair). Desktop (>=md): so o nome do negocio (a marca/sair ficam na sidebar).
+ * Topbar (spec 2). Mobile: brand a esquerda + avatar a direita (abre o sheet de
+ * conta: toggle de tema + sair). Desktop (>=md): so o nome do negocio (marca,
+ * toggle e sair ficam na sidebar). Bottom nav fica intocada (spec 1.C.2).
  */
 import { useState } from 'react';
+import { ThemeToggle } from './theme-toggle';
 
 export function Topbar({ businessName }: { businessName: string }) {
   const { logout, pending } = useLogout();
@@ -45,8 +47,10 @@ export function Topbar({ businessName }: { businessName: string }) {
             />
             <div
               role="menu"
-              className="absolute right-0 top-[46px] z-30 w-44 overflow-hidden rounded-card-sm border border-line-strong bg-surface-elev shadow-elev"
+              className="absolute right-0 top-[46px] z-30 w-60 overflow-hidden rounded-card-sm border border-line-strong bg-surface-elev shadow-elev"
             >
+              <ThemeToggle variant="sheet" />
+              <div className="h-px bg-line-soft" aria-hidden />
               <button
                 type="button"
                 role="menuitem"

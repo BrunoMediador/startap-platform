@@ -1,6 +1,6 @@
 'use client';
 
-import { IconPencil, IconPlus, IconScissors } from '@/components/icons';
+import { IconPencil, IconPlus, IconScissors, IconTrash } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -17,6 +17,13 @@ import { qk, useSaveServicos, useServicos } from '@/lib/queries';
  * array INTEIRO (contrato /portal/servicos). Salvamento OTIMISTA (D5): a UI
  * aplica na hora, dispara o PUT; sucesso -> toast "Serviços atualizados"; falha ->
  * reverte ao snapshot anterior + toast danger.
+ *
+ * Leva 2 (item 3):
+ *  - FORA do modo edicao, cada linha tem botao DELETAR (lixeira) com confirmacao
+ *    (ConfirmDialog) — deletar = remover do array + PUT da lista nova.
+ *  - No modo edicao inline, dois botoes claros: SALVAR (PUT) e CANCELAR (descarta
+ *    as mudancas daquele item, volta ao valor original, SEM PUT). cancel() so
+ *    fecha o editor; nada e enviado.
  *
  * Validacao no cliente espelha o servicoSchema do backend (nome>=1, duracao>0,
  * preco>=0) pra dar erro inline antes de bater na API.
@@ -145,7 +152,7 @@ export default function ServicosPage() {
         />
       ) : (
         <>
-          <div className="mb-3.5 overflow-hidden rounded-card border border-line bg-surface">
+          <div className="mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
             {servicos.map((s, idx) =>
               editing === idx ? (
                 <EditRow
@@ -154,11 +161,16 @@ export default function ServicosPage() {
                   errors={errors}
                   onChange={setDraft}
                   onSave={onSave}
-                  onRemove={() => setRemoveIdx(idx)}
+                  onCancel={cancel}
                   saving={save.isPending}
                 />
               ) : (
-                <ReadRow key={`row-${s.nome}`} servico={s} onEdit={() => startEdit(idx)} />
+                <ReadRow
+                  key={`row-${s.nome}`}
+                  servico={s}
+                  onEdit={() => startEdit(idx)}
+                  onDelete={() => setRemoveIdx(idx)}
+                />
               ),
             )}
             {editing === 'new' && (
@@ -201,9 +213,17 @@ export default function ServicosPage() {
   );
 }
 
-function ReadRow({ servico, onEdit }: { servico: Servico; onEdit: () => void }) {
+function ReadRow({
+  servico,
+  onEdit,
+  onDelete,
+}: {
+  servico: Servico;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   // Linha de lista (spec 1.A.8): hover "acende" a linha inteira (surface-hover) +
-  // revela o lapis (opacity-0 -> 100). No mobile, active da o mesmo feedback.
+  // revela editar/deletar (opacity-0 -> 100). No mobile, sempre visiveis.
   return (
     <div className="group flex min-h-16 items-center gap-3.5 border-b border-line-soft p-[15px] transition-colors last:border-b-0 hover:bg-surface-hover active:bg-surface-hover">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-brand-soft text-brand">
@@ -216,14 +236,24 @@ function ReadRow({ servico, onEdit }: { servico: Servico; onEdit: () => void }) 
           <b className="font-semibold text-ink">{formatPrecoCents(servico.preco_cents)}</b>
         </div>
       </div>
-      <button
-        type="button"
-        aria-label={`Editar ${servico.nome}`}
-        onClick={onEdit}
-        className="flex size-11 shrink-0 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft opacity-0 outline-none transition-[opacity,color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-brand group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100"
-      >
-        <IconPencil size={18} />
-      </button>
+      <div className="flex shrink-0 items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100">
+        <button
+          type="button"
+          aria-label={`Editar ${servico.nome}`}
+          onClick={onEdit}
+          className="flex size-11 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand"
+        >
+          <IconPencil size={18} />
+        </button>
+        <button
+          type="button"
+          aria-label={`Remover ${servico.nome}`}
+          onClick={onDelete}
+          className="flex size-11 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:border-danger/60 hover:bg-danger/12 hover:text-danger focus-visible:ring-2 focus-visible:ring-danger"
+        >
+          <IconTrash size={18} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -233,7 +263,6 @@ function EditRow({
   errors,
   onChange,
   onSave,
-  onRemove,
   onCancel,
   saving,
   isNew,
@@ -242,8 +271,7 @@ function EditRow({
   errors: FieldErrors;
   onChange: (d: Draft) => void;
   onSave: () => void;
-  onRemove?: () => void;
-  onCancel?: () => void;
+  onCancel: () => void;
   saving: boolean;
   isNew?: boolean;
 }) {
@@ -279,15 +307,9 @@ function EditRow({
         />
       </div>
       <div className="flex gap-2.5">
-        {isNew ? (
-          <Button variant="secondary" size="inline" onClick={onCancel} disabled={saving}>
-            Cancelar
-          </Button>
-        ) : (
-          <Button variant="destructive" size="inline" onClick={onRemove} disabled={saving}>
-            Remover
-          </Button>
-        )}
+        <Button variant="secondary" size="inline" onClick={onCancel} disabled={saving}>
+          Cancelar
+        </Button>
         <Button size="inline" className="flex-1" loading={saving} onClick={onSave}>
           Salvar
         </Button>
