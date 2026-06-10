@@ -114,6 +114,23 @@ if docker ps --format '{{.Names}}' | grep -qx 'automacoes-painel-admin-1'; then
   fi
 fi
 
+# --- Limpeza de cache de build (so apos deploy OK) ---
+# O build acima roda com --no-cache, entao o cache de build NUNCA e reusado —
+# ele so acumula a cada deploy (chegou a ~44GB e encheu o disco). Como os
+# health checks acima ja passaram, e seguro limpar TUDO aqui.
+#
+# ⚠️ JAMAIS trocar por `docker system prune -a` ou `docker image prune -a`:
+# isso removeria imagens paradas porem taggeadas, incluindo a
+# devlikeapro/waha-plus (imagem doada/congelada, NAO re-baixavel via pull)
+# e derrubaria os bots.
+#   - `builder prune -af` → so cache de build (nao toca em imagem nenhuma)
+#   - `image prune -f`    → so imagens dangling (<none>) de rebuilds; imagens
+#                           taggeadas (waha-plus, startap-*:pre-deploy) intactas
+# Best-effort: falha na limpeza nao pode falhar o deploy (|| true).
+echo "==> prune de build cache + imagens dangling (best-effort)"
+docker builder prune -af || true
+docker image prune -f || true
+
 echo "==> bots registrados:"
 # awk em vez de `grep | wc -l` porque grep retorna exit 1 quando ha 0 matches —
 # combinado com `set -euo pipefail` no topo, isso aborta o deploy mesmo quando
