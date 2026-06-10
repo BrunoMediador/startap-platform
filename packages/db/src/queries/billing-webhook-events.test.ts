@@ -104,6 +104,14 @@ function committed(): boolean {
   return sqlsRun().some((q) => q.includes('COMMIT'));
 }
 
+/** Novo next_due_date gravado (param $2 do INSERT INTO client_billing). */
+function advancedDue(): string | undefined {
+  const insert = calls.find((c) =>
+    c.sql.replace(/\s+/g, ' ').includes('INSERT INTO client_billing'),
+  );
+  return insert?.params[1] as string | undefined;
+}
+
 beforeEach(() => {
   calls.length = 0;
 });
@@ -221,6 +229,59 @@ describe('applyPaidWebhook (C1/C2/C4)', () => {
     expect(resumeSql).toBeDefined();
     expect(resumeSql).toContain("suspended_kind = 'billing'");
     expect(resumeSql).toContain('flow_enabled = false');
+  });
+});
+
+// ── ADR 0014: avanco do vencimento sob a flag dueDateModel ─────────────────────
+describe('applyPaidWebhook — avanco max(due, hoje) (ADR 0014)', () => {
+  const PAID_CHARGE = {
+    id: '10',
+    slot: 'barbearia-cirilo',
+    amount_cents: 19900,
+    status: 'pending',
+  };
+
+  function todayStr(): string {
+    const t = new Date();
+    const y = t.getUTCFullYear();
+    const m = String(t.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(t.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  it('flag OFF (default): avanco LEGADO a partir de next_due_date puro — comportamento ATUAL', async () => {
+    setup({ dedupeInserted: true, charge: PAID_CHARGE, nextDueDate: '2026-06-10', resumeRows: 0 });
+    const r = await applyPaidWebhook(BASE_INPUT); // sem dueDateModel
+    expect(r.outcome).toBe('applied');
+    // Legado: 2026-06-10 + 1 mes = 2026-07-10 (mesmo que esteja no passado relativo a hoje).
+    expect(advancedDue()).toBe('2026-07-10');
+  });
+
+  it('flag ON + VENCIDO (due no passado distante): NAO renova pro passado (parte de hoje)', async () => {
+    // venceu em 2020 -> legado cairia em 2020-02; com max(due,hoje) cai em hoje+1mes (futuro).
+    setup({ dedupeInserted: true, charge: PAID_CHARGE, nextDueDate: '2020-01-10', resumeRows: 1 });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, dueDateModel: true });
+    expect(r.outcome).toBe('applied');
+    const due = advancedDue();
+    // O novo vencimento e estritamente FUTURO (> hoje), nunca no passado.
+    expect(due).toBeDefined();
+    expect((due as string) > todayStr()).toBe(true);
+  });
+
+  it('flag ON + EM DIA (due no futuro): parte de next_due_date (nao perde tempo pago)', async () => {
+    setup({ dedupeInserted: true, charge: PAID_CHARGE, nextDueDate: '2099-06-10', resumeRows: 0 });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, dueDateModel: true });
+    expect(r.outcome).toBe('applied');
+    // due >> hoje -> max e a propria due. 2099-06-10 + 1 mes = 2099-07-10.
+    expect(advancedDue()).toBe('2099-07-10');
+  });
+
+  it('flag ON nao regride dedupe/underpaid: pago a menos NAO avanca (mesmo no modelo novo)', async () => {
+    setup({ dedupeInserted: true, charge: PAID_CHARGE, nextDueDate: '2020-01-10', resumeRows: 1 });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, paidAmountCents: 1, dueDateModel: true });
+    expect(r.outcome).toBe('underpaid');
+    expect(r.resumed).toBe(false);
+    expect(ranAdvance()).toBe(false); // underpaid NAO avanca, independe do modelo
   });
 });
 

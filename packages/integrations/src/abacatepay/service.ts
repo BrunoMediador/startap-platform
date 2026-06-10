@@ -174,3 +174,108 @@ function callGateway(abacate: AbacatePayClient, input: EnsureChargeInput, row: B
     expiresInSec: input.expiresInSec ?? DEFAULT_EXPIRES_IN_SEC,
   });
 }
+
+// ─── Modelo por DATA DE VENCIMENTO (ADR 0014) ──────────────────────────────────
+
+export interface EnsureChargeForSlotInput {
+  slot: string;
+  /** due_period 'YYYY-MM-DD' (a next_due_date vigente) — vira o `cycle` da linha nova. */
+  duePeriod: string;
+  /** Snapshot do valor em CENTAVOS (de client_billing.amount_cents). */
+  amountCents: number;
+  /** Texto curto exibido no PIX. Default 'Mensalidade'. */
+  description?: string;
+  expiresInSec?: number;
+}
+
+/**
+ * Garante UMA cobranca PIX ATIVA por slot no modelo por data (ADR 0014). NAO usa
+ * (slot, cycle)/UNIQUE: a cobranca ativa e a `pending` nao-expirada mais recente, e a
+ * invariante "1 pending/slot" e garantida por ADVISORY LOCK + recheck na transacao.
+ *
+ * Caminhos (sempre sob o lock por slot — serializa duas abas/dois cliques):
+ *   - Existe pending AINDA VALIDA -> REUSA (idempotencia). Nao chama o gateway.
+ *   - Existe pending EXPIRADA (ou sem validade conhecida) -> REEMITE reusando a MESMA
+ *     linha (por id), novo abacate_charge_id/br_code/expires_at, status volta 'pending'.
+ *   - NAO existe pending valida -> INSERE linha NOVA (cycle=duePeriod), chama o gateway e
+ *     attach por id.
+ *
+ * Pre-condicao: o chamador (portal/cron) JA checou a janela (computeBillingState) e o
+ * valor > 0. Este servico NAO decide janela — so materializa a cobranca ativa.
+ *
+ * O gateway (rede) e chamado DENTRO da transacao do lock — o lock dura no maximo o
+ * timeout do client (15s). Decisao do ADR 0014 (advisory lock > indice unico parcial).
+ */
+export async function ensurePixChargeForSlot(
+  abacate: AbacatePayClient,
+  input: EnsureChargeForSlotInput,
+  now: Date = new Date(),
+): Promise<EnsureChargeResult> {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+    throw new Error(
+      `ensurePixChargeForSlot: amountCents invalido (${input.amountCents}) — esperado inteiro > 0`,
+    );
+  }
+
+  return billingCharges.withBillingSlotLock(input.slot, async (client) => {
+    // 1) Recheck sob o lock: ja existe uma pending nao-expirada? Reusa (idempotencia).
+    const active = await billingCharges.getActivePendingCharge(input.slot, now, client);
+
+    if (active) {
+      if (isChargeStillValid(active, now)) {
+        log.info({ slot: input.slot, chargeId: active.id }, 'cobranca ativa valida — reuso');
+        return { charge: active, created: false, reissued: false };
+      }
+      // Pending porem expirada/sem validade: reemite REUSANDO a mesma linha (por id).
+      const legacyInput: EnsureChargeInput = {
+        slot: input.slot,
+        cycle: active.cycle,
+        amountCents: active.amount_cents,
+        description: input.description,
+        expiresInSec: input.expiresInSec,
+      };
+      const pix = await callGateway(abacate, legacyInput, active);
+      const reissued = await billingCharges.reissueGatewayDataById(client, {
+        id: active.id,
+        abacateChargeId: pix.id,
+        brCode: pix.brCode,
+        brCodeBase64: pix.brCodeBase64,
+        expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+      });
+      log.info(
+        { slot: input.slot, chargeId: active.id, abacateChargeId: pix.id },
+        'cobranca ativa expirada — reemitida (mesma linha)',
+      );
+      return { charge: reissued ?? active, created: true, reissued: true };
+    }
+
+    // 2) Sem pending valida: insere linha NOVA (cycle = due_period) e chama o gateway.
+    const externalId = `${input.slot}-${input.duePeriod}`;
+    const row = await billingCharges.insertPendingCharge(client, {
+      slot: input.slot,
+      cycle: input.duePeriod,
+      externalId,
+      amountCents: input.amountCents,
+    });
+    const legacyInput: EnsureChargeInput = {
+      slot: input.slot,
+      cycle: input.duePeriod,
+      amountCents: input.amountCents,
+      description: input.description,
+      expiresInSec: input.expiresInSec,
+    };
+    const pix = await callGateway(abacate, legacyInput, row);
+    const updated = await billingCharges.attachGatewayDataById(client, {
+      id: row.id,
+      abacateChargeId: pix.id,
+      brCode: pix.brCode,
+      brCodeBase64: pix.brCodeBase64,
+      expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+    });
+    log.info(
+      { slot: input.slot, chargeId: row.id, abacateChargeId: pix.id },
+      'cobranca PIX gerada (modelo por data)',
+    );
+    return { charge: updated ?? row, created: true, reissued: false };
+  });
+}

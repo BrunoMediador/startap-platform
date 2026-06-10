@@ -28,7 +28,7 @@
  * livre do payload (anti-spoof do slot).
  */
 import { pool, query } from '../client.js';
-import { advanceDueDate } from './client-billing.js';
+import { advanceDueDate, advanceFromMaxDue } from './client-billing.js';
 
 export interface BillingWebhookEventRow {
   event_id: string;
@@ -72,6 +72,15 @@ export interface ApplyPaidWebhookInput {
   actor?: string;
   /** meses a avancar (default 1). */
   cycleMonths?: number;
+  /**
+   * Modelo por DATA DE VENCIMENTO (ADR 0014). Default false (legado).
+   *   - false: avanca a partir de next_due_date puro (comportamento ATUAL — flag OFF).
+   *   - true : avanca max(next_due_date, hoje) + cycleMonths (nao renova pro passado em
+   *            re-cobranca/vencido). Vem de config.BILLING_DUE_DATE_MODEL no handler.
+   * NAO muda nada alem do calculo do novo vencimento — dedupe/underpaid/auto-resume
+   * permanecem identicos.
+   */
+  dueDateModel?: boolean;
 }
 
 /**
@@ -204,8 +213,13 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
          FROM client_billing WHERE slot = $1 FOR UPDATE`,
       [charge.slot],
     );
-    const base = billingRes.rows[0]?.next_due_date ?? new Date().toISOString().slice(0, 10);
-    const newDue = advanceDueDate(base, cycleMonths);
+    const currentDue = billingRes.rows[0]?.next_due_date ?? null;
+    // Modelo novo (ADR 0014): max(due, hoje) + cycleMonths — vencido/re-cobranca NUNCA
+    // renova pro passado. Legado (flag OFF): a partir de next_due_date puro (ou hoje se
+    // ausente) — comportamento ATUAL preservado byte-a-byte quando dueDateModel=false.
+    const newDue = input.dueDateModel
+      ? advanceFromMaxDue(currentDue, new Date(), cycleMonths)
+      : advanceDueDate(currentDue ?? new Date().toISOString().slice(0, 10), cycleMonths);
 
     await client.query(
       `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at)
