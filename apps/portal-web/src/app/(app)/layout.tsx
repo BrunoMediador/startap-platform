@@ -1,5 +1,6 @@
 import { ParticleField } from '@/components/fx/particle-field';
 import { BottomNav } from '@/components/shell/bottom-nav';
+import { ReconnectBanner } from '@/components/shell/reconnect-banner';
 import { SessionProvider } from '@/components/shell/session-context';
 import { Sidebar } from '@/components/shell/sidebar';
 import { Topbar } from '@/components/shell/topbar';
@@ -45,6 +46,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Sidebar businessName={businessName} />
         <div className="flex min-w-0 flex-1 flex-col">
           <Topbar businessName={businessName} />
+          {/* Banner de reconexao (acima de children, em TODAS as rotas quando
+              needs_action; some em WORKING e na propria /conectar). Gated pela flag. */}
+          <ReconnectBanner />
           <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-24 pt-[18px] md:pb-12">
             {children}
           </main>

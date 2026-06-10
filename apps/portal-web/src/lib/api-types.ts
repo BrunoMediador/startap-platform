@@ -196,3 +196,69 @@ export interface MensalidadeResponse {
 export interface SimularResponse {
   simulated: true;
 }
+
+// ── Conexao WhatsApp (portal-conexao.ts — reconexao self-service) ─────────────
+//
+// Espelha EXATAMENTE o contrato travado da API (5 rotas). A feature inteira e
+// gated por `enabled`: com `false`, esconder o item de menu e o banner (flag OFF
+// no backend). O telefone so chega MASCARADO (`registered_phone_masked`) — o
+// cliente nunca edita o numero.
+
+/**
+ * Estado da conexao do WhatsApp do robo (GET /portal/conexao).
+ *   enabled                 -> feature flag (esconde tudo quando false).
+ *   session                 -> nome da sessao WAHA (so referencia, nao exibido).
+ *   status                  -> status WAHA cru (WORKING, SCAN_QR_CODE, FAILED, ...).
+ *   connected               -> true sse status === WORKING.
+ *   needs_action            -> banner de reconexao deve aparecer (status != WORKING).
+ *   has_registered_phone    -> ha numero cadastrado (gate da reconexao por codigo).
+ *   registered_phone_masked -> "55 11 9••••-1234" (so leitura, nunca editavel).
+ *   can_reconnect           -> botao de reconectar habilitado (anti-abuso no back).
+ *   reconnect_cooldown_seconds -> cooldown sugerido pro botao apos reconectar.
+ */
+export interface ConexaoResponse {
+  enabled: boolean;
+  session: string | null;
+  status: string;
+  connected: boolean;
+  needs_action: boolean;
+  has_registered_phone: boolean;
+  registered_phone_masked: string | null;
+  can_reconnect: boolean;
+  reconnect_cooldown_seconds: number;
+}
+
+/** POST /portal/conexao/reconectar -> 202. Inicia o restart da sessao. */
+export interface ReconectarResponse {
+  state: 'restarting';
+  poll_after_ms: number;
+}
+
+/**
+ * POST /portal/conexao/codigo -> 200. Pairing code de 8 digitos "XXXX-XXXX" pra
+ * digitar no WhatsApp. Chamar de novo = gerar um codigo NOVO (o anterior cai).
+ */
+export interface CodigoResponse {
+  pairing_code: string; // 'XXXX-XXXX'
+  expires_in_seconds: number; // tipicamente 60
+  phone_masked: string;
+}
+
+/**
+ * GET /portal/conexao/qr -> 200. QR como data-URI pronto pra <img>. Quando ja
+ * conectado, `qr` vem null com `connected:true`.
+ */
+export interface QrResponse {
+  qr: string | null; // 'data:image/png;base64,...'
+  connected?: boolean;
+}
+
+/**
+ * GET /portal/conexao/status -> poll a cada 2s. Para quando `terminal` = true
+ * (chegou num estado final: conectado, ou falha definitiva).
+ */
+export interface StatusConexaoResponse {
+  status: string;
+  connected: boolean;
+  terminal: boolean;
+}

@@ -7,17 +7,20 @@ import { cn } from '@/lib/cn';
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { NAV_ITEMS } from './nav-items';
+import { useConexaoNav } from './use-conexao-nav';
 
 export function BottomNav() {
   const pathname = usePathname();
+  const { visibleItems, showDot } = useConexaoNav();
   return (
     <nav
       aria-label="Navegação principal"
       className="sticky bottom-0 z-30 flex border-t border-line bg-surface/[0.92] px-1.5 pb-[calc(9px+env(safe-area-inset-bottom))] pt-[9px] backdrop-blur-md md:hidden"
     >
-      {NAV_ITEMS.map(({ href, label, Icon }) => {
+      {visibleItems.map((item) => {
+        const { href, label, Icon } = item;
         const active = pathname === href;
+        const dot = showDot(item);
         return (
           <Link
             key={href}
@@ -32,11 +35,21 @@ export function BottomNav() {
           >
             <span
               className={cn(
-                'flex items-center justify-center rounded-[10px] px-3 py-0.5 transition-colors',
+                'relative flex items-center justify-center rounded-[10px] px-3 py-0.5 transition-colors',
                 active ? 'bg-brand-soft' : 'group-active:bg-surface-hover',
               )}
             >
               <Icon size={22} />
+              {/* Badge-dot vermelho: WhatsApp desconectado (status != WORKING). */}
+              {dot && (
+                <>
+                  <span
+                    aria-hidden
+                    className="absolute right-1.5 top-0 size-2.5 rounded-full border-2 border-surface bg-danger"
+                  />
+                  <span className="sr-only">(desconectado)</span>
+                </>
+              )}
             </span>
             {label}
           </Link>

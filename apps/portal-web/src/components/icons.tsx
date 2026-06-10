@@ -304,6 +304,76 @@ export function IconClock(props: IconProps) {
   );
 }
 
+/**
+ * WhatsApp — item de menu "Conectar" e contexto da tela de conexao. Glifo do
+ * balao + fone (tracado, herda currentColor; sem verde da marca pra casar com o
+ * tema). Decorativo (aria-hidden via base) — o rotulo vive no link/botao-pai.
+ */
+export function IconWhatsapp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M3.5 20.5 4.8 16A8 8 0 1 1 8 19.2l-4.5 1.3z"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 8.5c-.3 0-.6.1-.8.4-.3.3-.9.9-.9 2s.9 2.3 1 2.5c.1.2 1.7 2.7 4.2 3.6 2 .8 2.5.6 2.9.6.5-.1 1.4-.6 1.6-1.2.2-.6.2-1 .1-1.2-.1-.1-.3-.2-.6-.4-.3-.2-1.4-.7-1.6-.8-.2-.1-.4-.1-.6.1-.2.3-.6.8-.7 1-.1.1-.3.2-.5.1-.3-.1-1.1-.4-2-1.3-.7-.6-1.2-1.4-1.3-1.7-.1-.2 0-.4.1-.5l.4-.5c.1-.2.2-.3.3-.5 0-.2 0-.4-.1-.5-.1-.2-.6-1.4-.8-1.9-.2-.4-.4-.4-.6-.4h-.4z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+/** QR Code — alternativa de conexao por leitura (tela de conexao, estado f). */
+export function IconQr(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="3.5" width="6" height="6" rx="1.2" stroke="currentColor" strokeWidth={2} />
+      <rect x="14.5" y="3.5" width="6" height="6" rx="1.2" stroke="currentColor" strokeWidth={2} />
+      <rect x="3.5" y="14.5" width="6" height="6" rx="1.2" stroke="currentColor" strokeWidth={2} />
+      <path
+        d="M14.5 14.5h2.5v2.5M20.5 14.5v6M14.5 20.5h2.5"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Recarregar/atualizar — atualizar QR, tentar de novo (tela de conexao). */
+export function IconRefresh(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M20 11a8 8 0 1 0-.6 4M20 5v6h-6"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Suporte (fone de atendimento) — CTA "Falar com o suporte". */
+export function IconHeadset(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M4 13v-1a8 8 0 0 1 16 0v1M4 13a2 2 0 0 0-2 2v1a2 2 0 0 0 2 2h1v-5H4zM20 13a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-1v-5h1zM19 18v.5a3 3 0 0 1-3 3H13"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** Cartao/carteira — icone de contexto do card de billing (1.D.4). */
 export function IconWallet(props: IconProps) {
   return (
