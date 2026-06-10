@@ -10,7 +10,12 @@
  */
 import { IconChevronRight, IconWallet } from '@/components/icons';
 import type { StatusBilling } from '@/lib/api-types';
-import { type BillingTone, computeBillingView } from '@/lib/billing';
+import {
+  type BillingTone,
+  computeBillingState,
+  computeBillingView,
+  isDentroDaJanela,
+} from '@/lib/billing';
 import { cn } from '@/lib/cn';
 import { formatDueDate } from '@/lib/format';
 import Link from 'next/link';
@@ -72,7 +77,8 @@ export function BillingCard({ billing }: BillingCardProps) {
   const tone = view.tone;
   const due = formatDueDate(billing?.next_due_date ?? null);
 
-  // Sem dados de billing — informativo, sem alarme (spec 3.2).
+  // Sem dados de billing (sem_config) — informativo, sem alarme (spec 3.2). Sem CTA
+  // de pagar: nao ha vencimento configurado, entao nao ha PIX a gerar (ADR 0014).
   if (!view.hasDueDate) {
     return (
       <BillingShell tone="brand">
@@ -83,12 +89,19 @@ export function BillingCard({ billing }: BillingCardProps) {
         <p className={cn('relative z-10 mt-1 text-[13px]', META.brand)}>
           Pagamento controlado pelo suporte
         </p>
-        <PagarLink tone="brand" label="Pagar mensalidade" />
       </BillingShell>
     );
   }
 
   const dias = view.diasRestantes ?? 0;
+
+  // ── Mesma regua da tela /mensalidade (ADR 0014) ─────────────────────────────
+  // /portal/status NAO expoe `state` (so dias_restantes) — derivamos com a janela
+  // de 7 dias (mesma regra do backend, ver lib/billing computeBillingState). So
+  // mostramos o CTA "Pagar" na JANELA (a_vencer/vencido); em dia (d>7) nao faz
+  // sentido "Pagar" quem esta em dia, entao o card fica informativo, sem botao.
+  const state = computeBillingState(view.diasRestantes);
+  const naJanela = isDentroDaJanela(state); // a_vencer || vencido
 
   // Texto do numero/estado.
   const big = view.vencido ? null : dias;
@@ -107,7 +120,8 @@ export function BillingCard({ billing }: BillingCardProps) {
         >
           {titleVencido}
         </div>
-      ) : (
+      ) : naJanela ? (
+        // Na janela mas nao vencido (1..7 dias): contagem regressiva urgente.
         <div
           className={cn(
             'relative z-10 mt-1.5 font-display text-[34px] font-bold leading-none tracking-[-0.02em]',
@@ -119,20 +133,33 @@ export function BillingCard({ billing }: BillingCardProps) {
             {dias === 1 ? 'dia restante' : 'dias restantes'}
           </span>
         </div>
+      ) : (
+        // Em dia (d>7): mensagem calma "Em dia ate {data}", sem contagem alarmante.
+        <div
+          className={cn(
+            'relative z-10 mt-1.5 font-display text-[22px] font-bold tracking-[-0.01em]',
+            STRONG[tone],
+          )}
+        >
+          Em dia{due ? <> até {due}</> : null}
+        </div>
       )}
 
-      <p className={cn('relative z-10 mt-2 text-[13px]', META[tone])}>
-        {view.vencido ? <>Vencia em {due}</> : <>Vence em {due}</>}
-      </p>
+      {/* Linha de vencimento: so em estados urgentes (em dia ja diz "ate {data}" acima). */}
+      {(view.vencido || naJanela) && (
+        <p className={cn('relative z-10 mt-2 text-[13px]', META[tone])}>
+          {view.vencido ? <>Vencia em {due}</> : <>Vence em {due}</>}
+        </p>
+      )}
 
-      {view.proximo && (
+      {naJanela && !view.vencido && (
         <p className={cn('relative z-10 mt-1 text-[13px] font-semibold', META.amber)}>
           Não deixe seu atendimento parar
         </p>
       )}
       {view.vencido && (
         <p className={cn('relative z-10 mt-1 text-[13px] font-semibold', META.danger)}>
-          Fale com o suporte
+          Pague pra reativar seu atendimento
         </p>
       )}
 
@@ -156,11 +183,9 @@ export function BillingCard({ billing }: BillingCardProps) {
         </div>
       )}
 
-      {/* Atalho pra pagar: urgente quando vencido/proximo, renovacao quando em dia. */}
-      <PagarLink
-        tone={tone}
-        label={view.vencido || view.proximo ? 'Pagar agora' : 'Renovar mensalidade'}
-      />
+      {/* CTA so na JANELA (a_vencer/vencido). Em dia (d>7) nao mostra "Pagar" —
+          nao faz sentido cobrar quem esta em dia (ADR 0014). */}
+      {naJanela && <PagarLink tone={tone} label="Pagar agora" />}
     </BillingShell>
   );
 }

@@ -138,10 +138,17 @@ export interface AgendamentosResponse {
   agendamentos: Agendamento[];
 }
 
-// ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3) ─────────────
+// ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3 / ADR 0014) ──
 
 /** Estado da cobranca PIX do ciclo atual. */
 export type ChargeStatus = 'pending' | 'paid' | 'expired' | 'cancelled';
+
+/**
+ * Estado de cobranca por DATA DE VENCIMENTO (ADR 0014, modelo `due_date`).
+ * Fonte unica no backend (computeBillingState). Janela default = 7 dias.
+ *   sem_config | em_dia (d>7) | a_vencer (1..7) | vencido (d<=0).
+ */
+export type BillingDueState = 'em_dia' | 'a_vencer' | 'vencido' | 'sem_config';
 
 /**
  * Projecao publica da cobranca (chargeView no backend) — sem snapshot de valor
@@ -159,12 +166,27 @@ export interface ChargeView {
   is_expired?: boolean;
 }
 
-/** Resumo da mensalidade + cobranca do ciclo atual (GET /portal/mensalidade). */
+/**
+ * Resumo da mensalidade + cobranca do ciclo atual (GET /portal/mensalidade).
+ *
+ * COMPATIBILIDADE FLAG (ADR 0014, H): o backend serve DOIS contratos atras de
+ * `BILLING_DUE_DATE_MODEL`. Os campos do modelo novo (`model`/`state`/
+ * `pode_gerar_pix`) sao OPCIONAIS — vem SO com a flag ON. O front detecta o
+ * modelo pela PRESENCA de `state`: presente => modelo `due_date` (janela);
+ * ausente => modelo legado por ciclo de mes (render atual intacto). Assim o
+ * deploy e seguro com a flag off e o novo comportamento liga sem novo deploy.
+ */
 export interface MensalidadeResponse {
+  /** 'due_date' so no modelo novo (flag ON). Ausente no legado. */
+  model?: 'due_date';
+  /** Estado por data de vencimento (flag ON). Ausente => modelo legado. */
+  state?: BillingDueState;
   amount_cents: number | null;
   next_due_date: string | null; // 'YYYY-MM-DD'
   dias_restantes: number | null;
   billing_status: BillingStatus | null;
+  /** Janela de pagamento aberta (flag ON). Em dia/sem_config => false; charge=null. */
+  pode_gerar_pix?: boolean;
   charge: ChargeView | null;
   /** true quando a chave configurada e Dev (mostra "Simular pagamento"). */
   dev_mode: boolean;

@@ -9,9 +9,40 @@
  * Quando NAO ha dados de billing (sem next_due_date), o portal nao alarma:
  * mostra "Mensalidade em dia" / fallback de suporte (spec 3.2).
  */
-import type { StatusBilling } from './api-types';
+import type { BillingDueState, StatusBilling } from './api-types';
 
 export type BillingTone = 'brand' | 'amber' | 'danger' | 'neutral';
+
+/**
+ * Janela de pagamento (ADR 0014, decisao do Bruno): 7 dias antes do vencimento.
+ * DEVE espelhar `BILLING_WINDOW_DAYS` do backend (packages/db client-billing.ts).
+ * Usada SO pra derivar o `state` no card da Home, que consome /portal/status —
+ * rota que (hoje) NAO expoe `state`, so `dias_restantes`/`next_due_date`. A tela
+ * /mensalidade recebe `state` direto do backend (GET /portal/mensalidade, flag ON)
+ * e nao recalcula. Se o backend passar a expor `state` em /portal/status, o card
+ * deve preferir o valor da API e esta derivacao vira fallback.
+ */
+export const BILLING_WINDOW_DAYS = 7;
+
+/**
+ * Deriva o estado por data de vencimento (ADR 0014) a partir de dias_restantes,
+ * usando a MESMA regra do backend (computeBillingState):
+ *   sem data -> 'sem_config' · d > 7 -> 'em_dia' · 1..7 -> 'a_vencer' · d<=0 -> 'vencido'.
+ * `state` decide se o CTA "Pagar" aparece (so na janela: a_vencer/vencido).
+ */
+export function computeBillingState(
+  diasRestantes: number | null,
+  windowDays = BILLING_WINDOW_DAYS,
+): BillingDueState {
+  if (diasRestantes === null) return 'sem_config';
+  if (diasRestantes > windowDays) return 'em_dia';
+  return diasRestantes <= 0 ? 'vencido' : 'a_vencer';
+}
+
+/** true quando o slot esta na janela de pagamento (a_vencer/vencido) — mostra CTA de pagar. */
+export function isDentroDaJanela(state: BillingDueState): boolean {
+  return state === 'a_vencer' || state === 'vencido';
+}
 
 export interface BillingView {
   tone: BillingTone;
