@@ -63,6 +63,24 @@ describe('ConfigSchema', () => {
     expect(result.ABACATEPAY_BASE_URL).toBe('https://api.abacatepay.com');
   });
 
+  it('VALIDA OK sem segredos do webhook PIX — boot nao falha (C9 / padrao #248)', () => {
+    // Webhook e feature INATIVA ate o go-live. Os segredos sao OPCIONAIS no boot —
+    // validados no PONTO DE USO (a rota responde 503 sem eles). Ausencia nao crasha a api.
+    const result = ConfigSchema.parse(VALID_BASE);
+    expect(result.ABACATEPAY_WEBHOOK_QUERY_SECRET).toBeUndefined();
+    expect(result.ABACATEPAY_WEBHOOK_SECRET).toBeUndefined();
+  });
+
+  it('aceita segredos do webhook PIX quando presentes (feature ativa)', () => {
+    const result = ConfigSchema.parse({
+      ...VALID_BASE,
+      ABACATEPAY_WEBHOOK_QUERY_SECRET: 'qsec',
+      ABACATEPAY_WEBHOOK_SECRET: 'whsec',
+    });
+    expect(result.ABACATEPAY_WEBHOOK_QUERY_SECRET).toBe('qsec');
+    expect(result.ABACATEPAY_WEBHOOK_SECRET).toBe('whsec');
+  });
+
   it('aceita DEEPSEEK_API_KEY opcional', () => {
     const result = ConfigSchema.parse({ ...VALID_BASE, DEEPSEEK_API_KEY: 'ds-key' });
     expect(result.DEEPSEEK_API_KEY).toBe('ds-key');

@@ -44,6 +44,16 @@ export const ConfigSchema = z.object({
   ABACATEPAY_API_KEY: z.string().min(1).optional(),
   ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
 
+  // ── Webhook PIX (F2 — ADR 0013 / threat-model C9) ───────────────────────────
+  // OPCIONAIS no boot (mesmo padrao do #248 / postmortem P0 2026-06-09): webhook e
+  // feature INATIVA ate o go-live. Validados no PONTO DE USO (a rota /webhooks/abacatepay
+  // responde 503 se chamada sem eles), NUNCA no boot — ausencia nao crasha a api.
+  // - ABACATEPAY_WEBHOOK_QUERY_SECRET: comparado com ?webhookSecret= (timing-safe, C6).
+  // - ABACATEPAY_WEBHOOK_SECRET: chave do HMAC-SHA256 sobre o RAW BODY (C3/C6).
+  // NUNCA logados nem hardcoded. Key de Prod rotacionada antes do go-live; Dev != Prod.
+  ABACATEPAY_WEBHOOK_QUERY_SECRET: z.string().min(1).optional(),
+  ABACATEPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+
   SERVICE_NAME: z.string().optional(),
 });
 

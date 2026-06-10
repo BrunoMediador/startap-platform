@@ -17,6 +17,7 @@ export * as portalConfig from './queries/portal-config.js';
 export * as portalUsers from './queries/portal-users.js';
 export * as clientBilling from './queries/client-billing.js';
 export * as billingCharges from './queries/billing-charges.js';
+export * as billingWebhookEvents from './queries/billing-webhook-events.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -46,3 +47,9 @@ export type { PortalPausaRow } from './queries/portal-config.js';
 export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';
 export type { ClientBillingRow, BillingStatus } from './queries/client-billing.js';
 export type { BillingChargeRow, ChargeStatus } from './queries/billing-charges.js';
+export type {
+  BillingWebhookEventRow,
+  PaidWebhookOutcome,
+  PaidWebhookResult,
+  ApplyPaidWebhookInput,
+} from './queries/billing-webhook-events.js';

@@ -8015,8 +8015,18 @@ function _renderSuspensaoTab(container, clone) {
           ${icon('alert-triangle', 14)} O bot vai <strong>parar de responder</strong> imediatamente. O WhatsApp <strong>não</strong> será desconectado.
         </div>
         <div class="field">
-          <label for="suspend-reason-input">Motivo da suspensão <span class="muted">(opcional)</span></label>
-          <input id="suspend-reason-input" type="text" placeholder="Ex: inadimplência, férias do cliente, cancelamento temporário" maxlength="200" />
+          <label for="suspend-kind-select">Categoria da suspensão</label>
+          <select id="suspend-kind-select" class="input" style="width:100%">
+            <option value="billing" selected>Inadimplência / cobrança (reativa ao pagar PIX)</option>
+            <option value="owner_request">Pedido do cliente / férias</option>
+            <option value="manual_other">Outro motivo manual</option>
+            <option value="abuse">Abuso / violação</option>
+          </select>
+          <p class="muted" style="margin:.375rem 0 0;font-size:.75rem">${icon('info', 11)} Só "Inadimplência / cobrança" é reativada automaticamente quando o cliente paga o PIX. As demais exigem reativação manual.</p>
+        </div>
+        <div class="field">
+          <label for="suspend-reason-input">Motivo (anotação) <span class="muted">(opcional)</span></label>
+          <input id="suspend-reason-input" type="text" placeholder="Ex: 2 meses em atraso, férias até 15/07" maxlength="200" />
         </div>
         <div style="display:flex;gap:.625rem;flex-wrap:wrap">
           <button class="btn btn--danger" id="btn-confirm-suspend" style="flex:1;justify-content:center">
@@ -8031,12 +8041,13 @@ function _renderSuspensaoTab(container, clone) {
     document.getElementById('btn-confirm-suspend').addEventListener('click', async () => {
       const btn    = document.getElementById('btn-confirm-suspend');
       const reason = (document.getElementById('suspend-reason-input')?.value || '').trim();
+      const kind   = document.getElementById('suspend-kind-select')?.value || 'billing';
       btn.disabled = true;
       try {
         const updated = await api(`/api/clones/${clone.id}/suspend`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: reason || undefined }),
+          body: JSON.stringify({ reason: reason || undefined, kind }),
         });
         clone.flow_enabled     = updated.flow_enabled;
         clone.suspended_reason = updated.suspended_reason;
