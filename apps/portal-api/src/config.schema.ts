@@ -36,6 +36,17 @@ export const ConfigSchema = z.object({
   ABACATEPAY_API_KEY: z.string().min(1).optional(),
   ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
 
+  // ── Modelo de cobranca por DATA DE VENCIMENTO (ADR 0014) ───────────────────
+  // Flag global do novo modelo de billing (janela de pagamento + cobranca ativa por
+  // slot). OFF (default) = comportamento ATUAL intacto (cycle=mes, auto-gera sempre).
+  // ON = janela de 7 dias antes do next_due_date; em dia nao ve/gera PIX. Opcional no
+  // boot (ausente = OFF) — NUNCA crasha o boot. Liga-se em Dev primeiro, depois Prod,
+  // sem novo deploy de codigo. NUNCA hardcoded.
+  BILLING_DUE_DATE_MODEL: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // Segredo para assinar o cookie de sessao (opaco; a sessao mora no Redis).
   // OBRIGATORIO em producao — sem default. Min 32 chars.
   PORTAL_SESSION_SECRET: z.string().min(32, 'PORTAL_SESSION_SECRET deve ter >=32 chars'),
