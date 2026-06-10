@@ -134,6 +134,34 @@ describe('AbacatePayClient.getChargeStatus', () => {
   });
 });
 
+describe('AbacatePayClient.simulatePayment', () => {
+  it('POST no endpoint de simulacao (Dev) com o id na query e normaliza o status', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ data: { id: 'pix_char_abc123', status: 'PAID', paidAmount: 19900 } }),
+    );
+
+    const res = await client.simulatePayment('pix_char_abc123');
+
+    expect(res.id).toBe('pix_char_abc123');
+    expect(res.status).toBe('paid');
+    expect(res.paidAmountCents).toBe(19900);
+
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://api.abacatepay.com/v2/transparents/simulate-payment?id=pix_char_abc123',
+    );
+    expect(opts.method).toBe('POST');
+    // A key vai SO no header Authorization.
+    const headers = opts.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer dev_key_xyz');
+  });
+
+  it('propaga AbacatePayError em HTTP nao-2xx (ex.: simulacao recusada em Prod)', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'forbidden' }, 403));
+    await expect(client.simulatePayment('pix_char_abc123')).rejects.toBeInstanceOf(AbacatePayError);
+  });
+});
+
 describe('AbacatePayClient construtor (validacao no ponto de uso)', () => {
   // Postmortem P0 2026-06-09: a key e OPCIONAL no boot dos apps. A exigencia mora aqui —
   // ao instanciar o cliente pra usar a feature, key ausente = erro tipado e explicito.

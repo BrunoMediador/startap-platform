@@ -137,3 +137,38 @@ export interface AgendamentosResponse {
   count: number;
   agendamentos: Agendamento[];
 }
+
+// ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3) ─────────────
+
+/** Estado da cobranca PIX do ciclo atual. */
+export type ChargeStatus = 'pending' | 'paid' | 'expired' | 'cancelled';
+
+/**
+ * Projecao publica da cobranca (chargeView no backend) — sem snapshot de valor
+ * nem ids internos. `br_code` = copia-e-cola; `br_code_base64` = QR pronto pra
+ * <img src>. `null` quando ainda nao gerada.
+ */
+export interface ChargeView {
+  cycle: string; // 'YYYY-MM'
+  status: ChargeStatus;
+  br_code: string | null;
+  br_code_base64: string | null; // 'data:image/png;base64,...'
+  expires_at: string | null; // ISO
+  paid_at: string | null; // ISO
+}
+
+/** Resumo da mensalidade + cobranca do ciclo atual (GET /portal/mensalidade). */
+export interface MensalidadeResponse {
+  amount_cents: number | null;
+  next_due_date: string | null; // 'YYYY-MM-DD'
+  dias_restantes: number | null;
+  billing_status: BillingStatus | null;
+  charge: ChargeView | null;
+  /** true quando a chave configurada e Dev (mostra "Simular pagamento"). */
+  dev_mode: boolean;
+}
+
+/** Resposta do disparo de simulacao (POST /portal/mensalidade/simular). */
+export interface SimularResponse {
+  simulated: true;
+}

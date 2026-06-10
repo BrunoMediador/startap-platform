@@ -2,8 +2,8 @@
 
 import { cn } from '@/lib/cn';
 /**
- * Bottom nav mobile (<md) — spec 6.13. Sticky bottom, blur, 4 itens, area >=44px,
- * respeita safe-area. Some em >=md (vira sidebar). Item ativo em brand.
+ * Bottom nav mobile (<md) — spec 6.13. Sticky bottom, blur, itens em flex-1 (NAV_ITEMS),
+ * area >=44px, respeita safe-area. Some em >=md (vira sidebar). Item ativo em brand.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';

@@ -25,6 +25,17 @@ export const ConfigSchema = z.object({
   // GCAL é opcional: se ausente, /portal/agendamentos cai no stub vazio.
   GCAL_ENCRYPTION_KEY: z.string().optional(),
 
+  // ── AbacatePay (pagamento PIX — ADR 0013, F3) ──────────────────────────────
+  // OPCIONAIS no boot (mesmo padrao de apps/api e apps/worker). Pagamento e feature
+  // que NAO pode crashar o portal-api se a config faltar (postmortem P0 2026-06-09:
+  // segredo de feature INATIVA = opcional no boot, validado no PONTO DE USO). O
+  // AbacatePayClient lanca AbacatePayNotConfiguredError se for usado sem a chave —
+  // a rota /portal/mensalidade/pix responde 503 nesse caso, sem derrubar o boot.
+  // Ambiente Dev/Prod e definido PELA CHAVE (prefixo abc_dev_*), nao pela URL.
+  // NUNCA logada nem hardcoded.
+  ABACATEPAY_API_KEY: z.string().min(1).optional(),
+  ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
+
   // Segredo para assinar o cookie de sessao (opaco; a sessao mora no Redis).
   // OBRIGATORIO em producao — sem default. Min 32 chars.
   PORTAL_SESSION_SECRET: z.string().min(32, 'PORTAL_SESSION_SECRET deve ter >=32 chars'),
