@@ -155,6 +155,8 @@ export interface ChargeView {
   br_code_base64: string | null; // 'data:image/png;base64,...'
   expires_at: string | null; // ISO
   paid_at: string | null; // ISO
+  /** true quando a cobranca `pending` ja passou da validade (backend reemite no POST /pix). */
+  is_expired?: boolean;
 }
 
 /** Resumo da mensalidade + cobranca do ciclo atual (GET /portal/mensalidade). */

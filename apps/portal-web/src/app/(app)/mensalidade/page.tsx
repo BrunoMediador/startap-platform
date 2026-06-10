@@ -2,19 +2,27 @@
 
 /**
  * Mensalidade (ADR 0013 F3). O dono do negocio paga a mensalidade por PIX, sem
- * sair do portal. Fluxo de estados (uma tela, um card focal):
+ * sair do portal. O PIX aparece PRONTO e VALIDO ao abrir a tela — sem botao
+ * "Gerar PIX". Fluxo de estados (uma tela, um card focal):
  *
- *   1. SEM cobranca aberta (charge null/expired/cancelled) -> botao "Gerar PIX".
- *   2. AGUARDANDO (charge.status === 'pending') -> QR + copia-e-cola + validade +
- *      selo "Aguardando pagamento". A query faz POLL sozinha (useMensalidade) e a
- *      tela "vira pago" quando o webhook confirma.
- *   3. PAGO (charge.status === 'paid') -> selo "Pago" + proximo vencimento.
+ *   1. CARREGANDO (GET pendente) -> Skeleton.
+ *   2. PREPARANDO (POST /pix automatico em andamento, ainda sem QR) -> spinner
+ *      "Preparando seu PIX…", sem botao.
+ *   3. AGUARDANDO (charge.status === 'pending' valido) -> QR + copia-e-cola +
+ *      validade + selo "Aguardando pagamento". A query faz POLL sozinha
+ *      (useMensalidade) e a tela "vira pago" quando o webhook confirma.
+ *   4. PAGO (charge.status === 'paid') -> selo "Pago" + proximo vencimento.
+ *   5. ERRO -> mensagem amigavel + unico botao "Tentar de novo" (re-dispara POST).
+ *
+ * Auto-gerar: apos o GET, se ha billing configurado e o ciclo NAO esta pago, a tela
+ * dispara POST /pix sozinha quando (charge == null) OU (pending E expirado). Um guard
+ * (flag por ciclo) evita loop de chamadas — so dispara uma vez por carregamento.
  *
  * Dev-only: com dev_mode + cobranca pendente, aparece "Simular pagamento (Dev)"
  * que dispara o gateway de teste; o poll mostra virar pago. Tudo o que aparece na
  * tela vem mascarado do backend — nenhum segredo no front.
  */
-import { IconCheck, IconCopy, IconWallet } from '@/components/icons';
+import { IconCheck, IconCopy } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { PageHead } from '@/components/ui/page-head';
@@ -28,6 +36,7 @@ import { cn } from '@/lib/cn';
 import { formatDueDate, formatPrecoCents } from '@/lib/format';
 import { useGerarPix, useMensalidade, useSimularPagamento } from '@/lib/queries';
 import Image from 'next/image';
+import { useEffect, useRef } from 'react';
 
 const PAGE_SUBTITLE =
   'Pague sua mensalidade por PIX, na hora, sem sair daqui. Assim seu atendimento no WhatsApp continua no ar.';
@@ -39,37 +48,39 @@ export default function MensalidadePage() {
   const gerarPix = useGerarPix(slot);
   const simular = useSimularPagamento(slot);
 
-  if (mensalidadeQ.isPending) {
-    return (
-      <>
-        <PageHead title="Mensalidade" subtitle={PAGE_SUBTITLE} />
-        <span className="sr-only">Carregando sua mensalidade…</span>
-        <Skeleton className="h-[200px] w-full rounded-card" />
-      </>
-    );
-  }
-
-  if (mensalidadeQ.isError || !mensalidadeQ.data) {
-    return (
-      <>
-        <PageHead title="Mensalidade" subtitle={PAGE_SUBTITLE} />
-        <ErrorState
-          title="Não foi possível carregar sua mensalidade"
-          onRetry={() => mensalidadeQ.refetch()}
-        />
-      </>
-    );
-  }
-
   const data = mensalidadeQ.data;
-  const charge = data.charge;
-  // PIX em aberto = cobranca pendente (expirada/cancelada conta como "sem PIX").
-  const aguardando = charge?.status === 'pending';
+  const charge = data?.charge ?? null;
+  // PIX exibivel = cobranca pendente E ainda valida (nao expirada).
+  const aguardando = charge?.status === 'pending' && charge.is_expired !== true;
   const pago = charge?.status === 'paid';
 
-  function onGerarPix() {
+  // Billing configurado (tem valor) e ciclo nao pago: precisamos de um PIX valido.
+  const billingConfigurado = data != null && data.amount_cents !== null;
+  // Falta um QR valido? null OU pending-expirado -> backend gera/reemite no POST.
+  const precisaGerar =
+    billingConfigurado &&
+    !pago &&
+    (charge === null || (charge.status === 'pending' && charge.is_expired === true));
+
+  // Guard anti-loop: dispara o POST automatico no maximo UMA vez por ciclo carregado.
+  // A flag guarda o cycle (ou um sentinela quando charge==null) ja disparado; ao
+  // mudar de ciclo/charge a flag se reseta e permite um novo auto-disparo legitimo.
+  const autoFiredFor = useRef<string | null>(null);
+  const autoKey = charge?.cycle ?? (billingConfigurado ? '__no-charge__' : null);
+
+  useEffect(() => {
+    if (!precisaGerar || autoKey === null) return;
+    if (autoFiredFor.current === autoKey) return; // ja disparou pra este ciclo/estado
+    if (gerarPix.isPending) return; // POST em voo — nao reenfileira
+    autoFiredFor.current = autoKey;
     gerarPix.mutate(undefined, {
-      onSuccess: () => toast.success('PIX gerado. Escaneie ou copie o código pra pagar.'),
+      onError: (err) => toast.error(mensagemErroPix(err)),
+    });
+  }, [precisaGerar, autoKey, gerarPix, toast]);
+
+  function onAtualizarQr() {
+    gerarPix.mutate(undefined, {
+      onSuccess: () => toast.success('PIX atualizado. Escaneie ou copie o código pra pagar.'),
       onError: (err) => toast.error(mensagemErroPix(err)),
     });
   }
@@ -91,6 +102,35 @@ export default function MensalidadePage() {
     }
   }
 
+  // 1. Carregando o GET inicial.
+  if (mensalidadeQ.isPending) {
+    return (
+      <>
+        <PageHead title="Mensalidade" subtitle={PAGE_SUBTITLE} />
+        <span className="sr-only">Carregando sua mensalidade…</span>
+        <Skeleton className="h-[200px] w-full rounded-card" />
+      </>
+    );
+  }
+
+  // GET falhou de vez.
+  if (mensalidadeQ.isError || !data) {
+    return (
+      <>
+        <PageHead title="Mensalidade" subtitle={PAGE_SUBTITLE} />
+        <ErrorState
+          title="Não foi possível carregar sua mensalidade"
+          onRetry={() => mensalidadeQ.refetch()}
+        />
+      </>
+    );
+  }
+
+  // POST /pix falhou e nao temos um QR valido pra mostrar -> erro com "Tentar de novo".
+  const erroGerar = gerarPix.isError && !aguardando && !pago;
+  // Gerando: POST em voo (ou prestes a disparar) e ainda sem QR valido nem pago.
+  const preparando = !erroGerar && !pago && !aguardando && (gerarPix.isPending || precisaGerar);
+
   return (
     <>
       <PageHead title="Mensalidade" subtitle={PAGE_SUBTITLE} />
@@ -101,21 +141,31 @@ export default function MensalidadePage() {
           nextDueDate={data.next_due_date}
           diasRestantes={data.dias_restantes}
           billingStatus={data.billing_status}
-          pago={pago}
+          pago={!!pago}
         />
 
-        {aguardando && charge && (
+        {pago && <PagoCard nextDueDate={data.next_due_date} />}
+
+        {!pago && aguardando && charge && (
           <PixCard
             charge={charge}
             onCopiar={onCopiar}
+            onAtualizar={onAtualizarQr}
+            atualizando={gerarPix.isPending}
             onSimular={data.dev_mode ? onSimular : undefined}
             simulando={simular.isPending}
           />
         )}
 
-        {pago && <PagoCard nextDueDate={data.next_due_date} />}
+        {!pago && !aguardando && preparando && <PreparandoCard />}
 
-        {!aguardando && !pago && <GerarPixCard onGerar={onGerarPix} gerando={gerarPix.isPending} />}
+        {!pago && !aguardando && !preparando && erroGerar && (
+          <ErroPixCard
+            mensagem={mensagemErroPix(gerarPix.error)}
+            onTentar={onAtualizarQr}
+            tentando={gerarPix.isPending}
+          />
+        )}
       </div>
     </>
   );
@@ -266,39 +316,78 @@ function ResumoCard({
   );
 }
 
-/** Sem PIX em aberto: chamada pra gerar a cobranca do ciclo. */
-function GerarPixCard({ onGerar, gerando }: { onGerar: () => void; gerando: boolean }) {
+/**
+ * Preparando: o PIX esta sendo gerado/reemitido automaticamente (POST /pix em voo).
+ * Sem botao — o QR aparece sozinho assim que o gateway responde.
+ */
+function PreparandoCard() {
   return (
-    <section className="rounded-card border border-line bg-surface p-5 shadow-card">
-      <div className="flex items-start gap-3.5">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-[12px] bg-brand-soft text-brand">
-          <IconWallet size={22} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h2 className="font-display text-[16px] font-semibold text-ink">Pagar com PIX</h2>
-          <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
-            Gere um código PIX e pague pelo app do seu banco. A confirmação é automática.
-          </p>
-        </div>
+    <section
+      className="rounded-card border border-line bg-surface p-5 shadow-card"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2.5">
+        <span
+          className="size-[18px] shrink-0 rounded-full border-2 border-brand border-t-transparent animate-spin-token"
+          aria-hidden
+        />
+        <h2 className="font-display text-[16px] font-semibold text-ink">Preparando seu PIX…</h2>
       </div>
+      <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft">
+        Estamos gerando seu código PIX. Em instantes o QR Code aparece aqui — é só pagar pelo app do
+        seu banco.
+      </p>
+      <div className="mt-4 space-y-2">
+        <Skeleton className="mx-auto h-52 w-52 rounded-card-sm" />
+        <Skeleton className="h-9 w-full rounded-card-sm" />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Erro ao gerar/reemitir o PIX. Mensagem amigavel + o UNICO botao de geração que a
+ * tela permite ("Tentar de novo"), so neste caminho de erro.
+ */
+function ErroPixCard({
+  mensagem,
+  onTentar,
+  tentando,
+}: {
+  mensagem: string;
+  onTentar: () => void;
+  tentando: boolean;
+}) {
+  return (
+    <section
+      className="rounded-card border border-danger/40 bg-surface p-5 shadow-card"
+      role="alert"
+    >
+      <h2 className="font-display text-[16px] font-semibold text-ink">PIX indisponível agora</h2>
+      <p className="mt-1.5 text-[13.5px] leading-snug text-ink-soft">{mensagem}</p>
       <div className="mt-4">
-        <Button onClick={onGerar} loading={gerando} loadingLabel="Gerando PIX…">
-          Gerar PIX
+        <Button variant="secondary" onClick={onTentar} loading={tentando} loadingLabel="Gerando…">
+          Tentar de novo
         </Button>
       </div>
     </section>
   );
 }
 
-/** PIX pendente: QR + copia-e-cola + validade + selo "aguardando". */
+/** PIX pendente valido: QR + copia-e-cola + validade + selo "aguardando". */
 function PixCard({
   charge,
   onCopiar,
+  onAtualizar,
+  atualizando,
   onSimular,
   simulando,
 }: {
   charge: ChargeView;
   onCopiar: () => void;
+  onAtualizar: () => void;
+  atualizando: boolean;
   onSimular?: () => void;
   simulando: boolean;
 }) {
@@ -352,6 +441,18 @@ function PixCard({
       {validade && (
         <p className="mt-3 text-center text-[12.5px] text-ink-faint">Válido até {validade}</p>
       )}
+
+      {/* Fallback discreto: forca uma reemissao do QR (nao e o "Gerar PIX" de antes). */}
+      <div className="mt-3 text-center">
+        <button
+          type="button"
+          onClick={onAtualizar}
+          disabled={atualizando}
+          className="text-[12.5px] font-medium text-brand underline-offset-2 hover:underline disabled:opacity-50"
+        >
+          {atualizando ? 'Atualizando QR…' : 'Atualizar QR'}
+        </button>
+      </div>
 
       {onSimular && (
         <div className="mt-4 border-t border-line-soft pt-4">
