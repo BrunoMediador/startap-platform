@@ -5531,9 +5531,14 @@ app.put('/api/billing/:slot', async (req, res) => {
     }
 
     if (registerPayment) {
-      // Avanca o vencimento em cycle_months (default 1) a partir do vencimento
-      // atual (ou hoje, se ainda nao houver). Logica de avanco em SQL para nao
-      // depender de helpers TS aqui (espelha advanceDueDate de packages/db).
+      // Avanca o vencimento em cycle_months (default 1) a partir de MAX(vencimento, hoje).
+      // Espelha advanceFromMaxDue (packages/db client-billing.ts) e o avanco do webhook
+      // (billing-webhook-events.applyPaidWebhook §6 no modelo por data): o GREATEST garante
+      // que registrar pagamento de um cliente VENCIDO (due no passado) NUNCA renova pro
+      // passado — o novo vencimento parte de hoje. Aplicado INCONDICIONALMENTE: o painel
+      // nao le a flag BILLING_DUE_DATE_MODEL, e GREATEST(due, hoje) e seguro/correto nos
+      // DOIS modelos (em dia: parte de due; vencido: parte de hoje). Logica em SQL para
+      // nao depender de helpers TS aqui.
       let cycleMonths = req.body?.cycle_months != null ? Number(req.body.cycle_months) : 1;
       if (!Number.isInteger(cycleMonths) || cycleMonths < 1 || cycleMonths > 36) cycleMonths = 1;
 
@@ -5542,11 +5547,11 @@ app.put('/api/billing/:slot', async (req, res) => {
                                      last_payment_at, created_at, updated_at)
          VALUES (
            $1,
-           (COALESCE($2::date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           (GREATEST(COALESCE($2::date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
            $4, 'active', $5, NOW(), NOW(), NOW()
          )
          ON CONFLICT (slot) DO UPDATE SET
-           next_due_date   = (COALESCE(client_billing.next_due_date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           next_due_date   = (GREATEST(COALESCE(client_billing.next_due_date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
            amount_cents    = COALESCE($4, client_billing.amount_cents),
            status          = 'active',
            notes           = COALESCE($5, client_billing.notes),
