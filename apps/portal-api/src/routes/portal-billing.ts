@@ -1,13 +1,20 @@
 /**
- * Rotas de mensalidade/pagamento PIX do Portal do Cliente (ADR 0013, F3).
+ * Rotas de mensalidade/pagamento PIX do Portal do Cliente (ADR 0013, F3; ADR 0014).
  *
  * TODAS as rotas passam por withTenant e usam SO requireTenant(req).slot. Nenhuma
  * aceita slot/cycle/chargeId de body/query/params — o cliente nao consegue nem
  * nomear outra cobranca (anti-IDOR, controle C8 do threat-model; regra de ouro 5).
  *
- * GET  /portal/mensalidade          — valor/vencimento (client_billing) + cobranca do ciclo atual.
- * POST /portal/mensalidade/pix      — gera (idempotente) a cobranca PIX do ciclo atual.
+ * GET  /portal/mensalidade          — valor/vencimento (client_billing) + cobranca.
+ * POST /portal/mensalidade/pix      — gera (idempotente) a cobranca PIX.
  * POST /portal/mensalidade/simular  — Dev-only: dispara simulate-payment no gateway.
+ *
+ * DOIS MODELOS atras da flag config.BILLING_DUE_DATE_MODEL (ADR 0014):
+ *   - OFF (default, PRODUCAO): cobranca por ciclo de mes (cicloAtual). GET retorna a
+ *     cobranca do mes; POST sempre gera/reusa. Comportamento ATUAL intacto.
+ *   - ON: cobranca por DATA DE VENCIMENTO. GET retorna `state` (computeBillingState) +
+ *     a cobranca ATIVA do slot; so gera/exibe PIX na JANELA (a_vencer/vencido). Em dia
+ *     -> charge=null, state='em_dia'. POST fora da janela -> 409 fora_da_janela.
  *
  * O valor (amount_cents) vem SEMPRE de client_billing (snapshot do banco), nunca de
  * input. O efeito de marcar pago/renovar e responsabilidade do WEBHOOK async (F2).
@@ -67,11 +74,35 @@ function chargeView(charge: BillingChargeRow | null, now = new Date()) {
 }
 
 export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
-  // ── Resumo da mensalidade + cobranca do ciclo atual ──────────────────────────
+  // ── Resumo da mensalidade + cobranca ─────────────────────────────────────────
   app.get('/portal/mensalidade', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
-    const cycle = cicloAtual();
 
+    // ── Modelo por DATA DE VENCIMENTO (ADR 0014, flag ON) ──────────────────────
+    if (config.BILLING_DUE_DATE_MODEL) {
+      const billing = await clientBilling.getBillingBySlot(slot);
+      const { state, diasRestantes, podeGerarPix } = clientBilling.computeBillingState(
+        billing?.next_due_date ?? null,
+      );
+      // Cobranca ATIVA do slot = pending nao-expirada mais recente. So expomos a cobranca
+      // quando estamos na janela (a_vencer/vencido); em dia/sem_config -> charge=null.
+      const charge = podeGerarPix ? await billingCharges.getActivePendingCharge(slot) : null;
+
+      return reply.code(200).send({
+        model: 'due_date',
+        state,
+        amount_cents: billing?.amount_cents ?? null,
+        next_due_date: billing?.next_due_date ?? null,
+        dias_restantes: diasRestantes,
+        billing_status: billing?.status ?? null,
+        pode_gerar_pix: podeGerarPix,
+        charge: chargeView(charge),
+        dev_mode: isDevKey(),
+      });
+    }
+
+    // ── Modelo legado por ciclo de mes (flag OFF, PRODUCAO) ────────────────────
+    const cycle = cicloAtual();
     const [billing, charge] = await Promise.all([
       clientBilling.getBillingBySlot(slot),
       billingCharges.getCharge(slot, cycle),
@@ -87,10 +118,9 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  // ── Gera (ou reusa, idempotente) a cobranca PIX do ciclo atual ───────────────
+  // ── Gera (ou reusa, idempotente) a cobranca PIX ──────────────────────────────
   app.post('/portal/mensalidade/pix', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
-    const cycle = cicloAtual();
 
     // Valor vem SO do banco (snapshot). Sem amount configurado -> nao gera PIX.
     const billing = await clientBilling.getBillingBySlot(slot);
@@ -98,6 +128,53 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
     if (!amountCents || amountCents <= 0) {
       return reply.code(409).send({ error: 'sem_valor_configurado' });
     }
+
+    // ── Modelo por DATA DE VENCIMENTO (ADR 0014, flag ON) ──────────────────────
+    if (config.BILLING_DUE_DATE_MODEL) {
+      // 1) Checa a JANELA. Fora dela (em dia / sem vencimento) -> NAO gera (sem
+      // antecipacao na v1). 409 fora_da_janela: a tela trata como "em dia, sem PIX".
+      const { state, podeGerarPix } = clientBilling.computeBillingState(
+        billing?.next_due_date ?? null,
+      );
+      if (!podeGerarPix || !billing?.next_due_date) {
+        return reply.code(409).send({ error: 'fora_da_janela', state });
+      }
+
+      let client: InstanceType<typeof abacatepay.AbacatePayClient>;
+      try {
+        client = new abacatepay.AbacatePayClient({
+          apiKey: config.ABACATEPAY_API_KEY,
+          baseUrl: config.ABACATEPAY_BASE_URL,
+        });
+      } catch (err) {
+        if (err instanceof abacatepay.AbacatePayNotConfiguredError) {
+          log.warn({ slot }, 'pagamento acionado sem ABACATEPAY_API_KEY configurada');
+          return reply.code(503).send({ error: 'pagamento_indisponivel' });
+        }
+        throw err;
+      }
+
+      try {
+        // duePeriod = next_due_date vigente. Re-cobranca (data movida pro passado) cai
+        // aqui na janela e, como a `paid` antiga nao colide mais (sem UNIQUE), gera linha
+        // nova. Advisory lock + recheck garante 1 pending por slot (duas abas/cliques).
+        const { charge } = await abacatepay.ensurePixChargeForSlot(client, {
+          slot,
+          duePeriod: billing.next_due_date,
+          amountCents,
+        });
+        return reply.code(200).send(chargeView(charge));
+      } catch (err) {
+        log.error(
+          { slot, err: err instanceof Error ? err.message : 'erro' },
+          'falha ao gerar cobranca PIX (modelo por data)',
+        );
+        return reply.code(502).send({ error: 'falha_gateway' });
+      }
+    }
+
+    // ── Modelo legado por ciclo de mes (flag OFF, PRODUCAO) ────────────────────
+    const cycle = cicloAtual();
 
     let client: InstanceType<typeof abacatepay.AbacatePayClient>;
     try {
@@ -141,10 +218,12 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const { slot } = requireTenant(req);
-    const cycle = cicloAtual();
 
-    // chargeId vem do slot da sessao (cobranca do ciclo atual), NUNCA de input.
-    const charge = await billingCharges.getCharge(slot, cycle);
+    // chargeId vem do slot da sessao, NUNCA de input. No modelo por data (ADR 0014) a
+    // cobranca alvo e a ATIVA do slot; no legado, a do ciclo do mes corrente.
+    const charge = config.BILLING_DUE_DATE_MODEL
+      ? await billingCharges.getActivePendingCharge(slot)
+      : await billingCharges.getCharge(slot, cicloAtual());
     if (!charge?.abacate_charge_id) {
       return reply.code(409).send({ error: 'sem_cobranca' });
     }
@@ -168,7 +247,7 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(200).send({ simulated: true });
     } catch (err) {
       log.error(
-        { slot, cycle, err: err instanceof Error ? err.message : 'erro' },
+        { slot, cycle: charge.cycle, err: err instanceof Error ? err.message : 'erro' },
         'falha ao simular pagamento',
       );
       return reply.code(502).send({ error: 'falha_gateway' });

@@ -22,7 +22,7 @@
  * que dispara o gateway de teste; o poll mostra virar pago. Tudo o que aparece na
  * tela vem mascarado do backend — nenhum segredo no front.
  */
-import { IconCheck, IconCopy } from '@/components/icons';
+import { IconAlert, IconCheck, IconCopy, IconInfo } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { PageHead } from '@/components/ui/page-head';
@@ -37,6 +37,21 @@ import { formatDueDate, formatPrecoCents } from '@/lib/format';
 import { useGerarPix, useMensalidade, useSimularPagamento } from '@/lib/queries';
 import Image from 'next/image';
 import { useEffect, useRef } from 'react';
+
+/**
+ * 409 fora_da_janela (ADR 0014): o POST /pix recusou porque o slot esta EM DIA
+ * (fora da janela de pagamento). Nao e erro pro cliente — a tela trata como "em
+ * dia, sem PIX" e nao alarma. Detecta pelo corpo do ApiError.
+ */
+function isForaDaJanela(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    typeof err.body === 'object' &&
+    err.body !== null &&
+    (err.body as { error?: unknown }).error === 'fora_da_janela'
+  );
+}
 
 const PAGE_SUBTITLE =
   'Pague sua mensalidade por PIX, na hora, sem sair daqui. Assim seu atendimento no WhatsApp continua no ar.';
@@ -54,11 +69,24 @@ export default function MensalidadePage() {
   const aguardando = charge?.status === 'pending' && charge.is_expired !== true;
   const pago = charge?.status === 'paid';
 
+  // ── Compatibilidade flag (ADR 0014) ─────────────────────────────────────────
+  // O backend serve dois contratos atras de BILLING_DUE_DATE_MODEL. Detectamos o
+  // modelo NOVO pela presenca de `state`: presente => modelo por data de vencimento
+  // (janela); ausente => modelo legado por ciclo (render atual intacto).
+  const modeloNovo = data != null && data.state !== undefined;
+  const emDia = modeloNovo && data?.state === 'em_dia';
+  const semConfig = modeloNovo && data?.state === 'sem_config';
+  const vencido = modeloNovo && data?.state === 'vencido';
+
   // Billing configurado (tem valor) e ciclo nao pago: precisamos de um PIX valido.
   const billingConfigurado = data != null && data.amount_cents !== null;
+  // No modelo novo, so geramos PIX na JANELA (pode_gerar_pix). Em dia/sem_config nao
+  // dispara nada — resolve o risco de cobrar quem esta em dia (ex.: Cirilo). No legado,
+  // mantem o gate atual (tem valor + nao pago).
+  const podeGerar = modeloNovo ? data?.pode_gerar_pix === true : billingConfigurado;
   // Falta um QR valido? null OU pending-expirado -> backend gera/reemite no POST.
   const precisaGerar =
-    billingConfigurado &&
+    podeGerar &&
     !pago &&
     (charge === null || (charge.status === 'pending' && charge.is_expired === true));
 
@@ -66,7 +94,7 @@ export default function MensalidadePage() {
   // A flag guarda o cycle (ou um sentinela quando charge==null) ja disparado; ao
   // mudar de ciclo/charge a flag se reseta e permite um novo auto-disparo legitimo.
   const autoFiredFor = useRef<string | null>(null);
-  const autoKey = charge?.cycle ?? (billingConfigurado ? '__no-charge__' : null);
+  const autoKey = charge?.cycle ?? (podeGerar ? '__no-charge__' : null);
 
   useEffect(() => {
     if (!precisaGerar || autoKey === null) return;
@@ -74,14 +102,29 @@ export default function MensalidadePage() {
     if (gerarPix.isPending) return; // POST em voo — nao reenfileira
     autoFiredFor.current = autoKey;
     gerarPix.mutate(undefined, {
-      onError: (err) => toast.error(mensagemErroPix(err)),
+      // 409 fora_da_janela (modelo novo): slot virou "em dia" entre o GET e o POST —
+      // NAO alarma; reflete o estado em dia ressincronizando o resumo.
+      onError: (err) => {
+        if (isForaDaJanela(err)) {
+          mensalidadeQ.refetch();
+          return;
+        }
+        toast.error(mensagemErroPix(err));
+      },
     });
-  }, [precisaGerar, autoKey, gerarPix, toast]);
+  }, [precisaGerar, autoKey, gerarPix, toast, mensalidadeQ]);
 
   function onAtualizarQr() {
     gerarPix.mutate(undefined, {
       onSuccess: () => toast.success('PIX atualizado. Escaneie ou copie o código pra pagar.'),
-      onError: (err) => toast.error(mensagemErroPix(err)),
+      onError: (err) => {
+        // Em dia entre o GET e o POST (modelo novo) — sem alarme, so ressincroniza.
+        if (isForaDaJanela(err)) {
+          mensalidadeQ.refetch();
+          return;
+        }
+        toast.error(mensagemErroPix(err));
+      },
     });
   }
 
@@ -127,9 +170,15 @@ export default function MensalidadePage() {
   }
 
   // POST /pix falhou e nao temos um QR valido pra mostrar -> erro com "Tentar de novo".
-  const erroGerar = gerarPix.isError && !aguardando && !pago;
+  // 409 fora_da_janela (modelo novo) NAO conta como erro — e estado "em dia" esperado.
+  const erroGerar = gerarPix.isError && !isForaDaJanela(gerarPix.error) && !aguardando && !pago;
   // Gerando: POST em voo (ou prestes a disparar) e ainda sem QR valido nem pago.
   const preparando = !erroGerar && !pago && !aguardando && (gerarPix.isPending || precisaGerar);
+
+  // ── Modelo NOVO sem PIX: em dia / sem config -> nenhum QR, sem auto-gerar ─────
+  // (gate `podeGerar` ja impediu o auto-disparo). Mostra so o resumo + um card de
+  // contexto. Resolve o risco de cobrar quem esta em dia.
+  const semPix = modeloNovo && !podeGerar && !pago;
 
   return (
     <>
@@ -142,11 +191,19 @@ export default function MensalidadePage() {
           diasRestantes={data.dias_restantes}
           billingStatus={data.billing_status}
           pago={!!pago}
+          emDia={emDia}
         />
 
         {pago && <PagoCard nextDueDate={data.next_due_date} />}
 
-        {!pago && aguardando && charge && (
+        {/* Modelo novo, fora da janela: contexto sem PIX. */}
+        {!pago && semPix && semConfig && <SemConfigCard />}
+        {!pago && semPix && !semConfig && <EmDiaCard nextDueDate={data.next_due_date} />}
+
+        {/* Modelo novo vencido (na janela): aviso de reativacao acima do PIX. */}
+        {!pago && !semPix && vencido && <VencidoAlerta />}
+
+        {!pago && !semPix && aguardando && charge && (
           <PixCard
             charge={charge}
             onCopiar={onCopiar}
@@ -157,9 +214,9 @@ export default function MensalidadePage() {
           />
         )}
 
-        {!pago && !aguardando && preparando && <PreparandoCard />}
+        {!pago && !semPix && !aguardando && preparando && <PreparandoCard />}
 
-        {!pago && !aguardando && !preparando && erroGerar && (
+        {!pago && !semPix && !aguardando && !preparando && erroGerar && (
           <ErroPixCard
             mensagem={mensagemErroPix(gerarPix.error)}
             onTentar={onAtualizarQr}
@@ -175,6 +232,8 @@ export default function MensalidadePage() {
 
 function mensagemErroPix(err: unknown): string {
   if (err instanceof ApiError) {
+    // 409 cobre sem_valor_configurado (legado/novo) e sem_cobranca. fora_da_janela e
+    // tratado ANTES (isForaDaJanela) e nunca chega aqui como mensagem de erro.
     if (err.status === 409) return 'Sua mensalidade ainda não foi configurada. Fale com o suporte.';
     if (err.status === 503) return 'Pagamento indisponível no momento. Tente de novo em instantes.';
     if (err.status === 502)
@@ -231,19 +290,23 @@ function ResumoCard({
   diasRestantes,
   billingStatus,
   pago,
+  emDia = false,
 }: {
   amountCents: number | null;
   nextDueDate: string | null;
   diasRestantes: number | null;
   billingStatus: BillingStatus | null;
   pago: boolean;
+  /** Modelo novo (ADR 0014): slot em dia (d>7) -> tom roxo "tranquilo", sem alarme. */
+  emDia?: boolean;
 }) {
   const view = computeBillingView(
     nextDueDate !== null && diasRestantes !== null
       ? { next_due_date: nextDueDate, dias_restantes: diasRestantes, status: 'active' }
       : null,
   );
-  const tone: BillingTone = pago ? 'brand' : view.tone;
+  // Pago OU em dia (modelo novo) -> roxo "tranquilo". Na janela, segue o tom da regra.
+  const tone: BillingTone = pago || emDia ? 'brand' : view.tone;
   const due = formatDueDate(nextDueDate);
 
   return (
@@ -496,6 +559,83 @@ function PagoCard({ nextDueDate }: { nextDueDate: string | null }) {
           'Mensalidade renovada. Seu atendimento no WhatsApp segue ativo. Obrigado!'
         )}
       </p>
+    </section>
+  );
+}
+
+/**
+ * Modelo novo (ADR 0014), estado `em_dia` (d>7): cliente em dia, FORA da janela.
+ * NENHUM PIX e gerado (resolve o risco de cobrar quem esta em dia). Card calmo,
+ * sem CTA de pagar — so confirma que esta tudo certo ate o vencimento.
+ */
+function EmDiaCard({ nextDueDate }: { nextDueDate: string | null }) {
+  const due = formatDueDate(nextDueDate);
+  return (
+    <section className="rounded-card border border-ok/40 bg-ok-soft p-5 shadow-card">
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-7 items-center justify-center rounded-full bg-ok">
+          <IconCheck size={15} className="text-white" />
+        </span>
+        <h2 className="font-display text-[16px] font-semibold text-ink">Mensalidade em dia</h2>
+      </div>
+      <p className="mt-1.5 text-[14px] leading-normal text-ink-soft">
+        {due ? (
+          <>
+            Está tudo certo — seu próximo vencimento é em <b className="text-ink">{due}</b>. Quando
+            chegar perto, o PIX aparece aqui pra você pagar sem complicação.
+          </>
+        ) : (
+          'Está tudo certo com sua mensalidade. Quando chegar perto do vencimento, o PIX aparece aqui.'
+        )}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Modelo novo (ADR 0014), estado `sem_config`: mensalidade ainda nao configurada
+ * (sem next_due_date). Sem PIX — orienta a falar com o suporte, sem alarmar.
+ */
+function SemConfigCard() {
+  return (
+    <section className="rounded-card border border-line bg-surface p-5 shadow-card">
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-7 items-center justify-center rounded-full bg-brand-soft text-brand">
+          <IconInfo size={16} />
+        </span>
+        <h2 className="font-display text-[16px] font-semibold text-ink">
+          Mensalidade ainda não configurada
+        </h2>
+      </div>
+      <p className="mt-1.5 text-[14px] leading-normal text-ink-soft">
+        Sua mensalidade ainda não tem vencimento definido. Fale com o suporte para configurar — é
+        rápido, e depois você paga por aqui mesmo.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Modelo novo (ADR 0014), estado `vencido` (d<=0): aviso de reativacao acima do
+ * PIX. Tom de alerta, mas com saida clara — pagar o PIX abaixo reativa o atendimento.
+ */
+function VencidoAlerta() {
+  return (
+    <section className="rounded-card border border-danger/40 bg-danger-soft p-4" role="alert">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-[1px] flex size-6 shrink-0 items-center justify-center rounded-full bg-danger text-white">
+          <IconAlert size={15} />
+        </span>
+        <div>
+          <h2 className="font-display text-[15px] font-semibold text-danger">
+            Mensalidade vencida
+          </h2>
+          <p className="mt-0.5 text-[13.5px] leading-snug text-ink-soft">
+            Pague o PIX abaixo para reativar seu atendimento no WhatsApp. A renovação é automática
+            assim que o pagamento cair.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }

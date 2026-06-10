@@ -17,6 +17,16 @@ export const WorkerConfigSchema = z.object({
   // chave faltar — falha alta e explicita SO quando a feature roda. Nunca logada/hardcoded.
   ABACATEPAY_API_KEY: z.string().min(1).optional(),
   ABACATEPAY_BASE_URL: z.string().url().default('https://api.abacatepay.com'),
+
+  // ── Modelo de cobranca por DATA DE VENCIMENTO (ADR 0014) ───────────────────
+  // Flag global do novo modelo de billing. OFF (default) = comportamento ATUAL intacto.
+  // No worker a flag prepara o terreno pro cron de geracao (F4, fase posterior) — hoje
+  // nao altera nenhum job em prod. Opcional no boot (ausente = OFF) — NUNCA crasha o
+  // worker. NUNCA hardcoded.
+  BILLING_DUE_DATE_MODEL: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

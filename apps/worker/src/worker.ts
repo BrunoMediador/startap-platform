@@ -7,10 +7,12 @@ import { flowExecutionLog } from '@startap/db';
  * Substitui as triggers Schedule do automação visual antiga.
  */
 import { Cron } from 'croner';
+import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
+import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -74,8 +76,7 @@ async function main() {
       cleanupResult = await runCleanupChat();
       log.info({ ...cleanupResult }, 'cleanup cycle');
       const botPausaResult = await runCleanupBotPausa();
-      if (botPausaResult.deleted > 0)
-        log.info({ ...botPausaResult }, 'cleanup-bot-pausa cycle');
+      if (botPausaResult.deleted > 0) log.info({ ...botPausaResult }, 'cleanup-bot-pausa cycle');
       const prunedLogs = await flowExecutionLog.pruneOldFlowEvents(14);
       // Fecha execuções presas em running há mais de 5 minutos (safety net).
       const closedStale = await flowExecutionLog.closeStaleRunning(5);
@@ -130,13 +131,60 @@ async function main() {
         bot: 'worker',
         eventType: staleError ? 'worker.job-failed' : 'worker.job-finished',
         status: staleError ? 'error' : 'success',
-        message: staleError ? 'Job close-stale-running falhou' : 'Job close-stale-running concluído',
+        message: staleError
+          ? 'Job close-stale-running falhou'
+          : 'Job close-stale-running concluído',
         ...(staleResult ? { metadata: staleResult } : {}),
         ...(staleError ? { error: staleError } : {}),
         durationMs: Date.now() - startedAt,
       });
     }
   });
+
+  // Billing F4 (ADR 0014 §G): 1x/dia as 08:00 America/Sao_Paulo. Geracao + reconciliacao +
+  // expiracao de cobrancas PIX. ATRAS da flag BILLING_DUE_DATE_MODEL — com a flag OFF o job
+  // e NO-OP (nao le billing, nao instancia gateway, nao toca banco). SEM aviso ao cliente.
+  new Cron(
+    '0 8 * * *',
+    { name: 'generate-billing-charges', timezone: 'America/Sao_Paulo' },
+    async () => {
+      const executionId = randomUUID();
+      const startedAt = Date.now();
+      let billingResult: Awaited<ReturnType<typeof runGenerateBillingCharges>> | null = null;
+      let billingError: unknown = null;
+      await flowExecutionLog.logFlowEvent({
+        executionId,
+        flowId: 'worker:generate-billing-charges',
+        flowName: 'generate-billing-charges',
+        bot: 'worker',
+        eventType: 'worker.job-started',
+        status: 'running',
+        message: 'Job generate-billing-charges iniciado',
+      });
+      try {
+        billingResult = await runGenerateBillingCharges();
+        if (!billingResult.skipped) log.info({ ...billingResult }, 'billing F4 cycle');
+      } catch (e) {
+        billingError = e;
+        log.error({ err: e }, 'generate-billing-charges crashed');
+      } finally {
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:generate-billing-charges',
+          flowName: 'generate-billing-charges',
+          bot: 'worker',
+          eventType: billingError ? 'worker.job-failed' : 'worker.job-finished',
+          status: billingError ? 'error' : 'success',
+          message: billingError
+            ? 'Job generate-billing-charges falhou'
+            : 'Job generate-billing-charges concluído',
+          ...(billingResult ? { metadata: billingResult } : {}),
+          ...(billingError ? { error: billingError } : {}),
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    },
+  );
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {

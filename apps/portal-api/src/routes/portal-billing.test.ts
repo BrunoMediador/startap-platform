@@ -8,33 +8,70 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // config.js valida process.env no import — mockamos. dev_mode = chave abc_dev_*.
-vi.mock('../config.js', () => ({
-  config: {
+// BILLING_DUE_DATE_MODEL e MUTAVEL por teste (default OFF — comportamento atual).
+// vi.hoisted leva o objeto pro topo junto com o vi.mock (que e hoisted).
+const { mockConfig } = vi.hoisted(() => ({
+  mockConfig: {
     NODE_ENV: 'test',
     ABACATEPAY_API_KEY: 'abc_dev_xyz',
     ABACATEPAY_BASE_URL: 'https://api.abacatepay.com',
+    BILLING_DUE_DATE_MODEL: false,
   },
 }));
+vi.mock('../config.js', () => ({ config: mockConfig }));
 
 vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 
+// computeBillingState e a fonte unica de verdade (ADR 0014) — usamos a IMPLEMENTACAO
+// REAL no mock pra exercitar a janela de fato (nao mockar a logica que estamos testando).
+const { computeBillingStateReal } = vi.hoisted(() => {
+  const WINDOW = 7;
+  return {
+    computeBillingStateReal: (
+      nextDueDate: string | null,
+      today = new Date(),
+      windowDays = WINDOW,
+    ) => {
+      if (!nextDueDate) {
+        return {
+          state: 'sem_config',
+          diasRestantes: null,
+          dentroDaJanela: false,
+          podeGerarPix: false,
+        };
+      }
+      const due = Date.parse(`${nextDueDate}T00:00:00Z`);
+      const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+      const dias = Math.round((due - todayUtc) / 86_400_000);
+      if (dias > windowDays) {
+        return { state: 'em_dia', diasRestantes: dias, dentroDaJanela: false, podeGerarPix: false };
+      }
+      const state = dias <= 0 ? 'vencido' : 'a_vencer';
+      return { state, diasRestantes: dias, dentroDaJanela: true, podeGerarPix: true };
+    },
+  };
+});
+
 vi.mock('@startap/db', () => ({
   clientBilling: {
     getBillingBySlot: vi.fn(),
     daysUntilDue: vi.fn(),
+    computeBillingState: computeBillingStateReal,
   },
   billingCharges: {
     getCharge: vi.fn(),
+    getActivePendingCharge: vi.fn(),
   },
 }));
 
 // Client AbacatePay + service mockados. vi.hoisted leva os mocks pro topo junto com
 // vi.mock (que e hoisted) — evita "cannot access before initialization".
-const { simulatePaymentMock, ensureMock } = vi.hoisted(() => ({
+const { simulatePaymentMock, ensureMock, ensureForSlotMock } = vi.hoisted(() => ({
   simulatePaymentMock: vi.fn(),
   ensureMock: vi.fn(),
+  ensureForSlotMock: vi.fn(),
 }));
 vi.mock('@startap/integrations', () => {
   class FakeNotConfigured extends Error {}
@@ -52,6 +89,7 @@ vi.mock('@startap/integrations', () => {
       },
       AbacatePayNotConfiguredError: FakeNotConfigured,
       ensurePixChargeForCycle: (...args: unknown[]) => ensureMock(...args),
+      ensurePixChargeForSlot: (...args: unknown[]) => ensureForSlotMock(...args),
     },
   };
 });
@@ -75,6 +113,7 @@ import { cicloAtual, portalBillingRoutes } from './portal-billing.js';
 const getBillingMock = vi.mocked(clientBilling.getBillingBySlot);
 const daysUntilDueMock = vi.mocked(clientBilling.daysUntilDue);
 const getChargeMock = vi.mocked(billingCharges.getCharge);
+const getActivePendingChargeMock = vi.mocked(billingCharges.getActivePendingCharge);
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -122,7 +161,15 @@ function makeCharge(over: Partial<Record<string, unknown>> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   injectedSlot = 'clone_x';
+  mockConfig.BILLING_DUE_DATE_MODEL = false; // default OFF (comportamento atual)
 });
+
+/** next_due_date 'YYYY-MM-DD' a N dias de hoje (UTC) — pra exercitar a janela real. */
+function dueInDays(n: number): string {
+  const t = new Date();
+  const due = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() + n));
+  return due.toISOString().slice(0, 10);
+}
 
 // ── cicloAtual (helper puro) ──────────────────────────────────────────────────
 describe('cicloAtual', () => {
@@ -307,6 +354,202 @@ describe('POST /portal/mensalidade/simular', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'sem_cobranca' });
     expect(simulatePaymentMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADR 0014 — modelo por DATA DE VENCIMENTO (flag BILLING_DUE_DATE_MODEL = ON)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('GET /portal/mensalidade (flag ON — modelo por data)', () => {
+  it('EM DIA (d=20): state=em_dia, charge=null, pode_gerar_pix=false — NAO consulta cobranca', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(20), amount_cents: 19900 }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.model).toBe('due_date');
+    expect(body.state).toBe('em_dia');
+    expect(body.pode_gerar_pix).toBe(false);
+    expect(body.charge).toBeNull();
+    // Em dia nao busca cobranca ativa (nem expoe PIX).
+    expect(getActivePendingChargeMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('A VENCER (d=3): state=a_vencer, expoe a cobranca ATIVA do slot', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(3), amount_cents: 19900 }),
+    );
+    getActivePendingChargeMock.mockResolvedValue(
+      makeCharge({ abacate_charge_id: 'pix_char_ativa' }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    const body = res.json();
+    expect(body.state).toBe('a_vencer');
+    expect(body.pode_gerar_pix).toBe(true);
+    expect(body.charge).not.toBeNull();
+    expect(getActivePendingChargeMock).toHaveBeenCalledWith('clone_x');
+    await app.close();
+  });
+
+  it('VENCIDO (d=-2): state=vencido, expoe cobranca ativa', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(-2), amount_cents: 19900 }),
+    );
+    getActivePendingChargeMock.mockResolvedValue(makeCharge());
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    expect(res.json().state).toBe('vencido');
+    expect(res.json().pode_gerar_pix).toBe(true);
+    await app.close();
+  });
+
+  it('SEM CONFIG (sem next_due_date): state=sem_config, charge=null', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(makeBilling({ next_due_date: null, amount_cents: null }));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    const body = res.json();
+    expect(body.state).toBe('sem_config');
+    expect(body.charge).toBeNull();
+    expect(getActivePendingChargeMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('POST /portal/mensalidade/pix (flag ON — janela)', () => {
+  it('EM DIA -> 409 fora_da_janela, NAO gera (sem antecipacao)', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(20), amount_cents: 19900 }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'fora_da_janela', state: 'em_dia' });
+    expect(ensureForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('A VENCER -> gera via ensurePixChargeForSlot (duePeriod = next_due_date, amount do banco)', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    const due = dueInDays(3);
+    getBillingMock.mockResolvedValue(makeBilling({ next_due_date: due, amount_cents: 25000 }));
+    ensureForSlotMock.mockResolvedValue({
+      charge: makeCharge({ amount_cents: 25000 }),
+      created: true,
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/mensalidade/pix',
+      payload: { amount_cents: 1, slot: 'clone_hacker' }, // ignorado (anti-IDOR)
+    });
+
+    expect(res.statusCode).toBe(200);
+    const callArgs = ensureForSlotMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(callArgs).toMatchObject({ slot: 'clone_x', duePeriod: due, amountCents: 25000 });
+    await app.close();
+  });
+
+  it('VENCIDO -> gera (dentro da janela)', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(-5), amount_cents: 19900 }),
+    );
+    ensureForSlotMock.mockResolvedValue({ charge: makeCharge(), created: true });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(200);
+    expect(ensureForSlotMock).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('RE-COBRANCA (data movida pro passado) -> gera nova (dentro da janela)', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: '2020-01-01', amount_cents: 19900 }),
+    );
+    ensureForSlotMock.mockResolvedValue({ charge: makeCharge(), created: true });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(200);
+    const callArgs = ensureForSlotMock.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(callArgs).toMatchObject({ duePeriod: '2020-01-01' });
+    await app.close();
+  });
+
+  it('sem valor configurado -> 409 sem_valor_configurado (antes da janela)', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(-2), amount_cents: null }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'sem_valor_configurado' });
+    expect(ensureForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('flag OFF preserva o comportamento ATUAL (regressao)', () => {
+  it('GET sem flag NAO retorna `state`/`model` nem chama getActivePendingCharge', async () => {
+    // mockConfig.BILLING_DUE_DATE_MODEL ja e false (beforeEach).
+    getBillingMock.mockResolvedValue(makeBilling());
+    daysUntilDueMock.mockReturnValue(12);
+    getChargeMock.mockResolvedValue(makeCharge());
+
+    const app = await buildApp();
+    const body = (await app.inject({ method: 'GET', url: '/portal/mensalidade' })).json();
+
+    expect(body.model).toBeUndefined();
+    expect(body.state).toBeUndefined();
+    expect(body.pode_gerar_pix).toBeUndefined();
+    // Caminho legado: cobranca do ciclo do mes (getCharge), nao a ativa do slot.
+    expect(getChargeMock).toHaveBeenCalledWith('clone_x', cicloAtual());
+    expect(getActivePendingChargeMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('POST sem flag gera via ensurePixChargeForCycle (sem checagem de janela)', async () => {
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(20), amount_cents: 19900 }),
+    );
+    ensureMock.mockResolvedValue({ charge: makeCharge(), created: true });
+
+    const app = await buildApp();
+    // Mesmo "em dia" (d=20), no modelo legado gera normalmente (nada de fora_da_janela).
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(200);
+    expect(ensureMock).toHaveBeenCalledTimes(1);
+    expect(ensureForSlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 });

@@ -54,6 +54,17 @@ export const ConfigSchema = z.object({
   ABACATEPAY_WEBHOOK_QUERY_SECRET: z.string().min(1).optional(),
   ABACATEPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+  // ── Modelo de cobranca por DATA DE VENCIMENTO (ADR 0014) ───────────────────
+  // Flag global do novo modelo de billing. OFF (default) = comportamento ATUAL intacto.
+  // No apps/api a flag governa SO o avanco de vencimento do webhook PAID: ON usa
+  // max(next_due_date, hoje)+1mes (nao renova pro passado em re-cobranca/vencido); OFF
+  // usa o avanco legado (a partir de next_due_date puro). Opcional no boot (ausente =
+  // OFF) — NUNCA crasha o boot dos bots. NUNCA hardcoded.
+  BILLING_DUE_DATE_MODEL: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

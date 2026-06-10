@@ -4021,14 +4021,16 @@ app.post('/api/clones/:id/suspend', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() || null : null;
-  // suspended_kind = categoria ESTRUTURADA da suspensao (ADR 0013 / threat-model C1).
+  // suspended_kind = categoria ESTRUTURADA da suspensao (ADR 0013 / threat-model C1; ADR 0014 F1).
   // O auto-resume do webhook PIX SO reativa quando kind='billing' — nunca por string-match
-  // no texto livre de reason. Default 'billing' (caso dominante: inadimplencia). Outros
-  // motivos devem mandar o kind certo pra NUNCA serem reativados por pagamento.
+  // no texto livre de reason. A categoria e OBRIGATORIA: SEM default 'billing' (ADR 0014).
+  // Motivo: um default 'billing' silencioso poderia AUTO-RESUMIR uma suspensao que o
+  // operador fez por outro motivo (esqueceu de trocar o dropdown). Forcando a escolha
+  // consciente, so suspensoes realmente de cobranca reativam ao pagar.
   const VALID_KINDS = ['billing', 'owner_request', 'manual_other', 'abuse'];
-  let kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : 'billing';
+  const kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : '';
   if (!VALID_KINDS.includes(kind)) {
-    return res.status(400).json({ error: 'kind inválido (billing|owner_request|manual_other|abuse)' });
+    return res.status(400).json({ error: 'kind obrigatório (billing|owner_request|manual_other|abuse)' });
   }
   const actor = req.session?.userId ?? 'admin';
   const client = await pool.connect();
@@ -5529,9 +5531,14 @@ app.put('/api/billing/:slot', async (req, res) => {
     }
 
     if (registerPayment) {
-      // Avanca o vencimento em cycle_months (default 1) a partir do vencimento
-      // atual (ou hoje, se ainda nao houver). Logica de avanco em SQL para nao
-      // depender de helpers TS aqui (espelha advanceDueDate de packages/db).
+      // Avanca o vencimento em cycle_months (default 1) a partir de MAX(vencimento, hoje).
+      // Espelha advanceFromMaxDue (packages/db client-billing.ts) e o avanco do webhook
+      // (billing-webhook-events.applyPaidWebhook §6 no modelo por data): o GREATEST garante
+      // que registrar pagamento de um cliente VENCIDO (due no passado) NUNCA renova pro
+      // passado — o novo vencimento parte de hoje. Aplicado INCONDICIONALMENTE: o painel
+      // nao le a flag BILLING_DUE_DATE_MODEL, e GREATEST(due, hoje) e seguro/correto nos
+      // DOIS modelos (em dia: parte de due; vencido: parte de hoje). Logica em SQL para
+      // nao depender de helpers TS aqui.
       let cycleMonths = req.body?.cycle_months != null ? Number(req.body.cycle_months) : 1;
       if (!Number.isInteger(cycleMonths) || cycleMonths < 1 || cycleMonths > 36) cycleMonths = 1;
 
@@ -5540,11 +5547,11 @@ app.put('/api/billing/:slot', async (req, res) => {
                                      last_payment_at, created_at, updated_at)
          VALUES (
            $1,
-           (COALESCE($2::date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           (GREATEST(COALESCE($2::date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
            $4, 'active', $5, NOW(), NOW(), NOW()
          )
          ON CONFLICT (slot) DO UPDATE SET
-           next_due_date   = (COALESCE(client_billing.next_due_date, CURRENT_DATE) + ($3 || ' months')::interval)::date,
+           next_due_date   = (GREATEST(COALESCE(client_billing.next_due_date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
            amount_cents    = COALESCE($4, client_billing.amount_cents),
            status          = 'active',
            notes           = COALESCE($5, client_billing.notes),

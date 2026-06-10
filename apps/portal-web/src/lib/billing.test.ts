@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StatusBilling } from './api-types';
-import { computeBillingView } from './billing';
+import { computeBillingState, computeBillingView, isDentroDaJanela } from './billing';
 
 /**
  * Logica critica D1: o tom do card de billing por dias restantes.
@@ -44,5 +44,43 @@ describe('computeBillingView (regra D1)', () => {
     expect(computeBillingView(billing(0)).vencido).toBe(true);
     expect(computeBillingView(billing(-3)).tone).toBe('danger');
     expect(computeBillingView(billing(-3)).vencido).toBe(true);
+  });
+});
+
+/**
+ * Logica critica ADR 0014: o `state` por data de vencimento derivado de
+ * dias_restantes (janela de 7 dias). Decide se a tela auto-gera PIX e se o card
+ * mostra o CTA "Pagar". DEVE espelhar computeBillingState do backend.
+ */
+describe('computeBillingState (regra ADR 0014, janela 7d)', () => {
+  it('sem dias -> sem_config (sem PIX, sem CTA)', () => {
+    expect(computeBillingState(null)).toBe('sem_config');
+    expect(isDentroDaJanela('sem_config')).toBe(false);
+  });
+
+  it('d > 7 -> em_dia (fora da janela, sem PIX)', () => {
+    for (const d of [8, 12, 30, 365]) {
+      expect(computeBillingState(d), `dias=${d}`).toBe('em_dia');
+    }
+    expect(isDentroDaJanela('em_dia')).toBe(false);
+  });
+
+  it('1..7 -> a_vencer (na janela, gera PIX / CTA Pagar)', () => {
+    for (const d of [1, 4, 6, 7]) {
+      expect(computeBillingState(d), `dias=${d}`).toBe('a_vencer');
+    }
+    expect(isDentroDaJanela('a_vencer')).toBe(true);
+  });
+
+  it('0 ou negativo -> vencido (na janela, gera PIX / CTA Pagar)', () => {
+    for (const d of [0, -1, -30]) {
+      expect(computeBillingState(d), `dias=${d}`).toBe('vencido');
+    }
+    expect(isDentroDaJanela('vencido')).toBe(true);
+  });
+
+  it('limite da janela: 7 e a_vencer, 8 e em_dia', () => {
+    expect(computeBillingState(7)).toBe('a_vencer');
+    expect(computeBillingState(8)).toBe('em_dia');
   });
 });
