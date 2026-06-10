@@ -61,8 +61,6 @@ export interface ApplyPaidWebhookInput {
   abacateChargeId: string;
   /** valor efetivamente pago, em centavos (do payload). */
   paidAmountCents: number;
-  /** receipt_url (dado restrito — gravado so na cobranca, nunca logado). */
-  receiptUrl?: string | null;
   /** payload JA REDIGIDO (C5) pelo handler — sem CPF/email/telefone/brCode. */
   redactedPayload: unknown;
   /** quem agiu, pro flow_suspension_log do auto-resume. */
@@ -164,15 +162,17 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
     const underpaid = input.paidAmountCents < amountCents;
 
     // ── (5) Marca a cobranca como paga (transicao que guarda a idempotencia). ───
+    // NAO grava receipt_url: a URL do recibo nao e necessaria pra confirmar/renovar/
+    // reativar e a coluna nao existe em billing_charges (041/042). O receiptUrl continua
+    // redigido no payload bruto do evento (billing_webhook_events) — nunca persistido aqui.
     await client.query(
       `UPDATE billing_charges
           SET status            = 'paid',
               paid_at           = NOW(),
               paid_amount_cents = $2,
-              receipt_url       = COALESCE($3, receipt_url),
               updated_at        = NOW()
         WHERE id = $1`,
-      [charge.id, input.paidAmountCents, input.receiptUrl ?? null],
+      [charge.id, input.paidAmountCents],
     );
 
     if (underpaid) {

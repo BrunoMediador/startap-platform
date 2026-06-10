@@ -6,6 +6,9 @@
  * reativa), applied + auto-resume SO com suspended_kind='billing' (e NAO com
  * 'owner_request'/NULL). Verifica COMMIT/ROLLBACK e que o slot vem do registro casado.
  */
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ── Mock do pool pg: client fake roteado por substring da query ─────────────────
@@ -78,7 +81,6 @@ const BASE_INPUT = {
   event: 'transparent.completed',
   abacateChargeId: 'pix_char_abc',
   paidAmountCents: 19900,
-  receiptUrl: 'https://r/abc',
   redactedPayload: { id: 'evt_1', brCode: '[REDACTED]' },
 };
 
@@ -201,5 +203,92 @@ describe('applyPaidWebhook (C1/C2/C4)', () => {
     expect(resumeSql).toBeDefined();
     expect(resumeSql).toContain("suspended_kind = 'billing'");
     expect(resumeSql).toContain('flow_enabled = false');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Anti-coluna-fantasma (regressao do bug do receipt_url).
+//
+// O pool e MOCKADO nos testes acima, entao um SET pra coluna inexistente passaria
+// despercebido ate o 1o pagamento real (UPDATE -> 'column does not exist' -> 500 ->
+// retry -> ROLLBACK desfaz o dedupe -> loop). Esta suite deriva a lista de colunas
+// REAIS de billing_charges direto da migration 041 (fonte da verdade do schema) e
+// assegura que o SET do UPDATE so referencia colunas que existem.
+//
+// LIMITACAO ASSUMIDA: nao ha infra de Postgres efemero no projeto (so unit + mock).
+// Esta validacao e por PARSING de string (SQL capturado x colunas da migration), nao
+// por execucao real contra um banco. Cobre o furo concreto (coluna inexistente no SET);
+// nao valida tipos/constraints. Se um dia houver pg de teste, trocar por migrate+query.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const MIGRATION_041 = resolve(HERE, '../../migrations/041_billing_charges.sql');
+
+/** Extrai os nomes das colunas do CREATE TABLE billing_charges da migration 041. */
+function billingChargesColumns(): Set<string> {
+  const sql = readFileSync(MIGRATION_041, 'utf8');
+  const m = sql.match(/CREATE TABLE IF NOT EXISTS billing_charges\s*\(([\s\S]*?)\n\)\s*;/i);
+  if (!m) throw new Error('CREATE TABLE billing_charges nao encontrado na migration 041');
+  const cols = new Set<string>();
+  for (const rawLine of m[1].split('\n')) {
+    const line = rawLine.replace(/--.*$/, '').trim();
+    if (!line) continue;
+    // Pula linhas de constraint de tabela (nao sao definicoes de coluna).
+    if (/^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT)\b/i.test(line)) continue;
+    const col = line.match(/^([a-z_][a-z0-9_]*)/i);
+    if (col) cols.add(col[1].toLowerCase());
+  }
+  return cols;
+}
+
+/** Colunas referenciadas no SET de um `UPDATE billing_charges SET ... WHERE`. */
+function setClauseColumns(updateSql: string): string[] {
+  const norm = updateSql.replace(/\s+/g, ' ');
+  const m = norm.match(/UPDATE billing_charges SET (.+?) WHERE /i);
+  if (!m) throw new Error('clausula SET do UPDATE billing_charges nao encontrada');
+  return m[1]
+    .split(',')
+    .map((assign) =>
+      assign
+        .trim()
+        .match(/^([a-z_][a-z0-9_]*)/i)?.[1]
+        ?.toLowerCase(),
+    )
+    .filter((c): c is string => Boolean(c));
+}
+
+describe('anti-coluna-fantasma: applyPaidWebhook so toca colunas reais de billing_charges', () => {
+  it('a migration 041 expoe as colunas esperadas (sanidade do parser)', () => {
+    const cols = billingChargesColumns();
+    expect(cols.has('status')).toBe(true);
+    expect(cols.has('paid_at')).toBe(true);
+    expect(cols.has('paid_amount_cents')).toBe(true);
+    expect(cols.has('updated_at')).toBe(true);
+    // O bug: receipt_url NUNCA existiu em billing_charges.
+    expect(cols.has('receipt_url')).toBe(false);
+  });
+
+  it('cada coluna do SET do UPDATE billing_charges existe na migration 041', async () => {
+    setup({
+      dedupeInserted: true,
+      charge: { id: '10', slot: 'barbearia-cirilo', amount_cents: 19900, status: 'pending' },
+      nextDueDate: '2026-06-10',
+      resumeRows: 1,
+    });
+    await applyPaidWebhook(BASE_INPUT);
+
+    const real = billingChargesColumns();
+    const updateSql = sqlsRun().find(
+      (q) => q.includes('UPDATE billing_charges') && q.includes("status = 'paid'"),
+    );
+    expect(updateSql).toBeDefined();
+
+    const setCols = setClauseColumns(updateSql as string);
+    expect(setCols.length).toBeGreaterThan(0);
+    for (const col of setCols) {
+      expect(real.has(col), `coluna '${col}' nao existe em billing_charges (041)`).toBe(true);
+    }
+    // Guard explicito do bug que motivou o teste.
+    expect(setCols).not.toContain('receipt_url');
   });
 });

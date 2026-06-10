@@ -182,12 +182,11 @@ export function parseWebhookEvent(body: unknown): ParsedWebhookEvent | null {
 
   const abacateChargeId = str(charge.id) ?? str(data.id);
   const externalId = str(charge.externalId) ?? str(data.externalId) ?? str(charge.external_id);
+  // SO o valor efetivamente PAGO (paidAmount). NUNCA cai no valor devido (charge.amount/
+  // data.amount): isso MASCARARIA underpayment (C2). Ausencia de paidAmount -> null, e o
+  // handler trata como ignored:no-amount em vez de assumir que pagou o valor cheio.
   const paidAmountCents =
-    intOrNull(charge.paidAmount) ??
-    intOrNull(charge.paid_amount) ??
-    intOrNull(data.paidAmount) ??
-    intOrNull(charge.amount) ??
-    intOrNull(data.amount);
+    intOrNull(charge.paidAmount) ?? intOrNull(charge.paid_amount) ?? intOrNull(data.paidAmount);
   const receiptUrl = str(charge.receiptUrl) ?? str(data.receiptUrl) ?? str(charge.receipt_url);
 
   return {

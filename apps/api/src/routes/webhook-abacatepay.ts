@@ -162,7 +162,6 @@ export const abacatePayWebhookRoute: FastifyPluginAsync = async (app) => {
         event: evt.event,
         abacateChargeId: evt.abacateChargeId,
         paidAmountCents: evt.paidAmountCents,
-        receiptUrl: evt.receiptUrl,
         redactedPayload,
         actor: 'abacatepay-webhook',
       });
