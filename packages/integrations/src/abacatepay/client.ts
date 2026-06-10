@@ -212,6 +212,27 @@ export class AbacatePayClient {
       paidAmountCents: toIntOrNull(raw.paidAmount ?? raw.paid_amount),
     };
   }
+
+  /**
+   * Forca o PAID de uma cobranca em ambiente Dev (POST /v2/transparents/simulate-payment?id={id}).
+   *
+   * SO funciona com chave Dev (abc_dev_*) — a API recusa em Prod. Usado exclusivamente pelo
+   * endpoint Dev-only do portal pra exercitar o webhook real sem PIX de verdade (ADR 0013, F3).
+   * O efeito de marcar pago/renovar vem pelo WEBHOOK async; este metodo so dispara a simulacao.
+   * Retorna o status normalizado retornado pelo gateway.
+   */
+  async simulatePayment(chargeId: string): Promise<PixChargeStatusResult> {
+    const json = await this.request<{ data?: RawCharge } | RawCharge>(
+      'POST',
+      `/v2/transparents/simulate-payment?id=${encodeURIComponent(chargeId)}`,
+    );
+    const raw = unwrap(json);
+    return {
+      id: String(raw.id ?? chargeId),
+      status: normalizeStatus(raw.status),
+      paidAmountCents: toIntOrNull(raw.paidAmount ?? raw.paid_amount),
+    };
+  }
 }
 
 // ─── Helpers de parsing do retorno ──────────────────────────────────────────────
