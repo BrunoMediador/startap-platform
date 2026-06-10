@@ -260,6 +260,48 @@ export async function insertPendingCharge(
 }
 
 /**
+ * Lista TODAS as cobrancas `pending` que ja tem abacate_charge_id (modelo novo, ADR 0014).
+ * Usada pela RECONCILIACAO do cron F4 (rede de seguranca p/ webhook perdido): para cada
+ * uma, o cron consulta o status no gateway e, se PAID, aplica o efeito do webhook.
+ *
+ * So `pending` com gateway (abacate_charge_id NOT NULL) — sem gateway nao ha o que
+ * reconciliar. ORDER BY id pra ordem deterministica. `slot` continua a tenant key (RLS).
+ */
+export async function listPendingChargesWithGateway(): Promise<BillingChargeRow[]> {
+  const r = await query<BillingChargeRow>(
+    `SELECT ${COLUMNS} FROM billing_charges
+      WHERE status = 'pending'
+        AND abacate_charge_id IS NOT NULL
+      ORDER BY id`,
+  );
+  return r.rows;
+}
+
+/**
+ * Marca como 'expired' a cobranca `pending` cujo `expires_at` ja passou (higiene do
+ * ledger — ADR 0014, F4 passo 3). Chaveia por `id` e exige status='pending' (NUNCA
+ * mexe em 'paid'/'cancelled'). NAO deleta — a proxima geracao reusa/reemite a linha.
+ * Retorna a linha atualizada, ou null se nada casou (ja nao era pending vencida).
+ */
+export async function markChargeExpired(
+  id: string,
+  now: Date = new Date(),
+): Promise<BillingChargeRow | null> {
+  const r = await query<BillingChargeRow>(
+    `UPDATE billing_charges
+        SET status     = 'expired',
+            updated_at = NOW()
+      WHERE id = $1
+        AND status = 'pending'
+        AND expires_at IS NOT NULL
+        AND expires_at < $2
+      RETURNING ${COLUMNS}`,
+    [id, now],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
  * Preenche os dados do gateway numa linha ja criada, chaveando por `id` (modelo novo).
  * Espelha attachGatewayData mas por id (a identidade nao e mais (slot,cycle)).
  * Recebe o client da transacao do lock.
