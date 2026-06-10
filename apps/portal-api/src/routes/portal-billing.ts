@@ -42,9 +42,19 @@ function isDevKey(): boolean {
   return config.ABACATEPAY_API_KEY?.startsWith('abc_dev_') === true;
 }
 
-/** Projeta a linha de cobranca no shape publico (sem snapshot de valor nem ids internos). */
-function chargeView(charge: BillingChargeRow | null) {
+/**
+ * Projeta a linha de cobranca no shape publico (sem snapshot de valor nem ids internos).
+ *
+ * is_expired: true SO quando a cobranca esta 'pending' e a validade ja passou (relativo a
+ * `now`). Da ao front um sinal explicito de "esse QR nao vale mais" sem ele precisar
+ * comparar datas no cliente (relogio do navegador). 'paid' nunca e expirada.
+ */
+function chargeView(charge: BillingChargeRow | null, now = new Date()) {
   if (!charge) return null;
+  const isExpired =
+    charge.status === 'pending' &&
+    charge.expires_at != null &&
+    charge.expires_at.getTime() <= now.getTime();
   return {
     cycle: charge.cycle,
     status: charge.status,
@@ -52,6 +62,7 @@ function chargeView(charge: BillingChargeRow | null) {
     br_code_base64: charge.br_code_base64,
     expires_at: charge.expires_at ? charge.expires_at.toISOString() : null,
     paid_at: charge.paid_at ? charge.paid_at.toISOString() : null,
+    is_expired: isExpired,
   };
 }
 
@@ -103,10 +114,14 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
+      // reissueIfExpired: garante que o cliente sempre receba um PIX pagavel. Se a cobranca
+      // do ciclo ja existe mas expirou, reemite REUSANDO a mesma linha (slot, cycle) — sem
+      // duplicar cobranca no gateway. Cobranca paga e devolvida como esta (front mostra "pago").
       const { charge } = await abacatepay.ensurePixChargeForCycle(client, {
         slot,
         cycle,
         amountCents,
+        reissueIfExpired: true,
       });
       return reply.code(200).send(chargeView(charge));
     } catch (err) {

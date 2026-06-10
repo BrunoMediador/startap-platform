@@ -24,6 +24,22 @@ const log = logger.child({ module: 'abacatepay-service' });
 const DEFAULT_EXPIRES_IN_SEC = 3 * 24 * 60 * 60;
 /** AbacatePay limita description (v1: 37 chars). Mantemos curto e seguro. */
 const DESCRIPTION_MAX = 37;
+/**
+ * Margem de seguranca pra considerar um PIX "ainda valido": so reusamos a cobranca
+ * pendente se faltar MAIS que isso pra expirar. Evita devolver ao cliente um QR que
+ * expira nos proximos segundos (clock skew + tempo de pagar). 60s.
+ */
+const VALID_MARGIN_MS = 60_000;
+
+/**
+ * true se a cobranca pendente ainda da pra pagar: tem validade conhecida e ela esta
+ * no futuro com a margem de seguranca. Sem expires_at (validade desconhecida) -> NAO
+ * e considerada valida (forca reemissao por seguranca).
+ */
+function isChargeStillValid(charge: BillingChargeRow, now: Date): boolean {
+  if (!charge.expires_at) return false;
+  return charge.expires_at.getTime() - now.getTime() > VALID_MARGIN_MS;
+}
 
 export interface EnsureChargeInput {
   slot: string;
@@ -33,25 +49,39 @@ export interface EnsureChargeInput {
   /** Texto curto exibido no PIX. Default 'Mensalidade {cycle}'. */
   description?: string;
   expiresInSec?: number;
+  /**
+   * Se a cobranca pendente ja existente estiver EXPIRADA (ou sem validade conhecida),
+   * REEMITE no gateway reusando a MESMA linha (slot, cycle) — novo abacate_charge_id /
+   * br_code / expires_at, status volta a 'pending'. Default false (comportamento legado:
+   * reusa a linha existente como esta). O portal (F3) liga isso pra o cliente sempre ver
+   * um QR pagavel sem precisar gerar manualmente.
+   */
+  reissueIfExpired?: boolean;
 }
 
 export interface EnsureChargeResult {
   charge: BillingChargeRow;
-  /** true se gerou no gateway agora; false se ja existia (idempotencia). */
+  /** true se gerou no gateway agora (linha nova ou reemissao); false se ja existia (idempotencia). */
   created: boolean;
+  /** true SO quando reemitiu por expiracao reusando a linha existente (slot, cycle). */
+  reissued: boolean;
 }
 
 /**
  * Garante UMA cobranca PIX por (slot, ciclo). Cria no AbacatePay e persiste se ainda
  * nao existir; se ja existir, retorna a existente sem chamar o gateway.
  *
- * Caso de borda tratado: a linha pode existir 'pending' SEM dados do gateway (uma
- * geracao anterior inseriu mas falhou na chamada externa). Nesse caso completa a
- * chamada ao gateway agora — idempotente, sem duplicar a linha.
+ * Casos de borda tratados (sempre REUSANDO a linha — UNIQUE slot,cycle, sem duplicar):
+ *   - Linha 'pending' SEM dados do gateway (geracao anterior inseriu mas falhou na API):
+ *     completa a chamada ao gateway agora.
+ *   - Linha 'pending'/'expired' com PIX EXPIRADO e `reissueIfExpired`: REEMITE no gateway
+ *     e sobrescreve a MESMA linha (novo id/br_code/expires_at, status volta 'pending').
+ *   - Linha 'paid': retorna como esta (NUNCA reescreve cobranca paga — invariante C2).
  */
 export async function ensurePixChargeForCycle(
   abacate: AbacatePayClient,
   input: EnsureChargeInput,
+  now: Date = new Date(),
 ): Promise<EnsureChargeResult> {
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new Error(
@@ -69,25 +99,49 @@ export async function ensurePixChargeForCycle(
     amountCents: input.amountCents,
   });
 
-  // Ja existe E ja tem cobranca no gateway -> retorna como esta (nao duplica).
+  // Linha ja existente com cobranca no gateway: decide reuso / reemissao / paga.
   if (!created && row.abacate_charge_id) {
-    log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca ja existente — reuso');
-    return { charge: row, created: false };
+    // Paga: nunca mexe. O portal mostra "pago".
+    if (row.status === 'paid') {
+      log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca ja paga — reuso');
+      return { charge: row, created: false, reissued: false };
+    }
+
+    // Pendente e AINDA valida (validade no futuro com margem): reusa, nao chama gateway.
+    if (isChargeStillValid(row, now)) {
+      log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca pendente valida — reuso');
+      return { charge: row, created: false, reissued: false };
+    }
+
+    // Pendente porem EXPIRADA. Sem reissue: mantem o comportamento legado (reusa como esta).
+    if (!input.reissueIfExpired) {
+      log.info(
+        { slot: input.slot, cycle: input.cycle },
+        'cobranca expirada mas reissue desligado — reuso',
+      );
+      return { charge: row, created: false, reissued: false };
+    }
+
+    // Pendente EXPIRADA + reissue: reemite no gateway e sobrescreve a MESMA linha.
+    const pix = await callGateway(abacate, input, row);
+    const reissuedRow = await billingCharges.reissueGatewayData({
+      slot: input.slot,
+      cycle: input.cycle,
+      abacateChargeId: pix.id,
+      brCode: pix.brCode,
+      brCodeBase64: pix.brCodeBase64,
+      expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+    });
+    log.info(
+      { slot: input.slot, cycle: input.cycle, abacateChargeId: pix.id },
+      'cobranca PIX expirada — reemitida no gateway (mesma linha)',
+    );
+    return { charge: reissuedRow ?? row, created: true, reissued: true };
   }
 
   // Linha existe mas sem dados do gateway (nova, ou geracao anterior falhou na API):
   // completa a chamada ao AbacatePay agora.
-  const description = (input.description ?? `Mensalidade ${input.cycle}`).slice(0, DESCRIPTION_MAX);
-
-  const pix = await abacate.createPixCharge({
-    slot: input.slot,
-    cycle: input.cycle,
-    // Usa o SNAPSHOT ja gravado na linha — nunca re-le client_billing aqui.
-    amountCents: row.amount_cents,
-    description,
-    expiresInSec: input.expiresInSec ?? DEFAULT_EXPIRES_IN_SEC,
-  });
-
+  const pix = await callGateway(abacate, input, row);
   const updated = await billingCharges.attachGatewayData({
     slot: input.slot,
     cycle: input.cycle,
@@ -102,5 +156,21 @@ export async function ensurePixChargeForCycle(
     'cobranca PIX gerada no gateway',
   );
 
-  return { charge: updated ?? row, created: true };
+  return { charge: updated ?? row, created: true, reissued: false };
+}
+
+/**
+ * Chama createPixCharge usando SEMPRE o snapshot ja gravado na linha (row.amount_cents)
+ * — nunca re-le client_billing aqui. Centraliza description/expiresIn pros 3 caminhos
+ * (criar, completar, reemitir).
+ */
+function callGateway(abacate: AbacatePayClient, input: EnsureChargeInput, row: BillingChargeRow) {
+  const description = (input.description ?? `Mensalidade ${input.cycle}`).slice(0, DESCRIPTION_MAX);
+  return abacate.createPixCharge({
+    slot: input.slot,
+    cycle: input.cycle,
+    amountCents: row.amount_cents,
+    description,
+    expiresInSec: input.expiresInSec ?? DEFAULT_EXPIRES_IN_SEC,
+  });
 }
