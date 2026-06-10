@@ -186,9 +186,12 @@ export function useMensalidade(slot: string): UseQueryResult<MensalidadeResponse
 }
 
 /**
- * Gera (ou reusa, idempotente) a cobranca PIX do ciclo atual. Em sucesso, escreve
- * a cobranca no cache da query de mensalidade — o QR aparece na hora, e o poll do
- * useMensalidade assume dali (status `pending`).
+ * Garante uma cobranca PIX PAGAVEL e valida do ciclo atual (POST idempotente): se
+ * ja paga, devolve paga; se pending valida, reusa; se expirada/inexistente, gera/
+ * reemite um QR novo. Em sucesso, escreve a cobranca no cache da query de
+ * mensalidade — o QR aparece na hora, e o poll do useMensalidade assume dali (status
+ * `pending`). Tambem invalida pra ressincronizar vencimento/billing quando o ciclo
+ * ja veio `paid`. Disparada AUTOMATICAMENTE no mount da tela (sem botao "Gerar PIX").
  */
 export function useGerarPix(slot: string): UseMutationResult<ChargeView, Error, void> {
   const client = useQueryClient();
@@ -198,6 +201,10 @@ export function useGerarPix(slot: string): UseMutationResult<ChargeView, Error, 
       client.setQueryData<MensalidadeResponse>(qk.mensalidade(slot), (prev) =>
         prev ? { ...prev, charge } : prev,
       );
+      // Se voltou `paid`, o due/billing mudou no backend — refetch pra refletir.
+      if (charge.status === 'paid') {
+        client.invalidateQueries({ queryKey: qk.mensalidade(slot) });
+      }
     },
   });
 }

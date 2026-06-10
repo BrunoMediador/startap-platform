@@ -157,6 +157,7 @@ describe('GET /portal/mensalidade', () => {
         br_code_base64: 'data:image/png;base64,AAAA',
         expires_at: '2026-07-13T10:00:00.000Z',
         paid_at: null,
+        is_expired: false, // validade no futuro
       },
       dev_mode: true, // chave abc_dev_* no mock
     });
@@ -198,6 +199,35 @@ describe('GET /portal/mensalidade', () => {
     expect(getChargeMock).toHaveBeenCalledWith('clone_outro', cicloAtual());
     await app.close();
   });
+
+  it('is_expired=true quando pending com validade no passado (front sabe que o QR venceu)', async () => {
+    getBillingMock.mockResolvedValue(makeBilling());
+    daysUntilDueMock.mockReturnValue(3);
+    getChargeMock.mockResolvedValue(
+      makeCharge({ status: 'pending', expires_at: new Date('2020-01-01T00:00:00.000Z') }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().charge.is_expired).toBe(true);
+    await app.close();
+  });
+
+  it('is_expired=false para cobranca paga mesmo com expires_at no passado', async () => {
+    getBillingMock.mockResolvedValue(makeBilling());
+    daysUntilDueMock.mockReturnValue(3);
+    getChargeMock.mockResolvedValue(
+      makeCharge({ status: 'paid', expires_at: new Date('2020-01-01T00:00:00.000Z') }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    expect(res.json().charge.is_expired).toBe(false);
+    await app.close();
+  });
 });
 
 // ── POST /portal/mensalidade/pix ──────────────────────────────────────────────
@@ -216,9 +246,15 @@ describe('POST /portal/mensalidade/pix', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ cycle: cicloAtual(), status: 'pending' });
-    // amountCents veio do banco (25000), slot da sessao (clone_x).
+    // amountCents veio do banco (25000), slot da sessao (clone_x), reissue ligado
+    // (cliente sempre recebe um PIX pagavel — reemite o expirado sem duplicar).
     const callArgs = ensureMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(callArgs).toMatchObject({ slot: 'clone_x', cycle: cicloAtual(), amountCents: 25000 });
+    expect(callArgs).toMatchObject({
+      slot: 'clone_x',
+      cycle: cicloAtual(),
+      amountCents: 25000,
+      reissueIfExpired: true,
+    });
     await app.close();
   });
 

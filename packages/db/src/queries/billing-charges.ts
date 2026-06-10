@@ -119,3 +119,44 @@ export async function attachGatewayData(input: {
   );
   return r.rows[0] ?? null;
 }
+
+/**
+ * REEMITE a cobranca PIX REUSANDO a MESMA linha (slot, cycle): sobrescreve os dados do
+ * gateway (novo abacate_charge_id, br_code, validade) e volta status='pending'. Usado
+ * quando o PIX anterior EXPIROU (ADR 0013, edge case "PIX expirado").
+ *
+ * Diferenca pra attachGatewayData: aqui FORCAMOS status='pending' (a linha pode estar
+ * 'expired'/'pending' vencido) e o WHERE exige status != 'paid' — uma cobranca ja paga
+ * NUNCA e reescrita por reemissao (invariante de seguranca C2). Nao avanca vencimento.
+ *
+ * Retorna null se a linha nao existe OU ja esta paga (nenhuma reescrita aconteceu).
+ */
+export async function reissueGatewayData(input: {
+  slot: string;
+  cycle: string;
+  abacateChargeId: string;
+  brCode: string;
+  brCodeBase64: string;
+  expiresAt: Date | null;
+}): Promise<BillingChargeRow | null> {
+  const r = await query<BillingChargeRow>(
+    `UPDATE billing_charges
+     SET abacate_charge_id = $3,
+         br_code           = $4,
+         br_code_base64    = $5,
+         expires_at        = $6,
+         status            = 'pending',
+         updated_at        = NOW()
+     WHERE slot = $1 AND cycle = $2 AND status <> 'paid'
+     RETURNING ${COLUMNS}`,
+    [
+      input.slot,
+      input.cycle,
+      input.abacateChargeId,
+      input.brCode,
+      input.brCodeBase64,
+      input.expiresAt,
+    ],
+  );
+  return r.rows[0] ?? null;
+}
