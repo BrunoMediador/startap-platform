@@ -19,12 +19,15 @@ import { apiFetch } from './api';
 import type {
   AgendamentosResponse,
   AuthMe,
+  ChargeView,
   ContatosResponse,
   Horarios,
   HorariosResponse,
+  MensalidadeResponse,
   PausasResponse,
   Servico,
   ServicosResponse,
+  SimularResponse,
   StatusResponse,
 } from './api-types';
 
@@ -38,6 +41,7 @@ export const qk = {
   pausas: (slot: string) => ['pausas', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
+  mensalidade: (slot: string) => ['mensalidade', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -155,6 +159,60 @@ export function useRemovePausa(slot: string): UseMutationResult<unknown, Error, 
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.pausas(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });
+    },
+  });
+}
+
+// ── Mensalidade / Pagamento PIX (ADR 0013 F3) ────────────────────────────────
+
+/**
+ * Resumo da mensalidade + cobranca do ciclo. Enquanto a cobranca esta `pending`,
+ * a query faz POLL a cada 10s (em foco) pra captar o `paid` que chega async pelo
+ * webhook — assim a tela "vira pago" sozinha. Para o poll quando vira `paid`, ou
+ * quando nao ha cobranca pendente (evita bater na API a toa).
+ */
+export function useMensalidade(slot: string): UseQueryResult<MensalidadeResponse> {
+  return useQuery({
+    queryKey: qk.mensalidade(slot),
+    queryFn: ({ signal }) => apiFetch<MensalidadeResponse>('/portal/mensalidade', { signal }),
+    refetchInterval: (query) => {
+      const pending = query.state.data?.charge?.status === 'pending';
+      if (!pending) return false;
+      // So enquanto a aba esta visivel — pagamento e acao em foco do dono.
+      return typeof document !== 'undefined' && !document.hidden ? 10_000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+/**
+ * Gera (ou reusa, idempotente) a cobranca PIX do ciclo atual. Em sucesso, escreve
+ * a cobranca no cache da query de mensalidade — o QR aparece na hora, e o poll do
+ * useMensalidade assume dali (status `pending`).
+ */
+export function useGerarPix(slot: string): UseMutationResult<ChargeView, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<ChargeView>('/portal/mensalidade/pix', { method: 'POST' }),
+    onSuccess: (charge) => {
+      client.setQueryData<MensalidadeResponse>(qk.mensalidade(slot), (prev) =>
+        prev ? { ...prev, charge } : prev,
+      );
+    },
+  });
+}
+
+/**
+ * Dev-only: dispara o simulate-payment no gateway. O efeito (pago/renovacao) chega
+ * async pelo WEBHOOK — entao apos disparar, invalidamos a query pra reativar o poll
+ * e ver o status virar `paid`. 403 (simulacao_indisponivel) e tratado na tela.
+ */
+export function useSimularPagamento(slot: string): UseMutationResult<SimularResponse, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<SimularResponse>('/portal/mensalidade/simular', { method: 'POST' }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.mensalidade(slot) });
     },
   });
 }
