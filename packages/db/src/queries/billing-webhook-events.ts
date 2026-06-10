@@ -12,6 +12,11 @@
  *   3. Se charge.status='paid' ja -> { outcome:'already_paid' } (idempotente).
  *   4. Reconciliacao de valor (C2): se paidAmountCents < charge.amount_cents (SNAPSHOT)
  *      -> marca pago, NAO avanca vencimento, NAO reativa -> { outcome:'underpaid' }.
+ *      NOTA: no caso PIX o paidAmountCents pode chegar DERIVADO de `amount` (o gateway
+ *      omite paidAmount no transparent.completed do PIX/simulate; o parser faz fallback
+ *      fail-closed so pra PIX — ver integrations/abacatepay/webhook.ts). A reconciliacao
+ *      aqui e INALTERADA: continua comparando o valor recebido contra o snapshot
+ *      amount_cents; pago a menos -> underpaid, independentemente da origem do valor.
  *   5. UPDATE billing_charges SET status='paid', paid_at, paid_amount_cents.
  *   6. Avanca client_billing.next_due_date +1 mes (mesma logica do register_payment).
  *   7. Auto-resume (C1): SO se flow_enabled=false E suspended_kind='billing'

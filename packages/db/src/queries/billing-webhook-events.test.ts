@@ -157,6 +157,24 @@ describe('applyPaidWebhook (C1/C2/C4)', () => {
     expect(committed()).toBe(true);
   });
 
+  it('T3 C2: valor PIX derivado de amount (9500) < snapshot (10000) -> underpaid, nao avanca/reativa', async () => {
+    // Reconciliacao identica para valor derivado de `amount` (fallback PIX do parser): o
+    // applyPaidWebhook nao sabe nem se importa de onde veio o valor — compara contra o
+    // snapshot amount_cents. Pago a menos -> underpaid, sem avancar vencimento nem reativar.
+    setup({
+      dedupeInserted: true,
+      charge: { id: '10', slot: 'barbearia-cirilo', amount_cents: 10000, status: 'pending' },
+      nextDueDate: '2026-06-10',
+      resumeRows: 1, // ainda que pudesse reativar, nao deve chegar la
+    });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, paidAmountCents: 9500 });
+    expect(r.outcome).toBe('underpaid');
+    expect(r.resumed).toBe(false);
+    expect(ranAdvance()).toBe(false);
+    expect(ranResume()).toBe(false);
+    expect(committed()).toBe(true);
+  });
+
   it('C1 applied + auto-resume: pago >= snapshot e suspended_kind=billing -> reativa', async () => {
     setup({
       dedupeInserted: true,

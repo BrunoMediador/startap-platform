@@ -7,6 +7,7 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  isPixCharge,
   parseWebhookEvent,
   redactWebhookPayload,
   safeEqual,
@@ -167,5 +168,122 @@ describe('parseWebhookEvent', () => {
     expect(parseWebhookEvent({ event: 'transparent.completed' })).toBeNull();
     expect(parseWebhookEvent('nao-objeto')).toBeNull();
     expect(parseWebhookEvent(null)).toBeNull();
+  });
+});
+
+describe('isPixCharge (fail-closed — fallback so com sinal POSITIVO de PIX)', () => {
+  it('true: methods contem PIX (case-insensitive)', () => {
+    expect(isPixCharge({ methods: ['pix'] }, {}, null)).toBe(true);
+    expect(isPixCharge({ methods: ['PIX'] }, {}, null)).toBe(true);
+  });
+  it('true: id comeca com pix_char_ / pix_', () => {
+    expect(isPixCharge({}, {}, 'pix_char_CyfaX5D6yWm1QpnFx2kubqDc')).toBe(true);
+    expect(isPixCharge({}, {}, 'pix_abc')).toBe(true);
+  });
+  it('true: campo de metodo singular == pix', () => {
+    expect(isPixCharge({ kind: 'PIX' }, {}, null)).toBe(true);
+    expect(isPixCharge({ method: 'pix' }, {}, null)).toBe(true);
+    expect(isPixCharge({ paymentMethod: 'Pix' }, {}, null)).toBe(true);
+  });
+  it('false: sem nenhum sinal de PIX (fail-closed)', () => {
+    expect(isPixCharge({}, {}, null)).toBe(false);
+    expect(isPixCharge({ methods: ['CARD'] }, {}, 'char_generic')).toBe(false);
+    expect(isPixCharge({ method: 'boleto' }, {}, 'bol_123')).toBe(false);
+  });
+});
+
+describe('parseWebhookEvent — fallback de valor PIX (amount quando paidAmount ausente)', () => {
+  // T1 (obrigatorio): payload REAL do simulate-payment AbacatePay — paidAmount null,
+  // valor real em amount, id pix_char_*, PAID. Hoje vinha null e era descartado.
+  it('T1: PIX real (pix_char_*, amount:9500, paidAmount:null, PAID) -> 9500 via fallback', () => {
+    const body = {
+      id: 'log_mWKtP0Q0UQPskTXRTFBpzB31',
+      event: 'transparent.completed',
+      apiVersion: 2,
+      devMode: true,
+      data: {
+        transparent: {
+          id: 'pix_char_CyfaX5D6yWm1QpnFx2kubqDc',
+          externalId: null,
+          amount: 9500,
+          paidAmount: null,
+          platformFee: 80,
+          status: 'PAID',
+          methods: [],
+          frequency: 'ONE_TIME',
+          metadata: { slot: 'debug' },
+        },
+      },
+    };
+    const evt = parseWebhookEvent(body);
+    expect(evt).not.toBeNull();
+    expect(evt?.status).toBe('paid');
+    expect(evt?.abacateChargeId).toBe('pix_char_CyfaX5D6yWm1QpnFx2kubqDc');
+    // isPix detectado pelo prefixo pix_char_ (methods veio vazio).
+    expect(isPixCharge(body.data.transparent, body.data, evt?.abacateChargeId ?? null)).toBe(true);
+    expect(evt?.paidAmountCents).toBe(9500);
+    expect(evt?.amountFromFallback).toBe(true);
+    expect(evt?.method).toBe('pix');
+  });
+
+  // T2: PIX com paidAmount preenchido -> usa o valor DIRETO, sem fallback.
+  it('T2: PIX com paidAmount:9500 -> usa direto, amountFromFallback=false', () => {
+    const body = {
+      id: 'evt_pix_direto',
+      event: 'transparent.completed',
+      data: {
+        transparent: {
+          id: 'pix_char_abc',
+          amount: 9500,
+          paidAmount: 9500,
+          status: 'PAID',
+          methods: ['PIX'],
+        },
+      },
+    };
+    const evt = parseWebhookEvent(body);
+    expect(evt?.paidAmountCents).toBe(9500);
+    expect(evt?.amountFromFallback).toBe(false);
+  });
+
+  // T4 (obrigatorio): SEM sinal de PIX, paidAmount null -> paidAmountCents null (C2 intacto
+  // p/ nao-PIX: nao caimos em `amount`, handler ainda ignoraria como no-amount).
+  it('T4: charge SEM sinal de PIX, amount:9500, paidAmount:null -> paidAmountCents=null', () => {
+    const body = {
+      id: 'evt_card',
+      event: 'transparent.completed',
+      data: {
+        charge: {
+          id: 'char_generic_001',
+          amount: 9500,
+          paidAmount: null,
+          status: 'PAID',
+          methods: ['CARD'],
+          method: 'card',
+        },
+      },
+    };
+    const evt = parseWebhookEvent(body);
+    expect(evt?.paidAmountCents).toBeNull();
+    expect(evt?.amountFromFallback).toBe(false);
+  });
+
+  // T5: id generico, sem methods/method, sem paidAmount -> fail-closed -> null.
+  it('T5: id generico, sem methods/method/paidAmount -> fail-closed, paidAmountCents=null', () => {
+    const body = {
+      id: 'evt_ambiguo',
+      event: 'transparent.completed',
+      data: {
+        transparent: {
+          id: 'char_xyz',
+          amount: 9500,
+          status: 'PAID',
+        },
+      },
+    };
+    const evt = parseWebhookEvent(body);
+    expect(evt?.paidAmountCents).toBeNull();
+    expect(evt?.amountFromFallback).toBe(false);
+    expect(evt?.method).toBeNull();
   });
 });
