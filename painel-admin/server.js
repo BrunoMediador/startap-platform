@@ -4021,14 +4021,16 @@ app.post('/api/clones/:id/suspend', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
   const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() || null : null;
-  // suspended_kind = categoria ESTRUTURADA da suspensao (ADR 0013 / threat-model C1).
+  // suspended_kind = categoria ESTRUTURADA da suspensao (ADR 0013 / threat-model C1; ADR 0014 F1).
   // O auto-resume do webhook PIX SO reativa quando kind='billing' — nunca por string-match
-  // no texto livre de reason. Default 'billing' (caso dominante: inadimplencia). Outros
-  // motivos devem mandar o kind certo pra NUNCA serem reativados por pagamento.
+  // no texto livre de reason. A categoria e OBRIGATORIA: SEM default 'billing' (ADR 0014).
+  // Motivo: um default 'billing' silencioso poderia AUTO-RESUMIR uma suspensao que o
+  // operador fez por outro motivo (esqueceu de trocar o dropdown). Forcando a escolha
+  // consciente, so suspensoes realmente de cobranca reativam ao pagar.
   const VALID_KINDS = ['billing', 'owner_request', 'manual_other', 'abuse'];
-  let kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : 'billing';
+  const kind = typeof req.body?.kind === 'string' ? req.body.kind.trim() : '';
   if (!VALID_KINDS.includes(kind)) {
-    return res.status(400).json({ error: 'kind inválido (billing|owner_request|manual_other|abuse)' });
+    return res.status(400).json({ error: 'kind obrigatório (billing|owner_request|manual_other|abuse)' });
   }
   const actor = req.session?.userId ?? 'admin';
   const client = await pool.connect();
