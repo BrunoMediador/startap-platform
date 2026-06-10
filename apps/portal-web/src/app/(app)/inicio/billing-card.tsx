@@ -8,11 +8,12 @@
  * escura (amber-ink #1A1208) — branco sobre ambar reprova AA. Roxo/vermelho
  * solidos usam texto branco (AA). Barra de progresso com aria-label textual.
  */
-import { IconWallet } from '@/components/icons';
+import { IconChevronRight, IconWallet } from '@/components/icons';
 import type { StatusBilling } from '@/lib/api-types';
 import { type BillingTone, computeBillingView } from '@/lib/billing';
 import { cn } from '@/lib/cn';
 import { formatDueDate } from '@/lib/format';
+import Link from 'next/link';
 
 interface BillingCardProps {
   billing: StatusBilling | null;
@@ -48,6 +49,24 @@ const STRONG: Record<BillingTone, string> = {
   neutral: 'text-white',
 };
 
+/**
+ * CTA "Pagar mensalidade" sobre o card solido. Em vez de herdar a paleta da app,
+ * o botao usa a TINTA do proprio card como superficie pra ter o contraste maximo
+ * AA sobre o fundo colorido (espelha o primary D8: superficie clara, texto
+ * escuro): no roxo/vermelho -> botao branco com texto na cor do card; no ambar
+ * (ja escuro) -> botao amber-ink com texto claro. Foco com ring na cor do card.
+ */
+const CTA: Record<BillingTone, string> = {
+  brand:
+    'bg-white text-brand-fill hover:bg-white/90 focus-visible:ring-white/80 focus-visible:ring-offset-brand-fill',
+  amber:
+    'bg-amber-ink text-amber-fill hover:bg-amber-ink/90 focus-visible:ring-amber-ink/70 focus-visible:ring-offset-amber-fill',
+  danger:
+    'bg-white text-danger-fill hover:bg-white/90 focus-visible:ring-white/80 focus-visible:ring-offset-danger-fill',
+  neutral:
+    'bg-white text-brand-fill hover:bg-white/90 focus-visible:ring-white/80 focus-visible:ring-offset-brand-fill',
+};
+
 export function BillingCard({ billing }: BillingCardProps) {
   const view = computeBillingView(billing);
   const tone = view.tone;
@@ -64,6 +83,7 @@ export function BillingCard({ billing }: BillingCardProps) {
         <p className={cn('relative z-10 mt-1 text-[13px]', META.brand)}>
           Pagamento controlado pelo suporte
         </p>
+        <PagarLink tone="brand" label="Pagar mensalidade" />
       </BillingShell>
     );
   }
@@ -135,6 +155,12 @@ export function BillingCard({ billing }: BillingCardProps) {
           />
         </div>
       )}
+
+      {/* Atalho pra pagar: urgente quando vencido/proximo, renovacao quando em dia. */}
+      <PagarLink
+        tone={tone}
+        label={view.vencido || view.proximo ? 'Pagar agora' : 'Renovar mensalidade'}
+      />
     </BillingShell>
   );
 }
@@ -176,6 +202,27 @@ function BillingHeader({ label, tone }: { label: string; tone: BillingTone }) {
         <IconWallet size={18} />
       </span>
     </div>
+  );
+}
+
+/**
+ * Atalho pra tela de pagamento (/mensalidade). Requisito do dono: chegar ao PIX
+ * em 1 toque a partir da Home. Link estilizado (nao usa <Button>, que e <button>
+ * puro) — alvo de toque 44px (h-11), foco visivel, label contextual. So navega.
+ */
+function PagarLink({ tone, label }: { tone: BillingTone; label: string }) {
+  return (
+    <Link
+      href="/mensalidade"
+      aria-label={`${label} — abrir tela de pagamento`}
+      className={cn(
+        'relative z-10 mt-4 inline-flex h-11 w-full items-center justify-center gap-1.5 rounded-btn px-4 font-display text-[14px] font-semibold outline-none transition-[transform,background-color] duration-[120ms] active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-offset-2',
+        CTA[tone],
+      )}
+    >
+      {label}
+      <IconChevronRight size={17} />
+    </Link>
   );
 }
 
