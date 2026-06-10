@@ -153,6 +153,20 @@ export const abacatePayWebhookRoute: FastifyPluginAsync = async (app) => {
       return reply.code(200).send({ status: 'ignored:no-amount' });
     }
 
+    if (evt.amountFromFallback) {
+      // PIX sem paidAmount: valor veio de `amount`. NAO altera o fluxo — segue pro
+      // applyPaidWebhook normalmente, onde a reconciliacao contra o snapshot (C2) e a
+      // ultima defesa. Log forense, SEM PII.
+      log.info(
+        {
+          eventId: evt.eventId,
+          abacateChargeId: evt.abacateChargeId,
+          reconciliation: 'pix-amount-fallback',
+        },
+        'valor pago derivado de amount (PIX sem paidAmount) — reconciliado contra snapshot no applyPaidWebhook',
+      );
+    }
+
     // C5: redige PII ANTES de mandar pro banco (billing_webhook_events.payload).
     const redactedPayload = redactWebhookPayload(parsedJson);
 

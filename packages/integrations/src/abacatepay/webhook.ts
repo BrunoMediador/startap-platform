@@ -141,6 +141,10 @@ export interface ParsedWebhookEvent {
   externalId: string | null;
   /** valor pago em centavos (paidAmount) — usado na reconciliacao (C2). */
   paidAmountCents: number | null;
+  /** metodo de pagamento normalizado em minusculas (ex 'pix'). null se ausente. */
+  method: string | null;
+  /** true se o valor pago foi DERIVADO de `amount` (fallback PIX), nao do paidAmount direto. Forense/log. */
+  amountFromFallback: boolean;
   /** receipt_url (dado restrito). */
   receiptUrl: string | null;
 }
@@ -158,6 +162,52 @@ function intOrNull(v: unknown): number | null {
   if (typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v)))
     return Math.round(Number(v));
   return null;
+}
+
+/** Lê um campo string da cobranca e normaliza pra minusculas. null se ausente/vazio. */
+function methodOf(charge: Record<string, unknown>): string | null {
+  const raw =
+    str(charge.method) ??
+    str(charge.kind) ??
+    str(charge.paymentMethod) ??
+    str(charge.payment_method);
+  return raw ? raw.toLowerCase() : null;
+}
+
+/**
+ * Decide se a cobranca e PIX — FAIL-CLOSED: so retorna true com sinal POSITIVO de PIX.
+ * Na duvida (sinais ausentes/ambiguos) retorna false, pra NAO habilitar o fallback de
+ * valor (`amount`) em boleto/cartao, onde `amount` pode mascarar underpayment (C2).
+ *
+ * Sinais aceitos (qualquer um basta):
+ *   - charge.methods e array contendo 'PIX' (case-insensitive); OU
+ *   - abacateChargeId comeca com 'pix_char_' ou 'pix_'; OU
+ *   - charge.kind/method/paymentMethod === 'pix' (case-insensitive).
+ */
+export function isPixCharge(
+  charge: Record<string, unknown>,
+  _data: Record<string, unknown>,
+  abacateChargeId: string | null,
+): boolean {
+  // (1) Array de metodos contendo PIX.
+  const methods = charge.methods;
+  if (Array.isArray(methods)) {
+    for (const m of methods) {
+      if (typeof m === 'string' && m.toLowerCase() === 'pix') return true;
+    }
+  }
+
+  // (2) Prefixo do id da cobranca do gateway.
+  if (abacateChargeId) {
+    const id = abacateChargeId.toLowerCase();
+    if (id.startsWith('pix_char_') || id.startsWith('pix_')) return true;
+  }
+
+  // (3) Campo de metodo singular.
+  if (methodOf(charge) === 'pix') return true;
+
+  // Sem sinal positivo -> fail-closed.
+  return false;
 }
 
 /**
@@ -182,11 +232,24 @@ export function parseWebhookEvent(body: unknown): ParsedWebhookEvent | null {
 
   const abacateChargeId = str(charge.id) ?? str(data.id);
   const externalId = str(charge.externalId) ?? str(data.externalId) ?? str(charge.external_id);
-  // SO o valor efetivamente PAGO (paidAmount). NUNCA cai no valor devido (charge.amount/
-  // data.amount): isso MASCARARIA underpayment (C2). Ausencia de paidAmount -> null, e o
-  // handler trata como ignored:no-amount em vez de assumir que pagou o valor cheio.
-  const paidAmountCents =
+
+  // Valor pago, em centavos. Preferencia ABSOLUTA pelo valor efetivamente PAGO (paidAmount).
+  // Fallback pra `amount` (valor devido) SO em PIX (isPixCharge fail-closed): no PIX o valor
+  // e fixo pelo protocolo e autenticado pelo HMAC do payload (C3) — o pagador nao escolhe
+  // pagar menos, e o gateway costuma omitir paidAmount no transparent.completed do simulate/
+  // PIX. Em boleto/cartao NUNCA caimos em `amount`: la o pagador pode pagar parcial e usar
+  // `amount` mascararia underpayment (C2). A defesa final segue sendo o snapshot
+  // billing_charges.amount_cents reconciliado em applyPaidWebhook (paidAmountCents < snapshot
+  // -> underpaid): boleto/cartao com paidAmount null continuam paidAmountCents=null e o
+  // handler os trata como ignored:no-amount.
+  const directPaid =
     intOrNull(charge.paidAmount) ?? intOrNull(charge.paid_amount) ?? intOrNull(data.paidAmount);
+  const isPix = isPixCharge(charge, data, abacateChargeId);
+  const fallbackAmount = isPix ? (intOrNull(charge.amount) ?? intOrNull(data.amount)) : null;
+  const paidAmountCents = directPaid ?? fallbackAmount;
+  const amountFromFallback = directPaid == null && fallbackAmount != null;
+
+  const method = methodOf(charge) ?? (isPix ? 'pix' : null);
   const receiptUrl = str(charge.receiptUrl) ?? str(data.receiptUrl) ?? str(charge.receipt_url);
 
   return {
@@ -196,6 +259,8 @@ export function parseWebhookEvent(body: unknown): ParsedWebhookEvent | null {
     abacateChargeId,
     externalId,
     paidAmountCents,
+    method,
+    amountFromFallback,
     receiptUrl,
   };
 }
