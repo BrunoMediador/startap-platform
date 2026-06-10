@@ -54,7 +54,17 @@ jobs:
                 root@${{ secrets.SERVER_HOST }} \
                 'set -e; cd /opt/automacoes/code; bash ./scripts/deploy.sh'
 
-      - name: Prune Docker build cache (>7 dias)
+      # Limpeza pos-deploy: o build roda com --no-cache, entao o cache de build
+      # NUNCA e reusado — so acumula (chegou a ~44GB e encheu o disco). O filtro
+      # antigo (>7 dias) deixava escapar o cache novo de cada deploy. Prune TOTAL
+      # apos deploy OK. Redundante com o passo equivalente no deploy.sh
+      # (idempotente) — mantido aqui como rede de seguranca no caminho via CI.
+      #
+      # ⚠️ JAMAIS trocar por `docker system prune -a` ou `docker image prune -a`:
+      # isso removeria imagens paradas porem taggeadas, incluindo a
+      # devlikeapro/waha-plus (imagem doada/congelada, NAO re-baixavel) e
+      # derrubaria os bots. So cache de build + imagens dangling (<none>).
+      - name: Prune Docker build cache (pos-deploy)
         if: success()
         continue-on-error: true
         uses: appleboy/ssh-action@v1.2.0
@@ -66,4 +76,5 @@ jobs:
           timeout: 120s
           command_timeout: 15m
           script: |
-            docker builder prune -f --filter "until=168h"
+            docker builder prune -af || true
+            docker image prune -f || true
