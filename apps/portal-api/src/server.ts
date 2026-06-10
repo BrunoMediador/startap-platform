@@ -18,6 +18,7 @@ import { closeRedis } from './lib/session.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
+import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
@@ -57,6 +58,7 @@ async function main() {
   await app.register(portalPausasRoutes);
   await app.register(portalStatusRoutes);
   await app.register(portalAgendamentosRoutes);
+  await app.register(portalBillingRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);
