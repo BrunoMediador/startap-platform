@@ -27,9 +27,16 @@ alta e explicita **so quando a feature roda**, nunca no boot. Quando o pagamento
 ATIVADO, basta preencher a env. Principio: *segredo de feature inativa = opcional no boot,
 validado no uso; segredo de feature ativa = obrigatorio.*
 
+## F2 — Webhook PIX + auto-reativacao (NESTE pacote: primitivas; rota em `apps/api`)
+
+- `webhook.ts` (logica pura, testavel): `verifyWebhookSecret` (query secret, timing-safe, C6), `verifyWebhookSignature` (HMAC-SHA256 base64 sobre o **RAW BODY**, C3/C6), `redactWebhookPayload` (remove CPF/email/telefone/brCode antes de persistir, C5), `parseWebhookEvent` (extrai `eventId`/`status`/`abacateChargeId`/`paidAmount`).
+- Rota `POST /webhooks/abacatepay` em **`apps/api/src/routes/webhook-abacatepay.ts`** (C10 — server-to-server, NAO no portal-api). Raw body **escopado** via content-type parser do proprio plugin (C3). Pipeline: 503 sem segredos (C9) → rate-limit (C6) → query secret → HMAC raw → so entao banco.
+- Processamento transacional em **`@startap/db` `billingWebhookEvents.applyPaidWebhook`** (`packages/db/src/queries/billing-webhook-events.ts`): dedupe por `event_id` (C4), `FOR UPDATE` na cobranca (C4 race), reconciliacao de valor vs snapshot (C2), avanco de vencimento, auto-resume **so se `suspended_kind='billing'`** (C1).
+- Migration `042_billing_webhook_events.sql`: tabela `billing_webhook_events` (dedupe, payload redigido) + coluna `flow_clones.suspended_kind`.
+- Config (opcional no boot, C9): `ABACATEPAY_WEBHOOK_QUERY_SECRET`, `ABACATEPAY_WEBHOOK_SECRET` em `apps/api/src/config.schema.ts`.
+
 ## O que NAO tem aqui (fases seguintes)
 
-- Webhook (`POST /webhooks/abacatepay`), validacao HMAC + query secret, dedupe, auto-resume → **F2** (`apps/api`).
 - Endpoint do portal (`GET /portal/billing/current`) + UI → **F3**.
 - Cron mensal de geracao + reconciliacao → **F4** (`apps/worker`).
 
@@ -77,8 +84,48 @@ validado no uso; segredo de feature ativa = obrigatorio.*
    ```
    > Na F1 o status PAID **nao** avanca vencimento nem reativa fluxo — isso e o handler de webhook da F2 (controles C1–C4). Aqui so confirmamos que a leitura de status funciona.
 
+## Smoke test do WEBHOOK no Dev (F2 — manual, Bruno/PM com a chave Dev)
+
+> Exercita o webhook real **sem PIX de verdade** via `simulate-payment`. Pre-req: F1 ja roda
+> (cobranca gerada). A api precisa estar no ar com os segredos do webhook configurados.
+
+1. **Setar os segredos do webhook** no `.env` da api (alem da `ABACATEPAY_API_KEY` da F1):
+   ```
+   ABACATEPAY_WEBHOOK_QUERY_SECRET=<qualquer_segredo_forte>
+   ABACATEPAY_WEBHOOK_SECRET=<chave_compartilhada_do_webhook_no_painel_abacatepay>
+   ```
+   No painel da AbacatePay, cadastrar a URL do webhook como
+   `https://<host>/webhooks/abacatepay?webhookSecret=<ABACATEPAY_WEBHOOK_QUERY_SECRET>`
+   e usar a mesma `ABACATEPAY_WEBHOOK_SECRET` que assina o header `X-Webhook-Signature`.
+2. **Aplicar a migration** (cria `billing_webhook_events` + `flow_clones.suspended_kind`):
+   ```
+   bash scripts/migrate.sh
+   ```
+   Confirmar: `psql ... -c "\d billing_webhook_events"` e `\d flow_clones` (coluna `suspended_kind`).
+3. **(opcional) Suspender o slot por billing** pelo painel de gestao (categoria
+   "Inadimplencia / cobranca") pra exercitar o auto-resume — grava `suspended_kind='billing'`.
+4. **Gerar a cobranca** (F1) e **simular o pagamento**:
+   ```
+   curl -X POST "https://api.abacatepay.com/v2/transparents/simulate-payment?id=<pix_char_id>" \
+     -H "Authorization: Bearer $ABACATEPAY_API_KEY"
+   ```
+   A AbacatePay dispara o webhook `transparent.completed` (status `PAID`) pra nossa rota.
+5. **Conferir o efeito** no banco:
+   ```
+   psql ... -c "SELECT status, paid_amount_cents, paid_at FROM billing_charges WHERE abacate_charge_id='<pix_char_id>';"   -- status='paid'
+   psql ... -c "SELECT to_char(next_due_date,'YYYY-MM-DD'), status FROM client_billing WHERE slot='<slot>';"               -- vencimento +1 mes
+   psql ... -c "SELECT flow_enabled, suspended_kind FROM flow_clones WHERE slot='<slot>';"                                  -- flow_enabled=true se era billing
+   psql ... -c "SELECT event_id, event, processed_at, payload FROM billing_webhook_events ORDER BY received_at DESC LIMIT 1;" -- payload SEM CPF/email/telefone/brCode (C5)
+   ```
+6. **Replay (dedupe C4)**: reenviar o **mesmo** evento (mesmo `event_id`) — `billing_webhook_events`
+   nao ganha linha nova e nada e reprocessado (resposta `200 {status:'duplicate'}`).
+7. **Underpaid (C2)**: simular pagamento de valor abaixo do `amount_cents` da cobranca — a cobranca
+   vira `paid` MAS `next_due_date` **nao** avanca e `flow_enabled` **nao** muda; log de alerta
+   `billing-underpaid` pro Bruno.
+
 ## Endpoints confirmados
 
 - Criar cobranca PIX: `POST /v2/transparents/create` (body `{ method:'PIX', data:{ amount, description, expiresIn, externalId, metadata } }`). Fonte: ADR 0013 (docs.abacatepay.com).
 - Checar status: `GET /v2/transparents/check?id={id}`.
 - Simular pagamento (Dev): `POST /v2/transparents/simulate-payment?id={id}`.
+- Webhook (F2): `POST /webhooks/abacatepay?webhookSecret={query}` + header `X-Webhook-Signature` (HMAC-SHA256 base64 do raw body). Evento `transparent.completed` com `status:PAID`.

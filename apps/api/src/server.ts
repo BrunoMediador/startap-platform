@@ -8,6 +8,7 @@ import { TesteBarbeariaBot } from './bots/teste_barbearia.js';
 import { config } from './config.js';
 import { registerBot, registerCloneFactory } from './router.js';
 import { healthRoute } from './routes/health.js';
+import { abacatePayWebhookRoute } from './routes/webhook-abacatepay.js';
 import { wahaWebhookRoute } from './routes/webhook-waha.js';
 
 const log = logger.child({ service: 'api' });
@@ -21,6 +22,9 @@ async function main() {
   await app.register(sensible);
   await app.register(healthRoute);
   await app.register(wahaWebhookRoute);
+  // Webhook AbacatePay (F2): plugin encapsulado — seu content-type parser raw fica
+  // ESCOPADO a ele (C3), nao afeta o JSON parser global nem o webhook-waha.
+  await app.register(abacatePayWebhookRoute);
 
   // Bots sem sessão própria — lookup via routing_clientes.
   // Startap já está registrado via import './bots/startap.js' acima (registerBotEntry no init).
@@ -28,7 +32,10 @@ async function main() {
   registerBot('0ni38aSspWwhooHd', new TesteBarbeariaBot(), 'pausa_cirilo'); // teste_barbearia
 
   // Factories de clones — uma por matriz. O dispatcher instancia dinamicamente com slotOverride.
-  registerCloneFactory('teste_barbearia', (slotOverride) => new TesteBarbeariaBot({ slotOverride }));
+  registerCloneFactory(
+    'teste_barbearia',
+    (slotOverride) => new TesteBarbeariaBot({ slotOverride }),
+  );
 
   app.setErrorHandler((err, req, reply) => {
     log.error({ err, url: req.url }, 'Request error');
