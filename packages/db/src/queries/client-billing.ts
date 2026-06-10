@@ -151,3 +151,78 @@ export function daysUntilDue(nextDueDate: string | null, today = new Date()): nu
   const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
   return Math.round((due - todayUtc) / 86_400_000);
 }
+
+// ─── Modelo por DATA DE VENCIMENTO (ADR 0014) ──────────────────────────────────
+
+/** Janela de pagamento default: 7 dias antes do vencimento (decisao do Bruno, ADR 0014). */
+export const BILLING_WINDOW_DAYS = 7;
+
+/** Estado de cobranca derivado da data — FONTE UNICA DE VERDADE (tela E card consomem). */
+export type BillingState = 'em_dia' | 'a_vencer' | 'vencido' | 'sem_config';
+
+export interface BillingStateResult {
+  state: BillingState;
+  /** Dias ate o vencimento (negativo = vencido; null se sem_config). */
+  diasRestantes: number | null;
+  /** a_vencer || vencido — slot esta dentro da janela de pagamento. */
+  dentroDaJanela: boolean;
+  /** dentroDaJanela — derivado puro da data (o "tem valor?" e checado no ponto de uso). */
+  podeGerarPix: boolean;
+}
+
+/**
+ * Estado de cobranca a partir de next_due_date e hoje (ADR 0014, fonte unica).
+ *
+ * - `sem_config`: sem next_due_date (sem valor e tratado no ponto de uso, nao aqui).
+ * - `em_dia`   : d > windowDays  -> NAO gera/exibe PIX (cliente em dia).
+ * - `a_vencer` : 1 <= d <= windowDays -> dentro da janela, gera PIX.
+ * - `vencido`  : d <= 0          -> dentro da janela, gera PIX.
+ *
+ * Pura/deterministica. Reusa daysUntilDue (mesma referencia de "hoje" em UTC meia-noite).
+ */
+export function computeBillingState(
+  nextDueDate: string | null,
+  today = new Date(),
+  windowDays = BILLING_WINDOW_DAYS,
+): BillingStateResult {
+  const dias = daysUntilDue(nextDueDate, today);
+  if (dias == null) {
+    return { state: 'sem_config', diasRestantes: null, dentroDaJanela: false, podeGerarPix: false };
+  }
+  if (dias > windowDays) {
+    return { state: 'em_dia', diasRestantes: dias, dentroDaJanela: false, podeGerarPix: false };
+  }
+  const state: BillingState = dias <= 0 ? 'vencido' : 'a_vencer';
+  return { state, diasRestantes: dias, dentroDaJanela: true, podeGerarPix: true };
+}
+
+/**
+ * Data 'YYYY-MM-DD' de HOJE no fuso UTC (meia-noite). Base para o avanco com max(...).
+ * Alinhado com daysUntilDue, que tambem ancora "hoje" em UTC meia-noite.
+ */
+export function todayUtcDateStr(today = new Date()): string {
+  const y = today.getUTCFullYear();
+  const m = String(today.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(today.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Avanco do vencimento no modelo por data (ADR 0014, decisao do Bruno):
+ *   novo = max(next_due_date, hoje) + cycleMonths meses.
+ *
+ * - Em dia (due > hoje): parte de `due` (nao perde tempo pago).
+ * - Vencido / re-cobranca (due no passado): parte de `hoje` -> NUNCA renova pro passado.
+ *
+ * `currentDue` null => parte de hoje. Pura/deterministica (usa advanceDueDate).
+ */
+export function advanceFromMaxDue(
+  currentDue: string | null,
+  today = new Date(),
+  cycleMonths = 1,
+): string {
+  const todayStr = todayUtcDateStr(today);
+  // max(due, hoje): compara as strings 'YYYY-MM-DD' (ordenacao lexicografica == cronologica).
+  const base = currentDue && currentDue > todayStr ? currentDue : todayStr;
+  return advanceDueDate(base, cycleMonths);
+}
