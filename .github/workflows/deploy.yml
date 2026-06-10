@@ -25,17 +25,34 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1.2.0
+      # O provedor de rede da VPS (Hostinger) tem anti-DDoS na borda que, de forma
+      # intermitente, dropa faixas do GitHub Actions ANTES de chegar no servidor.
+      # Sintoma: `dial tcp :22 i/o timeout`. O firewall do SO esta liberado.
+      #
+      # `nick-fields/retry` re-executa o passo inteiro com backoff: se o bloqueio
+      # for intermitente e o IP do runner sair da faixa dropada (ou a borda liberar),
+      # uma das 3 tentativas passa. NAO resolve bloqueio sustentado (ver ticket de
+      # whitelist no provedor + opcao de tunel Tailscale).
+      - name: Deploy to server (with retry)
+        uses: nick-fields/retry@v3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          script: |
-            set -e
-            cd /opt/automacoes/code
-            bash ./scripts/deploy.sh
+          timeout_minutes: 18          # teto por tentativa (deploy real ~3-5min)
+          max_attempts: 3              # 3 tentativas
+          retry_wait_seconds: 30       # backoff entre tentativas
+          retry_on: error
+          command: |
+            mkdir -p ~/.ssh
+            printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            ssh -i ~/.ssh/deploy_key \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -o ConnectTimeout=120 \
+                -o ServerAliveInterval=30 \
+                -o ServerAliveCountMax=4 \
+                -p 22 \
+                root@${{ secrets.SERVER_HOST }} \
+                'set -e; cd /opt/automacoes/code; bash ./scripts/deploy.sh'
 
       - name: Prune Docker build cache (>7 dias)
         if: success()
@@ -46,5 +63,7 @@ jobs:
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
+          timeout: 120s
+          command_timeout: 15m
           script: |
             docker builder prune -f --filter "until=168h"
