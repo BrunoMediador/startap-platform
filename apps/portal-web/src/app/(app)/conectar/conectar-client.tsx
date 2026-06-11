@@ -16,8 +16,13 @@
  *
  * Polling: GET /status a cada 2s (useStatusConexao), liga so nas fases que
  * esperam transicao (reiniciando/codigo/qr). Para quando terminal. Ao virar
- * WORKING -> sucesso. A transicao final e anunciada via role=status/alert; o
- * poll em si e silencioso pro leitor de tela.
+ * WORKING -> sucesso. E o poll de STATUS que decide quando pedir o codigo: em
+ * 'reiniciando', assim que o status reporta SCAN_QR_CODE, POST /codigo e
+ * disparado UMA unica vez. O /codigo tem rate-limit apertado (3 por 5min,
+ * dimensionado pra clique manual em "Gerar novo codigo") e NUNCA pode virar
+ * polling — era isso que estourava 429 e derrubava a tela em ~7s em prod.
+ * A transicao final e anunciada via role=status/alert; o poll em si e
+ * silencioso pro leitor de tela.
  *
  * Telefone SEMPRE mascarado, SEM campo de edicao (o cliente nao muda o numero).
  */
@@ -201,9 +206,8 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       // 'reiniciando' tambem fica de fora: durante o restart a sessao pode passar
       // transitoriamente por FAILED/STOPPED antes de STARTING -> SCAN_QR_CODE.
       // Tratar isso como erro imediato e um falso negativo — a autoridade de
-      // desistir no restart e o timeout de 45s do effect de "reiniciando"
-      // (que faz o poll de /codigo). connected -> sucesso segue valendo em
-      // qualquer fase (tratado acima).
+      // desistir no restart e o timeout de seguranca de 45s (effect abaixo).
+      // connected -> sucesso segue valendo em qualquer fase (tratado acima).
       setErroMsg('A conexão demorou demais ou falhou. Isso acontece às vezes.');
       setPhase('erro');
     }
@@ -285,69 +289,87 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
   }, [cooldown, cooldownSeconds, reconectar, irParaSucesso]);
 
   // ── "Latest ref" do openQr ────────────────────────────────────────────────────
-  // O effect de 'reiniciando' (abaixo) NÃO pode capturar `openQr` direto: openQr
-  // depende de irParaSucesso -> conexaoQ (objeto react-query cuja IDENTIDADE muda
-  // a cada poll/render). Capturar openQr re-executava o effect a cada poll, o
-  // cleanup cancelava o tick em voo e o `if (cancelled)` DESCARTAVA um código 200
-  // válido -> loop infinito preso em "Preparando". Aqui o effect lê SEMPRE a
-  // versão mais recente via ref, mantendo suas deps estáveis ([phase, fn estável]).
+  // O effect do código (abaixo) NÃO pode capturar `openQr` direto: openQr depende
+  // de irParaSucesso -> conexaoQ (objeto react-query cuja IDENTIDADE muda a cada
+  // poll/render). Capturar openQr nas deps já causou bug em prod (PR #262: effect
+  // re-executava a cada poll, o cleanup cancelava o request em voo e DESCARTAVA
+  // um código 200 válido -> loop infinito preso em "Preparando"). Aqui o effect
+  // lê SEMPRE a versão mais recente via ref, mantendo deps deliberadas.
   const openQrRef = useRef(openQr);
   useEffect(() => {
     openQrRef.current = openQr;
   }, [openQr]);
 
-  // ── Reiniciando: pede o codigo assim que a sessao ficar pronta; timeout 45s ──
-  // Tenta POST /codigo periodicamente. 422 sessao_nao_pronta -> segue esperando.
-  // 200 -> entra na tela de codigo. Sem numero cadastrado (422 telefone_*) -> QR.
-  // Deps ESTÁVEIS de propósito: só [phase] + gerarCodigoAsync (mutateAsync tem
-  // identidade estável no TanStack Query). openQr entra via ref (acima).
-  const gerarCodigoAsync = gerarCodigo.mutateAsync;
+  // ── Reiniciando: timeout de seguranca (preso alem de 45s -> erro) ────────────
+  // Quem espera a sessao ficar pronta e o poll de GET /status (60/min). Aqui so
+  // o teto do ciclo: sem codigo nem conexao dentro do budget, desiste.
   useEffect(() => {
     if (phase !== 'reiniciando') return;
-    const startedAt = Date.now();
-    let cancelled = false;
-    let timer = 0;
+    const timer = window.setTimeout(() => {
+      setErroMsg('A conexão demorou demais ou falhou. Isso acontece às vezes.');
+      setPhase('erro');
+    }, RESTART_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [phase]);
 
-    async function tick(): Promise<void> {
-      if (cancelled) return;
-      // Timeout de seguranca: preso reiniciando alem do limite -> erro.
-      if (Date.now() - startedAt > RESTART_TIMEOUT_MS) {
-        setErroMsg('A conexão demorou demais ou falhou. Isso acontece às vezes.');
-        setPhase('erro');
-        return;
-      }
+  // ── Reiniciando: pede o codigo UMA vez quando o status vira SCAN_QR_CODE ─────
+  // POST /codigo tem rate-limit 3/5min (dimensionado pra clique manual em "Gerar
+  // novo código") e NUNCA pode virar polling: o tick-loop antigo queimava a cota
+  // com 422 sessao_nao_pronta e o 4o tick levava 429 -> erro genérico em ~7s
+  // (bug de prod; o código nunca aparecia). O gatilho agora é o poll de /status:
+  // SCAN_QR_CODE -> dispara o POST uma única vez por ciclo.
+  //
+  // Guard temporal via ref (não duplo-dispara entre renders/polls): guarda o
+  // dataUpdatedAt do tick de /status já tratado; Infinity = código pedido (trava
+  // o ciclo). Na corrida rara do 422 (status mudou entre o poll e o POST), rearma
+  // pro PRÓXIMO tick novo de /status — não conta como erro. Deps deliberadas:
+  // phase + dado/timestamp do poll + mutateAsync (identidade estável no TanStack
+  // Query). Sem cleanup cancelando nada: re-render é inofensivo (lição do #262).
+  const gerarCodigoAsync = gerarCodigo.mutateAsync;
+  const statusTratadoRef = useRef(0);
+  useEffect(() => {
+    if (phase !== 'reiniciando') {
+      statusTratadoRef.current = 0; // fora do ciclo -> libera pro próximo
+      return;
+    }
+    const tick = statusQ.dataUpdatedAt;
+    if (statusQ.data?.status !== 'SCAN_QR_CODE') return;
+    if (tick <= statusTratadoRef.current) return; // já tratado ou travado
+    statusTratadoRef.current = Number.POSITIVE_INFINITY; // 1 POST por ciclo
+
+    void (async () => {
       try {
         const res = await gerarCodigoAsync();
         // NUNCA descartar um código 200 válido: o backend já emitiu o pareamento
-        // (efêmero, 60s) e re-pedir geraria spam. Aplica SEMPRE, mesmo que o
-        // cleanup tenha virado `cancelled` durante o await — um setState a mais é
-        // inofensivo (React no-op fora de tela); jogar o código fora é o bug.
+        // (efêmero, 60s) e re-pedir geraria spam. Aplica SEMPRE, mesmo que a fase
+        // tenha mudado durante o await — um setState a mais é inofensivo (React
+        // no-op fora de tela); jogar o código fora é o bug (lição do PR #262).
         setPairingCode(res.pairing_code);
         setCodeExpiresIn(res.expires_in_seconds);
         setPhase('codigo');
       } catch (err) {
-        // Em erro o guard `cancelled` vale: evita re-agendar timer / disparar QR
-        // num effect que já foi limpo.
-        if (cancelled) return;
         if (isErr(err, 'sessao_nao_pronta')) {
-          timer = window.setTimeout(tick, 2000); // ainda preparando — tenta de novo
+          // Corrida rara: a sessao saiu de SCAN_QR_CODE entre o poll e o POST.
+          // Rearma o guard pro proximo tick de /status tentar de novo.
+          statusTratadoRef.current = tick;
           return;
         }
         if (isErr(err, 'telefone_nao_cadastrado')) {
           openQrRef.current(); // sem numero: cai no caminho de QR (ref estável)
           return;
         }
+        if (err instanceof ApiError && err.status === 429) {
+          // Cota do /codigo queimada (ex.: cliques manuais recentes em "Gerar
+          // novo código"). NÃO vira erro genérico: segue esperando dentro do
+          // budget de 45s (timeout acima decide). Guard fica travado pra não
+          // martelar o endpoint de novo neste ciclo.
+          return;
+        }
         setErroMsg(mensagemErro(err)); // 503 ou outro -> erro com retry
         setPhase('erro');
       }
-    }
-    // Da um respiro inicial pro restart engatar antes do 1o /codigo.
-    timer = window.setTimeout(tick, 1500);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [phase, gerarCodigoAsync]);
+    })();
+  }, [phase, statusQ.data, statusQ.dataUpdatedAt, gerarCodigoAsync]);
 
   // ── Auto-disparo vindo do banner (?auto=1) ───────────────────────────────────
   const autoFired = useRef(false);
