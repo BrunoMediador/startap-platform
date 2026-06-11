@@ -8224,7 +8224,7 @@ function _renderServicosTab(opts) {
       <div class="sv-row" data-idx="${idx}" style="display:grid;grid-template-columns:1fr 110px 110px auto;gap:.5rem;align-items:center;padding:.4rem .25rem;border-bottom:1px solid var(--border)">
         <input type="text" class="sv-nome" placeholder="Ex: Corte" value="${escapeHtml(nome)}" maxlength="60" />
         <input type="number" class="sv-preco" placeholder="R$ 0,00" value="${preco}" step="0.01" min="0" />
-        <input type="number" class="sv-dur" placeholder="min" value="${dur}" step="1" min="1" max="600" />
+        <input type="number" class="sv-dur" placeholder="min" value="${dur}" step="5" min="5" max="600" />
         <button type="button" class="btn btn--ghost btn--sm btn--icon sv-del" aria-label="Remover" style="color:var(--danger)">${icon('trash-2', 13)}</button>
       </div>`;
   }
@@ -8281,6 +8281,12 @@ function _renderServicosTab(opts) {
       if (!nome) { erro = erro || 'Cada serviço precisa de um nome.'; return; }
       const precoReais = Number(precoStr);
       const dur = Number(durStr);
+      // Duração só em múltiplos de 5 min (espelha validação do server — grade da
+      // agenda anda em passos de 5). Vazio segue permitido: cai no fallback 30.
+      if (durStr && Number.isFinite(dur) && dur > 0 && dur % 5 !== 0) {
+        erro = erro || `Duração de "${nome}" deve ser múltiplo de 5 min (5, 10, 15…).`;
+        return;
+      }
       novo.push({
         nome,
         preco_cents: Number.isFinite(precoReais) && precoReais >= 0 ? Math.round(precoReais * 100) : 0,
