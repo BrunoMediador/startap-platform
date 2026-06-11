@@ -26,6 +26,24 @@ describe('servicoSchema', () => {
     );
   });
 
+  it('aceita duracao_min multipla de 5 (grade de agenda em passos de 5min)', () => {
+    expect(servicoSchema.safeParse({ nome: 'X', preco_cents: 100, duracao_min: 5 }).success).toBe(
+      true,
+    );
+    expect(servicoSchema.safeParse({ nome: 'X', preco_cents: 100, duracao_min: 25 }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejeita duracao_min fora do passo de 5 minutos', () => {
+    expect(servicoSchema.safeParse({ nome: 'X', preco_cents: 100, duracao_min: 7 }).success).toBe(
+      false,
+    );
+    expect(servicoSchema.safeParse({ nome: 'X', preco_cents: 100, duracao_min: 23 }).success).toBe(
+      false,
+    );
+  });
+
   it('rejeita nome vazio', () => {
     const r = servicoSchema.safeParse({ nome: '   ', preco_cents: 100, duracao_min: 30 });
     expect(r.success).toBe(false);

@@ -10,8 +10,9 @@ import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import type { Servico } from '@/lib/api-types';
-import { formatDuracao, formatPrecoCents, parsePrecoToCents } from '@/lib/format';
+import { formatDuracao, formatPrecoCents } from '@/lib/format';
 import { qk, useSaveServicos, useServicos } from '@/lib/queries';
+import { type Draft, type FieldErrors, toDraft, validate } from '@/lib/servicos';
 /**
  * Serviços (spec 6.7 + 3.3). Lista editavel: nome · duracao · preco. PUT envia o
  * array INTEIRO (contrato /portal/servicos). Salvamento OTIMISTA (D5): a UI
@@ -25,44 +26,12 @@ import { qk, useSaveServicos, useServicos } from '@/lib/queries';
  *    as mudancas daquele item, volta ao valor original, SEM PUT). cancel() so
  *    fecha o editor; nada e enviado.
  *
- * Validacao no cliente espelha o servicoSchema do backend (nome>=1, duracao>0,
- * preco>=0) pra dar erro inline antes de bater na API.
+ * Validacao no cliente espelha o servicoSchema do backend (nome>=1, duracao>0
+ * e multiplo de 5 min, preco>=0) — vive em @/lib/servicos (testavel) e da erro
+ * inline antes de bater na API.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-
-interface Draft {
-  nome: string;
-  duracao: string;
-  preco: string;
-}
-
-interface FieldErrors {
-  nome?: string;
-  duracao?: string;
-  preco?: string;
-}
-
-function toDraft(s: Servico): Draft {
-  return {
-    nome: s.nome,
-    duracao: String(s.duracao_min),
-    preco: (s.preco_cents / 100).toFixed(2).replace('.', ','),
-  };
-}
-
-function validate(d: Draft): { ok: true; value: Servico } | { ok: false; errors: FieldErrors } {
-  const errors: FieldErrors = {};
-  const nome = d.nome.trim();
-  if (nome.length === 0) errors.nome = 'Informe um nome para o serviço';
-  const duracao = Number(d.duracao);
-  if (!Number.isInteger(duracao) || duracao <= 0)
-    errors.duracao = 'Duração deve ser maior que zero';
-  const cents = parsePrecoToCents(d.preco);
-  if (cents === null) errors.preco = 'Informe o preço';
-  if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return { ok: true, value: { nome, duracao_min: duracao, preco_cents: cents as number } };
-}
 
 export default function ServicosPage() {
   const { slot } = useTenant();
@@ -292,6 +261,8 @@ function EditRow({
           label="Duração"
           type="number"
           inputMode="numeric"
+          step={5}
+          min={5}
           suffix="min"
           value={draft.duracao}
           error={errors.duracao}
