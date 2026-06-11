@@ -55,7 +55,7 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 const PAGE_SUBTITLE =
   'Reconecte o WhatsApp do seu robô sem precisar do suporte. Deixe esta tela aberta durante o processo.';
@@ -559,6 +559,9 @@ function CodigoCard({
         <div className="mt-3.5">
           <CopyCodeButton code={code} />
         </div>
+        <p className="mt-2 text-center text-[12.5px] leading-snug text-ink-faint">
+          Copie antes de abrir o WhatsApp — lá é só colar.
+        </p>
         <Countdown seconds={expiresIn} />
 
         {/* Status passivo do poll — anuncia "esperando" sem spam de leitor de tela. */}
@@ -857,35 +860,227 @@ function Countdown({ seconds }: { seconds: number }) {
   );
 }
 
-/** Passo-a-passo numerado pra colar o código no WhatsApp do celular do robô. */
+/** Um passo do tutorial. `key` estável (a lista troca por plataforma). */
+type Passo = { key: string; texto: ReactNode };
+
+/** Plataforma do celular do robô — o menu do WhatsApp muda entre as duas. */
+type Plataforma = 'android' | 'iphone';
+
+/**
+ * Tutorial à prova de leigo pra colar o código no WhatsApp do celular do robô.
+ * O cliente costuma abrir o portal NO PRÓPRIO celular do robô, então:
+ *  1. Caminho feliz em destaque: gerar o código dispara uma notificação push do
+ *     WhatsApp NESTE aparelho ("conectar novo aparelho") -> tocar nela e colar.
+ *  2. Fallback manual separado por plataforma (Android usa ⋮ no topo; iPhone usa
+ *     Configurações embaixo) — toggle simples, sem lib nova.
+ *  3. Reforço de copiar o código ANTES de trocar de app (vai sair desta tela).
+ */
 function PassoAPasso() {
-  const passos = [
-    'Abra o WhatsApp no celular do robô',
-    "Toque em Ajustes (⚙️) e depois em 'Aparelhos conectados'",
-    "Toque em 'Conectar um aparelho'",
-    "Toque em 'Conectar com número de telefone' (fica embaixo do leitor de QR)",
-    'Digite ou cole o código que aparece aqui em cima',
+  const [plataforma, setPlataforma] = useState<Plataforma>('android');
+
+  const passosNotificacao: Passo[] = [
+    {
+      key: 'copiar',
+      texto: (
+        <>
+          Toque em <b className="text-ink">Copiar código</b> aqui em cima.
+        </>
+      ),
+    },
+    {
+      key: 'notificacao',
+      texto: (
+        <>
+          Toque na <b className="text-ink">notificação do WhatsApp</b> quando ela aparecer.
+        </>
+      ),
+    },
+    { key: 'colar', texto: 'Cole o código. Pronto!' },
   ];
+
+  const passosManual: Record<Plataforma, Passo[]> = {
+    android: [
+      {
+        key: 'copiar',
+        texto: (
+          <>
+            <b className="text-ink">Copie o código</b> aqui em cima.
+          </>
+        ),
+      },
+      { key: 'abrir', texto: 'Abra o WhatsApp.' },
+      {
+        key: 'menu',
+        texto: (
+          <>
+            Toque nos <b className="text-ink">três pontinhos (⋮)</b> no canto de cima, à direita.
+          </>
+        ),
+      },
+      {
+        key: 'aparelhos',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Aparelhos conectados</b>.
+          </>
+        ),
+      },
+      {
+        key: 'conectar',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Conectar um aparelho</b>.
+          </>
+        ),
+      },
+      {
+        key: 'numero',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Conectar com número de telefone</b> — fica embaixo do
+            leitor de QR.
+          </>
+        ),
+      },
+      { key: 'colar', texto: 'Cole o código. Pronto!' },
+    ],
+    iphone: [
+      {
+        key: 'copiar',
+        texto: (
+          <>
+            <b className="text-ink">Copie o código</b> aqui em cima.
+          </>
+        ),
+      },
+      { key: 'abrir', texto: 'Abra o WhatsApp.' },
+      {
+        key: 'menu',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Configurações</b>, no canto de baixo, à direita.
+          </>
+        ),
+      },
+      {
+        key: 'aparelhos',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Aparelhos conectados</b>.
+          </>
+        ),
+      },
+      {
+        key: 'conectar',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Conectar um aparelho</b>.
+          </>
+        ),
+      },
+      {
+        key: 'numero',
+        texto: (
+          <>
+            Toque em <b className="text-ink">Conectar com número de telefone</b>.
+          </>
+        ),
+      },
+      { key: 'colar', texto: 'Cole o código. Pronto!' },
+    ],
+  };
+
   return (
     <section className="rounded-card border border-line bg-surface p-5 shadow-card">
       <h3 className="font-display text-[14px] font-semibold text-ink">Como conectar</h3>
-      <ol className="mt-3 space-y-2.5">
-        {passos.map((texto, i) => (
-          <li key={texto} className="flex items-start gap-3">
-            <span
-              aria-hidden
-              className="mt-px flex size-6 shrink-0 items-center justify-center rounded-full bg-brand-soft font-display text-[12px] font-bold text-brand"
-            >
-              {i + 1}
-            </span>
-            <span className="text-[13.5px] leading-snug text-ink-soft">
-              <span className="sr-only">Passo {i + 1}: </span>
-              {texto}
-            </span>
-          </li>
-        ))}
-      </ol>
+
+      {/* Caminho feliz EM DESTAQUE: a notificação chega neste mesmo celular. */}
+      <div className="mt-3 rounded-card-sm border border-brand/40 bg-brand-soft p-4">
+        <p className="font-display text-[13.5px] font-semibold text-ink">
+          O jeito mais fácil: a notificação
+        </p>
+        <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
+          O WhatsApp vai avisar <b className="text-ink">neste celular</b> que alguém quer conectar
+          um aparelho.
+        </p>
+        <StepList passos={passosNotificacao} destaque />
+      </div>
+
+      {/* Fallback manual: menus diferentes por plataforma. */}
+      <div className="mt-4">
+        <p className="font-display text-[13.5px] font-semibold text-ink">
+          A notificação não apareceu?
+        </p>
+        <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
+          Tudo bem — dá pra fazer pelo menu do WhatsApp. Qual é o seu celular?
+        </p>
+        <PlataformaSwitch value={plataforma} onChange={setPlataforma} />
+        <StepList passos={passosManual[plataforma]} />
+      </div>
+
+      <p className="mt-4 rounded-card-sm border border-line bg-bg px-3 py-2.5 text-[13px] leading-snug text-ink-soft">
+        Depois de colar o código, volte pra esta tela — ela avisa quando o robô conectar.
+      </p>
     </section>
+  );
+}
+
+/** Lista numerada de passos. `destaque` muda o badge pra brand cheio (caixa soft). */
+function StepList({ passos, destaque = false }: { passos: Passo[]; destaque?: boolean }) {
+  return (
+    <ol className="mt-3 space-y-2.5">
+      {passos.map((p, i) => (
+        <li key={p.key} className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className={cn(
+              'mt-px flex size-6 shrink-0 items-center justify-center rounded-full font-display text-[12px] font-bold',
+              destaque ? 'bg-brand text-bg' : 'bg-brand-soft text-brand',
+            )}
+          >
+            {i + 1}
+          </span>
+          <span className="text-[13.5px] leading-snug text-ink-soft">
+            <span className="sr-only">Passo {i + 1}: </span>
+            {p.texto}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** Toggle Android/iPhone (aria-pressed; sem lib nova). Default Android. */
+function PlataformaSwitch({
+  value,
+  onChange,
+}: {
+  value: Plataforma;
+  onChange: (p: Plataforma) => void;
+}) {
+  const opcoes: { id: Plataforma; label: string }[] = [
+    { id: 'android', label: 'Android' },
+    { id: 'iphone', label: 'iPhone' },
+  ];
+  return (
+    <div role="group" aria-label="Qual é o seu celular?" className="mt-3 grid grid-cols-2 gap-2">
+      {opcoes.map((op) => (
+        <button
+          key={op.id}
+          type="button"
+          aria-pressed={value === op.id}
+          onClick={() => onChange(op.id)}
+          className={cn(
+            'h-11 rounded-btn font-display text-[14px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+            value === op.id
+              ? 'bg-brand text-bg'
+              : 'border border-line-strong bg-surface text-ink-soft hover:bg-surface-hover',
+          )}
+        >
+          {op.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
