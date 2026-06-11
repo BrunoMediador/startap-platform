@@ -55,6 +55,73 @@ export async function countConsumedBySlot(slot: string): Promise<number> {
   return Number(r.rows[0]?.count ?? 0);
 }
 
+/**
+ * Quantos trials estão SIMULTANEAMENTE vivos — teto anti-DoS de recurso do
+ * signup (security review PR #268, item P0 #2): cada trial vivo = 1 sessão WAHA
+ * (instância Baileys) consumindo RAM na VPS sem swap.
+ *
+ * Conta como "vivo" (modelo da migration 044):
+ *  - awaiting => clone provisionado aguardando QR (sessão pendurada — pior caso);
+ *  - blocked  => sessão pareada e viva, bot mudo (até PIX ou cleanup — card próprio);
+ *  - active NÃO expirado => trial corrente (next_due_date NULL ou >= hoje UTC).
+ * NÃO conta: none/exempt (não são trials) e active vencido (já convertido em
+ * pagante ou silenciado pelo gate ADR-0016 — deixou de ser "trial pendente").
+ */
+export async function countActiveTrials(): Promise<number> {
+  const r = await query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM flow_clones fc
+     LEFT JOIN client_billing cb ON cb.slot = fc.slot
+     WHERE fc.trial_status IN ('awaiting', 'blocked')
+        OR (fc.trial_status = 'active'
+            AND (cb.next_due_date IS NULL
+                 OR cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date))`,
+  );
+  return Number(r.rows[0]?.count ?? 0);
+}
+
+/**
+ * Serializa o processamento de trial por slot via advisory lock transacional
+ * (security review PR #268: dois session.status WORKING concorrentes do mesmo
+ * clone liam consumed=1 e ambos inseriam — estourava o "máx 2 números").
+ *
+ * Por que advisory e NÃO SELECT ... FOR UPDATE na row de flow_clones: os
+ * helpers de escrita (startTrial/blockTrial/consumeAdditionalNumber) abrem as
+ * PRÓPRIAS transações em conexões separadas e fazem UPDATE na mesma row — um
+ * FOR UPDATE segurado aqui bloquearia essas escritas internas (self-deadlock
+ * entre conexões do mesmo fluxo). O advisory xact lock serializa chamadas
+ * CONCORRENTES sem conflitar com row locks internos.
+ *
+ * try-lock (não bloqueante): se outro evento do MESMO slot está em curso,
+ * retorna { acquired: false } — o caller ignora o evento (WAHA reenvia
+ * session.status e o hook é idempotente; retry-friendly por design).
+ */
+export async function withTrialSlotLock<T>(
+  slot: string,
+  fn: () => Promise<T>,
+): Promise<{ acquired: false } | { acquired: true; result: T }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_xact_lock(hashtext('trial:' || $1)) AS locked`,
+      [slot],
+    );
+    if (!r.rows[0]?.locked) {
+      await client.query('ROLLBACK');
+      return { acquired: false };
+    }
+    const result = await fn();
+    await client.query('COMMIT');
+    return { acquired: true, result };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 export interface TrialCloneInfo {
   slot: string;
   trial_status: TrialStatus;

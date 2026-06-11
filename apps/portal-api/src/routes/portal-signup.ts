@@ -40,12 +40,16 @@ import { cookieSecure } from './auth.js';
 
 const log = logger.child({ service: 'portal-api', module: 'signup' });
 
-export const signupSchema = z.object({
-  nome_negocio: z.string().trim().min(2).max(100),
-  whatsapp: z.string().trim().min(8).max(25),
-  // Mesmos limites do change-password (8-72 — teto real do bcrypt).
-  senha: z.string().min(8).max(72),
-});
+// .strict(): campo desconhecido => 400 (defesa em profundidade contra
+// mass-assignment — security review PR #268, recomendação Zod não-estrito).
+export const signupSchema = z
+  .object({
+    nome_negocio: z.string().trim().min(2).max(100),
+    whatsapp: z.string().trim().min(8).max(25),
+    // Mesmos limites do change-password (8-72 — teto real do bcrypt).
+    senha: z.string().min(8).max(72),
+  })
+  .strict();
 
 /** Adapter pg.Pool -> SqlPool do módulo de provisionamento (DI, sem casts). */
 function dbAdapter(): provisioning.SqlPool {
@@ -101,36 +105,51 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     }
     // exempt (whitelist interna) segue normal.
 
-    // ── Conta já existe? (login = número) ───────────────────────────────────────
-    if (await portalUsers.usernameExists(canonical)) {
+    // ── Conta já existe? Dedup pela forma CANÔNICA (security review PR #268):
+    // username legado em forma local (ex: '31999998842', criado manual no gestão)
+    // colide com o canônico '553199998842' — sem isso o fallback canônico do
+    // login viraria ambíguo (mesmo número humano resolvendo pra 2 contas).
+    const existing = await portalUsers.listPortalUsernames();
+    if (existing.some((u) => canonicalE164(u.username) === canonical)) {
       return reply.code(409).send({ error: 'conta_ja_existe' });
+    }
+
+    // ── Teto GLOBAL de trials simultâneos (security review PR #268, P0 #2) ─────
+    // Cada signup sobe 1 sessão WAHA (instância Baileys): sem teto, farm de
+    // cadastros consome a RAM da VPS (sem swap) e derruba TODOS os clientes.
+    const trialsAtivos = await trialLedger.countActiveTrials();
+    if (trialsAtivos >= config.TRIAL_MAX_ATIVOS) {
+      log.warn(
+        { trialsAtivos, teto: config.TRIAL_MAX_ATIVOS },
+        'signup negado — teto de trials simultâneos atingido',
+      );
+      // 503 = lotação temporária ("estamos lotados, chame no WhatsApp" no front).
+      return reply.code(503).send({ error: 'trial_lotado' });
     }
 
     // ── Provisionamento automático (módulo compartilhado com o gestão) ─────────
     const slot = provisioning.generateCloneSlot(nome_negocio);
+    const provisioningDeps = {
+      db: dbAdapter(),
+      waha: {
+        url: config.WAHA_URL,
+        apiKey: config.WAHA_API_KEY,
+        webhookUrl: config.TS_WEBHOOK_URL,
+      },
+    };
     let provisioned: provisioning.ProvisionResult;
     try {
-      provisioned = await provisioning.provisionCloneWithWaha(
-        {
-          db: dbAdapter(),
-          waha: {
-            url: config.WAHA_URL,
-            apiKey: config.WAHA_API_KEY,
-            webhookUrl: config.TS_WEBHOOK_URL,
-          },
-        },
-        {
-          matrizSlot: config.PORTAL_SIGNUP_MATRIZ_SLOT,
-          novoSlot: slot,
-          displayName: nome_negocio,
-          telefoneContato: canonical,
-          // SEM overrides de provider/model: o clone herda da matriz (banco).
-          personalizacao: { nome_negocio },
-          // Slot já nasce prefixado clone_ — usa o próprio slot como sessão WAHA
-          // (evita duplo prefixo do wahaSessionName, pensado pro gestão).
-          sessionName: slot,
-        },
-      );
+      provisioned = await provisioning.provisionCloneWithWaha(provisioningDeps, {
+        matrizSlot: config.PORTAL_SIGNUP_MATRIZ_SLOT,
+        novoSlot: slot,
+        displayName: nome_negocio,
+        telefoneContato: canonical,
+        // SEM overrides de provider/model: o clone herda da matriz (banco).
+        personalizacao: { nome_negocio },
+        // Slot já nasce prefixado clone_ — usa o próprio slot como sessão WAHA
+        // (evita duplo prefixo do wahaSessionName, pensado pro gestão).
+        sessionName: slot,
+      });
     } catch (e) {
       log.error(
         { err: e instanceof Error ? e.message : String(e) },
@@ -169,15 +188,22 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
 
       await trialLedger.setTrialAwaiting(slot);
     } catch (e) {
+      // Falha PÓS-provisionamento: derruba clone + sessão WAHA recém-criados
+      // (compensating teardown — security review PR #268, P2 #5). Best-effort:
+      // nunca lança; sobra de órfão fica pro cleanup cron (card próprio).
+      const teardown = await provisioning.teardownProvisionedClone(provisioningDeps, {
+        slot,
+        sessionName: provisioned.sessionName,
+      });
       const err = e as { code?: string };
       if (err.code === '23505') {
-        // Corrida entre o check e o INSERT (username único) — falha limpa.
+        // Corrida entre o check e o INSERT (username único) — falha limpa. O
+        // teardown só remove pelo SLOT fresco: a conta pré-existente fica intacta.
         return reply.code(409).send({ error: 'conta_ja_existe' });
       }
-      // Clone provisionado mas conta incompleta: loga o slot pra limpeza manual.
       log.error(
-        { slot, err: e instanceof Error ? e.message : String(e) },
-        'signup: clone provisionado mas criação de conta/billing falhou — revisar manual',
+        { slot, teardown, err: e instanceof Error ? e.message : String(e) },
+        'signup: clone provisionado mas criação de conta/billing falhou — teardown executado',
       );
       return reply.code(500).send({ error: 'erro_ao_criar_conta' });
     }

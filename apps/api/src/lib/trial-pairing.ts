@@ -23,6 +23,9 @@
  *   - LGPD: telefone NUNCA logado em claro — só phone_hint (DDD + 2 últimos).
  *   - Idempotente: ledger com ON CONFLICT DO NOTHING; next_due_date só nasce se
  *     NULL; eventos WORKING repetidos viram no-op.
+ *   - Serializado por slot: a decisão roda sob advisory lock transacional
+ *     (withTrialSlotLock) com releitura fresh — eventos concorrentes do mesmo
+ *     clone não dupla-consomem o ledger (security review PR #268).
  */
 import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
@@ -144,6 +147,33 @@ async function processSessionStatus(
     throw e;
   }
 
+  // ── Decisão SERIALIZADA por slot (security review PR #268, race do ledger):
+  // dois WORKING concorrentes do mesmo clone liam consumed=1 e ambos inseriam,
+  // estourando o "máx 2 números". O advisory xact lock serializa; quem não pega
+  // o lock IGNORA o evento (WAHA reenvia session.status e o hook é idempotente).
+  // O estado é RE-LIDO dentro do lock — a leitura de cima pode estar velha.
+  const lock = await trialLedger.withTrialSlotLock(info.slot, async () => {
+    const fresh = await trialLedger.getTrialInfoBySession(body.session);
+    if (!fresh || fresh.trial_status === 'none' || fresh.trial_status === 'exempt') {
+      return { status: 'ignored:trial-none' };
+    }
+    return applyTrialDecision(fresh, { paired, hint, hmac }, body, opts);
+  });
+  if (!lock.acquired) {
+    log.warn(baseLog, 'trial-pairing: evento concorrente do mesmo slot — ignorado (WAHA reenvia)');
+    return { status: 'ignored:concurrent-event' };
+  }
+  return lock.result;
+}
+
+/** Branches da decisão de trial — SEMPRE executadas dentro do withTrialSlotLock. */
+async function applyTrialDecision(
+  info: NonNullable<Awaited<ReturnType<typeof trialLedger.getTrialInfoBySession>>>,
+  pairing: { paired: string; hint: string; hmac: string },
+  body: WahaWebhookBody,
+  opts: HookOpts,
+): Promise<{ status: string }> {
+  const { paired, hint, hmac } = pairing;
   const registeredCanonical = info.cliente_telefone ? canonicalE164(info.cliente_telefone) : null;
   const diverged = registeredCanonical != null && registeredCanonical !== paired;
 

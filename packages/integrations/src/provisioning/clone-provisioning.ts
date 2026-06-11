@@ -305,6 +305,104 @@ export async function createWahaSession(
   }
 }
 
+/**
+ * Derruba a sessão WAHA (DELETE /api/sessions/{name} — para e remove). NUNCA
+ * lança. Guarda: só sessões prefixadas clone_ (jamais toca sessão de matriz/
+ * cliente manual como cirilobarbearia/startap).
+ */
+export async function deleteWahaSession(waha: WahaConfig, name: string): Promise<boolean> {
+  if (!name.startsWith('clone_')) {
+    log.error({ session: name }, 'deleteWahaSession recusado: sessão sem prefixo clone_');
+    return false;
+  }
+  try {
+    const r = await fetch(`${waha.url}/api/sessions/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: waha.apiKey ? { 'X-Api-Key': waha.apiKey } : {},
+      signal: AbortSignal.timeout(8_000),
+    });
+    return r.ok;
+  } catch (e) {
+    log.warn(
+      { session: name, err: e instanceof Error ? e.message : String(e) },
+      'deleteWahaSession falhou (cleanup cron de órfãos cobre — card próprio)',
+    );
+    return false;
+  }
+}
+
+export interface TeardownResult {
+  wahaDeleted: boolean;
+  dbDeleted: boolean;
+}
+
+/**
+ * Compensating teardown de clone ÓRFÃO de falha parcial do signup (security
+ * review PR #268, item P2 #5): provisionamento ok mas criação de conta/billing
+ * falhou — sem isso, sessões WAHA sem dono acumulam e amplificam o DoS de RAM.
+ *
+ * Remove APENAS o que o próprio fluxo de signup acabou de criar, keyed pelo
+ * slot fresco (sufixo aleatório, gerado neste mesmo request). NUNCA toca o
+ * trial_ledger (permanente por design — e nesta fase nenhum trial foi consumido).
+ *
+ * Guardas (defesa em profundidade):
+ *  - slot precisa do prefixo clone_;
+ *  - a row de flow_clones precisa estar em rascunho/aguardando_qr (clone que já
+ *    progrediu — conectado/pareado — JAMAIS é derrubado por aqui).
+ *
+ * Best-effort: NUNCA lança (o caller já está num caminho de erro 4xx/5xx).
+ */
+export async function teardownProvisionedClone(
+  deps: { db: SqlPool; waha: WahaConfig },
+  input: { slot: string; sessionName: string },
+): Promise<TeardownResult> {
+  const out: TeardownResult = { wahaDeleted: false, dbDeleted: false };
+  if (!input.slot.startsWith('clone_')) {
+    log.error({ slot: input.slot }, 'teardown recusado: slot sem prefixo clone_');
+    return out;
+  }
+
+  out.wahaDeleted = await deleteWahaSession(deps.waha, input.sessionName);
+
+  let client: SqlClient | null = null;
+  try {
+    client = await deps.db.connect();
+    await client.query('BEGIN');
+    const st = await client.query('SELECT status FROM flow_clones WHERE slot = $1 FOR UPDATE', [
+      input.slot,
+    ]);
+    const status = st.rows[0]?.status as string | undefined;
+    if (status !== undefined && status !== 'rascunho' && status !== 'aguardando_qr') {
+      await client.query('ROLLBACK');
+      log.error({ slot: input.slot, status }, 'teardown abortado: clone já progrediu de estado');
+      return out;
+    }
+    // Espelho exato do que createCloneRecords + signup criaram para este slot.
+    // portal_users/portal_user_clones por SLOT (nunca por username): no 23505 a
+    // conta pré-existente tem outro slot e não é tocada.
+    await client.query('DELETE FROM portal_user_clones WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM portal_users WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM client_billing WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM bot_media WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM bot_prompt WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM bot_config WHERE slot = $1', [input.slot]);
+    await client.query('DELETE FROM flow_controls WHERE flow_id = $1', [input.slot]);
+    await client.query('DELETE FROM flow_clones WHERE slot = $1', [input.slot]);
+    await client.query('COMMIT');
+    out.dbDeleted = true;
+    log.info({ slot: input.slot, wahaDeleted: out.wahaDeleted }, 'clone órfão removido (teardown)');
+  } catch (e) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    log.error(
+      { slot: input.slot, err: e instanceof Error ? e.message : String(e) },
+      'teardown de clone órfão falhou — cleanup cron cobre (card próprio)',
+    );
+  } finally {
+    client?.release();
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Geração de slot (signup self-service — espelha flow-clones.ts createClone)
 // ---------------------------------------------------------------------------

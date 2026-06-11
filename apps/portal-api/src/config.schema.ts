@@ -84,6 +84,20 @@ export const ConfigSchema = z.object({
   // Rate-limit do signup: N cadastros por dia por IP (anti farm — doc 020 propõe 3).
   PORTAL_SIGNUP_RATE_MAX: z.coerce.number().int().positive().default(3),
 
+  // Teto GLOBAL de trials simultâneos (security review PR #268, P0 #2): cada trial
+  // vivo = 1 sessão WAHA consumindo RAM na VPS sem swap; sem teto, farm de signups
+  // derruba TODOS os clientes (fere regra de isolamento nº7). Acima do teto o signup
+  // responde 503 trial_lotado. OPCIONAL com default — NUNCA obrigatória no boot.
+  TRIAL_MAX_ATIVOS: z.coerce.number().int().positive().default(10),
+
+  // trustProxy do Fastify (security review PR #268, P1 #3): com `true`, o req.ip
+  // vinha do X-Forwarded-For MAIS À ESQUERDA (forjável pelo cliente) — bypass de
+  // TODO rate-limit por IP. Default 'loopback,uniquelocal' = só honra XFF anexado
+  // por hops em faixas privadas (NPM/portal-web nos bridges Docker), e o req.ip
+  // vira o primeiro endereço NÃO confiável da cadeia (o IP real do cliente).
+  // Valores aceitos: 'true' | 'false' | lista CSV de IPs/CIDRs/presets proxy-addr.
+  PORTAL_TRUST_PROXY: z.string().optional(),
+
   // URL do webhook WAHA do apps/api (mesma TS_WEBHOOK_URL do painel-admin).
   // OPCIONAL no boot; exigida LAZY quando o signup provisiona a sessão WAHA.
   TS_WEBHOOK_URL: z.string().url().optional(),

@@ -7,6 +7,7 @@ const cfg = vi.hoisted(() => ({
   PORTAL_SIGNUP_MATRIZ_SLOT: 'teste_barbearia',
   PORTAL_SIGNUP_AMOUNT_CENTS: 9999,
   PORTAL_SIGNUP_RATE_MAX: 3,
+  TRIAL_MAX_ATIVOS: 10,
   TS_WEBHOOK_URL: 'http://startap-api:3040/webhooks/waha',
   WAHA_URL: 'http://waha:3000',
   WAHA_API_KEY: 'k',
@@ -18,13 +19,15 @@ const cfg = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => ({
   findByPhoneHmac: vi.fn(),
   setTrialAwaiting: vi.fn(),
-  usernameExists: vi.fn(),
+  countActiveTrials: vi.fn(),
+  listPortalUsernames: vi.fn(),
   createPortalUser: vi.fn(),
   findPortalUserForAuth: vi.fn(),
   recordSuccessfulLogin: vi.fn(),
   upsertBilling: vi.fn(),
   generateCloneSlot: vi.fn(),
   provisionCloneWithWaha: vi.fn(),
+  teardownProvisionedClone: vi.fn(),
   createSession: vi.fn(),
   hash: vi.fn(),
 }));
@@ -35,9 +38,10 @@ vi.mock('@startap/db', () => ({
   trialLedger: {
     findByPhoneHmac: mocks.findByPhoneHmac,
     setTrialAwaiting: mocks.setTrialAwaiting,
+    countActiveTrials: mocks.countActiveTrials,
   },
   portalUsers: {
-    usernameExists: mocks.usernameExists,
+    listPortalUsernames: mocks.listPortalUsernames,
     createPortalUser: mocks.createPortalUser,
     findPortalUserForAuth: mocks.findPortalUserForAuth,
     recordSuccessfulLogin: mocks.recordSuccessfulLogin,
@@ -48,6 +52,7 @@ vi.mock('@startap/integrations', () => ({
   provisioning: {
     generateCloneSlot: mocks.generateCloneSlot,
     provisionCloneWithWaha: mocks.provisionCloneWithWaha,
+    teardownProvisionedClone: mocks.teardownProvisionedClone,
   },
 }));
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash, compare: vi.fn() } }));
@@ -87,7 +92,10 @@ beforeEach(() => {
   vi.stubEnv('TRIAL_PHONE_PEPPER', 'pepper-de-teste-com-32-caracteres!');
 
   mocks.findByPhoneHmac.mockResolvedValue(null);
-  mocks.usernameExists.mockResolvedValue(false);
+  // Dedup canônica: 'cirilo' não canonicaliza — nunca colide com número.
+  mocks.listPortalUsernames.mockResolvedValue([{ id: 1, username: 'cirilo' }]);
+  mocks.countActiveTrials.mockResolvedValue(0);
+  mocks.teardownProvisionedClone.mockResolvedValue({ wahaDeleted: true, dbDeleted: true });
   mocks.generateCloneSlot.mockReturnValue(SLOT);
   mocks.provisionCloneWithWaha.mockResolvedValue({
     cloneId: 42,
@@ -191,8 +199,8 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
-  it('409 conta_ja_existe quando o número já tem conta', async () => {
-    mocks.usernameExists.mockResolvedValue(true);
+  it('409 conta_ja_existe quando o número já tem conta (username canônico exato)', async () => {
+    mocks.listPortalUsernames.mockResolvedValue([{ id: 9, username: '553199998842' }]);
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
     expect(res.statusCode).toBe(409);
@@ -201,13 +209,49 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
-  it('409 conta_ja_existe na corrida check->INSERT (unique violation 23505)', async () => {
+  it('409 conta_ja_existe na colisão CANÔNICA: username legado em forma local (security #268)', async () => {
+    // Conta criada manual no gestão com o número SEM DDI e COM o 9º dígito:
+    // mesma identidade humana de '(31) 99999-8842' => canônico 553199998842.
+    mocks.listPortalUsernames.mockResolvedValue([{ id: 9, username: '31999998842' }]);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'conta_ja_existe' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    expect(mocks.createPortalUser).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('409 conta_ja_existe na corrida check->INSERT (23505) — COM teardown do clone órfão', async () => {
     const dup = Object.assign(new Error('duplicate key'), { code: '23505' });
     mocks.createPortalUser.mockRejectedValue(dup);
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'conta_ja_existe' });
+    // Clone provisionado pra nada: compensating teardown (security #268, P2 #5).
+    expect(mocks.teardownProvisionedClone).toHaveBeenCalledWith(expect.anything(), {
+      slot: SLOT,
+      sessionName: SLOT,
+    });
+    await app.close();
+  });
+
+  it('503 trial_lotado quando o teto TRIAL_MAX_ATIVOS é atingido (P0 #2 — DoS de RAM)', async () => {
+    mocks.countActiveTrials.mockResolvedValue(10); // teto do cfg = 10
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'trial_lotado' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('abaixo do teto segue normal (9 < 10)', async () => {
+    mocks.countActiveTrials.mockResolvedValue(9);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(201);
     await app.close();
   });
 
@@ -232,6 +276,19 @@ describe('POST /auth/signup', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'dados_invalidos' });
+    await app.close();
+  });
+
+  it('400 dados_invalidos para campo desconhecido (schema .strict() — security #268)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, slot: 'clone_injetado' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'dados_invalidos' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -260,6 +317,32 @@ describe('POST /auth/signup', () => {
     expect(res.statusCode).toBe(500);
     expect(res.json()).toEqual({ error: 'erro_ao_criar_conta' });
     expect(mocks.createPortalUser).not.toHaveBeenCalled();
+    // Transação do provisionamento já reverteu sozinha: NADA pra teardown aqui.
+    expect(mocks.teardownProvisionedClone).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('falha PÓS-provisionamento (billing) => 500 + teardown do clone órfão (security #268 P2 #5)', async () => {
+    mocks.upsertBilling.mockRejectedValue(new Error('pg timeout'));
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'erro_ao_criar_conta' });
+    expect(mocks.teardownProvisionedClone).toHaveBeenCalledWith(expect.anything(), {
+      slot: SLOT,
+      sessionName: SLOT,
+    });
+    // Teardown é best-effort: a resposta não muda nem se ele falhar.
+    await app.close();
+  });
+
+  it('teardown que FALHA não muda a resposta (best-effort, nunca lança)', async () => {
+    mocks.upsertBilling.mockRejectedValue(new Error('pg timeout'));
+    mocks.teardownProvisionedClone.mockResolvedValue({ wahaDeleted: false, dbDeleted: false });
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'erro_ao_criar_conta' });
     await app.close();
   });
 

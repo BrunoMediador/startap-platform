@@ -14,7 +14,8 @@ import sensible from '@fastify/sensible';
 import { logger } from '@startap/core/logger';
 import Fastify from 'fastify';
 import { config } from './config.js';
-import { closeRedis } from './lib/session.js';
+import { closeRedis, getRedis } from './lib/session.js';
+import { parseTrustProxy } from './lib/trust-proxy.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
@@ -31,7 +32,10 @@ async function main() {
   const app = Fastify({
     logger: false,
     bodyLimit: 1 * 1024 * 1024, // payloads do portal sao pequenos
-    trustProxy: true, // atras do Next/NPM
+    // SO confia em XFF anexado pelos hops reais (NPM/portal-web em faixa privada).
+    // `true` deixava o cliente forjar o proprio req.ip e bypassar todo rate-limit
+    // por IP (security review PR #268, P1 #3). Ver lib/trust-proxy.ts.
+    trustProxy: parseTrustProxy(config.PORTAL_TRUST_PROXY),
   });
 
   await app.register(sensible);
@@ -58,11 +62,16 @@ async function main() {
 
   // Signup self-service (Missao 020 F1) — escopo proprio com rate-limit DIARIO
   // por IP (anti trial-farm, doc 020). Flag PORTAL_SIGNUP OFF -> rota responde 404.
+  // Store no Redis (security review PR #268, item 3): janela de 1 DIA nao pode
+  // resetar a cada restart do container nem divergir entre instancias. Redis ja
+  // e dependencia dura do portal (sessoes); se cair, o limite degrada fail-closed.
   await app.register(async (instance) => {
     await instance.register(rateLimit, {
       max: config.PORTAL_SIGNUP_RATE_MAX,
       timeWindow: '1 day',
       keyGenerator: (req) => req.ip,
+      redis: getRedis(),
+      nameSpace: 'portal:rl:signup:',
     });
     await instance.register(portalSignupRoutes);
   });

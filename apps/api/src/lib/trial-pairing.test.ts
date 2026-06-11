@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   markExempt: vi.fn(),
   consumeAdditionalNumber: vi.fn(),
   countConsumedBySlot: vi.fn(),
+  withTrialSlotLock: vi.fn(),
   getSessionStatus: vi.fn(),
 }));
 
@@ -22,6 +23,7 @@ vi.mock('@startap/db', () => ({
     markExempt: mocks.markExempt,
     consumeAdditionalNumber: mocks.consumeAdditionalNumber,
     countConsumedBySlot: mocks.countConsumedBySlot,
+    withTrialSlotLock: mocks.withTrialSlotLock,
   },
 }));
 
@@ -57,6 +59,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('TRIAL_PHONE_PEPPER', 'pepper-de-teste-com-32-caracteres!');
   mocks.logFlowEvent.mockResolvedValue(null);
+  // Default: lock adquirido — executa a decisão (pass-through, como em prod sem
+  // concorrência). Teste de lock ocupado sobrescreve com { acquired: false }.
+  mocks.withTrialSlotLock.mockImplementation(async (_slot: string, fn: () => Promise<unknown>) => ({
+    acquired: true,
+    result: await fn(),
+  }));
 });
 
 afterEach(() => {
@@ -220,5 +228,43 @@ describe('handleSessionStatusEvent', () => {
     mocks.getTrialInfoBySession.mockRejectedValue(new Error('db down'));
     const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
     expect(r.status).toBe('error:trial-hook');
+  });
+
+  // ── Race do ledger (security review PR #268): decisão serializada por slot ──
+  it('lock do slot ocupado (evento concorrente) => ignora SEM consumir nada', async () => {
+    mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+    mocks.withTrialSlotLock.mockResolvedValue({ acquired: false });
+
+    const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+    expect(r.status).toBe('ignored:concurrent-event');
+    expect(mocks.withTrialSlotLock).toHaveBeenCalledWith(TRIAL_CLONE.slot, expect.any(Function));
+    expect(mocks.startTrial).not.toHaveBeenCalled();
+    expect(mocks.blockTrial).not.toHaveBeenCalled();
+    expect(mocks.consumeAdditionalNumber).not.toHaveBeenCalled();
+  });
+
+  it('a decisão RE-LÊ o estado dentro do lock (leitura pré-lock pode estar velha)', async () => {
+    // Pré-lock: awaiting. Dentro do lock (fresh): outro evento já iniciou o trial
+    // e o número já está contado pro MESMO clone => no-op, sem duplo consumo.
+    mocks.getTrialInfoBySession
+      .mockResolvedValueOnce(TRIAL_CLONE)
+      .mockResolvedValueOnce({ ...TRIAL_CLONE, trial_status: 'active' });
+    mocks.findByPhoneHmac.mockResolvedValue({
+      id: 1,
+      phone_hmac: 'x',
+      phone_hint: '+55 31 •••••-••42',
+      status: 'consumed',
+      slot: TRIAL_CLONE.slot,
+      consumed_at: new Date(),
+      created_at: new Date(),
+      notes: null,
+    });
+
+    const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+    expect(r.status).toBe('ok:trial-already-counted');
+    expect(mocks.getTrialInfoBySession).toHaveBeenCalledTimes(2);
+    expect(mocks.startTrial).not.toHaveBeenCalled();
   });
 });
