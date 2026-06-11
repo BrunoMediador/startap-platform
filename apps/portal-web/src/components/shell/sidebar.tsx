@@ -19,11 +19,12 @@ import { useLogout } from '@/lib/use-logout';
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { NAV_ITEMS } from './nav-items';
+import { useConexaoNav } from './use-conexao-nav';
 
 export function Sidebar({ businessName }: { businessName: string }) {
   const pathname = usePathname();
   const { logout, pending } = useLogout();
+  const { visibleItems, showDot } = useConexaoNav();
 
   return (
     <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-line bg-surface md:flex">
@@ -40,8 +41,10 @@ export function Sidebar({ businessName }: { businessName: string }) {
         aria-label="Navegação principal"
         className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-3 py-3"
       >
-        {NAV_ITEMS.map(({ href, label, Icon }) => {
+        {visibleItems.map((item) => {
+          const { href, label, Icon } = item;
           const active = pathname === href;
+          const dot = showDot(item);
           return (
             <Link
               key={href}
@@ -56,7 +59,21 @@ export function Sidebar({ businessName }: { businessName: string }) {
                   : 'text-ink-soft hover:bg-surface-hover hover:text-ink',
               )}
             >
-              <Icon size={20} />
+              {/* Badge-dot vermelho: WhatsApp desconectado (status != WORKING).
+                  Posicionado sobre o icone; texto sr-only garante que nao seja
+                  "so cor" pra leitor de tela. */}
+              <span className="relative flex shrink-0">
+                <Icon size={20} />
+                {dot && (
+                  <>
+                    <span
+                      aria-hidden
+                      className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-surface bg-danger"
+                    />
+                    <span className="sr-only">(desconectado)</span>
+                  </>
+                )}
+              </span>
               {label}
             </Link>
           );

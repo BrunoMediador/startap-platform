@@ -19,7 +19,6 @@ import { authRoutes } from './routes/auth.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
-import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
@@ -60,9 +59,6 @@ async function main() {
   await app.register(portalStatusRoutes);
   await app.register(portalAgendamentosRoutes);
   await app.register(portalBillingRoutes);
-  // Reconexão self-service da sessão WAHA (ADR 0015) — escopo encapsulado: tem o
-  // próprio @fastify/rate-limit por user (keyGenerator por cookie de sessão).
-  await app.register(portalConexaoRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);

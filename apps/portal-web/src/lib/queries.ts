@@ -20,14 +20,19 @@ import type {
   AgendamentosResponse,
   AuthMe,
   ChargeView,
+  CodigoResponse,
+  ConexaoResponse,
   ContatosResponse,
   Horarios,
   HorariosResponse,
   MensalidadeResponse,
   PausasResponse,
+  QrResponse,
+  ReconectarResponse,
   Servico,
   ServicosResponse,
   SimularResponse,
+  StatusConexaoResponse,
   StatusResponse,
 } from './api-types';
 
@@ -42,6 +47,7 @@ export const qk = {
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
   mensalidade: (slot: string) => ['mensalidade', slot] as const,
+  conexao: (slot: string) => ['conexao', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -221,5 +227,65 @@ export function useSimularPagamento(slot: string): UseMutationResult<SimularResp
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.mensalidade(slot) });
     },
+  });
+}
+
+// ── Conexao WhatsApp (reconexao self-service) ────────────────────────────────
+
+/**
+ * Estado da conexao (GET /portal/conexao). Fonte da verdade pro item de menu, o
+ * banner (needs_action) e o estado inicial da tela /conectar. Auto-refresh em
+ * foco (60s) pra o badge-dot/banner reagirem quando o WhatsApp cai/volta fora da
+ * tela de conexao. Sempre habilitada: o gate `enabled` e lido do resultado.
+ */
+export function useConexao(slot: string): UseQueryResult<ConexaoResponse> {
+  return useQuery({
+    queryKey: qk.conexao(slot),
+    queryFn: ({ signal }) => apiFetch<ConexaoResponse>('/portal/conexao', { signal }),
+    refetchInterval: () => (typeof document !== 'undefined' && !document.hidden ? 60_000 : false),
+    refetchIntervalInBackground: false,
+    retry: false,
+  });
+}
+
+/**
+ * Poll do status durante a reconexao (GET /portal/conexao/status, a cada 2s).
+ * Liga/desliga por `enabled`; a propria tela para o poll quando `terminal:true`
+ * setando enabled=false. Sem retry — cada tick e independente.
+ */
+export function useStatusConexao(
+  slot: string,
+  enabled: boolean,
+): UseQueryResult<StatusConexaoResponse> {
+  return useQuery({
+    queryKey: [...qk.conexao(slot), 'status'] as const,
+    queryFn: ({ signal }) => apiFetch<StatusConexaoResponse>('/portal/conexao/status', { signal }),
+    enabled,
+    refetchInterval: enabled ? 2_000 : false,
+    refetchIntervalInBackground: false,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
+/** POST /portal/conexao/reconectar — inicia o restart da sessao WAHA (202). */
+export function useReconectar(): UseMutationResult<ReconectarResponse, Error, void> {
+  return useMutation({
+    mutationFn: () =>
+      apiFetch<ReconectarResponse>('/portal/conexao/reconectar', { method: 'POST' }),
+  });
+}
+
+/** POST /portal/conexao/codigo — gera (ou regenera) o pairing code. */
+export function useCodigoConexao(): UseMutationResult<CodigoResponse, Error, void> {
+  return useMutation({
+    mutationFn: () => apiFetch<CodigoResponse>('/portal/conexao/codigo', { method: 'POST' }),
+  });
+}
+
+/** GET /portal/conexao/qr — busca o QR atual (data-URI) sob demanda. */
+export function useQrConexao(): UseMutationResult<QrResponse, Error, void> {
+  return useMutation({
+    mutationFn: () => apiFetch<QrResponse>('/portal/conexao/qr'),
   });
 }

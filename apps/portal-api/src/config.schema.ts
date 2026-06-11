@@ -47,21 +47,6 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
-  // ── Reconexão self-service da sessão WAHA no Portal (ADR 0015) ─────────────
-  // Flag da feature. OPCIONAL no boot (ausente = OFF) — NUNCA crasha o boot (lição do
-  // postmortem P0 2026-06-09: segredo/flag de feature INATIVA = opcional, validado no
-  // ponto de uso). OFF -> GET /portal/conexao responde { enabled:false } e as rotas de
-  // ação respondem 404 (front esconde tudo). Liga-se em Dev/piloto sem novo deploy de
-  // código. NUNCA hardcoded.
-  PORTAL_RECONEXAO_WAHA: z
-    .enum(['true', 'false'])
-    .optional()
-    .transform((v) => v === 'true'),
-
-  // Timeout (ms) por chamada WAHA do portal-api. Default 8s (ADR 0015 — toda chamada
-  // WAHA tem timeout). Opcional; ausente = 8000.
-  PORTAL_WAHA_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
-
   // Segredo para assinar o cookie de sessao (opaco; a sessao mora no Redis).
   // OBRIGATORIO em producao — sem default. Min 32 chars.
   PORTAL_SESSION_SECRET: z.string().min(32, 'PORTAL_SESSION_SECRET deve ter >=32 chars'),
