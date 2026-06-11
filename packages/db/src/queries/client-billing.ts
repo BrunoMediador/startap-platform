@@ -4,8 +4,12 @@
  * 1 linha por slot. Bruno gerencia pelo painel-admin (PUT /api/billing/:slot).
  * O portal SO LE (next_due_date / status / dias restantes).
  *
- * IMPORTANTE: status aqui e INFORMATIVO. NAO silencia o bot — isso continua sendo
- * flow_clones.flow_enabled (feature 30/05). Conceitos desacoplados de proposito.
+ * IMPORTANTE: a coluna `status` aqui continua INFORMATIVA (nunca dirige o gate).
+ * Desde o ADR 0016, porem, o SILENCIO do bot deriva TAMBEM do vencimento: o gate
+ * (apps/api/src/router.ts, passo billing) cala quando vencido alem da carencia
+ * (daysUntilDue < -GRACE_DAYS), atras da flag BILLING_OVERDUE_SILENCE. O eixo manual
+ * (flow_clones.flow_enabled) segue valendo em OR. Vencimento NUNCA escreve flow_enabled
+ * (derivado puro) — perdao = data pro futuro volta o bot sem nenhum UPDATE.
  */
 import { query } from '../client.js';
 
@@ -156,6 +160,15 @@ export function daysUntilDue(nextDueDate: string | null, today = new Date()): nu
 
 /** Janela de pagamento default: 7 dias antes do vencimento (decisao do Bruno, ADR 0014). */
 export const BILLING_WINDOW_DAYS = 7;
+
+/**
+ * Carencia de inadimplencia antes de silenciar o bot (ADR 0016).
+ *
+ * O bot so cala a partir do 4o dia de atraso: daysUntilDue < -GRACE_DAYS.
+ * Vencido ha 0/1/2/3 dias => AINDA RESPONDE (carencia). Vencido ha 4+ dias => CALA.
+ * Promover a env (BILLING_GRACE_DAYS) so se Bruno quiser ajustar sem deploy.
+ */
+export const GRACE_DAYS = 3;
 
 /** Estado de cobranca derivado da data — FONTE UNICA DE VERDADE (tela E card consomem). */
 export type BillingState = 'em_dia' | 'a_vencer' | 'vencido' | 'sem_config';

@@ -51,6 +51,17 @@ export interface CloneRow {
   suspended_at: Date | null;
   horarios_funcionamento: HorariosFuncionamento | null;
   servicos: ServicoConfig[] | null;
+  /**
+   * Vencimento do billing do slot (LEFT JOIN client_billing). null se nao ha linha
+   * de billing. Usado SO pelo gate de silencio por cobranca (ADR 0016) — derivado
+   * puro, nunca escrito por este caminho. 'YYYY-MM-DD'.
+   */
+  next_due_date: string | null;
+  /**
+   * Valor do billing em centavos (LEFT JOIN client_billing). null/0 = sem cobranca
+   * configurada -> o gate de silencio por cobranca NUNCA cala (ADR 0016, guard).
+   */
+  billing_amount_cents: number | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -459,13 +470,20 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   const cached = bySlotCache.get(slot);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
+  // LEFT JOIN client_billing (1 linha por slot) no MESMO SELECT — alimenta o gate de
+  // silencio por cobranca (ADR 0016) sem query extra no hot path. Cache TTL 60s ja cobre
+  // (vencimento muda 1x/dia). billing.next_due_date -> 'YYYY-MM-DD' via to_char.
   const r = await query<CloneRow & { id: string }>(
-    `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-            personalizacao, waha_sessao, status,
-            flow_enabled, suspended_reason, suspended_at,
-            horarios_funcionamento, servicos,
-            created_at, updated_at
-     FROM flow_clones WHERE slot = $1`,
+    `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome, fc.cliente_telefone,
+            fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
+            fc.horarios_funcionamento, fc.servicos,
+            to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
+            cb.amount_cents AS billing_amount_cents,
+            fc.created_at, fc.updated_at
+     FROM flow_clones fc
+     LEFT JOIN client_billing cb ON cb.slot = fc.slot
+     WHERE fc.slot = $1`,
     [slot],
   );
   const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
@@ -614,5 +632,11 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     suspended_at: (row as unknown as { suspended_at?: unknown }).suspended_at as Date | null ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
     servicos: parseJsonbOrNull<ServicoConfig[]>(row.servicos),
+    // Campos do LEFT JOIN client_billing (so vem de getCloneBySlot). Rows de outras
+    // origens (getCloneBySession, RETURNING *) nao tem -> null. pg ja devolve
+    // amount_cents como number; o ?? null cobre o caso da coluna ausente.
+    next_due_date: (row as unknown as { next_due_date?: unknown }).next_due_date as string | null ?? null,
+    billing_amount_cents:
+      (row as unknown as { billing_amount_cents?: unknown }).billing_amount_cents as number | null ?? null,
   };
 }
