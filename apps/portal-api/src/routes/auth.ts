@@ -32,7 +32,7 @@ export const changePasswordSchema = z.object({
   new_password: z.string().min(8).max(72),
 });
 
-function cookieSecure(): boolean {
+export function cookieSecure(): boolean {
   if (config.PORTAL_COOKIE_SECURE !== undefined) return config.PORTAL_COOKIE_SECURE;
   return config.NODE_ENV === 'production';
 }

@@ -22,6 +22,7 @@ import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
+import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
 
 const log = logger.child({ service: 'portal-api' });
@@ -53,6 +54,17 @@ async function main() {
       keyGenerator: (req) => req.ip,
     });
     await instance.register(authRoutes);
+  });
+
+  // Signup self-service (Missao 020 F1) — escopo proprio com rate-limit DIARIO
+  // por IP (anti trial-farm, doc 020). Flag PORTAL_SIGNUP OFF -> rota responde 404.
+  await app.register(async (instance) => {
+    await instance.register(rateLimit, {
+      max: config.PORTAL_SIGNUP_RATE_MAX,
+      timeWindow: '1 day',
+      keyGenerator: (req) => req.ip,
+    });
+    await instance.register(portalSignupRoutes);
   });
 
   await app.register(portalConfigRoutes);

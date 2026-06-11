@@ -62,6 +62,32 @@ export const ConfigSchema = z.object({
   // WAHA tem timeout). Opcional; ausente = 8000.
   PORTAL_WAHA_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 
+  // ── Signup self-service + trial 10 dias (Missão 020 F1) ────────────────────
+  // Flag da feature. OPCIONAL no boot (ausente = OFF) — NUNCA crasha o boot (lição
+  // do postmortem P0 2026-06-09). OFF -> POST /auth/signup responde 404. Pré-requisito
+  // pra ligar: TRIAL_PHONE_PEPPER e TS_WEBHOOK_URL provisionados (validados LAZY no
+  // ponto de uso — rota responde 503 se faltarem, sem derrubar o boot).
+  PORTAL_SIGNUP: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
+  // Matriz usada pelos clones do signup (v1: matriz única de serviços — decisão
+  // 2026-05-24). O modelo de IA vem do bot_config DESSA matriz (gpt-5.4 hoje) —
+  // zero default de modelo hardcoded (decisão Bruno 2026-06-11: trial = gpt-5.4).
+  PORTAL_SIGNUP_MATRIZ_SLOT: z.string().default('teste_barbearia'),
+
+  // Preço default pós-trial em centavos (client_billing.amount_cents do clone novo).
+  // Default R$99,99 (decisão Bruno 2026-06-11). Time edita por cliente no gestão.
+  PORTAL_SIGNUP_AMOUNT_CENTS: z.coerce.number().int().positive().default(9999),
+
+  // Rate-limit do signup: N cadastros por dia por IP (anti farm — doc 020 propõe 3).
+  PORTAL_SIGNUP_RATE_MAX: z.coerce.number().int().positive().default(3),
+
+  // URL do webhook WAHA do apps/api (mesma TS_WEBHOOK_URL do painel-admin).
+  // OPCIONAL no boot; exigida LAZY quando o signup provisiona a sessão WAHA.
+  TS_WEBHOOK_URL: z.string().url().optional(),
+
   // Segredo para assinar o cookie de sessao (opaco; a sessao mora no Redis).
   // OBRIGATORIO em producao — sem default. Min 32 chars.
   PORTAL_SESSION_SECRET: z.string().min(32, 'PORTAL_SESSION_SECRET deve ter >=32 chars'),
