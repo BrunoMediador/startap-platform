@@ -138,6 +138,56 @@ export interface AgendamentosResponse {
   agendamentos: Agendamento[];
 }
 
+// ── Agenda: slots livres + criação manual (Missão 020 F4) ────────────────────
+//
+// Espelham portal-agenda-slots.ts e o POST de portal-agendamentos.ts. A grade
+// vem SÓ com horários livres (ocupado nem aparece — doc 020 B3), agrupados em
+// manhã (<12h), tarde (12h–17h59) e noite (>=18h).
+
+export interface SlotsServico {
+  nome: string;
+  duracao_min: number;
+}
+
+export interface SlotsGrupos {
+  manha: string[];
+  tarde: string[];
+  noite: string[];
+}
+
+/**
+ * GET /portal/agenda/slots?data=YYYY-MM-DD&servico=<nome> → 200.
+ * `gcal_configured:false` = agenda não conectada (estado esperado, não erro).
+ * `aberto:false` = dia fechado na grade de Horários (slots sempre vazios).
+ */
+export interface AgendaSlotsResponse {
+  gcal_configured: boolean;
+  data: string; // 'YYYY-MM-DD'
+  servico: SlotsServico;
+  aberto: boolean;
+  count: number;
+  slots: string[]; // 'HH:mm'
+  grupos: SlotsGrupos;
+}
+
+/** Body do POST /portal/agendamentos (telefone já só dígitos, com DDI). */
+export interface CriarAgendamentoBody {
+  servico: string;
+  data: string; // 'YYYY-MM-DD'
+  hora: string; // 'HH:mm'
+  cliente_nome: string;
+  cliente_telefone?: string;
+}
+
+/** 201 do POST — `agendamento` no MESMO shape da lista (prepend otimista ok). */
+export interface CriarAgendamentoResponse {
+  ok: true;
+  agendamento: Agendamento;
+}
+
+/** Razões do 409 ({error:'conflito'}) do POST /portal/agendamentos. */
+export type ConflitoReason = 'ocupado' | 'horario_passado' | 'fora_do_horario';
+
 // ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3 / ADR 0014) ──
 
 /** Estado da cobranca PIX do ciclo atual. */

@@ -19,6 +19,7 @@ import { type PeriodoFiltro, classify, filtrarAgendamentos } from '@/lib/agendam
 import type { Agendamento, AgendamentosResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora, initials } from '@/lib/format';
+import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
 const PAGE_SIZE = 5;
@@ -31,6 +32,7 @@ const ABAS: { value: PeriodoFiltro; label: string }[] = [
 ];
 
 export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
+  const router = useRouter();
   const [periodo, setPeriodo] = useState<PeriodoFiltro>('todos');
   const [busca, setBusca] = useState('');
   const [data_, setData_] = useState(''); // "YYYY-MM-DD"
@@ -72,11 +74,13 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   }
 
   // Sem nenhum evento na janela (-7/+14d): empty "vazio de verdade", sem filtros.
+  // CTA leva pro agendamento manual (Missão 020 F4 — Fluxo B, ponto 2).
   if (totalNaJanela === 0) {
     return (
       <EmptyBox
         title="Nenhum agendamento ainda"
         description="Assim que o robô marcar um atendimento no WhatsApp, ele aparece aqui pra você acompanhar."
+        action={{ label: 'Marcar um horário', onClick: () => router.push('/agendamentos/novo') }}
       />
     );
   }

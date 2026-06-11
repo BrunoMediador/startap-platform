@@ -17,12 +17,15 @@ import {
 } from '@tanstack/react-query';
 import { apiFetch } from './api';
 import type {
+  AgendaSlotsResponse,
   AgendamentosResponse,
   AuthMe,
   ChargeView,
   CodigoResponse,
   ConexaoResponse,
   ContatosResponse,
+  CriarAgendamentoBody,
+  CriarAgendamentoResponse,
   Horarios,
   HorariosResponse,
   MensalidadeResponse,
@@ -46,6 +49,10 @@ export const qk = {
   pausas: (slot: string) => ['pausas', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
+  /** Prefixo por tenant — usar pra invalidar TODAS as grades de slots de uma vez. */
+  agendaSlotsBase: (slot: string) => ['agenda-slots', slot] as const,
+  agendaSlots: (slot: string, data: string, servico: string) =>
+    ['agenda-slots', slot, data, servico] as const,
   mensalidade: (slot: string) => ['mensalidade', slot] as const,
   conexao: (slot: string) => ['conexao', slot] as const,
 };
@@ -76,6 +83,64 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
   return useQuery({
     queryKey: qk.agendamentos(slot),
     queryFn: ({ signal }) => apiFetch<AgendamentosResponse>('/portal/agendamentos', { signal }),
+  });
+}
+
+// ── Novo agendamento (Missão 020 F4) ─────────────────────────────────────────
+
+/**
+ * Grade de horários LIVRES de um dia pra um serviço (GET /portal/agenda/slots).
+ * Só roda com dia E serviço escolhidos. staleTime 0 + sem retry: a agenda é
+ * disputada com o robô — grade velha vira 409 no POST, então sempre refaz.
+ */
+export function useAgendaSlots(
+  slot: string,
+  data: string | null,
+  servico: string | null,
+): UseQueryResult<AgendaSlotsResponse> {
+  return useQuery({
+    queryKey: qk.agendaSlots(slot, data ?? '', servico ?? ''),
+    queryFn: ({ signal }) =>
+      apiFetch<AgendaSlotsResponse>(
+        `/portal/agenda/slots?data=${encodeURIComponent(data ?? '')}&servico=${encodeURIComponent(servico ?? '')}`,
+        { signal },
+      ),
+    enabled: Boolean(data && servico),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/**
+ * POST /portal/agendamentos — o dono marca um horário sem passar pelo robô.
+ * No 201, faz prepend do evento no cache da lista da Início (aparece na hora,
+ * padrão D5) + invalida pra ressincronizar em background, e derruba as grades
+ * de slots em cache do tenant (um horário acabou de ser consumido).
+ * 409 (conflito) e 422 (gcal/config) são tratados NA TELA — aqui só o sucesso.
+ */
+export function useCriarAgendamento(
+  slot: string,
+): UseMutationResult<CriarAgendamentoResponse, Error, CriarAgendamentoBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarAgendamentoResponse>('/portal/agendamentos', { method: 'POST', body }),
+    onSuccess: ({ agendamento }) => {
+      client.setQueryData<AgendamentosResponse>(qk.agendamentos(slot), (prev) =>
+        prev
+          ? {
+              ...prev,
+              count: prev.count + 1,
+              agendamentos: [
+                agendamento,
+                ...prev.agendamentos.filter((a) => a.id !== agendamento.id),
+              ],
+            }
+          : prev,
+      );
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+    },
   });
 }
 
