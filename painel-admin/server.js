@@ -906,6 +906,27 @@ app.get('/api/bots/:slot', async (req, res) => {
   }
 });
 
+/**
+ * Valida duracao_min de UM servico: quando presente, deve ser inteiro > 0 e
+ * MULTIPLO DE 5 minutos (grade de agenda anda em passos de 5min — decisao
+ * Bruno 2026-06-11). Ausente/null segue permitido ("duracao a combinar",
+ * ver renderServicosPrecos). Usa Number() como o restante do codigo, entao
+ * "30" (string numerica) tambem passa. Retorna mensagem PT-BR ou null se ok.
+ * Usado por PUT /api/bots/:slot (bot_config) e PATCH /api/clones/:id (flow_clones).
+ */
+function validarDuracaoServico(s) {
+  if (s.duracao_min === undefined || s.duracao_min === null) return null;
+  const nome = String(s.nome || 'servico').trim();
+  const dur = Number(s.duracao_min);
+  if (!Number.isInteger(dur) || dur <= 0) {
+    return `servico "${nome}": duracao_min deve ser inteiro maior que zero`;
+  }
+  if (dur % 5 !== 0) {
+    return `servico "${nome}": duracao_min deve ser multiplo de 5 minutos`;
+  }
+  return null;
+}
+
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
@@ -938,6 +959,8 @@ app.put('/api/bots/:slot', async (req, res) => {
         if (!s || typeof s !== 'object' || !s.nome) {
           return res.status(400).json({ error: 'cada servico precisa de { nome }' });
         }
+        const erroDuracao = validarDuracaoServico(s);
+        if (erroDuracao) return res.status(400).json({ error: erroDuracao });
       }
     }
 
@@ -3889,6 +3912,8 @@ app.patch('/api/clones/:id', async (req, res) => {
       if (!s || typeof s !== 'object' || !s.nome) {
         return res.status(400).json({ error: 'cada servico precisa de { nome }' });
       }
+      const erroDuracao = validarDuracaoServico(s);
+      if (erroDuracao) return res.status(400).json({ error: erroDuracao });
     }
   }
 

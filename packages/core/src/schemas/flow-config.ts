@@ -4,7 +4,9 @@
  * Fonte unica de verdade (ADR 0012, Decisao 6): o portal-api JA nasce com esta
  * validacao forte; o painel-admin pode adotar num PR seguinte. Hoje a validacao
  * do painel e fraca (server.js:3752 so checa `nome`). Estes schemas validam
- * preco_cents >= 0 inteiro, duracao_min > 0 inteiro e HH:MM com abre < fecha.
+ * preco_cents >= 0 inteiro, duracao_min > 0 inteiro MULTIPLO DE 5 (grade de
+ * agenda anda em passos de 5min — decisao Bruno 2026-06-11) e HH:MM com
+ * abre < fecha.
  *
  * Espelha os tipos `ServicoConfig` e `HorariosFuncionamento` de
  * packages/db/src/queries/flow-clones.ts — mantidos compativeis de proposito.
@@ -27,6 +29,7 @@ export const servicoSchema = z
       .number({ invalid_type_error: 'duracao_min deve ser numero' })
       .int('duracao_min deve ser inteiro')
       .positive('duracao_min deve ser maior que zero')
+      .multipleOf(5, 'duracao_min deve ser multiplo de 5 minutos')
       .max(1440, 'duracao_min nao pode exceder 24h'),
   })
   .strict();
