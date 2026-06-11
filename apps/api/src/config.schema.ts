@@ -65,6 +65,18 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Silêncio do bot por perfil de cobrança (ADR 0016) ──────────────────────
+  // Flag do segundo eixo do gate de silêncio: quando ON, o bot de um clone CALA se
+  // estiver vencido além da carência (daysUntilDue(next_due_date) < -GRACE_DAYS, e só
+  // se houver billing: next_due_date E amount_cents>0). OFF (default) = comportamento
+  // ATUAL intacto — só flow_enabled=false (suspensão manual) cala. Opcional no boot
+  // (ausente = OFF) — NUNCA crasha o boot dos bots. NUNCA hardcoded. O router lê o
+  // process.env diretamente no gate; esta entrada documenta/valida o formato.
+  BILLING_OVERDUE_SILENCE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

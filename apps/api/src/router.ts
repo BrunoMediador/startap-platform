@@ -12,7 +12,7 @@
 import { logger } from '@startap/core/logger';
 import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
-import { antibot, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
+import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
@@ -371,37 +371,91 @@ export async function handleWebhook(
     return { status: 'ignored:flow-paused' };
   }
 
-  // 6b. Gate de suspensão de fluxo (billing/inadimplência).
+  // 6b. Gate de silêncio do bot por PERFIL DE COBRANÇA (ADR 0016).
   // Aplica apenas para clones (slot prefixado com "clone_").
-  // flow_enabled=false → silêncio total; sessão WAHA permanece intacta.
-  // Usa getCloneBySlot com cache TTL 60s — sem overhead extra no hot path.
+  // Dois eixos em OR — ambos silenciam total, sessão WAHA permanece intacta:
+  //   (a) suspensão MANUAL: flow_clones.flow_enabled === false (toggle do gestão);
+  //   (b) VENCIDO além da carência: daysUntilDue(next_due_date) < -GRACE_DAYS,
+  //       só quando há billing (next_due_date E amount_cents>0). DERIVADO no ato,
+  //       nunca escreve flow_enabled — perdão (data pro futuro) volta o bot sem UPDATE.
+  // Eixo (b) atrás da flag BILLING_OVERDUE_SILENCE (env). OFF (default) = comportamento
+  // legado: só (a) cala. getCloneBySlot já traz next_due_date/amount_cents via LEFT JOIN
+  // (cache TTL 60s) — sem query nova no hot path.
   if (route.workflow_id.startsWith('clone_')) {
     const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
-    if (cloneForGate?.flow_enabled === false) {
-      log.info(
-        {
-          telefone,
+
+    if (cloneForGate) {
+      const suspensaoManual = cloneForGate.flow_enabled === false;
+
+      const overdueSilenceOn = process.env.BILLING_OVERDUE_SILENCE === 'true';
+      // Guard duro: só há cobrança quando data E valor>0 estão presentes.
+      const temBilling =
+        cloneForGate.next_due_date != null && (cloneForGate.billing_amount_cents ?? 0) > 0;
+      const diasRestantes = temBilling
+        ? clientBilling.daysUntilDue(cloneForGate.next_due_date)
+        : null;
+      const vencidoComCarencia =
+        overdueSilenceOn &&
+        temBilling &&
+        diasRestantes != null &&
+        diasRestantes < -clientBilling.GRACE_DAYS;
+
+      // Suspensão manual tem precedência no log (eixo explícito do operador).
+      if (suspensaoManual) {
+        log.info(
+          {
+            telefone,
+            flowId: route.workflow_id,
+            suspendedReason: cloneForGate.suspended_reason,
+            suspendedAt: cloneForGate.suspended_at,
+          },
+          'Fluxo suspenso (manual), ignorando',
+        );
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
           flowId: route.workflow_id,
-          suspendedReason: cloneForGate.suspended_reason,
-          suspendedAt: cloneForGate.suspended_at,
-        },
-        'Fluxo suspenso, ignorando',
-      );
-      await flowExecutionLog.logFlowEvent({
-        ...phoneLog,
-        flowId: route.workflow_id,
-        flowName: route.workflow_name,
-        eventType: 'router.flow-suspended',
-        status: 'ignored',
-        message: 'Fluxo suspenso, ignorando',
-        metadata: {
+          flowName: route.workflow_name,
+          eventType: 'router.flow-suspended',
+          status: 'ignored',
+          message: 'Fluxo suspenso, ignorando',
+          metadata: {
+            flowId: route.workflow_id,
+            suspendedReason: cloneForGate.suspended_reason,
+            suspendedAt: cloneForGate.suspended_at?.toISOString() ?? null,
+          },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ignored:flow-suspended' };
+      }
+
+      if (vencidoComCarencia) {
+        log.info(
+          {
+            telefone,
+            flowId: route.workflow_id,
+            nextDueDate: cloneForGate.next_due_date,
+            diasRestantes,
+            graceDays: clientBilling.GRACE_DAYS,
+          },
+          'Fluxo silenciado por inadimplência (vencido além da carência), ignorando',
+        );
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
           flowId: route.workflow_id,
-          suspendedReason: cloneForGate.suspended_reason,
-          suspendedAt: cloneForGate.suspended_at?.toISOString() ?? null,
-        },
-        durationMs: Date.now() - startedAt,
-      });
-      return { status: 'ignored:flow-suspended' };
+          flowName: route.workflow_name,
+          eventType: 'router.billing-overdue',
+          status: 'ignored',
+          message: 'Fluxo silenciado por inadimplência, ignorando',
+          metadata: {
+            flowId: route.workflow_id,
+            nextDueDate: cloneForGate.next_due_date,
+            diasRestantes,
+            graceDays: clientBilling.GRACE_DAYS,
+          },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ignored:billing-overdue' };
+      }
     }
   }
 
