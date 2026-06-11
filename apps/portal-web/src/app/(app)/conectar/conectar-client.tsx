@@ -284,9 +284,23 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
     });
   }, [cooldown, cooldownSeconds, reconectar, irParaSucesso]);
 
+  // ── "Latest ref" do openQr ────────────────────────────────────────────────────
+  // O effect de 'reiniciando' (abaixo) NÃO pode capturar `openQr` direto: openQr
+  // depende de irParaSucesso -> conexaoQ (objeto react-query cuja IDENTIDADE muda
+  // a cada poll/render). Capturar openQr re-executava o effect a cada poll, o
+  // cleanup cancelava o tick em voo e o `if (cancelled)` DESCARTAVA um código 200
+  // válido -> loop infinito preso em "Preparando". Aqui o effect lê SEMPRE a
+  // versão mais recente via ref, mantendo suas deps estáveis ([phase, fn estável]).
+  const openQrRef = useRef(openQr);
+  useEffect(() => {
+    openQrRef.current = openQr;
+  }, [openQr]);
+
   // ── Reiniciando: pede o codigo assim que a sessao ficar pronta; timeout 45s ──
   // Tenta POST /codigo periodicamente. 422 sessao_nao_pronta -> segue esperando.
   // 200 -> entra na tela de codigo. Sem numero cadastrado (422 telefone_*) -> QR.
+  // Deps ESTÁVEIS de propósito: só [phase] + gerarCodigoAsync (mutateAsync tem
+  // identidade estável no TanStack Query). openQr entra via ref (acima).
   const gerarCodigoAsync = gerarCodigo.mutateAsync;
   useEffect(() => {
     if (phase !== 'reiniciando') return;
@@ -304,18 +318,23 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       }
       try {
         const res = await gerarCodigoAsync();
-        if (cancelled) return;
+        // NUNCA descartar um código 200 válido: o backend já emitiu o pareamento
+        // (efêmero, 60s) e re-pedir geraria spam. Aplica SEMPRE, mesmo que o
+        // cleanup tenha virado `cancelled` durante o await — um setState a mais é
+        // inofensivo (React no-op fora de tela); jogar o código fora é o bug.
         setPairingCode(res.pairing_code);
         setCodeExpiresIn(res.expires_in_seconds);
         setPhase('codigo');
       } catch (err) {
+        // Em erro o guard `cancelled` vale: evita re-agendar timer / disparar QR
+        // num effect que já foi limpo.
         if (cancelled) return;
         if (isErr(err, 'sessao_nao_pronta')) {
           timer = window.setTimeout(tick, 2000); // ainda preparando — tenta de novo
           return;
         }
         if (isErr(err, 'telefone_nao_cadastrado')) {
-          openQr(); // sem numero: cai no caminho de QR
+          openQrRef.current(); // sem numero: cai no caminho de QR (ref estável)
           return;
         }
         setErroMsg(mensagemErro(err)); // 503 ou outro -> erro com retry
@@ -328,7 +347,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [phase, gerarCodigoAsync, openQr]);
+  }, [phase, gerarCodigoAsync]);
 
   // ── Auto-disparo vindo do banner (?auto=1) ───────────────────────────────────
   const autoFired = useRef(false);
