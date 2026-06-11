@@ -5,7 +5,7 @@ import {
   buildContextBlock,
   formatarAgendaComConfig,
   loadScheduleConfig,
-} from '../lib/free-slots.js';
+} from '@startap/integrations/scheduling';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -99,7 +99,7 @@ export class TesteBarbeariaBot extends BotBase {
     const timeMin = now.toISOString();
     const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
 
-    let scheduleConfig: import('../lib/free-slots.js').ScheduleConfig;
+    let scheduleConfig: import('@startap/integrations/scheduling').ScheduleConfig;
     try {
       scheduleConfig = await loadScheduleConfig(this.slot);
     } catch (err) {
