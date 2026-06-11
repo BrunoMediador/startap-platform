@@ -6,7 +6,7 @@
  *
  *   b conectado        -> robo no ar; botao discreto "Reconectar mesmo assim".
  *   c desconectado     -> CTA "Reconectar WhatsApp" (+ cooldown anti-abuso).
- *   d reiniciando      -> spinner ~3-20s (timeout 25s -> erro). Poll de status.
+ *   d reiniciando      -> spinner (timeout 45s -> erro). Poll de status.
  *   e codigo           -> pairing code GIGANTE + passo-a-passo + countdown + poll.
  *   e' codigo_expirado -> code esmaecido + "Gerar novo codigo".
  *   f qr               -> QR em card branco (excecao ao tema) + "outro aparelho".
@@ -67,8 +67,14 @@ type Phase =
   | 'erro'
   | 'sem_numero';
 
-/** Tempo maximo (ms) preso em "reiniciando" sem code nem conexao -> erro. */
-const RESTART_TIMEOUT_MS = 25_000;
+/**
+ * Tempo maximo (ms) preso em "reiniciando" sem code nem conexao -> erro.
+ * Folga confortavel ACIMA do orcamento do backend (restartAndWaitForScan usa
+ * totalTimeoutMs: 30_000): reiniciar uma sessao HARD-desconectada leva ~25-30s
+ * (Baileys regera o pareamento do zero). 25s desistia bem quando a sessao tinha
+ * acabado de ficar pronta (falso negativo, confirmado em prod). 45s cobre isso.
+ */
+const RESTART_TIMEOUT_MS = 45_000;
 
 export function ConectarClient() {
   const { slot } = useTenant();
@@ -190,8 +196,14 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       conexaoQ.refetch();
       return;
     }
-    if (s.terminal && phase !== 'codigo' && phase !== 'qr') {
+    if (s.terminal && phase !== 'codigo' && phase !== 'qr' && phase !== 'reiniciando') {
       // Estado final sem conexao fora do pareamento ativo -> falha.
+      // 'reiniciando' tambem fica de fora: durante o restart a sessao pode passar
+      // transitoriamente por FAILED/STOPPED antes de STARTING -> SCAN_QR_CODE.
+      // Tratar isso como erro imediato e um falso negativo — a autoridade de
+      // desistir no restart e o timeout de 45s do effect de "reiniciando"
+      // (que faz o poll de /codigo). connected -> sucesso segue valendo em
+      // qualquer fase (tratado acima).
       setErroMsg('A conexão demorou demais ou falhou. Isso acontece às vezes.');
       setPhase('erro');
     }
@@ -272,7 +284,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
     });
   }, [cooldown, cooldownSeconds, reconectar, irParaSucesso]);
 
-  // ── Reiniciando: pede o codigo assim que a sessao ficar pronta; timeout 25s ──
+  // ── Reiniciando: pede o codigo assim que a sessao ficar pronta; timeout 45s ──
   // Tenta POST /codigo periodicamente. 422 sessao_nao_pronta -> segue esperando.
   // 200 -> entra na tela de codigo. Sem numero cadastrado (422 telefone_*) -> QR.
   const gerarCodigoAsync = gerarCodigo.mutateAsync;
@@ -480,7 +492,7 @@ function ReiniciandoCard() {
         Preparando seu WhatsApp…
       </h2>
       <p className="mx-auto mt-1.5 max-w-[34ch] text-[14px] leading-normal text-ink-soft">
-        Isso leva de 3 a 20 segundos. Não feche essa tela.
+        Isso leva alguns segundos. Não feche essa tela.
       </p>
     </section>
   );
