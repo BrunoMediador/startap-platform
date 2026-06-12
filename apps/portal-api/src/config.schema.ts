@@ -102,6 +102,16 @@ export const ConfigSchema = z.object({
   // OPCIONAL no boot; exigida LAZY quando o signup provisiona a sessão WAHA.
   TS_WEBHOOK_URL: z.string().url().optional(),
 
+  // ── Auth do webhook WAHA em sessão NOVA do signup (P0 #268 + spike 2026-06-11) ──
+  // Mesmas envs do apps/api e do painel-admin — manter em sincronia. AMBAS
+  // OPCIONAIS no boot (lição do incidente #247): ausentes = sessão nasce sem auth
+  // (comportamento atual). Presentes = a sessão do trial já nasce com
+  // webhooks[].hmac.key (plano A) e/ou customHeaders X-Webhook-Secret (plano B) —
+  // sem isso, com o enforcement ligado no apps/api, o trial nasceria surdo (401).
+  // NUNCA logadas nem hardcoded.
+  WAHA_WEBHOOK_HMAC_KEY: z.string().min(1).optional(),
+  WAHA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
   // Segredo para assinar o cookie de sessao (opaco; a sessao mora no Redis).
   // OBRIGATORIO em producao — sem default. Min 32 chars.
   PORTAL_SESSION_SECRET: z.string().min(32, 'PORTAL_SESSION_SECRET deve ter >=32 chars'),

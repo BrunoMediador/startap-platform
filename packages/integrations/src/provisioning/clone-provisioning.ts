@@ -44,6 +44,20 @@ export interface WahaConfig {
   apiKey: string;
   /** URL do webhook do apps/api (TS_WEBHOOK_URL). */
   webhookUrl: string;
+  /**
+   * Auth do webhook WAHA em sessão NOVA (P0 security #268 + spike 2026-06-11).
+   * AMBOS opcionais (ausentes = comportamento atual, sem auth). Mesmas envs do
+   * apps/api — manter em sincronia (a precedência de validação é decidida LÁ):
+   *  - webhookHmacKey (plano A, env WAHA_WEBHOOK_HMAC_KEY): sessão nasce com
+   *    webhooks[].hmac.key — o WAHA assina o raw body de cada POST.
+   *  - webhookSecret (plano B, env WAHA_WEBHOOK_SECRET): sessão nasce com o
+   *    header estático X-Webhook-Secret via webhooks[].customHeaders (contrato
+   *    do nome: apps/api/src/lib/webhook-auth.ts).
+   * Sem isso aqui, sessão criada com a env ligada no apps/api levaria 401 e o
+   * bot nasceria surdo. NUNCA logar os valores.
+   */
+  webhookHmacKey?: string;
+  webhookSecret?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +274,33 @@ export interface WahaSessionResult {
   error?: string;
 }
 
+/** Entrada de `config.webhooks[]` de uma sessão WAHA (subset que usamos). */
+interface WahaWebhookEntry {
+  url: string;
+  events: string[];
+  hmac?: { key: string };
+  customHeaders?: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Monta a entrada de webhook da sessão nova: url do apps/api + events recebidos
+ * + hmac.key (plano A) e/ou customHeaders (plano B), somente se configurados.
+ * Os dois podem coexistir na sessão (o WAHA manda assinatura E header); a
+ * precedência de validação é decidida pelo apps/api (webhook-auth.ts).
+ * Espelho do buildWahaWebhooks do painel-admin/server.js (rota legada
+ * POST /api/sessions) — manter em sincronia.
+ */
+function buildWebhook(waha: WahaConfig, events: string[]): WahaWebhookEntry {
+  const webhook: WahaWebhookEntry = { url: waha.webhookUrl, events };
+  if (waha.webhookHmacKey) {
+    webhook.hmac = { key: waha.webhookHmacKey };
+  }
+  if (waha.webhookSecret) {
+    webhook.customHeaders = [{ name: 'X-Webhook-Secret', value: waha.webhookSecret }];
+  }
+  return webhook;
+}
+
 /**
  * Cria sessão WAHA com webhook configurado. NUNCA lança — encapsula falha pra o
  * caller decidir (clone permanece em rascunho; retry-waha cobre).
@@ -283,10 +324,10 @@ export async function createWahaSession(
         // fica surdo pra audio (Bruno 2026-05-21) e o pause do dono quebra
         // (memoria reference_waha_fromme_message_any). 'session.status' alimenta
         // o hook de trial do pareamento (Missao 020 F1).
+        // buildWebhook injeta hmac.key e/ou customHeaders quando configurados
+        // (auth do webhook — P0 #268 + spike 2026-06-11).
         config: {
-          webhooks: [
-            { url: waha.webhookUrl, events: ['message', 'message.any', 'session.status'] },
-          ],
+          webhooks: [buildWebhook(waha, ['message', 'message.any', 'session.status'])],
         },
       }),
     });

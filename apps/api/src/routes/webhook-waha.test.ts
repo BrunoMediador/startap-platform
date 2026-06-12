@@ -1,30 +1,47 @@
 /**
- * Testes da rota POST /webhooks/waha — auth por secret compartilhado
- * (P0 security — review do PR #268).
+ * Testes da rota POST /webhooks/waha — auth por secret compartilhado +
+ * HMAC nativo do WAHA (P0 security — review do PR #268 + spike 2026-06-11).
  *
- * - config.js mockado (WAHA_WEBHOOK_SECRET controlável por teste).
+ * - config.js mockado (WAHA_WEBHOOK_SECRET / WAHA_WEBHOOK_HMAC_* controláveis
+ *   por teste).
  * - @startap/db mockado (flowExecutionLog) e ../router.js mockado (handleWebhook):
  *   um 401 NÃO pode gerar NENHUM processamento — nem log de execução, nem router
  *   (logo, nem o gancho trial-pairing de session.status quando entrar).
  *
- * Cobre: sem env -> aceita tudo (retrocompat); com env -> 401 sem header, 401
- * header errado (mesmo tamanho e tamanho diferente — sem throw do timingSafeEqual),
- * 200 header certo; nenhum efeito colateral antes da validação.
+ * Cobre: sem env -> aceita tudo (retrocompat); header estático -> 401 sem header,
+ * 401 header errado (mesmo tamanho e tamanho diferente — sem throw do
+ * timingSafeEqual), 200 header certo; HMAC -> 401 sem/inválida assinatura, 200
+ * assinatura válida sobre o raw body, precedência sobre o header estático;
+ * nenhum efeito colateral antes da validação.
  */
+import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const SECRET = 'whsec_waha_route_test';
+const HMAC_KEY = 'hmac_waha_route_test';
 
 // vi.hoisted: a factory de vi.mock é içada ao topo — variáveis top-level normais
 // não são acessíveis dentro dela.
 const configState = vi.hoisted(() => ({
   secret: undefined as string | undefined,
+  hmacKey: undefined as string | undefined,
+  hmacHeader: 'x-webhook-hmac',
+  hmacAlgorithm: 'sha512' as 'sha256' | 'sha512',
 }));
 
 vi.mock('../config.js', () => ({
   config: {
     get WAHA_WEBHOOK_SECRET() {
       return configState.secret;
+    },
+    get WAHA_WEBHOOK_HMAC_KEY() {
+      return configState.hmacKey;
+    },
+    get WAHA_WEBHOOK_HMAC_HEADER() {
+      return configState.hmacHeader;
+    },
+    get WAHA_WEBHOOK_HMAC_ALGORITHM() {
+      return configState.hmacAlgorithm;
     },
   },
 }));
@@ -68,6 +85,9 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
 
   beforeEach(async () => {
     configState.secret = undefined;
+    configState.hmacKey = undefined;
+    configState.hmacHeader = 'x-webhook-hmac';
+    configState.hmacAlgorithm = 'sha512';
     handleWebhook.mockReset();
     logFlowEvent.mockReset();
     handleWebhook.mockResolvedValue({ status: 'ok' });
@@ -174,6 +194,107 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
       expect(res.statusCode).toBe(401);
       expect(handleWebhook).not.toHaveBeenCalled();
       expect(logFlowEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('com WAHA_WEBHOOK_HMAC_KEY configurada (plano A — spike 2026-06-11)', () => {
+    /** Assinatura HMAC hex sobre os bytes EXATOS do body (como o WAHA faz). */
+    const sign = (raw: string, key = HMAC_KEY, alg: 'sha256' | 'sha512' = 'sha512') =>
+      createHmac(alg, key).update(Buffer.from(raw, 'utf8')).digest('hex');
+
+    /** POST com body raw string (controle total dos bytes assinados). */
+    const post = (raw: string, headers: Record<string, string> = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        headers: { 'content-type': 'application/json', ...headers },
+        payload: raw,
+      });
+
+    beforeEach(() => {
+      configState.hmacKey = HMAC_KEY;
+    });
+
+    it('sem header de assinatura -> 401 e NENHUM processamento', async () => {
+      const res = await post(JSON.stringify(wahaBody()));
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: 'unauthorized' });
+      expect(handleWebhook).not.toHaveBeenCalled();
+      expect(logFlowEvent).not.toHaveBeenCalled();
+    });
+
+    it('assinatura inválida -> 401 sem processar', async () => {
+      const raw = JSON.stringify(wahaBody());
+      const res = await post(raw, { 'x-webhook-hmac': sign(raw, 'key-errada') });
+      expect(res.statusCode).toBe(401);
+      expect(handleWebhook).not.toHaveBeenCalled();
+      expect(logFlowEvent).not.toHaveBeenCalled();
+    });
+
+    it('body adulterado após assinar -> 401 (integridade do raw body)', async () => {
+      const raw = JSON.stringify(wahaBody());
+      const signature = sign(raw);
+      const tampered = raw.replace('"oi"', '"OI"');
+      const res = await post(tampered, { 'x-webhook-hmac': signature });
+      expect(res.statusCode).toBe(401);
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('assinatura válida sobre o raw body -> 200 e processa (payload parseado chega no router)', async () => {
+      const raw = JSON.stringify(wahaBody());
+      const res = await post(raw, { 'x-webhook-hmac': sign(raw) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ok' });
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+      expect(handleWebhook.mock.calls[0]?.[0]).toMatchObject({
+        event: 'message',
+        session: 'clone_teste',
+      });
+    });
+
+    it('HMAC governa SOZINHO: header estático correto NÃO substitui assinatura ausente', async () => {
+      configState.secret = SECRET;
+      const res = await post(JSON.stringify(wahaBody()), { 'x-webhook-secret': SECRET });
+      expect(res.statusCode).toBe(401);
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('assinatura válida + payload Zod-inválido -> 200 ignored (comportamento pós-auth preservado)', async () => {
+      const raw = JSON.stringify({ nada: true });
+      const res = await post(raw, { 'x-webhook-hmac': sign(raw) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ignored:invalid-payload' });
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('assinatura válida + JSON malformado -> 400 invalid_json (mesmo status do parser default)', async () => {
+      const raw = '{"quebrado":';
+      const res = await post(raw, { 'x-webhook-hmac': sign(raw) });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'invalid_json' });
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('header/algoritmo configuráveis (contingência se a cobaia revelar nomes diferentes)', async () => {
+      configState.hmacHeader = 'x-hub-signature';
+      configState.hmacAlgorithm = 'sha256';
+      const raw = JSON.stringify(wahaBody());
+      const res = await post(raw, { 'x-hub-signature': sign(raw, HMAC_KEY, 'sha256') });
+      expect(res.statusCode).toBe(200);
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('JSON malformado sem auth configurada (parser escopado em Buffer)', () => {
+    it('-> 400 (mesmo status do parser JSON default do Fastify; WAHA retenta igual)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        headers: { 'content-type': 'application/json' },
+        payload: '{"quebrado":',
+      });
+      expect(res.statusCode).toBe(400);
+      expect(handleWebhook).not.toHaveBeenCalled();
     });
   });
 });

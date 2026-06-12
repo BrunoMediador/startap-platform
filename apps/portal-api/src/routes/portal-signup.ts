@@ -135,6 +135,10 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
         url: config.WAHA_URL,
         apiKey: config.WAHA_API_KEY,
         webhookUrl: config.TS_WEBHOOK_URL,
+        // Auth do webhook (P0 #268 + spike 2026-06-11): sessão do trial já nasce
+        // com hmac.key (plano A) e/ou X-Webhook-Secret (plano B), se configurados.
+        webhookHmacKey: config.WAHA_WEBHOOK_HMAC_KEY,
+        webhookSecret: config.WAHA_WEBHOOK_SECRET,
       },
     };
     let provisioned: provisioning.ProvisionResult;
