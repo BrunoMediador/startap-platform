@@ -138,7 +138,9 @@ export function LoginForm() {
                 </div>
               )}
 
-              <Field label="Usuário" htmlFor="login-user" icon={<IconUser size={18} />}>
+              {/* Microcopy (Missao 020 F1): contas novas do signup usam o NUMERO de
+                  WhatsApp como usuario — mesmo campo, mesma logica, so o texto muda. */}
+              <Field label="Usuário ou WhatsApp" htmlFor="login-user" icon={<IconUser size={18} />}>
                 <input
                   id="login-user"
                   type="text"
@@ -148,7 +150,7 @@ export function LoginForm() {
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="seu usuário"
+                  placeholder="usuário ou número do WhatsApp"
                   className="h-[52px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken pl-[42px] pr-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint hover:border-[var(--c-input-hover-border)] focus:border-brand focus:shadow-focus focus:ring-[3px] focus:ring-brand/35"
                 />
               </Field>

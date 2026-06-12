@@ -16,6 +16,7 @@ import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } 
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
+import { handleSessionStatusEvent } from './lib/trial-pairing.js';
 import {
   type BotEntry,
   buildCloneRoute,
@@ -50,7 +51,10 @@ async function resolveCloneBot(cloneSlot: string): Promise<Bot | null> {
   }
   const factory = cloneFactories.get(cloneRow.matriz_slot);
   if (!factory) {
-    log.warn({ cloneSlot, matrizSlot: cloneRow.matriz_slot }, 'Nenhuma factory registrada para matriz do clone');
+    log.warn(
+      { cloneSlot, matrizSlot: cloneRow.matriz_slot },
+      'Nenhuma factory registrada para matriz do clone',
+    );
     return null;
   }
   return factory(cloneSlot);
@@ -90,6 +94,14 @@ export async function handleWebhook(
     executionId: opts.executionId,
     session: body.session,
   };
+
+  // 0. Eventos de status de sessão alimentam o hook de trial do pareamento
+  // (Missão 020 F1): 1º WORKING de clone em trial consome o trial_ledger e
+  // inicia os 10 dias. Clones com trial_status='none' (Cirilo, matrizes,
+  // clones manuais) são no-op absoluto — comportamento atual intacto.
+  if (body.event === 'session.status') {
+    return handleSessionStatusEvent(body, { executionId: opts.executionId, startedAt });
+  }
 
   // 1. Aceita qualquer evento de mensagem nova (`message`, `message.any` e
   // variantes que algumas engines WAHA usam para audio/midia tipo
@@ -141,9 +153,7 @@ export async function handleWebhook(
   // antes de qualquer informação de roteamento.
   const sessionEntry = findBotBySession(body.session);
   const sessionManualCommand =
-    fromMe && sessionEntry
-      ? sessionEntry.getManualCommand(body.payload?.body ?? '')
-      : null;
+    fromMe && sessionEntry ? sessionEntry.getManualCommand(body.payload?.body ?? '') : null;
 
   // 2. Mensagens fromMe com texto podem ser comando manual por fluxo.
   // A decisão final vem depois de extrair o telefone e descobrir o fluxo.
@@ -616,10 +626,7 @@ async function buildIncomingMessage(input: {
         if (cleaned.length > 0) {
           texto = cleaned;
           wasAudio = true;
-          log.info(
-            { telefone, len: cleaned.length, source: audioInfo.source },
-            'Áudio transcrito',
-          );
+          log.info({ telefone, len: cleaned.length, source: audioInfo.source }, 'Áudio transcrito');
         } else {
           log.warn(
             { telefone, source: audioInfo.source },
@@ -691,8 +698,14 @@ function detectAudio(payload: unknown): AudioInfo {
   type Cand = { node: Record<string, unknown> | undefined; source: string };
   const cands: Cand[] = [
     { node: p.media as Record<string, unknown> | undefined, source: 'payload.media' },
-    { node: _msg.audioMessage as Record<string, unknown> | undefined, source: '_data.message.audioMessage' },
-    { node: _msg.pttMessage as Record<string, unknown> | undefined, source: '_data.message.pttMessage' },
+    {
+      node: _msg.audioMessage as Record<string, unknown> | undefined,
+      source: '_data.message.audioMessage',
+    },
+    {
+      node: _msg.pttMessage as Record<string, unknown> | undefined,
+      source: '_data.message.pttMessage',
+    },
     // Algumas versoes serializam direto na raiz do payload
     { node: p, source: 'payload (raiz)' },
   ];
@@ -700,8 +713,7 @@ function detectAudio(payload: unknown): AudioInfo {
   for (const c of cands) {
     if (!c.node || typeof c.node !== 'object') continue;
     const node = c.node;
-    const mime =
-      pickString(node.mimetype) ?? pickString(node.mime) ?? pickString(node.mimeType);
+    const mime = pickString(node.mimetype) ?? pickString(node.mime) ?? pickString(node.mimeType);
     if (!mime || !mime.startsWith('audio/')) continue;
     const url =
       pickString(node.url) ??
@@ -721,7 +733,9 @@ function detectAudio(payload: unknown): AudioInfo {
       isAudio: true,
       mimetype: pickString(node.mimetype) ?? 'audio/ogg',
       url,
-      source: _msg.audioMessage ? '_data.message.audioMessage (sem mime)' : '_data.message.pttMessage (sem mime)',
+      source: _msg.audioMessage
+        ? '_data.message.audioMessage (sem mime)'
+        : '_data.message.pttMessage (sem mime)',
     };
   }
 

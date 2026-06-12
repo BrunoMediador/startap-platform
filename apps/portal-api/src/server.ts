@@ -14,7 +14,8 @@ import sensible from '@fastify/sensible';
 import { logger } from '@startap/core/logger';
 import Fastify from 'fastify';
 import { config } from './config.js';
-import { closeRedis } from './lib/session.js';
+import { closeRedis, getRedis } from './lib/session.js';
+import { parseTrustProxy } from './lib/trust-proxy.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
@@ -23,6 +24,7 @@ import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
+import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
 
 const log = logger.child({ service: 'portal-api' });
@@ -31,7 +33,10 @@ async function main() {
   const app = Fastify({
     logger: false,
     bodyLimit: 1 * 1024 * 1024, // payloads do portal sao pequenos
-    trustProxy: true, // atras do Next/NPM
+    // SO confia em XFF anexado pelos hops reais (NPM/portal-web em faixa privada).
+    // `true` deixava o cliente forjar o proprio req.ip e bypassar todo rate-limit
+    // por IP (security review PR #268, P1 #3). Ver lib/trust-proxy.ts.
+    trustProxy: parseTrustProxy(config.PORTAL_TRUST_PROXY),
   });
 
   await app.register(sensible);
@@ -54,6 +59,22 @@ async function main() {
       keyGenerator: (req) => req.ip,
     });
     await instance.register(authRoutes);
+  });
+
+  // Signup self-service (Missao 020 F1) — escopo proprio com rate-limit DIARIO
+  // por IP (anti trial-farm, doc 020). Flag PORTAL_SIGNUP OFF -> rota responde 404.
+  // Store no Redis (security review PR #268, item 3): janela de 1 DIA nao pode
+  // resetar a cada restart do container nem divergir entre instancias. Redis ja
+  // e dependencia dura do portal (sessoes); se cair, o limite degrada fail-closed.
+  await app.register(async (instance) => {
+    await instance.register(rateLimit, {
+      max: config.PORTAL_SIGNUP_RATE_MAX,
+      timeWindow: '1 day',
+      keyGenerator: (req) => req.ip,
+      redis: getRedis(),
+      nameSpace: 'portal:rl:signup:',
+    });
+    await instance.register(portalSignupRoutes);
   });
 
   await app.register(portalConfigRoutes);

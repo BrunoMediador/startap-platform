@@ -3237,167 +3237,40 @@ app.get('/api/cleanup/status', async (req, res) => {
   }
 });
 
-// ---------- DEFAULTS POR MATRIZ AO CRIAR CLONE ----------
-// Quando um clone novo nasce, ja vem com horarios e servicos pre-cadastrados
-// para a matriz correspondente. Cliente edita pelo painel quando precisar.
-// Evita que o bot diga "Nenhum servico cadastrado" logo apos a criacao.
+// ---------- DEFAULTS + RENDER DE PROMPT POR CLONE (módulo compartilhado) ----------
+// Missão 020 F1: a lógica de defaults por matriz, render de prompt e orquestração
+// clone+WAHA foi EXTRAÍDA (move, não muda) para
+// packages/integrations/src/provisioning/clone-provisioning.ts — compartilhada
+// entre este painel e o portal-api (signup self-service). O painel consome o dist
+// compilado via import dinâmico, mesmo padrão do GoogleCalendarClient acima.
 
-const _CLONE_DEFAULTS_BARBEARIA = {
-  horarios_funcionamento: {
-    segunda: { abre: null, fecha: null, fechado: true },
-    terca: { abre: '09:00', fecha: '18:00', fechado: false },
-    quarta: { abre: '09:00', fecha: '18:00', fechado: false },
-    quinta: { abre: '09:00', fecha: '18:00', fechado: false },
-    sexta: { abre: '09:00', fecha: '18:00', fechado: false },
-    sabado: { abre: '09:00', fecha: '18:00', fechado: false },
-    domingo: { abre: null, fecha: null, fechado: true },
-  },
-  servicos: [
-    { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Barba', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Sobrancelha', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Pezinho', preco_cents: 5000, duracao_min: 30 },
-  ],
-};
+let _provisioningModPromise = null;
+function getProvisioning() {
+  if (!_provisioningModPromise) {
+    _provisioningModPromise = import(
+      '../packages/integrations/dist/provisioning/clone-provisioning.js'
+    );
+  }
+  return _provisioningModPromise;
+}
 
 /**
- * Defaults para clone novo. Hierarquia:
- *   1) bot_config.horarios_funcionamento + bot_config.servicos da MATRIZ
- *      (admin edita pelo painel — fonte de verdade quando preenchida).
- *   2) Hardcoded por matriz (_CLONE_DEFAULTS_BARBEARIA para teste_barbearia).
- *   3) null/null (outras matrizes — clone nasce com abas em branco).
- *
- * Async porque consulta bot_config. Callers precisam awaitar.
+ * Defaults para clone novo (delegado ao módulo compartilhado). Hierarquia:
+ *   1) bot_config.horarios_funcionamento + bot_config.servicos da MATRIZ;
+ *   2) hardcoded por matriz (teste_barbearia); 3) null/null.
  */
 async function getCloneDefaults(matrizSlot) {
-  try {
-    const r = await pool.query(
-      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
-      [matrizSlot],
-    );
-    const row = r.rows[0];
-    if (row && (row.horarios_funcionamento || row.servicos)) {
-      // Falha parcial (so um dos campos): completa com hardcoded da matriz.
-      const fallback = matrizSlot === 'teste_barbearia'
-        ? _CLONE_DEFAULTS_BARBEARIA
-        : { horarios_funcionamento: null, servicos: null };
-      return {
-        horarios_funcionamento: row.horarios_funcionamento ?? fallback.horarios_funcionamento,
-        servicos: row.servicos ?? fallback.servicos,
-      };
-    }
-  } catch (e) {
-    console.warn(`[getCloneDefaults] falha ao ler bot_config da matriz: ${e.message}`);
-  }
-  if (matrizSlot === 'teste_barbearia') return _CLONE_DEFAULTS_BARBEARIA;
-  return { horarios_funcionamento: null, servicos: null };
-}
-
-// ---------- RENDER DE PROMPT POR CLONE ----------
-// Helpers para gerar blocos {{horarios_funcionamento_render}} e {{servicos_precos_render}}
-// a partir dos jsonbs flow_clones.horarios_funcionamento e flow_clones.servicos.
-// Mantemos PT-BR e formato espelhando o prompt legado da matriz teste_barbearia.
-
-const _DIAS_SEMANA = [
-  ['segunda',  'Segunda'],
-  ['terca',    'Terca'],
-  ['quarta',   'Quarta'],
-  ['quinta',   'Quinta'],
-  ['sexta',    'Sexta'],
-  ['sabado',   'Sabado'],
-  ['domingo',  'Domingo'],
-];
-
-function renderHorariosFuncionamento(horarios) {
-  if (!horarios || typeof horarios !== 'object') return 'Nao configurado.';
-  const linhas = [];
-  for (const [key, label] of _DIAS_SEMANA) {
-    const dia = horarios[key];
-    if (!dia || dia.fechado) {
-      linhas.push(`${label}: fechado`);
-    } else if (dia.abre && dia.fecha) {
-      linhas.push(`${label}: ${dia.abre} as ${dia.fecha}`);
-    } else {
-      linhas.push(`${label}: nao configurado`);
-    }
-  }
-  return linhas.join('\n');
-}
-
-function renderServicosPrecos(servicos) {
-  if (!Array.isArray(servicos) || servicos.length === 0) return 'Nenhum servico cadastrado.';
-  return servicos
-    .filter((s) => s && typeof s === 'object' && s.nome)
-    .map((s) => {
-      const nome = String(s.nome).trim();
-      const preco = Number(s.preco_cents);
-      const dur = Number(s.duracao_min);
-      const precoStr = Number.isFinite(preco) && preco > 0
-        ? `R$${(preco / 100).toFixed(2).replace('.', ',')}`
-        : 'a combinar';
-      const durStr = Number.isFinite(dur) && dur > 0 ? `${dur} min` : 'duracao a combinar';
-      return `${nome}: ${precoStr} (${durStr})`;
-    })
-    .join('\n') || 'Nenhum servico cadastrado.';
+  const mod = await getProvisioning();
+  return mod.getCloneDefaults(pool, matrizSlot);
 }
 
 /**
- * Aplica os 3 grupos de placeholders {{double_brace}} sobre o template da matriz:
- *  - personalizacao: { nome_negocio, endereco, instagram, ... }
- *  - horarios:       jsonb com chaves segunda..domingo
- *  - servicos:       array [{ nome, preco_cents, duracao_min }]
- *
- * Placeholders nao resolvidos sao preservados (formato {{key}}) para nao perder
- * dado em caso de campo ausente.
- */
-function renderClonePrompt(matrizPrompt, personalizacao, horarios, servicos) {
-  const pers = personalizacao && typeof personalizacao === 'object' ? personalizacao : {};
-  const ctx = {
-    ...pers,
-    horarios_funcionamento_render: renderHorariosFuncionamento(horarios),
-    servicos_precos_render: renderServicosPrecos(servicos),
-  };
-  let out = matrizPrompt.replace(/\{\{(\w+)\}\}/g, (_, k) =>
-    Object.prototype.hasOwnProperty.call(ctx, k) ? String(ctx[k] ?? '') : `{{${k}}}`,
-  );
-  if (pers['cliente_nome']) {
-    out = out.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
-  }
-  return out;
-}
-
-/**
- * Re-renderiza o prompt do clone com base no estado atual de flow_clones e
- * sobrescreve bot_prompt do slot do clone. Idempotente. Usa o prompt da MATRIZ
- * como template (nao o prompt previamente salvo do clone), porque queremos que
- * mudancas estruturais na matriz se propaguem para clones quando o usuario
- * mexer em personalizacao/horarios/servicos.
- *
- * Retorna { ok: true, prompt } ou { ok: false, error }.
+ * Re-renderiza o prompt do clone a partir do template da MATRIZ (delegado ao
+ * módulo compartilhado). Idempotente. Retorna { ok, prompt } ou { ok:false, error }.
  */
 async function regerarPromptClone(cloneRow) {
-  try {
-    const matrizPrompt = await pool.query(`SELECT prompt FROM bot_prompt WHERE slot = $1`, [
-      cloneRow.matriz_slot,
-    ]);
-    if (!matrizPrompt.rows[0]) {
-      return { ok: false, error: `Matriz ${cloneRow.matriz_slot} sem prompt em bot_prompt` };
-    }
-    const prompt = renderClonePrompt(
-      matrizPrompt.rows[0].prompt,
-      cloneRow.personalizacao,
-      cloneRow.horarios_funcionamento,
-      cloneRow.servicos,
-    );
-    await pool.query(
-      `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
-      [cloneRow.slot, prompt],
-    );
-    return { ok: true, prompt };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
+  const mod = await getProvisioning();
+  return mod.regerarPromptClone(pool, cloneRow);
 }
 
 // ---------- CLONES DE FLUXO MATRIZ ----------
@@ -3556,45 +3429,24 @@ app.post('/api/clones', async (req, res) => {
 const MATRIZES_ROUTAVEIS = ['teste_barbearia'];
 
 /**
- * Deriva o nome da sessão WAHA a partir do slot do clone.
- * WAHA aceita apenas [a-zA-Z0-9_-], então substitui hífens por underscores
- * e prefixa com "clone_" para namespacing.
+ * Deriva o nome da sessão WAHA a partir do slot do clone (delegado ao módulo
+ * compartilhado de provisionamento — mesma regra de sempre).
  */
-function wahaSessionName(slot) {
-  return `clone_${slot.replace(/-/g, '_')}`;
+async function wahaSessionName(slot) {
+  const mod = await getProvisioning();
+  return mod.wahaSessionName(slot);
 }
 
 /**
- * Cria sessão WAHA com webhook configurado. Retorna { ok, status, error }.
- * Nunca lança — encapsula falha pra o caller decidir.
+ * Cria sessão WAHA com webhook configurado (delegado ao módulo compartilhado).
+ * Retorna { ok, status, error }. Nunca lança — encapsula falha pra o caller decidir.
  */
 async function createWahaSession(name) {
-  try {
-    const webhookUrl = TS_WEBHOOK_URL;
-    const r = await fetch(`${WAHA_URL}/api/sessions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
-      },
-      body: JSON.stringify({
-        name,
-        start: true,
-        // events MUST include 'message.any' — engine NOWEB do WAHA so manda
-        // audio/video/imagem sob 'message.any', nao 'message' (que so cobre
-        // texto). Sem isso o bot fica surdo pra audio. Bruno 2026-05-21.
-        config: { webhooks: [{ url: webhookUrl, events: ['message', 'message.any', 'session.status'] }] },
-      }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = body?.message ?? body?.error ?? `HTTP ${r.status}`;
-      return { ok: false, status: 'failed', error: `WAHA: ${msg}` };
-    }
-    return { ok: true, status: body?.status ?? 'STARTING', error: undefined };
-  } catch (e) {
-    return { ok: false, status: 'failed', error: `Falha ao contatar WAHA: ${e.message}` };
-  }
+  const mod = await getProvisioning();
+  return mod.createWahaSession(
+    { url: WAHA_URL, apiKey: WAHA_API_KEY, webhookUrl: TS_WEBHOOK_URL },
+    name,
+  );
 }
 
 // POST /api/clones/with-waha — orquestra clone + sessão WAHA em único request.
@@ -3641,170 +3493,59 @@ app.post('/api/clones/with-waha', async (req, res) => {
       ? personalizacao
       : {};
 
-  // --- 1. Cria clone via transação ---
-  const cloneClient = await pool.connect();
-  let cloneRow;
+  // --- Orquestração (módulo compartilhado — Missão 020 F1, "move, não muda") ---
+  // Mesma sequência de sempre: transação clone -> regerarPromptClone -> sessão
+  // WAHA (falha não reverte o clone — decisão Bruno 005-B) -> vínculo da sessão
+  // em flow_clones E bot_config (memoria mapping_slot_waha_sessao).
+  let result;
   try {
-    await cloneClient.query('BEGIN');
-
-    const cfgR = await cloneClient.query(
-      'SELECT provider, model, temperature FROM bot_config WHERE slot = $1',
-      [matriz_slot],
+    const mod = await getProvisioning();
+    result = await mod.provisionCloneWithWaha(
+      { db: pool, waha: { url: WAHA_URL, apiKey: WAHA_API_KEY, webhookUrl: TS_WEBHOOK_URL } },
+      {
+        matrizSlot: matriz_slot,
+        novoSlot: novo_slot,
+        displayName: display_name,
+        telefoneContato: telefone_contato ?? null,
+        personalizacao: pers,
+      },
     );
-    if (!cfgR.rows[0]) {
-      await cloneClient.query('ROLLBACK');
+  } catch (e) {
+    if (e && e.name === 'MatrizNotFoundError') {
       return res
         .status(400)
         .json({ error: `matriz_slot "${matriz_slot}" não encontrado em bot_config` });
     }
-    const { provider, model, temperature } = cfgR.rows[0];
-
-    // Campos de bot_config podem ser sobrescritos por personalizacao
-    const finalProvider = pers.provider ?? provider;
-    const finalModel = pers.model ?? model;
-    const finalTemperature = pers.temperature ?? temperature;
-
-    await cloneClient.query(
-      `INSERT INTO bot_config (slot, display_name, provider, model, temperature, updated_at)
-       VALUES ($1, $2, $3, $4, $5::numeric, NOW())`,
-      [novo_slot, display_name, finalProvider, finalModel, finalTemperature],
-    );
-
-    const promptR = await cloneClient.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
-      matriz_slot,
-    ]);
-    if (promptR.rows[0]) {
-      let prompt = promptR.rows[0].prompt;
-      prompt = prompt.replace(/\{\{(\w+)\}\}/g, (_, k) => pers[k] ?? `{{${k}}}`);
-      if (pers['cliente_nome'])
-        prompt = prompt.replace(/\[Ricardo\]/g, `[${pers['cliente_nome']}]`);
-      await cloneClient.query(
-        'INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())',
-        [novo_slot, prompt],
-      );
+    if (e && e.name === 'CloneSlotConflictError') {
+      return res.status(409).json({ error: `slot "${novo_slot}" já existe` });
     }
-
-    // bot_media herdado da matriz (inclui course_slug e is_course_intro)
-    const mediaR = await cloneClient.query(
-      `SELECT position, media_type, url, caption, context, position_order, enabled,
-              course_slug, is_course_intro
-       FROM bot_media WHERE slot = $1`,
-      [matriz_slot],
-    );
-    for (const m of mediaR.rows) {
-      await cloneClient.query(
-        `INSERT INTO bot_media
-           (slot, position, media_type, url, caption, context, position_order, enabled,
-            course_slug, is_course_intro, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
-        [
-          novo_slot,
-          m.position,
-          m.media_type,
-          m.url,
-          m.caption,
-          m.context,
-          m.position_order,
-          m.enabled,
-          m.course_slug ?? null,
-          m.is_course_intro ?? false,
-        ],
-      );
-    }
-
-    await cloneClient.query(
-      `INSERT INTO flow_controls (flow_id, flow_name, source, active, updated_at)
-       VALUES ($1, $2, 'clone', TRUE, NOW())
-       ON CONFLICT (flow_id) DO UPDATE SET active = TRUE, updated_at = NOW()`,
-      [novo_slot, display_name],
-    );
-
-    // Defaults de horarios/servicos conforme a matriz (memoria: clone novo
-    // ja sai oferecendo servicos comuns, evita "Nenhum servico cadastrado").
-    const defaults = await getCloneDefaults(matriz_slot);
-    const cloneR = await cloneClient.query(
-      `INSERT INTO flow_clones
-         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-          personalizacao, horarios_funcionamento, servicos,
-          status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, 'rascunho', NOW(), NOW())
-       RETURNING *`,
-      [
-        novo_slot,
-        matriz_slot,
-        display_name,
-        null,
-        telefone_contato ?? null,
-        JSON.stringify(pers),
-        defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
-        defaults.servicos ? JSON.stringify(defaults.servicos) : null,
-      ],
-    );
-
-    await cloneClient.query('COMMIT');
-    cloneRow = cloneR.rows[0];
-  } catch (e) {
-    await cloneClient.query('ROLLBACK');
     console.error(`[clones/with-waha] falha ao criar clone: ${e.message}`);
     return res.status(500).json({ error: `clones/with-waha: ${e.message}` });
-  } finally {
-    cloneClient.release();
   }
 
-  // Re-renderiza bot_prompt aplicando horarios+servicos default e personalizacao.
-  // Roda fora da transacao porque flow_clones ja foi commitado e
-  // regerarPromptClone faz seu proprio UPSERT em bot_prompt (idempotente).
-  const renderedPrompt = await regerarPromptClone(cloneRow);
-  if (!renderedPrompt.ok) {
-    console.warn(`[clones/with-waha] regerarPromptClone falhou: ${renderedPrompt.error}`);
-  }
-
-  // --- 2. Cria sessão WAHA (falha não reverte o clone — decisão Bruno 005-B) ---
-  const sessaoName = wahaSessionName(novo_slot);
-  const waha = await createWahaSession(sessaoName);
-
-  if (!waha.ok) {
+  if (result.wahaStatus === 'failed') {
     console.warn(
-      `[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado mas WAHA falhou: ${waha.error}`,
+      `[clones/with-waha] clone ${novo_slot} (id=${result.cloneId}) criado mas WAHA falhou: ${result.wahaError}`,
     );
     return res.json({
-      clone_id: cloneRow.id,
+      clone_id: result.cloneId,
       novo_slot,
-      waha_session_name: sessaoName,
+      waha_session_name: result.sessionName,
       waha_status: 'failed',
-      waha_error: waha.error,
+      waha_error: result.wahaError,
       clone_status: 'rascunho',
     });
   }
 
-  // --- 3. Vincula sessão ao clone ---
-  // Espelha o nome em bot_config.waha_sessao tambem — sem isso /api/bots
-  // resolve slot como nome de sessao WAHA (404) e mostra status furado
-  // (memoria mapping_slot_waha_sessao).
-  await Promise.all([
-    pool
-      .query(
-        `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW() WHERE id = $2`,
-        [sessaoName, cloneRow.id],
-      )
-      .catch((e) => console.error(`[clones/with-waha] falha ao vincular sessão no DB: ${e.message}`)),
-    pool
-      .query(
-        `UPDATE bot_config SET waha_sessao = $1, updated_at = NOW() WHERE slot = $2`,
-        [sessaoName, cloneRow.slot],
-      )
-      .catch((e) => console.error(`[clones/with-waha] falha ao espelhar waha_sessao em bot_config: ${e.message}`)),
-  ]);
-
   console.log(
-    `[clones/with-waha] clone ${novo_slot} (id=${cloneRow.id}) criado, sessão WAHA ${sessaoName} iniciada`,
+    `[clones/with-waha] clone ${novo_slot} (id=${result.cloneId}) criado, sessão WAHA ${result.sessionName} iniciada`,
   );
 
   res.json({
-    clone_id: cloneRow.id,
+    clone_id: result.cloneId,
     novo_slot,
-    waha_session_name: sessaoName,
-    waha_status: waha.status,
+    waha_session_name: result.sessionName,
+    waha_status: result.wahaStatus,
     clone_status: 'rascunho',
   });
 });
@@ -3832,7 +3573,7 @@ app.post('/api/clones/:id/retry-waha', async (req, res) => {
       error: `Clone em status "${cloneRow.status}"; retry-waha só permitido para rascunho`,
     });
 
-  const sessaoName = cloneRow.waha_sessao ?? wahaSessionName(cloneRow.slot);
+  const sessaoName = cloneRow.waha_sessao ?? (await wahaSessionName(cloneRow.slot));
   const waha = await createWahaSession(sessaoName);
 
   if (!waha.ok) {
