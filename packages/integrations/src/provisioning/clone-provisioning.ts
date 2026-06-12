@@ -193,13 +193,25 @@ export function renderClonePrompt(
   personalizacao: unknown,
   horarios: unknown,
   servicos: unknown,
+  displayName?: string,
 ): string {
   const pers: Record<string, unknown> =
     personalizacao && typeof personalizacao === 'object' && !Array.isArray(personalizacao)
       ? (personalizacao as Record<string, unknown>)
       : {};
+  // nome_negocio: precedência personalizacao > display_name do clone > fallback
+  // genérico. O fallback garante que {{nome_negocio}} nunca renderize literal
+  // nem vazio, mesmo num clone sem display_name e sem personalização.
+  const persNome = pers.nome_negocio;
+  const nomeNegocio =
+    typeof persNome === 'string' && persNome.trim() !== ''
+      ? persNome
+      : displayName && displayName.trim() !== ''
+        ? displayName
+        : 'a barbearia';
   const ctx: Record<string, unknown> = {
     ...pers,
+    nome_negocio: nomeNegocio,
     horarios_funcionamento_render: renderHorariosFuncionamento(horarios),
     servicos_precos_render: renderServicosPrecos(servicos),
   };
@@ -217,6 +229,7 @@ export interface CloneRowLike {
   id: number;
   slot: string;
   matriz_slot: string;
+  display_name?: string | null;
   personalizacao: unknown;
   horarios_funcionamento: unknown;
   servicos: unknown;
@@ -243,6 +256,7 @@ export async function regerarPromptClone(
       cloneRow.personalizacao,
       cloneRow.horarios_funcionamento,
       cloneRow.servicos,
+      cloneRow.display_name ?? undefined,
     );
     await db.query(
       `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
@@ -632,6 +646,9 @@ export async function createCloneRecords(
     ]);
     const tpl = promptR.rows[0]?.prompt;
     if (typeof tpl === 'string') {
+      // Render inline "de bootstrap": SOBRESCRITO logo após o COMMIT por
+      // regerarPromptClone (que aplica nome_negocio/horarios/servicos completos).
+      // Não replicar a lógica de nome_negocio aqui — inflaria o diff sem efeito.
       let prompt = tpl.replace(/\{\{(\w+)\}\}/g, (_m, k: string) =>
         Object.prototype.hasOwnProperty.call(pers, k) ? String(pers[k] ?? '') : `{{${k}}}`,
       );
