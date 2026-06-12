@@ -10,6 +10,7 @@
  * Respostas de erro sao genericas (nao revelam se o username existe).
  */
 import { logger } from '@startap/core/logger';
+import { canonicalE164 } from '@startap/core/phone';
 import { portalUsers } from '@startap/db';
 import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
@@ -32,9 +33,51 @@ export const changePasswordSchema = z.object({
   new_password: z.string().min(8).max(72),
 });
 
-function cookieSecure(): boolean {
+export function cookieSecure(): boolean {
   if (config.PORTAL_COOKIE_SECURE !== undefined) return config.PORTAL_COOKIE_SECURE;
   return config.NODE_ENV === 'production';
+}
+
+/**
+ * Resolve o user do login aceitando o NUMERO em qualquer formatacao (PR #268 —
+ * achado do frontend: cliente novo loga com o WhatsApp, mas "(31) 99999-8842"
+ * falhava porque o lookup era so lower(username) exato).
+ *
+ * Ordem (para na primeira que acha):
+ *  1. Match exato (comportamento atual — clientes legados como 'cirilo' intactos).
+ *  2. Forma canonica E.164 do input (signup grava o username canonico).
+ *  3. Canonico nos DOIS lados (exigencia da security): cobre conta criada manual
+ *     no gestao com username em forma local (ex: '31999998842'). Se MAIS de um
+ *     username resolve pro mesmo canonico (duplicata legada — o signup nao cria
+ *     mais, dedup canonica), NAO loga ninguem: ambiguidade e falha segura.
+ */
+async function findUserAcceptingPhoneFormats(
+  username: string,
+): Promise<Awaited<ReturnType<typeof portalUsers.findPortalUserForAuth>>> {
+  const exact = await portalUsers.findPortalUserForAuth(username);
+  if (exact) return exact;
+
+  const canonical = canonicalE164(username);
+  if (!canonical) return null; // input nao parece telefone — nada a tentar
+
+  if (canonical !== username.trim()) {
+    const byCanonical = await portalUsers.findPortalUserForAuth(canonical);
+    if (byCanonical) return byCanonical;
+  }
+
+  // Canonico nos dois lados (tabela minuscula na v1 — ver listPortalUsernames).
+  const all = await portalUsers.listPortalUsernames();
+  const matches = all.filter((u) => canonicalE164(u.username) === canonical);
+  if (matches.length === 1 && matches[0]) {
+    return portalUsers.findPortalUserAuthById(matches[0].id);
+  }
+  if (matches.length > 1) {
+    log.error(
+      { userIds: matches.map((u) => u.id) },
+      'login ambiguo: mais de um username resolve pro mesmo numero canonico — negado (corrigir no gestao)',
+    );
+  }
+  return null;
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
@@ -45,7 +88,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const { username, password } = parsed.data;
 
-    const user = await portalUsers.findPortalUserForAuth(username);
+    const user = await findUserAcceptingPhoneFormats(username);
     // Resposta generica para username inexistente (sem oraculo de enumeracao).
     if (!user) {
       // Custo constante: roda um compare dummy para nao vazar timing.

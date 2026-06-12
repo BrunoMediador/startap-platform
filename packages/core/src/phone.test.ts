@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractPhone, isGroupChat, toChatId } from './phone.js';
+import { canonicalE164, extractPhone, isGroupChat, phoneHint, toChatId } from './phone.js';
 import type { WahaWebhookBody } from './types.js';
 
 const base = {
@@ -104,5 +104,65 @@ describe('isGroupChat', () => {
     const body = makeBody({ from: '5535999998888@c.us' }) as Record<string, unknown>;
     (body['payload'] as Record<string, unknown>)['participant'] = '';
     expect(isGroupChat(body as WahaWebhookBody)).toBe(false);
+  });
+});
+
+// ── canonicalE164 / phoneHint (Missão 020 F1 — identidade do trial) ───────────
+
+describe('canonicalE164', () => {
+  it('canonicaliza móvel BR de 13 dígitos removendo o 9º dígito', () => {
+    expect(canonicalE164('5531999998842')).toBe('553199998842');
+  });
+
+  it('mantém BR de 12 dígitos (sem o 9) como canônico', () => {
+    expect(canonicalE164('553199998842')).toBe('553199998842');
+  });
+
+  it('13 e 12 dígitos do MESMO número convergem (Baileys ora manda com, ora sem o 9)', () => {
+    expect(canonicalE164('5531999998842')).toBe(canonicalE164('553199998842'));
+  });
+
+  it('aceita máscara BR sem DDI e prefixa 55', () => {
+    expect(canonicalE164('(31) 99999-8842')).toBe('553199998842');
+  });
+
+  it('aceita local BR de 10 dígitos (fixo, sem 9) e prefixa 55', () => {
+    expect(canonicalE164('3133334444')).toBe('553133334444');
+  });
+
+  it('corta sufixos de me.id do WAHA (":device" e "@dominio")', () => {
+    expect(canonicalE164('5531999998842:12@s.whatsapp.net')).toBe('553199998842');
+    expect(canonicalE164('553199998842@c.us')).toBe('553199998842');
+  });
+
+  it('remove prefixo tronco 0 (discagem com operadora)', () => {
+    expect(canonicalE164('031999998842')).toBe('553199998842');
+  });
+
+  it('número internacional não-BR (12+ dígitos) passa como dígitos', () => {
+    expect(canonicalE164('447911123456')).toBe('447911123456');
+  });
+
+  it('10/11 dígitos são SEMPRE tratados como BR local (produto BR)', () => {
+    // 11 dígitos ambíguos (poderia ser +1 US) viram BR — decisão de domínio.
+    expect(canonicalE164('31999998842')).toBe('553199998842');
+  });
+
+  it('rejeita entradas irrecuperáveis', () => {
+    expect(canonicalE164('')).toBeNull();
+    expect(canonicalE164('abc')).toBeNull();
+    expect(canonicalE164('999')).toBeNull();
+    expect(canonicalE164('55319')).toBeNull();
+  });
+});
+
+describe('phoneHint', () => {
+  it('mascara BR: só DDD + 2 últimos dígitos visíveis', () => {
+    expect(phoneHint('553199998842')).toBe('+55 31 •••••-••42');
+  });
+
+  it('nunca contém o número completo', () => {
+    const hint = phoneHint('553199998842');
+    expect(hint).not.toContain('99998842');
   });
 });

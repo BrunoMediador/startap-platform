@@ -30,6 +30,17 @@ export interface LoginErrorBody {
   locked?: boolean;
 }
 
+/**
+ * 201 do POST /auth/signup (portal-signup.ts, Missao 020 F1). A rota ja seta o
+ * cookie httpOnly de sessao (auto-login) — o front so redireciona.
+ * `trial_started` e sempre false aqui: o trial SO comeca no pareamento.
+ */
+export interface SignupResponse {
+  ok: true;
+  user: LoginUser;
+  trial_started: boolean;
+}
+
 export interface AuthMe {
   username: string;
   slot: string;

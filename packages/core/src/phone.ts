@@ -39,6 +39,70 @@ export function toChatId(phone: string): string {
   return `${digits}@c.us`;
 }
 
+// ---------------------------------------------------------------------------
+// Canonicalização E.164 — identidade única do trial (Missão 020 F1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonicaliza um telefone para a forma de IDENTIDADE única usada pelo
+ * trial_ledger (HMAC). Aceita entrada suja: máscara BR "(31) 99999-8842",
+ * me.id do WAHA "5531999998842:12@s.whatsapp.net", dígitos puros etc.
+ *
+ * Regras BR (DDI 55) — o 9º dígito móvel NÃO diferencia identidade
+ * (WAHA/Baileys ora entrega com, ora sem o 9 — doc 020):
+ *  - 13 dígitos (55 + DDD + 9 + 8): remove o 9 → canônico de 12 dígitos.
+ *  - 12 dígitos (55 + DDD + 8): já canônico.
+ *  - 10/11 dígitos sem DDI (DDD + 8/9): assume BR, prefixa 55 e aplica a regra.
+ *  - Prefixo de operadora/tronco "0" à esquerda é removido.
+ *
+ * Não-BR: retorna os dígitos como vieram (10-15 dígitos), sem regra especial.
+ *
+ * Retorna SOMENTE dígitos com DDI (ex: "553199998842") ou null se irrecuperável.
+ */
+export function canonicalE164(raw: string): string | null {
+  if (!raw) return null;
+  // Corta sufixos de JID/me.id do WAHA (":device" e "@dominio") antes de limpar.
+  const base = raw.split('@')[0]?.split(':')[0] ?? '';
+  let digits = base.replace(/\D/g, '');
+  // Remove prefixo tronco/operadora (ex: "031..." discado).
+  digits = digits.replace(/^0+/, '');
+  if (digits.length < 10 || digits.length > 15) return null;
+
+  // 10/11 dígitos = tamanho local BR (DDD + 8/9): assume Brasil e prefixa DDI.
+  // Vale inclusive começando com 55 (DDD 55 local) — produto BR, decisão de domínio.
+  if (digits.length === 10 || digits.length === 11) {
+    digits = `55${digits}`;
+  }
+
+  if (digits.startsWith('55')) {
+    // BR: 55 + DDD(2) + número(8|9). Fora disso, inválido.
+    if (digits.length === 13 && digits[4] === '9') {
+      // Móvel com 9º dígito → identidade canônica SEM o 9.
+      return digits.slice(0, 4) + digits.slice(5);
+    }
+    if (digits.length === 12) return digits;
+    if (digits.length === 13) return digits; // 9 dígitos não iniciados em 9 (raro) — mantém.
+    return null;
+  }
+
+  // Internacional não-BR: dígitos como estão.
+  return digits;
+}
+
+/**
+ * Hint mascarado para suporte/ops (LGPD — doc 020): "+55 31 •••••-••42".
+ * NUNCA loga/grava o número completo; só DDD + 2 últimos dígitos.
+ */
+export function phoneHint(canonical: string): string {
+  const digits = canonical.replace(/\D/g, '');
+  const last2 = digits.slice(-2);
+  if (digits.startsWith('55') && digits.length >= 12) {
+    const ddd = digits.slice(2, 4);
+    return `+55 ${ddd} •••••-••${last2}`;
+  }
+  return `+${digits.slice(0, 2)} •••••-••${last2}`;
+}
+
 /**
  * Detecta se um payload WAHA é de um grupo (não chat 1:1).
  *

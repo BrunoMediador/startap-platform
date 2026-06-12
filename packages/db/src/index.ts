@@ -18,6 +18,7 @@ export * as portalUsers from './queries/portal-users.js';
 export * as clientBilling from './queries/client-billing.js';
 export * as billingCharges from './queries/billing-charges.js';
 export * as billingWebhookEvents from './queries/billing-webhook-events.js';
+export * as trialLedger from './queries/trial-ledger.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -53,3 +54,9 @@ export type {
   PaidWebhookResult,
   ApplyPaidWebhookInput,
 } from './queries/billing-webhook-events.js';
+export type {
+  TrialLedgerRow,
+  TrialLedgerStatus,
+  TrialStatus,
+  TrialCloneInfo,
+} from './queries/trial-ledger.js';

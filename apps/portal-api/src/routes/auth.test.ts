@@ -3,12 +3,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Mocks ANTES de importar o modulo sob teste.
 // config.js valida process.env no import (lanca se faltar var) — mockamos para o teste.
 vi.mock('../config.js', () => ({
-  config: { PORTAL_BCRYPT_COST: 12, NODE_ENV: 'test' },
+  config: {
+    PORTAL_BCRYPT_COST: 12,
+    NODE_ENV: 'test',
+    PORTAL_LOGIN_MAX_ATTEMPTS: 5,
+    PORTAL_LOGIN_LOCK_MINUTES: 15,
+    PORTAL_SESSION_TTL_SECONDS: 3600,
+    PORTAL_COOKIE_SECURE: false,
+  },
 }));
 vi.mock('@startap/db', () => ({
   portalUsers: {
     findPortalUserAuthById: vi.fn(),
     changePortalUserPassword: vi.fn(),
+    findPortalUserForAuth: vi.fn(),
+    listPortalUsernames: vi.fn(),
+    getSlotForActivePortalUser: vi.fn(),
+    recordSuccessfulLogin: vi.fn(),
+    recordFailedLogin: vi.fn(),
   },
 }));
 vi.mock('bcryptjs', () => ({
@@ -30,20 +42,25 @@ vi.mock('../lib/tenant.js', async () => {
   };
 });
 
+import cookie from '@fastify/cookie';
 import { portalUsers } from '@startap/db';
 import bcrypt from 'bcryptjs';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { invalidateOtherUserSessions } from '../lib/session.js';
+import { createSession, invalidateOtherUserSessions } from '../lib/session.js';
 import { authRoutes, changePasswordSchema } from './auth.js';
 
 const findByIdMock = vi.mocked(portalUsers.findPortalUserAuthById);
 const changePwMock = vi.mocked(portalUsers.changePortalUserPassword);
+const findForAuthMock = vi.mocked(portalUsers.findPortalUserForAuth);
+const listUsernamesMock = vi.mocked(portalUsers.listPortalUsernames);
+const getSlotMock = vi.mocked(portalUsers.getSlotForActivePortalUser);
 const compareMock = vi.mocked(bcrypt.compare);
 const hashMock = vi.mocked(bcrypt.hash);
 const invalidateMock = vi.mocked(invalidateOtherUserSessions);
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  await app.register(cookie, { secret: 'segredo-de-teste-com-32-caracteres!!' });
   await app.register(authRoutes);
   await app.ready();
   return app;
@@ -66,6 +83,122 @@ const ACTIVE_USER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+// ── Login: número de WhatsApp em qualquer formatação (PR #268) ───────────────
+describe('POST /auth/login — fallback canônico de telefone', () => {
+  const PHONE_USER = {
+    ...ACTIVE_USER,
+    id: 21,
+    slot: 'clone_barbearia_x_ab12cd',
+    username: '553199998842', // canônico — como o signup grava
+    display_name: 'Barbearia X',
+    must_change_password: false,
+  };
+
+  function arrangeHappyLogin() {
+    compareMock.mockResolvedValue(true as never);
+    getSlotMock.mockResolvedValue(PHONE_USER.slot);
+    vi.mocked(createSession).mockResolvedValue('sid-novo');
+    listUsernamesMock.mockResolvedValue([
+      { id: 7, username: 'cirilo' },
+      { id: 21, username: PHONE_USER.username },
+    ]);
+  }
+
+  it('digitar o número MASCARADO "(31) 99999-8842" acha a conta canônica (achado do frontend)', async () => {
+    arrangeHappyLogin();
+    // 1ª busca (input cru) falha; 2ª (canônico) acha.
+    findForAuthMock.mockResolvedValueOnce(null).mockResolvedValueOnce(PHONE_USER);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: '(31) 99999-8842', password: 'senhaForte99' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.username).toBe('553199998842');
+    expect(findForAuthMock).toHaveBeenNthCalledWith(1, '(31) 99999-8842');
+    expect(findForAuthMock).toHaveBeenNthCalledWith(2, '553199998842');
+    await app.close();
+  });
+
+  it('username legado em forma LOCAL (31999998842) é achado pelo canônico nos dois lados', async () => {
+    arrangeHappyLogin();
+    const legado = { ...PHONE_USER, id: 33, username: '31999998842' };
+    findForAuthMock.mockResolvedValue(null); // nem cru nem canônico batem exato
+    listUsernamesMock.mockResolvedValue([{ id: 33, username: '31999998842' }]);
+    findByIdMock.mockResolvedValue(legado);
+    getSlotMock.mockResolvedValue(legado.slot);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: '(31) 99999-8842', password: 'senhaForte99' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(findByIdMock).toHaveBeenCalledWith(33);
+    await app.close();
+  });
+
+  it('login NÃO-telefone segue intacto: match exato, sem fallback (Cirilo intocado)', async () => {
+    arrangeHappyLogin();
+    findForAuthMock.mockResolvedValue({ ...ACTIVE_USER, must_change_password: false });
+    getSlotMock.mockResolvedValue('clone_x');
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'cirilo', password: 'senhaForte99' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(findForAuthMock).toHaveBeenCalledTimes(1);
+    expect(listUsernamesMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('AMBIGUIDADE (2 usernames legados => mesmo canônico) nega login — falha segura', async () => {
+    arrangeHappyLogin();
+    findForAuthMock.mockResolvedValue(null);
+    listUsernamesMock.mockResolvedValue([
+      { id: 33, username: '31999998842' },
+      { id: 44, username: '5531999998842' },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: '(31) 99999-8842', password: 'senhaForte99' },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(findByIdMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('número inexistente: 401 genérico (sem oráculo)', async () => {
+    findForAuthMock.mockResolvedValue(null);
+    listUsernamesMock.mockResolvedValue([{ id: 7, username: 'cirilo' }]);
+    compareMock.mockResolvedValue(false as never);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: '(31) 98888-0000', password: 'qualquer' },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'usuario ou senha invalidos' });
+    await app.close();
+  });
 });
 
 // ── Schema ──────────────────────────────────────────────────────────────────

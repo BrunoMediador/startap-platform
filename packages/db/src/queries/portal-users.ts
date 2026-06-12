@@ -103,6 +103,20 @@ export async function getPortalUserById(id: number): Promise<PortalUserRow | nul
   return r.rows[0] ? normalize(r.rows[0]) : null;
 }
 
+/**
+ * Lista (id, username) de TODOS os users — base do matching por forma CANONICA
+ * de telefone (dedup do signup + fallback do login), feito em JS na camada de
+ * aplicacao (canonicalE164 vive em @startap/core; SQL nao canonicaliza).
+ *
+ * v1: full scan aceitavel — portal_users e minuscula (1 row por cliente) e os
+ * callers sao rate-limited. Quando escalar: trocar por coluna username_canonical
+ * indexada (gerada no INSERT) e aposentar esta funcao.
+ */
+export async function listPortalUsernames(): Promise<Array<{ id: number; username: string }>> {
+  const r = await query<{ id: string; username: string }>('SELECT id, username FROM portal_users');
+  return r.rows.map((row) => ({ id: Number(row.id), username: row.username }));
+}
+
 /** Verdadeiro se o username (case-insensitive) ja existe. */
 export async function usernameExists(username: string): Promise<boolean> {
   const r = await query<{ count: string }>(
