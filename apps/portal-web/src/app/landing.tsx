@@ -20,8 +20,11 @@ import Link from 'next/link';
  * mesma vinheta (.login-vignette, z-[1]) e conteúdo em z-[2]. Tema único
  * escuro; nenhum fundo próprio cobre o canvas (lição dos PRs #237-240).
  *
- * Contato: reusa SUPORTE_WHATSAPP_URL (número público centralizado em
- * lib/suporte.ts) — sem env nova, sem número espalhado.
+ * CTA primário aponta pro /cadastro (signup self-service, Missão 020 F1) — a
+ * própria /cadastro trata a flag PORTAL_SIGNUP OFF com card "indisponível",
+ * então o link pode existir mesmo com a flag desligada. O WhatsApp segue como
+ * canal secundário (CTA final), reusando SUPORTE_WHATSAPP_URL (número público
+ * centralizado em lib/suporte.ts) — sem env nova, sem número espalhado.
  */
 
 const CONTATO_WHATSAPP_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
@@ -146,14 +149,12 @@ function Hero() {
       </p>
 
       <div className="mt-8 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
-        <a
-          href={CONTATO_WHATSAPP_URL}
-          target="_blank"
-          rel="noopener noreferrer"
+        <Link
+          href="/cadastro"
           className={`login-btn-glow inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-btn bg-brand px-7 font-display text-[15px] font-semibold text-bg transition-[transform,background-color] duration-[120ms] hover:bg-brand-600 active:scale-[0.985] active:bg-brand-700 sm:w-auto ${FOCUS_RING}`}
         >
           Quero testar grátis
-        </a>
+        </Link>
         <a
           href="#como-funciona"
           className={`inline-flex h-[52px] w-full items-center justify-center rounded-btn border border-line-strong bg-surface px-7 font-display text-[15px] font-semibold text-brand transition-colors duration-[120ms] hover:bg-surface-hover sm:w-auto ${FOCUS_RING}`}
@@ -249,21 +250,30 @@ function CtaFinal() {
           id="contato-titulo"
           className="font-display text-[clamp(22px,3vw,30px)] font-bold tracking-[-0.02em] text-ink"
         >
-          Entre em contato
+          Comece seu teste grátis
         </h2>
         <p className="mx-auto mt-3 max-w-[40ch] text-[15px] leading-[1.65] text-ink-soft">
-          Chama a gente no WhatsApp: a gente conecta o robô no seu número e você testa{' '}
-          <strong className="font-semibold text-ink">10 dias grátis</strong>, sem compromisso.
+          Crie sua conta em um minuto e teste{' '}
+          <strong className="font-semibold text-ink">10 dias grátis</strong> — sem cartão, sem
+          compromisso. Prefere conversar antes? Chama a gente no WhatsApp.
         </p>
-        <a
-          href={CONTATO_WHATSAPP_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`login-btn-glow mt-7 inline-flex h-[52px] items-center justify-center gap-2.5 rounded-btn bg-brand px-7 font-display text-[15px] font-semibold text-bg transition-[transform,background-color] duration-[120ms] hover:bg-brand-600 active:scale-[0.985] active:bg-brand-700 ${FOCUS_RING}`}
-        >
-          <IconWhatsapp size={20} />
-          Chamar no WhatsApp
-        </a>
+        <div className="mt-7 flex w-full flex-col items-center justify-center gap-3 sm:flex-row">
+          <Link
+            href="/cadastro"
+            className={`login-btn-glow inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-btn bg-brand px-7 font-display text-[15px] font-semibold text-bg transition-[transform,background-color] duration-[120ms] hover:bg-brand-600 active:scale-[0.985] active:bg-brand-700 sm:w-auto ${FOCUS_RING}`}
+          >
+            Criar minha conta grátis
+          </Link>
+          <a
+            href={CONTATO_WHATSAPP_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`inline-flex h-[52px] w-full items-center justify-center gap-2.5 rounded-btn border border-line-strong bg-transparent px-7 font-display text-[15px] font-semibold text-brand transition-colors duration-[120ms] hover:bg-surface-hover sm:w-auto ${FOCUS_RING}`}
+          >
+            <IconWhatsapp size={20} />
+            Chamar no WhatsApp
+          </a>
+        </div>
       </div>
     </section>
   );

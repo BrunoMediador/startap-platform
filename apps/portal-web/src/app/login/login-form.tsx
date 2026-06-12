@@ -18,6 +18,7 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
  *   - must_change_password: aviso pra falar com o suporte (sem fluxo de troca v1)
  *   - sucesso -> redirect /inicio.
  */
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -194,6 +195,19 @@ export function LoginForm() {
                 </a>
               </p>
             </form>
+
+            {/* Caminho pro signup self-service (Missao 020 F1) — espelha o
+                "Já tem conta? Entrar" da /cadastro. A própria /cadastro trata
+                a flag OFF com card "indisponível", então o link é seguro. */}
+            <p className="mt-5 text-center text-[13px] text-ink-soft">
+              Ainda não tem conta?{' '}
+              <Link
+                href="/cadastro"
+                className="font-semibold text-brand outline-none focus-visible:underline"
+              >
+                Criar conta grátis
+              </Link>
+            </p>
           </div>
         </main>
       </div>
