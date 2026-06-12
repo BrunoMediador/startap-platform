@@ -27,6 +27,30 @@ export const WorkerConfigSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+
+  // ── Cron de limpeza de trials ÓRFÃOS (Missao 020 F1 — condicao 2 do PORTAL_SIGNUP) ──
+  // TODAS opcionais com default (licao #247: nada aqui e obrigatorio no boot).
+  // Com PORTAL_SIGNUP OFF nao existe clone trial_status='awaiting' => o job roda e
+  // nao faz nada. Kill switch: 'false' desliga o job sem deploy.
+  TRIAL_ORPHAN_CLEANUP_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v !== 'false'),
+  // Idade minima (horas) pra signup nunca-pareado virar orfao. Default 72h —
+  // o doc 020 nao crava idade pra este caso (o ">30d" do doc e pra trial VENCIDO,
+  // outro cenario). Decisao registrada no PR pro Bruno ajustar se quiser.
+  TRIAL_ORPHAN_MAX_AGE_HOURS: z.coerce.number().int().positive().default(72),
+  // Padrao cron da rodada (croner). Default horario, :30 (evita colidir com o
+  // cleanup-chat de :00). Padrao invalido NUNCA crasha o boot — worker.ts cai
+  // pro default e loga alto.
+  TRIAL_ORPHAN_CRON: z.string().default('30 * * * *'),
+
+  // ── WAHA (teardown da sessao orfa) — mesmos defaults de packages/integrations/waha ──
+  WAHA_URL: z.string().default('http://waha:3000'),
+  WAHA_API_KEY: z.string().default(''),
+  // Exigida apenas pelo contrato WahaConfig (criacao de sessao); o teardown so
+  // DELETA sessao — string vazia e segura aqui.
+  TS_WEBHOOK_URL: z.string().default(''),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
