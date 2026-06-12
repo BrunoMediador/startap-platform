@@ -70,7 +70,7 @@ describe('createWahaSession', () => {
     webhookUrl: 'http://api:3040/webhooks/waha',
   };
 
-  it('cria sessão com webhook incluindo message.any e session.status', async () => {
+  it('cria sessão com webhook escutando SÓ message.any e session.status (sem message)', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'STARTING' }),
@@ -84,7 +84,45 @@ describe('createWahaSession', () => {
     };
     // message.any: sem ele o bot fica surdo pra áudio e o pause do dono quebra.
     // session.status: alimenta o hook de trial (Missão 020 F1).
-    expect(body.config.webhooks[0]?.events).toEqual(['message', 'message.any', 'session.status']);
+    // 'message' NÃO pode entrar: message.any é superset — os dois juntos
+    // entregam a mesma mensagem 2x e o bot responde em dobro (smoke 2026-06-12).
+    expect(body.config.webhooks[0]?.events).toEqual(['message.any', 'session.status']);
+  });
+
+  // Padrão-ouro de sessão nova (diretriz Bruno 12/06): config EXPLÍCITA igual
+  // às sessões prod comprovadas (GET real de cirilobarbearia, WAHA 2026.3.2).
+  // Default implícito da instância é frágil — o trial nasceu com
+  // retries.delaySeconds=2 enquanto Cirilo tem 3. Se este teste quebrar porque
+  // alguém removeu ignore/retries/noweb "por serem default do WAHA", NÃO
+  // remova o teste: restaure os campos.
+  it('payload explicita padrão Cirilo: ignore (só chat privado) + retries + noweb', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'STARTING' }) });
+    await createWahaSession(WAHA, 'clone_x');
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as { body: string }).body) as {
+      config: {
+        webhooks: Array<{ retries?: Record<string, unknown> }>;
+        ignore?: Record<string, unknown>;
+        noweb?: Record<string, unknown>;
+      };
+    };
+    // Bot SÓ responde chat privado: nada de status/grupos/canais/broadcast.
+    expect(body.config.ignore).toEqual({
+      status: true,
+      groups: true,
+      channels: true,
+      broadcast: true,
+    });
+    // Retry de entrega do webhook igual Cirilo (attempts 15, constant 3s).
+    expect(body.config.webhooks[0]?.retries).toEqual({
+      attempts: 15,
+      delaySeconds: 3,
+      policy: 'constant',
+    });
+    // Engine NOWEB igual Cirilo: markOnline on, store de chats/contatos off.
+    expect(body.config.noweb).toEqual({
+      markOnline: true,
+      store: { enabled: false, fullSync: false },
+    });
   });
 
   it('falha de WAHA NÃO lança — retorna { ok:false } pro caller decidir (retry-waha)', async () => {
@@ -116,8 +154,9 @@ describe('createWahaSession', () => {
     };
     expect(body.config.webhooks[0]?.hmac).toEqual({ key: 'hmac-key-test' });
     expect(body.config.webhooks[0]?.customHeaders).toBeUndefined();
-    // events intactos — PUT/POST com webhook sem message.any deixa o bot surdo.
-    expect(body.config.webhooks[0]?.events).toEqual(['message', 'message.any', 'session.status']);
+    // events intactos — sem message.any o bot fica surdo; com 'message' junto
+    // a entrega duplica e o bot responde 2x (smoke 2026-06-12).
+    expect(body.config.webhooks[0]?.events).toEqual(['message.any', 'session.status']);
   });
 
   it('webhookSecret configurado -> webhook nasce com customHeaders X-Webhook-Secret (plano B)', async () => {
