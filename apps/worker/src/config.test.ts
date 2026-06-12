@@ -21,4 +21,18 @@ describe('WorkerConfigSchema', () => {
     const result = WorkerConfigSchema.parse({ ABACATEPAY_API_KEY: 'abacate-dev-key' });
     expect(result.ABACATEPAY_API_KEY).toBe('abacate-dev-key');
   });
+
+  it('VALIDA OK sem nenhuma env do cron de trials orfaos — defaults seguros (licao #247)', () => {
+    const result = WorkerConfigSchema.parse({});
+    expect(result.TRIAL_ORPHAN_CLEANUP_ENABLED).toBe(true); // ausente = ligado (no-op sem candidatos)
+    expect(result.TRIAL_ORPHAN_MAX_AGE_HOURS).toBe(72);
+    expect(result.TRIAL_ORPHAN_CRON).toBe('30 * * * *');
+    expect(result.WAHA_URL).toBe('http://waha:3000');
+    expect(result.WAHA_API_KEY).toBe('');
+  });
+
+  it('kill switch TRIAL_ORPHAN_CLEANUP_ENABLED=false desliga o cron sem deploy', () => {
+    const result = WorkerConfigSchema.parse({ TRIAL_ORPHAN_CLEANUP_ENABLED: 'false' });
+    expect(result.TRIAL_ORPHAN_CLEANUP_ENABLED).toBe(false);
+  });
 });

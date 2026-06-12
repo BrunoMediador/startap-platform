@@ -319,3 +319,90 @@ export async function markExempt(slot: string, pairedPhone: string): Promise<voi
   );
   invalidateCloneCache({ slot });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trials ÓRFÃOS — cron de limpeza do worker (Missão 020 F1, condição 2 do
+// PORTAL_SIGNUP). Órfão = signup que provisionou clone + sessão WAHA mas NUNCA
+// pareou (trial nunca iniciou) e passou da idade limite. Sem limpeza, cada
+// órfão é 1 sessão WAHA (instância Baileys) comendo RAM na VPS sem swap.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OrphanTrialCandidate {
+  slot: string;
+  waha_sessao: string | null;
+  status: string;
+  trial_status: TrialStatus;
+  /** Idade do clone em horas (NOW() - created_at). */
+  age_hours: number;
+}
+
+/**
+ * WHERE compartilhada da seleção de órfãos — TODAS as condições são guardas:
+ *  - trial_status = 'awaiting'  => SÓ clone nascido do signup self-service que
+ *    nunca pareou. 'none' (Cirilo/matrizes/clones manuais do gestão) e 'exempt'
+ *    (whitelist interna) JAMAIS entram; 'active'/'blocked' são trials que já
+ *    consumiram ledger — fora do escopo deste cron.
+ *  - slot LIKE 'clone\_%'       => defesa em profundidade (prefixo obrigatório
+ *    do signup; mesma guarda do teardownProvisionedClone).
+ *  - status IN (rascunho, aguardando_qr) => nunca progrediu (mesma guarda
+ *    interna do teardown — clone conectado jamais é candidato).
+ *  - cb.next_due_date IS NULL   => cinto extra: trial nunca iniciou (startTrial
+ *    sempre seta a data; LEFT JOIN cobre clone sem linha de billing).
+ *  - created_at < NOW() - idade => só órfão "frio" (idade configurável no worker).
+ */
+const ORPHAN_WHERE = `
+  FROM flow_clones fc
+  LEFT JOIN client_billing cb ON cb.slot = fc.slot
+  WHERE fc.trial_status = 'awaiting'
+    AND fc.slot LIKE 'clone\\_%'
+    AND fc.status IN ('rascunho', 'aguardando_qr')
+    AND cb.next_due_date IS NULL
+    AND fc.created_at < NOW() - make_interval(hours => $1)`;
+
+const ORPHAN_COLS = `fc.slot, fc.waha_sessao, fc.status, fc.trial_status,
+         EXTRACT(EPOCH FROM (NOW() - fc.created_at)) / 3600.0 AS age_hours`;
+
+function normalizeOrphan(
+  row: Omit<OrphanTrialCandidate, 'age_hours'> & { age_hours: string | number },
+): OrphanTrialCandidate {
+  return { ...row, age_hours: Number(row.age_hours) };
+}
+
+/**
+ * Candidatos a teardown, mais antigos primeiro. `limit` é o teto por rodada do
+ * cron (o resto fica pra próxima — órfão não estraga esperando 1h). NÃO
+ * seleciona cliente_telefone (LGPD: o cron nunca vê/loga número).
+ */
+export async function listOrphanTrialCandidates(
+  maxAgeHours: number,
+  limit: number,
+): Promise<OrphanTrialCandidate[]> {
+  const r = await query<Omit<OrphanTrialCandidate, 'age_hours'> & { age_hours: string }>(
+    `SELECT ${ORPHAN_COLS}
+     ${ORPHAN_WHERE}
+     ORDER BY fc.created_at ASC
+     LIMIT $2`,
+    [maxAgeHours, limit],
+  );
+  return r.rows.map(normalizeOrphan);
+}
+
+/**
+ * Releitura FRESH de UM candidato — chamada DENTRO do withTrialSlotLock (mesmo
+ * advisory lock do trial-pairing) antes do teardown: se o cliente pareou entre
+ * o SELECT e o lock (trial_status virou active/blocked, ou status progrediu),
+ * retorna null e o cron pula o slot sem tocar em nada.
+ */
+export async function findOrphanTrialClone(
+  slot: string,
+  maxAgeHours: number,
+): Promise<OrphanTrialCandidate | null> {
+  const r = await query<Omit<OrphanTrialCandidate, 'age_hours'> & { age_hours: string }>(
+    `SELECT ${ORPHAN_COLS}
+     ${ORPHAN_WHERE}
+       AND fc.slot = $2
+     LIMIT 1`,
+    [maxAgeHours, slot],
+  );
+  return r.rows[0] ? normalizeOrphan(r.rows[0]) : null;
+}

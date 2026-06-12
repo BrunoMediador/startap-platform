@@ -11,10 +11,32 @@ import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
+import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 
 const log = logger.child({ service: 'worker' });
+
+/**
+ * Registra um cron cujo PATTERN vem de env: pattern inválido NUNCA crasha o
+ * boot do worker (lição #247) — cai pro fallback hardcoded e loga alto.
+ */
+function scheduleCronSafe(
+  pattern: string,
+  fallback: string,
+  opts: ConstructorParameters<typeof Cron>[1],
+  fn: () => Promise<void>,
+): Cron {
+  try {
+    return new Cron(pattern, opts, fn);
+  } catch (e) {
+    log.error(
+      { pattern, fallback, err: e instanceof Error ? e.message : String(e) },
+      'cron pattern inválido vindo de env — usando fallback',
+    );
+    return new Cron(fallback, opts, fn);
+  }
+}
 
 async function main() {
   log.info('Worker startup');
@@ -180,6 +202,54 @@ async function main() {
             : 'Job generate-billing-charges concluído',
           ...(billingResult ? { metadata: billingResult } : {}),
           ...(billingError ? { error: billingError } : {}),
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    },
+  );
+
+  // Trials órfãos (Missão 020 F1 — condição 2 do PORTAL_SIGNUP): horário por
+  // default (env TRIAL_ORPHAN_CRON, fallback :30 pra não colidir com o
+  // cleanup-chat de :00). Com PORTAL_SIGNUP OFF não existe clone
+  // trial_status='awaiting' => o job roda e não faz nada (no-op barato).
+  scheduleCronSafe(
+    config.TRIAL_ORPHAN_CRON,
+    '30 * * * *',
+    { name: 'cleanup-trial-orphans', timezone: 'America/Sao_Paulo' },
+    async () => {
+      const executionId = randomUUID();
+      const startedAt = Date.now();
+      let orphanResult: Awaited<ReturnType<typeof runCleanupTrialOrphans>> | null = null;
+      let orphanError: unknown = null;
+      await flowExecutionLog.logFlowEvent({
+        executionId,
+        flowId: 'worker:cleanup-trial-orphans',
+        flowName: 'cleanup-trial-orphans',
+        bot: 'worker',
+        eventType: 'worker.job-started',
+        status: 'running',
+        message: 'Job cleanup-trial-orphans iniciado',
+      });
+      try {
+        orphanResult = await runCleanupTrialOrphans();
+        // Só loga ciclo com atividade — com PORTAL_SIGNUP OFF o no-op fica mudo.
+        if (orphanResult.scanned > 0) log.info({ ...orphanResult }, 'cleanup-trial-orphans cycle');
+      } catch (e) {
+        orphanError = e;
+        log.error({ err: e }, 'cleanup-trial-orphans crashed');
+      } finally {
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:cleanup-trial-orphans',
+          flowName: 'cleanup-trial-orphans',
+          bot: 'worker',
+          eventType: orphanError ? 'worker.job-failed' : 'worker.job-finished',
+          status: orphanError ? 'error' : 'success',
+          message: orphanError
+            ? 'Job cleanup-trial-orphans falhou'
+            : 'Job cleanup-trial-orphans concluído',
+          ...(orphanResult ? { metadata: orphanResult } : {}),
+          ...(orphanError ? { error: orphanError } : {}),
           durationMs: Date.now() - startedAt,
         });
       }
