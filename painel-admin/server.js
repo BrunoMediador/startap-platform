@@ -131,14 +131,33 @@ const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/wah
 const WAHA_WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || '';
 const WAHA_WEBHOOK_HMAC_KEY = process.env.WAHA_WEBHOOK_HMAC_KEY || '';
 
+// ---------------------------------------------------------------------------
+// Padrao-ouro de sessao nova (diretriz Bruno 12/06): toda sessao WAHA criada
+// aqui segue EXPLICITAMENTE a config das sessoes prod comprovadas (GET real de
+// `cirilobarbearia`, WAHA Plus 2026.3.2 NOWEB — evidencia 2026-06-12). Os
+// valores COINCIDEM com defaults da instancia hoje, mas default implicito e
+// FRAGIL (prova: trial nasceu com retries.delaySeconds=2, Cirilo tem 3). NAO
+// remover achando redundante com o WAHA. Espelho EXATO das constantes de
+// clone-provisioning.ts (packages/integrations) — manter em sincronia.
+// ---------------------------------------------------------------------------
+
+// Retry de entrega do webhook — igual Cirilo (attempts 15, constant 3s).
+const WAHA_WEBHOOK_RETRIES = { attempts: 15, delaySeconds: 3, policy: 'constant' };
+// Bot SO responde chat privado: ignora status, grupos, canais e broadcast.
+const WAHA_SESSION_IGNORE = { status: true, groups: true, channels: true, broadcast: true };
+// Engine NOWEB igual Cirilo: markOnline ligado, store de chats/contatos
+// DESLIGADO (recent-contacts ja tem fallback via message_log p/ sessao sem store).
+const WAHA_SESSION_NOWEB = { markOnline: true, store: { enabled: false, fullSync: false } };
+
 /**
  * Monta o array `config.webhooks` padrao de uma sessao WAHA nova: url do TS api +
- * events recebidos + hmac.key (plano A) e/ou customHeaders (plano B), somente se
- * configurados. Os dois podem coexistir na sessao (o WAHA manda assinatura E
- * header); a precedencia de validacao e decidida pelo apps/api.
+ * events recebidos + retries explicito (padrao Cirilo, diretriz Bruno 12/06) +
+ * hmac.key (plano A) e/ou customHeaders (plano B), somente se configurados. Os
+ * dois podem coexistir na sessao (o WAHA manda assinatura E header); a
+ * precedencia de validacao e decidida pelo apps/api.
  */
 function buildWahaWebhooks(events) {
-  const webhook = { url: TS_WEBHOOK_URL, events };
+  const webhook = { url: TS_WEBHOOK_URL, events, retries: WAHA_WEBHOOK_RETRIES };
   if (WAHA_WEBHOOK_HMAC_KEY) {
     webhook.hmac = { key: WAHA_WEBHOOK_HMAC_KEY };
   }
@@ -4548,6 +4567,12 @@ app.post('/api/sessions', async (req, res) => {
           // sozinho tambem cobre audio/video/imagem (correcao 2026-05-21).
           // Mesma lista do clone-provisioning.ts (createWahaSession).
           webhooks: buildWahaWebhooks(['message.any', 'session.status']),
+          // ignore/noweb explicitos (padrao Cirilo, diretriz Bruno 12/06):
+          // sessao nova segue a config das sessoes prod comprovadas em vez de
+          // herdar default implicito da instancia WAHA — ver bloco "Padrao-ouro
+          // de sessao nova" no topo. Bot SO responde chat privado.
+          ignore: WAHA_SESSION_IGNORE,
+          noweb: WAHA_SESSION_NOWEB,
         },
       }),
     });

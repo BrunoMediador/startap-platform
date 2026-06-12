@@ -278,9 +278,37 @@ export interface WahaSessionResult {
 interface WahaWebhookEntry {
   url: string;
   events: string[];
+  retries: { attempts: number; delaySeconds: number; policy: string };
   hmac?: { key: string };
   customHeaders?: Array<{ name: string; value: string }>;
 }
+
+// ---------------------------------------------------------------------------
+// Padrão-ouro de sessão nova (diretriz Bruno 12/06): toda sessão WAHA criada
+// pelo provisioning segue EXPLICITAMENTE a config das sessões prod comprovadas
+// (GET real de `cirilobarbearia` na instância congelada WAHA Plus 2026.3.2
+// NOWEB — evidência 2026-06-12). Os valores COINCIDEM com defaults da
+// instância hoje, mas default implícito é FRÁGIL: a sessão do trial
+// (`clone_bruna_barber_shop_gqgp4q`) nasceu com retries.delaySeconds=2
+// enquanto Cirilo tem 3 — prova de que o default muda por fora do nosso
+// código. NÃO remover esses blocos achando que são redundantes com o WAHA.
+// Nomes de campo conferidos contra o schema da versão congelada (WebhookConfig
+// tem `retries` no OpenAPI — spike docs/missoes/spike-waha-meid-customheaders.md;
+// `ignore`/`noweb` aparecem no GET real das sessões dessa mesma instância).
+// ---------------------------------------------------------------------------
+
+/** Retry de entrega do webhook — igual Cirilo (attempts 15, constant 3s). */
+const WEBHOOK_RETRIES = { attempts: 15, delaySeconds: 3, policy: 'constant' } as const;
+
+/** Bot SÓ responde chat privado: ignora status, grupos, canais e broadcast. */
+const SESSION_IGNORE = { status: true, groups: true, channels: true, broadcast: true } as const;
+
+/**
+ * Engine NOWEB igual Cirilo: markOnline ligado, store de chats/contatos
+ * DESLIGADO (o painel já tem fallback via message_log pra sessões sem store —
+ * recent-contacts). fullSync só faria sentido com store ligado.
+ */
+const SESSION_NOWEB = { markOnline: true, store: { enabled: false, fullSync: false } } as const;
 
 /**
  * Monta a entrada de webhook da sessão nova: url do apps/api + events recebidos
@@ -291,7 +319,9 @@ interface WahaWebhookEntry {
  * POST /api/sessions) — manter em sincronia.
  */
 function buildWebhook(waha: WahaConfig, events: string[]): WahaWebhookEntry {
-  const webhook: WahaWebhookEntry = { url: waha.webhookUrl, events };
+  // retries explícito (padrão Cirilo, diretriz Bruno 12/06) — ver bloco
+  // "Padrão-ouro de sessão nova" acima.
+  const webhook: WahaWebhookEntry = { url: waha.webhookUrl, events, retries: WEBHOOK_RETRIES };
   if (waha.webhookHmacKey) {
     webhook.hmac = { key: waha.webhookHmacKey };
   }
@@ -336,8 +366,16 @@ export async function createWahaSession(
         //
         // buildWebhook injeta hmac.key e/ou customHeaders quando configurados
         // (auth do webhook — P0 #268 + spike 2026-06-11).
+        //
+        // ignore/noweb explícitos (padrão Cirilo, diretriz Bruno 12/06): toda
+        // sessão nova segue a config das sessões prod comprovadas em vez de
+        // herdar default implícito da instância WAHA — ver bloco "Padrão-ouro
+        // de sessão nova" acima. ignore garante que o bot SÓ responde chat
+        // privado (nada de status/grupos/canais/broadcast).
         config: {
           webhooks: [buildWebhook(waha, ['message.any', 'session.status'])],
+          ignore: SESSION_IGNORE,
+          noweb: SESSION_NOWEB,
         },
       }),
     });
