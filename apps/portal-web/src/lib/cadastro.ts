@@ -30,6 +30,25 @@ export interface CadastroPayload {
   senha: string;
 }
 
+/** Cards que SUBSTITUEM o form da /cadastro (spec A3.10: beco com saída). */
+export type SignupCardView = 'trial-usado' | 'conta-existe' | 'indisponivel' | 'lotado';
+
+/**
+ * Mapeia a resposta de erro do POST /auth/signup (portal-signup.ts) pro card
+ * dedicado — ou null quando o erro fica no tratamento inline/banner do form:
+ *  - 409 trial_ja_usado  -> 'trial-usado' (portão 1, soft check)
+ *  - 409 (conta_ja_existe e afins) -> 'conta-existe'
+ *  - 404/403 (flag PORTAL_SIGNUP OFF) -> 'indisponivel'
+ *  - 503 trial_lotado (teto TRIAL_MAX_ATIVOS, PR #268) -> 'lotado'
+ *  - resto (400 telefone_invalido, 500, 503 genérico, rede) -> null
+ */
+export function signupCardFromError(status: number, code: string | null): SignupCardView | null {
+  if (status === 409) return code === 'trial_ja_usado' ? 'trial-usado' : 'conta-existe';
+  if (status === 404 || status === 403) return 'indisponivel';
+  if (status === 503 && code === 'trial_lotado') return 'lotado';
+  return null;
+}
+
 /**
  * Reduz a entrada a digitos LOCAIS BR (DDD + numero, max 11).
  * Eco das regras do canonicalE164 (packages/core/phone.ts) pro caso de colar:

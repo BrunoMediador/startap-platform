@@ -9,10 +9,10 @@ export const metadata: Metadata = {
 };
 
 /**
- * Cadastro self-service (Missao 020 F1) — rota PUBLICA, acessivel SO por URL
- * direta enquanto PORTAL_SIGNUP estiver OFF (sem link na landing/login; o link
- * entra quando o Bruno ligar a flag). Com a flag OFF o backend devolve 404 e o
- * form mostra o estado "indisponivel". Ja logado pula pro app, igual /login.
+ * Cadastro self-service (Missao 020 F1) — rota PUBLICA, linkada na landing
+ * ("Quero testar grátis") e no login ("Criar conta grátis"). O link pode
+ * existir mesmo com PORTAL_SIGNUP OFF: o backend devolve 404 e o form mostra
+ * o estado "indisponivel". Ja logado pula pro app, igual /login.
  */
 export default async function CadastroPage() {
   const session = await getServerSession();

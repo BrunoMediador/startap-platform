@@ -7,7 +7,13 @@ import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { SignupResponse } from '@/lib/api-types';
-import { type CadastroErrors, maskPhoneBR, validateCadastro } from '@/lib/cadastro';
+import {
+  type CadastroErrors,
+  type SignupCardView,
+  maskPhoneBR,
+  signupCardFromError,
+  validateCadastro,
+} from '@/lib/cadastro';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 /**
  * Cadastro self-service (spec A3.1 da Missao 020). Mesma identidade do login v2:
@@ -19,14 +25,16 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
  *   - 409 trial_ja_usado  -> card amigavel (portao 1, soft check — A3.10)
  *   - 409 conta_ja_existe -> card "ja tem conta" com CTA Entrar
  *   - 404/403 (flag PORTAL_SIGNUP OFF) -> card "cadastro ainda nao disponivel"
+ *   - 503 trial_lotado (teto TRIAL_MAX_ATIVOS) -> card "estamos lotados" + CTA WhatsApp
  *   - 400 telefone_invalido -> erro inline no campo
- *   - 500/502/503/rede -> banner generico, form preservado
+ *   - 500/502/503 generico/rede -> banner generico, form preservado
+ * (mapa status+code -> card centralizado em lib/cadastro.ts: signupCardFromError)
  */
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
-type View = 'form' | 'trial-usado' | 'conta-existe' | 'indisponivel';
+type View = 'form' | SignupCardView;
 
 function apiCode(err: ApiError): string | null {
   const body = err.body as { error?: unknown } | null;
@@ -83,12 +91,9 @@ export function CadastroForm() {
       clearSlowTimer();
       if (err instanceof ApiError) {
         const code = apiCode(err);
-        if (err.status === 409 && code === 'trial_ja_usado') {
-          setView('trial-usado');
-        } else if (err.status === 409) {
-          setView('conta-existe');
-        } else if (err.status === 404 || err.status === 403) {
-          setView('indisponivel');
+        const card = signupCardFromError(err.status, code);
+        if (card) {
+          setView(card);
         } else if (err.status === 400 && code === 'telefone_invalido') {
           setErrors({ whatsapp: 'Confere o número? Ele não parece válido' });
         } else {
@@ -249,6 +254,7 @@ export function CadastroForm() {
             {view === 'trial-usado' && <TrialJaUsadoCard onVoltar={() => setView('form')} />}
             {view === 'conta-existe' && <ContaExisteCard onVoltar={() => setView('form')} />}
             {view === 'indisponivel' && <IndisponivelCard />}
+            {view === 'lotado' && <LotadoCard onVoltar={() => setView('form')} />}
 
             <p className="mt-5 text-center text-[13px] text-ink-soft">
               Já tem conta?{' '}
@@ -397,6 +403,33 @@ function ContaExisteCard({ onVoltar }: { onVoltar: () => void }) {
         className="mt-3 h-11 w-full rounded-btn font-display text-[14px] font-semibold text-brand outline-none transition-colors hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
       >
         Usar outro número
+      </button>
+    </StateCard>
+  );
+}
+
+/** 503 trial_lotado: teto global de trials simultaneos (TRIAL_MAX_ATIVOS) atingido.
+ *  Lotacao reframada como coisa boa (🎉, precedente A3.10/spec item 8) — nunca
+ *  culpa o visitante. Form fica preservado pro "Tentar de novo". */
+function LotadoCard({ onVoltar }: { onVoltar: () => void }) {
+  return (
+    <StateCard>
+      <h2 className="font-display text-[21px] font-bold leading-snug tracking-[-0.01em] text-ink">
+        Estamos lotados no momento 🎉
+      </h2>
+      <p className="mt-2.5 text-[14px] leading-[1.6] text-ink-soft">
+        Muita gente testando o robô ao mesmo tempo! A gente abre novas vagas aos poucos pra manter o
+        atendimento redondo. Chama no WhatsApp que avisamos assim que abrir a sua:
+      </p>
+      <div className="mt-5">
+        <CtaWhatsApp>Falar com a gente no WhatsApp</CtaWhatsApp>
+      </div>
+      <button
+        type="button"
+        onClick={onVoltar}
+        className="mt-3 h-11 w-full rounded-btn font-display text-[14px] font-semibold text-brand outline-none transition-colors hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        Tentar de novo
       </button>
     </StateCard>
   );

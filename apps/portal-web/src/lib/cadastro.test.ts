@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { maskPhoneBR, phoneDigits, validateCadastro } from './cadastro';
+import { maskPhoneBR, phoneDigits, signupCardFromError, validateCadastro } from './cadastro';
 
 describe('phoneDigits', () => {
   it('reduz entrada mascarada a digitos locais', () => {
@@ -87,5 +87,36 @@ describe('validateCadastro', () => {
       expect(res.errors.whatsapp).toBeTruthy();
       expect(res.errors.senha).toBeTruthy();
     }
+  });
+});
+
+describe('signupCardFromError', () => {
+  it('409 trial_ja_usado -> card do portao 1 (soft check)', () => {
+    expect(signupCardFromError(409, 'trial_ja_usado')).toBe('trial-usado');
+  });
+
+  it('409 sem/com outro codigo -> card "ja tem conta"', () => {
+    expect(signupCardFromError(409, 'conta_ja_existe')).toBe('conta-existe');
+    expect(signupCardFromError(409, null)).toBe('conta-existe');
+  });
+
+  it('404/403 (flag PORTAL_SIGNUP OFF) -> card indisponivel', () => {
+    expect(signupCardFromError(404, null)).toBe('indisponivel');
+    expect(signupCardFromError(403, null)).toBe('indisponivel');
+  });
+
+  it('503 trial_lotado (teto TRIAL_MAX_ATIVOS) -> card lotado', () => {
+    expect(signupCardFromError(503, 'trial_lotado')).toBe('lotado');
+  });
+
+  it('503 generico SEM trial_lotado NAO vira card (fica no banner)', () => {
+    expect(signupCardFromError(503, null)).toBeNull();
+    expect(signupCardFromError(503, 'outro_erro')).toBeNull();
+  });
+
+  it('400/500/rede ficam no tratamento inline/banner do form', () => {
+    expect(signupCardFromError(400, 'telefone_invalido')).toBeNull();
+    expect(signupCardFromError(500, null)).toBeNull();
+    expect(signupCardFromError(0, null)).toBeNull();
   });
 });
