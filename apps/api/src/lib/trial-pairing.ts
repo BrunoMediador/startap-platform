@@ -45,6 +45,13 @@ const SessionStatusPayload = z
   })
   .passthrough();
 
+/** `me` no TOPO do envelope: no WAHA Plus 2026.3.2 (NOWEB) o session.status NÃO
+ * traz `me` dentro de payload — vem como irmão dele, opcional (spike
+ * docs/missoes/spike-waha-meid-customheaders.md). */
+const SessionStatusEnvelope = z
+  .object({ me: z.object({ id: z.string().nullish() }).passthrough().nullish() })
+  .passthrough();
+
 const WAHA_TIMEOUT_MS = 8_000;
 
 interface HookOpts {
@@ -103,8 +110,14 @@ async function processSessionStatus(
     return { status: 'ignored:trial-none' };
   }
 
-  // Número REALMENTE pareado (prova de posse): payload.me.id ou GET na sessão.
-  let meId = parsed.success ? (parsed.data.me?.id ?? null) : null;
+  // Número REALMENTE pareado (prova de posse): me.id no TOPO do envelope
+  // (formato real do NOWEB 2026.3.2 — spike meid), depois payload.me.id
+  // (compat outras engines/versões) e, em último caso, GET na sessão.
+  const envelope = SessionStatusEnvelope.safeParse(body);
+  let meId = envelope.success ? (envelope.data.me?.id ?? null) : null;
+  if (!meId) {
+    meId = parsed.success ? (parsed.data.me?.id ?? null) : null;
+  }
   if (!meId) {
     try {
       const s = await waha.sessions.getSessionStatus(body.session, {
