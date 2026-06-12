@@ -14,15 +14,34 @@ export const ConfigSchema = z.object({
   WAHA_URL: z.string().url(),
   WAHA_API_KEY: z.string(),
 
-  // ── Auth do webhook WAHA (P0 security — review do PR #268) ─────────────────
-  // Secret compartilhado exigido no header X-Webhook-Secret de POST /webhooks/waha.
-  // OPCIONAL no boot (lição do incidente #247: env nova nunca derruba api/worker):
-  // ausente = aceita tudo (comportamento atual) + warn no boot; presente =
-  // request sem header/match -> 401 sem processar (comparação timing-safe).
+  // ── Auth do webhook WAHA (P0 security — review do PR #268 + spike 2026-06-11) ──
+  // Dois mecanismos, AMBOS opcionais no boot (lição do incidente #247: env nova
+  // nunca derruba api/worker). Precedência (decisão do spike, HMAC = plano A):
+  //   1. WAHA_WEBHOOK_HMAC_KEY presente  -> exige assinatura HMAC do WAHA nativo
+  //      (webhooks[].hmac.key na config da sessão) calculada sobre o RAW BODY.
+  //      HMAC sozinho basta: autentica + integridade; o header estático é IGNORADO
+  //      mesmo se WAHA_WEBHOOK_SECRET também existir (replay mitigado pelo dedupe
+  //      de event.id que já temos).
+  //   2. Só WAHA_WEBHOOK_SECRET presente -> plano B: header estático X-Webhook-Secret
+  //      via webhooks[].customHeaders (comparação timing-safe).
+  //   3. Nenhum -> aceita tudo (comportamento atual) + warn no boot.
+  // Falha em qualquer modo -> 401 SEM processar nada (nem parse do payload).
   // Ativação em prod SEM downtime: docs/runbooks/runbook-waha-webhook-auth.md
-  // (env aqui + customHeaders em cada sessão WAHA). Pré-requisito pra ligar
-  // PORTAL_SIGNUP. NUNCA logado nem hardcoded.
+  // (sessões WAHA primeiro, env depois). Pré-requisito pra ligar PORTAL_SIGNUP.
+  // NUNCA logados nem hardcoded.
   WAHA_WEBHOOK_SECRET: z.string().min(1).optional(),
+  WAHA_WEBHOOK_HMAC_KEY: z.string().min(1).optional(),
+  // Nome do header da assinatura e algoritmo: a doc do WAHA indica X-Webhook-Hmac
+  // (hex) + X-Webhook-Hmac-Algorithm: sha512, mas o OpenAPI da NOSSA versão
+  // congelada (2026.3.2) não crava os nomes — por isso são configuráveis, com
+  // default no que a doc indica. O runbook valida na cobaia WHATSAPP_ROUTER_TESTE
+  // antes de ligar o enforcement.
+  WAHA_WEBHOOK_HMAC_HEADER: z
+    .string()
+    .min(1)
+    .default('x-webhook-hmac')
+    .transform((v) => v.toLowerCase()),
+  WAHA_WEBHOOK_HMAC_ALGORITHM: z.enum(['sha256', 'sha512']).default('sha512'),
 
   WHISPER_URL: z.string().url(),
 

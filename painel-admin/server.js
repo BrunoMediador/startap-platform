@@ -117,21 +117,31 @@ function decryptGcalCredentials(stored) {
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
-// P0 security #268: secret compartilhado do webhook WAHA. Quando presente, TODA
-// sessao criada pelo painel ja sai com o header X-Webhook-Secret via
-// webhooks[].customHeaders — o apps/api exige o match quando a env homonima
-// estiver ligada la (sem isso, sessao nova criada pos-ativacao levaria 401 e o
-// bot nasceria surdo). Ausente = comportamento atual (sem header). Contrato do
-// nome do header: apps/api/src/lib/webhook-auth.ts. Ativacao em prod:
-// docs/runbooks/runbook-waha-webhook-auth.md. NUNCA logar o valor.
+// P0 security #268 + spike 2026-06-11: auth do webhook WAHA em sessao NOVA criada
+// pelo painel. Dois mecanismos (mesmas envs do apps/api — manter em sincronia):
+//  - WAHA_WEBHOOK_HMAC_KEY (plano A): sessao nasce com webhooks[].hmac.key e o
+//    WAHA assina o body de cada POST (HMAC nativo). No apps/api, HMAC configurado
+//    governa SOZINHO (header estatico ignorado).
+//  - WAHA_WEBHOOK_SECRET (plano B): sessao nasce com o header X-Webhook-Secret
+//    via webhooks[].customHeaders. Contrato do nome do header:
+//    apps/api/src/lib/webhook-auth.ts.
+// Sem as envs = comportamento atual (sem auth). Sem isso aqui, sessao nova criada
+// pos-ativacao levaria 401 e o bot nasceria surdo. Ativacao em prod:
+// docs/runbooks/runbook-waha-webhook-auth.md. NUNCA logar os valores.
 const WAHA_WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || '';
+const WAHA_WEBHOOK_HMAC_KEY = process.env.WAHA_WEBHOOK_HMAC_KEY || '';
 
 /**
  * Monta o array `config.webhooks` padrao de uma sessao WAHA nova: url do TS api +
- * events recebidos + customHeaders com o secret (somente se configurado).
+ * events recebidos + hmac.key (plano A) e/ou customHeaders (plano B), somente se
+ * configurados. Os dois podem coexistir na sessao (o WAHA manda assinatura E
+ * header); a precedencia de validacao e decidida pelo apps/api.
  */
 function buildWahaWebhooks(events) {
   const webhook = { url: TS_WEBHOOK_URL, events };
+  if (WAHA_WEBHOOK_HMAC_KEY) {
+    webhook.hmac = { key: WAHA_WEBHOOK_HMAC_KEY };
+  }
   if (WAHA_WEBHOOK_SECRET) {
     webhook.customHeaders = [{ name: 'X-Webhook-Secret', value: WAHA_WEBHOOK_SECRET }];
   }
@@ -3603,7 +3613,7 @@ async function createWahaSession(name) {
         // events MUST include 'message.any' — engine NOWEB do WAHA so manda
         // audio/video/imagem sob 'message.any', nao 'message' (que so cobre
         // texto). Sem isso o bot fica surdo pra audio. Bruno 2026-05-21.
-        // buildWahaWebhooks injeta o customHeader do secret (P0 security #268).
+        // buildWahaWebhooks injeta hmac.key (plano A) e/ou customHeader (plano B) — P0 #268 + spike 2026-06-11.
         config: { webhooks: buildWahaWebhooks(['message', 'message.any', 'session.status']) },
       }),
     });
@@ -4767,7 +4777,7 @@ app.post('/api/sessions', async (req, res) => {
         name,
         start: true,
         config: {
-          // buildWahaWebhooks injeta o customHeader do secret (P0 security #268).
+          // buildWahaWebhooks injeta hmac.key (plano A) e/ou customHeader (plano B) — P0 #268 + spike 2026-06-11.
           webhooks: buildWahaWebhooks(['message', 'session.status']),
         },
       }),
