@@ -5,6 +5,11 @@ on:
     # Domingos 07:00 UTC — logo após o backup das 06:00
     - cron: '0 7 * * 0'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run: só lista o que SERIA removido (sem git rm/push)'
+        type: boolean
+        default: true
 
 concurrency:
   group: backup-postgres-cleanup
@@ -16,56 +21,101 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout startap-backups
-        uses: actions/checkout@v4
-        with:
-          repository: BrunoMediador/startap-backups
-          token: ${{ secrets.BACKUP_REPO_TOKEN }}
-          path: startap-backups
-          fetch-depth: 0
+      - name: Setup SSH (deploy key startap-backups)
+        run: |
+          mkdir -p ~/.ssh
+
+          # Deploy key do repo startap-backups (mesmo mecanismo do backup-postgres.yml)
+          echo "${{ secrets.BACKUP_REPO_SSH_KEY }}" > ~/.ssh/backup_deploy
+          chmod 600 ~/.ssh/backup_deploy
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+          # Config SSH pra rotear host github.com→backup_deploy
+          cat >> ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/backup_deploy
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Checkout startap-backups (via SSH)
+        run: |
+          # Clone completo: o cleanup precisa de TODO o histórico de dumps
+          git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
 
       - name: Identifica e remove dumps elegíveis
         id: cleanup
+        env:
+          # Schedule sempre roda em modo real (dry-run só existe no disparo manual).
+          # workflow_dispatch: respeita o input (default true = seguro).
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
         run: |
           cd startap-backups
+
+          echo "Modo: DRY_RUN=${DRY_RUN}"
 
           # Lista todos os arquivos de dump ordenados por nome (ISO8601 = ordem cronológica)
           mapfile -t ALL_DUMPS < <(find dumps/ -name '*.sql.gz' | sort)
 
+          # Cutoff = 30 dias atrás. Dumps MAIS NOVOS que o cutoff são mantidos integralmente.
+          # Dumps MAIS ANTIGOS que o cutoff colapsam para 1 por semana ISO (o primeiro da semana).
           CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
+          echo "Cutoff (30 dias atrás): ${CUTOFF}"
+
           DELETED=0
-          declare -A WEEKLY_KEPT  # chave = YYYY-WW (ano-semana ISO)
+          declare -A WEEKLY_KEPT  # chave = YYYY-WW (ano-semana ISO) → primeiro dump mantido
 
           for f in "${ALL_DUMPS[@]}"; do
             # Extrai YYYY-MM-DD do nome do arquivo: dumps/YYYY/MM/YYYY-MM-DD-HHMMSS.sql.gz
             BASENAME=$(basename "${f}" .sql.gz)
             FILE_DATE="${BASENAME:0:10}"   # primeiros 10 chars = YYYY-MM-DD
 
-            # Só processa arquivos mais antigos que 30 dias
+            # Comparação lexicográfica é válida porque YYYY-MM-DD ordena cronologicamente.
+            # Mantém TUDO que é >= cutoff (dentro da janela de 30 dias).
             if [[ "${FILE_DATE}" > "${CUTOFF}" || "${FILE_DATE}" == "${CUTOFF}" ]]; then
               continue
             fi
 
-            # Semana ISO (ex: 2026-W20)
+            # Semana ISO (ex: 2026-W20). %G/%V casam ano-da-semana com número-da-semana ISO.
             WEEK=$(date -u -d "${FILE_DATE}" '+%G-W%V')
 
             if [[ -z "${WEEKLY_KEPT[$WEEK]}" ]]; then
-              # Primeiro dump da semana → mantém como backup semanal
+              # Primeiro dump da semana (cronologicamente) → mantém como backup semanal
               WEEKLY_KEPT[$WEEK]="${f}"
+              echo "KEEP (semanal ${WEEK}): ${f}"
             else
               # Dump extra desta semana → candidato a remoção
-              git rm "${f}"
+              if [[ "${DRY_RUN}" == "true" ]]; then
+                echo "WOULD-REMOVE (semana ${WEEK}, já tem semanal): ${f}"
+              else
+                echo "REMOVE (semana ${WEEK}, já tem semanal): ${f}"
+                git rm "${f}"
+              fi
               DELETED=$((DELETED + 1))
             fi
           done
 
-          echo "deleted=${DELETED}" >> "$GITHUB_OUTPUT"
+          echo "----------------------------------------"
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "DRY-RUN: ${DELETED} dump(s) SERIAM removidos. Nada foi alterado."
+          else
+            echo "Removidos: ${DELETED} dump(s)."
+          fi
 
-      - name: Commit e push (se removeu algo)
-        if: steps.cleanup.outputs.deleted != '0'
+          echo "deleted=${DELETED}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit e push (se removeu algo e não for dry-run)
+        if: steps.cleanup.outputs.deleted != '0' && steps.cleanup.outputs.dry_run == 'false'
         run: |
           cd startap-backups
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "cleanup: remove ${{ steps.cleanup.outputs.deleted }} dump(s) > 30 dias (mantém semanais)"
           git push
+
+      - name: Limpa chaves SSH
+        if: always()
+        run: rm -f ~/.ssh/backup_deploy ~/.ssh/config
