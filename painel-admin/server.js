@@ -4435,11 +4435,13 @@ app.post('/api/sessions/:name/stop', async (req, res) => {
   }
 });
 
-// POST /api/sessions/:name/ensure-audio-webhook — adiciona 'message.any' aos
-// events do webhook da sessao no WAHA, caso esteja faltando. Engine NOWEB so
-// envia audio/video/imagem sob 'message.any'. Sessoes criadas antes da
-// correcao deste bug (2026-05-21) tem apenas events:['message','session.status']
-// e nunca recebiam audio. Idempotente.
+// POST /api/sessions/:name/ensure-audio-webhook — garante 'message.any' nos
+// events do webhook da sessao no WAHA e REMOVE 'message' se presente. Engine
+// NOWEB so envia audio/video/imagem sob 'message.any'; sessoes criadas antes
+// da correcao de 2026-05-21 tinham so ['message','session.status'] e nunca
+// recebiam audio. 'message' sai porque 'message.any' e superset — os dois
+// juntos entregam a mesma mensagem inbound 2x (event.id diferentes, dedup nao
+// pega) e o bot responde em dobro (bug do smoke 2026-06-12). Idempotente.
 app.post('/api/sessions/:name/ensure-audio-webhook', async (req, res) => {
   const { name } = req.params;
   try {
@@ -4456,19 +4458,24 @@ app.post('/api/sessions/:name/ensure-audio-webhook', async (req, res) => {
       return res.status(400).json({ error: 'Sessao sem webhooks configurados — recrie a sessao' });
     }
 
-    // 2. Garante message.any em CADA webhook (caso haja mais de um)
+    // 2. Garante message.any e remove 'message' em CADA webhook (caso haja
+    // mais de um) — manter os dois duplica a entrega e o bot responde 2x.
     let changed = false;
     const newWebhooks = webhooks.map((w) => {
-      const events = Array.isArray(w.events) ? [...w.events] : [];
+      let events = Array.isArray(w.events) ? [...w.events] : [];
       if (!events.includes('message.any')) {
         events.push('message.any');
+        changed = true;
+      }
+      if (events.includes('message')) {
+        events = events.filter((ev) => ev !== 'message');
         changed = true;
       }
       return { ...w, events };
     });
 
     if (!changed) {
-      return res.json({ ok: true, changed: false, message: 'message.any ja presente em todos os webhooks' });
+      return res.json({ ok: true, changed: false, message: 'events ja corretos em todos os webhooks (message.any presente, sem message)' });
     }
 
     // 3. PUT no WAHA com config atualizado
@@ -4535,7 +4542,12 @@ app.post('/api/sessions', async (req, res) => {
         start: true,
         config: {
           // buildWahaWebhooks injeta hmac.key (plano A) e/ou customHeader (plano B) — P0 #268 + spike 2026-06-11.
-          webhooks: buildWahaWebhooks(['message', 'session.status']),
+          // SO 'message.any', SEM 'message': na engine NOWEB message.any e
+          // superset de message — assinar os dois entrega a mesma mensagem 2x
+          // e o bot responde em dobro (bug do smoke 2026-06-12). message.any
+          // sozinho tambem cobre audio/video/imagem (correcao 2026-05-21).
+          // Mesma lista do clone-provisioning.ts (createWahaSession).
+          webhooks: buildWahaWebhooks(['message.any', 'session.status']),
         },
       }),
     });

@@ -70,7 +70,7 @@ describe('createWahaSession', () => {
     webhookUrl: 'http://api:3040/webhooks/waha',
   };
 
-  it('cria sessão com webhook incluindo message.any e session.status', async () => {
+  it('cria sessão com webhook escutando SÓ message.any e session.status (sem message)', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ status: 'STARTING' }),
@@ -84,7 +84,9 @@ describe('createWahaSession', () => {
     };
     // message.any: sem ele o bot fica surdo pra áudio e o pause do dono quebra.
     // session.status: alimenta o hook de trial (Missão 020 F1).
-    expect(body.config.webhooks[0]?.events).toEqual(['message', 'message.any', 'session.status']);
+    // 'message' NÃO pode entrar: message.any é superset — os dois juntos
+    // entregam a mesma mensagem 2x e o bot responde em dobro (smoke 2026-06-12).
+    expect(body.config.webhooks[0]?.events).toEqual(['message.any', 'session.status']);
   });
 
   it('falha de WAHA NÃO lança — retorna { ok:false } pro caller decidir (retry-waha)', async () => {
@@ -116,8 +118,9 @@ describe('createWahaSession', () => {
     };
     expect(body.config.webhooks[0]?.hmac).toEqual({ key: 'hmac-key-test' });
     expect(body.config.webhooks[0]?.customHeaders).toBeUndefined();
-    // events intactos — PUT/POST com webhook sem message.any deixa o bot surdo.
-    expect(body.config.webhooks[0]?.events).toEqual(['message', 'message.any', 'session.status']);
+    // events intactos — sem message.any o bot fica surdo; com 'message' junto
+    // a entrega duplica e o bot responde 2x (smoke 2026-06-12).
+    expect(body.config.webhooks[0]?.events).toEqual(['message.any', 'session.status']);
   });
 
   it('webhookSecret configurado -> webhook nasce com customHeaders X-Webhook-Secret (plano B)', async () => {

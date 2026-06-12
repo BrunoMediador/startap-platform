@@ -324,10 +324,20 @@ export async function createWahaSession(
         // fica surdo pra audio (Bruno 2026-05-21) e o pause do dono quebra
         // (memoria reference_waha_fromme_message_any). 'session.status' alimenta
         // o hook de trial do pareamento (Missao 020 F1).
+        //
+        // 'message' NAO entra de proposito: 'message.any' e SUPERSET de
+        // 'message' na NOWEB — assinar os dois faz a mesma mensagem inbound
+        // chegar 2x (event.id diferentes, dedup nao pega) e o bot responder
+        // em dobro (bug do smoke do Bruno 2026-06-12, sessao
+        // clone_bruna_barber_shop_gqgp4q). Sessoes estaveis em prod
+        // (cirilobarbearia, STARTAP_AI_PROD) rodam so com
+        // ['message.any','session.status'] e nunca duplicaram. NAO
+        // "corrigir de volta" adicionando 'message'.
+        //
         // buildWebhook injeta hmac.key e/ou customHeaders quando configurados
         // (auth do webhook — P0 #268 + spike 2026-06-11).
         config: {
-          webhooks: [buildWebhook(waha, ['message', 'message.any', 'session.status'])],
+          webhooks: [buildWebhook(waha, ['message.any', 'session.status'])],
         },
       }),
     });
