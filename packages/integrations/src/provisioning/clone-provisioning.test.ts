@@ -50,6 +50,37 @@ describe('renderClonePrompt', () => {
     const out = renderClonePrompt('{{desconhecido}}', {}, null, null);
     expect(out).toBe('{{desconhecido}}');
   });
+
+  it('injeta display_name do clone em {{nome_negocio}} quando não há personalização', () => {
+    const out = renderClonePrompt(
+      'Bem vindo a {{nome_negocio}} 💈',
+      {},
+      null,
+      null,
+      'Barbearia do Samuel',
+    );
+    expect(out).toBe('Bem vindo a Barbearia do Samuel 💈');
+    expect(out).not.toContain('{{nome_negocio}}');
+  });
+
+  it('precedência: personalizacao.nome_negocio vence o display_name do clone', () => {
+    const out = renderClonePrompt(
+      '{{nome_negocio}}',
+      { nome_negocio: 'Salão Premium' },
+      null,
+      null,
+      'Barbearia do Samuel',
+    );
+    expect(out).toBe('Salão Premium');
+  });
+
+  it('fallback "a barbearia" quando personalizacao e display_name estão vazios', () => {
+    // sem display_name e sem nome_negocio na personalização => nunca literal nem vazio
+    expect(renderClonePrompt('{{nome_negocio}}', {}, null, null)).toBe('a barbearia');
+    expect(renderClonePrompt('{{nome_negocio}}', { nome_negocio: '  ' }, null, null, '  ')).toBe(
+      'a barbearia',
+    );
+  });
 });
 
 describe('createWahaSession', () => {
