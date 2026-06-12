@@ -46,6 +46,17 @@ function statusBody(status: string, meId?: string | null): WahaWebhookBody {
   } as unknown as WahaWebhookBody;
 }
 
+/** Formato REAL do NOWEB 2026.3.2: `me` no TOPO do envelope, irmão de payload
+ * (spike docs/missoes/spike-waha-meid-customheaders.md). */
+function envelopeBody(status: string, meId: string): WahaWebhookBody {
+  return {
+    event: 'session.status',
+    session: 'clone_barbearia_x_ab12cd',
+    me: { id: meId },
+    payload: { status },
+  } as unknown as WahaWebhookBody;
+}
+
 const TRIAL_CLONE = {
   slot: 'clone_barbearia_x_ab12cd',
   trial_status: 'awaiting' as const,
@@ -210,6 +221,46 @@ describe('handleSessionStatusEvent', () => {
 
     expect(r.status).toBe('ignored:no-pepper');
     expect(mocks.startTrial).not.toHaveBeenCalled();
+  });
+
+  // ── Origem do me.id (spike NOWEB 2026.3.2: `me` vem no TOPO do envelope) ────
+  it('me.id no TOPO do envelope (formato real NOWEB) => usado direto, SEM GET extra', async () => {
+    mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+    mocks.findByPhoneHmac.mockResolvedValue(null);
+    mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+
+    const r = await handleSessionStatusEvent(envelopeBody('WORKING', '5531999998842@c.us'), OPTS);
+
+    expect(r.status).toBe('ok:trial-started');
+    expect(mocks.getSessionStatus).not.toHaveBeenCalled();
+    expect(mocks.startTrial).toHaveBeenCalledWith(
+      expect.objectContaining({ pairedPhone: '553199998842' }),
+    );
+  });
+
+  it('me.id só dentro do payload (compat outras engines) => usado, SEM GET extra', async () => {
+    mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+    mocks.findByPhoneHmac.mockResolvedValue(null);
+    mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+
+    const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+    expect(r.status).toBe('ok:trial-started');
+    expect(mocks.getSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('sem me.id em lugar nenhum => fallback GET /sessions resolve e inicia trial', async () => {
+    mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+    mocks.findByPhoneHmac.mockResolvedValue(null);
+    mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+    mocks.getSessionStatus.mockResolvedValue({ me: { id: '5531999998842@c.us' } });
+
+    const r = await handleSessionStatusEvent(statusBody('WORKING'), OPTS);
+
+    expect(r.status).toBe('ok:trial-started');
+    expect(mocks.getSessionStatus).toHaveBeenCalledWith(TRIAL_CLONE.waha_sessao, {
+      timeoutMs: 8000,
+    });
   });
 
   it('payload sem me.id: busca via GET /sessions; WAHA fora => ignora e tenta depois', async () => {
