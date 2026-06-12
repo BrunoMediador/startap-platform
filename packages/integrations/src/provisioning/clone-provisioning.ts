@@ -185,8 +185,49 @@ export function renderServicosPrecos(servicos: unknown): string {
 }
 
 /**
+ * Fallback seguro para o nome do negócio. Centralizado pra que o render e o
+ * passe de sanitização final usem EXATAMENTE o mesmo texto.
+ */
+const NOME_NEGOCIO_FALLBACK = 'a barbearia';
+
+/**
+ * Neutraliza um valor injetável (display_name / nome_negocio) ANTES de entrar no
+ * prompt: remove as sequências de delimitador de placeholder ("{{" e "}}") e
+ * quebras de linha (\n,\r). Isso impede que um nome de cadastro self-service
+ * (a) injete um placeholder novo — ex.: um nome "{{servicos_precos_render}}"
+ * passaria a ser expandido — e (b) reduz superfície de prompt-injection por
+ * quebra de linha. Nomes legítimos não são alterados (só strip dessas
+ * sequências). NÃO faz trim de espaços comuns — a checagem de "vazio" é feita
+ * por quem chama, com trim.
+ */
+export function sanitizeNomeInjetavel(nome: string): string {
+  return nome.replace(/\{\{|\}\}/g, '').replace(/[\r\n]+/g, ' ');
+}
+
+/**
+ * Passe final de sanitização: NUNCA deixar um placeholder {{chave}} órfão crú
+ * no prompt persistido. Aplicado no fim de TODO caminho que grava bot_prompt do
+ * clone (renderClonePrompt + render inline de bootstrap em createCloneRecords),
+ * inclusive quando regerarPromptClone falha (warn-and-continue) e o prompt que
+ * sobra é o do bootstrap — onde nome_negocio não foi resolvido.
+ *
+ * - {{nome_negocio}} órfão -> fallback seguro ("a barbearia"). É o caso real do
+ *   gestão (personalizacao sem nome_negocio): antes ficava literal no banco,
+ *   pior que o hardcode antigo.
+ * - demais placeholders órfãos -> preservados ({{chave}}), comportamento
+ *   histórico (não perder dado/marcador desconhecido). Genérico: se um dia
+ *   outro marcador "de nome" precisar de fallback, basta estendê-lo aqui.
+ */
+export function sanitizeOrphanPlaceholders(prompt: string): string {
+  return prompt.replace(/\{\{(\w+)\}\}/g, (_m, k: string) =>
+    k === 'nome_negocio' ? NOME_NEGOCIO_FALLBACK : `{{${k}}}`,
+  );
+}
+
+/**
  * Aplica os 3 grupos de placeholders {{double_brace}} sobre o template da matriz.
- * Placeholders não resolvidos são preservados ({{key}}).
+ * Placeholders não resolvidos são preservados ({{key}}), EXCETO {{nome_negocio}}
+ * que é garantido pelo passe final de sanitização (nunca literal no persistido).
  */
 export function renderClonePrompt(
   matrizPrompt: string,
@@ -200,18 +241,22 @@ export function renderClonePrompt(
       ? (personalizacao as Record<string, unknown>)
       : {};
   // nome_negocio: precedência personalizacao > display_name do clone > fallback
-  // genérico. O fallback garante que {{nome_negocio}} nunca renderize literal
-  // nem vazio, mesmo num clone sem display_name e sem personalização.
+  // genérico. A precedência usa CHECAGEM trim() EXPLÍCITA (não `??`): "" e
+  // strings só-whitespace contam como vazio e caem pro próximo nível. Trocar
+  // por `??` reintroduziria o bug de string vazia (um persNome = "" venceria o
+  // display_name e renderizaria nome vazio). O fallback final garante que
+  // {{nome_negocio}} nunca renderize literal nem vazio, mesmo num clone sem
+  // display_name e sem personalização.
   const persNome = pers.nome_negocio;
-  const nomeNegocio =
+  const rawNome =
     typeof persNome === 'string' && persNome.trim() !== ''
       ? persNome
       : displayName && displayName.trim() !== ''
         ? displayName
-        : 'a barbearia';
+        : NOME_NEGOCIO_FALLBACK;
   const ctx: Record<string, unknown> = {
     ...pers,
-    nome_negocio: nomeNegocio,
+    nome_negocio: sanitizeNomeInjetavel(rawNome),
     horarios_funcionamento_render: renderHorariosFuncionamento(horarios),
     servicos_precos_render: renderServicosPrecos(servicos),
   };
@@ -222,7 +267,7 @@ export function renderClonePrompt(
   if (clienteNome) {
     out = out.replace(/\[Ricardo\]/g, `[${String(clienteNome)}]`);
   }
-  return out;
+  return sanitizeOrphanPlaceholders(out);
 }
 
 export interface CloneRowLike {
@@ -646,9 +691,13 @@ export async function createCloneRecords(
     ]);
     const tpl = promptR.rows[0]?.prompt;
     if (typeof tpl === 'string') {
-      // Render inline "de bootstrap": SOBRESCRITO logo após o COMMIT por
-      // regerarPromptClone (que aplica nome_negocio/horarios/servicos completos).
-      // Não replicar a lógica de nome_negocio aqui — inflaria o diff sem efeito.
+      // Render inline "de bootstrap": no caminho feliz é SOBRESCRITO logo após o
+      // COMMIT por regerarPromptClone (que aplica nome_negocio/horarios/servicos
+      // completos). Não replicar a lógica de nome_negocio aqui — inflaria o diff.
+      // MAS regerarPromptClone pode falhar (warn-and-continue) e este prompt de
+      // bootstrap fica sendo o persistido: por isso o passe final de sanitização
+      // é OBRIGATÓRIO também aqui (no gestão, pers não traz nome_negocio, então
+      // {{nome_negocio}} ficaria literal — pior que o hardcode antigo).
       let prompt = tpl.replace(/\{\{(\w+)\}\}/g, (_m, k: string) =>
         Object.prototype.hasOwnProperty.call(pers, k) ? String(pers[k] ?? '') : `{{${k}}}`,
       );
@@ -658,7 +707,7 @@ export async function createCloneRecords(
       }
       await client.query(
         'INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())',
-        [input.novoSlot, prompt],
+        [input.novoSlot, sanitizeOrphanPlaceholders(prompt)],
       );
     }
 
