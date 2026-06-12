@@ -117,6 +117,53 @@ function decryptGcalCredentials(stored) {
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
+// P0 security #268 + spike 2026-06-11: auth do webhook WAHA em sessao NOVA criada
+// pelo painel. Dois mecanismos (mesmas envs do apps/api — manter em sincronia):
+//  - WAHA_WEBHOOK_HMAC_KEY (plano A): sessao nasce com webhooks[].hmac.key e o
+//    WAHA assina o body de cada POST (HMAC nativo). No apps/api, HMAC configurado
+//    governa SOZINHO (header estatico ignorado).
+//  - WAHA_WEBHOOK_SECRET (plano B): sessao nasce com o header X-Webhook-Secret
+//    via webhooks[].customHeaders. Contrato do nome do header:
+//    apps/api/src/lib/webhook-auth.ts.
+// Sem as envs = comportamento atual (sem auth). Sem isso aqui, sessao nova criada
+// pos-ativacao levaria 401 e o bot nasceria surdo. Ativacao em prod:
+// docs/runbooks/runbook-waha-webhook-auth.md. NUNCA logar os valores.
+const WAHA_WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || '';
+const WAHA_WEBHOOK_HMAC_KEY = process.env.WAHA_WEBHOOK_HMAC_KEY || '';
+
+/**
+ * Monta o array `config.webhooks` padrao de uma sessao WAHA nova: url do TS api +
+ * events recebidos + hmac.key (plano A) e/ou customHeaders (plano B), somente se
+ * configurados. Os dois podem coexistir na sessao (o WAHA manda assinatura E
+ * header); a precedencia de validacao e decidida pelo apps/api.
+ */
+function buildWahaWebhooks(events) {
+  const webhook = { url: TS_WEBHOOK_URL, events };
+  if (WAHA_WEBHOOK_HMAC_KEY) {
+    webhook.hmac = { key: WAHA_WEBHOOK_HMAC_KEY };
+  }
+  if (WAHA_WEBHOOK_SECRET) {
+    webhook.customHeaders = [{ name: 'X-Webhook-Secret', value: WAHA_WEBHOOK_SECRET }];
+  }
+  return [webhook];
+}
+
+/**
+ * WahaConfig do modulo compartilhado de provisionamento (clone-provisioning).
+ * Mesmas envs de auth do buildWahaWebhooks acima — sessao criada via modulo
+ * compartilhado tambem nasce com hmac.key/customHeaders (P0 #268 + spike
+ * 2026-06-11). Manter os DOIS caminhos em sincronia.
+ */
+function wahaProvisioningConfig() {
+  return {
+    url: WAHA_URL,
+    apiKey: WAHA_API_KEY,
+    webhookUrl: TS_WEBHOOK_URL,
+    webhookHmacKey: WAHA_WEBHOOK_HMAC_KEY || undefined,
+    webhookSecret: WAHA_WEBHOOK_SECRET || undefined,
+  };
+}
+
 // Bots da plataforma TypeScript.
 const TS_BOTS = [
   {
@@ -3443,10 +3490,9 @@ async function wahaSessionName(slot) {
  */
 async function createWahaSession(name) {
   const mod = await getProvisioning();
-  return mod.createWahaSession(
-    { url: WAHA_URL, apiKey: WAHA_API_KEY, webhookUrl: TS_WEBHOOK_URL },
-    name,
-  );
+  // wahaProvisioningConfig injeta hmac.key (plano A) e/ou customHeader (plano B)
+  // na sessao nova — P0 #268 + spike 2026-06-11.
+  return mod.createWahaSession(wahaProvisioningConfig(), name);
 }
 
 // POST /api/clones/with-waha — orquestra clone + sessão WAHA em único request.
@@ -3501,7 +3547,8 @@ app.post('/api/clones/with-waha', async (req, res) => {
   try {
     const mod = await getProvisioning();
     result = await mod.provisionCloneWithWaha(
-      { db: pool, waha: { url: WAHA_URL, apiKey: WAHA_API_KEY, webhookUrl: TS_WEBHOOK_URL } },
+      // wahaProvisioningConfig injeta auth do webhook na sessao nova (P0 #268).
+      { db: pool, waha: wahaProvisioningConfig() },
       {
         matrizSlot: matriz_slot,
         novoSlot: novo_slot,
@@ -4477,7 +4524,6 @@ app.post('/api/sessions', async (req, res) => {
       .status(400)
       .json({ error: 'name obrigatório e deve conter apenas letras, números, _ e -' });
   try {
-    const webhookUrl = `${TS_WEBHOOK_URL}`;
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
       headers: {
@@ -4488,7 +4534,8 @@ app.post('/api/sessions', async (req, res) => {
         name,
         start: true,
         config: {
-          webhooks: [{ url: webhookUrl, events: ['message', 'session.status'] }],
+          // buildWahaWebhooks injeta hmac.key (plano A) e/ou customHeader (plano B) — P0 #268 + spike 2026-06-11.
+          webhooks: buildWahaWebhooks(['message', 'session.status']),
         },
       }),
     });

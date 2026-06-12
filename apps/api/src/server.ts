@@ -6,6 +6,7 @@ import { EchoBot } from './bots/echo.js';
 import './bots/startap.js';
 import { TesteBarbeariaBot } from './bots/teste_barbearia.js';
 import { config } from './config.js';
+import { resolveWahaWebhookAuthMode } from './lib/webhook-auth.js';
 import { registerBot, registerCloneFactory } from './router.js';
 import { healthRoute } from './routes/health.js';
 import { abacatePayWebhookRoute } from './routes/webhook-abacatepay.js';
@@ -22,6 +23,21 @@ async function main() {
   await app.register(sensible);
   await app.register(healthRoute);
   await app.register(wahaWebhookRoute);
+  const webhookAuthMode = resolveWahaWebhookAuthMode(
+    config.WAHA_WEBHOOK_HMAC_KEY,
+    config.WAHA_WEBHOOK_SECRET,
+  );
+  if (webhookAuthMode === 'open') {
+    // P0 security #268: sem auth, /webhooks/waha aceita POST de qualquer origem.
+    // Retrocompat proposital (lição #247) — ativar via runbook
+    // docs/runbooks/runbook-waha-webhook-auth.md ANTES de ligar PORTAL_SIGNUP.
+    // (O runbook grepa por 'Webhook WAHA sem auth' — não mudar o texto.)
+    log.warn(
+      'Webhook WAHA sem auth — configure WAHA_WEBHOOK_HMAC_KEY (plano A) ou WAHA_WEBHOOK_SECRET (plano B)',
+    );
+  } else {
+    log.info({ webhookAuthMode }, 'Auth do webhook WAHA ativa');
+  }
   // Webhook AbacatePay (F2): plugin encapsulado — seu content-type parser raw fica
   // ESCOPADO a ele (C3), nao afeta o JSON parser global nem o webhook-waha.
   await app.register(abacatePayWebhookRoute);

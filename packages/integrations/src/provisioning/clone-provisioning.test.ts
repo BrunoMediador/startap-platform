@@ -94,6 +94,52 @@ describe('createWahaSession', () => {
     expect(r.status).toBe('failed');
     expect(r.error).toContain('ECONNREFUSED');
   });
+
+  // Auth do webhook (P0 #268 + spike 2026-06-11): sessão nova nasce autenticada.
+  it('sem envs de auth -> webhook SEM hmac e SEM customHeaders (comportamento atual)', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'STARTING' }) });
+    await createWahaSession(WAHA, 'clone_x');
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as { body: string }).body) as {
+      config: { webhooks: Array<Record<string, unknown>> };
+    };
+    expect(body.config.webhooks[0]).not.toHaveProperty('hmac');
+    expect(body.config.webhooks[0]).not.toHaveProperty('customHeaders');
+  });
+
+  it('webhookHmacKey configurada -> webhook nasce com hmac.key (plano A), preservando events', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'STARTING' }) });
+    await createWahaSession({ ...WAHA, webhookHmacKey: 'hmac-key-test' }, 'clone_x');
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as { body: string }).body) as {
+      config: {
+        webhooks: Array<{ events: string[]; hmac?: { key: string }; customHeaders?: unknown }>;
+      };
+    };
+    expect(body.config.webhooks[0]?.hmac).toEqual({ key: 'hmac-key-test' });
+    expect(body.config.webhooks[0]?.customHeaders).toBeUndefined();
+    // events intactos — PUT/POST com webhook sem message.any deixa o bot surdo.
+    expect(body.config.webhooks[0]?.events).toEqual(['message', 'message.any', 'session.status']);
+  });
+
+  it('webhookSecret configurado -> webhook nasce com customHeaders X-Webhook-Secret (plano B)', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'STARTING' }) });
+    await createWahaSession(
+      { ...WAHA, webhookHmacKey: 'hmac-key-test', webhookSecret: 'static-secret' },
+      'clone_x',
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as { body: string }).body) as {
+      config: {
+        webhooks: Array<{
+          hmac?: { key: string };
+          customHeaders?: Array<{ name: string; value: string }>;
+        }>;
+      };
+    };
+    // Os dois coexistem na sessão; a precedência de validação é do apps/api.
+    expect(body.config.webhooks[0]?.hmac).toEqual({ key: 'hmac-key-test' });
+    expect(body.config.webhooks[0]?.customHeaders).toEqual([
+      { name: 'X-Webhook-Secret', value: 'static-secret' },
+    ]);
+  });
 });
 
 describe('createCloneRecords — idempotência/unicidade', () => {
