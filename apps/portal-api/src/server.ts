@@ -18,6 +18,7 @@ import { closeRedis, getRedis } from './lib/session.js';
 import { parseTrustProxy } from './lib/trust-proxy.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoute } from './routes/health.js';
+import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
@@ -80,6 +81,8 @@ async function main() {
   await app.register(portalPausasRoutes);
   await app.register(portalStatusRoutes);
   await app.register(portalAgendamentosRoutes);
+  // Grade de horarios livres pro agendamento manual (Missao 020 F4).
+  await app.register(portalAgendaSlotsRoutes);
   await app.register(portalBillingRoutes);
   // Reconexão self-service da sessão WAHA (ADR 0015) — escopo encapsulado: tem o
   // próprio @fastify/rate-limit por user (keyGenerator por cookie de sessão).

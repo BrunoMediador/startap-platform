@@ -11,11 +11,12 @@
  * O bot deve tratar esse erro e silenciar a resposta ao cliente (não enviar
  * horários fictícios de uma barbearia que não é a do cliente).
  */
-import type { CalendarEvent } from '@startap/integrations/google-calendar';
 import type { HorariosFuncionamento, ServicoConfig } from '@startap/db';
 import { flowClones, query } from '@startap/db';
+import type { CalendarEvent } from '../google-calendar/client.js';
 
-const TZ = 'America/Sao_Paulo';
+/** Timezone canônica de agendamento da plataforma. */
+export const TZ = 'America/Sao_Paulo';
 
 export interface ScheduleConfig {
   /** Janelas de atendimento por weekday (0=Dom .. 6=Sab). null = fechado. */
@@ -38,13 +39,13 @@ export interface ScheduleConfig {
 /** @deprecated SEED — não usar em runtime. Populando banco via scripts de seed apenas. */
 export const BUILTIN_DEFAULTS_SEED = {
   work: {
-    0: null,                  // domingo: fechado
-    1: null,                  // segunda: fechado
-    2: [9 * 60, 18 * 60],     // terca
-    3: [9 * 60, 18 * 60],     // quarta
-    4: [9 * 60, 18 * 60],     // quinta
-    5: [9 * 60, 18 * 60],     // sexta
-    6: [9 * 60, 18 * 60],     // sabado
+    0: null, // domingo: fechado
+    1: null, // segunda: fechado
+    2: [9 * 60, 18 * 60], // terca
+    3: [9 * 60, 18 * 60], // quarta
+    4: [9 * 60, 18 * 60], // quinta
+    5: [9 * 60, 18 * 60], // sexta
+    6: [9 * 60, 18 * 60], // sabado
   } as Record<number, [number, number] | null>,
   services: [
     { name: 'Corte', min: 30 },
@@ -106,9 +107,10 @@ function servicosToServices(
     .filter((s) => s && typeof s.nome === 'string' && s.nome.trim() !== '')
     .map((s) => ({
       name: String(s.nome).trim(),
-      min: Number.isFinite(Number(s.duracao_min)) && Number(s.duracao_min) > 0
-        ? Math.round(Number(s.duracao_min))
-        : 30,
+      min:
+        Number.isFinite(Number(s.duracao_min)) && Number(s.duracao_min) > 0
+          ? Math.round(Number(s.duracao_min))
+          : 30,
     }));
 }
 
@@ -117,17 +119,15 @@ function servicosToServices(
  * (queries.bot-config nao retorna esses jsonbs porque outros consumidores
  * nao precisam). Usado pelo loadScheduleConfig quando o slot e uma matriz.
  */
-async function loadFromBotConfig(
-  slot: string,
-): Promise<{ work: Record<number, [number, number] | null>; services: Array<{ name: string; min: number }> } | null> {
+async function loadFromBotConfig(slot: string): Promise<{
+  work: Record<number, [number, number] | null>;
+  services: Array<{ name: string; min: number }>;
+} | null> {
   try {
     const r = await query<{
       horarios_funcionamento: HorariosFuncionamento | null;
       servicos: ServicoConfig[] | null;
-    }>(
-      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
-      [slot],
-    );
+    }>('SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1', [slot]);
     const row = r.rows[0];
     if (!row) return null;
     const work = horariosToWork(row.horarios_funcionamento);
@@ -236,9 +236,7 @@ const _PERS_LABELS: Record<string, string> = {
 
 function humanizarChave(key: string): string {
   // 'horario_feriado' -> 'Horario feriado'
-  return key
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /**
@@ -274,10 +272,9 @@ async function loadEntityForContext(slot: string): Promise<{
           const r = await query<{
             horarios_funcionamento: HorariosFuncionamento | null;
             servicos: ServicoConfig[] | null;
-          }>(
-            `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
-            [clone.matriz_slot],
-          );
+          }>('SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1', [
+            clone.matriz_slot,
+          ]);
           const matrizRow = r.rows[0];
           if (matrizRow) {
             if (!horariosFinal) horariosFinal = matrizRow.horarios_funcionamento;
@@ -302,10 +299,7 @@ async function loadEntityForContext(slot: string): Promise<{
     const r = await query<{
       horarios_funcionamento: HorariosFuncionamento | null;
       servicos: ServicoConfig[] | null;
-    }>(
-      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
-      [slot],
-    );
+    }>('SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1', [slot]);
     const row = r.rows[0];
     if (row) {
       return {
@@ -444,9 +438,10 @@ function renderServicosPrecosBlock(servicos: ServicoConfig[] | null): string {
       const nome = String(s.nome).trim();
       const preco = Number(s.preco_cents);
       const dur = Number(s.duracao_min);
-      const precoStr = Number.isFinite(preco) && preco > 0
-        ? `R$${(preco / 100).toFixed(2).replace('.', ',')}`
-        : 'a combinar';
+      const precoStr =
+        Number.isFinite(preco) && preco > 0
+          ? `R$${(preco / 100).toFixed(2).replace('.', ',')}`
+          : 'a combinar';
       const durStr = Number.isFinite(dur) && dur > 0 ? `${dur} min` : 'duracao a combinar';
       return `${nome}: ${precoStr} (${durStr})`;
     });
@@ -458,22 +453,18 @@ function renderServicosPrecosBlock(servicos: ServicoConfig[] | null): string {
  * no prompt da matriz quando o worker roda pra matriz direto. Idempotente —
  * se o prompt nao tem esses placeholders, retorna inalterado.
  */
-export async function aplicarPlaceholdersMatriz(
-  prompt: string,
-  slot: string,
-): Promise<string> {
-  if (!prompt.includes('{{horarios_funcionamento_render}}') &&
-      !prompt.includes('{{servicos_precos_render}}')) {
+export async function aplicarPlaceholdersMatriz(prompt: string, slot: string): Promise<string> {
+  if (
+    !prompt.includes('{{horarios_funcionamento_render}}') &&
+    !prompt.includes('{{servicos_precos_render}}')
+  ) {
     return prompt;
   }
   try {
     const r = await query<{
       horarios_funcionamento: HorariosFuncionamento | null;
       servicos: ServicoConfig[] | null;
-    }>(
-      `SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1`,
-      [slot],
-    );
+    }>('SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1', [slot]);
     const row = r.rows[0];
     if (!row) return prompt;
     return prompt
@@ -481,10 +472,7 @@ export async function aplicarPlaceholdersMatriz(
         /\{\{horarios_funcionamento_render\}\}/g,
         renderHorariosFuncionamentoBlock(row.horarios_funcionamento),
       )
-      .replace(
-        /\{\{servicos_precos_render\}\}/g,
-        renderServicosPrecosBlock(row.servicos),
-      );
+      .replace(/\{\{servicos_precos_render\}\}/g, renderServicosPrecosBlock(row.servicos));
   } catch {
     return prompt;
   }
@@ -616,4 +604,142 @@ export function formatarAgendaComConfig(
   }
 
   return blocks.join('\n\n') || 'Sem horarios disponiveis.';
+}
+
+// ---- Slots estruturados por dia (portal — agendamento manual, Missão 020 F4) -
+
+/**
+ * Piso sobre o relógio para slots de HOJE (mesma regra do bot em
+ * formatarAgendaComConfig): não oferecer slot que começa em menos de 10min.
+ */
+const TODAY_FLOOR_MIN = 10;
+
+export interface FreeSlotsDayOpts {
+  /** Dia alvo no formato YYYY-MM-DD (calendário de America/Sao_Paulo). */
+  dateKey: string;
+  /** Duração do serviço em minutos — define o passo e o encaixe da grade. */
+  durationMin: number;
+  /** Relógio de referência (default: agora). Testável por injeção. */
+  now?: Date;
+}
+
+/**
+ * Versão ESTRUTURADA do formatarAgendaComConfig para UM dia e UMA duração:
+ * mesma regra de step (= duração), mesmo piso de 10min pra hoje, mesmo
+ * critério de overlap contra eventos do GCal. Retorna horários 'HH:mm'
+ * em ordem crescente. Dia fechado ou no passado → [].
+ *
+ * Usada pelo portal (GET /portal/agenda/slots) — o que o dono vê na grade é
+ * exatamente o que o bot ofereceria pro cliente final.
+ */
+export function computeFreeSlotsForDay(
+  events: CalendarEvent[],
+  work: Record<number, [number, number] | null>,
+  opts: FreeSlotsDayOpts,
+): string[] {
+  const { dateKey, durationMin } = opts;
+  const now = opts.now ?? new Date();
+  if (!Number.isFinite(durationMin) || durationMin <= 0) return [];
+
+  // Weekday do dia alvo no TZ: meio-dia BRT (15:00Z) evita borda de fuso.
+  const refDate = new Date(`${dateKey}T15:00:00Z`);
+  if (Number.isNaN(refDate.getTime())) return [];
+  const ref = spParts(refDate);
+  if (ref.key !== dateKey) return []; // dateKey inválido (ex: 2026-02-31)
+
+  const nowSp = spParts(now);
+  if (dateKey < nowSp.key) return []; // dia já passou
+
+  const wh = work[ref.wd];
+  if (!wh) return []; // fechado
+
+  // Ocupação do dia: mesmo bucketing por dia de início usado pelo bot.
+  const occ: Array<{ s: number; e: number }> = [];
+  for (const ev of events) {
+    const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
+    const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
+    const sp = spParts(s);
+    if (sp.key !== dateKey) continue;
+    occ.push({ s: sp.mins, e: spParts(e).mins });
+  }
+
+  const [wStart, wEnd] = wh;
+  const step = Math.max(1, durationMin);
+  let start = wStart;
+  if (dateKey === nowSp.key) {
+    start = Math.max(wStart, Math.ceil((nowSp.mins + TODAY_FLOOR_MIN) / step) * step);
+  }
+
+  const slots: string[] = [];
+  for (let t = start; t + durationMin <= wEnd; t += step) {
+    if (!occ.some((o) => t < o.e && t + durationMin > o.s)) {
+      slots.push(hhmm(t));
+    }
+  }
+  return slots;
+}
+
+// ---- Conversão wall-time (TZ) -> instante UTC (sem lib externa) -------------
+
+function tzOffsetMs(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+    .formatToParts(date)
+    .reduce<Record<string, string>>((a, p) => {
+      a[p.type] = p.value;
+      return a;
+    }, {});
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  return asUtc - date.getTime();
+}
+
+/**
+ * Converte data ('YYYY-MM-DD') + minutos desde 00:00 (hora de parede no TZ)
+ * para o instante UTC correspondente. Two-pass via Intl — correto mesmo se o
+ * TZ voltar a ter horário de verão (America/Sao_Paulo é -03:00 fixo hoje).
+ */
+export function zonedWallTimeToUtc(dateKey: string, mins: number, timeZone: string = TZ): Date {
+  const [y, mo, d] = dateKey.split('-').map(Number);
+  const guess = Date.UTC(y ?? 0, (mo ?? 1) - 1, d ?? 1, 0, mins, 0);
+  const offset1 = tzOffsetMs(new Date(guess), timeZone);
+  const offset2 = tzOffsetMs(new Date(guess - offset1), timeZone);
+  return new Date(guess - offset2);
+}
+
+/** Minutos desde 00:00 a partir de 'HH:mm' (já validado por regex no caller). */
+export function hhmmToMins(hora: string): number {
+  const [h, m] = hora.split(':').map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/** Partes de data/hora de um instante no TZ canônico (exposto pro portal). */
+export function nowPartsInTz(date: Date = new Date()): { dateKey: string; mins: number } {
+  const sp = spParts(date);
+  return { dateKey: sp.key, mins: sp.mins };
+}
+
+/**
+ * Weekday (0=Dom .. 6=Sab) de uma data 'YYYY-MM-DD' no calendário do TZ
+ * canônico. Retorna null se a data for inválida (ex: 2026-02-31).
+ */
+export function weekdayOfDateKey(dateKey: string): number | null {
+  const refDate = new Date(`${dateKey}T15:00:00Z`); // meio-dia BRT, longe de borda de fuso
+  if (Number.isNaN(refDate.getTime())) return null;
+  const sp = spParts(refDate);
+  return sp.key === dateKey ? sp.wd : null;
 }

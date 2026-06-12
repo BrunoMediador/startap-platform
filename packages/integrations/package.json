@@ -12,7 +12,8 @@
     "./whisper": "./dist/whisper/index.js",
     "./google-calendar": "./dist/google-calendar/index.js",
     "./abacatepay": "./dist/abacatepay/index.js",
-    "./provisioning": "./dist/provisioning/index.js"
+    "./provisioning": "./dist/provisioning/index.js",
+    "./scheduling": "./dist/scheduling/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
