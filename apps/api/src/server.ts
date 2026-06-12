@@ -22,6 +22,12 @@ async function main() {
   await app.register(sensible);
   await app.register(healthRoute);
   await app.register(wahaWebhookRoute);
+  if (!config.WAHA_WEBHOOK_SECRET) {
+    // P0 security #268: sem o secret, /webhooks/waha aceita POST de qualquer origem.
+    // Retrocompat proposital (lição #247) — ativar via runbook
+    // docs/runbooks/runbook-waha-webhook-auth.md ANTES de ligar PORTAL_SIGNUP.
+    log.warn('Webhook WAHA sem auth — configure WAHA_WEBHOOK_SECRET');
+  }
   // Webhook AbacatePay (F2): plugin encapsulado — seu content-type parser raw fica
   // ESCOPADO a ele (C3), nao afeta o JSON parser global nem o webhook-waha.
   await app.register(abacatePayWebhookRoute);

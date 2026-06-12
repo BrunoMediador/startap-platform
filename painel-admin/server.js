@@ -117,6 +117,27 @@ function decryptGcalCredentials(stored) {
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
+// P0 security #268: secret compartilhado do webhook WAHA. Quando presente, TODA
+// sessao criada pelo painel ja sai com o header X-Webhook-Secret via
+// webhooks[].customHeaders — o apps/api exige o match quando a env homonima
+// estiver ligada la (sem isso, sessao nova criada pos-ativacao levaria 401 e o
+// bot nasceria surdo). Ausente = comportamento atual (sem header). Contrato do
+// nome do header: apps/api/src/lib/webhook-auth.ts. Ativacao em prod:
+// docs/runbooks/runbook-waha-webhook-auth.md. NUNCA logar o valor.
+const WAHA_WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || '';
+
+/**
+ * Monta o array `config.webhooks` padrao de uma sessao WAHA nova: url do TS api +
+ * events recebidos + customHeaders com o secret (somente se configurado).
+ */
+function buildWahaWebhooks(events) {
+  const webhook = { url: TS_WEBHOOK_URL, events };
+  if (WAHA_WEBHOOK_SECRET) {
+    webhook.customHeaders = [{ name: 'X-Webhook-Secret', value: WAHA_WEBHOOK_SECRET }];
+  }
+  return [webhook];
+}
+
 // Bots da plataforma TypeScript.
 const TS_BOTS = [
   {
@@ -3570,7 +3591,6 @@ function wahaSessionName(slot) {
  */
 async function createWahaSession(name) {
   try {
-    const webhookUrl = TS_WEBHOOK_URL;
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
       headers: {
@@ -3583,7 +3603,8 @@ async function createWahaSession(name) {
         // events MUST include 'message.any' — engine NOWEB do WAHA so manda
         // audio/video/imagem sob 'message.any', nao 'message' (que so cobre
         // texto). Sem isso o bot fica surdo pra audio. Bruno 2026-05-21.
-        config: { webhooks: [{ url: webhookUrl, events: ['message', 'message.any', 'session.status'] }] },
+        // buildWahaWebhooks injeta o customHeader do secret (P0 security #268).
+        config: { webhooks: buildWahaWebhooks(['message', 'message.any', 'session.status']) },
       }),
     });
     const body = await r.json().catch(() => ({}));
@@ -4736,7 +4757,6 @@ app.post('/api/sessions', async (req, res) => {
       .status(400)
       .json({ error: 'name obrigatório e deve conter apenas letras, números, _ e -' });
   try {
-    const webhookUrl = `${TS_WEBHOOK_URL}`;
     const r = await fetch(`${WAHA_URL}/api/sessions`, {
       method: 'POST',
       headers: {
@@ -4747,7 +4767,8 @@ app.post('/api/sessions', async (req, res) => {
         name,
         start: true,
         config: {
-          webhooks: [{ url: webhookUrl, events: ['message', 'session.status'] }],
+          // buildWahaWebhooks injeta o customHeader do secret (P0 security #268).
+          webhooks: buildWahaWebhooks(['message', 'session.status']),
         },
       }),
     });

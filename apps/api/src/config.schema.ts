@@ -14,6 +14,16 @@ export const ConfigSchema = z.object({
   WAHA_URL: z.string().url(),
   WAHA_API_KEY: z.string(),
 
+  // ── Auth do webhook WAHA (P0 security — review do PR #268) ─────────────────
+  // Secret compartilhado exigido no header X-Webhook-Secret de POST /webhooks/waha.
+  // OPCIONAL no boot (lição do incidente #247: env nova nunca derruba api/worker):
+  // ausente = aceita tudo (comportamento atual) + warn no boot; presente =
+  // request sem header/match -> 401 sem processar (comparação timing-safe).
+  // Ativação em prod SEM downtime: docs/runbooks/runbook-waha-webhook-auth.md
+  // (env aqui + customHeaders em cada sessão WAHA). Pré-requisito pra ligar
+  // PORTAL_SIGNUP. NUNCA logado nem hardcoded.
+  WAHA_WEBHOOK_SECRET: z.string().min(1).optional(),
+
   WHISPER_URL: z.string().url(),
 
   OPENAI_API_KEY: z.string(),
