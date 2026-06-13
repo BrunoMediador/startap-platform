@@ -79,7 +79,28 @@ export const ConfigSchema = z.object({
   IDEMPOTENCY_DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   // Timeout do comando Redis no check de dedup (ms). Estoura -> fail-open
   // (processa). Curto de proposito: o caminho quente nao pode esperar Redis.
+  // Reusado tambem pelo action-lock (mesmo orcamento de latencia no caminho quente).
   IDEMPOTENCY_REDIS_TIMEOUT_MS: z.coerce.number().int().positive().default(500),
+
+  // ── Lock de acao com efeito externo (ADR 0019, passo 3) ────────────────────
+  // Flag-gated, default OFF, OPCIONAL no boot (licao do #247: env nova NUNCA
+  // derruba api/worker). OFF = comportamento ATUAL (cria o evento GCal como hoje,
+  // sem lock). ON = a criacao do evento GCal e envolvida por um lock distribuido
+  // por chave semantica (actionlock:gcal:<slot>:<telefone>:<inicioISO>): so quem
+  // adquire o SET NX PX cria o evento; processamento concorrente da MESMA acao
+  // (mesma conversa, mesmo horario) PULA -> 1 evento, nao 2.
+  // FAIL-OPEN: Redis inacessivel/timeout ao adquirir o lock -> cria o evento
+  // MESMO ASSIM (warn). Nunca dropar agendamento legitimo por hiccup de Redis.
+  // Com 1 instancia e inocuo (sempre adquire) — o ganho real e no scale-out
+  // (passo 5, decisao Bruno). NUNCA hardcoded.
+  IDEMPOTENCY_ACTION_LOCK: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // TTL do lock de acao (ms). Cobre a duracao de UMA criacao de evento GCal +
+  // margem; expira sozinho (sem lock orfao se a instancia morrer no meio).
+  // Default 10000ms (chamada GCal + rede). Ajustavel sem deploy.
+  IDEMPOTENCY_ACTION_LOCK_TTL_MS: z.coerce.number().int().positive().default(10000),
 
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 
