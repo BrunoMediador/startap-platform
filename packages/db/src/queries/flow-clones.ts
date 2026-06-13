@@ -52,6 +52,13 @@ export interface CloneRow {
   cliente_telefone: string | null;
   personalizacao: Record<string, string>;
   waha_sessao: string | null;
+  /**
+   * Shard do container WAHA da sessão (ADR 0020, migration 047). 0 = shard atual
+   * (`automacoes-waha-1`), onde TODAS as sessões vivem hoje. Default 0 no banco;
+   * só clientes NOVOS em shards novos no futuro. Lido pelo roteamento por shard
+   * apenas com a flag `WAHA_SHARDING` ON (default OFF) — hoje é informativo.
+   */
+  waha_shard_id: number;
   status: CloneStatus;
   /** false = fluxo suspenso por billing/férias — WAHA permanece conectado */
   flow_enabled: boolean;
@@ -478,7 +485,7 @@ export async function getCloneBySession(sessao: string): Promise<CloneRow | null
 
   const r = await query<CloneRow & { id: string }>(
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-            personalizacao, waha_sessao, status,
+            personalizacao, waha_sessao, waha_shard_id, status,
             flow_enabled, suspended_reason, suspended_at,
             horarios_funcionamento, servicos,
             created_at, updated_at
@@ -503,7 +510,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   // (vencimento muda 1x/dia). billing.next_due_date -> 'YYYY-MM-DD' via to_char.
   const r = await query<CloneRow & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome, fc.cliente_telefone,
-            fc.personalizacao, fc.waha_sessao, fc.status,
+            fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
@@ -656,6 +663,9 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     // flow_enabled vem como boolean do pg; fallback true para rows sem a coluna
     // (antes da migration 038 ser aplicada em dev)
     flow_enabled: (row as unknown as { flow_enabled?: unknown }).flow_enabled !== false,
+    // waha_shard_id: pg devolve int -> number. Fallback 0 (shard atual) p/ rows que
+    // não selecionam a coluna ou rodam antes da migration 047 em dev (ADR 0020).
+    waha_shard_id: Number((row as unknown as { waha_shard_id?: unknown }).waha_shard_id ?? 0),
     suspended_reason: (row as unknown as { suspended_reason?: unknown }).suspended_reason as string | null ?? null,
     suspended_at: (row as unknown as { suspended_at?: unknown }).suspended_at as Date | null ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
