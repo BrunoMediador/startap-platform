@@ -88,7 +88,12 @@ export function registerBot(
 /** Entry point — chamado pela rota /webhooks/waha. */
 export async function handleWebhook(
   body: WahaWebhookBody,
-  opts: { executionId: string; startedAt?: number },
+  // skipDedup (ADR 0021): no caminho ASSÍNCRONO (WEBHOOK_ASYNC) a rota roda o
+  // dedup ANTES do ACK-early — não pode reprocessar retry da WAHA. Para não
+  // deduplicar 2x, a rota passa skipDedup=true e o bloco 1b vira no-op. No
+  // caminho SÍNCRONO (flag OFF, default) o opts não traz skipDedup → o dedup
+  // segue rodando aqui, idêntico ao de hoje.
+  opts: { executionId: string; startedAt?: number; skipDedup?: boolean },
 ): Promise<{ status: string }> {
   const startedAt = opts.startedAt ?? Date.now();
   const baseLog = {
@@ -158,7 +163,9 @@ export async function handleWebhook(
   // Le a flag direto do process.env (mesmo padrao do gate BILLING_OVERDUE_SILENCE):
   // permite OFF instantaneo em runtime, sem rebuild. TTL/timeout vem do config
   // (parseados no boot — nao precisam de toggle a quente).
-  if (process.env.IDEMPOTENCY_DEDUP === 'true') {
+  // skipDedup: o ACK-early do webhook async (ADR 0021) JÁ rodou este dedup na
+  // rota, ANTES de aceitar o processamento — aqui seria deduplicar 2x.
+  if (process.env.IDEMPOTENCY_DEDUP === 'true' && !opts.skipDedup) {
     const messageId = body.payload?.id ?? '';
     const dedup = await checkAndMarkDuplicate(body.session, messageId);
     if (dedup.duplicate) {

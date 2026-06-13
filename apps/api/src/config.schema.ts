@@ -102,6 +102,31 @@ export const ConfigSchema = z.object({
   // Default 10000ms (chamada GCal + rede). Ajustavel sem deploy.
   IDEMPOTENCY_ACTION_LOCK_TTL_MS: z.coerce.number().int().positive().default(10000),
 
+  // ── Decouple async do webhook WAHA (ADR 0021) ─────────────────────────────
+  // Flag-gated, default OFF, OPCIONAL no boot (licao do #247: env nova NUNCA
+  // derruba api/worker). OFF = comportamento ATUAL byte-a-byte (await handleWebhook
+  // sincrono no ciclo da request). ON = a rota responde 200 ao WAHA na hora
+  // (ACK-early, apos HMAC+parse+safeParse+dedup+log) e processa handleWebhook em
+  // BACKGROUND, fora do ciclo request->response, com semaforo de concorrencia.
+  // Resolve isolamento: 1 cliente lento na LLM nao prende mais o pool PG e o event
+  // loop dos demais. SO e seguro com IDEMPOTENCY_DEDUP ATIVO (dedup ANTES do ACK
+  // evita reprocessar retry da WAHA). Enable encenado (sessao de teste -> janela
+  // 01-05h BRT). NUNCA hardcoded. O caminho quente le esta flag via config (parseado
+  // no boot); rollback = WEBHOOK_ASYNC=false (volta ao sincrono).
+  WEBHOOK_ASYNC: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Maximo de processamentos de webhook em background simultaneos (backpressure
+  // primario, ADR 0021). DEVE ser < pool PG (max 10) pra nunca esgotar conexao nem
+  // saturar o event loop. Default conservador = 4. Quando saturado, a rota responde
+  // 503 e a WAHA retenta (15x3s); o dedup evita duplicar. Ajustavel sem deploy.
+  WEBHOOK_MAX_INFLIGHT: z.coerce.number().int().positive().default(4),
+  // Timeout por tarefa de background (ms): uma LLM travada libera o slot do
+  // semaforo e nao o segura pra sempre. Default 60s. 0 desativa (espera indefinida
+  // — nao recomendado em prod). Rede final = close-stale-running no worker.
+  WEBHOOK_TASK_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(60_000),
+
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 
   CHAT_MEMORY_RETENTION: z.coerce.number().int().positive().default(30),
