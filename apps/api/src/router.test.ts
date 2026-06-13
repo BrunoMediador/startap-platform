@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   // @startap/core/phone — necessário mockar pois o módulo ESM não resolve em Vitest sem build
   extractPhone: vi.fn(),
   isGroupChat: vi.fn(),
+  // Dedup (ADR 0019): mockado pra nao tocar Redis real nos testes do router.
+  checkAndMarkDuplicate: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -69,7 +71,16 @@ vi.mock('@startap/core/phone', () => ({
   isGroupChat: mocks.isGroupChat,
 }));
 
+vi.mock('./lib/idempotency.js', () => ({
+  checkAndMarkDuplicate: mocks.checkAndMarkDuplicate,
+}));
+
 const { handleWebhook } = await import('./router.js');
+
+// Flag de dedup (ADR 0019) lida via process.env no router. Acesso por chave
+// computada (mesmo padrao do bloco BILLING_OVERDUE_SILENCE) — delete em membro
+// estatico dispara lint/performance/noDelete; em membro computado nao.
+const DEDUP_ENV_KEY = 'IDEMPOTENCY_DEDUP';
 
 // Bot stub para sessão 'startap' — simula o que startap.ts faz ao ser importado.
 const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
@@ -138,6 +149,9 @@ describe('handleWebhook', () => {
     // getCloneBySession e getCloneBySlot: nenhum clone por padrão
     mocks.getCloneBySession.mockResolvedValue(null);
     mocks.getCloneBySlot.mockResolvedValue(null);
+    // Dedup desligado por padrao (flag OFF) e, se chamado, default = nao duplicata.
+    delete process.env[DEDUP_ENV_KEY];
+    mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: false });
   });
 
   it('nao usa fallback da Lola para sessao de teste do router', async () => {
@@ -661,5 +675,77 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
     );
     expect(result).toEqual({ status: 'ignored:flow-suspended' });
     expect(botHandle).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleWebhook — dedup de evento de mensagem (ADR 0019)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env[DEDUP_ENV_KEY];
+    mocks.logFlowEvent.mockResolvedValue(null);
+    mocks.logMessage.mockResolvedValue(undefined);
+    mocks.isPaused.mockResolvedValue(false);
+    mocks.isFlowPaused.mockResolvedValue(false);
+    mocks.isFlowActive.mockResolvedValue(true);
+    mocks.findRouting.mockResolvedValue(null);
+    mocks.sendSeen.mockResolvedValue(undefined);
+    mocks.extractPhone.mockReturnValue('553598877248');
+    mocks.isGroupChat.mockReturnValue(false);
+    mocks.getCloneBySession.mockResolvedValue(null);
+    mocks.getCloneBySlot.mockResolvedValue(null);
+    mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: false });
+    stubBot.handle.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    delete process.env[DEDUP_ENV_KEY];
+  });
+
+  it('flag OFF → NUNCA chama dedup, processa normal (comportamento atual)', async () => {
+    const result = await handleWebhook(makeBody('startap'), {
+      executionId: 'exec-dedup-off',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok' });
+    expect(mocks.checkAndMarkDuplicate).not.toHaveBeenCalled();
+    expect(stubBot.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag ON + mensagem nova → processa e marca a chave (sessao, messageId)', async () => {
+    process.env[DEDUP_ENV_KEY] = 'true';
+    mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: false });
+    const result = await handleWebhook(makeBody('startap'), {
+      executionId: 'exec-dedup-new',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok' });
+    expect(mocks.checkAndMarkDuplicate).toHaveBeenCalledWith('startap', 'msg-1');
+    expect(stubBot.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag ON + duplicata → PULA (ignored:dedup), nao chama o bot', async () => {
+    process.env[DEDUP_ENV_KEY] = 'true';
+    mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: true, degraded: false });
+    const result = await handleWebhook(makeBody('startap'), {
+      executionId: 'exec-dedup-dup',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:dedup' });
+    expect(stubBot.handle).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.ignored' }),
+    );
+  });
+
+  it('flag ON + Redis down (fail-open: degraded, nao duplicata) → processa mesmo assim', async () => {
+    process.env[DEDUP_ENV_KEY] = 'true';
+    mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: true });
+    const result = await handleWebhook(makeBody('startap'), {
+      executionId: 'exec-dedup-failopen',
+      startedAt: 0,
+    });
+    // FAIL-OPEN: mensagem real do cliente NUNCA dropada por hiccup de Redis.
+    expect(result).toEqual({ status: 'ok' });
+    expect(stubBot.handle).toHaveBeenCalledTimes(1);
   });
 });

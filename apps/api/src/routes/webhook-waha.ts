@@ -20,8 +20,9 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // mesmo bodyLimit do app (server.ts)
  * Auth em DUAS camadas, o máximo possível ANTES do parse (P0 security #268 +
  * spike 2026-06-11). Precedência: HMAC (plano A) > header estático (plano B) >
  * aberto (retrocompat #247, warn no boot em server.ts). Com HMAC configurado o
- * header estático é IGNORADO — HMAC sozinho basta (autentica + integridade;
- * replay mitigado pelo dedupe de event.id).
+ * header estático é IGNORADO — HMAC sozinho basta (autentica + integridade).
+ * Replay/duplicata de mensagem é tratado SEPARADAMENTE no router pelo dedup de
+ * (sessao, messageId) no Redis (ADR 0019, flag IDEMPOTENCY_DEDUP) — NÃO aqui.
  *
  * Camada 1 — onRequest (roda ANTES do parse do body):
  *  - modo hmac: a assinatura é sobre o body, então só a PRESENÇA do header é

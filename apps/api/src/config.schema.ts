@@ -20,8 +20,8 @@ export const ConfigSchema = z.object({
   //   1. WAHA_WEBHOOK_HMAC_KEY presente  -> exige assinatura HMAC do WAHA nativo
   //      (webhooks[].hmac.key na config da sessão) calculada sobre o RAW BODY.
   //      HMAC sozinho basta: autentica + integridade; o header estático é IGNORADO
-  //      mesmo se WAHA_WEBHOOK_SECRET também existir (replay mitigado pelo dedupe
-  //      de event.id que já temos).
+  //      mesmo se WAHA_WEBHOOK_SECRET também existir. Replay/duplicata de mensagem
+  //      é tratado no router (dedup (sessao, messageId) no Redis, ADR 0019), não aqui.
   //   2. Só WAHA_WEBHOOK_SECRET presente -> plano B: header estático X-Webhook-Secret
   //      via webhooks[].customHeaders (comparação timing-safe).
   //   3. Nenhum -> aceita tudo (comportamento atual) + warn no boot.
@@ -54,6 +54,32 @@ export const ConfigSchema = z.object({
 
   REDIS_HOST: z.string().default('redis'),
   REDIS_PORT: z.coerce.number().default(6379),
+  // OPCIONAL no boot (mesmo Redis do worker/portal-api; portal-api ja usa
+  // REDIS_PASSWORD). Ausente = sem auth (Redis local sem senha) — comportamento
+  // atual da api intacto. NUNCA logado nem hardcoded.
+  REDIS_PASSWORD: z.string().optional(),
+
+  // ── Dedup de evento de mensagem WAHA (ADR 0019, passo 2) ───────────────────
+  // Flag-gated, default OFF, OPCIONAL no boot (licao do #247: env nova NUNCA
+  // derruba api/worker). OFF = comportamento ATUAL (sem dedup; igual a hoje).
+  // ON = antes de processar um evento de mensagem faz SET NX EX no Redis com
+  // chave (sessao, messageId); se a chave ja existe -> retry/duplicata -> PULA.
+  // FAIL-OPEN: Redis inacessivel/timeout no check -> processa MESMO ASSIM (warn).
+  // Idempotencia e protecao contra duplicata, nunca pode calar o bot. Com 1
+  // instancia e inocuo (nunca ha corrida) — serve pra observar quantos retries
+  // a WAHA reenvia hoje. Fail-closed so no scale-out (passo 5, decisao Bruno).
+  // NUNCA hardcoded.
+  IDEMPOTENCY_DEDUP: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // TTL da chave de dedup (cobre a janela de retry da WAHA sem reter memoria).
+  // Default 300s (valor do ADR 0019). Curto demais = retry tardio escapa;
+  // longo demais = retem chaves. Ajustavel sem deploy.
+  IDEMPOTENCY_DEDUP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  // Timeout do comando Redis no check de dedup (ms). Estoura -> fail-open
+  // (processa). Curto de proposito: o caminho quente nao pode esperar Redis.
+  IDEMPOTENCY_REDIS_TIMEOUT_MS: z.coerce.number().int().positive().default(500),
 
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 

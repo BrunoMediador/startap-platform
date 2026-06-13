@@ -15,6 +15,7 @@ import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap
 import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
+import { checkAndMarkDuplicate } from './lib/idempotency.js';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 import { handleSessionStatusEvent } from './lib/trial-pairing.js';
 import {
@@ -145,6 +146,35 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: 'ignored:event' };
+  }
+
+  // 1b. Dedup de evento de mensagem (ADR 0019, passo 2) — FLAG-GATED, FAIL-OPEN.
+  // Default OFF: este bloco e no-op e o fluxo segue identico ao de hoje. ON: faz
+  // SET NX EX no Redis com chave (sessao, messageId); se o evento ja foi visto
+  // (retry/duplicata da WAHA, ou a outra instancia no scale-out) -> PULA o
+  // processamento e retorna 200 (WAHA nao retenta). Redis down/timeout/sem id ->
+  // fail-open (processa mesmo assim, com warn) — nunca cala o bot por hiccup de
+  // Redis. Posicionado ANTES de qualquer efeito (resposta WAHA, GCal, antibot).
+  // Le a flag direto do process.env (mesmo padrao do gate BILLING_OVERDUE_SILENCE):
+  // permite OFF instantaneo em runtime, sem rebuild. TTL/timeout vem do config
+  // (parseados no boot — nao precisam de toggle a quente).
+  if (process.env.IDEMPOTENCY_DEDUP === 'true') {
+    const messageId = body.payload?.id ?? '';
+    const dedup = await checkAndMarkDuplicate(body.session, messageId);
+    if (dedup.duplicate) {
+      log.info({ ...baseLog }, 'Evento de mensagem duplicado ignorado (dedup)');
+      await flowExecutionLog.logFlowEvent({
+        ...baseLog,
+        eventType: 'router.ignored',
+        status: 'ignored',
+        message: 'Evento de mensagem duplicado ignorado (dedup)',
+        metadata: { reason: 'dedup', event: body.event },
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: 'ignored:dedup' };
+    }
+    // dedup.degraded === true -> Redis indisponivel ou sem messageId: ja logado
+    // como warn no modulo; seguimos processando (fail-open).
   }
 
   const fromMe = !!body.payload?.fromMe;
