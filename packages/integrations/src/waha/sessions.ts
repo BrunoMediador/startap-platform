@@ -51,6 +51,23 @@ export class WahaWrongStateError extends Error {
   }
 }
 
+/**
+ * Erro tipado de sessão INEXISTENTE no WAHA (HTTP 404 em GET /api/sessions/{name}).
+ * Distinto de um erro genérico de rede/timeout: significa que a sessão foi
+ * descartada (ex.: deploy/restart do WAHA entre o cadastro e o pareamento — bug
+ * sistêmico de onboarding). O chamador (portal-api) usa este sinal para RECRIAR a
+ * sessão com a config-padrão do provisionamento e seguir pro pareamento, em vez de
+ * tratar como "WAHA fora" (503). NUNCA confundir com WahaTimeoutError — só 404.
+ */
+export class WahaSessionNotFoundError extends Error {
+  readonly session: string;
+  constructor(session: string) {
+    super(`WAHA: sessão "${session}" não existe (404)`);
+    this.name = 'WahaSessionNotFoundError';
+    this.session = session;
+  }
+}
+
 function headers(): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
   if (WAHA_API_KEY) h['X-Api-Key'] = WAHA_API_KEY;
@@ -244,12 +261,29 @@ async function normalizeQrResponse(
 
 /**
  * Retorna o status atual da sessão.
+ *
+ * Em HTTP 404 (sessão inexistente no WAHA) lança WahaSessionNotFoundError — sinal
+ * tipado para o chamador distinguir "sessão sumiu" (recriar) de "WAHA fora"
+ * (timeout/rede). Faz o GET cru aqui (não via wahaReq, que mapearia 404 num Error
+ * genérico) só para inspecionar o status code; demais erros seguem o caminho
+ * normal (Error genérico / WahaTimeoutError).
  */
 export async function getSessionStatus(
   name: string,
   opts?: WahaCallOpts,
 ): Promise<SessionStatusResponse> {
-  return wahaReq<SessionStatusResponse>('GET', `/api/sessions/${name}`, undefined, opts);
+  const path = `/api/sessions/${name}`;
+  const res = await wahaFetch(path, { method: 'GET', headers: headers() }, opts);
+  if (res.status === 404) {
+    // drena o body para liberar a conexão; conteúdo é irrelevante.
+    await res.text().catch(() => '');
+    throw new WahaSessionNotFoundError(name);
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`WAHA sessoes ${path} -> HTTP ${res.status}: ${text}`);
+  }
+  return (await res.json()) as SessionStatusResponse;
 }
 
 /**

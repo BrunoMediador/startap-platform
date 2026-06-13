@@ -13,6 +13,13 @@ const { mockConfig } = vi.hoisted(() => ({
     NODE_ENV: 'test',
     PORTAL_RECONEXAO_WAHA: true,
     PORTAL_WAHA_TIMEOUT_MS: 8000,
+    // Config WAHA usada para RECRIAR a sessão (recreateWahaConfig) — mesmo padrão
+    // do signup. TS_WEBHOOK_URL presente = recriação habilitada.
+    WAHA_URL: 'http://waha:3000',
+    WAHA_API_KEY: 'k',
+    TS_WEBHOOK_URL: 'http://api:3040/webhooks/waha',
+    WAHA_WEBHOOK_HMAC_KEY: 'hmac-secret',
+    WAHA_WEBHOOK_SECRET: 'static-secret',
   },
 }));
 vi.mock('../config.js', () => ({ config: mockConfig }));
@@ -26,12 +33,15 @@ vi.mock('@startap/db', () => ({
 }));
 
 // Integrations: classes de erro REAIS (instanceof importa nas rotas) + helpers mockados.
-const { wahaMocks } = vi.hoisted(() => ({
+const { wahaMocks, provisioningMocks } = vi.hoisted(() => ({
   wahaMocks: {
     getSessionStatus: vi.fn(),
     restartAndWaitForScan: vi.fn(),
     requestPairingCode: vi.fn(),
     getSessionQR: vi.fn(),
+  },
+  provisioningMocks: {
+    createWahaSession: vi.fn(),
   },
 }));
 vi.mock('@startap/integrations', () => {
@@ -43,16 +53,27 @@ vi.mock('@startap/integrations', () => {
       this.status = status;
     }
   }
+  class WahaSessionNotFoundError extends Error {
+    session: string;
+    constructor(session: string) {
+      super(`WAHA: sessão "${session}" não existe (404)`);
+      this.session = session;
+    }
+  }
   return {
     waha: {
       sessions: {
         WahaTimeoutError,
         WahaWrongStateError,
+        WahaSessionNotFoundError,
         getSessionStatus: (...a: unknown[]) => wahaMocks.getSessionStatus(...a),
         restartAndWaitForScan: (...a: unknown[]) => wahaMocks.restartAndWaitForScan(...a),
         requestPairingCode: (...a: unknown[]) => wahaMocks.requestPairingCode(...a),
         getSessionQR: (...a: unknown[]) => wahaMocks.getSessionQR(...a),
       },
+    },
+    provisioning: {
+      createWahaSession: (...a: unknown[]) => provisioningMocks.createWahaSession(...a),
     },
   };
 });
@@ -106,8 +127,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   injectedSlot = 'clone_x';
   mockConfig.PORTAL_RECONEXAO_WAHA = true;
+  mockConfig.TS_WEBHOOK_URL = 'http://api:3040/webhooks/waha';
   redisMock.set.mockResolvedValue('OK');
   redisMock.ttl.mockResolvedValue(0);
+  // Default: recriação OK (testes de falha sobrescrevem).
+  provisioningMocks.createWahaSession.mockResolvedValue({ ok: true, status: 'STARTING' });
 });
 
 // ── Flag OFF ──────────────────────────────────────────────────────────────────
@@ -263,6 +287,74 @@ describe('POST /portal/conexao/reconectar', () => {
     expect(redisMock.set).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it('404 (sessão sumiu) -> RECRIA com a config-ouro e 202 restarting', async () => {
+    const { waha } = await import('@startap/integrations');
+    getCloneMock.mockResolvedValue(makeClone());
+    wahaMocks.getSessionStatus.mockRejectedValue(
+      new waha.sessions.WahaSessionNotFoundError('sess_x'),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ session: 'sess_x', state: 'restarting', poll_after_ms: 2000 });
+    // RECRIOU pelo helper do provisionamento, com o MESMO nome de sessão do banco
+    // (config-ouro vive dentro de createWahaSession — não duplicada aqui).
+    expect(provisioningMocks.createWahaSession).toHaveBeenCalledTimes(1);
+    const [wahaCfg, name] = provisioningMocks.createWahaSession.mock.calls[0];
+    expect(name).toBe('sess_x');
+    // A config WAHA vem do config tipado (env), não de input nem de container.
+    expect(wahaCfg).toMatchObject({
+      url: 'http://waha:3000',
+      apiKey: 'k',
+      webhookUrl: 'http://api:3040/webhooks/waha',
+      webhookHmacKey: 'hmac-secret',
+      webhookSecret: 'static-secret',
+    });
+    // NÃO chama restartAndWaitForScan (sessão recém-criada já nasce com start:true).
+    expect(wahaMocks.restartAndWaitForScan).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 + falha ao recriar -> 503 (não trava o cliente em beco)', async () => {
+    const { waha } = await import('@startap/integrations');
+    getCloneMock.mockResolvedValue(makeClone());
+    wahaMocks.getSessionStatus.mockRejectedValue(
+      new waha.sessions.WahaSessionNotFoundError('sess_x'),
+    );
+    provisioningMocks.createWahaSession.mockResolvedValue({
+      ok: false,
+      status: 'failed',
+      error: 'WAHA: boom',
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'waha_indisponivel' });
+    expect(provisioningMocks.createWahaSession).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('404 mas TS_WEBHOOK_URL ausente -> 503 sem recriar (env lazy, boot intacto)', async () => {
+    const { waha } = await import('@startap/integrations');
+    mockConfig.TS_WEBHOOK_URL = undefined as unknown as string;
+    getCloneMock.mockResolvedValue(makeClone());
+    wahaMocks.getSessionStatus.mockRejectedValue(
+      new waha.sessions.WahaSessionNotFoundError('sess_x'),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'waha_indisponivel' });
+    expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
 
 // ── POST /portal/conexao/codigo ──────────────────────────────────────────────────
@@ -332,6 +424,41 @@ describe('POST /portal/conexao/codigo', () => {
       next: 'POST /portal/conexao/reconectar',
     });
     expect(wahaMocks.requestPairingCode).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 (sessão sumiu) -> RECRIA e 422 sessao_nao_pronta (sem emitir código ainda)', async () => {
+    const { waha } = await import('@startap/integrations');
+    getCloneMock.mockResolvedValue(makeClone());
+    wahaMocks.getSessionStatus.mockRejectedValue(
+      new waha.sessions.WahaSessionNotFoundError('sess_x'),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/codigo' });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({
+      error: 'sessao_nao_pronta',
+      next: 'POST /portal/conexao/reconectar',
+    });
+    expect(provisioningMocks.createWahaSession).toHaveBeenCalledWith(
+      expect.objectContaining({ webhookUrl: 'http://api:3040/webhooks/waha' }),
+      'sess_x',
+    );
+    // Sessão recém-criada está STARTING, não SCAN_QR_CODE -> NÃO emite código.
+    expect(wahaMocks.requestPairingCode).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('WORKING -> 409 e NÃO recria sessão (sessão viva intocada)', async () => {
+    getCloneMock.mockResolvedValue(makeClone());
+    wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/codigo' });
+    expect(res.statusCode).toBe(409);
+    expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
     await app.close();
   });
 });

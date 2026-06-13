@@ -5,9 +5,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  WahaSessionNotFoundError,
   WahaTimeoutError,
   WahaWrongStateError,
   getSessionQR,
+  getSessionStatus,
   requestPairingCode,
   restartAndWaitForScan,
 } from './sessions.js';
@@ -39,6 +41,39 @@ function jsonOk(body: unknown): Response {
 function statusResp(status: string) {
   return jsonOk({ name: 'sess', status });
 }
+
+/** Resposta de erro HTTP genérica (status code arbitrário). */
+function httpErr(status: number, body = ''): Response {
+  return {
+    ok: false,
+    status,
+    headers: { get: () => 'text/plain' },
+    json: async () => ({}),
+    text: async () => body,
+    arrayBuffer: async () => new ArrayBuffer(0),
+  } as unknown as Response;
+}
+
+// ── getSessionStatus (404 -> WahaSessionNotFoundError) ────────────────────────────
+describe('getSessionStatus', () => {
+  it('404 -> WahaSessionNotFoundError (sessão descartada — gatilho de recriação)', async () => {
+    fetchMock.mockResolvedValueOnce(httpErr(404, 'session not found'));
+    await expect(getSessionStatus('sess')).rejects.toBeInstanceOf(WahaSessionNotFoundError);
+  });
+
+  it('500 -> Error genérico (NÃO confundir com 404 — não recria)', async () => {
+    fetchMock.mockResolvedValueOnce(httpErr(500, 'boom'));
+    const err = await getSessionStatus('sess').catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(WahaSessionNotFoundError);
+  });
+
+  it('200 -> devolve o status normalmente', async () => {
+    fetchMock.mockResolvedValueOnce(statusResp('WORKING'));
+    const out = await getSessionStatus('sess');
+    expect(out.status).toBe('WORKING');
+  });
+});
 
 // ── requestPairingCode ──────────────────────────────────────────────────────────
 describe('requestPairingCode', () => {
