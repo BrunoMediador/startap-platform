@@ -28,6 +28,7 @@
  */
 import {
   IconAlert,
+  IconCalendar,
   IconCheck,
   IconCopy,
   IconHeadset,
@@ -696,6 +697,22 @@ function SucessoCard() {
       <p className="mx-auto mt-1.5 max-w-[34ch] text-[14px] leading-normal text-ink-soft">
         Seu robô já está atendendo no WhatsApp.
       </p>
+
+      {/* Próximo passo: a agenda (Google Calendar) é configurada pela equipe,
+          não é self-service. Aviso acolhedor, sem prometer prazo exato. */}
+      <div className="mx-auto mt-5 flex max-w-[420px] items-start gap-3 rounded-card-sm border border-brand/30 bg-brand-soft p-4 text-left">
+        <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-full bg-brand text-bg">
+          <IconCalendar size={16} />
+        </span>
+        <div>
+          <p className="font-display text-[14px] font-semibold text-ink">Falta só a sua agenda</p>
+          <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
+            Nossa equipe vai entrar em contato em breve pra configurar a sua agenda do Google
+            Calendar — assim os horários marcados caem direto no seu calendário.
+          </p>
+        </div>
+      </div>
+
       <div className="mx-auto mt-5 max-w-[260px]">
         <Button
           onClick={() => {
