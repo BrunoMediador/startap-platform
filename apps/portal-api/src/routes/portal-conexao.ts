@@ -27,7 +27,7 @@
 import rateLimit from '@fastify/rate-limit';
 import { logger } from '@startap/core/logger';
 import { flowClones } from '@startap/db';
-import { waha } from '@startap/integrations';
+import { provisioning, waha } from '@startap/integrations';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 import { maskPhone } from '../lib/mask.js';
@@ -52,11 +52,64 @@ function userRateKey(req: FastifyRequest): string {
   return `ip:${req.ip}`;
 }
 
-const { WahaTimeoutError, WahaWrongStateError } = waha.sessions;
+const { WahaTimeoutError, WahaWrongStateError, WahaSessionNotFoundError } = waha.sessions;
 
 /** Timeout por chamada WAHA (ms) — vem do config (default 8s). */
 function wahaOpts() {
   return { timeoutMs: config.PORTAL_WAHA_TIMEOUT_MS };
+}
+
+/**
+ * Status sintético quando o GET /api/sessions/{name} volta 404 (sessão descartada
+ * pelo WAHA — ex.: deploy/restart entre cadastro e pareamento, o bug sistêmico de
+ * onboarding). DISTINTO de 'unknown' (WAHA fora/instável): só este gatilha a
+ * recriação da sessão. Nunca colide com um status real do WAHA
+ * (WORKING/FAILED/SCAN_QR_CODE/STARTING/STOPPED).
+ */
+const STATUS_NOT_FOUND = 'not_found';
+
+/**
+ * Config WAHA para (re)criar a sessão pelo MESMO caminho do provisionamento/signup
+ * — não duplica defaults. createWahaSession aplica a config-ouro da sessão nova
+ * (events ['message.any','session.status'], ignore status/grupos/canais/broadcast,
+ * retries 15×3s, hmac.key + X-Webhook-Secret quando configurados). Os segredos vêm
+ * do config tipado do boot (env), NUNCA extraídos de container. Ausentes = sessão
+ * sem auth (mesmo contrato lazy do signup; boot nunca crasha). NUNCA logar valores.
+ */
+function recreateWahaConfig(): provisioning.WahaConfig | null {
+  if (!config.TS_WEBHOOK_URL) return null;
+  return {
+    url: config.WAHA_URL,
+    apiKey: config.WAHA_API_KEY,
+    webhookUrl: config.TS_WEBHOOK_URL,
+    webhookHmacKey: config.WAHA_WEBHOOK_HMAC_KEY,
+    webhookSecret: config.WAHA_WEBHOOK_SECRET,
+  };
+}
+
+/**
+ * Recria a sessão WAHA inexistente (404) reusando o helper de provisionamento
+ * (config-ouro idêntica à do signup/gestão — anti resposta-dupla). NÃO recria
+ * registros do clone (eles já existem no banco); só a sessão WAHA com o MESMO nome
+ * já persistido em flow_clones.waha_sessao. Best-effort: nunca lança — devolve o
+ * resultado pro caller decidir entre seguir (ok) ou 503 (falha).
+ */
+async function recreateSession(
+  session: string,
+  slot: string,
+): Promise<provisioning.WahaSessionResult> {
+  const wahaCfg = recreateWahaConfig();
+  if (!wahaCfg) {
+    log.error({ slot }, 'recriar sessão indisponível: TS_WEBHOOK_URL não provisionada');
+    return { ok: false, status: 'failed', error: 'webhook_url_ausente' };
+  }
+  const res = await provisioning.createWahaSession(wahaCfg, session);
+  if (res.ok) {
+    log.info({ slot, session, wahaStatus: res.status }, 'sessão WAHA recriada (era 404)');
+  } else {
+    log.warn({ slot, session, error: res.error }, 'falha ao recriar sessão WAHA (404)');
+  }
+  return res;
 }
 
 // ── Lock Redis (anti-duplo-clique no reconectar) ────────────────────────────────
@@ -82,13 +135,23 @@ async function reconnectCooldownSeconds(slot: string): Promise<number> {
   return ttl > 0 ? ttl : 0;
 }
 
-/** Lê o status WAHA da sessão de forma graceful (timeout/erro -> 'unknown'). */
+/**
+ * Lê o status WAHA da sessão de forma graceful. Distingue 3 saídas:
+ *  - status real do WAHA (WORKING/FAILED/SCAN_QR_CODE/STARTING/...);
+ *  - STATUS_NOT_FOUND ('not_found'): sessão NÃO existe (404) — gatilho de recriação;
+ *  - 'unknown': WAHA fora/instável (timeout/rede) — NÃO recria, degrada graceful.
+ */
 async function readWahaStatus(session: string | null, slot: string): Promise<string> {
   if (!session) return 'unknown';
   try {
     const s = await waha.sessions.getSessionStatus(session, wahaOpts());
     return s.status ?? 'unknown';
   } catch (err) {
+    if (err instanceof WahaSessionNotFoundError) {
+      // 404 = sessão descartada (deploy/restart entre cadastro e pareamento).
+      log.info({ slot }, 'sessão WAHA inexistente (404) — elegível a recriação');
+      return STATUS_NOT_FOUND;
+    }
     log.info(
       { slot, err: err instanceof Error ? err.message : 'erro' },
       'WAHA status indisponível (graceful)',
@@ -182,13 +245,27 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(503).send({ error: 'waha_indisponivel' });
       }
 
-      // Lock anti-duplo-clique: 2 cliques rápidos -> o 2º cai em 429 (sem 2º restart,
-      // que invalidaria o código já gerado).
+      // Lock anti-duplo-clique: 2 cliques rápidos -> o 2º cai em 429 (sem 2º restart
+      // nem 2ª recriação, que invalidaria o código já gerado). Adquirido ANTES da
+      // recriação 404 também (uma só recriação por janela).
       const got = await acquireReconnectLock(tenant.slot);
       if (!got) {
         const retry = await reconnectCooldownSeconds(tenant.slot);
         reply.header('Retry-After', String(retry));
         return reply.code(429).send({ error: 'aguarde', retry_after_seconds: retry });
+      }
+
+      // 404 = sessão descartada (deploy/restart entre cadastro e pareamento — bug
+      // sistêmico de onboarding). RECRIA com a config-ouro do provisionamento (mesmo
+      // helper do signup; anti resposta-dupla) e segue pro pareamento. A sessão
+      // recém-criada já nasce com start:true rumo a SCAN_QR_CODE — o poll/QR/código
+      // cobrem a transição. Falha ao recriar -> 503 (não trava o cliente em beco).
+      if (status === STATUS_NOT_FOUND) {
+        const created = await recreateSession(session, tenant.slot);
+        if (!created.ok) {
+          return reply.code(503).send({ error: 'waha_indisponivel' });
+        }
+        return reply.code(202).send({ session, state: 'restarting', poll_after_ms: 2000 });
       }
 
       // Dispara o restart+poll em background — não pendura o hot path. O front faz
@@ -233,6 +310,19 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
       const status = await readWahaStatus(session, tenant.slot);
       if (status === 'WORKING') {
         return reply.code(409).send({ error: 'ja_conectado' });
+      }
+      // 404 = sessão descartada. RECRIA com a config-ouro do provisionamento (não
+      // emite código aqui: a sessão recém-criada ainda está STARTING, não
+      // SCAN_QR_CODE). Instrui o cliente a reconectar/aguardar o estado de scan — o
+      // GET /status confirma a transição. Tira o cliente do beco sem fim do bug.
+      if (status === STATUS_NOT_FOUND) {
+        const created = await recreateSession(session, tenant.slot);
+        if (!created.ok) {
+          return reply.code(503).send({ error: 'waha_indisponivel' });
+        }
+        return reply
+          .code(422)
+          .send({ error: 'sessao_nao_pronta', next: 'POST /portal/conexao/reconectar' });
       }
       // request-code só funciona em SCAN_QR_CODE. Em qualquer outro estado, instrui o
       // cliente a reconectar antes (sem novo restart aqui — re-emitir não reinicia).
