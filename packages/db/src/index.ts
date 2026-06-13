@@ -19,6 +19,7 @@ export * as clientBilling from './queries/client-billing.js';
 export * as billingCharges from './queries/billing-charges.js';
 export * as billingWebhookEvents from './queries/billing-webhook-events.js';
 export * as trialLedger from './queries/trial-ledger.js';
+export * as alerts from './queries/alerts.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -60,3 +61,10 @@ export type {
   TrialStatus,
   TrialCloneInfo,
 } from './queries/trial-ledger.js';
+export type {
+  AlertRecipientRow,
+  AlertConfigRow,
+  AlertState,
+  AlertStateRow,
+  MonitoredSession,
+} from './queries/alerts.js';

@@ -5532,4 +5532,188 @@ app.post('/api/admin/uploads/gc-orphans', async (req, res) => {
   }
 });
 
+// ============================================================================
+// SISTEMA DE ALERTAS INTERNO — config + destinatarios (Missao 021, Fase 1)
+// Spec: docs/missoes/021-sistema-alertas-interno.md.
+// Backend apenas; a sub-aba "Alertas" em Configuracoes vem na proxima onda
+// (frontend-engineer). Todas as rotas atras do requireAuth global + CSRF para
+// mutacoes (aplicado globalmente em /api/* mais acima). Config e GLOBAL (alerta
+// do time) — sem tenant key. NAO envia WhatsApp daqui; o envio e do worker
+// (job monitor) atras da flag ALERTS_ENABLED.
+// ============================================================================
+
+const ALERTS_MAX_RECIPIENTS = 5;
+// E.164 so digitos: 8 a 15 digitos (recomendacao ITU-T). Sem "+", sem mascara.
+const ALERTS_PHONE_RE = /^[1-9]\d{7,14}$/;
+
+// Normaliza telefone recebido (com +, mascara, espacos) -> so digitos.
+function _alertsNormalizePhone(raw) {
+  return String(raw ?? '').replace(/\D/g, '');
+}
+
+// ---------- GET /api/alerts/config — le a config global (1 linha) ----------
+app.get('/api/alerts/config', async (_req, res) => {
+  try {
+    await pool.query(`INSERT INTO alert_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    const r = await pool.query(
+      `SELECT id, enabled, sender_slot, cooldown_min, check_waha, check_health, check_host, updated_at
+         FROM alert_config WHERE id = 1`,
+    );
+    res.json({ config: r.rows[0] });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'alerts-config-get', pg_code: e?.code, msg: 'falha ao ler config de alertas' }));
+    res.status(500).json({ error: 'erro ao ler config de alertas' });
+  }
+});
+
+// ---------- PUT /api/alerts/config — patch parcial da config global ----------
+// Body: { enabled?, sender_slot?, cooldown_min?, check_waha?, check_health?, check_host? }
+app.put('/api/alerts/config', async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const sets = [];
+    const vals = [];
+    const addBool = (col, v) => { vals.push(Boolean(v)); sets.push(`${col} = $${vals.length}`); };
+
+    if (b.enabled !== undefined) addBool('enabled', b.enabled);
+    if (b.check_waha !== undefined) addBool('check_waha', b.check_waha);
+    if (b.check_health !== undefined) addBool('check_health', b.check_health);
+    if (b.check_host !== undefined) addBool('check_host', b.check_host);
+    if (b.sender_slot !== undefined) {
+      const slot = String(b.sender_slot).trim();
+      if (!slot || slot.length > 40) return res.status(400).json({ error: 'sender_slot invalido' });
+      vals.push(slot); sets.push(`sender_slot = $${vals.length}`);
+    }
+    if (b.cooldown_min !== undefined) {
+      const cd = Number(b.cooldown_min);
+      if (!Number.isInteger(cd) || cd < 5) return res.status(400).json({ error: 'cooldown_min minimo 5' });
+      vals.push(cd); sets.push(`cooldown_min = $${vals.length}`);
+    }
+
+    await pool.query(`INSERT INTO alert_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    if (sets.length === 0) {
+      const cur = await pool.query(
+        `SELECT id, enabled, sender_slot, cooldown_min, check_waha, check_health, check_host, updated_at
+           FROM alert_config WHERE id = 1`,
+      );
+      return res.json({ config: cur.rows[0] });
+    }
+    sets.push('updated_at = NOW()');
+    const r = await pool.query(
+      `UPDATE alert_config SET ${sets.join(', ')} WHERE id = 1
+       RETURNING id, enabled, sender_slot, cooldown_min, check_waha, check_health, check_host, updated_at`,
+      vals,
+    );
+    console.log(JSON.stringify({
+      audit: 'alerts-config-updated', operator: req.session?.userId || 'unknown',
+      enabled: r.rows[0]?.enabled, at: new Date().toISOString(),
+    }));
+    res.json({ ok: true, config: r.rows[0] });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'alerts-config-put', pg_code: e?.code, msg: 'falha ao atualizar config de alertas' }));
+    res.status(500).json({ error: 'erro ao atualizar config de alertas' });
+  }
+});
+
+// ---------- GET /api/alerts/recipients — lista destinatarios ----------
+app.get('/api/alerts/recipients', async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, phone, label, enabled, created_at FROM alert_recipients ORDER BY created_at ASC`,
+    );
+    res.json({ count: r.rows.length, max: ALERTS_MAX_RECIPIENTS, recipients: r.rows });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'alerts-recipients-list', pg_code: e?.code, msg: 'falha ao listar destinatarios' }));
+    res.status(500).json({ error: 'erro ao listar destinatarios' });
+  }
+});
+
+// ---------- POST /api/alerts/recipients — cria destinatario (max 5) ----------
+// Body: { phone: string (E.164/digitos), label?: string }
+app.post('/api/alerts/recipients', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const phone = _alertsNormalizePhone(req.body?.phone);
+    const label = req.body?.label != null ? String(req.body.label).trim().slice(0, 60) : null;
+    if (!ALERTS_PHONE_RE.test(phone)) {
+      return res.status(400).json({ error: 'telefone invalido (E.164 so digitos, 8 a 15 digitos, sem +)' });
+    }
+
+    await client.query('BEGIN');
+    const cnt = await client.query(`SELECT COUNT(*)::int AS c FROM alert_recipients`);
+    if ((cnt.rows[0]?.c ?? 0) >= ALERTS_MAX_RECIPIENTS) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: `limite de ${ALERTS_MAX_RECIPIENTS} destinatarios atingido` });
+    }
+    const dup = await client.query(`SELECT 1 FROM alert_recipients WHERE phone = $1 LIMIT 1`, [phone]);
+    if ((dup.rowCount ?? 0) > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'telefone ja cadastrado' });
+    }
+    const ins = await client.query(
+      `INSERT INTO alert_recipients (phone, label) VALUES ($1, $2)
+       RETURNING id, phone, label, enabled, created_at`,
+      [phone, label],
+    );
+    await client.query('COMMIT');
+    console.log(JSON.stringify({
+      audit: 'alerts-recipient-created', operator: req.session?.userId || 'unknown',
+      recipient_id: ins.rows[0]?.id, at: new Date().toISOString(),
+    }));
+    res.status(201).json({ ok: true, recipient: ins.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(JSON.stringify({ at: 'alerts-recipients-create', pg_code: e?.code, msg: 'falha ao criar destinatario' }));
+    res.status(500).json({ error: 'erro ao criar destinatario' });
+  } finally {
+    client.release();
+  }
+});
+
+// ---------- PATCH /api/alerts/recipients/:id — toggle enabled / editar label ----------
+// Body: { enabled?: bool, label?: string }
+app.patch('/api/alerts/recipients/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'id invalido' });
+    const sets = [];
+    const vals = [];
+    if (req.body?.enabled !== undefined) { vals.push(Boolean(req.body.enabled)); sets.push(`enabled = $${vals.length}`); }
+    if (req.body?.label !== undefined) {
+      const label = req.body.label != null ? String(req.body.label).trim().slice(0, 60) : null;
+      vals.push(label); sets.push(`label = $${vals.length}`);
+    }
+    if (sets.length === 0) return res.status(400).json({ error: 'nada a atualizar' });
+    vals.push(id);
+    const r = await pool.query(
+      `UPDATE alert_recipients SET ${sets.join(', ')} WHERE id = $${vals.length}
+       RETURNING id, phone, label, enabled, created_at`,
+      vals,
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'destinatario nao encontrado' });
+    res.json({ ok: true, recipient: r.rows[0] });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'alerts-recipients-patch', pg_code: e?.code, msg: 'falha ao atualizar destinatario' }));
+    res.status(500).json({ error: 'erro ao atualizar destinatario' });
+  }
+});
+
+// ---------- DELETE /api/alerts/recipients/:id ----------
+app.delete('/api/alerts/recipients/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'id invalido' });
+    const r = await pool.query(`DELETE FROM alert_recipients WHERE id = $1`, [id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'destinatario nao encontrado' });
+    console.log(JSON.stringify({
+      audit: 'alerts-recipient-deleted', operator: req.session?.userId || 'unknown',
+      recipient_id: id, at: new Date().toISOString(),
+    }));
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'alerts-recipients-delete', pg_code: e?.code, msg: 'falha ao remover destinatario' }));
+    res.status(500).json({ error: 'erro ao remover destinatario' });
+  }
+});
+
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));

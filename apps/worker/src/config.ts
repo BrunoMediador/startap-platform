@@ -51,6 +51,29 @@ export const WorkerConfigSchema = z.object({
   // Exigida apenas pelo contrato WahaConfig (criacao de sessao); o teardown so
   // DELETA sessao — string vazia e segura aqui.
   TS_WEBHOOK_URL: z.string().default(''),
+
+  // ── Sistema de Alertas Interno (Missao 021, Fase 1) ────────────────────────
+  // TODAS opcionais com default OFF/seguro (licao #247: NADA aqui e obrigatorio
+  // no boot — worker sobe normal mesmo sem nenhuma destas envs). Camada 1 do
+  // rollout: liga/desliga o REGISTRO do cron monitor. Com OFF o cron nem registra
+  // (zero chamada a WAHA/health, zero envio). A camada 2 (kill-switch quente) vive
+  // em alert_config.enabled no banco — toggle na UI sem restart.
+  // Pra LIGAR em prod: devops seta ALERTS_ENABLED=true + restart do worker; depois
+  // cadastrar numeros e ligar o toggle na UI do gestao.
+  ALERTS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrao cron do monitor (croner). Default a cada 2 min (spec §1). Padrao
+  // invalido NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
+  ALERTS_CRON: z.string().default('*/2 * * * *'),
+  // URL do /health do startap-api na rede interna Docker (spec §1 reusa o /health
+  // que ja expoe checks.db/checks.redis). Default = nome+porta do compose.
+  ALERTS_API_HEALTH_URL: z.string().default('http://startap-api:3040/health'),
+  // Hard cap global anti-flood: max de mensagens somando todos os checks por
+  // janela (spec §4). Protege o numero da Lola num cenario "tudo caiu de uma vez".
+  ALERTS_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  ALERTS_WINDOW_MIN: z.coerce.number().int().positive().default(30),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
