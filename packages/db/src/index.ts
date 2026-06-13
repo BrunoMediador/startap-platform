@@ -21,6 +21,7 @@ export * as billingWebhookEvents from './queries/billing-webhook-events.js';
 export * as trialLedger from './queries/trial-ledger.js';
 export * as alerts from './queries/alerts.js';
 export * as tenant from './queries/tenant.js';
+export * as tenantReadRollup from './queries/tenant-read-rollup.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -69,3 +70,11 @@ export type {
   AlertStateRow,
   MonitoredSession,
 } from './queries/alerts.js';
+export type {
+  ClientRollupRow,
+  ClientRollupResult,
+  RollupMode,
+  ParityReport,
+  ParityClientDiff,
+  ParityFieldDiff,
+} from './queries/tenant-read-rollup.js';

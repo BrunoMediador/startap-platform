@@ -1,6 +1,6 @@
 import { query } from '../client.js';
 import type { Provider } from './bot-config.js';
-import { resolveTenantId } from './tenant.js';
+import { isTenantReadCutoverEnabled, resolveTenantId } from './tenant.js';
 
 /**
  * model_usage — log de cada chamada ao LLM, com tokens e custo estimado.
@@ -87,6 +87,12 @@ export async function logUsage(input: LogUsageInput): Promise<void> {
 
 export interface UsageSummaryRow {
   slot: string;
+  /**
+   * tenant_id (UUID) do clone. Presente SÓ com o READ CUTOVER ligado
+   * (TENANT_READ_CUTOVER=true); null no modo slot (atual) e em slot de plataforma
+   * sem clone. NUNCA muda o `slot`, que segue sendo a chave legível do agrupamento.
+   */
+  tenant_id?: string | null;
   provider: string;
   model: string;
   calls: number;
@@ -96,31 +102,64 @@ export interface UsageSummaryRow {
   cost_usd: number;
 }
 
-export async function summaryByPeriod(daysBack: number): Promise<UsageSummaryRow[]> {
-  const r = await query<{
-    slot: string;
-    provider: string;
-    model: string;
-    calls: string;
-    prompt_tokens: string;
-    completion_tokens: string;
-    total_tokens: string;
-    cost_usd: string | null;
-  }>(
-    `SELECT slot, provider, model,
-            COUNT(*)::text AS calls,
+interface UsageSummaryRaw {
+  slot: string;
+  tenant_id?: string | null;
+  provider: string;
+  model: string;
+  calls: string;
+  prompt_tokens: string;
+  completion_tokens: string;
+  total_tokens: string;
+  cost_usd: string | null;
+}
+
+const SUMMARY_AGG = `COUNT(*)::text AS calls,
             SUM(prompt_tokens)::text     AS prompt_tokens,
             SUM(completion_tokens)::text AS completion_tokens,
             SUM(total_tokens)::text      AS total_tokens,
-            SUM(cost_usd)::text          AS cost_usd
-     FROM model_usage
-     WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
-     GROUP BY slot, provider, model
-     ORDER BY SUM(total_tokens) DESC`,
-    [String(daysBack)],
-  );
+            SUM(cost_usd)::text          AS cost_usd`;
+
+/**
+ * Rollup de uso de IA por período.
+ *
+ * READ CUTOVER (ADR 0018, Fase 2b) flag-gated, safe-by-construction:
+ * - `TENANT_READ_CUTOVER` OFF (default): query IDÊNTICA à de hoje — agrupa por
+ *   (slot, provider, model), saída sem tenant_id. Comportamento inalterado.
+ * - ON: LEFT JOIN com flow_clones traz o tenant_id e o agrupamento passa a chavear
+ *   por tenant_id (com o slot do clone como rótulo). Slot de plataforma sem clone
+ *   (tenant_id NULL) continua agrupando por slot — não some do relatório.
+ *
+ * NÃO toca o hot path por-conversa. `env` injetável só para teste.
+ */
+export async function summaryByPeriod(
+  daysBack: number,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<UsageSummaryRow[]> {
+  const cutover = isTenantReadCutoverEnabled(env);
+
+  const sql = cutover
+    ? // Modo tenant_id: agrupa por COALESCE(tenant_id do clone, slot). MAX(slot) dá um
+      // rótulo legível estável (1 tenant_id = 1 clone = 1 slot). Plataforma (sem clone)
+      // cai no slot, idêntico ao modo OFF para essas linhas.
+      `SELECT MAX(mu.slot) AS slot, fc.tenant_id::text AS tenant_id, mu.provider, mu.model,
+              ${SUMMARY_AGG}
+       FROM model_usage mu
+       LEFT JOIN flow_clones fc ON fc.slot = mu.slot
+       WHERE mu.created_at > NOW() - ($1 || ' days')::INTERVAL
+       GROUP BY COALESCE(fc.tenant_id::text, mu.slot), fc.tenant_id, mu.provider, mu.model
+       ORDER BY SUM(mu.total_tokens) DESC`
+    : `SELECT slot, provider, model,
+              ${SUMMARY_AGG}
+       FROM model_usage
+       WHERE created_at > NOW() - ($1 || ' days')::INTERVAL
+       GROUP BY slot, provider, model
+       ORDER BY SUM(total_tokens) DESC`;
+
+  const r = await query<UsageSummaryRaw>(sql, [String(daysBack)]);
   return r.rows.map((row) => ({
     slot: row.slot,
+    ...(cutover ? { tenant_id: row.tenant_id ?? null } : {}),
     provider: row.provider,
     model: row.model,
     calls: Number(row.calls),
