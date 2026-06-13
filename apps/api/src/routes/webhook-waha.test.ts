@@ -27,6 +27,10 @@ const configState = vi.hoisted(() => ({
   hmacKey: undefined as string | undefined,
   hmacHeader: 'x-webhook-hmac',
   hmacAlgorithm: 'sha512' as 'sha256' | 'sha512',
+  // ADR 0021 — webhook async. Default OFF = caminho síncrono atual.
+  webhookAsync: false,
+  maxInFlight: 4,
+  taskTimeoutMs: 0,
 }));
 
 vi.mock('../config.js', () => ({
@@ -43,15 +47,28 @@ vi.mock('../config.js', () => ({
     get WAHA_WEBHOOK_HMAC_ALGORITHM() {
       return configState.hmacAlgorithm;
     },
+    get WEBHOOK_ASYNC() {
+      return configState.webhookAsync;
+    },
+    get WEBHOOK_MAX_INFLIGHT() {
+      return configState.maxInFlight;
+    },
+    get WEBHOOK_TASK_TIMEOUT_MS() {
+      return configState.taskTimeoutMs;
+    },
   },
 }));
 
-const { handleWebhook, logFlowEvent } = vi.hoisted(() => ({
+const { handleWebhook, logFlowEvent, checkAndMarkDuplicate } = vi.hoisted(() => ({
   handleWebhook: vi.fn(),
   logFlowEvent: vi.fn(),
+  checkAndMarkDuplicate: vi.fn(),
 }));
 
 vi.mock('../router.js', () => ({ handleWebhook }));
+
+// Dedup (ADR 0019): no caminho async (ADR 0021) a ROTA roda o dedup antes do ACK.
+vi.mock('../lib/idempotency.js', () => ({ checkAndMarkDuplicate }));
 
 vi.mock('@startap/db', () => ({
   flowExecutionLog: { logFlowEvent },
@@ -63,6 +80,15 @@ vi.mock('@startap/core/logger', () => ({
 
 import Fastify from 'fastify';
 import { wahaWebhookRoute } from './webhook-waha.js';
+
+/** Promise controlável: segura o handler "em voo" sem assign-in-expression. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function wahaBody(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -88,10 +114,15 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
     configState.hmacKey = undefined;
     configState.hmacHeader = 'x-webhook-hmac';
     configState.hmacAlgorithm = 'sha512';
+    configState.webhookAsync = false;
+    configState.maxInFlight = 4;
+    configState.taskTimeoutMs = 0;
     handleWebhook.mockReset();
     logFlowEvent.mockReset();
+    checkAndMarkDuplicate.mockReset();
     handleWebhook.mockResolvedValue({ status: 'ok' });
     logFlowEvent.mockResolvedValue(undefined);
+    checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: false });
     app = await makeApp();
   });
 
@@ -295,6 +326,108 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(handleWebhook).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── WEBHOOK_ASYNC (ADR 0021) ───────────────────────────────────────────────
+  describe('WEBHOOK_ASYNC OFF (default) — caminho síncrono idêntico ao atual', () => {
+    it('aguarda handleWebhook e responde com o status dele (200 {status:ok})', async () => {
+      handleWebhook.mockResolvedValue({ status: 'ok' });
+      const res = await app.inject({ method: 'POST', url: '/webhooks/waha', payload: wahaBody() });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ok' });
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+      // No síncrono a rota NÃO roda dedup (corre dentro do router) nem passa skipDedup.
+      expect(checkAndMarkDuplicate).not.toHaveBeenCalled();
+      expect(handleWebhook.mock.calls[0]?.[1]).not.toHaveProperty('skipDedup');
+    });
+
+    it('crash do handler -> 200 {status:error:crash} (comportamento atual)', async () => {
+      handleWebhook.mockRejectedValue(new Error('boom'));
+      const res = await app.inject({ method: 'POST', url: '/webhooks/waha', payload: wahaBody() });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'error:crash' });
+    });
+  });
+
+  describe('WEBHOOK_ASYNC ON — ACK-early + processamento em background', () => {
+    beforeEach(() => {
+      configState.webhookAsync = true;
+    });
+
+    it('responde 200 {status:accepted} imediatamente e processa em background com skipDedup', async () => {
+      // handleWebhook segura: o ACK não pode esperar por ele.
+      const handler = deferred<{ status: string }>();
+      handleWebhook.mockReturnValue(handler.promise);
+
+      const res = await app.inject({ method: 'POST', url: '/webhooks/waha', payload: wahaBody() });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'accepted' });
+      // Dedup rodou ANTES do ACK; o background recebeu skipDedup=true.
+      expect(checkAndMarkDuplicate).toHaveBeenCalledTimes(1);
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+      expect(handleWebhook.mock.calls[0]?.[1]).toMatchObject({ skipDedup: true });
+
+      handler.resolve({ status: 'ok' }); // libera a tarefa em voo
+    });
+
+    it('dedup ANTES do ACK: evento duplicado -> 200 {status:ignored:dedup} sem chamar o router', async () => {
+      checkAndMarkDuplicate.mockResolvedValue({ duplicate: true, degraded: false });
+      const res = await app.inject({ method: 'POST', url: '/webhooks/waha', payload: wahaBody() });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ignored:dedup' });
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('semáforo cheio -> 503 {status:busy:retry} (política retry-503; WAHA retenta)', async () => {
+      configState.maxInFlight = 1;
+      const app1 = await makeApp(); // app com maxInFlight=1
+      try {
+        // 1ª mensagem segura o único slot.
+        const slot = deferred<{ status: string }>();
+        handleWebhook.mockReturnValue(slot.promise);
+        const first = await app1.inject({
+          method: 'POST',
+          url: '/webhooks/waha',
+          payload: wahaBody({ payload: { id: 'm1', from: '5535999998888@c.us', body: 'a' } }),
+        });
+        expect(first.statusCode).toBe(200);
+        expect(first.json()).toEqual({ status: 'accepted' });
+
+        // 2ª mensagem (id diferente p/ não cair no dedup) — slot cheio -> 503.
+        const second = await app1.inject({
+          method: 'POST',
+          url: '/webhooks/waha',
+          payload: wahaBody({ payload: { id: 'm2', from: '5535999998888@c.us', body: 'b' } }),
+        });
+        expect(second.statusCode).toBe(503);
+        expect(second.json()).toEqual({ status: 'busy:retry' });
+
+        slot.resolve({ status: 'ok' });
+      } finally {
+        await app1.close();
+      }
+    });
+
+    it('graceful drain: app.close() espera a tarefa em voo terminar', async () => {
+      let release!: () => void;
+      const handled = new Promise<void>((r) => {
+        release = r;
+      });
+      handleWebhook.mockImplementation(async () => {
+        await handled;
+        return { status: 'ok' };
+      });
+
+      const app2 = await makeApp();
+      const res = await app2.inject({ method: 'POST', url: '/webhooks/waha', payload: wahaBody() });
+      expect(res.statusCode).toBe(200);
+
+      // close() dispara o onClose hook (drain). Liberamos a tarefa logo depois.
+      const closing = app2.close();
+      release();
+      await closing; // não deve travar — drena dentro do teto
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
     });
   });
 });

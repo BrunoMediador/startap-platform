@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { logger } from '@startap/core/logger';
+import type { WahaWebhookBody as WahaWebhookBodyType } from '@startap/core/types';
 import { WahaWebhookBody } from '@startap/core/types';
 import { flowExecutionLog } from '@startap/db';
 import type { FastifyPluginAsync, onRequestHookHandler, preValidationHookHandler } from 'fastify';
 import { config } from '../config.js';
+import { AsyncRunner } from '../lib/async-runner.js';
+import { checkAndMarkDuplicate } from '../lib/idempotency.js';
 import {
   WAHA_WEBHOOK_SECRET_HEADER,
   isWahaWebhookAuthorized,
@@ -15,6 +18,11 @@ import { handleWebhook } from '../router.js';
 const log = logger.child({ module: 'webhook-waha' });
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // mesmo bodyLimit do app (server.ts)
+
+// Teto de tempo do drain de tarefas in-flight no shutdown (ADR 0021). Mais
+// generoso que o timeout por tarefa pra dar chance de a LLM em voo terminar; o
+// que não drenar a tempo, a WAHA retenta (nada foi ACKeado lá).
+const DRAIN_TIMEOUT_MS = 10_000;
 
 /**
  * Auth em DUAS camadas, o máximo possível ANTES do parse (P0 security #268 +
@@ -104,7 +112,49 @@ const wahaWebhookParseAndVerify: preValidationHookHandler = async (req, reply) =
   }
 };
 
+/**
+ * Loga o crash de um handleWebhook em flow_execution_logs (LGPD-safe — sem
+ * payload) e devolve um status de erro. Compartilhado pelos caminhos síncrono e
+ * assíncrono: no async, o crash NÃO derruba a request (já respondida), só é
+ * registrado aqui.
+ */
+async function logWebhookCrash(
+  err: unknown,
+  body: WahaWebhookBodyType,
+  ctx: { executionId: string; startedAt: number },
+): Promise<{ status: string }> {
+  log.error({ err }, 'Webhook handler crashed');
+  await flowExecutionLog
+    .logFlowEvent({
+      executionId: ctx.executionId,
+      session: body.session,
+      eventType: 'webhook.crash',
+      status: 'error',
+      message: 'Webhook handler crashed',
+      error: err,
+      durationMs: Date.now() - ctx.startedAt,
+    })
+    .catch((logErr) => log.error({ err: logErr }, 'Falha ao logar webhook.crash'));
+  return { status: 'error:crash' };
+}
+
 export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
+  // Semáforo de concorrência do processamento ASSÍNCRONO (ADR 0021). Instanciado
+  // SEMPRE (limites do config), mas só usado quando WEBHOOK_ASYNC=true. Com a flag
+  // OFF é inerte. Escopado ao plugin — uma instância por processo da API.
+  const asyncRunner = new AsyncRunner({
+    maxInFlight: config.WEBHOOK_MAX_INFLIGHT,
+    taskTimeoutMs: config.WEBHOOK_TASK_TIMEOUT_MS,
+  });
+
+  // Graceful shutdown (ADR 0021): no app.close() (SIGTERM/SIGINT em server.ts), o
+  // runner para de aceitar e drena o in-flight com teto. O que não drenar a tempo,
+  // a WAHA retenta. Com flag OFF não há in-flight → drain é no-op instantâneo.
+  app.addHook('onClose', async () => {
+    const remaining = await asyncRunner.drain(DRAIN_TIMEOUT_MS);
+    log.info({ remaining }, 'Drain de tarefas async concluído');
+  });
+
   // Parser de content-type ESCOPADO a este plugin (mesmo padrão do
   // webhook-abacatepay): entrega o Buffer CRU sem parsear — o HMAC é calculado
   // sobre os bytes exatos e o JSON.parse só acontece APÓS a assinatura validar
@@ -165,25 +215,81 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
         },
       });
 
-      // Processa de forma assíncrona, mas await o resultado pra responder com status
-      // WAHA tem retries; importante retornar 2xx mesmo se ignorarmos a mensagem
-      const result = await handleWebhook(parsed.data, { executionId, startedAt }).catch(
-        async (e) => {
-          log.error({ err: e }, 'Webhook handler crashed');
-          await flowExecutionLog.logFlowEvent({
+      // ── Caminho SÍNCRONO (WEBHOOK_ASYNC OFF, default) ──────────────────────
+      // Comportamento ATUAL byte-a-byte: aguarda handleWebhook e responde com o
+      // status. WAHA tem retries; retornamos 2xx mesmo se ignorarmos a mensagem.
+      // O dedup roda DENTRO de handleWebhook (sem skipDedup), como hoje.
+      if (!config.WEBHOOK_ASYNC) {
+        const result = await handleWebhook(parsed.data, { executionId, startedAt }).catch((e) =>
+          logWebhookCrash(e, parsed.data, { executionId, startedAt }),
+        );
+        return reply.send(result);
+      }
+
+      // ── Caminho ASSÍNCRONO (ADR 0021) ──────────────────────────────────────
+      // ACK-early: responde 200 ao WAHA na hora e processa em background, fora do
+      // ciclo HTTP, sob o semáforo. Sequência obrigatória (ADR 0021): HMAC →
+      // parse → safeParse → DEDUP → ACK 200 → background.
+      //
+      // 1) DEDUP ANTES do ACK. Se a WAHA retentou (timeout/15×3s) e o evento já
+      //    foi visto dentro do TTL, descartamos AQUI e respondemos 200 sem
+      //    enfileirar de novo. É o que torna o ACK-early seguro: sem isto o ACK
+      //    rápido amplia a janela em que o mesmo messageId entra 2x → 2 respostas
+      //    / 2 eventos GCal. Fail-open: Redis down → degraded → processa mesmo
+      //    assim (idempotência nunca cala o bot). O router recebe skipDedup=true
+      //    pra não deduplicar de novo lá dentro.
+      const messageId = parsed.data.payload?.id ?? '';
+      const dedup = await checkAndMarkDuplicate(parsed.data.session, messageId);
+      if (dedup.duplicate) {
+        log.info(
+          { session: parsed.data.session },
+          'Evento duplicado ignorado no ACK-early (dedup)',
+        );
+        await flowExecutionLog
+          .logFlowEvent({
             executionId,
             session: parsed.data.session,
-            eventType: 'webhook.crash',
-            status: 'error',
-            message: 'Webhook handler crashed',
-            error: e,
+            eventType: 'router.ignored',
+            status: 'ignored',
+            message: 'Evento de mensagem duplicado ignorado (dedup ACK-early)',
+            metadata: { reason: 'dedup', event: parsed.data.event },
             durationMs: Date.now() - startedAt,
-          });
-          return { status: 'error:crash' };
+          })
+          .catch((e) => log.error({ err: e }, 'Falha ao logar dedup ACK-early'));
+        return reply.code(200).send({ status: 'ignored:dedup' });
+      }
+
+      // 2) Tenta adquirir um slot no semáforo e agendar o processamento.
+      //    skipDedup=true: o dedup acima já marcou o evento.
+      const scheduled = asyncRunner.schedule(
+        () =>
+          handleWebhook(parsed.data, { executionId, startedAt, skipDedup: true }).then(
+            () => undefined,
+          ),
+        (err) => {
+          // Roda fora do ciclo HTTP (request já respondida); crash só é logado.
+          if (err) void logWebhookCrash(err, parsed.data, { executionId, startedAt });
         },
       );
 
-      return reply.send(result);
+      // 3) SATURADO → política retry-503 (ADR 0021): responde 503 e a WAHA
+      //    retenta (15×3s); a mensagem volta quando houver capacidade e o dedup
+      //    evita duplicar. Nada se perde dentro da janela de retry. Se o pico
+      //    durar mais que isso, é sinal de capacity planning (shard/2ª instância),
+      //    não bug. NÃO enfileiramos em memória — o WAHA é a fila durável.
+      if (!scheduled) {
+        log.warn(
+          { session: parsed.data.session, maxInFlight: config.WEBHOOK_MAX_INFLIGHT },
+          'Webhook saturado — 503 (WAHA retenta)',
+        );
+        return reply.code(503).send({ status: 'busy:retry' });
+      }
+
+      // 4) ACK-early: 200 imediato. O processamento segue em background; bot.started
+      //    /bot.finished e crash são logados de lá. ORDENAÇÃO POR CONVERSA: mensagens
+      //    do mesmo cliente podem ser processadas em paralelo e responder fora de
+      //    ordem (trade-off aceito, ADR 0021 §Risco 3 — raro no volume atual).
+      return reply.code(200).send({ status: 'accepted' });
     },
   );
 };
