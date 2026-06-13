@@ -5716,4 +5716,137 @@ app.delete('/api/alerts/recipients/:id', async (req, res) => {
   }
 });
 
+// ---------- POST /api/alerts/test — dispara UM alerta de teste on-demand ------
+// Onda 2, parte 1 (o "Enviar teste" adiado no #281).
+// Body (opcional): { phone?: string }  — se vier, envia SO pra esse numero;
+//   senao envia pra todos os destinatarios HABILITADOS em alert_recipients.
+//
+// Contrato/decisoes:
+//  - On-demand: funciona MESMO com ALERTS_ENABLED off e alert_config.enabled off.
+//    O objetivo e validar o envio ANTES de ligar o monitoramento (nao usa o cron).
+//  - Remetente: alert_config.sender_slot (default 'startap' = Lola/STARTAP_AI_PROD),
+//    resolvido para a sessao WAHA via bot_config.waha_sessao. Espelha getSenderSession()
+//    de packages/db/src/queries/alerts.ts (painel e JS standalone, sem build-time dep).
+//  - Envio reaproveita WAHA_URL + WAHA_API_KEY (process.env, ja em escopo — sem extrair
+//    segredo de container) batendo no mesmo /api/sendText que packages/integrations usa.
+//  - Anti-abuso: cooldown curto por operador (in-memory) pra o botao nao virar
+//    metralhadora pra Lola. Painel e single-operador; cooldown em memoria basta.
+//  - Erro de WAHA por destinatario NAO derruba a rota: resposta traz sucesso/falha
+//    item a item pra UI mostrar "enviado pro +55... ok".
+
+const ALERTS_TEST_COOLDOWN_MS = 15_000;
+const _alertsTestLastSendByUser = new Map(); // userId -> epoch ms do ultimo envio
+
+// Envia um texto via WAHA reaproveitando a config ja usada pelo painel.
+// Resolve via /api/sendText (mesmo endpoint de packages/integrations/waha/client).
+// timeout explicito (Regra 7) pra nunca aguardar WAHA infinito.
+async function _alertsSendText(sessao, chatId, texto, timeoutMs = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sendText`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
+      body: JSON.stringify({ session: sessao, chatId, text: texto }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) {
+      const detail = await r.text().catch(() => '');
+      throw new Error(`WAHA HTTP ${r.status}${detail ? `: ${detail.slice(0, 160)}` : ''}`);
+    }
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+app.post('/api/alerts/test', async (req, res) => {
+  const userId = req.session?.userId || 'unknown';
+
+  // Cooldown anti-spam por operador.
+  const now = Date.now();
+  const last = _alertsTestLastSendByUser.get(userId) ?? 0;
+  const waitMs = ALERTS_TEST_COOLDOWN_MS - (now - last);
+  if (waitMs > 0) {
+    return res.status(429).json({
+      error: 'aguarde alguns segundos antes de enviar outro teste',
+      retry_after_s: Math.ceil(waitMs / 1000),
+    });
+  }
+
+  try {
+    // 1) Resolve a sessao remetente (sender_slot -> bot_config.waha_sessao).
+    await pool.query(`INSERT INTO alert_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+    const cfg = await pool.query(`SELECT sender_slot FROM alert_config WHERE id = 1`);
+    const senderSlot = cfg.rows[0]?.sender_slot || 'startap';
+    const sess = await pool.query(`SELECT waha_sessao FROM bot_config WHERE slot = $1`, [senderSlot]);
+    const sessao = sess.rows[0]?.waha_sessao || null;
+    if (!sessao) {
+      return res.status(409).json({
+        error: `remetente '${senderSlot}' sem sessao WAHA configurada (bot_config.waha_sessao)`,
+      });
+    }
+
+    // 2) Monta a lista de destinatarios: numero do body (so ele) OU habilitados.
+    let targets; // [{ phone, label }]
+    if (req.body?.phone != null && String(req.body.phone).trim() !== '') {
+      const phone = _alertsNormalizePhone(req.body.phone);
+      if (!ALERTS_PHONE_RE.test(phone)) {
+        return res.status(400).json({ error: 'telefone invalido (E.164 so digitos, 8 a 15 digitos, sem +)' });
+      }
+      targets = [{ phone, label: null }];
+    } else {
+      const r = await pool.query(
+        `SELECT phone, label FROM alert_recipients WHERE enabled = TRUE ORDER BY created_at ASC`,
+      );
+      targets = r.rows;
+    }
+
+    if (targets.length === 0) {
+      return res.status(400).json({ error: 'cadastre ao menos um numero antes de enviar o teste' });
+    }
+
+    // Marca o cooldown ANTES de enviar — evita corrida de duplo-clique.
+    _alertsTestLastSendByUser.set(userId, now);
+
+    const texto =
+      '🔔 Teste de alerta — Startap. Se você recebeu isto, os alertas estão funcionando.';
+
+    // 3) Envia 1 a 1, coletando sucesso/falha sem derrubar a rota.
+    const results = [];
+    for (const t of targets) {
+      const chatId = `${t.phone}@c.us`;
+      try {
+        await _alertsSendText(sessao, chatId, texto);
+        results.push({ phone: t.phone, label: t.label ?? null, ok: true });
+      } catch (err) {
+        results.push({
+          phone: t.phone,
+          label: t.label ?? null,
+          ok: false,
+          error: err?.name === 'AbortError' ? 'timeout ao contatar WAHA' : (err?.message || 'falha no envio'),
+        });
+      }
+    }
+
+    const sent = results.filter((r) => r.ok).length;
+    console.log(JSON.stringify({
+      audit: 'alerts-test-sent', operator: userId, sender_slot: senderSlot,
+      sessao, total: results.length, sent, failed: results.length - sent,
+      at: new Date().toISOString(),
+    }));
+
+    // 200 se ao menos 1 chegou; 502 se TODOS falharam (problema de WAHA/sessao).
+    const status = sent > 0 ? 200 : 502;
+    res.status(status).json({ ok: sent > 0, sender_slot: senderSlot, sessao, sent, total: results.length, results });
+  } catch (e) {
+    // Falha inesperada (ex.: banco) — libera o cooldown pra o operador tentar de novo.
+    _alertsTestLastSendByUser.delete(userId);
+    console.error(JSON.stringify({ at: 'alerts-test', pg_code: e?.code, msg: 'falha ao enviar alerta de teste' }));
+    res.status(500).json({ error: 'erro ao enviar alerta de teste' });
+  }
+});
+
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));
