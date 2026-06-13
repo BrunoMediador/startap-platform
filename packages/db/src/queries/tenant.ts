@@ -40,6 +40,27 @@ export function invalidateTenantCache(slot?: string): void {
 }
 
 /**
+ * READ CUTOVER (ADR 0018, Fase 2b / Passo 3) — flag `TENANT_READ_CUTOVER`.
+ *
+ * OFF (default, ausente/qualquer valor != 'true') = LEITURAS AGREGADAS de
+ * billing/relatório continuam IDÊNTICAS às de hoje (agregam/juntam por `slot`).
+ * ON ('true') = as MESMAS leituras passam a agregar/juntar por `tenant_id`.
+ *
+ * Escopo do cutover: SÓ leitura agregada/billing/relatório (rollup de model_usage,
+ * cross-tabela MRR+uso por cliente). O HOT PATH por-conversa (bot_config/bot_prompt
+ * por slot na resposta ao cliente) NÃO é tocado — continua por `slot` sempre.
+ *
+ * Opcional no boot (lição #247: env nova nunca derruba api/worker). Lida via
+ * process.env no ponto de uso — não há config tipado em @startap/db (este package
+ * lê env direto, como client.ts). Rollback = desligar a flag (volta a ler por slot).
+ *
+ * Injetável (`env`) só para teste — em produção sempre lê `process.env`.
+ */
+export function isTenantReadCutoverEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.TENANT_READ_CUTOVER === 'true';
+}
+
+/**
  * Resolve o `tenant_id` (UUID) de um `slot` via `flow_clones`. Cacheado (TTL 60s).
  *
  * - Slot com clone -> UUID estável do clone.

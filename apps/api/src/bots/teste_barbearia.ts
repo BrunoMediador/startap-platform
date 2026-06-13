@@ -6,6 +6,8 @@ import {
   formatarAgendaComConfig,
   loadScheduleConfig,
 } from '@startap/integrations/scheduling';
+import { config } from '../config.js';
+import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -220,13 +222,43 @@ export class TesteBarbeariaBot extends BotBase {
             };
           }
 
-          const ev = await calClient.createEvent({
-            summary,
-            startISO: start,
-            endISO: end,
-            timeZone: TZ,
-          });
-          this.log.info({ eventId: ev.id, summary: ev.summary, telefone }, 'Agendamento criado');
+          const createEvent = () =>
+            calClient.createEvent({
+              summary,
+              startISO: start,
+              endISO: end,
+              timeZone: TZ,
+            });
+
+          // ── Action-lock (ADR 0019, passo 3) ──────────────────────────────
+          // Flag OFF (default) -> cria o evento direto, IGUAL a hoje.
+          if (!config.IDEMPOTENCY_ACTION_LOCK) {
+            const ev = await createEvent();
+            this.log.info({ eventId: ev.id, summary: ev.summary, telefone }, 'Agendamento criado');
+            return { ok: true, eventId: ev.id, summary: ev.summary };
+          }
+
+          // Flag ON -> envolve a criacao do evento com lock distribuido por
+          // (slot, telefone, inicio). Quem adquire cria; quem nao adquire
+          // entende que a acao ja foi feita por outro processamento e PULA.
+          // Fail-open: Redis down -> cria mesmo assim (degraded=true).
+          const lockKey = gcalActionLockKey(this.slot, telefone, start);
+          const lock = await withActionLock(lockKey, createEvent);
+          if (!lock.executed) {
+            // Acao ja em andamento/feita por outro processamento da mesma
+            // mensagem -> NAO cria 2º evento. Devolve sucesso pro agente para
+            // a conversa nao virar erro nem nova tentativa.
+            this.log.info(
+              { lockKey, telefone },
+              'inserir_agendamento pulado: acao ja em andamento (action-lock)',
+            );
+            return { ok: true, skipped: true };
+          }
+          const ev = lock.value as Awaited<ReturnType<typeof createEvent>>;
+          this.log.info(
+            { eventId: ev.id, summary: ev.summary, telefone, degraded: lock.degraded },
+            'Agendamento criado',
+          );
           return { ok: true, eventId: ev.id, summary: ev.summary };
         },
       },
