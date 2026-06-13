@@ -11,18 +11,25 @@
  * por tempo infinito).
  */
 
-const WAHA_URL = process.env.WAHA_URL ?? 'http://waha:3000';
+import { DEFAULT_WAHA_SHARD_ID, resolveWahaUrl } from './shard.js';
+
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 
 /** Timeout default (ms) por chamada WAHA. */
 export const DEFAULT_WAHA_TIMEOUT_MS = 8_000;
 
-/** Opções comuns a toda chamada WAHA: timeout e/ou um AbortSignal externo. */
+/** Opções comuns a toda chamada WAHA: timeout, AbortSignal externo e/ou shard. */
 export interface WahaCallOpts {
   /** Timeout por chamada (ms). Default DEFAULT_WAHA_TIMEOUT_MS. */
   timeoutMs?: number;
   /** Signal externo (ex.: encadear um deadline maior do orquestrador). */
   signal?: AbortSignal;
+  /**
+   * Shard do container WAHA da sessão (ADR 0020). Opcional; default shard 0
+   * (`automacoes-waha-1`). Com a flag `WAHA_SHARDING` OFF é ignorado — sempre a
+   * WAHA_URL única de hoje. Resolvido por chamada em wahaFetch.
+   */
+  shardId?: number;
 }
 
 /**
@@ -111,8 +118,10 @@ function buildSignal(opts: WahaCallOpts | undefined): {
 /** fetch com timeout/abort embutido. Lança WahaTimeoutError se estourar o tempo. */
 async function wahaFetch(path: string, init: RequestInit, opts?: WahaCallOpts): Promise<Response> {
   const { signal, cleanup, timedOut } = buildSignal(opts);
+  // Resolve a URL base por shard (ADR 0020). Flag OFF -> WAHA_URL única de hoje.
+  const base = resolveWahaUrl(opts?.shardId ?? DEFAULT_WAHA_SHARD_ID);
   try {
-    return await fetch(`${WAHA_URL}${path}`, { ...init, signal });
+    return await fetch(`${base}${path}`, { ...init, signal });
   } catch (err) {
     if (timedOut() || (err instanceof Error && err.name === 'AbortError')) {
       throw new WahaTimeoutError(path, opts?.timeoutMs ?? DEFAULT_WAHA_TIMEOUT_MS);

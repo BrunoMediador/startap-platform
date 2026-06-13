@@ -4,14 +4,27 @@
  * Substitui os nós "WAHA → Send a text message", "Start/Stop Typing", "Send Seen".
  */
 import { logger } from '@startap/core/logger';
+import { DEFAULT_WAHA_SHARD_ID, resolveWahaUrl } from './shard.js';
 
-const WAHA_URL = process.env.WAHA_URL ?? 'http://waha:3000';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 
 const log = logger.child({ module: 'waha' });
 
-async function wahaPost<T = unknown>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${WAHA_URL}${path}`, {
+/**
+ * Resolve a URL base do WAHA para o shard (ADR 0020). Com a flag `WAHA_SHARDING`
+ * OFF (default) IGNORA o shardId e devolve a WAHA_URL única de hoje — comportamento
+ * idêntico ao de antes do sharding. shardId default = shard 0 (`automacoes-waha-1`).
+ */
+function wahaUrl(shardId: number = DEFAULT_WAHA_SHARD_ID): string {
+  return resolveWahaUrl(shardId);
+}
+
+async function wahaPost<T = unknown>(
+  path: string,
+  body: unknown,
+  shardId: number = DEFAULT_WAHA_SHARD_ID,
+): Promise<T> {
+  const res = await fetch(`${wahaUrl(shardId)}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': WAHA_API_KEY },
     body: JSON.stringify(body),
@@ -32,30 +45,52 @@ export interface SendTextOpts {
   typing?: boolean;
   /** Delay artificial em ms antes de enviar (humaniza). */
   delayMs?: number;
+  /**
+   * Shard do container WAHA da sessão (ADR 0020). Opcional; default shard 0
+   * (`automacoes-waha-1`, onde tudo vive hoje). Com a flag `WAHA_SHARDING` OFF é
+   * ignorado — sempre a WAHA_URL única de hoje.
+   */
+  shardId?: number;
 }
 
 export async function sendText(opts: SendTextOpts): Promise<void> {
-  const { sessao, chatId, texto, typing = true, delayMs = 0 } = opts;
-  if (typing) await startTyping(sessao, chatId);
+  const { sessao, chatId, texto, typing = true, delayMs = 0, shardId = DEFAULT_WAHA_SHARD_ID } = opts;
+  if (typing) await startTyping(sessao, chatId, shardId);
   if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
-  await wahaPost('/api/sendText', {
-    session: sessao,
-    chatId,
-    text: texto,
-  });
-  if (typing) await stopTyping(sessao, chatId);
+  await wahaPost(
+    '/api/sendText',
+    {
+      session: sessao,
+      chatId,
+      text: texto,
+    },
+    shardId,
+  );
+  if (typing) await stopTyping(sessao, chatId, shardId);
 }
 
-export async function startTyping(sessao: string, chatId: string): Promise<void> {
-  await wahaPost('/api/startTyping', { session: sessao, chatId }).catch(() => {});
+export async function startTyping(
+  sessao: string,
+  chatId: string,
+  shardId: number = DEFAULT_WAHA_SHARD_ID,
+): Promise<void> {
+  await wahaPost('/api/startTyping', { session: sessao, chatId }, shardId).catch(() => {});
 }
 
-export async function stopTyping(sessao: string, chatId: string): Promise<void> {
-  await wahaPost('/api/stopTyping', { session: sessao, chatId }).catch(() => {});
+export async function stopTyping(
+  sessao: string,
+  chatId: string,
+  shardId: number = DEFAULT_WAHA_SHARD_ID,
+): Promise<void> {
+  await wahaPost('/api/stopTyping', { session: sessao, chatId }, shardId).catch(() => {});
 }
 
-export async function sendSeen(sessao: string, chatId: string): Promise<void> {
-  await wahaPost('/api/sendSeen', { session: sessao, chatId }).catch(() => {});
+export async function sendSeen(
+  sessao: string,
+  chatId: string,
+  shardId: number = DEFAULT_WAHA_SHARD_ID,
+): Promise<void> {
+  await wahaPost('/api/sendSeen', { session: sessao, chatId }, shardId).catch(() => {});
 }
 
 /** Envia mídia por URL (vídeo, imagem). */
@@ -65,6 +100,8 @@ export async function sendMedia(opts: {
   url: string;
   caption?: string;
   type: 'video' | 'image' | 'file';
+  /** Shard do container WAHA (ADR 0020). Default shard 0. Ignorado com flag OFF. */
+  shardId?: number;
 }): Promise<void> {
   const endpoint =
     opts.type === 'video'
@@ -72,12 +109,16 @@ export async function sendMedia(opts: {
       : opts.type === 'image'
         ? '/api/sendImage'
         : '/api/sendFile';
-  await wahaPost(endpoint, {
-    session: opts.sessao,
-    chatId: opts.chatId,
-    file: { url: opts.url },
-    caption: opts.caption,
-  });
+  await wahaPost(
+    endpoint,
+    {
+      session: opts.sessao,
+      chatId: opts.chatId,
+      file: { url: opts.url },
+      caption: opts.caption,
+    },
+    opts.shardId ?? DEFAULT_WAHA_SHARD_ID,
+  );
 }
 
 /** Baixa mídia (áudio/imagem) recebida — usa o campo media.url do payload WAHA.
@@ -85,17 +126,21 @@ export async function sendMedia(opts: {
  *  (WAHA serializa media.url como "http://localhost:3000/api/files/..." se
  *  referenciando a si proprio; dentro do nosso container "localhost" eh a
  *  api, nao o WAHA — entao reescrevemos o host pro WAHA_URL do docker net). */
-export async function downloadMedia(url: string): Promise<Buffer> {
+export async function downloadMedia(
+  url: string,
+  shardId: number = DEFAULT_WAHA_SHARD_ID,
+): Promise<Buffer> {
   if (!url) throw new Error('Download media failed: URL vazia');
+  const base = wahaUrl(shardId);
   let fullUrl: string;
   const localhostMatch = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.exec(url);
   if (localhostMatch) {
     const pathAndQuery = localhostMatch[3] ?? '/';
-    fullUrl = `${WAHA_URL}${pathAndQuery}`;
+    fullUrl = `${base}${pathAndQuery}`;
   } else if (/^https?:\/\//i.test(url)) {
     fullUrl = url;
   } else {
-    fullUrl = `${WAHA_URL}${url.startsWith('/') ? '' : '/'}${url}`;
+    fullUrl = `${base}${url.startsWith('/') ? '' : '/'}${url}`;
   }
   const res = await fetch(fullUrl, { headers: { 'X-Api-Key': WAHA_API_KEY } });
   if (!res.ok) throw new Error(`Download media failed: HTTP ${res.status} (url=${fullUrl.slice(0, 80)})`);
