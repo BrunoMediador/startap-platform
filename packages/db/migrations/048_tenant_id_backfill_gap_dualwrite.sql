@@ -1,4 +1,4 @@
--- Migration 047: backfill pontual de tenant_id nas satélites — fecha o GAP de
+-- Migration 048: backfill pontual de tenant_id nas satélites — fecha o GAP de
 -- escrita entre a migration 045 (Fase 1, backfill único) e o deploy do #287
 -- (dual-write em produção). ADR 0018, Fase 2.
 --
