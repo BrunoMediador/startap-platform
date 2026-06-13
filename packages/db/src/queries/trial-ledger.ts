@@ -188,13 +188,17 @@ export async function startTrial(input: {
       [input.phoneHmac, input.phoneHint, input.slot, input.notes ?? null],
     );
 
+    // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+    // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
     const billing = await client.query<{ next_due_date: string }>(
-      `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at)
-       VALUES ($1, (NOW() AT TIME ZONE 'utc')::date + $2::int, 'active', NOW(), NOW())
+      `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at, tenant_id)
+       VALUES ($1, (NOW() AT TIME ZONE 'utc')::date + $2::int, 'active', NOW(), NOW(),
+               (SELECT tenant_id FROM flow_clones WHERE slot = $1))
        ON CONFLICT (slot) DO UPDATE SET
          next_due_date = COALESCE(client_billing.next_due_date,
                                   (NOW() AT TIME ZONE 'utc')::date + $2::int),
-         updated_at    = NOW()
+         updated_at    = NOW(),
+         tenant_id     = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)
        RETURNING to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date`,
       [input.slot, days],
     );
@@ -290,12 +294,16 @@ export async function blockTrial(input: { slot: string; reason?: string }): Prom
     );
 
     // Abre a janela de PIX: vencido hoje => podeGerarPix (ADR 0014).
+    // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+    // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
     await client.query(
-      `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at)
-       VALUES ($1, (NOW() AT TIME ZONE 'utc')::date, 'active', NOW(), NOW())
+      `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at, tenant_id)
+       VALUES ($1, (NOW() AT TIME ZONE 'utc')::date, 'active', NOW(), NOW(),
+               (SELECT tenant_id FROM flow_clones WHERE slot = $1))
        ON CONFLICT (slot) DO UPDATE SET
          next_due_date = COALESCE(client_billing.next_due_date, (NOW() AT TIME ZONE 'utc')::date),
-         updated_at    = NOW()`,
+         updated_at    = NOW(),
+         tenant_id     = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)`,
       [input.slot],
     );
 

@@ -89,15 +89,19 @@ export async function upsertBilling(input: {
   status?: BillingStatus;
   notes?: string | null;
 }): Promise<ClientBillingRow> {
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert. Não-quente.
   const r = await query<ClientBillingRow>(
-    `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes, created_at, updated_at)
-     VALUES ($1, $2, $3, COALESCE($4, 'active'), $5, NOW(), NOW())
+    `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes, created_at, updated_at, tenant_id)
+     VALUES ($1, $2, $3, COALESCE($4, 'active'), $5, NOW(), NOW(),
+       (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      ON CONFLICT (slot) DO UPDATE SET
        next_due_date = COALESCE($2, client_billing.next_due_date),
        amount_cents  = COALESCE($3, client_billing.amount_cents),
        status        = COALESCE($4, client_billing.status),
        notes         = COALESCE($5, client_billing.notes),
-       updated_at    = NOW()
+       updated_at    = NOW(),
+       tenant_id     = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)
      RETURNING slot,
                to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
                amount_cents, last_payment_at, status, notes, created_at, updated_at`,
@@ -128,14 +132,18 @@ export async function registerPayment(input: {
   const base = current?.next_due_date ?? input.baseDate ?? new Date().toISOString().slice(0, 10);
   const newDue = advanceDueDate(base, cycleMonths);
 
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert. Não-quente.
   const r = await query<ClientBillingRow>(
-    `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at)
-     VALUES ($1, $2, 'active', NOW(), NOW(), NOW())
+    `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at, tenant_id)
+     VALUES ($1, $2, 'active', NOW(), NOW(), NOW(),
+       (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      ON CONFLICT (slot) DO UPDATE SET
        next_due_date   = $2,
        status          = 'active',
        last_payment_at = NOW(),
-       updated_at      = NOW()
+       updated_at      = NOW(),
+       tenant_id       = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)
      RETURNING slot,
                to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
                amount_cents, last_payment_at, status, notes, created_at, updated_at`,

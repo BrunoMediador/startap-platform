@@ -20,6 +20,7 @@ export * as billingCharges from './queries/billing-charges.js';
 export * as billingWebhookEvents from './queries/billing-webhook-events.js';
 export * as trialLedger from './queries/trial-ledger.js';
 export * as alerts from './queries/alerts.js';
+export * as tenant from './queries/tenant.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';

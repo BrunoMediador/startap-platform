@@ -112,10 +112,13 @@ export async function getCourseBySlug(
  * Cria um curso. Lança erro 'UNIQUE_VIOLATION' se course_slug já existe no slot.
  */
 export async function createCourse(input: CreateCourseInput): Promise<BotCourseRow> {
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
     `INSERT INTO bot_courses
-       (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+       (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at, tenant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(),
+        (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      RETURNING *`,
     [
       input.slot,

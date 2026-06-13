@@ -69,11 +69,14 @@ export async function upsertMedia(input: {
   course_slug?: string | null;
   is_course_intro?: boolean;
 }): Promise<BotMediaRow> {
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
   const r = await query<BotMediaRow & { id: string; position_order: string }>(
     `INSERT INTO bot_media
        (slot, position, media_type, url, caption, context, position_order, enabled,
-        course_slug, is_course_intro, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        course_slug, is_course_intro, updated_at, tenant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
+        (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      ON CONFLICT (slot, position) DO UPDATE SET
        media_type     = EXCLUDED.media_type,
        url            = EXCLUDED.url,
@@ -83,7 +86,8 @@ export async function upsertMedia(input: {
        enabled        = EXCLUDED.enabled,
        course_slug    = EXCLUDED.course_slug,
        is_course_intro = EXCLUDED.is_course_intro,
-       updated_at     = NOW()
+       updated_at     = NOW(),
+       tenant_id      = COALESCE(bot_media.tenant_id, EXCLUDED.tenant_id)
      RETURNING *`,
     [
       input.slot,
