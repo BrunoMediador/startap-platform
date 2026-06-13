@@ -119,14 +119,33 @@ function Wordmark() {
 function Header() {
   return (
     <header className="sticky top-0 z-10 border-b border-line-soft bg-bg/80 backdrop-blur-md">
-      <div className="mx-auto flex h-[64px] w-full max-w-[1040px] items-center justify-between px-5">
-        <Wordmark />
+      <div className="mx-auto flex h-[64px] w-full max-w-[1040px] items-center justify-between gap-3 px-5">
+        {/* Logo clicável: volta pra home (raiz pública / landing). */}
         <Link
-          href="/login"
-          className={`inline-flex h-10 items-center justify-center rounded-btn border border-line-strong bg-surface px-5 font-display text-[14px] font-semibold text-ink transition-colors duration-[120ms] hover:border-brand/60 hover:bg-surface-hover ${FOCUS_RING}`}
+          href="/"
+          aria-label="Startap — ir para o início"
+          className={`inline-flex items-center rounded-[6px] ${FOCUS_RING}`}
         >
-          Entrar
+          <Wordmark />
         </Link>
+
+        {/* Ações do topo: Criar conta (CTA primário) + Entrar (secundário/outline).
+            O vendedor cria a conta na hora com o cliente, então o primário leva
+            pro mesmo destino do "Quero testar grátis" (/cadastro). */}
+        <nav aria-label="Acesso" className="flex items-center gap-2 sm:gap-2.5">
+          <Link
+            href="/login"
+            className={`inline-flex h-10 items-center justify-center rounded-btn border border-line-strong bg-surface px-4 font-display text-[14px] font-semibold text-ink transition-colors duration-[120ms] hover:border-brand/60 hover:bg-surface-hover sm:px-5 ${FOCUS_RING}`}
+          >
+            Entrar
+          </Link>
+          <Link
+            href="/cadastro"
+            className={`inline-flex h-10 items-center justify-center rounded-btn bg-brand px-4 font-display text-[14px] font-semibold text-bg transition-[transform,background-color] duration-[120ms] hover:bg-brand-600 active:scale-[0.985] active:bg-brand-700 sm:px-5 ${FOCUS_RING}`}
+          >
+            Criar conta
+          </Link>
+        </nav>
       </div>
     </header>
   );
