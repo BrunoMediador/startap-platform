@@ -14,6 +14,7 @@ import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
+import { runMonitor } from './jobs/monitor.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -255,6 +256,63 @@ async function main() {
       }
     },
   );
+
+  // Monitor de alertas internos (Missão 021, Fase 1) — camada 1 do rollout:
+  // SÓ registra o cron se ALERTS_ENABLED=true (default OFF). Com a env ausente o
+  // worker sobe normal e este cron NÃO existe (zero chamada a WAHA/health/envio).
+  // Camada 2 (toggle quente alert_config.enabled) vive no próprio runMonitor.
+  // A cada 2 min (ALERTS_CRON, default */2). Padrão inválido cai no fallback.
+  if (config.ALERTS_ENABLED) {
+    log.info(
+      { cron: config.ALERTS_CRON },
+      'monitor de alertas: cron registrado (ALERTS_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.ALERTS_CRON,
+      '*/2 * * * *',
+      { name: 'monitor', timezone: 'America/Sao_Paulo' },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let monitorResult: Awaited<ReturnType<typeof runMonitor>> | null = null;
+        let monitorError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:monitor',
+          flowName: 'monitor',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job monitor iniciado',
+        });
+        try {
+          monitorResult = await runMonitor();
+          // Com o toggle de banco OFF (skipped) ou tudo UP/silêncio, fica mudo.
+          if (monitorResult.sent > 0 || monitorResult.down > 0 || monitorResult.suppressed > 0) {
+            log.warn({ ...monitorResult }, 'monitor: atividade neste ciclo');
+          }
+        } catch (e) {
+          monitorError = e;
+          log.error({ err: e }, 'monitor crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:monitor',
+            flowName: 'monitor',
+            bot: 'worker',
+            eventType: monitorError ? 'worker.job-failed' : 'worker.job-finished',
+            status: monitorError ? 'error' : 'success',
+            message: monitorError ? 'Job monitor falhou' : 'Job monitor concluído',
+            ...(monitorResult ? { metadata: monitorResult } : {}),
+            ...(monitorError ? { error: monitorError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('monitor de alertas: ALERTS_ENABLED ausente/false — cron NÃO registrado');
+  }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
