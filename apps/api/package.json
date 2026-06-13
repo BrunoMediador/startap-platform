@@ -15,6 +15,7 @@
     "@startap/integrations": "*",
     "fastify": "^5.2.0",
     "@fastify/sensible": "^6.0.2",
+    "ioredis": "^5.4.2",
     "zod": "^3.23.8"
   }
 }

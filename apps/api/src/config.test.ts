@@ -86,6 +86,29 @@ describe('ConfigSchema', () => {
     expect(result.DEEPSEEK_API_KEY).toBe('ds-key');
   });
 
+  it('IDEMPOTENCY_DEDUP ausente => false (flag OFF, boot nao falha) — ADR 0019', () => {
+    // Regra dura: env nova NUNCA derruba o boot (licao #247). Ausente = OFF.
+    const result = ConfigSchema.parse(VALID_BASE);
+    expect(result.IDEMPOTENCY_DEDUP).toBe(false);
+    expect(result.IDEMPOTENCY_DEDUP_TTL_SECONDS).toBe(300);
+    expect(result.IDEMPOTENCY_REDIS_TIMEOUT_MS).toBe(500);
+    expect(result.REDIS_PASSWORD).toBeUndefined();
+  });
+
+  it('IDEMPOTENCY_DEDUP=true => true; TTL/timeout customizaveis', () => {
+    const result = ConfigSchema.parse({
+      ...VALID_BASE,
+      IDEMPOTENCY_DEDUP: 'true',
+      IDEMPOTENCY_DEDUP_TTL_SECONDS: '120',
+      IDEMPOTENCY_REDIS_TIMEOUT_MS: '250',
+      REDIS_PASSWORD: 'r3dis',
+    });
+    expect(result.IDEMPOTENCY_DEDUP).toBe(true);
+    expect(result.IDEMPOTENCY_DEDUP_TTL_SECONDS).toBe(120);
+    expect(result.IDEMPOTENCY_REDIS_TIMEOUT_MS).toBe(250);
+    expect(result.REDIS_PASSWORD).toBe('r3dis');
+  });
+
   it('coerce CHAT_MEMORY_RETENTION de string para number', () => {
     const result = ConfigSchema.parse({ ...VALID_BASE, CHAT_MEMORY_RETENTION: '60' });
     expect(result.CHAT_MEMORY_RETENTION).toBe(60);
