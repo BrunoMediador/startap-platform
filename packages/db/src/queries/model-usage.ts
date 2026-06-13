@@ -1,5 +1,6 @@
 import { query } from '../client.js';
 import type { Provider } from './bot-config.js';
+import { resolveTenantId } from './tenant.js';
 
 /**
  * model_usage — log de cada chamada ao LLM, com tokens e custo estimado.
@@ -59,10 +60,15 @@ export interface LogUsageInput {
 
 export async function logUsage(input: LogUsageInput): Promise<void> {
   const cost = estimateCost(input.model, input.prompt, input.completion);
+  // Dual-write tenant_id (ADR 0018, Fase 2). HOT PATH: resolveTenantId é cacheado
+  // (TTL 60s por slot) — no pior caso 1 SELECT por slot/TTL, NUNCA 1 por chamada de
+  // LLM. Fail-safe: resolução nunca lança; null grava tenant_id NULL (slot de
+  // plataforma como `startap`/`teste_barbearia` resolve null de propósito).
+  const tenantId = await resolveTenantId(input.slot);
   await query(
     `INSERT INTO model_usage
-       (slot, project_id, flow_id, provider, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, telefone)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (slot, project_id, flow_id, provider, model, prompt_tokens, completion_tokens, total_tokens, cost_usd, telefone, tenant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       input.slot,
       input.projectId ?? null,
@@ -74,6 +80,7 @@ export async function logUsage(input: LogUsageInput): Promise<void> {
       input.total,
       cost,
       input.telefone ?? null,
+      tenantId,
     ],
   );
 }

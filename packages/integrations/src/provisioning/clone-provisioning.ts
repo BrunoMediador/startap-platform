@@ -303,9 +303,14 @@ export async function regerarPromptClone(
       cloneRow.servicos,
       cloneRow.display_name ?? undefined,
     );
+    // Dual-write tenant_id (ADR 0018, Fase 2): roda após o COMMIT do
+    // createCloneRecords, então o clone já existe — subselect resolve o UUID.
+    // NULL-safe se não houver linha.
     await db.query(
-      `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
+      `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
+       VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+       ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
+         tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
       [cloneRow.slot, prompt],
     );
     return { ok: true, prompt };
@@ -767,6 +772,22 @@ export async function createCloneRecords(
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
       ],
     );
+
+    // Dual-write tenant_id (ADR 0018, Fase 2): as satélites (bot_config/prompt/media)
+    // foram inseridas ANTES de flow_clones existir (o UUID nasce no INSERT acima, do
+    // DEFAULT gen_random_uuid()). Carimba o tenant_id recém-gerado nelas DENTRO da
+    // mesma transação (atômico). Idempotente (guard tenant_id IS NULL). Fail-safe: se
+    // ficar NULL, o backfill da migration 045 / próximo write cobre — nunca derruba o
+    // provisioning do trial.
+    const newTenantId = (cloneR.rows[0] as { tenant_id?: string }).tenant_id ?? null;
+    if (newTenantId) {
+      for (const tbl of ['bot_config', 'bot_prompt', 'bot_media', 'bot_courses'] as const) {
+        await client.query(
+          `UPDATE ${tbl} SET tenant_id = $1 WHERE slot = $2 AND tenant_id IS NULL`,
+          [newTenantId, input.novoSlot],
+        );
+      }
+    }
 
     await client.query('COMMIT');
     const row = cloneR.rows[0] as CloneRowLike & Record<string, unknown>;

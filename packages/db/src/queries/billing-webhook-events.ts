@@ -221,14 +221,18 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
       ? advanceFromMaxDue(currentDue, new Date(), cycleMonths)
       : advanceDueDate(currentDue ?? new Date().toISOString().slice(0, 10), cycleMonths);
 
+    // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+    // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
     await client.query(
-      `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at)
-       VALUES ($1, $2, 'active', NOW(), NOW(), NOW())
+      `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at, tenant_id)
+       VALUES ($1, $2, 'active', NOW(), NOW(), NOW(),
+         (SELECT tenant_id FROM flow_clones WHERE slot = $1))
        ON CONFLICT (slot) DO UPDATE SET
          next_due_date   = $2,
          status          = 'active',
          last_payment_at = NOW(),
-         updated_at      = NOW()`,
+         updated_at      = NOW(),
+         tenant_id       = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)`,
       [charge.slot, newDue],
     );
 

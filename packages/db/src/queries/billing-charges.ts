@@ -76,9 +76,11 @@ export async function insertPendingChargeIfAbsent(input: {
   externalId: string;
   amountCents: number;
 }): Promise<{ row: BillingChargeRow; created: boolean }> {
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
   const ins = await query<BillingChargeRow>(
-    `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status)
-     VALUES ($1, $2, $3, $4, 'pending')
+    `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status, tenant_id)
+     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      ON CONFLICT (slot, cycle) DO NOTHING
      RETURNING ${COLUMNS}`,
     [input.slot, input.cycle, input.externalId, input.amountCents],
@@ -250,9 +252,11 @@ export async function insertPendingCharge(
     amountCents: number;
   },
 ): Promise<BillingChargeRow> {
+  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
+  // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
   const r = await client.query<BillingChargeRow>(
-    `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status)
-     VALUES ($1, $2, $3, $4, 'pending')
+    `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status, tenant_id)
+     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $1))
      RETURNING ${COLUMNS}`,
     [input.slot, input.cycle, input.externalId, input.amountCents],
   );

@@ -25,10 +25,14 @@ export async function getPrompt(slot: string): Promise<string | null> {
 }
 
 export async function setPrompt(slot: string, prompt: string): Promise<void> {
+  // Dual-write tenant_id (ADR 0018, Fase 2). Subselect inline em flow_clones:
+  // atômico e resolve NULL sozinho quando o slot não tem clone (matriz/plataforma)
+  // — nunca derruba o INSERT. Caminho não-quente (painel/provisioning).
   await query(
-    `INSERT INTO bot_prompt (slot, prompt, updated_at)
-     VALUES ($1, $2, NOW())
-     ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
+    `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
+     VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+     ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
+       tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
     [slot, prompt],
   );
   cache.delete(slot);

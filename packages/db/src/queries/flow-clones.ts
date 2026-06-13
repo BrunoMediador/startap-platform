@@ -5,6 +5,7 @@
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
 import { pool, query } from '../client.js';
+import { invalidateTenantCache } from './tenant.js';
 
 export type CloneStatus =
   | 'rascunho'
@@ -38,6 +39,13 @@ export interface ServicoConfig {
 export interface CloneRow {
   id: number;
   slot: string;
+  /**
+   * Identidade UUID do tenant (ADR 0018). Âncora canônica; gerado por DEFAULT
+   * gen_random_uuid() na criação do clone (migration 045). NOT NULL no banco para
+   * flow_clones — opcional no tipo só pra rows de SELECTs que não pedem a coluna
+   * (não quebra os normalizeCloneRow existentes). Dual-write Fase 2.
+   */
+  tenant_id?: string;
   matriz_slot: string;
   display_name: string;
   cliente_nome: string | null;
@@ -257,7 +265,23 @@ export async function createClone(input: {
       [slug, matrizSlot, displayName, clienteNome ?? null, clienteTelefone ?? null, JSON.stringify(personalizacao)],
     );
 
+    // Dual-write tenant_id (ADR 0018, Fase 2): as satélites acima foram inseridas
+    // ANTES de flow_clones existir (o UUID nasce aqui, do DEFAULT gen_random_uuid()).
+    // Carimba o tenant_id recém-gerado nelas DENTRO da mesma transação (atômico).
+    // Idempotente (guard tenant_id IS NULL). Fail-safe: se ficar NULL, o backfill da
+    // migration 045 / próximo write cobre — nunca derruba a criação do clone.
+    const newTenantId = (cloneRes.rows[0] as unknown as { tenant_id?: string }).tenant_id ?? null;
+    if (newTenantId) {
+      for (const tbl of ['bot_config', 'bot_prompt', 'bot_media', 'bot_courses'] as const) {
+        await client.query(`UPDATE ${tbl} SET tenant_id = $1 WHERE slot = $2 AND tenant_id IS NULL`, [
+          newTenantId,
+          slug,
+        ]);
+      }
+    }
+
     await client.query('COMMIT');
+    invalidateTenantCache(slug);
     return normalizeCloneRow(cloneRes.rows[0]);
   } catch (e) {
     await client.query('ROLLBACK');
@@ -368,10 +392,13 @@ export async function updateClone(
       );
       if (promptRes.rows[0]) {
         const novo = applyPersonalizacao(promptRes.rows[0].prompt, personalizacao);
+        // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline — o clone já
+        // existe aqui, então resolve o UUID. NULL-safe se não houver linha.
         await query(
-          `INSERT INTO bot_prompt (slot, prompt, updated_at)
-           VALUES ($1, $2, NOW())
-           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW()`,
+          `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
+           VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
+             tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
           [row.slot, novo],
         );
       }
@@ -436,6 +463,7 @@ export async function deleteClone(id: number): Promise<{ slot: string; waha_sess
   }
 
   invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
+  invalidateTenantCache(row.slot);
   return { slot: row.slot, waha_sessao: row.waha_sessao };
 }
 
