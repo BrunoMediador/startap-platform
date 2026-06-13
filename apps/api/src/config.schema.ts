@@ -45,6 +45,22 @@ export const ConfigSchema = z.object({
 
   WHISPER_URL: z.string().url(),
 
+  // ── Provider de transcrição de áudio (ADR 0021) ────────────────────────────
+  // Flag-gated, default 'local' = comportamento ATUAL idêntico (Whisper :9000).
+  // 'openai' roteia o áudio pra OpenAI audio.transcriptions.create (mesma chave
+  // OPENAI_API_KEY do chat). Lida em RUNTIME no integrations, NÃO valida no boot
+  // como obrigatória (lição #247: env nova nunca derruba api/worker). O enum aqui
+  // só documenta/valida o formato quando presente. Permite desligar o Whisper
+  // local depois (libera ~1.3 GiB RAM + 2 vCPU da VPS — ver capacidade-vps).
+  TRANSCRIBE_PROVIDER: z.enum(['local', 'openai']).optional(),
+  // Modelo de transcrição OpenAI. Default gpt-4o-mini-transcribe (~US$0.003/min,
+  // metade do whisper-1, melhor qualidade PT-BR). Ajustável sem deploy.
+  OPENAI_TRANSCRIBE_MODEL: z.string().optional(),
+  // Timeout da chamada de transcrição OpenAI (ms).
+  OPENAI_TRANSCRIBE_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  // Se 'false', NÃO cai pro Whisper local quando a OpenAI falhar (default cai).
+  TRANSCRIBE_OPENAI_FALLBACK_LOCAL: z.enum(['true', 'false']).optional(),
+
   OPENAI_API_KEY: z.string(),
   OPENAI_MODEL: z.string().default('gpt-5.4'),
   AGENT_HISTORY_MAX_CHARS: z.coerce.number().int().positive().default(12000),

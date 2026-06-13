@@ -5,45 +5,77 @@ import { isTenantReadCutoverEnabled, resolveTenantId } from './tenant.js';
 /**
  * model_usage — log de cada chamada ao LLM, com tokens e custo estimado.
  *
- * Pricing em USD por 1M tokens. Fonte oficial: https://openai.com/api/pricing
- *   gpt-4o            → in: $2.50, out: $10.00  (oficial, mai/2024)
- *   gpt-4o-mini       → in: $0.15, out: $0.60   (oficial, jul/2024)
- *   gpt-4-turbo       → in: $10.00, out: $30.00 (oficial)
- *   gpt-3.5-turbo     → in: $0.50, out: $1.50   (oficial)
- *   gpt-5.4           → in: $5.00, out: $20.00  (ESTIMATIVA — OpenAI nao publicou pricing oficial)
- *   deepseek-chat     → in: $0.27, out: $1.10   (oficial deepseek.com)
- *   deepseek-reasoner → in: $0.55, out: $2.19   (oficial deepseek.com)
+ * Pricing em USD por 1M tokens. Fonte oficial: https://openai.com/api/docs/pricing
+ * (confirmado em 2026-06-13). `cached` = preço do input em cache-hit (prompt
+ * caching automático >= 1024 tokens), ~10x mais barato que o input normal.
+ *   gpt-4o            → in: $2.50,  cached: $1.25,  out: $10.00
+ *   gpt-4o-mini       → in: $0.15,  cached: $0.075, out: $0.60
+ *   gpt-4-turbo       → in: $10.00,                 out: $30.00 (sem cache)
+ *   gpt-3.5-turbo     → in: $0.50,                  out: $1.50  (sem cache)
+ *   gpt-5.4           → in: $2.50,  cached: $0.25,  out: $15.00 (OFICIAL — 2026-06-13)
+ *   gpt-5.5           → in: $5.00,  cached: $0.50,  out: $30.00 (OFICIAL — 2026-06-13)
+ *   deepseek-chat     → in: $0.27,                  out: $1.10  (oficial deepseek.com)
+ *   deepseek-reasoner → in: $0.55,                  out: $2.19  (oficial deepseek.com)
+ *
+ * BUG corrigido (ADR 0021): o `cost_usd` superestimava ~70x a conta REAL da
+ * OpenAI. Três erros multiplicativos, do mais ao menos grave:
+ *   1. CACHING IGNORADO (dominante): nosso uso é input-dominado (agenda GCal
+ *      re-injetada por turno = prefixo estável, sempre cache-hit). O código
+ *      antigo cobrava TODO input à tarifa cheia; o real é ~10x menor na parte
+ *      cacheada. `cached_tokens` (subconjunto de prompt) agora é cobrado à
+ *      tarifa `cached`.
+ *   2. PREÇO DE INPUT ERRADO: gpt-5.4 estava como $5.00 (estimativa); o oficial
+ *      é $2.50 → 2x de inflação.
+ *   3. PREÇO DE OUTPUT ERRADO: estava $20.00; o oficial é $15.00 → 1.33x.
  */
 
 export interface PriceTable {
-  /** USD per 1M input tokens */
+  /** USD per 1M input tokens (uncached) */
   in: number;
   /** USD per 1M output tokens */
   out: number;
   /**
-   * true quando o pricing nao tem fonte oficial publicada pelo provedor —
-   * frontend deve exibir aviso "~ valor estimado, atualizar quando OpenAI publicar".
+   * USD per 1M cached input tokens (prompt caching cache-hit). Ausente = modelo
+   * sem caching; cache-hits caem para a tarifa `in` normal.
+   */
+  cached?: number;
+  /**
+   * true quando o pricing nao tem fonte oficial publicada pelo provedor.
+   * Mantido por compat com o endpoint de pricing-info do frontend.
    */
   isEstimate?: true;
 }
 
 /** Exportado para endpoints que precisam expor metadados de pricing ao frontend. */
 export const PRICING: Record<string, PriceTable> = {
-  'gpt-4o': { in: 2.5, out: 10.0 },
-  'gpt-4o-mini': { in: 0.15, out: 0.6 },
+  'gpt-4o': { in: 2.5, out: 10.0, cached: 1.25 },
+  'gpt-4o-mini': { in: 0.15, out: 0.6, cached: 0.075 },
   'gpt-4-turbo': { in: 10.0, out: 30.0 },
   'gpt-3.5-turbo': { in: 0.5, out: 1.5 },
-  // Pricing nao publicado pela OpenAI. Placeholder baseado em estimativa interna
-  // (proporcional ao gpt-4o). Remover isEstimate quando OpenAI publicar oficial.
-  'gpt-5.4': { in: 5.0, out: 20.0, isEstimate: true },
+  // Pricing OFICIAL da OpenAI (confirmado em 2026-06-13). NÃO é mais estimativa.
+  'gpt-5.4': { in: 2.5, out: 15.0, cached: 0.25 },
+  'gpt-5.5': { in: 5.0, out: 30.0, cached: 0.5 },
   'deepseek-chat': { in: 0.27, out: 1.1 },
   'deepseek-reasoner': { in: 0.55, out: 2.19 },
 };
 
-function estimateCost(model: string, prompt: number, completion: number): number {
+/**
+ * Custo USD da chamada. `cached` = quantos dos `prompt` tokens foram cache-hit
+ * (subconjunto de prompt). A parte cacheada usa a tarifa `cached` (fallback pra
+ * `in` se o modelo não tiver caching); o restante do input usa `in`.
+ */
+export function estimateCost(
+  model: string,
+  prompt: number,
+  completion: number,
+  cached = 0,
+): number {
   const p = PRICING[model];
   if (!p) return 0;
-  return (prompt * p.in + completion * p.out) / 1_000_000;
+  const cachedTokens = Math.min(Math.max(cached, 0), prompt);
+  const uncachedTokens = prompt - cachedTokens;
+  const cachedRate = p.cached ?? p.in;
+  return (uncachedTokens * p.in + cachedTokens * cachedRate + completion * p.out) / 1_000_000;
 }
 
 export interface LogUsageInput {
@@ -55,11 +87,16 @@ export interface LogUsageInput {
   prompt: number;
   completion: number;
   total: number;
+  /**
+   * Tokens de input em cache-hit (subconjunto de `prompt`). Opcional: ausente/0
+   * = nenhum cache (comportamento de cobrança = tarifa cheia, como antes).
+   */
+  cached?: number;
   telefone?: string;
 }
 
 export async function logUsage(input: LogUsageInput): Promise<void> {
-  const cost = estimateCost(input.model, input.prompt, input.completion);
+  const cost = estimateCost(input.model, input.prompt, input.completion, input.cached ?? 0);
   // Dual-write tenant_id (ADR 0018, Fase 2). HOT PATH: resolveTenantId é cacheado
   // (TTL 60s por slot) — no pior caso 1 SELECT por slot/TTL, NUNCA 1 por chamada de
   // LLM. Fail-safe: resolução nunca lança; null grava tenant_id NULL (slot de

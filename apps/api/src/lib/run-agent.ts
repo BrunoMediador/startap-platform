@@ -81,6 +81,7 @@ export async function runAgentConfigured(opts: RunAgentConfiguredOpts): Promise<
         prompt: result.usage.prompt,
         completion: result.usage.completion,
         total: result.usage.total,
+        cached: result.usage.cached,
         telefone: opts.telefone,
       })
       .catch((e) => log.warn({ err: e, slot: opts.slot }, 'log usage falhou'));

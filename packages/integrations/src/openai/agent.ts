@@ -67,7 +67,14 @@ export interface RunAgentOpts {
 export interface RunAgentResult {
   reply: string;
   toolCalls: Array<{ name: string; args: unknown; result: unknown }>;
-  usage: { prompt: number; completion: number; total: number };
+  /**
+   * `cached` = subconjunto de `prompt` que foi cache-hit de prompt caching
+   * (usage.prompt_tokens_details.cached_tokens). Caching é automático para
+   * prompts >= 1024 tokens (nosso caso: agenda GCal re-injetada por turno é um
+   * prefixo estável). Tokens cacheados são ~10x mais baratos — sem isso o custo
+   * estimado fica inflado (ADR 0021 / fix do model_usage.cost_usd).
+   */
+  usage: { prompt: number; completion: number; total: number; cached: number };
 }
 
 export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
@@ -110,7 +117,7 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
   }));
 
   const trace: RunAgentResult['toolCalls'] = [];
-  const usage = { prompt: 0, completion: 0, total: 0 };
+  const usage = { prompt: 0, completion: 0, total: 0, cached: 0 };
 
   for (let turn = 0; turn < maxTurns; turn++) {
     const completion = await client.chat.completions.create({
@@ -124,6 +131,9 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
       usage.prompt += completion.usage.prompt_tokens ?? 0;
       usage.completion += completion.usage.completion_tokens ?? 0;
       usage.total += completion.usage.total_tokens ?? 0;
+      // cached_tokens é subconjunto de prompt_tokens (não soma a parte). DeepSeek
+      // e modelos sem caching reportam 0/ausente — fica zerado, sem efeito.
+      usage.cached += completion.usage.prompt_tokens_details?.cached_tokens ?? 0;
     }
 
     const msg = completion.choices[0]?.message;
