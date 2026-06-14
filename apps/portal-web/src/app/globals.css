@@ -61,6 +61,13 @@
   --color-skeleton: var(--c-skeleton);
   --color-skeleton-hi: var(--c-skeleton-hi);
 
+  /* --- Demo "celular" (W6) — bolhas de chat dedicadas (NAO reusa o verde de
+       status --c-ok pra nao confundir semantica). Bolha enviada = verde escuro
+       dessaturado que casa com o tema; recebida = surface; papel = sunken. --- */
+  --color-chat-bubble-out: var(--c-chat-bubble-out);
+  --color-chat-bubble-in: var(--c-chat-bubble-in);
+  --color-chat-bg: var(--c-chat-bg);
+
   /* --- Tipografia (Sora display / Inter body, via next/font) --- */
   --font-display: var(--font-sora), "Sora", system-ui, sans-serif;
   --font-sans: var(--font-inter), "Inter", system-ui, sans-serif;
@@ -138,6 +145,13 @@
   /* skeleton */
   --c-skeleton: #262237;
   --c-skeleton-hi: #332d4a;
+
+  /* demo "celular" — bolhas de chat (W6). Verde escuro dessaturado p/ a bolha
+     enviada (NAO o verde-WhatsApp cru #005c4b nem o --c-ok de status); recebida
+     reusa surface; papel de parede reusa sunken. Contraste do texto-ink AA. */
+  --c-chat-bubble-out: #1f3d2e;
+  --c-chat-bubble-in: #1e1b2b;
+  --c-chat-bg: #0f0d17;
 
   /* sombras — coadjuvante no escuro: elevacao e por tom (spec 1.A.6 / 1.C.5) */
   --c-shadow-card: none; /* card no escuro NAO usa sombra */
@@ -440,5 +454,58 @@ body {
   .stagger {
     opacity: 1;
     animation: none;
+  }
+}
+
+/* ============================================================
+   DEMO "celular" interativa (W6) — animacoes da conversa. Entrada da bolha
+   (fade+slide curto) e os 3 pontos do "digitando" (pulso escalonado). Tudo
+   cortado em reduced-motion (regra global ja zera duracao, mas aqui garantimos
+   estado final estavel, sem ficar "preso" num frame feio).
+   ============================================================ */
+@keyframes bubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.chat-bubble-in {
+  animation: bubbleIn var(--duration-base) var(--ease-out-soft) both;
+}
+
+@keyframes typingDot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.typing-dot {
+  animation: typingDot 1.2s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.typing-dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-bubble-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .typing-dot {
+    animation: none;
+    opacity: 0.6;
   }
 }

@@ -1,13 +1,19 @@
 import { ParticleField } from '@/components/fx/particle-field';
 import {
   Brandmark,
+  IconBrush,
   IconCalendar,
   IconHeadset,
   IconHome,
+  IconInstagram,
   IconPause,
+  IconScissors,
+  IconSparkle,
   IconWhatsapp,
 } from '@/components/icons';
-import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
+import { DemoCelular } from '@/components/landing/demo-celular';
+import { HelpFab } from '@/components/landing/help-fab';
+import { INSTAGRAM_HANDLE, INSTAGRAM_URL, SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 import Link from 'next/link';
 
 /**
@@ -31,6 +37,47 @@ const CONTATO_WHATSAPP_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
   'Olá! Vi o site da Startap e quero testar o robô de atendimento grátis.',
 )}`;
 
+// Verticais cobertas (W7) — chips "Funciona pro seu negócio". O catch-all
+// "Outros serviços" garante o "cobrimos todos". Ícones traçados (sem emoji cru),
+// herdam o tema. Manicure/Estética usam ícones novos (IconBrush/IconSparkle).
+const VERTICAIS = [
+  { icon: IconScissors, label: 'Barbearia' },
+  { icon: IconScissors, label: 'Salão & cabelo' },
+  { icon: IconBrush, label: 'Manicure' },
+  { icon: IconSparkle, label: 'Estética' },
+  { icon: IconCalendar, label: 'Outros serviços' },
+] as const;
+
+// Bloco "Serve pro meu negócio?" (W7.3) — exemplos ILUSTRATIVOS por vertical
+// (copy do growth). Nada aqui é conversa real de cliente (rótulo no rodapé).
+const EXEMPLOS = [
+  {
+    vertical: 'Barbearia',
+    texto:
+      '"Quero cortar o cabelo sábado de manhã" → o robô mostra os horários livres, marca o corte e já cai na sua agenda.',
+  },
+  {
+    vertical: 'Cabeleireiro & Salão',
+    texto:
+      '"Dá pra fazer escova e luzes na sexta?" → o robô confere o tempo de cada serviço, oferece o horário e confirma.',
+  },
+  {
+    vertical: 'Manicure & Nail',
+    texto:
+      '"Tem horário pra alongamento amanhã à tarde?" → o robô responde na hora, agenda e avisa você.',
+  },
+  {
+    vertical: 'Estética',
+    texto:
+      '"Queria marcar design de sobrancelha essa semana" → o robô mostra os dias, encaixa e confirma sozinho.',
+  },
+  {
+    vertical: 'Outros serviços',
+    texto:
+      'Atende com hora marcada? O robô se adapta aos seus serviços e à sua agenda — é só dizer o que você faz.',
+  },
+] as const;
+
 const PASSOS = [
   {
     titulo: 'A gente conecta o robô no seu WhatsApp',
@@ -38,7 +85,8 @@ const PASSOS = [
   },
   {
     titulo: 'Você cadastra seus serviços e horários',
-    texto: 'Corte, barba, manicure… você diz o que faz e quando atende, num painel simples.',
+    texto:
+      'Diz o que você faz (corte, escova, manicure, sobrancelha…) e quando atende, num painel simples.',
   },
   {
     titulo: 'O robô atende, agenda e te avisa',
@@ -49,14 +97,15 @@ const PASSOS = [
 const RECURSOS = [
   {
     icon: IconWhatsapp,
-    titulo: 'Atendimento 24/7',
+    titulo: 'Atende 24 horas',
     texto:
-      'Responde seus clientes no WhatsApp a qualquer hora, todo dia — até quando você está ocupado.',
+      'Responde seus clientes no WhatsApp a qualquer hora, todo dia — até quando você está com a mão ocupada no cliente.',
   },
   {
     icon: IconCalendar,
     titulo: 'Agenda sozinho',
-    texto: 'Marca horários direto na sua agenda (Google Calendar), sem horário duplicado.',
+    texto:
+      'Marca o horário direto na sua agenda (Google Calendar), sem encaixe errado e sem horário duplicado.',
   },
   {
     icon: IconHeadset,
@@ -94,13 +143,19 @@ export function Landing() {
 
         <main className="mx-auto w-full max-w-[1040px] px-5">
           <Hero />
+          <DemoCelular />
+          <Verticais />
           <ComoFunciona />
+          <ServePraMim />
           <Recursos />
           <CtaFinal />
         </main>
 
         <Footer />
       </div>
+
+      {/* FAB "Ajuda" (W12): fixo, fora do fluxo, por último no DOM (ordem de tab). */}
+      <HelpFab />
     </div>
   );
 }
@@ -164,7 +219,8 @@ function Hero() {
 
       <p className="mt-5 max-w-[52ch] text-[clamp(15px,1.6vw,18px)] leading-[1.65] text-ink-soft">
         O robô da Startap responde seus clientes, marca horários direto na sua agenda e nunca tira
-        folga. Feito pra barbearias, salões e estúdios.
+        folga. <span className="text-ink">Barbearia, salão, manicure, estética</span> — se você
+        atende com hora marcada, é pra você.
       </p>
 
       <div className="mt-8 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row">
@@ -187,6 +243,34 @@ function Hero() {
         <strong className="mr-1 font-semibold">10 dias grátis</strong> pra testar com clientes de
         verdade — sem cartão, sem compromisso.
       </p>
+    </section>
+  );
+}
+
+function Verticais() {
+  return (
+    <section aria-labelledby="verticais-titulo" className="py-10 md:py-12">
+      <h2
+        id="verticais-titulo"
+        className="text-center font-display text-[clamp(20px,2.6vw,26px)] font-bold tracking-[-0.02em] text-ink"
+      >
+        Funciona pro seu negócio
+      </h2>
+      <ul className="mx-auto mt-7 grid max-w-[760px] grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
+        {VERTICAIS.map(({ icon: Icon, label }) => (
+          <li
+            key={label}
+            className="flex flex-col items-center gap-2.5 rounded-card border border-line bg-surface px-3 py-4 text-center transition-colors duration-[120ms] hover:border-brand/40"
+          >
+            <span className="inline-flex size-10 items-center justify-center rounded-[12px] bg-brand-soft text-brand">
+              <Icon size={20} />
+            </span>
+            <span className="font-display text-[13.5px] font-semibold leading-tight text-ink">
+              {label}
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -224,6 +308,37 @@ function ComoFunciona() {
           </li>
         ))}
       </ol>
+    </section>
+  );
+}
+
+function ServePraMim() {
+  return (
+    <section aria-labelledby="serve-titulo" className="py-12 md:py-16">
+      <h2
+        id="serve-titulo"
+        className="text-center font-display text-[clamp(24px,3.4vw,34px)] font-bold tracking-[-0.02em] text-ink"
+      >
+        Serve pro meu negócio?
+      </h2>
+      <p className="mx-auto mt-3 max-w-[48ch] text-center text-[15px] leading-[1.6] text-ink-soft">
+        Se o seu cliente marca horário pelo WhatsApp, serve. Veja como fica no seu caso:
+      </p>
+
+      <ul className="mt-9 grid grid-cols-1 gap-4 md:grid-cols-2">
+        {EXEMPLOS.map(({ vertical, texto }) => (
+          <li key={vertical} className="rounded-card border border-line bg-surface p-5">
+            <h3 className="font-display text-[14px] font-semibold leading-snug text-brand">
+              {vertical}
+            </h3>
+            <p className="mt-2 text-[14px] leading-[1.55] text-ink-soft">{texto}</p>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-5 text-center text-[12px] italic text-ink-faint">
+        Exemplos ilustrativos — não são conversas reais de clientes.
+      </p>
     </section>
   );
 }
@@ -300,15 +415,46 @@ function CtaFinal() {
 
 function Footer() {
   return (
-    <footer className="border-t border-line-soft">
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col items-center justify-between gap-3 px-5 py-8 text-[13px] text-ink-faint sm:flex-row">
-        <p>© {new Date().getFullYear()} Startap — atendimento automático no WhatsApp.</p>
-        <Link
-          href="/login"
-          className={`font-semibold text-brand hover:underline ${FOCUS_RING} rounded-[4px]`}
-        >
-          Entrar
-        </Link>
+    <footer className="mt-4 border-t border-line-soft pb-24 sm:pb-8">
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-7 px-5 py-9">
+        {/* Linha de canais sociais (W12): WhatsApp + Instagram, texto + ícone. */}
+        <div className="flex flex-col items-center gap-4 text-center">
+          <span className="inline-flex items-center gap-2.5 font-display text-[15px] font-semibold text-ink">
+            <Brandmark size={26} />
+            Startap — atendimento automático no WhatsApp
+          </span>
+          <div className="flex flex-col items-center gap-3 sm:flex-row">
+            <a
+              href={CONTATO_WHATSAPP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`inline-flex h-11 items-center gap-2 rounded-pill border border-line-strong bg-surface px-5 text-[13.5px] font-semibold text-ink transition-colors duration-[120ms] hover:border-brand/50 hover:bg-surface-hover ${FOCUS_RING}`}
+            >
+              <IconWhatsapp size={18} />
+              Falar no WhatsApp
+            </a>
+            <a
+              href={INSTAGRAM_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Siga a Startap no Instagram, perfil arroba ${INSTAGRAM_HANDLE}`}
+              className={`inline-flex h-11 items-center gap-2 rounded-pill border border-line-strong bg-surface px-5 text-[13.5px] font-semibold text-ink transition-colors duration-[120ms] hover:border-brand/50 hover:bg-surface-hover ${FOCUS_RING}`}
+            >
+              <IconInstagram size={18} />@{INSTAGRAM_HANDLE} no Instagram
+            </a>
+          </div>
+        </div>
+
+        {/* Linha de copyright + acesso. */}
+        <div className="flex flex-col items-center justify-between gap-3 border-t border-line-soft pt-6 text-[13px] text-ink-faint sm:flex-row">
+          <p>© {new Date().getFullYear()} Startap</p>
+          <Link
+            href="/login"
+            className={`font-semibold text-brand hover:underline ${FOCUS_RING} rounded-[4px]`}
+          >
+            Entrar
+          </Link>
+        </div>
       </div>
     </footer>
   );

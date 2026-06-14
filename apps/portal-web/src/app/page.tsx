@@ -6,7 +6,7 @@ import { Landing } from './landing';
 export const metadata: Metadata = {
   title: 'Startap — Seu WhatsApp atendendo e agendando sozinho',
   description:
-    'O robô da Startap responde seus clientes no WhatsApp, marca horários direto na sua agenda e nunca tira folga. Feito pra barbearias, salões e estúdios. 10 dias grátis.',
+    'O robô da Startap responde seus clientes no WhatsApp, marca horários direto na sua agenda e nunca tira folga. Pra barbearia, salão, manicure, estética ou qualquer negócio que marca horário. 10 dias grátis.',
 };
 
 /**
