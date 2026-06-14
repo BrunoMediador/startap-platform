@@ -527,6 +527,48 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Cancelamento escalado — destino do alerta pro DONO do clone (Missão 023 W5)
+// ---------------------------------------------------------------------------
+
+export interface CloneAlertOwner {
+  /** Telefone E.164 (só dígitos) do dono que RECEBE o alerta. null = sem destino. */
+  phone: string | null;
+  /** Toggle por-clone (coluna alert_owner_enabled, default TRUE). */
+  enabled: boolean;
+  /** Nome amigável do clone p/ a mensagem do alerta (display_name). */
+  displayName: string;
+}
+
+/**
+ * Lê o destino do alerta de cancelamento de um clone (migration 050).
+ * Sem hardcode de número: o telefone vem de flow_clones.alert_owner_phone (backfill de
+ * cliente_telefone). Retorna null se o slot não for um clone (matriz/infra não têm dono).
+ *
+ * `enabled` reflete o toggle por-clone; o gate macro (flag de ambiente
+ * CANCELAMENTO_ESCALADO_ENABLED) é responsabilidade do chamador (apps/api).
+ * Normaliza o telefone p/ dígitos e exige >=8 (senão phone=null → não escala).
+ */
+export async function getCloneAlertOwner(slot: string): Promise<CloneAlertOwner | null> {
+  const r = await query<{
+    alert_owner_phone: string | null;
+    alert_owner_enabled: boolean | null;
+    display_name: string;
+  }>(
+    `SELECT alert_owner_phone, alert_owner_enabled, display_name
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+    [slot],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  const digits = (row.alert_owner_phone ?? '').replace(/\D/g, '');
+  return {
+    phone: digits.length >= 8 ? digits : null,
+    enabled: row.alert_owner_enabled !== false,
+    displayName: row.display_name,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Suspender / reativar fluxo (billing, inadimplência, férias)
 // ---------------------------------------------------------------------------
 

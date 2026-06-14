@@ -8,6 +8,7 @@ import {
 } from '@startap/integrations/scheduling';
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
+import { sendClientCancellationAlert } from '../lib/client-alert.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -75,14 +76,23 @@ export class TesteBarbeariaBot extends BotBase {
     const { telefone, texto, pushName } = ctx.message;
     if (!texto.trim()) return null;
 
-    // Cancelamento — deteccao mantida; envio de alerta pausado (Bruno 2026-05-22).
-    // Numero 553591746797@c.us removido: nao existe mais e feature nao e vendida ao cliente.
-    // TODO: quando feature for retomada, ler bot_config.alert_destination por clone
-    //       e enviar via waha.sendText para o destino configurado (sem hardcode).
+    // Cancelamento — caminho rápido determinístico (botão literal 'Cancelar').
+    // Missão 023 W5: o bot NUNCA cancela (não há tool de delete no GCal). Ele ESCALA
+    // pro dono do clone — mas SÓ com a flag CANCELAMENTO_ESCALADO_ENABLED=true (default OFF).
+    // Flag OFF -> comportamento ATUAL idêntico (responde "vou avisar o time", sem enviar).
     if (texto.trim() === 'Cancelar') {
+      if (config.CANCELAMENTO_ESCALADO_ENABLED) {
+        // Fire-and-forget: o resultado do alerta NUNCA bloqueia nem quebra a resposta.
+        void sendClientCancellationAlert({
+          slot: this.slot,
+          clienteTelefone: telefone,
+          motivo: '',
+          referenciaHorario: '',
+        });
+      }
       this.log.info(
-        { slot: this.slot, telefone, pushName },
-        'cancelamento detectado — feature de alerta pausada (Bruno 2026-05-22). TODO: implementar handoff pro dono do bot via bot_config.alert_destination quando feature for retomada.',
+        { slot: this.slot, telefone, pushName, escalado: config.CANCELAMENTO_ESCALADO_ENABLED },
+        'cancelamento detectado (botão literal) — bot NÃO cancela; escala pro dono se flag ON',
       );
       return 'ok! vou avisar o time, e logo entraremos em contato!';
     }
@@ -293,6 +303,57 @@ export class TesteBarbeariaBot extends BotBase {
         },
       },
     ];
+
+    // ── Cancelamento escalado (Missão 023 W5 — DORMENTE por flag) ────────────────
+    // A tool SÓ é exposta ao modelo quando a flag está ON. Com a flag OFF a lista de
+    // tools é IDÊNTICA à de hoje (só inserir/consultar) — bot 100% inalterado.
+    // A tool NÃO toca o GCal: nenhuma chamada de delete/createEvent. Apenas escala o
+    // pedido pro dono do clone (fire-and-forget) e responde {ok, escalado} pro modelo.
+    if (config.CANCELAMENTO_ESCALADO_ENABLED) {
+      tools.push({
+        name: 'escalar_cancelamento',
+        description:
+          'Use SOMENTE quando o cliente pedir explicitamente para CANCELAR/DESMARCAR um ' +
+          'horario ja agendado e NAO quiser remarcar. NAO use para: remarcar/trocar de ' +
+          'horario (isso e novo agendamento via inserir_agendamento), confirmar presenca, ' +
+          'perguntar sobre horarios, ou desistir de algo que ainda nao foi agendado. ' +
+          'Esta ferramenta NAO remove nada da agenda — ela apenas avisa o responsavel, ' +
+          'que entra em contato com o cliente.',
+        parameters: {
+          type: 'object',
+          properties: {
+            motivo: {
+              type: 'string',
+              description: 'Motivo do cancelamento, se o cliente informou. Vazio se nao disse.',
+            },
+            referencia_horario: {
+              type: 'string',
+              description:
+                'Dia/horario que o cliente mencionou querer cancelar, como ele falou. ' +
+                'Vazio se nao especificou.',
+            },
+          },
+          required: [],
+        },
+        run: async (args: unknown): Promise<{ ok: boolean; escalado: boolean }> => {
+          const a = (args ?? {}) as { motivo?: unknown; referencia_horario?: unknown };
+          const motivo = typeof a.motivo === 'string' ? a.motivo : '';
+          const referenciaHorario =
+            typeof a.referencia_horario === 'string' ? a.referencia_horario : '';
+          // NUNCA toca o GCal aqui. Fire-and-forget: o resultado do envio nunca derruba
+          // o atendimento (sendClientCancellationAlert captura toda falha internamente).
+          const r = await sendClientCancellationAlert({
+            slot: this.slot,
+            clienteTelefone: telefone,
+            motivo,
+            referenciaHorario,
+          });
+          // Pro modelo: sempre {ok:true, escalado:bool} — assim a IA fecha a resposta
+          // ("ja avisei o responsavel") sem nunca afirmar que cancelou de fato.
+          return { ok: true, escalado: r.escalado };
+        },
+      });
+    }
 
     const result = await runAgentConfigured({
       slot: this.slot,

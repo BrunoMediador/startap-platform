@@ -194,6 +194,25 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Cancelamento escalado (Missão 023 W5 — ALTO risco, DORMENTE) ───────────
+  // Quando o cliente final pede CANCELAMENTO ao bot de um barbeiro, o bot NÃO cancela:
+  // escala um alerta pro DONO do clone (flow_clones.alert_owner_phone, migration 050)
+  // pela sessão remetente `ALERTAS` (W3). O GCal NUNCA é tocado (não há tool de delete).
+  // Flag OPCIONAL no boot (default OFF — lição #247: env nova NUNCA derruba api/worker).
+  //   OFF (ausente/false) -> comportamento ATUAL 100% preservado (o bot responde "vou
+  //                          avisar o time", SEM enviar alerta nenhum). Idêntico a hoje.
+  //   ON  (true)          -> a tool escalar_cancelamento dispara o alerta pro dono
+  //                          (respeitando alert_owner_enabled por-clone + cooldown anti-flood).
+  // Ligar SÓ após QA controlado no Cirilo. NUNCA hardcoded.
+  CANCELAMENTO_ESCALADO_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Cooldown anti-flood do alerta, em minutos, por (slot, telefone-do-cliente). Evita 10
+  // WhatsApps pro dono se o cliente repetir "cancelar". Default 30min (design W5). Persistido
+  // em alert_states (reusa a máquina anti-spam; sem tabela nova). Ajustável sem deploy.
+  CANCELAMENTO_ESCALADO_COOLDOWN_MIN: z.coerce.number().int().positive().default(30),
+
   SERVICE_NAME: z.string().optional(),
 });
 

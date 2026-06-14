@@ -42,6 +42,7 @@ export type {
   CloneRow,
   CloneSummary,
   CloneStatus,
+  CloneAlertOwner,
   HorarioDia,
   HorariosFuncionamento,
   ServicoConfig,
