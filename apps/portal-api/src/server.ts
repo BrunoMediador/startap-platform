@@ -17,6 +17,7 @@ import { config } from './config.js';
 import { closeRedis, getRedis } from './lib/session.js';
 import { parseTrustProxy } from './lib/trust-proxy.js';
 import { authRoutes } from './routes/auth.js';
+import { demoChatRoutes } from './routes/demo-chat.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
@@ -75,6 +76,25 @@ async function main() {
       nameSpace: 'portal:rl:signup:',
     });
     await instance.register(portalSignupRoutes);
+  });
+
+  // Demo PÚBLICA de IA na landing (Missão 023 W6) — rota anônima, escopo próprio
+  // com rate-limit por IP de defesa em profundidade (atrás das guardas Redis em
+  // demo-guards.ts). Store no Redis (mesmo racional do signup: janela não pode
+  // resetar a cada restart nem divergir entre instâncias). Flag DEMO_ENABLED OFF
+  // -> a rota responde 404 internamente (front esconde a demo). O rate-limit aqui
+  // só ativa quando a flag está ON (config-gated) pra não pagar Redis à toa.
+  await app.register(async (instance) => {
+    if (config.DEMO_ENABLED) {
+      await instance.register(rateLimit, {
+        max: config.DEMO_RATE_PER_IP,
+        timeWindow: config.DEMO_RATE_WINDOW_SECONDS * 1000,
+        keyGenerator: (req) => req.ip,
+        redis: getRedis(),
+        nameSpace: 'portal:rl:demo:',
+      });
+    }
+    await instance.register(demoChatRoutes);
   });
 
   await app.register(portalConfigRoutes);
