@@ -19,46 +19,47 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy via SSH
-    runs-on: ubuntu-latest
+    name: Deploy (self-hosted runner na VPS)
+    # ------------------------------------------------------------------------
+    # MUDANÇA (infra/self-hosted-runner): o deploy agora roda DENTRO da VPS,
+    # num GitHub Actions self-hosted runner (systemd, /opt/actions-runner).
+    #
+    # Por quê: o anti-DDoS/firewall do provedor da VPS dropa de forma
+    # SUSTENTADA as faixas de IP dos runners hospedados do GitHub, fazendo
+    # TODO deploy automático falhar com `dial tcp :22 i/o timeout` (3/3
+    # tentativas do retry antigo). Vinha virando deploy manual toda vez.
+    #
+    # Com o runner NA VPS, o job executa local: NÃO há SSH cruzando o
+    # firewall do provedor. O runner usa só conexão de SAÍDA (HTTPS long-poll)
+    # pra receber jobs do GitHub — esse caminho não é bloqueado.
+    #
+    # O runner roda como root (mesma identidade do deploy manual: os arquivos
+    # de /opt/automacoes/code e o .git são root:root; acesso ao docker daemon).
+    # Justificativa de não usar usuário dedicado: o deploy exige grupo `docker`
+    # (≈ root efetivo) de qualquer forma, e trocar o dono de /opt/automacoes/code
+    # em produção (clientes vivos) seria risco sem ganho real de isolamento.
+    # ------------------------------------------------------------------------
+    runs-on: [self-hosted, vps, deploy]
     # So roda se o CI passou
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
-      # O provedor de rede da VPS (Hostinger) tem anti-DDoS na borda que, de forma
-      # intermitente, dropa faixas do GitHub Actions ANTES de chegar no servidor.
-      # Sintoma: `dial tcp :22 i/o timeout`. O firewall do SO esta liberado.
-      #
-      # `nick-fields/retry` re-executa o passo inteiro com backoff: se o bloqueio
-      # for intermitente e o IP do runner sair da faixa dropada (ou a borda liberar),
-      # uma das 3 tentativas passa. NAO resolve bloqueio sustentado (ver ticket de
-      # whitelist no provedor + opcao de tunel Tailscale).
-      - name: Deploy to server (with retry)
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 18          # teto por tentativa (deploy real ~3-5min)
-          max_attempts: 3              # 3 tentativas
-          retry_wait_seconds: 30       # backoff entre tentativas
-          retry_on: error
-          command: |
-            mkdir -p ~/.ssh
-            printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-            chmod 600 ~/.ssh/deploy_key
-            ssh -i ~/.ssh/deploy_key \
-                -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                -o ConnectTimeout=120 \
-                -o ServerAliveInterval=30 \
-                -o ServerAliveCountMax=4 \
-                -p 22 \
-                root@${{ secrets.SERVER_HOST }} \
-                'set -e; cd /opt/automacoes/code; bash ./scripts/deploy.sh'
+      # NÃO usamos actions/checkout: o deploy roda no checkout de PRODUÇÃO
+      # (/opt/automacoes/code), não no _work do runner. O próprio deploy.sh
+      # faz `git fetch + checkout main + pull --rebase` lá dentro. Assim o
+      # comportamento é byte-a-byte idêntico ao deploy manual já validado.
+      - name: Deploy (scripts/deploy.sh local na VPS)
+        working-directory: /opt/automacoes/code
+        run: |
+          set -e
+          echo "Runner: $(hostname) | user: $(whoami) | pwd: $(pwd)"
+          bash ./scripts/deploy.sh
 
       # Limpeza pos-deploy: o build roda com --no-cache, entao o cache de build
       # NUNCA e reusado — so acumula (chegou a ~44GB e encheu o disco). O filtro
       # antigo (>7 dias) deixava escapar o cache novo de cada deploy. Prune TOTAL
       # apos deploy OK. Redundante com o passo equivalente no deploy.sh
-      # (idempotente) — mantido aqui como rede de seguranca no caminho via CI.
+      # (idempotente) — mantido aqui como rede de seguranca.
       #
       # ⚠️ JAMAIS trocar por `docker system prune -a` ou `docker image prune -a`:
       # isso removeria imagens paradas porem taggeadas, incluindo a
@@ -67,14 +68,29 @@ jobs:
       - name: Prune Docker build cache (pos-deploy)
         if: success()
         continue-on-error: true
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          timeout: 120s
-          command_timeout: 15m
-          script: |
-            docker builder prune -af || true
-            docker image prune -f || true
+        run: |
+          docker builder prune -af || true
+          docker image prune -f || true
+
+# ============================================================================
+# FALLBACK (deploy via SSH externo) — manter como referência caso o runner caia
+# ----------------------------------------------------------------------------
+# Se o self-hosted runner ficar offline (systemd parado, VPS reiniciando, etc),
+# o job acima fica "Queued" indefinidamente porque ninguém o pega. Opções:
+#
+#   1) Reanimar o runner na VPS (preferido):
+#        ssh root@<VPS> 'cd /opt/actions-runner && ./svc.sh status'
+#        ssh root@<VPS> 'cd /opt/actions-runner && ./svc.sh start'
+#      (o serviço é `enabled` no boot; isto é só pra quando o processo morreu.)
+#
+#   2) Deploy manual na VPS (sempre funciona, independe de runner):
+#        ssh root@<VPS> 'cd /opt/automacoes/code && bash ./scripts/deploy.sh'
+#
+#   3) Reverter este PR para o caminho SSH externo (runs-on: ubuntu-latest +
+#      nick-fields/retry + appleboy/ssh-action). Esse caminho dependia dos
+#      secrets SSH_PRIVATE_KEY e SERVER_HOST, que continuam configurados no
+#      repo. Sujeito ao timeout :22 do firewall do provedor (motivo desta troca).
+#
+# A versão SSH anterior deste arquivo está no histórico git (git show <commit>:
+# .github/workflows/deploy.yml no commit imediatamente anterior a este PR).
+# ============================================================================
