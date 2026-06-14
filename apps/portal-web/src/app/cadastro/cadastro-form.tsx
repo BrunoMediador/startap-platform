@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/toast';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { SignupResponse } from '@/lib/api-types';
 import {
+  type Area,
   type CadastroErrors,
   type SignupCardView,
   maskPhoneBR,
@@ -33,6 +34,7 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { AreaSelector } from './area-selector';
 
 type View = 'form' | SignupCardView;
 
@@ -46,6 +48,7 @@ export function CadastroForm() {
   const toast = useToast();
   const [view, setView] = useState<View>('form');
   const [nome, setNome] = useState('');
+  const [area, setArea] = useState<Area | null>(null);
   const [whatsapp, setWhatsapp] = useState('');
   const [senha, setSenha] = useState('');
   const [showSenha, setShowSenha] = useState(false);
@@ -73,7 +76,7 @@ export function CadastroForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBanner(null);
-    const res = validateCadastro({ nome, whatsapp, senha });
+    const res = validateCadastro({ nome, area, whatsapp, senha });
     if (!res.ok) {
       setErrors(res.errors);
       return;
@@ -186,6 +189,15 @@ export function CadastroForm() {
                     onChange={(e) => {
                       setNome(e.target.value);
                       if (errors.nome) setErrors((prev) => ({ ...prev, nome: undefined }));
+                    }}
+                  />
+
+                  <AreaSelector
+                    value={area}
+                    error={errors.area}
+                    onChange={(a) => {
+                      setArea(a);
+                      if (errors.area) setErrors((prev) => ({ ...prev, area: undefined }));
                     }}
                   />
 

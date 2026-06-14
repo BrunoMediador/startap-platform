@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { maskPhoneBR, phoneDigits, signupCardFromError, validateCadastro } from './cadastro';
+import {
+  isArea,
+  maskPhoneBR,
+  phoneDigits,
+  signupCardFromError,
+  validateCadastro,
+} from './cadastro';
 
 describe('phoneDigits', () => {
   it('reduz entrada mascarada a digitos locais', () => {
@@ -38,14 +44,38 @@ describe('maskPhoneBR', () => {
 });
 
 describe('validateCadastro', () => {
-  const ok = { nome: 'Barbearia do João', whatsapp: '(31) 99999-8842', senha: '12345678' };
+  const ok = {
+    nome: 'Barbearia do João',
+    area: 'barbearia' as const,
+    whatsapp: '(31) 99999-8842',
+    senha: '12345678',
+  };
 
-  it('aceita draft valido e monta payload do signup (digitos locais)', () => {
+  it('aceita draft valido e monta payload do signup (digitos locais + area)', () => {
     const res = validateCadastro(ok);
     expect(res).toEqual({
       ok: true,
-      value: { nome_negocio: 'Barbearia do João', whatsapp: '31999998842', senha: '12345678' },
+      value: {
+        nome_negocio: 'Barbearia do João',
+        area: 'barbearia',
+        whatsapp: '31999998842',
+        senha: '12345678',
+      },
     });
+  });
+
+  it('rejeita quando nenhuma area foi escolhida (null)', () => {
+    const res = validateCadastro({ ...ok, area: null });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.errors.area).toBe('Escolha o tipo do seu negócio');
+  });
+
+  it('aceita os 5 slugs de area do contrato', () => {
+    for (const area of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outros'] as const) {
+      const res = validateCadastro({ ...ok, area });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.value.area).toBe(area);
+    }
   });
 
   it('rejeita nome vazio/curto com a microcopy da spec', () => {
@@ -80,13 +110,29 @@ describe('validateCadastro', () => {
   });
 
   it('acumula erros de todos os campos de uma vez', () => {
-    const res = validateCadastro({ nome: '', whatsapp: '123', senha: 'abc' });
+    const res = validateCadastro({ nome: '', area: null, whatsapp: '123', senha: 'abc' });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.errors.nome).toBeTruthy();
+      expect(res.errors.area).toBeTruthy();
       expect(res.errors.whatsapp).toBeTruthy();
       expect(res.errors.senha).toBeTruthy();
     }
+  });
+});
+
+describe('isArea', () => {
+  it('aceita só os 5 slugs do contrato', () => {
+    for (const a of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outros']) {
+      expect(isArea(a)).toBe(true);
+    }
+  });
+
+  it('rejeita slug fora do enum, null e não-string', () => {
+    expect(isArea('salao')).toBe(false);
+    expect(isArea(null)).toBe(false);
+    expect(isArea(undefined)).toBe(false);
+    expect(isArea(42)).toBe(false);
   });
 });
 
