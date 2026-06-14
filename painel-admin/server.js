@@ -5190,10 +5190,13 @@ app.post('/api/portal-users', async (req, res) => {
     let userRow;
     try {
       await client.query('BEGIN');
+      // A senha definida na criação é a DEFINITIVA — não forçamos
+      // must_change_password (o portal não tem troca self-service nem deve
+      // mostrar nag de "senha provisória"). FALSE explícito.
       const ins = await client.query(
         `INSERT INTO portal_users
            (slot, username, password_hash, display_name, must_change_password, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, TRUE, NOW(), NOW())
+         VALUES ($1, $2, $3, $4, FALSE, NOW(), NOW())
          RETURNING id, slot, username, display_name, active, must_change_password,
                    last_login_at, created_at, updated_at`,
         [slot, username, passwordHash, displayName],
@@ -5279,9 +5282,13 @@ app.patch('/api/portal-users/:id', async (req, res) => {
       const plain = provided ?? _genPortalPassword();
       const generated = provided == null;
       const hash = await bcrypt.hash(plain, BCRYPT_COST);
+      // A senha definida no reset é a DEFINITIVA — não marcamos
+      // must_change_password (o portal não tem troca self-service e não deve
+      // mostrar nag de "senha provisória" ao cliente). Limpamos a flag aqui pra
+      // não arrastar um TRUE antigo de quando o reset ainda forçava troca.
       const r = await pool.query(
         `UPDATE portal_users
-           SET password_hash = $2, must_change_password = TRUE,
+           SET password_hash = $2, must_change_password = FALSE,
                failed_attempts = 0, locked_until = NULL, updated_at = NOW()
          WHERE id = $1
          RETURNING id, slot, username, display_name, active, must_change_password,
