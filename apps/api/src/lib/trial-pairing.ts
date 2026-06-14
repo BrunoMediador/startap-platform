@@ -32,7 +32,7 @@ import { canonicalE164, phoneHint } from '@startap/core/phone';
 import { TrialPepperMissingError, trialPhoneHmac } from '@startap/core/trial';
 import type { WahaWebhookBody } from '@startap/core/types';
 import { flowExecutionLog, trialLedger } from '@startap/db';
-import { waha } from '@startap/integrations';
+import { internalAlert, waha } from '@startap/integrations';
 import { z } from 'zod';
 
 const log = logger.child({ module: 'trial-pairing' });
@@ -231,6 +231,22 @@ async function applyTrialDecision(
       nextDueDate,
       diverged,
     });
+
+    // Alerta interno (GANCHO B): cliente pareou e iniciou o trial. Fire-and-forget
+    // SEGURO — não pode quebrar o webhook WAHA (idempotente). display_name vem por
+    // 1 query (info não o carrega); o helper degrada pro slot se falhar.
+    void (async () => {
+      const displayName = await internalAlert.displayNameForSlot(info.slot);
+      await internalAlert.sendInternalAlert(
+        internalAlert.msgClienteAtivou({ displayName, slot: info.slot }),
+      );
+    })().catch((e: unknown) => {
+      log.error(
+        { slot: info.slot, err: e instanceof Error ? e.message : String(e) },
+        'trial-pairing: alerta de ativação falhou (não afeta o pareamento)',
+      );
+    });
+
     return { status: 'ok:trial-started' };
   }
 
