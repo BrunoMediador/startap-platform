@@ -65,8 +65,8 @@ E mais um cuidado de segurança, que vale repetir:
 2. Na barra de endereço (lá em cima, onde aparece o endereço dos sites), digite: **console.cloud.google.com/projectcreate** e aperte **Enter**.
    - **O que aparece:** abre a tela escrita **"Novo projeto"**, com um campo de nome esperando. (Se for a primeiríssima vez, antes disso aparece uma tela de boas-vindas: escolha o país **Brasil**, marque o aceite dos termos e clique no botão de aceitar — pode se chamar **"Concordo e continuar"** ou **"Concordar e continuar"**. Essa tela só aparece uma vez. Aceitar os termos é **grátis** e **não pede cartão**.)
    - **Se cair na tela errada:** se depois de aceitar você for parar na tela inicial do Console em vez do **"Novo projeto"**, é só colar **console.cloud.google.com/projectcreate** de novo.
-3. No campo **"Nome do projeto"**, digite algo fácil de reconhecer, como **`Agenda Edu Barbearia`**. (Regra: de 4 a 30 caracteres; **pode** ter espaço, mas **não** use acento nem ç.)
-   - **O que aparece:** logo abaixo, um **"ID do projeto"** é gerado sozinho (algo como `agenda-edu-barbearia-123456`). Pode deixar como está.
+3. No campo **"Nome do projeto"**, digite algo fácil de reconhecer, como **`Agenda Barbearia`**. (Regra: de 4 a 30 caracteres; **pode** ter espaço, mas **não** use acento nem ç.)
+   - **O que aparece:** logo abaixo, um **"ID do projeto"** é gerado sozinho (algo como `agenda-barbearia-123456`). Pode deixar como está.
 4. Olhe o campo **"Local"**. Numa conta Gmail comum ele mostra **"Sem organização"** (ou **"Nenhuma organização"** — é a mesma coisa) — não mexa em nada.
 5. Clique no botão **"Criar"**.
    - **O que aparece:** uma rodinha de carregando por 10 a 60 segundos, e um aviso no **sininho** (canto superior direito) dizendo **"Projeto criado"**. Em nenhum momento pediram cartão.
@@ -144,7 +144,7 @@ E mais um cuidado de segurança, que vale repetir:
 
 1. Abra **calendar.google.com**, logado na conta dedicada (`agenda.nomedocliente@gmail.com`).
 2. **Crie a agenda dedicada** (se ainda não tem uma):
-   - Na coluna da esquerda, ao lado de **"Outras agendas"**, clique no **+** → **"Criar nova agenda"** → dê um nome (ex.: **`Atendimento Edu Barbearia`**) → **"Criar agenda"**. Depois volte para a tela principal.
+   - Na coluna da esquerda, ao lado de **"Outras agendas"**, clique no **+** → **"Criar nova agenda"** → dê um nome (ex.: **`Atendimento Barbearia`**) → **"Criar agenda"**. Depois volte para a tela principal.
    - ⚠️ **Não use sua agenda pessoal.** Se você compartilhar a agenda pessoal, o robô passa a poder criar, mover e apagar os seus compromissos particulares. Uma agenda dedicada mantém tudo isolado.
 3. Na coluna da esquerda, em **"Minhas agendas"**, passe o mouse sobre o **nome** da agenda dedicada; aparece um ícone de **três pontos** (com o aviso **"Opções"**) → clique nele → **"Configurações e compartilhamento"**.
    - **O que aparece:** a tela de configurações daquela agenda específica. (Se a lista de agendas não aparecer, a janela pode estar estreita: clique no menu ☰ no canto superior esquerdo para abrir a coluna.)
