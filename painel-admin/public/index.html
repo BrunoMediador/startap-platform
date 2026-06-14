@@ -1192,43 +1192,7 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .upload-area input[type="file"] { display: none; }
 /* ── Divider ────────────────────────────────────────────────────────── */
 .divider { height: 1px; background: var(--border); margin: 1.25rem 0; }
-/* ── Routing table rows (legado — mantido para compat) ──────────────── */
-.routing-row { display: flex; align-items: center; gap: .75rem; padding: .625rem 0; border-bottom: 1px solid var(--border); }
-.routing-row:last-child { border-bottom: none; }
-.routing-row__pattern { font-family: var(--font-mono); font-size: .8125rem; flex: 1; }
-.routing-row__target  { font-size: .8125rem; color: var(--text-muted); }
-/* ── Routing page (003-F) ───────────────────────────────────────────── */
-.rt-kpi-strip { display:flex; gap:1rem; margin-bottom:1.25rem; flex-wrap:wrap; }
-.rt-kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:.625rem 1rem; display:flex; flex-direction:column; gap:.125rem; min-width:120px; }
-.rt-kpi__value { font-size:1.375rem; font-weight:700; line-height:1.1; }
-.rt-kpi__label { font-size:.6875rem; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); }
-.rt-filter-bar { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin-bottom:.875rem; }
-.rt-filter-bar select,
-.rt-filter-bar input[type="text"] { min-width:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); color:var(--text); padding:.375rem .625rem; font-size:.8125rem; height:32px; }
-.rt-filter-bar select:focus,
-.rt-filter-bar input[type="text"]:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 2px var(--primary-glow); }
-.rt-bulk-bar { display:none; align-items:center; gap:.75rem; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-md); padding:.5rem .875rem; margin-bottom:.75rem; }
-.rt-bulk-bar.visible { display:flex; }
-.rt-bulk-bar__count { font-size:.8125rem; font-weight:600; color:var(--text-muted); }
-.rt-table { width:100%; border-collapse:collapse; font-size:.8125rem; }
-.rt-table th { text-align:left; font-weight:600; color:var(--text-muted); font-size:.6875rem; text-transform:uppercase; letter-spacing:.05em; padding:.4rem .75rem; border-bottom:1px solid var(--border); white-space:nowrap; }
-.rt-table td { padding:.5rem .75rem; border-bottom:1px solid var(--border); vertical-align:middle; }
-.rt-table tr:last-child td { border-bottom:none; }
-.rt-table tbody tr:hover td { background:rgba(255,255,255,.02); }
-.rt-table td.rt-col-phone { font-family:var(--font-mono); font-size:.8rem; }
-.rt-wf-badge { display:inline-flex; align-items:center; gap:.35rem; padding:.2rem .55rem; border-radius:var(--radius-sm); font-size:.75rem; font-weight:600; cursor:pointer; transition:opacity var(--transition); }
-.rt-wf-badge:hover { opacity:.8; }
-.rt-inline-select { background:var(--surface-2); border:1px solid var(--primary); border-radius:var(--radius-sm); color:var(--text); padding:.2rem .4rem; font-size:.75rem; }
-.rt-actions-wrap { position:relative; display:inline-block; }
-.rt-actions-menu { display:none; position:absolute; right:0; top:100%; z-index:250; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-md); min-width:130px; box-shadow:0 4px 16px rgba(0,0,0,.2); }
-.rt-actions-menu.open { display:block; }
-.rt-actions-menu button { display:flex; align-items:center; gap:.5rem; width:100%; padding:.5rem .875rem; background:none; border:none; font-size:.8125rem; color:var(--text); cursor:pointer; white-space:nowrap; }
-.rt-actions-menu button:hover { background:var(--bg-2); }
-.rt-actions-menu button.danger { color:var(--danger); }
-@media (max-width:768px) {
-  .rt-col-updated,.rt-col-ativo,.rt-col-sessao { display:none; }
-  .rt-col-nome { max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-}
+/* CSS da seção "Roteamento" de teste (.routing-row* / .rt-*) removido na Missão 023 W2 — feature descontinuada. */
 /* ── Dashboard grid ─────────────────────────────────────────────────── */
 .dash-grid {
   display: grid;
@@ -2492,9 +2456,9 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
     <section class="section" id="sec-configuracoes" aria-label="Configurações">
       <!-- Seção Configurações — renderizada por renderConfig() -->
     </section>
-    <section class="section" id="sec-roteamento" aria-label="Roteamento">
-      <!-- Seção Roteamento — promovida a nível global; renderizada por renderRoteamento() -->
-    </section>
+    <!-- Seção Roteamento removida (Missão 023 W2): roteamento de TESTE descontinuado pelo Bruno. -->
+    <!-- O roteamento CORE (apps/api/src/router.ts) é runtime, não tem UI no painel. -->
+
     <!-- Rebrand F2 §1.3 — sec-metricas removida (conteúdo migrou pra Visão Geral). -->
     <!-- Clientes — rebrand F3 §4.7: funde Usuários do portal + Cobrança numa
          visão por cliente/slot (login do portal + cobrança juntos). As antigas
@@ -4402,7 +4366,7 @@ function renderBotDetail(bot, container) {
       <button class="tab-btn${_selectedBotTab === 'prompt' ? ' active' : ''}" data-tab="prompt" role="tab" aria-selected="${_selectedBotTab === 'prompt'}">Prompt</button>
       <button class="tab-btn${_selectedBotTab === 'media' ? ' active' : ''}" data-tab="media" role="tab" aria-selected="${_selectedBotTab === 'media'}">Mídias</button>
       <button class="tab-btn${_selectedBotTab === 'galeria' ? ' active' : ''}" data-tab="galeria" role="tab" aria-selected="${_selectedBotTab === 'galeria'}">${icon('image',13)} Galeria</button>
-      <!-- aba Roteamento removida (003-F): use a seção global "Roteamento" no menu -->
+      <!-- aba Roteamento removida (003-F); seção global "Roteamento" descontinuada na Missão 023 W2 -->
       <button class="tab-btn${_selectedBotTab === 'config-ia' ? ' active' : ''}" data-tab="config-ia" role="tab" aria-selected="${_selectedBotTab === 'config-ia'}">Configuração IA</button>
       <button class="tab-btn${_selectedBotTab === 'personalizacao' ? ' active' : ''}" data-tab="personalizacao" role="tab" aria-selected="${_selectedBotTab === 'personalizacao'}">Personalização</button>
       ${hasGcal ? `<button class="tab-btn${_selectedBotTab === 'horarios' ? ' active' : ''}" data-tab="horarios" role="tab" aria-selected="${_selectedBotTab === 'horarios'}">Horários</button>` : ''}
@@ -4449,14 +4413,6 @@ async function loadBotTab(slot, tab, el, bot) {
     await renderBotMedia(slot, el);
   } else if (tab === 'galeria') {
     await window.GalleryV2.renderBotGaleria(slot, el);
-  } else if (tab === 'routing') {
-    // aba removida em 003-F: roteamento virou seção global
-    el.innerHTML = `<div class="empty-state" style="padding:2rem 0">
-      ${icon('git-branch',32)}
-      <div class="empty-state__title">Roteamento centralizado</div>
-      <p class="empty-state__text">Todos os telefones são gerenciados numa tabela única.<br>Use a seção global de Roteamento para adicionar, editar ou remover acessos.</p>
-      <button class="btn btn--primary btn--sm empty-state__action" onclick="navigateTo('roteamento')">${icon('sliders',14)} Ir para Roteamento</button>
-    </div>`;
   } else if (tab === 'config-ia') {
     await renderBotConfigIA(slot, el);
   } else if (tab === 'horarios') {
@@ -6210,7 +6166,6 @@ function renderBarChart(data) {
    CONFIGURAÇÕES
    ══════════════════════════════════════════════════════════════════ */
 let _cfgTab = localStorage.getItem('paineladmin:cfg-tab') || 'fluxos';
-let _cfgRoutingCache = null;
 
 async function renderConfig() {
   const sec = document.querySelector('#sec-configuracoes');
@@ -6258,14 +6213,8 @@ async function renderConfig() {
 
 async function loadCfgFluxos(content) {
   try {
-    const [wfsData, routingData] = await Promise.allSettled([
-      api('/api/workflows'),
-      _cfgRoutingCache ? Promise.resolve(_cfgRoutingCache) : api('/api/routing'),
-    ]);
+    const wfsData = await Promise.allSettled([api('/api/workflows')]).then(r => r[0]);
     const wfs = wfsData.status === 'fulfilled' ? (Array.isArray(wfsData.value) ? wfsData.value : (wfsData.value?.workflows || wfsData.value?.data || [])) : [];
-    if (routingData.status === 'fulfilled') _cfgRoutingCache = routingData.value;
-    const routing = _cfgRoutingCache || [];
-    const routingArr = Array.isArray(routing) ? routing : (routing.routes || routing.rules || []);
 
     if (!wfs.length) {
       content.innerHTML = `<div class="empty-state">${icon('settings',36)}<div class="empty-state__title">Nenhum fluxo encontrado</div></div>`;
@@ -6277,7 +6226,6 @@ async function loadCfgFluxos(content) {
 
     wfs.forEach(w => {
       const wId = w.workflow_id || w.id;
-      const clients = routingArr.filter(r => r.workflow_id === wId).length;
       const isActive = w.active !== false;
 
       const card = document.createElement('div');
@@ -6289,7 +6237,7 @@ async function loadCfgFluxos(content) {
       const info = document.createElement('div');
       info.className = 'flex-1';
       info.style.cssText = 'min-width:120px';
-      info.innerHTML = `<div class="h3">${escapeHtml(w.name || w.workflow_id || '—')}</div><div class="muted mono" style="font-size:.75rem">${escapeHtml(w.workflow_id || w.source || '')}</div><div class="subtle" style="margin-top:2px">${fmtNum(clients)} cliente${clients !== 1 ? 's' : ''} roteado${clients !== 1 ? 's' : ''}</div>`;
+      info.innerHTML = `<div class="h3">${escapeHtml(w.name || w.workflow_id || '—')}</div><div class="muted mono" style="font-size:.75rem">${escapeHtml(w.workflow_id || w.source || '')}</div>`;
       card.appendChild(info);
 
       const badge = document.createElement('span');
@@ -9417,484 +9365,13 @@ async function _gerarPairingCodeClone(sessaoName) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   ROTEAMENTO — seção de primeiro nível (003-F: implementação completa)
-   Tabela única routing_clientes — CRUD completo com filtros, bulk delete,
-   edição inline de workflow e modal de adicionar/editar.
+   ROTEAMENTO de teste — REMOVIDO (Missão 023 W2).
+   A aba/seção "Roteamento" (CRUD da tabela routing_clientes para fluxos de
+   TESTE) e os helpers _rt* foram descontinuados pelo Bruno: as entradas foram
+   apagadas e a sessão WHATSAPP_ROUTER_TESTE foi removida do WAHA.
+   O roteamento CORE (apps/api/src/router.ts) continua intacto — é runtime e
+   não possui UI no painel.
    ══════════════════════════════════════════════════════════════════ */
-
-// Estado local da seção de roteamento
-let _rtRoutes   = [];   // cache completo de routing_clientes
-let _rtWfs      = [];   // cache de workflows roteáveis
-let _rtFilter   = { wfId: '', q: '' };
-let _rtSelected = new Set();
-let _rtDebounce = null;
-
-// Paleta de cores para badges de workflow (determinístico por id)
-// F4: badges de workflow re-tonalizados pra família Cadência (eram azul/ciano/rosa
-// off-brand). Soft-bg + texto claro; distinguíveis e on-brand. Determinístico por id.
-const RT_WF_COLORS = [
-  { bg:'rgba(154,124,240,.18)', color:'#b9a4f5' },
-  { bg:'rgba(78,216,143,.18)',  color:'#7fe6ad' },
-  { bg:'rgba(224,162,60,.18)',  color:'#ecc079' },
-  { bg:'rgba(100,49,214,.22)',  color:'#a98cf2' },
-  { bg:'rgba(255,107,94,.18)',  color:'#ff9b91' },
-  { bg:'rgba(126,92,232,.20)',  color:'#c4b1f7' },
-];
-function _rtWfColor(wfId) {
-  let h = 0;
-  for (let i = 0; i < (wfId||'').length; i++) h = (h*31 + (wfId||'').charCodeAt(i)) >>> 0;
-  return RT_WF_COLORS[h % RT_WF_COLORS.length];
-}
-
-async function renderRoteamento() {
-  const sec = document.querySelector('#sec-roteamento');
-  if (!sec) return;
-
-  sec.innerHTML = `
-    <div class="section-header">
-      <div class="section-header__left">
-        <h1 class="h1">Roteamento de Telefones</h1>
-        <p class="muted">Tabela única de acesso — vincula número ao fluxo de teste correspondente</p>
-      </div>
-      <div class="section-header__right">
-        <button class="btn btn--primary" id="rt-btn-add">${icon('plus',14)} Adicionar telefone</button>
-      </div>
-    </div>
-    <div id="rt-kpis" class="rt-kpi-strip">
-      <div class="rt-kpi"><span class="rt-kpi__value skeleton-inline" style="width:3ch">…</span><span class="rt-kpi__label">Cadastrados</span></div>
-      <div class="rt-kpi"><span class="rt-kpi__value skeleton-inline" style="width:3ch">…</span><span class="rt-kpi__label">Fluxos routáveis</span></div>
-    </div>
-    <div class="rt-filter-bar" id="rt-filter-bar">
-      <select id="rt-sel-wf" style="max-width:220px">
-        <option value="">Todos os fluxos</option>
-      </select>
-      <input type="text" id="rt-search" placeholder="Buscar telefone ou nome…" style="flex:1;max-width:280px" />
-      <button class="btn btn--ghost btn--sm" id="rt-btn-clear" style="white-space:nowrap">${icon('x',12)} Limpar filtros</button>
-    </div>
-    <div class="rt-bulk-bar" id="rt-bulk-bar">
-      <span class="rt-bulk-bar__count" id="rt-bulk-count"></span>
-      <button class="btn btn--sm btn--danger" id="rt-btn-bulk-del">${icon('trash-2',13)} Deletar selecionados</button>
-    </div>
-    <div id="rt-table-wrap">
-      <div style="padding:1.5rem 0;display:flex;align-items:center;gap:.5rem;color:var(--text-muted)"><div class="spinner"></div> Carregando…</div>
-    </div>`;
-
-  document.getElementById('rt-btn-add').addEventListener('click', () => _rtOpenModal(null));
-  document.getElementById('rt-btn-clear').addEventListener('click', _rtClearFilters);
-  document.getElementById('rt-search').addEventListener('input', () => {
-    clearTimeout(_rtDebounce);
-    _rtDebounce = setTimeout(() => {
-      _rtFilter.q = document.getElementById('rt-search').value.trim().toLowerCase();
-      _rtRender();
-    }, 200);
-  });
-  document.getElementById('rt-sel-wf').addEventListener('change', () => {
-    _rtFilter.wfId = document.getElementById('rt-sel-wf').value;
-    _rtRender();
-  });
-  document.getElementById('rt-btn-bulk-del').addEventListener('click', _rtBulkDelete);
-
-  try {
-    const [rawRoutes, rawWfs] = await Promise.all([
-      api('/api/routing'),
-      api('/api/workflows'),
-    ]);
-    _rtRoutes = Array.isArray(rawRoutes) ? rawRoutes : (rawRoutes.routes || rawRoutes.rules || []);
-    const allWfs = Array.isArray(rawWfs) ? rawWfs : (rawWfs.workflows || rawWfs.data || []);
-    _rtWfs = allWfs.filter(w => w.routable);
-
-    // Popula KPIs
-    document.getElementById('rt-kpis').innerHTML = `
-      <div class="rt-kpi"><span class="rt-kpi__value">${_rtRoutes.length}</span><span class="rt-kpi__label">Cadastrados</span></div>
-      <div class="rt-kpi"><span class="rt-kpi__value">${_rtWfs.length}</span><span class="rt-kpi__label">Fluxos disponíveis</span></div>`;
-
-    // Popula select de fluxos
-    const sel = document.getElementById('rt-sel-wf');
-    _rtWfs.forEach(w => {
-      const opt = document.createElement('option');
-      opt.value = w.id;
-      opt.textContent = w.name || w.id;
-      sel.appendChild(opt);
-    });
-
-    _rtRender();
-  } catch (err) {
-    document.getElementById('rt-table-wrap').innerHTML =
-      `<div class="alert--danger" style="background:var(--danger-bg);border:1px solid var(--danger);border-radius:var(--radius-md);padding:.75rem 1rem;color:var(--danger);display:flex;align-items:center;gap:.5rem">${icon('alert-triangle',14)} Erro ao carregar: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function _rtFiltered() {
-  return _rtRoutes.filter(r => {
-    if (_rtFilter.wfId && r.workflow_id !== _rtFilter.wfId) return false;
-    if (_rtFilter.q) {
-      const phone = (r.telefone || r.phone || '').toLowerCase();
-      const nome  = (r.nome_cliente || r.nome || '').toLowerCase();
-      if (!phone.includes(_rtFilter.q) && !nome.includes(_rtFilter.q)) return false;
-    }
-    return true;
-  });
-}
-
-function _rtClearFilters() {
-  _rtFilter = { wfId: '', q: '' };
-  const selEl = document.getElementById('rt-sel-wf');
-  const srEl  = document.getElementById('rt-search');
-  if (selEl) selEl.value = '';
-  if (srEl)  srEl.value = '';
-  _rtRender();
-}
-
-function _rtRender() {
-  const rows = _rtFiltered();
-  const wrap = document.getElementById('rt-table-wrap');
-  if (!wrap) return;
-
-  const hasFilters = !!((_rtFilter.wfId || _rtFilter.q));
-
-  if (!rows.length) {
-    wrap.innerHTML = `
-      <div class="empty-state">
-        ${icon('phone',32)}
-        <div class="empty-state__title">${hasFilters ? 'Nenhum resultado' : 'Sem telefones cadastrados'}</div>
-        <p class="empty-state__text">${hasFilters
-          ? 'Nenhum telefone corresponde aos filtros aplicados.'
-          : 'Adicione um telefone para liberar o acesso ao fluxo de teste.'}</p>
-        ${hasFilters ? `<button class="btn btn--ghost btn--sm empty-state__action" onclick="_rtClearFilters()">${icon('x',12)} Limpar filtros</button>` : ''}
-      </div>`;
-    return;
-  }
-
-  const tbody = rows.map(r => {
-    const id       = r.id;
-    const phone    = escapeHtml(_fmtPhone(r.telefone || r.phone) || r.telefone || r.phone || '—');
-    const nome     = escapeHtml(r.nome_cliente || r.nome || '—');
-    const wfId     = r.workflow_id || '';
-    const wf       = _rtWfs.find(w => w.id === wfId);
-    const wfName   = escapeHtml(wf?.name || r.workflow_name || wfId || '—');
-    // Sessão WAHA: o nome do workflow é o mesmo que o slot/sessão (ex: "teste_barbearia")
-    const sessaoName = escapeHtml(wf?.name || r.workflow_name || '—');
-    const ativo    = r.ativo !== false;
-    const updated  = r.atualizado_em ? fmtRelative(r.atualizado_em) : (r.criado_em ? fmtRelative(r.criado_em) : '—');
-    const checked  = _rtSelected.has(id);
-    const c        = _rtWfColor(wfId);
-    return `<tr data-rt-id="${escapeHtml(String(id))}">
-      <td style="width:36px;padding-left:.875rem">
-        <input type="checkbox" class="rt-row-check" data-id="${escapeHtml(String(id))}" ${checked ? 'checked' : ''} aria-label="Selecionar linha" />
-      </td>
-      <td class="rt-col-phone">${phone}</td>
-      <td class="rt-col-nome">${nome}</td>
-      <td>
-        <span class="rt-wf-badge" style="background:${c.bg};color:${c.color}" data-wf-id="${escapeHtml(wfId)}" data-row-id="${escapeHtml(String(id))}" title="Clique para editar workflow">${wfName}</span>
-      </td>
-      <td class="rt-col-sessao"><code style="font-size:.75rem;color:var(--text-muted)">${sessaoName}</code></td>
-      <td class="rt-col-ativo">
-        <label class="toggle" title="${ativo ? 'Ativo' : 'Inativo'}">
-          <input type="checkbox" class="rt-toggle-ativo" data-id="${escapeHtml(String(id))}" ${ativo ? 'checked' : ''} />
-          <span class="toggle__track"></span>
-        </label>
-      </td>
-      <td class="rt-col-updated muted">${escapeHtml(updated)}</td>
-      <td style="width:40px">
-        <div class="rt-actions-wrap">
-          <button class="more-btn rt-more" data-id="${escapeHtml(String(id))}" aria-label="Ações">···</button>
-          <div class="rt-actions-menu" id="rt-menu-${escapeHtml(String(id))}">
-            <button class="rt-act-edit" data-id="${escapeHtml(String(id))}">${icon('pencil',13)} Editar</button>
-            <button class="rt-act-del danger" data-id="${escapeHtml(String(id))}">${icon('trash-2',13)} Deletar</button>
-          </div>
-        </div>
-      </td>
-    </tr>`;
-  }).join('');
-
-  wrap.innerHTML = `
-    <div class="table-wrap">
-      <table class="rt-table">
-        <thead><tr>
-          <th style="width:36px;padding-left:.875rem"><input type="checkbox" id="rt-check-all" title="Selecionar todos" /></th>
-          <th>TELEFONE</th>
-          <th>CLIENTE</th>
-          <th>FLUXO</th>
-          <th class="rt-col-sessao">SESSÃO</th>
-          <th class="rt-col-ativo">ATIVO</th>
-          <th class="rt-col-updated">ATUALIZADO</th>
-          <th></th>
-        </tr></thead>
-        <tbody>${tbody}</tbody>
-      </table>
-    </div>`;
-
-  // Listeners — select all
-  wrap.querySelector('#rt-check-all').addEventListener('change', e => {
-    const checked = e.target.checked;
-    wrap.querySelectorAll('.rt-row-check').forEach(cb => {
-      cb.checked = checked;
-      const rid = cb.dataset.id;
-      if (checked) _rtSelected.add(rid); else _rtSelected.delete(rid);
-    });
-    _rtUpdateBulkBar();
-  });
-
-  // Listeners — individual checkboxes
-  wrap.querySelectorAll('.rt-row-check').forEach(cb => {
-    cb.addEventListener('change', e => {
-      if (e.target.checked) _rtSelected.add(e.target.dataset.id);
-      else _rtSelected.delete(e.target.dataset.id);
-      _rtUpdateBulkBar();
-    });
-  });
-
-  // Listeners — toggle ativo
-  wrap.querySelectorAll('.rt-toggle-ativo').forEach(tog => {
-    tog.addEventListener('change', async e => {
-      const rid = e.target.dataset.id;
-      const ativoNovo = e.target.checked;
-      try {
-        await api(`/api/routing/${encodeURIComponent(rid)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ativo: ativoNovo }),
-        });
-        const idx = _rtRoutes.findIndex(r => String(r.id) === rid);
-        if (idx !== -1) _rtRoutes[idx].ativo = ativoNovo;
-        toast(ativoNovo ? 'Registro ativado' : 'Registro desativado', 'success');
-      } catch (err) {
-        toast('Erro ao atualizar: ' + err.message, 'danger');
-        e.target.checked = !ativoNovo; // reverte
-      }
-    });
-  });
-
-  // Listeners — dropdown de ações
-  wrap.querySelectorAll('.rt-more').forEach(btn => {
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      const rid = btn.dataset.id;
-      // fecha todos os outros menus
-      wrap.querySelectorAll('.rt-actions-menu').forEach(m => {
-        if (m.id !== `rt-menu-${rid}`) m.classList.remove('open');
-      });
-      document.getElementById(`rt-menu-${rid}`)?.classList.toggle('open');
-    });
-  });
-  document.addEventListener('click', _rtCloseMenus, { once: true });
-
-  wrap.querySelectorAll('.rt-act-edit').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const rid = btn.dataset.id;
-      const route = _rtRoutes.find(r => String(r.id) === rid);
-      if (route) _rtOpenModal(route);
-    });
-  });
-
-  wrap.querySelectorAll('.rt-act-del').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const rid = btn.dataset.id;
-      const route = _rtRoutes.find(r => String(r.id) === rid);
-      const label = route ? (route.telefone || route.phone || rid) : rid;
-      if (!window.confirm(`Deletar o telefone ${label}?`)) return;
-      try {
-        await api(`/api/routing/${encodeURIComponent(rid)}`, { method: 'DELETE' });
-        _rtRoutes = _rtRoutes.filter(r => String(r.id) !== rid);
-        _rtSelected.delete(rid);
-        toast('Telefone removido', 'success');
-        _rtUpdateKPIs();
-        _rtRender();
-      } catch (err) {
-        toast('Erro ao deletar: ' + err.message, 'danger');
-      }
-    });
-  });
-
-  // Edição inline de workflow ao clicar no badge
-  wrap.querySelectorAll('.rt-wf-badge').forEach(badge => {
-    badge.addEventListener('click', e => {
-      const rid   = badge.dataset.rowId;
-      const curWf = badge.dataset.wfId;
-      const sel = document.createElement('select');
-      sel.className = 'rt-inline-select';
-      _rtWfs.forEach(w => {
-        const opt = document.createElement('option');
-        opt.value = w.id;
-        opt.textContent = w.name || w.id;
-        if (w.id === curWf) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      badge.replaceWith(sel);
-      sel.focus();
-      sel.addEventListener('change', async () => {
-        const newWfId = sel.value;
-        const newWf   = _rtWfs.find(w => w.id === newWfId);
-        try {
-          await api(`/api/routing/${encodeURIComponent(rid)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflow_id: newWfId, workflow_name: newWf?.name }),
-          });
-          const idx = _rtRoutes.findIndex(r => String(r.id) === rid);
-          if (idx !== -1) {
-            _rtRoutes[idx].workflow_id   = newWfId;
-            _rtRoutes[idx].workflow_name = newWf?.name;
-          }
-          toast('Fluxo atualizado', 'success');
-          _rtRender();
-        } catch (err) {
-          toast('Erro ao atualizar fluxo: ' + err.message, 'danger');
-          _rtRender();
-        }
-      });
-      sel.addEventListener('blur', () => _rtRender());
-    });
-  });
-
-  _rtUpdateBulkBar();
-}
-
-function _rtCloseMenus() {
-  document.querySelectorAll('.rt-actions-menu.open').forEach(m => m.classList.remove('open'));
-}
-
-function _rtUpdateBulkBar() {
-  const bar = document.getElementById('rt-bulk-bar');
-  const cnt = document.getElementById('rt-bulk-count');
-  if (!bar) return;
-  if (_rtSelected.size > 0) {
-    bar.classList.add('visible');
-    if (cnt) cnt.textContent = `${_rtSelected.size} selecionado${_rtSelected.size !== 1 ? 's' : ''}`;
-  } else {
-    bar.classList.remove('visible');
-  }
-}
-
-function _rtUpdateKPIs() {
-  const kpis = document.getElementById('rt-kpis');
-  if (!kpis) return;
-  kpis.innerHTML = `
-    <div class="rt-kpi"><span class="rt-kpi__value">${_rtRoutes.length}</span><span class="rt-kpi__label">Cadastrados</span></div>
-    <div class="rt-kpi"><span class="rt-kpi__value">${_rtWfs.length}</span><span class="rt-kpi__label">Fluxos routáveis</span></div>`;
-}
-
-async function _rtBulkDelete() {
-  if (_rtSelected.size === 0) return;
-  const n = _rtSelected.size;
-  if (!window.confirm(`Deletar ${n} telefone${n !== 1 ? 's' : ''}? Essa ação não pode ser desfeita.`)) return;
-  const ids = Array.from(_rtSelected);
-  let errs = 0;
-  for (const rid of ids) {
-    try {
-      await api(`/api/routing/${encodeURIComponent(rid)}`, { method: 'DELETE' });
-      _rtRoutes = _rtRoutes.filter(r => String(r.id) !== rid);
-    } catch (e) { errs++; console.warn('[rtBulkDelete] erro em', rid, ':', e?.message); }
-  }
-  _rtSelected.clear();
-  if (errs) toast(`${errs} erro(s) ao deletar`, 'warning');
-  else toast(`${n} telefone${n !== 1 ? 's' : ''} removido${n !== 1 ? 's' : ''}`, 'success');
-  _rtUpdateKPIs();
-  _rtRender();
-}
-
-function _rtOpenModal(route) {
-  // route = null → modo "Adicionar"; route = objeto → modo "Editar"
-  const isEdit = !!route;
-  const titleText = isEdit ? 'Editar acesso' : 'Adicionar telefone';
-  const phone = route ? (route.telefone || route.phone || '') : '';
-  const nome  = route ? (route.nome_cliente || route.nome || '') : '';
-  const wfId  = route ? (route.workflow_id || '') : '';
-  const ativo = route ? (route.ativo !== false) : true;
-
-  const wfOptions = _rtWfs.map(w =>
-    `<option value="${escapeHtml(w.id)}" ${w.id === wfId ? 'selected' : ''}>${escapeHtml(w.name || w.id)}</option>`
-  ).join('');
-
-  openModal(`
-    <div class="modal__header">
-      <span class="modal__title">${escapeHtml(titleText)}</span>
-      <button class="btn btn--ghost btn--sm" onclick="closeModal()" aria-label="Fechar">${icon('x',16)}</button>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:.875rem">
-      <div class="field">
-        <label for="rt-modal-phone">Telefone <span style="color:var(--danger)">*</span></label>
-        <input id="rt-modal-phone" type="tel" placeholder="5511999990000" maxlength="15"
-          value="${escapeHtml(phone)}"
-          style="font-family:var(--font-mono)" />
-        <span class="muted" style="font-size:.75rem">Somente dígitos, incluindo código do país (ex: 5511999990000)</span>
-      </div>
-      <div class="field">
-        <label for="rt-modal-nome">Nome do cliente <span class="muted">(opcional)</span></label>
-        <input id="rt-modal-nome" type="text" placeholder="Ex: João da Silva" maxlength="80"
-          value="${escapeHtml(nome)}" />
-      </div>
-      <div class="field">
-        <label for="rt-modal-wf">Fluxo de teste <span style="color:var(--danger)">*</span></label>
-        <select id="rt-modal-wf">
-          <option value="">— selecione um fluxo —</option>
-          ${wfOptions || '<option disabled>Nenhum fluxo disponível</option>'}
-        </select>
-      </div>
-      ${isEdit ? `<div class="field" style="display:flex;align-items:center;gap:.75rem">
-        <label class="toggle">
-          <input type="checkbox" id="rt-modal-ativo" ${ativo ? 'checked' : ''} />
-          <span class="toggle__track"></span>
-          <span>Ativo</span>
-        </label>
-      </div>` : ''}
-      <div style="display:flex;gap:.5rem;justify-content:flex-end;padding-top:.25rem">
-        <button class="btn btn--ghost btn--sm" onclick="closeModal()">Cancelar</button>
-        <button class="btn btn--primary btn--sm" id="rt-modal-save">${isEdit ? `${icon('check-circle-2',13)} Salvar` : `${icon('plus',13)} Adicionar`}</button>
-      </div>
-    </div>`);
-
-  document.getElementById('rt-modal-save').addEventListener('click', async () => {
-    const telRaw  = (document.getElementById('rt-modal-phone')?.value || '').replace(/\D/g, '');
-    const nomeVal = (document.getElementById('rt-modal-nome')?.value || '').trim();
-    const wfVal   = document.getElementById('rt-modal-wf')?.value;
-    const ativoVal = isEdit ? (document.getElementById('rt-modal-ativo')?.checked !== false) : true;
-
-    if (!telRaw || telRaw.length < 10) {
-      toast('Informe um telefone válido (mínimo 10 dígitos)', 'warning'); return;
-    }
-    if (!wfVal) {
-      toast('Selecione um fluxo de teste', 'warning'); return;
-    }
-    const wf = _rtWfs.find(w => w.id === wfVal);
-    const btn = document.getElementById('rt-modal-save');
-    if (btn) btn.disabled = true;
-
-    try {
-      const body = {
-        telefone: telRaw,
-        nome_cliente: nomeVal || undefined,
-        workflow_id: wfVal,
-        workflow_name: wf?.name,
-        ativo: ativoVal,
-      };
-      if (isEdit) {
-        const updated = await api(`/api/routing/${encodeURIComponent(route.id)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const idx = _rtRoutes.findIndex(r => String(r.id) === String(route.id));
-        if (idx !== -1) _rtRoutes[idx] = { ..._rtRoutes[idx], ...body, ...(updated || {}) };
-        toast('Acesso atualizado', 'success');
-      } else {
-        const created = await api('/api/routing', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        _rtRoutes.push(created && created.id ? created : { ...body, id: Date.now() });
-        toast('Telefone adicionado', 'success');
-      }
-      _rtUpdateKPIs();
-      _rtRender();
-      closeModal();
-    } catch (err) {
-      toast('Erro: ' + err.message, 'danger');
-      if (btn) btn.disabled = false;
-    }
-  });
-}
 
 /* ══════════════════════════════════════════════════════════════════
    MÉTRICAS — por bot, timeseries, top erros (003-I)
@@ -10061,7 +9538,6 @@ const NAV_GROUPS = [
       { id: 'bots',       label: 'Bots',       render: renderBots },
       { id: 'waha',       label: 'WAHA',       render: renderSessoes },
       { id: 'execucoes',  label: 'Execuções',  render: renderExecucoes },
-      { id: 'roteamento', label: 'Roteamento', render: renderRoteamento },
     ],
   },
   {
