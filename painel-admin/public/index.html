@@ -200,6 +200,8 @@ textarea, input, select { font-family: inherit; }
 .gcal-instructions li a { color: var(--primary); text-decoration: none; }
 .gcal-instructions li a:hover { text-decoration: underline; }
 .gcal-instructions li code { font-family: var(--font-mono, monospace); font-size: .75rem; background: var(--surface-2); padding: .0625rem .25rem; border-radius: 3px; }
+/* Variante sem a bolinha de numeração automática: os <li> já trazem rótulo manual ("Passo N —", "(1)/(2)") referenciado cruzado no texto, então o counter ::before duplicaria a numeração. Herda todo o resto de .gcal-instructions. */
+.gcal-instructions--plain li::before { content: none; }
 .gcal-edit-hint { padding: .625rem .75rem; background: var(--surface-2); border-radius: var(--radius-sm); font-size: .8125rem; color: var(--text-muted); margin-bottom: .5rem; border-left: 3px solid var(--primary); }
 .pause-help-block { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .pause-help-block summary { display: flex; align-items: center; gap: .375rem; padding: .625rem .875rem; font-size: .8125rem; font-weight: 600; cursor: pointer; user-select: none; background: var(--surface-2); list-style: none; color: var(--text); }
@@ -3192,7 +3194,7 @@ async function renderDashKPIStrip() {
     function deltaHtml(pct) {
       if (pct == null) return '';
       const cls = pct > 0 ? 'kpi-strip__delta--up' : pct < 0 ? 'kpi-strip__delta--down' : '';
-      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : 'â†’';
+      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '→';
       return `<span class="${cls}">${arrow} ${Math.abs(pct)}%</span>`;
     }
 
@@ -3555,13 +3557,13 @@ async function _loadDashActivity() {
       const isOk  = st === 'success' || (e.finished && !e.stoppedAt);
       const isErr = st === 'error' || (e.stoppedAt && !e.finished);
       const stCls = isOk ? 'activity-row__status--ok' : isErr ? 'activity-row__status--err' : 'activity-row__status--run';
-      const stTxt = isOk ? 'âœ“' : isErr ? 'âœ—' : '…';
+      const stTxt = isOk ? '✓' : isErr ? '✗' : '…';
       const dur = e.duration_ms != null ? fmtDuration(e.duration_ms) : (e.duration != null ? fmtDuration(e.duration) : '—');
 
       return `<div class="activity-row">
         <span class="activity-row__time">${escapeHtml(timeStr)}</span>
         <span class="activity-row__phone">${escapeHtml(phone)}</span>
-        <span class="activity-row__bot">â†’ ${bot}</span>
+        <span class="activity-row__bot">→ ${bot}</span>
         <span class="${stCls}" style="font-size:.8rem">${stTxt}</span>
         <span></span>
         <span class="activity-row__lat">${escapeHtml(dur)}</span>
@@ -3741,7 +3743,7 @@ function _sessaoAbrirQR(sessionName) {
   openModal(`
     <div class="modal__header">
       <span class="modal__title">${icon('qr-code',18)} Conectar — <span class="mono">${escapeHtml(sessionName)}</span></span>
-      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">âœ•</button>
+      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
     </div>
     <div style="display:flex;flex-direction:column;align-items:center;gap:.5rem;padding:1rem 0">
       <div class="auth-seg" role="tablist" aria-label="Método de autenticação">
@@ -3857,7 +3859,7 @@ async function _gerarPairingCode(sessionName) {
       <div class="pairing-instructions">
         No WhatsApp do cliente:<br>
         <ol>
-          <li>Configurações â†’ Aparelhos conectados</li>
+          <li>Configurações → Aparelhos conectados</li>
           <li>Conectar um aparelho</li>
           <li>Conectar com número de telefone</li>
           <li>Digite o código acima</li>
@@ -3961,7 +3963,7 @@ function _sessaoNovaModal() {
   openModal(`
     <div class="modal__header">
       <span class="modal__title">${icon('plus-circle',18)} Nova sessão WAHA</span>
-      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">âœ•</button>
+      <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
     </div>
     <div style="padding:.25rem 0 .5rem">
       <label class="label" for="nova-sessao-nome">Nome da sessão</label>
@@ -8054,65 +8056,106 @@ function _renderGcalTab(opts) {
 
   function _gcalInstructionsHtml() {
     return `
-      <details class="gcal-help-block">
-        <summary>${icon('help-circle', 14)} Como obter essas informações? (passo a passo)</summary>
-        <div class="gcal-help-block__body">
-          <p class="muted" style="margin:0 0 .75rem 0;font-size:.8125rem">
-            Use uma <strong>conta Gmail nova</strong> dedicada por cliente (ex: <code>agenda.nomedocliente@gmail.com</code>). Faça login nessa conta antes de começar e siga os 6 passos. Cada passo abre num link direto.
-          </p>
-          <ol class="gcal-instructions">
-            <li>
-              <div>
-                <strong>Criar um projeto no Google Cloud</strong><br>
-                Acesse <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com â†’ Criar projeto</a>.
-                Dê um nome (ex: <code>agenda-nomedocliente</code>) e clique em <strong>Criar</strong>. Aguarde alguns segundos até o projeto ficar pronto e selecione-o no seletor de projetos no topo.
-              </div>
-            </li>
-            <li>
-              <div>
-                <strong>Habilitar a Google Calendar API</strong><br>
-                <span style="color:var(--danger);font-weight:600">âš  Sem este passo o teste falha com erro 403 (<code>SERVICE_DISABLED</code> / <code>accessNotConfigured</code>).</span><br>
-                Com o projeto selecionado, abra <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener">console.cloud.google.com â†’ APIs â†’ Google Calendar API</a> e clique em <strong>Ativar / Enable</strong>. Espere ~1 minuto pra propagar.
-              </div>
-            </li>
-            <li>
-              <div>
-                <strong>Criar a Service Account</strong><br>
-                Vá em <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">IAM e Admin â†’ Contas de serviço</a> (com o projeto certo selecionado no topo).
-                Clique em <strong>+ Criar conta de serviço</strong>, dê um nome (ex: <code>agenda-nomedocliente</code>) e clique em <strong>Concluir</strong>. Pule as permissões opcionais.
-              </div>
-            </li>
-            <li>
-              <div>
-                <strong>Baixar a chave JSON</strong><br>
-                Na lista de contas de serviço, clique na conta criada â†’ aba <strong>Chaves</strong> â†’ <strong>Adicionar chave</strong> â†’ <strong>Criar nova chave</strong>.
-                Tipo <strong>JSON</strong> â†’ baixar. Guarde o arquivo (você vai colar o conteúdo abaixo) e abra-o pra copiar o campo <code>client_email</code>.
-              </div>
-            </li>
-            <li>
-              <div>
-                <strong>Compartilhar a agenda do cliente com a Service Account</strong><br>
-                <span style="color:var(--danger);font-weight:600">âš  Sem este passo o teste falha com erro 404 (<code>Calendar not found</code>).</span><br>
-                Acesse <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> <strong>logado na conta Gmail dona da agenda do cliente</strong> e:
-                <ol style="margin:.375rem 0 0 1rem;padding:0;font-size:.85rem">
-                  <li>Passe o mouse sobre a agenda na lista lateral â†’ clique nos 3 pontinhos â†’ <strong>Configurações e compartilhamento</strong>.</li>
-                  <li>Role até <strong>Compartilhar com pessoas e grupos específicos</strong> â†’ <strong>+ Adicionar pessoas e grupos</strong>.</li>
-                  <li>Cole o <code>client_email</code> copiado no passo 4 (ex: <code>agenda-fulano@projeto.iam.gserviceaccount.com</code>).</li>
-                  <li>Em "Permissões" escolha <strong>Fazer alterações em eventos</strong> (não basta "Ver todos os detalhes").</li>
-                  <li>Clique em <strong>Enviar</strong>.</li>
-                </ol>
-              </div>
-            </li>
-            <li>
-              <div>
-                <strong>Pegar o ID da agenda e conectar aqui</strong><br>
-                Na mesma tela <em>Configurações e compartilhamento</em>, role até <strong>Integrar agenda</strong> e copie o <strong>ID da agenda</strong> (geralmente um e-mail).
-                Volte aqui, cole o conteúdo do JSON do passo 4 no campo abaixo e o ID da agenda no segundo campo. Clique em <strong>Conectar</strong>.
-              </div>
-            </li>
-          </ol>
-        </div>
-      </details>`;
+<details class="gcal-help-block" open>
+<summary>${icon('help-circle', 14)} Como conectar o Google Calendar (LEIA: 2 avisos evitam 90% dos erros)</summary>
+<div class="gcal-help-block__body">
+<p class="muted">Este guia liga a agenda do Google ao seu atendimento automático, pra que os horários marcados pelo cliente apareçam sozinhos no seu calendário. Reserve uns 10 minutos, faça num computador (de preferência no Chrome) e siga na ordem. Não precisa de cartão de crédito em nenhum momento: tudo aqui é gratuito.</p>
+
+<p><strong>Regra de ouro:</strong> use a <strong>MESMA conta Gmail dedicada</strong> do Passo 1 até o Passo 6 &#8212; não troque de conta no meio. Antes de começar, crie uma conta Gmail só pra isso, dedicada a este cliente (por exemplo <code>agenda.nomedocliente@gmail.com</code>), e dentro dela uma agenda separada (não use sua agenda pessoal). Assim os horários do atendimento ficam isolados da sua vida particular e fica fácil revogar o acesso depois.</p>
+
+<p class="muted"><strong>Se a tela aparecer em inglês:</strong> o Google Cloud às vezes abre em inglês. Você pode trocar o idioma no seletor lá no rodapé da página (escolha Português do Brasil), ou usar estes equivalentes &#8212; Criar = Create, Ativar = Enable, Gerenciar = Manage, Contas de serviço = Service Accounts, Criar e continuar = Create and Continue, Concluído = Done, Chaves = Keys, Adicionar chave = Add Key, Criar nova chave = Create new key, Configurações e compartilhamento = Settings and sharing, Fazer alterações nos eventos = Make changes to events, Integrar agenda = Integrate calendar, ID da agenda = Calendar ID.</p>
+
+<p><span style="color:var(--danger);font-weight:bold">&#9888; Dois avisos que evitam 90% dos problemas (obrigatórios):</span></p>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><span style="color:var(--danger);font-weight:bold">(1)</span> se você pular o passo de <strong>Ativar</strong> a API do Calendar (Passo 2), tudo falha com erro <code>403</code>.</li>
+  <li><span style="color:var(--danger);font-weight:bold">(2)</span> se você não <strong>compartilhar a agenda</strong> com o robô (Passo 5), tudo falha com erro <code>404</code>.</li>
+</ol>
+
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li>
+    <div>
+      <strong>Passo 1 &#8212; Criar o projeto no Google Cloud.</strong> O projeto é só uma "pasta" onde o Google guarda essa configuração. Sem ele não dá pra continuar.
+      <ol>
+        <li>Abra o Chrome e confirme, na bolinha do canto superior direito, que você está logado na conta Gmail dedicada (a <code>agenda.nomedocliente@gmail.com</code>). Se for outra conta, clique na foto e troque. <span style="color:var(--danger);font-weight:bold">&#9888; Estar na conta errada aqui é o erro mais caro de desfazer.</span></li>
+        <li>Na barra de endereço (lá em cima, onde fica o endereço dos sites), digite <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com/projectcreate</a> e aperte <strong>Enter</strong>. Abre a tela <strong>Novo projeto</strong>. Se for a primeiríssima vez, antes aparece uma tela de boas-vindas: escolha o país <strong>Brasil</strong>, marque o aceite dos termos e clique no botão de aceitar (pode se chamar <strong>Concordo e continuar</strong> ou <strong>Concordar e continuar</strong>) &#8212; é gratuito e não pede cartão. Se depois de aceitar você cair na tela inicial do Console e não no <strong>Novo projeto</strong>, é só colar <code>console.cloud.google.com/projectcreate</code> de novo.</li>
+        <li>No campo <strong>Nome do projeto</strong>, digite algo que você reconheça, como <code>Agenda Edu Barbearia</code> (de 4 a 30 caracteres; pode ter espaço, mas não use acento nem ç). Logo abaixo o <code>ID do projeto</code> é gerado sozinho &#8212; pode deixar como está.</li>
+        <li>O campo <strong>Local</strong> deve mostrar <strong>Sem organização</strong> (ou <strong>Nenhuma organização</strong>, é a mesma coisa &#8212; normal numa conta Gmail comum) &#8212; não mexa.</li>
+        <li>Clique em <strong>Criar</strong>. Espera de 10 a 60 segundos; aparece um aviso no sininho dizendo <code>Projeto criado</code> (essa notificação some sozinha em poucos segundos, sem problema). O que importa é confirmar que o nome do projeto novo aparece fixo no topo, ao lado de <strong>Google Cloud</strong> &#8212; se não aparecer, clique no seletor de projeto no topo, aba <strong>Recentes</strong>, e abra o projeto.</li>
+      </ol>
+    </div>
+  </li>
+
+  <li>
+    <div>
+      <strong>Passo 2 &#8212; Ativar a Google Calendar API.</strong> "Ativar a API" é dar permissão pro Google deixar nosso sistema mexer na agenda. <span style="color:var(--danger);font-weight:bold">&#9888; Sem este passo, todo agendamento falha com erro <code>403</code> (a famosa mensagem "API has not been used in project... or it is disabled").</span>
+      <ol>
+        <li>Na barra de endereço, cole <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener">console.cloud.google.com/apis/library/calendar-json.googleapis.com</a> e aperte <strong>Enter</strong>. Abre a página da <strong>Google Calendar API</strong>.</li>
+        <li><span style="color:var(--danger);font-weight:bold">&#9888; Antes de clicar em Ativar, olhe o seletor de projeto no topo, ao lado de "Google Cloud".</span> Se ele NÃO mostrar o nome do seu projeto (aparece "Selecione um projeto" ou outro nome), clique nesse seletor, vá na aba <strong>Recentes</strong> e escolha o projeto que você criou no Passo 1. O link direto muitas vezes abre sem nenhum projeto selecionado &#8212; e aí o botão <strong>Ativar</strong> fica cinza/apagado e nada acontece ao clicar. Isso não é bug: é só o projeto que não está selecionado.</li>
+        <li>Clique no botão de ação principal escrito <strong>Ativar</strong> (geralmente azul). Em segundos o botão some e no lugar aparece <strong>Gerenciar</strong> &#8212; esse é o sinal de que deu certo. Se aparecer um aviso pedindo para aceitar os Termos de Serviço, marque o aceite e confirme: é gratuito e não pede cartão; depois disso o botão <strong>Ativar</strong> vira <strong>Gerenciar</strong> normalmente.</li>
+        <li>Confira de novo, depois de ativar, que o nome do projeto certo continua no topo &#8212; ativar no projeto errado é a causa nº1 do erro <code>403</code>.</li>
+        <li>Espere 1 a 2 minutos antes de testar. Logo após ativar, ainda pode dar <code>403</code> por alguns instantes (é só a ativação se espalhar pelos sistemas do Google) &#8212; é só esperar e tentar de novo, não significa erro. Se a página já mostrava <strong>Gerenciar</strong> em vez de <strong>Ativar</strong>, ótimo: a API já estava ligada, pode seguir.</li>
+      </ol>
+    </div>
+  </li>
+
+  <li>
+    <div>
+      <strong>Passo 3 &#8212; Criar a conta de serviço (o robô).</strong> Uma <em>conta de serviço</em> é um "usuário-robô": uma identidade automática que mexe na agenda em nome do sistema, sem ninguém precisar fazer login toda vez. O e-mail dela não termina em <code>@gmail.com</code> e sim em <code>.iam.gserviceaccount.com</code>.
+      <ol>
+        <li>Na barra de endereço, cole <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">console.cloud.google.com/iam-admin/serviceaccounts</a> e aperte <strong>Enter</strong> (confira o projeto certo no topo). Como alternativa, dá pra chegar pelo menu de três tracinhos (&#9776;) no canto superior esquerdo &#8594; <strong>IAM e administrador</strong> &#8594; <strong>Contas de serviço</strong> (pode ser preciso rolar o submenu até achar). Abre a lista de robôs do projeto (pode estar vazia).</li>
+        <li>Clique em <strong>Criar conta de serviço</strong> no topo. Abre um formulário em etapas.</li>
+        <li>Na etapa 1, preencha o <strong>Nome da conta de serviço</strong> com algo como <code>robo-agenda-cirilo</code> (o ID embaixo se preenche sozinho, não mexa) e clique em <strong>Criar e continuar</strong>.</li>
+        <li>As etapas seguintes (papéis e acesso) são <strong>opcionais</strong>: <strong>não escolha nada</strong> &#8212; clique em <strong>Continuar</strong> e depois em <strong>Concluído</strong> (ou em <strong>Concluído</strong> direto, se ele já aparecer). Pular aqui é o caminho certo: o robô vai ser autorizado direto na agenda (Passo 5), não no projeto. Se você adicionou um papel sem querer, não tem problema &#8212; pode remover ou deixar; o que autoriza o robô de verdade é o compartilhamento da agenda, não o papel aqui.</li>
+        <li>O robô novo aparece na lista com um e-mail terminando em <code>.iam.gserviceaccount.com</code>.</li>
+      </ol>
+    </div>
+  </li>
+
+  <li>
+    <div>
+      <strong>Passo 4 &#8212; Baixar a chave JSON.</strong> A "senha" do robô não é uma palavra digitada: é um arquivo (a chave JSON). Quem tem o arquivo, é o robô.
+      <span style="color:var(--danger);font-weight:bold">&#9888; Esse arquivo é uma senha. Nunca mande em grupo de WhatsApp, nunca poste print, nunca suba pro Git.</span>
+      <ol>
+        <li>Na lista, clique em cima do robô que você criou. Abre a página de detalhes com abas no topo.</li>
+        <li>Clique na aba <strong>Chaves</strong> &#8594; botão <strong>Adicionar chave</strong> &#8594; opção <strong>Criar nova chave</strong>. <span style="color:var(--danger);font-weight:bold">&#9888; Se o botão Adicionar chave estiver cinza/desabilitado ou aparecer a mensagem "Service account key creation is disabled" (criação de chave desativada), sua conta está numa organização com política de segurança que bloqueia chaves &#8212; fale com o responsável pela configuração, não dá pra resolver sozinho por aqui.</span></li>
+        <li>No pop-up, confirme que o tipo está em <strong>JSON</strong> (não P12) e clique em <strong>Criar</strong>. O navegador baixa um arquivo <code>.json</code> automaticamente (pasta Downloads). Pode aparecer uma janela com um aviso amarelo de segurança sobre chaves &#8212; é esperado, NÃO é erro; o arquivo já foi baixado.</li>
+        <li>Clique em <strong>Fechar</strong>. Guarde esse arquivo com cuidado: o Google <strong>não</strong> guarda uma segunda cópia &#8212; se perder, é preciso gerar outra chave.</li>
+        <li>Abra o arquivo no Bloco de Notas e procure <code>client_email</code> (dica: aperte Ctrl+F e digite <code>client_email</code>). Copie <strong>só</strong> o e-mail entre aspas, por exemplo <code>robo-agenda-cirilo@seu-projeto.iam.gserviceaccount.com</code> &#8212; sem as aspas e sem o texto <code>client_email</code>. Você vai usar ele no próximo passo.</li>
+      </ol>
+    </div>
+  </li>
+
+  <li>
+    <div>
+      <strong>Passo 5 &#8212; Compartilhar a agenda com o robô.</strong> Este passo acontece no <strong>Google Agenda</strong> (não no Google Cloud), logado na <strong>mesma</strong> conta dedicada que você usou do começo &#8212; a "conta dona da agenda" é essa mesma conta, não outra. <span style="color:var(--danger);font-weight:bold">&#9888; Sem este compartilhamento, tudo falha com erro <code>404</code> ("Calendar not found") &#8212; pra API, uma agenda que o robô não enxerga simplesmente "não existe".</span>
+      <ol>
+        <li>Abra <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a> e confira na bolinha do canto que é a conta dedicada (<code>agenda.nomedocliente@gmail.com</code>).</li>
+        <li><strong>Crie a agenda dedicada</strong> (se ainda não criou): na coluna da esquerda, ao lado de <strong>Outras agendas</strong>, clique no <strong>+</strong> &#8594; <strong>Criar nova agenda</strong> &#8594; dê um nome (ex.: <code>Atendimento Edu Barbearia</code>) &#8594; <strong>Criar agenda</strong>. Volte para a tela principal. <span style="color:var(--danger);font-weight:bold">&#9888; Não use sua agenda pessoal &#8212; o robô passaria a mexer nos seus compromissos particulares.</span></li>
+        <li>Na coluna esquerda, em <strong>Minhas agendas</strong>, passe o mouse sobre o nome da agenda dedicada; aparece um ícone de três pontos (tooltip <strong>Opções</strong>) &#8594; clique nele &#8594; <strong>Configurações e compartilhamento</strong>. (Se a lista de agendas não aparecer, a janela pode estar estreita: clique no menu &#9776; no canto superior esquerdo pra abrir a coluna.)</li>
+        <li>Role até <strong>Compartilhar com pessoas ou grupos específicos</strong> e clique em <strong>Adicionar pessoas e grupos</strong> (em algumas versões aparece como "Adicionar participantes e grupos" &#8212; é o mesmo botão).</li>
+        <li>Cole o <code>client_email</code> do robô (que você copiou no passo 4). O Google pode mostrar "sem foto / não reconhecido" &#8212; é normal para robô, adicione mesmo assim.</li>
+        <li>No seletor de permissão, escolha exatamente <strong>Fazer alterações nos eventos</strong>. <span style="color:var(--danger);font-weight:bold">&#9888; Não escolha "Ver todos os detalhes" &#8212; só leitura não deixa o robô criar horários (dá erro 403 ao agendar).</span> Também não precisa (e é melhor não) escolher "Fazer alterações e gerenciar compartilhamento", que dá mais poder do que o robô precisa.</li>
+        <li>Clique em <strong>Enviar</strong>. Como é uma conta de serviço (robô) e não uma pessoa, não há caixa de e-mail para receber convite nem nada para aceitar &#8212; o acesso passa a valer assim que ele aparece na lista com <strong>Fazer alterações nos eventos</strong> escrito ao lado. Se o Google mostrar algum aviso sobre notificar a pessoa, pode confirmar normalmente. <span style="color:var(--danger);font-weight:bold">&#9888; Se fechar a janela sem clicar Enviar, nada é salvo.</span></li>
+      </ol>
+    </div>
+  </li>
+
+  <li>
+    <div>
+      <strong>Passo 6 &#8212; Pegar o ID da agenda e conectar.</strong> O ID diz ao sistema em qual agenda criar os horários.
+      <ol>
+        <li>Ainda na mesma tela de configurações, role até <strong>Integrar agenda</strong> e copie o valor inteiro do campo <strong>ID da agenda</strong>. Numa agenda dedicada ele é um código longo terminando em <code>@group.calendar.google.com</code> (ex.: <code>c_3f8a...k2@group.calendar.google.com</code>). <span style="color:var(--danger);font-weight:bold">&#9888; Copie só o campo "ID da agenda" &#8212; ignore os campos "URL público", "Código de incorporação" e "Endereço no formato iCal" que também aparecem nessa seção.</span></li>
+        <li>Garanta que o ID copiado é o da <strong>mesma</strong> agenda que você compartilhou no passo 5. Se o ID for o seu próprio e-mail (termina em <code>@gmail.com</code>), você pegou a agenda <strong>pessoal</strong> &#8212; pare e use a agenda dedicada, senão o robô enxerga seus compromissos particulares.</li>
+        <li>Entregue ao responsável pela configuração, por um canal seguro (não por grupo de WhatsApp comum), o arquivo <code>.json</code> e o <strong>ID da agenda</strong>. Depois que a conexão estiver funcionando, mova o <code>.json</code> para um local protegido ou apague-o do computador &#8212; quem configura já tem a cópia.</li>
+        <li>A conexão é ligada por quem configura &#8212; pode levar alguns minutos até o primeiro horário aparecer. Se não aparecer em ~10 minutos, avise o responsável (em vez de refazer tudo). Pronto: a partir daí os horários marcados pelos clientes passam a aparecer sozinhos na sua agenda.</li>
+      </ol>
+    </div>
+  </li>
+</ol>
+
+<p class="muted"><strong>Já tenho isso configurado e quero trocar/refazer?</strong> Não precisa recriar tudo do zero. (a) Para trocar só a chave: reutilize o mesmo projeto e o mesmo robô, vá na aba <strong>Chaves</strong> &#8594; <strong>Adicionar chave</strong> &#8594; <strong>Criar nova chave</strong> (JSON), entregue a nova e apague a antiga na mesma aba (apagar revoga o acesso na hora). (b) Para trocar de agenda: refaça os Passos 5 e 6 na agenda nova e reenvie o JSON + o novo ID. (c) Se a chave vazou: apague-a na aba Chaves imediatamente e gere outra.</p>
+</div>
+</details>`;
   }
 
   function _showForm(data, isEdit) {
@@ -8159,7 +8202,7 @@ function _renderGcalTab(opts) {
         <div class="field">
           <label for="gcal-calendar-id">ID da agenda</label>
           <input type="text" id="gcal-calendar-id" placeholder="ex: fulano@gmail.com" value="${calId}" />
-          <span class="field__hint muted" style="font-size:.75rem">Encontre em calendar.google.com â†’ Configurações â†’ ID da agenda</span>
+          <span class="field__hint muted" style="font-size:.75rem">Encontre em calendar.google.com → Configurações → ID da agenda</span>
         </div>
         <div style="display:flex;gap:.625rem;flex-wrap:wrap">
           <button class="btn btn--primary" id="gcal-connect-btn">${btnLabel}</button>
@@ -9334,7 +9377,7 @@ async function _gerarPairingCodeClone(sessaoName) {
       <div class="pairing-instructions">
         No WhatsApp do cliente:<br>
         <ol>
-          <li>Configurações â†’ Aparelhos conectados</li>
+          <li>Configurações → Aparelhos conectados</li>
           <li>Conectar um aparelho</li>
           <li>Conectar com número de telefone</li>
           <li>Digite o código acima</li>
@@ -9751,7 +9794,7 @@ async function _rtBulkDelete() {
 }
 
 function _rtOpenModal(route) {
-  // route = null â†’ modo "Adicionar"; route = objeto â†’ modo "Editar"
+  // route = null → modo "Adicionar"; route = objeto → modo "Editar"
   const isEdit = !!route;
   const titleText = isEdit ? 'Editar acesso' : 'Adicionar telefone';
   const phone = route ? (route.telefone || route.phone || '') : '';
@@ -10037,7 +10080,7 @@ const NAV_GROUPS = [
    resto da máquina de nav (NAV_ITEMS_MAP.forEach) seguir funcionando. */
 const NAV_HIDDEN_ITEMS = [];
 
-/* Flat map de id â†’ item para lookup rápido (inclui itens ocultos navegáveis) */
+/* Flat map de id → item para lookup rápido (inclui itens ocultos navegáveis) */
 const NAV_ITEMS_MAP = {};
 NAV_GROUPS.forEach(g => g.items.forEach(i => { NAV_ITEMS_MAP[i.id] = i; }));
 NAV_HIDDEN_ITEMS.forEach(i => { NAV_ITEMS_MAP[i.id] = i; });
