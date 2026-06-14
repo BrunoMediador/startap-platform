@@ -15,6 +15,7 @@ import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap
 import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
+import { isBlockedNumber } from './lib/bot-blocklist.js';
 import { checkAndMarkDuplicate } from './lib/idempotency.js';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 import { handleSessionStatusEvent } from './lib/trial-pairing.js';
@@ -223,6 +224,25 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: 'ignored:no-phone' };
+  }
+
+  // 3-pre. Blocklist GLOBAL de números internos (ex.: sessão ALERTAS / 7411).
+  // Vale pra TODOS os clones (atuais e futuros): mora aqui, no router compartilhado,
+  // ANTES de antibot/routing/IA/GCal. Se um número operacional interno mandar mensagem
+  // pra qualquer bot -> ignora total (não responde, não chama IA, não toca GCal).
+  // Configurável por env BOT_BLOCKLIST_NUMBERS (default já inclui o 7411). Números do
+  // time/teste (Bruno etc.) NÃO entram na lista — ver lib/bot-blocklist.ts.
+  if (isBlockedNumber(telefone)) {
+    log.info({ ...baseLog }, 'Número da blocklist interna ignorado');
+    await flowExecutionLog.logFlowEvent({
+      ...baseLog,
+      eventType: 'router.ignored',
+      status: 'ignored',
+      message: 'Número da blocklist interna ignorado',
+      metadata: { reason: 'blocklist' },
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: 'ignored:blocklist' };
   }
 
   // 3a. Filtro de grupo — deve vir ANTES de qualquer log com telefone,

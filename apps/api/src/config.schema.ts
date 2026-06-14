@@ -213,6 +213,16 @@ export const ConfigSchema = z.object({
   // em alert_states (reusa a máquina anti-spam; sem tabela nova). Ajustável sem deploy.
   CANCELAMENTO_ESCALADO_COOLDOWN_MIN: z.coerce.number().int().positive().default(30),
 
+  // ── Blocklist GLOBAL de números internos (Missão 023 — fix do cancelamento) ──
+  // Lista (CSV) de números OPERACIONAIS internos que os bots NÃO devem responder
+  // (ex.: a sessão ALERTAS / 7411, que dispara avisos pro time/donos). Aplicada no
+  // router compartilhado ANTES de antibot/routing/IA/GCal -> vale pra TODOS os clones.
+  // OPCIONAL no boot (ausente = só o default 7411). Env opcional com default NÃO é env
+  // obrigatória nova (lição #247: env nova nunca derruba api/worker). O router lê a lib
+  // bot-blocklist (que lê process.env direto, mesmo padrão dos gates de flag); esta
+  // entrada documenta/valida o formato. NÃO incluir números do time/teste do Bruno aqui.
+  BOT_BLOCKLIST_NUMBERS: z.string().optional(),
+
   SERVICE_NAME: z.string().optional(),
 });
 
