@@ -15,8 +15,8 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
  *   - 401/403/400: "Usuário ou senha incorretos"
  *   - 429 / locked: lockout do portal-api
  *   - rede (status 0): "Não conseguimos entrar agora..."
- *   - must_change_password: aviso pra falar com o suporte (sem fluxo de troca v1)
- *   - sucesso -> redirect /inicio.
+ *   - sucesso -> redirect /inicio (sem nag de senha: a senha que o operador
+ *     define no gestão é a final; o portal não tem troca self-service).
  */
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -28,22 +28,21 @@ export function LoginForm() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    setNotice(null);
     setPending(true);
     try {
-      const res = await apiFetch<LoginResponse>('/auth/login', {
+      await apiFetch<LoginResponse>('/auth/login', {
         method: 'POST',
         body: { username: username.trim(), password },
       });
-      if (res.user.must_change_password) {
-        setNotice('Sua senha é provisória. Após entrar, fale com o suporte para defini-la.');
-      }
+      // A senha definida pelo operador (gestão) é a final — sem nag de "senha
+      // provisória" (o portal não tem fluxo de troca self-service e não deve
+      // alarmar o cliente). A flag `must_change_password` da API é ignorada aqui
+      // de propósito; ela permanece na coluna só para uso interno futuro.
       router.replace('/inicio');
       router.refresh();
     } catch (err) {
@@ -130,15 +129,6 @@ export function LoginForm() {
                   <span>{error}</span>
                 </div>
               )}
-              {notice && (
-                <div
-                  role="status"
-                  className="mb-3.5 rounded-[11px] border border-line-strong bg-surface-sunken px-3 py-2.5 text-[13px] text-ink-soft"
-                >
-                  {notice}
-                </div>
-              )}
-
               {/* Microcopy (Missao 020 F1): contas novas do signup usam o NUMERO de
                   WhatsApp como usuario — mesmo campo, mesma logica, so o texto muda. */}
               <Field label="Usuário ou WhatsApp" htmlFor="login-user" icon={<IconUser size={18} />}>
