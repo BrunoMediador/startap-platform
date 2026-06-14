@@ -12,20 +12,39 @@ export const SENHA_MAX = 72;
 export const NOME_MIN = 2;
 export const NOME_MAX = 100;
 
+/**
+ * Área (vertical) do negócio (W8 da Missão 023). São SLUGS estáveis enviados ao
+ * backend; o POST /auth/signup já aceita o campo `area` com este enum (o robô
+ * nasce com o tom/serviços da área). Os rótulos exibidos vivem no AreaSelector
+ * (UI); os slugs aqui são o contrato.
+ */
+export const AREAS_SLUGS = ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro'] as const;
+
+export type Area = (typeof AREAS_SLUGS)[number];
+
+/** Type guard pro slug de área (defensivo — entrada nunca confiável). */
+export function isArea(v: unknown): v is Area {
+  return typeof v === 'string' && (AREAS_SLUGS as readonly string[]).includes(v);
+}
+
 export interface CadastroDraft {
   nome: string;
+  /** Slug da área escolhida, ou null enquanto nada foi marcado. */
+  area: Area | null;
   whatsapp: string;
   senha: string;
 }
 
 export interface CadastroErrors {
   nome?: string;
+  area?: string;
   whatsapp?: string;
   senha?: string;
 }
 
 export interface CadastroPayload {
   nome_negocio: string;
+  area: Area;
   whatsapp: string;
   senha: string;
 }
@@ -94,6 +113,10 @@ export function validateCadastro(
     errors.nome = `Use no máximo ${NOME_MAX} caracteres`;
   }
 
+  if (!isArea(d.area)) {
+    errors.area = 'Escolha o tipo do seu negócio';
+  }
+
   const digits = phoneDigits(d.whatsapp);
   if (digits.length < 10 || digits.length > 11) {
     errors.whatsapp = 'Confere o número? Faltou dígito';
@@ -105,8 +128,13 @@ export function validateCadastro(
     errors.senha = `Use no máximo ${SENHA_MAX} caracteres`;
   }
 
-  if (errors.nome || errors.whatsapp || errors.senha) {
+  // isArea já garante d.area aqui, mas o TS não estreita por meio de errors —
+  // o guard explícito mantém o payload tipado sem cast.
+  if (errors.nome || errors.area || errors.whatsapp || errors.senha || !isArea(d.area)) {
     return { ok: false, errors };
   }
-  return { ok: true, value: { nome_negocio: nome, whatsapp: digits, senha: d.senha } };
+  return {
+    ok: true,
+    value: { nome_negocio: nome, area: d.area, whatsapp: digits, senha: d.senha },
+  };
 }
