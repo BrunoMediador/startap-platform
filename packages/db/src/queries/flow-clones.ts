@@ -541,26 +541,37 @@ export interface CloneAlertOwner {
 
 /**
  * Lê o destino do alerta de cancelamento de um clone (migration 050).
- * Sem hardcode de número: o telefone vem de flow_clones.alert_owner_phone (backfill de
- * cliente_telefone). Retorna null se o slot não for um clone (matriz/infra não têm dono).
+ * Sem hardcode de número. Fonte do telefone, em ordem de precedência:
+ *   1. flow_clones.alert_owner_phone (coluna dedicada, backfill da migration 050);
+ *   2. FALLBACK -> flow_clones.cliente_telefone, quando alert_owner_phone for NULL/vazio.
  *
- * `enabled` reflete o toggle por-clone; o gate macro (flag de ambiente
+ * Por que o fallback: o provisioning de clone NOVO NÃO grava alert_owner_phone (a 050 só
+ * fez backfill dos EXISTENTES). Sem o fallback, todo clone novo nasceria sem destino e o
+ * escalonamento de cancelamento ficaria mudo até alguém preencher a coluna na mão. Com o
+ * fallback, TODO clone (novo ou velho) tem destino sem depender de backfill/provisioning.
+ *
+ * Retorna null se o slot não for um clone (matriz/infra não têm dono).
+ * `enabled` reflete o toggle por-clone (alert_owner_enabled); o gate macro (flag de ambiente
  * CANCELAMENTO_ESCALADO_ENABLED) é responsabilidade do chamador (apps/api).
  * Normaliza o telefone p/ dígitos e exige >=8 (senão phone=null → não escala).
  */
 export async function getCloneAlertOwner(slot: string): Promise<CloneAlertOwner | null> {
   const r = await query<{
     alert_owner_phone: string | null;
+    cliente_telefone: string | null;
     alert_owner_enabled: boolean | null;
     display_name: string;
   }>(
-    `SELECT alert_owner_phone, alert_owner_enabled, display_name
+    `SELECT alert_owner_phone, cliente_telefone, alert_owner_enabled, display_name
        FROM flow_clones WHERE slot = $1 LIMIT 1`,
     [slot],
   );
   const row = r.rows[0];
   if (!row) return null;
-  const digits = (row.alert_owner_phone ?? '').replace(/\D/g, '');
+  // Precedência: alert_owner_phone -> cliente_telefone (fallback p/ clones sem backfill).
+  const ownerDigits = (row.alert_owner_phone ?? '').replace(/\D/g, '');
+  const fallbackDigits = (row.cliente_telefone ?? '').replace(/\D/g, '');
+  const digits = ownerDigits.length >= 8 ? ownerDigits : fallbackDigits;
   return {
     phone: digits.length >= 8 ? digits : null,
     enabled: row.alert_owner_enabled !== false,

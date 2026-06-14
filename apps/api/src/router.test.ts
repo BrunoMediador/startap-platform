@@ -69,6 +69,22 @@ vi.mock('@startap/integrations', () => ({
 vi.mock('@startap/core/phone', () => ({
   extractPhone: mocks.extractPhone,
   isGroupChat: mocks.isGroupChat,
+  // canonicalE164 é usado pela blocklist global (lib/bot-blocklist) carregada via
+  // router. Reimplementação fiel do essencial (DDI BR + regra do 9º dígito) — o ESM
+  // real de @startap/core/phone não resolve no Vitest sem build (ver nota acima).
+  canonicalE164: (raw: string): string | null => {
+    if (!raw) return null;
+    const base = raw.split('@')[0]?.split(':')[0] ?? '';
+    let digits = base.replace(/\D/g, '').replace(/^0+/, '');
+    if (digits.length < 10 || digits.length > 15) return null;
+    if (digits.length === 10 || digits.length === 11) digits = `55${digits}`;
+    if (digits.startsWith('55')) {
+      if (digits.length === 13 && digits[4] === '9') return digits.slice(0, 4) + digits.slice(5);
+      if (digits.length === 12 || digits.length === 13) return digits;
+      return null;
+    }
+    return digits;
+  },
 }));
 
 vi.mock('./lib/idempotency.js', () => ({
@@ -304,6 +320,44 @@ describe('handleWebhook', () => {
     expect(result).toEqual({ status: 'ignored:group-chat' });
     expect(mocks.logMessage).not.toHaveBeenCalled();
     expect(mocks.sendSeen).not.toHaveBeenCalled();
+  });
+
+  // --- Testes: blocklist global de números internos (Missão 023) ---
+
+  it('ignora mensagem do número interno da blocklist (7411) — não responde, não roteia', async () => {
+    // O 7411 (sessão ALERTAS) é o número interno padrão da blocklist.
+    mocks.extractPhone.mockReturnValue('553599247411');
+
+    const result = await handleWebhook(makeBody('STARTAP_AI_PROD'), {
+      executionId: 'exec-blocklist',
+      startedAt: 0,
+    });
+
+    expect(result).toEqual({ status: 'ignored:blocklist' });
+    // Não chega em antibot, routing nem bot.
+    expect(mocks.logMessage).not.toHaveBeenCalled();
+    expect(mocks.findRouting).not.toHaveBeenCalled();
+    expect(mocks.sendSeen).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'router.ignored',
+        metadata: expect.objectContaining({ reason: 'blocklist' }),
+      }),
+    );
+  });
+
+  it('processa normalmente número do time/teste (553598877248) — NÃO bloqueado', async () => {
+    // Número do Bruno/teste: não pode cair na blocklist.
+    mocks.extractPhone.mockReturnValue('553598877248');
+    stubBot.handle.mockResolvedValue(undefined);
+
+    const result = await handleWebhook(makeBody('startap'), {
+      executionId: 'exec-not-blocked',
+      startedAt: 0,
+    });
+
+    expect(result).toEqual({ status: 'ok' });
+    expect(mocks.logMessage).toHaveBeenCalled();
   });
 
   // --- Testes: gate de suspensão de fluxo (flow_enabled) ---
