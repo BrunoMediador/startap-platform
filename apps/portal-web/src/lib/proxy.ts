@@ -61,7 +61,7 @@ const STRIP_RESPONSE_HEADERS = new Set([
  */
 export async function proxyToApi(
   req: Request,
-  prefix: 'auth' | 'portal',
+  prefix: 'auth' | 'portal' | 'demo',
   path: string[],
 ): Promise<Response> {
   const incoming = new URL(req.url);

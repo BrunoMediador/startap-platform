@@ -385,6 +385,79 @@ export function IconWallet(props: IconProps) {
 }
 
 /**
+ * Instagram — link social no footer da landing (W12). Tracado (herda
+ * currentColor, padrao base()): quadrado arredondado + lente + ponto da camera.
+ * Decorativo (aria-hidden via base) — o rotulo vive no link-pai.
+ */
+export function IconInstagram(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" stroke="currentColor" strokeWidth={2} />
+      <circle cx="12" cy="12" r="3.8" stroke="currentColor" strokeWidth={2} />
+      <circle cx="17.2" cy="6.8" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Brilho/estrela — vertical "Estética" na faixa multi-vertical da landing (W7). */
+export function IconSparkle(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M12 3c.4 3.6 1.4 4.6 5 5-3.6.4-4.6 1.4-5 5-.4-3.6-1.4-4.6-5-5 3.6-.4 4.6-1.4 5-5zM18.5 14c.2 1.8.7 2.3 2.5 2.5-1.8.2-2.3.7-2.5 2.5-.2-1.8-.7-2.3-2.5-2.5 1.8-.2 2.3-.7 2.5-2.5z"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Pincel/esmalte — vertical "Manicure / Nail" na faixa multi-vertical (W7). */
+export function IconBrush(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M14.5 3.5 20.5 9.5 11 19a3 3 0 0 1-2 .9H6l-.9.9-2-2 .9-.9V15a3 3 0 0 1 .9-2L14.5 3.5z"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinejoin="round"
+      />
+      <path d="m12.5 5.5 6 6" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Check duplo decorativo — "entregue/lido" na bolha enviada da demo (W6). */
+export function IconCheckDouble(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M1.5 12.5 6 17l1-1.2M11 7.5 14 17l9-10M7 12.5 11.5 17"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Enviar (avião de papel) — botao de envio do composer da demo (W6). */
+export function IconSend(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path
+        d="M4 12 20 4l-6 16-3.2-6.4L4 12z"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
  * Brandmark Startap — simbolo Constelacao-S (Opcao A, solto). 5 nos em
  * ziguezague que o olho le como "S"; o no superior em ambar e o ponto focal.
  * Cores fixas (roxo #9A7CF0 -> #6431D6 descendo, ambar #E0A23C): a marca tem
