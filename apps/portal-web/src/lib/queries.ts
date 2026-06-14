@@ -15,6 +15,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
   AgendaSlotsResponse,
@@ -26,6 +27,7 @@ import type {
   ContatosResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
+  ExcluirAgendamentoResponse,
   Horarios,
   HorariosResponse,
   MensalidadeResponse,
@@ -137,6 +139,36 @@ export function useCriarAgendamento(
               ],
             }
           : prev,
+      );
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+    },
+  });
+}
+
+/**
+ * DELETE /portal/agendamentos/:eventId — cancela/exclui um evento na agenda do
+ * tenant (W10 da Missão 023). AÇÃO IRREVERSÍVEL: apaga de verdade no Google
+ * Calendar. No sucesso, remove o evento do cache da lista da Início na hora
+ * (some sem reload), libera o horário (invalida grades de slots do tenant) e
+ * ressincroniza a lista em background. 404/já-removido e erros de GCal são
+ * tratados NA TELA (mensagem amigável) — aqui só o caminho feliz.
+ *
+ * O contrato do backend está em construção (worktree do backend); o front
+ * consome `ExcluirAgendamentoResponse` e degrada com mensagem se a rota faltar.
+ */
+export function useExcluirAgendamento(
+  slot: string,
+): UseMutationResult<ExcluirAgendamentoResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId) =>
+      apiFetch<ExcluirAgendamentoResponse>(`/portal/agendamentos/${encodeURIComponent(eventId)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: (_res, eventId) => {
+      client.setQueryData<AgendamentosResponse>(qk.agendamentos(slot), (prev) =>
+        prev ? removerAgendamento(prev, eventId) : prev,
       );
       client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
