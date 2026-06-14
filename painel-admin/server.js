@@ -3679,37 +3679,137 @@ app.post('/api/clones/:id/regerar-prompt', async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────
+// Helpers do DELETE /api/clones/:id (exclusão de clone + sessão WAHA + órfãos)
+// ──────────────────────────────────────────────────────────────────────────
+
+// DENYLIST de sessões WAHA que NUNCA podem ser deletadas por esta rota, mesmo
+// que algum clone aponte para elas. São sessões compartilhadas/críticas:
+//   - STARTAP_AI_PROD: Lola (prospecção própria)
+//   - ALERTAS: remetente único de todos os alertas internos/cliente
+//   - matrizes/roteador: bases das quais os clones são clonados
+// NÃO reusamos o guard `clone_` do provisioning porque clientes manuais têm
+// sessão SEM esse prefixo (cirilobarbearia, barbearia_samuel) e PRECISAM ser
+// deletáveis por aqui. A denylist é a barreira correta. Fácil de estender.
+const WAHA_SESSION_DELETE_DENYLIST = new Set([
+  'STARTAP_AI_PROD',
+  'ALERTAS',
+  'teste_barbearia',
+  'teste_vendas_barbearia',
+  'WHATSAPP_ROUTER_TESTE',
+]);
+
+/** true se a sessão WAHA é protegida e não pode ser removida por esta rota. */
+function isProtectedWahaSession(sessao) {
+  return WAHA_SESSION_DELETE_DENYLIST.has(sessao);
+}
+
+/**
+ * Escapa um valor para uso seguro como PREFIXO em LIKE ... ESCAPE '\'.
+ * Slots e sessões contêm '_' (curinga do LIKE) — sem escapar, 'clone_a' casaria
+ * com 'cloneXa'. Escapa \ % _ para que o LIKE confine estritamente ao slot.
+ */
+function escapeLikePrefix(value) {
+  return value.replace(/([\\%_])/g, '\\$1');
+}
+
+/** Espelha isValidChatTableName de packages/db (defesa contra SQL injection no nome da tabela). */
+function isValidChatTableName(table) {
+  return typeof table === 'string' && /^chat_histories(_[a-z0-9_]+)?$/.test(table);
+}
+
+/**
+ * Apaga a sessão do WAHA de fato (para + REMOVE no NOWEB/Baileys). Best-effort:
+ * erro NUNCA bloqueia a exclusão do clone no banco. Pula se sessão vazia ou
+ * protegida pela denylist. DELETE é idempotente (404 = já não existe = ok).
+ */
+async function deleteCloneWahaSession(sessao) {
+  if (!sessao) return { attempted: false, reason: 'sem sessão' };
+  if (isProtectedWahaSession(sessao)) {
+    console.log(`[clones] sessão protegida '${sessao}' NÃO removida do WAHA (denylist)`);
+    return { attempted: false, reason: 'protegida' };
+  }
+  try {
+    const r = await fetch(`${WAHA_URL}/api/sessions/${sessao}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
+      },
+    });
+    if (!r.ok && r.status !== 404) {
+      const body = await r.json().catch(() => ({}));
+      console.log(`[clones] DELETE sessão '${sessao}' -> WAHA erro: ${body?.message ?? `HTTP ${r.status}`}`);
+      return { attempted: true, ok: false };
+    }
+    console.log(`[clones] sessão '${sessao}' removida do WAHA (status ${r.status})`);
+    return { attempted: true, ok: true };
+  } catch (e) {
+    // best-effort: WAHA fora do ar não pode travar a exclusão do clone
+    console.log(`[clones] falha ao contatar WAHA p/ deletar sessão '${sessao}': ${e.message}`);
+    return { attempted: true, ok: false };
+  }
+}
+
 // DELETE /api/clones/:id
 app.delete('/api/clones/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
   try {
-    const existing = await pool.query(`SELECT slot, waha_sessao FROM flow_clones WHERE id = $1`, [
-      id,
-    ]);
+    const existing = await pool.query(
+      `SELECT slot, waha_sessao, chat_table FROM flow_clones WHERE id = $1`,
+      [id],
+    );
     if (!existing.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
-    const { slot: cloneSlot, waha_sessao } = existing.rows[0];
+    const { slot: cloneSlot, waha_sessao, chat_table } = existing.rows[0];
 
-    // Tenta logout WAHA se tinha sessão vinculada (erro não bloqueia delete)
-    if (waha_sessao) {
-      await fetch(`${WAHA_URL}/api/sessions/${waha_sessao}/logout`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}),
-        },
-      }).catch(() => {});
-    }
+    // Remove a SESSÃO do WAHA de fato (não só logout). Best-effort: erro aqui
+    // nunca bloqueia o delete no banco. Denylist protege sessões compartilhadas.
+    await deleteCloneWahaSession(waha_sessao);
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // Remove todos os dados do clone na mesma transação para evitar órfãos
-      await client.query(`DELETE FROM flow_clones WHERE id = $1`, [id]);
+      // Remove todos os dados do clone na mesma transação para evitar órfãos.
+      // O DELETE de flow_clones dispara ON DELETE CASCADE (migrations 039/040/041):
+      // portal_users, portal_user_clones, client_billing, billing_charges — por
+      // isso o "usuário cliente" e o billing somem sem DELETE explícito aqui.
       await client.query(`DELETE FROM flow_controls WHERE flow_id = $1`, [cloneSlot]);
       await client.query(`DELETE FROM bot_prompt WHERE slot = $1`, [cloneSlot]);
       await client.query(`DELETE FROM bot_media WHERE slot = $1`, [cloneSlot]);
       await client.query(`DELETE FROM bot_config WHERE slot = $1`, [cloneSlot]);
+
+      // ── Órfãos SEM FK/CASCADE — limpeza explícita keyed pelo slot/sessão ──
+      // flow_pauses: registry usa workflow_id = slot do clone (registry.ts).
+      await client.query(`DELETE FROM flow_pauses WHERE flow_id = $1`, [cloneSlot]);
+
+      // alert_states (migration 046, PK = check_key, sem FK). Duas famílias de
+      // chave carregam o clone:
+      //   - 'waha:<waha_sessao>'        (monitor.ts: key = `waha:${sessao}`)
+      //   - 'clientalert:<slot>:<hash>' (client-alert.ts: cooldownKey por slot)
+      await client.query(
+        `DELETE FROM alert_states WHERE check_key LIKE $1 ESCAPE '\\'`,
+        [`clientalert:${escapeLikePrefix(cloneSlot)}:%`],
+      );
+      if (waha_sessao) {
+        await client.query(`DELETE FROM alert_states WHERE check_key = $1`, [`waha:${waha_sessao}`]);
+      }
+
+      // Histórico de chat (tabela COMPARTILHADA entre clones da mesma matriz).
+      // session_id = `${slot}:${sessao}:${flowId}:${telefone}` (bots/base.ts) —
+      // prefixado pelo slot. Confina ao slot com LIKE escapado + ESCAPE '\\'.
+      // Valida o nome da tabela (vem do banco) contra injeção antes de interpolar.
+      if (isValidChatTableName(chat_table)) {
+        await client.query(
+          `DELETE FROM ${chat_table} WHERE session_id LIKE $1 ESCAPE '\\'`,
+          [`${escapeLikePrefix(cloneSlot)}:%`],
+        );
+      }
+
+      // trial_ledger: NÃO deletar de propósito (migration 044) — o ledger sobrevive
+      // ao delete do clone (anti trial-farming: deletar+recriar não reseta o trial).
+
+      await client.query(`DELETE FROM flow_clones WHERE id = $1`, [id]);
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
