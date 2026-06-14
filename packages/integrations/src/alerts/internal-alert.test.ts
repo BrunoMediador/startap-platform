@@ -81,16 +81,46 @@ describe('sendInternalAlert', () => {
     const r = await sendInternalAlert('cliente novo!');
     expect(r.sent).toBe(2);
     expect(sendText).toHaveBeenCalledTimes(2);
-    // Sempre via a sessao da Lola, sem typing/delay, chatId @c.us.
+    // Sempre via a sessao da Lola, COM "digitando" + delay humanizador, chatId @c.us.
     expect(sendText).toHaveBeenCalledWith(
       expect.objectContaining({
         sessao: 'STARTAP_AI_PROD',
         chatId: '5531999990011@c.us',
         texto: 'cliente novo!',
-        typing: false,
-        delayMs: 0,
+        typing: true,
+        delayMs: expect.any(Number),
       }),
     );
+    // O delay humanizador tem que ser > 0 (digitando antes de enviar).
+    const firstCall = sendText.mock.calls[0][0] as { delayMs: number };
+    expect(firstCall.delayMs).toBeGreaterThan(0);
+  });
+
+  it('(c2) envia SEQUENCIAL e espaçado: 2o destinatario so depois do 1o + pausa entre eles', async () => {
+    vi.useFakeTimers();
+    try {
+      listEnabledRecipients.mockResolvedValue([
+        recipient(1, '5531999990011'),
+        recipient(2, '5531999990022'),
+      ]);
+      // sendText resolve na hora (delay interno e do client.ts real, aqui mockado).
+      sendText.mockResolvedValue(undefined);
+
+      const promise = sendInternalAlert('seq');
+      // Deixa o microtask inicial rodar ate o 1o sendText resolver.
+      await vi.advanceTimersByTimeAsync(0);
+      // 1o ja foi; o 2o NAO pode ter saido (esta segurado pela pausa entre destinatarios).
+      expect(sendText).toHaveBeenCalledTimes(1);
+
+      // Passa o tempo da pausa entre destinatarios -> o 2o sai.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(sendText).toHaveBeenCalledTimes(2);
+
+      const r = await promise;
+      expect(r.sent).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('(d) sendText lanca -> helper NAO lanca; falha de um nao derruba os outros', async () => {

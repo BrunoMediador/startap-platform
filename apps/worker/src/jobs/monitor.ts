@@ -52,8 +52,24 @@ const HEALTH_DEBOUNCE = 2;
 const HEALTH_TIMEOUT_MS = 5_000;
 const PG_TIMEOUT_MS = 3_000;
 const WAHA_LIST_TIMEOUT_MS = 8_000;
-/** Timeout do envio pela Lola — sendText não tem timeout próprio (client.ts). */
+/** Timeout do envio — sendText não tem timeout próprio (client.ts). Embrulha o
+ *  sendText INTEIRO, incluindo o delay humanizador (cabe com folga: 1.5s << 10s). */
 const SEND_TIMEOUT_MS = 10_000;
+
+/** Humanização do envio de alerta — reduz risco de derrubar a sessão remetente
+ *  (ALERTAS) por padrão de bot. "Digitando…" + delay antes de cada mensagem, e
+ *  pausa ENTRE destinatários (e entre broadcasts do mesmo ciclo) em vez de rajada
+ *  colada. SEQUENCIAL sempre (nunca Promise.all — paralelizar estressa a sessão). */
+const ALERT_TYPING_DELAY_MS = 1_500;
+const ALERT_BETWEEN_RECIPIENTS_MS = 1_200;
+/** Pausa entre dois broadcasts que SAÍRAM no mesmo ciclo (ex.: WAHA + PG caem
+ *  juntos → várias mensagens). Espaça pra não despejar tudo colado. */
+const ALERT_BETWEEN_BROADCASTS_MS = 1_500;
+
+/** Pausa não-bloqueante (humanização do envio). */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export interface MonitorResult extends Record<string, unknown> {
   /** true quando a flag de env ou o toggle de banco estavam OFF (NO-OP). */
@@ -253,11 +269,24 @@ async function broadcast(
     return;
   }
 
+  // Espaça broadcasts que saem no MESMO ciclo (ex.: WAHA + PG caem juntos): se já
+  // houve um envio bem-sucedido neste run, pausa antes de despejar o próximo.
+  if (result.sent > 0) await sleep(ALERT_BETWEEN_BROADCASTS_MS);
+
   let anyOk = false;
-  for (const r of recipients) {
+  // SEQUENCIAL e espaçado (anti-rajada — nunca Promise.all): "digitando…" + delay
+  // humanizador antes de cada envio; pausa ENTRE destinatários.
+  for (let i = 0; i < recipients.length; i++) {
+    const r = recipients[i];
     try {
       await Promise.race([
-        waha.sendText({ sessao, chatId: toChatId(r.phone), texto, typing: false, delayMs: 0 }),
+        waha.sendText({
+          sessao,
+          chatId: toChatId(r.phone),
+          texto,
+          typing: true,
+          delayMs: ALERT_TYPING_DELAY_MS,
+        }),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
         ),
@@ -271,6 +300,8 @@ async function broadcast(
         'monitor: falha ao enviar alerta pela Lola (próximo ciclo re-tenta)',
       );
     }
+    // Pausa antes do próximo destinatário (não depois do último).
+    if (i < recipients.length - 1) await sleep(ALERT_BETWEEN_RECIPIENTS_MS);
   }
   if (anyOk) result.sent += 1;
 }

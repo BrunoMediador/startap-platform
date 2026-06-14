@@ -75,6 +75,9 @@ describe('sendClientCancellationAlert', () => {
     const arg = mocks.sendText.mock.calls[0][0];
     expect(arg.sessao).toBe('ALERTAS');
     expect(arg.chatId).toBe('5535999991234@c.us');
+    // "Digitando" + delay humanizador antes de enviar (anti-derrubada da sessão).
+    expect(arg.typing).toBe(true);
+    expect(arg.delayMs).toBeGreaterThan(0);
     // Mensagem leva o nome do clone e a referência; cliente vai mascarado (LGPD).
     expect(arg.texto).toContain('Barbearia do Cirilo');
     expect(arg.texto).toContain('amanha 15h');

@@ -46,8 +46,26 @@ const DEFAULT_SENDER_SLOT = 'startap';
 const DEFAULT_MAX_PER_WINDOW = 10;
 const DEFAULT_WINDOW_MIN = 30;
 
-/** Timeout por envio — sendText (client.ts) não tem timeout próprio. */
+/** Timeout por envio — sendText (client.ts) não tem timeout próprio. Embrulha o
+ *  sendText INTEIRO, incluindo o delay humanizador (ALERT_TYPING_DELAY_MS), que
+ *  cabe com folga aqui (1.5s << 10s). */
 const SEND_TIMEOUT_MS = 10_000;
+
+/** Humanização do envio de alerta — reduz risco de derrubar a sessão remetente
+ *  (ALERTAS) por padrão de bot. Mostra "digitando…" antes e espaça os envios em
+ *  vez de rajada colada. Valores conservadores p/ WhatsApp parecer humano sem
+ *  atrasar demais o alerta:
+ *   - DELAY: pausa "digitando" antes de cada mensagem sair;
+ *   - BETWEEN_RECIPIENTS: pausa ENTRE um destinatário e o próximo (anti-rajada).
+ *  Mantemos SEQUENCIAL (nunca Promise.all) — paralelizar é justamente o padrão
+ *  que estressa a sessão. */
+const ALERT_TYPING_DELAY_MS = 1_500;
+const ALERT_BETWEEN_RECIPIENTS_MS = 1_200;
+
+/** Pausa não-bloqueante (humanização do envio). */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 export interface SendInternalAlertOpts {
   /** slot do remetente (default 'startap' = Lola). */
@@ -114,12 +132,21 @@ export async function sendInternalAlert(
       return { sent: 0 };
     }
 
-    // (5) Envia a cada destinatário. Falha individual não derruba os demais.
+    // (5) Envia a cada destinatário, SEQUENCIAL e espaçado (anti-rajada — não
+    //     paralelizar). Mostra "digitando…" + delay humanizador antes de cada
+    //     envio; pausa ENTRE destinatários. Falha individual não derruba os demais.
     let sent = 0;
-    for (const r of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const r = recipients[i];
       try {
         await Promise.race([
-          sendText({ sessao, chatId: toChatId(r.phone), texto, typing: false, delayMs: 0 }),
+          sendText({
+            sessao,
+            chatId: toChatId(r.phone),
+            texto,
+            typing: true,
+            delayMs: ALERT_TYPING_DELAY_MS,
+          }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
           ),
@@ -132,6 +159,8 @@ export async function sendInternalAlert(
           'internal-alert: falha ao enviar alerta pela Lola',
         );
       }
+      // Pausa antes do próximo destinatário (não depois do último).
+      if (i < recipients.length - 1) await sleep(ALERT_BETWEEN_RECIPIENTS_MS);
     }
     return { sent };
   } catch (e) {
