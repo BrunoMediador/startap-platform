@@ -136,6 +136,55 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => (v === undefined ? undefined : v === 'true')),
 
+  // ── Demo interativa de IA na landing (Missão 023 W6) ───────────────────────
+  // Endpoint PÚBLICO e ANÔNIMO (POST /demo/chat). TODAS as envs abaixo são
+  // OPCIONAIS no boot (lição #247: feature dormente nunca derruba o portal-api).
+  // Com DEMO_ENABLED ausente/false a rota responde 404 (front esconde a demo).
+  // Sobe dormente; liga-se em prod sem novo deploy de código, só após QA.
+  DEMO_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
+  // Chave do provider DeepSeek (mesma do apps/api). A demo usa DeepSeek
+  // (deepseek-chat) por custo (~10x menor que gpt-4o) — tráfego anônimo de volume
+  // imprevisível. OPCIONAL no boot; com DEMO_ENABLED=true e esta chave AUSENTE a
+  // rota /demo/chat responde 503 (validação LAZY no ponto de uso). NUNCA logada
+  // nem hardcoded.
+  DEEPSEEK_API_KEY: z.string().min(1).optional(),
+  // Modelo do provider DeepSeek. Default deepseek-chat (design W6). Ajustável sem deploy.
+  DEMO_MODEL: z.string().default('deepseek-chat'),
+  // Teto de tokens de SAÍDA por turn (custo duro por resposta). Default 180 (W6:
+  // resposta curta de WhatsApp).
+  DEMO_MAX_TOKENS: z.coerce.number().int().positive().default(180),
+  // Temperatura da demo (W6: 0.5 = conversa fluida mas previsível, evita "viajar").
+  DEMO_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.5),
+  // Timeout (ms) da chamada ao DeepSeek — nunca aguardar infinito (regra 7).
+  DEMO_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+
+  // ── Caps anti-abuso/custo da demo (todos com default seguro, W6 §guarda) ───
+  // Teto de mensagens por sessão de visitante (cookie/sessionId efêmero). Default 15.
+  DEMO_MSG_PER_SESSION: z.coerce.number().int().positive().default(15),
+  // Rate-limit por IP: N mensagens / janela. Default 20 / 10 min (W6) + burst abaixo.
+  DEMO_RATE_PER_IP: z.coerce.number().int().positive().default(20),
+  DEMO_RATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
+  // Burst por IP (rajada curta): N / minuto. Default 5 / 60s (W6).
+  DEMO_BURST_PER_IP: z.coerce.number().int().positive().default(5),
+  DEMO_BURST_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  // HARD CAP GLOBAL diário (nº de chamadas LLM somando TODOS os visitantes).
+  // Protege o custo num cenário de bot/scraper. Corta a demo em modo offline
+  // (canned + CTA) ao atingir. Default 5.000/dia (W6; Bruno pediu ~5.000). Alerta
+  // (warn no log) ao cruzar DEMO_DAILY_ALERT_AT. Ajustável por env sem deploy.
+  DEMO_DAILY_CALL_CAP: z.coerce.number().int().positive().default(5_000),
+  DEMO_DAILY_ALERT_AT: z.coerce.number().int().positive().default(3_000),
+  // Truncagem do texto do visitante antes de enviar ao modelo (input bounded).
+  DEMO_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(500),
+  // Quantas mensagens de histórico a demo reenvia ao modelo (corta custo de input).
+  DEMO_HISTORY_TURNS: z.coerce.number().int().positive().default(8),
+  // Salt opaco pro hash de IP no log (LGPD: IP nunca em claro). OPCIONAL; ausente
+  // cai num default fixo (hash determinístico ainda anonimiza o suficiente p/ log).
+  DEMO_IP_HASH_SALT: z.string().optional(),
+
   SERVICE_NAME: z.string().optional(),
 });
 
