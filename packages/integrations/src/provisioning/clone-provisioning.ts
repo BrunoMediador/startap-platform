@@ -191,6 +191,44 @@ export function renderServicosPrecos(servicos: unknown): string {
 const NOME_NEGOCIO_FALLBACK = 'a barbearia';
 
 /**
+ * Área/vertical do negócio (Missão 023 W8). Mapa CÓDIGO -> {{area_artigo}}, a
+ * frase pronta COM artigo que entra no prompt (ex.: "a barbearia", "o salao").
+ *
+ * Por que frase pronta e não montar artigo no template: evita concordância
+ * errada da IA e mantém o prompt-base legível pro operador (decisão ai-engineer).
+ *
+ * Os valores são DELIBERADAMENTE iguais ao design (w5-w6-w8-w11-ia-design.md). A
+ * TAXONOMIA canônica é validada por Zod NO APP (signup) — este mapa só traduz o
+ * código já-validado pra frase. Código desconhecido/ausente cai no fallback
+ * genérico AREA_ARTIGO_FALLBACK (nunca placeholder cru, nunca artigo errado).
+ *
+ * `'outro'` é o catch-all do signup; `'generico'` é alias histórico do design —
+ * ambos mapeiam pro tom neutro.
+ */
+const AREA_ARTIGO: Readonly<Record<string, string>> = {
+  barbearia: 'a barbearia',
+  cabeleireiro: 'o salao',
+  manicure: 'o espaco de unhas',
+  estetica: 'o studio de estetica',
+  outro: 'o atendimento',
+  generico: 'o atendimento',
+};
+
+/** Tom neutro quando a área é ausente/desconhecida (clone antigo, valor fora do mapa). */
+const AREA_ARTIGO_FALLBACK = 'o atendimento';
+
+/**
+ * Resolve a frase {{area_artigo}} a partir do código de área (já validado no app).
+ * Trim + lower defensivo; valor fora do mapa -> fallback genérico ("o atendimento").
+ * Centralizado pra que render e backfill/tests usem a MESMA tabela.
+ */
+export function areaArtigo(area: unknown): string {
+  if (typeof area !== 'string') return AREA_ARTIGO_FALLBACK;
+  const key = area.trim().toLowerCase();
+  return AREA_ARTIGO[key] ?? AREA_ARTIGO_FALLBACK;
+}
+
+/**
  * Neutraliza um valor injetável (display_name / nome_negocio) ANTES de entrar no
  * prompt: remove as sequências de delimitador de placeholder ("{{" e "}}") e
  * quebras de linha (\n,\r). Isso impede que um nome de cadastro self-service
@@ -214,14 +252,22 @@ export function sanitizeNomeInjetavel(nome: string): string {
  * - {{nome_negocio}} órfão -> fallback seguro ("a barbearia"). É o caso real do
  *   gestão (personalizacao sem nome_negocio): antes ficava literal no banco,
  *   pior que o hardcode antigo.
+ * - {{area_artigo}} órfão -> fallback genérico ("o atendimento"). Necessário no
+ *   render de BOOTSTRAP de createCloneRecords (que só resolve chaves presentes em
+ *   personalizacao): se o caminho não trouxer `area`, o {{area_artigo}} da matriz
+ *   (Missão 023 W8) cairia literal no banco — mesmo problema que {{nome_negocio}}.
+ *   No render normal (renderClonePrompt) area_artigo já é sempre resolvido (com
+ *   fallback), então este passe só atua no caminho de bootstrap.
  * - demais placeholders órfãos -> preservados ({{chave}}), comportamento
  *   histórico (não perder dado/marcador desconhecido). Genérico: se um dia
  *   outro marcador "de nome" precisar de fallback, basta estendê-lo aqui.
  */
 export function sanitizeOrphanPlaceholders(prompt: string): string {
-  return prompt.replace(/\{\{(\w+)\}\}/g, (_m, k: string) =>
-    k === 'nome_negocio' ? NOME_NEGOCIO_FALLBACK : `{{${k}}}`,
-  );
+  return prompt.replace(/\{\{(\w+)\}\}/g, (_m, k: string) => {
+    if (k === 'nome_negocio') return NOME_NEGOCIO_FALLBACK;
+    if (k === 'area_artigo') return AREA_ARTIGO_FALLBACK;
+    return `{{${k}}}`;
+  });
 }
 
 /**
@@ -254,9 +300,18 @@ export function renderClonePrompt(
       : displayName && displayName.trim() !== ''
         ? displayName
         : NOME_NEGOCIO_FALLBACK;
+  // {{area}} / {{area_artigo}}: vêm de personalizacao.area (selecionada no signup).
+  // Mesmo mecanismo de resolução do {{nome_negocio}} — sem mudança de assinatura.
+  // area_artigo é frase pronta com artigo (mapa AREA_ARTIGO); fallback genérico
+  // ("o atendimento") quando area é ausente/desconhecida — clones antigos (sem
+  // area) renderizam tom neutro, NUNCA placeholder cru. O valor canônico de area
+  // vai pra {{area}} sanitizado (não vaza {{ }} se vier sujo de algum caminho).
+  const areaRaw = pers.area;
   const ctx: Record<string, unknown> = {
     ...pers,
     nome_negocio: sanitizeNomeInjetavel(rawNome),
+    area: typeof areaRaw === 'string' ? sanitizeNomeInjetavel(areaRaw.trim()) : '',
+    area_artigo: areaArtigo(areaRaw),
     horarios_funcionamento_render: renderHorariosFuncionamento(horarios),
     servicos_precos_render: renderServicosPrecos(servicos),
   };
@@ -751,15 +806,25 @@ export async function createCloneRecords(
       [input.novoSlot, input.displayName],
     );
 
+    // Área/vertical (Missão 023 W8): chega via personalizacao.area (selecionada
+    // no signup; validada por Zod no app). Persiste na COLUNA tipada flow_clones.area
+    // (eixo de filtro/relatório) ALÉM de seguir em personalizacao (pro render do
+    // prompt). NULL quando ausente — clone antigo/gestão-legado fica sem área e o
+    // render usa o tom genérico. NÃO inventa default 'barbearia' aqui (o backfill da
+    // migration cobre os clones atuais; novos sem escolha = NULL = neutro).
+    const persArea = pers.area;
+    const areaValue =
+      typeof persArea === 'string' && persArea.trim() !== '' ? persArea.trim() : null;
+
     // Defaults de horarios/servicos conforme a matriz (clone novo já sai
     // oferecendo serviços comuns — evita "Nenhum servico cadastrado").
     const defaults = await getCloneDefaults(db, input.matrizSlot);
     const cloneR = await client.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-          personalizacao, horarios_funcionamento, servicos,
+          personalizacao, area, horarios_funcionamento, servicos,
           status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, 'rascunho', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, 'rascunho', NOW(), NOW())
        RETURNING *`,
       [
         input.novoSlot,
@@ -768,6 +833,7 @@ export async function createCloneRecords(
         null,
         input.telefoneContato ?? null,
         JSON.stringify(pers),
+        areaValue,
         defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
       ],

@@ -362,6 +362,49 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
+  // ── Área/vertical no signup (Missão 023 W8) ────────────────────────────────
+  it('aceita area válida e passa pro provisioning DENTRO de personalizacao', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, area: 'manicure' },
+    });
+    expect(res.statusCode).toBe(201);
+    const provInput = mocks.provisionCloneWithWaha.mock.calls[0]?.[1] as {
+      personalizacao: Record<string, unknown>;
+    };
+    expect(provInput.personalizacao).toMatchObject({
+      nome_negocio: 'Barbearia do João',
+      area: 'manicure',
+    });
+    await app.close();
+  });
+
+  it('sem area no payload -> default seguro "outro" (onboarding antigo não quebra)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(201);
+    const provInput = mocks.provisionCloneWithWaha.mock.calls[0]?.[1] as {
+      personalizacao: Record<string, unknown>;
+    };
+    expect(provInput.personalizacao.area).toBe('outro');
+    await app.close();
+  });
+
+  it('400 dados_invalidos para area fora da taxonomia (Zod enum recusa)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, area: 'petshop' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'dados_invalidos' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('caminho feliz dispara o alerta interno de novo cadastro', async () => {
     const app = await buildApp();
     await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
