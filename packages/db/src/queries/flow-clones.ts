@@ -7,12 +7,7 @@
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
 
-export type CloneStatus =
-  | 'rascunho'
-  | 'aguardando_qr'
-  | 'conectado'
-  | 'desconectado'
-  | 'falhou';
+export type CloneStatus = 'rascunho' | 'aguardando_qr' | 'conectado' | 'desconectado' | 'falhou';
 
 export interface HorarioDia {
   abre: string | null; // "HH:MM" ou null se fechado
@@ -108,12 +103,17 @@ export function invalidateCloneCache(opts?: { sessao?: string; slot?: string }):
 // ---------------------------------------------------------------------------
 
 function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+  return (
+    text
+      .toLowerCase()
+      .normalize('NFD')
+      // Remove diacríticos (combining marks U+0300–U+036F) após o NFD —
+      // mesmo padrão do slugify de packages/integrations/src/provisioning/clone-provisioning.ts.
+      // biome-ignore lint/suspicious/noMisleadingCharacterClass: faixa de combining marks é proposital pós-NFD
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+  );
 }
 
 function shortid(len: number): string {
@@ -129,10 +129,7 @@ function shortid(len: number): string {
  * Aplica substituições {{chave}} no template usando personalizacao.
  * Fallback: se personalizacao contiver cliente_nome, substitui [Ricardo] por [clienteNome].
  */
-function applyPersonalizacao(
-  template: string,
-  personalizacao: Record<string, string>,
-): string {
+function applyPersonalizacao(template: string, personalizacao: Record<string, string>): string {
   let result = template;
 
   // Substitui {{chave}} por valor correspondente
@@ -143,8 +140,8 @@ function applyPersonalizacao(
   });
 
   // Fallback legado: [Ricardo] -> [clienteNome] quando cliente_nome fornecido
-  if (personalizacao['cliente_nome']) {
-    result = result.replace(/\[Ricardo\]/g, `[${personalizacao['cliente_nome']}]`);
+  if (personalizacao.cliente_nome) {
+    result = result.replace(/\[Ricardo\]/g, `[${personalizacao.cliente_nome}]`);
   }
 
   return result;
@@ -175,12 +172,11 @@ export async function createClone(input: {
       provider: string;
       model: string;
       temperature: string;
-    }>(
-      `SELECT provider, model, temperature FROM bot_config WHERE slot = $1`,
-      [matrizSlot],
-    );
+    }>('SELECT provider, model, temperature FROM bot_config WHERE slot = $1', [matrizSlot]);
     if (!cfgRes.rows[0]) {
-      throw new Error(`flow-clones: createClone: matriz_slot "${matrizSlot}" não encontrado em bot_config`);
+      throw new Error(
+        `flow-clones: createClone: matriz_slot "${matrizSlot}" não encontrado em bot_config`,
+      );
     }
     const { provider, model, temperature } = cfgRes.rows[0];
 
@@ -192,13 +188,13 @@ export async function createClone(input: {
 
     // 2. Copia e personaliza bot_prompt
     const promptRes = await client.query<{ prompt: string }>(
-      `SELECT prompt FROM bot_prompt WHERE slot = $1`,
+      'SELECT prompt FROM bot_prompt WHERE slot = $1',
       [matrizSlot],
     );
     if (promptRes.rows[0]) {
       const promptPersonalizado = applyPersonalizacao(promptRes.rows[0].prompt, personalizacao);
       await client.query(
-        `INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())`,
+        'INSERT INTO bot_prompt (slot, prompt, updated_at) VALUES ($1, $2, NOW())',
         [slug, promptPersonalizado],
       );
     }
@@ -226,8 +222,18 @@ export async function createClone(input: {
            (slot, position, media_type, url, caption, context, position_order, enabled,
             course_slug, is_course_intro, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())`,
-        [slug, m.position, m.media_type, m.url, m.caption, m.context, m.position_order, m.enabled,
-         m.course_slug ?? null, m.is_course_intro ?? false],
+        [
+          slug,
+          m.position,
+          m.media_type,
+          m.url,
+          m.caption,
+          m.context,
+          m.position_order,
+          m.enabled,
+          m.course_slug ?? null,
+          m.is_course_intro ?? false,
+        ],
       );
     }
 
@@ -251,7 +257,16 @@ export async function createClone(input: {
            (slot, course_slug, name, description, price, duration, position_order, enabled, created_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
          ON CONFLICT (slot, course_slug) DO NOTHING`,
-        [slug, c.course_slug, c.name, c.description, c.price, c.duration, c.position_order, c.enabled],
+        [
+          slug,
+          c.course_slug,
+          c.name,
+          c.description,
+          c.price,
+          c.duration,
+          c.position_order,
+          c.enabled,
+        ],
       );
     }
 
@@ -269,7 +284,14 @@ export async function createClone(input: {
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'rascunho', NOW(), NOW())
        RETURNING *`,
-      [slug, matrizSlot, displayName, clienteNome ?? null, clienteTelefone ?? null, JSON.stringify(personalizacao)],
+      [
+        slug,
+        matrizSlot,
+        displayName,
+        clienteNome ?? null,
+        clienteTelefone ?? null,
+        JSON.stringify(personalizacao),
+      ],
     );
 
     // Dual-write tenant_id (ADR 0018, Fase 2): as satélites acima foram inseridas
@@ -280,10 +302,10 @@ export async function createClone(input: {
     const newTenantId = (cloneRes.rows[0] as unknown as { tenant_id?: string }).tenant_id ?? null;
     if (newTenantId) {
       for (const tbl of ['bot_config', 'bot_prompt', 'bot_media', 'bot_courses'] as const) {
-        await client.query(`UPDATE ${tbl} SET tenant_id = $1 WHERE slot = $2 AND tenant_id IS NULL`, [
-          newTenantId,
-          slug,
-        ]);
+        await client.query(
+          `UPDATE ${tbl} SET tenant_id = $1 WHERE slot = $2 AND tenant_id IS NULL`,
+          [newTenantId, slug],
+        );
       }
     }
 
@@ -312,7 +334,8 @@ export async function listClones(): Promise<CloneSummary[]> {
   );
   return r.rows.map((row) => ({
     ...normalizeCloneRow(row),
-    matriz_display_name: (row as unknown as { matriz_display_name: string | null }).matriz_display_name,
+    matriz_display_name: (row as unknown as { matriz_display_name: string | null })
+      .matriz_display_name,
   }));
 }
 
@@ -332,7 +355,8 @@ export async function getClone(id: number): Promise<CloneSummary | null> {
   if (!r.rows[0]) return null;
   return {
     ...normalizeCloneRow(r.rows[0]),
-    matriz_display_name: (r.rows[0] as unknown as { matriz_display_name: string | null }).matriz_display_name,
+    matriz_display_name: (r.rows[0] as unknown as { matriz_display_name: string | null })
+      .matriz_display_name,
   };
 }
 
@@ -388,13 +412,13 @@ export async function updateClone(
   if (patch.personalizacao !== undefined) {
     const personalizacao = patch.personalizacao;
     const matrizRes = await query<{ matriz_slot: string }>(
-      `SELECT matriz_slot FROM flow_clones WHERE id = $1`,
+      'SELECT matriz_slot FROM flow_clones WHERE id = $1',
       [id],
     );
     const matrizSlot = matrizRes.rows[0]?.matriz_slot;
     if (matrizSlot) {
       const promptRes = await query<{ prompt: string }>(
-        `SELECT prompt FROM bot_prompt WHERE slot = $1`,
+        'SELECT prompt FROM bot_prompt WHERE slot = $1',
         [matrizSlot],
       );
       if (promptRes.rows[0]) {
@@ -434,7 +458,7 @@ export async function setCloneSession(id: number, sessaoName: string): Promise<C
 
 export async function setCloneStatus(id: number, status: CloneStatus): Promise<CloneRow | null> {
   const r = await query<CloneRow & { id: string }>(
-    `UPDATE flow_clones SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+    'UPDATE flow_clones SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
     [status, id],
   );
   if (!r.rows[0]) return null;
@@ -449,9 +473,11 @@ export async function setCloneStatus(id: number, status: CloneStatus): Promise<C
  * flow_controls usa flow_id = slot — removido explicitamente pois não tem FK.
  * Retorna o waha_sessao para o chamador poder fazer logout se necessário.
  */
-export async function deleteClone(id: number): Promise<{ slot: string; waha_sessao: string | null } | null> {
+export async function deleteClone(
+  id: number,
+): Promise<{ slot: string; waha_sessao: string | null } | null> {
   const existing = await query<{ slot: string; waha_sessao: string | null }>(
-    `SELECT slot, waha_sessao FROM flow_clones WHERE id = $1`,
+    'SELECT slot, waha_sessao FROM flow_clones WHERE id = $1',
     [id],
   );
   const row = existing.rows[0];
@@ -461,9 +487,9 @@ export async function deleteClone(id: number): Promise<{ slot: string; waha_sess
   try {
     await client.query('BEGIN');
     // flow_controls não tem FK para bot_config — remove manualmente
-    await client.query(`DELETE FROM flow_controls WHERE flow_id = $1`, [row.slot]);
+    await client.query('DELETE FROM flow_controls WHERE flow_id = $1', [row.slot]);
     // bot_config CASCADE limpa bot_prompt, bot_media e flow_clones
-    await client.query(`DELETE FROM bot_config WHERE slot = $1`, [row.slot]);
+    await client.query('DELETE FROM bot_config WHERE slot = $1', [row.slot]);
     await client.query('COMMIT');
   } catch (e) {
     await client.query('ROLLBACK');
@@ -722,15 +748,21 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     // waha_shard_id: pg devolve int -> number. Fallback 0 (shard atual) p/ rows que
     // não selecionam a coluna ou rodam antes da migration 047 em dev (ADR 0020).
     waha_shard_id: Number((row as unknown as { waha_shard_id?: unknown }).waha_shard_id ?? 0),
-    suspended_reason: (row as unknown as { suspended_reason?: unknown }).suspended_reason as string | null ?? null,
-    suspended_at: (row as unknown as { suspended_at?: unknown }).suspended_at as Date | null ?? null,
+    suspended_reason:
+      ((row as unknown as { suspended_reason?: unknown }).suspended_reason as string | null) ??
+      null,
+    suspended_at:
+      ((row as unknown as { suspended_at?: unknown }).suspended_at as Date | null) ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
     servicos: parseJsonbOrNull<ServicoConfig[]>(row.servicos),
     // Campos do LEFT JOIN client_billing (so vem de getCloneBySlot). Rows de outras
     // origens (getCloneBySession, RETURNING *) nao tem -> null. pg ja devolve
     // amount_cents como number; o ?? null cobre o caso da coluna ausente.
-    next_due_date: (row as unknown as { next_due_date?: unknown }).next_due_date as string | null ?? null,
+    next_due_date:
+      ((row as unknown as { next_due_date?: unknown }).next_due_date as string | null) ?? null,
     billing_amount_cents:
-      (row as unknown as { billing_amount_cents?: unknown }).billing_amount_cents as number | null ?? null,
+      ((row as unknown as { billing_amount_cents?: unknown }).billing_amount_cents as
+        | number
+        | null) ?? null,
   };
 }
