@@ -4,6 +4,7 @@ import {
   type SqlClient,
   type SqlPool,
   type SqlResult,
+  areaArtigo,
   createCloneRecords,
   createWahaSession,
   generateCloneSlot,
@@ -98,6 +99,90 @@ describe('renderClonePrompt', () => {
     );
     expect(out).not.toContain('{{nome_negocio}}');
     expect(out).toContain('a barbearia');
+  });
+});
+
+// Missão 023 W8 — área/vertical adapta o prompt genérico. {{area_artigo}} é
+// resolvido pelo MESMO mecanismo do {{nome_negocio}} (personalizacao.area).
+describe('renderClonePrompt — área/vertical (Missão 023 W8)', () => {
+  const TPL =
+    'Voce e o assistente virtual de {{nome_negocio}}, {{area_artigo}}. Voce atende {{area_artigo}}.';
+
+  it('novo clone com area=manicure renderiza o prompt adaptado (estudio de unhas)', () => {
+    const out = renderClonePrompt(
+      TPL,
+      { nome_negocio: 'Espaco Lili Nails', area: 'manicure' },
+      null,
+      null,
+    );
+    expect(out).toContain('Espaco Lili Nails');
+    expect(out).toContain('o espaco de unhas');
+    expect(out).not.toContain('a barbearia');
+    expect(out).not.toContain('{{area_artigo}}');
+  });
+
+  it('area=cabeleireiro -> "o salao"; area=estetica -> "o studio de estetica"', () => {
+    expect(
+      renderClonePrompt('{{area_artigo}}', { nome_negocio: 'X', area: 'cabeleireiro' }, null, null),
+    ).toBe('o salao');
+    expect(
+      renderClonePrompt('{{area_artigo}}', { nome_negocio: 'X', area: 'estetica' }, null, null),
+    ).toBe('o studio de estetica');
+  });
+
+  it('area=barbearia preserva o tom barbearia (clone barbearia inalterado de comportamento)', () => {
+    const out = renderClonePrompt(
+      TPL,
+      { nome_negocio: 'Barbearia do Edu', area: 'barbearia' },
+      null,
+      null,
+    );
+    expect(out).toContain('a barbearia');
+    expect(out).toContain('Barbearia do Edu');
+  });
+
+  it('clone SEM area -> fallback genérico "o atendimento", NUNCA placeholder cru', () => {
+    const out = renderClonePrompt(TPL, { nome_negocio: 'Negocio Generico' }, null, null);
+    expect(out).toContain('o atendimento');
+    expect(out).not.toContain('{{area_artigo}}');
+    expect(out).not.toContain('{{area}}');
+  });
+
+  it('area inválida/desconhecida -> fallback genérico (mapa não casa)', () => {
+    expect(
+      renderClonePrompt('{{area_artigo}}', { nome_negocio: 'X', area: 'petshop' }, null, null),
+    ).toBe('o atendimento');
+  });
+
+  it('{{area}} expõe o código canônico sanitizado (sem vazar {{ }})', () => {
+    const out = renderClonePrompt(
+      'codigo={{area}}',
+      { nome_negocio: 'X', area: 'manicure' },
+      null,
+      null,
+    );
+    expect(out).toBe('codigo=manicure');
+  });
+});
+
+describe('areaArtigo — mapa código -> frase com artigo', () => {
+  it('mapeia cada vertical canônica para a frase pronta', () => {
+    expect(areaArtigo('barbearia')).toBe('a barbearia');
+    expect(areaArtigo('cabeleireiro')).toBe('o salao');
+    expect(areaArtigo('manicure')).toBe('o espaco de unhas');
+    expect(areaArtigo('estetica')).toBe('o studio de estetica');
+    expect(areaArtigo('outro')).toBe('o atendimento');
+  });
+
+  it('trim + lower defensivo (valor do banco pode vir com caixa/espaços)', () => {
+    expect(areaArtigo('  MANICURE ')).toBe('o espaco de unhas');
+  });
+
+  it('ausente/não-string/fora do mapa -> fallback genérico', () => {
+    expect(areaArtigo(undefined)).toBe('o atendimento');
+    expect(areaArtigo(null)).toBe('o atendimento');
+    expect(areaArtigo(42)).toBe('o atendimento');
+    expect(areaArtigo('petshop')).toBe('o atendimento');
   });
 });
 
@@ -376,6 +461,71 @@ describe('createCloneRecords — idempotência/unicidade', () => {
     // passe final garante: zero "{{nome_negocio}}" cru no que foi pro banco.
     expect(bootstrap?.prompt).not.toContain('{{nome_negocio}}');
     expect(bootstrap?.prompt).toContain('a barbearia');
+  });
+
+  // Missão 023 W8: a área escolhida no signup grava na COLUNA tipada flow_clones.area.
+  // Captura os values do INSERT INTO flow_clones (que tem 'area' na lista de colunas).
+  function fakePoolCapturingClone(): {
+    pool: SqlPool;
+    cloneInsert: () => { text: string; values?: unknown[] } | undefined;
+  } {
+    const inserts: Array<{ text: string; values?: unknown[] }> = [];
+    const client: SqlClient = {
+      query: async (text: string, values?: unknown[]): Promise<SqlResult> => {
+        inserts.push({ text, values });
+        if (text.includes('SELECT prompt FROM bot_prompt')) {
+          return { rows: [{ prompt: 'Oi {{nome_negocio}} ({{area_artigo}})' }] };
+        }
+        if (text.includes('SELECT provider, model, temperature FROM bot_config')) {
+          return { rows: [{ provider: 'openai', model: 'gpt-5.4', temperature: '0.7' }] };
+        }
+        if (text.includes('RETURNING *')) {
+          return { rows: [{ id: 9, slot: String(values?.[0]) }] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool: SqlPool = {
+      query: async (text: string): Promise<SqlResult> => {
+        if (text.includes('SELECT 1 FROM')) return { rows: [] };
+        if (text.includes('horarios_funcionamento, servicos FROM bot_config')) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+      connect: async () => client,
+    };
+    return {
+      pool,
+      cloneInsert: () => inserts.find((q) => q.text.includes('INSERT INTO flow_clones')),
+    };
+  }
+
+  it('persiste area=manicure na coluna flow_clones.area (vem de personalizacao.area)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_lili_nails_ab12cd',
+      displayName: 'Espaco Lili Nails',
+      personalizacao: { nome_negocio: 'Espaco Lili Nails', area: 'manicure' },
+    });
+    const ins = cloneInsert();
+    expect(ins).toBeDefined();
+    expect(ins?.text).toContain('area');
+    // a coluna area é o 7º parâmetro do INSERT ($7) -> índice 6 do array values.
+    expect(ins?.values?.[6]).toBe('manicure');
+  });
+
+  it('clone SEM area grava NULL em flow_clones.area (gestão legado / sem seletor)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_sem_area_ab12cd',
+      displayName: 'Negocio X',
+      personalizacao: { nome_negocio: 'Negocio X' },
+    });
+    expect(cloneInsert()?.values?.[6]).toBeNull();
   });
 });
 

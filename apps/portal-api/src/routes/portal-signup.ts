@@ -40,6 +40,15 @@ import { cookieSecure } from './auth.js';
 
 const log = logger.child({ service: 'portal-api', module: 'signup' });
 
+/**
+ * Taxonomia canônica de áreas/verticais (Missão 023 W8). Validada AQUI (Zod), NÃO
+ * por CHECK no banco — a lista evolui sem migration (decisão do design W8). O
+ * provisioning traduz o código pra frase {{area_artigo}} (mapa AREA_ARTIGO).
+ * `'outro'` é o catch-all genérico. Manter em sincronia com o seletor do front e
+ * com AREA_ARTIGO em clone-provisioning.ts.
+ */
+export const AREA_VALUES = ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro'] as const;
+
 // .strict(): campo desconhecido => 400 (defesa em profundidade contra
 // mass-assignment — security review PR #268, recomendação Zod não-estrito).
 export const signupSchema = z
@@ -48,6 +57,10 @@ export const signupSchema = z
     whatsapp: z.string().trim().min(8).max(25),
     // Mesmos limites do change-password (8-72 — teto real do bcrypt).
     senha: z.string().min(8).max(72),
+    // Área/vertical (Missão 023 W8). DEFAULT seguro 'outro' (tom genérico) quando
+    // o front não envia — onboarding antigo/cliente que pulou o seletor não quebra.
+    // Valor FORA da taxonomia => 400 dados_invalidos (.strict + enum).
+    area: z.enum(AREA_VALUES).default('outro'),
   })
   .strict();
 
@@ -76,7 +89,7 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'dados_invalidos' });
     }
-    const { nome_negocio, whatsapp, senha } = parsed.data;
+    const { nome_negocio, whatsapp, senha, area } = parsed.data;
 
     const canonical = canonicalE164(whatsapp);
     if (!canonical) {
@@ -149,7 +162,10 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
         displayName: nome_negocio,
         telefoneContato: canonical,
         // SEM overrides de provider/model: o clone herda da matriz (banco).
-        personalizacao: { nome_negocio },
+        // `area` (W8) vai DENTRO de personalizacao: o provisioning a usa pra
+        // resolver {{area_artigo}} no render do prompt E grava em flow_clones.area
+        // (coluna tipada). Sem mudança de assinatura — espelha {{nome_negocio}}.
+        personalizacao: { nome_negocio, area },
         // Slot já nasce prefixado clone_ — usa o próprio slot como sessão WAHA
         // (evita duplo prefixo do wahaSessionName, pensado pro gestão).
         sessionName: slot,
