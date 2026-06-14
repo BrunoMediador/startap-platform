@@ -31,7 +31,14 @@ curl -s -u admin:startap2026 https://gestao.startap.tech/api/bots | python3 -c "
 # Esperado: 4 (startap, teste_barbearia, teste_vendas, teste_vendas_barbearia)
 ```
 
-## 5. WAHA sessions contem STARTAP_AI_PROD e WHATSAPP_ROUTER_TESTE
+## 5. WAHA sessions contem STARTAP_AI_PROD
+
+> Nota (Missão 023 W2): o **roteamento de TESTE foi descontinuado pelo Bruno** —
+> as entradas de `routing_clientes` foram apagadas e a sessao `WHATSAPP_ROUTER_TESTE`
+> foi removida do WAHA. A aba "Roteamento" do painel e o endpoint `/api/routing`
+> tambem foram removidos. Por isso este item **nao** verifica mais
+> `WHATSAPP_ROUTER_TESTE` (verificar sua presenca falharia de proposito agora).
+> O roteamento CORE (`apps/api/src/router.ts`) segue intacto.
 
 ```bash
 curl -s -u admin:startap2026 https://gestao.startap.tech/api/sessions | python3 -c "
@@ -40,7 +47,6 @@ data = json.load(sys.stdin)
 names = [s.get('name') or s.get('session') for s in data]
 print(names)
 assert 'STARTAP_AI_PROD' in names, 'STARTAP_AI_PROD ausente'
-assert 'WHATSAPP_ROUTER_TESTE' in names, 'WHATSAPP_ROUTER_TESTE ausente'
 "
 ```
 

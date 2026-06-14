@@ -263,7 +263,6 @@ const DEFAULT_PROJECT_DATABASES = [
       category: 'teste',
       tables: [
         'chat_memory',
-        'routing',
         'flow_pauses',
         'flow_pause_keywords',
         'bot_prompt',
@@ -306,7 +305,7 @@ function resolveSlotToFlowId(slot) {
 
 const DATABASE_TABLES = {
   chat_memory: { label: 'Historico de conversa', type: 'memoria' },
-  routing: { label: 'Roteamento', type: 'operacao' },
+  // 'routing' removido na Missão 023 W2 (inspector da tabela routing_clientes de teste — descontinuado).
   flow_pauses: { label: 'Pausas por fluxo', type: 'operacao' },
   flow_pause_keywords: { label: 'Palavras-chave de pausa', type: 'config' },
   bot_prompt: { label: 'Prompt', type: 'config' },
@@ -743,117 +742,12 @@ const wahaFetch = (p) =>
     headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
   }).then((r) => r.json());
 
-// ---------- ROUTING CRUD ----------
-app.get('/api/routing', async (req, res) => {
-  try {
-    const r = await pool.query(`
-      SELECT id, telefone, nome_cliente, workflow_id, workflow_name, webhook_url,
-             ativo, criado_em, atualizado_em
-      FROM routing_clientes ORDER BY workflow_name, telefone
-    `);
-    res.json(r.rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/routing', async (req, res) => {
-  try {
-    const { telefone, workflow_id, nome_cliente, ativo = true, move = false } = req.body;
-    if (!telefone || !workflow_id)
-      return res.status(400).json({ error: 'telefone e workflow_id obrigatorios' });
-    const tel = String(telefone).replace(/\D/g, '');
-    if (tel.length < 10) return res.status(400).json({ error: 'telefone invalido' });
-
-    const wf = await resolveWorkflow(workflow_id);
-    if (!wf) return res.status(400).json({ error: 'workflow nao encontrado' });
-    if (!wf.webhook_url) return res.status(400).json({ error: 'workflow sem webhook publico' });
-
-    const existing = await pool.query(
-      'SELECT id, workflow_name FROM routing_clientes WHERE telefone = $1',
-      [tel],
-    );
-    if (existing.rows.length && !move) {
-      return res.status(409).json({
-        error: 'duplicate',
-        message: `Telefone ja vinculado ao fluxo "${existing.rows[0].workflow_name}"`,
-        existing_id: existing.rows[0].id,
-        existing_workflow: existing.rows[0].workflow_name,
-      });
-    }
-
-    await pool.query(
-      `INSERT INTO routing_clientes (telefone, workflow_id, workflow_name, webhook_url, nome_cliente, ativo, atualizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,NOW())
-       ON CONFLICT (telefone) DO UPDATE SET
-         workflow_id=EXCLUDED.workflow_id,
-         workflow_name=EXCLUDED.workflow_name,
-         webhook_url=EXCLUDED.webhook_url,
-         nome_cliente=COALESCE(EXCLUDED.nome_cliente, routing_clientes.nome_cliente),
-         ativo=EXCLUDED.ativo,
-         atualizado_em=NOW()`,
-      [tel, wf.id, wf.name, wf.webhook_url, nome_cliente || null, ativo],
-    );
-    res.json({ ok: true, moved: existing.rows.length > 0 });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.put('/api/routing/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    // PATCH semantics: lê o registro atual, faz merge com os campos enviados.
-    // Permite toggles parciais (ex: só `ativo`, só `workflow_id`) sem precisar
-    // mandar o objeto inteiro do front.
-    const cur = await pool.query(
-      `SELECT telefone, workflow_id, workflow_name, webhook_url, nome_cliente, ativo
-       FROM routing_clientes WHERE id = $1`,
-      [id],
-    );
-    if (cur.rowCount === 0) return res.status(404).json({ error: 'rota nao encontrada' });
-    const row = cur.rows[0];
-
-    const telefoneRaw =
-      req.body.telefone !== undefined ? String(req.body.telefone).replace(/\D/g, '') : row.telefone;
-    const wfIdNovo = req.body.workflow_id !== undefined ? req.body.workflow_id : row.workflow_id;
-
-    let wfId = row.workflow_id;
-    let wfName = row.workflow_name;
-    let webhookUrl = row.webhook_url;
-    if (wfIdNovo !== row.workflow_id) {
-      const wf = await resolveWorkflow(wfIdNovo);
-      if (!wf) return res.status(400).json({ error: 'workflow nao encontrado' });
-      wfId = wf.id;
-      wfName = wf.name;
-      webhookUrl = wf.webhook_url;
-    }
-
-    const nomeCliente =
-      req.body.nome_cliente !== undefined ? req.body.nome_cliente || null : row.nome_cliente;
-    const ativo = req.body.ativo !== undefined ? !!req.body.ativo : row.ativo;
-
-    await pool.query(
-      `UPDATE routing_clientes SET
-         telefone=$1, workflow_id=$2, workflow_name=$3, webhook_url=$4,
-         nome_cliente=$5, ativo=$6, atualizado_em=NOW()
-       WHERE id=$7`,
-      [telefoneRaw, wfId, wfName, webhookUrl, nomeCliente, ativo, id],
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.delete('/api/routing/:id', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM routing_clientes WHERE id = $1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+// ---------- ROUTING CRUD (REMOVIDO — Missão 023 W2) ----------
+// A aba "Roteamento" do painel e os endpoints CRUD /api/routing (que liam/escreviam
+// na tabela routing_clientes para os fluxos de TESTE) foram descontinuados pelo Bruno.
+// A tabela routing_clientes foi PRESERVADA (vazia, custo zero, sem migration destrutiva).
+// O roteamento CORE de mensagens (apps/api/src/router.ts → findRoute → routing.findRouting)
+// NÃO passa por estes endpoints e segue intacto.
 
 // ---------- BOT CONFIG (modelos por slot) ----------
 app.get(
@@ -2171,14 +2065,8 @@ async function fetchAllWorkflows() {
   });
 }
 
-async function resolveWorkflow(workflow_id) {
-  const tsBot = TS_BOTS.find((b) => b.id === workflow_id);
-  if (tsBot) {
-    if (!tsBot.routable) return null;
-    return { id: tsBot.id, name: tsBot.name, active: tsBot.active, webhook_url: tsBot.webhook_url };
-  }
-  return null;
-}
+// resolveWorkflow() removido na Missão 023 W2 — só era usado pelo CRUD /api/routing
+// (aba "Roteamento" de teste, descontinuada). TS_BOTS segue em uso em fetchAllWorkflows.
 
 async function getFlowControlMap() {
   try {
@@ -2744,16 +2632,7 @@ function getProjectTablePlan(project, key) {
         rowsVals: [],
       };
     }
-    case 'routing':
-      return {
-        tableName: 'routing_clientes',
-        countSql:
-          'SELECT COUNT(*)::int AS rows, MAX(atualizado_em) AS last_at FROM routing_clientes WHERE workflow_id = $1',
-        countVals: [project.workflow_id],
-        rowsSql:
-          'SELECT id, telefone, nome_cliente, workflow_id, workflow_name, ativo, criado_em, atualizado_em FROM routing_clientes WHERE workflow_id = $1 ORDER BY atualizado_em DESC LIMIT $2',
-        rowsVals: [project.workflow_id],
-      };
+    // case 'routing' removido na Missão 023 W2 (inspector de routing_clientes de teste — descontinuado).
     case 'flow_pauses':
       return {
         tableName: 'flow_pauses',
