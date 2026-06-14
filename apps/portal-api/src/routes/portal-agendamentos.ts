@@ -263,4 +263,82 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(502).send({ error: 'nao foi possivel criar o agendamento agora' });
     }
   });
+
+  // ---- DELETE /portal/agendamentos/:eventId (Missão 023 W10 — cancelar) -------
+  //
+  // O dono cancela um horário pelo portal. Apaga o evento REAL na agenda GCal do
+  // tenant (irreversível) — o front confirma com modal antes de chamar.
+  //
+  // Guarda de pertencimento (CRÍTICA, anti-IDOR): o deleteEvent do GCal é cego ao
+  // tenant — qualquer eventId na MESMA agenda seria apagável. Antes de deletar,
+  // re-listamos a agenda DO TENANT (resolvida por getGcalForSlot(slot), nunca por
+  // input do cliente) numa janela ampla e confirmamos que o eventId está LÁ. Se
+  // não está → 404 e NADA é apagado. Como cada clone tem Service Account/agenda
+  // próprias (per-clone.ts, sem fallback pra matriz), um eventId de outro tenant
+  // jamais aparece nessa listagem → cliente A nunca apaga evento de B.
+  //
+  // Janela de validação: -7/+60d (cobre os recentes que o GET mostra + futuro até
+  // o limite de agendamento). Mesmo critério de isolamento do GET/POST.
+
+  /** Quanto pra trás re-listar na validação de pertencimento (cobre passados recentes). */
+  const DELETE_LOOKBACK_DAYS = 7;
+  /** Quanto pra frente re-listar (alinha ao teto de agendamento de 60d). */
+  const DELETE_LOOKAHEAD_DAYS = 60;
+  /** eventId do GCal: alfanumérico (base32hex). Sanidade leve antes de ir ao GCal. */
+  const eventIdParam = z.object({
+    eventId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(1024)
+      .regex(/^[a-z0-9_-]+$/i, 'eventId invalido'),
+  });
+
+  app.delete('/portal/agendamentos/:eventId', { preHandler: withTenant }, async (req, reply) => {
+    const { slot, userId } = requireTenant(req);
+
+    const parsed = eventIdParam.safeParse(req.params ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'eventId_invalido' });
+    }
+    const { eventId } = parsed.data;
+
+    const client = await gcal.getGcalForSlot(slot);
+    if (!client) {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+
+    const now = new Date();
+    const timeMin = new Date(now.getTime() - DELETE_LOOKBACK_DAYS * 86_400_000).toISOString();
+    const timeMax = new Date(now.getTime() + DELETE_LOOKAHEAD_DAYS * 86_400_000).toISOString();
+
+    try {
+      // Guarda de pertencimento: o eventId TEM que estar na agenda DESTE tenant.
+      const events = await client.listEvents({ timeMin, timeMax });
+      const pertence = events.some((e) => e.id === eventId);
+      if (!pertence) {
+        log.warn(
+          { slot, userId, eventId },
+          'cancelamento negado: eventId fora da agenda do tenant',
+        );
+        return reply.code(404).send({ error: 'evento_nao_encontrado' });
+      }
+
+      await client.deleteEvent(eventId);
+      log.info({ slot, userId, eventId }, 'agendamento cancelado via portal');
+      return reply.code(200).send({ ok: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'erro';
+      // Idempotência: evento já removido (race entre a re-listagem e o delete, ou
+      // dois cliques) → o Google devolve 404/410. Tratamos como sucesso: o estado
+      // final desejado (evento ausente) foi atingido.
+      if (/HTTP 4(0[49]|10)/.test(msg)) {
+        log.info({ slot, userId, eventId }, 'cancelamento idempotente: evento ja ausente no GCal');
+        return reply.code(200).send({ ok: true });
+      }
+      if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
+      log.error({ slot, userId, eventId, err: msg }, 'cancelamento: falha no GCal');
+      return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
+    }
+  });
 };

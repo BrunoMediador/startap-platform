@@ -296,3 +296,141 @@ describe('POST /portal/agendamentos — validação e erros', () => {
     await app.close();
   });
 });
+
+// ---- DELETE /portal/agendamentos/:eventId (Missão 023 W10 — cancelar) --------
+//
+// Foco: caminho feliz (apaga só após confirmar pertencimento), guarda anti-IDOR
+// (eventId fora da agenda do tenant -> 404, NÃO chama deleteEvent), e que o slot
+// usado pra resolver a agenda vem SEMPRE da sessão (isolamento por tenant).
+
+const EVT_DO_TENANT = {
+  id: 'evt_do_tenant',
+  summary: 'Cliente - Corte | WhatsApp: 5511999990000',
+  start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+  end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+};
+
+/** Client GCal cuja agenda contém apenas os eventos passados. */
+function gcalClientComEventos(eventos: Array<{ id: string }>) {
+  return {
+    listEvents: vi.fn().mockResolvedValue(eventos),
+    deleteEvent: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+describe('DELETE /portal/agendamentos/:eventId — caminho feliz', () => {
+  it('200: apaga o evento do PRÓPRIO tenant após confirmar pertencimento', async () => {
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(client.deleteEvent).toHaveBeenCalledWith(EVT_DO_TENANT.id);
+    // Isolamento: a agenda foi resolvida pelo slot da SESSÃO, nunca por input.
+    expect(getGcalForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('200 idempotente: evento já ausente no GCal (404/410) ainda responde ok', async () => {
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    // Passou a guarda (estava na lista), mas sumiu antes do delete (race).
+    client.deleteEvent.mockRejectedValue(new Error('GCal /events/x -> HTTP 410: deleted'));
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    await app.close();
+  });
+});
+
+describe('DELETE /portal/agendamentos/:eventId — guarda de pertencimento (anti-IDOR)', () => {
+  it('404: eventId que NÃO está na agenda do tenant — NÃO chama deleteEvent', async () => {
+    // A agenda do tenant logado só tem EVT_DO_TENANT; o cliente tenta apagar um
+    // eventId de OUTRA agenda (que jamais aparece na listagem deste tenant).
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt_de_outro_tenant',
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('evento_nao_encontrado');
+    // CRÍTICO: nada é apagado quando o evento não pertence ao tenant.
+    expect(client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404: agenda vazia — qualquer eventId é rejeitado sem deletar', async () => {
+    const client = gcalClientComEventos([]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('DELETE /portal/agendamentos/:eventId — erros', () => {
+  it('422: GCal não configurado no tenant', async () => {
+    getGcalForSlotMock.mockResolvedValue(null);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('gcal_nao_configurado');
+    await app.close();
+  });
+
+  it('400: eventId com caracteres inválidos', async () => {
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt%20com%20espaco%21',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('eventId_invalido');
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('502: falha do GCal ao listar — e invalida cache em 401/403', async () => {
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    client.listEvents.mockRejectedValue(new Error('GCal /events -> HTTP 403: forbidden'));
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+    expect(res.statusCode).toBe(502);
+    expect(invalidateGcalCacheMock).toHaveBeenCalledWith(injectedSlot);
+    expect(client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
