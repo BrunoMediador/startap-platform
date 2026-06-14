@@ -270,8 +270,9 @@ export interface MonitoredSession {
  *  - clones com sessão dedicada E status 'conectado' (já pareados — Cirilo/Samuel);
  *    NÃO monitora pré-setup (rascunho/aguardando_qr — FAILED esperado) nem trials
  *    'awaiting' (ver memória project_fluxos_pre_setup);
- *  - + a própria sessão remetente (Lola — bot_config do sender_slot), pra detectar
- *    se a Lola caiu (ainda que, caída, o alerta não saia — limitação conhecida §3).
+ *  - + a própria sessão remetente (bot_config do sender_slot — hoje a sessão dedicada
+ *    `ALERTAS`; antes era a Lola), pra detectar se o remetente caiu (ainda que, caído,
+ *    o alerta não saia — limitação conhecida §3).
  *
  * Exclui sessões de teste por nunca casarem com clone 'conectado' (WHATSAPP_ROUTER_TESTE
  * não é flow_clone de cliente). Dedup por nome de sessão.
@@ -292,10 +293,10 @@ export async function listMonitoredSessions(senderSlot: string): Promise<Monitor
       label: row.display_name ?? row.waha_sessao,
     });
   }
-  // A sessão da Lola (remetente) — monitorada também.
-  const lola = await getSenderSession(senderSlot);
-  if (lola && !out.has(lola)) {
-    out.set(lola, { sessao: lola, label: 'Lola (remetente de alertas)' });
+  // A sessão remetente (resolvida pelo sender_slot) — monitorada também.
+  const sender = await getSenderSession(senderSlot);
+  if (sender && !out.has(sender)) {
+    out.set(sender, { sessao: sender, label: 'Sessão de alertas (remetente)' });
   }
   return [...out.values()];
 }

@@ -195,6 +195,32 @@ test('200 — envia pros destinatarios habilitados e retorna sucesso por item', 
 });
 
 // ---------------------------------------------------------------------------
+// Repoint W3 (Missao 023): sender_slot='alertas' -> envia pela sessao 'ALERTAS'.
+// Prova que a rota usa o remetente RESOLVIDO de alert_config.sender_slot ->
+// bot_config.waha_sessao (NAO chumba 'startap'/'STARTAP_AI_PROD').
+// ---------------------------------------------------------------------------
+test('200 — repoint: sender_slot="alertas" envia pela sessao ALERTAS (sem hardcode)', async () => {
+  const calls = [];
+  const sendFn = async (sessao, chatId) => {
+    calls.push({ sessao, chatId });
+  };
+  const queryFn = makeQuery({
+    senderSlot: 'alertas',
+    sessao: 'ALERTAS',
+    recipients: [{ phone: '5535999247411', label: 'Bruno' }],
+  });
+  const server = await serve(buildRoute({ queryFn, sendFn }));
+  const { status, body } = await request(server, 'POST', '/api/alerts/test', { body: {} });
+  server.close();
+
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(body.sender_slot, 'alertas');
+  assert.equal(body.sessao, 'ALERTAS');
+  assert.equal(calls[0].sessao, 'ALERTAS');
+});
+
+// ---------------------------------------------------------------------------
 // Body com numero especifico: envia SO pra ele, ignora os cadastrados.
 // ---------------------------------------------------------------------------
 test('200 — body.phone envia apenas para o numero informado', async () => {

@@ -124,6 +124,20 @@ describe('sendInternalAlert', () => {
     expect(r.sent).toBe(0);
     expect(sendText).not.toHaveBeenCalled();
   });
+
+  it('(g) repoint W3: resolve o remetente via config.sender_slot (NAO hardcode), envia pela ALERTAS', async () => {
+    // Pos-repoint (migration 049): sender_slot='alertas' -> sessao 'ALERTAS'.
+    getConfig.mockResolvedValue({ enabled: true, sender_slot: 'alertas' });
+    getSenderSession.mockImplementation(async (slot: string) =>
+      slot === 'alertas' ? 'ALERTAS' : 'STARTAP_AI_PROD',
+    );
+    const r = await sendInternalAlert('alerta interno');
+    expect(r.sent).toBe(1);
+    // Resolveu o slot que veio da config (nao chumbou 'startap').
+    expect(getSenderSession).toHaveBeenCalledWith('alertas');
+    // E enviou pela sessao dedicada do Bruno.
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ sessao: 'ALERTAS' }));
+  });
 });
 
 describe('displayNameForSlot', () => {
