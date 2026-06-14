@@ -28,8 +28,15 @@ import { config } from '../config.js';
 
 const log = logger.child({ module: 'client-alert' });
 
-/** Timeout duro do sendText — o caminho do bot nunca espera WAHA indefinidamente. */
+/** Timeout duro do sendText — o caminho do bot nunca espera WAHA indefinidamente.
+ *  Embrulha o sendText INTEIRO, incluindo o delay humanizador (cabe com folga:
+ *  1.5s << 8s). */
 const SEND_TIMEOUT_MS = 8000;
+
+/** Humanização do envio — "digitando…" + delay antes de enviar, p/ reduzir risco
+ *  de o padrão de bot derrubar a sessão remetente (ALERTAS). 1 destinatário só
+ *  (o dono do clone) → não há pausa de loop, só typing + delay. */
+const ALERT_TYPING_DELAY_MS = 1_500;
 
 export type ClientAlertResult =
   | { ok: true; escalado: true }
@@ -163,7 +170,13 @@ export async function sendClientCancellationAlert(input: {
     });
 
     await Promise.race([
-      waha.sendText({ sessao, chatId: toChatId(owner.phone), texto, typing: false, delayMs: 0 }),
+      waha.sendText({
+        sessao,
+        chatId: toChatId(owner.phone),
+        texto,
+        typing: true,
+        delayMs: ALERT_TYPING_DELAY_MS,
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
       ),
