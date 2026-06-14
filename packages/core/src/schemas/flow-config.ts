@@ -119,3 +119,50 @@ export const horariosSchema = z
   .strict();
 
 export type Horarios = z.infer<typeof horariosSchema>;
+
+// ---------------------------------------------------------------------------
+// Perfil do negocio: dados editaveis pelo cliente no portal (Missao 023 W13).
+//
+// Os 6 campos vivem em flow_clones.personalizacao (JSONB), MESMA fonte que o
+// gestao grava (PATCH /api/clones/:id) — sem migration. Todos OPCIONAIS: o
+// cliente preenche o que quiser; vazio/ausente nao polui o contexto do bot
+// (free-slots.ts omite chave vazia). `instagram` aceita com ou sem '@' (o
+// renderer ja prefixa '@'); aqui so normalizamos removendo um '@' inicial pra
+// nao virar '@@'. `formas_pagamento` e texto livre (ex.: "Pix, cartao,
+// dinheiro"). String vazia ("") e aceita como "limpar o campo".
+// ---------------------------------------------------------------------------
+
+/** Remove um unico '@' inicial e espacos das pontas (idempotente). */
+function stripAtPrefix(v: string): string {
+  return v.trim().replace(/^@+/, '');
+}
+
+export const perfilSchema = z
+  .object({
+    nome_negocio: z.string().trim().max(120, 'nome do negocio muito longo').optional(),
+    nome_prestador: z.string().trim().max(120, 'nome do prestador muito longo').optional(),
+    telefone_contato: z.string().trim().max(40, 'telefone muito longo').optional(),
+    endereco: z.string().trim().max(240, 'endereco muito longo').optional(),
+    instagram: z
+      .string()
+      .trim()
+      .max(120, 'instagram muito longo')
+      .transform(stripAtPrefix)
+      .optional(),
+    formas_pagamento: z.string().trim().max(240, 'formas de pagamento muito longo').optional(),
+  })
+  .strict();
+
+export type Perfil = z.infer<typeof perfilSchema>;
+
+/** Chaves do perfil em flow_clones.personalizacao — fonte unica (GET/PUT + data layer). */
+export const PERFIL_KEYS = [
+  'nome_negocio',
+  'nome_prestador',
+  'telefone_contato',
+  'endereco',
+  'instagram',
+  'formas_pagamento',
+] as const;
+
+export type PerfilKey = (typeof PERFIL_KEYS)[number];

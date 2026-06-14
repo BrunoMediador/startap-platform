@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { horarioDiaSchema, horariosSchema, servicoSchema, servicosSchema } from './flow-config.js';
+import {
+  horarioDiaSchema,
+  horariosSchema,
+  perfilSchema,
+  servicoSchema,
+  servicosSchema,
+} from './flow-config.js';
 
 describe('servicoSchema', () => {
   it('aceita servico valido', () => {
@@ -136,6 +142,55 @@ describe('horariosSchema', () => {
     const r = horariosSchema.safeParse({
       funday: { abre: '09:00', fecha: '18:00', fechado: false },
     });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('perfilSchema', () => {
+  it('aceita perfil completo valido', () => {
+    const r = perfilSchema.safeParse({
+      nome_negocio: 'Barbearia do Edu',
+      nome_prestador: 'Edu',
+      telefone_contato: '(11) 99999-0000',
+      endereco: 'Rua X, 123',
+      instagram: 'barbeariaedu',
+      formas_pagamento: 'Pix, cartao, dinheiro',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('aceita objeto vazio (todos os campos opcionais)', () => {
+    expect(perfilSchema.safeParse({}).success).toBe(true);
+  });
+
+  it('aceita campos vazios ("") como limpar o campo', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: '', formas_pagamento: '' });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.nome_negocio).toBe('');
+      expect(r.data.formas_pagamento).toBe('');
+    }
+  });
+
+  it('normaliza instagram removendo o @ inicial (nao precisa do @)', () => {
+    const com = perfilSchema.safeParse({ instagram: '@barbeariaedu' });
+    const sem = perfilSchema.safeParse({ instagram: 'barbeariaedu' });
+    expect(com.success && com.data.instagram).toBe('barbeariaedu');
+    expect(sem.success && sem.data.instagram).toBe('barbeariaedu');
+  });
+
+  it('rejeita campo extra (strict) — nao deixa cliente injetar outras chaves', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: 'X', slot: 'outro_clone' });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejeita nome_negocio acima do maxlength', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: 'a'.repeat(121) });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejeita tipo invalido (numero em vez de string)', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: 123 });
     expect(r.success).toBe(false);
   });
 });

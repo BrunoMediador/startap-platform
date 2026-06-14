@@ -229,9 +229,11 @@ interface ContextBlockOpts {
 // um bloco [OBSERVACOES] no final do contexto.
 const _PERS_LABELS: Record<string, string> = {
   nome_negocio: 'Nome',
+  nome_prestador: 'Profissional',
   endereco: 'Endereco',
   instagram: 'Instagram',
   telefone_contato: 'Telefone',
+  formas_pagamento: 'Formas de pagamento',
 };
 
 function humanizarChave(key: string): string {
