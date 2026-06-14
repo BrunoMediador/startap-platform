@@ -10,7 +10,7 @@
  * marcam, Home/End vão pros extremos. A seleção é visível por MAIS que cor
  * (check + borda + fundo), pra daltonismo (spec acessibilidade).
  *
- * Os slugs (`barbearia`...`outros`) são o contrato do POST /auth/signup; os
+ * Os slugs (`barbearia`...`outro`) são o contrato do POST /auth/signup; os
  * rótulos abaixo são só de exibição. "Outro serviço" é o catch-all e ocupa a
  * largura dupla pra caber o texto.
  */
@@ -39,7 +39,7 @@ const OPTIONS: AreaOption[] = [
   { slug: 'cabeleireiro', label: 'Cabeleireiro', Icon: IconUser },
   { slug: 'manicure', label: 'Manicure', Icon: IconBrush },
   { slug: 'estetica', label: 'Estética', Icon: IconSparkle },
-  { slug: 'outros', label: 'Outro serviço com agendamento', Icon: IconCalendar, wide: true },
+  { slug: 'outro', label: 'Outro serviço com agendamento', Icon: IconCalendar, wide: true },
 ];
 
 interface AreaSelectorProps {

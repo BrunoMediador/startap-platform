@@ -18,7 +18,7 @@ export const NOME_MAX = 100;
  * nasce com o tom/serviços da área). Os rótulos exibidos vivem no AreaSelector
  * (UI); os slugs aqui são o contrato.
  */
-export const AREAS_SLUGS = ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outros'] as const;
+export const AREAS_SLUGS = ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro'] as const;
 
 export type Area = (typeof AREAS_SLUGS)[number];
 

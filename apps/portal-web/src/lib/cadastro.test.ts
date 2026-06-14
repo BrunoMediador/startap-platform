@@ -71,7 +71,7 @@ describe('validateCadastro', () => {
   });
 
   it('aceita os 5 slugs de area do contrato', () => {
-    for (const area of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outros'] as const) {
+    for (const area of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro'] as const) {
       const res = validateCadastro({ ...ok, area });
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.value.area).toBe(area);
@@ -123,7 +123,7 @@ describe('validateCadastro', () => {
 
 describe('isArea', () => {
   it('aceita só os 5 slugs do contrato', () => {
-    for (const a of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outros']) {
+    for (const a of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro']) {
       expect(isArea(a)).toBe(true);
     }
   });
