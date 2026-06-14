@@ -338,3 +338,21 @@ export interface StatusConexaoResponse {
   connected: boolean;
   terminal: boolean;
 }
+
+// ── Perfil do negocio (portal-perfil.ts — Missão 023 W13) ─────────────────────
+//
+// Dados do negocio que o cliente edita pelo portal (sem depender do gestao). Seis
+// campos string, TODOS podem vir vazios. O slot vem da sessao (withTenant) — nunca
+// no body. GET e PUT compartilham o mesmo shape.
+
+export interface PerfilNegocio {
+  nome_negocio: string;
+  nome_prestador: string;
+  telefone_contato: string;
+  endereco: string;
+  instagram: string;
+  formas_pagamento: string;
+}
+
+/** GET /portal/perfil -> 200. PUT envia o mesmo shape e devolve o perfil salvo. */
+export type PerfilResponse = PerfilNegocio;

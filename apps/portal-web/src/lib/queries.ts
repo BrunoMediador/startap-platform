@@ -32,6 +32,7 @@ import type {
   HorariosResponse,
   MensalidadeResponse,
   PausasResponse,
+  PerfilResponse,
   QrResponse,
   ReconectarResponse,
   Servico,
@@ -47,6 +48,7 @@ export const qk = {
   me: ['me'] as const,
   status: (slot: string) => ['status', slot] as const,
   servicos: (slot: string) => ['servicos', slot] as const,
+  perfil: (slot: string) => ['perfil', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
@@ -196,6 +198,32 @@ export function useSaveServicos(slot: string): UseMutationResult<Servico[], Erro
       }).then((r) => r.servicos),
     onSuccess: (servicos) => {
       client.setQueryData(qk.servicos(slot), servicos);
+    },
+  });
+}
+
+// ── Perfil do negocio (GET/PUT /portal/perfil — Missão 023 W13) ──────────────
+//
+// Mesmo shape no GET e no PUT. O slot vem da sessao no backend (nunca no body).
+// Contrato definido na spec W13; o backend par esta em outro worktree — o front
+// consome `PerfilResponse` e a tela trata erro/empty com graca.
+
+export function usePerfil(slot: string): UseQueryResult<PerfilResponse> {
+  return useQuery({
+    queryKey: qk.perfil(slot),
+    queryFn: ({ signal }) => apiFetch<PerfilResponse>('/portal/perfil', { signal }),
+  });
+}
+
+export function useSavePerfil(
+  slot: string,
+): UseMutationResult<PerfilResponse, Error, PerfilResponse> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (perfil: PerfilResponse) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { method: 'PUT', body: perfil }),
+    onSuccess: (perfil) => {
+      client.setQueryData(qk.perfil(slot), perfil);
     },
   });
 }
