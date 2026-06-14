@@ -6,10 +6,11 @@ import {
   filtrarAgendamentos,
   normalizar,
   parseInicio,
+  removerAgendamento,
   temFiltroAtivo,
   totalAgendamentos,
 } from './agendamentos';
-import type { Agendamento } from './api-types';
+import type { Agendamento, AgendamentosResponse } from './api-types';
 
 // Referencia fixa: 2026-06-09 (terca), 14:00 horario local.
 const NOW = new Date(2026, 5, 9, 14, 0, 0);
@@ -200,5 +201,39 @@ describe('paginacao 5/pagina (logica de slice usada na UI)', () => {
     expect(totalPages).toBe(3);
     expect(out.slice(0, PAGE)).toHaveLength(5);
     expect(out.slice(10, 15)).toHaveLength(2); // ultima pagina parcial
+  });
+});
+
+describe('removerAgendamento (cache do excluir — W10)', () => {
+  const base: AgendamentosResponse = {
+    gcal_configured: true,
+    count: 3,
+    agendamentos: [ag('a', null), ag('b', null), ag('c', null)],
+  };
+
+  it('remove o evento por id e decrementa o count', () => {
+    const out = removerAgendamento(base, 'b');
+    expect(out.agendamentos.map((a) => a.id)).toEqual(['a', 'c']);
+    expect(out.count).toBe(2);
+  });
+
+  it('id ausente -> devolve a MESMA referência intacta (idempotente)', () => {
+    const out = removerAgendamento(base, 'zzz');
+    expect(out).toBe(base);
+    expect(out.count).toBe(3);
+  });
+
+  it('nunca decrementa count abaixo de 0 (count dessincronizado)', () => {
+    const desync: AgendamentosResponse = { ...base, count: 0 };
+    const out = removerAgendamento(desync, 'a');
+    expect(out.count).toBe(0);
+    expect(out.agendamentos.map((a) => a.id)).toEqual(['b', 'c']);
+  });
+
+  it('não muta o objeto original', () => {
+    const snapshot = base.agendamentos.length;
+    removerAgendamento(base, 'a');
+    expect(base.agendamentos).toHaveLength(snapshot);
+    expect(base.count).toBe(3);
   });
 });

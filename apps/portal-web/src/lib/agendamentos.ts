@@ -12,7 +12,7 @@
  * `inicio` pode ser ISO datetime, date puro "2026-06-09" ou null. Null vai pra
  * Proximos (evento sem horario definido — nao some da tela), no fim do grupo.
  */
-import type { Agendamento } from './api-types';
+import type { Agendamento, AgendamentosResponse } from './api-types';
 
 export type GrupoAgendamento = 'hoje' | 'proximos' | 'recentes';
 
@@ -86,6 +86,21 @@ export function agruparAgendamentos(
 /** Quantos eventos no total (pra empty state e contagem). */
 export function totalAgendamentos(g: GruposAgendamentos): number {
   return g.hoje.length + g.proximos.length + g.recentes.length;
+}
+
+/**
+ * Remove um evento do cache da lista por id, ajustando `count` (W10 — excluir).
+ * Pura/testável (separada do hook de query). Não decrementa `count` abaixo de 0
+ * e é idempotente: excluir um id ausente devolve a lista intacta (caso o evento
+ * já tenha sumido — ex.: cancelado pelo robô em paralelo).
+ */
+export function removerAgendamento(
+  prev: AgendamentosResponse,
+  eventId: string,
+): AgendamentosResponse {
+  const agendamentos = prev.agendamentos.filter((a) => a.id !== eventId);
+  if (agendamentos.length === prev.agendamentos.length) return prev;
+  return { ...prev, agendamentos, count: Math.max(0, prev.count - 1) };
 }
 
 // ── Filtros + paginacao da Inicio (leva 3, BLOCO B) ──────────────────────────

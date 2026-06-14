@@ -199,6 +199,21 @@ export interface CriarAgendamentoResponse {
 /** Razões do 409 ({error:'conflito'}) do POST /portal/agendamentos. */
 export type ConflitoReason = 'ocupado' | 'horario_passado' | 'fora_do_horario';
 
+/**
+ * 200 do DELETE /portal/agendamentos/:eventId — cancela/exclui o evento no GCal
+ * do tenant (ação irreversível: apaga de verdade na agenda Google).
+ *
+ * CONTRATO DOCUMENTADO (Missão 023 W10): o backend ainda está construindo esta
+ * rota num worktree próprio. O front consome contra este shape; se a rota ainda
+ * não existir (404 sem corpo conhecido), a UI degrada com mensagem amigável.
+ * `already_gone:true` = o evento já não estava lá (idempotente, trata como
+ * sucesso na UI — o objetivo do dono foi alcançado).
+ */
+export interface ExcluirAgendamentoResponse {
+  ok: true;
+  already_gone?: boolean;
+}
+
 // ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3 / ADR 0014) ──
 
 /** Estado da cobranca PIX do ciclo atual. */

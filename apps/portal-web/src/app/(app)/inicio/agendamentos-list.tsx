@@ -13,12 +13,28 @@
  *
  * Polish 1.D.5: linhas E0, divisor line-soft, icone com borda line-strong,
  * titulo Sora 15px, chevron no hover. Realce ambar lateral no 1o de hoje (1.2).
+ *
+ * W10 (Missão 023): cada linha ganha botão de excluir/cancelar -> modal de
+ * confirmação (ação IRREVERSÍVEL, apaga no Google Calendar). Consome o
+ * useExcluirAgendamento (DELETE /portal/agendamentos/:eventId); erro vira toast
+ * amigável, nunca trava sem saída.
  */
-import { IconCalendar, IconChevronLeft, IconChevronRight, IconSearch } from '@/components/icons';
+import {
+  IconCalendar,
+  IconChevronLeft,
+  IconChevronRight,
+  IconSearch,
+  IconTrash,
+} from '@/components/icons';
+import { useTenant } from '@/components/shell/session-context';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { useToast } from '@/components/ui/toast';
 import { type PeriodoFiltro, classify, filtrarAgendamentos } from '@/lib/agendamentos';
+import { ApiError } from '@/lib/api';
 import type { Agendamento, AgendamentosResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora, initials } from '@/lib/format';
+import { useExcluirAgendamento } from '@/lib/queries';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
@@ -33,10 +49,37 @@ const ABAS: { value: PeriodoFiltro; label: string }[] = [
 
 export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   const router = useRouter();
+  const { slot } = useTenant();
+  const toast = useToast();
+  const excluir = useExcluirAgendamento(slot);
   const [periodo, setPeriodo] = useState<PeriodoFiltro>('todos');
   const [busca, setBusca] = useState('');
   const [data_, setData_] = useState(''); // "YYYY-MM-DD"
   const [page, setPage] = useState(1);
+  /** Evento aguardando confirmação de exclusão (abre o modal). null = fechado. */
+  const [aExcluir, setAExcluir] = useState<Agendamento | null>(null);
+
+  function confirmarExclusao() {
+    if (!aExcluir) return;
+    const alvo = aExcluir;
+    excluir.mutate(alvo.id, {
+      onSuccess: (res) => {
+        toast.success(
+          res.already_gone ? 'Esse horário já não estava na agenda.' : 'Horário cancelado.',
+        );
+        setAExcluir(null);
+      },
+      onError: (err) => {
+        // 404 = já saiu da agenda (cancelado em paralelo): trata como sucesso.
+        if (err instanceof ApiError && err.status === 404) {
+          toast.success('Esse horário já não estava na agenda.');
+          setAExcluir(null);
+          return;
+        }
+        toast.error('Não foi possível cancelar agora. Tente de novo.');
+      },
+    });
+  }
 
   const filtradas = useMemo(
     () => filtrarAgendamentos(data.agendamentos, { periodo, busca, data: data_ }),
@@ -164,6 +207,7 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
                 key={ag.id}
                 ag={ag}
                 destaque={periodo !== 'recentes' && ag.id === idDestaqueHoje}
+                onExcluir={() => setAExcluir(ag)}
               />
             ))}
           </div>
@@ -201,17 +245,45 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
           )}
         </>
       )}
+
+      {/* Confirmação de exclusão (W10) — ação irreversível: apaga no GCal. */}
+      <ConfirmDialog
+        open={aExcluir !== null}
+        title="Cancelar este horário?"
+        description={
+          aExcluir
+            ? `“${aExcluir.titulo}” vai ser removido da sua agenda do Google. Isso não tem como desfazer.`
+            : ''
+        }
+        confirmLabel="Cancelar horário"
+        cancelLabel="Voltar"
+        confirmVariant="destructive"
+        loading={excluir.isPending}
+        icon={<IconTrash size={22} />}
+        onConfirm={confirmarExclusao}
+        onCancel={() => {
+          if (!excluir.isPending) setAExcluir(null);
+        }}
+      />
     </div>
   );
 }
 
-function AgendamentoRow({ ag, destaque }: { ag: Agendamento; destaque: boolean }) {
+function AgendamentoRow({
+  ag,
+  destaque,
+  onExcluir,
+}: {
+  ag: Agendamento;
+  destaque: boolean;
+  onExcluir: () => void;
+}) {
   const hora = formatAgendamentoHora(ag.inicio);
   const dia = formatAgendamentoDia(ag.inicio);
   return (
     <div
       className={cn(
-        // Linha E0 (1.D.5): divisor line-soft, hover acende, chevron entra.
+        // Linha E0 (1.D.5): divisor line-soft, hover acende.
         'group flex min-h-14 items-center gap-3.5 border-b border-line-soft px-[15px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover',
         destaque && 'border-l-[3px] border-l-amber',
       )}
@@ -230,12 +302,16 @@ function AgendamentoRow({ ag, destaque }: { ag: Agendamento; destaque: boolean }
         ) : null}
         {dia}
       </div>
-      <span
-        aria-hidden
-        className="ml-1 shrink-0 text-ink-faint opacity-0 transition-[opacity,transform] duration-[120ms] -translate-x-[3px] group-hover:translate-x-0 group-hover:opacity-100"
+      {/* Excluir/cancelar (W10): some no repouso, aparece no hover/foco; no toque
+          (sem hover) o foco/tab revela. Alvo 36px, abre o modal de confirmação. */}
+      <button
+        type="button"
+        onClick={onExcluir}
+        aria-label={`Cancelar horário de ${ag.titulo}`}
+        className="ml-0.5 flex size-9 shrink-0 items-center justify-center rounded-[9px] text-ink-faint outline-none transition-colors hover:bg-danger/12 hover:text-danger focus-visible:bg-danger/12 focus-visible:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger sm:opacity-0 sm:group-hover:opacity-100"
       >
-        <IconChevronRight size={16} />
-      </span>
+        <IconTrash size={17} />
+      </button>
     </div>
   );
 }
