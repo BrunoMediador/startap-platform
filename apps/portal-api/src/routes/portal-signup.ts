@@ -29,7 +29,7 @@ import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
 import { isTrialPepperConfigured, trialPhoneHmac } from '@startap/core/trial';
 import { clientBilling, pool, portalUsers, trialLedger } from '@startap/db';
-import { provisioning } from '@startap/integrations';
+import { internalAlert, provisioning } from '@startap/integrations';
 import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -233,6 +233,26 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     }
 
     log.info({ phone: hint }, 'signup ok — conta + clone provisionados');
+
+    // Alerta interno (GANCHO A): time sabe que caiu cadastro novo. Fire-and-forget
+    // SEGURO — sendInternalAlert nunca lança; o .catch é só cinto extra. JAMAIS
+    // pode atrasar/quebrar o 201 do cliente, então NÃO se faz await.
+    void internalAlert
+      .sendInternalAlert(
+        internalAlert.msgNovoCadastro({
+          nomeNegocio: nome_negocio,
+          phoneHint: hint,
+          slot,
+          amountCents: config.PORTAL_SIGNUP_AMOUNT_CENTS,
+        }),
+      )
+      .catch((e: unknown) => {
+        log.error(
+          { err: e instanceof Error ? e.message : String(e) },
+          'signup: alerta de novo cadastro falhou (não afeta o cadastro)',
+        );
+      });
+
     return reply.code(201).send({
       ok: true,
       user: {

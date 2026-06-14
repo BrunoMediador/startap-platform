@@ -31,6 +31,14 @@ import {
   verifyWebhookSecret,
   verifyWebhookSignature,
 } from '@startap/integrations/abacatepay';
+// Subpath dedicado (./alerts) — NÃO importa o barrel do integrations (openai/agent
+// instancia o client no load e exige OPENAI_API_KEY), mesma razão do import
+// ./abacatepay logo abaixo.
+import {
+  displayNameForSlot,
+  msgClientePagou,
+  sendInternalAlert,
+} from '@startap/integrations/alerts';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
 
@@ -212,6 +220,28 @@ export const abacatePayWebhookRoute: FastifyPluginAsync = async (app) => {
           },
           'webhook PAID processado',
         );
+
+        // Alerta interno (GANCHO C): cliente NOVO virou pagante. SO no PRIMEIRO
+        // pagamento (result.firstPayment, derivado de last_payment_at==NULL antes
+        // do webhook — race-free, dentro da transação). Renovação mensal NÃO
+        // alerta (firstPayment=false). Fire-and-forget SEGURO — não pode quebrar o
+        // 200 do gateway; o .catch é cinto extra (sendInternalAlert já não lança).
+        // TODO(débito aceito): alerta de RENOVAÇÃO mensal fica pra feature futura.
+        if (result.outcome === 'applied' && result.firstPayment && result.slot) {
+          const slot = result.slot;
+          const paidCents = result.paidAmountCents ?? result.amountCents ?? 0;
+          void (async () => {
+            const displayName = await displayNameForSlot(slot);
+            await sendInternalAlert(
+              msgClientePagou({ displayName, slot, paidAmountCents: paidCents }),
+            );
+          })().catch((e: unknown) => {
+            log.error(
+              { slot, err: e instanceof Error ? e.message : String(e) },
+              'webhook PAID: alerta de cliente novo falhou (não afeta o pagamento)',
+            );
+          });
+        }
       }
 
       // 200 so apos sucesso. Retries do gateway sao cobertos pelo dedupe (C4).

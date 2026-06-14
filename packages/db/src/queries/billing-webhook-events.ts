@@ -55,6 +55,14 @@ export interface PaidWebhookResult {
   /** snapshot congelado da cobranca (centavos) — pra alerta de underpaid. */
   amountCents: number | null;
   paidAmountCents: number | null;
+  /**
+   * true SO no PRIMEIRO pagamento do slot (cliente novo virou pagante): derivado
+   * de client_billing.last_payment_at == NULL ANTES deste webhook, lido dentro da
+   * mesma transacao (race-free). Renovacao mensal (last_payment_at ja preenchido)
+   * vem false. So faz sentido com outcome='applied'; nos demais outcomes e false.
+   * Consumido pelo alerta de "cliente NOVO pagou" (NAO alerta renovacao).
+   */
+  firstPayment: boolean;
 }
 
 export interface ApplyPaidWebhookInput {
@@ -114,6 +122,7 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
         resumed: false,
         amountCents: null,
         paidAmountCents: input.paidAmountCents,
+        firstPayment: false,
       };
     }
 
@@ -145,6 +154,7 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
         resumed: false,
         amountCents: null,
         paidAmountCents: input.paidAmountCents,
+        firstPayment: false,
       };
     }
 
@@ -169,6 +179,7 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
         resumed: false,
         amountCents,
         paidAmountCents: input.paidAmountCents,
+        firstPayment: false,
       };
     }
 
@@ -202,18 +213,29 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
         resumed: false,
         amountCents,
         paidAmountCents: input.paidAmountCents,
+        firstPayment: false,
       };
     }
 
     // ── (6) Avanca o vencimento (mesma logica do register_payment). ─────────────
     // Le o vencimento atual DENTRO da transacao e avanca +cycleMonths. Se nao havia
     // next_due_date, parte de hoje (UTC). Calculo deterministico via advanceDueDate.
-    const billingRes = await client.query<{ next_due_date: string | null }>(
-      `SELECT to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date
+    const billingRes = await client.query<{
+      next_due_date: string | null;
+      first_payment: boolean;
+    }>(
+      `SELECT to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
+              (last_payment_at IS NULL) AS first_payment
          FROM client_billing WHERE slot = $1 FOR UPDATE`,
       [charge.slot],
     );
     const currentDue = billingRes.rows[0]?.next_due_date ?? null;
+    // PRIMEIRO pagamento = cliente novo virou pagante. last_payment_at so e
+    // preenchido por applyPaidWebhook/registerPayment; ANTES deste webhook
+    // estar NULL significa que nunca pagou (signup/trial deixam NULL). Se nao ha
+    // linha de billing (caso teorico — sempre ha pra charge casada), trata como
+    // primeiro pagamento (default true do COALESCE).
+    const firstPayment = billingRes.rows[0]?.first_payment ?? true;
     // Modelo novo (ADR 0014): max(due, hoje) + cycleMonths — vencido/re-cobranca NUNCA
     // renova pro passado. Legado (flag OFF): a partir de next_due_date puro (ou hoje se
     // ausente) — comportamento ATUAL preservado byte-a-byte quando dueDateModel=false.
@@ -275,6 +297,7 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
       resumed,
       amountCents,
       paidAmountCents: input.paidAmountCents,
+      firstPayment,
     };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

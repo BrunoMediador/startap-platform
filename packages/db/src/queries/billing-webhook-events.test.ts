@@ -17,6 +17,9 @@ interface Scenario {
   charge: { id: string; slot: string; amount_cents: number; status: string } | null; // (2) SELECT charge FOR UPDATE
   nextDueDate: string | null; // (6) SELECT client_billing FOR UPDATE
   resumeRows: number; // (7) UPDATE flow_clones ... RETURNING -> 0 ou 1
+  // (6) last_payment_at IS NULL no SELECT client_billing -> firstPayment do result.
+  // Default true (cliente novo) quando não declarado pelo cenário.
+  firstPayment?: boolean;
 }
 
 const calls: { sql: string; params: unknown[] }[] = [];
@@ -45,7 +48,10 @@ function makeClient(s: Scenario) {
         return { rows: [], rowCount: 1 };
       }
       if (q.includes('FROM client_billing') && q.includes('FOR UPDATE')) {
-        return { rows: [{ next_due_date: s.nextDueDate }], rowCount: s.nextDueDate ? 1 : 0 };
+        return {
+          rows: [{ next_due_date: s.nextDueDate, first_payment: s.firstPayment ?? true }],
+          rowCount: s.nextDueDate ? 1 : 0,
+        };
       }
       if (q.includes('INSERT INTO client_billing')) {
         return { rows: [], rowCount: 1 };
@@ -229,6 +235,53 @@ describe('applyPaidWebhook (C1/C2/C4)', () => {
     expect(resumeSql).toBeDefined();
     expect(resumeSql).toContain("suspended_kind = 'billing'");
     expect(resumeSql).toContain('flow_enabled = false');
+  });
+
+  // ── firstPayment (gancho C do alerta de cliente novo) ───────────────────────
+  it('firstPayment=true no PRIMEIRO pagamento (last_payment_at era NULL)', async () => {
+    setup({
+      dedupeInserted: true,
+      charge: { id: '10', slot: 'clone-novo', amount_cents: 3100, status: 'pending' },
+      nextDueDate: '2026-06-20', // trial já tinha vencimento; last_payment_at NULL é o que conta
+      resumeRows: 0,
+      firstPayment: true,
+    });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, paidAmountCents: 3100 });
+    expect(r.outcome).toBe('applied');
+    expect(r.firstPayment).toBe(true);
+    // O SELECT de billing carrega o teste de last_payment_at IS NULL.
+    expect(sqlsRun().some((q) => q.includes('last_payment_at IS NULL'))).toBe(true);
+  });
+
+  it('firstPayment=false na RENOVAÇÃO mensal (last_payment_at já preenchido)', async () => {
+    setup({
+      dedupeInserted: true,
+      charge: { id: '11', slot: 'barbearia-cirilo', amount_cents: 8500, status: 'pending' },
+      nextDueDate: '2026-06-10',
+      resumeRows: 0,
+      firstPayment: false, // já pagou antes -> renovação, NÃO alerta cliente novo
+    });
+    const r = await applyPaidWebhook({ ...BASE_INPUT, paidAmountCents: 8500 });
+    expect(r.outcome).toBe('applied');
+    expect(r.firstPayment).toBe(false);
+  });
+
+  it('firstPayment é sempre false fora do applied (duplicate/orphan/already_paid/underpaid)', async () => {
+    setup({ dedupeInserted: false, charge: null, nextDueDate: null, resumeRows: 0 });
+    expect((await applyPaidWebhook(BASE_INPUT)).firstPayment).toBe(false); // duplicate
+
+    setup({ dedupeInserted: true, charge: null, nextDueDate: null, resumeRows: 0 });
+    expect((await applyPaidWebhook(BASE_INPUT)).firstPayment).toBe(false); // orphan
+
+    setup({
+      dedupeInserted: true,
+      charge: { id: '10', slot: 's', amount_cents: 19900, status: 'pending' },
+      nextDueDate: '2026-06-10',
+      resumeRows: 0,
+    });
+    expect((await applyPaidWebhook({ ...BASE_INPUT, paidAmountCents: 1 })).firstPayment).toBe(
+      false,
+    ); // underpaid
   });
 });
 

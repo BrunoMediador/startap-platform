@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   teardownProvisionedClone: vi.fn(),
   createSession: vi.fn(),
   hash: vi.fn(),
+  sendInternalAlert: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({ config: cfg }));
@@ -53,6 +54,13 @@ vi.mock('@startap/integrations', () => ({
     generateCloneSlot: mocks.generateCloneSlot,
     provisionCloneWithWaha: mocks.provisionCloneWithWaha,
     teardownProvisionedClone: mocks.teardownProvisionedClone,
+  },
+  internalAlert: {
+    sendInternalAlert: mocks.sendInternalAlert,
+    // Helpers de mensagem são puros — usa os reais, mas mockados aqui pra não
+    // depender do dist. Retornam string previsível.
+    msgNovoCadastro: (i: { nomeNegocio: string; slot: string }) =>
+      `cadastro ${i.nomeNegocio} ${i.slot}`,
   },
 }));
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash, compare: vi.fn() } }));
@@ -110,6 +118,7 @@ beforeEach(() => {
   mocks.setTrialAwaiting.mockResolvedValue(undefined);
   mocks.findPortalUserForAuth.mockResolvedValue({ id: 7, username: '553199998842' });
   mocks.createSession.mockResolvedValue('sid-novo');
+  mocks.sendInternalAlert.mockResolvedValue({ sent: 1 });
 });
 
 afterEach(() => {
@@ -350,6 +359,29 @@ describe('POST /auth/signup', () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
     expect(res.body).not.toContain(SLOT);
+    await app.close();
+  });
+
+  it('caminho feliz dispara o alerta interno de novo cadastro', async () => {
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(mocks.sendInternalAlert).toHaveBeenCalledWith(
+      expect.stringContaining('Barbearia do João'),
+    );
+    await app.close();
+  });
+
+  it('alerta interno que FALHA não quebra o 201 (fire-and-forget)', async () => {
+    // O alerta é a ÚLTIMA coisa, fire-and-forget (void + .catch). Mesmo se rejeitar,
+    // o cadastro já está persistido e a resposta 201 tem que sair normal.
+    mocks.sendInternalAlert.mockRejectedValue(new Error('Lola caiu'));
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ ok: true, trial_started: false });
+    // O cadastro foi de fato persistido (não dependeu do alerta).
+    expect(mocks.createPortalUser).toHaveBeenCalled();
+    expect(mocks.upsertBilling).toHaveBeenCalled();
     await app.close();
   });
 });

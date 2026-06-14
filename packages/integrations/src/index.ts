@@ -4,3 +4,4 @@ export * as openai from './openai/index.js';
 export * as gcal from './google-calendar/index.js';
 export * as abacatepay from './abacatepay/index.js';
 export * as provisioning from './provisioning/index.js';
+export * as internalAlert from './alerts/index.js';

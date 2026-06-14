@@ -13,7 +13,8 @@
     "./google-calendar": "./dist/google-calendar/index.js",
     "./abacatepay": "./dist/abacatepay/index.js",
     "./provisioning": "./dist/provisioning/index.js",
-    "./scheduling": "./dist/scheduling/index.js"
+    "./scheduling": "./dist/scheduling/index.js",
+    "./alerts": "./dist/alerts/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"

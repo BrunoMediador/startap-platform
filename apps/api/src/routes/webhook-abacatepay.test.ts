@@ -35,14 +35,24 @@ vi.mock('../config.js', () => ({
   },
 }));
 
-const { applyPaidWebhook, invalidateCloneCache } = vi.hoisted(() => ({
-  applyPaidWebhook: vi.fn(),
-  invalidateCloneCache: vi.fn(),
-}));
+const { applyPaidWebhook, invalidateCloneCache, sendInternalAlert, displayNameForSlot } =
+  vi.hoisted(() => ({
+    applyPaidWebhook: vi.fn(),
+    invalidateCloneCache: vi.fn(),
+    sendInternalAlert: vi.fn(),
+    displayNameForSlot: vi.fn(),
+  }));
 
 vi.mock('@startap/db', () => ({
   billingWebhookEvents: { applyPaidWebhook },
   flowClones: { invalidateCloneCache },
+}));
+
+// Subpath ./alerts mockado — o handler dispara o alerta de "cliente novo pagou".
+vi.mock('@startap/integrations/alerts', () => ({
+  sendInternalAlert,
+  displayNameForSlot,
+  msgClientePagou: (i: { displayName: string; slot: string }) => `pagou ${i.displayName} ${i.slot}`,
 }));
 
 vi.mock('@startap/core/logger', () => ({
@@ -92,12 +102,19 @@ describe('POST /webhooks/abacatepay', () => {
     configState.hmac = WEBHOOK_SECRET;
     applyPaidWebhook.mockReset();
     invalidateCloneCache.mockReset();
+    sendInternalAlert.mockReset();
+    displayNameForSlot.mockReset();
+    sendInternalAlert.mockResolvedValue({ sent: 1 });
+    displayNameForSlot.mockResolvedValue('Barbearia do Cirilo');
+    // Default = renovação (firstPayment:false) -> não alerta cliente novo nos
+    // testes que não exercitam o gancho C.
     applyPaidWebhook.mockResolvedValue({
       outcome: 'applied',
       slot: 'barbearia-cirilo',
       resumed: true,
       amountCents: 19900,
       paidAmountCents: 19900,
+      firstPayment: false,
     });
     app = await makeApp();
   });
@@ -271,5 +288,65 @@ describe('POST /webhooks/abacatepay', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ error: 'webhook_not_configured' });
     expect(applyPaidWebhook).not.toHaveBeenCalled();
+  });
+
+  // ── Gancho C: alerta de cliente NOVO pagou (so no PRIMEIRO pagamento) ─────────
+  it('PRIMEIRO pagamento (firstPayment=true) dispara alerta de cliente novo', async () => {
+    applyPaidWebhook.mockResolvedValue({
+      outcome: 'applied',
+      slot: 'clone-edu',
+      resumed: false,
+      amountCents: 3100,
+      paidAmountCents: 3100,
+      firstPayment: true,
+    });
+    const body = paidBody();
+    const res = await app.inject({
+      method: 'POST',
+      url: url(),
+      headers: { 'content-type': 'application/json', 'x-webhook-signature': sign(body) },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    // O alerta é fire-and-forget (void async) — aguarda o microtask drenar.
+    await new Promise((r) => setImmediate(r));
+    expect(sendInternalAlert).toHaveBeenCalledWith(expect.stringContaining('clone-edu'));
+  });
+
+  it('RENOVAÇÃO (firstPayment=false) NÃO dispara alerta de cliente novo', async () => {
+    // default do beforeEach já é firstPayment:false.
+    const body = paidBody();
+    const res = await app.inject({
+      method: 'POST',
+      url: url(),
+      headers: { 'content-type': 'application/json', 'x-webhook-signature': sign(body) },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(200);
+    await new Promise((r) => setImmediate(r));
+    expect(sendInternalAlert).not.toHaveBeenCalled();
+  });
+
+  it('alerta que FALHA não quebra o 200 do webhook (fire-and-forget)', async () => {
+    applyPaidWebhook.mockResolvedValue({
+      outcome: 'applied',
+      slot: 'clone-edu',
+      resumed: false,
+      amountCents: 3100,
+      paidAmountCents: 3100,
+      firstPayment: true,
+    });
+    sendInternalAlert.mockRejectedValue(new Error('Lola caiu'));
+    const body = paidBody();
+    const res = await app.inject({
+      method: 'POST',
+      url: url(),
+      headers: { 'content-type': 'application/json', 'x-webhook-signature': sign(body) },
+      payload: body,
+    });
+    // Webhook responde 200 normalmente; a falha do alerta é engolida.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'applied' });
+    await new Promise((r) => setImmediate(r));
   });
 });

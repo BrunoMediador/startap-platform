@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   countConsumedBySlot: vi.fn(),
   withTrialSlotLock: vi.fn(),
   getSessionStatus: vi.fn(),
+  sendInternalAlert: vi.fn(),
+  displayNameForSlot: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -30,6 +32,12 @@ vi.mock('@startap/db', () => ({
 vi.mock('@startap/integrations', () => ({
   waha: {
     sessions: { getSessionStatus: mocks.getSessionStatus },
+  },
+  internalAlert: {
+    sendInternalAlert: mocks.sendInternalAlert,
+    displayNameForSlot: mocks.displayNameForSlot,
+    msgClienteAtivou: (i: { displayName: string; slot: string }) =>
+      `ativou ${i.displayName} ${i.slot}`,
   },
 }));
 
@@ -70,6 +78,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('TRIAL_PHONE_PEPPER', 'pepper-de-teste-com-32-caracteres!');
   mocks.logFlowEvent.mockResolvedValue(null);
+  mocks.sendInternalAlert.mockResolvedValue({ sent: 1 });
+  mocks.displayNameForSlot.mockResolvedValue('Barbearia do Trial');
   // Default: lock adquirido — executa a decisão (pass-through, como em prod sem
   // concorrência). Teste de lock ocupado sobrescreve com { acquired: false }.
   mocks.withTrialSlotLock.mockImplementation(async (_slot: string, fn: () => Promise<unknown>) => ({
@@ -114,6 +124,24 @@ describe('handleSessionStatusEvent', () => {
     // LGPD: hint nos metadados, nunca o número completo.
     const callArg = mocks.startTrial.mock.calls[0]?.[0] as { phoneHint: string };
     expect(callArg.phoneHint).not.toContain('99998842');
+
+    // Gancho B: dispara o alerta interno de ativação (fire-and-forget).
+    await new Promise((res) => setImmediate(res));
+    expect(mocks.sendInternalAlert).toHaveBeenCalledWith(expect.stringContaining(TRIAL_CLONE.slot));
+  });
+
+  it('alerta de ativação que FALHA não quebra o pareamento (ok:trial-started)', async () => {
+    mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+    mocks.findByPhoneHmac.mockResolvedValue(null);
+    mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+    mocks.sendInternalAlert.mockRejectedValue(new Error('Lola caiu'));
+
+    const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+    // O pareamento concluiu normalmente apesar da falha do alerta.
+    expect(r.status).toBe('ok:trial-started');
+    expect(mocks.startTrial).toHaveBeenCalled();
+    await new Promise((res) => setImmediate(res));
   });
 
   it('número já consumido em OUTRO clone => bloqueia (sem iniciar trial)', async () => {
