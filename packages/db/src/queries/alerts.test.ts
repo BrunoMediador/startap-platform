@@ -20,6 +20,7 @@ vi.mock('../client.js', () => ({
 
 const {
   addRecipient,
+  getSenderSession,
   listMonitoredSessions,
   reserveGlobalSend,
   TooManyRecipientsError,
@@ -31,16 +32,37 @@ beforeEach(() => {
   mockConnect.mockReset();
 });
 
+describe('getSenderSession — repoint do remetente (Missão 023 W3)', () => {
+  it('com sender_slot="alertas" resolve pra waha_sessao="ALERTAS"', async () => {
+    // Pós-repoint (migration 049): bot_config slot 'alertas' → sessão dedicada 'ALERTAS'.
+    mockQuery.mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
+
+    const sessao = await getSenderSession('alertas');
+
+    // Lê bot_config.waha_sessao parametrizado pelo slot (sem hardcode de sessão).
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('SELECT waha_sessao FROM bot_config WHERE slot = $1');
+    expect(params).toEqual(['alertas']);
+    expect(sessao).toBe('ALERTAS');
+  });
+
+  it('degrada gracioso (null) se o slot remetente não tiver waha_sessao mapeado', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await getSenderSession('alertas')).toBeNull();
+  });
+});
+
 describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup)', () => {
-  it('filtra SÓ clones conectados e NÃO awaiting, e adiciona a sessão da Lola', async () => {
-    // 1ª query: clones monitorados. 2ª query (getSenderSession): waha_sessao da Lola.
+  it('filtra SÓ clones conectados e NÃO awaiting, e adiciona a sessão remetente', async () => {
+    // 1ª query: clones monitorados. 2ª query (getSenderSession): waha_sessao remetente.
+    // Pós-repoint o remetente é a sessão dedicada 'ALERTAS' (sender_slot='alertas').
     mockQuery
       .mockResolvedValueOnce({
         rows: [{ waha_sessao: 'cirilo_barbaershop', display_name: 'Barbearia do Cirilo' }],
       })
-      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'STARTAP_AI_PROD' }] });
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
-    const sessions = await listMonitoredSessions('startap');
+    const sessions = await listMonitoredSessions('alertas');
 
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     // Só clones JÁ conectados (pareados) — pré-setup nunca entra.
@@ -50,23 +72,23 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup)', (
     // Nunca seleciona sessão vazia/nula.
     expect(sql).toContain('fc.waha_sessao IS NOT NULL');
 
-    // Resultado: clone do Cirilo + Lola (remetente), dedup por nome.
+    // Resultado: clone do Cirilo + a sessão remetente (label neutro, não "Lola").
     expect(sessions).toEqual([
       { sessao: 'cirilo_barbaershop', label: 'Barbearia do Cirilo' },
-      { sessao: 'STARTAP_AI_PROD', label: 'Lola (remetente de alertas)' },
+      { sessao: 'ALERTAS', label: 'Sessão de alertas (remetente)' },
     ]);
   });
 
-  it('não duplica a Lola se ela já for um clone monitorado', async () => {
+  it('não duplica a sessão remetente se ela já for um clone monitorado', async () => {
     mockQuery
       .mockResolvedValueOnce({
-        rows: [{ waha_sessao: 'STARTAP_AI_PROD', display_name: 'Lola' }],
+        rows: [{ waha_sessao: 'ALERTAS', display_name: 'Alertas' }],
       })
-      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'STARTAP_AI_PROD' }] });
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
-    const sessions = await listMonitoredSessions('startap');
+    const sessions = await listMonitoredSessions('alertas');
     expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.sessao).toBe('STARTAP_AI_PROD');
+    expect(sessions[0]?.sessao).toBe('ALERTAS');
   });
 });
 
