@@ -32,9 +32,11 @@ import type {
   HorariosResponse,
   MensalidadeResponse,
   PausasResponse,
+  PerfilNegocio,
   PerfilResponse,
   QrResponse,
   ReconectarResponse,
+  SavePerfilResponse,
   Servico,
   ServicosResponse,
   SimularResponse,
@@ -204,24 +206,30 @@ export function useSaveServicos(slot: string): UseMutationResult<Servico[], Erro
 
 // ── Perfil do negocio (GET/PUT /portal/perfil — Missão 023 W13) ──────────────
 //
-// Mesmo shape no GET e no PUT. O slot vem da sessao no backend (nunca no body).
-// Contrato definido na spec W13; o backend par esta em outro worktree — o front
-// consome `PerfilResponse` e a tela trata erro/empty com graca.
+// O backend (#306) usa ENVELOPE `perfil` nos dois sentidos:
+//   GET  -> 200 { perfil }                  ; PUT body = { perfil } -> 200 { ok, perfil }
+// Os hooks desembrulham o envelope e expoem o `PerfilNegocio` cru pra tela (mesmo
+// padrao de useSaveServicos/useSaveHorarios). O cache guarda o perfil cru. O slot
+// vem da sessao no backend (nunca no body).
 
-export function usePerfil(slot: string): UseQueryResult<PerfilResponse> {
+export function usePerfil(slot: string): UseQueryResult<PerfilNegocio> {
   return useQuery({
     queryKey: qk.perfil(slot),
-    queryFn: ({ signal }) => apiFetch<PerfilResponse>('/portal/perfil', { signal }),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => r.perfil),
   });
 }
 
 export function useSavePerfil(
   slot: string,
-): UseMutationResult<PerfilResponse, Error, PerfilResponse> {
+): UseMutationResult<PerfilNegocio, Error, PerfilNegocio> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (perfil: PerfilResponse) =>
-      apiFetch<PerfilResponse>('/portal/perfil', { method: 'PUT', body: perfil }),
+    mutationFn: (perfil: PerfilNegocio) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: { perfil },
+      }).then((r) => r.perfil),
     onSuccess: (perfil) => {
       client.setQueryData(qk.perfil(slot), perfil);
     },
