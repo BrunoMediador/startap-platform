@@ -8,6 +8,7 @@ import {
   createCloneRecords,
   createWahaSession,
   generateCloneSlot,
+  regerarPromptClone,
   renderClonePrompt,
   sanitizeNomeInjetavel,
   sanitizeOrphanPlaceholders,
@@ -526,6 +527,103 @@ describe('createCloneRecords — idempotência/unicidade', () => {
       personalizacao: { nome_negocio: 'Negocio X' },
     });
     expect(cloneInsert()?.values?.[6]).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// regerarPromptClone — dual-write tenant_id (ADR 0018 Fase 2). HOT PATH do signup
+// self-service (provisionCloneWithWaha -> regerarPromptClone pós-COMMIT). Foi um
+// dos dois caminhos que QUEBRARAM em prod (hotfix #309, 2026-06-14): o dual-write
+// reusava o MESMO placeholder $1 no alvo do INSERT (bot_prompt.slot varchar(50)) e
+// no subselect (SELECT tenant_id FROM flow_clones WHERE slot = $1) (flow_clones.slot
+// varchar(80)) -> Postgres 16 deduz tipos conflitantes -> "inconsistent types
+// deduced for parameter $1" -> a query falha -> signup trava. Estes testes pinam o
+// invariante DEDICADO: o subselect usa placeholder SEPARADO ($3), não reusa $1.
+// Com o padrão antigo, FALHARIAM; com o corrigido, passam. Usam a injeção de SqlPool
+// (sem mock de módulo) — mesmo estilo dos demais testes deste arquivo.
+// ---------------------------------------------------------------------------
+describe('regerarPromptClone — dual-write tenant_id NÃO reusa $1 (hotfix #309, caminho signup)', () => {
+  // Captura o INSERT INTO bot_prompt emitido pelo dual-write. Devolve o template da
+  // matriz pro SELECT prompt; tudo o mais é vazio (regerarPromptClone só faz 2 queries).
+  function fakeRegerarPool(matrizTpl: string): {
+    pool: SqlPool;
+    promptInsert: () => { text: string; values?: unknown[] } | undefined;
+  } {
+    const queries: Array<{ text: string; values?: unknown[] }> = [];
+    const pool: SqlPool = {
+      query: async (text: string, values?: unknown[]): Promise<SqlResult> => {
+        queries.push({ text, values });
+        if (text.includes('SELECT prompt FROM bot_prompt')) {
+          return { rows: [{ prompt: matrizTpl }] };
+        }
+        return { rows: [] };
+      },
+      connect: async () => {
+        throw new Error('regerarPromptClone não deveria abrir transação');
+      },
+    };
+    return {
+      pool,
+      promptInsert: () => queries.find((q) => q.text.includes('INSERT INTO bot_prompt')),
+    };
+  }
+
+  const CLONE = {
+    id: 7,
+    slot: 'clone_edu_barbeiro_ab12cd',
+    matriz_slot: 'teste_barbearia',
+    display_name: 'Edu Barbeiro',
+    personalizacao: { nome_negocio: 'Edu Barbeiro' },
+    horarios_funcionamento: null,
+    servicos: null,
+  };
+
+  it('subselect de tenant_id usa placeholder SEPARADO ($N>1), nunca reusa o $1 do INSERT', async () => {
+    const { pool, promptInsert } = fakeRegerarPool('Oi, sou da {{nome_negocio}}.');
+
+    const r = await regerarPromptClone(pool, CLONE);
+    expect(r.ok).toBe(true);
+
+    const ins = promptInsert();
+    expect(ins, 'regerarPromptClone deveria ter feito o INSERT INTO bot_prompt').toBeDefined();
+    const norm = String(ins?.text).replace(/\s+/g, ' ');
+
+    // O subselect existe e NÃO pode reusar $1 (o slot do alvo do INSERT).
+    const m = norm.match(/SELECT tenant_id FROM flow_clones WHERE slot = \$(\d+)/);
+    expect(m, `subselect de tenant_id não encontrado em: ${norm}`).not.toBeNull();
+    const subselectIdx = Number((m as RegExpMatchArray)[1]);
+    // ANTI-REGRESSÃO #309: com o bug era $1; o fix moveu pra $3.
+    expect(subselectIdx, 'subselect NÃO pode reusar $1 (era o bug do #309)').toBeGreaterThan(1);
+
+    // params cobrem todo $N; o param do subselect e o $1 são ambos o slot do clone.
+    const values = ins?.values ?? [];
+    const maxPlaceholder = Math.max(...[...norm.matchAll(/\$(\d+)/g)].map((x) => Number(x[1])));
+    expect(values).toHaveLength(maxPlaceholder);
+    expect(values[subselectIdx - 1]).toBe(CLONE.slot);
+    expect(values[0]).toBe(CLONE.slot);
+  });
+
+  it('semântica preservada: ON CONFLICT + COALESCE do tenant_id existente no UPSERT', async () => {
+    const { pool, promptInsert } = fakeRegerarPool('Bem-vindo a {{nome_negocio}}.');
+    await regerarPromptClone(pool, CLONE);
+    const norm = String(promptInsert()?.text).replace(/\s+/g, ' ');
+    expect(norm).toContain('ON CONFLICT (slot) DO UPDATE');
+    expect(norm).toContain('COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)');
+  });
+
+  it('matriz sem prompt => ok:false e NENHUM INSERT (não toca bot_prompt)', async () => {
+    const { pool, promptInsert } = fakeRegerarPool('irrelevante');
+    // força ausência de template: SELECT prompt devolve vazio.
+    const emptyPool: SqlPool = {
+      query: async (text: string, values?: unknown[]): Promise<SqlResult> => {
+        if (text.includes('SELECT prompt FROM bot_prompt')) return { rows: [] };
+        return pool.query(text, values);
+      },
+      connect: pool.connect,
+    };
+    const r = await regerarPromptClone(emptyPool, CLONE);
+    expect(r.ok).toBe(false);
+    expect(promptInsert()).toBeUndefined();
   });
 });
 
