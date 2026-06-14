@@ -91,10 +91,12 @@ export async function upsertBilling(input: {
 }): Promise<ClientBillingRow> {
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($6) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1" entre os varchars de slot).
   const r = await query<ClientBillingRow>(
     `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes, created_at, updated_at, tenant_id)
      VALUES ($1, $2, $3, COALESCE($4, 'active'), $5, NOW(), NOW(),
-       (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+       (SELECT tenant_id FROM flow_clones WHERE slot = $6))
      ON CONFLICT (slot) DO UPDATE SET
        next_due_date = COALESCE($2, client_billing.next_due_date),
        amount_cents  = COALESCE($3, client_billing.amount_cents),
@@ -111,6 +113,7 @@ export async function upsertBilling(input: {
       input.amountCents ?? null,
       input.status ?? null,
       input.notes ?? null,
+      input.slot, // $6: slot do subselect tenant_id (contexto de tipo separado de $1)
     ],
   );
   return r.rows[0];
@@ -134,10 +137,12 @@ export async function registerPayment(input: {
 
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1" entre os varchars de slot).
   const r = await query<ClientBillingRow>(
     `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at, tenant_id)
      VALUES ($1, $2, 'active', NOW(), NOW(), NOW(),
-       (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+       (SELECT tenant_id FROM flow_clones WHERE slot = $3))
      ON CONFLICT (slot) DO UPDATE SET
        next_due_date   = $2,
        status          = 'active',
@@ -147,7 +152,7 @@ export async function registerPayment(input: {
      RETURNING slot,
                to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
                amount_cents, last_payment_at, status, notes, created_at, updated_at`,
-    [input.slot, newDue],
+    [input.slot, newDue, input.slot],
   );
   return r.rows[0];
 }

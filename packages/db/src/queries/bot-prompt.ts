@@ -28,12 +28,16 @@ export async function setPrompt(slot: string, prompt: string): Promise<void> {
   // Dual-write tenant_id (ADR 0018, Fase 2). Subselect inline em flow_clones:
   // atômico e resolve NULL sozinho quando o slot não tem clone (matriz/plataforma)
   // — nunca derruba o INSERT. Caminho não-quente (painel/provisioning).
+  // O slot do subselect é um parâmetro SEPARADO ($3) — não reusa $1. Reusar o
+  // mesmo placeholder em dois contextos de tipo (bot_prompt.slot varchar(50) vs
+  // flow_clones.slot varchar(80)) faz o Postgres lançar "inconsistent types
+  // deduced for parameter $1" e a query falha.
   await query(
     `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
-     VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+     VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
      ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
        tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
-    [slot, prompt],
+    [slot, prompt, slot],
   );
   cache.delete(slot);
 }

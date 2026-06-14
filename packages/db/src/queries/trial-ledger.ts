@@ -190,17 +190,19 @@ export async function startTrial(input: {
 
     // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
     // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
+    // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
+    // "inconsistent types deduced for parameter $1" entre os varchars de slot).
     const billing = await client.query<{ next_due_date: string }>(
       `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at, tenant_id)
        VALUES ($1, (NOW() AT TIME ZONE 'utc')::date + $2::int, 'active', NOW(), NOW(),
-               (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+               (SELECT tenant_id FROM flow_clones WHERE slot = $3))
        ON CONFLICT (slot) DO UPDATE SET
          next_due_date = COALESCE(client_billing.next_due_date,
                                   (NOW() AT TIME ZONE 'utc')::date + $2::int),
          updated_at    = NOW(),
          tenant_id     = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)
        RETURNING to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date`,
-      [input.slot, days],
+      [input.slot, days, input.slot],
     );
 
     await client.query(
@@ -296,15 +298,17 @@ export async function blockTrial(input: { slot: string; reason?: string }): Prom
     // Abre a janela de PIX: vencido hoje => podeGerarPix (ADR 0014).
     // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
     // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
+    // Slot do subselect é parâmetro SEPARADO ($2) — não reusa $1 (evita
+    // "inconsistent types deduced for parameter $1" entre os varchars de slot).
     await client.query(
       `INSERT INTO client_billing (slot, next_due_date, status, created_at, updated_at, tenant_id)
        VALUES ($1, (NOW() AT TIME ZONE 'utc')::date, 'active', NOW(), NOW(),
-               (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+               (SELECT tenant_id FROM flow_clones WHERE slot = $2))
        ON CONFLICT (slot) DO UPDATE SET
          next_due_date = COALESCE(client_billing.next_due_date, (NOW() AT TIME ZONE 'utc')::date),
          updated_at    = NOW(),
          tenant_id     = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)`,
-      [input.slot],
+      [input.slot, input.slot],
     );
 
     await client.query('COMMIT');

@@ -71,12 +71,15 @@ export async function upsertMedia(input: {
 }): Promise<BotMediaRow> {
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($11) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1": bot_media.slot varchar(50)
+  // vs flow_clones.slot varchar(80)).
   const r = await query<BotMediaRow & { id: string; position_order: string }>(
     `INSERT INTO bot_media
        (slot, position, media_type, url, caption, context, position_order, enabled,
         course_slug, is_course_intro, updated_at, tenant_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
-        (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+        (SELECT tenant_id FROM flow_clones WHERE slot = $11))
      ON CONFLICT (slot, position) DO UPDATE SET
        media_type     = EXCLUDED.media_type,
        url            = EXCLUDED.url,
@@ -100,6 +103,7 @@ export async function upsertMedia(input: {
       input.enabled ?? true,
       input.course_slug ?? null,
       input.is_course_intro ?? false,
+      input.slot, // $11: slot do subselect tenant_id (contexto de tipo separado de $1)
     ],
   );
   cache.delete(input.slot);
