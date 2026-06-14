@@ -25,6 +25,7 @@ import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
+import { portalPerfilRoutes } from './routes/portal-perfil.js';
 import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
 
@@ -98,6 +99,8 @@ async function main() {
   });
 
   await app.register(portalConfigRoutes);
+  // Perfil do negocio (Missao 023 W13): cliente edita dados do negocio no portal.
+  await app.register(portalPerfilRoutes);
   await app.register(portalPausasRoutes);
   await app.register(portalStatusRoutes);
   await app.register(portalAgendamentosRoutes);

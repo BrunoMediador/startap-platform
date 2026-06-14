@@ -8,9 +8,10 @@
  * Apos escrita em flow_clones, invalida o cache de clone (TTL 60s) para o webhook
  * pegar a versao nova em ate ~0s em vez de ate 60s.
  */
-import type { Horarios, Servicos } from '@startap/core/schemas';
+import type { Horarios, Perfil, Servicos } from '@startap/core/schemas';
+import { PERFIL_KEYS } from '@startap/core/schemas';
 import { query } from '../client.js';
-import { invalidateCloneCache } from './flow-clones.js';
+import { invalidateCloneCache, updateClone } from './flow-clones.js';
 
 function parseJsonbOrNull<T>(value: unknown): T | null {
   if (value == null) return null;
@@ -77,6 +78,71 @@ export async function updateHorariosBySlot(slot: string, horarios: Horarios): Pr
   if (r.rowCount === 0) return false;
   invalidateCloneCache({ slot });
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Perfil do negocio (flow_clones.personalizacao JSONB — Missao 023 W13)
+//
+// As 6 chaves do perfil vivem no MESMO JSONB que o gestao grava (PATCH
+// /api/clones/:id) — fonte unica, sem migration. CRITICO: o update MERGE as 6
+// chaves no personalizacao existente; NUNCA sobrescreve o objeto inteiro (o
+// admin/cliente pode ter cadastrado observacoes/promocoes/etc por outra via).
+// ---------------------------------------------------------------------------
+
+/**
+ * Le as 6 chaves do perfil do personalizacao do clone. `null` se o slot nao
+ * existe (clone ausente). Chaves nao preenchidas saem como '' (campo vazio),
+ * para o front renderizar inputs controlados sem `undefined`.
+ */
+export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
+  const r = await query<{ personalizacao: unknown }>(
+    'SELECT personalizacao FROM flow_clones WHERE slot = $1',
+    [slot],
+  );
+  if (r.rows.length === 0) return null;
+  const pers = parseJsonbOrNull<Record<string, string>>(r.rows[0].personalizacao) ?? {};
+  const perfil: Record<string, string> = {};
+  for (const key of PERFIL_KEYS) {
+    const v = pers[key];
+    perfil[key] = typeof v === 'string' ? v : '';
+  }
+  return perfil as Perfil;
+}
+
+/**
+ * Grava o perfil do negocio MERGE-ando as 6 chaves no personalizacao existente
+ * (preserva qualquer outra chave). Espera `data` JA validado pelo perfilSchema
+ * do chamador. Campos `undefined` (ausentes no PUT) sao IGNORADOS; campos com
+ * '' (string vazia) sao gravados como "limpar". Reusa updateClone -> re-renderiza
+ * o bot_prompt ({{nome_negocio}} etc.) e invalida o cache de clone.
+ *
+ * Retorna false se o slot nao existe.
+ */
+export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<boolean> {
+  // 1. Lê o personalizacao atual + id do clone (precisamos do id para updateClone,
+  //    que re-renderiza o prompt). Uma query só.
+  const r = await query<{ id: number; personalizacao: unknown }>(
+    'SELECT id, personalizacao FROM flow_clones WHERE slot = $1',
+    [slot],
+  );
+  const found = r.rows[0];
+  if (!found) return false;
+
+  const atual = parseJsonbOrNull<Record<string, string>>(found.personalizacao) ?? {};
+
+  // 2. MERGE: parte do objeto existente e sobrescreve SÓ as chaves presentes no
+  //    payload. `undefined` (campo nao enviado) nao toca a chave. As demais chaves
+  //    do personalizacao (observacoes, promocoes, etc.) ficam intactas.
+  const merged: Record<string, string> = { ...atual };
+  for (const key of PERFIL_KEYS) {
+    const v = (data as Record<string, string | undefined>)[key];
+    if (v !== undefined) merged[key] = v;
+  }
+
+  // 3. Reusa updateClone (escreve personalizacao=$::jsonb, re-renderiza o prompt
+  //    a partir da matriz e invalida o cache de clone). Idempotente.
+  const updated = await updateClone(Number(found.id), { personalizacao: merged });
+  return updated !== null;
 }
 
 // ---------------------------------------------------------------------------
