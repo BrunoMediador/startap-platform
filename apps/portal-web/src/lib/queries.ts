@@ -32,8 +32,11 @@ import type {
   HorariosResponse,
   MensalidadeResponse,
   PausasResponse,
+  PerfilNegocio,
+  PerfilResponse,
   QrResponse,
   ReconectarResponse,
+  SavePerfilResponse,
   Servico,
   ServicosResponse,
   SimularResponse,
@@ -47,6 +50,7 @@ export const qk = {
   me: ['me'] as const,
   status: (slot: string) => ['status', slot] as const,
   servicos: (slot: string) => ['servicos', slot] as const,
+  perfil: (slot: string) => ['perfil', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
@@ -196,6 +200,38 @@ export function useSaveServicos(slot: string): UseMutationResult<Servico[], Erro
       }).then((r) => r.servicos),
     onSuccess: (servicos) => {
       client.setQueryData(qk.servicos(slot), servicos);
+    },
+  });
+}
+
+// ── Perfil do negocio (GET/PUT /portal/perfil — Missão 023 W13) ──────────────
+//
+// O backend (#306) usa ENVELOPE `perfil` nos dois sentidos:
+//   GET  -> 200 { perfil }                  ; PUT body = { perfil } -> 200 { ok, perfil }
+// Os hooks desembrulham o envelope e expoem o `PerfilNegocio` cru pra tela (mesmo
+// padrao de useSaveServicos/useSaveHorarios). O cache guarda o perfil cru. O slot
+// vem da sessao no backend (nunca no body).
+
+export function usePerfil(slot: string): UseQueryResult<PerfilNegocio> {
+  return useQuery({
+    queryKey: qk.perfil(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => r.perfil),
+  });
+}
+
+export function useSavePerfil(
+  slot: string,
+): UseMutationResult<PerfilNegocio, Error, PerfilNegocio> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (perfil: PerfilNegocio) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: { perfil },
+      }).then((r) => r.perfil),
+    onSuccess: (perfil) => {
+      client.setQueryData(qk.perfil(slot), perfil);
     },
   });
 }

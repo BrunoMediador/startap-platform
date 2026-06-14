@@ -13,6 +13,7 @@ import {
   IconHome,
   IconPause,
   IconServices,
+  IconUser,
   IconWallet,
   IconWhatsapp,
 } from '@/components/icons';
@@ -30,6 +31,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: 'conexao' },
   { href: '/servicos', label: 'Serviços', Icon: IconServices },
   { href: '/horarios', label: 'Horários', Icon: IconCalendar },
+  { href: '/perfil', label: 'Meu negócio', Icon: IconUser },
   { href: '/pausas', label: 'Pausas', Icon: IconPause },
   { href: '/mensalidade', label: 'Mensalidade', Icon: IconWallet },
 ];

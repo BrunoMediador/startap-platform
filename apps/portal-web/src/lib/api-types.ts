@@ -338,3 +338,37 @@ export interface StatusConexaoResponse {
   connected: boolean;
   terminal: boolean;
 }
+
+// ── Perfil do negocio (portal-perfil.ts — Missão 023 W13) ─────────────────────
+//
+// Dados do negocio que o cliente edita pelo portal (sem depender do gestao). Seis
+// campos string, TODOS podem vir vazios (campo vazio = ""). O slot vem da sessao
+// (withTenant) — nunca no body.
+//
+// CONTRATO (#306, confirmado): o backend usa ENVELOPE `perfil` em GET e PUT.
+//   GET /portal/perfil       -> 200 { perfil: PerfilNegocio }
+//   PUT /portal/perfil  body =      { perfil: Partial<PerfilNegocio> } (campos opcionais)
+//                            -> 200 { ok: true, perfil: PerfilNegocio }
+//   erro de validacao        -> 400 { error, issues }
+// Regra do PUT: chave ausente no body = nao toca; "" = limpa. Instagram e
+// guardado SEM "@" no backend (a normalizacao client casa com isso).
+
+export interface PerfilNegocio {
+  nome_negocio: string;
+  nome_prestador: string;
+  telefone_contato: string;
+  endereco: string;
+  instagram: string;
+  formas_pagamento: string;
+}
+
+/** GET /portal/perfil -> 200. O perfil vem dentro do envelope `perfil`. */
+export interface PerfilResponse {
+  perfil: PerfilNegocio;
+}
+
+/** PUT /portal/perfil -> 200. Devolve `ok` + o perfil salvo no mesmo envelope. */
+export interface SavePerfilResponse {
+  ok: true;
+  perfil: PerfilNegocio;
+}
