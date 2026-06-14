@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CloneSlotConflictError,
+  type ServicoTemplate,
   type SqlClient,
   type SqlPool,
   type SqlResult,
@@ -8,10 +9,12 @@ import {
   createCloneRecords,
   createWahaSession,
   generateCloneSlot,
+  getCloneDefaults,
   regerarPromptClone,
   renderClonePrompt,
   sanitizeNomeInjetavel,
   sanitizeOrphanPlaceholders,
+  servicosForArea,
   teardownProvisionedClone,
   wahaSessionName,
 } from './clone-provisioning.js';
@@ -184,6 +187,116 @@ describe('areaArtigo — mapa código -> frase com artigo', () => {
     expect(areaArtigo(null)).toBe('o atendimento');
     expect(areaArtigo(42)).toBe('o atendimento');
     expect(areaArtigo('petshop')).toBe('o atendimento');
+  });
+});
+
+// Bug 2026-06-14: clone de manicure nascia com serviços de BARBEARIA (herdados
+// da matriz teste_barbearia). servicosForArea escolhe o conjunto pela ÁREA, MESMO
+// mecanismo do {{area_artigo}}.
+describe('servicosForArea — serviços de exemplo por vertical', () => {
+  const nomes = (s: ServicoTemplate[]): string[] => s.map((x) => x.nome);
+
+  it('manicure -> serviços de manicure, NUNCA de barbearia (o bug original)', () => {
+    const s = servicosForArea('manicure');
+    expect(nomes(s)).toEqual(expect.arrayContaining(['Manicure', 'Pedicure', 'Esmaltação em gel']));
+    // O regression test do bug: nada de Corte/Barba/Pezinho de barbearia.
+    expect(nomes(s)).not.toContain('Corte');
+    expect(nomes(s)).not.toContain('Barba');
+    expect(nomes(s)).not.toContain('Pezinho');
+  });
+
+  it('cada vertical tem o conjunto certo', () => {
+    expect(nomes(servicosForArea('barbearia'))).toContain('Corte');
+    expect(nomes(servicosForArea('cabeleireiro'))).toContain('Corte feminino');
+    expect(nomes(servicosForArea('estetica'))).toContain('Limpeza de pele');
+  });
+
+  it('outro/desconhecida/ausente -> genérico mínimo, SEM exemplo de barbearia', () => {
+    for (const a of ['outro', 'petshop', undefined, null, 42]) {
+      const s = servicosForArea(a as unknown);
+      expect(s.length).toBeGreaterThan(0);
+      expect(nomes(s)).not.toContain('Corte');
+      expect(nomes(s)).not.toContain('Barba');
+    }
+  });
+
+  it('trim + lower defensivo (valor do banco pode vir sujo)', () => {
+    expect(nomes(servicosForArea('  MANICURE '))).toContain('Manicure');
+  });
+
+  it('formato esperado: preco_cents inteiro >= 0 e duracao_min múltiplo de 5', () => {
+    for (const a of ['barbearia', 'cabeleireiro', 'manicure', 'estetica', 'outro']) {
+      for (const s of servicosForArea(a)) {
+        expect(Number.isInteger(s.preco_cents)).toBe(true);
+        expect(s.preco_cents).toBeGreaterThanOrEqual(0);
+        expect(s.duracao_min % 5).toBe(0);
+        expect(s.duracao_min).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('retorna cópia mutável (não aliasa a constante readonly)', () => {
+    const a = servicosForArea('manicure');
+    const b = servicosForArea('manicure');
+    expect(a).not.toBe(b);
+    a[0].nome = 'MUTADO';
+    expect(servicosForArea('manicure')[0]?.nome).toBe('Manicure');
+  });
+});
+
+describe('getCloneDefaults — serviços por área (signup) vs matriz (gestão legado)', () => {
+  // bot_config da matriz devolve serviços de BARBEARIA (é teste_barbearia).
+  function fakeDefaultsPool(botConfigRow: Record<string, unknown> | undefined): SqlPool {
+    return {
+      query: async (text: string): Promise<SqlResult> => {
+        if (text.includes('horarios_funcionamento, servicos FROM bot_config')) {
+          return { rows: botConfigRow ? [botConfigRow] : [] };
+        }
+        return { rows: [] };
+      },
+      connect: async () => {
+        throw new Error('getCloneDefaults não abre transação');
+      },
+    };
+  }
+
+  const BARBEARIA_DA_MATRIZ = [{ nome: 'Corte', preco_cents: 5000, duracao_min: 30 }];
+
+  it('área=manicure: serviços de manicure mesmo quando a matriz tem serviços de barbearia', async () => {
+    const pool = fakeDefaultsPool({
+      horarios_funcionamento: { terca: { abre: '09:00', fecha: '18:00', fechado: false } },
+      servicos: BARBEARIA_DA_MATRIZ,
+    });
+    const d = await getCloneDefaults(pool, 'teste_barbearia', 'manicure');
+    const servicos = d.servicos as ServicoTemplate[];
+    const nomes = servicos.map((s) => s.nome);
+    expect(nomes).toContain('Manicure');
+    expect(nomes).not.toContain('Corte'); // o bug: NÃO herdar barbearia
+  });
+
+  it('área=estetica do fallback (bot_config sem linha): serviços de estética', async () => {
+    const pool = fakeDefaultsPool(undefined);
+    const d = await getCloneDefaults(pool, 'teste_barbearia', 'estetica');
+    const nomes = (d.servicos as ServicoTemplate[]).map((s) => s.nome);
+    expect(nomes).toContain('Limpeza de pele');
+    expect(nomes).not.toContain('Corte');
+  });
+
+  it('SEM área (gestão legado): mantém serviços da matriz (barbearia) — sem regressão', async () => {
+    const pool = fakeDefaultsPool({
+      horarios_funcionamento: null,
+      servicos: BARBEARIA_DA_MATRIZ,
+    });
+    const d = await getCloneDefaults(pool, 'teste_barbearia');
+    expect((d.servicos as ServicoTemplate[]).map((s) => s.nome)).toContain('Corte');
+  });
+
+  it('área=outro: genérico mínimo, NUNCA barbearia', async () => {
+    const pool = fakeDefaultsPool({ horarios_funcionamento: null, servicos: BARBEARIA_DA_MATRIZ });
+    const d = await getCloneDefaults(pool, 'teste_barbearia', 'outro');
+    const nomes = (d.servicos as ServicoTemplate[]).map((s) => s.nome);
+    expect(nomes).not.toContain('Corte');
+    expect(nomes.length).toBeGreaterThan(0);
   });
 });
 
@@ -527,6 +640,35 @@ describe('createCloneRecords — idempotência/unicidade', () => {
       personalizacao: { nome_negocio: 'Negocio X' },
     });
     expect(cloneInsert()?.values?.[6]).toBeNull();
+  });
+
+  // Bug 2026-06-14 (end-to-end no provisioning): área=manicure deve gravar serviços
+  // de MANICURE em flow_clones.servicos ($9 do INSERT -> índice 8), NÃO os de
+  // barbearia herdados da matriz teste_barbearia.
+  it('área=manicure grava serviços de manicure em flow_clones.servicos (não barbearia)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_lili_nails_ef34gh',
+      displayName: 'Espaco Lili Nails',
+      personalizacao: { nome_negocio: 'Espaco Lili Nails', area: 'manicure' },
+    });
+    // servicos é o 9º parâmetro ($9) -> índice 8 do array values (JSONB stringificado).
+    const servicosJson = String(cloneInsert()?.values?.[8]);
+    expect(servicosJson).toContain('Manicure');
+    expect(servicosJson).not.toContain('Corte');
+    expect(servicosJson).not.toContain('Barba');
+  });
+
+  it('área=barbearia mantém serviços de barbearia (Cirilo/Samuel — sem regressão)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_barber_ij56kl',
+      displayName: 'Barbearia Nova',
+      personalizacao: { nome_negocio: 'Barbearia Nova', area: 'barbearia' },
+    });
+    expect(String(cloneInsert()?.values?.[8])).toContain('Corte');
   });
 });
 

@@ -65,23 +65,92 @@ export interface WahaConfig {
 // matriz não tem horarios/servicos preenchidos em bot_config)
 // ---------------------------------------------------------------------------
 
-const CLONE_DEFAULTS_BARBEARIA = {
-  horarios_funcionamento: {
-    segunda: { abre: null, fecha: null, fechado: true },
-    terca: { abre: '09:00', fecha: '18:00', fechado: false },
-    quarta: { abre: '09:00', fecha: '18:00', fechado: false },
-    quinta: { abre: '09:00', fecha: '18:00', fechado: false },
-    sexta: { abre: '09:00', fecha: '18:00', fechado: false },
-    sabado: { abre: '09:00', fecha: '18:00', fechado: false },
-    domingo: { abre: null, fecha: null, fechado: true },
-  },
-  servicos: [
+/** Horários default de clone novo (área-agnóstico — segunda fechada, ter-sáb 9-18). */
+const HORARIOS_DEFAULT = {
+  segunda: { abre: null, fecha: null, fechado: true },
+  terca: { abre: '09:00', fecha: '18:00', fechado: false },
+  quarta: { abre: '09:00', fecha: '18:00', fechado: false },
+  quinta: { abre: '09:00', fecha: '18:00', fechado: false },
+  sexta: { abre: '09:00', fecha: '18:00', fechado: false },
+  sabado: { abre: '09:00', fecha: '18:00', fechado: false },
+  domingo: { abre: null, fecha: null, fechado: true },
+} as const;
+
+/** Um item de serviço de exemplo no formato esperado pelo render (preço em CENTAVOS, duração em min). */
+export interface ServicoTemplate {
+  nome: string;
+  preco_cents: number;
+  duracao_min: number;
+}
+
+/**
+ * Serviços de EXEMPLO por área/vertical (bug 2026-06-14: clone de manicure
+ * nascia com serviços de BARBEARIA herdados da matriz teste_barbearia).
+ *
+ * MESMO mecanismo de seleção por área do prompt ({{area_artigo}} / mapa
+ * AREA_ARTIGO): o código de área já-validado no signup (Zod) escolhe o conjunto.
+ * São só um PONTO DE PARTIDA (o cliente edita preços/duração/nomes no portal —
+ * "Meu negócio") — Bruno/growth refinam os textos depois.
+ *
+ * Regras de formato (espelham o que renderServicosPrecos espera):
+ *  - preco_cents é INTEIRO em centavos (5000 = R$50,00);
+ *  - duracao_min é múltiplo de 5 (slots da agenda).
+ *
+ * `'outro'`/desconhecida -> AREA_SERVICOS_FALLBACK (genérico mínimo, NUNCA
+ * exemplos de barbearia). Manter as CHAVES em sincronia com AREA_ARTIGO e a
+ * taxonomia AREA_VALUES (portal-signup.ts).
+ */
+const AREA_SERVICOS: Readonly<Record<string, ReadonlyArray<ServicoTemplate>>> = {
+  barbearia: [
     { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Barba', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Sobrancelha', preco_cents: 5000, duracao_min: 30 },
-    { nome: 'Pezinho', preco_cents: 5000, duracao_min: 30 },
+    { nome: 'Barba', preco_cents: 4000, duracao_min: 30 },
+    { nome: 'Corte + Barba', preco_cents: 8000, duracao_min: 60 },
+    { nome: 'Sobrancelha', preco_cents: 2000, duracao_min: 15 },
+  ],
+  cabeleireiro: [
+    { nome: 'Corte feminino', preco_cents: 7000, duracao_min: 45 },
+    { nome: 'Escova', preco_cents: 5000, duracao_min: 45 },
+    { nome: 'Coloração', preco_cents: 15000, duracao_min: 120 },
+    { nome: 'Hidratação', preco_cents: 8000, duracao_min: 60 },
+  ],
+  manicure: [
+    { nome: 'Manicure', preco_cents: 3500, duracao_min: 45 },
+    { nome: 'Pedicure', preco_cents: 4000, duracao_min: 45 },
+    { nome: 'Manicure + Pedicure', preco_cents: 7000, duracao_min: 90 },
+    { nome: 'Esmaltação em gel', preco_cents: 6000, duracao_min: 60 },
+    { nome: 'Alongamento', preco_cents: 12000, duracao_min: 120 },
+  ],
+  estetica: [
+    { nome: 'Limpeza de pele', preco_cents: 12000, duracao_min: 60 },
+    { nome: 'Design de sobrancelha', preco_cents: 4000, duracao_min: 30 },
+    { nome: 'Depilação', preco_cents: 6000, duracao_min: 45 },
+    { nome: 'Massagem', preco_cents: 10000, duracao_min: 60 },
   ],
 } as const;
+
+/**
+ * Serviços genéricos mínimos para `'outro'`/área desconhecida. Sem exemplo de
+ * barbearia (diretriz Bruno) e sem ficar vazio ("Nenhum servico cadastrado" no
+ * prompt seria pior). O cliente renomeia/ajusta no portal.
+ */
+const AREA_SERVICOS_FALLBACK: ReadonlyArray<ServicoTemplate> = [
+  { nome: 'Atendimento', preco_cents: 0, duracao_min: 30 },
+  { nome: 'Avaliação', preco_cents: 0, duracao_min: 30 },
+];
+
+/**
+ * Resolve os serviços de exemplo a partir do código de área (já validado no app).
+ * Trim + lower defensivo; código fora do mapa -> fallback genérico (nunca
+ * barbearia). Centralizado pra que provisioning e testes usem a MESMA tabela.
+ * Retorna cópia mutável (array fresco) — o caller serializa pra JSONB sem risco
+ * de aliasing das constantes readonly.
+ */
+export function servicosForArea(area: unknown): ServicoTemplate[] {
+  if (typeof area !== 'string') return AREA_SERVICOS_FALLBACK.map((s) => ({ ...s }));
+  const key = area.trim().toLowerCase();
+  const tpl = AREA_SERVICOS[key] ?? AREA_SERVICOS_FALLBACK;
+  return tpl.map((s) => ({ ...s }));
+}
 
 export interface CloneDefaults {
   horarios_funcionamento: unknown | null;
@@ -89,12 +158,30 @@ export interface CloneDefaults {
 }
 
 /**
- * Defaults para clone novo (movido de painel-admin). Hierarquia:
- *  1) bot_config.horarios_funcionamento + bot_config.servicos da MATRIZ.
- *  2) Hardcoded por matriz (teste_barbearia).
- *  3) null/null (outras matrizes).
+ * Defaults para clone novo (movido de painel-admin; serviços-por-área em
+ * 2026-06-14). Hierarquia:
+ *  1) horários: bot_config.horarios_funcionamento da MATRIZ; senão HORARIOS_DEFAULT
+ *     (só pra teste_barbearia, área-agnóstico); senão null.
+ *  2) serviços:
+ *     a) quando `area` é informada -> conjunto de exemplo DA ÁREA (servicosForArea),
+ *        IGNORANDO os serviços da matriz (que são sempre de barbearia). É o caminho
+ *        do signup self-service (corrige o bug do clone de manicure com serviços de
+ *        barbearia). `'outro'`/desconhecida -> genérico mínimo, nunca barbearia.
+ *     b) quando `area` é AUSENTE (gestão legado, matriz barbearia sem seletor) ->
+ *        comportamento histórico: bot_config.servicos da matriz; senão barbearia.
+ *
+ * `area` é OPCIONAL pra não quebrar o wrapper do painel-admin (chamada 2-arg).
  */
-export async function getCloneDefaults(db: SqlPool, matrizSlot: string): Promise<CloneDefaults> {
+export async function getCloneDefaults(
+  db: SqlPool,
+  matrizSlot: string,
+  area?: string | null,
+): Promise<CloneDefaults> {
+  // Serviços-por-área (signup self-service): a área manda, a matriz NÃO. Quando o
+  // caller não informa área, mantém o caminho histórico (matriz/barbearia abaixo).
+  const areaInformada = typeof area === 'string' && area.trim() !== '';
+  const servicosByArea = areaInformada ? servicosForArea(area) : undefined;
+
   try {
     const r = await db.query(
       'SELECT horarios_funcionamento, servicos FROM bot_config WHERE slot = $1',
@@ -102,13 +189,13 @@ export async function getCloneDefaults(db: SqlPool, matrizSlot: string): Promise
     );
     const row = r.rows[0];
     if (row && (row.horarios_funcionamento || row.servicos)) {
-      const fallback: CloneDefaults =
-        matrizSlot === 'teste_barbearia'
-          ? CLONE_DEFAULTS_BARBEARIA
-          : { horarios_funcionamento: null, servicos: null };
+      const horariosFallback = matrizSlot === 'teste_barbearia' ? HORARIOS_DEFAULT : null;
+      const servicosFallback =
+        matrizSlot === 'teste_barbearia' ? servicosForArea('barbearia') : null;
       return {
-        horarios_funcionamento: row.horarios_funcionamento ?? fallback.horarios_funcionamento,
-        servicos: row.servicos ?? fallback.servicos,
+        horarios_funcionamento: row.horarios_funcionamento ?? horariosFallback,
+        // Área informada vence os serviços da matriz (sempre barbearia).
+        servicos: servicosByArea ?? row.servicos ?? servicosFallback,
       };
     }
   } catch (e) {
@@ -117,8 +204,13 @@ export async function getCloneDefaults(db: SqlPool, matrizSlot: string): Promise
       'getCloneDefaults: falha ao ler bot_config da matriz',
     );
   }
-  if (matrizSlot === 'teste_barbearia') return CLONE_DEFAULTS_BARBEARIA;
-  return { horarios_funcionamento: null, servicos: null };
+  if (matrizSlot === 'teste_barbearia') {
+    return {
+      horarios_funcionamento: HORARIOS_DEFAULT,
+      servicos: servicosByArea ?? servicosForArea('barbearia'),
+    };
+  }
+  return { horarios_funcionamento: null, servicos: servicosByArea ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -819,9 +911,11 @@ export async function createCloneRecords(
     const areaValue =
       typeof persArea === 'string' && persArea.trim() !== '' ? persArea.trim() : null;
 
-    // Defaults de horarios/servicos conforme a matriz (clone novo já sai
-    // oferecendo serviços comuns — evita "Nenhum servico cadastrado").
-    const defaults = await getCloneDefaults(db, input.matrizSlot);
+    // Defaults de horarios/servicos conforme a ÁREA escolhida (signup) — clone
+    // novo já sai oferecendo os serviços comuns DAQUELA vertical (corrige o bug
+    // do clone de manicure com serviços de barbearia). Sem área (gestão legado)
+    // -> getCloneDefaults mantém o comportamento histórico (matriz/barbearia).
+    const defaults = await getCloneDefaults(db, input.matrizSlot, areaValue);
     const cloneR = await client.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
