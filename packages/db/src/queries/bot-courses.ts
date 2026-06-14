@@ -114,11 +114,14 @@ export async function getCourseBySlug(
 export async function createCourse(input: CreateCourseInput): Promise<BotCourseRow> {
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($10) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1" quando bot_courses.slot e
+  // flow_clones.slot têm tamanhos de varchar diferentes).
   const r = await query<BotCourseRow & { id: string; price: string; position_order: string }>(
     `INSERT INTO bot_courses
        (slot, course_slug, name, description, price, duration, position_order, enabled, details_for_llm, created_at, updated_at, tenant_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW(),
-        (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+        (SELECT tenant_id FROM flow_clones WHERE slot = $10))
      RETURNING *`,
     [
       input.slot,
@@ -130,6 +133,7 @@ export async function createCourse(input: CreateCourseInput): Promise<BotCourseR
       input.position_order ?? 0,
       input.enabled ?? true,
       input.details_for_llm ?? null,
+      input.slot, // $10: slot do subselect tenant_id (contexto de tipo separado de $1)
     ],
   );
   return mapRow(r.rows[0]);

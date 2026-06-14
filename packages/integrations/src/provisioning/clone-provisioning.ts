@@ -361,12 +361,15 @@ export async function regerarPromptClone(
     // Dual-write tenant_id (ADR 0018, Fase 2): roda após o COMMIT do
     // createCloneRecords, então o clone já existe — subselect resolve o UUID.
     // NULL-safe se não houver linha.
+    // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
+    // "inconsistent types deduced for parameter $1": bot_prompt.slot varchar(50)
+    // vs flow_clones.slot varchar(80)).
     await db.query(
       `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
-       VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+       VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
        ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
          tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
-      [cloneRow.slot, prompt],
+      [cloneRow.slot, prompt, cloneRow.slot],
     );
     return { ok: true, prompt };
   } catch (e) {

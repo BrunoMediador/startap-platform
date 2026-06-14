@@ -78,12 +78,14 @@ export async function insertPendingChargeIfAbsent(input: {
 }): Promise<{ row: BillingChargeRow; created: boolean }> {
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($5) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1" entre os varchars de slot).
   const ins = await query<BillingChargeRow>(
     `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status, tenant_id)
-     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $5))
      ON CONFLICT (slot, cycle) DO NOTHING
      RETURNING ${COLUMNS}`,
-    [input.slot, input.cycle, input.externalId, input.amountCents],
+    [input.slot, input.cycle, input.externalId, input.amountCents, input.slot],
   );
   if (ins.rows[0]) {
     return { row: ins.rows[0], created: true };
@@ -254,11 +256,13 @@ export async function insertPendingCharge(
 ): Promise<BillingChargeRow> {
   // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
   // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
+  // Slot do subselect é parâmetro SEPARADO ($5) — não reusa $1 (evita
+  // "inconsistent types deduced for parameter $1" entre os varchars de slot).
   const r = await client.query<BillingChargeRow>(
     `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status, tenant_id)
-     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $1))
+     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $5))
      RETURNING ${COLUMNS}`,
-    [input.slot, input.cycle, input.externalId, input.amountCents],
+    [input.slot, input.cycle, input.externalId, input.amountCents, input.slot],
   );
   return r.rows[0];
 }
