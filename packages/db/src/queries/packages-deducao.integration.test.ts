@@ -94,10 +94,18 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     dataExpiracao?: string;
   }): Promise<number> {
     const servicos = JSON.stringify(opts.servicos ?? ['Corte', 'Barba']);
+    // FONTE DA VERDADE = ledger: o código calcula saldo = sessoes_total + SUM(delta) e IGNORA o
+    // cache sessoes_restantes (ver packages.ts selectActiveCreditsTx/rebuildCreditCacheTx). Logo,
+    // para o crédito COMEÇAR com `restantes` sessões e ZERO redeems no ledger (countRedeems=0),
+    // o sessoes_total do template/crédito tem de ser o próprio `restantes` (saldo_ledger = total
+    // + 0). O `opts.total` original (sessões compradas) não afeta nenhuma asserção — nenhum teste
+    // checa sessoes_total — e seedar total>restantes SEM redeems prévios deixava saldo_ledger=total
+    // (a guarda saldo>0 nunca via a "última sessão"), que era a causa-raiz das 4 falhas.
+    const totalLedger = opts.restantes;
     const pkgRes = await exec(
       `INSERT INTO service_packages (slot, tenant_id, nome, servicos_cobertos, total_sessoes)
        VALUES ($1,$2,'Pacote Teste',$3::jsonb,$4) RETURNING id`,
-      [SLOT, TENANT, servicos, opts.total],
+      [SLOT, TENANT, servicos, totalLedger],
     );
     const packageId = pkgRes.rows[0].id;
     const credRes = await exec(
@@ -109,7 +117,7 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
         SLOT,
         TENANT,
         HMAC,
-        opts.total,
+        totalLedger,
         opts.restantes,
         opts.dataExpiracao ?? '2999-12-31',
       ],
