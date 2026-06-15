@@ -1,10 +1,14 @@
 import type { BotContext } from '@startap/core/types';
+import { cloneColaboradores } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
+  type ColaboradorAgenda,
   buildContextBlock,
+  buildEstabelecimentoContext,
   formatarAgendaComConfig,
   loadScheduleConfig,
+  resolveColaboradorByShortId,
 } from '@startap/integrations/scheduling';
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
@@ -95,6 +99,19 @@ export class TesteBarbeariaBot extends BotBase {
         'cancelamento detectado (botão literal) — bot NÃO cancela; escala pro dono se flag ON',
       );
       return 'ok! vou avisar o time, e logo entraremos em contato!';
+    }
+
+    // ── Estabelecimento multi-colaborador (ADR 0023/0024, Fase A — DORMENTE) ──────
+    // GATE DUPLO: SÓ entra no caminho novo se a flag ESTABELECIMENTO_ENABLED está ON
+    // **E** o slot é product_type='estabelecimento'. Qualquer um dos dois falso ->
+    // o código abaixo (individual) roda BYTE-A-BYTE como hoje. Cirilo/Samuel são
+    // individual -> getProductType devolve 'individual' (fallback seguro até em erro)
+    // -> nunca alcançam processEstabelecimento, independente da flag.
+    if (config.ESTABELECIMENTO_ENABLED) {
+      const productType = await cloneColaboradores.getProductType(this.slot);
+      if (productType === 'estabelecimento') {
+        return this.processEstabelecimento(ctx);
+      }
     }
 
     const calClient = await gcal.getGcalForSlot(this.slot);
@@ -354,6 +371,320 @@ export class TesteBarbeariaBot extends BotBase {
         },
       });
     }
+
+    const result = await runAgentConfigured({
+      slot: this.slot,
+      projectId: this.slot,
+      flowId: ctx.flowId,
+      telefone,
+      systemPrompt,
+      history,
+      userMessage: texto,
+      tools,
+      maxTurns: 5,
+    });
+
+    return sanitizarResposta(result.reply);
+  }
+
+  /**
+   * Caminho ESTABELECIMENTO (ADR 0023/0024, Fase A — MVP). Só é alcançado quando
+   * ESTABELECIMENTO_ENABLED=ON E product_type='estabelecimento' (gate feito em process).
+   *
+   * Diferenças do individual:
+   *  - resolve N agendas (1 por colaborador) via gcal.getGcalsForSlot (resolvedor com
+   *    isolamento por slot+tenant_id, ADR 0024 §4) — NUNCA usa a agenda principal do clone;
+   *  - {agenda} vira blocos [PROFISSIONAIS] + [HORARIOS] rotulados por colaborador,
+   *    com a ocupação de TODOS lida numa única chamada freebusy.query batched (ADR 0024 §5);
+   *  - inserir_agendamento exige colaborador_id (id curto C1/C2…); o servidor resolve o
+   *    calendarId server-side validando contra a lista ATIVA daquele slot/tenant — o LLM
+   *    nunca recebe nem passa calendarId/e-mail de agenda.
+   *
+   * MVP: o bot SEMPRE pergunta o profissional (sem "qualquer profissional"/pooled — Fase B).
+   */
+  private async processEstabelecimento(ctx: BotContext): Promise<string | null> {
+    const { telefone, texto, pushName } = ctx.message;
+
+    // Resolve os colaboradores ATIVOS (com agenda 'active' + calendarId) do slot.
+    // O resolvedor já filtra ativo/gcal active no banco e isola por slot+tenant.
+    const colaboradores = await gcal.getGcalsForSlot(this.slot);
+    if (colaboradores.length === 0) {
+      // Estabelecimento sem nenhum colaborador agendável (nenhum cadastrado ou todos
+      // com agenda pending/invalid). NÃO cai pro caminho individual (vazaria a agenda
+      // principal do clone) e NÃO inventa disponibilidade — silencia, igual ao
+      // individual quando a config está ausente.
+      this.log.error(
+        { slot: this.slot, telefone },
+        'estabelecimento: nenhum colaborador agendável — bot não responde (sem fallback p/ agenda do clone)',
+      );
+      return null;
+    }
+
+    // Config de agenda (horários + serviços globais do clone) — mesma fonte do individual.
+    let scheduleConfig: import('@startap/integrations/scheduling').ScheduleConfig;
+    try {
+      scheduleConfig = await loadScheduleConfig(this.slot);
+    } catch (err) {
+      this.log.error(
+        { err: err instanceof Error ? err.message : String(err), slot: this.slot, telefone },
+        'estabelecimento: configuração de horários/serviços ausente — bot não responde',
+      );
+      return null;
+    }
+
+    const now = new Date();
+    const timeMin = now.toISOString();
+    const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Monta [PROFISSIONAIS] + [HORARIOS por colaborador] com 1 chamada freebusy batched.
+    // `decorados` carrega o shortId (C1, C2…) + client + calendarId server-side — é a
+    // MESMA lista usada para resolver o colaborador_id no inserir_agendamento (sem
+    // reconstruir a numeração).
+    let estab: import('@startap/integrations/scheduling').EstabelecimentoContext;
+    try {
+      estab = await buildEstabelecimentoContext(colaboradores, scheduleConfig, {
+        timeMin,
+        timeMax,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/40[13]/.test(msg)) gcal.invalidateGcalsForSlot(this.slot);
+      this.log.error(
+        { err: msg, slot: this.slot, telefone },
+        'estabelecimento: freebusy falhou — bot não responde (não inventa disponibilidade)',
+      );
+      return null;
+    }
+
+    const decorados: ColaboradorAgenda[] = estab.colaboradores;
+
+    this.log.info(
+      {
+        slot: this.slot,
+        scheduleSource: scheduleConfig.source,
+        colaboradoresCount: decorados.length,
+        colaboradores: decorados.map((c) => `${c.shortId}/${c.colaboradorId}`),
+      },
+      'estabelecimento: contexto montado (agenda por colaborador)',
+    );
+
+    const dataAtual = now.toLocaleDateString('pt-BR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: TZ,
+    });
+
+    let promptPersona: string;
+    try {
+      promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
+    } catch (err) {
+      this.log.error({ err, slot: this.slot, telefone }, 'renderPrompt falhou — bot nao responde');
+      return null;
+    }
+
+    // Contexto base do banco (negócio, horários, serviços, cliente) SEM a agenda
+    // individual — a disponibilidade do estabelecimento vem nos blocos rotulados abaixo.
+    const baseContext = await buildContextBlock({
+      slot: this.slot,
+      nomeCliente: pushName || telefone,
+      telefoneCliente: telefone,
+      dataAtual,
+      ano: String(now.getFullYear()),
+      agendaFormatada: '',
+    });
+
+    // Blocos runtime, não-editáveis, SÓ no estabelecimento (ADR 0024 §6 / panorama §6).
+    const systemPrompt = [
+      promptPersona,
+      '',
+      baseContext,
+      '',
+      '[PROFISSIONAIS]',
+      estab.profissionaisBlock,
+      '',
+      '[HORARIOS DISPONIVEIS POR PROFISSIONAL - ATUALIZADO AGORA]',
+      estab.horariosBlock,
+    ].join('\n');
+
+    const fullHistory = await this.loadHistory(ctx);
+    const history = fullHistory.slice(0, -1);
+
+    const tools: ToolDefinition[] = [
+      {
+        name: 'inserir_agendamento',
+        description:
+          'Insere um agendamento no Google Calendar do PROFISSIONAL escolhido. Use APENAS apos ' +
+          'o cliente confirmar com SIM E ter escolhido o profissional (id curto C1, C2, …). ' +
+          'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
+        parameters: {
+          type: 'object',
+          properties: {
+            colaborador_id: {
+              type: 'string',
+              description:
+                'Id curto do profissional escolhido pelo cliente (ex.: C1, C2). Obrigatorio. ' +
+                'Use SOMENTE um id que aparece no bloco [PROFISSIONAIS]. Nunca invente nem passe e-mail/agenda.',
+            },
+            summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
+            start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
+            end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
+          },
+          required: ['colaborador_id', 'summary', 'start', 'end'],
+        },
+        run: async (args: unknown) => {
+          const { colaborador_id, summary, start, end } = args as {
+            colaborador_id: string;
+            summary: string;
+            start: string;
+            end: string;
+          };
+
+          // Resolve calendarId SERVER-SIDE a partir do id curto, validando contra a
+          // lista ATIVA daquele slot/tenant (decorados). Id inválido / inativo / de
+          // OUTRO estabelecimento -> null -> rejeita (sem vazamento cross-tenant).
+          // O LLM nunca passa calendarId — só o id curto, que aqui é validado.
+          const colaborador = resolveColaboradorByShortId(decorados, String(colaborador_id ?? ''));
+          if (!colaborador) {
+            this.log.warn(
+              { slot: this.slot, telefone, colaboradorIdRecebido: colaborador_id },
+              'inserir_agendamento rejeitado: colaborador_id invalido/inativo/fora do slot',
+            );
+            return {
+              ok: false,
+              error: 'COLABORADOR_INVALIDO',
+              message:
+                'Profissional não reconhecido. Pergunte ao cliente qual profissional ele quer.',
+            };
+          }
+
+          const colabClient = colaborador.client;
+
+          // Validação server-side de overlap NA AGENDA DO COLABORADOR (fonte de verdade).
+          const existing = await colabClient.listEvents({ timeMin: start, timeMax: end });
+          const reqStart = new Date(start).getTime();
+          const reqEnd = new Date(end).getTime();
+          const conflito = existing.find((ev) => {
+            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? start).getTime();
+            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? end).getTime();
+            return evStart < reqEnd && evEnd > reqStart;
+          });
+          if (conflito) {
+            this.log.warn(
+              {
+                slot: this.slot,
+                colaboradorId: colaborador.colaboradorId,
+                conflito: { start: conflito.start.dateTime, end: conflito.end.dateTime },
+                requestedStart: start,
+                requestedEnd: end,
+                telefone,
+              },
+              'inserir_agendamento (estab) bloqueado: conflito na agenda do colaborador',
+            );
+            return {
+              ok: false,
+              error: 'CONFLITO',
+              conflito: { start: conflito.start.dateTime, end: conflito.end.dateTime },
+            };
+          }
+
+          const createEvent = () =>
+            colabClient.createEvent({ summary, startISO: start, endISO: end, timeZone: TZ });
+
+          // Action-lock por (slot, colaborador, telefone, inicio): flag OFF -> cria direto.
+          if (!config.IDEMPOTENCY_ACTION_LOCK) {
+            const ev = await createEvent();
+            this.log.info(
+              {
+                eventId: ev.id,
+                summary: ev.summary,
+                colaboradorId: colaborador.colaboradorId,
+                telefone,
+              },
+              'Agendamento criado (estabelecimento)',
+            );
+            return {
+              ok: true,
+              eventId: ev.id,
+              summary: ev.summary,
+              colaborador_nome: colaborador.nome,
+            };
+          }
+
+          const lockKey = gcalActionLockKey(
+            `${this.slot}:${colaborador.colaboradorId}`,
+            telefone,
+            start,
+          );
+          const lock = await withActionLock(lockKey, createEvent);
+          if (!lock.executed) {
+            this.log.info(
+              { lockKey, telefone },
+              'inserir_agendamento (estab) pulado: acao ja em andamento (action-lock)',
+            );
+            return { ok: true, skipped: true, colaborador_nome: colaborador.nome };
+          }
+          const ev = lock.value as Awaited<ReturnType<typeof createEvent>>;
+          this.log.info(
+            {
+              eventId: ev.id,
+              summary: ev.summary,
+              colaboradorId: colaborador.colaboradorId,
+              telefone,
+              degraded: lock.degraded,
+            },
+            'Agendamento criado (estabelecimento)',
+          );
+          return {
+            ok: true,
+            eventId: ev.id,
+            summary: ev.summary,
+            colaborador_nome: colaborador.nome,
+          };
+        },
+      },
+      {
+        name: 'consultar_agendamento',
+        description: 'Consulta agendamentos futuros do cliente nas agendas dos profissionais.',
+        parameters: {
+          type: 'object',
+          properties: {
+            telefone: { type: 'string', description: 'WhatsApp do cliente (so digitos)' },
+          },
+          required: ['telefone'],
+        },
+        run: async (args: unknown) => {
+          const { telefone: tel } = args as { telefone: string };
+          const tMin = new Date().toISOString();
+          const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+          const phone = tel.replace(/\D/g, '');
+          const matching: Array<{
+            summary?: string;
+            start?: string;
+            end?: string;
+            profissional: string;
+          }> = [];
+          // Cruza nas agendas de TODOS os colaboradores ativos do estabelecimento.
+          for (const c of decorados) {
+            const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
+            for (const e of evs) {
+              if (e.summary?.includes(phone) || e.description?.includes(phone)) {
+                matching.push({
+                  summary: e.summary,
+                  start: e.start.dateTime,
+                  end: e.end.dateTime,
+                  profissional: c.nome,
+                });
+              }
+            }
+          }
+          if (!matching.length)
+            return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
+          return { events: matching };
+        },
+      },
+    ];
 
     const result = await runAgentConfigured({
       slot: this.slot,

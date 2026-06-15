@@ -223,6 +223,25 @@ export const ConfigSchema = z.object({
   // entrada documenta/valida o formato. NÃO incluir números do time/teste do Bruno aqui.
   BOT_BLOCKLIST_NUMBERS: z.string().optional(),
 
+  // ── Estabelecimento multi-colaborador (ADR 0023/0024, Fase A — DORMENTE) ────
+  // Gate macro do tipo de conta ESTABELECIMENTO. OPCIONAL no boot (default OFF —
+  // lição #247: env nova NUNCA derruba api/worker). O caminho novo (agenda por
+  // colaborador, blocos [PROFISSIONAIS]/[HORARIOS] rotulados, param colaborador_id)
+  // SÓ é alcançado quando ESTA flag está ON **E** o slot é product_type='estabelecimento'.
+  //   OFF (ausente/false) -> comportamento ATUAL byte-a-byte. Cirilo/Samuel (individual)
+  //                          nunca entram no código novo, independentemente da flag.
+  //   ON  (true)          -> clones com product_type='estabelecimento' passam a montar
+  //                          a agenda por colaborador (resolvedor getGcalsForSlot).
+  // O resolvedor em @startap/integrations lê process.env.ESTABELECIMENTO_ENABLED
+  // direto (mesmo padrão dos demais gates de flag); esta entrada documenta/valida o
+  // formato e expõe a flag tipada pro apps/api. NUNCA hardcoded. GATE OPERACIONAL do
+  // ADR 0024 (rotação GCAL_ENCRYPTION_KEY) é pré-requisito do 1º estabelecimento REAL,
+  // não desta flag de código.
+  ESTABELECIMENTO_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

@@ -6,3 +6,4 @@
  * duração do serviço, piso de 10min pra hoje, overlap contra GCal).
  */
 export * from './free-slots.js';
+export * from './estabelecimento.js';
