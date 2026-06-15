@@ -55,23 +55,56 @@ if (!process.env.GCAL_ENCRYPTION_KEY) {
 
 // ── Criptografia AES-256-GCM para gcal_credentials_json ──────────────────────
 // Espelha packages/core/src/crypto.ts (painel é JS sem build-time dep do core).
-// Chave: GCAL_ENCRYPTION_KEY — 32 bytes hex. Obrigatória; ausência para o boot.
-const _GCAL_ENC_PREFIX = 'enc:v1:';
+// MANTER OS DOIS CONSISTENTES — formato e seleção de chave devem bater 1:1.
+//
+// Formato: enc:<ver>:<iv>:<authTag>:<ciphertext> (base64).
+//   - enc:v2: cifrado com GCAL_ENCRYPTION_KEY (chave atual)
+//   - enc:v1: cifrado com a chave legada — decifrado com GCAL_ENCRYPTION_KEY_OLD
+//             se definida, senão com GCAL_ENCRYPTION_KEY (estado de HOJE).
+//   - sem prefixo "enc:": texto claro legado (fallback de migração).
+//
+// ⚠️ RETROCOMPAT (ADR 0024, AC5): no estado de HOJE (tudo enc:v1, só
+// GCAL_ENCRYPTION_KEY definida, sem OLD), enc:v1 decifra com GCAL_ENCRYPTION_KEY
+// — comportamento idêntico ao anterior. Rotação: docs/runbooks/rotacao-gcal-encryption-key.md
+const _GCAL_PREFIX_V1 = 'enc:v1:';
+const _GCAL_PREFIX_V2 = 'enc:v2:';
+const _GCAL_CURRENT_PREFIX = _GCAL_PREFIX_V2;
 
-function _getGcalKey() {
-  const hex = process.env.GCAL_ENCRYPTION_KEY;
+// Carrega/valida uma chave hex de 32 bytes. required=false devolve null se ausente.
+function _loadGcalKey(envName, required) {
+  const hex = process.env[envName];
   if (!hex || hex.trim() === '') {
-    throw new Error(
-      'boot: GCAL_ENCRYPTION_KEY ausente — defina 32 bytes hex no .env antes de iniciar',
-    );
+    if (!required) {
+      return null;
+    }
+    throw new Error(`boot: ${envName} ausente — defina 32 bytes hex no .env antes de iniciar`);
   }
   const buf = Buffer.from(hex.trim(), 'hex');
   if (buf.length !== 32) {
     throw new Error(
-      `boot: GCAL_ENCRYPTION_KEY deve ter 32 bytes (64 chars hex); recebido ${buf.length} bytes`,
+      `boot: ${envName} deve ter 32 bytes (64 chars hex); recebido ${buf.length} bytes`,
     );
   }
   return buf;
+}
+
+// Chave atual (nova). Obrigatória.
+function _getGcalKey() {
+  return _loadGcalKey('GCAL_ENCRYPTION_KEY', true);
+}
+
+// Chave legada para decifrar enc:v1 durante a janela de rotação. Opcional.
+function _getGcalOldKey() {
+  return _loadGcalKey('GCAL_ENCRYPTION_KEY_OLD', false);
+}
+
+// Seleciona a chave de descriptografia pelo prefixo (mesma lógica do core):
+//   enc:v2 → GCAL_ENCRYPTION_KEY; enc:v1 → OLD se definida, senão GCAL_ENCRYPTION_KEY.
+function _getGcalDecryptionKey(prefix) {
+  if (prefix === _GCAL_PREFIX_V2) {
+    return _getGcalKey();
+  }
+  return _getGcalOldKey() ?? _getGcalKey();
 }
 
 function encryptGcalCredentials(plain) {
@@ -81,7 +114,7 @@ function encryptGcalCredentials(plain) {
   const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return (
-    _GCAL_ENC_PREFIX +
+    _GCAL_CURRENT_PREFIX +
     iv.toString('base64') +
     ':' +
     authTag.toString('base64') +
@@ -91,17 +124,24 @@ function encryptGcalCredentials(plain) {
 }
 
 function decryptGcalCredentials(stored) {
-  if (!stored.startsWith(_GCAL_ENC_PREFIX)) {
+  const prefix = stored.startsWith(_GCAL_PREFIX_V2)
+    ? _GCAL_PREFIX_V2
+    : stored.startsWith(_GCAL_PREFIX_V1)
+      ? _GCAL_PREFIX_V1
+      : null;
+  if (prefix === null) {
     // Dado legado em texto claro — aceitar durante janela de migração.
     return stored;
   }
-  const rest = stored.slice(_GCAL_ENC_PREFIX.length);
+  const rest = stored.slice(prefix.length);
   const parts = rest.split(':');
   if (parts.length !== 3) {
-    throw new Error('gcal: formato enc:v1 inválido — esperado 3 partes após prefixo');
+    throw new Error(
+      `gcal: formato ${prefix.replace(/:$/, '')} inválido — esperado 3 partes após prefixo`,
+    );
   }
   const [ivB64, authTagB64, ciphertextB64] = parts;
-  const key = _getGcalKey();
+  const key = _getGcalDecryptionKey(prefix);
   const iv = Buffer.from(ivB64, 'base64');
   const authTag = Buffer.from(authTagB64, 'base64');
   const ciphertext = Buffer.from(ciphertextB64, 'base64');
