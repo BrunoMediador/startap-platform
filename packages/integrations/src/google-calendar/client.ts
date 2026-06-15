@@ -31,6 +31,20 @@ export interface PerCloneOptions {
   calendarId: string;
 }
 
+/** Janela de ocupação (busy) de UM calendário, retornada pelo freebusy.query. */
+export interface FreeBusyInterval {
+  start: string; // ISO 8601
+  end: string; // ISO 8601
+}
+
+/**
+ * Resultado do freebusy.query batched: mapa calendarId -> intervalos ocupados.
+ * Um calendarId que o Google não pôde resolver (sem permissão/erro) NÃO aparece
+ * no mapa (ou vem com `errors`); o caller deve tratar ausência como "não sei a
+ * ocupação" e ser conservador. ADR 0024 §5.
+ */
+export type FreeBusyResult = Record<string, FreeBusyInterval[]>;
+
 export type TestConnectionResult = { ok: true } | { ok: false; error: string };
 
 // ─── Per-clone (Service Account) ─────────────────────────────────────────────
@@ -175,6 +189,61 @@ export class GoogleCalendarClient {
       () => this.getAccessToken(),
     );
     return json.items ?? [];
+  }
+
+  /**
+   * Consulta a ocupação (busy) de VÁRIOS calendários numa única chamada
+   * freebusy.query (ADR 0024 §5 — até 50 calendarId/chamada). Usado pelo
+   * estabelecimento para montar a disponibilidade rotulada por colaborador sem
+   * N chamadas listEvents por turno.
+   *
+   * Importante: a credencial (SA) deste client precisa ter acesso a TODOS os
+   * calendarIds passados — no modelo estabelecimento todos os calendários dos
+   * colaboradores são da MESMA SA do clone (ADR 0024 §2), então qualquer client
+   * de colaborador daquele clone serve para emitir o batch.
+   *
+   * Calendários que o Google não conseguiu resolver vêm com `errors` no item e
+   * são OMITIDOS do resultado — o caller trata ausência como "ocupação
+   * desconhecida" (conservador), nunca como "livre".
+   */
+  async freeBusy(opts: {
+    calendarIds: string[];
+    timeMin: string;
+    timeMax: string;
+    timeZone?: string;
+  }): Promise<FreeBusyResult> {
+    if (opts.calendarIds.length === 0) return {};
+    if (opts.calendarIds.length > 50) {
+      // Limite duro da API (ADR 0024 §5). Estabelecimento até-10 nunca chega aqui;
+      // falha alta e explícita em vez de cortar silenciosamente.
+      throw new Error(
+        `freeBusy: até 50 calendarId por chamada (recebeu ${opts.calendarIds.length})`,
+      );
+    }
+    const json = await gcalFetch<{
+      calendars?: Record<string, { busy?: FreeBusyInterval[]; errors?: unknown[] }>;
+    }>(
+      '/freeBusy',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          timeMin: opts.timeMin,
+          timeMax: opts.timeMax,
+          timeZone: opts.timeZone ?? 'America/Sao_Paulo',
+          items: opts.calendarIds.map((id) => ({ id })),
+        }),
+      },
+      () => this.getAccessToken(),
+    );
+    const out: FreeBusyResult = {};
+    const calendars = json.calendars ?? {};
+    for (const [id, entry] of Object.entries(calendars)) {
+      // Calendário com erro (sem acesso etc.) NÃO entra no mapa — o caller é
+      // conservador e trata ausência como ocupação desconhecida.
+      if (entry.errors && entry.errors.length > 0) continue;
+      out[id] = entry.busy ?? [];
+    }
+    return out;
   }
 
   async createEvent(opts: {

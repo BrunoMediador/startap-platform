@@ -12,6 +12,7 @@ export * as botMedia from './queries/bot-media.js';
 export * as flowExecutionLog from './queries/flow-execution-log.js';
 export * as flowControl from './queries/flow-control.js';
 export * as flowClones from './queries/flow-clones.js';
+export * as cloneColaboradores from './queries/clone-colaboradores.js';
 export * as botCourses from './queries/bot-courses.js';
 export * as portalConfig from './queries/portal-config.js';
 export * as portalUsers from './queries/portal-users.js';
@@ -47,6 +48,7 @@ export type {
   HorariosFuncionamento,
   ServicoConfig,
 } from './queries/flow-clones.js';
+export type { ProductType } from './queries/clone-colaboradores.js';
 export type { BotCourseRow } from './queries/bot-courses.js';
 export type { PortalPausaRow } from './queries/portal-config.js';
 export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';
