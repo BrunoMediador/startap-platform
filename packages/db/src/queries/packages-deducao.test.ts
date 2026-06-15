@@ -24,9 +24,8 @@ vi.mock('../client.js', () => ({
   query: (...a: unknown[]) => mockQuery(...a),
 }));
 
-const { escolherCreditoParaDeducao, redeemForBooking, refundForBooking } = await import(
-  './packages.js'
-);
+const { escolherCreditoParaDeducao, redeemForBooking, refundForBooking, findSuspectDoubleRedeems } =
+  await import('./packages.js');
 
 import type { ClientPackageCredit } from './packages.js';
 
@@ -70,16 +69,21 @@ function rawCredit(over: Record<string, unknown> = {}) {
 
 /**
  * Programa o fake client de transação. `activeRows` = retorno do SELECT FOR UPDATE.
- * `insertRowCount` = rowCount do INSERT redemption (0 = ON CONFLICT pegou = idempotente).
+ * `insertRowCount` = rowCount do INSERT redemption (0 = ON CONFLICT pegou OU guarda saldo>0
+ *   barrou). `redeemJaExiste` decide o que a query EXISTS responde quando insertRowCount=0:
+ *   true = retry idempotente (já havia redeem) -> reporta descontado; false = guarda barrou
+ *   (corrida perdeu a última sessão) -> avulso. Default true (caso idempotência comum).
  * `rebuildSaldo` = saldo devolvido pelo UPDATE de cache.
  */
 function programTx(opts: {
   activeRows?: unknown[];
   insertRowCount?: number;
+  redeemJaExiste?: boolean;
   rebuildSaldo?: number;
 }) {
   const activeRows = opts.activeRows ?? [];
   const insertRowCount = opts.insertRowCount ?? 1;
+  const redeemJaExiste = opts.redeemJaExiste ?? true;
   const rebuildSaldo = opts.rebuildSaldo ?? 2;
   mockClientQuery.mockReset();
   mockClientQuery.mockImplementation(async (sql: string) => {
@@ -88,6 +92,9 @@ function programTx(opts: {
     if (/^\s*ROLLBACK/i.test(sql)) return { rows: [], rowCount: 0 };
     if (/FOR UPDATE OF c/.test(sql)) return { rows: activeRows, rowCount: activeRows.length };
     if (/INSERT INTO package_redemptions/.test(sql)) return { rows: [], rowCount: insertRowCount };
+    // Guarda anti-over-consumption: EXISTS(...reason='redeem') distingue retry de corrida.
+    if (/EXISTS\([\s\S]*reason = 'redeem'/.test(sql))
+      return { rows: [{ existe: redeemJaExiste }], rowCount: 1 };
     if (/FROM package_redemptions[\s\S]*reason = 'redeem'/.test(sql))
       return { rows: opts.activeRows?.length ? [{ credit_id: '1' }] : [] };
     if (/UPDATE client_package_credits/.test(sql))
@@ -164,6 +171,15 @@ describe('redeemForBooking — dedução', () => {
     expect(sql).toContain("'redeem'");
     expect(sql).toContain('-1');
     expect(sql).toContain('ON CONFLICT (gcal_event_id, reason) DO NOTHING');
+    // GUARDA anti-over-consumption: o INSERT só grava -1 se o saldo do ledger > 0.
+    expect(sql).toContain('> 0');
+    expect(sql).toContain('SUM(pr.delta)');
+    // REGRESSÃO do P0 (#321): o SELECT de lock NÃO pode combinar GROUP BY com FOR UPDATE
+    // (PG 16 rejeita: erro 0A000). O saldo vem de subquery escalar, não de GROUP BY.
+    const selCall = mockClientQuery.mock.calls.find((c) => /FOR UPDATE OF c/.test(String(c[0])));
+    const selSql = String(selCall?.[0]);
+    expect(selSql).not.toMatch(/GROUP BY/i);
+    expect(selSql).toContain('FOR UPDATE OF c');
     // NUNCA UPDATE solto no cache: a baixa é reconstruída do ledger.
     const cacheUpd = mockClientQuery.mock.calls.find((c) =>
       /UPDATE client_package_credits/.test(String(c[0])),
@@ -172,11 +188,12 @@ describe('redeemForBooking — dedução', () => {
     expect(mockClientQuery).toHaveBeenCalledWith('COMMIT');
   });
 
-  it('IDEMPOTÊNCIA: retry do MESMO evento (ON CONFLICT pegou, 0 linhas) → 1 desconto só', async () => {
-    // INSERT devolve rowCount 0 (já existia) → ainda assim reporta descontou=true (sem dupla baixa).
+  it('IDEMPOTÊNCIA: retry do MESMO evento (ON CONFLICT pegou, 0 linhas, redeem já existe) → 1 desconto só', async () => {
+    // INSERT devolve rowCount 0 (já existia); EXISTS confirma que há redeem → descontou=true (sem dupla baixa).
     programTx({
       activeRows: [rawCredit({ saldo_ledger: '2' })],
       insertRowCount: 0,
+      redeemJaExiste: true,
       rebuildSaldo: 2,
     });
     const r = await redeemForBooking({
@@ -187,6 +204,31 @@ describe('redeemForBooking — dedução', () => {
     });
     expect(r.descontou_do_pacote).toBe(true);
     expect(r.sessoes_restantes).toBe(2); // saldo não caiu de novo
+  });
+
+  it('OVER-CONSUMPTION: guarda saldo>0 barra o INSERT (0 linhas, redeem NÃO existe) → avulso, sem -1', async () => {
+    // Corrida: outra transação levou a última sessão; o INSERT com AND saldo>0 não produz linha
+    // e NÃO há redeem prévio deste evento → cai pra avulso (sem_pacote), nunca grava -1 abaixo de 0.
+    programTx({
+      activeRows: [rawCredit({ saldo_ledger: '1' })],
+      insertRowCount: 0,
+      redeemJaExiste: false,
+    });
+    const r = await redeemForBooking({
+      slot: 's',
+      phoneHmac: 'h',
+      gcalEventId: 'evt-race',
+      servicoNome: 'Corte',
+    });
+    expect(r.descontou_do_pacote).toBe(false);
+    expect(r.avulso).toBe(true);
+    expect(r.motivo).toBe('sem_pacote');
+    // garante que CONSULTOU o EXISTS (a guarda) e fez COMMIT (não rollback).
+    const existsCall = mockClientQuery.mock.calls.find((c) =>
+      /EXISTS\([\s\S]*reason = 'redeem'/.test(String(c[0])),
+    );
+    expect(existsCall).toBeDefined();
+    expect(mockClientQuery).toHaveBeenCalledWith('COMMIT');
   });
 
   it('usa_pacote=false: NÃO desconta, agenda avulso, sem tocar o banco', async () => {
@@ -353,5 +395,50 @@ describe('refundForBooking — estorno manual idempotente', () => {
     );
     expect(String(sel?.[0])).toContain('tenant_id = $3');
     expect(sel?.[1]).toEqual(['evt-1', 's', 't-1']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('findSuspectDoubleRedeems — relatório de reconciliação (read-only)', () => {
+  it('só leitura; parametriza janela + limit (e slot quando dado); nunca toca telefone', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await findSuspectDoubleRedeems({ slot: 'cirilobarbearia', janelaHoras: 24, limit: 50 });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("reason = 'redeem'");
+    expect(sql).toContain('HAVING COUNT(*) > 1');
+    expect(sql).toContain('rd.redeems - COALESCE(rf.refunds, 0) > 1');
+    expect(sql).not.toMatch(/phone|telefone|hmac/i); // sem PII
+    expect(params).toEqual([24, 50, 'cirilobarbearia']);
+  });
+
+  it('normaliza linha do banco (counts string -> number, event_ids array)', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          credit_id: '7',
+          slot: 's',
+          servico_nome: 'Corte',
+          redeems: '2',
+          refunds: '0',
+          gcal_event_ids: ['evt-velho', 'evt-novo'],
+          primeiro: '2026-06-14T10:00:00Z',
+          ultimo: '2026-06-14T18:00:00Z',
+        },
+      ],
+    });
+    const out = await findSuspectDoubleRedeems();
+    expect(out[0]).toMatchObject({
+      credit_id: 7,
+      redeems: 2,
+      refunds: 0,
+      gcal_event_ids: ['evt-velho', 'evt-novo'],
+    });
+  });
+
+  it('sem slot: varre todos (params só janela default + limit)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await findSuspectDoubleRedeems();
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual([48, 200]); // default 48h / limit 200
   });
 });

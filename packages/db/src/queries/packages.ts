@@ -79,6 +79,23 @@ function toStringArray(v: unknown): string[] {
   return [];
 }
 
+/**
+ * Normaliza nome de serviço para casamento de cobertura: trim + lowercase + dobra de acento
+ * (NFD + strip de marcas combinantes). Assim "Hidratação" casa com "Hidratacao", "Pé" com "Pe".
+ * NÃO faz sinônimo nem stemming (decisão de produto: o dono cadastra o nome canônico). A direção
+ * continua segura: só amplia o casamento de variações de acento da MESMA palavra. Exportado para
+ * o package-context usar a MESMA regra (uma fonte da verdade de normalização).
+ */
+export function normalizeServiceName(s: string): string {
+  // NFD separa a letra do diacr\u00edtico; \p{Diacritic} (Unicode property) remove as marcas de
+  // acento sem o character-class de combining marks (que o Biome sinaliza como enganoso).
+  return s
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim()
+    .toLowerCase();
+}
+
 const TEMPLATE_COLS = `id, slot, nome, descricao, servicos_cobertos, total_sessoes,
   validade_dias, to_char(data_validade_fixa, 'YYYY-MM-DD') AS data_validade_fixa,
   preco_cents, colaborador_id, ativo`;
@@ -183,8 +200,10 @@ function normalizeCredit(r: CreditRowRaw): ClientPackageCredit {
     estado,
     servicos_cobertos: servicos,
     colaborador_id: r.colaborador_id === null ? null : Number(r.colaborador_id),
-    cobre: (servicoNome: string) =>
-      servicos.some((s) => s.trim().toLowerCase() === servicoNome.trim().toLowerCase()),
+    cobre: (servicoNome: string) => {
+      const alvo = normalizeServiceName(servicoNome);
+      return servicos.some((s) => normalizeServiceName(s) === alvo);
+    },
   };
 }
 
@@ -376,8 +395,24 @@ export async function redeemForBooking(input: RedeemForBookingInput): Promise<Re
       tenantId: input.tenantId,
     });
 
-    // (2) cobertura (server-side; o LLM nunca decide) — case-insensitive via cobre().
+    // (2) cobertura (server-side; o LLM nunca decide) — acento/caixa-insensível via cobre().
     const cobertos = ativos.filter((c) => c.cobre(input.servicoNome));
+
+    // NEAR-MISS: cliente TEM pacote ativo mas NENHUM cobriu o serviço pedido. Isso é
+    // diferente de "cliente sem pacote" e merece rastro pro ops auditar (ex.: divergência
+    // de nome de serviço entre o catálogo e o que o LLM gravou no summary). Não loga PII —
+    // só slot + serviço + nº de pacotes ativos. Não muda o resultado (continua avulso).
+    if (ativos.length > 0 && cobertos.length === 0) {
+      log.warn(
+        {
+          slot: input.slot,
+          servicoPedido: input.servicoNome,
+          pacotesAtivos: ativos.length,
+          servicosCobertosUniao: Array.from(new Set(ativos.flatMap((c) => c.servicos_cobertos))),
+        },
+        'pacote-near-miss: cliente tem pacote ATIVO mas nenhum cobre o serviço — agenda avulso (auditar nome de serviço)',
+      );
+    }
 
     // (3)+(4) precedência determinística; nenhum elegível -> avulso.
     const credito = escolherCreditoParaDeducao(cobertos, input.colaboradorId ?? null);
@@ -393,15 +428,50 @@ export async function redeemForBooking(input: RedeemForBookingInput): Promise<Re
 
     // (5) grava o consumo no ledger — idempotente por evento. tenant_id e slot vêm do
     // PRÓPRIO crédito (já tenant-stamped) — nunca de campo livre. ON CONFLICT cobre retry.
-    await client.query(
+    //
+    // GUARDA anti-over-consumption (defesa em profundidade além do FOR UPDATE OF c): o -1 só
+    // é gravado se o saldo do ledger DESTE crédito ainda for > 0 NA MESMA transação (subquery
+    // escalar recomputada agora, sob o row-lock). Se duas transações concorrentes do mesmo
+    // cliente disputarem a ÚLTIMA sessão, o FOR UPDATE serializa: a 2ª só roda depois do COMMIT
+    // da 1ª, vê saldo 0 aqui, e o INSERT não produz linha — `descontou` cai pra avulso (não
+    // grava -1 abaixo de zero). NÃO confiamos só no CHECK do cache; barramos no ledger.
+    const ins = await client.query(
       `INSERT INTO package_redemptions
          (credit_id, slot, tenant_id, gcal_event_id, colaborador_id, servico_nome, delta, reason)
        SELECT c.id, c.slot, c.tenant_id, $2, $3, $4, -1, 'redeem'
          FROM client_package_credits c
         WHERE c.id = $1
+          AND (c.sessoes_total + COALESCE(
+                (SELECT SUM(pr.delta) FROM package_redemptions pr WHERE pr.credit_id = c.id), 0
+              )) > 0
        ON CONFLICT (gcal_event_id, reason) DO NOTHING`,
       [credito.credit_id, input.gcalEventId, input.colaboradorId ?? null, input.servicoNome],
     );
+
+    // rowCount 0 PODE significar (a) retry do MESMO evento (ON CONFLICT pegou — idempotente,
+    // já descontou antes) OU (b) a guarda saldo>0 barrou (corrida perdeu a última sessão). Só
+    // o caso (b) precisa virar avulso. Distinguimos checando se já existe um redeem deste
+    // evento: existe -> idempotente (descontou=true, sem dupla baixa); não existe -> guarda
+    // barrou -> avulso (motivo 'sem_pacote').
+    if (ins.rowCount === 0) {
+      const ja = await client.query<{ existe: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1 FROM package_redemptions
+            WHERE gcal_event_id = $1 AND reason = 'redeem'
+         ) AS existe`,
+        [input.gcalEventId],
+      );
+      if (!ja.rows[0]?.existe) {
+        // Guarda barrou: saldo zerou entre o SELECT e o INSERT (corrida). Avulso, sem -1.
+        await client.query('COMMIT');
+        return {
+          descontou_do_pacote: false,
+          avulso: true,
+          motivo: 'sem_pacote',
+          sessoes_restantes: null,
+        };
+      }
+    }
 
     // (6) reconstrói o cache sessoes_restantes do ledger (fonte da verdade) — clamp [0..total].
     const saldo = await rebuildCreditCacheTx(client, credito.credit_id);
@@ -561,6 +631,102 @@ export function reconciliationHook(entry: {
   );
 }
 
+/** Uma suspeita de dupla-baixa por cancelar+reagendar (heurística, sem PII). */
+export interface SuspectDoubleRedeem {
+  credit_id: number;
+  slot: string;
+  servico_nome: string;
+  /** Quantos 'redeem' do MESMO serviço no MESMO crédito dentro da janela. */
+  redeems: number;
+  /** Quantos 'refund' já lançados nesse crédito na janela (compensação parcial). */
+  refunds: number;
+  /** Eventos GCal envolvidos (para o ops cruzar com a agenda). */
+  gcal_event_ids: string[];
+  primeiro: string; // ISO do redeem mais antigo na janela
+  ultimo: string; // ISO do redeem mais recente na janela
+}
+
+/**
+ * RELATÓRIO de reconciliação (READ-ONLY) — ADR 0025 dívida 5, mitigação de runtime.
+ *
+ * Varre o ledger procurando a ASSINATURA de cancelar+reagendar: 2+ 'redeem' do MESMO serviço
+ * no MESMO crédito dentro de `janelaHoras` (default 48h), com mais redeems que refunds (ou
+ * seja, baixa líquida > 1 num atendimento que deveria ser 1). NÃO estorna nada — só devolve a
+ * lista para o job/ops AGIR (refund manual). Sem PII: agrega por crédito+serviço, nunca toca
+ * telefone. Escopado por slot quando fornecido; sem slot, varre todos (uso do cron global).
+ *
+ * É deliberadamente conservador (heurística): pode ter falso-positivo legítimo (cliente que
+ * de fato fez 2 cortes em 2 dias) — por isso é RELATÓRIO pra humano, não auto-refund.
+ */
+export async function findSuspectDoubleRedeems(input?: {
+  slot?: string;
+  janelaHoras?: number;
+  limit?: number;
+}): Promise<SuspectDoubleRedeem[]> {
+  const janelaHoras = input?.janelaHoras ?? 48;
+  const limit = input?.limit ?? 200;
+  const params: unknown[] = [janelaHoras, limit];
+  let slotClause = '';
+  if (input?.slot) {
+    params.push(input.slot);
+    slotClause = ` AND pr.slot = $${params.length}`;
+  }
+  // Agrupa redeems do MESMO (credit_id, servico_nome) na janela; conta refunds do crédito na
+  // mesma janela como compensação. Sinaliza só quando redeems - refunds > 1.
+  const r = await query<{
+    credit_id: string | number;
+    slot: string;
+    servico_nome: string | null;
+    redeems: string | number;
+    refunds: string | number;
+    gcal_event_ids: string[];
+    primeiro: string;
+    ultimo: string;
+  }>(
+    `WITH redeems AS (
+       SELECT pr.credit_id, pr.slot, pr.servico_nome,
+              COUNT(*)                       AS redeems,
+              array_agg(pr.gcal_event_id)    AS gcal_event_ids,
+              MIN(pr.created_at)             AS primeiro,
+              MAX(pr.created_at)             AS ultimo
+         FROM package_redemptions pr
+        WHERE pr.reason = 'redeem'
+          AND pr.created_at >= NOW() - ($1 || ' hours')::interval${slotClause}
+        GROUP BY pr.credit_id, pr.slot, pr.servico_nome
+       HAVING COUNT(*) > 1
+     ),
+     refunds AS (
+       SELECT pr.credit_id, COUNT(*) AS refunds
+         FROM package_redemptions pr
+        WHERE pr.reason = 'refund'
+          AND pr.created_at >= NOW() - ($1 || ' hours')::interval
+        GROUP BY pr.credit_id
+     )
+     SELECT rd.credit_id, rd.slot, rd.servico_nome,
+            rd.redeems::int                              AS redeems,
+            COALESCE(rf.refunds, 0)::int                 AS refunds,
+            rd.gcal_event_ids                            AS gcal_event_ids,
+            to_char(rd.primeiro AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS primeiro,
+            to_char(rd.ultimo   AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS ultimo
+       FROM redeems rd
+       LEFT JOIN refunds rf ON rf.credit_id = rd.credit_id
+      WHERE rd.redeems - COALESCE(rf.refunds, 0) > 1
+      ORDER BY rd.ultimo DESC
+      LIMIT $2`,
+    params,
+  );
+  return r.rows.map((row) => ({
+    credit_id: Number(row.credit_id),
+    slot: row.slot,
+    servico_nome: row.servico_nome ?? '',
+    redeems: Number(row.redeems),
+    refunds: Number(row.refunds),
+    gcal_event_ids: Array.isArray(row.gcal_event_ids) ? row.gcal_event_ids : [],
+    primeiro: row.primeiro,
+    ultimo: row.ultimo,
+  }));
+}
+
 // ── helpers transacionais (privados) ─────────────────────────────────────────
 
 interface PgLikeClient {
@@ -584,7 +750,11 @@ async function selectActiveCreditsTx(
     params.push(input.tenantId);
     tenantClause = ` AND c.tenant_id = $${params.length}`;
   }
-  // FOR UPDATE OF c: trava só as linhas de crédito (não os agregados do LEFT JOIN).
+  // PostgreSQL 16 PROÍBE locking clause (FOR UPDATE) com GROUP BY (erro 0A000). Por isso o
+  // saldo do ledger vem de SUBQUERY ESCALAR CORRELACIONADA (SUM(pr.delta) por credit_id), NÃO
+  // de GROUP BY + agregado no SELECT externo. Sem agregação no nível externo, o
+  // `FOR UPDATE OF c` é legal e trava SÓ as linhas de client_package_credits (serializa
+  // dois agendamentos concorrentes do MESMO cliente que disputam a última sessão).
   const r = await client.query<CreditRowRaw>(
     `SELECT c.id            AS credit_id,
             c.package_id    AS package_id,
@@ -592,7 +762,9 @@ async function selectActiveCreditsTx(
             sp.nome         AS nome,
             c.sessoes_total AS sessoes_total,
             c.sessoes_restantes AS sessoes_restantes_cache,
-            (c.sessoes_total + COALESCE(SUM(pr.delta), 0)) AS saldo_ledger,
+            (c.sessoes_total + COALESCE(
+              (SELECT SUM(pr.delta) FROM package_redemptions pr WHERE pr.credit_id = c.id), 0)
+            ) AS saldo_ledger,
             to_char(c.data_expiracao, 'YYYY-MM-DD')        AS data_expiracao,
             (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
             c.status        AS status,
@@ -600,9 +772,7 @@ async function selectActiveCreditsTx(
             sp.colaborador_id    AS colaborador_id
        FROM client_package_credits c
        JOIN service_packages sp ON sp.id = c.package_id
-       LEFT JOIN package_redemptions pr ON pr.credit_id = c.id
       WHERE c.slot = $1 AND c.cliente_phone_hmac = $2${tenantClause}
-      GROUP BY c.id, sp.nome, sp.servicos_cobertos, sp.colaborador_id
       ORDER BY c.data_expiracao ASC, c.data_compra ASC
       FOR UPDATE OF c`,
     params,

@@ -91,4 +91,5 @@ export type {
   RedeemForBookingInput,
   RefundForBookingInput,
   RefundResult,
+  SuspectDoubleRedeem,
 } from './queries/packages.js';
