@@ -13,6 +13,7 @@ import {
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
 import { sendClientCancellationAlert } from '../lib/client-alert.js';
+import { buildSeuPacoteBlock, resolveClientPackages } from '../lib/package-context.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -191,7 +192,24 @@ export class TesteBarbeariaBot extends BotBase {
       agendaFormatada: agenda,
     });
 
-    const systemPrompt = `${promptPersona}\n\n${contextBlock}`;
+    // ── Bloco [SEU PACOTE] (ADR 0025 — DORMENTE por flag) ────────────────────────
+    // SÓ com PACOTES_ENABLED=ON E o cliente tendo algum pacote: injeta uma linha
+    // pronta (saldo/validade/cobertura, com EXPIRADO/ESGOTADO explícitos). Read-only —
+    // nenhuma escrita, nenhuma dedução (isso é o bloco 2b). Com a flag OFF, pacoteBlock
+    // fica '' e o systemPrompt é BYTE-A-BYTE o de hoje. System prompt segue só persona.
+    let pacoteBlock = '';
+    if (config.PACOTES_ENABLED) {
+      const credits = await resolveClientPackages({
+        slot: this.slot,
+        telefone,
+        apenasAtivos: false, // inclui EXPIRADO/ESGOTADO para informar o cliente
+      });
+      pacoteBlock = buildSeuPacoteBlock(credits);
+    }
+
+    const systemPrompt = pacoteBlock
+      ? `${promptPersona}\n\n${contextBlock}\n\n${pacoteBlock}`
+      : `${promptPersona}\n\n${contextBlock}`;
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
@@ -368,6 +386,53 @@ export class TesteBarbeariaBot extends BotBase {
           // Pro modelo: sempre {ok:true, escalado:bool} — assim a IA fecha a resposta
           // ("ja avisei o responsavel") sem nunca afirmar que cancelou de fato.
           return { ok: true, escalado: r.escalado };
+        },
+      });
+    }
+
+    // ── consultar_pacote (ADR 0025 BLOCO 2a — DORMENTE por flag) ─────────────────
+    // Tool READ-ONLY: SÓ é exposta com PACOTES_ENABLED=ON. Com a flag OFF a lista de
+    // tools é IDÊNTICA à de hoje (bot 100% inalterado). NÃO toca saldo/ledger/GCal —
+    // só LÊ os pacotes do cliente já calculados server-side (saldo/validade/cobertura/
+    // escopo, com EXPIRADO/ESGOTADO explícitos). A DEDUÇÃO é o bloco 2b.
+    if (config.PACOTES_ENABLED) {
+      tools.push({
+        name: 'consultar_pacote',
+        description:
+          'Use quando o cliente perguntar sobre o PACOTE pré-pago dele (quantas sessões ' +
+          'restam, validade, o que cobre). Esta ferramenta apenas CONSULTA o saldo — ela ' +
+          'NÃO desconta, NÃO agenda e NÃO altera nada. Devolve os pacotes do cliente já ' +
+          'calculados (ativos, expirados e esgotados).',
+        parameters: {
+          type: 'object',
+          properties: {
+            telefone: {
+              type: 'string',
+              description: 'WhatsApp do cliente (so digitos). Vazio = usa o numero da conversa.',
+            },
+          },
+          required: [],
+        },
+        run: async (args: unknown) => {
+          const a = (args ?? {}) as { telefone?: unknown };
+          const tel = typeof a.telefone === 'string' && a.telefone.trim() ? a.telefone : telefone;
+          const credits = await resolveClientPackages({
+            slot: this.slot,
+            telefone: tel,
+            apenasAtivos: false,
+          });
+          // Devolve já calculado; NUNCA o número cru, NUNCA o HMAC (resolvido internamente).
+          return {
+            pacotes: credits.map((c) => ({
+              nome: c.nome,
+              estado: c.estado, // ATIVO | EXPIRADO | ESGOTADO | CANCELADO
+              sessoes_restantes: c.sessoes_restantes,
+              sessoes_total: c.sessoes_total,
+              valido_ate: c.data_expiracao,
+              cobre: c.servicos_cobertos,
+              escopo: c.colaborador_id === null ? 'casa' : 'colaborador',
+            })),
+          };
         },
       });
     }

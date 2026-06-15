@@ -242,6 +242,22 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Pacotes de serviço (ADR 0025 — BLOCO 2a: modelo + consulta read-only) ───
+  // Gate macro de pacotes. OPCIONAL no boot (default OFF — lição #247: env nova
+  // NUNCA derruba api/worker). Com a flag OFF, o bot NÃO expõe a tool
+  // consultar_pacote NEM injeta o bloco [SEU PACOTE]; inserir_agendamento é
+  // byte-a-byte o de hoje (a DEDUÇÃO é o bloco 2b, fora deste PR e também gated).
+  //   OFF (ausente/false) -> Cirilo/Samuel (e qualquer clone) 100% inalterados.
+  //   ON  (true)          -> o bot consulta pacotes (read-only) e injeta o bloco
+  //                          [SEU PACOTE] quando o telefone tem pacote ativo.
+  // Ligar SÓ após o dono DEFINIR um pacote (CRUD = bloco 2b) e QA controlado.
+  // Pré-requisito de USO (não de boot): PACKAGE_PHONE_PEPPER provisionado (validado
+  // LAZY — sem ele, pacotes degradam para vazio, sem crash). NUNCA hardcoded.
+  PACOTES_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

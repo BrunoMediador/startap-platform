@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   renderPrompt: vi.fn(),
   loadHistory: vi.fn(),
   logFlowEvent: vi.fn(),
+  resolveClientPackages: vi.fn(),
+  buildSeuPacoteBlock: vi.fn(),
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
@@ -46,12 +48,17 @@ const cfg = {
   CANCELAMENTO_ESCALADO_ENABLED: false,
   IDEMPOTENCY_ACTION_LOCK: false,
   ESTABELECIMENTO_ENABLED: false,
+  PACOTES_ENABLED: false,
 };
 vi.mock('../config.js', () => ({ config: cfg }));
 
 vi.mock('../lib/run-agent.js', () => ({ runAgentConfigured: mocks.runAgentConfigured }));
 vi.mock('../lib/client-alert.js', () => ({
   sendClientCancellationAlert: mocks.sendClientCancellationAlert,
+}));
+vi.mock('../lib/package-context.js', () => ({
+  resolveClientPackages: mocks.resolveClientPackages,
+  buildSeuPacoteBlock: mocks.buildSeuPacoteBlock,
 }));
 vi.mock('../lib/action-lock.js', () => ({
   gcalActionLockKey: () => 'k',
@@ -122,6 +129,10 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
     cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
   });
 
   it('flag OFF: tool escalar_cancelamento NÃO é exposta (bot inalterado)', async () => {
@@ -267,6 +278,10 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
   });
 
   // (a) individual byte-a-byte inalterado mesmo com a flag LIGADA, se product_type=individual.
@@ -385,5 +400,107 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('COLABORADOR_INVALIDO');
     expect(c1.createEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Pacotes de serviço (ADR 0025, BLOCO 2a — read-only, gated por PACOTES_ENABLED)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/** Roda process() (individual) e devolve { tools, systemPrompt } passados ao runAgent. */
+async function runIndividual(texto: string): Promise<{
+  tools: Array<{ name: string; run: (a: unknown) => Promise<unknown> }>;
+  systemPrompt: string;
+}> {
+  setupSchedule();
+  const bot = new TesteBarbeariaBot();
+  await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+    makeCtx(texto),
+  );
+  const call = mocks.runAgentConfigured.mock.calls[0][0];
+  return { tools: call.tools, systemPrompt: call.systemPrompt };
+}
+
+describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  it('flag OFF: tool consultar_pacote NÃO é exposta e nada de pacote é consultado (byte-a-byte)', async () => {
+    const { tools, systemPrompt } = await runIndividual('quero marcar um corte');
+    expect(tools.map((t) => t.name)).not.toContain('consultar_pacote');
+    // Nunca toca a camada de pacotes com a flag OFF — Cirilo/Samuel intactos.
+    expect(mocks.resolveClientPackages).not.toHaveBeenCalled();
+    expect(mocks.buildSeuPacoteBlock).not.toHaveBeenCalled();
+    // systemPrompt = persona + contexto, SEM bloco de pacote.
+    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT');
+  });
+
+  it('flag ON, cliente SEM pacote: tool exposta, mas systemPrompt sem bloco (block vazio)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    const { tools, systemPrompt } = await runIndividual('quero marcar um corte');
+    expect(tools.map((t) => t.name)).toContain('consultar_pacote');
+    expect(mocks.resolveClientPackages).toHaveBeenCalled();
+    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT'); // bloco vazio não é concatenado
+  });
+
+  it('flag ON, cliente COM pacote: injeta o bloco [SEU PACOTE] no systemPrompt', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([{ estado: 'ATIVO' }]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('[SEU PACOTE]\n- Pacote 5 Cortes: 3 de 5...');
+    const { systemPrompt } = await runIndividual('quero marcar um corte');
+    expect(systemPrompt).toContain('PERSONA');
+    expect(systemPrompt).toContain('CONTEXT');
+    expect(systemPrompt).toContain('[SEU PACOTE]');
+  });
+
+  it('consultar_pacote é READ-ONLY: nenhum nome de tool sugere escrita/dedução', async () => {
+    cfg.PACOTES_ENABLED = true;
+    const { tools } = await runIndividual('quanto saldo eu tenho?');
+    const consultar = tools.find((t) => t.name === 'consultar_pacote');
+    expect(consultar).toBeDefined();
+    for (const t of tools) {
+      // NENHUMA tool de pacote que descontMatemática/baixa/dedução (isso é o bloco 2b).
+      expect(t.name).not.toMatch(/deduz|descontar|baixar_pacote|consumir_pacote|usar_pacote/i);
+    }
+  });
+
+  it('consultar_pacote.run devolve os pacotes já calculados (sem número cru, sem HMAC)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([
+      {
+        nome: 'Pacote 5 Cortes',
+        estado: 'ATIVO',
+        sessoes_restantes: 3,
+        sessoes_total: 5,
+        data_expiracao: '2026-12-31',
+        servicos_cobertos: ['Corte'],
+        colaborador_id: null,
+      },
+    ]);
+    const { tools } = await runIndividual('quanto saldo?');
+    const consultar = tools.find((t) => t.name === 'consultar_pacote') as {
+      run: (a: unknown) => Promise<{ pacotes: Array<Record<string, unknown>> }>;
+    };
+    const res = await consultar.run({});
+    expect(res.pacotes).toEqual([
+      {
+        nome: 'Pacote 5 Cortes',
+        estado: 'ATIVO',
+        sessoes_restantes: 3,
+        sessoes_total: 5,
+        valido_ate: '2026-12-31',
+        cobre: ['Corte'],
+        escopo: 'casa',
+      },
+    ]);
   });
 });
