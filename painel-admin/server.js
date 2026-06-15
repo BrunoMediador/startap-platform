@@ -29,6 +29,11 @@ const {
   MEDIA_PUBLIC_BASE_URL = '/uploads',
   MEDIA_UPLOAD_MAX_MB = '250',
   SESSION_SECRET,
+  // Pepper PROPRIO de pacotes (ADR 0025 §4), distinto de TRIAL_PHONE_PEPPER. Usado SO ao
+  // VENDER um pacote (hash do telefone do cliente final). Validacao LAZY no ponto de uso
+  // (postmortem #247): boot NUNCA crasha sem ele — a venda de pacote e que falha com 409
+  // claro. NUNCA rotacionar (HMAC deterministico; rotacao invalida todo lookup de saldo).
+  PACKAGE_PHONE_PEPPER = '',
 } = process.env;
 
 // PG_PASS não tem default — expor senha no código é proibido (Regra 3 CLAUDE.md).
@@ -3268,6 +3273,7 @@ app.get('/api/clones', async (_req, res) => {
              fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
              fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
              fc.horarios_funcionamento, fc.servicos,
+             fc.product_type, fc.seat_cap,
              fc.created_at, fc.updated_at,
              bc.display_name AS matriz_display_name
       FROM flow_clones fc
@@ -3596,6 +3602,7 @@ app.get('/api/clones/:id', async (req, res) => {
               fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
               fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
               fc.horarios_funcionamento, fc.servicos,
+              fc.product_type, fc.seat_cap,
               fc.created_at, fc.updated_at,
               bc.display_name AS matriz_display_name
        FROM flow_clones fc
@@ -3622,12 +3629,25 @@ app.patch('/api/clones/:id', async (req, res) => {
     horarios_funcionamento,
     servicos,
     status: newStatus,
+    product_type,
+    seat_cap,
   } = req.body ?? {};
 
   // Validacao leve dos novos campos.
   if (horarios_funcionamento !== undefined) {
     if (!horarios_funcionamento || typeof horarios_funcionamento !== 'object' || Array.isArray(horarios_funcionamento)) {
       return res.status(400).json({ error: 'horarios_funcionamento deve ser objeto' });
+    }
+  }
+  // product_type: taxonomia validada no app (ADR 0023), nao por CHECK no banco.
+  if (product_type !== undefined && !['individual', 'estabelecimento'].includes(String(product_type))) {
+    return res.status(400).json({ error: 'product_type deve ser individual ou estabelecimento' });
+  }
+  // seat_cap: NULL (sem teto) ou inteiro >= 1. Validado no app (enforcement do teto no runtime).
+  if (seat_cap !== undefined && seat_cap !== null) {
+    const sc = Number(seat_cap);
+    if (!Number.isInteger(sc) || sc < 1 || sc > 100) {
+      return res.status(400).json({ error: 'seat_cap deve ser inteiro entre 1 e 100 (ou nulo)' });
     }
   }
   if (servicos !== undefined) {
@@ -3674,6 +3694,14 @@ app.patch('/api/clones/:id', async (req, res) => {
   if (newStatus !== undefined) {
     sets.push(`status = $${i++}`);
     vals.push(newStatus);
+  }
+  if (product_type !== undefined) {
+    sets.push(`product_type = $${i++}`);
+    vals.push(String(product_type));
+  }
+  if (seat_cap !== undefined) {
+    sets.push(`seat_cap = $${i++}`);
+    vals.push(seat_cap === null ? null : Number(seat_cap));
   }
 
   if (sets.length === 0) return res.status(400).json({ error: 'Nenhum campo para atualizar' });
@@ -5872,6 +5900,617 @@ app.post('/api/alerts/test', async (req, res) => {
     _alertsTestLastSendByUser.delete(userId);
     console.error(JSON.stringify({ at: 'alerts-test', pg_code: e?.code, msg: 'falha ao enviar alerta de teste' }));
     res.status(500).json({ error: 'erro ao enviar alerta de teste' });
+  }
+});
+
+// ============================================================================
+// COLABORADORES (estabelecimento) + PACOTES (templates / venda / saldo).
+// Bloco 3 (frontend-engineer). ADR 0023 (colaboradores) + ADR 0025 (pacotes).
+//
+// Escopo por CLONE: toda rota recebe o id do clone na URL, resolve slot + tenant_id
+// de flow_clones e carimba tenant_id em todo INSERT (isolamento — migrations 053-057).
+// Todas atras do requireAuth global + CSRF para mutacoes (aplicado em /api/* acima).
+//
+// O painel e JS standalone (sem build-time dep do @startap/*): os helpers puros abaixo
+// ESPELHAM packages/core (phone.ts / package-phone.ts). MANTER EM SYNC — testados em
+// test/pacotes-phone.test.js (mesmo padrao de media-unlink/servicos-duracao).
+//
+// FISCAL (ADR 0025 §5): preco_cents do pacote e INFORMATIVO (caixa do barbeiro). NAO
+// toca AbacatePay / client_billing / billing_charges / MRR. So rastreamos o SALDO.
+// O LEDGER (package_redemptions) so e escrito pelo BOT (deducao 2b, #321) — o painel
+// nunca desconta/estorna; aqui so DEFINE template, VENDE credito e LE saldo/extrato.
+// ============================================================================
+
+// ── Helpers puros (espelho de packages/core) — testados isoladamente ──────────
+
+// Espelho de canonicalE164 (packages/core/src/phone.ts). So digitos com DDI ou null.
+function _pkgCanonicalE164(raw) {
+  if (!raw) return null;
+  const base = String(raw).split('@')[0]?.split(':')[0] ?? '';
+  let digits = base.replace(/\D/g, '').replace(/^0+/, '');
+  if (digits.length < 10 || digits.length > 15) return null;
+  if (digits.length === 10 || digits.length === 11) digits = `55${digits}`;
+  if (digits.startsWith('55')) {
+    if (digits.length === 13 && digits[4] === '9') return digits.slice(0, 4) + digits.slice(5);
+    if (digits.length === 12) return digits;
+    if (digits.length === 13) return digits;
+    return null;
+  }
+  return digits;
+}
+
+// Espelho de phoneHint (packages/core/src/phone.ts). Mascara LGPD: DDD + 2 ultimos.
+function _pkgPhoneHint(canonical) {
+  const digits = String(canonical).replace(/\D/g, '');
+  const last2 = digits.slice(-2);
+  if (digits.startsWith('55') && digits.length >= 12) {
+    const ddd = digits.slice(2, 4);
+    return `+55 ${ddd} •••••-••${last2}`;
+  }
+  return `+${digits.slice(0, 2)} •••••-••${last2}`;
+}
+
+// Espelho de packagePhoneHmac (packages/core/src/package-phone.ts). Pepper PROPRIO,
+// validacao LAZY: lanca se ausente/curto (chamador devolve 409, nunca crasha o boot).
+const _PKG_PEPPER_MIN = 16;
+function _pkgIsPepperConfigured() {
+  return !!PACKAGE_PHONE_PEPPER && PACKAGE_PHONE_PEPPER.trim().length >= _PKG_PEPPER_MIN;
+}
+function _pkgPhoneHmac(canonicalPhone) {
+  if (!_pkgIsPepperConfigured()) {
+    throw new Error('PACKAGE_PHONE_PEPPER ausente ou curta demais (min 16 chars)');
+  }
+  return crypto.createHmac('sha256', PACKAGE_PHONE_PEPPER.trim()).update(canonicalPhone, 'utf8').digest('hex');
+}
+
+// Normaliza array de nomes de servico (trim, sem vazio, dedup case-insensitive, max 50).
+function _pkgNormalizeServicos(arr) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr) {
+    const s = String(raw ?? '').trim().slice(0, 80);
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+// Resolve { slot, tenant_id, product_type, seat_cap } de um clone pelo id (404 se nao existe).
+// tenant_id e NOT NULL nas tabelas novas; flow_clones.tenant_id sempre populado (migr 045).
+async function _resolveCloneScope(cloneId) {
+  const id = Number(cloneId);
+  if (!Number.isInteger(id) || id <= 0) return { error: 'id de clone invalido', status: 400 };
+  const r = await pool.query(
+    `SELECT id, slot, tenant_id, product_type, seat_cap FROM flow_clones WHERE id = $1`,
+    [id],
+  );
+  if (r.rowCount === 0) return { error: 'clone nao encontrado', status: 404 };
+  const row = r.rows[0];
+  if (!row.tenant_id) return { error: 'clone sem tenant_id (dado inconsistente)', status: 409 };
+  return { scope: row };
+}
+
+// ───────────────────────── COLABORADORES (estabelecimento) ───────────────────
+
+// GET /api/clones/:id/colaboradores — lista colaboradores + uso de vagas (seat_cap).
+app.get('/api/clones/:id/colaboradores', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, product_type, seat_cap } = resolved.scope;
+    const r = await pool.query(
+      `SELECT id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, created_at, updated_at
+         FROM clone_colaboradores WHERE slot = $1 ORDER BY ordem ASC, id ASC`,
+      [slot],
+    );
+    const ativos = r.rows.filter((c) => c.ativo === true).length;
+    res.json({
+      product_type,
+      seat_cap: seat_cap === null ? null : Number(seat_cap),
+      usados: ativos,
+      colaboradores: r.rows,
+    });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'colaboradores-list', pg_code: e?.code, msg: 'falha ao listar colaboradores' }));
+    res.status(500).json({ error: 'erro ao listar colaboradores' });
+  }
+});
+
+// POST /api/clones/:id/colaboradores — cria colaborador (respeita seat_cap p/ ATIVOS).
+// Body: { nome, gcal_calendar_id?, servicos?: string[], ativo?: bool, ordem?: int }
+app.post('/api/clones/:id/colaboradores', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id, product_type, seat_cap } = resolved.scope;
+    if (product_type !== 'estabelecimento') {
+      return res.status(409).json({ error: 'colaboradores so existem em clientes do tipo estabelecimento' });
+    }
+    const nome = String(req.body?.nome ?? '').trim().slice(0, 160);
+    if (!nome) return res.status(400).json({ error: 'nome obrigatorio' });
+    const gcalId = req.body?.gcal_calendar_id != null ? String(req.body.gcal_calendar_id).trim().slice(0, 500) || null : null;
+    const servicos = _pkgNormalizeServicos(req.body?.servicos);
+    const ativo = req.body?.ativo === undefined ? true : Boolean(req.body.ativo);
+    const ordem = Number.isInteger(Number(req.body?.ordem)) ? Number(req.body.ordem) : 0;
+    const gcalStatus = gcalId ? 'active' : 'pending';
+
+    await client.query('BEGIN');
+    // Teto: conta SO os ativos (vaga ocupada = colaborador ativo). seat_cap NULL = sem teto.
+    if (ativo && seat_cap !== null) {
+      const cnt = await client.query(
+        `SELECT COUNT(*)::int AS c FROM clone_colaboradores WHERE slot = $1 AND ativo = TRUE`,
+        [slot],
+      );
+      if ((cnt.rows[0]?.c ?? 0) >= Number(seat_cap)) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `limite do plano atingido (${seat_cap} vagas). Desative um colaborador ou aumente o plano.` });
+      }
+    }
+    const ins = await client.query(
+      `INSERT INTO clone_colaboradores (slot, tenant_id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       RETURNING id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, created_at, updated_at`,
+      [slot, tenant_id, nome, gcalId, gcalStatus, JSON.stringify(servicos), ativo, ordem],
+    );
+    await client.query('COMMIT');
+    console.log(JSON.stringify({ audit: 'colaborador-created', operator: req.session?.userId || 'unknown', slot, colaborador_id: ins.rows[0]?.id, at: new Date().toISOString() }));
+    res.status(201).json({ ok: true, colaborador: ins.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (e?.code === '23505') return res.status(409).json({ error: 'ja existe um colaborador com esse nome neste estabelecimento' });
+    console.error(JSON.stringify({ at: 'colaboradores-create', pg_code: e?.code, msg: 'falha ao criar colaborador' }));
+    res.status(500).json({ error: 'erro ao criar colaborador' });
+  } finally {
+    client.release();
+  }
+});
+
+// PATCH /api/clones/:id/colaboradores/:colabId — edita campos (respeita seat_cap ao ATIVAR).
+app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, seat_cap } = resolved.scope;
+    const colabId = Number(req.params.colabId);
+    if (!Number.isInteger(colabId) || colabId <= 0) return res.status(400).json({ error: 'colabId invalido' });
+
+    const sets = [];
+    const vals = [];
+    const b = req.body ?? {};
+    if (b.nome !== undefined) {
+      const nome = String(b.nome).trim().slice(0, 160);
+      if (!nome) return res.status(400).json({ error: 'nome nao pode ser vazio' });
+      vals.push(nome); sets.push(`nome = $${vals.length}`);
+    }
+    if (b.gcal_calendar_id !== undefined) {
+      const gcalId = b.gcal_calendar_id != null ? String(b.gcal_calendar_id).trim().slice(0, 500) || null : null;
+      vals.push(gcalId); sets.push(`gcal_calendar_id = $${vals.length}`);
+      vals.push(gcalId ? 'active' : 'pending'); sets.push(`gcal_status = $${vals.length}`);
+    }
+    if (b.servicos !== undefined) {
+      vals.push(JSON.stringify(_pkgNormalizeServicos(b.servicos))); sets.push(`servicos = $${vals.length}::jsonb`);
+    }
+    if (b.ordem !== undefined) {
+      const ordem = Number(b.ordem);
+      if (!Number.isInteger(ordem)) return res.status(400).json({ error: 'ordem deve ser inteiro' });
+      vals.push(ordem); sets.push(`ordem = $${vals.length}`);
+    }
+
+    await client.query('BEGIN');
+    // Ativar consome vaga: checa seat_cap se estiver virando ativo.
+    if (b.ativo !== undefined) {
+      const ativo = Boolean(b.ativo);
+      if (ativo && seat_cap !== null) {
+        const cnt = await client.query(
+          `SELECT COUNT(*)::int AS c FROM clone_colaboradores WHERE slot = $1 AND ativo = TRUE AND id <> $2`,
+          [slot, colabId],
+        );
+        if ((cnt.rows[0]?.c ?? 0) >= Number(seat_cap)) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: `limite do plano atingido (${seat_cap} vagas).` });
+        }
+      }
+      vals.push(ativo); sets.push(`ativo = $${vals.length}`);
+    }
+    if (sets.length === 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'nada a atualizar' }); }
+    sets.push('updated_at = NOW()');
+    vals.push(slot); vals.push(colabId);
+    const r = await client.query(
+      `UPDATE clone_colaboradores SET ${sets.join(', ')} WHERE slot = $${vals.length - 1} AND id = $${vals.length}
+       RETURNING id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, created_at, updated_at`,
+      vals,
+    );
+    if (r.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'colaborador nao encontrado neste clone' }); }
+    await client.query('COMMIT');
+    console.log(JSON.stringify({ audit: 'colaborador-updated', operator: req.session?.userId || 'unknown', slot, colaborador_id: colabId, at: new Date().toISOString() }));
+    res.json({ ok: true, colaborador: r.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (e?.code === '23505') return res.status(409).json({ error: 'ja existe um colaborador com esse nome neste estabelecimento' });
+    console.error(JSON.stringify({ at: 'colaboradores-patch', pg_code: e?.code, msg: 'falha ao atualizar colaborador' }));
+    res.status(500).json({ error: 'erro ao atualizar colaborador' });
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /api/clones/:id/colaboradores/:colabId — remove colaborador (escopado por slot).
+app.delete('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot } = resolved.scope;
+    const colabId = Number(req.params.colabId);
+    if (!Number.isInteger(colabId) || colabId <= 0) return res.status(400).json({ error: 'colabId invalido' });
+    const r = await pool.query(`DELETE FROM clone_colaboradores WHERE slot = $1 AND id = $2`, [slot, colabId]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'colaborador nao encontrado neste clone' });
+    console.log(JSON.stringify({ audit: 'colaborador-deleted', operator: req.session?.userId || 'unknown', slot, colaborador_id: colabId, at: new Date().toISOString() }));
+    res.json({ ok: true });
+  } catch (e) {
+    // FK de service_packages.colaborador_id e ON DELETE SET NULL — nao deve bloquear.
+    console.error(JSON.stringify({ at: 'colaboradores-delete', pg_code: e?.code, msg: 'falha ao remover colaborador' }));
+    res.status(500).json({ error: 'erro ao remover colaborador' });
+  }
+});
+
+// ───────────────────────── PACOTES — TEMPLATES (service_packages) ─────────────
+
+// Valida o corpo de um template de pacote. Retorna { error } ou { value }.
+function _validatePacoteTemplate(b, { partial = false } = {}) {
+  const out = {};
+  const need = (k) => !partial || b[k] !== undefined;
+
+  if (need('nome')) {
+    const nome = String(b?.nome ?? '').trim().slice(0, 160);
+    if (!nome) return { error: 'nome do pacote obrigatorio' };
+    out.nome = nome;
+  }
+  if (b?.descricao !== undefined) out.descricao = b.descricao != null ? String(b.descricao).trim().slice(0, 2000) || null : null;
+  if (need('total_sessoes')) {
+    const tot = Number(b?.total_sessoes);
+    if (!Number.isInteger(tot) || tot < 1 || tot > 1000) return { error: 'total de sessoes deve ser inteiro entre 1 e 1000' };
+    out.total_sessoes = tot;
+  }
+  if (b?.servicos_cobertos !== undefined) out.servicos_cobertos = _pkgNormalizeServicos(b.servicos_cobertos);
+  if (b?.preco_cents !== undefined) {
+    if (b.preco_cents === null || b.preco_cents === '') { out.preco_cents = null; }
+    else {
+      const cents = Number(b.preco_cents);
+      if (!Number.isInteger(cents) || cents < 0 || cents > 100_000_000) return { error: 'preco_cents invalido' };
+      out.preco_cents = cents;
+    }
+  }
+  // Validade: EXATAMENTE um dos dois (dias OU data fixa). No create, obrigatorio um.
+  const hasDias = b?.validade_dias !== undefined && b.validade_dias !== null && b.validade_dias !== '';
+  const hasData = b?.data_validade_fixa !== undefined && b.data_validade_fixa !== null && b.data_validade_fixa !== '';
+  if (hasDias && hasData) return { error: 'use validade em DIAS ou DATA FIXA, nao os dois' };
+  if (hasDias) {
+    const dias = Number(b.validade_dias);
+    if (!Number.isInteger(dias) || dias < 1 || dias > 3650) return { error: 'validade em dias deve ser inteiro entre 1 e 3650' };
+    out.validade_dias = dias; out.data_validade_fixa = null;
+  } else if (hasData) {
+    const d = String(b.data_validade_fixa).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return { error: 'data de validade deve ser AAAA-MM-DD' };
+    out.data_validade_fixa = d; out.validade_dias = null;
+  } else if (!partial) {
+    return { error: 'informe a validade: dias OU data fixa' };
+  }
+  // colaborador_id: NULL = casa inteira; preenchido = so com aquele colaborador.
+  if (b?.colaborador_id !== undefined) {
+    if (b.colaborador_id === null || b.colaborador_id === '') out.colaborador_id = null;
+    else {
+      const cid = Number(b.colaborador_id);
+      if (!Number.isInteger(cid) || cid <= 0) return { error: 'colaborador_id invalido' };
+      out.colaborador_id = cid;
+    }
+  }
+  if (b?.ativo !== undefined) out.ativo = Boolean(b.ativo);
+  return { value: out };
+}
+
+const PACOTE_TEMPLATE_COLS = `id, nome, descricao, servicos_cobertos, total_sessoes,
+  validade_dias, to_char(data_validade_fixa, 'YYYY-MM-DD') AS data_validade_fixa,
+  preco_cents, colaborador_id, ativo, created_at, updated_at`;
+
+// GET /api/clones/:id/pacotes — lista TODOS os templates (ativos e inativos) do clone.
+app.get('/api/clones/:id/pacotes', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id, product_type } = resolved.scope;
+    const r = await pool.query(
+      `SELECT ${PACOTE_TEMPLATE_COLS} FROM service_packages
+        WHERE slot = $1 AND tenant_id = $2 ORDER BY ativo DESC, nome ASC`,
+      [slot, tenant_id],
+    );
+    // Colaboradores p/ o select de escopo (so faz sentido em estabelecimento).
+    let colaboradores = [];
+    if (product_type === 'estabelecimento') {
+      const cc = await pool.query(
+        `SELECT id, nome FROM clone_colaboradores WHERE slot = $1 ORDER BY ordem ASC, id ASC`,
+        [slot],
+      );
+      colaboradores = cc.rows;
+    }
+    res.json({ product_type, colaboradores, pacotes: r.rows });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'pacotes-list', pg_code: e?.code, msg: 'falha ao listar pacotes' }));
+    res.status(500).json({ error: 'erro ao listar pacotes' });
+  }
+});
+
+// POST /api/clones/:id/pacotes — cria template de pacote.
+app.post('/api/clones/:id/pacotes', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const v = _validatePacoteTemplate(req.body ?? {}, { partial: false });
+    if (v.error) return res.status(400).json({ error: v.error });
+    const t = v.value;
+    const r = await pool.query(
+      `INSERT INTO service_packages
+         (slot, tenant_id, nome, descricao, servicos_cobertos, total_sessoes,
+          validade_dias, data_validade_fixa, preco_cents, colaborador_id, ativo)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)
+       RETURNING ${PACOTE_TEMPLATE_COLS}`,
+      [slot, tenant_id, t.nome, t.descricao ?? null, JSON.stringify(t.servicos_cobertos ?? []),
+       t.total_sessoes, t.validade_dias ?? null, t.data_validade_fixa ?? null,
+       t.preco_cents ?? null, t.colaborador_id ?? null, t.ativo === undefined ? true : t.ativo],
+    );
+    console.log(JSON.stringify({ audit: 'pacote-template-created', operator: req.session?.userId || 'unknown', slot, package_id: r.rows[0]?.id, at: new Date().toISOString() }));
+    res.status(201).json({ ok: true, pacote: r.rows[0] });
+  } catch (e) {
+    if (e?.code === '23503') return res.status(400).json({ error: 'colaborador_id nao pertence a este clone' });
+    console.error(JSON.stringify({ at: 'pacotes-create', pg_code: e?.code, msg: 'falha ao criar pacote' }));
+    res.status(500).json({ error: 'erro ao criar pacote' });
+  }
+});
+
+// PATCH /api/clones/:id/pacotes/:pkgId — edita template (parcial).
+app.patch('/api/clones/:id/pacotes/:pkgId', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const pkgId = Number(req.params.pkgId);
+    if (!Number.isInteger(pkgId) || pkgId <= 0) return res.status(400).json({ error: 'pkgId invalido' });
+    const v = _validatePacoteTemplate(req.body ?? {}, { partial: true });
+    if (v.error) return res.status(400).json({ error: v.error });
+    const t = v.value;
+    const sets = [];
+    const vals = [];
+    const put = (col, val, cast = '') => { vals.push(val); sets.push(`${col} = $${vals.length}${cast}`); };
+    if (t.nome !== undefined) put('nome', t.nome);
+    if (t.descricao !== undefined) put('descricao', t.descricao);
+    if (t.servicos_cobertos !== undefined) put('servicos_cobertos', JSON.stringify(t.servicos_cobertos), '::jsonb');
+    if (t.total_sessoes !== undefined) put('total_sessoes', t.total_sessoes);
+    if (t.validade_dias !== undefined) put('validade_dias', t.validade_dias);
+    if (t.data_validade_fixa !== undefined) put('data_validade_fixa', t.data_validade_fixa);
+    if (t.preco_cents !== undefined) put('preco_cents', t.preco_cents);
+    if (t.colaborador_id !== undefined) put('colaborador_id', t.colaborador_id);
+    if (t.ativo !== undefined) put('ativo', t.ativo);
+    if (sets.length === 0) return res.status(400).json({ error: 'nada a atualizar' });
+    sets.push('updated_at = NOW()');
+    vals.push(slot); vals.push(tenant_id); vals.push(pkgId);
+    const r = await pool.query(
+      `UPDATE service_packages SET ${sets.join(', ')}
+        WHERE slot = $${vals.length - 2} AND tenant_id = $${vals.length - 1} AND id = $${vals.length}
+       RETURNING ${PACOTE_TEMPLATE_COLS}`,
+      vals,
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'pacote nao encontrado neste clone' });
+    console.log(JSON.stringify({ audit: 'pacote-template-updated', operator: req.session?.userId || 'unknown', slot, package_id: pkgId, at: new Date().toISOString() }));
+    res.json({ ok: true, pacote: r.rows[0] });
+  } catch (e) {
+    if (e?.code === '23503') return res.status(400).json({ error: 'colaborador_id nao pertence a este clone' });
+    console.error(JSON.stringify({ at: 'pacotes-patch', pg_code: e?.code, msg: 'falha ao atualizar pacote' }));
+    res.status(500).json({ error: 'erro ao atualizar pacote' });
+  }
+});
+
+// DELETE /api/clones/:id/pacotes/:pkgId — remove template.
+// Bloqueia se ja houver credito vendido desse template (FK protege o saldo do cliente).
+// Recomenda desativar (ativo=false) em vez de apagar quando ha venda.
+app.delete('/api/clones/:id/pacotes/:pkgId', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const pkgId = Number(req.params.pkgId);
+    if (!Number.isInteger(pkgId) || pkgId <= 0) return res.status(400).json({ error: 'pkgId invalido' });
+    const sold = await pool.query(`SELECT 1 FROM client_package_credits WHERE package_id = $1 LIMIT 1`, [pkgId]);
+    if ((sold.rowCount ?? 0) > 0) {
+      return res.status(409).json({ error: 'este pacote ja foi vendido a clientes — desative-o (em vez de excluir) para preservar o saldo de quem comprou' });
+    }
+    const r = await pool.query(
+      `DELETE FROM service_packages WHERE slot = $1 AND tenant_id = $2 AND id = $3`,
+      [slot, tenant_id, pkgId],
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'pacote nao encontrado neste clone' });
+    console.log(JSON.stringify({ audit: 'pacote-template-deleted', operator: req.session?.userId || 'unknown', slot, package_id: pkgId, at: new Date().toISOString() }));
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'pacotes-delete', pg_code: e?.code, msg: 'falha ao remover pacote' }));
+    res.status(500).json({ error: 'erro ao remover pacote' });
+  }
+});
+
+// ───────────────────────── PACOTES — VENDER / SALDO / EXTRATO ─────────────────
+
+// POST /api/clones/:id/pacotes/:pkgId/vender — vende/atribui um pacote a um cliente final.
+// Body: { telefone (cru), sessoes?, validade_dias?|data_expiracao? }
+// O servidor hasheia o telefone com PACKAGE_PHONE_PEPPER (nunca persiste o numero cru).
+// sessoes default = total_sessoes do template; validade default = derivada do template.
+app.post('/api/clones/:id/pacotes/:pkgId/vender', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const pkgId = Number(req.params.pkgId);
+    if (!Number.isInteger(pkgId) || pkgId <= 0) return res.status(400).json({ error: 'pkgId invalido' });
+
+    // Identidade do cliente final — pepper obrigatorio (degrada com 409 claro se ausente).
+    if (!_pkgIsPepperConfigured()) {
+      return res.status(409).json({ error: 'venda de pacote indisponivel: PACKAGE_PHONE_PEPPER nao configurada no servidor (avise o time)' });
+    }
+    const canonical = _pkgCanonicalE164(req.body?.telefone);
+    if (!canonical) return res.status(400).json({ error: 'telefone do cliente invalido' });
+    const hmac = _pkgPhoneHmac(canonical);
+    const hint = _pkgPhoneHint(canonical);
+
+    // Carrega o template (escopado por slot+tenant) para defaults de sessoes/validade.
+    const tpl = await client.query(
+      `SELECT id, total_sessoes, validade_dias, to_char(data_validade_fixa,'YYYY-MM-DD') AS data_validade_fixa, ativo
+         FROM service_packages WHERE id = $1 AND slot = $2 AND tenant_id = $3`,
+      [pkgId, slot, tenant_id],
+    );
+    if (tpl.rowCount === 0) return res.status(404).json({ error: 'pacote nao encontrado neste clone' });
+    const template = tpl.rows[0];
+
+    // sessoes: body override OU total do template.
+    let sessoes = template.total_sessoes;
+    if (req.body?.sessoes !== undefined && req.body.sessoes !== null && req.body.sessoes !== '') {
+      const s = Number(req.body.sessoes);
+      if (!Number.isInteger(s) || s < 1 || s > 1000) return res.status(400).json({ error: 'sessoes deve ser inteiro entre 1 e 1000' });
+      sessoes = s;
+    }
+
+    // data_expiracao: body (data fixa OU dias) OU derivada do template.
+    let dataExpiracao = null;
+    if (req.body?.data_expiracao) {
+      const d = String(req.body.data_expiracao).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'data_expiracao deve ser AAAA-MM-DD' });
+      dataExpiracao = d;
+    } else if (req.body?.validade_dias) {
+      const dias = Number(req.body.validade_dias);
+      if (!Number.isInteger(dias) || dias < 1 || dias > 3650) return res.status(400).json({ error: 'validade_dias invalida' });
+      dataExpiracao = `__DIAS__${dias}`;
+    } else if (template.data_validade_fixa) {
+      dataExpiracao = template.data_validade_fixa;
+    } else if (template.validade_dias) {
+      dataExpiracao = `__DIAS__${Number(template.validade_dias)}`;
+    } else {
+      return res.status(400).json({ error: 'sem validade definida: informe data_expiracao ou validade_dias' });
+    }
+
+    // Resolve "__DIAS__N" -> data via SQL (CURRENT_DATE + N) pra evitar fuso do Node.
+    const dataExpr = dataExpiracao.startsWith('__DIAS__')
+      ? `(CURRENT_DATE + ($6::int))`
+      : `$6::date`;
+    const dataParam = dataExpiracao.startsWith('__DIAS__')
+      ? Number(dataExpiracao.slice('__DIAS__'.length))
+      : dataExpiracao;
+
+    await client.query('BEGIN');
+    const ins = await client.query(
+      `INSERT INTO client_package_credits
+         (package_id, slot, tenant_id, cliente_phone_hmac, cliente_phone_hint, sessoes_total, sessoes_restantes, data_expiracao, status)
+       VALUES ($1, $2, $3, $4, $5, $7, $7, ${dataExpr}, 'active')
+       RETURNING id, sessoes_total, sessoes_restantes, to_char(data_expiracao,'YYYY-MM-DD') AS data_expiracao, cliente_phone_hint, data_compra, status`,
+      [pkgId, slot, tenant_id, hmac, hint, dataParam, sessoes],
+    );
+    await client.query('COMMIT');
+    // NUNCA loga o numero cru — so o hint mascarado.
+    console.log(JSON.stringify({ audit: 'pacote-vendido', operator: req.session?.userId || 'unknown', slot, package_id: pkgId, credit_id: ins.rows[0]?.id, hint, at: new Date().toISOString() }));
+    res.status(201).json({ ok: true, credito: ins.rows[0] });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(JSON.stringify({ at: 'pacotes-vender', pg_code: e?.code, msg: 'falha ao vender pacote' }));
+    res.status(500).json({ error: 'erro ao vender pacote' });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/clones/:id/creditos — saldo de pacotes do clone. Filtro opcional ?telefone=.
+// Com ?telefone= hasheia e mostra so os creditos daquele cliente. Sem filtro, lista todos
+// os creditos do clone (saldo recomputado do ledger — fonte da verdade).
+app.get('/api/clones/:id/creditos', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+
+    const params = [slot, tenant_id];
+    let phoneClause = '';
+    let filtroHint = null;
+    if (req.query?.telefone) {
+      if (!_pkgIsPepperConfigured()) {
+        return res.status(409).json({ error: 'busca por telefone indisponivel: PACKAGE_PHONE_PEPPER nao configurada' });
+      }
+      const canonical = _pkgCanonicalE164(req.query.telefone);
+      if (!canonical) return res.status(400).json({ error: 'telefone invalido' });
+      params.push(_pkgPhoneHmac(canonical));
+      phoneClause = ` AND c.cliente_phone_hmac = $${params.length}`;
+      filtroHint = _pkgPhoneHint(canonical);
+    }
+
+    const r = await pool.query(
+      `SELECT c.id AS credit_id, c.package_id, sp.nome AS pacote_nome,
+              c.cliente_phone_hint, c.sessoes_total,
+              (c.sessoes_total + COALESCE(SUM(pr.delta), 0)) AS saldo,
+              to_char(c.data_expiracao,'YYYY-MM-DD') AS data_expiracao,
+              (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
+              c.status, sp.servicos_cobertos, sp.colaborador_id, c.data_compra
+         FROM client_package_credits c
+         JOIN service_packages sp ON sp.id = c.package_id
+         LEFT JOIN package_redemptions pr ON pr.credit_id = c.id
+        WHERE c.slot = $1 AND c.tenant_id = $2${phoneClause}
+        GROUP BY c.id, sp.nome, sp.servicos_cobertos, sp.colaborador_id
+        ORDER BY c.data_expiracao ASC, c.data_compra ASC`,
+      params,
+    );
+    const creditos = r.rows.map((row) => {
+      const saldo = Math.max(0, Number(row.saldo));
+      let estado = 'ATIVO';
+      if (row.status === 'cancelled') estado = 'CANCELADO';
+      else if (row.expirado) estado = 'EXPIRADO';
+      else if (saldo <= 0) estado = 'ESGOTADO';
+      return {
+        credit_id: Number(row.credit_id), package_id: Number(row.package_id), pacote_nome: row.pacote_nome,
+        cliente_phone_hint: row.cliente_phone_hint, sessoes_total: Number(row.sessoes_total),
+        saldo, data_expiracao: row.data_expiracao, estado,
+        servicos_cobertos: Array.isArray(row.servicos_cobertos) ? row.servicos_cobertos : [],
+        colaborador_id: row.colaborador_id === null ? null : Number(row.colaborador_id),
+        data_compra: row.data_compra,
+      };
+    });
+    res.json({ filtro_hint: filtroHint, total: creditos.length, creditos });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'pacotes-creditos', pg_code: e?.code, msg: 'falha ao listar creditos' }));
+    res.status(500).json({ error: 'erro ao listar creditos' });
+  }
+});
+
+// GET /api/clones/:id/creditos/:creditId/extrato — ledger (movimentos) de um credito.
+app.get('/api/clones/:id/creditos/:creditId/extrato', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot } = resolved.scope;
+    const creditId = Number(req.params.creditId);
+    if (!Number.isInteger(creditId) || creditId <= 0) return res.status(400).json({ error: 'creditId invalido' });
+    // Confirma que o credito e deste clone antes de expor o ledger (isolamento).
+    const own = await pool.query(`SELECT 1 FROM client_package_credits WHERE id = $1 AND slot = $2`, [creditId, slot]);
+    if ((own.rowCount ?? 0) === 0) return res.status(404).json({ error: 'credito nao encontrado neste clone' });
+    const r = await pool.query(
+      `SELECT id, gcal_event_id, colaborador_id, servico_nome, delta, reason, created_at
+         FROM package_redemptions WHERE credit_id = $1 AND slot = $2 ORDER BY created_at ASC, id ASC`,
+      [creditId, slot],
+    );
+    res.json({ credit_id: creditId, movimentos: r.rows });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'pacotes-extrato', pg_code: e?.code, msg: 'falha ao ler extrato' }));
+    res.status(500).json({ error: 'erro ao ler extrato' });
   }
 });
 
