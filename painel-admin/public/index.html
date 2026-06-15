@@ -8455,8 +8455,13 @@ function openCloneConfigModal(clone) {
   let _cfgCloneTab = 'dados';
 
   function renderConfigModal() {
-    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos', 'media', 'galeria', 'prompt', 'ia', 'sessao', 'gcal', 'pausa', 'suspensao'];
-    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa', suspensao: '⏸ Suspensão' };
+    // Aba "Colaboradores" so para clientes do tipo estabelecimento (Salao da Bruna).
+    // "Pacotes" vale para qualquer cliente (individual tambem vende pacote — ADR 0025).
+    const isEstab = clone.product_type === 'estabelecimento';
+    const tabNames = ['dados', 'personalizacao', 'horarios', 'servicos',
+      ...(isEstab ? ['colaboradores'] : []), 'pacotes',
+      'media', 'galeria', 'prompt', 'ia', 'sessao', 'gcal', 'pausa', 'suspensao'];
+    const tabLabels = { dados: 'Dados', personalizacao: 'Personalização', horarios: 'Horários', servicos: 'Serviços', colaboradores: '👥 Colaboradores', pacotes: '🎟 Pacotes', media: 'Mídias', galeria: 'Galeria', prompt: 'Prompt', ia: 'Modelo & IA', sessao: 'Sessão WAHA', gcal: 'Google Calendar', pausa: 'Pausa', suspensao: '⏸ Suspensão' };
 
     const tabsHtml = tabNames.map(t => {
       // Aba Suspensão ganha cor de danger quando fluxo está suspenso (aviso visual permanente)
@@ -8694,6 +8699,457 @@ function _renderServicosTab(opts) {
   });
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+ * COLABORADORES (estabelecimento) + PACOTES — Bloco 3 (CRUD na gestao).
+ * ADR 0023 (colaboradores) + ADR 0025 (pacotes). Escopado por clone.id; o
+ * servidor resolve slot+tenant_id e isola. Padrao IIFE-namespaced p/ nao poluir
+ * o escopo global do arquivo legado (lição feedback_patches_arquivo_legado).
+ * ════════════════════════════════════════════════════════════════════════════ */
+const PacotesUI = (() => {
+  // Lista de checkboxes de servicos a partir dos nomes em clone.servicos[].nome.
+  function _servicosChecklist(cloneServicos, selected, namePrefix) {
+    const nomes = (Array.isArray(cloneServicos) ? cloneServicos : [])
+      .map(s => (s && typeof s === 'object' ? s.nome : s))
+      .filter(n => typeof n === 'string' && n.trim());
+    const sel = new Set((selected || []).map(s => String(s).toLowerCase()));
+    if (nomes.length === 0) {
+      return `<p class="muted" style="font-size:.78rem">Nenhum serviço cadastrado neste cliente ainda — cadastre na aba <b>Serviços</b> primeiro.</p>`;
+    }
+    return `<div style="display:flex;flex-wrap:wrap;gap:.4rem">` + nomes.map((n, i) => `
+      <label style="display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--border);border-radius:var(--radius-md);padding:.25rem .55rem;font-size:.8rem;cursor:pointer">
+        <input type="checkbox" class="${namePrefix}-sv" value="${escapeHtml(n)}" ${sel.has(n.toLowerCase()) ? 'checked' : ''} />
+        <span>${escapeHtml(n)}</span>
+      </label>`).join('') + `</div>`;
+  }
+  function _collectChecked(container, sel) {
+    return Array.from(container.querySelectorAll(sel)).filter(c => c.checked).map(c => c.value);
+  }
+  function _fmtCents(cents) {
+    if (cents == null || cents === '') return '—';
+    return 'R$ ' + (Number(cents) / 100).toFixed(2).replace('.', ',');
+  }
+  function _estadoBadge(estado) {
+    const map = {
+      ATIVO: 'badge--success', ESGOTADO: 'badge--warning',
+      EXPIRADO: 'badge--danger', CANCELADO: 'badge--muted',
+    };
+    return `<span class="badge ${map[estado] || 'badge--muted'}">${escapeHtml(estado)}</span>`;
+  }
+  return { _servicosChecklist, _collectChecked, _fmtCents, _estadoBadge };
+})();
+
+/* ── Aba COLABORADORES ──────────────────────────────────────────────────────── */
+async function _renderColaboradoresTab(content, clone) {
+  content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+  let data;
+  try {
+    data = await api(`/api/clones/${clone.id}/colaboradores`);
+  } catch (err) {
+    content.innerHTML = `<p class="muted" style="color:var(--danger);padding-top:.75rem">${icon('alert-triangle',14)} Falha ao carregar colaboradores: ${escapeHtml(err.message)}</p>`;
+    const retry = document.createElement('button');
+    retry.className = 'btn btn--sm';
+    retry.style.marginTop = '.5rem';
+    retry.innerHTML = `${icon('refresh-cw',13)} Tentar de novo`;
+    retry.addEventListener('click', () => _renderColaboradoresTab(content, clone));
+    content.appendChild(retry);
+    return;
+  }
+  const vagasLabel = data.seat_cap === null
+    ? `${data.usados} colaborador${data.usados === 1 ? '' : 'es'} ativo${data.usados === 1 ? '' : 's'} (plano sem teto)`
+    : `${data.usados} de ${data.seat_cap} vaga${data.seat_cap === 1 ? '' : 's'} do plano em uso`;
+  const cheio = data.seat_cap !== null && data.usados >= data.seat_cap;
+
+  const linhas = (data.colaboradores || []).map(c => {
+    const svcs = Array.isArray(c.servicos) && c.servicos.length
+      ? c.servicos.map(s => `<span class="badge badge--muted" style="font-size:.65rem">${escapeHtml(s)}</span>`).join(' ')
+      : '<span class="muted" style="font-size:.72rem">todos / não especificado</span>';
+    const gcalOk = c.gcal_calendar_id && String(c.gcal_calendar_id).trim();
+    return `
+      <div class="colab-row" data-colab-id="${c.id}" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.65rem .75rem;display:flex;flex-direction:column;gap:.4rem;${c.ativo ? '' : 'opacity:.6'}">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+          <strong>${escapeHtml(c.nome)}</strong>
+          ${c.ativo ? '<span class="badge badge--success" style="font-size:.62rem">Ativo</span>' : '<span class="badge badge--muted" style="font-size:.62rem">Inativo</span>'}
+          ${gcalOk ? `<span class="badge badge--success" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('calendar',10)} Agenda OK</span>` : `<span class="badge badge--warning" style="font-size:.62rem">${icon('alert-triangle',10)} Sem agenda</span>`}
+          <span style="margin-left:auto;display:flex;gap:.35rem">
+            <button class="btn btn--sm colab-edit" data-id="${c.id}">${icon('settings',13)} Editar</button>
+            <button class="btn btn--sm btn--ghost btn--icon colab-del" data-id="${c.id}" style="color:var(--danger)" aria-label="Remover ${escapeHtml(c.nome)}">${icon('trash-2',13)}</button>
+          </span>
+        </div>
+        <div style="display:flex;gap:.3rem;flex-wrap:wrap;align-items:center">${svcs}</div>
+      </div>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <span class="badge ${cheio ? 'badge--warning' : 'badge--muted'}">${icon('users',12)} ${escapeHtml(vagasLabel)}</span>
+        <button class="btn btn--primary btn--sm" id="colab-add-btn" ${cheio ? 'disabled title="Limite do plano atingido — aumente as vagas em Dados"' : ''} style="margin-left:auto">${icon('plus',13)} Adicionar colaborador</button>
+      </div>
+      <div id="colab-form-wrap"></div>
+      <div id="colab-list" style="display:flex;flex-direction:column;gap:.5rem">${linhas || '<p class="muted">Nenhum colaborador cadastrado. Adicione o primeiro.</p>'}</div>
+    </div>`;
+
+  const addBtn = content.querySelector('#colab-add-btn');
+  if (addBtn) addBtn.addEventListener('click', () => _renderColaboradorForm(content, clone, null));
+  content.querySelectorAll('.colab-edit').forEach(b => b.addEventListener('click', () => {
+    const c = (data.colaboradores || []).find(x => String(x.id) === b.dataset.id);
+    _renderColaboradorForm(content, clone, c);
+  }));
+  content.querySelectorAll('.colab-del').forEach(b => b.addEventListener('click', async () => {
+    const c = (data.colaboradores || []).find(x => String(x.id) === b.dataset.id);
+    if (!confirm(`Remover o colaborador "${c?.nome || ''}"? A agenda dele deixa de ser usada pelo bot.`)) return;
+    try {
+      await api(`/api/clones/${clone.id}/colaboradores/${b.dataset.id}`, { method: 'DELETE' });
+      toast('Colaborador removido.', 'success');
+      _renderColaboradoresTab(content, clone);
+    } catch (err) { toast('Erro: ' + err.message, 'danger'); }
+  }));
+}
+
+function _renderColaboradorForm(content, clone, colab) {
+  const wrap = content.querySelector('#colab-form-wrap');
+  if (!wrap) return;
+  const isEdit = !!colab;
+  wrap.innerHTML = `
+    <form id="colab-form" style="border:1px solid var(--accent);border-radius:var(--radius-md);padding:.85rem;display:flex;flex-direction:column;gap:.7rem;background:rgba(255,255,255,.02)">
+      <strong style="font-size:.9rem">${isEdit ? 'Editar colaborador' : 'Novo colaborador'}</strong>
+      <div class="field">
+        <label for="colab-nome">Nome</label>
+        <input id="colab-nome" type="text" maxlength="160" value="${escapeHtml(colab?.nome || '')}" placeholder="ex: Maria" />
+      </div>
+      <div class="field">
+        <label for="colab-gcal">ID da agenda Google (calendarId)</label>
+        <input id="colab-gcal" type="text" maxlength="500" value="${escapeHtml(colab?.gcal_calendar_id || '')}" placeholder="colar o ID da agenda Google (ex: abc123@group.calendar.google.com)" />
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">Crie uma agenda Google para este colaborador, compartilhe com a conta de serviço e cole o ID aqui. (Criar a agenda automaticamente é um próximo passo — por ora é manual.)</p>
+      </div>
+      <div class="field">
+        <label>Serviços que faz</label>
+        ${PacotesUI._servicosChecklist(clone.servicos, colab?.servicos, 'colab')}
+      </div>
+      <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap">
+        <label style="display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer">
+          <input type="checkbox" id="colab-ativo" ${colab ? (colab.ativo ? 'checked' : '') : 'checked'} /> Ativo
+        </label>
+        <div style="display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem">
+          <label for="colab-ordem">Ordem</label>
+          <input id="colab-ordem" type="number" step="1" min="0" max="999" style="width:5rem" value="${Number.isInteger(Number(colab?.ordem)) ? Number(colab.ordem) : 0}" />
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button type="submit" class="btn btn--primary btn--sm">${icon('check-circle-2',13)} ${isEdit ? 'Salvar' : 'Adicionar'}</button>
+        <button type="button" class="btn btn--sm" id="colab-cancel">Cancelar</button>
+      </div>
+    </form>`;
+  wrap.querySelector('#colab-cancel').addEventListener('click', () => { wrap.innerHTML = ''; });
+  wrap.querySelector('#colab-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    const body = {
+      nome: (wrap.querySelector('#colab-nome').value || '').trim(),
+      gcal_calendar_id: (wrap.querySelector('#colab-gcal').value || '').trim() || null,
+      servicos: PacotesUI._collectChecked(wrap, '.colab-sv'),
+      ativo: wrap.querySelector('#colab-ativo').checked,
+      ordem: Number(wrap.querySelector('#colab-ordem').value || 0),
+    };
+    if (!body.nome) { toast('Informe o nome do colaborador.', 'warning'); btn.disabled = false; return; }
+    try {
+      const url = isEdit
+        ? `/api/clones/${clone.id}/colaboradores/${colab.id}`
+        : `/api/clones/${clone.id}/colaboradores`;
+      await api(url, {
+        method: isEdit ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast(isEdit ? 'Colaborador atualizado!' : 'Colaborador adicionado!', 'success');
+      _renderColaboradoresTab(content, clone);
+    } catch (err) {
+      toast('Erro: ' + err.message, 'danger');
+      btn.disabled = false;
+    }
+  });
+  wrap.querySelector('#colab-nome')?.focus();
+}
+
+/* ── Aba PACOTES (templates + venda + saldo) ────────────────────────────────── */
+let _pacotesSubTab = 'templates';
+async function _renderPacotesTab(content, clone) {
+  content.innerHTML = `
+    <div style="padding-top:.5rem">
+      <div class="tabs" id="pacotes-subtabs" style="margin-bottom:.5rem">
+        <button class="tab-btn${_pacotesSubTab === 'templates' ? ' active' : ''}" data-sub="templates">Pacotes oferecidos</button>
+        <button class="tab-btn${_pacotesSubTab === 'saldo' ? ' active' : ''}" data-sub="saldo">Saldo dos clientes</button>
+      </div>
+      <div id="pacotes-sub-content"></div>
+    </div>`;
+  content.querySelectorAll('#pacotes-subtabs .tab-btn').forEach(b => b.addEventListener('click', () => {
+    _pacotesSubTab = b.dataset.sub;
+    content.querySelectorAll('#pacotes-subtabs .tab-btn').forEach(x => x.classList.toggle('active', x.dataset.sub === _pacotesSubTab));
+    _loadPacotesSub(content, clone);
+  }));
+  _loadPacotesSub(content, clone);
+}
+
+function _loadPacotesSub(content, clone) {
+  const sub = content.querySelector('#pacotes-sub-content');
+  if (_pacotesSubTab === 'saldo') return _renderPacotesSaldo(sub, clone);
+  return _renderPacotesTemplates(sub, clone);
+}
+
+async function _renderPacotesTemplates(sub, clone) {
+  sub.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+  let data;
+  try { data = await api(`/api/clones/${clone.id}/pacotes`); }
+  catch (err) { sub.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`; return; }
+
+  const colabById = Object.fromEntries((data.colaboradores || []).map(c => [String(c.id), c.nome]));
+  const cards = (data.pacotes || []).map(p => {
+    const validade = p.validade_dias != null
+      ? `vale ${p.validade_dias} dia${p.validade_dias === 1 ? '' : 's'} após a compra`
+      : (p.data_validade_fixa ? `vale até ${p.data_validade_fixa}` : 'sem validade');
+    const escopo = p.colaborador_id != null
+      ? `só com ${escapeHtml(colabById[String(p.colaborador_id)] || 'colaborador')}`
+      : 'casa inteira';
+    const cobre = Array.isArray(p.servicos_cobertos) && p.servicos_cobertos.length
+      ? p.servicos_cobertos.map(s => escapeHtml(s)).join(', ')
+      : 'todos os serviços';
+    return `
+      <div class="pkg-card" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.7rem .8rem;display:flex;flex-direction:column;gap:.35rem;${p.ativo ? '' : 'opacity:.55'}">
+        <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+          <strong>${escapeHtml(p.nome)}</strong>
+          ${p.ativo ? '<span class="badge badge--success" style="font-size:.62rem">Ativo</span>' : '<span class="badge badge--muted" style="font-size:.62rem">Inativo</span>'}
+          <span class="badge badge--muted" style="font-size:.62rem">${p.total_sessoes} sessões</span>
+          <span class="badge badge--muted" style="font-size:.62rem">${PacotesUI._fmtCents(p.preco_cents)}</span>
+          <span style="margin-left:auto;display:flex;gap:.35rem">
+            <button class="btn btn--primary btn--sm pkg-sell" data-id="${p.id}" ${p.ativo ? '' : 'disabled title="Ative o pacote para vender"'}>${icon('plus',12)} Vender</button>
+            <button class="btn btn--sm pkg-edit" data-id="${p.id}">${icon('settings',13)}</button>
+            <button class="btn btn--sm btn--ghost btn--icon pkg-del" data-id="${p.id}" style="color:var(--danger)" aria-label="Excluir">${icon('trash-2',13)}</button>
+          </span>
+        </div>
+        <div class="muted" style="font-size:.76rem">Cobre: ${cobre} · ${escapeHtml(escopo)} · ${escapeHtml(validade)}</div>
+        ${p.descricao ? `<div class="muted" style="font-size:.74rem">${escapeHtml(p.descricao)}</div>` : ''}
+      </div>`;
+  }).join('');
+
+  sub.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:.75rem">
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <p class="muted" style="font-size:.78rem;margin:0;flex:1">O dinheiro do pacote é seu — combine o valor direto com seu cliente. A gente só controla o saldo de sessões.</p>
+        <button class="btn btn--primary btn--sm" id="pkg-new-btn">${icon('plus',13)} Novo pacote</button>
+      </div>
+      <div id="pkg-form-wrap"></div>
+      <div id="pkg-list" style="display:flex;flex-direction:column;gap:.5rem">${cards || '<p class="muted">Nenhum pacote definido ainda. Crie o primeiro.</p>'}</div>
+    </div>`;
+
+  sub.querySelector('#pkg-new-btn').addEventListener('click', () => _renderPacoteForm(sub, clone, null, data.colaboradores));
+  sub.querySelectorAll('.pkg-edit').forEach(b => b.addEventListener('click', () => {
+    const p = (data.pacotes || []).find(x => String(x.id) === b.dataset.id);
+    _renderPacoteForm(sub, clone, p, data.colaboradores);
+  }));
+  sub.querySelectorAll('.pkg-sell').forEach(b => b.addEventListener('click', () => {
+    const p = (data.pacotes || []).find(x => String(x.id) === b.dataset.id);
+    _renderVenderForm(sub, clone, p);
+  }));
+  sub.querySelectorAll('.pkg-del').forEach(b => b.addEventListener('click', async () => {
+    const p = (data.pacotes || []).find(x => String(x.id) === b.dataset.id);
+    if (!confirm(`Excluir o pacote "${p?.nome || ''}"? (Se já foi vendido, prefira desativar.)`)) return;
+    try {
+      await api(`/api/clones/${clone.id}/pacotes/${b.dataset.id}`, { method: 'DELETE' });
+      toast('Pacote excluído.', 'success');
+      _renderPacotesTemplates(sub, clone);
+    } catch (err) { toast('Erro: ' + err.message, 'danger'); }
+  }));
+}
+
+function _renderPacoteForm(sub, clone, pkg, colaboradores) {
+  const wrap = sub.querySelector('#pkg-form-wrap');
+  if (!wrap) return;
+  const isEdit = !!pkg;
+  const usaData = pkg && pkg.data_validade_fixa != null;
+  const colabOpts = (colaboradores || []).map(c =>
+    `<option value="${c.id}" ${pkg && String(pkg.colaborador_id) === String(c.id) ? 'selected' : ''}>${escapeHtml(c.nome)}</option>`).join('');
+  wrap.innerHTML = `
+    <form id="pkg-form" style="border:1px solid var(--accent);border-radius:var(--radius-md);padding:.85rem;display:flex;flex-direction:column;gap:.7rem;background:rgba(255,255,255,.02)">
+      <strong style="font-size:.9rem">${isEdit ? 'Editar pacote' : 'Novo pacote'}</strong>
+      <div class="field"><label for="pkg-nome">Nome</label>
+        <input id="pkg-nome" type="text" maxlength="160" value="${escapeHtml(pkg?.nome || '')}" placeholder="ex: Combo 5 cortes" /></div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:120px"><label for="pkg-sessoes">Total de sessões</label>
+          <input id="pkg-sessoes" type="number" min="1" max="1000" step="1" value="${pkg?.total_sessoes || ''}" placeholder="ex: 5" /></div>
+        <div class="field" style="flex:1;min-width:120px"><label for="pkg-preco">Valor (R$) — informativo</label>
+          <input id="pkg-preco" type="number" min="0" step="0.01" value="${pkg?.preco_cents != null ? (Number(pkg.preco_cents)/100).toFixed(2) : ''}" placeholder="0,00" /></div>
+      </div>
+      <p class="muted" style="font-size:.72rem;margin:-.3rem 0 0">O dinheiro do pacote é seu, combine com seu cliente; a gente só controla o saldo.</p>
+      <div class="field"><label>Validade</label>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center">
+          <label style="display:inline-flex;gap:.35rem;align-items:center;font-size:.85rem"><input type="radio" name="pkg-val-mode" value="dias" ${usaData ? '' : 'checked'} /> Vale X dias</label>
+          <input id="pkg-val-dias" type="number" min="1" max="3650" step="1" style="width:6rem" value="${pkg?.validade_dias != null ? pkg.validade_dias : ''}" placeholder="dias" ${usaData ? 'disabled' : ''} />
+          <label style="display:inline-flex;gap:.35rem;align-items:center;font-size:.85rem"><input type="radio" name="pkg-val-mode" value="data" ${usaData ? 'checked' : ''} /> Vale até</label>
+          <input id="pkg-val-data" type="date" value="${pkg?.data_validade_fixa || ''}" ${usaData ? '' : 'disabled'} />
+        </div>
+      </div>
+      <div class="field"><label>Serviços cobertos (vazio = todos)</label>
+        ${PacotesUI._servicosChecklist(clone.servicos, pkg?.servicos_cobertos, 'pkg')}
+      </div>
+      ${clone.product_type === 'estabelecimento' ? `
+      <div class="field"><label for="pkg-escopo">Escopo</label>
+        <select id="pkg-escopo">
+          <option value="">Casa inteira (qualquer colaborador)</option>
+          ${colabOpts}
+        </select></div>` : ''}
+      <label style="display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer">
+        <input type="checkbox" id="pkg-ativo" ${pkg ? (pkg.ativo ? 'checked' : '') : 'checked'} /> Ativo (aparece para vender)
+      </label>
+      <div style="display:flex;gap:.5rem">
+        <button type="submit" class="btn btn--primary btn--sm">${icon('check-circle-2',13)} ${isEdit ? 'Salvar' : 'Criar pacote'}</button>
+        <button type="button" class="btn btn--sm" id="pkg-cancel">Cancelar</button>
+      </div>
+    </form>`;
+  // Toggle dias/data
+  wrap.querySelectorAll('input[name="pkg-val-mode"]').forEach(r => r.addEventListener('change', () => {
+    const isDias = wrap.querySelector('input[name="pkg-val-mode"]:checked').value === 'dias';
+    wrap.querySelector('#pkg-val-dias').disabled = !isDias;
+    wrap.querySelector('#pkg-val-data').disabled = isDias;
+  }));
+  wrap.querySelector('#pkg-cancel').addEventListener('click', () => { wrap.innerHTML = ''; });
+  wrap.querySelector('#pkg-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    const mode = wrap.querySelector('input[name="pkg-val-mode"]:checked').value;
+    const precoStr = (wrap.querySelector('#pkg-preco').value || '').trim();
+    const escopoSel = wrap.querySelector('#pkg-escopo');
+    const body = {
+      nome: (wrap.querySelector('#pkg-nome').value || '').trim(),
+      total_sessoes: Number(wrap.querySelector('#pkg-sessoes').value || 0),
+      preco_cents: precoStr === '' ? null : Math.round(Number(precoStr) * 100),
+      servicos_cobertos: PacotesUI._collectChecked(wrap, '.pkg-sv'),
+      validade_dias: mode === 'dias' ? Number(wrap.querySelector('#pkg-val-dias').value || 0) || null : null,
+      data_validade_fixa: mode === 'data' ? (wrap.querySelector('#pkg-val-data').value || null) : null,
+      colaborador_id: escopoSel && escopoSel.value ? Number(escopoSel.value) : null,
+      ativo: wrap.querySelector('#pkg-ativo').checked,
+    };
+    if (!body.nome) { toast('Informe o nome do pacote.', 'warning'); btn.disabled = false; return; }
+    if (!Number.isInteger(body.total_sessoes) || body.total_sessoes < 1) { toast('Informe o total de sessões.', 'warning'); btn.disabled = false; return; }
+    if (mode === 'dias' && !body.validade_dias) { toast('Informe a validade em dias.', 'warning'); btn.disabled = false; return; }
+    if (mode === 'data' && !body.data_validade_fixa) { toast('Informe a data de validade.', 'warning'); btn.disabled = false; return; }
+    try {
+      const url = isEdit ? `/api/clones/${clone.id}/pacotes/${pkg.id}` : `/api/clones/${clone.id}/pacotes`;
+      await api(url, { method: isEdit ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      toast(isEdit ? 'Pacote atualizado!' : 'Pacote criado!', 'success');
+      _renderPacotesTemplates(sub, clone);
+    } catch (err) { toast('Erro: ' + err.message, 'danger'); btn.disabled = false; }
+  });
+  wrap.querySelector('#pkg-nome')?.focus();
+}
+
+function _renderVenderForm(sub, clone, pkg) {
+  const wrap = sub.querySelector('#pkg-form-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = `
+    <form id="vender-form" style="border:1px solid var(--accent);border-radius:var(--radius-md);padding:.85rem;display:flex;flex-direction:column;gap:.7rem;background:rgba(255,255,255,.02)">
+      <strong style="font-size:.9rem">Vender "${escapeHtml(pkg.nome)}" a um cliente</strong>
+      <div class="field"><label for="vender-tel">Telefone do cliente (WhatsApp)</label>
+        <input id="vender-tel" type="tel" placeholder="(31) 99999-8842" />
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">O número é guardado de forma segura (só o final fica visível). É a chave do saldo dele.</p></div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:110px"><label for="vender-sessoes">Sessões</label>
+          <input id="vender-sessoes" type="number" min="1" max="1000" step="1" value="${pkg.total_sessoes}" /></div>
+        <div class="field" style="flex:1;min-width:140px"><label for="vender-dias">Validade (dias) — opcional</label>
+          <input id="vender-dias" type="number" min="1" max="3650" step="1" placeholder="${pkg.validade_dias != null ? pkg.validade_dias : 'padrão do pacote'}" /></div>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button type="submit" class="btn btn--primary btn--sm">${icon('check-circle-2',13)} Confirmar venda</button>
+        <button type="button" class="btn btn--sm" id="vender-cancel">Cancelar</button>
+      </div>
+    </form>`;
+  wrap.querySelector('#vender-cancel').addEventListener('click', () => { wrap.innerHTML = ''; });
+  wrap.querySelector('#vender-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = ev.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    const tel = (wrap.querySelector('#vender-tel').value || '').trim();
+    if (!tel) { toast('Informe o telefone do cliente.', 'warning'); btn.disabled = false; return; }
+    const dias = (wrap.querySelector('#vender-dias').value || '').trim();
+    const body = {
+      telefone: tel,
+      sessoes: Number(wrap.querySelector('#vender-sessoes').value || pkg.total_sessoes),
+    };
+    if (dias) body.validade_dias = Number(dias);
+    try {
+      const r = await api(`/api/clones/${clone.id}/pacotes/${pkg.id}/vender`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      toast(`Pacote vendido! ${r.credito?.sessoes_total || ''} sessões para ${r.credito?.cliente_phone_hint || 'o cliente'}.`, 'success');
+      wrap.innerHTML = '';
+      _pacotesSubTab = 'saldo';
+      // recarrega a aba pacotes inteira pra ir pro saldo
+      const content = sub.closest('#cfg-clone-tab-content') || sub.parentElement;
+      if (content) _renderPacotesTab(content, clone);
+    } catch (err) { toast('Erro: ' + err.message, 'danger'); btn.disabled = false; }
+  });
+  wrap.querySelector('#vender-tel')?.focus();
+}
+
+async function _renderPacotesSaldo(sub, clone) {
+  sub.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:.75rem">
+      <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label for="saldo-tel">Buscar por telefone (opcional)</label>
+          <input id="saldo-tel" type="tel" placeholder="(31) 99999-8842" /></div>
+        <button class="btn btn--sm" id="saldo-buscar">${icon('search',13)} Buscar</button>
+        <button class="btn btn--sm btn--ghost" id="saldo-todos">Ver todos</button>
+      </div>
+      <div id="saldo-list"></div>
+    </div>`;
+  const listEl = sub.querySelector('#saldo-list');
+  async function carregar(tel) {
+    listEl.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
+    try {
+      const q = tel ? `?telefone=${encodeURIComponent(tel)}` : '';
+      const data = await api(`/api/clones/${clone.id}/creditos${q}`);
+      if (!data.creditos || data.creditos.length === 0) {
+        listEl.innerHTML = `<p class="muted">${tel ? 'Nenhum pacote para esse telefone.' : 'Nenhum pacote vendido ainda.'}</p>`;
+        return;
+      }
+      listEl.innerHTML = data.creditos.map(c => `
+        <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.6rem .75rem;display:flex;flex-direction:column;gap:.3rem;margin-bottom:.5rem">
+          <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+            <strong>${escapeHtml(c.pacote_nome)}</strong>
+            ${PacotesUI._estadoBadge(c.estado)}
+            <span class="badge badge--muted" style="font-size:.65rem">${escapeHtml(c.cliente_phone_hint || '')}</span>
+            <span style="margin-left:auto;font-weight:600">${c.saldo} / ${c.sessoes_total} sessões</span>
+          </div>
+          <div class="muted" style="font-size:.74rem">Vence em ${escapeHtml(c.data_expiracao)}${(Array.isArray(c.servicos_cobertos)&&c.servicos_cobertos.length)?' · cobre: '+c.servicos_cobertos.map(escapeHtml).join(', '):''}
+            <button class="btn btn--ghost btn--sm saldo-extrato" data-id="${c.credit_id}" style="margin-left:.5rem">${icon('list',12)} Extrato</button></div>
+          <div class="saldo-extrato-box" data-box="${c.credit_id}"></div>
+        </div>`).join('');
+      listEl.querySelectorAll('.saldo-extrato').forEach(b => b.addEventListener('click', async () => {
+        const box = listEl.querySelector(`.saldo-extrato-box[data-box="${b.dataset.id}"]`);
+        if (box.innerHTML) { box.innerHTML = ''; return; }
+        box.innerHTML = `<div class="spinner" style="margin:.5rem 0"></div>`;
+        try {
+          const ex = await api(`/api/clones/${clone.id}/creditos/${b.dataset.id}/extrato`);
+          if (!ex.movimentos || ex.movimentos.length === 0) { box.innerHTML = `<p class="muted" style="font-size:.74rem">Sem movimentos ainda (nenhuma sessão usada).</p>`; return; }
+          box.innerHTML = `<div style="border-top:1px solid var(--border);margin-top:.4rem;padding-top:.4rem;display:flex;flex-direction:column;gap:.2rem">` +
+            ex.movimentos.map(m => {
+              const sinal = m.delta < 0 ? `−${Math.abs(m.delta)}` : `+${m.delta}`;
+              const lbl = { redeem: 'Sessão usada', refund: 'Estorno', adjust: 'Ajuste' }[m.reason] || m.reason;
+              return `<div style="font-size:.74rem;display:flex;gap:.5rem"><span style="font-weight:600;color:${m.delta<0?'var(--danger)':'var(--success,#4caf50)'}">${sinal}</span><span>${escapeHtml(lbl)}</span><span class="muted">${m.servico_nome ? escapeHtml(m.servico_nome)+' · ' : ''}${escapeHtml(fmtRelative(m.created_at))}</span></div>`;
+            }).join('') + `</div>`;
+        } catch (err) { box.innerHTML = `<p class="muted" style="color:var(--danger);font-size:.74rem">${escapeHtml(err.message)}</p>`; }
+      }));
+    } catch (err) {
+      listEl.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
+    }
+  }
+  sub.querySelector('#saldo-buscar').addEventListener('click', () => carregar((sub.querySelector('#saldo-tel').value || '').trim()));
+  sub.querySelector('#saldo-todos').addEventListener('click', () => { sub.querySelector('#saldo-tel').value = ''; carregar(''); });
+  sub.querySelector('#saldo-tel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); carregar((e.target.value || '').trim()); } });
+  carregar('');
+}
+
 /**
  * Helper reutilizavel: renderiza editor de chave-valor de personalizacao.
  * Usado pela aba "Personalizacao" da matriz (loadBotTab) e do clone (loadCloneConfigTab).
@@ -8786,13 +9242,35 @@ function loadCloneConfigTab(tab, clone) {
           <label for="cd-cliente-tel">Telefone do cliente</label>
           <input id="cd-cliente-tel" type="tel" value="${escapeHtml(clone.cliente_telefone || '')}" maxlength="20" />
         </div>
+        <div class="field">
+          <label for="cd-product-type">Tipo de conta</label>
+          <select id="cd-product-type">
+            <option value="individual"${clone.product_type !== 'estabelecimento' ? ' selected' : ''}>Individual (1 agenda)</option>
+            <option value="estabelecimento"${clone.product_type === 'estabelecimento' ? ' selected' : ''}>Estabelecimento (vários colaboradores)</option>
+          </select>
+          <p class="muted" style="font-size:.75rem;margin:.25rem 0 0">Estabelecimento libera a aba <b>Colaboradores</b> (cada um com sua agenda).</p>
+        </div>
+        <div class="field" id="cd-seatcap-field" style="${clone.product_type === 'estabelecimento' ? '' : 'display:none'}">
+          <label for="cd-seat-cap">Vagas do plano (colaboradores)</label>
+          <input id="cd-seat-cap" type="number" min="1" max="100" step="1" value="${Number.isInteger(Number(clone.seat_cap)) ? Number(clone.seat_cap) : ''}" placeholder="ex: 3" />
+          <p class="muted" style="font-size:.75rem;margin:.25rem 0 0">Quantos colaboradores ATIVOS o plano permite. Vazio = sem teto.</p>
+        </div>
         <button type="submit" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar</button>
       </form>`;
+
+    // Mostra/esconde campo de vagas conforme o tipo de conta.
+    content.querySelector('#cd-product-type')?.addEventListener('change', (ev) => {
+      const field = content.querySelector('#cd-seatcap-field');
+      if (field) field.style.display = ev.target.value === 'estabelecimento' ? '' : 'none';
+    });
 
     content.querySelector('#clone-dados-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const btn = ev.target.querySelector('[type=submit]');
       btn.disabled = true;
+      const productType = content.querySelector('#cd-product-type')?.value || 'individual';
+      const seatCapRaw = (content.querySelector('#cd-seat-cap')?.value || '').trim();
+      const seatCap = productType === 'estabelecimento' && seatCapRaw !== '' ? Number(seatCapRaw) : null;
       try {
         const updated = await api(`/api/clones/${clone.id}`, {
           method: 'PATCH',
@@ -8801,11 +9279,20 @@ function loadCloneConfigTab(tab, clone) {
             display_name:     (content.querySelector('#cd-display-name')?.value || '').trim() || undefined,
             cliente_nome:     (content.querySelector('#cd-cliente-nome')?.value || '').trim() || undefined,
             cliente_telefone: (content.querySelector('#cd-cliente-tel')?.value || '').trim() || undefined,
+            product_type:     productType,
+            seat_cap:         seatCap,
           }),
         });
         Object.assign(clone, updated);
         toast('Clone atualizado!', 'success');
         _rendered['bots'] = false;
+        // Tipo de conta mudou -> re-renderiza o modal pra refletir abas (Colaboradores).
+        loadCloneConfigTab('dados', clone);
+        const tabsEl = document.getElementById('cfg-clone-tabs');
+        if (tabsEl) {
+          const hasColab = !!tabsEl.querySelector('[data-tab="colaboradores"]');
+          if ((clone.product_type === 'estabelecimento') !== hasColab) openCloneConfigModal(clone);
+        }
       } catch (err) {
         toast('Erro: ' + err.message, 'danger');
       } finally { btn.disabled = false; }
@@ -8838,6 +9325,12 @@ function loadCloneConfigTab(tab, clone) {
       method: 'PATCH',
       onSaved: (updated) => Object.assign(clone, updated),
     });
+
+  } else if (tab === 'colaboradores') {
+    _renderColaboradoresTab(content, clone);
+
+  } else if (tab === 'pacotes') {
+    _renderPacotesTab(content, clone);
 
   } else if (tab === 'media') {
     content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
