@@ -86,4 +86,9 @@ export type {
   PackageState,
   ServicePackageTemplate,
   ClientPackageCredit,
+  RedeemMotivo,
+  RedeemResult,
+  RedeemForBookingInput,
+  RefundForBookingInput,
+  RefundResult,
 } from './queries/packages.js';

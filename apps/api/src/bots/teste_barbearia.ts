@@ -1,5 +1,5 @@
 import type { BotContext } from '@startap/core/types';
-import { cloneColaboradores } from '@startap/db';
+import { cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
@@ -13,7 +13,12 @@ import {
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
 import { sendClientCancellationAlert } from '../lib/client-alert.js';
-import { buildSeuPacoteBlock, resolveClientPackages } from '../lib/package-context.js';
+import {
+  buildSeuPacoteBlock,
+  deduzirPacoteNoAgendamento,
+  resolveClientPackages,
+  servicoFromSummary,
+} from '../lib/package-context.js';
 import { renderPrompt } from '../lib/render-prompt.js';
 import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
@@ -219,18 +224,45 @@ export class TesteBarbeariaBot extends BotBase {
         name: 'inserir_agendamento',
         description:
           'Insere um agendamento no Google Calendar. Use APENAS apos o cliente confirmar com SIM. ' +
-          'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
+          'Summary: "[Nome] - [Servico] | WhatsApp: [numero]". Se houver [SEU PACOTE] e o ' +
+          'cliente quiser usar o pacote pra este servico, passe servico=<nome do servico> e ' +
+          'usa_pacote=true; o SISTEMA decide e desconta (voce NUNCA da baixa). Se for avulso, ' +
+          'usa_pacote=false. Em caso de duvida, deixe usa_pacote ausente (o sistema valida).',
         parameters: {
           type: 'object',
           properties: {
             summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
             start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
             end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
+            servico: {
+              type: 'string',
+              description:
+                'Nome do servico agendado (ex.: "Corte"). Usado pra checar cobertura de pacote. ' +
+                'Se vazio, o sistema tenta extrair do summary.',
+            },
+            usa_pacote: {
+              type: 'boolean',
+              description:
+                'SUGESTAO: true se o cliente quer usar o pacote pre-pago neste servico. O sistema ' +
+                're-valida cobertura/saldo/validade e decide; nunca confie nisto para o saldo.',
+            },
           },
           required: ['summary', 'start', 'end'],
         },
         run: async (args: unknown) => {
-          const { summary, start, end } = args as { summary: string; start: string; end: string };
+          const {
+            summary,
+            start,
+            end,
+            servico: servicoArg,
+            usa_pacote: usaPacoteArg,
+          } = args as {
+            summary: string;
+            start: string;
+            end: string;
+            servico?: unknown;
+            usa_pacote?: unknown;
+          };
 
           // Validação server-side: impede criação de evento com overlap real no Calendar.
           // O LLM pode alucinar disponibilidade — esta verificação é a fonte de verdade.
@@ -280,7 +312,15 @@ export class TesteBarbeariaBot extends BotBase {
           if (!config.IDEMPOTENCY_ACTION_LOCK) {
             const ev = await createEvent();
             this.log.info({ eventId: ev.id, summary: ev.summary, telefone }, 'Agendamento criado');
-            return { ok: true, eventId: ev.id, summary: ev.summary };
+            // Dedução de pacote (ADR 0025 2b) — gated por PACOTES_ENABLED; OFF = pula tudo.
+            const pacote = await this.maybeDeduzirPacote({
+              telefone,
+              eventId: ev.id,
+              summary,
+              servicoArg,
+              usaPacoteArg,
+            });
+            return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
           }
 
           // Flag ON -> envolve a criacao do evento com lock distribuido por
@@ -304,7 +344,16 @@ export class TesteBarbeariaBot extends BotBase {
             { eventId: ev.id, summary: ev.summary, telefone, degraded: lock.degraded },
             'Agendamento criado',
           );
-          return { ok: true, eventId: ev.id, summary: ev.summary };
+          // Dedução de pacote (ADR 0025 2b) sob o MESMO action-lock — gated; OFF = pula.
+          // Idempotente por UNIQUE(gcal_event_id,reason): retry do MESMO evento não duplica.
+          const pacote = await this.maybeDeduzirPacote({
+            telefone,
+            eventId: ev.id,
+            summary,
+            servicoArg,
+            usaPacoteArg,
+          });
+          return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
         },
       },
       {
@@ -453,6 +502,78 @@ export class TesteBarbeariaBot extends BotBase {
   }
 
   /**
+   * Dedução de pacote APÓS o evento existir no GCal (ADR 0025 BLOCO 2b). Gated por
+   * PACOTES_ENABLED no chamador. SEMPRE degrada para "avulso" sem nunca lançar — o evento
+   * já está na agenda; falha de pacote não derruba o atendimento (lição #247). Devolve os
+   * campos enriquecidos que vão na resposta da tool (descontou/sessoes_restantes/avulso/...).
+   *
+   * O telefone vem da CONVERSA (this) — nunca de campo livre do LLM. tenant_id é resolvido
+   * do clone (cache) como defesa em profundidade (P3 #320); ausência não bloqueia.
+   */
+  private async maybeDeduzirPacote(input: {
+    telefone: string;
+    eventId: string | undefined;
+    summary: string;
+    servicoArg: unknown;
+    usaPacoteArg: unknown;
+    colaboradorId?: number | null;
+  }): Promise<{
+    descontou_do_pacote: boolean;
+    avulso: boolean;
+    sessoes_restantes: number | null;
+    motivo: string;
+    pacote_nome?: string;
+    pacote_colaborador_id?: number | null;
+  } | null> {
+    if (!config.PACOTES_ENABLED) return null;
+    // Sem eventId (action-lock skip / criação degradada sem id) não há âncora de
+    // idempotência -> NÃO desconta (evita baixa sem rastro ligável ao evento).
+    if (!input.eventId) return null;
+
+    const servicoExplicito =
+      typeof input.servicoArg === 'string' && input.servicoArg.trim()
+        ? input.servicoArg.trim()
+        : servicoFromSummary(input.summary);
+    const usaPacote = typeof input.usaPacoteArg === 'boolean' ? input.usaPacoteArg : undefined;
+
+    let tenantId: string | undefined;
+    try {
+      const clone = await flowClones.getCloneBySlot(this.slot);
+      tenantId = clone?.tenant_id ?? undefined;
+    } catch {
+      tenantId = undefined; // defesa em profundidade — ausência não bloqueia (escopo por slot continua).
+    }
+
+    const r = await deduzirPacoteNoAgendamento({
+      slot: this.slot,
+      tenantId,
+      telefone: input.telefone,
+      gcalEventId: input.eventId,
+      servicoNome: servicoExplicito,
+      colaboradorId: input.colaboradorId ?? null,
+      usaPacote,
+    });
+    this.log.info(
+      {
+        slot: this.slot,
+        eventId: input.eventId,
+        descontou: r.descontou_do_pacote,
+        motivo: r.motivo,
+        sessoesRestantes: r.sessoes_restantes,
+      },
+      'pacote: resultado da deducao no agendamento',
+    );
+    return {
+      descontou_do_pacote: r.descontou_do_pacote,
+      avulso: r.avulso,
+      sessoes_restantes: r.sessoes_restantes,
+      motivo: r.motivo,
+      pacote_nome: r.pacote_nome,
+      pacote_colaborador_id: r.colaborador_id,
+    };
+  }
+
+  /**
    * Caminho ESTABELECIMENTO (ADR 0023/0024, Fase A — MVP). Só é alcançado quando
    * ESTABELECIMENTO_ENABLED=ON E product_type='estabelecimento' (gate feito em process).
    *
@@ -595,15 +716,34 @@ export class TesteBarbeariaBot extends BotBase {
             summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
             start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
             end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
+            servico: {
+              type: 'string',
+              description:
+                'Nome do servico agendado. Usado pra checar cobertura de pacote. Vazio = extrai do summary.',
+            },
+            usa_pacote: {
+              type: 'boolean',
+              description:
+                'SUGESTAO: true se o cliente quer usar o pacote pre-pago. O sistema re-valida e decide.',
+            },
           },
           required: ['colaborador_id', 'summary', 'start', 'end'],
         },
         run: async (args: unknown) => {
-          const { colaborador_id, summary, start, end } = args as {
+          const {
+            colaborador_id,
+            summary,
+            start,
+            end,
+            servico: servicoArg,
+            usa_pacote: usaPacoteArg,
+          } = args as {
             colaborador_id: string;
             summary: string;
             start: string;
             end: string;
+            servico?: unknown;
+            usa_pacote?: unknown;
           };
 
           // Resolve calendarId SERVER-SIDE a partir do id curto, validando contra a
@@ -669,11 +809,20 @@ export class TesteBarbeariaBot extends BotBase {
               },
               'Agendamento criado (estabelecimento)',
             );
+            const pacote = await this.maybeDeduzirPacote({
+              telefone,
+              eventId: ev.id,
+              summary,
+              servicoArg,
+              usaPacoteArg,
+              colaboradorId: colaborador.colaboradorId,
+            });
             return {
               ok: true,
               eventId: ev.id,
               summary: ev.summary,
               colaborador_nome: colaborador.nome,
+              ...(pacote ? { pacote } : {}),
             };
           }
 
@@ -701,11 +850,20 @@ export class TesteBarbeariaBot extends BotBase {
             },
             'Agendamento criado (estabelecimento)',
           );
+          const pacote = await this.maybeDeduzirPacote({
+            telefone,
+            eventId: ev.id,
+            summary,
+            servicoArg,
+            usaPacoteArg,
+            colaboradorId: colaborador.colaboradorId,
+          });
           return {
             ok: true,
             eventId: ev.id,
             summary: ev.summary,
             colaborador_nome: colaborador.nome,
+            ...(pacote ? { pacote } : {}),
           };
         },
       },

@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   listActiveClientCredits: vi.fn(),
   listClientCredits: vi.fn(),
+  redeemForBooking: vi.fn(),
+  reconciliationHook: vi.fn(),
   packagePhoneHmac: vi.fn(),
 }));
 
@@ -20,6 +22,8 @@ vi.mock('@startap/db', () => ({
   packages: {
     listActiveClientCredits: mocks.listActiveClientCredits,
     listClientCredits: mocks.listClientCredits,
+    redeemForBooking: mocks.redeemForBooking,
+    reconciliationHook: mocks.reconciliationHook,
   },
 }));
 
@@ -35,13 +39,24 @@ vi.mock('@startap/core', () => ({
   packagePhoneHmac: (...a: unknown[]) => mocks.packagePhoneHmac(...a),
 }));
 
-const { resolveClientPackages, buildSeuPacoteBlock } = await import('./package-context.js');
+const {
+  resolveClientPackages,
+  buildSeuPacoteBlock,
+  deduzirPacoteNoAgendamento,
+  servicoFromSummary,
+} = await import('./package-context.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.packagePhoneHmac.mockReturnValue('hmac-abc');
   mocks.listActiveClientCredits.mockResolvedValue([]);
   mocks.listClientCredits.mockResolvedValue([]);
+  mocks.redeemForBooking.mockResolvedValue({
+    descontou_do_pacote: false,
+    avulso: true,
+    motivo: 'sem_pacote',
+    sessoes_restantes: null,
+  });
 });
 
 describe('resolveClientPackages', () => {
@@ -142,5 +157,109 @@ describe('buildSeuPacoteBlock', () => {
   it('cobertura vazia: "sem serviços vinculados" (regra do ADR §4: não cobre nada)', () => {
     const b = buildSeuPacoteBlock([credit({ servicos_cobertos: [] })]);
     expect(b).toContain('sem serviços vinculados');
+  });
+});
+
+describe('servicoFromSummary — fallback de nome do serviço', () => {
+  it('extrai do padrão "Nome - Servico | WhatsApp: numero"', () => {
+    expect(servicoFromSummary('Fulano - Corte | WhatsApp: 5531999998842')).toBe('Corte');
+  });
+  it('sem o " - " separador → string vazia (server re-valida cobertura)', () => {
+    expect(servicoFromSummary('texto solto')).toBe('');
+  });
+  it('serviço com espaços é preservado e trim aplicado', () => {
+    expect(servicoFromSummary('Cliente - Barba e Cabelo | WhatsApp: 5531')).toBe('Barba e Cabelo');
+  });
+});
+
+describe('deduzirPacoteNoAgendamento — wrapper de dedução (BLOCO 2b)', () => {
+  it('descontou: chama redeemForBooking com hmac e dispara o reconciliation-hook', async () => {
+    mocks.redeemForBooking.mockResolvedValue({
+      descontou_do_pacote: true,
+      avulso: false,
+      motivo: 'descontado',
+      sessoes_restantes: 2,
+      credit_id: 7,
+      pacote_nome: 'Pacote 5 Cortes',
+      colaborador_id: null,
+    });
+    const r = await deduzirPacoteNoAgendamento({
+      slot: 'cirilobarbearia',
+      tenantId: 't-1',
+      telefone: '5531999998842',
+      gcalEventId: 'evt-1',
+      servicoNome: 'Corte',
+    });
+    expect(r.descontou_do_pacote).toBe(true);
+    expect(mocks.redeemForBooking).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'cirilobarbearia',
+        tenantId: 't-1',
+        phoneHmac: 'hmac-abc',
+        gcalEventId: 'evt-1',
+        servicoNome: 'Corte',
+        usarPacote: true,
+      }),
+    );
+    // dívida cancelar+reagendar: rastro p/ job de reconciliação.
+    expect(mocks.reconciliationHook).toHaveBeenCalledWith(
+      expect.objectContaining({ gcalEventId: 'evt-1', creditId: 7 }),
+    );
+  });
+
+  it('avulso (não descontou): NÃO dispara o reconciliation-hook', async () => {
+    mocks.redeemForBooking.mockResolvedValue({
+      descontou_do_pacote: false,
+      avulso: true,
+      motivo: 'sem_pacote',
+      sessoes_restantes: null,
+    });
+    await deduzirPacoteNoAgendamento({
+      slot: 's',
+      telefone: '5531999998842',
+      gcalEventId: 'e',
+      servicoNome: 'Corte',
+    });
+    expect(mocks.reconciliationHook).not.toHaveBeenCalled();
+  });
+
+  it('pepper AUSENTE: degrada para avulso (motivo pepper_ausente), não chama redeem', async () => {
+    mocks.packagePhoneHmac.mockImplementation(() => {
+      throw new FakePepperMissing();
+    });
+    const r = await deduzirPacoteNoAgendamento({
+      slot: 's',
+      telefone: '5531999998842',
+      gcalEventId: 'e',
+      servicoNome: 'Corte',
+    });
+    expect(r.avulso).toBe(true);
+    expect(r.descontou_do_pacote).toBe(false);
+    expect(r.motivo).toBe('pepper_ausente');
+    expect(mocks.redeemForBooking).not.toHaveBeenCalled();
+  });
+
+  it('telefone irrecuperável: avulso sem hashear nem deduzir (LGPD)', async () => {
+    const r = await deduzirPacoteNoAgendamento({
+      slot: 's',
+      telefone: '123',
+      gcalEventId: 'e',
+      servicoNome: 'Corte',
+    });
+    expect(r.avulso).toBe(true);
+    expect(mocks.packagePhoneHmac).not.toHaveBeenCalled();
+    expect(mocks.redeemForBooking).not.toHaveBeenCalled();
+  });
+
+  it('erro no redeem: degrada para avulso (motivo erro), não lança', async () => {
+    mocks.redeemForBooking.mockRejectedValue(new Error('pg down'));
+    const r = await deduzirPacoteNoAgendamento({
+      slot: 's',
+      telefone: '5531999998842',
+      gcalEventId: 'e',
+      servicoNome: 'Corte',
+    });
+    expect(r.avulso).toBe(true);
+    expect(r.motivo).toBe('erro');
   });
 });

@@ -33,6 +33,9 @@ const mocks = vi.hoisted(() => ({
   logFlowEvent: vi.fn(),
   resolveClientPackages: vi.fn(),
   buildSeuPacoteBlock: vi.fn(),
+  deduzirPacoteNoAgendamento: vi.fn(),
+  servicoFromSummary: vi.fn(),
+  getCloneBySlot: vi.fn(),
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
@@ -40,6 +43,7 @@ vi.mock('@startap/db', () => ({
   chatMemory: { loadHistory: mocks.loadHistory },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
   cloneColaboradores: { getProductType: mocks.getProductType },
+  flowClones: { getCloneBySlot: mocks.getCloneBySlot },
   pausa: {},
 }));
 
@@ -59,6 +63,8 @@ vi.mock('../lib/client-alert.js', () => ({
 vi.mock('../lib/package-context.js', () => ({
   resolveClientPackages: mocks.resolveClientPackages,
   buildSeuPacoteBlock: mocks.buildSeuPacoteBlock,
+  deduzirPacoteNoAgendamento: mocks.deduzirPacoteNoAgendamento,
+  servicoFromSummary: mocks.servicoFromSummary,
 }));
 vi.mock('../lib/action-lock.js', () => ({
   gcalActionLockKey: () => 'k',
@@ -430,6 +436,14 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
     cfg.PACOTES_ENABLED = false;
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
+    mocks.servicoFromSummary.mockReturnValue('Corte');
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: false,
+      avulso: true,
+      motivo: 'sem_pacote',
+      sessoes_restantes: null,
+    });
   });
 
   it('flag OFF: tool consultar_pacote NÃO é exposta e nada de pacote é consultado (byte-a-byte)', async () => {
@@ -502,5 +516,143 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
         escopo: 'casa',
       },
     ]);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Dedução de pacote no agendamento (ADR 0025, BLOCO 2b — gated por PACOTES_ENABLED)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/** setupSchedule, mas com um calClient que também cria evento (pra exercitar inserir). */
+function setupScheduleComCreate(eventId = 'evt-novo') {
+  const calClient = {
+    listEvents: vi.fn().mockResolvedValue([]),
+    createEvent: vi.fn().mockResolvedValue({ id: eventId, summary: 'Fulano - Corte' }),
+  };
+  mocks.getGcalForSlot.mockResolvedValue(calClient);
+  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
+  mocks.renderPrompt.mockResolvedValue('PERSONA');
+  mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+  mocks.runAgentConfigured.mockResolvedValue({ reply: 'ok' });
+  mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+  mocks.getProductType.mockResolvedValue('individual');
+  return calClient;
+}
+
+async function inserirToolFor(): Promise<{
+  run: (a: unknown) => Promise<Record<string, unknown>>;
+}> {
+  const bot = new TesteBarbeariaBot();
+  await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+    makeCtx('quero marcar um corte'),
+  );
+  const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{
+    name: string;
+    run: (a: unknown) => Promise<Record<string, unknown>>;
+  }>;
+  return tools.find((t) => t.name === 'inserir_agendamento') as {
+    run: (a: unknown) => Promise<Record<string, unknown>>;
+  };
+}
+
+describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
+    mocks.servicoFromSummary.mockReturnValue('Corte');
+  });
+
+  it('flag OFF: inserir_agendamento NÃO consulta nem deduz pacote (byte-a-byte) — Cirilo/Samuel intactos', async () => {
+    const calClient = setupScheduleComCreate('evt-1');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res).toEqual({ ok: true, eventId: 'evt-1', summary: 'Fulano - Corte' });
+    expect(res).not.toHaveProperty('pacote'); // sem campo de pacote
+    expect(mocks.deduzirPacoteNoAgendamento).not.toHaveBeenCalled();
+    expect(mocks.getCloneBySlot).not.toHaveBeenCalled();
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag ON, serviço coberto: deduz e enriquece a resposta (descontou + saldo)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    setupScheduleComCreate('evt-9');
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: true,
+      avulso: false,
+      sessoes_restantes: 2,
+      motivo: 'descontado',
+      pacote_nome: 'Pacote 5 Cortes',
+      pacote_colaborador_id: null,
+    });
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+      servico: 'Corte',
+      usa_pacote: true,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.eventId).toBe('evt-9');
+    expect(res.pacote).toMatchObject({
+      descontou_do_pacote: true,
+      avulso: false,
+      sessoes_restantes: 2,
+    });
+    // O servidor recebeu o eventId (âncora idempotente) + serviço explícito + sugestão usa_pacote.
+    expect(mocks.deduzirPacoteNoAgendamento).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'teste_barbearia',
+        tenantId: 't-uuid',
+        gcalEventId: 'evt-9',
+        servicoNome: 'Corte',
+        usaPacote: true,
+      }),
+    );
+  });
+
+  it('flag ON, "por fora" (não coberto): agenda avulso, resposta marca avulso', async () => {
+    cfg.PACOTES_ENABLED = true;
+    setupScheduleComCreate('evt-10');
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: false,
+      avulso: true,
+      sessoes_restantes: null,
+      motivo: 'sem_pacote',
+    });
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Hidratação | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.pacote).toMatchObject({ descontou_do_pacote: false, avulso: true });
+  });
+
+  it('flag ON: usa_pacote=false é repassado como SUGESTÃO ao servidor (não força nada)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    setupScheduleComCreate('evt-11');
+    const inserir = await inserirToolFor();
+    await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+      usa_pacote: false,
+    });
+    expect(mocks.deduzirPacoteNoAgendamento).toHaveBeenCalledWith(
+      expect.objectContaining({ usaPacote: false }),
+    );
   });
 });
