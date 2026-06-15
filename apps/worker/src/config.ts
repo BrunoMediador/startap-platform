@@ -74,6 +74,23 @@ export const WorkerConfigSchema = z.object({
   // janela (spec §4). Protege o numero da Lola num cenario "tudo caiu de uma vez".
   ALERTS_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
   ALERTS_WINDOW_MIN: z.coerce.number().int().positive().default(30),
+
+  // ── Reconciliacao de pacotes (ADR 0025 divida 5: cancelar+reagendar) ───────
+  // RELATORIO read-only de suspeitas de dupla-baixa (2+ redeem do mesmo servico/credito
+  // sem refund compensatorio) pra ops AGIR (refund manual). NAO estorna nada sozinho.
+  // Gated: so registra o cron com PACOTES_RECONCILE_ENABLED=true (default OFF, como o
+  // resto de pacotes). Com OFF o worker sobe normal e o cron nem existe (zero query).
+  // Acompanha o rollout de PACOTES_ENABLED — ligar ANTES de escalar pacotes p/ muitos
+  // clientes (recomendacao do review do #321). NUNCA obrigatorio no boot (licao #247).
+  PACOTES_RECONCILE_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrao cron (croner). Default 1x/dia as 09:00 (depois do billing das 08:00).
+  // Padrao invalido NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
+  PACOTES_RECONCILE_CRON: z.string().default('0 9 * * *'),
+  // Janela (horas) pra agrupar redeems do mesmo servico/credito como suspeita. Default 48h.
+  PACOTES_RECONCILE_WINDOW_HOURS: z.coerce.number().int().positive().default(48),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

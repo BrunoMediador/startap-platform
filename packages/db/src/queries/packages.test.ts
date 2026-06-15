@@ -18,9 +18,8 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { listActiveTemplates, listClientCredits, listActiveClientCredits } = await import(
-  './packages.js'
-);
+const { listActiveTemplates, listClientCredits, listActiveClientCredits, normalizeServiceName } =
+  await import('./packages.js');
 
 beforeEach(() => {
   mockQuery.mockReset().mockResolvedValue({ rows: [] });
@@ -191,5 +190,21 @@ describe('listActiveClientCredits — só utilizáveis', () => {
   it('cliente sem pacote => lista vazia (não injeta bloco no caller)', async () => {
     mockQuery.mockResolvedValue({ rows: [] });
     expect(await listActiveClientCredits({ slot: 's', phoneHmac: 'h' })).toEqual([]);
+  });
+});
+
+describe('normalizeServiceName + cobre() — casamento acento/caixa-insensível', () => {
+  it('normaliza acento + caixa + espaços', () => {
+    expect(normalizeServiceName('  Hidratação ')).toBe('hidratacao');
+    expect(normalizeServiceName('Pé e Mão')).toBe('pe e mao');
+    expect(normalizeServiceName('CORTE')).toBe('corte');
+  });
+
+  it('cobre() casa "Hidratacao" pedido contra "Hidratação" cadastrado (sem acento perde a baixa antes)', async () => {
+    mockQuery.mockResolvedValue({ rows: [rawCredit({ servicos_cobertos: ['Hidratação'] })] });
+    const [c] = await listClientCredits({ slot: 's', phoneHmac: 'h' });
+    expect(c?.cobre('Hidratacao')).toBe(true); // sem acento no pedido
+    expect(c?.cobre('hidratação')).toBe(true); // caixa diferente
+    expect(c?.cobre('Corte')).toBe(false); // continua não cobrindo o que não é o serviço
   });
 });

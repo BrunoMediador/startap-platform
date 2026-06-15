@@ -86,4 +86,10 @@ export type {
   PackageState,
   ServicePackageTemplate,
   ClientPackageCredit,
+  RedeemMotivo,
+  RedeemResult,
+  RedeemForBookingInput,
+  RefundForBookingInput,
+  RefundResult,
+  SuspectDoubleRedeem,
 } from './queries/packages.js';

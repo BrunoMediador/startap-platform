@@ -15,6 +15,7 @@ import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 import { runMonitor } from './jobs/monitor.js';
+import { runReconcilePackages } from './jobs/reconcile-packages.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -312,6 +313,63 @@ async function main() {
     );
   } else {
     log.info('monitor de alertas: ALERTS_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Reconciliação de pacotes (ADR 0025 dívida 5: cancelar+reagendar) — RELATÓRIO read-only
+  // de suspeitas de dupla-baixa pra ops agir. SÓ registra com PACOTES_RECONCILE_ENABLED=true
+  // (default OFF). Com a flag OFF o cron nem existe (zero query). Ligar junto com o rollout
+  // de PACOTES_ENABLED, ANTES de escalar pacotes pra muitos clientes (review #321).
+  if (config.PACOTES_RECONCILE_ENABLED) {
+    log.info(
+      { cron: config.PACOTES_RECONCILE_CRON },
+      'reconcile-packages: cron registrado (PACOTES_RECONCILE_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.PACOTES_RECONCILE_CRON,
+      '0 9 * * *',
+      { name: 'reconcile-packages', timezone: 'America/Sao_Paulo' },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let reconcileResult: Awaited<ReturnType<typeof runReconcilePackages>> | null = null;
+        let reconcileError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:reconcile-packages',
+          flowName: 'reconcile-packages',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job reconcile-packages iniciado',
+        });
+        try {
+          reconcileResult = await runReconcilePackages();
+          if (reconcileResult.suspects > 0) {
+            log.warn({ ...reconcileResult }, 'reconcile-packages: suspeitas encontradas');
+          }
+        } catch (e) {
+          reconcileError = e;
+          log.error({ err: e }, 'reconcile-packages crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:reconcile-packages',
+            flowName: 'reconcile-packages',
+            bot: 'worker',
+            eventType: reconcileError ? 'worker.job-failed' : 'worker.job-finished',
+            status: reconcileError ? 'error' : 'success',
+            message: reconcileError
+              ? 'Job reconcile-packages falhou'
+              : 'Job reconcile-packages concluído',
+            ...(reconcileResult ? { metadata: reconcileResult } : {}),
+            ...(reconcileError ? { error: reconcileError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('reconcile-packages: PACOTES_RECONCILE_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

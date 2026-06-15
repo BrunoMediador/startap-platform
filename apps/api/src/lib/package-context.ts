@@ -20,7 +20,7 @@
 import { PackagePepperMissingError, packagePhoneHmac } from '@startap/core';
 import { logger } from '@startap/core/logger';
 import { canonicalE164 } from '@startap/core/phone';
-import { type ClientPackageCredit, packages } from '@startap/db';
+import { type ClientPackageCredit, type RedeemResult, packages } from '@startap/db';
 
 const log = logger.child({ module: 'package-context' });
 
@@ -124,4 +124,92 @@ export function buildSeuPacoteBlock(credits: ClientPackageCredit[]): string {
       'Serviço fora da cobertura, ou pacote EXPIRADO/ESGOTADO, é atendimento avulso (não usa o pacote). ' +
       'Você NUNCA dá baixa no saldo — apenas informa; o desconto é feito pelo sistema ao agendar.',
   ].join('\n');
+}
+
+/**
+ * DEDUZ uma sessão de pacote para um agendamento JÁ criado no GCal (ADR 0025 BLOCO 2b).
+ * Wrapper de packages.redeemForBooking que cuida do telefone -> HMAC (pepper PRÓPRIO,
+ * canônico E.164) e DEGRADA com segurança: telefone inválido / pepper ausente / qualquer
+ * erro -> "avulso" (não desconta) SEM lançar. O evento no GCal já existe; falha de pacote
+ * NUNCA derruba o atendimento (lição #247).
+ *
+ * O SERVIDOR re-valida cobertura+saldo+validade dentro de redeemForBooking — `usaPacote`
+ * é só a SUGESTÃO do LLM (cliente pode optar por pagar avulso); nunca FORÇA desconto.
+ *
+ * GATE: o chamador (o bot) só invoca isto com config.PACOTES_ENABLED === true. Telefone
+ * cru nunca é logado nem retornado.
+ */
+export async function deduzirPacoteNoAgendamento(input: {
+  slot: string;
+  tenantId?: string;
+  telefone: string;
+  gcalEventId: string;
+  servicoNome: string;
+  colaboradorId?: number | null;
+  usaPacote?: boolean;
+}): Promise<RedeemResult> {
+  const avulso: RedeemResult = {
+    descontou_do_pacote: false,
+    avulso: true,
+    motivo: 'sem_pacote',
+    sessoes_restantes: null,
+  };
+
+  const canonical = canonicalE164(input.telefone);
+  if (!canonical) return avulso; // telefone irrecuperável — sem identidade de pacote.
+
+  let phoneHmac: string;
+  try {
+    phoneHmac = packagePhoneHmac(canonical);
+  } catch (err) {
+    if (err instanceof PackagePepperMissingError) {
+      log.warn(
+        { slot: input.slot },
+        'PACKAGE_PHONE_PEPPER ausente — dedução degrada para avulso (atendimento intacto)',
+      );
+      return { ...avulso, motivo: 'pepper_ausente' };
+    }
+    throw err;
+  }
+
+  try {
+    const r = await packages.redeemForBooking({
+      slot: input.slot,
+      tenantId: input.tenantId,
+      phoneHmac,
+      gcalEventId: input.gcalEventId,
+      servicoNome: input.servicoNome,
+      colaboradorId: input.colaboradorId ?? null,
+      usarPacote: input.usaPacote ?? true,
+    });
+    // Dívida cancelar+reagendar (ADR 0025 dívida 5): deixa rastro p/ job futuro quando descontou.
+    if (r.descontou_do_pacote && r.credit_id != null) {
+      packages.reconciliationHook({
+        slot: input.slot,
+        gcalEventId: input.gcalEventId,
+        creditId: r.credit_id,
+        servicoNome: input.servicoNome,
+      });
+    }
+    return r;
+  } catch (err) {
+    log.error(
+      { err: err instanceof Error ? err.message : String(err), slot: input.slot },
+      'deduzirPacoteNoAgendamento: dedução falhou — agenda avulso (atendimento intacto)',
+    );
+    return { ...avulso, motivo: 'erro' };
+  }
+}
+
+/**
+ * Extrai o nome do serviço do summary "Nome - Servico | WhatsApp: numero" como FALLBACK
+ * quando o LLM não passar o param `servico` explicitamente. Determinístico, sem PII no log.
+ * Retorna '' se não conseguir isolar (server re-valida cobertura: '' não cobre nada).
+ */
+export function servicoFromSummary(summary: string): string {
+  // "Nome - Servico | WhatsApp: 5531..."  -> pega o trecho após o primeiro " - " e antes do " | ".
+  const semWhats = summary.split('|')[0] ?? summary;
+  const idx = semWhats.indexOf(' - ');
+  if (idx < 0) return '';
+  return semWhats.slice(idx + 3).trim();
 }
