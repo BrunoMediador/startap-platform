@@ -12,6 +12,7 @@
     "./types": "./dist/types.js",
     "./crypto": "./dist/crypto.js",
     "./trial": "./dist/trial.js",
+    "./package-phone": "./dist/package-phone.js",
     "./schemas": "./dist/schemas/flow-config.js"
   },
   "scripts": {

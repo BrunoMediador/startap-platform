@@ -23,6 +23,7 @@ export * as trialLedger from './queries/trial-ledger.js';
 export * as alerts from './queries/alerts.js';
 export * as tenant from './queries/tenant.js';
 export * as tenantReadRollup from './queries/tenant-read-rollup.js';
+export * as packages from './queries/packages.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -81,3 +82,8 @@ export type {
   ParityClientDiff,
   ParityFieldDiff,
 } from './queries/tenant-read-rollup.js';
+export type {
+  PackageState,
+  ServicePackageTemplate,
+  ClientPackageCredit,
+} from './queries/packages.js';
