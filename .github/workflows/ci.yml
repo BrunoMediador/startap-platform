@@ -10,6 +10,24 @@ jobs:
   build:
     name: Build & typecheck
     runs-on: ubuntu-latest
+    # Postgres 16 EFÊMERO p/ os testes de INTEGRAÇÃO de SQL real (ex.: packages-deducao.integration).
+    # Sem ele, esses testes AUTO-SKIPAM (PG_TEST_URL ausente) e classes inteiras de defeito ficam
+    # invisíveis: o mock só compara a STRING do SQL e deixou passar o P0 do #321 (FOR UPDATE + GROUP BY
+    # = erro 0A000 no PG 16, inexecutável). Banco descartável, vive só durante o job; nunca toca prod.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: itestuser
+          POSTGRES_PASSWORD: itestpass
+          POSTGRES_DB: itestdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U itestuser -d itestdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,4 +38,8 @@ jobs:
       - name: TypeScript build (all workspaces)
         run: npm run build --workspaces --if-present
       - name: Tests
+        # PG_TEST_URL liga os testes de integração de SQL real contra o service postgres:16 acima.
+        # O suite de integração cria/dropa as próprias tabelas num banco vazio (autocontido).
+        env:
+          PG_TEST_URL: postgres://itestuser:itestpass@localhost:5432/itestdb
         run: npm test --workspaces --if-present
