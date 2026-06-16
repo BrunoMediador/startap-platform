@@ -317,3 +317,30 @@ export async function getProductType(slot: string): Promise<ProductType> {
     return 'individual';
   }
 }
+
+/**
+ * Lê a área/vertical de um slot (flow_clones.area, migration 051).
+ *
+ * Retorna `null` (NÃO uma string default) quando a coluna não existe, o slot não
+ * tem linha em flow_clones, ou o valor é nulo — assim o chamador distingue "sem
+ * área conhecida" de uma área concreta e aplica o fallback genérico DELE. A
+ * normalização da taxonomia (barbearia/cabeleireiro/manicure/estetica/...) é
+ * responsabilidade da camada de emojis (apps/api), não daqui — este reader só
+ * devolve o texto cru do banco em lowercase, sem inventar default.
+ *
+ * Fallback `null` é DELIBERADO e seguro: o consumidor (cartão de confirmação)
+ * trata null como "área desconhecida" → não muda emoji nenhum (caminho atual).
+ */
+export async function getArea(slot: string): Promise<string | null> {
+  try {
+    const r = await query<{ area: string | null }>(
+      'SELECT area FROM flow_clones WHERE slot = $1 LIMIT 1',
+      [slot],
+    );
+    const v = r.rows[0]?.area;
+    return v ? v.trim().toLowerCase() : null;
+  } catch {
+    // Coluna ausente (pré-051) ou erro de query → null = área desconhecida.
+    return null;
+  }
+}

@@ -12,6 +12,10 @@ import {
 } from '@startap/integrations/scheduling';
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
+import {
+  buildCartaoEmojiOverrideBlock,
+  buildCartaoEstabelecimentoBlock,
+} from '../lib/area-emojis.js';
 import { sendClientCancellationAlert } from '../lib/client-alert.js';
 import {
   buildSeuPacoteBlock,
@@ -212,9 +216,19 @@ export class TesteBarbeariaBot extends BotBase {
       pacoteBlock = buildSeuPacoteBlock(credits);
     }
 
-    const systemPrompt = pacoteBlock
-      ? `${promptPersona}\n\n${contextBlock}\n\n${pacoteBlock}`
-      : `${promptPersona}\n\n${contextBlock}`;
+    // ── Emojis do cartão por ÁREA (flow_clones.area, migration 051) ──────────────
+    // O cartão individual vive no bot_prompt persistido com 💈/✂️ (barbearia). Pra
+    // áreas NÃO-barbearia (salão/manicure/estética), injetamos EM RUNTIME um bloco
+    // que manda o modelo trocar os ícones — assim clones JÁ existentes (Bruna/salão)
+    // pegam o emoji certo SEM re-renderizar o prompt. Para barbearia (Cirilo/Samuel)
+    // e para área NULL/desconhecida o builder devolve '' → systemPrompt byte-a-byte
+    // o de hoje. getArea degrada pra null em erro/coluna ausente (fallback seguro).
+    const area = await cloneColaboradores.getArea(this.slot);
+    const cartaoEmojiBlock = buildCartaoEmojiOverrideBlock(area);
+
+    const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoEmojiBlock]
+      .filter((b) => b !== '')
+      .join('\n\n');
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
@@ -692,15 +706,12 @@ export class TesteBarbeariaBot extends BotBase {
     // Esta instrução SÓ entra neste caminho (gate duplo ESTABELECIMENTO_ENABLED +
     // product_type='estabelecimento'); o clone individual (Cirilo/Samuel) nunca a vê e o
     // cartão deles segue byte-a-byte.
-    const cartaoEstabelecimentoBlock = [
-      '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]',
-      'Antes de gravar, mostre o cartão de confirmação e peça SIM. Neste estabelecimento o',
-      'cliente escolhe o profissional, então o cartão DEVE incluir o nome do profissional',
-      'escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2). Use o formato:',
-      '👤 PROFISSIONAL: <nome do profissional escolhido>',
-      '📅 DIA: <dia> / 🕐 HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
-      'Mantenha o tom da persona. Só chame inserir_agendamento depois do SIM.',
-    ].join('\n');
+    //
+    // Os EMOJIS do cartão seguem a ÁREA do clone (migration 051): barbearia mantém
+    // 📅 🕐 ✂️ 💰 👤 (idêntico ao bloco original); salão/manicure/estética trocam
+    // marca+serviço. getArea degrada pra null (→ genérico) em erro/coluna ausente.
+    const area = await cloneColaboradores.getArea(this.slot);
+    const cartaoEstabelecimentoBlock = buildCartaoEstabelecimentoBlock(area);
 
     const systemPrompt = [
       promptPersona,

@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   buildContextBlock: vi.fn(),
   buildEstabelecimentoContext: vi.fn(),
   getProductType: vi.fn(),
+  getArea: vi.fn(),
   renderPrompt: vi.fn(),
   loadHistory: vi.fn(),
   logFlowEvent: vi.fn(),
@@ -42,7 +43,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@startap/db', () => ({
   chatMemory: { loadHistory: mocks.loadHistory },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
-  cloneColaboradores: { getProductType: mocks.getProductType },
+  cloneColaboradores: { getProductType: mocks.getProductType, getArea: mocks.getArea },
   flowClones: { getCloneBySlot: mocks.getCloneBySlot },
   pausa: {},
 }));
@@ -115,6 +116,9 @@ function setupSchedule() {
   mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
   // Default: slot é individual (caminho atual). Testes de estabelecimento sobrescrevem.
   mocks.getProductType.mockResolvedValue('individual');
+  // Default: área barbearia (Cirilo/Samuel) → buildCartaoEmojiOverrideBlock devolve
+  // '' → systemPrompt byte-a-byte o de hoje. Testes de outras áreas sobrescrevem.
+  mocks.getArea.mockResolvedValue('barbearia');
   return calClient;
 }
 
@@ -236,6 +240,8 @@ function setupEstabelecimento(
 ) {
   cfg.ESTABELECIMENTO_ENABLED = true;
   mocks.getProductType.mockResolvedValue('estabelecimento');
+  // Default barbearia → cartão de estabelecimento byte-a-byte o do #325.
+  mocks.getArea.mockResolvedValue('barbearia');
   mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
