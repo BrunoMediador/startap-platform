@@ -932,6 +932,27 @@ function validarDuracaoServico(s) {
   return null;
 }
 
+/**
+ * Valida a dupla product_type/seat_cap (taxonomia de conta — ADR 0023, migr 052).
+ * Regra ÚNICA reusada pelo PATCH /api/clones/:id e pelo POST /api/clones (criar
+ * clone com tipo já no wizard). product_type: 'individual' | 'estabelecimento'.
+ * seat_cap: NULL (sem teto) ou inteiro 1..100. Validação no app, não por CHECK no
+ * banco (enforcement do teto vive no runtime). Retorna mensagem PT-BR ou null se ok.
+ * `undefined` em qualquer campo = "não informado" e passa (default fica a cargo do caller).
+ */
+function validarTipoConta(product_type, seat_cap) {
+  if (product_type !== undefined && !['individual', 'estabelecimento'].includes(String(product_type))) {
+    return 'product_type deve ser individual ou estabelecimento';
+  }
+  if (seat_cap !== undefined && seat_cap !== null) {
+    const sc = Number(seat_cap);
+    if (!Number.isInteger(sc) || sc < 1 || sc > 100) {
+      return 'seat_cap deve ser inteiro entre 1 e 100 (ou nulo)';
+    }
+  }
+  return null;
+}
+
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
@@ -3290,12 +3311,25 @@ app.get('/api/clones', async (_req, res) => {
 app.post('/api/clones', async (req, res) => {
   const { matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao } =
     req.body ?? {};
+  // Tipo de conta opcional no momento da clonagem (escolha já no wizard "Clonar").
+  // Default 'individual' quando ausente = retrocompatível (quem clona sem escolher
+  // continua igual a hoje). product_type/seat_cap validados pela MESMA regra do PATCH.
+  const { product_type, seat_cap } = req.body ?? {};
   if (!matriz_slot || typeof matriz_slot !== 'string') {
     return res.status(400).json({ error: 'matriz_slot obrigatório' });
   }
   if (!display_name || typeof display_name !== 'string') {
     return res.status(400).json({ error: 'display_name obrigatório' });
   }
+  const erroTipoConta = validarTipoConta(product_type, seat_cap);
+  if (erroTipoConta) return res.status(400).json({ error: erroTipoConta });
+  // Normaliza: default 'individual'; seat_cap só faz sentido p/ estabelecimento.
+  const productTypeFinal =
+    product_type !== undefined ? String(product_type) : 'individual';
+  const seatCapFinal =
+    productTypeFinal === 'estabelecimento' && seat_cap !== undefined && seat_cap !== null
+      ? Number(seat_cap)
+      : null;
 
   // Gera slug único
   const slug = `clone_${display_name
@@ -3383,8 +3417,9 @@ app.post('/api/clones', async (req, res) => {
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
           personalizacao, horarios_funcionamento, servicos,
+          product_type, seat_cap,
           status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,'rascunho',NOW(),NOW())
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,'rascunho',NOW(),NOW())
        RETURNING *`,
       [
         slug,
@@ -3395,6 +3430,8 @@ app.post('/api/clones', async (req, res) => {
         JSON.stringify(pers),
         defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
+        productTypeFinal,
+        seatCapFinal,
       ],
     );
 
@@ -3639,17 +3676,10 @@ app.patch('/api/clones/:id', async (req, res) => {
       return res.status(400).json({ error: 'horarios_funcionamento deve ser objeto' });
     }
   }
-  // product_type: taxonomia validada no app (ADR 0023), nao por CHECK no banco.
-  if (product_type !== undefined && !['individual', 'estabelecimento'].includes(String(product_type))) {
-    return res.status(400).json({ error: 'product_type deve ser individual ou estabelecimento' });
-  }
-  // seat_cap: NULL (sem teto) ou inteiro >= 1. Validado no app (enforcement do teto no runtime).
-  if (seat_cap !== undefined && seat_cap !== null) {
-    const sc = Number(seat_cap);
-    if (!Number.isInteger(sc) || sc < 1 || sc > 100) {
-      return res.status(400).json({ error: 'seat_cap deve ser inteiro entre 1 e 100 (ou nulo)' });
-    }
-  }
+  // product_type/seat_cap: taxonomia validada no app (ADR 0023), nao por CHECK no
+  // banco. Regra ÚNICA em validarTipoConta — mesma usada pelo POST /api/clones.
+  const erroTipoConta = validarTipoConta(product_type, seat_cap);
+  if (erroTipoConta) return res.status(400).json({ error: erroTipoConta });
   if (servicos !== undefined) {
     if (!Array.isArray(servicos)) {
       return res.status(400).json({ error: 'servicos deve ser array' });

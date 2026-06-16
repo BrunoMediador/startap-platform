@@ -7383,6 +7383,8 @@ function openCloneWizard(preSelectMatriz) {
     stopQR: null,
     modelo_ia: '',      // '' = herdar da matriz
     modelo_ia_label: '', // label do modelo selecionado
+    product_type: 'individual', // 'individual' | 'estabelecimento' (escolha no passo 2)
+    seat_cap: '',               // vagas; só usado quando estabelecimento; '' = sem teto
   };
   if (preSelectMatriz) _wizardState.step = 2;
   renderWizardStep();
@@ -7450,6 +7452,19 @@ function renderWizardStep() {
             ${wModelOpts}
           </select>
           ${wModels.length === 0 ? `<span class="field-hint" id="wz-model-loading">${icon('loader',11)} Carregando modelos...</span>` : '<span class="field-hint">Modelo mais inteligente = melhor resposta, mas custo maior</span>'}
+        </div>
+        <div class="field">
+          <label for="wz-product-type">Tipo de conta</label>
+          <select id="wz-product-type">
+            <option value="individual"${s.product_type !== 'estabelecimento' ? ' selected' : ''}>Individual (1 agenda)</option>
+            <option value="estabelecimento"${s.product_type === 'estabelecimento' ? ' selected' : ''}>Estabelecimento (vários colaboradores)</option>
+          </select>
+          <span class="field-hint">Estabelecimento libera a aba Colaboradores (cada um com sua agenda). Você pode mudar isso depois em Configurar.</span>
+        </div>
+        <div class="field" id="wz-seatcap-field" style="${s.product_type === 'estabelecimento' ? '' : 'display:none'}">
+          <label for="wz-seat-cap">Vagas do plano (colaboradores)</label>
+          <input id="wz-seat-cap" type="number" min="1" max="100" step="1" value="${escapeHtml(String(s.seat_cap ?? ''))}" placeholder="ex: 3" />
+          <span class="field-hint">Quantos colaboradores ATIVOS o plano permite. Vazio = sem teto.</span>
         </div>
       </div>`;
     footerHtml = `
@@ -7580,6 +7595,11 @@ function renderWizardStep() {
         if (hint) hint.textContent = 'Modelo mais inteligente = melhor resposta, mas custo maior';
       });
     }
+    // Mostra/esconde campo de vagas conforme o tipo de conta (mesmo padrão do Configurar).
+    document.getElementById('wz-product-type')?.addEventListener('change', (ev) => {
+      const field = document.getElementById('wz-seatcap-field');
+      if (field) field.style.display = ev.target.value === 'estabelecimento' ? '' : 'none';
+    });
   }
 
   if (s.step === 3) {
@@ -7665,6 +7685,12 @@ function wizardCollectStep() {
     } else {
       s.modelo_ia_label = '';
     }
+    s.product_type = document.getElementById('wz-product-type')?.value === 'estabelecimento'
+      ? 'estabelecimento' : 'individual';
+    // seat_cap só vale p/ estabelecimento; mantém string (vazio = sem teto).
+    s.seat_cap = s.product_type === 'estabelecimento'
+      ? (document.getElementById('wz-seat-cap')?.value || '').trim()
+      : '';
   } else if (s.step === 3) {
     s.personalizacao = {};
     document.querySelectorAll('[data-kv]').forEach(row => {
@@ -7685,6 +7711,26 @@ function wizardValidateStep() {
     if (!name) { toast('O nome do clone é obrigatório.', 'warning'); document.getElementById('wz-display-name')?.focus(); return false; }
   }
   return true;
+}
+
+/* ── Monta o corpo do POST /api/clones a partir do estado do wizard ──
+   Fonte única p/ os 3 caminhos (nova sessão / vincular / sem sessão).
+   product_type só é enviado quando 'estabelecimento' → caminho individual
+   fica byte-a-byte como antes (servidor faz default 'individual'). */
+function wizardCloneBody() {
+  const s = _wizardState;
+  const body = {
+    matriz_slot:      s.matriz_slot,
+    display_name:     s.display_name,
+    cliente_nome:     s.cliente_nome || undefined,
+    cliente_telefone: s.cliente_telefone || undefined,
+    personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+  };
+  if (s.product_type === 'estabelecimento') {
+    body.product_type = 'estabelecimento';
+    if (s.seat_cap !== '' && s.seat_cap != null) body.seat_cap = Number(s.seat_cap);
+  }
+  return body;
 }
 
 /* ── Aplica modelo IA ao clone (se escolhido no wizard) ─────────── */
@@ -7718,13 +7764,7 @@ async function wizardStep4Create() {
       const clone = await api('/api/clones', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          matriz_slot:      s.matriz_slot,
-          display_name:     s.display_name,
-          cliente_nome:     s.cliente_nome || undefined,
-          cliente_telefone: s.cliente_telefone || undefined,
-          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
-        }),
+        body: JSON.stringify(wizardCloneBody()),
       });
       s.cloneId = clone.id;
       if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
@@ -7841,13 +7881,7 @@ async function wizardStep4BindExisting() {
       const clone = await api('/api/clones', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          matriz_slot:      s.matriz_slot,
-          display_name:     s.display_name,
-          cliente_nome:     s.cliente_nome || undefined,
-          cliente_telefone: s.cliente_telefone || undefined,
-          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
-        }),
+        body: JSON.stringify(wizardCloneBody()),
       });
       s.cloneId = clone.id;
       if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
@@ -7883,13 +7917,7 @@ async function wizardStep4Skip() {
       const clone = await api('/api/clones', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          matriz_slot:      s.matriz_slot,
-          display_name:     s.display_name,
-          cliente_nome:     s.cliente_nome || undefined,
-          cliente_telefone: s.cliente_telefone || undefined,
-          personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
-        }),
+        body: JSON.stringify(wizardCloneBody()),
       });
       s.cloneId = clone.id;
       if (s.modelo_ia) await wizardApplyModelToClone(s.cloneId, s.modelo_ia);
