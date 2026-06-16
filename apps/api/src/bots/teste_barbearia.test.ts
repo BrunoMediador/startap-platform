@@ -278,6 +278,19 @@ async function estabToolsFor(
   return mocks.runAgentConfigured.mock.calls[0][0].tools;
 }
 
+/** Roda process() pro estabelecimento e devolve o systemPrompt passado ao runAgent. */
+async function estabSystemPromptFor(
+  texto: string,
+  colaboradores: Array<{ colaboradorId: number; nome: string; shortId: string; client: unknown }>,
+): Promise<string> {
+  setupEstabelecimento(colaboradores);
+  const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+  await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+    makeCtx(texto),
+  );
+  return mocks.runAgentConfigured.mock.calls[0][0].systemPrompt;
+}
+
 describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -406,6 +419,70 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('COLABORADOR_INVALIDO');
     expect(c1.createEvent).not.toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Cartão de confirmação com PROFISSIONAL (estabelecimento) — injetado em RUNTIME
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// Garantias do PM:
+//  - estabelecimento → o systemPrompt injeta, EM RUNTIME, a instrução de incluir o nome
+//    do profissional escolhido no cartão de confirmação ("👤 PROFISSIONAL"). Como vem do
+//    código (não do bot_prompt estático), vale pro clone JÁ existente da Bruna SEM
+//    re-renderizar o prompt dela (renderPrompt devolve 'PERSONA' fixa nos testes — a regra
+//    NÃO está nela; ainda assim aparece no systemPrompt).
+//  - individual → o systemPrompt NÃO contém a instrução de profissional (cartão dos
+//    pagantes Cirilo/Samuel fica byte-a-byte: 'PERSONA\n\nCONTEXT').
+
+describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runtime)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  it('estabelecimento: systemPrompt injeta a instrução do PROFISSIONAL no cartão (runtime, sem depender do bot_prompt)', async () => {
+    const c1 = colabClientStub('cal-joao');
+    // renderPrompt devolve 'PERSONA' fixa (persona da Bruna sem a regra) — prova que a
+    // instrução vem do CÓDIGO em runtime, não de um prompt re-renderizado.
+    const systemPrompt = await estabSystemPromptFor('quero um corte', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1 },
+    ]);
+    expect(systemPrompt).toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
+    expect(systemPrompt).toContain('👤 PROFISSIONAL');
+    // A persona base ('PERSONA') NÃO carregava a regra — ela é adicionada em runtime.
+    expect(systemPrompt).toContain('PERSONA');
+    expect('PERSONA').not.toContain('PROFISSIONAL');
+  });
+
+  it('estabelecimento: a instrução manda usar o NOME do profissional, não o id curto C1/C2', async () => {
+    const c1 = colabClientStub('cal-joao');
+    const systemPrompt = await estabSystemPromptFor('quero um corte', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1 },
+    ]);
+    // Garante que a regra referencia o bloco [PROFISSIONAIS] e o nome (não o id curto).
+    expect(systemPrompt).toMatch(/nome do profissional escolhido/i);
+    expect(systemPrompt).toMatch(/n[aã]o o id curto/i);
+  });
+
+  it('individual: systemPrompt NÃO contém a instrução de profissional (Cirilo/Samuel byte-a-byte)', async () => {
+    // Mesmo com a flag de estabelecimento LIGADA, product_type=individual → caminho atual.
+    cfg.ESTABELECIMENTO_ENABLED = true;
+    setupSchedule(); // getProductType -> 'individual'
+    const bot = new TesteBarbeariaBot();
+    await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero marcar um corte'),
+    );
+    const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    // Cartão individual intocado: persona + contexto, SEM bloco de profissional.
+    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT');
+    expect(systemPrompt).not.toContain('PROFISSIONAL');
+    expect(systemPrompt).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
   });
 });
 

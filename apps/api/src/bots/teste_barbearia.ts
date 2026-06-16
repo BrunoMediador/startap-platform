@@ -682,6 +682,26 @@ export class TesteBarbeariaBot extends BotBase {
     });
 
     // Blocos runtime, não-editáveis, SÓ no estabelecimento (ADR 0024 §6 / panorama §6).
+    //
+    // [CARTAO DE CONFIRMACAO - ESTABELECIMENTO]: o cartão de confirmação do clone
+    // individual (no bot_prompt) lista DIA/HORARIO/SERVICO/VALOR mas NÃO o profissional —
+    // num estabelecimento o cliente escolhe COM QUEM agendar, então o cartão precisa
+    // mostrar isso. Injetamos a regra EM RUNTIME (não no template estático do bot_prompt)
+    // de propósito: assim TODO clone estabelecimento — inclusive os JÁ existentes, como o
+    // da Bruna — passa a incluir a linha do profissional SEM re-renderizar o prompt deles.
+    // Esta instrução SÓ entra neste caminho (gate duplo ESTABELECIMENTO_ENABLED +
+    // product_type='estabelecimento'); o clone individual (Cirilo/Samuel) nunca a vê e o
+    // cartão deles segue byte-a-byte.
+    const cartaoEstabelecimentoBlock = [
+      '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]',
+      'Antes de gravar, mostre o cartão de confirmação e peça SIM. Neste estabelecimento o',
+      'cliente escolhe o profissional, então o cartão DEVE incluir o nome do profissional',
+      'escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2). Use o formato:',
+      '👤 PROFISSIONAL: <nome do profissional escolhido>',
+      '📅 DIA: <dia> / 🕐 HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
+      'Mantenha o tom da persona. Só chame inserir_agendamento depois do SIM.',
+    ].join('\n');
+
     const systemPrompt = [
       promptPersona,
       '',
@@ -692,6 +712,8 @@ export class TesteBarbeariaBot extends BotBase {
       '',
       '[HORARIOS DISPONIVEIS POR PROFISSIONAL - ATUALIZADO AGORA]',
       estab.horariosBlock,
+      '',
+      cartaoEstabelecimentoBlock,
     ].join('\n');
 
     const fullHistory = await this.loadHistory(ctx);
