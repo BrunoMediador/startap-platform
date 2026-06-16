@@ -41,9 +41,15 @@ export interface SignupResponse {
   trial_started: boolean;
 }
 
+export type ProductType = 'individual' | 'estabelecimento';
+
 export interface AuthMe {
   username: string;
   slot: string;
+  // Presentes SÓ quando o cliente é estabelecimento E a feature está ON (auth.ts).
+  // Ausentes = individual: o portal renderiza IDÊNTICO ao de hoje (Cirilo/Samuel).
+  product_type?: ProductType;
+  seat_cap?: number | null;
 }
 
 // ── Servicos ─────────────────────────────────────────────────────────────────
@@ -56,6 +62,45 @@ export interface Servico {
 
 export interface ServicosResponse {
   servicos: Servico[];
+}
+
+// ── Equipe / Colaboradores (estabelecimento — portal-equipe.ts) ──────────────
+
+export interface Colaborador {
+  id: number;
+  nome: string;
+  gcal_calendar_id: string | null;
+  gcal_status: string;
+  servicos: string[];
+  ativo: boolean;
+  ordem: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EquipeResponse {
+  /** Teto contratual de vagas. null = sem teto. */
+  seat_cap: number | null;
+  /** Colaboradores ATIVOS (vagas em uso). */
+  usados: number;
+  colaboradores: Colaborador[];
+}
+
+export interface SaveColaboradorResponse {
+  ok: true;
+  colaborador: Colaborador;
+}
+
+/**
+ * Corpo de criação/edição de colaborador (slot/tenant vêm da sessão, nunca aqui).
+ * Todos opcionais porque o PATCH é parcial (ex.: toggle de `ativo` só envia ativo).
+ * Na criação, a validação do form (lib/equipe) garante o `nome`.
+ */
+export interface ColaboradorInput {
+  nome?: string;
+  servicos?: string[];
+  ativo?: boolean;
+  ordem?: number;
 }
 
 // ── Horarios ─────────────────────────────────────────────────────────────────

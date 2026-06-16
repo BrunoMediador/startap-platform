@@ -24,6 +24,7 @@ import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
+import { portalEquipeRoutes } from './routes/portal-equipe.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalPerfilRoutes } from './routes/portal-perfil.js';
 import { portalSignupRoutes } from './routes/portal-signup.js';
@@ -110,6 +111,10 @@ async function main() {
   // Reconexão self-service da sessão WAHA (ADR 0015) — escopo encapsulado: tem o
   // próprio @fastify/rate-limit por user (keyGenerator por cookie de sessão).
   await app.register(portalConexaoRoutes);
+  // Painel do dono de ESTABELECIMENTO (Fatia 1 — equipe). Gated em profundidade:
+  // flag ESTABELECIMENTO_ENABLED (404 se OFF) + product_type do clone (409 se
+  // individual). Individual (Cirilo/Samuel) nunca alcança escrita de colaborador.
+  await app.register(portalEquipeRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);

@@ -5,11 +5,17 @@
  * disponivel pras telas usarem nas query keys (isolamento por tenant). Nunca e
  * editavel pelo cliente — so leitura.
  */
+import type { ProductType } from '@/lib/api-types';
 import { createContext, useContext } from 'react';
 
 interface SessionCtx {
   slot: string;
   username: string;
+  /** Tipo de conta (vem do servidor, READ-only). Default 'individual' — gating do
+   *  painel de estabelecimento. Individual = portal enxuto idêntico ao de hoje. */
+  productType: ProductType;
+  /** Teto contratual de vagas do estabelecimento (null = sem teto / individual). */
+  seatCap: number | null;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -17,9 +23,11 @@ const Ctx = createContext<SessionCtx | null>(null);
 export function SessionProvider({
   slot,
   username,
+  productType,
+  seatCap,
   children,
 }: SessionCtx & { children: React.ReactNode }) {
-  return <Ctx.Provider value={{ slot, username }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ slot, username, productType, seatCap }}>{children}</Ctx.Provider>;
 }
 
 export function useTenant(): SessionCtx {

@@ -185,6 +185,20 @@ export const ConfigSchema = z.object({
   // cai num default fixo (hash determinístico ainda anonimiza o suficiente p/ log).
   DEMO_IP_HASH_SALT: z.string().optional(),
 
+  // ── Painel do dono de ESTABELECIMENTO no portal (Fatia 1 — equipe) ──────────
+  // Kill-switch da seção Equipe self-service no portal. OPCIONAL no boot (ausente =
+  // OFF, lição #247: feature dormente nunca derruba o portal-api). É defesa em
+  // PROFUNDIDADE — o gating real é o product_type do clone (READ-only do banco): só
+  // estabelecimento alcança as rotas /portal/equipe. Esta flag permite DESLIGAR a
+  // feature no portal sem mexer no banco nem no caminho do gestão (que tem a sua
+  // própria ESTABELECIMENTO_ENABLED, já ON em prod). OFF -> /portal/equipe responde
+  // 404 e /auth/me omite product_type/seat_cap (nav não renderiza o item). Individual
+  // (Cirilo/Samuel) é byte-a-byte com a flag em qualquer estado.
+  ESTABELECIMENTO_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

@@ -23,10 +23,12 @@ import type {
   AuthMe,
   ChargeView,
   CodigoResponse,
+  ColaboradorInput,
   ConexaoResponse,
   ContatosResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
+  EquipeResponse,
   ExcluirAgendamentoResponse,
   Horarios,
   HorariosResponse,
@@ -36,6 +38,7 @@ import type {
   PerfilResponse,
   QrResponse,
   ReconectarResponse,
+  SaveColaboradorResponse,
   SavePerfilResponse,
   Servico,
   ServicosResponse,
@@ -61,6 +64,7 @@ export const qk = {
     ['agenda-slots', slot, data, servico] as const,
   mensalidade: (slot: string) => ['mensalidade', slot] as const,
   conexao: (slot: string) => ['conexao', slot] as const,
+  equipe: (slot: string) => ['equipe', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -420,5 +424,56 @@ export function useCodigoConexao(): UseMutationResult<CodigoResponse, Error, voi
 export function useQrConexao(): UseMutationResult<QrResponse, Error, void> {
   return useMutation({
     mutationFn: () => apiFetch<QrResponse>('/portal/conexao/qr'),
+  });
+}
+
+// ── Equipe / Colaboradores (estabelecimento — GET/POST/PATCH/DELETE) ─────────
+//
+// Toda rota é escopada por slot da sessão no backend (withTenant) + gated por
+// product_type. O front nunca envia slot. A query key carrega o slot pra isolar o
+// cache por tenant. As mutations invalidam a lista (refetch) em vez de editar o
+// cache na mão: o backend é a fonte de verdade do seat_cap/uso (usados/seat_cap).
+
+export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
+  return useQuery({
+    queryKey: qk.equipe(slot),
+    queryFn: ({ signal }) => apiFetch<EquipeResponse>('/portal/equipe', { signal }),
+    retry: false,
+  });
+}
+
+export function useCreateColaborador(
+  slot: string,
+): UseMutationResult<SaveColaboradorResponse, Error, ColaboradorInput> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<SaveColaboradorResponse>('/portal/equipe', { method: 'POST', body }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.equipe(slot) });
+    },
+  });
+}
+
+export function useUpdateColaborador(
+  slot: string,
+): UseMutationResult<SaveColaboradorResponse, Error, { id: number; patch: ColaboradorInput }> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }) =>
+      apiFetch<SaveColaboradorResponse>(`/portal/equipe/${id}`, { method: 'PATCH', body: patch }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.equipe(slot) });
+    },
+  });
+}
+
+export function useRemoveColaborador(slot: string): UseMutationResult<{ ok: true }, Error, number> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiFetch<{ ok: true }>(`/portal/equipe/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.equipe(slot) });
+    },
   });
 }
