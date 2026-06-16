@@ -11,7 +11,7 @@
  */
 import { logger } from '@startap/core/logger';
 import { canonicalE164 } from '@startap/core/phone';
-import { portalUsers } from '@startap/db';
+import { cloneColaboradores, portalUsers } from '@startap/db';
 import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -175,9 +175,37 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/auth/me', { preHandler: withTenant }, async (req, reply) => {
     const tenant = requireTenant(req);
+
+    // Gating do painel de estabelecimento (Fatia 1): product_type vem do banco
+    // (READ-only; o cliente NUNCA o nomeia) e é o ponto ÚNICO de gating do portal —
+    // já é server-fetched pelo guard do (app)/layout, sem fetch extra no client.
+    // Individual (fallback seguro de getScopeBySlot) -> product_type omitido na
+    // resposta -> o portal renderiza IDÊNTICO ao de hoje (Cirilo/Samuel intocados).
+    // Com a flag OFF nem consultamos o banco: feature dormente, /auth/me byte-a-byte.
+    let productType: 'individual' | 'estabelecimento' = 'individual';
+    let seatCap: number | null = null;
+    if (config.ESTABELECIMENTO_ENABLED) {
+      try {
+        const scope = await cloneColaboradores.getScopeBySlot(tenant.slot);
+        productType = scope.product_type;
+        seatCap = scope.seat_cap;
+      } catch (e) {
+        // Nunca derruba /auth/me por causa do gating — degrada pra individual.
+        log.warn(
+          { userId: tenant.userId, err: e instanceof Error ? e.message : String(e) },
+          'falha ao resolver product_type — degrada pra individual',
+        );
+      }
+    }
+
     return reply.code(200).send({
       username: tenant.username,
       slot: tenant.slot,
+      // Só envia os campos quando a feature está ON E o cliente é estabelecimento.
+      // Ausentes = individual (o front trata ausência como 'individual').
+      ...(productType === 'estabelecimento'
+        ? { product_type: productType, seat_cap: seatCap }
+        : {}),
     });
   });
 

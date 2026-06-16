@@ -14,6 +14,7 @@ import {
   IconPause,
   IconServices,
   IconUser,
+  IconUsers,
   IconWallet,
   IconWhatsapp,
 } from '@/components/icons';
@@ -22,13 +23,18 @@ export interface NavItem {
   href: string;
   label: string;
   Icon: typeof IconHome;
-  /** 'conexao' = item gated pela flag GET /portal/conexao.enabled. */
-  gated?: 'conexao';
+  /** Item GATED:
+   *  - 'conexao'        -> só aparece com GET /portal/conexao.enabled true.
+   *  - 'estabelecimento' -> só aparece quando product_type === 'estabelecimento'
+   *    (vem da sessão /auth/me). Individual (Cirilo/Samuel) nunca vê.
+   */
+  gated?: 'conexao' | 'estabelecimento';
 }
 
 export const NAV_ITEMS: NavItem[] = [
   { href: '/inicio', label: 'Início', Icon: IconHome },
   { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: 'conexao' },
+  { href: '/equipe', label: 'Equipe', Icon: IconUsers, gated: 'estabelecimento' },
   { href: '/servicos', label: 'Serviços', Icon: IconServices },
   { href: '/horarios', label: 'Horários', Icon: IconCalendar },
   { href: '/perfil', label: 'Meu negócio', Icon: IconUser },

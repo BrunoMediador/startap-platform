@@ -49,7 +49,16 @@ export type {
   HorariosFuncionamento,
   ServicoConfig,
 } from './queries/flow-clones.js';
-export type { ProductType } from './queries/clone-colaboradores.js';
+export type {
+  ProductType,
+  ColaboradorRow,
+  CloneScope,
+  CreateColaboradorInput,
+  UpdateColaboradorInput,
+} from './queries/clone-colaboradores.js';
+// Classe de erro de regra (seat_cap/homônimo) — re-export de VALOR para o caller
+// (portal/gestão) usar `instanceof` no tratamento de 409.
+export { ColaboradorRuleError } from './queries/clone-colaboradores.js';
 export type { BotCourseRow } from './queries/bot-courses.js';
 export type { PortalPausaRow } from './queries/portal-config.js';
 export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';

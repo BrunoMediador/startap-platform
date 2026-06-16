@@ -28,7 +28,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const businessName = await getServerBusinessName(session.slot);
 
   return (
-    <SessionProvider slot={session.slot} username={session.username}>
+    <SessionProvider
+      slot={session.slot}
+      username={session.username}
+      productType={session.product_type ?? 'individual'}
+      seatCap={session.seat_cap ?? null}
+    >
       {/* Fundo vivo fixo (atras de TODO o shell, z-[-1]): a constelacao do login
           persistente em todas as rotas autenticadas. + vinheta por cima do
           canvas pra contraste AA do texto que rola sobre as particulas. */}
