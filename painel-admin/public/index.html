@@ -7986,9 +7986,30 @@ async function _renderPauseTab(container, slot) {
  *  opts.reloadFn     — função sem argumentos para recarregar a aba
  * ================================================================ */
 function _renderGcalTab(opts) {
-  const { baseUrl, entityLabel, container, reloadFn } = opts;
+  const { baseUrl, entityLabel, container, reloadFn, isEstabelecimento } = opts;
+
+  // Estabelecimento NÃO usa a agenda do nível do clone (flow_clones.gcal_*).
+  // O bot de estabelecimento agenda nas agendas dos COLABORADORES
+  // (clone_colaboradores.gcal_calendar_id). Testar a agenda do clone aqui
+  // produz um CALENDAR_NOT_SHARED enganoso "mesmo dando certo". Então, em vez
+  // de rodar o teste do nível do clone, mostramos uma nota apontando pra aba
+  // Colaboradores. Clones individuais (Cirilo/Samuel) seguem o fluxo normal.
+  function _renderEstabelecimentoNote() {
+    container.innerHTML = `
+      <div style="padding-top:.75rem;display:flex;flex-direction:column;gap:.875rem">
+        <div style="padding:.75rem 1rem;background:var(--surface-2);border:1px solid var(--info);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+          <span style="color:var(--info);flex-shrink:0">${icon('info', 22)}</span>
+          <div>
+            <div style="font-weight:600;margin-bottom:.375rem">Estabelecimento usa as agendas dos colaboradores</div>
+            <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;line-height:1.5">Neste tipo de conta, cada colaborador tem a <strong>sua própria agenda</strong> do Google Calendar. O bot agenda na agenda do colaborador escolhido — a agenda do nível do clone <strong>não é usada</strong> aqui.</p>
+            <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Para conectar/conferir cada agenda, vá na aba <strong>👥 Colaboradores</strong> e configure o Google Calendar de cada um.</p>
+          </div>
+        </div>
+      </div>`;
+  }
 
   async function loadTab() {
+    if (isEstabelecimento) { _renderEstabelecimentoNote(); return; }
     container.innerHTML = `<div style="padding-top:.75rem;display:flex;justify-content:center"><div class="spinner"></div></div>`;
     let data;
     try {
@@ -9441,12 +9462,16 @@ function loadCloneConfigTab(tab, clone) {
     }
 
   } else if (tab === 'gcal') {
-    /* ── Google Calendar (Service Account por clone) — usa helper _renderGcalTab ── */
+    /* ── Google Calendar (Service Account por clone) — usa helper _renderGcalTab ──
+     * Estabelecimento usa as agendas dos colaboradores (clone_colaboradores.gcal_*),
+     * não a do nível do clone — por isso o helper mostra uma nota em vez de rodar o
+     * teste enganoso. Clones individuais (Cirilo/Samuel) seguem normal. */
     _renderGcalTab({
       baseUrl: `/api/clones/${clone.id}`,
       entityLabel: 'clone',
       container: content,
       reloadFn: null,
+      isEstabelecimento: clone.product_type === 'estabelecimento',
     });
   } else if (tab === 'pausa') {
     /* ── Palavras-chave de pausa/retomada do clone ── */
