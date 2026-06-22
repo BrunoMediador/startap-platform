@@ -1,19 +1,25 @@
 /**
  * bot-blocklist — blocklist GLOBAL de números internos da operação.
  *
- * Por quê: alguns números são NOSSOS (ex.: a sessão `ALERTAS` / 7411, que dispara
- * avisos pro time e pros donos). Quando esse número manda mensagem pra QUALQUER bot
- * cliente, o bot NÃO deve responder (nem chamar IA/GCal) — senão dois sistemas
- * internos ficam conversando entre si. O filtro vale pra TODOS os clones (atuais e
+ * Por quê: o número remetente da sessão `ALERTAS` (553598373138) é NOSSO — dispara
+ * avisos pro time e pros donos. Quando esse número manda mensagem pra QUALQUER bot
+ * cliente (ex.: o alerta de cancelamento que chega no próprio número da barbearia),
+ * o bot NÃO deve responder (nem chamar IA/GCal) — senão dois sistemas internos ficam
+ * conversando entre si (loop/eco). O filtro vale pra TODOS os clones (atuais e
  * futuros) porque mora no router compartilhado, ANTES de chegar nos bots.
  *
  * Configuração: env OPCIONAL `BOT_BLOCKLIST_NUMBERS` (lista separada por vírgula).
- * Default já inclui o 7411 (553599247411). Env OPCIONAL com default = NÃO é env
- * obrigatória nova no boot (lição do incidente #247: env nova nunca derruba a api).
+ * Default já inclui o remetente atual da ALERTAS (553598373138) — sem depender de
+ * setar a env em prod. Env OPCIONAL com default = NÃO é env obrigatória nova no boot
+ * (lição do incidente #247: env nova nunca derruba a api). A env soma números extras.
+ *
+ * NOTA (Missão pós-023): o número ANTIGO 553599247411 ("7411") NÃO é mais o remetente
+ * de alertas e foi LIBERADO do blocklist — o Bruno vai reusá-lo pra outros fins, então
+ * o bot PRECISA poder interagir com ele. Quem bloqueia agora é o remetente ATUAL.
  *
  * IMPORTANTE — NÃO bloquear números do time/teste: o Bruno testa os bots com o
  * número dele (ex.: 5519981018908) e com 553598877248. Esses NÃO entram aqui. Só
- * o(s) número(s) OPERACIONAL(is) interno(s) tipo o 7411.
+ * o(s) número(s) OPERACIONAL(is) interno(s) que enviam alerta (a sessão ALERTAS).
  *
  * Comparação: só dígitos. Para tolerar o 9º dígito móvel BR (a WAHA/Baileys ora
  * entrega com, ora sem o 9), comparamos tanto os dígitos crus quanto a forma
@@ -21,14 +27,14 @@
  */
 import { canonicalE164 } from '@startap/core/phone';
 
-/** Número operacional interno padrão (sessão ALERTAS / 7411). */
-export const DEFAULT_BLOCKLIST_NUMBER = '553599247411';
+/** Número remetente atual da sessão ALERTAS — bloqueado por DEFAULT (sem precisar de env). */
+export const DEFAULT_BLOCKLIST_NUMBER = '553598373138';
 
 /**
  * Parseia a env `BOT_BLOCKLIST_NUMBERS` (CSV) em um Set de números normalizados.
- * O default (7411) é SEMPRE incluído, mesmo que a env traga outros — a menos que
- * a env explicitamente o omita? Não: o default é uma base de segurança, então é
- * unido ao que vier da env. Cada item é normalizado (dígitos + canônico).
+ * O default (remetente da ALERTAS) é SEMPRE incluído, mesmo que a env traga outros:
+ * é uma base de segurança, unida ao que vier da env. Cada item é normalizado
+ * (dígitos + canônico).
  */
 function parseBlocklist(rawEnv: string | undefined): Set<string> {
   const out = new Set<string>();
