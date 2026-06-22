@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalE164, extractPhone, isGroupChat, phoneHint, toChatId } from './phone.js';
+import {
+  canonicalE164,
+  extractPhone,
+  isGroupChat,
+  meIdToDigits,
+  phoneHint,
+  toChatId,
+} from './phone.js';
 import type { WahaWebhookBody } from './types.js';
 
 const base = {
@@ -153,6 +160,39 @@ describe('canonicalE164', () => {
     expect(canonicalE164('abc')).toBeNull();
     expect(canonicalE164('999')).toBeNull();
     expect(canonicalE164('55319')).toBeNull();
+  });
+});
+
+describe('meIdToDigits — autofill do alert_owner_phone (preserva o 9, NÃO canonicaliza)', () => {
+  it('PRESERVA o 9 do me.id de 13 dígitos (formato gravado nos pagantes)', () => {
+    // canonicalE164 removeria o 9 (-> 12 díg); meIdToDigits NÃO — bate com o Cirilo.
+    expect(meIdToDigits('5511979630828@c.us')).toBe('5511979630828');
+  });
+
+  it('mantém 12 dígitos sem o 9 como estão (me.id ao vivo do Samuel)', () => {
+    expect(meIdToDigits('553591746797@c.us')).toBe('553591746797');
+  });
+
+  it('corta sufixo de device (":12") e domínio (@s.whatsapp.net)', () => {
+    expect(meIdToDigits('5531999998842:12@s.whatsapp.net')).toBe('5531999998842');
+  });
+
+  it('remove o "+" inicial (me.id do Vitor vem com +)', () => {
+    expect(meIdToDigits('+556599453860@c.us')).toBe('556599453860');
+  });
+
+  it('aceita máscara BR e devolve só dígitos (sem prefixar 55 — preserva o que veio)', () => {
+    expect(meIdToDigits('(11) 97963-0828')).toBe('11979630828');
+  });
+
+  it('remove prefixo tronco 0 à esquerda', () => {
+    expect(meIdToDigits('031999998842')).toBe('31999998842');
+  });
+
+  it('rejeita entrada curta/vazia/inválida -> null', () => {
+    expect(meIdToDigits('')).toBeNull();
+    expect(meIdToDigits('abc')).toBeNull();
+    expect(meIdToDigits('123')).toBeNull();
   });
 });
 
