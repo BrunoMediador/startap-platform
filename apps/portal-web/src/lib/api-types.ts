@@ -186,6 +186,13 @@ export interface Agendamento {
   titulo: string;
   inicio: string | null; // ISO ou date
   fim: string | null;
+  /**
+   * Estabelecimento (multi-profissional): de qual colaborador é o evento.
+   * AUSENTES no individual (single-agenda) — a agenda renderiza idêntico a hoje.
+   * Só presentes quando o backend agrega as agendas dos colaboradores.
+   */
+  colaborador_id?: number;
+  profissional_nome?: string;
 }
 
 export interface AgendamentosResponse {

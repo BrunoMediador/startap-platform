@@ -13,6 +13,7 @@
  *   - com eventos        -> AgendaClient (Lista/Semana).
  */
 import { AgendaClient } from '@/components/agenda/agenda-client';
+import { AgendaEstabelecimentoClient } from '@/components/agenda/agenda-estabelecimento-client';
 import { IconCalendar } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { PageHead } from '@/components/ui/page-head';
@@ -22,15 +23,22 @@ import { useAgendamentos } from '@/lib/queries';
 import { useRouter } from 'next/navigation';
 
 export default function AgendaPage() {
-  const { slot } = useTenant();
+  const { slot, productType } = useTenant();
   const router = useRouter();
   const q = useAgendamentos(slot);
+  // Estabelecimento (multi-profissional): variante com cor/coluna por profissional.
+  // Individual (Cirilo/Samuel): segue idêntico a hoje (AgendaClient).
+  const isEstabelecimento = productType === 'estabelecimento';
 
   return (
     <>
       <PageHead
         title="Agenda"
-        subtitle="Todos os horários da sua agenda. Toque num pra remarcar, trocar o serviço ou cancelar."
+        subtitle={
+          isEstabelecimento
+            ? 'Os horários de todos os profissionais, cada um com sua cor. Toque num pra remarcar, trocar o serviço ou cancelar.'
+            : 'Todos os horários da sua agenda. Toque num pra remarcar, trocar o serviço ou cancelar.'
+        }
       />
 
       {q.isPending ? (
@@ -53,6 +61,8 @@ export default function AgendaPage() {
           description="Assim que o robô marcar um atendimento no WhatsApp, ele aparece aqui. Você também pode marcar um na mão."
           action={{ label: 'Marcar um horário', onClick: () => router.push('/agendamentos/novo') }}
         />
+      ) : isEstabelecimento ? (
+        <AgendaEstabelecimentoClient slot={slot} data={q.data} />
       ) : (
         <AgendaClient data={q.data} />
       )}
