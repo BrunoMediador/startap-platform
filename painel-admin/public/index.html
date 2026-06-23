@@ -8033,6 +8033,20 @@ function _renderGcalTab(opts) {
             <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Para conectar/conferir cada agenda, vá na aba <strong>👥 Colaboradores</strong> e configure o Google Calendar de cada um.</p>
           </div>
         </div>
+        <details class="gcal-help-block">
+        <summary>${icon('help-circle', 14)} 👥 Vários colaboradores (uma agenda por barbeiro) — regra de ouro</summary>
+        <div class="gcal-help-block__body">
+        <p class="muted">Aqui cada barbeiro tem a <strong>sua própria agenda</strong> do Google, mas o <strong>robô (a conta de serviço) é UM SÓ</strong> pra todo o salão. Você não cria um robô por barbeiro — cria o robô uma vez (o tutorial de conexão tem o passo a passo) e <strong>reaproveita o mesmo e-mail dele em todas as agendas</strong>.</p>
+        <ol class="gcal-instructions gcal-instructions--plain">
+          <li><strong>(1) Um e-mail de robô só.</strong> O e-mail da conta de serviço (termina em <code>.iam.gserviceaccount.com</code>) é o <strong>mesmo</strong> pra todos os colaboradores do salão. Anote ele.</li>
+          <li><strong>(2) Uma agenda Google por barbeiro.</strong> No <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a>, crie uma agenda separada para cada barbeiro (ex.: <code>Agenda do Maria</code>, <code>Agenda do João</code>). <span style="color:var(--danger);font-weight:bold">&#9888; Hoje isso é manual</span> — criar a agenda de cada colaborador você faz na mão (a dica também está no formulário de cada colaborador).</li>
+          <li><strong>(3) Compartilhe TODAS as agendas com o MESMO e-mail do robô.</strong> Em cada agenda &#8594; <strong>Configurações e compartilhamento</strong> &#8594; <strong>Adicionar pessoas e grupos</strong> &#8594; cole o e-mail do robô (o tal <code>.iam.gserviceaccount.com</code>) e escolha a permissão <strong>Fazer alterações nos eventos</strong>. Repita em cada agenda. <span style="color:var(--danger);font-weight:bold">&#9888; Sem esse compartilhamento, aquela agenda dá erro <code>404</code> ("Calendar not found").</span></li>
+          <li><strong>(4) Cole o ID de cada agenda no colaborador certo.</strong> Pegue o <strong>ID da agenda</strong> (em <strong>Integrar agenda</strong>, termina em <code>@group.calendar.google.com</code>) e cole no campo <strong>ID da agenda Google</strong> do colaborador correspondente, na aba <strong>👥 Colaboradores</strong>. Cada barbeiro recebe o ID da agenda dele.</li>
+        </ol>
+        <p class="muted"><strong>Por que dá certo:</strong> a permissão de criar horários vem do <strong>compartilhamento da agenda</strong>, não de um robô por pessoa. Por isso um único robô atende o salão inteiro — basta cada agenda tê-lo como convidado.</p>
+        <p class="muted"><span style="color:var(--danger);font-weight:bold">&#9888; Importante:</span> agenda por barbeiro só vale neste tipo de conta (<strong>estabelecimento</strong>). Em conta <strong>individual</strong> é uma agenda só pro salão todo — todos os horários caem nela.</p>
+        </div>
+        </details>
       </div>`;
   }
 
