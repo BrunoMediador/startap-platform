@@ -34,6 +34,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       productType={session.product_type ?? 'individual'}
       seatCap={session.seat_cap ?? null}
       atendimentosEnabled={session.atendimentos_enabled ?? false}
+      atendFromAgenda={session.atend_from_agenda ?? false}
     >
       {/* Fundo vivo fixo (atras de TODO o shell, z-[-1]): a constelacao do login
           persistente em todas as rotas autenticadas. + vinheta por cima do

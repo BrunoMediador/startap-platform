@@ -18,6 +18,12 @@ interface SessionCtx {
   seatCap: number | null;
   /** App de gestão (atendimentos + relatórios) ligado p/ este cliente (flag do backend). */
   atendimentosEnabled: boolean;
+  /**
+   * Billing derivado da agenda (ADR 0027 Fase C). Quando true, a área de faturamento
+   * ganha as abas Previsão/Faturado editáveis. false = faturamento IDÊNTICO ao de
+   * hoje (SOLO Cirilo/Samuel não regride). Vem da sessão (READ-only).
+   */
+  atendFromAgenda: boolean;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -28,10 +34,13 @@ export function SessionProvider({
   productType,
   seatCap,
   atendimentosEnabled,
+  atendFromAgenda,
   children,
 }: SessionCtx & { children: React.ReactNode }) {
   return (
-    <Ctx.Provider value={{ slot, username, productType, seatCap, atendimentosEnabled }}>
+    <Ctx.Provider
+      value={{ slot, username, productType, seatCap, atendimentosEnabled, atendFromAgenda }}
+    >
       {children}
     </Ctx.Provider>
   );
