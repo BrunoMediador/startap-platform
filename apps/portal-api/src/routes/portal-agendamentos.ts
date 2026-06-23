@@ -123,6 +123,125 @@ const editarAgendamentoSchema = z
     message: 'informe ao menos um campo para editar',
   });
 
+/**
+ * Determina se o slot opera no modo estabelecimento (multi-profissional) para
+ * roteamento de DELETE/PATCH. Gating IDÊNTICO ao do GET: só TRUE quando a flag
+ * ESTABELECIMENTO_ENABLED está ligada E product_type='estabelecimento'. Qualquer
+ * falha ao resolver o tipo degrada pro caminho individual (seguro — byte-a-byte
+ * como hoje pra Cirilo/Samuel).
+ */
+async function isEstabelecimentoSlot(slot: string): Promise<boolean> {
+  if (!config.ESTABELECIMENTO_ENABLED) return false;
+  try {
+    const scope = await cloneColaboradores.getScopeBySlot(slot);
+    return scope.product_type === 'estabelecimento';
+  } catch (err) {
+    log.warn(
+      { slot, err: err instanceof Error ? err.message : 'erro' },
+      'product_type indeterminado — tratando como individual',
+    );
+    return false;
+  }
+}
+
+// ---- Resolução de agenda para DELETE/PATCH (individual + estabelecimento) ----
+//
+// DELETE/PATCH precisam encontrar a agenda GCal onde o `eventId` vive — e SÓ pode
+// ser uma agenda DESTE tenant (guarda anti-IDOR). No INDIVIDUAL é trivial: uma
+// agenda única (getGcalForSlot). No ESTABELECIMENTO o clone não tem agenda própria;
+// o evento mora no calendarId de UM colaborador. Aqui resolvemos, por product_type,
+// QUAL client opera o evento, varrendo apenas as agendas dos colaboradores DESTE
+// slot/tenant (getGcalsForSlot já é escopado por slot+tenant na integração, ADR 0024
+// §4) — um eventId de outro tenant jamais aparece nessas listagens.
+//
+// Estados de retorno (discriminados em `kind`):
+//   - 'unconfigured' : nenhuma agenda resolvível (pré-setup / GCal não configurado).
+//   - 'not_found'    : agendas existem, mas o eventId não está em NENHUMA delas.
+//   - 'found'        : { client, event, colaboradorId? } — client é a agenda DONA do
+//                      evento; o caller opera (delete/patch) NESSE client.
+//   - 'error'        : falha transitória do GCal ao listar (502 no caller). `msg`
+//                      carrega a mensagem pra o caller decidir invalidar cache (401/403).
+//
+// IMPORTANTE: no estabelecimento NÃO movemos evento entre colaboradores (v1). O PATCH
+// reusa o MESMO client/colaborador resolvido aqui → o eventId é preservado (ADR 0025
+// dívida 5: nenhuma baixa nova no ledger de pacotes).
+/** GoogleCalendarClient resolvido (non-null) — tipo derivado da própria integração. */
+type ResolvedGcalClient = NonNullable<Awaited<ReturnType<typeof gcal.getGcalForSlot>>>;
+
+type ResolveResult =
+  | { kind: 'unconfigured' }
+  | { kind: 'not_found' }
+  | { kind: 'error'; msg: string }
+  | {
+      kind: 'found';
+      client: ResolvedGcalClient;
+      event: gcal.CalendarEvent;
+      colaboradorId?: number;
+    };
+
+/**
+ * Resolve o client GCal que CONTÉM `eventId`, escopado ao tenant, respeitando o
+ * product_type. Janela de validação = a mesma do caller (-7/+60d).
+ *
+ * - individual: getGcalForSlot(slot) + lista + acha o evento (igual ao fluxo legado).
+ * - estabelecimento: getGcalsForSlot(slot) + lista cada agenda de colaborador (em
+ *   paralelo) e devolve a agenda dona do evento. Falha de UMA agenda não derruba a
+ *   busca (allSettled). Se TODAS falharam e nada foi achado → 'error' (transitório).
+ */
+async function resolveEventClient(
+  slot: string,
+  isEstabelecimento: boolean,
+  eventId: string,
+  timeMin: string,
+  timeMax: string,
+): Promise<ResolveResult> {
+  if (!isEstabelecimento) {
+    const client = await gcal.getGcalForSlot(slot);
+    if (!client) return { kind: 'unconfigured' };
+    try {
+      const events = await client.listEvents({ timeMin, timeMax });
+      const event = events.find((e) => e.id === eventId);
+      if (!event) return { kind: 'not_found' };
+      return { kind: 'found', client, event };
+    } catch (err) {
+      return { kind: 'error', msg: err instanceof Error ? err.message : 'erro' };
+    }
+  }
+
+  // Estabelecimento: o evento vive na agenda de UM colaborador deste slot/tenant.
+  const colaboradores = await gcal.getGcalsForSlot(slot);
+  if (colaboradores.length === 0) return { kind: 'unconfigured' };
+
+  const settled = await Promise.allSettled(
+    colaboradores.map((c) => c.client.listEvents({ timeMin, timeMax })),
+  );
+
+  let houveSucesso = false;
+  let ultimaFalha = '';
+  for (let i = 0; i < settled.length; i++) {
+    const res = settled[i];
+    const colab = colaboradores[i];
+    if (res.status !== 'fulfilled') {
+      ultimaFalha = res.reason instanceof Error ? res.reason.message : 'erro';
+      log.warn(
+        { slot, colaboradorId: colab.colaboradorId, err: ultimaFalha },
+        'resolveEventClient: falha ao listar agenda de um colaborador (ignorado)',
+      );
+      continue;
+    }
+    houveSucesso = true;
+    const event = res.value.find((e) => e.id === eventId);
+    if (event) {
+      return { kind: 'found', client: colab.client, event, colaboradorId: colab.colaboradorId };
+    }
+  }
+
+  // Nada achado. Se NENHUMA listagem deu certo, é falha transitória (502); se ao
+  // menos uma agenda respondeu e o evento não estava em lugar nenhum, é 404 real.
+  if (!houveSucesso) return { kind: 'error', msg: ultimaFalha || 'erro' };
+  return { kind: 'not_found' };
+}
+
 export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/agendamentos', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
@@ -147,22 +266,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     // Gating estrito: só entra com a flag ESTABELECIMENTO_ENABLED ligada E o clone
     // sendo product_type='estabelecimento'. Qualquer outro caso cai no caminho
     // INDIVIDUAL abaixo — byte-a-byte como hoje (Cirilo/Samuel inalterados).
-    if (config.ESTABELECIMENTO_ENABLED) {
-      let isEstabelecimento = false;
-      try {
-        const scope = await cloneColaboradores.getScopeBySlot(slot);
-        isEstabelecimento = scope.product_type === 'estabelecimento';
-      } catch (err) {
-        // Falha ao resolver o tipo → degrada pro caminho individual (seguro).
-        log.warn(
-          { slot, err: err instanceof Error ? err.message : 'erro' },
-          'product_type indeterminado — caindo no caminho individual',
-        );
-      }
-
-      if (isEstabelecimento) {
-        return handleEstabelecimento(slot, timeMin, timeMax, reply);
-      }
+    if (await isEstabelecimentoSlot(slot)) {
+      return handleEstabelecimento(slot, timeMin, timeMax, reply);
     }
 
     // ── INDIVIDUAL (single-agenda) — inalterado ───────────────────────────────
@@ -369,29 +474,41 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
     const { eventId } = parsed.data;
 
-    const client = await gcal.getGcalForSlot(slot);
-    if (!client) {
-      return reply.code(422).send({ error: 'gcal_nao_configurado' });
-    }
-
     const now = new Date();
     const timeMin = new Date(now.getTime() - DELETE_LOOKBACK_DAYS * 86_400_000).toISOString();
     const timeMax = new Date(now.getTime() + DELETE_LOOKAHEAD_DAYS * 86_400_000).toISOString();
 
+    // Resolve a agenda DONA do evento (individual = agenda única; estabelecimento =
+    // a agenda do colaborador onde o evento vive). Guarda anti-IDOR embutida: a
+    // busca só varre agendas DESTE slot/tenant — eventId alheio nunca é encontrado.
+    const estab = await isEstabelecimentoSlot(slot);
+    let resolved: ResolveResult;
     try {
-      // Guarda de pertencimento: o eventId TEM que estar na agenda DESTE tenant.
-      const events = await client.listEvents({ timeMin, timeMax });
-      const pertence = events.some((e) => e.id === eventId);
-      if (!pertence) {
-        log.warn(
-          { slot, userId, eventId },
-          'cancelamento negado: eventId fora da agenda do tenant',
-        );
-        return reply.code(404).send({ error: 'evento_nao_encontrado' });
-      }
+      resolved = await resolveEventClient(slot, estab, eventId, timeMin, timeMax);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'erro';
+      log.error({ slot, userId, eventId, err: msg }, 'cancelamento: falha ao resolver agenda');
+      return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
+    }
 
+    if (resolved.kind === 'unconfigured') {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+    if (resolved.kind === 'error') {
+      if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
+      log.error({ slot, userId, eventId, err: resolved.msg }, 'cancelamento: falha no GCal');
+      return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
+    }
+    if (resolved.kind === 'not_found') {
+      log.warn({ slot, userId, eventId }, 'cancelamento negado: eventId fora da agenda do tenant');
+      return reply.code(404).send({ error: 'evento_nao_encontrado' });
+    }
+
+    const { client, colaboradorId } = resolved;
+
+    try {
       await client.deleteEvent(eventId);
-      log.info({ slot, userId, eventId }, 'agendamento cancelado via portal');
+      log.info({ slot, userId, eventId, colaboradorId }, 'agendamento cancelado via portal');
       return reply.code(200).send({ ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
@@ -414,17 +531,19 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   // do cliente. REMARCAR = PATCH no MESMO eventId — NUNCA delete+create (preserva
   // o vínculo do ledger de pacotes, ADR 0025 dívida 5; nenhuma baixa nova ocorre).
   //
-  // Guarda anti-IDOR IDÊNTICA à do DELETE: re-lista a agenda DO TENANT (-7/+60d,
-  // slot resolvido por getGcalForSlot(slot), nunca por input) e confirma que o
-  // eventId está LÁ. Se não está → 404 e NADA muda. Como cada clone tem agenda/SA
-  // próprias (sem fallback pra matriz), eventId de outro tenant jamais aparece.
+  // Guarda anti-IDOR IDÊNTICA à do DELETE: resolve a agenda DO TENANT (-7/+60d) via
+  // resolveEventClient (individual = agenda única; estabelecimento = a agenda do
+  // colaborador onde o evento vive, varrendo só agendas deste slot/tenant) e confirma
+  // que o eventId está LÁ. Se não está → 404 e NADA muda. eventId de outro tenant
+  // jamais aparece nessas listagens.
   //
-  // Anti-corrida: recheca a NOVA janela contra o GCal, IGNORANDO o próprio evento,
-  // antes de aplicar → 409 estruturado se colidir; o front recarrega a grade.
+  // Anti-corrida: recheca a NOVA janela NA MESMA agenda resolvida, IGNORANDO o próprio
+  // evento, antes de aplicar → 409 estruturado se colidir; o front recarrega a grade.
   //
-  // v1 = SÓ clone single-agenda (getGcalForSlot resolve a agenda principal — cobre
-  // todos os clientes de hoje). Estabelecimento multi-colaborador (agenda por
-  // barbeiro, mover entre colaboradores) é FOLLOW-UP explícito, fora de escopo.
+  // ESTABELECIMENTO: remarcar/trocar serviço acontece na MESMA agenda do colaborador
+  // dono do evento (o eventId é preservado → ADR 0025 dívida 5: sem baixa nova no
+  // ledger). v1 NÃO move evento entre colaboradores — trocar de profissional é
+  // FOLLOW-UP; o body atual não expõe isso, então não há caso a recusar aqui.
 
   app.patch('/portal/agendamentos/:eventId', { preHandler: withTenant }, async (req, reply) => {
     const { slot, userId } = requireTenant(req);
@@ -443,11 +562,6 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const patch = bodyParsed.data;
-
-    const client = await gcal.getGcalForSlot(slot);
-    if (!client) {
-      return reply.code(422).send({ error: 'gcal_nao_configurado' });
-    }
 
     // Config do tenant — só precisamos validar serviço/horário se data/hora/serviço
     // mudaram. Mas a duração do serviço (atual ou novo) é necessária pra calcular a
@@ -472,15 +586,35 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const timeMinGuard = new Date(now.getTime() - DELETE_LOOKBACK_DAYS * 86_400_000).toISOString();
     const timeMaxGuard = new Date(now.getTime() + DELETE_LOOKAHEAD_DAYS * 86_400_000).toISOString();
 
+    // Resolve a agenda DONA do evento (mesma lógica do DELETE). No estabelecimento, o
+    // client devolvido é o do colaborador onde o evento vive — patchEvent acontece NELE
+    // (preserva eventId; não move entre colaboradores).
+    const estab = await isEstabelecimentoSlot(slot);
+    let resolved: ResolveResult;
     try {
-      // Guarda de pertencimento: o eventId TEM que estar na agenda DESTE tenant.
-      const events = await client.listEvents({ timeMin: timeMinGuard, timeMax: timeMaxGuard });
-      const atual = events.find((e) => e.id === eventId);
-      if (!atual) {
-        log.warn({ slot, userId, eventId }, 'edicao negada: eventId fora da agenda do tenant');
-        return reply.code(404).send({ error: 'evento_nao_encontrado' });
-      }
+      resolved = await resolveEventClient(slot, estab, eventId, timeMinGuard, timeMaxGuard);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'erro';
+      log.error({ slot, userId, eventId, err: msg }, 'edicao: falha ao resolver agenda');
+      return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
+    }
 
+    if (resolved.kind === 'unconfigured') {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+    if (resolved.kind === 'error') {
+      if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
+      log.error({ slot, userId, eventId, err: resolved.msg }, 'edicao: falha no GCal');
+      return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
+    }
+    if (resolved.kind === 'not_found') {
+      log.warn({ slot, userId, eventId }, 'edicao negada: eventId fora da agenda do tenant');
+      return reply.code(404).send({ error: 'evento_nao_encontrado' });
+    }
+
+    const { client, event: atual, colaboradorId } = resolved;
+
+    try {
       // Valida serviço (se mudou) contra a config do tenant.
       let svc: { name: string; min: number } | undefined;
       if (mudaServico && config) {
@@ -610,6 +744,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
           slot,
           userId,
           eventId,
+          colaboradorId,
           reagenda,
           mudaServico,
           mudaTitulo,
