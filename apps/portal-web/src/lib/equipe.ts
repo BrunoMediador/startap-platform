@@ -64,6 +64,29 @@ export function comissaoToText(pct: number): string {
   return pct > 0 ? String(pct) : '';
 }
 
+/**
+ * Normaliza uma linha de colaborador como vem da rede pro tipo Colaborador.
+ *
+ * Boundary de conversão: `clone_colaboradores.id` é BIGSERIAL e o driver pg
+ * serializa BIGINT como STRING ("4") no JSON; `comissao_pct` é NUMERIC e também
+ * pode chegar como string. Sem este map, o `id` string quebra DOIS fluxos no
+ * portal:
+ *   1. Editar colaborador: o gate `typeof editing === 'number'` (equipe/page)
+ *      fica false pra string → o PATCH nunca dispara.
+ *   2. Registrar atendimento: o `colaborador_id` vai como string no POST →
+ *      o backend (Zod number) responde 400.
+ * Converter aqui, no único ponto onde a linha entra no app, conserta tudo de
+ * uma vez (em vez de remendar cada consumidor). `Number(...)` é idempotente:
+ * funciona tanto se o backend já mandar number quanto string.
+ */
+export function mapColaboradorRow(row: Colaborador): Colaborador {
+  return {
+    ...row,
+    id: Number(row.id),
+    comissao_pct: Number(row.comissao_pct),
+  };
+}
+
 /** Colaborador (da API) -> Draft pra editar no form. */
 export function toDraft(c: Colaborador): Draft {
   return {

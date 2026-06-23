@@ -52,6 +52,7 @@ import type {
   StatusConexaoResponse,
   StatusResponse,
 } from './api-types';
+import { mapColaboradorRow } from './equipe';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
 
@@ -487,7 +488,12 @@ export function useQrConexao(): UseMutationResult<QrResponse, Error, void> {
 export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
   return useQuery({
     queryKey: qk.equipe(slot),
-    queryFn: ({ signal }) => apiFetch<EquipeResponse>('/portal/equipe', { signal }),
+    // Normaliza id (BIGSERIAL -> string) e comissao_pct (NUMERIC) pra number no
+    // boundary. Sem isso, id string quebra o gate de save e o POST de atendimento.
+    queryFn: async ({ signal }) => {
+      const res = await apiFetch<EquipeResponse>('/portal/equipe', { signal });
+      return { ...res, colaboradores: res.colaboradores.map(mapColaboradorRow) };
+    },
     retry: false,
   });
 }
@@ -497,8 +503,13 @@ export function useCreateColaborador(
 ): UseMutationResult<SaveColaboradorResponse, Error, ColaboradorInput> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body) =>
-      apiFetch<SaveColaboradorResponse>('/portal/equipe', { method: 'POST', body }),
+    mutationFn: async (body) => {
+      const res = await apiFetch<SaveColaboradorResponse>('/portal/equipe', {
+        method: 'POST',
+        body,
+      });
+      return { ...res, colaborador: mapColaboradorRow(res.colaborador) };
+    },
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.equipe(slot) });
     },
@@ -510,8 +521,13 @@ export function useUpdateColaborador(
 ): UseMutationResult<SaveColaboradorResponse, Error, { id: number; patch: ColaboradorInput }> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }) =>
-      apiFetch<SaveColaboradorResponse>(`/portal/equipe/${id}`, { method: 'PATCH', body: patch }),
+    mutationFn: async ({ id, patch }) => {
+      const res = await apiFetch<SaveColaboradorResponse>(`/portal/equipe/${id}`, {
+        method: 'PATCH',
+        body: patch,
+      });
+      return { ...res, colaborador: mapColaboradorRow(res.colaborador) };
+    },
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.equipe(slot) });
     },

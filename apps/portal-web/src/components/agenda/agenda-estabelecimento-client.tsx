@@ -42,7 +42,9 @@ export function AgendaEstabelecimentoClient({
   slot: string;
   data: AgendamentosResponse;
 }) {
-  const [periodo, setPeriodo] = useState<PeriodoFiltro>('hoje');
+  // Default 'todos' (igual ao SOLO): 'hoje' mostrava "Nada nesse período" quando
+  // a agenda só tem eventos de outros dias — confuso pra quem acabou de abrir.
+  const [periodo, setPeriodo] = useState<PeriodoFiltro>('todos');
   const [profissionalId, setProfissionalId] = useState<number | null>(null);
   const [aberto, setAberto] = useState<Agendamento | null>(null);
 
