@@ -24,14 +24,18 @@ import type {
   ChargeView,
   CodigoResponse,
   ColaboradorInput,
+  ComissaoReport,
   ConexaoResponse,
   ContatosResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
+  CriarAtendimentoBody,
+  CriarAtendimentoResponse,
   EditarAgendamentoBody,
   EditarAgendamentoResponse,
   EquipeResponse,
   ExcluirAgendamentoResponse,
+  FaturamentoReport,
   Horarios,
   HorariosResponse,
   MensalidadeResponse,
@@ -67,6 +71,12 @@ export const qk = {
   mensalidade: (slot: string) => ['mensalidade', slot] as const,
   conexao: (slot: string) => ['conexao', slot] as const,
   equipe: (slot: string) => ['equipe', slot] as const,
+  /** Prefixo por tenant — invalida todos os relatórios (qualquer período) de uma vez. */
+  relatoriosBase: (slot: string) => ['relatorios', slot] as const,
+  faturamento: (slot: string, de: string, ate: string) =>
+    ['relatorios', slot, 'faturamento', de, ate] as const,
+  comissao: (slot: string, de: string, ate: string) =>
+    ['relatorios', slot, 'comissao', de, ate] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -515,5 +525,73 @@ export function useRemoveColaborador(slot: string): UseMutationResult<{ ok: true
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.equipe(slot) });
     },
+  });
+}
+
+// ── App de gestão: atendimentos + relatórios (ADR 0026) ──────────────────────
+//
+// Toda rota é gated por ATENDIMENTOS_ENABLED no backend (404 quando OFF) e
+// escopada por slot da sessão (withTenant). O front nunca envia slot. As query
+// keys carregam o slot pra isolar o cache por tenant. 404 (flag off) é tratado NA
+// TELA (estado "recurso indisponível"); aqui os hooks só transportam o contrato.
+
+/**
+ * POST /portal/atendimentos — registra um atendimento (dinheiro do cliente final).
+ * No 201, invalida TODOS os relatórios do tenant (qualquer período) pra refletir o
+ * lançamento novo. 400 (validação) e 404 (flag off) são tratados na tela.
+ */
+export function useCriarAtendimento(
+  slot: string,
+): UseMutationResult<CriarAtendimentoResponse, Error, CriarAtendimentoBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarAtendimentoResponse>('/portal/atendimentos', { method: 'POST', body }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
+  });
+}
+
+/**
+ * GET /portal/relatorios/faturamento?de=&ate= — `de`/`ate` OBRIGATÓRIOS no
+ * backend, então o hook só roda com os dois preenchidos (enabled). 404 (flag off)
+ * é tratado na tela. Sem retry: 404 não se resolve sozinho.
+ */
+export function useFaturamento(
+  slot: string,
+  de: string | null,
+  ate: string | null,
+): UseQueryResult<FaturamentoReport> {
+  return useQuery({
+    queryKey: qk.faturamento(slot, de ?? '', ate ?? ''),
+    queryFn: ({ signal }) =>
+      apiFetch<FaturamentoReport>(
+        `/portal/relatorios/faturamento?de=${encodeURIComponent(de ?? '')}&ate=${encodeURIComponent(ate ?? '')}`,
+        { signal },
+      ),
+    enabled: Boolean(de && ate),
+    retry: false,
+  });
+}
+
+/**
+ * GET /portal/relatorios/comissao?de=&ate= — só EMPRESA tem dados (SOLO volta
+ * vazio). `de`/`ate` OBRIGATÓRIOS (enabled só com os dois). 404 (flag off) na tela.
+ */
+export function useComissao(
+  slot: string,
+  de: string | null,
+  ate: string | null,
+): UseQueryResult<ComissaoReport> {
+  return useQuery({
+    queryKey: qk.comissao(slot, de ?? '', ate ?? ''),
+    queryFn: ({ signal }) =>
+      apiFetch<ComissaoReport>(
+        `/portal/relatorios/comissao?de=${encodeURIComponent(de ?? '')}&ate=${encodeURIComponent(ate ?? '')}`,
+        { signal },
+      ),
+    enabled: Boolean(de && ate),
+    retry: false,
   });
 }

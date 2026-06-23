@@ -50,6 +50,12 @@ export interface AuthMe {
   // Ausentes = individual: o portal renderiza IDÊNTICO ao de hoje (Cirilo/Samuel).
   product_type?: ProductType;
   seat_cap?: number | null;
+  /**
+   * App de gestão (atendimentos + relatórios). SEMPRE presente (true/false): o
+   * backend deriva da flag ATENDIMENTOS_ENABLED. false => o portal esconde os
+   * itens de menu de gestão e as páginas mostram "recurso indisponível".
+   */
+  atendimentos_enabled: boolean;
 }
 
 // ── Servicos ─────────────────────────────────────────────────────────────────
@@ -74,6 +80,12 @@ export interface Colaborador {
   servicos: string[];
   ativo: boolean;
   ordem: number;
+  /**
+   * % de comissão sobre o BRUTO do atendimento (0–100). Vem como número do
+   * backend (a coluna é NUMERIC, mas a rota /portal/equipe serializa pra number).
+   * Default 0 = profissional sem comissão configurada.
+   */
+  comissao_pct: number;
   created_at: string;
   updated_at: string;
 }
@@ -101,6 +113,8 @@ export interface ColaboradorInput {
   servicos?: string[];
   ativo?: boolean;
   ordem?: number;
+  /** % de comissão sobre o bruto (0–100). Opcional no PATCH parcial. */
+  comissao_pct?: number;
 }
 
 // ── Horarios ─────────────────────────────────────────────────────────────────
@@ -450,4 +464,105 @@ export interface PerfilResponse {
 export interface SavePerfilResponse {
   ok: true;
   perfil: PerfilNegocio;
+}
+
+// ── App de gestão: atendimentos + relatórios (ADR 0026, migration 058) ────────
+//
+// Fase 1 do app de gestão (faturamento + comissão). TODA rota é gated por
+// ATENDIMENTOS_ENABLED no backend (404 se OFF) e escopada por slot da sessão
+// (withTenant) — o front nunca envia slot. Valores monetários SEMPRE em centavos
+// (*_cents). `atendimentos` (Postgres) é a fonte da verdade do dinheiro do cliente
+// final; é SEPARADO de client_billing/AbacatePay (nossa mensalidade B2B).
+
+/** Formas de pagamento aceitas pelo POST /portal/atendimentos. */
+export type FormaPagamento = 'dinheiro' | 'pix' | 'credito' | 'debito' | 'pacote' | 'outro';
+
+/**
+ * Linha de atendimento registrado (201 do POST /portal/atendimentos).
+ *
+ * GOTCHA: `comissao_pct` volta como STRING (a coluna é NUMERIC no pg e o
+ * serializador não converte). Não usar em cálculo no front sem Number(); a UI
+ * desta entrega só exibe a linha, não recalcula comissão (o relatório já vem
+ * pronto do backend).
+ */
+export interface AtendimentoRow {
+  id: number;
+  servico_nome: string | null;
+  valor_cents: number;
+  desconto_cents: number;
+  // O backend permite forma nula (lançamento sem forma informada). Tratar no render.
+  forma_pagamento: FormaPagamento | null;
+  colaborador_id: number | null;
+  comissao_pct: string;
+  cliente_nome: string | null;
+  cliente_contato: string | null;
+  data: string; // 'YYYY-MM-DD'
+  created_at: string; // ISO
+}
+
+/**
+ * Body do POST /portal/atendimentos. Só `valor_cents` é obrigatório. Regra do
+ * backend: forma_pagamento==='pacote' ZERA o valor (a UI antecipa isso travando
+ * o campo em R$0). `colaborador_id` ausente = SOLO (sem comissão).
+ */
+export interface CriarAtendimentoBody {
+  valor_cents: number;
+  servico_nome?: string;
+  desconto_cents?: number;
+  colaborador_id?: number;
+  forma_pagamento?: FormaPagamento;
+  cliente_nome?: string;
+  cliente_contato?: string;
+  data?: string; // 'YYYY-MM-DD'
+}
+
+/** 201 do POST /portal/atendimentos. */
+export interface CriarAtendimentoResponse {
+  ok: true;
+  atendimento: AtendimentoRow;
+}
+
+// Relatório de faturamento (GET /portal/relatorios/faturamento?de=&ate=).
+
+export interface FaturamentoPorForma {
+  // null = atendimentos sem forma informada (agrupados num bucket "Sem forma").
+  forma_pagamento: FormaPagamento | null;
+  total_cents: number;
+  count: number;
+}
+
+export interface FaturamentoPorProfissional {
+  // No SOLO (sem colaborador) ambos vêm null — render usa fallback "Sem profissional".
+  colaborador_id: number | null;
+  profissional_nome: string | null;
+  total_cents: number;
+  count: number;
+}
+
+export interface FaturamentoReport {
+  de: string; // 'YYYY-MM-DD'
+  ate: string; // 'YYYY-MM-DD'
+  total_cents: number;
+  count: number;
+  ticket_medio_cents: number;
+  por_forma_pagamento: FaturamentoPorForma[];
+  por_profissional: FaturamentoPorProfissional[];
+}
+
+// Relatório de comissão (GET /portal/relatorios/comissao?de=&ate=). SOLO = vazio.
+
+export interface ComissaoPorProfissional {
+  // O backend de comissão filtra colaborador_id IS NOT NULL — id é sempre presente.
+  // `profissional_nome` ainda pode vir null (nome apagado); render usa fallback.
+  colaborador_id: number;
+  profissional_nome: string | null;
+  comissao_cents: number;
+  count: number;
+}
+
+export interface ComissaoReport {
+  de: string; // 'YYYY-MM-DD'
+  ate: string; // 'YYYY-MM-DD'
+  total_cents: number;
+  por_profissional: ComissaoPorProfissional[];
 }

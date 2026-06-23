@@ -1,14 +1,14 @@
 'use client';
 
 /**
- * Logica de navegacao GATED, compartilhada por sidebar e bottom-nav. Filtra
- * NAV_ITEMS pelos dois gates atuais:
- *   - gated:'conexao'        -> só aparece com a feature de reconexao ON
- *     (GET /portal/conexao.enabled true) E com o estado já carregado (evita
- *     piscar o item e sumir).
- *   - gated:'estabelecimento' -> só aparece quando o dono é estabelecimento
- *     (productType da sessao /auth/me, READ-only). Individual (Cirilo/Samuel) ->
- *     productType 'individual' -> item "Equipe" NUNCA renderiza (nav byte-a-byte).
+ * Logica de navegacao GATED, compartilhada por sidebar e bottom-nav. Cada item
+ * pode ter VÁRIOS gates (`gated` é um array) — TODOS precisam passar pra aparecer:
+ *   - 'conexao'        -> só com a feature de reconexao ON (GET /portal/conexao.
+ *     enabled true) E com o estado já carregado (evita piscar o item e sumir).
+ *   - 'estabelecimento' -> só quando o dono é estabelecimento (productType da
+ *     sessao /auth/me, READ-only). Individual (Cirilo/Samuel) nunca vê "Equipe".
+ *   - 'atendimentos'   -> só quando o app de gestão está ligado pro cliente
+ *     (atendimentosEnabled da sessao). "Comissão" combina atendimentos+estabelecimento.
  * Itens sem `gated` nunca filtram.
  *
  * `showDot(item)`: true só pro item "Conectar" quando a sessao NAO esta WORKING
@@ -26,19 +26,23 @@ export function useConexaoNav(): {
   visibleItems: NavItem[];
   showDot: (item: NavItem) => boolean;
 } {
-  const { slot, productType } = useTenant();
+  const { slot, productType, atendimentosEnabled } = useTenant();
   const conexao = useConexao(slot);
   const enabled = conexao.data?.enabled === true;
   const needsAction = conexao.data?.needs_action === true;
   const isEstabelecimento = productType === 'estabelecimento';
 
-  const visibleItems = NAV_ITEMS.filter((item) => {
-    if (item.gated === 'conexao') return enabled;
-    if (item.gated === 'estabelecimento') return isEstabelecimento;
+  const passes = (gate: NonNullable<NavItem['gated']>[number]): boolean => {
+    if (gate === 'conexao') return enabled;
+    if (gate === 'estabelecimento') return isEstabelecimento;
+    if (gate === 'atendimentos') return atendimentosEnabled;
     return true;
-  });
+  };
 
-  const showDot = (item: NavItem) => item.gated === 'conexao' && enabled && needsAction;
+  const visibleItems = NAV_ITEMS.filter((item) => !item.gated || item.gated.every(passes));
+
+  const showDot = (item: NavItem) =>
+    item.gated?.includes('conexao') === true && enabled && needsAction;
 
   return { visibleItems, showDot };
 }

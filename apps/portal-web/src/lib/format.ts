@@ -218,3 +218,26 @@ export function dataPorExtenso(date = new Date()): string {
   const mes = MESES[date.getMonth()];
   return `${dia}, ${num} de ${mes}`;
 }
+
+/** Date local -> "YYYY-MM-DD" (sem deslocamento de fuso, ao contrário de toISOString). */
+export function toISODate(date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** "YYYY-MM-DD" do dia 1 do mês corrente (default do seletor de período). */
+export function firstOfMonthISO(date = new Date()): string {
+  return toISODate(new Date(date.getFullYear(), date.getMonth(), 1));
+}
+
+/** "YYYY-MM-DD" -> "9 de jun" (curto, pro rótulo do período). null se inválido. */
+export function formatDateShort(isoDate: string | null): string | null {
+  if (!isoDate) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!m) return null;
+  const monthIdx = Number(m[2]) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return null;
+  return `${Number(m[3])} de ${MESES[monthIdx].slice(0, 3)}`;
+}
