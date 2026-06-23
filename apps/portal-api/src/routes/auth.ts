@@ -201,6 +201,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(200).send({
       username: tenant.username,
       slot: tenant.slot,
+      // Flag do app de gestão (atendimentos/faturamento/comissão, ADR 0026). SEMPRE
+      // presente (boolean), independente de product_type — o front liga/desliga o
+      // menu por ele. !! garante boolean mesmo se a config vier indefinida.
+      atendimentos_enabled: !!config.ATENDIMENTOS_ENABLED,
       // Só envia os campos quando a feature está ON E o cliente é estabelecimento.
       // Ausentes = individual (o front trata ausência como 'individual').
       ...(productType === 'estabelecimento'

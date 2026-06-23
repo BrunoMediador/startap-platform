@@ -34,8 +34,31 @@ export interface ColaboradorRow {
   servicos: string[];
   ativo: boolean;
   ordem: number;
+  /**
+   * % de comissão do colaborador sobre o BRUTO (0–100, 2 casas; migration 058).
+   * O pg devolve NUMERIC como string — este campo é SEMPRE normalizado pra number
+   * (via mapColaboradorRow) antes de sair daqui, pra API entregar number no JSON.
+   */
+  comissao_pct: number;
   created_at: string;
   updated_at: string;
+}
+
+/** Linha crua do banco (comissao_pct chega como string do pg). */
+interface ColaboradorRowRaw extends Omit<ColaboradorRow, 'comissao_pct'> {
+  comissao_pct: string | number | null;
+}
+
+/**
+ * Normaliza a linha crua do pg pro contrato público: NUMERIC vem como string, então
+ * comissao_pct é convertido pra number (NULL/indef -> 0, fallback seguro). Única
+ * porta de saída das funções que retornam ColaboradorRow.
+ */
+function mapColaboradorRow(row: ColaboradorRowRaw): ColaboradorRow {
+  return {
+    ...row,
+    comissao_pct: row.comissao_pct == null ? 0 : Number(row.comissao_pct),
+  };
 }
 
 /** Escopo do estabelecimento (product_type + teto de vagas) lido do clone. */
@@ -48,7 +71,7 @@ export interface CloneScope {
 }
 
 const SELECT_COLAB_COLS =
-  'id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, created_at, updated_at';
+  'id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, comissao_pct, created_at, updated_at';
 
 /**
  * Normaliza o array de serviços de um colaborador: trim + dedup case-insensitive,
@@ -103,11 +126,11 @@ export async function getScopeBySlot(slot: string): Promise<CloneScope> {
  * Escopado SEMPRE por slot (o caller injeta o slot da sessão, ADR 0012 Decisão 4).
  */
 export async function listBySlot(slot: string): Promise<ColaboradorRow[]> {
-  const r = await query<ColaboradorRow>(
+  const r = await query<ColaboradorRowRaw>(
     `SELECT ${SELECT_COLAB_COLS} FROM clone_colaboradores WHERE slot = $1 ORDER BY ordem ASC, id ASC`,
     [slot],
   );
-  return r.rows;
+  return r.rows.map(mapColaboradorRow);
 }
 
 /** Conta colaboradores ATIVOS de um slot (vaga ocupada = colaborador ativo). */
@@ -132,6 +155,19 @@ export interface CreateColaboradorInput {
   servicos?: unknown;
   ativo?: boolean;
   ordem?: number;
+  /** % de comissão sobre o bruto (0–100). Ausente/indef -> 0 (default da coluna). */
+  comissao_pct?: number;
+}
+
+/**
+ * Saneia o % de comissão: number finito, clamp em [0, 100], 2 casas. Ausente/indef
+ * ou inválido (NaN/Infinity/não-number) -> null = "não enviado" (caller decide se é
+ * o default 0 do create ou "não altera" no update parcial).
+ */
+function sanitizeComissaoPct(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const clamped = Math.min(100, Math.max(0, v));
+  return Math.round(clamped * 100) / 100;
 }
 
 /**
@@ -155,6 +191,8 @@ export async function create(
   const servicos = normalizeColaboradorServicos(input.servicos);
   const ativo = input.ativo === undefined ? true : Boolean(input.ativo);
   const ordem = Number.isInteger(Number(input.ordem)) ? Number(input.ordem) : 0;
+  // Ausente/inválido -> 0 (default da coluna, NOT NULL na migration 058).
+  const comissaoPct = sanitizeComissaoPct(input.comissao_pct) ?? 0;
 
   const client = await pool.connect();
   try {
@@ -169,14 +207,14 @@ export async function create(
         );
       }
     }
-    const ins = await client.query<ColaboradorRow>(
-      `INSERT INTO clone_colaboradores (slot, tenant_id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem)
-       VALUES ($1, $2, $3, NULL, 'pending', $4::jsonb, $5, $6)
+    const ins = await client.query<ColaboradorRowRaw>(
+      `INSERT INTO clone_colaboradores (slot, tenant_id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, comissao_pct)
+       VALUES ($1, $2, $3, NULL, 'pending', $4::jsonb, $5, $6, $7)
        RETURNING ${SELECT_COLAB_COLS}`,
-      [input.slot, input.tenantId, nome, JSON.stringify(servicos), ativo, ordem],
+      [input.slot, input.tenantId, nome, JSON.stringify(servicos), ativo, ordem, comissaoPct],
     );
     await client.query('COMMIT');
-    return ins.rows[0] as ColaboradorRow;
+    return mapColaboradorRow(ins.rows[0] as ColaboradorRowRaw);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     if ((e as { code?: string }).code === '23505') {
@@ -196,6 +234,8 @@ export interface UpdateColaboradorInput {
   servicos?: unknown;
   ativo?: boolean;
   ordem?: number;
+  /** % de comissão (0–100). Ausente -> NÃO altera o valor atual (update parcial). */
+  comissao_pct?: number;
 }
 
 /**
@@ -230,6 +270,18 @@ export async function update(
     vals.push(ordem);
     sets.push(`ordem = $${vals.length}`);
   }
+  // Só toca comissao_pct quando o campo veio no patch (undefined = NÃO altera; nunca
+  // zera quem não mandou). Valor inválido vira ColaboradorRuleError (caller -> 409).
+  if (patch.comissao_pct !== undefined) {
+    const pct = sanitizeComissaoPct(patch.comissao_pct);
+    if (pct === null)
+      throw new ColaboradorRuleError(
+        'duplicate_name',
+        'comissao_pct deve ser um numero entre 0 e 100',
+      );
+    vals.push(pct);
+    sets.push(`comissao_pct = $${vals.length}`);
+  }
 
   const client = await pool.connect();
   try {
@@ -256,7 +308,7 @@ export async function update(
     sets.push('updated_at = NOW()');
     vals.push(slot);
     vals.push(id);
-    const r = await client.query<ColaboradorRow>(
+    const r = await client.query<ColaboradorRowRaw>(
       `UPDATE clone_colaboradores SET ${sets.join(', ')}
          WHERE slot = $${vals.length - 1} AND id = $${vals.length}
        RETURNING ${SELECT_COLAB_COLS}`,
@@ -267,7 +319,7 @@ export async function update(
       return null;
     }
     await client.query('COMMIT');
-    return r.rows[0] as ColaboradorRow;
+    return mapColaboradorRow(r.rows[0] as ColaboradorRowRaw);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     if ((e as { code?: string }).code === '23505') {

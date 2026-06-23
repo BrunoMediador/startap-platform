@@ -86,6 +86,7 @@ const COLAB = {
   servicos: ['Corte'],
   ativo: true,
   ordem: 0,
+  comissao_pct: 0,
   created_at: '2026-06-15T00:00:00Z',
   updated_at: '2026-06-15T00:00:00Z',
 };
@@ -165,6 +166,32 @@ describe('POST /portal/equipe', () => {
     await app.close();
   });
 
+  it('201: comissao_pct vai pro create (cenário EMPRESA)', async () => {
+    createMock.mockResolvedValue({ ...COLAB, comissao_pct: 15 });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/equipe',
+      payload: { nome: 'Ana', comissao_pct: 15 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(createMock.mock.calls[0][0]).toMatchObject({ nome: 'Ana', comissao_pct: 15 });
+    expect(res.json().colaborador.comissao_pct).toBe(15);
+    await app.close();
+  });
+
+  it('400: comissao_pct fora do range (>100) é rejeitado pelo schema', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/equipe',
+      payload: { nome: 'Ana', comissao_pct: 150 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(createMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('400: nome vazio (schema)', async () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/portal/equipe', payload: { nome: '' } });
@@ -217,6 +244,33 @@ describe('PATCH /portal/equipe/:id', () => {
       expect.objectContaining({ nome: 'Ana B' }),
       3,
     );
+    await app.close();
+  });
+
+  it('200: PATCH só de comissao_pct repassa o campo (update parcial)', async () => {
+    updateMock.mockResolvedValue({ ...COLAB, comissao_pct: 25 });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/equipe/1',
+      payload: { comissao_pct: 25 },
+    });
+    expect(res.statusCode).toBe(200);
+    // O patch repassado ao data layer contém SÓ comissao_pct (não inventa nome/ativo).
+    expect(updateMock.mock.calls[0][2]).toEqual({ comissao_pct: 25 });
+    expect(res.json().colaborador.comissao_pct).toBe(25);
+    await app.close();
+  });
+
+  it('400: PATCH com comissao_pct negativo é rejeitado pelo schema', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/equipe/1',
+      payload: { comissao_pct: -5 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(updateMock).not.toHaveBeenCalled();
     await app.close();
   });
 
