@@ -92,6 +92,9 @@ vi.mock('@startap/integrations/scheduling', async () => {
     buildContextBlock: mocks.buildContextBlock,
     buildEstabelecimentoContext: mocks.buildEstabelecimentoContext,
     resolveColaboradorByShortId: real.resolveColaboradorByShortId,
+    // validação serviço×profissional (Bug 2) usa a lógica REAL — queremos exercitá-la.
+    colaboradorFazServico: real.colaboradorFazServico,
+    servicosDoColaborador: real.servicosDoColaborador,
   };
 });
 
@@ -234,26 +237,41 @@ function colabClientStub(calendarId: string, existing: unknown[] = []) {
   };
 }
 
+/** Colaborador de teste: id curto + nome + client; servicos opcional (Bug 2). */
+type EstabColab = {
+  colaboradorId: number;
+  nome: string;
+  shortId: string;
+  client: unknown;
+  servicos?: string[];
+};
+
 /** Configura os mocks para o caminho ESTABELECIMENTO completar até o runAgent. */
 function setupEstabelecimento(
-  colaboradores: Array<{ colaboradorId: number; nome: string; shortId: string; client: unknown }>,
+  colaboradores: EstabColab[],
+  opts?: { services?: Array<{ name: string; min: number }> },
 ) {
   cfg.ESTABELECIMENTO_ENABLED = true;
   mocks.getProductType.mockResolvedValue('estabelecimento');
   // Default barbearia → cartão de estabelecimento byte-a-byte o do #325.
   mocks.getArea.mockResolvedValue('barbearia');
-  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.loadScheduleConfig.mockResolvedValue({
+    source: 'flow_clones',
+    services: opts?.services ?? [],
+  });
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
   mocks.runAgentConfigured.mockResolvedValue({ reply: 'ok' });
   mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
-  // O resolvedor por colaborador devolve a lista crua (sem shortId).
+  // O resolvedor por colaborador devolve a lista crua (sem shortId), JÁ com servicos
+  // (migration 057 — projetada em getGcalsForSlot). [] = faz todos os globais.
   mocks.getGcalsForSlot.mockResolvedValue(
     colaboradores.map((c) => ({
       colaboradorId: c.colaboradorId,
       nome: c.nome,
       calendarId: (c.client as { calendarId: string }).calendarId,
       client: c.client,
+      servicos: c.servicos ?? [],
     })),
   );
   // buildEstabelecimentoContext devolve a lista JÁ decorada com shortId (o que o bot usa
@@ -265,6 +283,7 @@ function setupEstabelecimento(
       calendarId: (c.client as { calendarId: string }).calendarId,
       client: c.client,
       shortId: c.shortId,
+      servicos: c.servicos ?? [],
     })),
     profissionaisBlock: 'PROFISSIONAIS',
     horariosBlock: 'HORARIOS',
@@ -274,9 +293,10 @@ function setupEstabelecimento(
 /** Roda process() pro estabelecimento e devolve o array `tools` passado ao runAgent. */
 async function estabToolsFor(
   texto: string,
-  colaboradores: Array<{ colaboradorId: number; nome: string; shortId: string; client: unknown }>,
+  colaboradores: EstabColab[],
+  opts?: { services?: Array<{ name: string; min: number }> },
 ): Promise<Array<{ name: string; run: (a: unknown) => Promise<unknown> }>> {
-  setupEstabelecimento(colaboradores);
+  setupEstabelecimento(colaboradores, opts);
   const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
   await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
     makeCtx(texto),
@@ -285,10 +305,7 @@ async function estabToolsFor(
 }
 
 /** Roda process() pro estabelecimento e devolve o systemPrompt passado ao runAgent. */
-async function estabSystemPromptFor(
-  texto: string,
-  colaboradores: Array<{ colaboradorId: number; nome: string; shortId: string; client: unknown }>,
-): Promise<string> {
+async function estabSystemPromptFor(texto: string, colaboradores: EstabColab[]): Promise<string> {
   setupEstabelecimento(colaboradores);
   const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
   await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
@@ -426,6 +443,93 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     expect(res.error).toBe('COLABORADOR_INVALIDO');
     expect(c1.createEvent).not.toHaveBeenCalled();
   });
+
+  // (d) Bug 2: serviço×profissional — Maria não faz "Corte" → rejeita SEM criar evento.
+  it('inserir_agendamento REJEITA serviço que o profissional não faz (Maria × Corte)', async () => {
+    const cBruno = colabClientStub('cal-bruno');
+    const cMaria = colabClientStub('cal-maria');
+    const tools = await estabToolsFor(
+      'quero cortar com a maria',
+      [
+        { colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] },
+        {
+          colaboradorId: 11,
+          nome: 'Maria',
+          shortId: 'C2',
+          client: cMaria,
+          servicos: ['Manicure'],
+        },
+      ],
+      {
+        services: [
+          { name: 'Corte', min: 30 },
+          { name: 'Manicure', min: 40 },
+        ],
+      },
+    );
+    const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+      run: (a: unknown) => Promise<{ ok: boolean; error?: string; message?: string }>;
+    };
+    const res = await inserir.run({
+      colaborador_id: 'C2', // Maria
+      summary: 'Cliente - Corte',
+      servico: 'Corte',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('SERVICO_NAO_OFERECIDO');
+    expect(res.message).toMatch(/Maria/);
+    expect(res.message).toMatch(/Manicure/); // sugere o que ela faz
+    // NENHUM evento criado e NENHUMA agenda consultada (rejeitado antes de tocar GCal).
+    expect(cMaria.createEvent).not.toHaveBeenCalled();
+    expect(cMaria.listEvents).not.toHaveBeenCalled();
+  });
+
+  // (e) Bug 2: serviço que o profissional FAZ → segue normal e cria o evento.
+  it('inserir_agendamento ACEITA serviço que o profissional faz (Bruno × Corte)', async () => {
+    const cBruno = colabClientStub('cal-bruno');
+    const tools = await estabToolsFor(
+      'quero cortar com o bruno',
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+      run: (a: unknown) => Promise<{ ok: boolean; colaborador_nome?: string }>;
+    };
+    const res = await inserir.run({
+      colaborador_id: 'C1',
+      summary: 'Cliente - Corte',
+      servico: 'Corte',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res.ok).toBe(true);
+    expect(res.colaborador_nome).toBe('Bruno');
+    expect(cBruno.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // (f) Bug 2: colaborador sem servicos (fallback global) faz qualquer serviço global.
+  it('inserir_agendamento ACEITA serviço quando o profissional não tem servicos cadastrados (fallback global)', async () => {
+    const cCuringa = colabClientStub('cal-curinga');
+    const tools = await estabToolsFor(
+      'quero um corte',
+      [{ colaboradorId: 10, nome: 'Curinga', shortId: 'C1', client: cCuringa, servicos: [] }],
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+      run: (a: unknown) => Promise<{ ok: boolean }>;
+    };
+    const res = await inserir.run({
+      colaborador_id: 'C1',
+      summary: 'Cliente - Corte',
+      servico: 'Corte',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res.ok).toBe(true);
+    expect(cCuringa.createEvent).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -459,8 +563,11 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
     const systemPrompt = await estabSystemPromptFor('quero um corte', [
       { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1 },
     ]);
-    expect(systemPrompt).toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
+    expect(systemPrompt).toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO');
     expect(systemPrompt).toContain('👤 PROFISSIONAL');
+    // Bug 1: a regra de confirmação SEMPRE (inclusive back-to-back) entra em runtime.
+    expect(systemPrompt).toMatch(/CADA agendamento/i);
+    expect(systemPrompt).toMatch(/back-to-back|mesma conversa/i);
     // A persona base ('PERSONA') NÃO carregava a regra — ela é adicionada em runtime.
     expect(systemPrompt).toContain('PERSONA');
     expect('PERSONA').not.toContain('PROFISSIONAL');

@@ -6,9 +6,11 @@ import {
   type ColaboradorAgenda,
   buildContextBlock,
   buildEstabelecimentoContext,
+  colaboradorFazServico,
   formatarAgendaComConfig,
   loadScheduleConfig,
   resolveColaboradorByShortId,
+  servicosDoColaborador,
 } from '@startap/integrations/scheduling';
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
@@ -735,7 +737,10 @@ export class TesteBarbeariaBot extends BotBase {
         name: 'inserir_agendamento',
         description:
           'Insere um agendamento no Google Calendar do PROFISSIONAL escolhido. Use APENAS apos ' +
-          'o cliente confirmar com SIM E ter escolhido o profissional (id curto C1, C2, …). ' +
+          'o cliente confirmar com SIM no CARTAO DE CONFIRMACAO E ter escolhido o profissional ' +
+          '(id curto C1, C2, …). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
+          'TODO agendamento, inclusive o 2º/3º na mesma conversa. Só agende o servico com um ' +
+          'profissional que faz aquele servico (ver [PROFISSIONAIS]). ' +
           'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
         parameters: {
           type: 'object',
@@ -794,6 +799,36 @@ export class TesteBarbeariaBot extends BotBase {
               error: 'COLABORADOR_INVALIDO',
               message:
                 'Profissional não reconhecido. Pergunte ao cliente qual profissional ele quer.',
+            };
+          }
+
+          // VALIDAÇÃO serviço×profissional (Bug 2): o serviço pedido tem que estar na
+          // lista do colaborador escolhido (clone_colaboradores.servicos, migration 057;
+          // vazio = faz todos os globais — fallback em servicosDoColaborador). Rede final
+          // server-side: mesmo que o prompt vacile, NÃO marcamos um serviço com quem não
+          // o faz. Serviço extraído do arg explícito ou do summary (mesma fonte do pacote).
+          const servicoPedido =
+            typeof servicoArg === 'string' && servicoArg.trim()
+              ? servicoArg.trim()
+              : servicoFromSummary(summary);
+          if (!colaboradorFazServico(colaborador, scheduleConfig, servicoPedido)) {
+            const oferece = servicosDoColaborador(colaborador, scheduleConfig).join(', ');
+            this.log.warn(
+              {
+                slot: this.slot,
+                telefone,
+                colaboradorId: colaborador.colaboradorId,
+                servicoPedido,
+              },
+              'inserir_agendamento (estab) rejeitado: profissional nao faz o servico pedido',
+            );
+            return {
+              ok: false,
+              error: 'SERVICO_NAO_OFERECIDO',
+              message:
+                `${colaborador.nome} não faz "${servicoPedido}". ` +
+                `Ele(a) faz: ${oferece}. Ofereça um desses ou pergunte com qual profissional ` +
+                `o cliente quer fazer "${servicoPedido}".`,
             };
           }
 

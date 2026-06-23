@@ -186,12 +186,19 @@ export function buildCartaoEstabelecimentoBlock(area: string | null | undefined)
   // CardEmojis.horario (que é ⏰ no individual). As demais posições seguem a área.
   const horarioEstab = '🕐';
   return [
-    '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]',
-    'Antes de gravar, mostre o cartão de confirmação e peça SIM. Neste estabelecimento o',
-    'cliente escolhe o profissional, então o cartão DEVE incluir o nome do profissional',
-    'escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2). Use o formato:',
+    '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO — REGRA CRITICA, VIOLACAO = ERRO GRAVE]',
+    'Antes de CADA agendamento você DEVE, OBRIGATORIAMENTE e SEM EXCEÇÃO:',
+    '1. Mostrar o CARTAO DE CONFIRMACAO completo (todos os campos abaixo).',
+    '2. Esperar o cliente responder SIM (ou equivalente claro: "isso", "pode marcar").',
+    '3. SÓ DEPOIS do SIM, chamar inserir_agendamento.',
+    'Isso vale para TODO agendamento, INCLUSIVE o 2º, 3º… na MESMA conversa (back-to-back):',
+    'cada novo horário recomeça o fluxo — mostra o cartão e pede SIM de novo. NUNCA agende',
+    'direto, NUNCA pule o cartão, NUNCA assuma o SIM porque o cliente já confirmou antes.',
+    'Neste estabelecimento o cliente escolhe o profissional, então o cartão DEVE incluir o',
+    'nome do profissional escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2).',
+    'Formato do cartão:',
     `${e.profissional} PROFISSIONAL: <nome do profissional escolhido>`,
     `${e.dia} DIA: <dia> / ${horarioEstab} HORARIO: <horario> / ${e.servico} SERVICO: <servico> / ${e.valor} VALOR: <valor>`,
-    'Mantenha o tom da persona. Só chame inserir_agendamento depois do SIM.',
+    'Termine o cartão pedindo: "Responda SIM para confirmar." Mantenha o tom da persona.',
   ].join('\n');
 }

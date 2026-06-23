@@ -13,7 +13,9 @@
  *     (que já vem ORDER BY ordem, id — estável entre turnos enquanto a equipe não muda).
  *  3. Consulta a ocupação de TODOS de uma vez via freebusy.query batched (1 chamada,
  *     até 50 calendarId — ADR 0024 §5).
- *  4. Monta o bloco [PROFISSIONAIS] (id + nome + serviços) e o [HORARIOS DISPONIVEIS]
+ *  4. Monta o bloco [PROFISSIONAIS] (id + nome + serviços DE CADA colaborador, de
+ *     clone_colaboradores.servicos — migration 057; vazio = faz todos os globais) e o
+ *     [HORARIOS DISPONIVEIS]
  *     ROTULADO POR COLABORADOR, reusando a MESMA grade do bot individual
  *     (formatarAgendaComConfig — step = duração, piso de 10min pra hoje, overlap).
  *  5. Inclui a REGRA DE DESAMBIGUAÇÃO obrigatória pra homônimos.
@@ -109,28 +111,89 @@ function nomeLimpo(nome: string): string {
   return nome.replace(/\s+/g, ' ').trim();
 }
 
+/** Normaliza um nome de serviço pra comparação tolerante (lower + trim + colapsa espaço). */
+function normServico(s: string | null | undefined): string {
+  return String(s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Resolve a lista EFETIVA de serviços que um colaborador faz, aplicando o fallback:
+ *  - se `colaborador.servicos` tem itens → usa a lista DELE (migration 057);
+ *  - se está VAZIA → o dono não especificou → faz TODOS os serviços globais do clone
+ *    (config.services). Decisão de produto (migration 057): vazio NÃO bloqueia agenda.
+ *
+ * Os nomes são casados (case-insensitive) contra os serviços globais para devolver o
+ * nome CANÔNICO (o que aparece em [SERVICOS E PRECOS]); um serviço do colaborador que
+ * não exista mais na lista global é descartado (config do dono ficou inconsistente).
+ */
+export function servicosDoColaborador(
+  colaborador: { servicos: string[] },
+  config: ScheduleConfig,
+): string[] {
+  const globais = config.services.map((s) => s.name);
+  if (!colaborador.servicos || colaborador.servicos.length === 0) {
+    return globais;
+  }
+  const globaisByNorm = new Map(globais.map((n) => [normServico(n), n]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of colaborador.servicos) {
+    const canonico = globaisByNorm.get(normServico(raw));
+    if (canonico && !seen.has(canonico)) {
+      seen.add(canonico);
+      out.push(canonico);
+    }
+  }
+  // Se TODOS os serviços do colaborador sumiram da lista global (inconsistência),
+  // cai pro fallback global em vez de deixar o profissional sem nenhum serviço.
+  return out.length > 0 ? out : globais;
+}
+
+/**
+ * True se `servicoPedido` está entre os serviços EFETIVOS do colaborador (com o
+ * fallback de `servicosDoColaborador`). Comparação tolerante (case/espaço).
+ * Pedido vazio → true (não bloqueia: o summary/contexto decide o serviço depois).
+ */
+export function colaboradorFazServico(
+  colaborador: { servicos: string[] },
+  config: ScheduleConfig,
+  servicoPedido: string | null | undefined,
+): boolean {
+  const pedido = normServico(servicoPedido);
+  if (pedido === '') return true;
+  return servicosDoColaborador(colaborador, config).some((s) => normServico(s) === pedido);
+}
+
 /**
  * Monta o bloco [PROFISSIONAIS]: id curto + nome + serviços que o profissional faz.
  *
- * Fase A (MVP): a junção colaborador×serviço (colaborador_servico, migration 054)
- * é Fase B — aqui TODOS os colaboradores fazem TODOS os serviços globais do clone
- * (config.services). A linha de serviços usa a lista global; quando a 054 entrar,
- * passa a ser por colaborador. A regra de desambiguação é OBRIGATÓRIA (homônimos).
+ * Cada colaborador lista os SEUS serviços (clone_colaboradores.servicos, migration
+ * 057). Quando o dono NÃO especificou (servicos vazio), o profissional faz TODOS os
+ * serviços globais do clone (fallback de produto — migration 057: vazio não bloqueia).
+ * A regra de desambiguação de homônimos é OBRIGATÓRIA.
  */
 function buildProfissionaisBlock(
   colaboradores: ColaboradorAgenda[],
   config: ScheduleConfig,
 ): string {
-  const servicosGlobais = config.services.map((s) => s.name).join(', ') || 'todos os serviços';
-  const linhas = colaboradores.map(
-    (c) => `${c.shortId} = ${nomeLimpo(c.nome)} (faz: ${servicosGlobais})`,
-  );
+  const linhas = colaboradores.map((c) => {
+    const servs = servicosDoColaborador(c, config);
+    const lista = servs.join(', ') || 'todos os serviços';
+    return `${c.shortId} = ${nomeLimpo(c.nome)} (faz: ${lista})`;
+  });
   return [
     'Profissionais disponíveis (use o id curto, ex.: C1, ao agendar):',
     ...linhas,
     '',
     'REGRA DE ESCOLHA DO PROFISSIONAL (OBRIGATÓRIA):',
     '- SEMPRE pergunte com qual profissional o cliente quer antes de confirmar o horário.',
+    '- Cada profissional só faz os serviços listados ao lado do nome dele. NUNCA ofereça',
+    '  nem agende um serviço com um profissional que não o faz. Se o cliente pedir um',
+    '  serviço que aquele profissional não faz, diga isso e indique quem faz (ou ofereça',
+    '  outro serviço que ele faz). Ex.: "A Maria não faz Corte; quem faz é o Bruno. Quer com ele?".',
     '- Se o cliente disser só o primeiro nome e houver MAIS DE UM profissional com esse',
     '  nome (homônimos), você DEVE perguntar qual deles, listando as opções pelo nome',
     '  completo. Ex.: "Temos o João S. e o João P., com qual você prefere?".',

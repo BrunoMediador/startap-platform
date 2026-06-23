@@ -16,8 +16,10 @@ import type { FreeBusyResult, GoogleCalendarClient } from '../google-calendar/cl
 import type { ColaboradorGcal } from '../google-calendar/per-clone.js';
 import {
   buildEstabelecimentoContext,
+  colaboradorFazServico,
   decorateColaboradores,
   resolveColaboradorByShortId,
+  servicosDoColaborador,
 } from './estabelecimento.js';
 import type { ScheduleConfig } from './free-slots.js';
 
@@ -198,5 +200,124 @@ describe('resolveColaboradorByShortId — roteamento e rejeição', () => {
     expect(resolveColaboradorByShortId(outroSlot, 'C1')?.calendarId).toBe('cal-OUTRA-AGENDA');
     // o id numérico 10 (do slot original) não existe na lista do outro slot → null.
     expect(resolveColaboradorByShortId(outroSlot, '10')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug 2 — serviço POR profissional: bloco [PROFISSIONAIS] + validação server-side
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Config com 3 serviços globais — cobre o cenário do Bruno (Maria não faz Corte).
+const CONFIG_MULTI: ScheduleConfig = {
+  ...CONFIG,
+  services: [
+    { name: 'Corte', min: 30 },
+    { name: 'Barba', min: 30 },
+    { name: 'Manicure', min: 40 },
+    { name: 'Sobrancelha', min: 20 },
+  ],
+};
+
+describe('servicosDoColaborador — fallback global vs lista do colaborador', () => {
+  it('colaborador COM servicos → usa a lista DELE (canonizada contra os globais)', () => {
+    const bruno = { servicos: ['corte', 'BARBA'] }; // caixa diferente de propósito
+    expect(servicosDoColaborador(bruno, CONFIG_MULTI)).toEqual(['Corte', 'Barba']);
+  });
+
+  it('colaborador com servicos VAZIO → fallback: faz TODOS os globais', () => {
+    expect(servicosDoColaborador({ servicos: [] }, CONFIG_MULTI)).toEqual([
+      'Corte',
+      'Barba',
+      'Manicure',
+      'Sobrancelha',
+    ]);
+  });
+
+  it('servico do colaborador que sumiu da lista global é descartado', () => {
+    const maria = { servicos: ['Manicure', 'Serviço Extinto'] };
+    expect(servicosDoColaborador(maria, CONFIG_MULTI)).toEqual(['Manicure']);
+  });
+
+  it('se TODOS os servicos do colaborador sumiram dos globais → cai pro fallback global', () => {
+    const inconsistente = { servicos: ['Só Coisas Antigas'] };
+    expect(servicosDoColaborador(inconsistente, CONFIG_MULTI)).toEqual([
+      'Corte',
+      'Barba',
+      'Manicure',
+      'Sobrancelha',
+    ]);
+  });
+});
+
+describe('colaboradorFazServico — validação serviço×profissional', () => {
+  const bruno = { servicos: ['Corte', 'Barba'] };
+  const maria = { servicos: ['Manicure', 'Sobrancelha'] };
+
+  it('aceita serviço que o profissional faz (case/espaço tolerante)', () => {
+    expect(colaboradorFazServico(bruno, CONFIG_MULTI, 'Corte')).toBe(true);
+    expect(colaboradorFazServico(bruno, CONFIG_MULTI, '  corte ')).toBe(true);
+  });
+
+  it('REJEITA serviço que o profissional NÃO faz (cenário do Bruno: Maria × Corte)', () => {
+    expect(colaboradorFazServico(maria, CONFIG_MULTI, 'Corte')).toBe(false);
+  });
+
+  it('colaborador sem servicos (fallback global) faz qualquer serviço global', () => {
+    expect(colaboradorFazServico({ servicos: [] }, CONFIG_MULTI, 'Corte')).toBe(true);
+    expect(colaboradorFazServico({ servicos: [] }, CONFIG_MULTI, 'Manicure')).toBe(true);
+  });
+
+  it('serviço pedido vazio → não bloqueia (true)', () => {
+    expect(colaboradorFazServico(maria, CONFIG_MULTI, '')).toBe(true);
+    expect(colaboradorFazServico(maria, CONFIG_MULTI, '   ')).toBe(true);
+  });
+});
+
+describe('buildProfissionaisBlock — serviços por profissional', () => {
+  it('lista os serviços DE CADA colaborador (não os globais pra todos)', async () => {
+    const shared = makeClient(() => ({}));
+    const colaboradores: ColaboradorGcal[] = [
+      colab({
+        colaboradorId: 1,
+        nome: 'Bruno',
+        calendarId: 'cal-bruno',
+        client: shared,
+        servicos: ['Corte', 'Barba'],
+      }),
+      colab({
+        colaboradorId: 2,
+        nome: 'Maria',
+        calendarId: 'cal-maria',
+        client: shared,
+        servicos: ['Manicure', 'Sobrancelha'],
+      }),
+    ];
+
+    const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG_MULTI, TIME);
+
+    expect(ctx.profissionaisBlock).toContain('C1 = Bruno (faz: Corte, Barba)');
+    expect(ctx.profissionaisBlock).toContain('C2 = Maria (faz: Manicure, Sobrancelha)');
+    // Maria NÃO deve aparecer fazendo Corte.
+    expect(ctx.profissionaisBlock).not.toMatch(/Maria \(faz:[^)]*Corte/);
+    // regra de "não agende serviço que o profissional não faz" presente.
+    expect(ctx.profissionaisBlock).toMatch(/não faz|nao faz/i);
+  });
+
+  it('colaborador sem servicos cadastrados cai no fallback (todos os globais)', async () => {
+    const shared = makeClient(() => ({}));
+    const colaboradores: ColaboradorGcal[] = [
+      colab({
+        colaboradorId: 1,
+        nome: 'Curinga',
+        calendarId: 'cal-curinga',
+        client: shared,
+        servicos: [],
+      }),
+    ];
+
+    const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG_MULTI, TIME);
+    expect(ctx.profissionaisBlock).toContain(
+      'C1 = Curinga (faz: Corte, Barba, Manicure, Sobrancelha)',
+    );
   });
 });
