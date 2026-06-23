@@ -819,3 +819,213 @@ describe('PATCH /portal/agendamentos/:eventId — anti-corrida (409)', () => {
     await app.close();
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// DELETE/PATCH — ESTABELECIMENTO (multi-profissional)
+//
+// O clone NÃO tem agenda própria; o evento vive no calendarId de UM colaborador.
+// DELETE/PATCH têm que resolver QUAL agenda de colaborador contém o eventId e operar
+// NELA — varrendo só agendas DESTE slot/tenant (anti-IDOR). getGcalForSlot (singular)
+// NÃO deve ser consultado neste modo.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Agenda de colaborador cujo client contém os eventos passados (com delete+patch). */
+function colabAgenda(colaboradorId: number, nome: string, eventos: Array<{ id: string }>) {
+  return {
+    colaboradorId,
+    nome,
+    calendarId: `cal-${colaboradorId}`,
+    servicos: [],
+    client: {
+      listEvents: vi.fn().mockResolvedValue(eventos),
+      deleteEvent: vi.fn().mockResolvedValue(undefined),
+      patchEvent: vi.fn().mockImplementation((eventId: string, fields: { summary?: string }) =>
+        Promise.resolve({
+          id: eventId,
+          summary: fields.summary ?? 'João - Corte | WhatsApp: 5511999990000',
+          start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+        }),
+      ),
+    },
+  };
+}
+
+describe('DELETE /portal/agendamentos/:eventId — estabelecimento', () => {
+  beforeEach(() => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  it('200: acha o evento na agenda do colaborador certo e apaga SÓ nela', async () => {
+    // evt_do_bene está na agenda do colaborador 1 (Bené); a do 2 (Caly) está vazia.
+    const bene = colabAgenda(1, 'Bené', [EVT_DO_TENANT]);
+    const caly = colabAgenda(2, 'Caly', []);
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    // Apagou na agenda do DONO do evento; a do outro colaborador não foi tocada.
+    expect(bene.client.deleteEvent).toHaveBeenCalledWith(EVT_DO_TENANT.id);
+    expect(caly.client.deleteEvent).not.toHaveBeenCalled();
+    // Modo estabelecimento: o resolvedor singular NÃO é usado.
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+    expect(getGcalsForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('404: eventId não está em NENHUMA agenda de colaborador — nada é apagado', async () => {
+    const bene = colabAgenda(1, 'Bené', [EVT_DO_TENANT]);
+    const caly = colabAgenda(2, 'Caly', []);
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt_inexistente',
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('evento_nao_encontrado');
+    expect(bene.client.deleteEvent).not.toHaveBeenCalled();
+    expect(caly.client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('anti-IDOR: só varre as agendas DESTE slot/tenant — evento alheio não aparece, 404', async () => {
+    // getGcalsForSlot já é escopado por slot+tenant na integração: só devolve as
+    // agendas dos colaboradores deste tenant. Um eventId de outro tenant jamais
+    // estará nessas listagens → 404, sem deletar nada.
+    const bene = colabAgenda(1, 'Bené', [EVT_DO_TENANT]);
+    getGcalsForSlotMock.mockResolvedValue([bene]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt_de_outro_tenant',
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(bene.client.deleteEvent).not.toHaveBeenCalled();
+    // A resolução foi escopada pelo slot da SESSÃO, nunca por input.
+    expect(getGcalsForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('422: nenhum colaborador com agenda ativa (pré-setup) — gcal_nao_configurado', async () => {
+    getGcalsForSlotMock.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('gcal_nao_configurado');
+    await app.close();
+  });
+
+  it('502: TODAS as agendas de colaboradores falham ao listar', async () => {
+    const ruim1 = colabAgenda(1, 'Bené', []);
+    ruim1.client.listEvents.mockRejectedValue(new Error('GCal /events -> HTTP 500'));
+    const ruim2 = colabAgenda(2, 'Caly', []);
+    ruim2.client.listEvents.mockRejectedValue(new Error('GCal /events -> HTTP 500'));
+    getGcalsForSlotMock.mockResolvedValue([ruim1, ruim2]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(ruim1.client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 (não 502): UMA agenda falha mas a outra responde e não tem o evento', async () => {
+    // Pelo menos uma listagem deu certo → o evento realmente não existe = 404 real,
+    // não erro transitório (não dá pra apagar evento que pode estar na agenda quebrada,
+    // mas tampouco mascarar 502; aqui a regra é: houve sucesso ⇒ 404).
+    const ruim = colabAgenda(1, 'Bené', []);
+    ruim.client.listEvents.mockRejectedValue(new Error('GCal /events -> HTTP 500'));
+    const bom = colabAgenda(2, 'Caly', []); // responde, sem o evento
+    getGcalsForSlotMock.mockResolvedValue([ruim, bom]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt_inexistente',
+    });
+
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe('PATCH /portal/agendamentos/:eventId — estabelecimento', () => {
+  beforeEach(() => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  it('200: remarca via patchEvent no MESMO eventId, na agenda do colaborador dono', async () => {
+    const bene = colabAgenda(1, 'Bené', [evtAtual()]);
+    const caly = colabAgenda(2, 'Caly', []);
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    // event_id PRESERVADO (ADR 0025: sem dupla-baixa de pacote).
+    expect(body.agendamento.id).toBe('evt_atual');
+    // Patch ocorreu na agenda do DONO (Bené), nunca na do outro colaborador.
+    expect(bene.client.patchEvent).toHaveBeenCalledTimes(1);
+    expect(caly.client.patchEvent).not.toHaveBeenCalled();
+    const [eventId, fields] = bene.client.patchEvent.mock.calls[0];
+    expect(eventId).toBe('evt_atual');
+    expect(fields.startISO).toBe(zonedWallTimeToUtc(FUTURO, 11 * 60).toISOString());
+    // Modo estabelecimento: resolvedor singular não é usado.
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 anti-IDOR: eventId fora de TODAS as agendas de colaborador — NÃO patcheia', async () => {
+    const bene = colabAgenda(1, 'Bené', [evtAtual()]);
+    getGcalsForSlotMock.mockResolvedValue([bene]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_de_outro_tenant',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('evento_nao_encontrado');
+    expect(bene.client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
