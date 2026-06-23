@@ -232,3 +232,15 @@ export function servicoFromSummary(summary: string): string {
   if (idx < 0) return '';
   return semWhats.slice(idx + 3).trim();
 }
+
+/**
+ * Extrai o NOME do cliente do summary do evento ("Nome - Servico | WhatsApp: 5531...").
+ * Pega o trecho ANTES do primeiro " - " (e antes do " | "). Usado como snapshot do
+ * cliente no atendimento derivado da agenda (ADR 0027). '' se o padrão não bate.
+ */
+export function clienteFromSummary(summary: string): string {
+  const semWhats = summary.split('|')[0] ?? summary;
+  const idx = semWhats.indexOf(' - ');
+  if (idx < 0) return '';
+  return semWhats.slice(0, idx).trim();
+}

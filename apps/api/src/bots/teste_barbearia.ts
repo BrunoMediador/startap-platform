@@ -1,5 +1,5 @@
 import type { BotContext } from '@startap/core/types';
-import { cloneColaboradores, flowClones } from '@startap/db';
+import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
@@ -21,6 +21,7 @@ import {
 import { sendClientCancellationAlert } from '../lib/client-alert.js';
 import {
   buildSeuPacoteBlock,
+  clienteFromSummary,
   deduzirPacoteNoAgendamento,
   resolveClientPackages,
   servicoFromSummary,
@@ -336,6 +337,16 @@ export class TesteBarbeariaBot extends BotBase {
               servicoArg,
               usaPacoteArg,
             });
+            // Gancho de billing derivado da agenda (ADR 0027) — gated por ATEND_FROM_AGENDA;
+            // OFF = no-op. Best-effort: nunca quebra o agendamento (try/catch interno). Individual = colaborador null.
+            await this.maybeRegistrarAtendimento({
+              eventId: ev.id,
+              summary,
+              servicoArg,
+              start,
+              end,
+              colaboradorId: null,
+            });
             return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
           }
 
@@ -368,6 +379,16 @@ export class TesteBarbeariaBot extends BotBase {
             summary,
             servicoArg,
             usaPacoteArg,
+          });
+          // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
+          // OFF = no-op. Idempotente pelo unique parcial (slot, gcal_event_id). Individual = colaborador null.
+          await this.maybeRegistrarAtendimento({
+            eventId: ev.id,
+            summary,
+            servicoArg,
+            start,
+            end,
+            colaboradorId: null,
           });
           return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
         },
@@ -587,6 +608,91 @@ export class TesteBarbeariaBot extends BotBase {
       pacote_nome: r.pacote_nome,
       pacote_colaborador_id: r.colaborador_id,
     };
+  }
+
+  /**
+   * Gancho de billing DERIVADO DA AGENDA (ADR 0027, Fase D). Best-effort, DORMENTE por
+   * flag. Faz o evento recém-criado pelo bot virar uma linha de PREVISÃO em `atendimentos`
+   * (origem='agenda', status='agendado'). Roda AO LADO da dedução de pacote, sob o MESMO
+   * action-lock idempotente — o helper é idempotente pelo unique parcial (slot, gcal_event_id),
+   * então reprocesso de webhook / retry do MESMO evento NÃO duplica.
+   *
+   * GARANTIAS NÃO-NEGOCIÁVEIS (Bruno):
+   *  1) GATING: flag ATEND_FROM_AGENDA OFF (default) -> retorna IMEDIATAMENTE, zero linha,
+   *     zero efeito. O caminho do bot é byte-a-byte o de hoje (Cirilo/Samuel inalterados).
+   *  2) NUNCA QUEBRA O FLUXO: TODO o corpo é envolvido em try/catch. Qualquer falha
+   *     (tenant não resolvido, DB fora, helper lançando) é LOGADA e ENGOLIDA — o bot já
+   *     criou o evento, deduziu pacote e vai responder o cliente exatamente como hoje.
+   *
+   * ISOLAMENTO P0: a linha NUNCA nasce sem tenant_id. tenant_id vem do clone
+   * (getScopeBySlot, nunca de input). Sem tenant resolvido -> NÃO grava (loga e segue).
+   */
+  private async maybeRegistrarAtendimento(input: {
+    eventId: string | undefined;
+    summary: string;
+    servicoArg: unknown;
+    start: string;
+    end: string;
+    colaboradorId?: number | null;
+  }): Promise<void> {
+    // GATE: flag OFF (default) -> nada acontece. Byte-a-byte o bot de hoje.
+    if (!config.ATEND_FROM_AGENDA) return;
+    // Sem eventId (criação degradada / action-lock sem id) não há chave de idempotência
+    // (gcal_event_id) -> NÃO cria (evitaria linha sem âncora de dedup).
+    if (!input.eventId) return;
+
+    // best-effort: o gancho NUNCA pode quebrar o agendamento nem a resposta do bot.
+    try {
+      // tenant_id SEMPRE do clone (isolamento P0) — nunca de input do cliente.
+      const scope = await cloneColaboradores.getScopeBySlot(this.slot);
+      const tenantId = scope.tenant_id;
+      if (!tenantId) {
+        this.log.warn(
+          { slot: this.slot, eventId: input.eventId },
+          'atend-from-agenda: tenant_id não resolvido — linha NÃO criada (isolamento)',
+        );
+        return;
+      }
+
+      // servico/cliente snapshot do mesmo summary que o resto do fluxo usa.
+      const servicoNome =
+        typeof input.servicoArg === 'string' && input.servicoArg.trim()
+          ? input.servicoArg.trim()
+          : servicoFromSummary(input.summary);
+      const clienteNome = clienteFromSummary(input.summary);
+
+      // valor automático: o helper resolve do flow_clones.servicos pelo servicoNome
+      // (valorCents ausente). origem='agenda', status='agendado' definidos no helper.
+      const row = await atendimentos.upsertAtendimentoFromEvent({
+        slot: this.slot,
+        tenantId,
+        gcalEventId: input.eventId,
+        servicoNome: servicoNome || null,
+        colaboradorId: input.colaboradorId ?? null,
+        clienteNome: clienteNome || null,
+        inicioAt: input.start,
+        fimAt: input.end,
+      });
+      this.log.info(
+        {
+          slot: this.slot,
+          eventId: input.eventId,
+          atendimentoId: row.id,
+          colaboradorId: input.colaboradorId ?? null,
+        },
+        'atend-from-agenda: linha de previsão criada/atualizada',
+      );
+    } catch (err) {
+      // Billing é derivado/best-effort; o atendimento ao cliente é sagrado. Loga e segue.
+      this.log.error(
+        {
+          err: err instanceof Error ? err.message : String(err),
+          slot: this.slot,
+          eventId: input.eventId,
+        },
+        'atend-from-agenda: falha ao gravar atendimento — IGNORADA (bot segue normal)',
+      );
+    }
   }
 
   /**
@@ -885,6 +991,16 @@ export class TesteBarbeariaBot extends BotBase {
               usaPacoteArg,
               colaboradorId: colaborador.colaboradorId,
             });
+            // Gancho de billing derivado da agenda (ADR 0027) — gated; OFF = no-op. Best-effort.
+            // Estabelecimento: passa o colaborador que recebeu o evento.
+            await this.maybeRegistrarAtendimento({
+              eventId: ev.id,
+              summary,
+              servicoArg,
+              start,
+              end,
+              colaboradorId: colaborador.colaboradorId,
+            });
             return {
               ok: true,
               eventId: ev.id,
@@ -924,6 +1040,16 @@ export class TesteBarbeariaBot extends BotBase {
             summary,
             servicoArg,
             usaPacoteArg,
+            colaboradorId: colaborador.colaboradorId,
+          });
+          // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
+          // OFF = no-op. Best-effort. Estabelecimento: colaborador que recebeu o evento.
+          await this.maybeRegistrarAtendimento({
+            eventId: ev.id,
+            summary,
+            servicoArg,
+            start,
+            end,
             colaboradorId: colaborador.colaboradorId,
           });
           return {
