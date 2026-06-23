@@ -21,7 +21,7 @@
  * telefone/descricao/summary cru alem do titulo.
  */
 import { logger } from '@startap/core/logger';
-import { cloneColaboradores } from '@startap/db';
+import { atendimentos, cloneColaboradores } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import {
   TZ,
@@ -242,6 +242,120 @@ async function resolveEventClient(
   return { kind: 'not_found' };
 }
 
+// ── Gancho de billing DERIVADO DA AGENDA (ADR 0027, Fase B2) ─────────────────
+//
+// Liga as rotas de AGENDAMENTO (criar/remarcar/cancelar) à camada de atendimentos:
+//   - criar  -> upsertAtendimentoFromEvent  (linha de PREVISÃO, origem='agenda')
+//   - editar -> syncAtendimentoFromEvent    (sincroniza janela/serviço respeitando sticky)
+//   - apagar -> softDeleteAtendimentoByEvent (some do faturamento)
+//
+// INVARIANTES (críticas):
+//   1. GATING: tudo gated por config.ATEND_FROM_AGENDA. Flag OFF = byte-a-byte como hoje
+//      — nenhuma linha é criada/sincronizada/deletada (o helper nem é chamado).
+//   2. NUNCA QUEBRA O AGENDAMENTO: o agendamento é a função crítica; o billing é DERIVADO.
+//      Cada chamada de helper é envolvida em try/catch AQUI — se o upsert/sync/softDelete
+//      falhar (DB fora, tenant_id ausente, etc.), o erro é LOGADO e a operação de
+//      agendamento segue retornando sucesso pro cliente. Estas funções NUNCA lançam.
+//   3. ISOLAMENTO: slot SEMPRE da sessão (vem do caller, que o pegou de requireTenant). O
+//      tenant_id é resolvido do clone (getScopeBySlot) — nunca de input. Sem tenant_id, o
+//      gancho é no-op silencioso (não dá pra carimbar a linha; regra de ouro 5).
+//   4. IDEMPOTÊNCIA: o upsert é idempotente pelo unique parcial (ux_atend_event_ativo) —
+//      rebook/retry do MESMO eventId não duplica. O softDelete é idempotente (já deletado
+//      não casa o WHERE).
+
+/**
+ * Cria/atualiza a linha de atendimento de um evento recém-criado/remarcado. Gated por
+ * ATEND_FROM_AGENDA; ISOLADO em try/catch (nunca lança). `colaboradorId` no estabelecimento
+ * = a agenda do colaborador que recebeu o evento; null no individual (SOLO).
+ *
+ * `mode` só muda QUAL helper chamamos (mesma semântica de banco — sync é alias do upsert):
+ *   - 'create' (POST)  -> upsertAtendimentoFromEvent (nasce a previsão).
+ *   - 'sync'   (PATCH) -> syncAtendimentoFromEvent   (remarca/troca serviço; intenção
+ *      explícita de SINCRONIZAR). O sticky (dirty_fields) é respeitado DENTRO do helper:
+ *      colunas pinadas à mão não voltam pro catálogo.
+ *
+ * O preço NÃO é passado: o helper resolve do catálogo (flow_clones.servicos) pelo
+ * servicoNome — mesma fonte que o bot. A linha nasce/segue como PREVISÃO (forma_pagamento
+ * null; o split previsão×faturado é stateless por fim_at vs now()).
+ */
+async function hookUpsertAtendimento(args: {
+  slot: string;
+  eventId: string;
+  servicoNome: string | null;
+  clienteNome: string | null;
+  clienteContato: string | null;
+  inicioAt: string | null;
+  fimAt: string | null;
+  colaboradorId: number | null;
+  mode: 'create' | 'sync';
+}): Promise<void> {
+  if (!config.ATEND_FROM_AGENDA) return;
+  try {
+    const scope = await cloneColaboradores.getScopeBySlot(args.slot);
+    if (!scope.tenant_id) {
+      // Sem tenant_id não há como carimbar a linha (regra de ouro 5). No-op silencioso —
+      // o agendamento já foi criado; só o billing derivado não acontece pra este clone.
+      log.warn(
+        { slot: args.slot, eventId: args.eventId },
+        'atend-from-agenda: clone sem tenant_id — gancho de previsão ignorado',
+      );
+      return;
+    }
+    const eventInput = {
+      slot: args.slot,
+      tenantId: scope.tenant_id,
+      gcalEventId: args.eventId,
+      servicoNome: args.servicoNome,
+      colaboradorId: args.colaboradorId,
+      clienteNome: args.clienteNome,
+      clienteContato: args.clienteContato,
+      inicioAt: args.inicioAt,
+      fimAt: args.fimAt,
+    };
+    const row =
+      args.mode === 'sync'
+        ? await atendimentos.syncAtendimentoFromEvent(eventInput)
+        : await atendimentos.upsertAtendimentoFromEvent(eventInput);
+    log.info(
+      {
+        slot: args.slot,
+        eventId: args.eventId,
+        atendimentoId: row.id,
+        colaboradorId: args.colaboradorId,
+        mode: args.mode,
+      },
+      'atend-from-agenda: linha de previsão sincronizada com o evento',
+    );
+  } catch (err) {
+    // CRÍTICO: o billing derivado NUNCA derruba o agendamento. Loga e segue.
+    log.error(
+      { slot: args.slot, eventId: args.eventId, err: err instanceof Error ? err.message : 'erro' },
+      'atend-from-agenda: falha ao sincronizar previsão (agendamento NÃO afetado)',
+    );
+  }
+}
+
+/**
+ * Soft-deleta a linha de atendimento de um evento cancelado. Gated por ATEND_FROM_AGENDA;
+ * ISOLADO em try/catch (nunca lança). Escopado por slot (helper nunca cruza tenant).
+ * Idempotente: re-rodar é no-op. Não derruba o cancelamento se falhar.
+ */
+async function hookSoftDeleteAtendimento(slot: string, eventId: string): Promise<void> {
+  if (!config.ATEND_FROM_AGENDA) return;
+  try {
+    const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId);
+    log.info(
+      { slot, eventId, removido: row != null },
+      'atend-from-agenda: previsão removida no cancelamento',
+    );
+  } catch (err) {
+    log.error(
+      { slot, eventId, err: err instanceof Error ? err.message : 'erro' },
+      'atend-from-agenda: falha ao remover previsão (cancelamento NÃO afetado)',
+    );
+  }
+}
+
 export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/agendamentos', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
@@ -420,6 +534,23 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         'agendamento manual criado via portal',
       );
 
+      // ── Gancho de billing derivado da agenda (ADR 0027 Fase B2) ────────────
+      // Cria a linha de PREVISÃO do atendimento (origem='agenda'). Gated por
+      // ATEND_FROM_AGENDA e ISOLADO (try/catch interno: nunca derruba o POST). Este é
+      // o caminho INDIVIDUAL (single-agenda) — colaboradorId = null (SOLO; sem split de
+      // comissão). Preço resolvido do catálogo pelo servico (svc.name) dentro do helper.
+      await hookUpsertAtendimento({
+        slot,
+        eventId: ev.id,
+        servicoNome: svc.name,
+        clienteNome: cliente_nome,
+        clienteContato: cliente_telefone ?? null,
+        inicioAt: ev.start?.dateTime ?? startUtc.toISOString(),
+        fimAt: ev.end?.dateTime ?? endUtc.toISOString(),
+        colaboradorId: null,
+        mode: 'create',
+      });
+
       const agendamento: AgendamentoOut = {
         id: ev.id,
         titulo: ev.summary ?? summary,
@@ -508,6 +639,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
 
     try {
       await client.deleteEvent(eventId);
+      // Gancho ADR 0027: some do faturamento. Gated + ISOLADO (não derruba o cancelamento).
+      await hookSoftDeleteAtendimento(slot, eventId);
       log.info({ slot, userId, eventId, colaboradorId }, 'agendamento cancelado via portal');
       return reply.code(200).send({ ok: true });
     } catch (err) {
@@ -516,6 +649,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       // dois cliques) → o Google devolve 404/410. Tratamos como sucesso: o estado
       // final desejado (evento ausente) foi atingido.
       if (/HTTP 4(0[49]|10)/.test(msg)) {
+        // Estado final = evento ausente: garante que a previsão derivada também suma.
+        await hookSoftDeleteAtendimento(slot, eventId);
         log.info({ slot, userId, eventId }, 'cancelamento idempotente: evento ja ausente no GCal');
         return reply.code(200).send({ ok: true });
       }
@@ -737,6 +872,26 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         ...(startISO !== undefined ? { startISO } : {}),
         ...(endISO !== undefined ? { endISO } : {}),
         ...(startISO !== undefined || endISO !== undefined ? { timeZone: TZ } : {}),
+      });
+
+      // ── Gancho de billing derivado da agenda (ADR 0027 Fase B2) ────────────
+      // Sincroniza a linha do atendimento (remarcar/trocar serviço). O eventId é
+      // PRESERVADO (patchEvent no mesmo id) → upsert idempotente, mesma linha. O sync
+      // RESPEITA dirty_fields (sticky) no helper: colunas pinadas à mão NÃO voltam pro
+      // catálogo. Gated + ISOLADO (try/catch interno; nunca derruba o PATCH). No
+      // estabelecimento, colaboradorId é o da agenda dona do evento (resolveEventClient).
+      const inicioSyncIso = updated.start?.dateTime ?? startISO ?? atual.start?.dateTime ?? null;
+      const fimSyncIso = updated.end?.dateTime ?? endISO ?? atual.end?.dateTime ?? null;
+      await hookUpsertAtendimento({
+        slot,
+        eventId,
+        servicoNome: novoServicoNome || null,
+        clienteNome: novoNome || null,
+        clienteContato: novoTelefone ?? null,
+        inicioAt: inicioSyncIso,
+        fimAt: fimSyncIso,
+        colaboradorId: colaboradorId ?? null,
+        mode: 'sync',
       });
 
       log.info(
