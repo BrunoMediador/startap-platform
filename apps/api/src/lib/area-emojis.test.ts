@@ -6,17 +6,25 @@ import {
   isBarbearia,
 } from './area-emojis.js';
 
-// O bloco de estabelecimento que o #325 produzia ANTES desta feature (hardcoded).
-// Os testes de barbearia provam que buildCartaoEstabelecimentoBlock('barbearia')
-// é byte-a-byte este texto — regressão dos pagantes/estabelecimentos atuais.
-const ESTAB_325_BARBEARIA = [
-  '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]',
-  'Antes de gravar, mostre o cartão de confirmação e peça SIM. Neste estabelecimento o',
-  'cliente escolhe o profissional, então o cartão DEVE incluir o nome do profissional',
-  'escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2). Use o formato:',
+// Bloco de estabelecimento ESPERADO para barbearia (após o fix do Bug 1 — confirmação
+// SEMPRE, inclusive back-to-back). Os testes de barbearia provam que
+// buildCartaoEstabelecimentoBlock('barbearia') é byte-a-byte este texto — regressão
+// dos estabelecimentos atuais (emojis 👤/📅/🕐/✂️/💰 inalterados; só a REGRA endurecida).
+const ESTAB_BARBEARIA = [
+  '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO — REGRA CRITICA, VIOLACAO = ERRO GRAVE]',
+  'Antes de CADA agendamento você DEVE, OBRIGATORIAMENTE e SEM EXCEÇÃO:',
+  '1. Mostrar o CARTAO DE CONFIRMACAO completo (todos os campos abaixo).',
+  '2. Esperar o cliente responder SIM (ou equivalente claro: "isso", "pode marcar").',
+  '3. SÓ DEPOIS do SIM, chamar inserir_agendamento.',
+  'Isso vale para TODO agendamento, INCLUSIVE o 2º, 3º… na MESMA conversa (back-to-back):',
+  'cada novo horário recomeça o fluxo — mostra o cartão e pede SIM de novo. NUNCA agende',
+  'direto, NUNCA pule o cartão, NUNCA assuma o SIM porque o cliente já confirmou antes.',
+  'Neste estabelecimento o cliente escolhe o profissional, então o cartão DEVE incluir o',
+  'nome do profissional escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2).',
+  'Formato do cartão:',
   '👤 PROFISSIONAL: <nome do profissional escolhido>',
   '📅 DIA: <dia> / 🕐 HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
-  'Mantenha o tom da persona. Só chame inserir_agendamento depois do SIM.',
+  'Termine o cartão pedindo: "Responda SIM para confirmar." Mantenha o tom da persona.',
 ].join('\n');
 
 describe('area-emojis — mapa área→emojis', () => {
@@ -109,9 +117,21 @@ describe('buildCartaoEmojiOverrideBlock — caminho INDIVIDUAL', () => {
 });
 
 describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
-  // REGRESSÃO: barbearia tem que ser BYTE-A-BYTE o bloco hardcoded do #325.
-  it('barbearia → idêntico byte-a-byte ao bloco do #325', () => {
-    expect(buildCartaoEstabelecimentoBlock('barbearia')).toBe(ESTAB_325_BARBEARIA);
+  // REGRESSÃO: barbearia tem que ser BYTE-A-BYTE o bloco esperado (pós fix Bug 1).
+  it('barbearia → idêntico byte-a-byte ao bloco esperado (emojis intactos)', () => {
+    expect(buildCartaoEstabelecimentoBlock('barbearia')).toBe(ESTAB_BARBEARIA);
+  });
+
+  // Bug 1: o bloco DEVE exigir confirmação SEMPRE, inclusive em agendamentos de
+  // SEGUIDA (back-to-back) — foi onde o bot pulava o cartão no teste do barber_dragon.
+  it('exige cartão+SIM a CADA agendamento, inclusive back-to-back (fix Bug 1)', () => {
+    for (const area of ['barbearia', 'manicure', null]) {
+      const block = buildCartaoEstabelecimentoBlock(area);
+      expect(block).toMatch(/CADA agendamento/i);
+      expect(block).toMatch(/back-to-back|mesma conversa/i);
+      expect(block).toMatch(/NUNCA pule o cartão|NUNCA agende\s+direto/i);
+      expect(block).toMatch(/Responda SIM/i);
+    }
   });
 
   it('salão → mantém 👤/🕐/✂️ no estab (cartão não mostra a marca, então == barbearia)', () => {
@@ -122,7 +142,7 @@ describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
     expect(block).toContain('👤 PROFISSIONAL:');
     expect(block).toContain('🕐 HORARIO');
     expect(block).toContain('✂️ SERVICO');
-    expect(block).toBe(ESTAB_325_BARBEARIA);
+    expect(block).toBe(ESTAB_BARBEARIA);
   });
 
   it('manicure → 💅 no serviço, sem ✂️ de barbearia', () => {

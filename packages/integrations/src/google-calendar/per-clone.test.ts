@@ -246,6 +246,60 @@ describe('getGcalsForSlot — estabelecimento', () => {
     mockQuery.mockResolvedValueOnce(qResult([]));
     expect(await getGcalsForSlot('clone_estab_x')).toEqual([]);
   });
+
+  // Bug 2 (a): projeta clone_colaboradores.servicos (migration 057) e devolve por colaborador.
+  it('projeta servicos do colaborador e devolve (jsonb array → string[])', async () => {
+    mockQuery.mockResolvedValueOnce(
+      qResult([
+        {
+          product_type: 'estabelecimento',
+          tenant_id: '22222222-2222-2222-2222-222222222222',
+          clone_credentials_json: SA_JSON,
+          colaborador_id: '10',
+          nome: 'Bruno',
+          gcal_calendar_id: 'cal-bruno',
+          gcal_status: 'active',
+          servicos: ['Corte', 'Barba'], // o driver pg desserializa jsonb → array JS
+        },
+        {
+          product_type: 'estabelecimento',
+          tenant_id: '22222222-2222-2222-2222-222222222222',
+          clone_credentials_json: SA_JSON,
+          colaborador_id: '11',
+          nome: 'Maria',
+          gcal_calendar_id: 'cal-maria',
+          gcal_status: 'active',
+          servicos: [], // não especificado → caller aplica fallback global
+        },
+      ]),
+    );
+
+    const out = await getGcalsForSlot('clone_estab_x');
+    expect(out[0].servicos).toEqual(['Corte', 'Barba']);
+    expect(out[1].servicos).toEqual([]);
+    // a SELECT projeta a coluna servicos.
+    const sql = mockQuery.mock.calls[0][0] as string;
+    expect(sql).toContain('cc.servicos');
+  });
+
+  it('servicos ausente/null no banco (pré-057) → [] (não quebra)', async () => {
+    mockQuery.mockResolvedValueOnce(
+      qResult([
+        {
+          product_type: 'estabelecimento',
+          tenant_id: '22222222-2222-2222-2222-222222222222',
+          clone_credentials_json: SA_JSON,
+          colaborador_id: '10',
+          nome: 'Bruno',
+          gcal_calendar_id: 'cal-bruno',
+          gcal_status: 'active',
+          servicos: null,
+        },
+      ]),
+    );
+    const out = await getGcalsForSlot('clone_estab_x');
+    expect(out[0].servicos).toEqual([]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

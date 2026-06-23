@@ -142,6 +142,14 @@ export interface ColaboradorGcal {
   nome: string;
   calendarId: string;
   client: GoogleCalendarClient;
+  /**
+   * Serviços que ESTE colaborador faz (clone_colaboradores.servicos, migration 057 —
+   * array de servico_nome que espelha flow_clones.servicos[].nome). `[]` = não
+   * especificado pelo dono → o caller decide o fallback (oferecer os serviços globais
+   * do clone). Usado para montar o bloco [PROFISSIONAIS] por colaborador e validar
+   * serviço×profissional no inserir_agendamento (server-side).
+   */
+  servicos: string[];
 }
 
 /**
@@ -153,6 +161,7 @@ interface ColabCacheEntry {
   colaboradorId: number;
   tenantId: string;
   nome: string;
+  servicos: string[];
   client: GoogleCalendarClient;
   expiresAt: number;
 }
@@ -177,6 +186,20 @@ interface EstabColabRow {
   nome: string;
   gcal_calendar_id: string | null;
   gcal_status: string | null;
+  // servicos do colaborador (jsonb, migration 057). O driver pg já desserializa
+  // jsonb → array JS; pode vir null se a coluna não existir (pré-057) → [].
+  servicos: unknown;
+}
+
+/** Normaliza o jsonb `servicos` do colaborador para string[] (trim + descarta vazio). */
+function parseColaboradorServicos(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const s = String(item ?? '').trim();
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 /**
@@ -217,7 +240,8 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
             cc.id                      AS colaborador_id,
             cc.nome                    AS nome,
             cc.gcal_calendar_id        AS gcal_calendar_id,
-            cc.gcal_status             AS gcal_status
+            cc.gcal_status             AS gcal_status,
+            cc.servicos                AS servicos
        FROM flow_clones fc
        JOIN clone_colaboradores cc ON cc.slot = fc.slot AND cc.tenant_id = fc.tenant_id
       WHERE fc.slot = $1
@@ -254,6 +278,7 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
     }
 
     const colaboradorId = Number(row.colaborador_id);
+    const servicos = parseColaboradorServicos(row.servicos);
     const key = colabCacheKey(slot, colaboradorId);
     const cached = colabCache.get(key);
 
@@ -271,6 +296,9 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
         nome: cached.nome,
         calendarId: row.gcal_calendar_id,
         client: cached.client,
+        // servicos vem da LINHA atual (não do cache do client): mudanças do dono no
+        // painel devem refletir já no próximo turno, sem esperar o TTL da credencial.
+        servicos,
       });
       continue;
     }
@@ -286,11 +314,12 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
       colaboradorId,
       tenantId,
       nome: row.nome,
+      servicos,
       client,
       expiresAt: now + CACHE_TTL_MS,
     });
 
-    out.push({ colaboradorId, nome: row.nome, calendarId: row.gcal_calendar_id, client });
+    out.push({ colaboradorId, nome: row.nome, calendarId: row.gcal_calendar_id, client, servicos });
   }
 
   return out;
