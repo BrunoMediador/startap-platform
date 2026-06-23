@@ -8033,20 +8033,7 @@ function _renderGcalTab(opts) {
             <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Para conectar/conferir cada agenda, vá na aba <strong>👥 Colaboradores</strong> e configure o Google Calendar de cada um.</p>
           </div>
         </div>
-        <details class="gcal-help-block">
-        <summary>${icon('help-circle', 14)} 👥 Vários colaboradores (uma agenda por barbeiro) — regra de ouro</summary>
-        <div class="gcal-help-block__body">
-        <p class="muted">Aqui cada barbeiro tem a <strong>sua própria agenda</strong> do Google, mas o <strong>robô (a conta de serviço) é UM SÓ</strong> pra todo o salão. Você não cria um robô por barbeiro — cria o robô uma vez (o tutorial de conexão tem o passo a passo) e <strong>reaproveita o mesmo e-mail dele em todas as agendas</strong>.</p>
-        <ol class="gcal-instructions gcal-instructions--plain">
-          <li><strong>(1) Um e-mail de robô só.</strong> O e-mail da conta de serviço (termina em <code>.iam.gserviceaccount.com</code>) é o <strong>mesmo</strong> pra todos os colaboradores do salão. Anote ele.</li>
-          <li><strong>(2) Uma agenda Google por barbeiro.</strong> No <a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a>, crie uma agenda separada para cada barbeiro (ex.: <code>Agenda do Maria</code>, <code>Agenda do João</code>). <span style="color:var(--danger);font-weight:bold">&#9888; Hoje isso é manual</span> — criar a agenda de cada colaborador você faz na mão (a dica também está no formulário de cada colaborador).</li>
-          <li><strong>(3) Compartilhe TODAS as agendas com o MESMO e-mail do robô.</strong> Em cada agenda &#8594; <strong>Configurações e compartilhamento</strong> &#8594; <strong>Adicionar pessoas e grupos</strong> &#8594; cole o e-mail do robô (o tal <code>.iam.gserviceaccount.com</code>) e escolha a permissão <strong>Fazer alterações nos eventos</strong>. Repita em cada agenda. <span style="color:var(--danger);font-weight:bold">&#9888; Sem esse compartilhamento, aquela agenda dá erro <code>404</code> ("Calendar not found").</span></li>
-          <li><strong>(4) Cole o ID de cada agenda no colaborador certo.</strong> Pegue o <strong>ID da agenda</strong> (em <strong>Integrar agenda</strong>, termina em <code>@group.calendar.google.com</code>) e cole no campo <strong>ID da agenda Google</strong> do colaborador correspondente, na aba <strong>👥 Colaboradores</strong>. Cada barbeiro recebe o ID da agenda dele.</li>
-        </ol>
-        <p class="muted"><strong>Por que dá certo:</strong> a permissão de criar horários vem do <strong>compartilhamento da agenda</strong>, não de um robô por pessoa. Por isso um único robô atende o salão inteiro — basta cada agenda tê-lo como convidado.</p>
-        <p class="muted"><span style="color:var(--danger);font-weight:bold">&#9888; Importante:</span> agenda por barbeiro só vale neste tipo de conta (<strong>estabelecimento</strong>). Em conta <strong>individual</strong> é uma agenda só pro salão todo — todos os horários caem nela.</p>
-        </div>
-        </details>
+        ${_gcalEstabGuiaHtml()}
       </div>`;
   }
 
@@ -8249,6 +8236,74 @@ function _renderGcalTab(opts) {
 </ol>
 
 <p class="muted"><strong>Já tenho isso configurado e quero trocar/refazer?</strong> Não precisa recriar tudo do zero. (a) Para trocar só a chave: reutilize o mesmo projeto e o mesmo robô, vá na aba <strong>Chaves</strong> &#8594; <strong>Adicionar chave</strong> &#8594; <strong>Criar nova chave</strong> (JSON), entregue a nova e apague a antiga na mesma aba (apagar revoga o acesso na hora). (b) Para trocar de agenda: refaça os Passos 5 e 6 na agenda nova e reenvie o JSON + o novo ID. (c) Se a chave vazou: apague-a na aba Chaves imediatamente e gere outra.</p>
+</div>
+</details>`;
+  }
+
+  // ════ GUIA COMPLETO ESTABELECIMENTO (vários barbeiros, à prova de leigo) ════
+  // Bloco <details> que aparece na aba Google Calendar do estabelecimento.
+  // Cobre o fluxo do zero em 4 partes + seção "deu erro". A Parte 1 (criar o
+  // robô no Google Cloud) é a MESMA dos 4 primeiros passos do individual; aqui
+  // é resumida com mini-passos e o link de quem quiser o passo a passo detalhado.
+  function _gcalEstabGuiaHtml() {
+    return `
+<details class="gcal-help-block" open>
+<summary>${icon('help-circle', 14)} 📖 Guia completo: configurar agenda com vários barbeiros (leia do começo)</summary>
+<div class="gcal-help-block__body">
+<p class="muted">Aqui no salão <strong>cada barbeiro tem a SUA própria agenda</strong> do Google, mas o <strong>"robô" (a conta de serviço) é UM SÓ</strong> pra todo o salão. Você cria o robô <strong>uma vez</strong> e usa o <strong>mesmo e-mail dele em todas as agendas</strong>. Faça num computador, de preferência no Chrome. Tudo é gratuito e não pede cartão. São 4 partes — siga na ordem.</p>
+
+<p><span style="color:var(--danger);font-weight:bold">&#9888; Os 2 erros que mais acontecem (e como não cair neles):</span></p>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><span style="color:var(--danger);font-weight:bold">(1)</span> Se você esquecer de <strong>ativar a Google Calendar API</strong> (Parte 1), tudo falha com erro <code>403</code>.</li>
+  <li><span style="color:var(--danger);font-weight:bold">(2)</span> Se você não <strong>compartilhar a agenda de cada barbeiro</strong> com o e-mail do robô (Parte 3), aquela agenda falha com erro <code>404</code> ("Calendar not found").</li>
+</ol>
+
+<h4 style="margin:1rem 0 .35rem;font-size:.95rem">Parte 1 &#8212; Criar o "robô" do salão (só uma vez)</h4>
+<p class="muted">O robô é uma <strong>conta de serviço</strong> do Google: um usuário automático que mexe nas agendas em nome do sistema. <strong>É um só pro salão inteiro</strong> &#8212; você NÃO cria um robô por barbeiro. Faça isto uma vez, logado numa conta Gmail dedicada ao salão (de preferência uma criada só pra isso, ex.: <code>agenda.nomedosalao@gmail.com</code>, e não sua conta pessoal).</p>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><strong>(1.1) Crie o projeto.</strong> Abra <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com/projectcreate</a>, confira na bolinha do canto que está na conta dedicada, dê um nome ao projeto (ex.: <code>Agenda Salao do Ze</code>, sem acento nem ç) e clique em <strong>Criar</strong>. Espere o nome do projeto aparecer fixo no topo.</li>
+  <li><strong>(1.2) Ative a Google Calendar API.</strong> Abra <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener">console.cloud.google.com/apis/library/calendar-json.googleapis.com</a>, <strong>confira que seu projeto está selecionado no topo</strong> e clique em <strong>Ativar</strong>. Quando o botão virar <strong>Gerenciar</strong>, deu certo. <span style="color:var(--danger);font-weight:bold">&#9888; Pular este passo é a causa nº1 do erro 403.</span> Espere 1&#8211;2 minutos antes de testar.</li>
+  <li><strong>(1.3) Crie a conta de serviço (o robô).</strong> Abra <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">console.cloud.google.com/iam-admin/serviceaccounts</a> &#8594; <strong>Criar conta de serviço</strong> &#8594; dê um nome (ex.: <code>robo-agenda-salao</code>) &#8594; <strong>Criar e continuar</strong> &#8594; pule os passos opcionais (<strong>Continuar</strong> e <strong>Concluído</strong>, sem escolher papel nenhum). O robô aparece na lista com um e-mail terminando em <code>.iam.gserviceaccount.com</code>.</li>
+  <li><strong>(1.4) Baixe a chave JSON (a "senha" do robô).</strong> Clique no robô &#8594; aba <strong>Chaves</strong> &#8594; <strong>Adicionar chave</strong> &#8594; <strong>Criar nova chave</strong> &#8594; tipo <strong>JSON</strong> &#8594; <strong>Criar</strong>. O navegador baixa um arquivo <code>.json</code> (pasta Downloads). <span style="color:var(--danger);font-weight:bold">&#9888; Esse arquivo é uma senha &#8212; nunca mande em grupo de WhatsApp, nunca poste print.</span></li>
+</ol>
+<p class="muted">💡 Quer cada clique com mais detalhe (e o que fazer se a tela vier em inglês)? O tutorial dos clientes individuais traz os mesmos Passos 1 a 4, bem detalhados &#8212; é só abrir um clone <strong>individual</strong> na aba Google Calendar e ler a ajuda "Como conectar o Google Calendar". A parte de criar o robô é idêntica.</p>
+
+<h4 style="margin:1.1rem 0 .35rem;font-size:.95rem">Parte 2 &#8212; Colar o robô aqui no painel</h4>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><strong>(2.1)</strong> Ainda nesta aba <strong>Google Calendar</strong>, abra o bloco <strong>"Conectar o robô do salão (cole o JSON da Service Account)"</strong> logo aqui embaixo.</li>
+  <li><strong>(2.2)</strong> Abra o arquivo <code>.json</code> que você baixou (Bloco de Notas) e copie <strong>todo o conteúdo</strong>, ou use o botão de selecionar arquivo. Cole no campo e clique em <strong>Conectar robô</strong> / <strong>Salvar</strong>.</li>
+  <li><strong>(2.3)</strong> Vai aparecer uma caixa verde com o <strong>e-mail do robô</strong> (termina em <code>.iam.gserviceaccount.com</code>). <strong>Esse é o e-mail que você vai compartilhar com as agendas.</strong> Clique em <strong>Copiar e-mail</strong> &#8212; você vai colar ele várias vezes na Parte 3.</li>
+</ol>
+
+<h4 style="margin:1.1rem 0 .35rem;font-size:.95rem">Parte 3 &#8212; Criar e compartilhar a agenda de CADA barbeiro</h4>
+<p class="muted">Esta parte é no <strong>Google Agenda</strong> (<a href="https://calendar.google.com" target="_blank" rel="noopener">calendar.google.com</a>), na <strong>mesma</strong> conta dedicada. <span style="color:var(--danger);font-weight:bold">Regra de ouro: 1 agenda DIFERENTE por barbeiro, mas o MESMO e-mail do robô em todas elas.</span> Repita os passos abaixo para cada barbeiro:</p>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><strong>(3.1) Crie a agenda do barbeiro.</strong> Na coluna da esquerda, ao lado de <strong>Outras agendas</strong>, clique no <strong>+</strong> &#8594; <strong>Criar nova agenda</strong> &#8594; dê um nome que identifique a pessoa (ex.: <code>Agenda do João</code>, <code>Agenda da Maria</code>) &#8594; <strong>Criar agenda</strong>. <span style="color:var(--danger);font-weight:bold">&#9888; Uma agenda DIFERENTE por barbeiro &#8212; não use a mesma agenda pra dois, senão os horários se misturam.</span></li>
+  <li><strong>(3.2) Abra as configurações dessa agenda.</strong> Em <strong>Minhas agendas</strong>, passe o mouse no nome da agenda do barbeiro &#8594; três pontinhos &#8594; <strong>Configurações e compartilhamento</strong>.</li>
+  <li><strong>(3.3) Compartilhe com o robô.</strong> Role até <strong>Compartilhar com pessoas ou grupos específicos</strong> &#8594; <strong>Adicionar pessoas e grupos</strong> &#8594; <strong>cole o e-mail do robô</strong> (o mesmo que você copiou na Parte 2.3) &#8594; escolha a permissão <strong>exatamente</strong> <strong>"Fazer alterações nos eventos"</strong> &#8594; <strong>Enviar</strong>. <span style="color:var(--danger);font-weight:bold">&#9888; Tem que ser "Fazer alterações nos eventos" &#8212; "Ver detalhes" (só leitura) NÃO deixa o robô marcar horário.</span></li>
+  <li><strong>(3.4) Copie o ID dessa agenda.</strong> Na mesma tela, role até <strong>Integrar agenda</strong> e copie o campo <strong>ID da agenda</strong> (um código longo terminando em <code>@group.calendar.google.com</code>). <span style="color:var(--danger);font-weight:bold">&#9888; Copie só o "ID da agenda" &#8212; ignore "URL público", "Código de incorporação" e "iCal".</span> Anote a qual barbeiro esse ID pertence.</li>
+</ol>
+<p class="muted">✅ No fim da Parte 3 você tem, para cada barbeiro: <strong>uma agenda criada</strong>, <strong>compartilhada com o mesmo e-mail do robô</strong>, e <strong>o ID daquela agenda anotado</strong>.</p>
+
+<h4 style="margin:1.1rem 0 .35rem;font-size:.95rem">Parte 4 &#8212; Cadastrar os barbeiros aqui no painel</h4>
+<ol class="gcal-instructions gcal-instructions--plain">
+  <li><strong>(4.1)</strong> Vá na aba <strong>👥 Colaboradores</strong> (no topo deste clone) e clique em <strong>Adicionar colaborador</strong>.</li>
+  <li><strong>(4.2)</strong> Preencha o nome do barbeiro e cole, no campo <strong>ID da agenda Google</strong>, o ID <strong>daquele</strong> barbeiro (o que você anotou na Parte 3.4). <span style="color:var(--danger);font-weight:bold">&#9888; Confira que é o ID da agenda DELE &#8212; trocar os IDs faz os horários caírem na pessoa errada.</span> Clique em <strong>Salvar</strong>.</li>
+  <li><strong>(4.3)</strong> Ainda no colaborador, clique em <strong>Editar</strong> e use o botão <strong>"Testar conexão"</strong>. Espere ficar <strong>verde</strong> ("Agenda OK"). Se der erro, veja a seção <strong>"Deu erro?"</strong> mais abaixo.</li>
+  <li><strong>(4.4)</strong> Repita 4.1 a 4.3 para cada barbeiro. Quando todos estiverem verdes, está pronto: o bot marca o horário na agenda do barbeiro que o cliente escolher.</li>
+</ol>
+
+<h4 style="margin:1.1rem 0 .35rem;font-size:.95rem">Deu erro? O que fazer</h4>
+<p class="muted">No <strong>"Testar conexão"</strong> de cada colaborador o painel mostra um aviso. Ache o seu na lista:</p>
+<ul class="gcal-instructions gcal-instructions--plain" style="list-style:none">
+  <li>🔴 <strong>"API desabilitada" / API_DISABLED:</strong> faltou <strong>ativar a Google Calendar API</strong> &#8212; volte à <strong>Parte 1.2</strong>, ative e espere 1&#8211;2 min.</li>
+  <li>🔴 <strong>"Agenda não compartilhada" / "Calendar not found" / 404:</strong> aquela agenda <strong>não foi compartilhada</strong> com o e-mail do robô, OU o <strong>ID está errado/trocado</strong> &#8212; revise a <strong>Parte 3.3</strong> (compartilhar) e a <strong>Parte 3.4 / 4.2</strong> (o ID certo daquele barbeiro).</li>
+  <li>🔴 <strong>"JSON inválido" / INVALID_JSON:</strong> o JSON do robô está <strong>incompleto ou errado</strong> &#8212; baixe a chave de novo (<strong>Parte 1.4</strong>) e cole tudo novamente (<strong>Parte 2</strong>).</li>
+  <li>🔴 <strong>"Robô não configurado" / clone_sem_service_account:</strong> você ainda não <strong>colou o JSON do robô</strong> &#8212; faça a <strong>Parte 2</strong> primeiro; só depois dá pra testar as agendas dos barbeiros.</li>
+  <li>🔴 <strong>"Permissão insuficiente" / 403 ao agendar:</strong> a agenda foi compartilhada só pra <strong>leitura</strong> &#8212; volte à <strong>Parte 3.3</strong> e troque a permissão para <strong>"Fazer alterações nos eventos"</strong>.</li>
+</ul>
+<p class="muted"><strong>Por que isso tudo funciona:</strong> a permissão de marcar horário vem do <strong>compartilhamento de cada agenda</strong> com o robô &#8212; não de um robô por pessoa. Por isso um único robô atende o salão inteiro: basta cada agenda tê-lo como convidado com "Fazer alterações nos eventos".</p>
+<p class="muted"><span style="color:var(--danger);font-weight:bold">&#9888; Lembrete:</span> agenda por barbeiro só vale neste tipo de conta (<strong>estabelecimento</strong>). Em conta <strong>individual</strong> é uma agenda só pro salão todo.</p>
 </div>
 </details>`;
   }
@@ -8958,9 +9013,29 @@ async function _renderColaboradoresTab(content, clone) {
         </div>
       </div>` : '';
 
+  // Atalho/resumo do guia completo: o passo a passo de verdade mora na aba
+  // Google Calendar (não dá pra renderizar o guia inteiro aqui sem acesso ao
+  // helper _gcalEstabGuiaHtml, que é local de _renderGcalTab). Aqui fica o
+  // resumo das 4 partes + ponteiro pra aba certa.
+  const guiaResumoHtml = `
+      <details class="gcal-help-block">
+      <summary>${icon('help-circle', 14)} 📖 Como configurar a agenda de cada barbeiro (resumo)</summary>
+      <div class="gcal-help-block__body">
+        <p class="muted">O <strong>passo a passo completo, do zero</strong> (criar o robô, compartilhar agendas, etc.) está na aba <strong>Google Calendar</strong> deste clone, no guia <strong>"📖 Guia completo: configurar agenda com vários barbeiros"</strong>. Resumão das 4 partes:</p>
+        <ol class="gcal-instructions gcal-instructions--plain">
+          <li><strong>Parte 1 &#8212;</strong> Criar o "robô" do salão uma vez (Google Cloud) e baixar a chave JSON.</li>
+          <li><strong>Parte 2 &#8212;</strong> Colar esse JSON na aba <strong>Google Calendar</strong> e copiar o e-mail do robô.</li>
+          <li><strong>Parte 3 &#8212;</strong> No Google Agenda, criar <strong>1 agenda por barbeiro</strong>, compartilhar cada uma com o <strong>mesmo e-mail do robô</strong> (permissão "Fazer alterações nos eventos") e copiar o <strong>ID</strong> de cada agenda.</li>
+          <li><strong>Parte 4 &#8212; (aqui)</strong> Adicionar cada barbeiro, colar o <strong>ID da agenda dele</strong>, salvar e usar <strong>"Testar conexão"</strong> até ficar verde.</li>
+        </ol>
+        <p class="muted"><span style="color:var(--danger);font-weight:bold">&#9888;</span> Mesmo e-mail do robô em TODAS as agendas; <strong>uma agenda DIFERENTE por barbeiro</strong>.</p>
+      </div>
+      </details>`;
+
   content.innerHTML = `
     <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
       ${saWarnHtml}
+      ${guiaResumoHtml}
       <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <span class="badge ${cheio ? 'badge--warning' : 'badge--muted'}">${icon('users',12)} ${escapeHtml(vagasLabel)}</span>
         <button class="btn btn--primary btn--sm" id="colab-add-btn" ${cheio ? 'disabled title="Limite do plano atingido — aumente as vagas em Dados"' : ''} style="margin-left:auto">${icon('plus',13)} Adicionar colaborador</button>
