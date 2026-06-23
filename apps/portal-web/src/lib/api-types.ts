@@ -56,6 +56,14 @@ export interface AuthMe {
    * itens de menu de gestão e as páginas mostram "recurso indisponível".
    */
   atendimentos_enabled: boolean;
+  /**
+   * Billing derivado da agenda (ADR 0027 Fase C). Quando true, o faturamento passa
+   * a vir dos eventos da agenda em DOIS baldes (Previsão = futuros / Faturado =
+   * passados), editáveis linha a linha. Pode vir AUSENTE (contrato em construção no
+   * backend, em paralelo) — o front trata ausente como false: com a flag OFF a área
+   * de faturamento fica IDÊNTICA à de hoje (SOLO Cirilo/Samuel não regride).
+   */
+  atend_from_agenda?: boolean;
 }
 
 // ── Servicos ─────────────────────────────────────────────────────────────────
@@ -520,6 +528,78 @@ export interface CriarAtendimentoBody {
 export interface CriarAtendimentoResponse {
   ok: true;
   atendimento: AtendimentoRow;
+}
+
+// ── Billing derivado da agenda (ADR 0027 Fase C) ─────────────────────────────
+//
+// O faturamento passa a ser DERIVADO da agenda, em dois baldes:
+//   - 'previsao' : eventos FUTUROS    -> receita esperada.
+//   - 'faturado' : eventos que já PASSARAM -> realizado.
+// Cada linha pode ser EDITADA (valor/forma/serviço/cliente) — editar ≠ excluir; a
+// edição é sticky (volta em `dirty_fields`) e marca o badge "Editado". Se o
+// atendimento não rolou, REMOVE a linha (soft-delete) e ela some das listas.
+//
+// CONTRATO CONGELADO (o backend implementa isto em paralelo; se algo divergir no
+// fim, QA reconcilia). TODA rota é gated por ATENDIMENTOS_ENABLED + atend_from_agenda
+// e escopada por slot da sessão (withTenant). Valores SEMPRE em centavos. Campos
+// nullable são `| null` de verdade — render com fallback ("Sem profissional"/"Sem
+// forma"), nunca repetir o bug de tipo do #344.
+
+/** Os dois baldes do billing-da-agenda. */
+export type AtendimentoBalde = 'previsao' | 'faturado';
+
+/**
+ * Linha de atendimento DERIVADA da agenda (GET /portal/atendimentos?balde=...).
+ *
+ * `origem`:
+ *   - 'agenda' : nasceu de um evento da agenda (auto). Sem dirty -> badge "Auto".
+ *   - 'manual' : lançado na mão (tela Registrar / walk-in) -> badge "Manual".
+ * `dirty_fields`: colunas EDITADAS pelo dono (ex.: ['valor_cents']). Não-vazio =>
+ *   a linha foi tocada -> badge "Editado" (sobrepõe Auto/Manual).
+ * Campos nullable (`forma_pagamento`, `colaborador_id`, `profissional_nome`,
+ *   `cliente_*`, `servico_nome`) podem vir null — render com fallback.
+ */
+export interface AtendimentoBaldeRow {
+  id: number;
+  data: string; // 'YYYY-MM-DD'
+  inicio_at: string | null; // ISO (início do evento) ou null (sem horário)
+  fim_at: string | null; // ISO (fim do evento) ou null
+  cliente_nome: string | null;
+  cliente_contato: string | null;
+  servico_nome: string | null;
+  valor_cents: number;
+  desconto_cents: number;
+  forma_pagamento: FormaPagamento | null;
+  colaborador_id: number | null;
+  profissional_nome: string | null;
+  origem: 'agenda' | 'manual';
+  /** Colunas editadas (sticky). Vazio = nunca tocada. */
+  dirty_fields: string[];
+  status: string;
+}
+
+/** 200 do GET /portal/atendimentos?balde=&de=&ate= — linhas do balde + total. */
+export interface AtendimentosListResponse {
+  atendimentos: AtendimentoBaldeRow[];
+  total_cents: number;
+}
+
+/**
+ * Body do PATCH /portal/atendimentos/:id — editar uma linha. TODOS opcionais
+ * (PATCH parcial); a UI só envia o que mudou. O backend devolve a Row atualizada
+ * com `dirty_fields` incluindo as colunas tocadas (a edição é sticky).
+ */
+export interface EditarAtendimentoBody {
+  valor_cents?: number;
+  desconto_cents?: number;
+  forma_pagamento?: FormaPagamento;
+  servico_nome?: string;
+  cliente_nome?: string;
+}
+
+/** 200 do PATCH — a Row atualizada (já com `dirty_fields` novos). */
+export interface EditarAtendimentoResponse {
+  atendimento: AtendimentoBaldeRow;
 }
 
 // Relatório de faturamento (GET /portal/relatorios/faturamento?de=&ate=).

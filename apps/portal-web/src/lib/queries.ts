@@ -20,6 +20,8 @@ import { apiFetch } from './api';
 import type {
   AgendaSlotsResponse,
   AgendamentosResponse,
+  AtendimentoBalde,
+  AtendimentosListResponse,
   AuthMe,
   ChargeView,
   CodigoResponse,
@@ -33,6 +35,8 @@ import type {
   CriarAtendimentoResponse,
   EditarAgendamentoBody,
   EditarAgendamentoResponse,
+  EditarAtendimentoBody,
+  EditarAtendimentoResponse,
   EquipeResponse,
   ExcluirAgendamentoResponse,
   FaturamentoReport,
@@ -52,6 +56,7 @@ import type {
   StatusConexaoResponse,
   StatusResponse,
 } from './api-types';
+import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { mapColaboradorRow } from './equipe';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
@@ -78,6 +83,10 @@ export const qk = {
     ['relatorios', slot, 'faturamento', de, ate] as const,
   comissao: (slot: string, de: string, ate: string) =>
     ['relatorios', slot, 'comissao', de, ate] as const,
+  /** Prefixo por tenant — invalida TODAS as listas de baldes (ambos, qualquer período). */
+  atendimentosBaldeBase: (slot: string) => ['atendimentos-balde', slot] as const,
+  atendimentosBalde: (slot: string, balde: AtendimentoBalde, de: string, ate: string) =>
+    ['atendimentos-balde', slot, balde, de, ate] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -609,5 +618,96 @@ export function useComissao(
       ),
     enabled: Boolean(de && ate),
     retry: false,
+  });
+}
+
+// ── Billing derivado da agenda (ADR 0027 Fase C) ─────────────────────────────
+//
+// Listas EDITÁVEIS por balde (previsao/faturado). Gated por ATENDIMENTOS_ENABLED +
+// atend_from_agenda no backend (404 quando OFF, tratado na tela). Escopado por slot
+// da sessão (withTenant) — o front nunca envia slot. Query key carrega slot + balde
+// + período pra isolar o cache por tenant E não misturar os dois baldes.
+
+/**
+ * GET /portal/atendimentos?balde=&de=&ate= — linhas DERIVADAS da agenda do balde,
+ * com `total_cents`. `de`/`ate` obrigatórios -> só roda com os dois (enabled). Sem
+ * retry: 404 (flag off) não se resolve sozinho. `enabled` extra pra desligar quando
+ * a feature está off (defesa em profundidade — não bate na API à toa).
+ */
+export function useAtendimentosBalde(
+  slot: string,
+  balde: AtendimentoBalde,
+  de: string | null,
+  ate: string | null,
+  enabled = true,
+): UseQueryResult<AtendimentosListResponse> {
+  return useQuery({
+    queryKey: qk.atendimentosBalde(slot, balde, de ?? '', ate ?? ''),
+    queryFn: ({ signal }) =>
+      apiFetch<AtendimentosListResponse>(
+        `/portal/atendimentos?balde=${balde}&de=${encodeURIComponent(de ?? '')}&ate=${encodeURIComponent(ate ?? '')}`,
+        { signal },
+      ),
+    enabled: enabled && Boolean(de && ate),
+    retry: false,
+  });
+}
+
+/**
+ * PATCH /portal/atendimentos/:id — edita uma linha (valor/forma/serviço/cliente).
+ * No 200, faz update OTIMISTA in-place na lista do balde em foco (a Row volta com
+ * `dirty_fields` -> badge "Editado" na hora) e invalida TODAS as listas de baldes
+ * + os relatórios do tenant pra ressincronizar total/quebras. 400/404 na tela.
+ */
+export function useEditarAtendimento(
+  slot: string,
+  balde: AtendimentoBalde,
+  de: string | null,
+  ate: string | null,
+): UseMutationResult<
+  EditarAtendimentoResponse,
+  Error,
+  { id: number; patch: EditarAtendimentoBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }) =>
+      apiFetch<EditarAtendimentoResponse>(`/portal/atendimentos/${id}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
+    onSuccess: ({ atendimento }) => {
+      client.setQueryData<AtendimentosListResponse>(
+        qk.atendimentosBalde(slot, balde, de ?? '', ate ?? ''),
+        (prev) => (prev ? patchRowNaLista(prev, atendimento) : prev),
+      );
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
+  });
+}
+
+/**
+ * DELETE /portal/atendimentos/:id — soft-delete (o atendimento não rolou). No
+ * sucesso, remove a linha do cache do balde na hora (some sem reload) + invalida
+ * todas as listas de baldes e os relatórios. 404 (já removido / flag off) na tela.
+ */
+export function useRemoverAtendimento(
+  slot: string,
+  balde: AtendimentoBalde,
+  de: string | null,
+  ate: string | null,
+): UseMutationResult<{ ok: true }, Error, number> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => apiFetch<{ ok: true }>(`/portal/atendimentos/${id}`, { method: 'DELETE' }),
+    onSuccess: (_res, id) => {
+      client.setQueryData<AtendimentosListResponse>(
+        qk.atendimentosBalde(slot, balde, de ?? '', ate ?? ''),
+        (prev) => (prev ? removerRowDaLista(prev, id) : prev),
+      );
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
   });
 }
