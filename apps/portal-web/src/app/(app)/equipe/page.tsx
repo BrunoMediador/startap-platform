@@ -37,7 +37,7 @@ import {
 } from '@/lib/queries';
 import { useState } from 'react';
 
-const EMPTY_DRAFT: Draft = { nome: '', servicos: '', ativo: true };
+const EMPTY_DRAFT: Draft = { nome: '', servicos: '', ativo: true, comissao: '' };
 
 /** Extrai a mensagem amigável de um ApiError (409 seat_cap/homônimo) ou um fallback. */
 function errMsg(e: unknown, fallback: string): string {
@@ -104,7 +104,12 @@ export default function EquipePage() {
     }
     if (editing === 'new') {
       create.mutate(
-        { nome: res.value.nome, servicos: res.value.servicos, ativo: res.value.ativo },
+        {
+          nome: res.value.nome,
+          servicos: res.value.servicos,
+          ativo: res.value.ativo,
+          comissao_pct: res.value.comissao_pct,
+        },
         {
           onSuccess: () => {
             toast.success('Profissional adicionado');
@@ -117,7 +122,12 @@ export default function EquipePage() {
       update.mutate(
         {
           id: editing,
-          patch: { nome: res.value.nome, servicos: res.value.servicos, ativo: res.value.ativo },
+          patch: {
+            nome: res.value.nome,
+            servicos: res.value.servicos,
+            ativo: res.value.ativo,
+            comissao_pct: res.value.comissao_pct,
+          },
         },
         {
           onSuccess: () => {
@@ -289,6 +299,7 @@ function ReadRow({
         </div>
         <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
           {servicos.length > 0 ? servicos.join(' · ') : 'Atende todos os serviços'}
+          {colaborador.comissao_pct > 0 && ` · ${colaborador.comissao_pct}% comissão`}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
@@ -359,6 +370,19 @@ function EditRow({
       />
       <p className="-mt-1 text-[12px] text-ink-soft">
         Deixe em branco se ele atende todos os serviços.
+      </p>
+      <Input
+        label="% de comissão (sobre o valor do atendimento)"
+        type="text"
+        inputMode="decimal"
+        suffix="%"
+        placeholder="0"
+        value={draft.comissao}
+        error={errors.comissao}
+        onChange={(e) => onChange({ ...draft, comissao: e.target.value })}
+      />
+      <p className="-mt-1 text-[12px] text-ink-soft">
+        Usada nos relatórios de comissão. Deixe 0 se não houver comissão.
       </p>
       {/* Switch é auto-rotulado (aria-label próprio); o <span> só dá contexto
           visual. Não usamos <label> (sem controle nativo dentro) — mesmo padrão

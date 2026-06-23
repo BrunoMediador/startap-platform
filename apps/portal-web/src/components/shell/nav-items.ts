@@ -12,6 +12,7 @@ import {
   IconCalendar,
   IconHome,
   IconPause,
+  IconPlus,
   IconServices,
   IconUser,
   IconUsers,
@@ -23,18 +24,34 @@ export interface NavItem {
   href: string;
   label: string;
   Icon: typeof IconHome;
-  /** Item GATED:
-   *  - 'conexao'        -> só aparece com GET /portal/conexao.enabled true.
+  /** Item GATED (pode combinar mais de um — TODOS precisam passar):
+   *  - 'conexao'         -> só aparece com GET /portal/conexao.enabled true.
    *  - 'estabelecimento' -> só aparece quando product_type === 'estabelecimento'
    *    (vem da sessão /auth/me). Individual (Cirilo/Samuel) nunca vê.
+   *  - 'atendimentos'    -> só aparece quando atendimentos_enabled (flag do backend).
    */
-  gated?: 'conexao' | 'estabelecimento';
+  gated?: ('conexao' | 'estabelecimento' | 'atendimentos')[];
 }
 
 export const NAV_ITEMS: NavItem[] = [
   { href: '/inicio', label: 'Início', Icon: IconHome },
-  { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: 'conexao' },
-  { href: '/equipe', label: 'Equipe', Icon: IconUsers, gated: 'estabelecimento' },
+  { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: ['conexao'] },
+  { href: '/equipe', label: 'Equipe', Icon: IconUsers, gated: ['estabelecimento'] },
+  // App de gestão (Fase 1): registrar atendimento + relatórios. Gated pela flag.
+  { href: '/atendimentos/novo', label: 'Registrar', Icon: IconPlus, gated: ['atendimentos'] },
+  {
+    href: '/relatorios/faturamento',
+    label: 'Faturamento',
+    Icon: IconWallet,
+    gated: ['atendimentos'],
+  },
+  // Comissão só faz sentido com profissionais (estabelecimento) E a flag ligada.
+  {
+    href: '/relatorios/comissao',
+    label: 'Comissão',
+    Icon: IconUsers,
+    gated: ['atendimentos', 'estabelecimento'],
+  },
   { href: '/servicos', label: 'Serviços', Icon: IconServices },
   { href: '/horarios', label: 'Horários', Icon: IconCalendar },
   { href: '/perfil', label: 'Meu negócio', Icon: IconUser },
