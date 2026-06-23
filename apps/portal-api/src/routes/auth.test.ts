@@ -1,17 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mocks ANTES de importar o modulo sob teste.
-// config.js valida process.env no import (lanca se faltar var) — mockamos para o teste.
-vi.mock('../config.js', () => ({
-  config: {
+// configMock e o mock de cloneColaboradores são içados pro topo (vi.hoisted) porque as
+// factories de vi.mock referenciam essas refs — sem hoisted dá TDZ. configMock é MUTÁVEL
+// por teste pra alternar ATENDIMENTOS_ENABLED/ESTABELECIMENTO_ENABLED no /auth/me.
+const { configMock, getScopeBySlotMock } = vi.hoisted(() => ({
+  configMock: {
     PORTAL_BCRYPT_COST: 12,
     NODE_ENV: 'test',
     PORTAL_LOGIN_MAX_ATTEMPTS: 5,
     PORTAL_LOGIN_LOCK_MINUTES: 15,
     PORTAL_SESSION_TTL_SECONDS: 3600,
     PORTAL_COOKIE_SECURE: false,
-  },
+    ATENDIMENTOS_ENABLED: false,
+    ESTABELECIMENTO_ENABLED: false,
+  } as Record<string, unknown>,
+  getScopeBySlotMock: vi.fn(),
 }));
+
+// Mocks ANTES de importar o modulo sob teste.
+// config.js valida process.env no import (lanca se faltar var) — mockamos para o teste.
+vi.mock('../config.js', () => ({ config: configMock }));
 vi.mock('@startap/db', () => ({
   portalUsers: {
     findPortalUserAuthById: vi.fn(),
@@ -21,6 +29,9 @@ vi.mock('@startap/db', () => ({
     getSlotForActivePortalUser: vi.fn(),
     recordSuccessfulLogin: vi.fn(),
     recordFailedLogin: vi.fn(),
+  },
+  cloneColaboradores: {
+    getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a),
   },
 }));
 vi.mock('bcryptjs', () => ({
@@ -83,6 +94,49 @@ const ACTIVE_USER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Estado padrão entre testes: ambas as flags OFF; scope individual sem tenant.
+  configMock.ATENDIMENTOS_ENABLED = false;
+  configMock.ESTABELECIMENTO_ENABLED = false;
+  getScopeBySlotMock.mockResolvedValue({
+    product_type: 'individual',
+    seat_cap: null,
+    tenant_id: 'tid-1',
+  });
+});
+
+// ── GET /auth/me — flag do app de gestão ─────────────────────────────────────
+describe('GET /auth/me — atendimentos_enabled', () => {
+  it('atendimentos_enabled=false quando a flag está OFF (sempre presente)', async () => {
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.atendimentos_enabled).toBe(false);
+    expect(body.username).toBe('cirilo');
+    await app.close();
+  });
+
+  it('atendimentos_enabled=true quando a flag está ON', async () => {
+    configMock.ATENDIMENTOS_ENABLED = true;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().atendimentos_enabled).toBe(true);
+    await app.close();
+  });
+
+  it('campo presente mesmo pra individual (sem product_type/seat_cap no corpo)', async () => {
+    configMock.ATENDIMENTOS_ENABLED = true;
+    configMock.ESTABELECIMENTO_ENABLED = false; // não resolve scope -> individual
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    const body = res.json();
+    expect(body.atendimentos_enabled).toBe(true);
+    expect(body.product_type).toBeUndefined();
+    expect(body.seat_cap).toBeUndefined();
+    await app.close();
+  });
 });
 
 // ── Login: número de WhatsApp em qualquer formatação (PR #268) ───────────────

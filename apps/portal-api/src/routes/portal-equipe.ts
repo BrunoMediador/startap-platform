@@ -30,6 +30,10 @@ import { requireTenant, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'equipe' });
 
+// % de comissão sobre o BRUTO (cenário EMPRESA, ADR 0026). 0–100, 2 casas. Opcional:
+// no create ausente => 0 (default da coluna); no update ausente => NÃO altera o valor.
+const comissaoPctSchema = z.number().min(0).max(100);
+
 // Body de criação. strict() rejeita campos extras (ex.: alguém tentando setar
 // gcal_calendar_id/tenant pelo portal — agenda é assistida, tenant vem da sessão).
 const createSchema = z
@@ -38,6 +42,7 @@ const createSchema = z
     servicos: z.array(z.string()).max(50).optional(),
     ativo: z.boolean().optional(),
     ordem: z.number().int().optional(),
+    comissao_pct: comissaoPctSchema.optional(),
   })
   .strict();
 
@@ -48,6 +53,7 @@ const updateSchema = z
     servicos: z.array(z.string()).max(50).optional(),
     ativo: z.boolean().optional(),
     ordem: z.number().int().optional(),
+    comissao_pct: comissaoPctSchema.optional(),
   })
   .strict();
 
