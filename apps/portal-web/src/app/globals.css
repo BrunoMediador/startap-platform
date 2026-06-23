@@ -268,6 +268,15 @@ body {
     transform: scale(1);
   }
 }
+/* Painel lateral (detail no desktop): entra deslizando da direita — spec 4. */
+@keyframes panelIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
 /* Entrada de linha (add servico): fade+slide curto. */
 @keyframes rowIn {
   from {
@@ -277,6 +286,43 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* ============================================================
+   MARQUEE de nome no DESKTOP (Bloco B — nomes legíveis). No hover/foco da linha,
+   o nome do cliente desliza pra revelar o que transbordou. SÓ no desktop (ativado
+   por group-hover/focus, que no toque não dispara) e SÓ quando o texto não cabe:
+   o componente injeta a classe `.agenda-marquee-run` apenas se measurar overflow.
+   `--marquee-shift` (px negativos) vem inline calculado (scrollWidth-clientWidth).
+   Cortado em reduced-motion (regra global zera duração; aqui garantimos repouso).
+   ============================================================ */
+@keyframes agendaMarquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--marquee-shift, 0));
+  }
+}
+/* O nome desliza SÓ no DESKTOP (pointer fino, hover de verdade) E quando o
+   componente mediu overflow (classe `.agenda-marquee` no span). No mobile/touch
+   nada anima (sem :hover real). Repouso = translateX(0). */
+.agenda-marquee {
+  transform: translateX(0);
+}
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .agenda-marquee,
+  .group:focus-within .agenda-marquee {
+    animation: agendaMarquee 4.5s ease-in-out infinite alternate;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agenda-marquee {
+    animation: none !important;
+    transform: none;
   }
 }
 

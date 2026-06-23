@@ -32,7 +32,10 @@
   },
   "overrides": [
     {
-      "include": ["apps/portal-web/src/components/icons.tsx"],
+      "include": [
+        "apps/portal-web/src/components/icons.tsx",
+        "apps/portal-web/src/components/agenda/icons-agenda.tsx"
+      ],
       "linter": {
         "rules": {
           "a11y": {
