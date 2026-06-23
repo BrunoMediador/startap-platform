@@ -6168,10 +6168,14 @@ app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
     }
     if (b.gcal_calendar_id !== undefined) {
       const gcalId = b.gcal_calendar_id != null ? String(b.gcal_calendar_id).trim().slice(0, 500) || null : null;
-      vals.push(gcalId); sets.push(`gcal_calendar_id = $${vals.length}`);
+      vals.push(gcalId); const gcalPh = vals.length; sets.push(`gcal_calendar_id = $${gcalPh}`);
       // Trocar/limpar o calendarId reseta para 'pending' — a confiança de 'active' só
       // vem do /gcal/test que valida no Google. Nunca promovemos por presença de string.
-      vals.push('pending'); sets.push(`gcal_status = $${vals.length}`);
+      // MAS: se o calendarId NÃO mudou, preservamos o status atual ('active'/'invalid' do
+      // teste) — senão um "salvar" logo após o "testar verde" apagava o 'active' e o
+      // colaborador voltava a 'pending' (bot ficava em silêncio). O CASE compara o valor
+      // ANTIGO da coluna (pré-update) com o novo (mesmo placeholder $gcalPh).
+      sets.push(`gcal_status = CASE WHEN gcal_calendar_id IS DISTINCT FROM $${gcalPh} THEN 'pending' ELSE gcal_status END`);
     }
     if (b.servicos !== undefined) {
       vals.push(JSON.stringify(_pkgNormalizeServicos(b.servicos))); sets.push(`servicos = $${vals.length}::jsonb`);
