@@ -199,6 +199,18 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Atendimentos / financeiro do negócio do cliente (ADR 0026, Fase 1 MVP) ──
+  // Kill-switch da camada de atendimentos (POST /portal/atendimentos + relatórios de
+  // faturamento e comissão). OPCIONAL no boot (ausente = OFF, lição #247: feature
+  // dormente nunca derruba o portal-api). OFF -> as rotas respondem 404 (não vazam) e
+  // NENHUM fluxo existente é tocado; produção byte-a-byte como hoje. Sobe dormente; liga
+  // em Dev/QA primeiro, depois prod, sem novo deploy de código. Aplica aos DOIS cenários
+  // (individual=SOLO sem comissão / estabelecimento=EMPRESA com comissão). NUNCA hardcoded.
+  ATENDIMENTOS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

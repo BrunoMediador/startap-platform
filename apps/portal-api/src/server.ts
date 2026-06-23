@@ -21,6 +21,7 @@ import { demoChatRoutes } from './routes/demo-chat.js';
 import { healthRoute } from './routes/health.js';
 import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
+import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
@@ -115,6 +116,10 @@ async function main() {
   // flag ESTABELECIMENTO_ENABLED (404 se OFF) + product_type do clone (409 se
   // individual). Individual (Cirilo/Samuel) nunca alcança escrita de colaborador.
   await app.register(portalEquipeRoutes);
+  // Atendimentos + relatórios de faturamento/comissão do negócio do cliente (ADR 0026).
+  // Gated por ATENDIMENTOS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual.
+  // Cobre os dois cenários: individual (SOLO, sem comissão) e estabelecimento (EMPRESA).
+  await app.register(portalAtendimentosRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);
