@@ -8937,7 +8937,25 @@ const PacotesUI = (() => {
     };
     return `<span class="badge ${map[estado] || 'badge--muted'}">${escapeHtml(estado)}</span>`;
   }
-  return { _servicosChecklist, _collectChecked, _fmtCents, _estadoBadge };
+  // Prioridade de exibição: quem precisa de ação do operador vem primeiro.
+  // ESGOTADO e EXPIRADO sobem ao topo da lista de saldo (quick win — operador
+  // VÊ quem renovar sem rolar). ATIVO e CANCELADO ficam embaixo.
+  function _estadoRank(estado) {
+    const rank = { EXPIRADO: 0, ESGOTADO: 1, ATIVO: 2, CANCELADO: 3 };
+    return rank[estado] != null ? rank[estado] : 9;
+  }
+  // UUID v4 para idempotency_key. Gerado NO MOMENTO do submit e reusado no retry
+  // do MESMO clique — sem isso, clicar 2x recarrega 2x (soma dobrada no backend).
+  function _uuid() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    // Fallback (navegador sem crypto.randomUUID / contexto não-seguro).
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+      const r = Math.random() * 16 | 0;
+      const v = ch === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+  return { _servicosChecklist, _collectChecked, _fmtCents, _estadoBadge, _estadoRank, _uuid };
 })();
 
 /* ── Aba COLABORADORES ──────────────────────────────────────────────────────── */
@@ -9436,8 +9454,28 @@ async function _renderPacotesSaldo(sub, clone) {
         listEl.innerHTML = `<p class="muted">${tel ? 'Nenhum pacote para esse telefone.' : 'Nenhum pacote vendido ainda.'}</p>`;
         return;
       }
-      listEl.innerHTML = data.creditos.map(c => `
-        <div style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.6rem .75rem;display:flex;flex-direction:column;gap:.3rem;margin-bottom:.5rem">
+      // Quick win: ESGOTADO/EXPIRADO no topo (precisam de ação) — ordenação estável
+      // por rank de estado, mantendo a ordem original do backend dentro de cada grupo.
+      const creditos = data.creditos
+        .map((c, i) => ({ c, i }))
+        .sort((a, b) => (PacotesUI._estadoRank(a.c.estado) - PacotesUI._estadoRank(b.c.estado)) || (a.i - b.i))
+        .map(x => x.c);
+      const precisaAcao = creditos.filter(c => c.estado === 'ESGOTADO' || c.estado === 'EXPIRADO').length;
+      const alertaHtml = precisaAcao > 0
+        ? `<div style="display:flex;gap:.5rem;align-items:center;padding:.55rem .75rem;margin-bottom:.5rem;background:var(--surface-2);border:1px dashed var(--warning,#d4a017);border-radius:var(--radius-md);font-size:.8rem">
+             <span style="color:var(--warning,#d4a017);flex-shrink:0">${icon('alert-triangle',16)}</span>
+             <span><strong>${precisaAcao}</strong> pacote${precisaAcao===1?'':'s'} esgotado/vencido precisa${precisaAcao===1?'':'m'} de renovação (no topo da lista).</span>
+           </div>`
+        : '';
+      listEl.innerHTML = alertaHtml + creditos.map(c => {
+        const cid = c.credit_id;
+        const podeRecarregar = c.estado !== 'CANCELADO';
+        const reativar = c.estado === 'CANCELADO'; // mesmo botão "reativar" manda reativar:true
+        const podeVenc = c.estado === 'ATIVO' || c.estado === 'ESGOTADO' || c.estado === 'EXPIRADO';
+        const podeCancelar = c.estado !== 'CANCELADO';
+        const labelRecarregar = reativar ? `${icon('refresh-cw',12)} Reativar` : `${icon('plus-circle',12)} Recarregar`;
+        return `
+        <div class="saldo-card" data-card="${cid}" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.6rem .75rem;display:flex;flex-direction:column;gap:.3rem;margin-bottom:.5rem${c.estado==='CANCELADO'?';opacity:.65':''}">
           <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
             <strong>${escapeHtml(c.pacote_nome)}</strong>
             ${PacotesUI._estadoBadge(c.estado)}
@@ -9445,9 +9483,18 @@ async function _renderPacotesSaldo(sub, clone) {
             <span style="margin-left:auto;font-weight:600">${c.saldo} / ${c.sessoes_total} sessões</span>
           </div>
           <div class="muted" style="font-size:.74rem">Vence em ${escapeHtml(c.data_expiracao)}${(Array.isArray(c.servicos_cobertos)&&c.servicos_cobertos.length)?' · cobre: '+c.servicos_cobertos.map(escapeHtml).join(', '):''}
-            <button class="btn btn--ghost btn--sm saldo-extrato" data-id="${c.credit_id}" style="margin-left:.5rem">${icon('list',12)} Extrato</button></div>
-          <div class="saldo-extrato-box" data-box="${c.credit_id}"></div>
-        </div>`).join('');
+            <button class="btn btn--ghost btn--sm saldo-extrato" data-id="${cid}" style="margin-left:.5rem">${icon('list',12)} Extrato</button></div>
+          <div style="display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.1rem">
+            ${podeRecarregar ? `<button class="btn btn--sm saldo-act" data-act="recarregar" data-id="${cid}" data-reativar="${reativar?'1':'0'}">${labelRecarregar}</button>` : ''}
+            ${podeVenc ? `<button class="btn btn--sm btn--ghost saldo-act" data-act="venc" data-id="${cid}">${icon('calendar',12)} Mudar vencimento</button>` : ''}
+            ${podeCancelar ? `<button class="btn btn--sm btn--ghost saldo-act" data-act="cancelar" data-id="${cid}" style="color:var(--danger)">${icon('x-circle',12)} Cancelar</button>` : ''}
+          </div>
+          <div class="saldo-form-box" data-form="${cid}"></div>
+          <div class="saldo-extrato-box" data-box="${cid}"></div>
+        </div>`;
+      }).join('');
+
+      // Toggle do extrato (movimentos do crédito).
       listEl.querySelectorAll('.saldo-extrato').forEach(b => b.addEventListener('click', async () => {
         const box = listEl.querySelector(`.saldo-extrato-box[data-box="${b.dataset.id}"]`);
         if (box.innerHTML) { box.innerHTML = ''; return; }
@@ -9459,9 +9506,49 @@ async function _renderPacotesSaldo(sub, clone) {
             ex.movimentos.map(m => {
               const sinal = m.delta < 0 ? `−${Math.abs(m.delta)}` : `+${m.delta}`;
               const lbl = { redeem: 'Sessão usada', refund: 'Estorno', adjust: 'Ajuste' }[m.reason] || m.reason;
-              return `<div style="font-size:.74rem;display:flex;gap:.5rem"><span style="font-weight:600;color:${m.delta<0?'var(--danger)':'var(--success,#4caf50)'}">${sinal}</span><span>${escapeHtml(lbl)}</span><span class="muted">${m.servico_nome ? escapeHtml(m.servico_nome)+' · ' : ''}${escapeHtml(fmtRelative(m.created_at))}</span></div>`;
+              const estornavel = m.reason === 'redeem' && m.gcal_event_id;
+              const estornoBtn = estornavel
+                ? `<button class="btn btn--ghost btn--sm saldo-estornar" data-id="${b.dataset.id}" data-event="${escapeHtml(m.gcal_event_id)}" style="margin-left:auto;font-size:.7rem;color:var(--warning,#d4a017)">${icon('refresh-cw',11)} Estornar</button>`
+                : '';
+              return `<div style="font-size:.74rem;display:flex;gap:.5rem;align-items:center"><span style="font-weight:600;color:${m.delta<0?'var(--danger)':'var(--success,#4caf50)'}">${sinal}</span><span>${escapeHtml(lbl)}</span><span class="muted">${m.servico_nome ? escapeHtml(m.servico_nome)+' · ' : ''}${escapeHtml(fmtRelative(m.created_at))}</span>${estornoBtn}</div>`;
             }).join('') + `</div>`;
+          // Estornar 1 sessão de um agendamento (link no extrato).
+          box.querySelectorAll('.saldo-estornar').forEach(eb => eb.addEventListener('click', async () => {
+            if (!confirm('Estornar 1 sessão deste agendamento de volta ao saldo do cliente?')) return;
+            eb.disabled = true;
+            try {
+              await api(`/api/clones/${clone.id}/creditos/${eb.dataset.id}/estornar`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ gcal_event_id: eb.dataset.event }),
+              });
+              toast('Sessão estornada ao saldo.', 'success');
+              carregar(tel); // recarrega saldo + extrato
+            } catch (err) { eb.disabled = false; toast(_acaoErroMsg(err), 'danger'); }
+          }));
         } catch (err) { box.innerHTML = `<p class="muted" style="color:var(--danger);font-size:.74rem">${escapeHtml(err.message)}</p>`; }
+      }));
+
+      // Botões de ação (recarregar/reativar, mudar vencimento, cancelar).
+      listEl.querySelectorAll('.saldo-act').forEach(b => b.addEventListener('click', () => {
+        const cid = b.dataset.id;
+        const box = listEl.querySelector(`.saldo-form-box[data-form="${cid}"]`);
+        if (b.dataset.act === 'cancelar') {
+          if (!confirm('Cancelar este pacote? O saldo restante é zerado e o cliente perde as sessões não usadas.')) return;
+          b.disabled = true;
+          api(`/api/clones/${clone.id}/creditos/${cid}/cancelar`, { method: 'POST' })
+            .then(() => { toast('Pacote cancelado.', 'success'); carregar(tel); })
+            .catch(err => { b.disabled = false; toast(_acaoErroMsg(err), 'danger'); });
+          return;
+        }
+        // Toggle do form inline (recarregar OU vencimento). Fecha se já aberto com o mesmo form.
+        if (box.dataset.open === b.dataset.act) { box.innerHTML = ''; box.dataset.open = ''; return; }
+        box.dataset.open = b.dataset.act;
+        if (b.dataset.act === 'recarregar') {
+          _formRecarregar(box, clone, cid, b.dataset.reativar === '1', () => carregar(tel));
+        } else if (b.dataset.act === 'venc') {
+          _formVencimento(box, clone, cid, () => carregar(tel));
+        }
       }));
     } catch (err) {
       listEl.innerHTML = `<p class="muted" style="color:var(--danger)">${icon('alert-triangle',14)} ${escapeHtml(err.message)}</p>`;
@@ -9471,6 +9558,140 @@ async function _renderPacotesSaldo(sub, clone) {
   sub.querySelector('#saldo-todos').addEventListener('click', () => { sub.querySelector('#saldo-tel').value = ''; carregar(''); });
   sub.querySelector('#saldo-tel').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); carregar((e.target.value || '').trim()); } });
   carregar('');
+}
+
+/** Mensagem amigável a partir do erro do api() (que já extrai j.error/j.message). */
+function _acaoErroMsg(err) {
+  const s = err && err.status;
+  if (s === 400) return err.message || 'Dados inválidos. Confira os campos.';
+  if (s === 404) return 'Pacote não encontrado (pode ter sido removido). Recarregue a lista.';
+  if (s === 409) return err.message || 'Ação em conflito com o estado atual deste pacote.';
+  if (s === 500) return 'Erro no servidor. Tente de novo em instantes.';
+  return err && err.message ? err.message : 'Não foi possível concluir a ação.';
+}
+
+/**
+ * Form inline de Recarregar/Renovar (ou Reativar, se o crédito está CANCELADO).
+ * POST /creditos/:id/recarregar. O idempotency_key é gerado UMA vez por instância
+ * do form e REUSADO no retry do mesmo clique (sem isso, 2 cliques = saldo dobrado).
+ * Validade: "nova data" XOR "+ dias" — UI impede mandar os dois.
+ */
+function _formRecarregar(box, clone, creditId, reativar, onDone) {
+  const idemKey = PacotesUI._uuid();
+  box.innerHTML = `
+    <div style="border-top:1px solid var(--border);margin-top:.4rem;padding-top:.5rem;display:flex;flex-direction:column;gap:.5rem">
+      <div class="field" style="margin:0;max-width:240px">
+        <label for="rc-sess-${creditId}">Sessões a adicionar</label>
+        <input id="rc-sess-${creditId}" class="rc-sess" type="number" min="1" max="1000" step="1" placeholder="ex: 10" />
+      </div>
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.5rem .6rem;margin:0">
+        <legend style="font-size:.72rem;padding:0 .3rem" class="muted">Validade (opcional — em branco mantém a atual)</legend>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer"><input type="radio" name="rc-val-${creditId}" class="rc-mode" value="none" checked /> Manter</label>
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer"><input type="radio" name="rc-val-${creditId}" class="rc-mode" value="data" /> Nova data</label>
+          <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer"><input type="radio" name="rc-val-${creditId}" class="rc-mode" value="dias" /> + dias</label>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
+          <input class="rc-data" type="date" style="display:none;max-width:170px" />
+          <input class="rc-dias" type="number" min="1" max="3650" step="1" placeholder="dias a somar" style="display:none;max-width:170px" />
+        </div>
+      </fieldset>
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn--primary btn--sm rc-confirm">${icon('check-circle-2',13)} ${reativar ? 'Reativar' : 'Confirmar'}</button>
+        <button class="btn btn--ghost btn--sm rc-cancel">Fechar</button>
+      </div>
+    </div>`;
+  const dataInput = box.querySelector('.rc-data');
+  const diasInput = box.querySelector('.rc-dias');
+  box.querySelectorAll('.rc-mode').forEach(r => r.addEventListener('change', () => {
+    const mode = box.querySelector('.rc-mode:checked').value;
+    dataInput.style.display = mode === 'data' ? '' : 'none';
+    diasInput.style.display = mode === 'dias' ? '' : 'none';
+  }));
+  box.querySelector('.rc-cancel').addEventListener('click', () => { box.innerHTML = ''; box.dataset.open = ''; });
+  box.querySelector('.rc-confirm').addEventListener('click', async () => {
+    const btn = box.querySelector('.rc-confirm');
+    const sessoes = parseInt(box.querySelector('.rc-sess').value, 10);
+    if (!Number.isInteger(sessoes) || sessoes < 1 || sessoes > 1000) {
+      toast('Informe um número de sessões entre 1 e 1000.', 'warning'); return;
+    }
+    const mode = box.querySelector('.rc-mode:checked').value;
+    const body = { sessoes, idempotency_key: idemKey };
+    if (reativar) body.reativar = true;
+    if (mode === 'data') {
+      const v = (dataInput.value || '').trim();
+      if (!v) { toast('Escolha a nova data de validade.', 'warning'); return; }
+      body.data_expiracao = v;
+    } else if (mode === 'dias') {
+      const d = parseInt(diasInput.value, 10);
+      if (!Number.isInteger(d) || d < 1) { toast('Informe quantos dias somar.', 'warning'); return; }
+      body.adicionar_dias = d;
+    }
+    btn.disabled = true;
+    try {
+      await api(`/api/clones/${clone.id}/creditos/${creditId}/recarregar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), // mesma idemKey no retry — não soma 2x
+      });
+      toast(reativar ? 'Pacote reativado e recarregado.' : 'Pacote recarregado.', 'success');
+      onDone();
+    } catch (err) { btn.disabled = false; toast(_acaoErroMsg(err), 'danger'); }
+  });
+}
+
+/**
+ * Form inline de Mudar vencimento.
+ * PATCH /creditos/:id — manda { data_expiracao } OU { adicionar_dias } (exclusivo).
+ */
+function _formVencimento(box, clone, creditId, onDone) {
+  box.innerHTML = `
+    <div style="border-top:1px solid var(--border);margin-top:.4rem;padding-top:.5rem;display:flex;flex-direction:column;gap:.5rem">
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer"><input type="radio" name="vc-mode-${creditId}" class="vc-mode" value="data" checked /> Nova data</label>
+        <label style="display:flex;align-items:center;gap:.35rem;font-size:.8rem;cursor:pointer"><input type="radio" name="vc-mode-${creditId}" class="vc-mode" value="dias" /> + dias</label>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input class="vc-data" type="date" style="max-width:170px" />
+        <input class="vc-dias" type="number" min="1" max="3650" step="1" placeholder="dias a somar" style="display:none;max-width:170px" />
+      </div>
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn--primary btn--sm vc-confirm">${icon('check-circle-2',13)} Salvar vencimento</button>
+        <button class="btn btn--ghost btn--sm vc-cancel">Fechar</button>
+      </div>
+    </div>`;
+  const dataInput = box.querySelector('.vc-data');
+  const diasInput = box.querySelector('.vc-dias');
+  box.querySelectorAll('.vc-mode').forEach(r => r.addEventListener('change', () => {
+    const mode = box.querySelector('.vc-mode:checked').value;
+    dataInput.style.display = mode === 'data' ? '' : 'none';
+    diasInput.style.display = mode === 'dias' ? '' : 'none';
+  }));
+  box.querySelector('.vc-cancel').addEventListener('click', () => { box.innerHTML = ''; box.dataset.open = ''; });
+  box.querySelector('.vc-confirm').addEventListener('click', async () => {
+    const btn = box.querySelector('.vc-confirm');
+    const mode = box.querySelector('.vc-mode:checked').value;
+    let body;
+    if (mode === 'data') {
+      const v = (dataInput.value || '').trim();
+      if (!v) { toast('Escolha a nova data de validade.', 'warning'); return; }
+      body = { data_expiracao: v };
+    } else {
+      const d = parseInt(diasInput.value, 10);
+      if (!Number.isInteger(d) || d < 1) { toast('Informe quantos dias somar.', 'warning'); return; }
+      body = { adicionar_dias: d };
+    }
+    btn.disabled = true;
+    try {
+      await api(`/api/clones/${clone.id}/creditos/${creditId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      toast('Vencimento atualizado.', 'success');
+      onDone();
+    } catch (err) { btn.disabled = false; toast(_acaoErroMsg(err), 'danger'); }
+  });
 }
 
 /**
