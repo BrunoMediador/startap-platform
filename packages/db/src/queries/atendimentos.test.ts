@@ -159,37 +159,50 @@ describe('getColaboradorComissao — anti-IDOR (pertence ao slot)', () => {
 });
 
 describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
-  it('getFaturamento filtra por slot E tenant_id + status realizado em toda query', async () => {
+  it('getFaturamento filtra por slot E tenant_id + só FATURADO (não deletado) em toda query', async () => {
     mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
     await getFaturamento('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
-    // 3 queries (total, por forma, por profissional) — todas escopadas.
+    // 4 queries (total, por forma, por profissional, previsto) — todas escopadas.
     for (const [sql, params] of mockQuery.mock.calls as [string, unknown[]][]) {
       expect(sql).toMatch(/slot = \$1/);
       expect(sql).toMatch(/tenant_id = \$2/);
-      expect(sql).toContain("status = 'realizado'");
+      // ADR 0027: relatório nunca conta linha deletada.
+      expect(sql).toContain('deleted_at IS NULL');
       expect(params[0]).toBe('clone_cirilo');
       expect(params[1]).toBe('tid-1'); // tenant_id parâmetro próprio ($2, não reusa $1)
     }
+    // O total/forma/profissional restringem a FATURADO (passado ou walk-in manual).
+    const sqls = (mockQuery.mock.calls as [string, unknown[]][]).map(([s]) => s);
+    const faturadoSqls = sqls.filter((s) => s.includes('fim_at <= now()'));
+    expect(faturadoSqls.length).toBeGreaterThanOrEqual(3);
+    for (const s of faturadoSqls) expect(s).toMatch(/origem = 'manual'/);
+    // E há a query de PREVISTO (futuro).
+    expect(sqls.some((s) => s.includes('fim_at > now()'))).toBe(true);
   });
 
-  it('getFaturamento: ticket médio = round(total/count)', async () => {
+  it('getFaturamento: ticket médio = round(total/count) + previsto exposto', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ total_cents: '10000', count: '3' }], rowCount: 1 }) // total
       .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // por forma
-      .mockResolvedValueOnce({ rows: [], rowCount: 0 }); // por profissional
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 }) // por profissional
+      .mockResolvedValueOnce({ rows: [{ total_cents: '4500' }], rowCount: 1 }); // previsto
     const r = await getFaturamento('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
     expect(r.total_cents).toBe(10000);
     expect(r.count).toBe(3);
     expect(r.ticket_medio_cents).toBe(3333); // round(10000/3)
+    expect(r.previsto_total_cents).toBe(4500); // futuro/aberto, aditivo
   });
 
-  it('getComissao filtra por slot+tenant e só linhas COM colaborador (SOLO=vazio)', async () => {
+  it('getComissao filtra por slot+tenant, só FATURADO e só linhas COM colaborador (SOLO=vazio)', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const r = await getComissao('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
     const [sql, params] = lastCall();
     expect(sql).toMatch(/a\.slot = \$1/);
     expect(sql).toMatch(/a\.tenant_id = \$2/);
     expect(sql).toContain('a.colaborador_id IS NOT NULL');
+    // ADR 0027: comissão só sobre faturado (passado) e nunca sobre linha deletada.
+    expect(sql).toContain('a.deleted_at IS NULL');
+    expect(sql).toContain('a.fim_at <= now()');
     expect(params).toEqual(['clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30']);
     expect(r.total_cents).toBe(0); // SOLO -> sem comissão
     expect(r.por_profissional).toEqual([]);
