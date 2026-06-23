@@ -6688,4 +6688,262 @@ app.get('/api/clones/:id/creditos/:creditId/extrato', async (req, res) => {
   }
 });
 
+// ──────────────── PACOTES — LIFECYCLE PÓS-VENDA (recarga / vencimento / estorno) ──
+//
+// ADR 0025 BLOCO 2c. NOVA invariante: o PAINEL agora PODE escrever no ledger, mas SÓ
+// com reason='recharge' (delta>0) — distinto de redeem(-1)/refund(+1). O saldo continua
+// vindo do ledger; sessoes_restantes é cache reconstruído na MESMA transação. Estas rotas
+// ESPELHAM packages/db/src/queries/packages.ts (recargaCredit/mudarVencimento/cancelarCredito/
+// refundForBooking) — o painel é JS standalone, sem build-time dep do @startap/db. MANTER
+// EM SYNC. FISCAL: preco/saldo é caixa do barbeiro; NUNCA toca AbacatePay/client_billing.
+//
+// Idempotência da recarga: gcal_event_id sintético 'recharge:<creditId>:<idempotency_key>'
+// + UNIQUE(gcal_event_id,reason). Mesma idempotency_key retried = no-op (não soma 2x).
+
+// Reconstrói o cache sessoes_restantes de UM credito a partir do LEDGER (fonte da verdade),
+// DENTRO da transacao. Clampa [0..sessoes_total]; re-deriva status (exhausted/active),
+// preservando 'cancelled'. Espelho de rebuildCreditCacheTx (packages.ts).
+async function _pkgRebuildCreditCacheTx(client, creditId) {
+  const r = await client.query(
+    `UPDATE client_package_credits c
+        SET sessoes_restantes = GREATEST(0, LEAST(c.sessoes_total,
+              c.sessoes_total + COALESCE(
+                (SELECT SUM(pr.delta) FROM package_redemptions pr WHERE pr.credit_id = c.id), 0))),
+            status = CASE
+              WHEN c.status = 'cancelled' THEN 'cancelled'
+              WHEN (c.sessoes_total + COALESCE(
+                (SELECT SUM(pr.delta) FROM package_redemptions pr WHERE pr.credit_id = c.id), 0)) <= 0
+                THEN 'exhausted'
+              ELSE 'active' END,
+            updated_at = NOW()
+      WHERE c.id = $1
+      RETURNING c.sessoes_restantes AS saldo`,
+    [creditId],
+  );
+  return Math.max(0, Number(r.rows[0]?.saldo ?? 0));
+}
+
+// Snapshot pos-update (total/validade/status) DENTRO da transacao. Read-only.
+async function _pkgCreditSnapshotTx(client, creditId) {
+  const r = await client.query(
+    `SELECT sessoes_total, to_char(data_expiracao,'YYYY-MM-DD') AS data_expiracao, status
+       FROM client_package_credits WHERE id = $1`,
+    [creditId],
+  );
+  const row = r.rows[0] || {};
+  return {
+    sessoes_total: Number(row.sessoes_total ?? 0),
+    data_expiracao: row.data_expiracao ?? null,
+    status: row.status ?? null,
+  };
+}
+
+// POST /api/clones/:id/creditos/:creditId/recarregar — RENOVA o MESMO credito (soma sessoes +
+// muda vencimento no mesmo card). Body: { sessoes, data_expiracao?|adicionar_dias?,
+// idempotency_key?, reativar? }. Decisao do Bruno: 1 card por cliente; renovacao reusa o card.
+app.post('/api/clones/:id/creditos/:creditId/recarregar', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const creditId = Number(req.params.creditId);
+    if (!Number.isInteger(creditId) || creditId <= 0) return res.status(400).json({ error: 'creditId invalido' });
+
+    // sessoes a SOMAR (>0).
+    const sessoes = Number(req.body?.sessoes);
+    if (!Number.isInteger(sessoes) || sessoes < 1 || sessoes > 1000) {
+      return res.status(400).json({ error: 'sessoes deve ser inteiro entre 1 e 1000' });
+    }
+    // Nova validade opcional: data fixa OU dias (nao os dois).
+    const hasData = req.body?.data_expiracao !== undefined && req.body.data_expiracao !== null && req.body.data_expiracao !== '';
+    const hasDias = req.body?.adicionar_dias !== undefined && req.body.adicionar_dias !== null && req.body.adicionar_dias !== '';
+    if (hasData && hasDias) return res.status(400).json({ error: 'use data_expiracao OU adicionar_dias, nao os dois' });
+    let novaData = null; let novaDias = null;
+    if (hasData) {
+      const d = String(req.body.data_expiracao).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'data_expiracao deve ser AAAA-MM-DD' });
+      novaData = d;
+    } else if (hasDias) {
+      const dias = Number(req.body.adicionar_dias);
+      if (!Number.isInteger(dias) || dias < 1 || dias > 3650) return res.status(400).json({ error: 'adicionar_dias deve ser inteiro entre 1 e 3650' });
+      novaDias = dias;
+    }
+    // Chave de idempotencia: do body (frontend reusa no retry) ou UUID novo (recarga unica).
+    const idemKey = (req.body?.idempotency_key && String(req.body.idempotency_key).trim().slice(0, 80)) || crypto.randomUUID();
+    const syntheticEventId = `recharge:${creditId}:${idemKey}`;
+    const reativar = req.body?.reativar === true;
+
+    await client.query('BEGIN');
+    // Trava o credito; escopo slot+tenant (anti-IDOR). 404 se nao for deste clone.
+    const cred = await client.query(
+      `SELECT id, status FROM client_package_credits WHERE id = $1 AND slot = $2 AND tenant_id = $3 FOR UPDATE`,
+      [creditId, slot, tenant_id],
+    );
+    if (cred.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'credito nao encontrado neste clone' }); }
+
+    // reativar=true: tira de 'cancelled' ANTES (rebuild preserva cancelled). Idempotente.
+    if (reativar && cred.rows[0]?.status === 'cancelled') {
+      await client.query(
+        `UPDATE client_package_credits SET status = 'active', updated_at = NOW() WHERE id = $1 AND status = 'cancelled'`,
+        [creditId],
+      );
+    }
+
+    // Ledger: append +sessoes, reason='recharge'. tenant_id/slot do PROPRIO credito.
+    const ins = await client.query(
+      `INSERT INTO package_redemptions
+         (credit_id, slot, tenant_id, gcal_event_id, colaborador_id, servico_nome, delta, reason)
+       SELECT c.id, c.slot, c.tenant_id, $2, NULL, $3, $4, 'recharge'
+         FROM client_package_credits c WHERE c.id = $1
+       ON CONFLICT (gcal_event_id, reason) DO NOTHING`,
+      [creditId, syntheticEventId, String(req.session?.userId || 'recharge').slice(0, 160), sessoes],
+    );
+
+    if (ins.rowCount === 0) {
+      // Mesma idempotency_key ja aplicada (retry) — NAO soma de novo nem muda validade.
+      const saldo = await _pkgRebuildCreditCacheTx(client, creditId);
+      const snap = await _pkgCreditSnapshotTx(client, creditId);
+      await client.query('COMMIT');
+      return res.json({ ok: true, status_recarga: 'ja_aplicada', credit_id: creditId, saldo, sessoes_total: snap.sessoes_total, data_expiracao: snap.data_expiracao, status: snap.status });
+    }
+
+    // Cresce sessoes_total + nova validade se veio (resolvida no DB, sem fuso do Node).
+    const setVal = ['sessoes_total = sessoes_total + $2'];
+    const upParams = [creditId, sessoes];
+    if (novaData) { upParams.push(novaData); setVal.push(`data_expiracao = $${upParams.length}::date`); }
+    else if (novaDias != null) { upParams.push(novaDias); setVal.push(`data_expiracao = CURRENT_DATE + ($${upParams.length}::int)`); }
+    await client.query(`UPDATE client_package_credits SET ${setVal.join(', ')}, updated_at = NOW() WHERE id = $1`, upParams);
+
+    const saldo = await _pkgRebuildCreditCacheTx(client, creditId);
+    const snap = await _pkgCreditSnapshotTx(client, creditId);
+    await client.query('COMMIT');
+    console.log(JSON.stringify({ audit: 'pacote-recarga', operator: req.session?.userId || 'unknown', slot, credit_id: creditId, sessoes_add: sessoes, nova_validade: novaData || (novaDias != null ? `+${novaDias}d` : 'mantida'), reativar, at: new Date().toISOString() }));
+    res.json({ ok: true, status_recarga: 'recarregado', credit_id: creditId, saldo, sessoes_total: snap.sessoes_total, data_expiracao: snap.data_expiracao, status: snap.status });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(JSON.stringify({ at: 'pacotes-recarga', pg_code: e?.code, msg: 'falha ao recarregar credito' }));
+    res.status(500).json({ error: 'erro ao recarregar credito' });
+  } finally {
+    client.release();
+  }
+});
+
+// PATCH /api/clones/:id/creditos/:creditId — muda SO o vencimento. Body: { data_expiracao }
+// OU { adicionar_dias }. NAO toca o ledger (nao e movimento de saldo). Rebuild re-deriva status.
+app.patch('/api/clones/:id/creditos/:creditId', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const creditId = Number(req.params.creditId);
+    if (!Number.isInteger(creditId) || creditId <= 0) return res.status(400).json({ error: 'creditId invalido' });
+
+    const hasData = req.body?.data_expiracao !== undefined && req.body.data_expiracao !== null && req.body.data_expiracao !== '';
+    const hasDias = req.body?.adicionar_dias !== undefined && req.body.adicionar_dias !== null && req.body.adicionar_dias !== '';
+    if (hasData === hasDias) return res.status(400).json({ error: 'informe EXATAMENTE um: data_expiracao OU adicionar_dias' });
+    let validadeExpr; const params = [creditId, slot, tenant_id];
+    if (hasData) {
+      const d = String(req.body.data_expiracao).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'data_expiracao deve ser AAAA-MM-DD' });
+      params.push(d); validadeExpr = `$${params.length}::date`;
+    } else {
+      const dias = Number(req.body.adicionar_dias);
+      if (!Number.isInteger(dias) || dias < 1 || dias > 3650) return res.status(400).json({ error: 'adicionar_dias deve ser inteiro entre 1 e 3650' });
+      params.push(dias); validadeExpr = `CURRENT_DATE + ($${params.length}::int)`;
+    }
+
+    await client.query('BEGIN');
+    const upd = await client.query(
+      `UPDATE client_package_credits SET data_expiracao = ${validadeExpr}, updated_at = NOW()
+        WHERE id = $1 AND slot = $2 AND tenant_id = $3 RETURNING id`,
+      params,
+    );
+    if (upd.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'credito nao encontrado neste clone' }); }
+    const saldo = await _pkgRebuildCreditCacheTx(client, creditId);
+    const snap = await _pkgCreditSnapshotTx(client, creditId);
+    await client.query('COMMIT');
+    console.log(JSON.stringify({ audit: 'pacote-vencimento', operator: req.session?.userId || 'unknown', slot, credit_id: creditId, nova_validade: hasData ? req.body.data_expiracao : `+${req.body.adicionar_dias}d`, at: new Date().toISOString() }));
+    res.json({ ok: true, credit_id: creditId, data_expiracao: snap.data_expiracao, status: snap.status, saldo });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(JSON.stringify({ at: 'pacotes-vencimento', pg_code: e?.code, msg: 'falha ao mudar vencimento' }));
+    res.status(500).json({ error: 'erro ao mudar vencimento' });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/clones/:id/creditos/:creditId/cancelar — marca status='cancelled'. Ledger intacto.
+// Reversivel via recarregar com {reativar:true}.
+app.post('/api/clones/:id/creditos/:creditId/cancelar', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const creditId = Number(req.params.creditId);
+    if (!Number.isInteger(creditId) || creditId <= 0) return res.status(400).json({ error: 'creditId invalido' });
+    const upd = await pool.query(
+      `UPDATE client_package_credits SET status = 'cancelled', updated_at = NOW()
+        WHERE id = $1 AND slot = $2 AND tenant_id = $3 RETURNING status`,
+      [creditId, slot, tenant_id],
+    );
+    if (upd.rowCount === 0) return res.status(404).json({ error: 'credito nao encontrado neste clone' });
+    console.log(JSON.stringify({ audit: 'pacote-cancelado', operator: req.session?.userId || 'unknown', slot, credit_id: creditId, at: new Date().toISOString() }));
+    res.json({ ok: true, credit_id: creditId, status: 'cancelled' });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'pacotes-cancelar', pg_code: e?.code, msg: 'falha ao cancelar credito' }));
+    res.status(500).json({ error: 'erro ao cancelar credito' });
+  }
+});
+
+// POST /api/clones/:id/creditos/:creditId/estornar — DEVOLVE 1 sessao de um agendamento que
+// nao vai acontecer. Body: { gcal_event_id }. Espelho de refundForBooking (packages.ts):
+// acha o redeem original do evento NESTE credito (escopo slot+tenant), grava +1 reason='refund'
+// idempotente por UNIQUE(gcal_event_id,'refund'), reconstroi o saldo. Disparo MANUAL (o bot
+// nunca cancela — escala pro dono).
+app.post('/api/clones/:id/creditos/:creditId/estornar', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id } = resolved.scope;
+    const creditId = Number(req.params.creditId);
+    if (!Number.isInteger(creditId) || creditId <= 0) return res.status(400).json({ error: 'creditId invalido' });
+    const gcalEventId = String(req.body?.gcal_event_id ?? '').trim();
+    if (!gcalEventId) return res.status(400).json({ error: 'gcal_event_id obrigatorio' });
+
+    await client.query('BEGIN');
+    // Acha o redeem original DESTE evento NESTE credito (escopo slot+tenant). FOR UPDATE serializa.
+    const redeem = await client.query(
+      `SELECT id FROM package_redemptions
+        WHERE gcal_event_id = $1 AND reason = 'redeem' AND credit_id = $2 AND slot = $3 AND tenant_id = $4
+        FOR UPDATE`,
+      [gcalEventId, creditId, slot, tenant_id],
+    );
+    if (redeem.rowCount === 0) { await client.query('COMMIT'); return res.status(404).json({ error: 'sem desconto (redeem) deste evento neste credito — nada a estornar' }); }
+
+    const ins = await client.query(
+      `INSERT INTO package_redemptions
+         (credit_id, slot, tenant_id, gcal_event_id, colaborador_id, servico_nome, delta, reason)
+       SELECT c.id, c.slot, c.tenant_id, $2, NULL, NULL, 1, 'refund'
+         FROM client_package_credits c WHERE c.id = $1
+       ON CONFLICT (gcal_event_id, reason) DO NOTHING`,
+      [creditId, gcalEventId],
+    );
+    const saldo = await _pkgRebuildCreditCacheTx(client, creditId);
+    await client.query('COMMIT');
+    const jaEstornado = ins.rowCount === 0;
+    console.log(JSON.stringify({ audit: 'pacote-estorno', operator: req.session?.userId || 'unknown', slot, credit_id: creditId, gcal_event_id: gcalEventId, ja_estornado: jaEstornado, at: new Date().toISOString() }));
+    res.json({ ok: true, credit_id: creditId, estornado: !jaEstornado, status_estorno: jaEstornado ? 'ja_estornado' : 'estornado', saldo });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(JSON.stringify({ at: 'pacotes-estorno', pg_code: e?.code, msg: 'falha ao estornar' }));
+    res.status(500).json({ error: 'erro ao estornar' });
+  } finally {
+    client.release();
+  }
+});
+
 app.listen(Number(PORT), () => console.log(`Painel rodando em :${PORT}`));
