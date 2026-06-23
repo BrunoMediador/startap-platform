@@ -238,6 +238,47 @@ describe('POST /portal/atendimentos — EMPRESA (com colaborador)', () => {
     expect(createAtendimentoMock).not.toHaveBeenCalled(); // não grava com colaborador alheio
     await app.close();
   });
+
+  // O id de clone_colaboradores é BIGSERIAL -> o driver pg serializa como STRING ("4");
+  // o caller pode reenviar esse id como string-numérica. z.coerce deve aceitar e coagir,
+  // mas ainda rejeitar lixo não-numérico (evita 400 espúrio no estabelecimento/comissão).
+  it('201: aceita colaborador_id como STRING-numérica "9" e coage pra 9 (id vem string do pg)', async () => {
+    getColaboradorComissaoMock.mockResolvedValue({ belongs: true, comissaoPct: 40 });
+    createAtendimentoMock.mockResolvedValue({
+      ...ROW,
+      colaborador_id: 9,
+      comissao_pct: '40.00',
+      comissao_cents: 2000,
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/atendimentos',
+      payload: { valor_cents: 5000, colaborador_id: '9', forma_pagamento: 'pix' },
+    });
+    expect(res.statusCode).toBe(201);
+    // Coagido pra Number ANTES do anti-IDOR: a data layer recebe 9, não "9".
+    expect(getColaboradorComissaoMock).toHaveBeenCalledWith(injectedSlot, 9);
+    expect(createAtendimentoMock.mock.calls[0][0]).toMatchObject({
+      slot: injectedSlot,
+      tenantId: injectedTenant,
+      colaboradorId: 9,
+    });
+    await app.close();
+  });
+
+  it('400: colaborador_id lixo não-numérico ("abc") segue rejeitado pelo schema', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/atendimentos',
+      payload: { valor_cents: 5000, colaborador_id: 'abc' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(getColaboradorComissaoMock).not.toHaveBeenCalled();
+    expect(createAtendimentoMock).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
 
 describe('GET /portal/relatorios/faturamento', () => {
