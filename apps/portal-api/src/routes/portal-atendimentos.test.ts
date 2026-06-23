@@ -23,6 +23,9 @@ const {
   createAtendimentoMock,
   getFaturamentoMock,
   getComissaoMock,
+  listAtendimentosMock,
+  patchAtendimentoMock,
+  softDeleteByIdMock,
 } = vi.hoisted(() => ({
   configMock: { ATENDIMENTOS_ENABLED: true } as { ATENDIMENTOS_ENABLED: boolean },
   getScopeBySlotMock: vi.fn(),
@@ -30,6 +33,9 @@ const {
   createAtendimentoMock: vi.fn(),
   getFaturamentoMock: vi.fn(),
   getComissaoMock: vi.fn(),
+  listAtendimentosMock: vi.fn(),
+  patchAtendimentoMock: vi.fn(),
+  softDeleteByIdMock: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({ config: configMock }));
@@ -47,6 +53,9 @@ vi.mock('@startap/db', () => ({
     createAtendimento: (...a: unknown[]) => createAtendimentoMock(...a),
     getFaturamento: (...a: unknown[]) => getFaturamentoMock(...a),
     getComissao: (...a: unknown[]) => getComissaoMock(...a),
+    listAtendimentos: (...a: unknown[]) => listAtendimentosMock(...a),
+    patchAtendimento: (...a: unknown[]) => patchAtendimentoMock(...a),
+    softDeleteAtendimentoById: (...a: unknown[]) => softDeleteByIdMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -340,6 +349,172 @@ describe('GET /portal/relatorios/comissao', () => {
       '2026-06-01',
       '2026-06-30',
     );
+    await app.close();
+  });
+});
+
+// ── ADR 0027 — GET por balde / PATCH (sticky) / DELETE (soft-delete) ─────────────────
+describe('GET /portal/atendimentos — balde previsao/faturado', () => {
+  it('200: balde=previsao repassa escopo+período à data layer', async () => {
+    listAtendimentosMock.mockResolvedValue({ atendimentos: [], total_cents: 0 });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos?balde=previsao&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ atendimentos: [], total_cents: 0 });
+    expect(listAtendimentosMock).toHaveBeenCalledWith(
+      injectedSlot,
+      injectedTenant,
+      'previsao',
+      '2026-06-01',
+      '2026-06-30',
+    );
+    await app.close();
+  });
+
+  it('200: balde=faturado devolve linhas + total', async () => {
+    listAtendimentosMock.mockResolvedValue({
+      atendimentos: [{ ...ROW, origem: 'manual', dirty_fields: [], inicio_at: null, fim_at: null }],
+      total_cents: 5000,
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos?balde=faturado&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total_cents).toBe(5000);
+    expect(listAtendimentosMock.mock.calls[0][2]).toBe('faturado');
+    await app.close();
+  });
+
+  it('400: balde inválido', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos?balde=tudo&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(listAtendimentosMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 quando a flag está OFF', async () => {
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos?balde=faturado&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(listAtendimentosMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('PATCH /portal/atendimentos/:id — sticky', () => {
+  it('200: edita valor + pina dirty_fields; id coage string->number', async () => {
+    patchAtendimentoMock.mockResolvedValue({
+      ...ROW,
+      valor_cents: 7000,
+      dirty_fields: ['valor_cents'],
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/atendimentos/9',
+      payload: { valor_cents: 7000 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().atendimento.dirty_fields).toEqual(['valor_cents']);
+    // id coagido pra Number; escopo slot+tenant da SESSÃO (não do body).
+    expect(patchAtendimentoMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 9, {
+      valorCents: 7000,
+      descontoCents: undefined,
+      formaPagamento: undefined,
+      servicoNome: undefined,
+      clienteNome: undefined,
+    });
+    await app.close();
+  });
+
+  it('404 (anti-IDOR): id de outro tenant -> data layer retorna null -> 404', async () => {
+    patchAtendimentoMock.mockResolvedValue(null);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/atendimentos/999',
+      payload: { valor_cents: 1 },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('400: body vazio (nenhum campo)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/atendimentos/9',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(patchAtendimentoMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('400 (strict): tentar forjar campo proibido (dirty_fields/origem/comissao_cents)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/atendimentos/9',
+      payload: { valor_cents: 1, dirty_fields: ['x'], comissao_cents: 99999 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(patchAtendimentoMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 quando a flag está OFF', async () => {
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/atendimentos/9',
+      payload: { valor_cents: 1 },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(patchAtendimentoMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('DELETE /portal/atendimentos/:id — soft-delete', () => {
+  it('200: soft-delete escopado por slot+tenant', async () => {
+    softDeleteByIdMock.mockResolvedValue(true);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'DELETE', url: '/portal/atendimentos/9' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(softDeleteByIdMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 9);
+    await app.close();
+  });
+
+  it('404 (anti-IDOR / idempotente): ausente ou já deletado -> false -> 404', async () => {
+    softDeleteByIdMock.mockResolvedValue(false);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'DELETE', url: '/portal/atendimentos/999' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('404 quando a flag está OFF', async () => {
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'DELETE', url: '/portal/atendimentos/9' });
+    expect(res.statusCode).toBe(404);
+    expect(softDeleteByIdMock).not.toHaveBeenCalled();
     await app.close();
   });
 });

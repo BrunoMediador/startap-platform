@@ -211,6 +211,20 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
+  // Kill-switch da camada que DERIVA atendimentos dos eventos do GCal (split
+  // previsão×faturado, sticky de edição). OPCIONAL no boot (ausente = OFF, lição #247:
+  // feature dormente nunca derruba o portal-api). O GANCHO de criar-no-agendamento +
+  // sync no cancelar/remarcar (Fase B2) é gated por esta flag. Os endpoints de
+  // atendimento (GET por balde / PATCH / DELETE) são ADITIVOS e podem existir com a flag
+  // OFF — o front gateia as ABAS (previsão/faturado) por este campo no /auth/me. Liga em
+  // Dev/QA primeiro, depois prod, sem novo deploy. OFF = produção byte-a-byte como hoje.
+  // NUNCA hardcoded.
+  ATEND_FROM_AGENDA: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

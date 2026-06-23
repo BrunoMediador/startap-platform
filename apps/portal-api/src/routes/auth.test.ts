@@ -12,6 +12,7 @@ const { configMock, getScopeBySlotMock } = vi.hoisted(() => ({
     PORTAL_SESSION_TTL_SECONDS: 3600,
     PORTAL_COOKIE_SECURE: false,
     ATENDIMENTOS_ENABLED: false,
+    ATEND_FROM_AGENDA: false,
     ESTABELECIMENTO_ENABLED: false,
   } as Record<string, unknown>,
   getScopeBySlotMock: vi.fn(),
@@ -94,8 +95,9 @@ const ACTIVE_USER = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Estado padrão entre testes: ambas as flags OFF; scope individual sem tenant.
+  // Estado padrão entre testes: flags OFF; scope individual sem tenant.
   configMock.ATENDIMENTOS_ENABLED = false;
+  configMock.ATEND_FROM_AGENDA = false;
   configMock.ESTABELECIMENTO_ENABLED = false;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'individual',
@@ -135,6 +137,29 @@ describe('GET /auth/me — atendimentos_enabled', () => {
     expect(body.atendimentos_enabled).toBe(true);
     expect(body.product_type).toBeUndefined();
     expect(body.seat_cap).toBeUndefined();
+    await app.close();
+  });
+});
+
+// ── GET /auth/me — flag do billing derivado da agenda (ADR 0027) ─────────────
+describe('GET /auth/me — atend_from_agenda', () => {
+  it('atend_from_agenda=false quando a flag está OFF (sempre presente)', async () => {
+    configMock.ATEND_FROM_AGENDA = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().atend_from_agenda).toBe(false);
+    await app.close();
+  });
+
+  it('atend_from_agenda=true quando a flag está ON (independe de atendimentos_enabled)', async () => {
+    configMock.ATEND_FROM_AGENDA = true;
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    const body = res.json();
+    expect(body.atend_from_agenda).toBe(true);
+    expect(body.atendimentos_enabled).toBe(false);
     await app.close();
   });
 });

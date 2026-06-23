@@ -18,6 +18,16 @@
  *
  * GATING: flag ATENDIMENTOS_ENABLED OFF -> TODAS as rotas respondem 404 (feature dormente;
  * não vaza). Aplica aos dois cenários. Flag OFF = produção idêntica a hoje.
+ *
+ * ADR 0027 (billing derivado da agenda) — endpoints ADITIVOS:
+ *   - GET    /portal/atendimentos?balde=previsao|faturado&de=&ate=  — lista por balde.
+ *   - PATCH  /portal/atendimentos/:id                                — edição manual STICKY
+ *            (cada campo enviado é pinado em dirty_fields; não volta pro catálogo).
+ *   - DELETE /portal/atendimentos/:id                                — soft-delete (some).
+ * Os relatórios contam SÓ linhas FATURADAS (passado) e NÃO deletadas; comissão idem.
+ * A flag ATEND_FROM_AGENDA gateia o GANCHO de criar-no-agendamento (Fase B2, fora deste
+ * arquivo); estes endpoints existem sob ATENDIMENTOS_ENABLED e o front gateia as abas
+ * por atend_from_agenda (exposto no /auth/me).
  */
 import { logger } from '@startap/core/logger';
 import { atendimentos, cloneColaboradores } from '@startap/db';
@@ -59,6 +69,33 @@ const createSchema = z
 const periodoSchema = z.object({
   de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'de deve ser YYYY-MM-DD'),
   ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ate deve ser YYYY-MM-DD'),
+});
+
+// Query da LISTAGEM por balde (ADR 0027): balde + período obrigatórios.
+const listSchema = z.object({
+  balde: z.enum(['previsao', 'faturado']),
+  de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'de deve ser YYYY-MM-DD'),
+  ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ate deve ser YYYY-MM-DD'),
+});
+
+// Body do PATCH (edição manual STICKY): só os campos editáveis pelo dono. Cada um enviado
+// é PINADO em dirty_fields (não volta pro catálogo). strict() rejeita forjar slot/tenant/
+// comissao/dirty_fields/origem. .partial() — mas exige ≥1 campo via .refine() na rota.
+const patchSchema = z
+  .object({
+    valor_cents: z.number().int().min(0).max(100_000_000),
+    desconto_cents: z.number().int().min(0).max(100_000_000),
+    forma_pagamento: z.enum(FORMAS),
+    servico_nome: z.string().trim().min(1).max(160),
+    cliente_nome: z.string().trim().max(160),
+  })
+  .partial()
+  .strict();
+
+// :id do path — o id é BIGSERIAL e o pg serializa como STRING ("4"); coerce aceita "4"/4,
+// coage pra Number e rejeita lixo. positivo (sem id 0/negativo).
+const idParamSchema = z.object({
+  id: z.coerce.number().int().positive(),
 });
 
 /**
@@ -132,6 +169,99 @@ export const portalAtendimentosRoutes: FastifyPluginAsync = async (app) => {
       'atendimento registrado (portal)',
     );
     return reply.code(201).send({ ok: true, atendimento: row });
+  });
+
+  // GET /portal/atendimentos?balde=previsao|faturado&de=&ate= — lista por balde (ADR 0027).
+  // previsao = futuro/aberto (fim_at > now()); faturado = passado ou walk-in manual.
+  // total_cents = SUM(valor - desconto) das linhas listadas. Escopo slot+tenant da sessão.
+  app.get('/portal/atendimentos', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateAtendimentos(req, reply);
+    if (!gate) return reply;
+    const parsed = listSchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'parametros invalidos',
+        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      });
+    }
+    const { atendimentos: rows, total_cents } = await atendimentos.listAtendimentos(
+      gate.slot,
+      gate.tenantId,
+      parsed.data.balde,
+      parsed.data.de,
+      parsed.data.ate,
+    );
+    return reply.code(200).send({ atendimentos: rows, total_cents });
+  });
+
+  // PATCH /portal/atendimentos/:id — edição manual STICKY. Cada campo enviado é gravado E
+  // PINADO em dirty_fields (não volta pro catálogo num upsert futuro do evento). Escopado
+  // por slot+tenant (anti-IDOR): id de outro cliente -> 404 (não vaza existência).
+  app.patch('/portal/atendimentos/:id', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateAtendimentos(req, reply);
+    if (!gate) return reply;
+
+    const idParsed = idParamSchema.safeParse(req.params ?? {});
+    if (!idParsed.success) {
+      return reply.code(400).send({ error: 'id invalido' });
+    }
+    const bodyParsed = patchSchema.safeParse(req.body ?? {});
+    if (!bodyParsed.success) {
+      return reply.code(400).send({
+        error: 'dados invalidos',
+        issues: bodyParsed.error.issues.map((i) => ({
+          path: i.path.join('.'),
+          message: i.message,
+        })),
+      });
+    }
+    const b = bodyParsed.data;
+    if (Object.keys(b).length === 0) {
+      return reply.code(400).send({ error: 'envie ao menos um campo para alterar' });
+    }
+
+    const row = await atendimentos.patchAtendimento(gate.slot, gate.tenantId, idParsed.data.id, {
+      valorCents: b.valor_cents,
+      descontoCents: b.desconto_cents,
+      formaPagamento: b.forma_pagamento,
+      servicoNome: b.servico_nome,
+      clienteNome: b.cliente_nome,
+    });
+    if (!row) {
+      // Não existe NO ESCOPO (ou deletado) — 404 (anti-IDOR: não distingue alheio de ausente).
+      return reply.code(404).send({ error: 'atendimento nao encontrado' });
+    }
+
+    log.info(
+      { slot: gate.slot, atendimentoId: row.id, dirtyFields: row.dirty_fields },
+      'atendimento editado (portal, sticky)',
+    );
+    return reply.code(200).send({ ok: true, atendimento: row });
+  });
+
+  // DELETE /portal/atendimentos/:id — soft-delete ("some de tudo"; sem estorno/trilha).
+  // Escopado por slot+tenant (anti-IDOR). Idempotente: já deletado/ausente -> 404.
+  app.delete('/portal/atendimentos/:id', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateAtendimentos(req, reply);
+    if (!gate) return reply;
+
+    const idParsed = idParamSchema.safeParse(req.params ?? {});
+    if (!idParsed.success) {
+      return reply.code(400).send({ error: 'id invalido' });
+    }
+    const ok = await atendimentos.softDeleteAtendimentoById(
+      gate.slot,
+      gate.tenantId,
+      idParsed.data.id,
+    );
+    if (!ok) {
+      return reply.code(404).send({ error: 'atendimento nao encontrado' });
+    }
+    log.info(
+      { slot: gate.slot, atendimentoId: idParsed.data.id },
+      'atendimento removido (portal, soft-delete)',
+    );
+    return reply.code(200).send({ ok: true });
   });
 
   // GET /portal/relatorios/faturamento?de=&ate= — total, por forma, por profissional.
