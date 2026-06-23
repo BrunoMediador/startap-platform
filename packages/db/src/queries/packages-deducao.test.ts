@@ -44,6 +44,7 @@ function credit(over: Partial<ClientPackageCredit> = {}): ClientPackageCredit {
     estado: over.estado ?? 'ATIVO',
     servicos_cobertos: servicos,
     colaborador_id: over.colaborador_id ?? null,
+    preco_cents: over.preco_cents ?? null,
     cobre: (s: string) => servicos.some((x) => x.trim().toLowerCase() === s.trim().toLowerCase()),
   };
 }
@@ -63,6 +64,7 @@ function rawCredit(over: Record<string, unknown> = {}) {
     status: 'active',
     servicos_cobertos: ['Corte', 'Barba'],
     colaborador_id: null,
+    preco_cents: null,
     ...over,
   };
 }

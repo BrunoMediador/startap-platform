@@ -40,6 +40,7 @@ function rawCredit(over: Partial<Record<string, unknown>> = {}) {
     status: 'active',
     servicos_cobertos: ['Corte', 'Barba'],
     colaborador_id: null,
+    preco_cents: 8500,
     ...over,
   };
 }
@@ -113,6 +114,9 @@ describe('listClientCredits — isolamento + saldo do ledger', () => {
     expect(sql).toContain('WHERE c.slot = $1 AND c.cliente_phone_hmac = $2');
     expect(sql).toContain('c.sessoes_total + COALESCE(SUM(pr.delta), 0)');
     expect(sql).toContain('LEFT JOIN package_redemptions pr');
+    // Preço do pacote no SELECT + no GROUP BY (pro bot informar "R$ X,XX").
+    expect(sql).toContain('sp.preco_cents');
+    expect(sql).toMatch(/GROUP BY[\s\S]*sp\.preco_cents/);
     expect(params).toEqual(['cirilobarbearia', 'abc123']);
   });
 
@@ -131,6 +135,7 @@ describe('listClientCredits — isolamento + saldo do ledger', () => {
     expect(c?.cobre('corte')).toBe(true); // case-insensitive
     expect(c?.cobre('Hidratação')).toBe(false); // fora da cobertura
     expect(c?.colaborador_id).toBeNull(); // pacote da casa (individual)
+    expect(c?.preco_cents).toBe(8500); // preço do template normalizado (pro bot)
   });
 
   it('estado EXPIRADO: data_expiracao no passado (expirado=true do SQL) mesmo com saldo', async () => {

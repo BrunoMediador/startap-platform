@@ -158,6 +158,21 @@ describe('buildSeuPacoteBlock', () => {
     const b = buildSeuPacoteBlock([credit({ servicos_cobertos: [] })]);
     expect(b).toContain('sem serviços vinculados');
   });
+
+  it('PREÇO do pacote: "R$ X,XX" no bloco quando preco_cents está setado (pro bot informar)', () => {
+    const b = buildSeuPacoteBlock([credit({ preco_cents: 8500 })]);
+    expect(b).toContain('preço do pacote: R$ 85,00');
+  });
+
+  it('preço com centavos: 12990 → R$ 129,90', () => {
+    const b = buildSeuPacoteBlock([credit({ preco_cents: 12990 })]);
+    expect(b).toContain('R$ 129,90');
+  });
+
+  it('sem preço (preco_cents null): NÃO injeta rótulo de preço', () => {
+    const b = buildSeuPacoteBlock([credit({ preco_cents: null })]);
+    expect(b).not.toContain('preço do pacote');
+  });
 });
 
 describe('servicoFromSummary — fallback de nome do serviço', () => {
