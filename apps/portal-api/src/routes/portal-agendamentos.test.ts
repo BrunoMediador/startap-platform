@@ -9,8 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // config.js valida process.env no import (cadeia tenant.js -> session.js) — mockamos.
 // estabelecimentoConfig é mutável: cada teste de estabelecimento liga a flag.
+// ATEND_FROM_AGENDA também é mutável: default OFF (gancho de billing desligado).
 const { estabelecimentoConfig } = vi.hoisted(() => ({
-  estabelecimentoConfig: { ESTABELECIMENTO_ENABLED: false },
+  estabelecimentoConfig: { ESTABELECIMENTO_ENABLED: false, ATEND_FROM_AGENDA: false },
 }));
 vi.mock('../config.js', () => ({
   config: {
@@ -21,6 +22,9 @@ vi.mock('../config.js', () => ({
     get ESTABELECIMENTO_ENABLED() {
       return estabelecimentoConfig.ESTABELECIMENTO_ENABLED;
     },
+    get ATEND_FROM_AGENDA() {
+      return estabelecimentoConfig.ATEND_FROM_AGENDA;
+    },
   },
 }));
 
@@ -28,12 +32,27 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 
-const { getScopeBySlotMock } = vi.hoisted(() => ({ getScopeBySlotMock: vi.fn() }));
+const {
+  getScopeBySlotMock,
+  upsertAtendimentoFromEventMock,
+  syncAtendimentoFromEventMock,
+  softDeleteAtendimentoByEventMock,
+} = vi.hoisted(() => ({
+  getScopeBySlotMock: vi.fn(),
+  upsertAtendimentoFromEventMock: vi.fn(),
+  syncAtendimentoFromEventMock: vi.fn(),
+  softDeleteAtendimentoByEventMock: vi.fn(),
+}));
 vi.mock('@startap/db', () => ({
   flowClones: { getCloneBySlot: vi.fn() },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
   cloneColaboradores: { getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a) },
+  atendimentos: {
+    upsertAtendimentoFromEvent: (...a: unknown[]) => upsertAtendimentoFromEventMock(...a),
+    syncAtendimentoFromEvent: (...a: unknown[]) => syncAtendimentoFromEventMock(...a),
+    softDeleteAtendimentoByEvent: (...a: unknown[]) => softDeleteAtendimentoByEventMock(...a),
+  },
 }));
 
 const { getGcalForSlotMock, getGcalsForSlotMock, invalidateGcalCacheMock } = vi.hoisted(() => ({
@@ -125,13 +144,19 @@ const PAYLOAD_OK = {
 beforeEach(() => {
   vi.clearAllMocks();
   loadScheduleConfigMock.mockResolvedValue(CONFIG_OK);
-  // Default: flag OFF + clone individual — caminho INDIVIDUAL (como hoje).
+  // Default: flags OFF + clone individual — caminho INDIVIDUAL (como hoje), gancho de
+  // billing derivado DESLIGADO (byte-a-byte com produção sem ATEND_FROM_AGENDA).
   estabelecimentoConfig.ESTABELECIMENTO_ENABLED = false;
+  estabelecimentoConfig.ATEND_FROM_AGENDA = false;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'individual',
     seat_cap: null,
     tenant_id: null,
   });
+  // Defaults benignos dos helpers de atendimento (só usados quando ATEND_FROM_AGENDA ON).
+  upsertAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
+  syncAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
+  softDeleteAtendimentoByEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1026,6 +1051,325 @@ describe('PATCH /portal/agendamentos/:eventId — estabelecimento', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('evento_nao_encontrado');
     expect(bene.client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Fase B2 (ADR 0027) — gancho de billing DERIVADO DA AGENDA
+//
+// POST cria a linha de PREVISÃO; PATCH sincroniza (sync, respeita dirty_fields no
+// helper); DELETE faz soft-delete. TUDO gated por ATEND_FROM_AGENDA (OFF = nenhum
+// helper chamado). E o INVARIANTE CRÍTICO: falha do helper NUNCA derruba o
+// agendamento (a operação ainda retorna sucesso pro cliente).
+// ════════════════════════════════════════════════════════════════════════════
+describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA)', () => {
+  // tenant_id presente é pré-condição do gancho (sem ele = no-op silencioso).
+  beforeEach(() => {
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  // ── GATING ──────────────────────────────────────────────────────────────────
+  it('flag OFF: POST cria o evento mas NÃO toca a camada de atendimentos', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = false;
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+
+    expect(res.statusCode).toBe(201);
+    // Flag OFF = byte-a-byte como hoje: helper nem é chamado.
+    expect(upsertAtendimentoFromEventMock).not.toHaveBeenCalled();
+    expect(getScopeBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('flag ON: POST cria a linha de PREVISÃO (origem agenda) com slot/tenant da sessão', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(upsertAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    const arg = upsertAtendimentoFromEventMock.mock.calls[0][0];
+    // Isolamento: slot da SESSÃO, tenant resolvido do clone (nunca de input). SOLO -> colaboradorId null.
+    expect(arg).toMatchObject({
+      slot: injectedSlot,
+      tenantId: 'tenant-xyz',
+      gcalEventId: 'evt_novo',
+      servicoNome: 'Corte',
+      colaboradorId: null,
+    });
+    // Não passa preço explícito: o helper resolve do catálogo (valorCents ausente).
+    expect(arg.valorCents).toBeUndefined();
+    expect(getScopeBySlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('flag ON + clone sem tenant_id: POST ainda cria o evento, mas o gancho é no-op', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: null,
+    });
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+
+    expect(res.statusCode).toBe(201);
+    // Sem tenant_id não há como carimbar a linha → helper não é chamado, mas o POST passa.
+    expect(upsertAtendimentoFromEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  // ── INVARIANTE CRÍTICO: billing NUNCA derruba o agendamento ──────────────────
+  it('CRÍTICO: falha do upsert NÃO derruba o POST (ainda 201)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    upsertAtendimentoFromEventMock.mockRejectedValue(new Error('DB down'));
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+
+    // O evento foi criado no GCal; o billing falhou em silêncio → 201 mesmo assim.
+    expect(res.statusCode).toBe(201);
+    expect(res.json().ok).toBe(true);
+    expect(client.createEvent).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('CRÍTICO: falha do getScopeBySlot NÃO derruba o POST (ainda 201)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    getScopeBySlotMock.mockRejectedValue(new Error('scope lookup falhou'));
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(upsertAtendimentoFromEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('IDEMPOTÊNCIA: rebook do mesmo serviço chama o upsert (unique parcial dedup no helper)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    // Dois POSTs (rebook/retry): o helper é idempotente pelo unique parcial — não duplica.
+    await app.inject({ method: 'POST', url: '/portal/agendamentos', payload: PAYLOAD_OK });
+    await app.inject({ method: 'POST', url: '/portal/agendamentos', payload: PAYLOAD_OK });
+    // Cada POST chama o upsert; a dedup é no banco (ON CONFLICT), testada em packages/db.
+    expect(upsertAtendimentoFromEventMock).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  // ── PATCH sincroniza (sync, respeita dirty_fields no helper) ─────────────────
+  it('flag OFF: PATCH remarca o evento mas NÃO sincroniza atendimento', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = false;
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(syncAtendimentoFromEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('flag ON: PATCH chama SYNC com o MESMO eventId preservado (janela nova)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(syncAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    // Upsert (create) NÃO é usado no PATCH — só o alias sync (intenção explícita).
+    expect(upsertAtendimentoFromEventMock).not.toHaveBeenCalled();
+    const arg = syncAtendimentoFromEventMock.mock.calls[0][0];
+    expect(arg.gcalEventId).toBe('evt_atual'); // event_id preservado (ADR 0025 dívida 5)
+    expect(arg.slot).toBe(injectedSlot);
+    expect(arg.tenantId).toBe('tenant-xyz');
+    // Nova janela (11:00 BRT) propagada pro helper — quem respeita dirty_fields é o helper.
+    expect(arg.inicioAt).toBe(`${FUTURO}T11:00:00-03:00`);
+    await app.close();
+  });
+
+  it('CRÍTICO: falha do sync NÃO derruba o PATCH (ainda 200)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    syncAtendimentoFromEventMock.mockRejectedValue(new Error('sync explodiu'));
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().ok).toBe(true);
+    expect(client.patchEvent).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('estabelecimento: PATCH propaga o colaborador dono do evento pro sync', async () => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+    const bene = colabAgenda(1, 'Bené', [evtAtual()]);
+    const caly = colabAgenda(2, 'Caly', []);
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(syncAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    // colaboradorId = a agenda dona do evento (Bené=1), resolvida por resolveEventClient.
+    expect(syncAtendimentoFromEventMock.mock.calls[0][0].colaboradorId).toBe(1);
+    await app.close();
+  });
+
+  // ── DELETE faz soft-delete da previsão ───────────────────────────────────────
+  it('flag OFF: DELETE apaga o evento mas NÃO faz soft-delete do atendimento', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = false;
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(softDeleteAtendimentoByEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('flag ON: DELETE faz soft-delete da previsão pelo eventId/slot da sessão', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id);
+    await app.close();
+  });
+
+  it('CRÍTICO: falha do soft-delete NÃO derruba o DELETE (ainda 200)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    softDeleteAtendimentoByEventMock.mockRejectedValue(new Error('soft-delete falhou'));
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    expect(client.deleteEvent).toHaveBeenCalledWith(EVT_DO_TENANT.id);
+    await app.close();
+  });
+
+  it('flag ON: cancelamento idempotente (evento já ausente) ainda soft-deleta a previsão', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    client.deleteEvent.mockRejectedValue(new Error('GCal /events/x -> HTTP 410: deleted'));
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${EVT_DO_TENANT.id}`,
+    });
+
+    // Estado final = evento ausente → a previsão derivada também deve sumir.
+    expect(res.statusCode).toBe(200);
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id);
+    await app.close();
+  });
+
+  it('anti-IDOR mantido: DELETE de eventId fora da agenda → 404 e NÃO soft-deleta', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA = true;
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/agendamentos/evt_de_outro_tenant',
+    });
+
+    expect(res.statusCode).toBe(404);
+    // Evento alheio nunca passa a guarda → nada é apagado nem no GCal nem no atendimento.
+    expect(client.deleteEvent).not.toHaveBeenCalled();
+    expect(softDeleteAtendimentoByEventMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
