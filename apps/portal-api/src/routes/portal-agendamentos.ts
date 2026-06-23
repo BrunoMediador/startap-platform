@@ -21,6 +21,7 @@
  * telefone/descricao/summary cru alem do titulo.
  */
 import { logger } from '@startap/core/logger';
+import { cloneColaboradores } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import {
   TZ,
@@ -30,8 +31,9 @@ import {
   weekdayOfDateKey,
   zonedWallTimeToUtc,
 } from '@startap/integrations/scheduling';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { config } from '../config.js';
 import { maskPhone } from '../lib/mask.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
@@ -49,6 +51,14 @@ interface AgendamentoOut {
   titulo: string;
   inicio: string | null;
   fim: string | null;
+  /**
+   * Estabelecimento (multi-profissional): identifica de qual colaborador é o
+   * evento. Ausente no INDIVIDUAL (single-agenda) — o front renderiza idêntico
+   * a hoje (Cirilo/Samuel). Só adiciona id + nome do profissional; nenhuma PII
+   * nova vaza (DTO whitelist continua: titulo já contém nome/serviço como hoje).
+   */
+  colaborador_id?: number;
+  profissional_nome?: string;
 }
 
 // ---- POST /portal/agendamentos (Missão 020 F4 — agendamento manual) --------
@@ -117,12 +127,6 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/agendamentos', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
 
-    const client = await gcal.getGcalForSlot(slot);
-    if (!client) {
-      // Clone sem GCal proprio (pre-setup ou nao configurado) — vazio, sem erro.
-      return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
-    }
-
     const query = req.query as { past?: unknown; ahead?: unknown };
     const pastParsed = pastDaysQuery.safeParse(query?.past);
     const aheadParsed = aheadDaysQuery.safeParse(query?.ahead);
@@ -132,6 +136,41 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const now = new Date();
     const timeMin = new Date(now.getTime() - pastDays * 86_400_000).toISOString();
     const timeMax = new Date(now.getTime() + aheadDays * 86_400_000).toISOString();
+
+    // ── ESTABELECIMENTO (multi-profissional) ──────────────────────────────────
+    // No estabelecimento o clone NÃO tem agenda própria: os eventos vivem nas
+    // agendas de CADA colaborador (clone_colaboradores.gcal_calendar_id). Por isso
+    // getGcalForSlot(slot) devolve agenda vazia. Aqui agregamos os eventos de TODAS
+    // as agendas dos colaboradores (getGcalsForSlot, escopado por slot+tenant) e
+    // marcamos cada evento com { colaborador_id, profissional_nome }.
+    //
+    // Gating estrito: só entra com a flag ESTABELECIMENTO_ENABLED ligada E o clone
+    // sendo product_type='estabelecimento'. Qualquer outro caso cai no caminho
+    // INDIVIDUAL abaixo — byte-a-byte como hoje (Cirilo/Samuel inalterados).
+    if (config.ESTABELECIMENTO_ENABLED) {
+      let isEstabelecimento = false;
+      try {
+        const scope = await cloneColaboradores.getScopeBySlot(slot);
+        isEstabelecimento = scope.product_type === 'estabelecimento';
+      } catch (err) {
+        // Falha ao resolver o tipo → degrada pro caminho individual (seguro).
+        log.warn(
+          { slot, err: err instanceof Error ? err.message : 'erro' },
+          'product_type indeterminado — caindo no caminho individual',
+        );
+      }
+
+      if (isEstabelecimento) {
+        return handleEstabelecimento(slot, timeMin, timeMax, reply);
+      }
+    }
+
+    // ── INDIVIDUAL (single-agenda) — inalterado ───────────────────────────────
+    const client = await gcal.getGcalForSlot(slot);
+    if (!client) {
+      // Clone sem GCal proprio (pre-setup ou nao configurado) — vazio, sem erro.
+      return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+    }
 
     try {
       const events = await client.listEvents({ timeMin, timeMax });
@@ -599,6 +638,85 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 };
+
+/**
+ * Agrega os eventos de TODAS as agendas dos colaboradores de um estabelecimento
+ * numa única lista, marcando cada evento com { colaborador_id, profissional_nome }.
+ *
+ * Resolvido por gcal.getGcalsForSlot(slot) (PLURAL) — escopado por slot+tenant
+ * dentro da própria integração (ADR 0024 §4: cada entry confere (slot, tenantId)).
+ * Cada colaborador tem seu calendarId (mesma Service Account do clone). Listamos
+ * em paralelo; a falha de UMA agenda NÃO derruba as outras (Promise.allSettled) —
+ * o profissional com agenda quebrada simplesmente não aparece nesta janela.
+ *
+ * Estados:
+ *   - sem colaborador resolvível (nenhum com GCal active) -> gcal_configured:false
+ *     (mesmo contrato do individual em pré-setup: front mostra "agenda não
+ *     conectada", não erro).
+ *   - todas as listagens falharam (e havia colaborador) -> 502.
+ */
+async function handleEstabelecimento(
+  slot: string,
+  timeMin: string,
+  timeMax: string,
+  reply: FastifyReply,
+): Promise<FastifyReply> {
+  const colaboradores = await gcal.getGcalsForSlot(slot);
+  if (colaboradores.length === 0) {
+    // Nenhum colaborador com agenda ativa (pré-setup do estabelecimento) — vazio.
+    return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+  }
+
+  // Lista as agendas em paralelo; uma falha não invalida as demais.
+  const settled = await Promise.allSettled(
+    colaboradores.map((c) => c.client.listEvents({ timeMin, timeMax })),
+  );
+
+  let houveSucesso = false;
+  const agendamentos: AgendamentoOut[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const res = settled[i];
+    const colab = colaboradores[i];
+    if (res.status !== 'fulfilled') {
+      log.warn(
+        {
+          slot,
+          colaboradorId: colab.colaboradorId,
+          err: res.reason instanceof Error ? res.reason.message : 'erro',
+        },
+        'estabelecimento: falha ao listar agenda de um colaborador (ignorado nesta janela)',
+      );
+      continue;
+    }
+    houveSucesso = true;
+    for (const e of res.value) {
+      agendamentos.push({
+        id: e.id,
+        titulo: e.summary ?? '(sem titulo)',
+        inicio: e.start?.dateTime ?? e.start?.date ?? null,
+        fim: e.end?.dateTime ?? e.end?.date ?? null,
+        colaborador_id: colab.colaboradorId,
+        profissional_nome: colab.nome,
+      });
+    }
+  }
+
+  // Havia colaboradores mas NENHUMA listagem deu certo → erro transitório do GCal.
+  if (!houveSucesso) {
+    log.error({ slot }, 'estabelecimento: todas as agendas de colaboradores falharam');
+    return reply.code(502).send({ error: 'nao foi possivel buscar agendamentos agora' });
+  }
+
+  // Ordena por inicio ASC; eventos sem inicio (null) vao pro fim. Cap defensivo
+  // (janela pequena, mas N agendas podem somar): mantém os mais próximos do início.
+  const limitadas = agendamentos
+    .sort((a, b) => (a.inicio ?? '￿').localeCompare(b.inicio ?? '￿'))
+    .slice(0, MAX_EVENTS);
+
+  return reply
+    .code(200)
+    .send({ gcal_configured: true, count: limitadas.length, agendamentos: limitadas });
+}
 
 /**
  * Quebra o summary do bot ("Nome - Servico | WhatsApp: numero") em partes pra

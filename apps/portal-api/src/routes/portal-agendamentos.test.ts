@@ -8,27 +8,43 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // config.js valida process.env no import (cadeia tenant.js -> session.js) — mockamos.
+// estabelecimentoConfig é mutável: cada teste de estabelecimento liga a flag.
+const { estabelecimentoConfig } = vi.hoisted(() => ({
+  estabelecimentoConfig: { ESTABELECIMENTO_ENABLED: false },
+}));
 vi.mock('../config.js', () => ({
-  config: { NODE_ENV: 'test', REDIS_HOST: 'localhost', REDIS_PORT: 6379, REDIS_PASSWORD: '' },
+  config: {
+    NODE_ENV: 'test',
+    REDIS_HOST: 'localhost',
+    REDIS_PORT: 6379,
+    REDIS_PASSWORD: '',
+    get ESTABELECIMENTO_ENABLED() {
+      return estabelecimentoConfig.ESTABELECIMENTO_ENABLED;
+    },
+  },
 }));
 
 vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 
+const { getScopeBySlotMock } = vi.hoisted(() => ({ getScopeBySlotMock: vi.fn() }));
 vi.mock('@startap/db', () => ({
   flowClones: { getCloneBySlot: vi.fn() },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
+  cloneColaboradores: { getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a) },
 }));
 
-const { getGcalForSlotMock, invalidateGcalCacheMock } = vi.hoisted(() => ({
+const { getGcalForSlotMock, getGcalsForSlotMock, invalidateGcalCacheMock } = vi.hoisted(() => ({
   getGcalForSlotMock: vi.fn(),
+  getGcalsForSlotMock: vi.fn(),
   invalidateGcalCacheMock: vi.fn(),
 }));
 vi.mock('@startap/integrations', () => ({
   gcal: {
     getGcalForSlot: (...a: unknown[]) => getGcalForSlotMock(...a),
+    getGcalsForSlot: (...a: unknown[]) => getGcalsForSlotMock(...a),
     invalidateGcalCache: (...a: unknown[]) => invalidateGcalCacheMock(...a),
   },
 }));
@@ -109,6 +125,180 @@ const PAYLOAD_OK = {
 beforeEach(() => {
   vi.clearAllMocks();
   loadScheduleConfigMock.mockResolvedValue(CONFIG_OK);
+  // Default: flag OFF + clone individual — caminho INDIVIDUAL (como hoje).
+  estabelecimentoConfig.ESTABELECIMENTO_ENABLED = false;
+  getScopeBySlotMock.mockResolvedValue({
+    product_type: 'individual',
+    seat_cap: null,
+    tenant_id: null,
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GET /portal/agendamentos — INDIVIDUAL (single-agenda, inalterado)
+// ════════════════════════════════════════════════════════════════════════════
+describe('GET /portal/agendamentos — individual (single-agenda)', () => {
+  it('200: lista os eventos da agenda única, SEM marcar profissional', async () => {
+    const client = {
+      listEvents: vi.fn().mockResolvedValue([
+        {
+          id: 'evt_1',
+          summary: 'João - Corte | WhatsApp: 5511999998888',
+          start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+        },
+      ]),
+    };
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gcal_configured).toBe(true);
+    expect(body.agendamentos).toHaveLength(1);
+    // INDIVIDUAL: nenhum campo de profissional no DTO.
+    expect(body.agendamentos[0].colaborador_id).toBeUndefined();
+    expect(body.agendamentos[0].profissional_nome).toBeUndefined();
+    // NÃO entrou no caminho de estabelecimento (flag OFF).
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+  });
+
+  it('200 gcal_configured:false quando a flag está OFF mesmo sendo estabelecimento (cai no individual)', async () => {
+    // Flag OFF → product_type nem é consultado; vai direto pro individual.
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = false;
+    getGcalForSlotMock.mockResolvedValue(null);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().gcal_configured).toBe(false);
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// GET /portal/agendamentos — ESTABELECIMENTO (multi-profissional, agregação)
+// ════════════════════════════════════════════════════════════════════════════
+describe('GET /portal/agendamentos — estabelecimento (multi-profissional)', () => {
+  beforeEach(() => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  function colab(colaboradorId: number, nome: string, eventos: unknown[]) {
+    return {
+      colaboradorId,
+      nome,
+      calendarId: `cal-${colaboradorId}`,
+      client: { listEvents: vi.fn().mockResolvedValue(eventos) },
+      servicos: [],
+    };
+  }
+
+  it('200: agrega eventos de TODAS as agendas marcando colaborador_id + profissional_nome', async () => {
+    getGcalsForSlotMock.mockResolvedValue([
+      colab(1, 'Bené', [
+        {
+          id: 'evt_a',
+          summary: 'João - Corte',
+          start: { dateTime: `${FUTURO}T09:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T09:30:00-03:00` },
+        },
+      ]),
+      colab(2, 'Caly', [
+        {
+          id: 'evt_b',
+          summary: 'Maria - Barba',
+          // MESMO horário do evt_a, profissional diferente (paralelo).
+          start: { dateTime: `${FUTURO}T09:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T09:20:00-03:00` },
+        },
+      ]),
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gcal_configured).toBe(true);
+    expect(body.agendamentos).toHaveLength(2);
+
+    const byId = Object.fromEntries(body.agendamentos.map((a: { id: string }) => [a.id, a]));
+    expect(byId.evt_a).toMatchObject({ colaborador_id: 1, profissional_nome: 'Bené' });
+    expect(byId.evt_b).toMatchObject({ colaborador_id: 2, profissional_nome: 'Caly' });
+    // Não usou o resolvedor single-agenda.
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+  });
+
+  it('200 gcal_configured:false quando NENHUM colaborador tem agenda (pré-setup)', async () => {
+    getGcalsForSlotMock.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gcal_configured).toBe(false);
+    expect(body.agendamentos).toHaveLength(0);
+  });
+
+  it('200: a falha de UMA agenda não derruba as outras (allSettled)', async () => {
+    const bom = colab(1, 'Bené', [
+      {
+        id: 'evt_ok',
+        summary: 'João - Corte',
+        start: { dateTime: `${FUTURO}T09:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T09:30:00-03:00` },
+      },
+    ]);
+    const ruim = {
+      colaboradorId: 2,
+      nome: 'Caly',
+      calendarId: 'cal-2',
+      client: { listEvents: vi.fn().mockRejectedValue(new Error('GCal /events -> HTTP 500')) },
+      servicos: [],
+    };
+    getGcalsForSlotMock.mockResolvedValue([bom, ruim]);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.agendamentos).toHaveLength(1);
+    expect(body.agendamentos[0]).toMatchObject({ id: 'evt_ok', profissional_nome: 'Bené' });
+  });
+
+  it('502 quando TODAS as agendas falham (e havia colaboradores)', async () => {
+    const ruim1 = {
+      colaboradorId: 1,
+      nome: 'Bené',
+      calendarId: 'cal-1',
+      client: { listEvents: vi.fn().mockRejectedValue(new Error('boom1')) },
+      servicos: [],
+    };
+    const ruim2 = {
+      colaboradorId: 2,
+      nome: 'Caly',
+      calendarId: 'cal-2',
+      client: { listEvents: vi.fn().mockRejectedValue(new Error('boom2')) },
+      servicos: [],
+    };
+    getGcalsForSlotMock.mockResolvedValue([ruim1, ruim2]);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(502);
+  });
 });
 
 describe('POST /portal/agendamentos — caminho feliz', () => {
