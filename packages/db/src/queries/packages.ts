@@ -70,6 +70,12 @@ export interface ClientPackageCredit {
   servicos_cobertos: string[];
   /** NULL = pacote da casa; preenchido = só vale com aquele colaborador. */
   colaborador_id: number | null;
+  /**
+   * Preço do PACOTE em centavos (do template), p/ o bot informar "R$ X,XX" quando o
+   * cliente perguntar o preço. INFORMATIVO (caixa do barbeiro) — NÃO toca client_billing/
+   * AbacatePay/MRR (ADR 0025 §5). NULL = template sem preço cadastrado.
+   */
+  preco_cents: number | null;
   /** cobre(servicoNome) calculado já considerando o array acima. */
   cobre: (servicoNome: string) => boolean;
 }
@@ -171,6 +177,7 @@ interface CreditRowRaw {
   status: string;
   servicos_cobertos: unknown;
   colaborador_id: string | number | null;
+  preco_cents: number | null;
 }
 
 function deriveEstado(input: {
@@ -200,6 +207,7 @@ function normalizeCredit(r: CreditRowRaw): ClientPackageCredit {
     estado,
     servicos_cobertos: servicos,
     colaborador_id: r.colaborador_id === null ? null : Number(r.colaborador_id),
+    preco_cents: r.preco_cents === null ? null : Number(r.preco_cents),
     cobre: (servicoNome: string) => {
       const alvo = normalizeServiceName(servicoNome);
       return servicos.some((s) => normalizeServiceName(s) === alvo);
@@ -242,12 +250,13 @@ export async function listClientCredits(input: {
             (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
             c.status        AS status,
             sp.servicos_cobertos AS servicos_cobertos,
-            sp.colaborador_id    AS colaborador_id
+            sp.colaborador_id    AS colaborador_id,
+            sp.preco_cents       AS preco_cents
        FROM client_package_credits c
        JOIN service_packages sp ON sp.id = c.package_id
        LEFT JOIN package_redemptions pr ON pr.credit_id = c.id
       WHERE c.slot = $1 AND c.cliente_phone_hmac = $2${tenantClause}
-      GROUP BY c.id, sp.nome, sp.servicos_cobertos, sp.colaborador_id
+      GROUP BY c.id, sp.nome, sp.servicos_cobertos, sp.colaborador_id, sp.preco_cents
       ORDER BY c.data_expiracao ASC, c.data_compra ASC`,
     params,
   );
@@ -598,6 +607,397 @@ export async function refundForBooking(input: RefundForBookingInput): Promise<Re
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BLOCO 2c — LIFECYCLE PÓS-VENDA (painel): RECARGA / MUDAR VENCIMENTO / CANCELAR.
+// ADR 0025 — NOVA invariante: o PAINEL agora PODE escrever no ledger, mas SÓ com
+// reason='recharge' (delta>0). Distinto de redeem (-1)/refund (+1, casado a evento).
+// Recarga NÃO está ligada a um gcal_event_id real — usa uma CHAVE SINTÉTICA própria
+// como âncora de idempotência ('recharge:<creditId>:<idempotencyKey>'), gravada na
+// coluna gcal_event_id (NOT NULL) para reusar o UNIQUE(gcal_event_id,reason). Duas
+// recargas distintas = chaves distintas (somam); retry da MESMA recarga = mesma chave
+// (ON CONFLICT DO NOTHING — não dupla-conta). O saldo continua vindo do ledger.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Como derivar a nova validade numa recarga. Exatamente UM dos dois (ou nenhum = mantém). */
+export interface NovaValidade {
+  /** Data fixa 'YYYY-MM-DD'. */
+  dataExpiracao?: string;
+  /** Dias a partir de HOJE (CURRENT_DATE + N), calculado no DB (evita fuso do Node). */
+  adicionarDias?: number;
+}
+
+export interface RecargaInput {
+  slot: string;
+  /** Defesa em profundidade (P3 #320): AND tenant_id = $N no escopo do crédito. */
+  tenantId?: string;
+  creditId: number;
+  /** Sessões a SOMAR (>0). Vira sessoes_total += N + redemption delta=+N. */
+  sessoes: number;
+  /** Opcional: nova validade (data fixa OU dias). Ausente = mantém data_expiracao atual. */
+  novaValidade?: NovaValidade;
+  /**
+   * Chave de idempotência da recarga (UUID gerado pelo chamador por requisição). MESMA chave
+   * retried = no-op (não soma 2x). Chaves distintas = recargas distintas (somam). Obrigatória:
+   * sem ela não há como distinguir retry de nova recarga.
+   */
+  idempotencyKey: string;
+  /** Quem disparou (operador do painel) — forense, no log e na coluna servico_nome. */
+  actor?: string;
+}
+
+export interface RecargaResult {
+  ok: boolean;
+  reason: 'recharged' | 'already_applied' | 'not_found' | 'invalid' | 'erro';
+  credit_id?: number;
+  /** Saldo DEPOIS da recarga (recomputado do ledger). */
+  sessoes_restantes?: number;
+  sessoes_total?: number;
+  data_expiracao?: string; // 'YYYY-MM-DD'
+  status?: string;
+}
+
+/**
+ * RECARREGA o MESMO crédito (renovação no mesmo card — decisão do Bruno: 1 card por cliente).
+ *
+ * Fluxo (TUDO numa transação, idempotente sob retry):
+ *  1. SELECT ... FOR UPDATE do crédito escopado por slot(+tenant). 404 se não for deste clone.
+ *  2. INSERT redemption (delta=+sessoes, reason='recharge') com gcal_event_id sintético
+ *     ('recharge:<creditId>:<idempotencyKey>') ON CONFLICT (gcal_event_id,reason) DO NOTHING.
+ *     0 linhas = MESMA recarga já aplicada (retry) -> NÃO soma de novo (idempotente). Nesse
+ *     caso NÃO altera sessoes_total nem validade (a 1ª chamada já fez tudo).
+ *  3. (só se inseriu) UPDATE sessoes_total += sessoes; se novaValidade veio, atualiza
+ *     data_expiracao na MESMA transação. O CHECK (sessoes_restantes BETWEEN 0 AND sessoes_total)
+ *     continua válido porque sessoes_total CRESCE.
+ *  4. rebuildCreditCacheTx recomputa sessoes_restantes do ledger e RE-DERIVA o status: como
+ *     o saldo passa a >0, exhausted -> active. (Validade nova futura também tira de "expired"
+ *     na próxima leitura, que recalcula expirado por data.) cancelled NÃO é reativado por
+ *     recarga: cancelar é decisão explícita do operador — para reativar um cancelado, o
+ *     operador usa o endpoint próprio (reativar) que limpa o status antes.
+ *
+ * Idempotência ABSOLUTA por idempotencyKey: retry exato não soma sessão nem mexe na validade.
+ * Escopo slot+tenant em TODA query. Saldo NUNCA fica negativo (recarga é delta>0).
+ */
+export async function recargaCredit(input: RecargaInput): Promise<RecargaResult> {
+  if (!Number.isInteger(input.sessoes) || input.sessoes < 1 || input.sessoes > 1000) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (!input.idempotencyKey || typeof input.idempotencyKey !== 'string') {
+    return { ok: false, reason: 'invalid' };
+  }
+  // Valida a nova validade (no máximo um dos dois; data no formato; dias na faixa).
+  const nv = input.novaValidade;
+  if (nv) {
+    const hasData = nv.dataExpiracao != null && nv.dataExpiracao !== '';
+    const hasDias = nv.adicionarDias != null;
+    if (hasData && hasDias) return { ok: false, reason: 'invalid' };
+    if (hasData && !/^\d{4}-\d{2}-\d{2}$/.test(String(nv.dataExpiracao))) {
+      return { ok: false, reason: 'invalid' };
+    }
+    if (hasDias && (!Number.isInteger(nv.adicionarDias) || (nv.adicionarDias ?? 0) < 1)) {
+      return { ok: false, reason: 'invalid' };
+    }
+  }
+
+  const syntheticEventId = `recharge:${input.creditId}:${input.idempotencyKey}`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // (1) trava o crédito; escopa por slot(+tenant). FOR UPDATE serializa recargas concorrentes.
+    const params: unknown[] = [input.creditId, input.slot];
+    let tenantClause = '';
+    if (input.tenantId) {
+      params.push(input.tenantId);
+      tenantClause = ` AND tenant_id = $${params.length}`;
+    }
+    const credRes = await client.query<{ id: string; slot: string; tenant_id: string }>(
+      `SELECT id::text AS id, slot, tenant_id::text AS tenant_id
+         FROM client_package_credits
+        WHERE id = $1 AND slot = $2${tenantClause}
+        FOR UPDATE`,
+      params,
+    );
+    const cred = credRes.rows[0];
+    if (!cred) {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'not_found' };
+    }
+
+    // (2) ledger: append delta=+sessoes, reason='recharge'. tenant_id/slot vêm do PRÓPRIO
+    // crédito (já tenant-stamped) — nunca de campo livre. ON CONFLICT cobre retry exato.
+    const ins = await client.query(
+      `INSERT INTO package_redemptions
+         (credit_id, slot, tenant_id, gcal_event_id, colaborador_id, servico_nome, delta, reason)
+       SELECT c.id, c.slot, c.tenant_id, $2, NULL, $3, $4, 'recharge'
+         FROM client_package_credits c
+        WHERE c.id = $1
+       ON CONFLICT (gcal_event_id, reason) DO NOTHING`,
+      [input.creditId, syntheticEventId, input.actor ?? 'recharge', input.sessoes],
+    );
+
+    // 0 linhas = ESTA recarga (mesma idempotencyKey) já foi aplicada antes -> idempotente.
+    // NÃO mexe em sessoes_total/validade (a 1ª chamada já fez). Só recomputa e devolve o saldo.
+    if (ins.rowCount === 0) {
+      const saldo = await rebuildCreditCacheTx(client, input.creditId);
+      const snap = await readCreditSnapshotTx(client, input.creditId);
+      await client.query('COMMIT');
+      return {
+        ok: true,
+        reason: 'already_applied',
+        credit_id: input.creditId,
+        sessoes_restantes: saldo,
+        sessoes_total: snap.sessoes_total,
+        data_expiracao: snap.data_expiracao,
+        status: snap.status,
+      };
+    }
+
+    // (3) cresce sessoes_total (o teto do cache sobe junto) + nova validade se veio. NUNCA
+    // dropa coluna; só UPDATE. A nova validade é resolvida no DB (sem fuso do Node).
+    const setVal: string[] = ['sessoes_total = sessoes_total + $2'];
+    const upParams: unknown[] = [input.creditId, input.sessoes];
+    if (nv?.dataExpiracao) {
+      upParams.push(nv.dataExpiracao);
+      setVal.push(`data_expiracao = $${upParams.length}::date`);
+    } else if (nv?.adicionarDias != null) {
+      upParams.push(nv.adicionarDias);
+      setVal.push(`data_expiracao = CURRENT_DATE + ($${upParams.length}::int)`);
+    }
+    await client.query(
+      `UPDATE client_package_credits SET ${setVal.join(', ')}, updated_at = NOW() WHERE id = $1`,
+      upParams,
+    );
+
+    // (4) recomputa cache + RE-DERIVA status (exhausted -> active porque saldo subiu).
+    const saldo = await rebuildCreditCacheTx(client, input.creditId);
+    const snap = await readCreditSnapshotTx(client, input.creditId);
+    await client.query('COMMIT');
+
+    log.info(
+      {
+        slot: input.slot,
+        creditId: input.creditId,
+        sessoesAdd: input.sessoes,
+        novaValidade:
+          nv?.dataExpiracao ?? (nv?.adicionarDias != null ? `+${nv.adicionarDias}d` : 'mantida'),
+        actor: input.actor ?? 'recharge',
+      },
+      'recargaCredit: crédito recarregado (renovação no mesmo card)',
+    );
+    return {
+      ok: true,
+      reason: 'recharged',
+      credit_id: input.creditId,
+      sessoes_restantes: saldo,
+      sessoes_total: snap.sessoes_total,
+      data_expiracao: snap.data_expiracao,
+      status: snap.status,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    log.error(
+      { err: err instanceof Error ? err.message : String(err), slot: input.slot },
+      'recargaCredit falhou',
+    );
+    return { ok: false, reason: 'erro' };
+  } finally {
+    client.release();
+  }
+}
+
+export interface MudarVencimentoInput {
+  slot: string;
+  tenantId?: string;
+  creditId: number;
+  /** Exatamente um: data fixa OU dias a partir de hoje. */
+  dataExpiracao?: string;
+  adicionarDias?: number;
+  actor?: string;
+}
+
+export interface MudarVencimentoResult {
+  ok: boolean;
+  reason: 'updated' | 'not_found' | 'invalid' | 'erro';
+  credit_id?: number;
+  data_expiracao?: string;
+  status?: string;
+  sessoes_restantes?: number;
+}
+
+/**
+ * MUDA o vencimento (data_expiracao) de um crédito. NÃO toca o ledger (não é movimento de
+ * saldo). Escopo slot(+tenant). Após o UPDATE, recomputa o cache/status via rebuild para
+ * re-derivar 'active' a partir de 'exhausted' se o saldo for >0 (estender a validade de um
+ * crédito com saldo o reativa na próxima leitura, que recalcula 'expirado' por data).
+ * cancelled NÃO é reativado aqui (decisão explícita do operador).
+ */
+export async function mudarVencimento(input: MudarVencimentoInput): Promise<MudarVencimentoResult> {
+  const hasData = input.dataExpiracao != null && input.dataExpiracao !== '';
+  const hasDias = input.adicionarDias != null;
+  if (hasData === hasDias) return { ok: false, reason: 'invalid' }; // precisa de EXATAMENTE um
+  if (hasData && !/^\d{4}-\d{2}-\d{2}$/.test(String(input.dataExpiracao))) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (hasDias && (!Number.isInteger(input.adicionarDias) || (input.adicionarDias ?? 0) < 1)) {
+    return { ok: false, reason: 'invalid' };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const params: unknown[] = [input.creditId, input.slot];
+    let tenantClause = '';
+    if (input.tenantId) {
+      params.push(input.tenantId);
+      tenantClause = ` AND tenant_id = $${params.length}`;
+    }
+    // SET por data fixa OU dias. O placeholder da validade vem DEPOIS do escopo p/ não colidir.
+    params.push(hasData ? input.dataExpiracao : input.adicionarDias);
+    const validadeExpr = hasData
+      ? `$${params.length}::date`
+      : `CURRENT_DATE + ($${params.length}::int)`;
+    const upd = await client.query<{ id: string }>(
+      `UPDATE client_package_credits
+          SET data_expiracao = ${validadeExpr}, updated_at = NOW()
+        WHERE id = $1 AND slot = $2${tenantClause}
+        RETURNING id::text AS id`,
+      params,
+    );
+    if (upd.rowCount === 0) {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'not_found' };
+    }
+    const saldo = await rebuildCreditCacheTx(client, input.creditId);
+    const snap = await readCreditSnapshotTx(client, input.creditId);
+    await client.query('COMMIT');
+    log.info(
+      {
+        slot: input.slot,
+        creditId: input.creditId,
+        novaValidade: hasData ? input.dataExpiracao : `+${input.adicionarDias}d`,
+        actor: input.actor ?? 'manual',
+      },
+      'mudarVencimento: data_expiracao atualizada',
+    );
+    return {
+      ok: true,
+      reason: 'updated',
+      credit_id: input.creditId,
+      data_expiracao: snap.data_expiracao,
+      status: snap.status,
+      sessoes_restantes: saldo,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    log.error(
+      { err: err instanceof Error ? err.message : String(err), slot: input.slot },
+      'mudarVencimento falhou',
+    );
+    return { ok: false, reason: 'erro' };
+  } finally {
+    client.release();
+  }
+}
+
+export interface CancelarCreditoInput {
+  slot: string;
+  tenantId?: string;
+  creditId: number;
+  actor?: string;
+}
+
+export interface CancelarCreditoResult {
+  ok: boolean;
+  reason: 'cancelled' | 'not_found' | 'erro';
+  credit_id?: number;
+  status?: string;
+}
+
+/**
+ * CANCELA um crédito (status='cancelled'). NÃO mexe no ledger (o histórico de consumo fica
+ * intacto — append-only). Marca o crédito como inutilizável: deriveEstado() devolve CANCELADO
+ * e o bot nunca desconta dele. rebuildCreditCacheTx PRESERVA 'cancelled' (não re-deriva).
+ * Reversível pelo endpoint de reativar/recarregar (que limpa o status antes). Escopo slot(+tenant).
+ */
+export async function cancelarCredito(input: CancelarCreditoInput): Promise<CancelarCreditoResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const params: unknown[] = [input.creditId, input.slot];
+    let tenantClause = '';
+    if (input.tenantId) {
+      params.push(input.tenantId);
+      tenantClause = ` AND tenant_id = $${params.length}`;
+    }
+    const upd = await client.query<{ status: string }>(
+      `UPDATE client_package_credits
+          SET status = 'cancelled', updated_at = NOW()
+        WHERE id = $1 AND slot = $2${tenantClause}
+        RETURNING status`,
+      params,
+    );
+    if (upd.rowCount === 0) {
+      await client.query('COMMIT');
+      return { ok: false, reason: 'not_found' };
+    }
+    await client.query('COMMIT');
+    log.info(
+      { slot: input.slot, creditId: input.creditId, actor: input.actor ?? 'manual' },
+      'cancelarCredito: crédito marcado como cancelled (ledger intacto)',
+    );
+    return { ok: true, reason: 'cancelled', credit_id: input.creditId, status: 'cancelled' };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    log.error(
+      { err: err instanceof Error ? err.message : String(err), slot: input.slot },
+      'cancelarCredito falhou',
+    );
+    return { ok: false, reason: 'erro' };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * REATIVA um crédito cancelled: limpa o status (volta a 'active'/'exhausted'/'expired' conforme
+ * saldo+validade) e recarrega o crédito. Necessário porque rebuildCreditCacheTx PRESERVA
+ * 'cancelled' — sem limpar antes, a recarga não conseguiria sair de CANCELADO. Para esgotado/
+ * expirado SEM cancelamento, basta recargaCredit direto (este wrapper só adiciona o passo de
+ * limpar 'cancelled'). Idempotente pela própria recargaCredit (idempotencyKey).
+ */
+export async function reativarCredito(input: RecargaInput): Promise<RecargaResult> {
+  const client = await pool.connect();
+  try {
+    const params: unknown[] = [input.creditId, input.slot];
+    let tenantClause = '';
+    if (input.tenantId) {
+      params.push(input.tenantId);
+      tenantClause = ` AND tenant_id = $${params.length}`;
+    }
+    // Tira de 'cancelled' SÓ se estiver cancelled (idempotente). rebuildCreditCacheTx dentro
+    // de recargaCredit re-deriva o status final a partir do saldo. Escopo slot(+tenant).
+    const upd = await client.query(
+      `UPDATE client_package_credits
+          SET status = 'active', updated_at = NOW()
+        WHERE id = $1 AND slot = $2${tenantClause} AND status = 'cancelled'`,
+      params,
+    );
+    if (upd.rowCount === 0) {
+      // Não estava cancelled (ou não existe). Segue pra recarga: se não existe, ela devolve
+      // not_found; se existe e não estava cancelled, a recarga reativa esgotado/expirado igual.
+      const exists = await query<{ id: string }>(
+        `SELECT id::text AS id FROM client_package_credits WHERE id = $1 AND slot = $2${tenantClause}`,
+        params,
+      );
+      if (exists.rowCount === 0) return { ok: false, reason: 'not_found' };
+    }
+  } finally {
+    client.release();
+  }
+  // Recarrega (soma sessões + nova validade + re-deriva status) numa transação própria.
+  return recargaCredit(input);
+}
+
 /**
  * Hook de RECONCILIAÇÃO — STUB (ADR 0025, dívida 5: furo cancelar+reagendar).
  *
@@ -769,7 +1169,8 @@ async function selectActiveCreditsTx(
             (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
             c.status        AS status,
             sp.servicos_cobertos AS servicos_cobertos,
-            sp.colaborador_id    AS colaborador_id
+            sp.colaborador_id    AS colaborador_id,
+            sp.preco_cents       AS preco_cents
        FROM client_package_credits c
        JOIN service_packages sp ON sp.id = c.package_id
       WHERE c.slot = $1 AND c.cliente_phone_hmac = $2${tenantClause}
@@ -804,4 +1205,31 @@ async function rebuildCreditCacheTx(client: PgLikeClient, creditId: number): Pro
     [creditId],
   );
   return Math.max(0, Number(r.rows[0]?.saldo ?? 0));
+}
+
+/**
+ * Lê o snapshot pós-update de um crédito (total/validade/status) DENTRO da transação, para
+ * o lifecycle devolver o estado final ao painel. Read-only; não toca o ledger.
+ */
+async function readCreditSnapshotTx(
+  client: PgLikeClient,
+  creditId: number,
+): Promise<{ sessoes_total: number; data_expiracao: string; status: string }> {
+  const r = await client.query<{
+    sessoes_total: number;
+    data_expiracao: string;
+    status: string;
+  }>(
+    `SELECT sessoes_total,
+            to_char(data_expiracao, 'YYYY-MM-DD') AS data_expiracao,
+            status
+       FROM client_package_credits WHERE id = $1`,
+    [creditId],
+  );
+  const row = r.rows[0];
+  return {
+    sessoes_total: Number(row?.sessoes_total ?? 0),
+    data_expiracao: row?.data_expiracao ?? '',
+    status: row?.status ?? '',
+  };
 }

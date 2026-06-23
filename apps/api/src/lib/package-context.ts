@@ -92,6 +92,18 @@ function coberturaLabel(c: ClientPackageCredit): string {
 }
 
 /**
+ * Formata preco_cents (do template do pacote) em 'R$ X,XX' pt-BR, sem libs (Intl pode variar
+ * por runtime). NULL/ausente => '' (sem rótulo de preço). INFORMATIVO: é o preço do PACOTE
+ * (caixa do barbeiro), NÃO mexe em client_billing/AbacatePay/MRR (ADR 0025 §5).
+ */
+function precoLabel(precoCents: number | null): string {
+  if (precoCents == null || !Number.isFinite(precoCents)) return '';
+  const reais = Math.trunc(precoCents / 100);
+  const centavos = String(Math.abs(precoCents % 100)).padStart(2, '0');
+  return `R$ ${reais},${centavos}`;
+}
+
+/**
  * Monta o bloco de prompt [SEU PACOTE] em texto pronto, com estados explícitos.
  * Recebe a lista COMPLETA (apenasAtivos=false) para poder informar expirado/esgotado.
  * Retorna '' (string vazia) se o cliente não tem nenhum pacote — o caller decide
@@ -103,7 +115,9 @@ export function buildSeuPacoteBlock(credits: ClientPackageCredit[]): string {
   if (credits.length === 0) return '';
 
   const linhas = credits.map((c) => {
-    const base = `${c.nome} — ${coberturaLabel(c)} (${escopoLabel(c)})`;
+    const preco = precoLabel(c.preco_cents);
+    const precoSuffix = preco ? ` [preço do pacote: ${preco}]` : '';
+    const base = `${c.nome} — ${coberturaLabel(c)} (${escopoLabel(c)})${precoSuffix}`;
     switch (c.estado) {
       case 'ATIVO':
         return `- ${base}: ${c.sessoes_restantes} de ${c.sessoes_total} sessões restantes, válido até ${formatBR(c.data_expiracao)}.`;

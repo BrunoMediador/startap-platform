@@ -102,6 +102,13 @@ export type {
   RefundForBookingInput,
   RefundResult,
   SuspectDoubleRedeem,
+  NovaValidade,
+  RecargaInput,
+  RecargaResult,
+  MudarVencimentoInput,
+  MudarVencimentoResult,
+  CancelarCreditoInput,
+  CancelarCreditoResult,
 } from './queries/packages.js';
 export type {
   AtendimentoStatus,
