@@ -1,44 +1,37 @@
 'use client';
 
 /**
- * Agendamentos da Home — leva 3 (BLOCO B): paginacao 5/pagina + 3 filtros
- * combinaveis (periodo / busca por nome / data exata).
+ * Agendamentos da Home — agora é um RESUMO (top-5) com link pra /agenda
+ * (Bloco A). Antes era a lista paginada completa; a tela cheia migrou pra rota
+ * dedicada. Aqui:
+ *   - gcal off (pré-setup)        -> empty "agenda não conectada".
+ *   - sem eventos na janela       -> empty "sem agendamentos" + CTA Novo.
+ *   - com eventos                 -> abas de período + os 5 PRIMEIROS da seleção +
+ *     "Ver agenda completa" (quando há mais que 5) -> /agenda.
  *
- * O backend manda janela -7/+14d ASC. Aqui:
- *   - gcal_configured=false -> empty "agenda nao conectada" (pre-setup).
- *   - sem eventos na janela  -> empty caprichado "sem agendamentos" (1.D.5).
- *   - com eventos            -> abas de periodo + busca + data, lista paginada
- *     (5/pagina, "X–Y de N", anterior/proxima). Filtro vazio (mas com eventos
- *     na janela) -> empty "nenhum resultado pro filtro", distinto do anterior.
- *
- * Polish 1.D.5: linhas E0, divisor line-soft, icone com borda line-strong,
- * titulo Sora 15px, chevron no hover. Realce ambar lateral no 1o de hoje (1.2).
- *
- * W10 (Missão 023): cada linha ganha botão de excluir/cancelar -> modal de
- * confirmação (ação IRREVERSÍVEL, apaga no Google Calendar). Consome o
- * useExcluirAgendamento (DELETE /portal/agendamentos/:eventId); erro vira toast
- * amigável, nunca trava sem saída.
+ * Bloco B (nomes legíveis): cada linha usa <EventoTitulo> (nome + serviço em 2
+ * linhas, marquee no desktop quando transborda). Bloco C: a linha é CLICÁVEL e
+ * abre o <AgendaDetailSheet> (detalhe + remarcar/trocar/cancelar). O cancelar
+ * rápido (lixeira) continua na linha, abrindo a confirmação destrutiva.
  */
-import {
-  IconCalendar,
-  IconChevronLeft,
-  IconChevronRight,
-  IconSearch,
-  IconTrash,
-} from '@/components/icons';
+import { AgendaDetailSheet } from '@/components/agenda/agenda-detail-sheet';
+import { EventoTitulo } from '@/components/agenda/evento-titulo';
+import { IconCalendar, IconChevronRight, IconTrash } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
+import { inicialDoTitulo, parseTitulo } from '@/lib/agenda-titulo';
 import { type PeriodoFiltro, classify, filtrarAgendamentos } from '@/lib/agendamentos';
 import { ApiError } from '@/lib/api';
 import type { Agendamento, AgendamentosResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
-import { formatAgendamentoDia, formatAgendamentoHora, initials } from '@/lib/format';
+import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
 import { useExcluirAgendamento } from '@/lib/queries';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 
-const PAGE_SIZE = 5;
+const TOP = 5;
 
 const ABAS: { value: PeriodoFiltro; label: string }[] = [
   { value: 'todos', label: 'Todos' },
@@ -53,16 +46,14 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   const toast = useToast();
   const excluir = useExcluirAgendamento(slot);
   const [periodo, setPeriodo] = useState<PeriodoFiltro>('todos');
-  const [busca, setBusca] = useState('');
-  const [data_, setData_] = useState(''); // "YYYY-MM-DD"
-  const [page, setPage] = useState(1);
-  /** Evento aguardando confirmação de exclusão (abre o modal). null = fechado. */
+  /** Evento aguardando confirmação de exclusão (modal). null = fechado. */
   const [aExcluir, setAExcluir] = useState<Agendamento | null>(null);
+  /** Evento aberto no sheet de detalhe (null = fechado). */
+  const [aberto, setAberto] = useState<Agendamento | null>(null);
 
   function confirmarExclusao() {
     if (!aExcluir) return;
-    const alvo = aExcluir;
-    excluir.mutate(alvo.id, {
+    excluir.mutate(aExcluir.id, {
       onSuccess: (res) => {
         toast.success(
           res.already_gone ? 'Esse horário já não estava na agenda.' : 'Horário cancelado.',
@@ -70,7 +61,6 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
         setAExcluir(null);
       },
       onError: (err) => {
-        // 404 = já saiu da agenda (cancelado em paralelo): trata como sucesso.
         if (err instanceof ApiError && err.status === 404) {
           toast.success('Esse horário já não estava na agenda.');
           setAExcluir(null);
@@ -82,31 +72,21 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   }
 
   const filtradas = useMemo(
-    () => filtrarAgendamentos(data.agendamentos, { periodo, busca, data: data_ }),
-    [data.agendamentos, periodo, busca, data_],
+    () => filtrarAgendamentos(data.agendamentos, { periodo, busca: '', data: '' }),
+    [data.agendamentos, periodo],
   );
 
   const totalNaJanela = data.agendamentos.length;
-  const totalPages = Math.max(1, Math.ceil(filtradas.length / PAGE_SIZE));
-  const pageSafe = Math.min(page, totalPages);
-  const inicioIdx = (pageSafe - 1) * PAGE_SIZE;
-  const visiveis = filtradas.slice(inicioIdx, inicioIdx + PAGE_SIZE);
-  const de = filtradas.length === 0 ? 0 : inicioIdx + 1;
-  const ate = inicioIdx + visiveis.length;
+  const visiveis = filtradas.slice(0, TOP);
+  const temMais = filtradas.length > TOP;
 
-  // id do 1o evento de hoje na lista filtrada (realce ambar lateral, 1.2).
+  // id do 1o evento de hoje na lista (realce ambar lateral, 1.2).
   const idDestaqueHoje = useMemo(() => {
     const hoje = filtradas.find((ag) => classify(ag.inicio) === 'hoje');
     return hoje?.id ?? null;
   }, [filtradas]);
 
-  // Qualquer mudanca de filtro volta pra pagina 1.
-  function resetPage(fn: () => void) {
-    fn();
-    setPage(1);
-  }
-
-  // gcal off (pre-setup): empty especifico, sem filtros.
+  // gcal off (pré-setup): empty especifico, sem filtros.
   if (!data.gcal_configured) {
     return (
       <EmptyBox
@@ -117,7 +97,6 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   }
 
   // Sem nenhum evento na janela (-7/+14d): empty "vazio de verdade", sem filtros.
-  // CTA leva pro agendamento manual (Missão 020 F4 — Fluxo B, ponto 2).
   if (totalNaJanela === 0) {
     return (
       <EmptyBox
@@ -144,7 +123,7 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
               type="button"
               role="tab"
               aria-selected={ativo}
-              onClick={() => resetPage(() => setPeriodo(aba.value))}
+              onClick={() => setPeriodo(aba.value)}
               className={cn(
                 'shrink-0 rounded-pill px-3.5 py-1.5 font-display text-[13px] font-semibold outline-none transition-colors duration-[120ms] focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
                 ativo
@@ -158,46 +137,12 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
         })}
       </div>
 
-      {/* Busca por nome + filtro de data */}
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <div className="relative flex-1">
-          <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-faint">
-            <IconSearch size={18} />
-          </span>
-          <input
-            type="search"
-            inputMode="search"
-            value={busca}
-            onChange={(e) => resetPage(() => setBusca(e.target.value))}
-            aria-label="Buscar agendamento por nome do cliente"
-            placeholder="Buscar por nome"
-            className="h-[44px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken pl-[42px] pr-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint focus:border-brand focus:shadow-focus focus:ring-[3px] focus:ring-brand/35"
-          />
-        </div>
-        <input
-          type="date"
-          value={data_}
-          onChange={(e) => resetPage(() => setData_(e.target.value))}
-          aria-label="Filtrar por data específica"
-          className="h-[44px] rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] focus:border-brand focus:shadow-focus focus:ring-[3px] focus:ring-brand/35 sm:w-[170px]"
-        />
-      </div>
-
-      {/* Lista / empty de filtro */}
       {filtradas.length === 0 ? (
         <EmptyBox
           compacto
-          title="Nenhum resultado pra esse filtro"
-          description="Tente outro período, limpe a busca ou escolha outra data."
-          action={{
-            label: 'Limpar filtros',
-            onClick: () =>
-              resetPage(() => {
-                setPeriodo('todos');
-                setBusca('');
-                setData_('');
-              }),
-          }}
+          title="Nada nesse período"
+          description="Tente outro período ou veja a agenda completa."
+          action={{ label: 'Ver agenda completa', onClick: () => router.push('/agenda') }}
         />
       ) : (
         <>
@@ -207,52 +152,34 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
                 key={ag.id}
                 ag={ag}
                 destaque={periodo !== 'recentes' && ag.id === idDestaqueHoje}
+                onAbrir={() => setAberto(ag)}
                 onExcluir={() => setAExcluir(ag)}
               />
             ))}
           </div>
 
-          {/* Controles de paginacao — so se houver mais de 1 pagina. */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[12.5px] tabular-nums text-ink-soft">
-                {de}–{ate} de {filtradas.length}
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  aria-label="Página anterior"
-                  disabled={pageSafe <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="flex size-10 items-center justify-center rounded-[11px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <IconChevronLeft size={18} />
-                </button>
-                <span className="min-w-[64px] text-center text-[12.5px] tabular-nums text-ink-soft">
-                  {pageSafe} / {totalPages}
-                </span>
-                <button
-                  type="button"
-                  aria-label="Próxima página"
-                  disabled={pageSafe >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  className="flex size-10 items-center justify-center rounded-[11px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <IconChevronRight size={18} />
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Link pra agenda completa — sempre presente; conta os extras se houver. */}
+          <Link
+            href="/agenda"
+            className="flex items-center justify-center gap-1.5 rounded-card-sm border border-line bg-surface py-2.5 font-display text-[13.5px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+          >
+            Ver agenda completa
+            {temMais && <span className="text-ink-soft">(+{filtradas.length - TOP})</span>}
+            <IconChevronRight size={16} />
+          </Link>
         </>
       )}
 
-      {/* Confirmação de exclusão (W10) — ação irreversível: apaga no GCal. */}
+      {/* Detalhe + remarcar/trocar/cancelar (Bloco C). */}
+      <AgendaDetailSheet slot={slot} agendamento={aberto} onClose={() => setAberto(null)} />
+
+      {/* Confirmação de exclusão rápida (lixeira da linha) — irreversível: apaga no GCal. */}
       <ConfirmDialog
         open={aExcluir !== null}
         title="Cancelar este horário?"
         description={
           aExcluir
-            ? `“${aExcluir.titulo}” vai ser removido da sua agenda do Google. Isso não tem como desfazer.`
+            ? `“${descricaoEvento(aExcluir)}” vai ser removido da sua agenda do Google. Isso não tem como desfazer.`
             : ''
         }
         confirmLabel="Cancelar horário"
@@ -269,13 +196,21 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
   );
 }
 
+/** "Nome — Serviço" legível pro modal de confirmação (sem o telefone). */
+function descricaoEvento(ag: Agendamento): string {
+  const { nome, servico } = parseTitulo(ag.titulo);
+  return servico ? `${nome} — ${servico}` : nome;
+}
+
 function AgendamentoRow({
   ag,
   destaque,
+  onAbrir,
   onExcluir,
 }: {
   ag: Agendamento;
   destaque: boolean;
+  onAbrir: () => void;
   onExcluir: () => void;
 }) {
   const hora = formatAgendamentoHora(ag.inicio);
@@ -283,32 +218,37 @@ function AgendamentoRow({
   return (
     <div
       className={cn(
-        // Linha E0 (1.D.5): divisor line-soft, hover acende.
-        'group flex min-h-14 items-center gap-3.5 border-b border-line-soft px-[15px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover',
+        'group flex min-h-14 items-center gap-3.5 border-b border-line-soft pr-2.5 transition-colors last:border-b-0 hover:bg-surface-hover',
         destaque && 'border-l-[3px] border-l-amber',
       )}
     >
-      <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-brand-soft font-display text-[13px] font-bold text-brand">
-        {initials(ag.titulo)}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-display text-[15px] font-semibold text-ink">{ag.titulo}</div>
-      </div>
-      <div className="shrink-0 text-right text-[12.5px] text-ink-soft">
-        {hora ? (
-          <b className="block font-display text-[14px] font-semibold tabular-nums text-ink">
-            {hora}
-          </b>
-        ) : null}
-        {dia}
-      </div>
-      {/* Excluir/cancelar (W10): some no repouso, aparece no hover/foco; no toque
-          (sem hover) o foco/tab revela. Alvo 36px, abre o modal de confirmação. */}
+      {/* Área clicável (abre o detalhe). A lixeira fica FORA dela pra não conflitar. */}
+      <button
+        type="button"
+        onClick={onAbrir}
+        aria-label={`Abrir detalhe de ${parseTitulo(ag.titulo).nome}`}
+        className="flex min-w-0 flex-1 items-center gap-3.5 py-[13px] pl-[15px] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+      >
+        <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-brand-soft font-display text-[13px] font-bold text-brand">
+          {inicialDoTitulo(ag.titulo)}
+        </span>
+        <EventoTitulo titulo={ag.titulo} className="flex-1" />
+        <div className="shrink-0 text-right text-[12.5px] text-ink-soft">
+          {hora ? (
+            <b className="block font-display text-[14px] font-semibold tabular-nums text-ink">
+              {hora}
+            </b>
+          ) : null}
+          {dia}
+        </div>
+      </button>
+      {/* Cancelar rápido: some no repouso, aparece no hover/foco (desktop); no
+          toque o foco/tab revela. Detalhe completo fica no sheet (botão acima). */}
       <button
         type="button"
         onClick={onExcluir}
-        aria-label={`Cancelar horário de ${ag.titulo}`}
-        className="ml-0.5 flex size-9 shrink-0 items-center justify-center rounded-[9px] text-ink-faint outline-none transition-colors hover:bg-danger/12 hover:text-danger focus-visible:bg-danger/12 focus-visible:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger sm:opacity-0 sm:group-hover:opacity-100"
+        aria-label={`Cancelar horário de ${parseTitulo(ag.titulo).nome}`}
+        className="flex size-9 shrink-0 items-center justify-center rounded-[9px] text-ink-faint outline-none transition-colors hover:bg-danger/12 hover:text-danger focus-visible:bg-danger/12 focus-visible:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger sm:opacity-0 sm:group-hover:opacity-100"
       >
         <IconTrash size={17} />
       </button>

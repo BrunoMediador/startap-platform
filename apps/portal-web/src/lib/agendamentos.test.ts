@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type FiltroAgendamentos,
   agruparAgendamentos,
+  atualizarAgendamento,
   classify,
   filtrarAgendamentos,
   normalizar,
@@ -235,5 +236,40 @@ describe('removerAgendamento (cache do excluir — W10)', () => {
     removerAgendamento(base, 'a');
     expect(base.agendamentos).toHaveLength(snapshot);
     expect(base.count).toBe(3);
+  });
+});
+
+describe('atualizarAgendamento (cache do editar — Bloco C)', () => {
+  const base: AgendamentosResponse = {
+    gcal_configured: true,
+    count: 3,
+    agendamentos: [
+      { id: 'a', titulo: 'A - Corte', inicio: '2026-06-09T08:00:00', fim: null },
+      { id: 'b', titulo: 'B - Barba', inicio: '2026-06-09T09:00:00', fim: null },
+      { id: 'c', titulo: 'C - Manicure', inicio: '2026-06-09T10:00:00', fim: null },
+    ],
+  };
+
+  it('substitui o evento por id, mantendo posição e count', () => {
+    const novo = { id: 'b', titulo: 'B - Sobrancelha', inicio: '2026-06-09T15:00:00', fim: null };
+    const out = atualizarAgendamento(base, novo);
+    expect(out.agendamentos.map((a) => a.id)).toEqual(['a', 'b', 'c']);
+    expect(out.agendamentos[1]).toEqual(novo);
+    expect(out.count).toBe(3);
+  });
+
+  it('id ausente -> MESMA referência intacta (idempotente)', () => {
+    const out = atualizarAgendamento(base, {
+      id: 'zzz',
+      titulo: 'X',
+      inicio: null,
+      fim: null,
+    });
+    expect(out).toBe(base);
+  });
+
+  it('não muta o objeto original', () => {
+    atualizarAgendamento(base, { id: 'a', titulo: 'mudou', inicio: null, fim: null });
+    expect(base.agendamentos[0].titulo).toBe('A - Corte');
   });
 });

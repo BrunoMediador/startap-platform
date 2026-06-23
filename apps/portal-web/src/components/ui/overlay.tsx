@@ -17,8 +17,13 @@ interface OverlayProps {
   onClose: () => void;
   ariaLabel?: string;
   ariaLabelledBy?: string;
-  /** 'sheet' sobe de baixo (mobile-first); 'modal' centraliza. */
-  variant: 'sheet' | 'modal';
+  /**
+   * 'sheet'  sobe de baixo (mobile-first);
+   * 'modal'  centraliza;
+   * 'detail' é responsivo: bottom-sheet no mobile, painel lateral direito no
+   *          desktop (>=sm). Usado no detalhe de agendamento (Bloco C).
+   */
+  variant: 'sheet' | 'modal' | 'detail';
   children: React.ReactNode;
   /** elemento que recebe foco ao abrir (default: o primeiro focavel). */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
@@ -98,7 +103,10 @@ export function Overlay({
       className={cn(
         // Overlay mais forte no escuro (spec 1.A.6 / D12): black/55 vs ink/40 do claro.
         'fixed inset-0 z-40 flex bg-black/55',
-        variant === 'sheet' ? 'items-end' : 'items-center justify-center px-6',
+        variant === 'sheet' && 'items-end',
+        variant === 'modal' && 'items-center justify-center px-6',
+        // detail: bottom-sheet no mobile, painel encostado à direita no desktop.
+        variant === 'detail' && 'items-end sm:items-stretch sm:justify-end',
       )}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -113,9 +121,14 @@ export function Overlay({
         onKeyDown={onKeyDown}
         className={cn(
           // Flutuante (spec 1.A.6): surface-elev + borda forte + sombra so pra descolar do overlay.
-          variant === 'sheet'
-            ? 'w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev'
-            : 'w-full max-w-[330px] animate-[modalIn_180ms_var(--ease-out-soft)] rounded-[20px] border border-line-strong bg-surface-elev p-[22px_20px_18px] shadow-elev',
+          variant === 'sheet' &&
+            'w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev',
+          variant === 'modal' &&
+            'w-full max-w-[330px] animate-[modalIn_180ms_var(--ease-out-soft)] rounded-[20px] border border-line-strong bg-surface-elev p-[22px_20px_18px] shadow-elev',
+          // detail: sheet de baixo no mobile; no desktop, painel alto encostado à
+          // direita (entra deslizando da direita), com scroll interno.
+          variant === 'detail' &&
+            'flex max-h-[88vh] w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] flex-col overflow-y-auto rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev sm:max-h-none sm:h-dvh sm:w-[420px] sm:origin-right sm:animate-[panelIn_200ms_var(--ease-out-soft)] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-[max(18px,env(safe-area-inset-bottom))]',
         )}
       >
         {children}

@@ -259,6 +259,33 @@ export interface ExcluirAgendamentoResponse {
   already_gone?: boolean;
 }
 
+/**
+ * Body do PATCH /portal/agendamentos/:eventId (Bloco C — remarcar/trocar serviço).
+ *
+ * CONTRATO (backend-senior, em paralelo): todos os campos OPCIONAIS, mas pelo
+ * menos UM obrigatório (o backend valida ≥1; o front também trava o botão se
+ * nada mudou). `data`+`hora` viajam juntos no remarcar; `servico` no trocar.
+ * `cliente_*` ficam disponíveis no contrato, mas a UI desta entrega só usa
+ * servico/data/hora (editar nome/telefone é tech debt aceito).
+ *
+ * Respostas:
+ *   200 { ok, agendamento }   · 400 payload inválido · 404 evento não pertence
+ *   409 conflito (recarregar a grade de slots) · 422 config ausente · 502 GCal.
+ */
+export interface EditarAgendamentoBody {
+  servico?: string;
+  data?: string; // 'YYYY-MM-DD'
+  hora?: string; // 'HH:mm'
+  cliente_nome?: string;
+  cliente_telefone?: string;
+}
+
+/** 200 do PATCH — `agendamento` no MESMO shape da lista (atualização in-place). */
+export interface EditarAgendamentoResponse {
+  ok: true;
+  agendamento: Agendamento;
+}
+
 // ── Mensalidade / Pagamento PIX (portal-billing.ts — ADR 0013 F3 / ADR 0014) ──
 
 /** Estado da cobranca PIX do ciclo atual. */

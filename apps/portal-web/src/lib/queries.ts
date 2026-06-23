@@ -15,7 +15,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { removerAgendamento } from './agendamentos';
+import { atualizarAgendamento, removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
   AgendaSlotsResponse,
@@ -28,6 +28,8 @@ import type {
   ContatosResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
+  EditarAgendamentoBody,
+  EditarAgendamentoResponse,
   EquipeResponse,
   ExcluirAgendamentoResponse,
   Horarios,
@@ -177,6 +179,44 @@ export function useExcluirAgendamento(
     onSuccess: (_res, eventId) => {
       client.setQueryData<AgendamentosResponse>(qk.agendamentos(slot), (prev) =>
         prev ? removerAgendamento(prev, eventId) : prev,
+      );
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+    },
+  });
+}
+
+/**
+ * PATCH /portal/agendamentos/:eventId — remarca (data+hora) ou troca o serviço
+ * de um evento já existente (Bloco C). No 200, faz update IN-PLACE no cache da
+ * lista (o evento muda na hora, sem reload), libera/consome horário (invalida as
+ * grades de slots do tenant) e ressincroniza a lista em background.
+ *
+ * Tratados NA TELA (sheet de detalhe), não aqui:
+ *   400 payload · 404 não-pertence · 409 conflito (recarregar grade de slots)
+ *   422 config ausente · 502 GCal. Aqui só o caminho feliz.
+ *
+ * O endpoint só fica live quando a PR do backend mergear+deployar; o front
+ * consome contra o contrato (EditarAgendamentoBody/Response) e degrada com
+ * mensagem amigável se a rota ainda não existir.
+ */
+export function useEditarAgendamento(
+  slot: string,
+): UseMutationResult<
+  EditarAgendamentoResponse,
+  Error,
+  { eventId: string; patch: EditarAgendamentoBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, patch }) =>
+      apiFetch<EditarAgendamentoResponse>(`/portal/agendamentos/${encodeURIComponent(eventId)}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
+    onSuccess: ({ agendamento }) => {
+      client.setQueryData<AgendamentosResponse>(qk.agendamentos(slot), (prev) =>
+        prev ? atualizarAgendamento(prev, agendamento) : prev,
       );
       client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });

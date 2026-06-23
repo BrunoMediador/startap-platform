@@ -103,6 +103,28 @@ export function removerAgendamento(
   return { ...prev, agendamentos, count: Math.max(0, prev.count - 1) };
 }
 
+/**
+ * Substitui um evento no cache da lista pelo `atualizado` (Bloco C — editar).
+ * Casa por id; se o id não existir, devolve a MESMA referência intacta (o evento
+ * pode ter saído da janela ou sido cancelado em paralelo — o refetch resolve).
+ * `count` não muda (edição não cria/remove). Pura/testável.
+ */
+export function atualizarAgendamento(
+  prev: AgendamentosResponse,
+  atualizado: Agendamento,
+): AgendamentosResponse {
+  let achou = false;
+  const agendamentos = prev.agendamentos.map((a) => {
+    if (a.id === atualizado.id) {
+      achou = true;
+      return atualizado;
+    }
+    return a;
+  });
+  if (!achou) return prev;
+  return { ...prev, agendamentos };
+}
+
 // ── Filtros + paginacao da Inicio (leva 3, BLOCO B) ──────────────────────────
 
 /** Periodo selecionavel nas abas: Todos / Hoje / Proximos / Recentes. */
