@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Colaborador } from './api-types';
 import {
   comissaoToText,
+  mapColaboradorRow,
   parseComissao,
   parseServicos,
   servicosToText,
@@ -52,6 +53,50 @@ describe('servicosToText / toDraft', () => {
       ativo: false,
       comissao: '30',
     });
+  });
+});
+
+describe('mapColaboradorRow', () => {
+  // O driver pg serializa BIGSERIAL (id) e NUMERIC (comissao_pct) como STRING na
+  // rede. O map precisa devolver number — senão o id string quebra o gate de save
+  // (editar não dispara PATCH) e o POST de atendimento manda string -> 400.
+  it('converte id e comissao_pct vindos como string pra number', () => {
+    const row = {
+      id: '4',
+      nome: 'Eduardo',
+      gcal_calendar_id: 'cal@group.calendar.google.com',
+      gcal_status: 'active',
+      servicos: ['Corte'],
+      ativo: true,
+      ordem: 1,
+      comissao_pct: '30',
+      created_at: '2026-06-23T00:00:00Z',
+      updated_at: '2026-06-23T00:00:00Z',
+    } as unknown as Colaborador;
+    const out = mapColaboradorRow(row);
+    expect(out.id).toBe(4);
+    expect(typeof out.id).toBe('number');
+    expect(out.comissao_pct).toBe(30);
+    expect(typeof out.comissao_pct).toBe('number');
+  });
+
+  it('é idempotente quando os campos já vêm como number', () => {
+    const c: Colaborador = {
+      id: 7,
+      nome: 'Maria',
+      gcal_calendar_id: null,
+      gcal_status: 'pending',
+      servicos: [],
+      ativo: false,
+      ordem: 0,
+      comissao_pct: 0,
+      created_at: '2026-06-23T00:00:00Z',
+      updated_at: '2026-06-23T00:00:00Z',
+    };
+    const out = mapColaboradorRow(c);
+    expect(out.id).toBe(7);
+    expect(out.comissao_pct).toBe(0);
+    expect(out.nome).toBe('Maria');
   });
 });
 

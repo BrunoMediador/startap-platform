@@ -100,7 +100,10 @@ export function validate(draft: Draft): ValidateResult {
   const servico = draft.servicoNome.trim().slice(0, NOME_MAX);
   if (servico) body.servico_nome = servico;
   if (descontoCents > 0) body.desconto_cents = descontoCents;
-  if (draft.colaboradorId !== null) body.colaborador_id = draft.colaboradorId;
+  // Number(...) defensivo: o id do colaborador nasce de uma coluna BIGSERIAL que
+  // o driver pg serializa como string. O boundary (mapColaboradorRow) já converte,
+  // mas garantir aqui evita um POST com string -> 400 do backend (Zod number).
+  if (draft.colaboradorId !== null) body.colaborador_id = Number(draft.colaboradorId);
   const cliente = draft.clienteNome.trim().slice(0, NOME_MAX);
   if (cliente) body.cliente_nome = cliente;
 

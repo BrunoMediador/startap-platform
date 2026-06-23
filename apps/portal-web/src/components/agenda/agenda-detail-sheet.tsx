@@ -25,6 +25,7 @@ import {
   IconPencil,
   IconScissors,
   IconTrash,
+  IconUser,
   IconWhatsapp,
 } from '@/components/icons';
 import { Button } from '@/components/ui/button';
@@ -246,6 +247,10 @@ export function AgendaDetailSheet({
               hora={hora}
               dia={dia}
               telefone={telefone}
+              // Só vem no estabelecimento (eventos agregados de N barbeiros). No
+              // individual é undefined -> a linha "Profissional" não aparece e o
+              // layout SOLO fica idêntico a hoje.
+              profissional={agendamento.profissional_nome ?? null}
               onRemarcar={abrirRemarcar}
               onTrocar={abrirTrocar}
               onCancelar={() => setConfirmarCancelar(true)}
@@ -337,6 +342,7 @@ function DetalheView({
   hora,
   dia,
   telefone,
+  profissional,
   onRemarcar,
   onTrocar,
   onCancelar,
@@ -346,6 +352,8 @@ function DetalheView({
   hora: string;
   dia: string;
   telefone: string | null;
+  /** Estabelecimento: qual barbeiro. null no individual (não renderiza a linha). */
+  profissional: string | null;
   onRemarcar: () => void;
   onTrocar: () => void;
   onCancelar: () => void;
@@ -358,6 +366,11 @@ function DetalheView({
       </p>
 
       <dl className="mt-4 space-y-3">
+        {/* Profissional: só no estabelecimento. Desambigua eventos do mesmo
+            horário (4 barbeiros) na hora de remarcar/cancelar. */}
+        {profissional && (
+          <LinhaInfo icon={<IconUser size={17} />} rotulo="Profissional" valor={profissional} />
+        )}
         {servico && (
           <LinhaInfo icon={<IconScissors size={17} />} rotulo="Serviço" valor={servico} />
         )}
