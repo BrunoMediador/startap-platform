@@ -633,6 +633,55 @@ export interface AtendimentoListResult {
   total_cents: number;
 }
 
+/** Forma crua de uma linha enriquecida (atendimentos a + JOIN clone_colaboradores). */
+interface JoinedRawRow {
+  id: number;
+  data: string;
+  inicio_at: string | null;
+  fim_at: string | null;
+  cliente_nome: string | null;
+  cliente_contato: string | null;
+  servico_nome: string | null;
+  valor_cents: number;
+  desconto_cents: number;
+  forma_pagamento: string | null;
+  colaborador_id: number | null;
+  profissional_nome: string | null;
+  origem: string;
+  dirty_fields: unknown;
+  status: string;
+}
+
+/**
+ * Colunas da Row enriquecida (mesma forma do GET list E do retorno do PATCH). Usada nas
+ * queries que fazem o LEFT JOIN com clone_colaboradores para trazer profissional_nome.
+ * `a.` = alias de atendimentos; `c.` = alias de clone_colaboradores.
+ */
+const _LIST_COLS = `a.id, a.data, a.inicio_at, a.fim_at, a.cliente_nome, a.cliente_contato,
+  a.servico_nome, a.valor_cents, a.desconto_cents, a.forma_pagamento,
+  a.colaborador_id, c.nome AS profissional_nome, a.origem, a.dirty_fields, a.status`;
+
+/** Mapeia a linha crua do JOIN -> AtendimentoListRow (números coeridos, dirty_fields normalizado). */
+function mapJoinedRow(x: JoinedRawRow): AtendimentoListRow {
+  return {
+    id: Number(x.id),
+    data: x.data,
+    inicio_at: x.inicio_at,
+    fim_at: x.fim_at,
+    cliente_nome: x.cliente_nome,
+    cliente_contato: x.cliente_contato,
+    servico_nome: x.servico_nome,
+    valor_cents: Number(x.valor_cents),
+    desconto_cents: Number(x.desconto_cents),
+    forma_pagamento: x.forma_pagamento,
+    colaborador_id: x.colaborador_id == null ? null : Number(x.colaborador_id),
+    profissional_nome: x.profissional_nome,
+    origem: x.origem,
+    dirty_fields: asDirty(x.dirty_fields),
+    status: x.status,
+  };
+}
+
 /**
  * Lista atendimentos de um balde num período [de, ate] (inclusivo por `data`). Escopo
  * SEMPRE slot + tenant_id. total_cents = SUM(valor - desconto) das linhas listadas.
@@ -654,26 +703,8 @@ export async function listAtendimentos(
       ? "a.status <> 'cancelado' AND a.fim_at > now()"
       : "(a.fim_at <= now() OR a.origem = 'manual')";
 
-  const r = await query<{
-    id: number;
-    data: string;
-    inicio_at: string | null;
-    fim_at: string | null;
-    cliente_nome: string | null;
-    cliente_contato: string | null;
-    servico_nome: string | null;
-    valor_cents: number;
-    desconto_cents: number;
-    forma_pagamento: string | null;
-    colaborador_id: number | null;
-    profissional_nome: string | null;
-    origem: string;
-    dirty_fields: unknown;
-    status: string;
-  }>(
-    `SELECT a.id, a.data, a.inicio_at, a.fim_at, a.cliente_nome, a.cliente_contato,
-            a.servico_nome, a.valor_cents, a.desconto_cents, a.forma_pagamento,
-            a.colaborador_id, c.nome AS profissional_nome, a.origem, a.dirty_fields, a.status
+  const r = await query<JoinedRawRow>(
+    `SELECT ${_LIST_COLS}
        FROM atendimentos a
        LEFT JOIN clone_colaboradores c
          ON c.id = a.colaborador_id AND c.slot = a.slot
@@ -685,23 +716,7 @@ export async function listAtendimentos(
     [slot, tenantId, de, ate],
   );
 
-  const atendimentos = r.rows.map((x) => ({
-    id: Number(x.id),
-    data: x.data,
-    inicio_at: x.inicio_at,
-    fim_at: x.fim_at,
-    cliente_nome: x.cliente_nome,
-    cliente_contato: x.cliente_contato,
-    servico_nome: x.servico_nome,
-    valor_cents: Number(x.valor_cents),
-    desconto_cents: Number(x.desconto_cents),
-    forma_pagamento: x.forma_pagamento,
-    colaborador_id: x.colaborador_id == null ? null : Number(x.colaborador_id),
-    profissional_nome: x.profissional_nome,
-    origem: x.origem,
-    dirty_fields: asDirty(x.dirty_fields),
-    status: x.status,
-  }));
+  const atendimentos = r.rows.map(mapJoinedRow);
 
   const total_cents = atendimentos.reduce((acc, a) => acc + (a.valor_cents - a.desconto_cents), 0);
   return { atendimentos, total_cents };
@@ -718,29 +733,24 @@ export interface PatchAtendimentoInput {
   clienteNome?: string | null;
 }
 
-/** Colunas do banco para cada campo do patch (a coluna é o que vai pra dirty_fields). */
-const _PATCH_COLUMN: Record<keyof PatchAtendimentoInput, DirtyField> = {
-  valorCents: 'valor_cents',
-  descontoCents: 'desconto_cents',
-  formaPagamento: 'forma_pagamento',
-  servicoNome: 'servico_nome',
-  clienteNome: 'cliente_nome',
-};
-
 /**
  * Edita manualmente um atendimento e PINA cada coluna enviada em dirty_fields (sticky:
  * upsert futuro do evento não reverte). Escopado por slot + tenant_id (anti-IDOR) e só
- * linhas NÃO deletadas. Retorna a linha atualizada, ou null se o id não existe no escopo.
+ * linhas NÃO deletadas. Retorna a Row ENRIQUECIDA (igual ao GET list — inclui
+ * `profissional_nome`, null no SOLO/sem colaborador), ou null se o id não existe no escopo.
  *
- * dirty_fields novo = união (sem duplicatas) do antigo + as colunas deste patch. Usamos
- * jsonb de pinned como parâmetro e deduplicamos via SELECT DISTINCT no SQL.
+ * O retorno casa 1:1 com a Row do GET por balde (AtendimentoListRow): o front renderiza o
+ * resultado do PATCH direto, sem refetch e sem piscar "Sem profissional" no estabelecimento.
+ *
+ * dirty_fields novo = união (sem duplicatas) do antigo + as colunas deste patch. Pinned vai
+ * como jsonb parametrizado (nunca interpolado) e deduplica via jsonb_agg(DISTINCT) no SQL.
  */
 export async function patchAtendimento(
   slot: string,
   tenantId: string,
   id: number,
   patch: PatchAtendimentoInput,
-): Promise<AtendimentoRow | null> {
+): Promise<AtendimentoListRow | null> {
   const sets: string[] = [];
   const params: unknown[] = [slot, tenantId, id];
   const pinned: DirtyField[] = [];
@@ -772,35 +782,47 @@ export async function patchAtendimento(
   }
 
   if (sets.length === 0) {
-    // Nada a alterar — devolve a linha atual (no escopo, não deletada) ou null.
-    const cur = await query<AtendimentoRow & { dirty_fields: unknown }>(
-      `SELECT ${_RETURNING_COLS} FROM atendimentos
-        WHERE slot = $1 AND tenant_id = $2 AND id = $3 AND deleted_at IS NULL`,
+    // Nada a alterar — devolve a linha atual ENRIQUECIDA (no escopo, não deletada) ou null.
+    // Mesmo LEFT JOIN do GET list pra trazer profissional_nome.
+    const cur = await query<JoinedRawRow>(
+      `SELECT ${_LIST_COLS}
+         FROM atendimentos a
+         LEFT JOIN clone_colaboradores c
+           ON c.id = a.colaborador_id AND c.slot = a.slot
+        WHERE a.slot = $1 AND a.tenant_id = $2 AND a.id = $3 AND a.deleted_at IS NULL`,
       [slot, tenantId, id],
     );
     const row = cur.rows[0];
-    return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
+    return row ? mapJoinedRow(row) : null;
   }
 
-  // dirty_fields := array(SELECT DISTINCT unnest(antigo || pinned)). Pinned vai como
-  // jsonb parametrizado (nunca interpolado) — anti-injeção mesmo sendo lista fixa.
+  // Pinned (colunas deste patch) vai como jsonb parametrizado (nunca interpolado) — anti-
+  // injeção mesmo sendo lista fixa. dirty_fields := DISTINCT(antigo || pinned).
   params.push(JSON.stringify(pinned.map((p) => p)));
   const pinnedParam = `$${params.length}::jsonb`;
 
-  const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
-    `UPDATE atendimentos
-        SET ${sets.join(', ')},
-            dirty_fields = (
-              SELECT COALESCE(jsonb_agg(DISTINCT e), '[]'::jsonb)
-                FROM jsonb_array_elements_text(dirty_fields || ${pinnedParam}) AS e
-            ),
-            updated_at = now()
-      WHERE slot = $1 AND tenant_id = $2 AND id = $3 AND deleted_at IS NULL
-      RETURNING ${_RETURNING_COLS}`,
+  // CTE: faz o UPDATE escopado e SELECT da linha atualizada com o MESMO LEFT JOIN do GET
+  // list — o retorno do PATCH traz profissional_nome (null no SOLO). Sem segundo round-trip.
+  const r = await query<JoinedRawRow>(
+    `WITH upd AS (
+       UPDATE atendimentos AS a
+          SET ${sets.join(', ')},
+              dirty_fields = (
+                SELECT COALESCE(jsonb_agg(DISTINCT e), '[]'::jsonb)
+                  FROM jsonb_array_elements_text(a.dirty_fields || ${pinnedParam}) AS e
+              ),
+              updated_at = now()
+        WHERE a.slot = $1 AND a.tenant_id = $2 AND a.id = $3 AND a.deleted_at IS NULL
+        RETURNING a.*
+     )
+     SELECT ${_LIST_COLS}
+       FROM upd a
+       LEFT JOIN clone_colaboradores c
+         ON c.id = a.colaborador_id AND c.slot = a.slot`,
     params,
   );
   const row = r.rows[0];
-  return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
+  return row ? mapJoinedRow(row) : null;
 }
 
 /**

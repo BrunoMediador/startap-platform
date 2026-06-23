@@ -263,8 +263,14 @@ describe('patchAtendimento — pina colunas enviadas em dirty_fields (sticky)', 
     expect(sql).toContain('forma_pagamento = $5');
     // dirty_fields := DISTINCT(antigo || pinned). pinned vai como jsonb parametrizado.
     expect(sql).toContain('dirty_fields = (');
-    expect(sql).toContain('jsonb_array_elements_text(dirty_fields ||');
-    expect(sql).toContain('WHERE slot = $1 AND tenant_id = $2 AND id = $3 AND deleted_at IS NULL');
+    expect(sql).toContain('jsonb_array_elements_text(a.dirty_fields ||');
+    expect(sql).toContain(
+      'WHERE a.slot = $1 AND a.tenant_id = $2 AND a.id = $3 AND a.deleted_at IS NULL',
+    );
+    // Retorno enriquecido: o PATCH re-seleciona via CTE com o MESMO LEFT JOIN do GET list.
+    expect(sql).toContain('WITH upd AS');
+    expect(sql).toContain('LEFT JOIN clone_colaboradores c');
+    expect(sql).toContain('c.nome AS profissional_nome');
     expect(params.slice(0, 3)).toEqual(['clone_cirilo', 'tid-1', 1]);
     // último param = pinned serializado como JSON array das COLUNAS (não dos nomes de campo).
     expect(JSON.parse(params[params.length - 1] as string)).toEqual([
@@ -274,9 +280,45 @@ describe('patchAtendimento — pina colunas enviadas em dirty_fields (sticky)', 
     expect(r?.dirty_fields).toEqual(['valor_cents', 'forma_pagamento']);
   });
 
+  // QA nit P3: o PATCH de uma linha COM colaborador (estabelecimento) deve devolver a Row
+  // enriquecida com profissional_nome preenchido — senão o front pisca "Sem profissional".
+  it('PATCH de linha com colaborador devolve profissional_nome preenchido (estabelecimento)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          ...ROW,
+          colaborador_id: 9,
+          profissional_nome: 'Eduardo',
+          valor_cents: 7000,
+          dirty_fields: ['valor_cents'],
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await patchAtendimento('clone_dragon', 'tid-2', 5, { valorCents: 7000 });
+    expect(r?.colaborador_id).toBe(9);
+    expect(r?.profissional_nome).toBe('Eduardo'); // veio do LEFT JOIN, não some no PATCH
+    expect(r?.valor_cents).toBe(7000);
+    expect(r?.dirty_fields).toEqual(['valor_cents']);
+  });
+
+  it('PATCH de linha SOLO devolve profissional_nome null (sem colaborador)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { ...ROW, colaborador_id: null, profissional_nome: null, dirty_fields: ['valor_cents'] },
+      ],
+      rowCount: 1,
+    });
+    const r = await patchAtendimento('clone_cirilo', 'tid-1', 1, { valorCents: 1 });
+    expect(r?.colaborador_id).toBeNull();
+    expect(r?.profissional_nome).toBeNull();
+  });
+
   it('patch só servicoNome -> pina servico_nome', async () => {
     mockQuery.mockResolvedValueOnce({
-      rows: [{ ...ROW, servico_nome: 'Barba', dirty_fields: ['servico_nome'] }],
+      rows: [
+        { ...ROW, servico_nome: 'Barba', profissional_nome: null, dirty_fields: ['servico_nome'] },
+      ],
       rowCount: 1,
     });
     await patchAtendimento('clone_cirilo', 'tid-1', 1, { servicoNome: 'Barba' });
@@ -285,12 +327,17 @@ describe('patchAtendimento — pina colunas enviadas em dirty_fields (sticky)', 
     expect(JSON.parse(params[params.length - 1] as string)).toEqual(['servico_nome']);
   });
 
-  it('patch vazio -> apenas SELECT da linha atual (sem UPDATE), escopado', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [ROW], rowCount: 1 });
+  it('patch vazio -> SELECT enriquecido da linha atual (sem UPDATE), escopado', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, profissional_nome: null }], rowCount: 1 });
     await patchAtendimento('clone_cirilo', 'tid-1', 1, {});
     const [sql, params] = lastCall();
     expect(sql).toContain('SELECT');
     expect(sql).not.toContain('UPDATE atendimentos');
+    // Mesmo no no-op o retorno é enriquecido (LEFT JOIN), pra casar 1:1 com o GET list.
+    expect(sql).toContain('LEFT JOIN clone_colaboradores c');
+    expect(sql).toContain(
+      'WHERE a.slot = $1 AND a.tenant_id = $2 AND a.id = $3 AND a.deleted_at IS NULL',
+    );
     expect(params).toEqual(['clone_cirilo', 'tid-1', 1]);
   });
 

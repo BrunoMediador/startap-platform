@@ -415,11 +415,24 @@ describe('GET /portal/atendimentos — balde previsao/faturado', () => {
 });
 
 describe('PATCH /portal/atendimentos/:id — sticky', () => {
-  it('200: edita valor + pina dirty_fields; id coage string->number', async () => {
+  it('200: edita valor + pina dirty_fields; devolve Row enriquecida (profissional_nome); id coage string->number', async () => {
+    // Row enriquecida (igual ao GET list): a data layer já traz profissional_nome via JOIN.
     patchAtendimentoMock.mockResolvedValue({
-      ...ROW,
+      id: 9,
+      data: '2026-06-23',
+      inicio_at: null,
+      fim_at: null,
+      cliente_nome: null,
+      cliente_contato: null,
+      servico_nome: 'Corte',
       valor_cents: 7000,
+      desconto_cents: 0,
+      forma_pagamento: 'pix',
+      colaborador_id: 9,
+      profissional_nome: 'Eduardo',
+      origem: 'agenda',
       dirty_fields: ['valor_cents'],
+      status: 'agendado',
     });
     const app = await buildApp();
     const res = await app.inject({
@@ -428,7 +441,11 @@ describe('PATCH /portal/atendimentos/:id — sticky', () => {
       payload: { valor_cents: 7000 },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().atendimento.dirty_fields).toEqual(['valor_cents']);
+    const atend = res.json().atendimento;
+    expect(atend.dirty_fields).toEqual(['valor_cents']);
+    // QA nit P3: a resposta do PATCH carrega profissional_nome (não pisca "Sem profissional").
+    expect(atend.profissional_nome).toBe('Eduardo');
+    expect(atend.colaborador_id).toBe(9);
     // id coagido pra Number; escopo slot+tenant da SESSÃO (não do body).
     expect(patchAtendimentoMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 9, {
       valorCents: 7000,
