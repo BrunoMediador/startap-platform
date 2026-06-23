@@ -260,22 +260,21 @@ export const ConfigSchema = z.object({
     .transform((v) => v === 'true'),
 
   // ── Billing DERIVADO DA AGENDA — gancho do BOT (ADR 0027, Fase D) ───────────
-  // Gate do GANCHO que faz um agendamento criado PELO BOT (WhatsApp) virar linha de
-  // atendimento de PREVISÃO (origem='agenda', status='agendado'). OPCIONAL no boot
-  // (ausente = OFF, lição #247: feature dormente NUNCA derruba a api do bot). Mesma flag
-  // do portal-api (apps/portal-api ATEND_FROM_AGENDA) — liga a camada inteira.
-  //   OFF (ausente/false) -> o bot é BYTE-A-BYTE o de hoje: cria o evento, deduz pacote e
-  //                          responde o cliente sem tocar a tabela `atendimentos`. Cirilo/
-  //                          Samuel 100% inalterados.
-  //   ON  (true)          -> após criar o evento (sob o MESMO action-lock idempotente, ao
-  //                          lado da dedução de pacote) o bot grava/atualiza a linha de
-  //                          previsão (best-effort: a gravação é envolvida em try/catch e
-  //                          NUNCA quebra o agendamento nem a resposta do bot).
-  // Ligar SÓ em clone de teste (dragon) com QA controlado. NUNCA hardcoded.
-  ATEND_FROM_AGENDA: z
-    .enum(['true', 'false'])
-    .optional()
-    .transform((v) => v === 'true'),
+  // Gate POR-CLONE do GANCHO que faz um agendamento criado PELO BOT (WhatsApp) virar
+  // linha de atendimento de PREVISÃO (origem='agenda', status='agendado'). Lista de slots
+  // separada por vírgula; o gate é avaliado com isAtendFromAgendaEnabled(slot, ...).
+  // OPCIONAL no boot (ausente = OFF, lição #247: feature dormente NUNCA derruba a api do
+  // bot). Mesma env no portal-api (apps/portal-api ATEND_FROM_AGENDA_SLOTS) — liga a camada.
+  //   vazio/ausente       -> OFF pra TODOS os slots (default seguro = byte-a-byte de hoje;
+  //                          o bot cria o evento, deduz pacote e responde sem tocar
+  //                          `atendimentos`. Cirilo/Samuel 100% inalterados).
+  //   'slot_a,slot_b'      -> ON só nos slots listados (após criar o evento, sob o MESMO
+  //                          action-lock idempotente, o bot grava/atualiza a linha de
+  //                          previsão best-effort: try/catch, NUNCA quebra o agendamento).
+  //   '*'                  -> ON pra TODOS (enable global futuro).
+  // KILL-SWITCH: limpar a env volta a OFF pra todos, sem deploy de código.
+  // Ligar SÓ no clone de teste (dragon = clone_barber_dragon_caly8b) com QA. NUNCA hardcoded.
+  ATEND_FROM_AGENDA_SLOTS: z.string().optional().default(''),
 
   SERVICE_NAME: z.string().optional(),
 });
