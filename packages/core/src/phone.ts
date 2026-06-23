@@ -90,6 +90,31 @@ export function canonicalE164(raw: string): string | null {
 }
 
 /**
+ * Normaliza um `me.id` do WAHA (ou qualquer JID) para os DÍGITOS PUROS do número,
+ * PRESERVANDO o 9º dígito móvel BR — diferente de canonicalE164 (que REMOVE o 9 para
+ * formar a chave de identidade do trial). É a forma usada na coluna
+ * flow_clones.alert_owner_phone, que precisa bater com o destino de envio do WAHA.
+ *
+ * Por que NÃO reusar canonicalE164: a 050 fez backfill de alert_owner_phone com os
+ * dígitos crus de cliente_telefone (regexp_replace, sem tirar o 9). Os clientes
+ * pagantes ficaram com 13 dígitos COM o 9 (Cirilo 5511979630828, Samuel
+ * 5535991746797). Para o autofill gravar no MESMO formato e não divergir, preservamos
+ * o número como veio do me.id, só limpando o envelope.
+ *
+ * Aceita: "5511979630828@c.us", "+556599453860@c.us", "5531999998842:12@s.whatsapp.net",
+ * "(11) 97963-0828". Corta sufixo de device (":n") e de domínio ("@..."), remove o "+"
+ * e qualquer não-dígito, e o prefixo de tronco "0" à esquerda.
+ *
+ * @returns dígitos puros (>= 8) ou null se irrecuperável/curto demais.
+ */
+export function meIdToDigits(raw: string): string | null {
+  if (!raw) return null;
+  const base = raw.split('@')[0]?.split(':')[0] ?? '';
+  const digits = base.replace(/\D/g, '').replace(/^0+/, '');
+  return digits.length >= 8 ? digits : null;
+}
+
+/**
  * Hint mascarado para suporte/ops (LGPD — doc 020): "+55 31 •••••-••42".
  * NUNCA loga/grava o número completo; só DDD + 2 últimos dígitos.
  */

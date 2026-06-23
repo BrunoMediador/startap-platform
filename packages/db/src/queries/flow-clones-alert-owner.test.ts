@@ -13,7 +13,7 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { getCloneAlertOwner } = await import('./flow-clones.js');
+const { getCloneAlertOwner, setCloneAlertOwnerPhoneIfEmpty } = await import('./flow-clones.js');
 
 describe('getCloneAlertOwner — fallback alert_owner_phone -> cliente_telefone', () => {
   beforeEach(() => {
@@ -120,5 +120,61 @@ describe('getCloneAlertOwner — fallback alert_owner_phone -> cliente_telefone'
     const owner = await getCloneAlertOwner('clone_nao_existe');
 
     expect(owner).toBeNull();
+  });
+});
+
+describe('setCloneAlertOwnerPhoneIfEmpty — autofill do número da sessão (só se vazio)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('grava quando estava vazio (UPDATE afetou 1 linha) e retorna true', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ slot: 'clone_seven_7' }], rowCount: 1 });
+
+    const filled = await setCloneAlertOwnerPhoneIfEmpty('clone_seven_7', '556599453860@c.us');
+
+    expect(filled).toBe(true);
+    // SQL parametrizado com placeholders DISTINTOS ($1 phone, $2 slot) — guard IS NULL/''.
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('alert_owner_phone IS NULL');
+    expect(sql).toContain('$1');
+    expect(sql).toContain('$2');
+    // dígitos puros do me.id (sem @c.us), preservando o número.
+    expect(params).toEqual(['556599453860', 'clone_seven_7']);
+  });
+
+  it('NÃO sobrescreve valor já preenchido: UPDATE não afeta linha -> retorna false', async () => {
+    // O guard WHERE alert_owner_phone IS NULL/'' faz o UPDATE não casar -> rowCount 0.
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const filled = await setCloneAlertOwnerPhoneIfEmpty('clone_cirilo', '5511979630828@c.us');
+
+    expect(filled).toBe(false);
+  });
+
+  it('preserva o 9 do me.id (formato dos pagantes: 13 dígitos com 9)', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ slot: 'clone_x' }], rowCount: 1 });
+
+    await setCloneAlertOwnerPhoneIfEmpty('clone_x', '5511979630828@c.us');
+
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // NÃO canonicaliza (canonicalE164 removeria o 9) — grava igual ao Cirilo.
+    expect((params as string[])[0]).toBe('5511979630828');
+  });
+
+  it('normaliza me.id com sufixo de device e @s.whatsapp.net', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ slot: 'clone_y' }], rowCount: 1 });
+
+    await setCloneAlertOwnerPhoneIfEmpty('clone_y', '5531999998842:12@s.whatsapp.net');
+
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect((params as string[])[0]).toBe('5531999998842');
+  });
+
+  it('me.id curto/inválido (<8 dígitos) -> não grava, retorna false (não toca o banco)', async () => {
+    const filled = await setCloneAlertOwnerPhoneIfEmpty('clone_z', '123');
+
+    expect(filled).toBe(false);
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });

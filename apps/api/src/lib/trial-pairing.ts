@@ -34,6 +34,7 @@ import type { WahaWebhookBody } from '@startap/core/types';
 import { flowExecutionLog, trialLedger } from '@startap/db';
 import { internalAlert, waha } from '@startap/integrations';
 import { z } from 'zod';
+import { autofillAlertOwnerPhone } from './alert-owner-autofill.js';
 
 const log = logger.child({ module: 'trial-pairing' });
 
@@ -105,33 +106,25 @@ async function processSessionStatus(
     return { status: 'ignored:session-status' };
   }
 
-  // Clones manuais/legados: NOOP absoluto (Cirilo nunca passa daqui).
+  // Número REALMENTE pareado (prova de posse): me.id resolvido (envelope -> payload
+  // -> GET na sessão). Resolvido ANTES do gate de trial porque o autofill do
+  // alert_owner_phone (abaixo) vale para TODO clone — inclusive trial_status='none'
+  // (Cirilo, clones manuais), que sai cedo do fluxo de trial mas ainda precisa do
+  // destino de alerta preenchido.
+  const meId = await resolveMeId(body, parsed, baseLog);
+
+  // AUTOFILL do alert_owner_phone (fix do gap de alerta sem destino): preenche
+  // flow_clones.alert_owner_phone com o número da própria sessão SE estiver vazio.
+  // Fire-and-forget SEGURO — nunca lança, nunca afeta o pareamento de trial nem o
+  // webhook. Roda mesmo sem me.id (no-op interno) e para clones não-trial.
+  await autofillAlertOwnerPhone(info.slot, meId);
+
+  // Clones manuais/legados: NOOP no que toca trial (Cirilo nunca passa daqui). O
+  // autofill acima JÁ rodou — só o fluxo de trial é pulado.
   if (info.trial_status === 'none' || info.trial_status === 'exempt') {
     return { status: 'ignored:trial-none' };
   }
 
-  // Número REALMENTE pareado (prova de posse): me.id no TOPO do envelope
-  // (formato real do NOWEB 2026.3.2 — spike meid), depois payload.me.id
-  // (compat outras engines/versões) e, em último caso, GET na sessão.
-  const envelope = SessionStatusEnvelope.safeParse(body);
-  let meId = envelope.success ? (envelope.data.me?.id ?? null) : null;
-  if (!meId) {
-    meId = parsed.success ? (parsed.data.me?.id ?? null) : null;
-  }
-  if (!meId) {
-    try {
-      const s = await waha.sessions.getSessionStatus(body.session, {
-        timeoutMs: WAHA_TIMEOUT_MS,
-      });
-      meId = s.me?.id ?? null;
-    } catch (e) {
-      log.warn(
-        { ...baseLog, err: e instanceof Error ? e.message : String(e) },
-        'trial-pairing: WAHA indisponível para ler me.id (tenta no próximo evento)',
-      );
-      return { status: 'ignored:no-me-id' };
-    }
-  }
   if (!meId) {
     log.warn(baseLog, 'trial-pairing: sessão WORKING sem me.id (tenta no próximo evento)');
     return { status: 'ignored:no-me-id' };
@@ -177,6 +170,40 @@ async function processSessionStatus(
     return { status: 'ignored:concurrent-event' };
   }
   return lock.result;
+}
+
+/**
+ * Resolve o me.id REALMENTE pareado de uma sessão WORKING (prova de posse), na ordem:
+ *   1. me.id no TOPO do envelope (formato real do NOWEB 2026.3.2 — spike meid);
+ *   2. payload.me.id (compat outras engines/versões);
+ *   3. GET na sessão (último recurso, com timeout — nunca espera infinito).
+ * Retorna null se indisponível (WAHA fora / sessão sem me.id). Nunca lança.
+ */
+async function resolveMeId(
+  body: WahaWebhookBody,
+  parsed: ReturnType<typeof SessionStatusPayload.safeParse>,
+  baseLog: Record<string, unknown>,
+): Promise<string | null> {
+  const envelope = SessionStatusEnvelope.safeParse(body);
+  let meId = envelope.success ? (envelope.data.me?.id ?? null) : null;
+  if (!meId) {
+    meId = parsed.success ? (parsed.data.me?.id ?? null) : null;
+  }
+  if (!meId) {
+    try {
+      const s = await waha.sessions.getSessionStatus(body.session, {
+        timeoutMs: WAHA_TIMEOUT_MS,
+      });
+      meId = s.me?.id ?? null;
+    } catch (e) {
+      log.warn(
+        { ...baseLog, err: e instanceof Error ? e.message : String(e) },
+        'trial-pairing: WAHA indisponível para ler me.id (tenta no próximo evento)',
+      );
+      return null;
+    }
+  }
+  return meId;
 }
 
 /** Branches da decisão de trial — SEMPRE executadas dentro do withTrialSlotLock. */

@@ -324,9 +324,9 @@ describe('handleWebhook', () => {
 
   // --- Testes: blocklist global de números internos (Missão 023) ---
 
-  it('ignora mensagem do número interno da blocklist (7411) — não responde, não roteia', async () => {
-    // O 7411 (sessão ALERTAS) é o número interno padrão da blocklist.
-    mocks.extractPhone.mockReturnValue('553599247411');
+  it('ignora mensagem do remetente da ALERTAS (553598373138) — não responde, não roteia', async () => {
+    // O remetente atual da sessão ALERTAS é o número interno padrão da blocklist.
+    mocks.extractPhone.mockReturnValue('553598373138');
 
     const result = await handleWebhook(makeBody('STARTAP_AI_PROD'), {
       executionId: 'exec-blocklist',

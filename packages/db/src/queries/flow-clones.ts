@@ -4,6 +4,7 @@
  * Um clone herda bot_config/bot_prompt/bot_media de uma matriz, com personalizacao
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
+import { meIdToDigits } from '@startap/core/phone';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
 
@@ -606,6 +607,51 @@ export async function getCloneAlertOwner(slot: string): Promise<CloneAlertOwner 
     enabled: row.alert_owner_enabled !== false,
     displayName: row.display_name,
   };
+}
+
+/**
+ * Preenche flow_clones.alert_owner_phone com o número da PRÓPRIA sessão WhatsApp
+ * conectada (me.id), SOMENTE SE a coluna estiver vazia/NULL. Idempotente e seguro
+ * para rodar em todo evento WORKING (Missão pós-023: clones novos nasciam sem
+ * destino de alerta; o cancelamento escalado se perdia — não havia nada que
+ * gravasse o telefone do dono no momento da conexão).
+ *
+ * REGRAS:
+ *  - NUNCA sobrescreve valor já preenchido (respeita override manual / backfill 050).
+ *    O guard `alert_owner_phone IS NULL OR alert_owner_phone = ''` garante isso no
+ *    próprio UPDATE (não em read-then-write — sem TOCTOU).
+ *  - Escopado por `slot` (âncora do tenant; flow_clones é a tabela-âncora — não há
+ *    risco de cross-tenant pois 1 slot = 1 clone).
+ *  - O telefone JÁ vem normalizado (dígitos puros) do chamador. Mesmo assim, defensa
+ *    em profundidade: rejeita < 8 dígitos (não grava lixo).
+ *  - SQL parametrizado com placeholders DISTINTOS ($1 phone, $2 slot) — nunca reusa
+ *    o mesmo placeholder (lição ADR 0018 F2 / #309: "inconsistent types deduced for
+ *    parameter $1").
+ *
+ * @returns true se ESTE chamada gravou o número (estava vazio); false se já havia
+ *          valor (no-op) ou o slot não é um clone.
+ */
+export async function setCloneAlertOwnerPhoneIfEmpty(
+  slot: string,
+  phoneOrMeId: string,
+): Promise<boolean> {
+  // meIdToDigits corta sufixo de device (":12") e domínio ("@c.us"/"@s.whatsapp.net")
+  // ANTES de limpar não-dígitos — replace(/\D/g) sozinho deixaria o "12" do device
+  // colado no número. Preserva o 9 (NÃO usa canonicalE164).
+  const digits = meIdToDigits(phoneOrMeId ?? '');
+  if (!digits || digits.length < 8) return false; // não grava número inválido/curto
+
+  const r = await query<{ slot: string }>(
+    `UPDATE flow_clones
+        SET alert_owner_phone = $1, updated_at = NOW()
+      WHERE slot = $2
+        AND (alert_owner_phone IS NULL OR alert_owner_phone = '')
+      RETURNING slot`,
+    [digits, slot],
+  );
+  const updated = (r.rowCount ?? 0) > 0;
+  if (updated) invalidateCloneCache({ slot });
+  return updated;
 }
 
 // ---------------------------------------------------------------------------

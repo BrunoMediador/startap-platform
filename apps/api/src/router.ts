@@ -226,12 +226,13 @@ export async function handleWebhook(
     return { status: 'ignored:no-phone' };
   }
 
-  // 3-pre. Blocklist GLOBAL de números internos (ex.: sessão ALERTAS / 7411).
-  // Vale pra TODOS os clones (atuais e futuros): mora aqui, no router compartilhado,
-  // ANTES de antibot/routing/IA/GCal. Se um número operacional interno mandar mensagem
-  // pra qualquer bot -> ignora total (não responde, não chama IA, não toca GCal).
-  // Configurável por env BOT_BLOCKLIST_NUMBERS (default já inclui o 7411). Números do
-  // time/teste (Bruno etc.) NÃO entram na lista — ver lib/bot-blocklist.ts.
+  // 3-pre. Blocklist GLOBAL de números internos (o remetente da sessão ALERTAS,
+  // 553598373138). Vale pra TODOS os clones (atuais e futuros): mora aqui, no router
+  // compartilhado, ANTES de antibot/routing/IA/GCal. Se o número operacional interno
+  // mandar mensagem pra qualquer bot (ex.: o alerta que chega no próprio número da
+  // barbearia) -> ignora total (não responde, não chama IA, não toca GCal).
+  // Configurável por env BOT_BLOCKLIST_NUMBERS (default já inclui o remetente da
+  // ALERTAS). Números do time/teste (Bruno etc.) NÃO entram — ver lib/bot-blocklist.ts.
   if (isBlockedNumber(telefone)) {
     log.info({ ...baseLog }, 'Número da blocklist interna ignorado');
     await flowExecutionLog.logFlowEvent({
