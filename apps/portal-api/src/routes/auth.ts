@@ -205,6 +205,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // presente (boolean), independente de product_type — o front liga/desliga o
       // menu por ele. !! garante boolean mesmo se a config vier indefinida.
       atendimentos_enabled: !!config.ATENDIMENTOS_ENABLED,
+      // Flag do billing derivado da agenda (ADR 0027). SEMPRE presente (boolean) — o
+      // front gateia as ABAS previsão/faturado por ela (criar-no-agendamento da Fase B2
+      // também). !! garante boolean mesmo se a config vier indefinida.
+      atend_from_agenda: !!config.ATEND_FROM_AGENDA,
       // Só envia os campos quando a feature está ON E o cliente é estabelecimento.
       // Ausentes = individual (o front trata ausência como 'individual').
       ...(productType === 'estabelecimento'
