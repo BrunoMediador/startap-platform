@@ -4071,9 +4071,6 @@ app.put('/api/clones/:id/gcal', async (req, res) => {
   if (!credentials_json || typeof credentials_json !== 'string') {
     return res.status(400).json({ error: 'credentials_json obrigatório' });
   }
-  if (!calendar_id || typeof calendar_id !== 'string') {
-    return res.status(400).json({ error: 'calendar_id obrigatório' });
-  }
 
   let parsed;
   try {
@@ -4085,9 +4082,28 @@ app.put('/api/clones/:id/gcal', async (req, res) => {
     return res.status(400).json({ error: 'credentials_json: deve ser do tipo service_account' });
   }
 
+  // No estabelecimento, o calendarId do CLONE é ignorado pelo bot — cada colaborador
+  // tem o seu (clone_colaboradores.gcal_calendar_id). Aqui só gravamos a Service
+  // Account do clone, sem exigir calendar_id. No individual, calendar_id segue obrigatório.
+  let productType;
+  try {
+    const meta = await pool.query(`SELECT product_type FROM flow_clones WHERE id = $1`, [id]);
+    if (!meta.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    productType = meta.rows[0].product_type;
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+  const isEstabelecimento = productType === 'estabelecimento';
+  if (!isEstabelecimento && (!calendar_id || typeof calendar_id !== 'string')) {
+    return res.status(400).json({ error: 'calendar_id obrigatório' });
+  }
+  // calendar_id é opcional no estabelecimento; quando ausente, gravamos NULL.
+  const calendarIdValue =
+    calendar_id && typeof calendar_id === 'string' ? calendar_id.trim() : null;
+
   const clientEmail = parsed.client_email ?? null;
   // Loga apenas o client_email — nunca a chave privada
-  console.log(`[gcal] PUT clone ${id}: client_email=${clientEmail}`);
+  console.log(`[gcal] PUT clone ${id} (${productType}): client_email=${clientEmail}`);
 
   try {
     const r = await pool.query(
@@ -4101,7 +4117,7 @@ app.put('/api/clones/:id/gcal', async (req, res) => {
               updated_at            = NOW()
         WHERE id = $4
         RETURNING id, slot, gcal_client_email, gcal_calendar_id, gcal_status`,
-      [encryptGcalCredentials(credentials_json), clientEmail, calendar_id.trim(), id],
+      [encryptGcalCredentials(credentials_json), clientEmail, calendarIdValue, id],
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
     res.json(r.rows[0]);
@@ -6033,6 +6049,33 @@ app.get('/api/clones/:id/colaboradores', async (req, res) => {
     const resolved = await _resolveCloneScope(req.params.id);
     if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
     const { slot, product_type, seat_cap } = resolved.scope;
+
+    // O clone tem Service Account gravada? Sem ela, NENHUM colaborador agenda de
+    // verdade (getGcalsForSlot retorna [] — per-clone.ts). Usamos isso pra (a)
+    // informar o front (clone_has_sa) e (b) corrigir "active mentiroso" (abaixo).
+    const saRow = await pool.query(
+      `SELECT gcal_credentials_json IS NOT NULL AS has_sa FROM flow_clones WHERE id = $1`,
+      [resolved.scope.id],
+    );
+    const cloneHasSa = saRow.rows[0]?.has_sa === true;
+
+    // BACKFILL leve / corretivo: se o clone NÃO tem SA, qualquer colaborador
+    // marcado 'active' é verde-falso (nunca passou por um teste real possível) —
+    // volta pra 'pending'. Idempotente: só toca linhas active deste slot. Assim,
+    // ex. barber_dragon (3 colabs 'active' fake, clone sem SA) aparece como
+    // "precisa testar" e o operador sabe que falta subir o JSON + testar cada um.
+    if (product_type === 'estabelecimento' && !cloneHasSa) {
+      const fixed = await pool.query(
+        `UPDATE clone_colaboradores
+            SET gcal_status = 'pending', updated_at = NOW()
+          WHERE slot = $1 AND gcal_status = 'active'`,
+        [slot],
+      );
+      if (fixed.rowCount > 0) {
+        console.log(JSON.stringify({ audit: 'colaborador-gcal-active-reset', slot, count: fixed.rowCount, reason: 'clone_sem_service_account', at: new Date().toISOString() }));
+      }
+    }
+
     const r = await pool.query(
       `SELECT id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, created_at, updated_at
          FROM clone_colaboradores WHERE slot = $1 ORDER BY ordem ASC, id ASC`,
@@ -6043,6 +6086,7 @@ app.get('/api/clones/:id/colaboradores', async (req, res) => {
       product_type,
       seat_cap: seat_cap === null ? null : Number(seat_cap),
       usados: ativos,
+      clone_has_sa: cloneHasSa,
       colaboradores: r.rows,
     });
   } catch (e) {
@@ -6068,7 +6112,10 @@ app.post('/api/clones/:id/colaboradores', async (req, res) => {
     const servicos = _pkgNormalizeServicos(req.body?.servicos);
     const ativo = req.body?.ativo === undefined ? true : Boolean(req.body.ativo);
     const ordem = Number.isInteger(Number(req.body?.ordem)) ? Number(req.body.ordem) : 0;
-    const gcalStatus = gcalId ? 'active' : 'pending';
+    // Status SEMPRE nasce 'pending'. Ter um calendarId NÃO prova que a agenda foi
+    // compartilhada com a SA do clone — só o endpoint /gcal/test (que bate no Google)
+    // promove para 'active'. Fim do "badge verde mentiroso".
+    const gcalStatus = 'pending';
 
     await client.query('BEGIN');
     // Teto: conta SO os ativos (vaga ocupada = colaborador ativo). seat_cap NULL = sem teto.
@@ -6122,7 +6169,9 @@ app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
     if (b.gcal_calendar_id !== undefined) {
       const gcalId = b.gcal_calendar_id != null ? String(b.gcal_calendar_id).trim().slice(0, 500) || null : null;
       vals.push(gcalId); sets.push(`gcal_calendar_id = $${vals.length}`);
-      vals.push(gcalId ? 'active' : 'pending'); sets.push(`gcal_status = $${vals.length}`);
+      // Trocar/limpar o calendarId reseta para 'pending' — a confiança de 'active' só
+      // vem do /gcal/test que valida no Google. Nunca promovemos por presença de string.
+      vals.push('pending'); sets.push(`gcal_status = $${vals.length}`);
     }
     if (b.servicos !== undefined) {
       vals.push(JSON.stringify(_pkgNormalizeServicos(b.servicos))); sets.push(`servicos = $${vals.length}::jsonb`);
@@ -6187,6 +6236,97 @@ app.delete('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
     // FK de service_packages.colaborador_id e ON DELETE SET NULL — nao deve bloquear.
     console.error(JSON.stringify({ at: 'colaboradores-delete', pg_code: e?.code, msg: 'falha ao remover colaborador' }));
     res.status(500).json({ error: 'erro ao remover colaborador' });
+  }
+});
+
+// POST /api/clones/:id/colaboradores/:colabId/gcal/test
+// Testa a agenda de UM colaborador no Google de verdade: usa a Service Account do
+// CLONE (flow_clones.gcal_credentials_json) + o calendarId DO COLABORADOR e roda
+// testConnection(). É a ÚNICA via que promove o colaborador para gcal_status='active'.
+// Espelha /api/clones/:id/gcal/test (individual), mas com a creds do clone e o
+// calendarId do colaborador. ADR 0024 §2 (1 SA do clone, N calendarIds).
+app.post('/api/clones/:id/colaboradores/:colabId/gcal/test', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id, product_type } = resolved.scope;
+    if (product_type !== 'estabelecimento') {
+      return res.status(409).json({ error: 'teste por colaborador so existe em clientes do tipo estabelecimento' });
+    }
+    const colabId = Number(req.params.colabId);
+    if (!Number.isInteger(colabId) || colabId <= 0) return res.status(400).json({ error: 'colabId invalido' });
+
+    // Carrega a creds do CLONE + o calendarId do COLABORADOR num JOIN escopado por
+    // slot E tenant_id (anti-IDOR: o colaborador tem que pertencer a este clone/tenant).
+    const r = await pool.query(
+      `SELECT fc.gcal_credentials_json AS clone_creds,
+              fc.gcal_client_email     AS clone_email,
+              cc.gcal_calendar_id      AS colab_calendar_id
+         FROM flow_clones fc
+         JOIN clone_colaboradores cc
+           ON cc.slot = fc.slot AND cc.tenant_id = fc.tenant_id
+        WHERE fc.id = $1 AND cc.id = $2 AND fc.tenant_id = $3`,
+      [resolved.scope.id, colabId, tenant_id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'colaborador nao encontrado neste clone' });
+
+    const { clone_creds, clone_email, colab_calendar_id } = r.rows[0];
+    // Sem a SA do clone não há o que testar — instrui o operador a setar a SA primeiro.
+    if (!clone_creds) {
+      return res.status(422).json({ error: 'clone_sem_service_account' });
+    }
+    if (!colab_calendar_id) {
+      return res.status(400).json({ error: 'colaborador sem gcal_calendar_id — informe o ID da agenda antes de testar' });
+    }
+
+    // Import dinâmico (mesmo padrão do teste individual) — evita dep. circular no legado.
+    let testResult;
+    let decryptedCreds;
+    try {
+      decryptedCreds = decryptGcalCredentials(clone_creds);
+      const { GoogleCalendarClient } = await import(
+        '../packages/integrations/dist/google-calendar/client.js'
+      );
+      const client = new GoogleCalendarClient({
+        credentialsJson: decryptedCreds,
+        calendarId: colab_calendar_id,
+      });
+      testResult = await client.testConnection();
+    } catch (importErr) {
+      testResult = { ok: false, error: `Falha ao carregar cliente GCal: ${importErr.message}` };
+    }
+
+    const newStatus = testResult.ok ? 'active' : 'invalid';
+    console.log(`[gcal] TEST colaborador slot=${slot} colab=${colabId} (${clone_email}): ${newStatus}`);
+
+    // Persiste o status REAL (active só quando o Google respondeu OK). Escopo por slot+id.
+    await pool.query(
+      `UPDATE clone_colaboradores SET gcal_status = $1, updated_at = NOW() WHERE slot = $2 AND id = $3`,
+      [newStatus, slot, colabId],
+    );
+
+    // Invalida o cache in-process do bot runtime quando alcançável (mesmo processo).
+    // No deploy atual o painel roda em processo separado do bot → no-op; o cache do
+    // resolvedor expira em 5min (CACHE_TTL_MS). Tech debt conhecida (ver corpo do PR).
+    try {
+      const perClone = await import('../packages/integrations/dist/google-calendar/per-clone.js');
+      if (typeof perClone.invalidateGcalsForSlot === 'function') {
+        perClone.invalidateGcalsForSlot(slot);
+      }
+    } catch { /* módulo não carregável aqui = ok, TTL cobre */ }
+
+    const enriched = testResult.ok ? null : enrichGcalError(testResult.error, decryptedCreds);
+    res.json({
+      ok: testResult.ok,
+      status: newStatus,
+      error: testResult.ok ? undefined : testResult.error,
+      errorCode: enriched?.code,
+      errorHint: enriched?.hint,
+      errorLink: enriched?.link,
+    });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'colaborador-gcal-test', pg_code: e?.code, msg: 'falha ao testar gcal do colaborador' }));
+    res.status(500).json({ error: 'erro ao testar conexao do colaborador' });
   }
 });
 

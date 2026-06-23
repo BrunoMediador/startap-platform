@@ -8050,8 +8050,87 @@ function _renderGcalTab(opts) {
       </div>`;
   }
 
+  // Estabelecimento: nota explicativa (#330) + estado da Service Account do CLONE +
+  // form pra colar/atualizar o JSON da SA. Depois de salva, mostra o e-mail da SA
+  // em DESTAQUE — é com esse e-mail que o operador compartilha as agendas dos barbeiros.
+  function _renderEstabelecimentoView(data) {
+    _renderEstabelecimentoNote();
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:.875rem;margin-top:.875rem;padding-top:.875rem;border-top:1px solid var(--border)';
+    const hasSA = !!data.gcal_client_email;
+    const saEmail = data.gcal_client_email || '';
+
+    const saBlockHtml = hasSA ? `
+      <div style="padding:.75rem 1rem;background:var(--success-bg);border:1px solid var(--success);border-radius:var(--radius-md)">
+        <div style="font-weight:600;margin-bottom:.375rem;display:flex;gap:.5rem;align-items:center"><span style="color:var(--success)">${icon('check-circle-2', 18)}</span> Robô (Service Account) do salão conectado</div>
+        <p class="muted" style="margin:0 0 .5rem;font-size:.8125rem;line-height:1.5">Compartilhe <strong>a agenda de cada barbeiro</strong> com este e-mail no Google Calendar (permissão <strong>"Fazer alterações nos eventos"</strong>):</p>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+          <code id="estab-sa-email" style="font-size:.85rem;background:var(--surface-2);padding:.375rem .625rem;border-radius:var(--radius-sm);user-select:all;word-break:break-all">${escapeHtml(saEmail)}</code>
+          <button class="btn btn--sm btn--ghost" id="estab-sa-copy">${icon('copy', 13)} Copiar e-mail</button>
+        </div>
+        <p class="muted" style="margin:.625rem 0 0;font-size:.8125rem;line-height:1.5">Depois, vá na aba <strong>👥 Colaboradores</strong>, cole o ID da agenda de cada barbeiro e clique em <strong>"Testar conexão"</strong> em cada um.</p>
+      </div>` : `
+      <div style="padding:.75rem 1rem;background:var(--surface-2);border:1px dashed var(--warning,#d4a017);border-radius:var(--radius-md)">
+        <div style="font-weight:600;margin-bottom:.25rem">${icon('alert-triangle', 16)} Robô do salão ainda não conectado</div>
+        <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Cole abaixo o <strong>JSON da Service Account</strong> (o "robô" do salão). Enquanto isso não for feito, o bot <strong>não agenda em nenhum barbeiro</strong>, mesmo com as agendas já configuradas.</p>
+      </div>`;
+
+    wrap.innerHTML = `
+      ${saBlockHtml}
+      <details class="gcal-help-block"${hasSA ? '' : ' open'}>
+        <summary>${icon('link-2', 14)} ${hasSA ? 'Trocar o JSON do robô (Service Account)' : 'Conectar o robô do salão (cole o JSON da Service Account)'}</summary>
+        <div class="gcal-help-block__body">
+          ${hasSA ? `<p class="muted">Cole um <strong>novo</strong> JSON para substituir o atual. O e-mail acima muda se a Service Account for outra. Não armazenamos o JSON no formulário.</p>` : `<p class="muted">É o mesmo robô para o salão inteiro — você cria uma vez (veja o tutorial em "Vários colaboradores" acima) e reusa o e-mail dele em todas as agendas.</p>`}
+          <div class="field">
+            <label for="estab-gcal-json-file">JSON da Service Account</label>
+            <input type="file" id="estab-gcal-json-file" accept=".json" style="margin-bottom:.375rem" />
+            <textarea id="estab-gcal-json-text" rows="5" placeholder="Ou cole o JSON aqui" style="font-size:.8125rem;font-family:var(--font-mono,monospace)"></textarea>
+          </div>
+          <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+            <button class="btn btn--primary" id="estab-gcal-save-btn">${icon('save', 14)} ${hasSA ? 'Salvar novo JSON' : 'Conectar robô'}</button>
+          </div>
+        </div>
+      </details>`;
+    container.appendChild(wrap);
+
+    const copyBtn = wrap.querySelector('#estab-sa-copy');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(saEmail); toast('E-mail copiado!', 'success'); }
+        catch { toast('Não foi possível copiar — selecione e copie manualmente.', 'warning'); }
+      });
+    }
+
+    wrap.querySelector('#estab-gcal-json-file').addEventListener('change', (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => { wrap.querySelector('#estab-gcal-json-text').value = e.target.result; };
+      reader.readAsText(file);
+    });
+
+    wrap.querySelector('#estab-gcal-save-btn').addEventListener('click', async () => {
+      const btn = wrap.querySelector('#estab-gcal-save-btn');
+      const jsonText = (wrap.querySelector('#estab-gcal-json-text')?.value || '').trim();
+      if (!jsonText) { toast('Cole o JSON da Service Account.', 'warning'); return; }
+      btn.disabled = true;
+      try {
+        // Estabelecimento: PUT sem calendar_id — o backend grava só a SA do clone.
+        await api(`${baseUrl}/gcal`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credentials_json: jsonText }),
+        });
+        toast('Robô do salão salvo! Agora configure as agendas dos colaboradores.', 'success');
+        loadTab();
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+        btn.disabled = false;
+      }
+    });
+  }
+
   async function loadTab() {
-    if (isEstabelecimento) { _renderEstabelecimentoNote(); return; }
     container.innerHTML = `<div style="padding-top:.75rem;display:flex;justify-content:center"><div class="spinner"></div></div>`;
     let data;
     try {
@@ -8062,6 +8141,11 @@ function _renderGcalTab(opts) {
       container.querySelector('#gcal-retry-btn').addEventListener('click', loadTab);
       return;
     }
+    // Estabelecimento: mostra a nota (#330) + o FORM da Service Account do CLONE.
+    // A SA do clone é compartilhada por todos os colaboradores (1 robô, N agendas).
+    // Sem ela gravada, getGcalsForSlot retorna [] e o bot não agenda em ninguém.
+    // Aqui o calendarId do nível do clone NÃO é pedido — cada colab tem o seu.
+    if (isEstabelecimento) { _renderEstabelecimentoView(data); return; }
     render(data);
   }
 
@@ -8822,17 +8906,39 @@ async function _renderColaboradoresTab(content, clone) {
     : `${data.usados} de ${data.seat_cap} vaga${data.seat_cap === 1 ? '' : 's'} do plano em uso`;
   const cheio = data.seat_cap !== null && data.usados >= data.seat_cap;
 
+  // Sem a Service Account do clone, nenhum colaborador agenda de verdade. O backend
+  // já reseta os 'active' fake (backfill), mas a UI também nunca mostra verde aqui.
+  const cloneHasSa = data.clone_has_sa === true;
+
   const linhas = (data.colaboradores || []).map(c => {
     const svcs = Array.isArray(c.servicos) && c.servicos.length
       ? c.servicos.map(s => `<span class="badge badge--muted" style="font-size:.65rem">${escapeHtml(s)}</span>`).join(' ')
       : '<span class="muted" style="font-size:.72rem">todos / não especificado</span>';
-    const gcalOk = c.gcal_calendar_id && String(c.gcal_calendar_id).trim();
+    const hasCalId = c.gcal_calendar_id && String(c.gcal_calendar_id).trim();
+    // Badge reflete o gcal_status REAL (não a mera presença do calendarId):
+    //  - clone sem SA              → "Precisa testar" (warning) — nunca verde sem robô
+    //  - sem calendarId            → "Sem agenda" (warning)
+    //  - calendarId mas pending    → "Não testada" (warning) — precisa do Testar conexão
+    //  - active (passou no teste)  → "Agenda OK" (success)
+    //  - invalid (falhou o teste)  → "Agenda com erro" (danger)
+    let gcalBadge;
+    if (!hasCalId) {
+      gcalBadge = `<span class="badge badge--warning" style="font-size:.62rem">${icon('alert-triangle',10)} Sem agenda</span>`;
+    } else if (!cloneHasSa) {
+      gcalBadge = `<span class="badge badge--warning" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('alert-triangle',10)} Precisa testar</span>`;
+    } else if (c.gcal_status === 'active') {
+      gcalBadge = `<span class="badge badge--success" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('calendar',10)} Agenda OK</span>`;
+    } else if (c.gcal_status === 'invalid') {
+      gcalBadge = `<span class="badge badge--danger" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('x-circle',10)} Agenda com erro</span>`;
+    } else {
+      gcalBadge = `<span class="badge badge--warning" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('alert-triangle',10)} Não testada</span>`;
+    }
     return `
       <div class="colab-row" data-colab-id="${c.id}" style="border:1px solid var(--border);border-radius:var(--radius-md);padding:.65rem .75rem;display:flex;flex-direction:column;gap:.4rem;${c.ativo ? '' : 'opacity:.6'}">
         <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
           <strong>${escapeHtml(c.nome)}</strong>
           ${c.ativo ? '<span class="badge badge--success" style="font-size:.62rem">Ativo</span>' : '<span class="badge badge--muted" style="font-size:.62rem">Inativo</span>'}
-          ${gcalOk ? `<span class="badge badge--success" style="font-size:.62rem" title="${escapeHtml(c.gcal_calendar_id)}">${icon('calendar',10)} Agenda OK</span>` : `<span class="badge badge--warning" style="font-size:.62rem">${icon('alert-triangle',10)} Sem agenda</span>`}
+          ${gcalBadge}
           <span style="margin-left:auto;display:flex;gap:.35rem">
             <button class="btn btn--sm colab-edit" data-id="${c.id}">${icon('settings',13)} Editar</button>
             <button class="btn btn--sm btn--ghost btn--icon colab-del" data-id="${c.id}" style="color:var(--danger)" aria-label="Remover ${escapeHtml(c.nome)}">${icon('trash-2',13)}</button>
@@ -8842,8 +8948,19 @@ async function _renderColaboradoresTab(content, clone) {
       </div>`;
   }).join('');
 
+  // Aviso no topo quando o robô (SA) do salão ainda não foi configurado: sem ele,
+  // testar agenda de colaborador retorna 422 e o bot não agenda em ninguém.
+  const saWarnHtml = (data.product_type === 'estabelecimento' && !cloneHasSa) ? `
+      <div style="padding:.65rem .85rem;background:var(--surface-2);border:1px dashed var(--warning,#d4a017);border-radius:var(--radius-md);display:flex;gap:.6rem;align-items:flex-start">
+        <span style="color:var(--warning,#d4a017);flex-shrink:0">${icon('alert-triangle', 18)}</span>
+        <div style="font-size:.82rem;line-height:1.5">
+          <strong>O robô do salão (Service Account) ainda não foi configurado.</strong> Vá na aba <strong>Google Calendar</strong> deste clone, cole o JSON da Service Account e copie o e-mail do robô. Só então as agendas dos colaboradores podem ser testadas e usadas pelo bot.
+        </div>
+      </div>` : '';
+
   content.innerHTML = `
     <div style="padding-top:.5rem;display:flex;flex-direction:column;gap:.875rem">
+      ${saWarnHtml}
       <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
         <span class="badge ${cheio ? 'badge--warning' : 'badge--muted'}">${icon('users',12)} ${escapeHtml(vagasLabel)}</span>
         <button class="btn btn--primary btn--sm" id="colab-add-btn" ${cheio ? 'disabled title="Limite do plano atingido — aumente as vagas em Dados"' : ''} style="margin-left:auto">${icon('plus',13)} Adicionar colaborador</button>
@@ -8883,7 +9000,19 @@ function _renderColaboradorForm(content, clone, colab) {
       <div class="field">
         <label for="colab-gcal">ID da agenda Google (calendarId)</label>
         <input id="colab-gcal" type="text" maxlength="500" value="${escapeHtml(colab?.gcal_calendar_id || '')}" placeholder="colar o ID da agenda Google (ex: abc123@group.calendar.google.com)" />
-        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">Crie uma agenda Google para este colaborador, compartilhe com a conta de serviço e cole o ID aqui. (Criar a agenda automaticamente é um próximo passo — por ora é manual.)</p>
+        <p class="muted" style="font-size:.72rem;margin:.25rem 0 0">Crie uma agenda Google para este colaborador, compartilhe com a conta de serviço (mesmo e-mail do robô do salão, na aba Google Calendar) e cole o ID aqui. (Criar a agenda automaticamente é um próximo passo — por ora é manual.)</p>
+        ${isEdit ? `
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem">
+          <button type="button" class="btn btn--sm" id="colab-gcal-test">${icon('zap',13)} Testar conexão</button>
+          <span id="colab-gcal-test-status">${(() => {
+            if (!colab?.gcal_calendar_id) return '<span class="muted" style="font-size:.72rem">Salve o ID da agenda e teste para validar no Google.</span>';
+            if (colab.gcal_status === 'active') return `<span class="badge badge--success" style="font-size:.62rem">${icon('check-circle-2',10)} Conectada</span>`;
+            if (colab.gcal_status === 'invalid') return `<span class="badge badge--danger" style="font-size:.62rem">${icon('x-circle',10)} Com erro — re-teste</span>`;
+            return `<span class="badge badge--warning" style="font-size:.62rem">${icon('alert-triangle',10)} Não testada</span>`;
+          })()}</span>
+        </div>
+        <div id="colab-gcal-test-hint"></div>` : `
+        <p class="muted" style="font-size:.72rem;margin:.375rem 0 0">${icon('info',11)} Para testar a conexão desta agenda no Google, salve o colaborador primeiro e depois clique em "Editar".</p>`}
       </div>
       <div class="field">
         <label>Serviços que faz</label>
@@ -8904,6 +9033,62 @@ function _renderColaboradorForm(content, clone, colab) {
       </div>
     </form>`;
   wrap.querySelector('#colab-cancel').addEventListener('click', () => { wrap.innerHTML = ''; });
+
+  // Testar conexão da agenda deste colaborador no Google (só em modo edição, pois
+  // precisa de um colabId persistido). Salva o calendarId atual do campo antes,
+  // pra testar exatamente o que está na tela, e mostra status + hint REAIS.
+  const testBtn = wrap.querySelector('#colab-gcal-test');
+  if (testBtn && isEdit && colab) {
+    testBtn.addEventListener('click', async () => {
+      const statusEl = wrap.querySelector('#colab-gcal-test-status');
+      const hintEl = wrap.querySelector('#colab-gcal-test-hint');
+      const calId = (wrap.querySelector('#colab-gcal').value || '').trim() || null;
+      if (!calId) { toast('Informe o ID da agenda antes de testar.', 'warning'); return; }
+      testBtn.disabled = true;
+      if (statusEl) statusEl.innerHTML = `<span class="muted" style="font-size:.72rem">${icon('refresh-cw',11)} testando…</span>`;
+      if (hintEl) hintEl.innerHTML = '';
+      try {
+        // Persiste o calendarId atual antes de testar (zera p/ 'pending' no backend).
+        await api(`/api/clones/${clone.id}/colaboradores/${colab.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gcal_calendar_id: calId }),
+        });
+        const result = await api(`/api/clones/${clone.id}/colaboradores/${colab.id}/gcal/test`, { method: 'POST' });
+        if (result.ok) {
+          if (statusEl) statusEl.innerHTML = `<span class="badge badge--success" style="font-size:.62rem">${icon('check-circle-2',10)} Conectada</span>`;
+          toast('Agenda do colaborador conectada!', 'success');
+        } else {
+          if (statusEl) statusEl.innerHTML = `<span class="badge badge--danger" style="font-size:.62rem">${icon('x-circle',10)} Com erro</span>`;
+          if (hintEl && result.errorHint) {
+            const linkHtml = result.errorLink
+              ? `<a href="${escapeHtml(result.errorLink)}" target="_blank" rel="noopener" class="btn btn--sm" style="margin-top:.5rem;display:inline-block">${icon('external-link', 13)} Abrir no Google</a>`
+              : '';
+            const codeLabel = result.errorCode ? `<code style="font-size:.7rem;background:var(--surface-2);padding:.0625rem .25rem;border-radius:3px;margin-left:.375rem">${escapeHtml(result.errorCode)}</code>` : '';
+            hintEl.innerHTML = `
+              <div style="margin-top:.5rem;padding:.625rem .75rem;background:rgba(255,107,94,.08);border-left:3px solid var(--danger);border-radius:var(--radius-sm)">
+                <div style="font-weight:600;margin-bottom:.25rem;color:var(--danger);font-size:.82rem">${icon('alert-triangle', 13)} Como resolver${codeLabel}</div>
+                <p style="margin:0;font-size:.8rem;line-height:1.5">${escapeHtml(result.errorHint)}</p>
+                ${linkHtml}
+                <details style="margin-top:.4rem"><summary class="muted" style="font-size:.72rem;cursor:pointer">Ver erro técnico</summary><div class="muted" style="font-size:.72rem;margin-top:.25rem;word-break:break-word">${escapeHtml(result.error || '')}</div></details>
+              </div>`;
+          }
+          toast('Falha na conexão da agenda. Veja a instrução.', 'danger');
+        }
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = `<span class="badge badge--danger" style="font-size:.62rem">${icon('x-circle',10)} Erro</span>`;
+        // 422 = clone sem Service Account: orienta a configurar o robô do salão antes.
+        const msg = /clone_sem_service_account/.test(err.message)
+          ? 'O robô do salão (Service Account) ainda não foi configurado. Vá na aba Google Calendar deste clone e cole o JSON da Service Account primeiro.'
+          : ('Erro ao testar: ' + err.message);
+        if (hintEl) hintEl.innerHTML = `<p class="muted" style="font-size:.78rem;margin-top:.4rem;color:var(--danger)">${escapeHtml(msg)}</p>`;
+        toast(msg, 'danger');
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
+
   wrap.querySelector('#colab-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const btn = ev.target.querySelector('[type=submit]');
