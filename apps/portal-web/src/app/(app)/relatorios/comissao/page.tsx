@@ -84,7 +84,7 @@ export default function ComissaoPage() {
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-display text-[15px] font-semibold text-ink">
-                      {p.profissional_nome}
+                      {p.profissional_nome ?? 'Sem profissional'}
                     </div>
                     <div className="text-[12.5px] text-ink-soft">
                       {p.count} {p.count === 1 ? 'atendimento' : 'atendimentos'}

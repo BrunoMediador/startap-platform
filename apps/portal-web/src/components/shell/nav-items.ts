@@ -3,10 +3,11 @@
  * e na sidebar (>=md): Inicio, Conectar, Servicos, Horarios, Pausas, Mensalidade.
  *
  * "Conectar" (2a posicao) e GATED pela feature de reconexao: so aparece quando
- * GET /portal/conexao responde `enabled:true` (campo `gated:'conexao'`). Quando
- * visivel, ganha um badge-dot vermelho enquanto a sessao nao esta WORKING — a
- * regra de exibicao do dot vive no shell (sidebar/bottom-nav), que ja consulta
- * o estado da conexao.
+ * GET /portal/conexao responde `enabled:true` (gate `'conexao'` no array `gated`).
+ * Quando visivel, ganha um badge-dot vermelho enquanto a sessao nao esta WORKING
+ * — a regra de exibicao do dot vive no shell (sidebar/bottom-nav), que ja
+ * consulta o estado da conexao. Itens com `gated` so aparecem quando TODOS os
+ * gates do array passam (ver use-conexao-nav).
  */
 import {
   IconCalendar,

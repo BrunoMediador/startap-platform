@@ -490,7 +490,8 @@ export interface AtendimentoRow {
   servico_nome: string | null;
   valor_cents: number;
   desconto_cents: number;
-  forma_pagamento: FormaPagamento;
+  // O backend permite forma nula (lançamento sem forma informada). Tratar no render.
+  forma_pagamento: FormaPagamento | null;
   colaborador_id: number | null;
   comissao_pct: string;
   cliente_nome: string | null;
@@ -524,14 +525,16 @@ export interface CriarAtendimentoResponse {
 // Relatório de faturamento (GET /portal/relatorios/faturamento?de=&ate=).
 
 export interface FaturamentoPorForma {
-  forma_pagamento: FormaPagamento;
+  // null = atendimentos sem forma informada (agrupados num bucket "Sem forma").
+  forma_pagamento: FormaPagamento | null;
   total_cents: number;
   count: number;
 }
 
 export interface FaturamentoPorProfissional {
-  colaborador_id: number;
-  profissional_nome: string;
+  // No SOLO (sem colaborador) ambos vêm null — render usa fallback "Sem profissional".
+  colaborador_id: number | null;
+  profissional_nome: string | null;
   total_cents: number;
   count: number;
 }
@@ -549,8 +552,10 @@ export interface FaturamentoReport {
 // Relatório de comissão (GET /portal/relatorios/comissao?de=&ate=). SOLO = vazio.
 
 export interface ComissaoPorProfissional {
+  // O backend de comissão filtra colaborador_id IS NOT NULL — id é sempre presente.
+  // `profissional_nome` ainda pode vir null (nome apagado); render usa fallback.
   colaborador_id: number;
-  profissional_nome: string;
+  profissional_nome: string | null;
   comissao_cents: number;
   count: number;
 }

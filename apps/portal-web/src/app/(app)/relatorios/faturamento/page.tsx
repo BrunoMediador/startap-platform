@@ -33,6 +33,16 @@ const FORMA_LABEL: Record<FormaPagamento, string> = {
   outro: 'Outro',
 };
 
+/** Rótulo da forma de pagamento, com fallback pra null (lançamento sem forma). */
+function formaLabel(forma: FormaPagamento | null): string {
+  return forma ? FORMA_LABEL[forma] : 'Sem forma';
+}
+
+/** Nome do profissional, com fallback pra null (SOLO = sem colaborador). */
+function profissionalLabel(nome: string | null): string {
+  return nome ?? 'Sem profissional';
+}
+
 function is404(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
 }
@@ -96,10 +106,10 @@ export default function FaturamentoPage() {
               <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
                 {q.data.por_forma_pagamento.map((f) => (
                   <div
-                    key={f.forma_pagamento}
+                    key={f.forma_pagamento ?? 'sem-forma'}
                     className="flex items-center gap-3 border-b border-line-soft px-[15px] py-3.5 last:border-b-0"
                   >
-                    <Badge tone="info">{FORMA_LABEL[f.forma_pagamento]}</Badge>
+                    <Badge tone="info">{formaLabel(f.forma_pagamento)}</Badge>
                     <span className="text-[12.5px] text-ink-soft">
                       {f.count} {f.count === 1 ? 'atendimento' : 'atendimentos'}
                     </span>
@@ -124,12 +134,12 @@ export default function FaturamentoPage() {
               <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
                 {q.data.por_profissional.map((p) => (
                   <div
-                    key={p.colaborador_id}
+                    key={p.colaborador_id ?? 'solo'}
                     className="flex items-center gap-3 border-b border-line-soft px-[15px] py-3.5 last:border-b-0"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-display text-[15px] font-semibold text-ink">
-                        {p.profissional_nome}
+                        {profissionalLabel(p.profissional_nome)}
                       </div>
                       <div className="text-[12.5px] text-ink-soft">
                         {p.count} {p.count === 1 ? 'atendimento' : 'atendimentos'}
