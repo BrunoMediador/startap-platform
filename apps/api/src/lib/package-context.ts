@@ -123,6 +123,11 @@ export function buildSeuPacoteBlock(credits: ClientPackageCredit[]): string {
     'Regras: só desconta sessão de pacote ATIVO que cobre o serviço pedido. ' +
       'Serviço fora da cobertura, ou pacote EXPIRADO/ESGOTADO, é atendimento avulso (não usa o pacote). ' +
       'Você NUNCA dá baixa no saldo — apenas informa; o desconto é feito pelo sistema ao agendar.',
+    'Seja PROATIVO: quando o cliente pedir um serviço e tiver pacote ATIVO, NÃO decida sozinho. ' +
+      'Se o serviço ESTÁ coberto, PERGUNTE antes de agendar: "Quer usar seu pacote (X de Y sessões, vence DD/MM) ou pagar avulso?". ' +
+      'Se o serviço NÃO está coberto pelo pacote, avise que esse serviço fica avulso e ofereça o avulso. ' +
+      'Quando o cliente perguntar quantas sessões tem, quando vence, o que cobre, ou quanto custou o pacote, ' +
+      'responda com os números/data/preço já prontos acima — nunca invente nem recalcule.',
   ].join('\n');
 }
 

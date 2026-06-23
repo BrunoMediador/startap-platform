@@ -158,6 +158,92 @@ describe('buildSeuPacoteBlock', () => {
     const b = buildSeuPacoteBlock([credit({ servicos_cobertos: [] })]);
     expect(b).toContain('sem serviços vinculados');
   });
+
+  /**
+   * EVAL — proatividade de pacote (regra de ouro: não mexer em pacote sem eval).
+   * Golden cases sobre o CONTEXTO/INSTRUÇÃO montado (sem LLM real — o repo não tem
+   * harness de LLM). Cada caso = uma intenção do cliente; o assert garante que o
+   * bloco injetado carrega a informação/instrução que faz o bot responder certo.
+   */
+  describe('EVAL proatividade — instrução + dados prontos no bloco injetado', () => {
+    // 1) instrução de proatividade presente (pergunta pacote vs avulso, não decide sozinho)
+    it('pacote ativo: instrui PERGUNTAR pacote vs avulso (não deduz silenciosamente)', () => {
+      const b = buildSeuPacoteBlock([credit()]);
+      expect(b).toContain('Seja PROATIVO');
+      expect(b).toMatch(/pagar avulso/);
+      expect(b).toContain('NÃO decida sozinho');
+    });
+
+    // 2) serviço NÃO coberto: instrui avisar avulso e oferecer
+    it('serviço fora do pacote: instrui avisar avulso e oferecer o avulso', () => {
+      const b = buildSeuPacoteBlock([credit({ servicos_cobertos: ['Corte'] })]);
+      expect(b).toContain('NÃO está coberto');
+      expect(b).toContain('avise');
+      expect(b).toContain('avulso');
+    });
+
+    // 3) "quanto tenho de pacote?" → saldo pronto no bloco
+    it('"quanto tenho?": saldo X de Y já pronto (bot lê, não recalcula)', () => {
+      const b = buildSeuPacoteBlock([credit({ sessoes_restantes: 2, sessoes_total: 5 })]);
+      expect(b).toContain('2 de 5 sessões restantes');
+      expect(b).toContain('nunca invente nem recalcule');
+    });
+
+    // 4) "quando vence?" → validade BR pronta
+    it('"quando vence?": validade em DD/MM/AAAA pronta', () => {
+      const b = buildSeuPacoteBlock([credit({ data_expiracao: '2026-08-15' })]);
+      expect(b).toContain('válido até 15/08/2026');
+      expect(b).toMatch(/quando vence/i);
+    });
+
+    // 5) "esse corte é do meu pacote?" → cobertura listada
+    it('"esse corte é do pacote?": cobertura explícita no bloco', () => {
+      const b = buildSeuPacoteBlock([credit({ servicos_cobertos: ['Corte', 'Barba'] })]);
+      expect(b).toContain('cobre: Corte, Barba');
+      expect(b).toMatch(/o que cobre/i);
+    });
+
+    // 6) "quanto custou?" → instrução de informar preço (preço em si vem do #340)
+    it('"quanto custou?": instrui informar preço pronto (não inventa)', () => {
+      const b = buildSeuPacoteBlock([credit()]);
+      expect(b).toMatch(/quanto custou/i);
+      expect(b).toContain('preço');
+    });
+
+    // 7) a pergunta sugerida traz X/Y e validade (parâmetros corretos)
+    it('a pergunta sugerida referencia sessões e data de validade', () => {
+      const b = buildSeuPacoteBlock([credit()]);
+      expect(b).toMatch(/sessões.*vence/);
+      expect(b).toContain('Quer usar seu pacote');
+    });
+
+    // 8) EXPIRADO: NÃO oferece pacote (cai em avulso) — proatividade não fura validade
+    it('pacote EXPIRADO: bloco mantém "NÃO pode ser usado" (proatividade respeita validade)', () => {
+      const b = buildSeuPacoteBlock([credit({ estado: 'EXPIRADO', data_expiracao: '2024-01-10' })]);
+      expect(b).toContain('EXPIRADO em 10/01/2024');
+      expect(b).toContain('NÃO pode ser usado');
+      // a instrução de proatividade segue presente (vale p/ outros pacotes ativos do cliente)
+      expect(b).toContain('Seja PROATIVO');
+    });
+
+    // 9) ESGOTADO: idem — não oferece desconto de saldo zerado
+    it('pacote ESGOTADO: bloco marca esgotado e não promete pacote', () => {
+      const b = buildSeuPacoteBlock([credit({ estado: 'ESGOTADO', sessoes_restantes: 0 })]);
+      expect(b).toContain('ESGOTADO');
+      expect(b).toContain('NÃO pode ser usado');
+    });
+
+    // 10) múltiplos pacotes: a instrução aparece UMA vez (no rodapé), não por linha
+    it('múltiplos pacotes: instrução de proatividade aparece só uma vez (rodapé)', () => {
+      const b = buildSeuPacoteBlock([
+        credit({ nome: 'Pacote Cortes' }),
+        credit({ nome: 'Pacote Barba', servicos_cobertos: ['Barba'] }),
+      ]);
+      expect(b.match(/Seja PROATIVO/g)?.length).toBe(1);
+      expect(b).toContain('Pacote Cortes');
+      expect(b).toContain('Pacote Barba');
+    });
+  });
 });
 
 describe('servicoFromSummary — fallback de nome do serviço', () => {
