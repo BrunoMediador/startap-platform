@@ -12,9 +12,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 /**
- * Replica a decisão de gcal_status ao GRAVAR um colaborador (POST/PATCH).
- * Regra nova: presença de calendarId NÃO promove a 'active' — sempre 'pending'.
+ * Replica a decisão de gcal_status ao GRAVAR um calendarId NOVO/alterado/limpo
+ * (POST, ou PATCH que muda o calendarId).
+ * Regra: presença de calendarId NÃO promove a 'active' — fica 'pending'.
  * Só o endpoint /gcal/test (que bate no Google) promove a 'active'.
+ * (PATCH que reenvia o MESMO calendarId preserva o status — ver
+ *  colaborador-patch-gcal-status.test.js.)
  */
 function statusAoGravarColaborador() {
   return 'pending';
