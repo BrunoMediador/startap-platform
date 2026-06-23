@@ -434,3 +434,198 @@ describe('DELETE /portal/agendamentos/:eventId — erros', () => {
     await app.close();
   });
 });
+
+// ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
+//
+// Foco: caminho feliz (remarca via patchEvent no MESMO eventId, sem delete+create),
+// guarda anti-IDOR (eventId fora da agenda do tenant -> 404, NÃO chama patchEvent),
+// e anti-corrida (409 ignorando o PRÓPRIO evento na nova janela).
+
+/** Evento atual do tenant: 10:00-10:30, serviço Corte (30min) no título do bot. */
+function evtAtual(over: Record<string, unknown> = {}) {
+  return {
+    id: 'evt_atual',
+    summary: 'João - Corte | WhatsApp: 5511999990000',
+    start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+    end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+    ...over,
+  };
+}
+
+/**
+ * Client cuja agenda contém `eventos`. listEvents serve TANTO a guarda de
+ * pertencimento (-7/+60d) QUANTO o recheck anti-corrida (janela estreita). Por
+ * default devolve a mesma lista; pode-se sobrescrever via mockImplementationOnce.
+ */
+function gcalClientPatch(eventos: Array<{ id: string }>) {
+  return {
+    listEvents: vi.fn().mockResolvedValue(eventos),
+    patchEvent: vi.fn().mockImplementation((eventId: string, fields: { summary?: string }) =>
+      Promise.resolve({
+        id: eventId,
+        summary: fields.summary ?? 'João - Corte | WhatsApp: 5511999990000',
+        start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+      }),
+    ),
+  };
+}
+
+describe('PATCH /portal/agendamentos/:eventId — caminho feliz', () => {
+  it('200: remarca hora via patchEvent no MESMO eventId (não delete+create)', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.agendamento.id).toBe('evt_atual'); // MESMO eventId preservado
+    // patchEvent chamado com a nova janela (11:00 BRT, 30min) e MESMO eventId.
+    expect(client.patchEvent).toHaveBeenCalledTimes(1);
+    const [eventId, fields] = client.patchEvent.mock.calls[0];
+    expect(eventId).toBe('evt_atual');
+    expect(fields.startISO).toBe(zonedWallTimeToUtc(FUTURO, 11 * 60).toISOString());
+    expect(fields.endISO).toBe(zonedWallTimeToUtc(FUTURO, 11 * 60 + 30).toISOString());
+    // Só hora mudou → título NÃO é reescrito (preserva summary atual).
+    expect(fields.summary).toBeUndefined();
+    expect(getGcalForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('200: muda serviço recompõe o título preservando nome e telefone do título atual', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte + barba' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, fields] = client.patchEvent.mock.calls[0];
+    // Recompõe: nome+telefone vêm do título atual, serviço é o novo.
+    expect(fields.summary).toBe('João - Corte + barba | WhatsApp: 5511999990000');
+    // Não mudou data/hora → sem start/end no patch.
+    expect(fields.startISO).toBeUndefined();
+    await app.close();
+  });
+
+  it('400: body sem nenhum campo → payload_invalido', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('payload_invalido');
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('PATCH /portal/agendamentos/:eventId — guarda anti-IDOR', () => {
+  it('404: eventId fora da agenda do tenant — NÃO chama patchEvent', async () => {
+    // Agenda do tenant só tem evt_atual; cliente tenta editar evento de outro tenant.
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_de_outro_tenant',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('evento_nao_encontrado');
+    // CRÍTICO: nada é editado quando o evento não pertence ao tenant.
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('PATCH /portal/agendamentos/:eventId — anti-corrida (409)', () => {
+  it('409 ocupado: novo horário tomado por OUTRO evento — ignora o próprio', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    // 1ª listEvents = guarda de pertencimento (encontra evt_atual).
+    // 2ª listEvents = recheck da nova janela: além do PRÓPRIO evento (que deve ser
+    // ignorado), há um OUTRO evento ocupando 11:00 → conflito.
+    client.listEvents.mockResolvedValueOnce([evtAtual()]).mockResolvedValueOnce([
+      evtAtual({
+        start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+      }),
+      {
+        id: 'evt_outro',
+        summary: 'Maria - Corte | WhatsApp: 5511888880000',
+        start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+      },
+    ]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflito');
+    expect(res.json().reason).toBe('ocupado');
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('200: nova janela contém SÓ o próprio evento (auto-overlap ignorado) → remarca', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    // 1ª = guarda; 2ª = recheck onde a janela contém apenas o próprio evento
+    // (ex.: remarca dentro do mesmo bloco) → NÃO é conflito.
+    client.listEvents.mockResolvedValueOnce([evtAtual()]).mockResolvedValueOnce([
+      evtAtual({
+        start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+      }),
+    ]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(client.patchEvent).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('409 fora_do_horario: nova hora fora da janela de funcionamento', async () => {
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '08:00' }, // abre 09:00
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe('fora_do_horario');
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+});

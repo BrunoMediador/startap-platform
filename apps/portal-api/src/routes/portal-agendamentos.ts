@@ -86,6 +86,33 @@ const criarAgendamentoSchema = z.object({
   ),
 });
 
+// ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
+//
+// Todos os campos OPCIONAIS, mas o body precisa ter >= 1 (.refine). O eventId é
+// PRESERVADO (remarcar = PATCH, nunca delete+create) — ver patchEvent no client.
+// telefone reusa o mesmo telefoneSchema do POST; '' / null => "limpar telefone"
+// é tratado como undefined (não muda). null/'' não viram "remover telefone".
+const editarAgendamentoSchema = z
+  .object({
+    servico: z.string().trim().min(1).max(80).optional(),
+    data: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD')
+      .optional(),
+    hora: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm')
+      .optional(),
+    cliente_nome: z.string().trim().min(1).max(80).optional(),
+    cliente_telefone: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      telefoneSchema.optional(),
+    ),
+  })
+  .refine((b) => Object.values(b).some((v) => v !== undefined), {
+    message: 'informe ao menos um campo para editar',
+  });
+
 export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/agendamentos', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
@@ -341,4 +368,276 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
   });
+
+  // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -----------------
+  //
+  // O dono edita um horário existente pelo portal: serviço, data/hora e/ou dados
+  // do cliente. REMARCAR = PATCH no MESMO eventId — NUNCA delete+create (preserva
+  // o vínculo do ledger de pacotes, ADR 0025 dívida 5; nenhuma baixa nova ocorre).
+  //
+  // Guarda anti-IDOR IDÊNTICA à do DELETE: re-lista a agenda DO TENANT (-7/+60d,
+  // slot resolvido por getGcalForSlot(slot), nunca por input) e confirma que o
+  // eventId está LÁ. Se não está → 404 e NADA muda. Como cada clone tem agenda/SA
+  // próprias (sem fallback pra matriz), eventId de outro tenant jamais aparece.
+  //
+  // Anti-corrida: recheca a NOVA janela contra o GCal, IGNORANDO o próprio evento,
+  // antes de aplicar → 409 estruturado se colidir; o front recarrega a grade.
+  //
+  // v1 = SÓ clone single-agenda (getGcalForSlot resolve a agenda principal — cobre
+  // todos os clientes de hoje). Estabelecimento multi-colaborador (agenda por
+  // barbeiro, mover entre colaboradores) é FOLLOW-UP explícito, fora de escopo.
+
+  app.patch('/portal/agendamentos/:eventId', { preHandler: withTenant }, async (req, reply) => {
+    const { slot, userId } = requireTenant(req);
+
+    const paramParsed = eventIdParam.safeParse(req.params ?? {});
+    if (!paramParsed.success) {
+      return reply.code(400).send({ error: 'eventId_invalido' });
+    }
+    const { eventId } = paramParsed.data;
+
+    const bodyParsed = editarAgendamentoSchema.safeParse(req.body ?? {});
+    if (!bodyParsed.success) {
+      return reply.code(400).send({
+        error: 'payload_invalido',
+        detalhe: bodyParsed.error.issues[0]?.message ?? 'payload invalido',
+      });
+    }
+    const patch = bodyParsed.data;
+
+    const client = await gcal.getGcalForSlot(slot);
+    if (!client) {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+
+    // Config do tenant — só precisamos validar serviço/horário se data/hora/serviço
+    // mudaram. Mas a duração do serviço (atual ou novo) é necessária pra calcular a
+    // nova janela quando data/hora mudam; então carregamos sempre que houver reagenda.
+    const reagenda = patch.data !== undefined || patch.hora !== undefined;
+    const mudaServico = patch.servico !== undefined;
+
+    let config: Awaited<ReturnType<typeof loadScheduleConfig>> | null = null;
+    if (reagenda || mudaServico) {
+      try {
+        config = await loadScheduleConfig(slot);
+      } catch (err) {
+        log.warn(
+          { slot, err: err instanceof Error ? err.message : 'erro' },
+          'editar agendamento: horarios/servicos nao configurados',
+        );
+        return reply.code(422).send({ error: 'config_ausente' });
+      }
+    }
+
+    const now = new Date();
+    const timeMinGuard = new Date(now.getTime() - DELETE_LOOKBACK_DAYS * 86_400_000).toISOString();
+    const timeMaxGuard = new Date(now.getTime() + DELETE_LOOKAHEAD_DAYS * 86_400_000).toISOString();
+
+    try {
+      // Guarda de pertencimento: o eventId TEM que estar na agenda DESTE tenant.
+      const events = await client.listEvents({ timeMin: timeMinGuard, timeMax: timeMaxGuard });
+      const atual = events.find((e) => e.id === eventId);
+      if (!atual) {
+        log.warn({ slot, userId, eventId }, 'edicao negada: eventId fora da agenda do tenant');
+        return reply.code(404).send({ error: 'evento_nao_encontrado' });
+      }
+
+      // Valida serviço (se mudou) contra a config do tenant.
+      let svc: { name: string; min: number } | undefined;
+      if (mudaServico && config) {
+        const found = config.services.find(
+          (s) => s.name.toLowerCase() === (patch.servico as string).toLowerCase(),
+        );
+        if (!found) {
+          return reply.code(400).send({ error: 'servico_nao_encontrado' });
+        }
+        svc = found;
+      }
+
+      // Recompõe os campos do título a partir do summary atual + o que mudou.
+      const parsedAtual = parseBotSummary(atual.summary ?? '');
+      const novoNome = patch.cliente_nome ?? parsedAtual.nome;
+      const novoServicoNome = svc?.name ?? parsedAtual.servico;
+      const novoTelefone =
+        patch.cliente_telefone !== undefined ? patch.cliente_telefone : parsedAtual.telefone;
+      const mudaTitulo =
+        patch.cliente_nome !== undefined || mudaServico || patch.cliente_telefone !== undefined;
+
+      // ---- Reagendamento: calcula a nova janela e valida + anti-corrida --------
+      let startISO: string | undefined;
+      let endISO: string | undefined;
+
+      if (reagenda) {
+        // config é garantido aqui (reagenda => carregamos config acima).
+        const cfg = config as Awaited<ReturnType<typeof loadScheduleConfig>>;
+        // Deriva a data/hora ATUAL do evento pra preencher o lado que não mudou.
+        const inicioAtualIso = atual.start?.dateTime ?? null;
+        if (!inicioAtualIso) {
+          // Evento all-day ou sem dateTime — não dá pra remarcar por hora. Raro
+          // (o bot/portal sempre cria com dateTime). 422 explícito.
+          return reply.code(422).send({ error: 'evento_sem_horario' });
+        }
+        const partsAtual = nowPartsInTz(new Date(inicioAtualIso));
+        const dataAlvo = patch.data ?? partsAtual.dateKey;
+        const horaAlvoMins = patch.hora !== undefined ? hhmmToMins(patch.hora) : partsAtual.mins;
+
+        const wd = weekdayOfDateKey(dataAlvo);
+        if (wd === null) {
+          return reply.code(400).send({ error: 'payload_invalido', detalhe: 'data inexistente' });
+        }
+
+        // Duração: serviço novo (se mudou) senão o serviço do título atual (lookup
+        // na config); fallback p/ duração do evento atual se o nome não casar.
+        const duracaoMin =
+          svc?.min ??
+          cfg.services.find((s) => s.name.toLowerCase() === novoServicoNome.toLowerCase())?.min ??
+          minutesBetween(atual.start?.dateTime, atual.end?.dateTime);
+        if (!duracaoMin || duracaoMin <= 0) {
+          return reply.code(422).send({ error: 'duracao_indeterminada' });
+        }
+
+        const startMins = horaAlvoMins;
+        const endMins = startMins + duracaoMin;
+
+        // Janela hoje..+60d + piso de 10min pra HOJE (mesma regra do POST).
+        const agora = nowPartsInTz();
+        const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000));
+        if (dataAlvo > limite.dateKey) {
+          return reply
+            .code(400)
+            .send({ error: 'data_fora_da_janela', max_dias: POST_MAX_AHEAD_DAYS });
+        }
+        if (
+          dataAlvo < agora.dateKey ||
+          (dataAlvo === agora.dateKey && startMins < agora.mins + POST_TODAY_FLOOR_MIN)
+        ) {
+          return reply.code(409).send({ error: 'conflito', reason: 'horario_passado' });
+        }
+        const janela = cfg.work[wd];
+        if (!janela || startMins < janela[0] || endMins > janela[1]) {
+          return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
+        }
+
+        const startUtc = zonedWallTimeToUtc(dataAlvo, startMins);
+        const endUtc = zonedWallTimeToUtc(dataAlvo, endMins);
+
+        // Anti-corrida: recheca a NOVA janela IGNORANDO o próprio evento.
+        const existing = await client.listEvents({
+          timeMin: startUtc.toISOString(),
+          timeMax: endUtc.toISOString(),
+        });
+        const conflito = existing.find((ev) => {
+          if (ev.id === eventId) return false; // ignora o próprio evento (mesmo horário)
+          const evStart = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`).getTime();
+          const evEnd = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`).getTime();
+          return evStart < endUtc.getTime() && evEnd > startUtc.getTime();
+        });
+        if (conflito) {
+          log.warn(
+            { slot, userId, eventId, data: dataAlvo, hora: minsToHHmm(startMins) },
+            'edicao bloqueada: slot ocupado na nova janela',
+          );
+          return reply.code(409).send({
+            error: 'conflito',
+            reason: 'ocupado',
+            conflito: {
+              inicio: conflito.start.dateTime ?? conflito.start.date ?? null,
+              fim: conflito.end.dateTime ?? conflito.end.date ?? null,
+            },
+          });
+        }
+
+        startISO = startUtc.toISOString();
+        endISO = endUtc.toISOString();
+      }
+
+      // MESMO formato do bot SÓ se nome/servico/telefone mudaram; senão preserva o
+      // título atual (não reescreve summary à toa).
+      const summary = mudaTitulo
+        ? novoTelefone
+          ? `${novoNome} - ${novoServicoNome} | WhatsApp: ${novoTelefone}`
+          : `${novoNome} - ${novoServicoNome}`
+        : undefined;
+
+      const updated = await client.patchEvent(eventId, {
+        ...(summary !== undefined ? { summary } : {}),
+        ...(startISO !== undefined ? { startISO } : {}),
+        ...(endISO !== undefined ? { endISO } : {}),
+        ...(startISO !== undefined || endISO !== undefined ? { timeZone: TZ } : {}),
+      });
+
+      log.info(
+        {
+          slot,
+          userId,
+          eventId,
+          reagenda,
+          mudaServico,
+          mudaTitulo,
+          phone: novoTelefone ? maskPhone(novoTelefone) : undefined,
+        },
+        'agendamento editado via portal',
+      );
+
+      const agendamento: AgendamentoOut = {
+        id: updated.id ?? eventId,
+        titulo: updated.summary ?? summary ?? atual.summary ?? '(sem titulo)',
+        inicio: updated.start?.dateTime ?? updated.start?.date ?? atual.start?.dateTime ?? null,
+        fim: updated.end?.dateTime ?? updated.end?.date ?? atual.end?.dateTime ?? null,
+      };
+      return reply.code(200).send({ ok: true, agendamento });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'erro';
+      // Idempotência: evento sumiu entre a re-listagem e o patch → 404/410 do Google.
+      if (/HTTP 4(0[49]|10)/.test(msg)) {
+        log.info({ slot, userId, eventId }, 'edicao: evento ja ausente no GCal');
+        return reply.code(404).send({ error: 'evento_nao_encontrado' });
+      }
+      if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
+      log.error({ slot, userId, eventId, err: msg }, 'edicao: falha no GCal');
+      return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
+    }
+  });
 };
+
+/**
+ * Quebra o summary do bot ("Nome - Servico | WhatsApp: numero") em partes pra
+ * recompor o título quando só ALGUNS campos mudam. Tolerante: se o formato não
+ * casar, devolve o texto inteiro como `nome` e os demais vazios (o caller só usa
+ * os pedaços que vai sobrescrever; se o cliente mandou nome+servico+telefone, o
+ * parse nem importa).
+ */
+function parseBotSummary(summary: string): { nome: string; servico: string; telefone?: string } {
+  let telefone: string | undefined;
+  let resto = summary;
+  const waIdx = resto.indexOf('| WhatsApp:');
+  if (waIdx >= 0) {
+    const tel = resto
+      .slice(waIdx + '| WhatsApp:'.length)
+      .trim()
+      .replace(/\D/g, '');
+    telefone = tel.length > 0 ? tel : undefined;
+    resto = resto.slice(0, waIdx).trim();
+  }
+  const sep = resto.indexOf(' - ');
+  if (sep >= 0) {
+    return { nome: resto.slice(0, sep).trim(), servico: resto.slice(sep + 3).trim(), telefone };
+  }
+  return { nome: resto.trim(), servico: '', telefone };
+}
+
+/** Diferença em minutos entre dois ISO dateTimes (ou 0 se faltar algum). */
+function minutesBetween(startIso?: string, endIso?: string): number {
+  if (!startIso || !endIso) return 0;
+  const ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  return Number.isFinite(ms) && ms > 0 ? Math.round(ms / 60_000) : 0;
+}
+
+/** Minutos-do-dia → "HH:mm" (só pra log estruturado). */
+function minsToHHmm(mins: number): string {
+  const h = Math.floor(mins / 60)
+    .toString()
+    .padStart(2, '0');
+  const m = (mins % 60).toString().padStart(2, '0');
+  return `${h}:${m}`;
+}
