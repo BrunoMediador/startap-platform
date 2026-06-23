@@ -20,6 +20,7 @@
  * DTO whitelist (parecer-001): apenas id, titulo, inicio, fim. NAO expor
  * telefone/descricao/summary cru alem do titulo.
  */
+import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { atendimentos, cloneColaboradores } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -250,8 +251,9 @@ async function resolveEventClient(
 //   - apagar -> softDeleteAtendimentoByEvent (some do faturamento)
 //
 // INVARIANTES (críticas):
-//   1. GATING: tudo gated por config.ATEND_FROM_AGENDA. Flag OFF = byte-a-byte como hoje
-//      — nenhuma linha é criada/sincronizada/deletada (o helper nem é chamado).
+//   1. GATING: POR-CLONE via isAtendFromAgendaEnabled(slot, config.ATEND_FROM_AGENDA_SLOTS).
+//      Slot fora da lista (vazia = todos) = byte-a-byte como hoje — nenhuma linha é
+//      criada/sincronizada/deletada (o helper de atendimento nem é chamado).
 //   2. NUNCA QUEBRA O AGENDAMENTO: o agendamento é a função crítica; o billing é DERIVADO.
 //      Cada chamada de helper é envolvida em try/catch AQUI — se o upsert/sync/softDelete
 //      falhar (DB fora, tenant_id ausente, etc.), o erro é LOGADO e a operação de
@@ -265,7 +267,7 @@ async function resolveEventClient(
 
 /**
  * Cria/atualiza a linha de atendimento de um evento recém-criado/remarcado. Gated por
- * ATEND_FROM_AGENDA; ISOLADO em try/catch (nunca lança). `colaboradorId` no estabelecimento
+ * slot (ATEND_FROM_AGENDA_SLOTS); ISOLADO em try/catch (nunca lança). `colaboradorId` no estabelecimento
  * = a agenda do colaborador que recebeu o evento; null no individual (SOLO).
  *
  * `mode` só muda QUAL helper chamamos (mesma semântica de banco — sync é alias do upsert):
@@ -289,7 +291,7 @@ async function hookUpsertAtendimento(args: {
   colaboradorId: number | null;
   mode: 'create' | 'sync';
 }): Promise<void> {
-  if (!config.ATEND_FROM_AGENDA) return;
+  if (!isAtendFromAgendaEnabled(args.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
   try {
     const scope = await cloneColaboradores.getScopeBySlot(args.slot);
     if (!scope.tenant_id) {
@@ -336,12 +338,12 @@ async function hookUpsertAtendimento(args: {
 }
 
 /**
- * Soft-deleta a linha de atendimento de um evento cancelado. Gated por ATEND_FROM_AGENDA;
- * ISOLADO em try/catch (nunca lança). Escopado por slot (helper nunca cruza tenant).
+ * Soft-deleta a linha de atendimento de um evento cancelado. Gated por slot
+ * (ATEND_FROM_AGENDA_SLOTS); ISOLADO em try/catch (nunca lança). Escopado por slot (helper nunca cruza tenant).
  * Idempotente: re-rodar é no-op. Não derruba o cancelamento se falhar.
  */
 async function hookSoftDeleteAtendimento(slot: string, eventId: string): Promise<void> {
-  if (!config.ATEND_FROM_AGENDA) return;
+  if (!isAtendFromAgendaEnabled(slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
   try {
     const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId);
     log.info(
@@ -535,8 +537,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       );
 
       // ── Gancho de billing derivado da agenda (ADR 0027 Fase B2) ────────────
-      // Cria a linha de PREVISÃO do atendimento (origem='agenda'). Gated por
-      // ATEND_FROM_AGENDA e ISOLADO (try/catch interno: nunca derruba o POST). Este é
+      // Cria a linha de PREVISÃO do atendimento (origem='agenda'). Gated por slot
+      // (ATEND_FROM_AGENDA_SLOTS) e ISOLADO (try/catch interno: nunca derruba o POST). Este é
       // o caminho INDIVIDUAL (single-agenda) — colaboradorId = null (SOLO; sem split de
       // comissão). Preço resolvido do catálogo pelo servico (svc.name) dentro do helper.
       await hookUpsertAtendimento({
