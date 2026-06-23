@@ -277,6 +277,36 @@ export class GoogleCalendarClient {
     );
   }
 
+  /**
+   * Edita campos de um evento EXISTENTE via HTTP PATCH (events.patch) — preserva
+   * o MESMO eventId. Usado para remarcar/editar pelo portal sem delete+create.
+   *
+   * Mandar só os campos que mudaram: a API faz merge parcial (PATCH semantics).
+   * start/end vão como { dateTime, timeZone }; se startISO ou endISO vier, o
+   * timeZone (default America/Sao_Paulo) acompanha aquele lado. summary só vai se
+   * informado. Não passar nenhum campo é no-op no chamador (a rota exige ≥1).
+   *
+   * IMPORTANTE (ADR 0025, dívida 5): manter o MESMO eventId é o que evita a dupla
+   * baixa no ledger de pacotes — o vínculo do ledger é UNIQUE(gcal_event_id,reason),
+   * então editar o evento existente NÃO gera novo redeem. NUNCA trocar isto por
+   * delete+create.
+   */
+  async patchEvent(
+    eventId: string,
+    fields: { summary?: string; startISO?: string; endISO?: string; timeZone?: string },
+  ): Promise<CalendarEvent> {
+    const tz = fields.timeZone ?? 'America/Sao_Paulo';
+    const body: Record<string, unknown> = {};
+    if (fields.summary !== undefined) body.summary = fields.summary;
+    if (fields.startISO !== undefined) body.start = { dateTime: fields.startISO, timeZone: tz };
+    if (fields.endISO !== undefined) body.end = { dateTime: fields.endISO, timeZone: tz };
+    return gcalFetch<CalendarEvent>(
+      `/calendars/${encodeURIComponent(this.calendarId)}/events/${eventId}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      () => this.getAccessToken(),
+    );
+  }
+
   /** Testa a conexão tentando listar 1 evento na agenda. */
   async testConnection(): Promise<{ ok: true } | { ok: false; error: string }> {
     try {
