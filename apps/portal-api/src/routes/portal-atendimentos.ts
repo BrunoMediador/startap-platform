@@ -39,7 +39,11 @@ const createSchema = z
     servico_nome: z.string().trim().min(1).max(160).optional(),
     valor_cents: z.number().int().min(0).max(100_000_000), // teto sanidade R$1M
     desconto_cents: z.number().int().min(0).max(100_000_000).optional(),
-    colaborador_id: z.number().int().positive().optional(),
+    // clone_colaboradores.id é BIGSERIAL — o driver pg o serializa como STRING ("4")
+    // na rede; qualquer caller (front, integração) pode reenviar esse id como string.
+    // coerce aceita "4" e 4, coage pra Number, e ainda rejeita lixo ("abc"). Mantém
+    // opcional: SOLO omite colaborador_id (sem split de comissão). Ver fix do 400.
+    colaborador_id: z.coerce.number().int().positive().optional(),
     forma_pagamento: z.enum(FORMAS).optional(),
     cliente_nome: z.string().trim().max(160).optional(),
     cliente_contato: z.string().trim().max(64).optional(),
