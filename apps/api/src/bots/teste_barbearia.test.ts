@@ -36,15 +36,23 @@ const mocks = vi.hoisted(() => ({
   buildSeuPacoteBlock: vi.fn(),
   deduzirPacoteNoAgendamento: vi.fn(),
   servicoFromSummary: vi.fn(),
+  clienteFromSummary: vi.fn(),
   getCloneBySlot: vi.fn(),
+  getScopeBySlot: vi.fn(),
+  upsertAtendimentoFromEvent: vi.fn(),
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
 vi.mock('@startap/db', () => ({
   chatMemory: { loadHistory: mocks.loadHistory },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
-  cloneColaboradores: { getProductType: mocks.getProductType, getArea: mocks.getArea },
+  cloneColaboradores: {
+    getProductType: mocks.getProductType,
+    getArea: mocks.getArea,
+    getScopeBySlot: mocks.getScopeBySlot,
+  },
   flowClones: { getCloneBySlot: mocks.getCloneBySlot },
+  atendimentos: { upsertAtendimentoFromEvent: mocks.upsertAtendimentoFromEvent },
   pausa: {},
 }));
 
@@ -54,6 +62,7 @@ const cfg = {
   IDEMPOTENCY_ACTION_LOCK: false,
   ESTABELECIMENTO_ENABLED: false,
   PACOTES_ENABLED: false,
+  ATEND_FROM_AGENDA: false,
 };
 vi.mock('../config.js', () => ({ config: cfg }));
 
@@ -66,6 +75,7 @@ vi.mock('../lib/package-context.js', () => ({
   buildSeuPacoteBlock: mocks.buildSeuPacoteBlock,
   deduzirPacoteNoAgendamento: mocks.deduzirPacoteNoAgendamento,
   servicoFromSummary: mocks.servicoFromSummary,
+  clienteFromSummary: mocks.clienteFromSummary,
 }));
 vi.mock('../lib/action-lock.js', () => ({
   gcalActionLockKey: () => 'k',
@@ -143,6 +153,7 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -321,6 +332,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -552,6 +564,7 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
   });
@@ -624,6 +637,7 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
     mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
@@ -753,6 +767,7 @@ describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', 
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
     mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
@@ -843,6 +858,241 @@ describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', 
     });
     expect(mocks.deduzirPacoteNoAgendamento).toHaveBeenCalledWith(
       expect.objectContaining({ usaPacote: false }),
+    );
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Billing DERIVADO DA AGENDA — gancho do BOT (ADR 0027, Fase D — gated por ATEND_FROM_AGENDA)
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// Garantias NÃO-NEGOCIÁVEIS do Bruno:
+//  1) flag OFF (default) -> NENHUMA linha em `atendimentos`; o bot é BYTE-A-BYTE o de hoje
+//     (mesma resposta, evento criado, pacote deduzido). Cirilo/Samuel intactos.
+//  2) flag ON -> após criar o evento, grava a linha de PREVISÃO (tenant_id do clone,
+//     colaborador certo no estabelecimento / null no individual, origem='agenda').
+//  3) o gancho NUNCA quebra o fluxo: helper lançando exceção -> o agendamento completa
+//     normal (evento criado + pacote deduzido + resposta intacta). Best-effort.
+//  4) isolamento P0: tenant_id NUNCA vem de input; sem tenant resolvido -> NÃO grava (e o
+//     bot ainda responde).
+
+/** Roda inserir_agendamento do ESTABELECIMENTO e devolve o resultado da tool. */
+async function estabInserirRun(
+  colaboradores: EstabColab[],
+  args: Record<string, unknown>,
+  opts?: { services?: Array<{ name: string; min: number }> },
+): Promise<Record<string, unknown>> {
+  const tools = await estabToolsFor('quero cortar', colaboradores, opts);
+  const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+    run: (a: unknown) => Promise<Record<string, unknown>>;
+  };
+  return inserir.run(args);
+}
+
+describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho do bot)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA = false;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
+    // servico/cliente do summary usam a lógica real (snapshot meaningful no atendimento).
+    mocks.servicoFromSummary.mockImplementation((s: string) => {
+      const sem = s.split('|')[0] ?? s;
+      const i = sem.indexOf(' - ');
+      return i < 0 ? '' : sem.slice(i + 3).trim();
+    });
+    mocks.clienteFromSummary.mockImplementation((s: string) => {
+      const sem = s.split('|')[0] ?? s;
+      const i = sem.indexOf(' - ');
+      return i < 0 ? '' : sem.slice(0, i).trim();
+    });
+    // Default: scope resolve tenant_id (clone do estab tem tenant próprio).
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: 't-uuid',
+    });
+    mocks.upsertAtendimentoFromEvent.mockResolvedValue({ id: 777 });
+  });
+
+  // ── INDIVIDUAL ────────────────────────────────────────────────────────────────
+
+  it('flag OFF (individual): NÃO grava atendimento e a resposta é byte-a-byte a de hoje', async () => {
+    const calClient = setupScheduleComCreate('evt-off');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res).toEqual({ ok: true, eventId: 'evt-off', summary: 'Fulano - Corte' });
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(mocks.getScopeBySlot).not.toHaveBeenCalled();
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag ON (individual): cria linha de previsão com tenant_id e colaborador null', async () => {
+    cfg.ATEND_FROM_AGENDA = true;
+    const calClient = setupScheduleComCreate('evt-ind');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    // resposta ao cliente inalterada
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-ind' });
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'teste_barbearia',
+        tenantId: 't-uuid',
+        gcalEventId: 'evt-ind',
+        servicoNome: 'Corte',
+        clienteNome: 'Fulano',
+        colaboradorId: null,
+        inicioAt: '2026-06-16T13:00:00-03:00',
+        fimAt: '2026-06-16T13:30:00-03:00',
+      }),
+    );
+  });
+
+  it('flag ON (individual): tenant_id NÃO resolvido -> NÃO grava, mas o bot responde normal', async () => {
+    cfg.ATEND_FROM_AGENDA = true;
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: null, // dado inconsistente -> isolamento P0: não cria linha
+    });
+    const calClient = setupScheduleComCreate('evt-notenant');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-notenant' });
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+  });
+
+  it('flag ON (individual): helper LANÇANDO exceção NÃO quebra o agendamento (evento criado + pacote deduzido + resposta intacta)', async () => {
+    cfg.ATEND_FROM_AGENDA = true;
+    cfg.PACOTES_ENABLED = true;
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: true,
+      avulso: false,
+      sessoes_restantes: 1,
+      motivo: 'descontado',
+      pacote_nome: 'Pacote 5 Cortes',
+      pacote_colaborador_id: null,
+    });
+    mocks.upsertAtendimentoFromEvent.mockRejectedValue(new Error('DB down'));
+    const calClient = setupScheduleComCreate('evt-boom');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+      servico: 'Corte',
+      usa_pacote: true,
+    });
+    // O bot completa NORMAL: evento criado, pacote deduzido, resposta enriquecida — a falha
+    // do atendimento (best-effort) foi engolida.
+    expect(res.ok).toBe(true);
+    expect(res.eventId).toBe('evt-boom');
+    expect(res.pacote).toMatchObject({ descontou_do_pacote: true });
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.deduzirPacoteNoAgendamento).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1); // tentou e falhou
+  });
+
+  // ── ESTABELECIMENTO ─────────────────────────────────────────────────────────────
+
+  it('flag OFF (estabelecimento): NÃO grava atendimento; resposta byte-a-byte', async () => {
+    const cBruno = colabClientStub('cal-bruno');
+    const res = await estabInserirRun(
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      {
+        colaborador_id: 'C1',
+        summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+        servico: 'Corte',
+        start: '2026-06-16T13:00:00-03:00',
+        end: '2026-06-16T13:30:00-03:00',
+      },
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.colaborador_nome).toBe('Bruno');
+    expect((cBruno as { createEvent: ReturnType<typeof vi.fn> }).createEvent).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+  });
+
+  it('flag ON (estabelecimento): cria linha com o colaborador que recebeu o evento', async () => {
+    cfg.ATEND_FROM_AGENDA = true;
+    // o clone do estab resolve tenant próprio
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 't-estab',
+    });
+    const cBruno = colabClientStub('cal-bruno');
+    const res = await estabInserirRun(
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      {
+        colaborador_id: 'C1',
+        summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+        servico: 'Corte',
+        start: '2026-06-16T13:00:00-03:00',
+        end: '2026-06-16T13:30:00-03:00',
+      },
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    expect(res.ok).toBe(true);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_estab_x',
+        tenantId: 't-estab',
+        gcalEventId: 'evt-cal-bruno',
+        servicoNome: 'Corte',
+        colaboradorId: 10, // o colaborador que recebeu o evento (não null)
+      }),
+    );
+  });
+
+  it('flag ON (estabelecimento): helper LANÇANDO NÃO quebra o agendamento', async () => {
+    cfg.ATEND_FROM_AGENDA = true;
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 't-estab',
+    });
+    mocks.upsertAtendimentoFromEvent.mockRejectedValue(new Error('boom'));
+    const cBruno = colabClientStub('cal-bruno');
+    const res = await estabInserirRun(
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      {
+        colaborador_id: 'C1',
+        summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+        servico: 'Corte',
+        start: '2026-06-16T13:00:00-03:00',
+        end: '2026-06-16T13:30:00-03:00',
+      },
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    expect(res.ok).toBe(true);
+    expect(res.colaborador_nome).toBe('Bruno');
+    expect((cBruno as { createEvent: ReturnType<typeof vi.fn> }).createEvent).toHaveBeenCalledTimes(
+      1,
     );
   });
 });
