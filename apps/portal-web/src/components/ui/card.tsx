@@ -24,21 +24,28 @@ export function Card({ className, padded = true, children, ...props }: CardProps
   );
 }
 
-/** Card de metrica (spec 6.3): numero grande + legenda. Vira link se `href`. */
+/** Card de metrica (spec 6.3): numero grande + legenda. Vira link se `href`.
+ *  `className` permite ajustar o span no grid (ex.: total full-width no mobile). */
 export function MetricCard({
   value,
   caption,
   href,
   ariaLabel,
+  className,
 }: {
   value: React.ReactNode;
   caption: string;
   href?: string;
   ariaLabel?: string;
+  className?: string;
 }) {
   const inner = (
     <>
-      <div className="font-display text-[26px] font-bold tracking-[-0.02em] text-ink">{value}</div>
+      {/* Número grande mas que QUEBRA em telas estreitas em vez de estourar a
+          largura do card (valores longos como R$ 1.234,56). */}
+      <div className="break-words font-display text-[26px] font-bold tracking-[-0.02em] text-ink">
+        {value}
+      </div>
       <div className="mt-0.5 text-[12.5px] text-ink-soft">{caption}</div>
     </>
   );
@@ -53,11 +60,12 @@ export function MetricCard({
         className={cn(
           cls,
           'cursor-pointer hover:bg-surface-hover hover:border-line-strong active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+          className,
         )}
       >
         {inner}
       </a>
     );
   }
-  return <div className={cls}>{inner}</div>;
+  return <div className={cn(cls, className)}>{inner}</div>;
 }
