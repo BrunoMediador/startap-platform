@@ -518,11 +518,24 @@ const WEBHOOK_RETRIES = { attempts: 15, delaySeconds: 3, policy: 'constant' } as
 const SESSION_IGNORE = { status: true, groups: true, channels: true, broadcast: true } as const;
 
 /**
- * Engine NOWEB igual Cirilo: markOnline ligado, store de chats/contatos
- * DESLIGADO (o painel já tem fallback via message_log pra sessões sem store —
- * recent-contacts). fullSync só faria sentido com store ligado.
+ * Engine NOWEB: markOnline ligado + store de chats/contatos LIGADO.
+ *
+ * O store NOWEB é pré-requisito do `/api/sendSeen` (o "visto"/read-receipt): sem
+ * ele o WAHA responde 400 "Enable NOWEB store" a CADA mensagem inbound e nunca
+ * marca a conversa como lida. Ligar aqui faz o "visto" funcionar em todo clone
+ * criado daqui pra frente (a Lola já roda assim).
+ *
+ * `fullSync: false` de propósito: cobre ~3 meses de histórico — suficiente pro
+ * sendSeen — sem o custo de I/O e crescimento de disco do fullSync completo.
+ *
+ * NÃO retroage: sessões já criadas (Cirilo/Samuel/dragon) seguem store-less até
+ * um re-pareamento natural; ligar nelas exigiria recriar/re-escanear QR, risco
+ * que não vale por algo cosmético.
+ *
+ * O painel mantém o fallback via message_log pra recent-contacts (independe do
+ * store).
  */
-const SESSION_NOWEB = { markOnline: true, store: { enabled: false, fullSync: false } } as const;
+const SESSION_NOWEB = { markOnline: true, store: { enabled: true, fullSync: false } } as const;
 
 /**
  * Monta a entrada de webhook da sessão nova: url do apps/api + events recebidos

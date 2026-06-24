@@ -19,6 +19,18 @@ function wahaUrl(shardId: number = DEFAULT_WAHA_SHARD_ID): string {
   return resolveWahaUrl(shardId);
 }
 
+/**
+ * Endpoints best-effort/cosméticos (presença/visto): o callsite já engole o erro
+ * com `.catch(() => {})` porque falhar não afeta a conversa. O erro deles vira
+ * `debug` em vez de `error` pra não poluir o log.
+ *
+ * Caso concreto: `/api/sendSeen` responde 400 "Enable NOWEB store" em TODA
+ * mensagem das sessões antigas (criadas com store off) — ruído puro, não
+ * incidente. Sessões novas nascem com store on (clone-provisioning) e param de
+ * dar 400; as antigas só zeram o ruído num re-pareamento natural.
+ */
+const BEST_EFFORT_PATHS = new Set(['/api/sendSeen', '/api/startTyping', '/api/stopTyping']);
+
 async function wahaPost<T = unknown>(
   path: string,
   body: unknown,
@@ -31,7 +43,10 @@ async function wahaPost<T = unknown>(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    log.error({ path, status: res.status, body: text }, 'WAHA error');
+    // Endpoints cosméticos (visto/presença) não merecem nível error — o callsite
+    // já trata como best-effort. Envios reais (sendText/sendMedia) seguem error.
+    const level = BEST_EFFORT_PATHS.has(path) ? 'debug' : 'error';
+    log[level]({ path, status: res.status, body: text }, 'WAHA error');
     throw new Error(`WAHA ${path} -> HTTP ${res.status}: ${text}`);
   }
   return (await res.json()) as T;

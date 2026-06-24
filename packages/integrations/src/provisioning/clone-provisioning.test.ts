@@ -412,10 +412,13 @@ describe('createWahaSession', () => {
       delaySeconds: 3,
       policy: 'constant',
     });
-    // Engine NOWEB igual Cirilo: markOnline on, store de chats/contatos off.
+    // Engine NOWEB: markOnline on + store LIGADO (pré-requisito do /api/sendSeen,
+    // o "visto"; sem store o WAHA responde 400 "Enable NOWEB store" a cada msg).
+    // fullSync OFF de propósito (~3 meses, suficiente pro sendSeen, sem o I/O do
+    // fullSync completo). Sessões antigas NÃO retroagem (exigiria re-scan de QR).
     expect(body.config.noweb).toEqual({
       markOnline: true,
-      store: { enabled: false, fullSync: false },
+      store: { enabled: true, fullSync: false },
     });
   });
 
