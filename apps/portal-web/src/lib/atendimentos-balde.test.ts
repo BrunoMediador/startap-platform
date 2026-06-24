@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { AtendimentoBaldeRow, AtendimentosListResponse } from './api-types';
 import {
+  FILTRO_VAZIO,
+  agruparPorDia,
+  agruparPorForma,
+  agruparPorProfissional,
   centsToInput,
   clienteLabel,
+  computeComissaoFromRows,
   draftFromRow,
+  filtrarAtendimentos,
   formaPagamentoLabel,
   patchRowNaLista,
   patchVazio,
@@ -12,6 +18,7 @@ import {
   rowBadge,
   servicoLabel,
   somarTotalCents,
+  temFiltroAtivo,
   validateEdit,
   valorLiquidoCents,
 } from './atendimentos-balde';
@@ -186,5 +193,133 @@ describe('validateEdit (PATCH mínimo, só o que mudou)', () => {
     const res = validateEdit(original, draft);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.patch.servico_nome).toBe('');
+  });
+});
+
+describe('agregações do gráfico (3 visões)', () => {
+  const rows = [
+    row({
+      id: 1,
+      data: '2026-06-23',
+      valor_cents: 5000,
+      forma_pagamento: 'pix',
+      colaborador_id: 1,
+      profissional_nome: 'Bruno',
+    }),
+    row({
+      id: 2,
+      data: '2026-06-23',
+      valor_cents: 3000,
+      desconto_cents: 500,
+      forma_pagamento: 'dinheiro',
+      colaborador_id: 2,
+      profissional_nome: 'Maria',
+    }),
+    row({
+      id: 3,
+      data: '2026-06-24',
+      valor_cents: 4000,
+      forma_pagamento: 'pix',
+      colaborador_id: 1,
+      profissional_nome: 'Bruno',
+    }),
+  ];
+
+  it('agruparPorDia soma o líquido por data (ordenado, sem derivar de inicio_at)', () => {
+    const dia = agruparPorDia(rows);
+    expect(dia.map((b) => b.chave)).toEqual(['2026-06-23', '2026-06-24']);
+    expect(dia[0].total_cents).toBe(7500); // 5000 + (3000-500)
+    expect(dia[1].total_cents).toBe(4000);
+  });
+
+  it('agruparPorProfissional soma por colaborador (desc), fallback no SOLO', () => {
+    const prof = agruparPorProfissional(rows);
+    expect(prof[0].rotulo).toBe('Bruno');
+    expect(prof[0].total_cents).toBe(9000); // 5000 + 4000
+    expect(prof[1].total_cents).toBe(2500);
+    const solo = agruparPorProfissional([row({ colaborador_id: null, profissional_nome: null })]);
+    expect(solo[0].rotulo).toBe('Sem profissional');
+  });
+
+  it('agruparPorForma soma por forma com fallback "Sem forma"', () => {
+    const forma = agruparPorForma(rows);
+    const pix = forma.find((b) => b.chave === 'pix');
+    expect(pix?.total_cents).toBe(9000); // 5000 + 4000
+    const semForma = agruparPorForma([row({ forma_pagamento: null })]);
+    expect(semForma[0].rotulo).toBe('Sem forma');
+  });
+});
+
+describe('filtros client-side', () => {
+  const rows = [
+    row({ id: 1, cliente_nome: 'João Silva', servico_nome: 'Corte', colaborador_id: 1 }),
+    row({ id: 2, cliente_nome: 'Ana Souza', servico_nome: 'Barba', colaborador_id: 2 }),
+    row({ id: 3, cliente_nome: 'joana', servico_nome: 'Corte', colaborador_id: 1 }),
+  ];
+
+  it('FILTRO_VAZIO não filtra nada', () => {
+    expect(temFiltroAtivo(FILTRO_VAZIO)).toBe(false);
+    expect(filtrarAtendimentos(rows, FILTRO_VAZIO)).toHaveLength(3);
+  });
+
+  it('cliente: match case-insensitive (substring)', () => {
+    const f = filtrarAtendimentos(rows, { ...FILTRO_VAZIO, cliente: 'jo' });
+    expect(f.map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  it('colaborador: igualdade de id', () => {
+    const f = filtrarAtendimentos(rows, { ...FILTRO_VAZIO, colaboradorId: 2 });
+    expect(f.map((r) => r.id)).toEqual([2]);
+  });
+
+  it('serviço: igualdade exata de nome', () => {
+    const f = filtrarAtendimentos(rows, { ...FILTRO_VAZIO, servico: 'Corte' });
+    expect(f.map((r) => r.id)).toEqual([1, 3]);
+  });
+
+  it('filtros são AND', () => {
+    const f = filtrarAtendimentos(rows, { cliente: 'jo', colaboradorId: 1, servico: 'Corte' });
+    expect(f.map((r) => r.id)).toEqual([1, 3]);
+  });
+});
+
+describe('computeComissaoFromRows (live-compute, sob filtro)', () => {
+  const colaboradores = [
+    { id: 1, nome: 'Bruno', comissao_pct: 50 },
+    { id: 2, nome: 'Maria', comissao_pct: 0 },
+  ];
+
+  it('comissão = líquido × pct; lista TODOS os ativos mesmo sem booking', () => {
+    const rows = [
+      row({ id: 1, valor_cents: 10000, colaborador_id: 1, profissional_nome: 'Bruno' }),
+    ];
+    const res = computeComissaoFromRows(rows, colaboradores);
+    const bruno = res.por_profissional.find((p) => p.colaborador_id === 1);
+    const maria = res.por_profissional.find((p) => p.colaborador_id === 2);
+    expect(bruno?.comissao_cents).toBe(5000); // 10000 × 50%
+    expect(maria?.total_bruto_cents).toBe(0); // ativo, sem booking
+    expect(maria?.comissao_cents).toBe(0);
+    expect(res.total_cents).toBe(5000);
+  });
+
+  it('pacote entra com líquido 0 (não dobra / não infla comissão)', () => {
+    const rows = [
+      row({
+        id: 1,
+        valor_cents: 0,
+        forma_pagamento: 'pacote',
+        colaborador_id: 1,
+        profissional_nome: 'Bruno',
+      }),
+    ];
+    const res = computeComissaoFromRows(rows, colaboradores);
+    expect(res.por_profissional.find((p) => p.colaborador_id === 1)?.comissao_cents).toBe(0);
+  });
+
+  it('SOLO (linha sem colaborador) não gera comissão', () => {
+    const rows = [row({ id: 1, valor_cents: 5000, colaborador_id: null })];
+    const res = computeComissaoFromRows(rows, []);
+    expect(res.por_profissional).toHaveLength(0);
+    expect(res.total_cents).toBe(0);
   });
 });

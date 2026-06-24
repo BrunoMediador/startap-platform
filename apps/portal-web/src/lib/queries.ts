@@ -21,6 +21,7 @@ import type {
   AgendaSlotsResponse,
   AgendamentosResponse,
   AtendimentoBalde,
+  AtendimentoByEventoResponse,
   AtendimentosListResponse,
   AuthMe,
   ChargeView,
@@ -91,6 +92,9 @@ export const qk = {
   atendimentosBaldeBase: (slot: string) => ['atendimentos-balde', slot] as const,
   atendimentosBalde: (slot: string, balde: AtendimentoBalde, de: string, ate: string) =>
     ['atendimentos-balde', slot, balde, de, ate] as const,
+  /** Linha de atendimento resolvida pelo event_id da agenda (edição de dinheiro no card). */
+  atendimentoByEvento: (slot: string, eventId: string) =>
+    ['atendimento-by-evento', slot, eventId] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -180,6 +184,10 @@ export function useCriarAgendamento(
       );
       client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+      // Billing-da-agenda (ADR 0027): um agendamento novo materializa uma linha de
+      // atendimento (Previsão) → Previsão/comissão ficam stale sem isto.
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
     },
   });
 }
@@ -210,6 +218,10 @@ export function useExcluirAgendamento(
       );
       client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+      // Billing-da-agenda (ADR 0027): excluir o evento some/zera a linha derivada →
+      // Previsão/Faturado/comissão precisam ressincronizar.
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
     },
   });
 }
@@ -248,6 +260,10 @@ export function useEditarAgendamento(
       );
       client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+      // Billing-da-agenda (ADR 0027): remarcar/trocar serviço muda dia/valor da linha
+      // derivada → Previsão e comissão ficam stale sem invalidar aqui (item 2).
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
     },
   });
 }
@@ -728,6 +744,67 @@ export function useEditarAtendimento(
         qk.atendimentosBalde(slot, balde, de ?? '', ate ?? ''),
         (prev) => (prev ? patchRowNaLista(prev, atendimento) : prev),
       );
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
+  });
+}
+
+/**
+ * GET /portal/atendimentos/by-evento/:eventId — resolve a LINHA de atendimento
+ * (mesma Row do balde) a partir do event_id da agenda, pra editar o DINHEIRO
+ * (valor/desconto/forma) direto do card da agenda. 404 = não existe linha (clone
+ * individual fora do gate, ou evento sem atendimento) → a UI ESCONDE a seção Valor.
+ *
+ * `enabled` extra: só dispara quando a feature está ligada (atend_from_agenda) e há
+ * um eventId — defesa em profundidade (não bate na API à toa nos clones individuais).
+ * Sem retry: 404 não se resolve sozinho. Escopado por slot da sessão (withTenant);
+ * evento de outro tenant => 404 (anti-IDOR).
+ */
+export function useAtendimentoByEvento(
+  slot: string,
+  eventId: string | null,
+  enabled = true,
+): UseQueryResult<AtendimentoByEventoResponse> {
+  return useQuery({
+    queryKey: qk.atendimentoByEvento(slot, eventId ?? ''),
+    queryFn: ({ signal }) =>
+      apiFetch<AtendimentoByEventoResponse>(
+        `/portal/atendimentos/by-evento/${encodeURIComponent(eventId ?? '')}`,
+        { signal },
+      ),
+    enabled: enabled && Boolean(eventId),
+    retry: false,
+  });
+}
+
+/**
+ * PATCH /portal/atendimentos/:id a partir do CARD DA AGENDA (edição de dinheiro
+ * pelo sheet de agendamento). Mesmo endpoint sticky do billing (PINA dirty_fields),
+ * mas SEM o período do balde em foco (o card da agenda não conhece de/ate): no
+ * sucesso invalida o by-evento da linha + TODAS as listas de baldes + relatórios.
+ * Assim a edição reflete nos dois lados (agenda ↔ billing) automaticamente. 400/404
+ * tratados na tela.
+ */
+export function useEditarAtendimentoPorEvento(
+  slot: string,
+  eventId: string | null,
+): UseMutationResult<
+  EditarAtendimentoResponse,
+  Error,
+  { id: number; patch: EditarAtendimentoBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }) =>
+      apiFetch<EditarAtendimentoResponse>(`/portal/atendimentos/${id}`, {
+        method: 'PATCH',
+        body: patch,
+      }),
+    onSuccess: () => {
+      if (eventId) {
+        client.invalidateQueries({ queryKey: qk.atendimentoByEvento(slot, eventId) });
+      }
       client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
       client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
     },
