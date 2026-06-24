@@ -45,8 +45,9 @@ export function EstabelecimentoHorarioGrupo({
         )}
       </div>
 
-      {/* Cartões paralelos lado a lado. */}
-      <div className="grid flex-1 gap-2 [grid-template-columns:repeat(auto-fill,minmax(168px,1fr))]">
+      {/* Cartões paralelos lado a lado. minmax com min(100%,…) colapsa pra 1 coluna
+          em telas estreitas (<360px) sem estourar a largura do card. */}
+      <div className="grid flex-1 gap-2 [grid-template-columns:repeat(auto-fill,minmax(min(100%,160px),1fr))]">
         {grupo.eventos.map((ag) => (
           <CartaoEvento key={ag.id} ag={ag} onClick={() => onAbrir(ag)} />
         ))}
@@ -69,25 +70,25 @@ function CartaoEvento({ ag, onClick }: { ag: Agendamento; onClick: () => void })
       // Barra lateral colorida do profissional (dinâmico → style calculado).
       style={{ borderLeft: `3px solid ${cor.solid}` }}
     >
-      {/* Profissional (chip de cor). */}
+      {/* Profissional = DESTAQUE principal do card (chip de cor + nome maior). */}
       {profissional && (
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
           <span
             aria-hidden
             className="size-2 shrink-0 rounded-full"
             style={{ backgroundColor: cor.solid }}
           />
           <span
-            className="truncate text-[11.5px] font-bold uppercase tracking-[0.02em]"
+            className="truncate font-display text-[14px] font-semibold"
             style={{ color: cor.ink }}
           >
             {profissional}
           </span>
         </span>
       )}
-      {/* Cliente (nome legível, truncado — completo no sheet de detalhe). */}
-      <span className="truncate font-display text-[14px] font-semibold text-ink">{nome}</span>
-      {servico && <span className="line-clamp-1 text-[12.5px] text-ink-soft">{servico}</span>}
+      {/* Cliente (secundário, menor — nome completo no sheet de detalhe). */}
+      <span className="truncate text-[12.5px] font-medium text-ink-soft">{nome}</span>
+      {servico && <span className="line-clamp-1 text-[12px] text-ink-faint">{servico}</span>}
     </button>
   );
 }

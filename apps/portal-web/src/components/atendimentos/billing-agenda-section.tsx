@@ -96,6 +96,7 @@ export function BillingAgendaSection({
               rows={filtradas}
               totalCents={totalFiltrado}
               onFlagOff={() => setFlagOff(true)}
+              mostrarVendedor={isEstabelecimento}
             />
           </>
         )}

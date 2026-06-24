@@ -61,10 +61,12 @@ export function AgendaValorSection({ slot, eventId }: { slot: string; eventId: s
     );
   }
 
-  // Erro não-404 (rede/5xx): degrada silencioso — não trava o resto do card.
+  // Erro não-404 (rede/5xx) OU resposta sem corpo: degrada silencioso — não trava
+  // o resto do card. (Guarda contra undefined antes de tocar em row.valor_cents.)
   if (q.isError || !q.data) return null;
 
-  return <ValorForm slot={slot} eventId={eventId} row={q.data.atendimento} />;
+  // CONTRATO: o by-evento devolve a Row CRUA (sem envelope) — `q.data` JÁ é a Row.
+  return <ValorForm slot={slot} eventId={eventId} row={q.data} />;
 }
 
 function Titulo() {
