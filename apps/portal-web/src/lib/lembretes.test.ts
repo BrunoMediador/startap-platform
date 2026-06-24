@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ApiError } from './api';
 import type { LembretesConfig } from './api-types';
 import {
   DEFAULT_WINDOWS,
@@ -6,6 +7,7 @@ import {
   type LembretesDraft,
   isJanelaPermitida,
   isLembretesDirty,
+  isLembretesFeatureOff,
   isLembretesValido,
   normalizeWindows,
   setEnabled,
@@ -155,5 +157,24 @@ describe('toLembretesPatch', () => {
     const patch = toLembretesPatch(d);
     patch.windows_min.push(999 as JanelaMin);
     expect(d.windows).toEqual([60]);
+  });
+});
+
+describe('isLembretesFeatureOff', () => {
+  it('404 = feature desligada (REMINDERS_ENABLED OFF) -> seção some', () => {
+    const err = new ApiError(404, 'Not Found', null);
+    expect(isLembretesFeatureOff(err)).toBe(true);
+  });
+
+  it('500 / outros status NÃO são feature-off (mostra erro real)', () => {
+    expect(isLembretesFeatureOff(new ApiError(500, 'Internal', null))).toBe(false);
+    expect(isLembretesFeatureOff(new ApiError(401, 'Unauthorized', null))).toBe(false);
+    expect(isLembretesFeatureOff(new ApiError(0, 'Network', null))).toBe(false);
+  });
+
+  it('erro genérico / null / undefined NÃO são feature-off', () => {
+    expect(isLembretesFeatureOff(new Error('boom'))).toBe(false);
+    expect(isLembretesFeatureOff(null)).toBe(false);
+    expect(isLembretesFeatureOff(undefined)).toBe(false);
   });
 });

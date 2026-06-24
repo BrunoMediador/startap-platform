@@ -30,6 +30,7 @@ import {
   JANELA_LABEL,
   type LembretesDraft,
   isLembretesDirty,
+  isLembretesFeatureOff,
   isLembretesValido,
   setEnabled,
   toLembretesDraft,
@@ -124,6 +125,12 @@ export function LembretesSection() {
       </SectionShell>
     );
   }
+
+  // Feature OFF no backend (REMINDERS_ENABLED desligado): GET /portal/lembretes
+  // devolve 404. Isso NÃO é erro do cliente — a seção some graciosamente, sem card
+  // vermelho nem botão de "tentar de novo" que falharia pra sempre. Outros erros
+  // (rede real, 500…) caem no ErrorState abaixo. Mesmo critério de atendimentos/novo.
+  if (isLembretesFeatureOff(lembretesQ.error)) return null;
 
   if (lembretesQ.isError) {
     return (

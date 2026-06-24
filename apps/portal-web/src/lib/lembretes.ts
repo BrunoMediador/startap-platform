@@ -14,7 +14,18 @@
  * ordena DESC (a mais distante primeiro — "24h" antes de "1h"), que é também a ordem
  * em que os chips aparecem.
  */
+import { ApiError } from './api';
 import type { LembretesConfig } from './api-types';
+
+/**
+ * Feature OFF: o backend devolve 404 no GET /portal/lembretes quando
+ * REMINDERS_ENABLED está desligado. Isso NÃO é erro do cliente (rede/500) — a seção
+ * deve sumir graciosamente em vez de mostrar card vermelho. Mesmo critério de 404 =
+ * flag-off usado em atendimentos/novo.
+ */
+export function isLembretesFeatureOff(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
+}
 
 /** Janelas permitidas (minutos antes do agendamento), na ORDEM de exibição (DESC). */
 export const JANELAS_PERMITIDAS = [1440, 180, 120, 60] as const;
