@@ -25,6 +25,7 @@ import {
   profissionalLabel,
   rowBadge,
   servicoLabel,
+  tituloLinhaAtendimento,
   valorLiquidoCents,
 } from '@/lib/atendimentos-balde';
 import { formatAgendamentoDia, formatAgendamentoHora, formatPrecoCents } from '@/lib/format';
@@ -127,6 +128,12 @@ export function BaldeListView({
   rows,
   totalCents,
   onFlagOff,
+  /**
+   * Estabelecimento: destaca o VENDEDOR (profissional que atendeu) como título da
+   * linha, rebaixando o cliente. No individual/SOLO (profissional_nome=null) FICA
+   * false — senão toda linha viraria "Sem profissional".
+   */
+  mostrarVendedor = false,
 }: {
   slot: string;
   balde: AtendimentoBalde;
@@ -135,6 +142,7 @@ export function BaldeListView({
   rows: AtendimentoBaldeRow[];
   totalCents: number;
   onFlagOff: () => void;
+  mostrarVendedor?: boolean;
 }) {
   const [aberto, setAberto] = useState<AtendimentoBaldeRow | null>(null);
   const copy = COPY[balde];
@@ -153,7 +161,12 @@ export function BaldeListView({
 
           <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
             {rows.map((row) => (
-              <LinhaAtendimento key={row.id} row={row} onClick={() => setAberto(row)} />
+              <LinhaAtendimento
+                key={row.id}
+                row={row}
+                mostrarVendedor={mostrarVendedor}
+                onClick={() => setAberto(row)}
+              />
             ))}
           </div>
         </div>
@@ -176,9 +189,12 @@ export function BaldeListView({
 function LinhaAtendimento({
   row,
   onClick,
+  /** Estabelecimento: título = vendedor (profissional); cliente desce pra 2ª linha. */
+  mostrarVendedor = false,
 }: {
   row: AtendimentoBaldeRow;
   onClick: () => void;
+  mostrarVendedor?: boolean;
 }) {
   const dia = formatAgendamentoDia(row.inicio_at ?? row.data);
   const hora = formatAgendamentoHora(row.inicio_at);
@@ -187,18 +203,19 @@ function LinhaAtendimento({
   const temDesconto = row.desconto_cents > 0;
   const badge = rowBadge(row);
 
+  // No estabelecimento o título proeminente é o VENDEDOR; no individual, o cliente.
+  const titulo = tituloLinhaAtendimento(row, mostrarVendedor);
+
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Editar atendimento de ${clienteLabel(row.cliente_nome)} — ${formatPrecoCents(liquido)}`}
+      aria-label={`Editar atendimento de ${titulo} — ${formatPrecoCents(liquido)}`}
       className="flex w-full items-center gap-3 border-b border-line-soft px-[15px] py-3.5 text-left outline-none transition-colors last:border-b-0 hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate font-display text-[15px] font-semibold text-ink">
-            {clienteLabel(row.cliente_nome)}
-          </span>
+          <span className="truncate font-display text-[15px] font-semibold text-ink">{titulo}</span>
           <BadgeOrigem badge={badge} />
         </div>
         <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
@@ -206,7 +223,14 @@ function LinhaAtendimento({
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-ink-faint">
           <span>{formaPagamentoLabel(row.forma_pagamento)}</span>
-          {row.profissional_nome !== null && (
+          {/* Estabelecimento: o cliente desce pra cá (o vendedor virou título). */}
+          {mostrarVendedor && (
+            <>
+              <span aria-hidden>·</span>
+              <span>{clienteLabel(row.cliente_nome)}</span>
+            </>
+          )}
+          {!mostrarVendedor && row.profissional_nome !== null && (
             <>
               <span aria-hidden>·</span>
               <span>{profissionalLabel(row.profissional_nome)}</span>

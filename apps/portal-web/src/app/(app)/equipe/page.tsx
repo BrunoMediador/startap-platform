@@ -307,35 +307,42 @@ function ReadRow({
 }) {
   const servicos = colaborador.servicos;
   return (
-    <div className="group flex min-h-16 items-center gap-3.5 border-b border-line-soft p-[15px] transition-colors last:border-b-0 hover:bg-surface-hover active:bg-surface-hover">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-brand-soft text-brand">
-        <IconUser size={20} />
+    <div className="group flex min-h-16 items-center gap-2.5 border-b border-line-soft p-3 transition-colors last:border-b-0 hover:bg-surface-hover active:bg-surface-hover sm:gap-3.5 sm:p-[15px]">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-[11px] bg-brand-soft text-brand sm:size-10">
+        <IconUser size={18} className="sm:hidden" />
+        <IconUser size={20} className="max-sm:hidden" />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-display text-[15px] font-semibold text-ink">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-display text-[14px] font-semibold text-ink sm:text-[15px]">
             {colaborador.nome}
           </span>
-          {colaborador.ativo ? <Badge tone="ok">Ativo</Badge> : <Badge tone="warn">Inativo</Badge>}
+          <span className="shrink-0">
+            {colaborador.ativo ? (
+              <Badge tone="ok">Ativo</Badge>
+            ) : (
+              <Badge tone="warn">Inativo</Badge>
+            )}
+          </span>
         </div>
-        <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
+        <div className="mt-0.5 truncate text-[12px] text-ink-soft sm:text-[12.5px]">
           {servicos.length > 0 ? servicos.join(' · ') : 'Atende todos os serviços'}
           {colaborador.comissao_pct > 0 && ` · ${colaborador.comissao_pct}% comissão`}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
         <Switch
           checked={colaborador.ativo}
           onChange={onToggle}
           disabled={toggling}
           label={`${colaborador.ativo ? 'Desativar' : 'Ativar'} ${colaborador.nome}`}
         />
-        <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100">
+        <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100 sm:gap-2">
           <button
             type="button"
             aria-label={`Editar ${colaborador.nome}`}
             onClick={onEdit}
-            className="flex size-11 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand"
+            className="flex size-9 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand sm:size-11"
           >
             <IconUser size={18} />
             <span className="sr-only">Editar</span>
@@ -344,7 +351,7 @@ function ReadRow({
             type="button"
             aria-label={`Remover ${colaborador.nome}`}
             onClick={onDelete}
-            className="flex size-11 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:border-danger/60 hover:bg-danger/12 hover:text-danger focus-visible:ring-2 focus-visible:ring-danger"
+            className="flex size-9 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:border-danger/60 hover:bg-danger/12 hover:text-danger focus-visible:ring-2 focus-visible:ring-danger sm:size-11"
           >
             <IconTrash size={18} />
           </button>

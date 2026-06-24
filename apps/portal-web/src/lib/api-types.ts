@@ -645,10 +645,11 @@ export interface EditarAtendimentoResponse {
  * CONTRATO CONGELADO (backend constrói em paralelo). Gated por ATENDIMENTOS_ENABLED
  * + atend_from_agenda e escopado por slot da sessão (withTenant); evento de outro
  * tenant => 404 (anti-IDOR).
+ *
+ * A resposta É a Row CRUA (sem envelope) — o backend faz `reply.send(row)` direto
+ * (portal-atendimentos.ts) e o teste de contrato congela isso (sem chave `atendimento`).
  */
-export interface AtendimentoByEventoResponse {
-  atendimento: AtendimentoBaldeRow;
-}
+export type AtendimentoByEventoResponse = AtendimentoBaldeRow;
 
 // Relatório de faturamento (GET /portal/relatorios/faturamento?de=&ate=).
 

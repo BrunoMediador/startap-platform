@@ -50,6 +50,21 @@ export function clienteLabel(nome: string | null): string {
   return nome && nome.trim() !== '' ? nome : 'Sem cliente';
 }
 
+/**
+ * Título proeminente de uma linha do billing. No ESTABELECIMENTO o destaque é o
+ * VENDEDOR (profissional que atendeu — pedido do Bruno); no individual/SOLO
+ * (profissional_nome=null) o destaque continua o cliente, senão toda linha viraria
+ * "Sem profissional". Pura/testável.
+ */
+export function tituloLinhaAtendimento(
+  row: Pick<AtendimentoBaldeRow, 'cliente_nome' | 'profissional_nome'>,
+  mostrarVendedor: boolean,
+): string {
+  return mostrarVendedor
+    ? profissionalLabel(row.profissional_nome)
+    : clienteLabel(row.cliente_nome);
+}
+
 // ── Badge da linha ───────────────────────────────────────────────────────────
 
 export type RowBadge = 'editado' | 'auto' | 'manual';

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { AtendimentoBaldeRow, AtendimentosListResponse } from './api-types';
+import type {
+  AtendimentoBaldeRow,
+  AtendimentoByEventoResponse,
+  AtendimentosListResponse,
+} from './api-types';
 import {
   FILTRO_VAZIO,
   agruparPorDia,
@@ -19,6 +23,7 @@ import {
   servicoLabel,
   somarTotalCents,
   temFiltroAtivo,
+  tituloLinhaAtendimento,
   validateEdit,
   valorLiquidoCents,
 } from './atendimentos-balde';
@@ -60,6 +65,29 @@ describe('rótulos com fallback (campos nullable)', () => {
     expect(servicoLabel('Barba')).toBe('Barba');
     expect(clienteLabel(null)).toBe('Sem cliente');
     expect(clienteLabel('Ana')).toBe('Ana');
+  });
+});
+
+describe('tituloLinhaAtendimento (vendedor no estabelecimento, cliente no individual)', () => {
+  it('estabelecimento (mostrarVendedor): título = profissional', () => {
+    expect(tituloLinhaAtendimento({ cliente_nome: 'João', profissional_nome: 'Maria' }, true)).toBe(
+      'Maria',
+    );
+  });
+
+  it('individual (mostrarVendedor=false): título = cliente', () => {
+    expect(tituloLinhaAtendimento({ cliente_nome: 'João', profissional_nome: null }, false)).toBe(
+      'João',
+    );
+  });
+
+  it('fallbacks: vendedor sem nome -> "Sem profissional"; cliente sem nome -> "Sem cliente"', () => {
+    expect(tituloLinhaAtendimento({ cliente_nome: 'João', profissional_nome: null }, true)).toBe(
+      'Sem profissional',
+    );
+    expect(tituloLinhaAtendimento({ cliente_nome: null, profissional_nome: 'Maria' }, false)).toBe(
+      'Sem cliente',
+    );
   });
 });
 
@@ -140,6 +168,17 @@ describe('draftFromRow / centsToInput', () => {
 
   it('preenche desconto quando > 0', () => {
     expect(draftFromRow(row({ desconto_cents: 500 })).desconto).toBe('5,00');
+  });
+
+  // Regressão do crash do /inicio (#370 backend Row-crua × #371 frontend envelope):
+  // o GET by-evento devolve a Row DIRETO (sem `{ atendimento }`). A AgendaValorSection
+  // passa `q.data` (a Row) pro ValorForm, que faz draftFromRow(row). Se o tipo voltar a
+  // mentir como envelope, alguém faria draftFromRow(resp.atendimento) -> undefined.valor_cents.
+  it('CONTRATO by-evento: a resposta É a Row crua e alimenta draftFromRow sem unwrap', () => {
+    const resp: AtendimentoByEventoResponse = row({ id: 9, valor_cents: 7000 });
+    // `resp` É a Row (não tem `.atendimento`); draftFromRow consome direto, sem throw.
+    expect(() => draftFromRow(resp)).not.toThrow();
+    expect(draftFromRow(resp).valor).toBe('70,00');
   });
 });
 
