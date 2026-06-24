@@ -24,6 +24,7 @@ const {
   getFaturamentoMock,
   getComissaoMock,
   listAtendimentosMock,
+  getAtendimentoByEventMock,
   patchAtendimentoMock,
   softDeleteByIdMock,
 } = vi.hoisted(() => ({
@@ -34,6 +35,7 @@ const {
   getFaturamentoMock: vi.fn(),
   getComissaoMock: vi.fn(),
   listAtendimentosMock: vi.fn(),
+  getAtendimentoByEventMock: vi.fn(),
   patchAtendimentoMock: vi.fn(),
   softDeleteByIdMock: vi.fn(),
 }));
@@ -54,6 +56,7 @@ vi.mock('@startap/db', () => ({
     getFaturamento: (...a: unknown[]) => getFaturamentoMock(...a),
     getComissao: (...a: unknown[]) => getComissaoMock(...a),
     listAtendimentos: (...a: unknown[]) => listAtendimentosMock(...a),
+    getAtendimentoByEvent: (...a: unknown[]) => getAtendimentoByEventMock(...a),
     patchAtendimento: (...a: unknown[]) => patchAtendimentoMock(...a),
     softDeleteAtendimentoById: (...a: unknown[]) => softDeleteByIdMock(...a),
   },
@@ -466,6 +469,74 @@ describe('GET /portal/atendimentos — balde previsao/faturado', () => {
     });
     expect(res.statusCode).toBe(404);
     expect(listAtendimentosMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+// ── MUDANÇA 2: GET /portal/atendimentos/by-evento/:eventId (pré-req do frontend) ─────
+describe('GET /portal/atendimentos/by-evento/:eventId — resolve a linha pelo gcal_event_id', () => {
+  const ENRICHED = {
+    id: 9,
+    data: '2026-06-23',
+    inicio_at: '2026-06-23T13:00:00Z',
+    fim_at: '2026-06-23T13:30:00Z',
+    cliente_nome: null,
+    cliente_contato: null,
+    servico_nome: 'Corte',
+    valor_cents: 5000,
+    desconto_cents: 0,
+    forma_pagamento: null,
+    colaborador_id: 1,
+    profissional_nome: 'Eduardo',
+    origem: 'agenda',
+    dirty_fields: [],
+    status: 'agendado',
+  };
+
+  it('200: devolve a AtendimentoListRow DIRETO (sem envelope), escopo slot+tenant da sessão', async () => {
+    getAtendimentoByEventMock.mockResolvedValue(ENRICHED);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/atendimentos/by-evento/evt_abc' });
+    expect(res.statusCode).toBe(200);
+    // CONTRATO: a Row vem direto (front consome AtendimentoListRow | 404).
+    expect(res.json()).toMatchObject({
+      id: 9,
+      profissional_nome: 'Eduardo',
+      servico_nome: 'Corte',
+    });
+    // Anti-IDOR: slot+tenant da SESSÃO, eventId do path.
+    expect(getAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 'evt_abc');
+    await app.close();
+  });
+
+  it('404 (anti-IDOR): eventId fora do escopo / inexistente -> data layer null -> 404', async () => {
+    getAtendimentoByEventMock.mockResolvedValue(null);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos/by-evento/evt_de_outro_tenant',
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('400: eventId com caracteres inválidos -> não toca a data layer', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/atendimentos/by-evento/evt%20com%20espaco%21',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(getAtendimentoByEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 quando a flag ATENDIMENTOS_ENABLED está OFF (gate)', async () => {
+    configMock.ATENDIMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/atendimentos/by-evento/evt_abc' });
+    expect(res.statusCode).toBe(404);
+    expect(getAtendimentoByEventMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
