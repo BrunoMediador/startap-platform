@@ -2,39 +2,75 @@ import { describe, expect, it } from 'vitest';
 import type { Colaborador } from './api-types';
 import {
   comissaoToText,
+  isServicoMarcado,
   mapColaboradorRow,
+  normalizeServicos,
   parseComissao,
-  parseServicos,
-  servicosToText,
+  servicosOrfaos,
   toDraft,
+  toggleServico,
   validate,
 } from './equipe';
 
-describe('parseServicos', () => {
+describe('normalizeServicos', () => {
   it('faz trim, descarta vazios e dedup case-insensitive', () => {
-    expect(parseServicos('Corte, Barba ,corte')).toEqual(['Corte', 'Barba']);
+    expect(normalizeServicos(['Corte', ' Barba ', 'corte'])).toEqual(['Corte', 'Barba']);
   });
 
-  it('texto vazio / só vírgulas -> []', () => {
-    expect(parseServicos('')).toEqual([]);
-    expect(parseServicos('  ,  , ')).toEqual([]);
+  it('array vazio / só espaços -> []', () => {
+    expect(normalizeServicos([])).toEqual([]);
+    expect(normalizeServicos(['  ', '', ' '])).toEqual([]);
   });
 
   it('limita cada item a 80 chars e o array a 50 itens', () => {
     const longName = 'a'.repeat(100);
-    expect(parseServicos(longName)[0]).toHaveLength(80);
+    expect(normalizeServicos([longName])[0]).toHaveLength(80);
 
-    const many = Array.from({ length: 60 }, (_, i) => `s${i}`).join(',');
-    expect(parseServicos(many)).toHaveLength(50);
+    const many = Array.from({ length: 60 }, (_, i) => `s${i}`);
+    expect(normalizeServicos(many)).toHaveLength(50);
   });
 });
 
-describe('servicosToText / toDraft', () => {
-  it('servicosToText junta com ", "', () => {
-    expect(servicosToText(['Corte', 'Barba'])).toBe('Corte, Barba');
+describe('toggleServico', () => {
+  it('marca um serviço novo (preserva ordem)', () => {
+    expect(toggleServico(['Corte'], 'Barba')).toEqual(['Corte', 'Barba']);
   });
 
-  it('toDraft converte um colaborador da API em draft de form', () => {
+  it('desmarca um serviço já marcado (case-insensitive)', () => {
+    expect(toggleServico(['Corte', 'Barba'], 'corte')).toEqual(['Barba']);
+  });
+
+  it('ignora nome vazio', () => {
+    expect(toggleServico(['Corte'], '   ')).toEqual(['Corte']);
+  });
+
+  it('não passa do teto de 50 itens ao marcar', () => {
+    const cheio = Array.from({ length: 50 }, (_, i) => `s${i}`);
+    expect(toggleServico(cheio, 'novo')).toHaveLength(50);
+    // mas desmarcar um existente continua funcionando no teto
+    expect(toggleServico(cheio, 's0')).toHaveLength(49);
+  });
+});
+
+describe('isServicoMarcado', () => {
+  it('detecta marcado case-insensitive', () => {
+    expect(isServicoMarcado(['Corte', 'Barba'], 'corte')).toBe(true);
+    expect(isServicoMarcado(['Corte'], 'Barba')).toBe(false);
+  });
+});
+
+describe('servicosOrfaos', () => {
+  it('retorna os selecionados que não existem mais no catálogo (case-insensitive)', () => {
+    expect(servicosOrfaos(['Corte', 'Sobrancelha'], ['Corte', 'Barba'])).toEqual(['Sobrancelha']);
+  });
+
+  it('catálogo cobre tudo -> sem órfãos', () => {
+    expect(servicosOrfaos(['corte'], ['Corte', 'Barba'])).toEqual([]);
+  });
+});
+
+describe('toDraft', () => {
+  it('toDraft converte um colaborador da API em draft de form (servicos como array)', () => {
     const c: Colaborador = {
       id: 1,
       nome: 'Ana',
@@ -49,7 +85,7 @@ describe('servicosToText / toDraft', () => {
     };
     expect(toDraft(c)).toEqual({
       nome: 'Ana',
-      servicos: 'Corte, Barba',
+      servicos: ['Corte', 'Barba'],
       ativo: false,
       comissao: '30',
     });
@@ -126,10 +162,10 @@ describe('parseComissao / comissaoToText', () => {
 });
 
 describe('validate (draft de colaborador)', () => {
-  it('aceita draft válido e normaliza os serviços + comissão', () => {
+  it('aceita draft válido: serviços marcados viram o payload (normalizados)', () => {
     const res = validate({
       nome: '  Ana  ',
-      servicos: 'Corte, corte, Barba',
+      servicos: ['Corte', 'corte', 'Barba'],
       ativo: true,
       comissao: '30',
     });
@@ -139,8 +175,8 @@ describe('validate (draft de colaborador)', () => {
     });
   });
 
-  it('aceita sem serviços (atende todos) -> array vazio + comissão 0', () => {
-    const res = validate({ nome: 'Ana', servicos: '', ativo: true, comissao: '' });
+  it('aceita sem serviços marcados (atende todos) -> array vazio + comissão 0', () => {
+    const res = validate({ nome: 'Ana', servicos: [], ativo: true, comissao: '' });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.value.servicos).toEqual([]);
@@ -149,19 +185,19 @@ describe('validate (draft de colaborador)', () => {
   });
 
   it('rejeita nome vazio', () => {
-    const res = validate({ nome: '   ', servicos: '', ativo: true, comissao: '' });
+    const res = validate({ nome: '   ', servicos: [], ativo: true, comissao: '' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.errors.nome).toBeTruthy();
   });
 
   it('rejeita nome acima de 160 chars (espelha o backend)', () => {
-    const res = validate({ nome: 'a'.repeat(161), servicos: '', ativo: true, comissao: '' });
+    const res = validate({ nome: 'a'.repeat(161), servicos: [], ativo: true, comissao: '' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.errors.nome).toBeTruthy();
   });
 
   it('rejeita comissão fora de 0..100', () => {
-    const res = validate({ nome: 'Ana', servicos: '', ativo: true, comissao: '150' });
+    const res = validate({ nome: 'Ana', servicos: [], ativo: true, comissao: '150' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.errors.comissao).toBeTruthy();
   });

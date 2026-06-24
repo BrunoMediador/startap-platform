@@ -15,7 +15,7 @@
  * + Toast. As mutations invalidam a lista (o backend é a fonte de verdade do
  * seat_cap/uso), não editam o cache otimista — assim o card de vagas nunca diverge.
  */
-import { IconPlus, IconTrash, IconUser, IconUsers } from '@/components/icons';
+import { IconCheck, IconPlus, IconTrash, IconUser, IconUsers } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,16 +28,26 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
 import type { Colaborador } from '@/lib/api-types';
-import { type Draft, type FieldErrors, toDraft, validate } from '@/lib/equipe';
+import { cn } from '@/lib/cn';
+import {
+  type Draft,
+  type FieldErrors,
+  isServicoMarcado,
+  servicosOrfaos,
+  toDraft,
+  toggleServico,
+  validate,
+} from '@/lib/equipe';
 import {
   useCreateColaborador,
   useEquipe,
   useRemoveColaborador,
+  useServicos,
   useUpdateColaborador,
 } from '@/lib/queries';
 import { useState } from 'react';
 
-const EMPTY_DRAFT: Draft = { nome: '', servicos: '', ativo: true, comissao: '' };
+const EMPTY_DRAFT: Draft = { nome: '', servicos: [], ativo: true, comissao: '' };
 
 /** Extrai a mensagem amigável de um ApiError (409 seat_cap/homônimo) ou um fallback. */
 function errMsg(e: unknown, fallback: string): string {
@@ -52,6 +62,11 @@ export default function EquipePage() {
   const { slot, productType, seatCap } = useTenant();
   const toast = useToast();
   const equipeQ = useEquipe(slot);
+  // Catálogo de serviços EXISTENTES do clone: fonte do checklist (o dono só marca
+  // o que já existe; não dá pra digitar serviço inexistente). Mesma query da tela
+  // de novo agendamento (GET /portal/servicos), isolada por slot no cache.
+  const servicosQ = useServicos(slot);
+  const catalogo = (servicosQ.data ?? []).map((s) => s.nome);
   const create = useCreateColaborador(slot);
   const update = useUpdateColaborador(slot);
   const remove = useRemoveColaborador(slot);
@@ -214,6 +229,9 @@ export default function EquipePage() {
                   key={`row-${c.id}`}
                   draft={draft}
                   errors={errors}
+                  catalogo={catalogo}
+                  catalogoLoading={servicosQ.isPending}
+                  catalogoError={servicosQ.isError}
                   onChange={setDraft}
                   onSave={onSave}
                   onCancel={cancel}
@@ -235,6 +253,9 @@ export default function EquipePage() {
                 isNew
                 draft={draft}
                 errors={errors}
+                catalogo={catalogo}
+                catalogoLoading={servicosQ.isPending}
+                catalogoError={servicosQ.isError}
                 onChange={setDraft}
                 onSave={onSave}
                 onCancel={cancel}
@@ -336,6 +357,9 @@ function ReadRow({
 function EditRow({
   draft,
   errors,
+  catalogo,
+  catalogoLoading,
+  catalogoError,
   onChange,
   onSave,
   onCancel,
@@ -344,6 +368,10 @@ function EditRow({
 }: {
   draft: Draft;
   errors: FieldErrors;
+  /** Nomes dos serviços EXISTENTES do clone (catálogo). Fonte do checklist. */
+  catalogo: string[];
+  catalogoLoading: boolean;
+  catalogoError: boolean;
   onChange: (d: Draft) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -362,15 +390,13 @@ function EditRow({
         onChange={(e) => onChange({ ...draft, nome: e.target.value })}
         autoFocus
       />
-      <Input
-        label="Serviços que faz (separe por vírgula)"
-        placeholder="Ex.: Corte, Barba"
-        value={draft.servicos}
-        onChange={(e) => onChange({ ...draft, servicos: e.target.value })}
+      <ServicosChecklist
+        catalogo={catalogo}
+        loading={catalogoLoading}
+        error={catalogoError}
+        selecionados={draft.servicos}
+        onToggle={(nome) => onChange({ ...draft, servicos: toggleServico(draft.servicos, nome) })}
       />
-      <p className="-mt-1 text-[12px] text-ink-soft">
-        Deixe em branco se ele atende todos os serviços.
-      </p>
       <Input
         label="% de comissão (sobre o valor do atendimento)"
         type="text"
@@ -404,5 +430,122 @@ function EditRow({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Checklist dos serviços EXISTENTES do clone. O dono marca quais o profissional
+ * atende — não dá pra digitar serviço inexistente (o backend rejeita; aqui a UX já
+ * impede). Nada marcado = atende todos (regra antiga preservada). Serviços já
+ * marcados que não existem mais no catálogo (órfãos) seguem visíveis como chip
+ * "removido" pra não sumir a config sozinha — o dono decide manter ou desmarcar.
+ *
+ * `role=group` + cada chip é um checkbox (`aria-checked`). Mobile-first: chips que
+ * quebram linha (flex-wrap), alvo de toque ~36px.
+ */
+function ServicosChecklist({
+  catalogo,
+  loading,
+  error,
+  selecionados,
+  onToggle,
+}: {
+  catalogo: string[];
+  loading: boolean;
+  error: boolean;
+  selecionados: string[];
+  onToggle: (nome: string) => void;
+}) {
+  const orfaos = servicosOrfaos(selecionados, catalogo);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-display text-[13px] font-semibold text-ink">Serviços que faz</span>
+
+      {loading ? (
+        <p className="text-[12.5px] text-ink-soft">Carregando seus serviços…</p>
+      ) : error ? (
+        <p className="text-[12.5px] text-danger">
+          Não foi possível carregar seus serviços. Salve o nome e tente de novo, ou ajuste os
+          serviços depois.
+        </p>
+      ) : catalogo.length === 0 && orfaos.length === 0 ? (
+        <p className="text-[12.5px] text-ink-soft">
+          Você ainda não cadastrou serviços. Cadastre na tela{' '}
+          <span className="font-semibold text-ink">Serviços</span> para escolher aqui — por
+          enquanto, este profissional atende todos.
+        </p>
+      ) : (
+        <div
+          role="group"
+          aria-label="Serviços que o profissional faz"
+          className="flex flex-wrap gap-2"
+        >
+          {catalogo.map((nome) => (
+            <ServicoChip
+              key={`cat-${nome}`}
+              nome={nome}
+              marcado={isServicoMarcado(selecionados, nome)}
+              onToggle={() => onToggle(nome)}
+            />
+          ))}
+          {orfaos.map((nome) => (
+            <ServicoChip
+              key={`orf-${nome}`}
+              nome={nome}
+              marcado
+              removido
+              onToggle={() => onToggle(nome)}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="text-[12px] text-ink-soft">
+        Sem marcar nenhum = atende <span className="font-semibold text-ink">todos</span> os
+        serviços.
+      </p>
+    </div>
+  );
+}
+
+/** Chip-checkbox de um serviço. `removido` = marcado mas fora do catálogo atual. */
+function ServicoChip({
+  nome,
+  marcado,
+  removido,
+  onToggle,
+}: {
+  nome: string;
+  marcado: boolean;
+  removido?: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={marcado}
+      onClick={onToggle}
+      className={cn(
+        'flex min-h-9 items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-left font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-brand-soft',
+        marcado
+          ? 'border-brand bg-brand text-bg'
+          : 'border-line-strong bg-surface text-ink hover:bg-surface-hover',
+        removido && 'border-dashed',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-[15px] shrink-0 items-center justify-center rounded-full border',
+          marcado ? 'border-bg/60 bg-bg/15' : 'border-line-strong',
+        )}
+      >
+        {marcado && <IconCheck size={11} />}
+      </span>
+      <span className="truncate">{nome}</span>
+      {removido && <span className="text-[11px] font-medium opacity-80">(removido)</span>}
+    </button>
   );
 }
