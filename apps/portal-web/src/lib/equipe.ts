@@ -4,15 +4,17 @@
  * serviços trim + dedup case-insensitive (<=80 chars/item, <=50 itens). Dar erro
  * inline ANTES de bater na API. Testável sem React (vive aqui, fora da página).
  *
- * Os serviços são digitados como texto separado por vírgula no form (UX simples
- * pro dono); parseServicos vira o array que o backend espera.
+ * Os serviços são SELECIONADOS por checklist a partir do catálogo EXISTENTE do
+ * clone (mesmo modelo do painel de gestão). O draft guarda só os NOMES marcados
+ * (string[]); a UI nunca deixa digitar serviço inexistente. Sem marcar = vazio =
+ * atende todos (preservado do comportamento antigo).
  */
 import type { Colaborador } from './api-types';
 
 export interface Draft {
   nome: string;
-  /** Serviços como texto separado por vírgula (ex.: "Corte, Barba"). */
-  servicos: string;
+  /** Nomes dos serviços MARCADOS (subconjunto do catálogo do clone). [] = todos. */
+  servicos: string[];
   ativo: boolean;
   /** % de comissão sobre o bruto, como texto editável (0–100). "" = 0. */
   comissao: string;
@@ -29,12 +31,17 @@ const SERVICOS_MAX = 50;
 const COMISSAO_MIN = 0;
 const COMISSAO_MAX = 100;
 
-/** Texto "Corte, Barba ,corte" -> ['Corte','Barba'] (trim + dedup case-insensitive). */
-export function parseServicos(raw: string): string[] {
+/**
+ * Normaliza uma lista de serviços marcados: trim + corta em SERVICO_MAX, descarta
+ * vazios, dedup case-insensitive, limita a SERVICOS_MAX. Espelha o backend e é a
+ * última barreira antes do payload (o catálogo já restringe o que dá pra marcar,
+ * mas isto garante a forma do array independente da origem).
+ */
+export function normalizeServicos(servicos: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const part of raw.split(',')) {
-    const s = part.trim().slice(0, SERVICO_MAX);
+  for (const raw of servicos) {
+    const s = raw.trim().slice(0, SERVICO_MAX);
     if (!s) continue;
     const key = s.toLowerCase();
     if (seen.has(key)) continue;
@@ -45,9 +52,35 @@ export function parseServicos(raw: string): string[] {
   return out;
 }
 
-/** Array de serviços -> texto pro input ("Corte, Barba"). */
-export function servicosToText(servicos: string[]): string {
-  return servicos.join(', ');
+/**
+ * Liga/desliga um serviço na seleção (dedup case-insensitive). Usado pelo
+ * checklist: tocar num chip alterna a marcação. Mantém a ordem de marcação.
+ */
+export function toggleServico(servicos: string[], nome: string): string[] {
+  const alvo = nome.trim();
+  if (!alvo) return servicos;
+  const key = alvo.toLowerCase();
+  const existe = servicos.some((s) => s.toLowerCase() === key);
+  if (existe) return servicos.filter((s) => s.toLowerCase() !== key);
+  if (servicos.length >= SERVICOS_MAX) return servicos;
+  return [...servicos, alvo];
+}
+
+/** Um serviço está marcado no draft? (case-insensitive) */
+export function isServicoMarcado(servicos: string[], nome: string): boolean {
+  const key = nome.trim().toLowerCase();
+  return servicos.some((s) => s.toLowerCase() === key);
+}
+
+/**
+ * Serviços do colaborador que NÃO existem mais no catálogo do clone (ex.: o dono
+ * apagou "Sobrancelha" depois de marcá-la). Continuam selecionáveis no editor
+ * (chip "legado") pra não sumir a config silenciosamente — o dono decide se mantém
+ * ou desmarca. Compara case-insensitive.
+ */
+export function servicosOrfaos(selecionados: string[], catalogo: string[]): string[] {
+  const noCatalogo = new Set(catalogo.map((s) => s.toLowerCase()));
+  return selecionados.filter((s) => !noCatalogo.has(s.trim().toLowerCase()));
 }
 
 /** "12,5" / "12.5" / "" -> número 0..100, ou null se inválido. "" vira 0. */
@@ -87,11 +120,11 @@ export function mapColaboradorRow(row: Colaborador): Colaborador {
   };
 }
 
-/** Colaborador (da API) -> Draft pra editar no form. */
+/** Colaborador (da API) -> Draft pra editar no form. Mantém os serviços já marcados. */
 export function toDraft(c: Colaborador): Draft {
   return {
     nome: c.nome,
-    servicos: servicosToText(c.servicos),
+    servicos: normalizeServicos(c.servicos),
     ativo: c.ativo,
     comissao: comissaoToText(c.comissao_pct),
   };
@@ -119,7 +152,7 @@ export function validate(draft: Draft): ValidateResult {
     ok: true,
     value: {
       nome: nome.slice(0, NOME_MAX),
-      servicos: parseServicos(draft.servicos),
+      servicos: normalizeServicos(draft.servicos),
       ativo: draft.ativo,
       comissao_pct: comissao ?? 0,
     },
