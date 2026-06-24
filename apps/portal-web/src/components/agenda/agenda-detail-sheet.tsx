@@ -280,6 +280,9 @@ export function AgendaDetailSheet({
                   setAviso(null);
                 }}
                 aviso={aviso}
+                // Estabelecimento: a grade de remarcação olha a agenda do MESMO profissional
+                // do evento (remarcar v1 não troca de profissional). null no individual.
+                colaboradorId={agendamento.colaborador_id ?? null}
               />
 
               {/* Resumo + salvar (fixo no rodapé do painel). */}

@@ -90,6 +90,63 @@ export class TesteBarbeariaBot extends BotBase {
     });
   }
 
+  /**
+   * Tool `escalar_cancelamento` (Missão 023 W5) — DORMENTE por flag. O bot NUNCA
+   * cancela na agenda: a tool só ESCALA o pedido pro dono do clone (fire-and-forget,
+   * `sendClientCancellationAlert` captura toda falha) e devolve {ok,escalado} pro modelo.
+   *
+   * Extraída pra ser usada nos DOIS caminhos (individual + estabelecimento) — antes só o
+   * individual a expunha, então no estabelecimento um cliente que digitava "quero cancelar"
+   * (texto, não botão) fazia o LLM improvisar, podendo afirmar que cancelou SEM avisar o dono.
+   * O caller decide expor ou não pela flag CANCELAMENTO_ESCALADO_ENABLED — comportamento
+   * idêntico nos dois caminhos.
+   */
+  private buildEscalarCancelamentoTool(telefone: string): ToolDefinition {
+    return {
+      name: 'escalar_cancelamento',
+      description:
+        'Use SOMENTE quando o cliente pedir explicitamente para CANCELAR/DESMARCAR um ' +
+        'horario ja agendado e NAO quiser remarcar. NAO use para: remarcar/trocar de ' +
+        'horario (isso e novo agendamento via inserir_agendamento), confirmar presenca, ' +
+        'perguntar sobre horarios, ou desistir de algo que ainda nao foi agendado. ' +
+        'Esta ferramenta NAO remove nada da agenda — ela apenas avisa o responsavel, ' +
+        'que entra em contato com o cliente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          motivo: {
+            type: 'string',
+            description: 'Motivo do cancelamento, se o cliente informou. Vazio se nao disse.',
+          },
+          referencia_horario: {
+            type: 'string',
+            description:
+              'Dia/horario que o cliente mencionou querer cancelar, como ele falou. ' +
+              'Vazio se nao especificou.',
+          },
+        },
+        required: [],
+      },
+      run: async (args: unknown): Promise<{ ok: boolean; escalado: boolean }> => {
+        const a = (args ?? {}) as { motivo?: unknown; referencia_horario?: unknown };
+        const motivo = typeof a.motivo === 'string' ? a.motivo : '';
+        const referenciaHorario =
+          typeof a.referencia_horario === 'string' ? a.referencia_horario : '';
+        // NUNCA toca o GCal aqui. Fire-and-forget: o resultado do envio nunca derruba
+        // o atendimento (sendClientCancellationAlert captura toda falha internamente).
+        const r = await sendClientCancellationAlert({
+          slot: this.slot,
+          clienteTelefone: telefone,
+          motivo,
+          referenciaHorario,
+        });
+        // Pro modelo: sempre {ok:true, escalado:bool} — assim a IA fecha a resposta
+        // ("ja avisei o responsavel") sem nunca afirmar que cancelou de fato.
+        return { ok: true, escalado: r.escalado };
+      },
+    };
+  }
+
   protected async process(ctx: BotContext): Promise<string | null> {
     const { telefone, texto, pushName } = ctx.message;
     if (!texto.trim()) return null;
@@ -436,49 +493,7 @@ export class TesteBarbeariaBot extends BotBase {
     // A tool NÃO toca o GCal: nenhuma chamada de delete/createEvent. Apenas escala o
     // pedido pro dono do clone (fire-and-forget) e responde {ok, escalado} pro modelo.
     if (config.CANCELAMENTO_ESCALADO_ENABLED) {
-      tools.push({
-        name: 'escalar_cancelamento',
-        description:
-          'Use SOMENTE quando o cliente pedir explicitamente para CANCELAR/DESMARCAR um ' +
-          'horario ja agendado e NAO quiser remarcar. NAO use para: remarcar/trocar de ' +
-          'horario (isso e novo agendamento via inserir_agendamento), confirmar presenca, ' +
-          'perguntar sobre horarios, ou desistir de algo que ainda nao foi agendado. ' +
-          'Esta ferramenta NAO remove nada da agenda — ela apenas avisa o responsavel, ' +
-          'que entra em contato com o cliente.',
-        parameters: {
-          type: 'object',
-          properties: {
-            motivo: {
-              type: 'string',
-              description: 'Motivo do cancelamento, se o cliente informou. Vazio se nao disse.',
-            },
-            referencia_horario: {
-              type: 'string',
-              description:
-                'Dia/horario que o cliente mencionou querer cancelar, como ele falou. ' +
-                'Vazio se nao especificou.',
-            },
-          },
-          required: [],
-        },
-        run: async (args: unknown): Promise<{ ok: boolean; escalado: boolean }> => {
-          const a = (args ?? {}) as { motivo?: unknown; referencia_horario?: unknown };
-          const motivo = typeof a.motivo === 'string' ? a.motivo : '';
-          const referenciaHorario =
-            typeof a.referencia_horario === 'string' ? a.referencia_horario : '';
-          // NUNCA toca o GCal aqui. Fire-and-forget: o resultado do envio nunca derruba
-          // o atendimento (sendClientCancellationAlert captura toda falha internamente).
-          const r = await sendClientCancellationAlert({
-            slot: this.slot,
-            clienteTelefone: telefone,
-            motivo,
-            referenciaHorario,
-          });
-          // Pro modelo: sempre {ok:true, escalado:bool} — assim a IA fecha a resposta
-          // ("ja avisei o responsavel") sem nunca afirmar que cancelou de fato.
-          return { ok: true, escalado: r.escalado };
-        },
-      });
+      tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
 
     // ── consultar_pacote (ADR 0025 BLOCO 2a — DORMENTE por flag) ─────────────────
@@ -1123,6 +1138,15 @@ export class TesteBarbeariaBot extends BotBase {
         },
       },
     ];
+
+    // ── Cancelamento escalado (Missão 023 W5 — DORMENTE por flag) ────────────────
+    // MESMO comportamento do caminho individual: a tool SÓ é exposta com a flag ON e
+    // NÃO toca o GCal — apenas escala o pedido pro dono. Sem isto, um cliente que digita
+    // "quero cancelar" (texto, não botão) no estabelecimento fazia o LLM improvisar e
+    // podia afirmar que cancelou sem avisar o dono.
+    if (config.CANCELAMENTO_ESCALADO_ENABLED) {
+      tools.push(this.buildEscalarCancelamentoTool(telefone));
+    }
 
     const result = await runAgentConfigured({
       slot: this.slot,

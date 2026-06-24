@@ -22,15 +22,25 @@ vi.mock('@startap/db', () => ({
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
 
-const { getGcalForSlotMock, invalidateGcalCacheMock } = vi.hoisted(() => ({
+const { getGcalForSlotMock, getGcalsForSlotMock, invalidateGcalCacheMock } = vi.hoisted(() => ({
   getGcalForSlotMock: vi.fn(),
+  getGcalsForSlotMock: vi.fn(),
   invalidateGcalCacheMock: vi.fn(),
 }));
 vi.mock('@startap/integrations', () => ({
   gcal: {
     getGcalForSlot: (...a: unknown[]) => getGcalForSlotMock(...a),
+    getGcalsForSlot: (...a: unknown[]) => getGcalsForSlotMock(...a),
     invalidateGcalCache: (...a: unknown[]) => invalidateGcalCacheMock(...a),
   },
+}));
+
+// isEstabelecimentoSlot vem de portal-agendamentos.js (reusado pra a grade ser ciente de
+// estabelecimento). Mockado: default FALSE => caminho individual (todos os testes legados
+// inalterados). Os testes de estabelecimento ligam mockResolvedValue(true).
+const { isEstabelecimentoSlotMock } = vi.hoisted(() => ({ isEstabelecimentoSlotMock: vi.fn() }));
+vi.mock('./portal-agendamentos.js', () => ({
+  isEstabelecimentoSlot: (...a: unknown[]) => isEstabelecimentoSlotMock(...a),
 }));
 
 // loadScheduleConfig mockado (config vem do banco); funções puras REAIS via
@@ -102,6 +112,8 @@ async function buildApp(): Promise<FastifyInstance> {
 beforeEach(() => {
   vi.clearAllMocks();
   loadScheduleConfigMock.mockResolvedValue(CONFIG_OK);
+  // Default: clone INDIVIDUAL (todos os testes legados seguem byte-a-byte).
+  isEstabelecimentoSlotMock.mockResolvedValue(false);
 });
 
 describe('GET /portal/agenda/slots', () => {
@@ -247,6 +259,109 @@ describe('GET /portal/agenda/slots', () => {
       url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte`,
     });
     expect(res.statusCode).toBe(502);
+    await app.close();
+  });
+});
+
+// ── ESTABELECIMENTO (multi-profissional) — a grade tem que olhar a agenda do colaborador ──
+// Sem isto, getGcalForSlot (singular) não acha agenda própria do clone e devolve vazio em
+// todo dia → o front troca o form por "conecte a agenda" e o remarcar mostra "dia cheio".
+describe('GET /portal/agenda/slots — estabelecimento', () => {
+  const COLAB_ID = 42;
+
+  it('com colaborador_id: resolve a agenda DAQUELE colaborador (getGcalsForSlot) e calcula livres', async () => {
+    isEstabelecimentoSlotMock.mockResolvedValue(true);
+    const listEvents = vi.fn().mockResolvedValue([
+      {
+        id: 'ev1',
+        summary: 'Fulano - Corte | WhatsApp: 5511999990000',
+        start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+        end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+      },
+    ]);
+    getGcalsForSlotMock.mockResolvedValue([
+      { colaboradorId: COLAB_ID, nome: 'João', client: { listEvents } },
+      { colaboradorId: 99, nome: 'Maria', client: { listEvents: vi.fn() } },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte&colaborador_id=${COLAB_ID}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gcal_configured).toBe(true);
+    expect(body.aberto).toBe(true);
+    // 09-19h passo 30 = 20 slots; o evento do colaborador tira o 10:00 → 19 livres.
+    expect(body.count).toBe(19);
+    expect(body.slots).not.toContain('10:00');
+    expect(body.slots).toContain('10:30');
+    // Resolveu pelo PLURAL (agenda do colaborador), nunca pela agenda própria do clone.
+    expect(getGcalsForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+    // Listou APENAS a agenda do colaborador alvo (Maria/99 não foi consultada).
+    expect(listEvents).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('422 colaborador_obrigatorio: estabelecimento sem colaborador_id (igual ao POST)', async () => {
+    isEstabelecimentoSlotMock.mockResolvedValue(true);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('colaborador_obrigatorio');
+    // Nem chega a resolver agenda sem o profissional escolhido.
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 colaborador_nao_encontrado: id fora do tenant (anti-IDOR)', async () => {
+    isEstabelecimentoSlotMock.mockResolvedValue(true);
+    getGcalsForSlotMock.mockResolvedValue([
+      { colaboradorId: 99, nome: 'Maria', client: { listEvents: vi.fn() } },
+    ]);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte&colaborador_id=${COLAB_ID}`,
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('colaborador_nao_encontrado');
+    await app.close();
+  });
+
+  it('gcal_configured=false: estabelecimento sem nenhum colaborador com agenda ativa (pré-setup)', async () => {
+    isEstabelecimentoSlotMock.mockResolvedValue(true);
+    getGcalsForSlotMock.mockResolvedValue([]);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte&colaborador_id=${COLAB_ID}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().gcal_configured).toBe(false);
+    expect(res.json().slots).toEqual([]);
+    await app.close();
+  });
+
+  it('INDIVIDUAL inalterado: ignora colaborador_id e usa getGcalForSlot (singular)', async () => {
+    // isEstabelecimentoSlot=false (default) — mesmo mandando colaborador_id na query, o
+    // caminho individual roda byte-a-byte (não chama o resolvedor plural).
+    const listEvents = vi.fn().mockResolvedValue([]);
+    getGcalForSlotMock.mockResolvedValue({ listEvents });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/agenda/slots?data=${FUTURO}&servico=Corte&colaborador_id=${COLAB_ID}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(getGcalForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 });

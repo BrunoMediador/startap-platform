@@ -611,6 +611,53 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
     expect(systemPrompt).not.toContain('PROFISSIONAL');
     expect(systemPrompt).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
   });
+
+  // ── Cancelamento por texto livre escala TAMBÉM no estabelecimento (paridade c/ individual) ──
+  // Antes a tool escalar_cancelamento só existia no caminho individual → no estabelecimento o
+  // cliente que digitava "quero cancelar" fazia o LLM improvisar (podia mentir que cancelou) e
+  // o dono NÃO era avisado. Agora o gating é o MESMO nos dois caminhos.
+  it('flag OFF: escalar_cancelamento NÃO é exposta no estabelecimento (byte-a-byte)', async () => {
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    const tools = await estabToolsFor('quero cancelar', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
+    ]);
+    expect(tools.map((t) => t.name)).not.toContain('escalar_cancelamento');
+  });
+
+  it('flag ON: escalar_cancelamento É exposta no estabelecimento (paridade c/ individual)', async () => {
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = true;
+    const tools = await estabToolsFor('quero cancelar', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
+    ]);
+    expect(tools.map((t) => t.name)).toContain('escalar_cancelamento');
+  });
+
+  it('flag ON: rodar a tool no estabelecimento ESCALA (mock) sem cancelar de fato', async () => {
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = true;
+    mocks.sendClientCancellationAlert.mockResolvedValue({ ok: true, escalado: true });
+    const c1 = colabClientStub('cal-joao');
+    const tools = await estabToolsFor('quero cancelar meu horario', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1 },
+    ]);
+    const tool = tools.find((t) => t.name === 'escalar_cancelamento') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
+    };
+    const res = await tool.run({ motivo: 'imprevisto', referencia_horario: 'amanhã 10h' });
+    expect(res).toEqual({ ok: true, escalado: true });
+    // Só ESCALA pro dono — NUNCA cria/remove evento na agenda do colaborador.
+    expect(mocks.sendClientCancellationAlert).toHaveBeenCalledTimes(1);
+    expect(c1.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('NENHUMA tool do estabelecimento tem nome de delete/remover de GCal', async () => {
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = true;
+    const tools = await estabToolsFor('quero cancelar', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
+    ]);
+    for (const t of tools) {
+      expect(t.name).not.toMatch(/delet|remov|cancel.*agenda|apagar/i);
+    }
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════

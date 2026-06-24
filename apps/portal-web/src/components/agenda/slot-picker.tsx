@@ -25,6 +25,7 @@ export function SlotPicker({
   onPickDia,
   onPickHora,
   aviso,
+  colaboradorId = null,
 }: {
   slot: string;
   /** Nome do serviço (define a duração — necessário pra grade). */
@@ -35,9 +36,15 @@ export function SlotPicker({
   onPickHora: (hora: string) => void;
   /** Aviso amber inline (ex.: 409 recarregou a grade). */
   aviso?: string | null;
+  /**
+   * ESTABELECIMENTO: colaborador dono do evento sendo remarcado — a grade tem que
+   * olhar a agenda DELE. null no individual (single-agenda). Remarcar v1 não move o
+   * evento entre profissionais, então é sempre o colaborador atual do agendamento.
+   */
+  colaboradorId?: number | null;
 }) {
   const horariosQ = useHorarios(slot);
-  const slotsQ = useAgendaSlots(slot, dataSel, servico);
+  const slotsQ = useAgendaSlots(slot, dataSel, servico, colaboradorId);
   const strip = useMemo(() => buildDayStrip(horariosQ.data), [horariosQ.data]);
 
   return (

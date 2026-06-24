@@ -33,6 +33,7 @@ import {
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { requireTenant, withTenant } from '../lib/tenant.js';
+import { isEstabelecimentoSlot } from './portal-agendamentos.js';
 
 const log = logger.child({ service: 'portal-api', module: 'agenda-slots' });
 
@@ -42,6 +43,14 @@ const MAX_AHEAD_DAYS = 60;
 const querySchema = z.object({
   data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
   servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+  // ESTABELECIMENTO (multi-profissional): qual colaborador/agenda a grade consulta.
+  // É clone_colaboradores.id (numérico). OPCIONAL no schema porque o INDIVIDUAL não
+  // usa (single-agenda) — a obrigatoriedade no estabelecimento é validada no handler
+  // (422 'colaborador_obrigatorio', igual ao POST). '' / null => undefined.
+  colaborador_id: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.coerce.number().int().positive().optional(),
+  ),
 });
 
 /** Agrupa slots 'HH:mm' em manhã (<12h), tarde (12h–17h59) e noite (>=18h). */
@@ -71,7 +80,7 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
         detalhe: parsed.error.issues[0]?.message ?? 'query invalida',
       });
     }
-    const { data, servico } = parsed.data;
+    const { data, servico, colaborador_id } = parsed.data;
 
     // Janela: nada no passado (calendário de SP), nada além de +60 dias.
     const hoje = nowPartsInTz();
@@ -109,12 +118,49 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
     }
     const aberto = config.work[wd] != null;
 
-    const client = await gcal.getGcalForSlot(slot);
-    if (!client) {
-      // Agenda não conectada — estado esperado (pré-setup), não é erro.
-      return reply
-        .code(200)
-        .send({ gcal_configured: false, data, servico: servicoOut, aberto, ...vazio });
+    // ── Resolução da agenda que alimenta a grade (individual + estabelecimento) ──
+    // INDIVIDUAL: agenda única do clone (getGcalForSlot) — singular, inalterado.
+    // ESTABELECIMENTO: o clone NÃO tem agenda própria — os eventos vivem nas agendas
+    // dos colaboradores. A grade tem que olhar a agenda DAQUELE colaborador, senão
+    // getGcalForSlot devolve vazio → gcal_configured:false em todo dia (o front troca
+    // o form por "conecte sua agenda" e o remarcar mostra "dia cheio"). Espelha o
+    // gating do POST (#347/#359): exige colaborador_id (422 se faltar) e resolve a
+    // agenda dele contra getGcalsForSlot — lista já escopada por slot+tenant na
+    // integração (ADR 0024 §4), então colaborador alheio cai no 404 (anti-IDOR).
+    let client: NonNullable<Awaited<ReturnType<typeof gcal.getGcalForSlot>>>;
+
+    if (await isEstabelecimentoSlot(slot)) {
+      // Estabelecimento exige escolher o profissional (qual agenda a grade consulta).
+      if (colaborador_id === undefined) {
+        return reply.code(422).send({ error: 'colaborador_obrigatorio' });
+      }
+      const colaboradores = await gcal.getGcalsForSlot(slot);
+      if (colaboradores.length === 0) {
+        // Nenhum colaborador com agenda ativa (pré-setup) — estado esperado, não erro.
+        return reply
+          .code(200)
+          .send({ gcal_configured: false, data, servico: servicoOut, aberto, ...vazio });
+      }
+      const alvo = colaboradores.find((c) => c.colaboradorId === colaborador_id);
+      if (!alvo) {
+        // colaborador_id não pertence a ESTE slot/tenant (ou sem agenda ativa).
+        // Anti-IDOR: a lista só contém colaboradores deste tenant — alheio cai aqui.
+        log.warn(
+          { slot, colaboradorId: colaborador_id },
+          'slots: colaborador fora do tenant ou sem agenda ativa',
+        );
+        return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
+      }
+      client = alvo.client;
+    } else {
+      const single = await gcal.getGcalForSlot(slot);
+      if (!single) {
+        // Agenda não conectada — estado esperado (pré-setup), não é erro.
+        return reply
+          .code(200)
+          .send({ gcal_configured: false, data, servico: servicoOut, aberto, ...vazio });
+      }
+      client = single;
     }
 
     if (!aberto) {

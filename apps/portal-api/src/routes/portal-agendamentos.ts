@@ -139,7 +139,7 @@ const editarAgendamentoSchema = z
  * falha ao resolver o tipo degrada pro caminho individual (seguro — byte-a-byte
  * como hoje pra Cirilo/Samuel).
  */
-async function isEstabelecimentoSlot(slot: string): Promise<boolean> {
+export async function isEstabelecimentoSlot(slot: string): Promise<boolean> {
   if (!config.ESTABELECIMENTO_ENABLED) return false;
   try {
     const scope = await cloneColaboradores.getScopeBySlot(slot);

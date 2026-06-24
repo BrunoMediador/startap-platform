@@ -189,6 +189,49 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
     expect(params[13]).toBe(true); // pagamento INFORMADO (forma=null explícito) -> aplica no UPDATE
   });
 
+  // ── BUG de dinheiro: coluna `data` derivada em UTC, não BRT ────────────────────────
+  // O slice(0,10) do ISO devolvia o dia em UTC. Booking ≥21h BRT (= dia seguinte em UTC)
+  // caía na `data` do dia seguinte → faturamento/comissão/lista (filtram por `data`) não
+  // mostravam o atendimento noturno em "Hoje" e ele vazava pro mês seguinte. O fix deriva
+  // `data` no fuso America/Sao_Paulo. inicio_at/fim_at (TIMESTAMPTZ) NÃO mudam.
+  it('data derivada em BRT: booking 22:00 BRT (=01:00Z do dia seguinte) → data = o dia BRT', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 9, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt-noturno',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: 'pix',
+      // 22:00 BRT do dia 23/06 = 01:00Z do dia 24/06 (UTC-3).
+      inicioAt: '2026-06-24T01:00:00.000Z',
+      fimAt: '2026-06-24T01:30:00.000Z',
+    });
+    const [, params] = lastCall();
+    // data (13º param, índice 12) = dia BRT (23), NÃO o dia UTC (24).
+    expect(params[12]).toBe('2026-06-23');
+    // O instante absoluto (inicio_at) segue em UTC, intacto.
+    expect(params[10]).toBe('2026-06-24T01:00:00.000Z');
+  });
+
+  it('data derivada em BRT: booking 09:00 BRT (=12:00Z, mesmo dia) → data = o dia BRT', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 10, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt-manha',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: 'pix',
+      inicioAt: '2026-06-23T12:00:00.000Z', // 09:00 BRT
+      fimAt: '2026-06-23T12:30:00.000Z',
+    });
+    const [, params] = lastCall();
+    expect(params[12]).toBe('2026-06-23');
+  });
+
   // REMARCAÇÃO sem info de pagamento (sync) NÃO pode reverter a marca de pacote -> $14 FALSE
   // faz o UPDATE preservar forma_pagamento/valor/desconto antigos (senão a receita dobrava).
   it('REMARCAR (formaPagamento undefined): UPDATE preserva forma/valor antigos ($14=false)', async () => {

@@ -514,9 +514,25 @@ function toIso(d: Date | string | null | undefined): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-/** Dia (YYYY-MM-DD) de um instante; null se ausente -> deixa o banco usar now()::date. */
+/**
+ * Dia-calendário (YYYY-MM-DD) de um instante NO FUSO America/Sao_Paulo; null se ausente
+ * -> deixa o banco usar now()::date.
+ *
+ * BUG de dinheiro: o slice(0,10) do ISO devolvia o dia em UTC. Um agendamento às 22:00 BRT
+ * (= 01:00Z do dia seguinte) caía em `data` do dia seguinte → faturamento/comissão/lista
+ * (que filtram por `data`) não mostravam o atendimento noturno em "Hoje" e ele vazava pro
+ * mês seguinte. Aqui derivamos o dia DE PAREDE no TZ canônico (en-CA já produz YYYY-MM-DD),
+ * batendo com o LABEL exibido (format.ts) e com o relógio do dono. NÃO afeta inicio_at/fim_at
+ * (TIMESTAMPTZ — instante absoluto, corretos).
+ */
+const TZ_SAO_PAULO = 'America/Sao_Paulo';
+
 function isoToDateOnly(iso: string | null): string | null {
-  return iso ? (iso.slice(0, 10) as string) : null;
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  // en-CA formata como YYYY-MM-DD; timeZone projeta o instante no calendário de SP.
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ_SAO_PAULO }).format(d);
 }
 
 /**
