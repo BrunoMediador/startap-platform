@@ -11,7 +11,7 @@
  *   - máscara/validação do form (nome obrigatório, WhatsApp opcional BR).
  *   - formatação do resumo vivo ("sáb 14/06", "10:00–10:30").
  */
-import type { DiaSemana, Horarios } from './api-types';
+import type { CriarAgendamentoBody, DiaSemana, Horarios, ProductType } from './api-types';
 
 /** Quantos dias o DayStrip mostra (spec B3: hoje + 13). */
 export const DIAS_STRIP = 14;
@@ -191,4 +191,31 @@ export function validateNovoAgendamento(
       ...(digits.length > 0 ? { cliente_telefone: `55${digits}` } : {}),
     },
   };
+}
+
+// ── Profissional (só estabelecimento) ────────────────────────────────────────
+
+/**
+ * Monta o body do POST /portal/agendamentos casando com o gating do backend.
+ *
+ *  - estabelecimento: `colaborador_id` é OBRIGATÓRIO. Sem ele o backend responde
+ *    422 colaborador_obrigatorio, então travamos antes e devolvemos o erro do
+ *    seletor de profissional.
+ *  - individual/SOLO: `colaborador_id` NUNCA é enviado (1 agenda só) — o body sai
+ *    byte-a-byte igual ao de hoje.
+ *
+ * Função pura/testável (não conhece React) — a tela só decide produto/seleção.
+ */
+export function buildCriarAgendamentoBody(args: {
+  productType: ProductType;
+  base: { servico: string; data: string; hora: string } & NovoAgendamentoCliente;
+  colaboradorId: number | null;
+}): { ok: true; body: CriarAgendamentoBody } | { ok: false; error: 'colaborador_obrigatorio' } {
+  const { productType, base, colaboradorId } = args;
+  if (productType === 'estabelecimento') {
+    if (colaboradorId == null) return { ok: false, error: 'colaborador_obrigatorio' };
+    return { ok: true, body: { ...base, colaborador_id: colaboradorId } };
+  }
+  // individual: nunca manda colaborador_id (comportamento de hoje preservado).
+  return { ok: true, body: { ...base } };
 }

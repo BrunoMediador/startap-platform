@@ -25,12 +25,13 @@ import { Skeleton, SkeletonList, skeletonKeys } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
-import type { ConflitoReason, Servico, SlotsGrupos } from '@/lib/api-types';
+import type { Colaborador, ConflitoReason, Servico, SlotsGrupos } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatDuracao, formatPrecoCents } from '@/lib/format';
 import {
   type NovoAgendamentoErrors,
   addMinutosHora,
+  buildCriarAgendamentoBody,
   buildDayStrip,
   formatDiaCurto,
   formatDiaExtenso,
@@ -41,6 +42,7 @@ import {
   useAgendaSlots,
   useAgendamentos,
   useCriarAgendamento,
+  useEquipe,
   useHorarios,
   useServicos,
 } from '@/lib/queries';
@@ -59,6 +61,21 @@ function is422(err: unknown): boolean {
   return err instanceof ApiError && err.status === 422;
 }
 
+/** Código `error` do corpo de um ApiError (ex.: 'colaborador_obrigatorio'). */
+function errorCode(err: unknown): string | null {
+  if (err instanceof ApiError && err.body && typeof err.body === 'object' && 'error' in err.body) {
+    const e = (err.body as { error?: unknown }).error;
+    if (typeof e === 'string') return e;
+  }
+  return null;
+}
+
+/** 422/404 do estabelecimento sobre o profissional — toast, NÃO bloqueio de gcal. */
+function isColaboradorErro(err: unknown): boolean {
+  const code = errorCode(err);
+  return code === 'colaborador_obrigatorio' || code === 'colaborador_nao_encontrado';
+}
+
 /** Extrai o `reason` do corpo do 409 (shape do POST /portal/agendamentos). */
 function conflitoReason(body: unknown): ConflitoReason {
   if (body && typeof body === 'object' && 'reason' in body) {
@@ -69,18 +86,24 @@ function conflitoReason(body: unknown): ConflitoReason {
 }
 
 export default function NovoAgendamentoPage() {
-  const { slot } = useTenant();
+  const { slot, productType } = useTenant();
   const router = useRouter();
   const toast = useToast();
+  const isEstabelecimento = productType === 'estabelecimento';
 
   const servicosQ = useServicos(slot);
   const horariosQ = useHorarios(slot);
   // Só pro pré-check da agenda Google (mesma query da Início — cache quente).
   const agendamentosQ = useAgendamentos(slot);
+  // Profissionais: só no estabelecimento (no individual não há quem escolher).
+  const equipeQ = useEquipe(isEstabelecimento ? slot : '');
 
   const [servicoSel, setServicoSel] = useState<string | null>(null);
   const [dataSel, setDataSel] = useState<string | null>(null);
   const [horaSel, setHoraSel] = useState<string | null>(null);
+  const [colaboradorSel, setColaboradorSel] = useState<number | null>(null);
+  /** Erro inline do seletor de profissional (obrigatório no estabelecimento). */
+  const [colaboradorErro, setColaboradorErro] = useState<string | null>(null);
   const [nome, setNome] = useState('');
   const [telefone, setTelefone] = useState('');
   const [errors, setErrors] = useState<NovoAgendamentoErrors>({});
@@ -95,6 +118,8 @@ export default function NovoAgendamentoPage() {
   const servicos = servicosQ.data ?? [];
   const servico = servicos.find((s) => s.nome === servicoSel) ?? null;
   const strip = useMemo(() => buildDayStrip(horariosQ.data), [horariosQ.data]);
+  // Só ativos podem ser escolhidos (mesma regra da tela de Atendimento).
+  const colaboradores = (equipeQ.data?.colaboradores ?? []).filter((c) => c.ativo);
 
   // Agenda Google não conectada: pelo cache da Início, pela resposta da grade
   // ou por 422 (grade/POST). Estado explicativo — conectar é fase 3.
@@ -125,7 +150,14 @@ export default function NovoAgendamentoPage() {
     setAviso(null);
   }
 
-  const pronto = Boolean(servico && dataSel && horaSel && nome.trim());
+  function selecionarColaborador(id: number) {
+    setColaboradorSel(id);
+    setColaboradorErro(null);
+  }
+
+  // No estabelecimento, escolher o profissional é parte da prontidão.
+  const profissionalOk = !isEstabelecimento || colaboradorSel != null;
+  const pronto = Boolean(servico && dataSel && horaSel && nome.trim() && profissionalOk);
 
   function onConfirmar() {
     const res = validateNovoAgendamento({ nome, telefone });
@@ -136,37 +168,47 @@ export default function NovoAgendamentoPage() {
     setErrors({});
     if (!servico || !dataSel || !horaSel) return;
 
-    criar.mutate(
-      {
-        servico: servico.nome,
-        data: dataSel,
-        hora: horaSel,
-        ...res.value,
+    // Monta o body com o gating de profissional do backend (estabelecimento exige
+    // colaborador_id; individual nunca envia). Trava antes de bater na API.
+    const built = buildCriarAgendamentoBody({
+      productType,
+      base: { servico: servico.nome, data: dataSel, hora: horaSel, ...res.value },
+      colaboradorId: colaboradorSel,
+    });
+    if (!built.ok) {
+      setColaboradorErro('Escolha o profissional que vai atender.');
+      return;
+    }
+    setColaboradorErro(null);
+
+    criar.mutate(built.body, {
+      onSuccess: () => {
+        toast.success(`Horário marcado: ${servico.nome} · ${formatDiaCurto(dataSel)} · ${horaSel}`);
+        router.push('/inicio');
       },
-      {
-        onSuccess: () => {
-          toast.success(
-            `Horário marcado: ${servico.nome} · ${formatDiaCurto(dataSel)} · ${horaSel}`,
-          );
-          router.push('/inicio');
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) {
-            // Conflito de corrida com o robô: o slot escolhido some, a grade
-            // recarrega e dia/serviço ficam como estavam (020 B4).
-            setHoraSel(null);
-            setAviso(CONFLITO_MSG[conflitoReason(err.body)]);
-            slotsQ.refetch();
-            return;
-          }
-          if (is422(err)) {
-            setGcalBloqueado(true);
-            return;
-          }
-          toast.error('Não foi possível marcar. Tente de novo.');
-        },
+      onError: (err) => {
+        if (err instanceof ApiError && err.status === 409) {
+          // Conflito de corrida com o robô: o slot escolhido some, a grade
+          // recarrega e dia/serviço ficam como estavam (020 B4).
+          setHoraSel(null);
+          setAviso(CONFLITO_MSG[conflitoReason(err.body)]);
+          slotsQ.refetch();
+          return;
+        }
+        // Estabelecimento: profissional faltando (422) ou inválido (404) — toast
+        // claro + erro inline no seletor. Precede o bloqueio de gcal (mesmo 422).
+        if (isColaboradorErro(err)) {
+          setColaboradorErro('Escolha o profissional que vai atender.');
+          toast.error('Escolha um profissional pra marcar o horário.');
+          return;
+        }
+        if (is422(err)) {
+          setGcalBloqueado(true);
+          return;
+        }
+        toast.error('Não foi possível marcar. Tente de novo.');
       },
-    );
+    });
   }
 
   return (
@@ -208,6 +250,43 @@ export default function NovoAgendamentoPage() {
         />
       ) : (
         <div className="space-y-6">
+          {/* 0. Profissional — só estabelecimento (individual = 1 agenda só). */}
+          {isEstabelecimento && (
+            <section aria-labelledby="sec-profissional">
+              <h2
+                id="sec-profissional"
+                className="mx-0.5 mb-2.5 font-display text-[15px] font-semibold text-ink"
+              >
+                Profissional
+              </h2>
+              {equipeQ.isPending ? (
+                <SkeletonList rows={2} />
+              ) : equipeQ.isError ? (
+                <ErrorState
+                  title="Não foi possível carregar a equipe"
+                  onRetry={() => equipeQ.refetch()}
+                />
+              ) : colaboradores.length === 0 ? (
+                <NotaGrade texto="Nenhum profissional ativo. Cadastre um em Equipe pra marcar horários.">
+                  <Button variant="secondary" size="inline" onClick={() => router.push('/equipe')}>
+                    Ir pra Equipe
+                  </Button>
+                </NotaGrade>
+              ) : (
+                <ProfissionalRadioList
+                  colaboradores={colaboradores}
+                  selecionado={colaboradorSel}
+                  onPick={selecionarColaborador}
+                />
+              )}
+              {colaboradorErro && (
+                <p role="alert" className="mx-0.5 mt-2 text-[13px] font-medium text-danger">
+                  {colaboradorErro}
+                </p>
+              )}
+            </section>
+          )}
+
           {/* 1. Serviço */}
           <section aria-labelledby="sec-servico">
             <h2
@@ -438,6 +517,60 @@ function ServiceRadioList({
             </span>
             <span className="shrink-0 text-[12.5px] text-ink-soft">
               {formatDuracao(s.duracao_min)} · {formatPrecoCents(s.preco_cents)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Lista radio de profissionais (estabelecimento). 1 toque seleciona. */
+function ProfissionalRadioList({
+  colaboradores,
+  selecionado,
+  onPick,
+}: {
+  colaboradores: Colaborador[];
+  selecionado: number | null;
+  onPick: (id: number) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Escolha o profissional"
+      className="overflow-hidden rounded-card border border-line bg-surface shadow-card"
+    >
+      {colaboradores.map((c) => {
+        const ativo = c.id === selecionado;
+        return (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={ativo}
+            onClick={() => onPick(c.id)}
+            className={cn(
+              'flex min-h-[52px] w-full items-center gap-3 border-b border-line-soft px-[15px] py-3 text-left outline-none transition-colors last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand',
+              ativo ? 'bg-brand-soft' : 'hover:bg-surface-hover',
+            )}
+          >
+            <span
+              aria-hidden
+              className={cn(
+                'flex size-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px]',
+                ativo ? 'border-brand' : 'border-line-strong',
+              )}
+            >
+              {ativo && <span className="size-2.5 rounded-full bg-brand" />}
+            </span>
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate font-display text-[15px] font-semibold',
+                ativo ? 'text-brand' : 'text-ink',
+              )}
+            >
+              {c.nome}
             </span>
           </button>
         );

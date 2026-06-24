@@ -262,6 +262,12 @@ export interface CriarAgendamentoBody {
   hora: string; // 'HH:mm'
   cliente_nome: string;
   cliente_telefone?: string;
+  /**
+   * Profissional do estabelecimento que vai atender. OBRIGATÓRIO quando o tenant é
+   * `product_type=estabelecimento` (o backend responde 422 colaborador_obrigatorio
+   * sem ele); AUSENTE no individual/SOLO (1 agenda só — comportamento de hoje).
+   */
+  colaborador_id?: number;
 }
 
 /** 201 do POST — `agendamento` no MESMO shape da lista (prepend otimista ok). */
