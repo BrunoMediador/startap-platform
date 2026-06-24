@@ -95,6 +95,14 @@ const criarAgendamentoSchema = z.object({
     (v) => (v == null || v === '' ? undefined : v),
     telefoneSchema.optional(),
   ),
+  // ESTABELECIMENTO (multi-profissional): qual colaborador/agenda recebe o evento.
+  // É clone_colaboradores.id (numérico). OPCIONAL no schema porque o INDIVIDUAL não
+  // usa (single-agenda) — a obrigatoriedade no estabelecimento é validada no handler
+  // (422 'colaborador_obrigatorio'). '' / null => undefined (form individual não manda).
+  colaborador_id: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : v),
+    z.coerce.number().int().positive().optional(),
+  ),
 });
 
 // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
@@ -425,7 +433,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         detalhe: parsed.error.issues[0]?.message ?? 'payload invalido',
       });
     }
-    const { servico, data, hora, cliente_nome, cliente_telefone } = parsed.data;
+    const { servico, data, hora, cliente_nome, cliente_telefone, colaborador_id } = parsed.data;
 
     // Config do tenant (horários + serviços) — mesma fonte que o bot e o GET /slots.
     let config: Awaited<ReturnType<typeof loadScheduleConfig>>;
@@ -475,9 +483,45 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
     }
 
-    const client = await gcal.getGcalForSlot(slot);
-    if (!client) {
-      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    // ── Resolução da agenda DONA do evento (individual + estabelecimento) ──────
+    // INDIVIDUAL: agenda única do clone (getGcalForSlot), colaboradorId = null.
+    // ESTABELECIMENTO: o clone NÃO tem agenda própria — o evento nasce na agenda de
+    // UM colaborador (clone_colaboradores.gcal_calendar_id). Resolvemos o colaborador
+    // alvo (colaborador_id do body) contra a lista de getGcalsForSlot — que já é
+    // escopada por slot+tenant na integração (ADR 0024 §4). Um colaborador de outro
+    // tenant JAMAIS aparece nessa lista → input alheio é rejeitado naturalmente (404),
+    // mesma guarda anti-IDOR do DELETE/PATCH (#347).
+    let client: ResolvedGcalClient;
+    let colaboradorId: number | null = null;
+
+    if (await isEstabelecimentoSlot(slot)) {
+      // Estabelecimento exige escolher o profissional (qual agenda recebe o evento).
+      if (colaborador_id === undefined) {
+        return reply.code(422).send({ error: 'colaborador_obrigatorio' });
+      }
+      const colaboradores = await gcal.getGcalsForSlot(slot);
+      if (colaboradores.length === 0) {
+        // Nenhum colaborador com agenda ativa (pré-setup do estabelecimento).
+        return reply.code(422).send({ error: 'gcal_nao_configurado' });
+      }
+      const alvo = colaboradores.find((c) => c.colaboradorId === colaborador_id);
+      if (!alvo) {
+        // colaborador_id não pertence a ESTE slot/tenant (ou não tem agenda ativa).
+        // Anti-IDOR: a lista só contém colaboradores deste tenant — alheio cai aqui.
+        log.warn(
+          { slot, userId, colaboradorId: colaborador_id },
+          'agendamento manual negado: colaborador fora do tenant ou sem agenda ativa',
+        );
+        return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
+      }
+      client = alvo.client;
+      colaboradorId = alvo.colaboradorId;
+    } else {
+      const single = await gcal.getGcalForSlot(slot);
+      if (!single) {
+        return reply.code(422).send({ error: 'gcal_nao_configurado' });
+      }
+      client = single;
     }
 
     const startUtc = zonedWallTimeToUtc(data, startMins);
@@ -528,6 +572,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
           slot,
           userId,
           eventId: ev.id,
+          colaboradorId,
           servico: svc.name,
           data,
           hora,
@@ -538,9 +583,10 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
 
       // ── Gancho de billing derivado da agenda (ADR 0027 Fase B2) ────────────
       // Cria a linha de PREVISÃO do atendimento (origem='agenda'). Gated por slot
-      // (ATEND_FROM_AGENDA_SLOTS) e ISOLADO (try/catch interno: nunca derruba o POST). Este é
-      // o caminho INDIVIDUAL (single-agenda) — colaboradorId = null (SOLO; sem split de
-      // comissão). Preço resolvido do catálogo pelo servico (svc.name) dentro do helper.
+      // (ATEND_FROM_AGENDA_SLOTS) e ISOLADO (try/catch interno: nunca derruba o POST).
+      // colaboradorId = null no INDIVIDUAL (SOLO; sem split de comissão) e = a agenda do
+      // colaborador escolhido no ESTABELECIMENTO (a linha nasce com o profissional certo
+      // pra o relatório de comissão). Preço resolvido do catálogo pelo servico dentro do helper.
       await hookUpsertAtendimento({
         slot,
         eventId: ev.id,
@@ -549,7 +595,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         clienteContato: cliente_telefone ?? null,
         inicioAt: ev.start?.dateTime ?? startUtc.toISOString(),
         fimAt: ev.end?.dateTime ?? endUtc.toISOString(),
-        colaboradorId: null,
+        colaboradorId,
         mode: 'create',
       });
 
@@ -558,6 +604,9 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         titulo: ev.summary ?? summary,
         inicio: ev.start?.dateTime ?? ev.start?.date ?? startUtc.toISOString(),
         fim: ev.end?.dateTime ?? ev.end?.date ?? endUtc.toISOString(),
+        // Estabelecimento: ecoa o colaborador dono pro front renderizar na coluna
+        // certa (mesmo campo do DTO do GET). Ausente no individual (null).
+        ...(colaboradorId !== null ? { colaborador_id: colaboradorId } : {}),
       };
       return reply.code(201).send({ ok: true, agendamento });
     } catch (err) {
