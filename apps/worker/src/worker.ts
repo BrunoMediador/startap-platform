@@ -16,6 +16,7 @@ import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 import { runMonitor } from './jobs/monitor.js';
 import { runReconcilePackages } from './jobs/reconcile-packages.js';
+import { runReminders } from './jobs/reminders.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -370,6 +371,63 @@ async function main() {
     );
   } else {
     log.info('reconcile-packages: PACOTES_RECONCILE_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Lembrete de agendamento (one-way, configurável por clone — migration 060). Camada 1 do
+  // rollout: SÓ registra o cron com REMINDERS_ENABLED=true (default OFF). Com a env ausente o
+  // worker sobe normal e este cron NÃO existe (zero query/WAHA). Camada 2 (gate por-clone
+  // flow_clones.reminders_enabled) vive no SQL do runReminders. A cada 5 min (REMINDERS_CRON,
+  // default */5). Padrão inválido cai no fallback via scheduleCronSafe.
+  if (config.REMINDERS_ENABLED) {
+    log.info(
+      { cron: config.REMINDERS_CRON },
+      'reminders: cron registrado (REMINDERS_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.REMINDERS_CRON,
+      '*/5 * * * *',
+      { name: 'reminders', timezone: 'America/Sao_Paulo' },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let remindersResult: Awaited<ReturnType<typeof runReminders>> | null = null;
+        let remindersError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:reminders',
+          flowName: 'reminders',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job reminders iniciado',
+        });
+        try {
+          remindersResult = await runReminders();
+          // Só loga ciclo com atividade — com 0 clientes due fica mudo.
+          if (remindersResult.sent > 0 || remindersResult.failed > 0) {
+            log.info({ ...remindersResult }, 'reminders cycle');
+          }
+        } catch (e) {
+          remindersError = e;
+          log.error({ err: e }, 'reminders crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:reminders',
+            flowName: 'reminders',
+            bot: 'worker',
+            eventType: remindersError ? 'worker.job-failed' : 'worker.job-finished',
+            status: remindersError ? 'error' : 'success',
+            message: remindersError ? 'Job reminders falhou' : 'Job reminders concluído',
+            ...(remindersResult ? { metadata: remindersResult } : {}),
+            ...(remindersError ? { error: remindersError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('reminders: REMINDERS_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

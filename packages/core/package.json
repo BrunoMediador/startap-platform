@@ -14,6 +14,7 @@
     "./trial": "./dist/trial.js",
     "./package-phone": "./dist/package-phone.js",
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
+    "./reminders": "./dist/reminders.js",
     "./schemas": "./dist/schemas/flow-config.js"
   },
   "scripts": {

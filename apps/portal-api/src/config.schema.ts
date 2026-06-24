@@ -226,6 +226,17 @@ export const ConfigSchema = z.object({
   // independem deste gate. Mesma env no apps/api (bot). NUNCA hardcoded.
   ATEND_FROM_AGENDA_SLOTS: z.string().optional().default(''),
 
+  // ── Lembrete de agendamento (one-way, configurável por clone — migration 060) ──
+  // Kill-switch da camada de CONFIG do lembrete no portal (GET/PATCH /portal/lembretes).
+  // OPCIONAL no boot (ausente = OFF, lição #247: feature dormente nunca derruba o
+  // portal-api). OFF -> as rotas respondem 404 (não vazam; front esconde a seção) e nenhum
+  // fluxo existente é tocado; produção byte-a-byte como hoje. O ENVIO em si vive no worker
+  // (gated por REMINDERS_ENABLED lá) — esta flag só controla a UI de config. NUNCA hardcoded.
+  REMINDERS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

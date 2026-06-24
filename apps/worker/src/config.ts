@@ -91,6 +91,34 @@ export const WorkerConfigSchema = z.object({
   PACOTES_RECONCILE_CRON: z.string().default('0 9 * * *'),
   // Janela (horas) pra agrupar redeems do mesmo servico/credito como suspeita. Default 48h.
   PACOTES_RECONCILE_WINDOW_HOURS: z.coerce.number().int().positive().default(48),
+
+  // ── Lembrete de agendamento (one-way, configuravel por clone — migration 060) ──
+  // GATE GLOBAL do ENVIO. Com REMINDERS_ENABLED ausente/false o worker sobe normal e o cron
+  // 'reminders' NEM e registrado (zero query, zero chamada WAHA) — NO-OP total. Mesmo com a
+  // flag ON, so processa clones com flow_clones.reminders_enabled=true (gate POR-CLONE). Dois
+  // niveis (global + por-clone), igual ALERTS_ENABLED. OPCIONAL no boot (licao #247: NADA
+  // aqui e obrigatorio). Pra ligar em prod: devops seta REMINDERS_ENABLED=true + restart do
+  // worker; depois o dono liga o lembrete do clone dele pelo portal. NUNCA hardcoded.
+  REMINDERS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrao cron (croner). Default a cada 5 min (design). Padrao invalido NUNCA crasha o boot —
+  // worker.ts cai pro fallback via scheduleCronSafe.
+  REMINDERS_CRON: z.string().default('*/5 * * * *'),
+  // Horizonte (min) que a varredura olha pra frente: tem que cobrir a MAIOR janela (24h=1440)
+  // + folga. Default 1500 (25h). Atendimentos alem disso ainda nao entram em nenhuma janela.
+  REMINDERS_HORIZON_MIN: z.coerce.number().int().positive().default(1_500),
+  // Tolerancia (min) do gatilho de janela: dispara quando faltam (janela - tol, janela]. Cobre
+  // o passo do cron (*/5) sem perder/duplicar; o claim idempotente garante 1 envio. Default 6.
+  REMINDERS_TOLERANCE_MIN: z.coerce.number().int().positive().default(6),
+  // Teto de envios por CICLO por SESSAO WAHA (anti-flood/anti-ban da sessao do clone). Default
+  // 20. Acima disso o ciclo para de enviar por aquela sessao (os demais entram no proximo).
+  REMINDERS_MAX_PER_SESSION: z.coerce.number().int().positive().default(20),
+  // Delay humanizador (ms) antes de cada envio (typing + pausa). Default 1500.
+  REMINDERS_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
+  // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
+  REMINDERS_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

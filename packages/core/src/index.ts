@@ -10,3 +10,17 @@ export {
   packagePhoneHmac,
 } from './package-phone.js';
 export { isAtendFromAgendaEnabled } from './atend-from-agenda-gate.js';
+export {
+  REMINDER_TZ,
+  ALLOWED_REMINDER_WINDOWS_MIN,
+  DEFAULT_REMINDER_WINDOWS_MIN,
+  DEFAULT_REMINDER_TOLERANCE_MIN,
+  DEFAULT_REMINDER_TEMPLATE,
+  validateWindows,
+  resolveWindows,
+  isWindowDue,
+  minutesUntil,
+  formatHorarioBRT,
+  renderReminderTemplate,
+} from './reminders.js';
+export type { WindowsValidation, ReminderRenderVars } from './reminders.js';

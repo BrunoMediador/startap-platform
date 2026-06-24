@@ -26,6 +26,7 @@ import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalEquipeRoutes } from './routes/portal-equipe.js';
+import { portalLembretesRoutes } from './routes/portal-lembretes.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalPerfilRoutes } from './routes/portal-perfil.js';
 import { portalSignupRoutes } from './routes/portal-signup.js';
@@ -120,6 +121,10 @@ async function main() {
   // Gated por ATENDIMENTOS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual.
   // Cobre os dois cenários: individual (SOLO, sem comissão) e estabelecimento (EMPRESA).
   await app.register(portalAtendimentosRoutes);
+  // Config do lembrete de agendamento (one-way, por clone — migration 060). Gated por
+  // REMINDERS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual. O ENVIO vive
+  // no worker (gated lá também); esta rota só liga/desliga e ajusta janelas pela UI.
+  await app.register(portalLembretesRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);
