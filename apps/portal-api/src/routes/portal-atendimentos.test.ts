@@ -329,10 +329,11 @@ describe('GET /portal/relatorios/faturamento', () => {
 });
 
 describe('GET /portal/relatorios/comissao', () => {
-  it('200: SOLO retorna vazio/0 (sem profissionais), escopado', async () => {
+  it('200: SOLO retorna vazio/0, escopado, balde DEFAULT=faturado quando ausente', async () => {
     getComissaoMock.mockResolvedValue({
       de: '2026-06-01',
       ate: '2026-06-30',
+      balde: 'faturado',
       total_cents: 0,
       por_profissional: [],
     });
@@ -343,12 +344,67 @@ describe('GET /portal/relatorios/comissao', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().total_cents).toBe(0);
+    expect(res.json().balde).toBe('faturado');
+    // balde ausente -> default 'faturado' (comportamento histórico inalterado).
     expect(getComissaoMock).toHaveBeenCalledWith(
       injectedSlot,
       injectedTenant,
       '2026-06-01',
       '2026-06-30',
+      'faturado',
     );
+    await app.close();
+  });
+
+  it('200: balde=previsao repassa o balde à data layer (comissão projetada)', async () => {
+    getComissaoMock.mockResolvedValue({
+      de: '2026-06-01',
+      ate: '2026-06-30',
+      balde: 'previsao',
+      total_cents: 4000,
+      por_profissional: [
+        {
+          colaborador_id: 9,
+          profissional_nome: 'Eduardo',
+          total_bruto_cents: 10000,
+          comissao_pct: 40,
+          comissao_cents: 4000,
+          count: 3,
+        },
+      ],
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/relatorios/comissao?balde=previsao&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().balde).toBe('previsao');
+    expect(res.json().total_cents).toBe(4000);
+    expect(res.json().por_profissional[0]).toMatchObject({
+      colaborador_id: 9,
+      comissao_pct: 40,
+      comissao_cents: 4000,
+      total_bruto_cents: 10000,
+    });
+    expect(getComissaoMock).toHaveBeenCalledWith(
+      injectedSlot,
+      injectedTenant,
+      '2026-06-01',
+      '2026-06-30',
+      'previsao',
+    );
+    await app.close();
+  });
+
+  it('400: balde inválido (fora de previsao|faturado)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/relatorios/comissao?balde=tudo&de=2026-06-01&ate=2026-06-30',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(getComissaoMock).not.toHaveBeenCalled();
     await app.close();
   });
 });

@@ -71,6 +71,12 @@ const periodoSchema = z.object({
   ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ate deve ser YYYY-MM-DD'),
 });
 
+// Query do relatório de COMISSÃO: período + balde OPCIONAL (default 'faturado' =
+// comportamento histórico). 'previsao' = comissão projetada dos agendamentos futuros (ADR 0027).
+const comissaoQuerySchema = periodoSchema.extend({
+  balde: z.enum(['previsao', 'faturado']).default('faturado'),
+});
+
 // Query da LISTAGEM por balde (ADR 0027): balde + período obrigatórios.
 const listSchema = z.object({
   balde: z.enum(['previsao', 'faturado']),
@@ -284,14 +290,17 @@ export const portalAtendimentosRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(200).send(report);
   });
 
-  // GET /portal/relatorios/comissao?de=&ate= — comissão a pagar por profissional.
+  // GET /portal/relatorios/comissao?de=&ate=&balde=previsao|faturado — comissão por profissional.
+  // balde=faturado (DEFAULT) = comissão sobre o REALIZADO (snapshot congelado, comportamento
+  // histórico). balde=previsao = comissão PROJETADA dos agendamentos futuros (ADR 0027), com o
+  // pct CORRENTE do colaborador. SOLO -> lista vazia/0 nos dois. Escopo slot+tenant da sessão.
   app.get('/portal/relatorios/comissao', { preHandler: withTenant }, async (req, reply) => {
     const gate = await gateAtendimentos(req, reply);
     if (!gate) return reply;
-    const parsed = periodoSchema.safeParse(req.query ?? {});
+    const parsed = comissaoQuerySchema.safeParse(req.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({
-        error: 'periodo invalido',
+        error: 'parametros invalidos',
         issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
     }
@@ -300,6 +309,7 @@ export const portalAtendimentosRoutes: FastifyPluginAsync = async (app) => {
       gate.tenantId,
       parsed.data.de,
       parsed.data.ate,
+      parsed.data.balde,
     );
     return reply.code(200).send(report);
   });

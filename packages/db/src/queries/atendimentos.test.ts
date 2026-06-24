@@ -193,7 +193,7 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(r.previsto_total_cents).toBe(4500); // futuro/aberto, aditivo
   });
 
-  it('getComissao filtra por slot+tenant, só FATURADO e só linhas COM colaborador (SOLO=vazio)', async () => {
+  it('getComissao (default=faturado) filtra por slot+tenant, só FATURADO e só linhas COM colaborador (SOLO=vazio)', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const r = await getComissao('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
     const [sql, params] = lastCall();
@@ -203,22 +203,118 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     // ADR 0027: comissão só sobre faturado (passado) e nunca sobre linha deletada.
     expect(sql).toContain('a.deleted_at IS NULL');
     expect(sql).toContain('a.fim_at <= now()');
+    // Default = faturado: NUNCA conta agendamento futuro.
+    expect(sql).not.toContain('a.fim_at > now()');
+    // Faturado soma o snapshot CONGELADO (não recalcula).
+    expect(sql).toContain('SUM(a.comissao_cents)');
     expect(params).toEqual(['clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30']);
+    expect(r.balde).toBe('faturado');
     expect(r.total_cents).toBe(0); // SOLO -> sem comissão
     expect(r.por_profissional).toEqual([]);
   });
 
-  it('getComissao soma comissao_cents por profissional', async () => {
+  it('getComissao (faturado) soma o comissao_cents CONGELADO por profissional', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
-        { colaborador_id: 9, profissional_nome: 'Ana', comissao_cents: '2000', count: '2' },
-        { colaborador_id: 10, profissional_nome: 'Bia', comissao_cents: '1500', count: '1' },
+        {
+          colaborador_id: 9,
+          profissional_nome: 'Ana',
+          total_bruto_cents: '5000',
+          comissao_pct: '40.00',
+          comissao_cents: '2000',
+          count: '2',
+        },
+        {
+          colaborador_id: 10,
+          profissional_nome: 'Bia',
+          total_bruto_cents: '3000',
+          comissao_pct: '50.00',
+          comissao_cents: '1500',
+          count: '1',
+        },
       ],
       rowCount: 2,
     });
-    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30');
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    expect(r.balde).toBe('faturado');
     expect(r.total_cents).toBe(3500);
     expect(r.por_profissional).toHaveLength(2);
-    expect(r.por_profissional[0]).toMatchObject({ colaborador_id: 9, comissao_cents: 2000 });
+    expect(r.por_profissional[0]).toMatchObject({
+      colaborador_id: 9,
+      total_bruto_cents: 5000,
+      comissao_pct: 40,
+      comissao_cents: 2000,
+    });
+  });
+
+  it('getComissao balde=previsao: só agendamentos FUTUROS, projeta sobre o pct CORRENTE', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    const [sql, params] = lastCall();
+    // PREVISÃO: só futuro/agendado, nunca o predicado de faturado.
+    expect(sql).toContain("a.status = 'agendado'");
+    expect(sql).toContain('a.fim_at > now()');
+    expect(sql).not.toContain('a.fim_at <= now()');
+    // Projeta sobre o pct corrente do colaborador (não usa o snapshot congelado).
+    expect(sql).toContain('c.comissao_pct');
+    expect(sql).not.toContain('SUM(a.comissao_cents)');
+    // Mesmo escopo + só linhas COM colaborador + nunca deletado.
+    expect(sql).toContain('a.colaborador_id IS NOT NULL');
+    expect(sql).toContain('a.deleted_at IS NULL');
+    expect(params).toEqual(['clone_dragon', 'tid-2', '2026-06-01', '2026-06-30']);
+    expect(r.balde).toBe('previsao');
+    expect(r.total_cents).toBe(0);
+    expect(r.por_profissional).toEqual([]);
+  });
+
+  it('getComissao balde=previsao: soma a comissão PROJETADA (SQL) por profissional', async () => {
+    // A projeção é feita no SQL (round(bruto*pct/100)); aqui validamos o mapeamento do retorno.
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          colaborador_id: 9,
+          profissional_nome: 'Ana',
+          total_bruto_cents: '10000',
+          comissao_pct: '40.00',
+          comissao_cents: '4000',
+          count: '3',
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    expect(r.balde).toBe('previsao');
+    expect(r.total_cents).toBe(4000);
+    expect(r.por_profissional[0]).toMatchObject({
+      colaborador_id: 9,
+      total_bruto_cents: 10000,
+      comissao_pct: 40,
+      comissao_cents: 4000,
+    });
+  });
+
+  it('getComissao balde=previsao: profissional com comissao_pct=0 APARECE na lista (comissão 0)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          colaborador_id: 11,
+          profissional_nome: 'Zé',
+          total_bruto_cents: '8000',
+          comissao_pct: '0',
+          comissao_cents: '0',
+          count: '2',
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    expect(r.por_profissional).toHaveLength(1);
+    expect(r.por_profissional[0]).toMatchObject({
+      colaborador_id: 11,
+      comissao_pct: 0,
+      comissao_cents: 0, // pct 0 -> projeção 0, mas aparece com a base bruta
+      total_bruto_cents: 8000,
+    });
+    expect(r.total_cents).toBe(0);
   });
 });

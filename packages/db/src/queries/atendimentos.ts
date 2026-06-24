@@ -304,6 +304,11 @@ export async function getFaturamento(
 export interface ComissaoPorProfissionalRow {
   colaborador_id: number;
   profissional_nome: string | null;
+  /** Base BRUTA (SUM(valor - desconto)) das linhas do balde — denominador da comissão. */
+  total_bruto_cents: number;
+  /** % aplicado: FATURADO usa o snapshot (já congelado); PREVISÃO usa o pct CORRENTE do colaborador. */
+  comissao_pct: number;
+  /** FATURADO = SUM(comissao_cents congelado); PREVISÃO = round(bruto * pct/100) projetado. */
   comissao_cents: number;
   count: number;
 }
@@ -311,36 +316,79 @@ export interface ComissaoPorProfissionalRow {
 export interface ComissaoReport {
   de: string;
   ate: string;
+  /** Balde do relatório: 'faturado' (realizado) ou 'previsao' (agendamentos futuros). */
+  balde: Balde;
   total_cents: number;
   por_profissional: ComissaoPorProfissionalRow[];
 }
 
 /**
- * Relatório de COMISSÃO A PAGAR por profissional num período (soma comissao_cents
- * congelado). Comissão SÓ sobre FATURADO (passado, ADR 0027 — previsão não gera comissão)
- * e NÃO deletado, só linhas COM colaborador_id (SOLO não gera comissão -> lista vazia /
- * total 0). Escopo slot + tenant_id.
+ * Relatório de COMISSÃO por profissional num período. DOIS BALDES (ADR 0027):
+ *
+ *  - 'faturado' (DEFAULT — comportamento histórico inalterado): comissão sobre o REALIZADO.
+ *    Soma o comissao_cents CONGELADO (snapshot da venda) sobre o predicado canônico de
+ *    faturado (deleted_at NULL, status<>'cancelado', fim_at<=now() OU origem='manual').
+ *
+ *  - 'previsao' (NOVO): comissão PROJETADA dos agendamentos futuros (deleted_at NULL,
+ *    status='agendado', fim_at>now()). As linhas de previsão têm comissao_cents=0 congelado
+ *    (o snapshot só acontece ao virar faturado), então a comissão é CALCULADA: para cada
+ *    linha, round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE do colaborador
+ *    (clone_colaboradores.comissao_pct) — MESMA regra do calcComissaoCents, agregada em SQL.
+ *
+ * Comum aos dois: só linhas COM colaborador_id (SOLO não gera comissão -> lista vazia /
+ * total 0). Profissional com comissao_pct=0 APARECE na lista (comissão 0). Escopo
+ * slot + tenant_id (defesa em profundidade RLS). Período inclusivo por `data`.
  */
 export async function getComissao(
   slot: string,
   tenantId: string,
   de: string,
   ate: string,
+  balde: Balde = 'faturado',
 ): Promise<ComissaoReport> {
+  // Predicado do balde — ambos com escopo slot+tenant + só linhas COM colaborador.
+  // faturado: snapshot congelado; previsao: projeção sobre o pct corrente.
+  const baldeCond =
+    balde === 'previsao' ? "a.status = 'agendado' AND a.fim_at > now()" : _FATURADO_SQL_A;
+
+  // comissao_cents:
+  //  - faturado: SUM do snapshot congelado (a.comissao_cents).
+  //  - previsao: SUM por linha de round(GREATEST(valor-desconto,0) * pct corrente / 100),
+  //    com COALESCE(c.comissao_pct,0) — colaborador sem pct -> projeta 0 (mas aparece).
+  // comissao_pct exposto:
+  //  - faturado: pct médio efetivo (comissao/bruto*100), 0 se sem base — só informativo.
+  //  - previsao: o pct corrente do colaborador (uniforme por profissional).
+  const comissaoExpr =
+    balde === 'previsao'
+      ? 'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(c.comissao_pct, 0) / 100.0)), 0)::bigint'
+      : 'COALESCE(SUM(a.comissao_cents), 0)::bigint';
+  const pctExpr =
+    balde === 'previsao'
+      ? 'COALESCE(MAX(c.comissao_pct), 0)::numeric'
+      : `CASE WHEN COALESCE(SUM(a.valor_cents - a.desconto_cents), 0) > 0
+              THEN ROUND(COALESCE(SUM(a.comissao_cents), 0)::numeric
+                         / SUM(a.valor_cents - a.desconto_cents)::numeric * 100, 2)
+              ELSE 0 END`;
+
   const r = await query<{
     colaborador_id: number;
     profissional_nome: string | null;
+    total_bruto_cents: string;
+    comissao_pct: string;
     comissao_cents: string;
     count: string;
   }>(
     `SELECT a.colaborador_id,
             c.nome AS profissional_nome,
-            COALESCE(SUM(a.comissao_cents), 0)::bigint AS comissao_cents,
+            COALESCE(SUM(a.valor_cents - a.desconto_cents), 0)::bigint AS total_bruto_cents,
+            ${pctExpr} AS comissao_pct,
+            ${comissaoExpr} AS comissao_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos a
        LEFT JOIN clone_colaboradores c
          ON c.id = a.colaborador_id AND c.slot = a.slot
-      WHERE a.slot = $1 AND a.tenant_id = $2 AND ${_FATURADO_SQL_A}
+      WHERE a.slot = $1 AND a.tenant_id = $2 AND ${baldeCond}
+        AND a.deleted_at IS NULL
         AND a.colaborador_id IS NOT NULL
         AND a.data >= $3 AND a.data <= $4
       GROUP BY a.colaborador_id, c.nome
@@ -351,6 +399,8 @@ export async function getComissao(
   const rows = r.rows.map((x) => ({
     colaborador_id: Number(x.colaborador_id),
     profissional_nome: x.profissional_nome,
+    total_bruto_cents: Number(x.total_bruto_cents),
+    comissao_pct: Number(x.comissao_pct),
     comissao_cents: Number(x.comissao_cents),
     count: Number(x.count),
   }));
@@ -358,6 +408,7 @@ export async function getComissao(
   return {
     de,
     ate,
+    balde,
     total_cents: rows.reduce((acc, x) => acc + x.comissao_cents, 0),
     por_profissional: rows,
   };
