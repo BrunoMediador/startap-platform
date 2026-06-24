@@ -157,3 +157,112 @@ describe('update — comissao_pct (update parcial)', () => {
     expect(mockConnect).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX: serviço vinculado ao colaborador TEM que existir no catálogo do clone
+// (flow_clones.servicos). Antes, qualquer free-text ("cirurgia") era aceito.
+describe('create — valida serviços contra o catálogo do clone', () => {
+  /**
+   * Programa create + o catálogo do clone. catalogoNomes = nomes em flow_clones.servicos
+   * (como { nome } — formato real). BEGIN/COMMIT ok; INSERT devolve a linha dada.
+   */
+  function programCreateComCatalogo(
+    insRow: Record<string, unknown>,
+    catalogoNomes: string[],
+  ): void {
+    const servicos = catalogoNomes.map((nome) => ({ nome, preco_cents: 1000, duracao_min: 30 }));
+    mockClientQuery.mockReset().mockImplementation(async (sql: string) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) return { rows: [], rowCount: 0 };
+      if (/SELECT servicos FROM flow_clones/i.test(sql))
+        return { rows: [{ servicos }], rowCount: 1 };
+      if (/INSERT INTO clone_colaboradores/i.test(sql)) return { rows: [insRow], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+  }
+
+  it('serviço existente (case/trim tolerado) -> cria normal', async () => {
+    programCreateComCatalogo({ ...RAW_ROW, servicos: ['Corte'] }, ['Corte', 'Barba']);
+    // Input com caixa/espaço diferentes do catálogo deve casar.
+    const row = await create(
+      { slot: 'clone_x', tenantId: 'tid-1', nome: 'Ana', servicos: ['  corte '] },
+      null,
+    );
+    expect(row.servicos).toEqual(['Corte']);
+    // O INSERT foi disparado (não houve rejeição).
+    const ins = mockClientQuery.mock.calls.find((c) =>
+      /INSERT INTO clone_colaboradores/i.test(String(c[0])),
+    );
+    expect(ins).toBeTruthy();
+  });
+
+  it('serviço fora do catálogo ("cirurgia") -> ColaboradorRuleError unknown_servico, sem INSERT', async () => {
+    programCreateComCatalogo({ ...RAW_ROW }, ['Corte', 'Barba']);
+    await expect(
+      create({ slot: 'clone_x', tenantId: 'tid-1', nome: 'Ana', servicos: ['cirurgia'] }, null),
+    ).rejects.toMatchObject({ name: 'ColaboradorRuleError', code: 'unknown_servico' });
+    // Nunca chegou ao INSERT; e deu ROLLBACK.
+    const ins = mockClientQuery.mock.calls.find((c) =>
+      /INSERT INTO clone_colaboradores/i.test(String(c[0])),
+    );
+    expect(ins).toBeUndefined();
+    const rolledBack = mockClientQuery.mock.calls.some((c) => /ROLLBACK/i.test(String(c[0])));
+    expect(rolledBack).toBe(true);
+  });
+
+  it('lista de serviços vazia -> NÃO consulta catálogo (fallback p/ todos)', async () => {
+    programCreateComCatalogo({ ...RAW_ROW, servicos: [] }, ['Corte']);
+    await create({ slot: 'clone_x', tenantId: 'tid-1', nome: 'Ana', servicos: [] }, null);
+    const consultou = mockClientQuery.mock.calls.some((c) =>
+      /SELECT servicos FROM flow_clones/i.test(String(c[0])),
+    );
+    expect(consultou).toBe(false);
+  });
+});
+
+describe('update — valida serviços contra o catálogo do clone', () => {
+  function programUpdateComCatalogo(
+    updRow: Record<string, unknown> | null,
+    catalogoNomes: string[],
+  ): void {
+    const servicos = catalogoNomes.map((nome) => ({ nome, preco_cents: 1000, duracao_min: 30 }));
+    mockClientQuery.mockReset().mockImplementation(async (sql: string) => {
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) return { rows: [], rowCount: 0 };
+      if (/SELECT servicos FROM flow_clones/i.test(sql))
+        return { rows: [{ servicos }], rowCount: 1 };
+      if (/UPDATE clone_colaboradores/i.test(sql))
+        return updRow ? { rows: [updRow], rowCount: 1 } : { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 0 };
+    });
+  }
+
+  it('troca p/ serviço existente -> UPDATE normal', async () => {
+    programUpdateComCatalogo({ ...RAW_ROW, servicos: ['Barba'] }, ['Corte', 'Barba']);
+    const row = await update('clone_x', 1, { servicos: ['Barba'] }, null);
+    expect(row?.servicos).toEqual(['Barba']);
+    const upd = mockClientQuery.mock.calls.find((c) =>
+      /UPDATE clone_colaboradores/i.test(String(c[0])),
+    );
+    expect(upd).toBeTruthy();
+  });
+
+  it('troca p/ serviço fora do catálogo -> unknown_servico, sem UPDATE', async () => {
+    programUpdateComCatalogo({ ...RAW_ROW }, ['Corte', 'Barba']);
+    await expect(update('clone_x', 1, { servicos: ['cirurgia'] }, null)).rejects.toMatchObject({
+      name: 'ColaboradorRuleError',
+      code: 'unknown_servico',
+    });
+    const upd = mockClientQuery.mock.calls.find((c) =>
+      /UPDATE clone_colaboradores/i.test(String(c[0])),
+    );
+    expect(upd).toBeUndefined();
+  });
+
+  it('patch SEM serviços -> não consulta catálogo (não bloqueia edição de nome)', async () => {
+    programUpdateComCatalogo({ ...RAW_ROW, nome: 'Ana B' }, ['Corte']);
+    await update('clone_x', 1, { nome: 'Ana B' }, null);
+    const consultou = mockClientQuery.mock.calls.some((c) =>
+      /SELECT servicos FROM flow_clones/i.test(String(c[0])),
+    );
+    expect(consultou).toBe(false);
+  });
+});

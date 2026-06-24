@@ -15,9 +15,14 @@ import { pool, query } from '../client.js';
 /** Tipo de conta de um clone. Default no banco é 'individual' (migration 052). */
 export type ProductType = 'individual' | 'estabelecimento';
 
-/** Erro de regra de negócio (seat_cap cheio, homônimo) — caller mapeia pra 409. */
+/**
+ * Erro de regra de negócio (seat_cap cheio, homônimo, serviço fora do catálogo).
+ * O caller mapeia: `unknown_servico` -> 400 (input inválido do operador/dono);
+ * os demais -> 409 (conflito de estado/regra). Ver sendRuleError no portal e o
+ * handler do gestão (server.js).
+ */
 export class ColaboradorRuleError extends Error {
-  readonly code: 'seat_cap_full' | 'duplicate_name' | 'not_estabelecimento';
+  readonly code: 'seat_cap_full' | 'duplicate_name' | 'not_estabelecimento' | 'unknown_servico';
   constructor(code: ColaboradorRuleError['code'], message: string) {
     super(message);
     this.name = 'ColaboradorRuleError';
@@ -95,6 +100,71 @@ export function normalizeColaboradorServicos(arr: unknown): string[] {
     if (out.length >= 50) break;
   }
   return out;
+}
+
+/**
+ * Chave de comparação de nome de serviço: trim + lowercase. Usada pra casar o
+ * serviço vinculado ao colaborador contra o catálogo do clone tolerando
+ * diferença de caixa/espaços (ex.: " Corte " == "corte"). NÃO normaliza acento
+ * de propósito: o catálogo é a fonte de verdade e o operador escolhe de uma
+ * lista; "Cirúrgia" != "cirurgia" só importaria se ambos existissem no catálogo.
+ */
+function servicoKey(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/**
+ * Lê o conjunto de nomes de serviço do CATÁLOGO do clone (flow_clones.servicos,
+ * array de { nome, preco_cents, duracao_min }) como chaves normalizadas
+ * (trim+lowercase). Usa o `client` da transação em curso pra ficar consistente
+ * com o INSERT/UPDATE e escopado pelo MESMO slot (isolamento, regra de ouro 5).
+ * Catálogo vazio/ausente -> Set vazio (nenhum serviço é vinculável; o caller
+ * rejeita qualquer item — coerente com a UI "cadastre serviços primeiro").
+ */
+async function getCatalogoKeys(client: pg.PoolClient, slot: string): Promise<Set<string>> {
+  const r = await client.query<{ servicos: unknown }>(
+    'SELECT servicos FROM flow_clones WHERE slot = $1 LIMIT 1',
+    [slot],
+  );
+  const raw = r.rows[0]?.servicos;
+  const keys = new Set<string>();
+  if (!Array.isArray(raw)) return keys;
+  for (const item of raw) {
+    const nome =
+      item && typeof item === 'object' && 'nome' in item
+        ? String((item as { nome: unknown }).nome ?? '')
+        : typeof item === 'string'
+          ? item
+          : '';
+    const key = servicoKey(nome);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+/**
+ * Valida que TODO serviço vinculado ao colaborador existe no catálogo do clone
+ * (por nome, case/trim-insensitive). Lança ColaboradorRuleError('unknown_servico')
+ * no primeiro que não existir — esse é o coração do fix: sem isso, um free-text
+ * ("cirurgia") era aceito direto no banco. Lista vazia passa de propósito
+ * (colaborador sem serviço = fallback pra TODOS, comportamento legítimo atual).
+ * Roda DENTRO da transação (mesmo client/slot) pra ser atômico com o write.
+ */
+async function assertServicosNoCatalogo(
+  client: pg.PoolClient,
+  slot: string,
+  servicos: string[],
+): Promise<void> {
+  if (servicos.length === 0) return;
+  const catalogo = await getCatalogoKeys(client, slot);
+  for (const s of servicos) {
+    if (!catalogo.has(servicoKey(s))) {
+      throw new ColaboradorRuleError(
+        'unknown_servico',
+        `o serviço "${s}" não existe no catálogo deste cliente — cadastre na aba Serviços antes de vinculá-lo ao colaborador`,
+      );
+    }
+  }
 }
 
 /**
@@ -207,6 +277,9 @@ export async function create(
         );
       }
     }
+    // Coração do fix: todo serviço vinculado tem que existir no catálogo do clone.
+    // Lança 'unknown_servico' (-> 400 no caller) e o catch abaixo dá ROLLBACK.
+    await assertServicosNoCatalogo(client, input.slot, servicos);
     const ins = await client.query<ColaboradorRowRaw>(
       `INSERT INTO clone_colaboradores (slot, tenant_id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem, comissao_pct)
        VALUES ($1, $2, $3, NULL, 'pending', $4::jsonb, $5, $6, $7)
@@ -252,6 +325,9 @@ export async function update(
 ): Promise<ColaboradorRow | null> {
   const sets: string[] = [];
   const vals: unknown[] = [];
+  // Serviços normalizados quando o patch os inclui (validados contra o catálogo
+  // DENTRO da transação, abaixo). null = patch não mexe em serviços.
+  let servicosToValidate: string[] | null = null;
 
   if (patch.nome !== undefined) {
     const nome = String(patch.nome).trim().slice(0, 160);
@@ -260,7 +336,8 @@ export async function update(
     sets.push(`nome = $${vals.length}`);
   }
   if (patch.servicos !== undefined) {
-    vals.push(JSON.stringify(normalizeColaboradorServicos(patch.servicos)));
+    servicosToValidate = normalizeColaboradorServicos(patch.servicos);
+    vals.push(JSON.stringify(servicosToValidate));
     sets.push(`servicos = $${vals.length}::jsonb`);
   }
   if (patch.ordem !== undefined) {
@@ -286,6 +363,11 @@ export async function update(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Coração do fix (PATCH): se o patch troca os serviços, todo nome tem que existir
+    // no catálogo do clone. Lança 'unknown_servico' (-> 400) e o catch dá ROLLBACK.
+    if (servicosToValidate !== null) {
+      await assertServicosNoCatalogo(client, slot, servicosToValidate);
+    }
     if (patch.ativo !== undefined) {
       const ativo = Boolean(patch.ativo);
       if (ativo && seatCap !== null) {
