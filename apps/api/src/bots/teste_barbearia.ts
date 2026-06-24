@@ -340,6 +340,7 @@ export class TesteBarbeariaBot extends BotBase {
             });
             // Gancho de billing derivado da agenda (ADR 0027) — gated por slot (ATEND_FROM_AGENDA_SLOTS);
             // slot fora da lista = no-op. Best-effort: nunca quebra o agendamento (try/catch interno). Individual = colaborador null.
+            // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
               summary,
@@ -347,6 +348,7 @@ export class TesteBarbeariaBot extends BotBase {
               start,
               end,
               colaboradorId: null,
+              formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
             });
             return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
           }
@@ -383,6 +385,7 @@ export class TesteBarbeariaBot extends BotBase {
           });
           // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
           // OFF = no-op. Idempotente pelo unique parcial (slot, gcal_event_id). Individual = colaborador null.
+          // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary,
@@ -390,6 +393,7 @@ export class TesteBarbeariaBot extends BotBase {
             start,
             end,
             colaboradorId: null,
+            formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
           });
           return { ok: true, eventId: ev.id, summary: ev.summary, ...(pacote ? { pacote } : {}) };
         },
@@ -636,6 +640,13 @@ export class TesteBarbeariaBot extends BotBase {
     start: string;
     end: string;
     colaboradorId?: number | null;
+    /**
+     * Forma de pagamento DERIVADA da dedução de pacote (ADR 0027 — bug DOBRA receita).
+     * Quando o agendamento foi pago via PACOTE (maybeDeduzirPacote.descontou_do_pacote=true),
+     * o caller passa 'pacote' aqui -> upsertAtendimentoFromEvent zera valor_cents (a receita
+     * já entrou na venda do pacote; não contar 2×). Ausente/undefined = previsão normal.
+     */
+    formaPagamento?: string | null;
   }): Promise<void> {
     // GATE POR-CLONE: slot fora da lista (vazia = todos) -> nada acontece. Byte-a-byte
     // o bot de hoje (Cirilo/Samuel inalterados). this.slot SEMPRE do clone (isolamento).
@@ -666,6 +677,8 @@ export class TesteBarbeariaBot extends BotBase {
 
       // valor automático: o helper resolve do flow_clones.servicos pelo servicoNome
       // (valorCents ausente). origem='agenda', status='agendado' definidos no helper.
+      // formaPagamento='pacote' (quando o pacote foi deduzido) -> o helper zera valor_cents
+      // (não conta receita 2×, ADR 0027 bug DOBRA). Ausente -> previsão normal (forma null).
       const row = await atendimentos.upsertAtendimentoFromEvent({
         slot: this.slot,
         tenantId,
@@ -675,6 +688,7 @@ export class TesteBarbeariaBot extends BotBase {
         clienteNome: clienteNome || null,
         inicioAt: input.start,
         fimAt: input.end,
+        formaPagamento: input.formaPagamento ?? null,
       });
       this.log.info(
         {
@@ -996,6 +1010,7 @@ export class TesteBarbeariaBot extends BotBase {
             });
             // Gancho de billing derivado da agenda (ADR 0027) — gated; OFF = no-op. Best-effort.
             // Estabelecimento: passa o colaborador que recebeu o evento.
+            // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
               summary,
@@ -1003,6 +1018,7 @@ export class TesteBarbeariaBot extends BotBase {
               start,
               end,
               colaboradorId: colaborador.colaboradorId,
+              formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
             });
             return {
               ok: true,
@@ -1047,6 +1063,7 @@ export class TesteBarbeariaBot extends BotBase {
           });
           // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
           // OFF = no-op. Best-effort. Estabelecimento: colaborador que recebeu o evento.
+          // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary,
@@ -1054,6 +1071,7 @@ export class TesteBarbeariaBot extends BotBase {
             start,
             end,
             colaboradorId: colaborador.colaboradorId,
+            formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
           });
           return {
             ok: true,

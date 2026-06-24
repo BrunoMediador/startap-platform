@@ -135,39 +135,77 @@ export function formatDiaRelativo(iso: string | null): string {
 }
 
 /**
+ * Fuso da barbearia (BR). Datas/horas de agendamento (timestamptz vindos do GCal/Postgres em
+ * UTC) DEVEM ser exibidas neste fuso, NUNCA no fuso do runtime (Next SSR roda em UTC; o
+ * navegador pode estar em qualquer lugar). Sem isto, o label do DIA cai no dia errado pra
+ * horários da noite (ex.: 22:00 BRT = 01:00 UTC do dia seguinte). ADR 0027 — bug de data.
+ */
+const BR_TZ = 'America/Sao_Paulo';
+
+/**
+ * Componentes do calendário de um instante NO fuso BR (year/month/day inteiros). Usa
+ * Intl.DateTimeFormat (en-CA -> "YYYY-MM-DD") pra extrair o dia civil BR de forma
+ * determinística, independente do fuso do runtime. Helper interno do split de DIA.
+ */
+function brCalendarParts(d: Date): { year: number; month: number; day: number } {
+  const iso = d.toLocaleDateString('en-CA', {
+    timeZone: BR_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }); // "2026-06-23"
+  const [y, mo, da] = iso.split('-');
+  return { year: Number(y), month: Number(mo), day: Number(da) };
+}
+
+/** Número serial do dia civil BR (dias desde a época) — base da comparação hoje/amanhã/ontem. */
+function brDaySerial(d: Date): number {
+  const { year, month, day } = brCalendarParts(d);
+  // Date.UTC com os componentes BR -> serial estável (não sofre DST do runtime).
+  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
+}
+
+/**
  * Rotulo de DIA pt-BR pra um agendamento (item 1). Aceita ISO datetime OU date
  * puro "YYYY-MM-DD". Usa "hoje"/"amanhã"/"ontem" quando perto; senao "9 de jun".
- * Date puro vira meia-noite LOCAL (nao UTC) pra a comparacao de dia bater.
+ * SEMPRE no fuso da barbearia (BR_TZ) — o dia é o dia CIVIL da barbearia, não do runtime.
  */
 export function formatAgendamentoDia(inicio: string | null, now = new Date()): string {
   const d = parseLocalDate(inicio);
   if (!d) return 'Sem data';
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOf(d) - startOf(now)) / 86_400_000);
+  const diffDays = brDaySerial(d) - brDaySerial(now);
   if (diffDays === 0) return 'Hoje';
   if (diffDays === 1) return 'Amanhã';
   if (diffDays === -1) return 'Ontem';
-  return d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'short' }).replace('.', '');
+  return d
+    .toLocaleDateString('pt-BR', { timeZone: BR_TZ, day: 'numeric', month: 'short' })
+    .replace('.', '');
 }
 
 /**
  * Hora pt-BR "14:30" pra um agendamento. Date puro (sem hora) -> "" (dia inteiro).
  * Distingue de formatHora (que devolve "--:--" em null) pra nao poluir a UI.
+ * SEMPRE no fuso da barbearia (BR_TZ) — a hora é a hora local da barbearia.
  */
 export function formatAgendamentoHora(inicio: string | null): string {
   if (!inicio) return '';
   if (/^\d{4}-\d{2}-\d{2}$/.test(inicio)) return ''; // date puro: sem horario
   const d = new Date(inicio);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('pt-BR', { timeZone: BR_TZ, hour: '2-digit', minute: '2-digit' });
 }
 
-/** ISO datetime ou date puro "YYYY-MM-DD" -> Date local (helper interno). */
+/**
+ * ISO datetime ou date puro "YYYY-MM-DD" -> Date (helper interno). Date puro vira meia-noite
+ * BR (não meia-noite UTC nem do runtime): constrói o instante que, no fuso BR, é 00:00 daquele
+ * dia, pra que brDaySerial/format devolvam o dia civil correto. ISO datetime passa direto.
+ */
 function parseLocalDate(inicio: string | null): Date | null {
   if (!inicio) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(inicio);
   if (m) {
-    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    // BR está em UTC-3 (sem DST desde 2019) -> meia-noite BR = 03:00 UTC do mesmo dia.
+    const d = new Date(`${m[1]}-${m[2]}-${m[3]}T03:00:00.000Z`);
     return Number.isNaN(d.getTime()) ? null : d;
   }
   const d = new Date(inicio);

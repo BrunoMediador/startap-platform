@@ -978,6 +978,63 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
         fimAt: '2026-06-16T13:30:00-03:00',
       }),
     );
+    // BUG 2: sem dedução de pacote -> forma null (previsão conta a receita 1×).
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ formaPagamento: null }),
+    );
+  });
+
+  // ── BUG 2 (pacote DOBRA): a dedução do pacote tem que chegar ao upsert como forma='pacote'
+  it('BUG2 (individual): pacote DEDUZIDO -> upsert recebe formaPagamento="pacote" (não dobra a receita)', async () => {
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
+    cfg.PACOTES_ENABLED = true;
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: true, // <- pacote debitado: a receita já entrou na venda do pacote
+      avulso: false,
+      sessoes_restantes: 2,
+      motivo: 'descontado',
+      pacote_nome: 'Pacote 5 Cortes',
+      pacote_colaborador_id: null,
+    });
+    const calClient = setupScheduleComCreate('evt-pac');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+      servico: 'Corte',
+      usa_pacote: true,
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-pac' });
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    // O resultado da dedução chega ao gancho: forma='pacote' -> o helper zera valor (testado na db layer).
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ gcalEventId: 'evt-pac', formaPagamento: 'pacote' }),
+    );
+  });
+
+  it('BUG2 (individual): pacote NÃO deduzido (avulso) -> forma NÃO é "pacote" (conta a receita)', async () => {
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
+    cfg.PACOTES_ENABLED = true;
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: false, // <- não tinha pacote: é avulso, conta a receita normal
+      avulso: true,
+      sessoes_restantes: null,
+      motivo: 'sem_pacote',
+    });
+    const calClient = setupScheduleComCreate('evt-avu');
+    const inserir = await inserirToolFor();
+    await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+      servico: 'Corte',
+    });
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ gcalEventId: 'evt-avu', formaPagamento: null }),
+    );
   });
 
   it('flag ON (individual): tenant_id NÃO resolvido -> NÃO grava, mas o bot responde normal', async () => {
@@ -1110,6 +1167,42 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     expect(res.colaborador_nome).toBe('Bruno');
     expect((cBruno as { createEvent: ReturnType<typeof vi.fn> }).createEvent).toHaveBeenCalledTimes(
       1,
+    );
+  });
+
+  it('BUG2 (estabelecimento): pacote DEDUZIDO -> upsert recebe formaPagamento="pacote"', async () => {
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_estab_x';
+    cfg.PACOTES_ENABLED = true;
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 't-estab',
+    });
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: true,
+      avulso: false,
+      sessoes_restantes: 1,
+      motivo: 'descontado',
+      pacote_nome: 'Pacote 5 Cortes',
+      pacote_colaborador_id: 10,
+    });
+    const cBruno = colabClientStub('cal-bruno');
+    const res = await estabInserirRun(
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      {
+        colaborador_id: 'C1',
+        summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+        servico: 'Corte',
+        usa_pacote: true,
+        start: '2026-06-16T13:00:00-03:00',
+        end: '2026-06-16T13:30:00-03:00',
+      },
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    expect(res.ok).toBe(true);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ colaboradorId: 10, formaPagamento: 'pacote' }),
     );
   });
 });

@@ -25,6 +25,7 @@ const {
   getColaboradorComissao,
   getFaturamento,
   getComissao,
+  upsertAtendimentoFromEvent,
 } = await import('./atendimentos.js');
 
 beforeEach(() => {
@@ -141,6 +142,79 @@ describe('createAtendimento — cenários', () => {
   });
 });
 
+// ── BUG DE DINHEIRO 2 (ADR 0027): pacote DOBRA a receita ─────────────────────────────
+// Quando o agendamento é pago via PACOTE, a receita JÁ entrou na venda do pacote. Se a linha
+// de atendimento derivada da agenda contar o valor de novo, o faturamento DOBRA. O fix faz o
+// gancho (bot/portal) passar formaPagamento='pacote' -> upsertAtendimentoFromEvent zera o
+// valor_cents (e desconto). Sem pacote (forma undefined/null), a previsão segue com o valor.
+describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', () => {
+  // params do INSERT: [slot, tenant, eventId, clienteNome, clienteContato, servicoNome,
+  //                    valor_cents, desconto_cents, forma_pagamento, colaboradorId, inicio, fim, data]
+  it('PACOTE: forma=pacote -> valor_cents=0 e desconto=0 (receita já entrou na venda do pacote)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt-pacote',
+      servicoNome: 'Corte',
+      valorCents: 5000, // o evento valeria 5000, mas é pacote -> zera
+      descontoCents: 300,
+      colaboradorId: 1,
+      formaPagamento: 'pacote',
+      inicioAt: '2026-06-23T13:00:00.000Z',
+      fimAt: '2026-06-23T13:30:00.000Z',
+    });
+    const [, params] = lastCall();
+    expect(params[6]).toBe(0); // valor_cents zerado (não conta 2×)
+    expect(params[7]).toBe(0); // desconto_cents zerado
+    expect(params[8]).toBe('pacote'); // forma_pagamento marcada
+  });
+
+  it('SEM pacote (forma null): valor do catálogo/explícito é PRESERVADO (previsão normal)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 2, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt-avulso',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: null, // não foi pacote
+      inicioAt: '2026-06-23T13:00:00.000Z',
+      fimAt: '2026-06-23T13:30:00.000Z',
+    });
+    const [, params] = lastCall();
+    expect(params[6]).toBe(5000); // valor preservado (conta a receita 1×)
+    expect(params[8]).toBeNull(); // sem forma definida
+    expect(params[13]).toBe(true); // pagamento INFORMADO (forma=null explícito) -> aplica no UPDATE
+  });
+
+  // REMARCAÇÃO sem info de pagamento (sync) NÃO pode reverter a marca de pacote -> $14 FALSE
+  // faz o UPDATE preservar forma_pagamento/valor/desconto antigos (senão a receita dobrava).
+  it('REMARCAR (formaPagamento undefined): UPDATE preserva forma/valor antigos ($14=false)', async () => {
+    // sem valorCents -> upsert resolve o preço do catálogo (1ª query), depois faz o INSERT (2ª).
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ servicos: [{ nome: 'Corte', preco_cents: 5000 }] }],
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 3, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt-remarca',
+      servicoNome: 'Corte',
+      // SEM formaPagamento (sync de remarcação não sabe do pagamento)
+      colaboradorId: 1,
+      inicioAt: '2026-06-23T14:00:00.000Z',
+      fimAt: '2026-06-23T14:30:00.000Z',
+    });
+    const [sql, params] = lastCall();
+    expect(params[13]).toBe(false); // pagamento NÃO informado -> preserva no UPDATE
+    // O SQL guarda a forma/valor/desconto antigos quando $14 é false.
+    expect(sql).toContain("dirty_fields ? 'forma_pagamento' OR NOT $14::boolean");
+    expect(sql).toContain("dirty_fields ? 'valor_cents' OR NOT $14::boolean");
+  });
+});
+
 describe('getColaboradorComissao — anti-IDOR (pertence ao slot)', () => {
   it('escopa por slot E id; colaborador inexistente no slot -> belongs:false', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
@@ -208,15 +282,17 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(sql).toContain('a.fim_at <= now()');
     // Default = faturado: NUNCA conta agendamento futuro.
     expect(sql).not.toContain('a.fim_at > now()');
-    // Faturado soma o snapshot CONGELADO (não recalcula).
-    expect(sql).toContain('SUM(a.comissao_cents)');
+    // Faturado AO VIVO (fix dinheiro): projeta sobre o pct CORRENTE, NÃO usa o snapshot
+    // congelado a.comissao_cents (que é 0 nas linhas de agenda — zerava o Faturado).
+    expect(sql).toContain('cc.comissao_pct');
+    expect(sql).not.toContain('SUM(a.comissao_cents)');
     expect(params).toEqual(['clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30']);
     expect(r.balde).toBe('faturado');
     expect(r.total_cents).toBe(0); // SOLO -> sem comissão (0 colaboradores)
     expect(r.por_profissional).toEqual([]);
   });
 
-  it('getComissao (faturado) soma o comissao_cents CONGELADO por profissional', async () => {
+  it('getComissao (faturado) soma a comissão AO VIVO (pct corrente) por profissional', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -224,7 +300,7 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
           profissional_nome: 'Ana',
           total_bruto_cents: '5000',
           comissao_pct: '40.00',
-          comissao_cents: '2000',
+          comissao_cents: '2000', // round(5000 * 40 / 100) calculado no SQL ao vivo
           count: '2',
         },
         {
@@ -248,6 +324,55 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
       comissao_pct: 40,
       comissao_cents: 2000,
     });
+  });
+
+  // ── BUG DE DINHEIRO 1 (ADR 0027): Faturado deixava comissão ZERAR ─────────────────────
+  // As linhas derivadas da agenda têm a.comissao_cents=0 congelado (nada congela na
+  // realização). O SQL ANTIGO somava esse snapshot -> Faturado=R$0 mesmo com atendimento real.
+  // Fix: Faturado calcula AO VIVO (round(bruto*pct/100), pct corrente) — MESMA fórmula da
+  // Previsão. Estes dois testes travam: (a) o SQL é a projeção ao vivo, idêntico nos dois
+  // baldes a menos da janela; (b) pra UM evento passado, Faturado bate com Previsão (≠ 0).
+  it('BUG1: faturado e previsao usam a MESMA projeção ao vivo no SQL (só muda a janela)', async () => {
+    await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    const [sqlFat] = lastCall();
+    await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    const [sqlPrev] = lastCall();
+    // A expressão de comissão ao vivo (round(GREATEST(bruto,0) * pct corrente / 100)) está nos DOIS.
+    const projExpr =
+      'ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)';
+    expect(sqlFat).toContain(projExpr);
+    expect(sqlPrev).toContain(projExpr);
+    // Nenhum dos dois usa mais o snapshot congelado.
+    expect(sqlFat).not.toContain('SUM(a.comissao_cents)');
+    expect(sqlPrev).not.toContain('SUM(a.comissao_cents)');
+    // Só a JANELA difere: faturado olha o passado, previsao o futuro.
+    expect(sqlFat).toContain('a.fim_at <= now()');
+    expect(sqlFat).not.toContain('a.fim_at > now()');
+    expect(sqlPrev).toContain('a.fim_at > now()');
+    expect(sqlPrev).not.toContain('a.fim_at <= now()');
+  });
+
+  it('BUG1: evento PASSADO -> Faturado mostra a comissão real (R$16,50), não R$0', async () => {
+    // Cenário do bug: 1 corte de R$50 (5000c), pct 33%, JÁ realizado (fim_at no passado).
+    // ANTES: a.comissao_cents=0 congelado -> Faturado somava 0. AGORA: round(5000*33/100)=1650.
+    // O SQL faz a conta; o mock devolve o que o SQL ao vivo retornaria (= o que a Previsão daria).
+    const liveRow = {
+      colaborador_id: 1,
+      profissional_nome: 'Bruno',
+      total_bruto_cents: '5000',
+      comissao_pct: '33',
+      comissao_cents: '1650', // round(5000 * 33 / 100) — ao vivo, NÃO o snapshot 0
+      count: '1',
+    };
+    mockQuery.mockResolvedValueOnce({ rows: [liveRow], rowCount: 1 });
+    const fat = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    expect(fat.total_cents).toBe(1650); // R$16,50 — NÃO zero
+    expect(fat.por_profissional[0]).toMatchObject({ colaborador_id: 1, comissao_cents: 1650 });
+
+    // E bate com a Previsão pro MESMO evento se ele fosse futuro (mesma fórmula ao vivo).
+    mockQuery.mockResolvedValueOnce({ rows: [liveRow], rowCount: 1 });
+    const prev = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    expect(prev.total_cents).toBe(fat.total_cents);
   });
 
   it('getComissao balde=previsao: só agendamentos FUTUROS, projeta sobre o pct CORRENTE', async () => {
@@ -422,14 +547,15 @@ describe('getComissao — lista TODOS os colaboradores ATIVOS (com e sem atendim
   });
 
   it('faturado: colaborador ativo SEM booking expõe o pct CORRENTE (não 0) e bruto/comissão 0', async () => {
-    // No SQL, pctExpr no faturado cai no ELSE COALESCE(cc.comissao_pct,0) quando bruto=0.
+    // Fix dinheiro: o faturado agora expõe o pct corrente DIRETO (COALESCE(cc.comissao_pct,0)),
+    // sem o CASE médio-efetivo antigo. Quem não tem booking aparece com o % configurado.
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
           colaborador_id: 8,
           profissional_nome: 'eduardo',
           total_bruto_cents: '0',
-          comissao_pct: '20', // pct corrente do colaborador, vindo do ELSE
+          comissao_pct: '20', // pct corrente do colaborador (cc.comissao_pct)
           comissao_cents: '0',
           count: '0',
         },
@@ -444,9 +570,10 @@ describe('getComissao — lista TODOS os colaboradores ATIVOS (com e sem atendim
       comissao_cents: 0,
     });
     expect(r.total_cents).toBe(0);
-    // Confirma que o ELSE expõe o pct do colaborador no faturado sem base.
+    // O pct exposto no faturado é o corrente do colaborador (mesma expr da previsão), sem CASE.
     const [sql] = lastCall();
-    expect(sql).toContain('ELSE COALESCE(cc.comissao_pct, 0) END');
+    expect(sql).toContain('COALESCE(cc.comissao_pct, 0)::numeric AS comissao_pct');
+    expect(sql).not.toContain('ELSE COALESCE(cc.comissao_pct, 0) END');
   });
 
   it('SOLO/individual continua por_profissional vazio (0 colaboradores na tabela base)', async () => {
