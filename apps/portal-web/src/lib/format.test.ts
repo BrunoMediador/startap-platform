@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatAgendamentoDia,
+  formatAgendamentoHora,
   formatDuracao,
   formatPhoneDisplay,
   formatPrecoCents,
@@ -73,5 +75,49 @@ describe('normalizePhone (join contatos x pausas)', () => {
   });
   it('numeros equivalentes (com/sem DDI) normalizam igual', () => {
     expect(normalizePhone('5511999990007')).toBe(normalizePhone('11999990007'));
+  });
+});
+
+// ── BUG DE DINHEIRO 3 (ADR 0027): label do DIA/HORA saía em UTC -> dia errado ────────────
+// A barbearia é BR (UTC-3). O timestamptz vem em UTC; sem timeZone, toLocale* usa o fuso do
+// runtime (Next SSR roda em UTC). Um horário noturno (22:00 BRT = 01:00 UTC do dia SEGUINTE)
+// caía no dia errado. O fix fixa America/Sao_Paulo. Estes testes são determinísticos em
+// QUALQUER TZ de runtime (a função força BR_TZ internamente).
+describe('formatAgendamentoHora (fuso da barbearia — Bug 3)', () => {
+  it('22:00 BRT (= 01:00 UTC do dia seguinte) -> "22:00", não "01:00"', () => {
+    // 2026-06-23 22:00 -03:00 === 2026-06-24T01:00:00Z
+    expect(formatAgendamentoHora('2026-06-24T01:00:00.000Z')).toBe('22:00');
+  });
+  it('13:00 BRT (= 16:00 UTC) -> "13:00"', () => {
+    expect(formatAgendamentoHora('2026-06-23T16:00:00.000Z')).toBe('13:00');
+  });
+  it('date puro (sem hora) -> "" (dia inteiro)', () => {
+    expect(formatAgendamentoHora('2026-06-23')).toBe('');
+  });
+});
+
+describe('formatAgendamentoDia (fuso da barbearia — Bug 3)', () => {
+  // "now" fixo pro cálculo hoje/amanhã/ontem ser determinístico (ref = 2026-06-23 ~meio-dia BRT).
+  const now = new Date('2026-06-23T15:00:00.000Z'); // 12:00 BRT do dia 23
+
+  it('22:00 BRT do dia 23 (= 01:00 UTC do dia 24) -> "Hoje", NÃO "Amanhã"', () => {
+    // O instante UTC cai no dia 24; em BR ainda é dia 23 -> tem que ser "Hoje".
+    expect(formatAgendamentoDia('2026-06-24T01:00:00.000Z', now)).toBe('Hoje');
+  });
+  it('22:00 BRT do dia 24 -> "Amanhã" relativo ao dia 23', () => {
+    expect(formatAgendamentoDia('2026-06-25T01:00:00.000Z', now)).toBe('Amanhã');
+  });
+  it('02:00 BRT do dia 23 (= 05:00 UTC do dia 23) -> "Hoje"', () => {
+    expect(formatAgendamentoDia('2026-06-23T05:00:00.000Z', now)).toBe('Hoje');
+  });
+  it('ontem: 22:00 BRT do dia 22 (= 01:00 UTC do dia 23) -> "Ontem"', () => {
+    expect(formatAgendamentoDia('2026-06-23T01:00:00.000Z', now)).toBe('Ontem');
+  });
+  it('date puro "YYYY-MM-DD" usa o dia BR (não escorrega pro dia anterior)', () => {
+    expect(formatAgendamentoDia('2026-06-23', now)).toBe('Hoje');
+    expect(formatAgendamentoDia('2026-06-24', now)).toBe('Amanhã');
+  });
+  it('null -> "Sem data"', () => {
+    expect(formatAgendamentoDia(null, now)).toBe('Sem data');
   });
 });

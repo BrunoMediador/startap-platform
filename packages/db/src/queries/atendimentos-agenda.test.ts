@@ -172,10 +172,15 @@ describe('STICKY — o UPDATE do ON CONFLICT preserva colunas pinadas', () => {
     ]) {
       expect(sql).toContain(`atendimentos.dirty_fields ? '${col}'`);
     }
-    // Sticky comprovado: valor_cents só é trocado quando NÃO está pinado.
+    // Sticky comprovado: valor_cents só é trocado quando NÃO está pinado E o pagamento foi
+    // informado neste call ($14). Colunas de pagamento (valor/desconto/forma) também são
+    // preservadas quando a remarcação não traz info de pagamento (ADR 0027 bug DOBRA).
     expect(sql).toMatch(
-      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
+      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents' OR NOT \$14::boolean\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
     );
+    for (const col of ['valor_cents', 'desconto_cents', 'forma_pagamento']) {
+      expect(sql).toContain(`atendimentos.dirty_fields ? '${col}' OR NOT $14::boolean`);
+    }
   });
 
   it('syncAtendimentoFromEvent é o mesmo caminho do upsert (alias B2)', async () => {

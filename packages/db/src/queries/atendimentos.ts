@@ -306,9 +306,9 @@ export interface ComissaoPorProfissionalRow {
   profissional_nome: string | null;
   /** Base BRUTA (SUM(valor - desconto)) das linhas do balde — denominador da comissão. */
   total_bruto_cents: number;
-  /** % aplicado: FATURADO usa o snapshot (já congelado); PREVISÃO usa o pct CORRENTE do colaborador. */
+  /** % aplicado: o pct CORRENTE do colaborador (clone_colaboradores.comissao_pct), nos dois baldes. */
   comissao_pct: number;
-  /** FATURADO = SUM(comissao_cents congelado); PREVISÃO = round(bruto * pct/100) projetado. */
+  /** AO VIVO nos dois baldes: SUM(round(GREATEST(bruto,0) * pct corrente / 100)). Não usa snapshot. */
   comissao_cents: number;
   count: number;
 }
@@ -325,16 +325,23 @@ export interface ComissaoReport {
 /**
  * Relatório de COMISSÃO por profissional num período. DOIS BALDES (ADR 0027):
  *
- *  - 'faturado' (DEFAULT — comportamento histórico inalterado nos valores): comissão sobre
- *    o REALIZADO. Soma o comissao_cents CONGELADO (snapshot da venda) sobre o predicado
- *    canônico de faturado (deleted_at NULL, status<>'cancelado', fim_at<=now() OU
- *    origem='manual').
+ *  - 'faturado' (DEFAULT): comissão sobre o REALIZADO (deleted_at NULL, status<>'cancelado',
+ *    fim_at<=now() OU origem='manual'). A comissão é CALCULADA AO VIVO — round(GREATEST(
+ *    valor-desconto,0) * pct/100) com o pct CORRENTE do colaborador (clone_colaboradores.
+ *    comissao_pct), MESMA regra do balde 'previsao' (e do calcComissaoCents), só que sobre a
+ *    janela do passado. NÃO usa mais o snapshot a.comissao_cents congelado.
+ *
+ *    POR QUÊ (ADR 0027 — bug de dinheiro, fix 2026-06-23): as linhas derivadas da agenda
+ *    nascem/seguem com comissao_cents=0 congelado (NADA congela na realização — não há cron
+ *    de transição agendado->realizado). Somar o snapshot devolvia R$0 no Faturado mesmo com
+ *    atendimento realizado. Decisão do Bruno: calcular o Faturado AO VIVO (mesma projeção da
+ *    Previsão, só com a janela do passado). Refinamento contábil futuro = snapshot-ao-realizar
+ *    (congela o pct no instante da realização, p/ histórico imutável quando o pct muda depois);
+ *    HOJE é LIVE-COMPUTE, fora de escopo deste fix.
  *
  *  - 'previsao': comissão PROJETADA dos agendamentos futuros (deleted_at NULL,
- *    status='agendado', fim_at>now()). As linhas de previsão têm comissao_cents=0 congelado
- *    (o snapshot só acontece ao virar faturado), então a comissão é CALCULADA: para cada
- *    linha, round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE do colaborador
- *    (clone_colaboradores.comissao_pct) — MESMA regra do calcComissaoCents, agregada em SQL.
+ *    status='agendado', fim_at>now()). MESMA fórmula AO VIVO do faturado, só muda a janela
+ *    (futuro vs passado) — round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE.
  *
  * TODOS OS ATIVOS APARECEM: a query PARTE de clone_colaboradores (ativo = TRUE) com LEFT
  * JOIN em atendimentos. Assim, TODO colaborador ativo do clone entra em por_profissional —
@@ -349,10 +356,8 @@ export interface ComissaoReport {
  *    comissão preservado). Atendimentos SOLO têm colaborador_id NULL e nunca casam o JOIN.
  *  - total_cents (soma das comissões) NÃO muda: linhas zeradas somam 0.
  *
- * comissao_pct exposto:
- *  - previsao: o pct CORRENTE do colaborador (uniforme por profissional, sempre presente).
- *  - faturado: pct médio efetivo (comissao/bruto*100) quando há base; SEM base usa o pct
- *    corrente do colaborador (cc.comissao_pct) — assim o zerado mostra o % configurado, não 0.
+ * comissao_pct exposto: o pct CORRENTE do colaborador (cc.comissao_pct), uniforme por
+ *  profissional e idêntico nos dois baldes (o zerado mostra o % configurado, não 0).
  *
  * Escopo: slot do colaborador + tenant_id do atendimento no ON do JOIN (defesa em
  * profundidade RLS). Período inclusivo por `data`. Ordenação ESTÁVEL: comissão desc, com os
@@ -371,25 +376,16 @@ export async function getComissao(
   const baldeCond =
     balde === 'previsao' ? "a.status = 'agendado' AND a.fim_at > now()" : _FATURADO_SQL_A;
 
-  // comissao_cents:
-  //  - faturado: SUM do snapshot congelado (a.comissao_cents).
-  //  - previsao: SUM por linha de round(GREATEST(valor-desconto,0) * pct corrente / 100),
-  //    com COALESCE(cc.comissao_pct,0) — colaborador sem pct -> projeta 0 (mas aparece).
-  // comissao_pct exposto (cc = clone_colaboradores, sempre presente pois é a tabela base):
-  //  - previsao: o pct corrente do colaborador.
-  //  - faturado: pct médio efetivo SE há base; sem base -> o pct corrente do colaborador (o
-  //    zerado mostra o % configurado, não 0 — é o ponto desta mudança).
+  // comissao_cents — AO VIVO nos DOIS baldes (fix de dinheiro 2026-06-23): SUM por linha de
+  // round(GREATEST(valor-desconto,0) * pct corrente / 100), com COALESCE(cc.comissao_pct,0)
+  // — colaborador sem pct -> projeta 0 (mas aparece). Antes o 'faturado' somava o snapshot
+  // a.comissao_cents, que é 0 nas linhas de agenda (nada congela na realização) -> zerava o
+  // Faturado. A única diferença entre os baldes agora é o predicado de janela (baldeCond).
+  // comissao_pct exposto = o pct CORRENTE do colaborador (uniforme por profissional, sempre
+  // presente pois cc = clone_colaboradores é a tabela base). Mesmo valor nos dois baldes.
   const comissaoExpr =
-    balde === 'previsao'
-      ? 'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)), 0)::bigint'
-      : 'COALESCE(SUM(a.comissao_cents), 0)::bigint';
-  const pctExpr =
-    balde === 'previsao'
-      ? 'COALESCE(cc.comissao_pct, 0)::numeric'
-      : `CASE WHEN COALESCE(SUM(a.valor_cents - a.desconto_cents), 0) > 0
-              THEN ROUND(COALESCE(SUM(a.comissao_cents), 0)::numeric
-                         / SUM(a.valor_cents - a.desconto_cents)::numeric * 100, 2)
-              ELSE COALESCE(cc.comissao_pct, 0) END`;
+    'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)), 0)::bigint';
+  const pctExpr = 'COALESCE(cc.comissao_pct, 0)::numeric';
 
   // PARTE de clone_colaboradores (ativos do slot) -> LEFT JOIN atendimentos com TODOS os
   // filtros (tenant, período, balde, deleted) no ON, para preservar o zerado. GROUP BY pelas
@@ -569,13 +565,27 @@ export async function resolvePrecoCents(slot: string, servicoNome: string | null
  * PREÇO: valorCents ausente -> resolve do flow_clones.servicos pelo servico_nome.
  * PACOTE: forma_pagamento='pacote' -> valor_cents=0 (receita vive na venda do pacote).
  *
- * Comissão NÃO é congelada aqui (atendimento ainda é PREVISÃO; comissão só sobre faturado).
- * O snapshot de comissão acontece quando vira faturado (Fase B2 — fora do escopo deste PR).
+ * PAGAMENTO NO UPDATE (ADR 0027 — bug DOBRA): se `formaPagamento` chega UNDEFINED (sync de
+ * remarcação que não sabe do pagamento), o UPDATE PRESERVA forma_pagamento/valor/desconto da
+ * linha existente — assim remarcar um agendamento pago por PACOTE NÃO reverte a marca pra
+ * null (o que faria a receita dobrar). Forma informada ('pacote'/'pix'/null explícito) aplica.
+ *
+ * Comissão NÃO é congelada aqui — o relatório calcula a comissão AO VIVO (getComissao); não
+ * há snapshot de realização (split previsão×faturado é stateless por fim_at, sem cron).
  */
 export async function upsertAtendimentoFromEvent(
   input: AtendimentoEventInput,
 ): Promise<AtendimentoRow> {
   const isPacote = input.formaPagamento === 'pacote';
+
+  // Pagamento INFORMADO neste call? (forma !== undefined). Distingue:
+  //  - INFORMADO ('pacote'/'pix'/null explícito) -> aplica forma + valor derivado.
+  //  - NÃO informado (undefined: sync de remarcação que não sabe do pagamento) -> NO UPDATE
+  //    PRESERVA a forma_pagamento/valor/desconto da linha existente. Isto protege a marca de
+  //    PACOTE numa remarcação (ADR 0027 bug DOBRA): sem isto, o sync sobrescreveria
+  //    forma='pacote'->null e o valor voltaria pro catálogo -> a receita dobrava de novo.
+  //    No INSERT (linha nova) "preservar" recai no default (forma null / valor calculado).
+  const pagamentoInformado = input.formaPagamento !== undefined;
 
   // Preço: explícito > catálogo. Pacote zera. Nunca negativo, sempre inteiro.
   let valorCents: number;
@@ -597,6 +607,7 @@ export async function upsertAtendimentoFromEvent(
   // dirty_fields é a chave do sticky: para cada coluna derivável, só atualiza se a coluna
   // NÃO estiver pinada (atendimentos.dirty_fields = a linha ANTIGA, via EXCLUDED é a nova).
   // `a.dirty_fields ? 'coluna'` (operador jsonb ?) testa pertença no array de strings.
+  // $14 = pagamentoInformado: quando FALSE, o UPDATE preserva forma/valor/desconto antigos.
   const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
     `INSERT INTO atendimentos
        (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
@@ -615,11 +626,11 @@ export async function upsertAtendimentoFromEvent(
                                THEN atendimentos.cliente_contato ELSE EXCLUDED.cliente_contato END,
        servico_nome     = CASE WHEN atendimentos.dirty_fields ? 'servico_nome'
                                THEN atendimentos.servico_nome ELSE EXCLUDED.servico_nome END,
-       valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents'
+       valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents' OR NOT $14::boolean
                                THEN atendimentos.valor_cents ELSE EXCLUDED.valor_cents END,
-       desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents'
+       desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents' OR NOT $14::boolean
                                THEN atendimentos.desconto_cents ELSE EXCLUDED.desconto_cents END,
-       forma_pagamento  = CASE WHEN atendimentos.dirty_fields ? 'forma_pagamento'
+       forma_pagamento  = CASE WHEN atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $14::boolean
                                THEN atendimentos.forma_pagamento ELSE EXCLUDED.forma_pagamento END,
        colaborador_id   = CASE WHEN atendimentos.dirty_fields ? 'colaborador_id'
                                THEN atendimentos.colaborador_id ELSE EXCLUDED.colaborador_id END,
@@ -642,6 +653,7 @@ export async function upsertAtendimentoFromEvent(
       inicioIso,
       fimIso,
       dataDay,
+      pagamentoInformado,
     ],
   );
   const row = r.rows[0] as AtendimentoRow & { dirty_fields: unknown };

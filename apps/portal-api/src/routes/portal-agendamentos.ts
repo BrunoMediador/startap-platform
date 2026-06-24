@@ -298,6 +298,14 @@ async function hookUpsertAtendimento(args: {
   fimAt: string | null;
   colaboradorId: number | null;
   mode: 'create' | 'sync';
+  /**
+   * Forma de pagamento derivada de dedução de pacote (ADR 0027 — bug DOBRA receita). Quando
+   * o agendamento foi pago via PACOTE, passa 'pacote' -> o helper zera valor_cents (a receita
+   * já entrou na venda do pacote; não contar 2×). Hoje as rotas do portal (operador agenda
+   * manual) NÃO deduzem pacote, então chegam sem este campo (undefined = previsão normal,
+   * forma null). Paridade de assinatura com o gancho do bot (maybeRegistrarAtendimento).
+   */
+  formaPagamento?: string | null;
 }): Promise<void> {
   if (!isAtendFromAgendaEnabled(args.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
   try {
@@ -321,6 +329,8 @@ async function hookUpsertAtendimento(args: {
       clienteContato: args.clienteContato,
       inicioAt: args.inicioAt,
       fimAt: args.fimAt,
+      // Só repassa quando informado (pacote) — undefined preserva o comportamento de previsão.
+      ...(args.formaPagamento !== undefined ? { formaPagamento: args.formaPagamento } : {}),
     };
     const row =
       args.mode === 'sync'

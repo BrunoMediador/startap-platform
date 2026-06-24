@@ -8,6 +8,17 @@
 
 ---
 
+## Erratum 2026-06-23 — comissão do Faturado é LIVE-COMPUTE (não snapshot)
+
+> Supersede a parte da **Decisão 3** que dizia "soma o `comissao_cents` congelado". A auditoria de billing achou 3 bugs de dinheiro; o fix correspondente:
+>
+> 1. **Comissão do Faturado é calculada AO VIVO**, não do snapshot. As linhas derivadas da agenda (`origem='agenda'`) nascem e seguem com `comissao_cents=0` congelado — **nada congela na realização**: o split previsão×faturado é stateless por `fim_at` (decisão 2/6), **sem cron** que vire `agendado→realizado`. Somar o snapshot devolvia **R$0** no Faturado mesmo com atendimento realizado. Decisão do Bruno: o relatório de comissão calcula o Faturado **AO VIVO** — `round(GREATEST(valor-desconto,0) * pct corrente / 100)` com `clone_colaboradores.comissao_pct`, **a MESMA fórmula da Previsão**, só com a janela do passado (`fim_at <= now()`). (Implementado em `getComissao`; o `pctExpr`/`comissaoExpr` ficou idêntico nos dois baldes, mudando só o predicado de janela.)
+>    - **Trade-off aceito:** se o operador muda o `comissao_pct` de um profissional, o Faturado já fechado **recalcula** com o pct novo (não há histórico imutável do pct vigente na data do atendimento). Para gestão de salão é aceitável. **Refinamento contábil futuro (fora deste escopo):** snapshot-ao-realizar — congelar `comissao_cents` no instante em que `fim_at` passa (exigiria o cron de realização que a decisão 2 dispensou) — daria histórico imutável; HOJE é **live-compute** e isso é deliberado.
+> 2. **Pacote não dobra a receita.** Quando o agendamento foi pago via pacote, o gancho (bot/portal) passa `forma_pagamento='pacote'` ao upsert → `valor_cents=0` (a receita já entrou na venda do pacote, ADR 0025). Antes, o gancho não recebia o resultado da dedução e a linha contava a receita 2×.
+> 3. **Data/hora no fuso da barbearia (BRT).** O label do dia/hora no portal era formatado no fuso do runtime (UTC no SSR) → dia errado pra horários noturnos. Fixado em `America/Sao_Paulo` (`apps/portal-web/src/lib/format.ts`).
+
+---
+
 ## Contexto
 
 O ADR 0026 cravou `atendimentos` como fonte da verdade do financeiro do negócio do cliente (faturamento + comissão), com migration 058 (LIVE, flag `ATENDIMENTOS_ENABLED`). A Fase 1 (registro manual pelo painel + relatórios de faturamento/comissão) está em produção. O 0026 deixou a **Fase 2 — Integração** como "ponte bot/agenda → `atendimentos`" com um conjunto de questões em aberto (reconciliação da dupla contagem, divergência GCal × painel, status). Este ADR fecha essa Fase 2 com as decisões do Bruno, que **simplificam** o desenho original.
