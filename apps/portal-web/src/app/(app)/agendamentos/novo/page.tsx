@@ -112,7 +112,15 @@ export default function NovoAgendamentoPage() {
   /** 422 no POST (gcal_nao_configurado/config_ausente) — vira o estado explicativo. */
   const [gcalBloqueado, setGcalBloqueado] = useState(false);
 
-  const slotsQ = useAgendaSlots(slot, dataSel, servicoSel);
+  // No estabelecimento a grade tem que olhar a agenda DO PROFISSIONAL escolhido (que já é
+  // selecionado antes da grade); senão o backend não acha agenda própria do clone e devolve
+  // gcal_configured:false em todo dia. No individual passamos null (single-agenda, inalterado).
+  const slotsQ = useAgendaSlots(
+    slot,
+    dataSel,
+    servicoSel,
+    isEstabelecimento ? colaboradorSel : null,
+  );
   const criar = useCriarAgendamento(slot);
 
   const servicos = servicosQ.data ?? [];
@@ -151,8 +159,15 @@ export default function NovoAgendamentoPage() {
   }
 
   function selecionarColaborador(id: number) {
+    if (id === colaboradorSel) return;
     setColaboradorSel(id);
     setColaboradorErro(null);
+    // A grade agora reflete a agenda DESTE profissional — uma hora escolhida pra outro
+    // pode não existir nela. Zera a hora pra evitar submeter um slot que sumiu da grade.
+    if (horaSel) {
+      setHoraSel(null);
+      setAviso('Você trocou de profissional — escolha o horário de novo.');
+    }
   }
 
   // No estabelecimento, escolher o profissional é parte da prontidão.

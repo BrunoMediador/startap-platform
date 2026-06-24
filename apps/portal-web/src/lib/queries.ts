@@ -75,8 +75,9 @@ export const qk = {
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
   /** Prefixo por tenant — usar pra invalidar TODAS as grades de slots de uma vez. */
   agendaSlotsBase: (slot: string) => ['agenda-slots', slot] as const,
-  agendaSlots: (slot: string, data: string, servico: string) =>
-    ['agenda-slots', slot, data, servico] as const,
+  // `colaborador` no fim distingue a grade por profissional (estabelecimento); '' = individual.
+  agendaSlots: (slot: string, data: string, servico: string, colaborador: number | null) =>
+    ['agenda-slots', slot, data, servico, colaborador ?? ''] as const,
   mensalidade: (slot: string) => ['mensalidade', slot] as const,
   conexao: (slot: string) => ['conexao', slot] as const,
   equipe: (slot: string) => ['equipe', slot] as const,
@@ -132,14 +133,18 @@ export function useAgendaSlots(
   slot: string,
   data: string | null,
   servico: string | null,
+  // ESTABELECIMENTO (multi-profissional): a grade consulta a agenda DESTE colaborador.
+  // null no INDIVIDUAL (single-agenda) — não vai na query. No estabelecimento o backend
+  // exige (422 'colaborador_obrigatorio'), então só habilitamos a query com ele escolhido.
+  colaboradorId: number | null = null,
 ): UseQueryResult<AgendaSlotsResponse> {
   return useQuery({
-    queryKey: qk.agendaSlots(slot, data ?? '', servico ?? ''),
-    queryFn: ({ signal }) =>
-      apiFetch<AgendaSlotsResponse>(
-        `/portal/agenda/slots?data=${encodeURIComponent(data ?? '')}&servico=${encodeURIComponent(servico ?? '')}`,
-        { signal },
-      ),
+    queryKey: qk.agendaSlots(slot, data ?? '', servico ?? '', colaboradorId),
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ data: data ?? '', servico: servico ?? '' });
+      if (colaboradorId != null) params.set('colaborador_id', String(colaboradorId));
+      return apiFetch<AgendaSlotsResponse>(`/portal/agenda/slots?${params.toString()}`, { signal });
+    },
     enabled: Boolean(data && servico),
     staleTime: 0,
     retry: false,
