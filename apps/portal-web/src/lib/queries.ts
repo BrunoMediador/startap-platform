@@ -42,6 +42,8 @@ import type {
   FaturamentoReport,
   Horarios,
   HorariosResponse,
+  LembretesConfig,
+  LembretesPatch,
   MensalidadeResponse,
   PausasResponse,
   PerfilNegocio,
@@ -68,6 +70,7 @@ export const qk = {
   perfil: (slot: string) => ['perfil', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
+  lembretes: (slot: string) => ['lembretes', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
   /** Prefixo por tenant — usar pra invalidar TODAS as grades de slots de uma vez. */
@@ -362,6 +365,41 @@ export function useRemovePausa(slot: string): UseMutationResult<unknown, Error, 
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.pausas(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });
+    },
+  });
+}
+
+// ── Lembretes de agendamento (GET/PATCH /portal/lembretes) ───────────────────
+//
+// Config self-service do lembrete automático: enabled + janelas (min antes). O
+// slot vem da sessão no backend (withTenant) — o front nunca envia slot; a query
+// key carrega o slot pra isolar o cache por tenant. O contrato está CONGELADO mas
+// o backend constrói em paralelo (PR companheiro do worker); a tela degrada com
+// mensagem amigável se a rota ainda não existir.
+
+export function useLembretes(slot: string): UseQueryResult<LembretesConfig> {
+  return useQuery({
+    queryKey: qk.lembretes(slot),
+    queryFn: ({ signal }) => apiFetch<LembretesConfig>('/portal/lembretes', { signal }),
+    retry: false,
+  });
+}
+
+/**
+ * PATCH /portal/lembretes — salva enabled + janelas. OTIMISTA: escreve o estado
+ * novo no cache na hora (o toggle/chips não "voltam") e ressincroniza com a
+ * resposta do servidor no sucesso. A tela faz o revert ao snapshot anterior no
+ * erro (mesmo padrão D5 de perfil/serviços/horários).
+ */
+export function useSaveLembretes(
+  slot: string,
+): UseMutationResult<LembretesConfig, Error, LembretesPatch> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (patch) =>
+      apiFetch<LembretesConfig>('/portal/lembretes', { method: 'PATCH', body: patch }),
+    onSuccess: (config) => {
+      client.setQueryData(qk.lembretes(slot), config);
     },
   });
 }

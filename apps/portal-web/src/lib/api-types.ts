@@ -480,6 +480,33 @@ export interface SavePerfilResponse {
   perfil: PerfilNegocio;
 }
 
+// ── Lembretes de agendamento (portal-lembretes.ts — config self-service) ──────
+//
+// O dono liga/desliga o lembrete automático e escolhe QUANDO enviar (uma ou mais
+// janelas, em minutos antes do horário). O worker que ENVIA é backend (PR
+// companheiro); aqui é só o contrato da config. Escopado por slot da sessão
+// (withTenant) — o front nunca envia slot.
+//
+// CONTRATO CONGELADO (backend constrói em paralelo; se divergir, QA reconcilia):
+//   GET   /portal/lembretes -> 200 { enabled, windows_min }
+//   PATCH /portal/lembretes body { enabled?, windows_min? } -> 200 (estado novo)
+// Janelas permitidas (min antes do agendamento): 1440 (24h), 180 (3h), 120 (2h),
+// 60 (1h). A normalização/validação dessas regras vive em @/lib/lembretes (pura,
+// testável). Gating: a feature depende dos atendimentos derivados da agenda
+// (atend_from_agenda do /auth/me) — sem agenda ativa, não há o que lembrar.
+
+export interface LembretesConfig {
+  enabled: boolean;
+  /** Janelas (min antes do agendamento). Permitidas: 1440, 180, 120, 60. */
+  windows_min: number[];
+}
+
+/** Body do PATCH /portal/lembretes — parcial; a UI manda o estado completo. */
+export interface LembretesPatch {
+  enabled?: boolean;
+  windows_min?: number[];
+}
+
 // ── App de gestão: atendimentos + relatórios (ADR 0026, migration 058) ────────
 //
 // Fase 1 do app de gestão (faturamento + comissão). TODA rota é gated por
