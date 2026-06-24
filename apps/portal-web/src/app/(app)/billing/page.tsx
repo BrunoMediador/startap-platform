@@ -11,12 +11,15 @@
  *   - Faturado = eventos PASSADOS (realizado). Período mira o passado (1º do mês →
  *     hoje); `ate` não passa de hoje.
  *
- * Blocos (todos seguem o balde selecionado):
- *   1. Total do balde (dentro do BaldeList).
- *   2. Atendimentos — lista EDITÁVEL (editar valor/forma/serviço/cliente com badge
- *      sticky "Editado"; remover = soft-delete; badges Auto/Editado/Manual;
- *      fallbacks de null). Reusa BaldeList (já testado).
- *   3. Comissão por profissional — SÓ estabelecimento (bruto · % · comissão).
+ * Blocos (todos seguem o balde selecionado), no ramo atend_from_agenda dentro de
+ * BillingAgendaSection (dono único da query — gráfico/filtros/lista compartilham o
+ * mesmo fetch):
+ *   1. Filtros (cliente/colaborador/serviço) — client-side sobre o array carregado.
+ *   2. Gráfico (3 visões: dia / profissional / forma de pagamento).
+ *   3. Total do balde + lista EDITÁVEL (editar valor/forma/serviço/cliente com badge
+ *      sticky "Editado"; remover = soft-delete; badges Auto/Editado/Manual).
+ *   4. Comissão por profissional — SÓ estabelecimento (bruto · % · comissão),
+ *      recomputada do array filtrado (live-compute).
  *   + Botão "Registrar" (atendimento manual/walk-in) -> /atendimentos/novo.
  *
  * Gating: a página é gated por atendimentos_enabled (flag do backend). Com a flag
@@ -24,9 +27,8 @@
  * (atend_from_agenda) liga as abas + a lista editável; sem ele, mostra o relatório
  * agregado legado (idêntico ao de hoje pro SOLO Cirilo/Samuel — sem regressão).
  */
-import { BaldeList } from '@/components/atendimentos/balde-list';
+import { BillingAgendaSection } from '@/components/atendimentos/billing-agenda-section';
 import { BillingTabs } from '@/components/atendimentos/billing-tabs';
-import { ComissaoBalde } from '@/components/atendimentos/comissao-balde';
 import { ResumoFaturamento } from '@/components/atendimentos/resumo-faturamento';
 import { IconPlus, IconWallet } from '@/components/icons';
 import { PeriodSelector } from '@/components/relatorios/period-selector';
@@ -88,10 +90,7 @@ export default function BillingPage() {
             limites={limites}
           />
 
-          <div className="space-y-8">
-            <BaldeList balde={balde} de={periodo.de} ate={periodo.ate} />
-            <ComissaoBalde balde={balde} de={periodo.de} ate={periodo.ate} />
-          </div>
+          <BillingAgendaSection balde={balde} de={periodo.de} ate={periodo.ate} />
         </>
       ) : (
         // Billing-da-agenda OFF (SOLO Cirilo/Samuel): relatório agregado legado.

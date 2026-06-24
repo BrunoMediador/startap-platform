@@ -635,6 +635,21 @@ export interface EditarAtendimentoResponse {
   atendimento: AtendimentoBaldeRow;
 }
 
+/**
+ * 200 do GET /portal/atendimentos/by-evento/:eventId — resolve a linha de
+ * atendimento (mesma Row do balde) a partir do `event_id` da agenda. 404 quando
+ * NÃO existe linha pra esse evento (clone individual fora do gate atend_from_agenda,
+ * ou evento que ainda não materializou atendimento). A UI usa pra abrir a edição de
+ * dinheiro a partir do card da agenda — gated por atend_from_agenda + presença (200).
+ *
+ * CONTRATO CONGELADO (backend constrói em paralelo). Gated por ATENDIMENTOS_ENABLED
+ * + atend_from_agenda e escopado por slot da sessão (withTenant); evento de outro
+ * tenant => 404 (anti-IDOR).
+ */
+export interface AtendimentoByEventoResponse {
+  atendimento: AtendimentoBaldeRow;
+}
+
 // Relatório de faturamento (GET /portal/relatorios/faturamento?de=&ate=).
 
 export interface FaturamentoPorForma {

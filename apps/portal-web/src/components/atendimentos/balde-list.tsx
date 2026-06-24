@@ -113,6 +113,65 @@ export function BaldeList({
   );
 }
 
+/**
+ * Versão PRESENTACIONAL da lista: recebe as linhas (já filtradas) + o total
+ * recomputado, sem dono da query. Usada pela página de Billing quando o array já
+ * vive no page.tsx (gráfico + filtros compartilham o mesmo fetch — sem duplicar).
+ * Mantém o MESMO sheet de edição (sticky) e os mesmos estados de empty.
+ */
+export function BaldeListView({
+  slot,
+  balde,
+  de,
+  ate,
+  rows,
+  totalCents,
+  onFlagOff,
+}: {
+  slot: string;
+  balde: AtendimentoBalde;
+  de: string;
+  ate: string;
+  rows: AtendimentoBaldeRow[];
+  totalCents: number;
+  onFlagOff: () => void;
+}) {
+  const [aberto, setAberto] = useState<AtendimentoBaldeRow | null>(null);
+  const copy = COPY[balde];
+
+  return (
+    <>
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={<IconWallet size={26} />}
+          title={copy.emptyTitle}
+          description={copy.emptyDesc}
+        />
+      ) : (
+        <div className="space-y-4">
+          <MetricCard value={formatPrecoCents(totalCents)} caption={copy.totalCaption} />
+
+          <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
+            {rows.map((row) => (
+              <LinhaAtendimento key={row.id} row={row} onClick={() => setAberto(row)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <AtendimentoEditSheet
+        slot={slot}
+        balde={balde}
+        de={de}
+        ate={ate}
+        row={aberto}
+        onClose={() => setAberto(null)}
+        onFlagOff={onFlagOff}
+      />
+    </>
+  );
+}
+
 /** Uma linha clicável (abre o sheet de edição). */
 function LinhaAtendimento({
   row,

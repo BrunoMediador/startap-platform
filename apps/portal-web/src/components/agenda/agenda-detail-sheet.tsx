@@ -28,6 +28,7 @@ import {
   IconUser,
   IconWhatsapp,
 } from '@/components/icons';
+import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Overlay } from '@/components/ui/overlay';
@@ -41,6 +42,7 @@ import { addMinutosHora, formatDiaCurto } from '@/lib/novo-agendamento';
 import { qk, useEditarAgendamento, useExcluirAgendamento, useServicos } from '@/lib/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
+import { AgendaValorSection } from './agenda-valor-section';
 import { SlotPicker } from './slot-picker';
 
 const CONFLITO_MSG: Record<ConflitoReason, string> = {
@@ -55,6 +57,24 @@ function conflitoReason(body: unknown): ConflitoReason {
     if (r === 'ocupado' || r === 'horario_passado' || r === 'fora_do_horario') return r;
   }
   return 'ocupado';
+}
+
+/**
+ * 409 NOVO do backend ao trocar pra um serviço mais LONGO que invade o próximo
+ * horário: `{ error:'conflito_horario', message }`. Extrai a `message` amigável; se
+ * vier sem corpo conhecido, cai num texto genérico (nunca renderiza null).
+ */
+function conflitoHorarioMsg(body: unknown): string | null {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const e = (body as { error?: unknown }).error;
+    if (e === 'conflito_horario') {
+      const m = (body as { message?: unknown }).message;
+      return typeof m === 'string' && m.trim() !== ''
+        ? m
+        : 'O novo serviço é mais longo e bate no próximo horário. Remarque ou escolha outro serviço.';
+    }
+  }
+  return null;
 }
 
 type Modo = 'detalhe' | 'remarcar' | 'trocar';
@@ -72,6 +92,7 @@ export function AgendaDetailSheet({
   const titleId = useId();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { atendFromAgenda } = useTenant();
   const editar = useEditarAgendamento(slot);
   const excluir = useExcluirAgendamento(slot);
   const servicosQ = useServicos(slot);
@@ -83,6 +104,9 @@ export function AgendaDetailSheet({
   const [dataSel, setDataSel] = useState<string | null>(null);
   const [horaSel, setHoraSel] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  // Trocar serviço: por padrão MANTÉM o mesmo horário (dia/hora ausentes no PATCH);
+  // o dono escolhe "outro dia" só se quiser remarcar junto.
+  const [manterHorario, setManterHorario] = useState(true);
 
   const open = agendamento !== null;
   const parsed = agendamento ? parseTitulo(agendamento.titulo) : null;
@@ -94,6 +118,7 @@ export function AgendaDetailSheet({
     setDataSel(null);
     setHoraSel(null);
     setAviso(null);
+    setManterHorario(true);
     setConfirmarCancelar(false);
     onClose();
   }
@@ -113,6 +138,7 @@ export function AgendaDetailSheet({
     setDataSel(null);
     setHoraSel(null);
     setAviso(null);
+    setManterHorario(true);
     setModo('trocar');
   }
 
@@ -133,22 +159,29 @@ export function AgendaDetailSheet({
     setAviso(null);
   }
 
+  // Trocar serviço escolhe um NOVO horário? (toggle "Escolher outro dia"). No
+  // remarcar é sempre true (escolher dia/hora é o ponto). No trocar com "manter o
+  // mesmo horário", o PATCH vai SÓ com o serviço (data/hora ausentes — backend ok).
+  const escolheNovoHorario = modo === 'remarcar' || (modo === 'trocar' && !manterHorario);
+
   const podeSalvar =
     modo === 'remarcar'
       ? Boolean(dataSel && horaSel)
       : modo === 'trocar'
-        ? Boolean(servicoSel && dataSel && horaSel)
+        ? Boolean(servicoSel) && (manterHorario || Boolean(dataSel && horaSel))
         : false;
 
   function salvar() {
     if (!agendamento) return;
+    // Só manda dia/hora quando o dono de fato escolheu um novo horário; trocar só o
+    // serviço viaja apenas com { servico } (item 1).
+    const mandarHorario = escolheNovoHorario && Boolean(dataSel && horaSel);
     const patch =
       modo === 'remarcar'
         ? { data: dataSel ?? undefined, hora: horaSel ?? undefined }
         : {
             servico: servicoSel ?? undefined,
-            data: dataSel ?? undefined,
-            hora: horaSel ?? undefined,
+            ...(mandarHorario ? { data: dataSel ?? undefined, hora: horaSel ?? undefined } : {}),
           };
 
     editar.mutate(
@@ -158,12 +191,21 @@ export function AgendaDetailSheet({
           toast.success(
             modo === 'remarcar'
               ? `Remarcado: ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
-              : `Serviço trocado: ${servicoSel}`,
+              : mandarHorario
+                ? `Trocado: ${servicoSel} · ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
+                : `Serviço trocado: ${servicoSel}`,
           );
           fechar();
         },
         onError: (err) => {
           if (err instanceof ApiError && err.status === 409) {
+            // 409 NOVO: serviço mais longo bate no próximo horário → mostra a message
+            // do backend inline, sem mexer na grade (não é corrida de slot).
+            const msgLongo = conflitoHorarioMsg(err.body);
+            if (msgLongo) {
+              setAviso(msgLongo);
+              return;
+            }
             // Corrida com o robô: o slot some, recarrega a grade (só livres),
             // mantém dia/serviço. Invalidar a base força o SlotPicker a refetch.
             setHoraSel(null);
@@ -242,6 +284,11 @@ export function AgendaDetailSheet({
 
           {modo === 'detalhe' ? (
             <DetalheView
+              slot={slot}
+              eventId={agendamento.id}
+              // Edição de dinheiro só no clone do gate (atend_from_agenda) E se houver
+              // linha (by-evento 200). No individual a flag é false -> nem consulta.
+              mostrarValor={atendFromAgenda}
               nome={parsed.nome}
               servico={parsed.servico}
               hora={hora}
@@ -269,21 +316,54 @@ export function AgendaDetailSheet({
                   />
                 </div>
               )}
-              <SlotPicker
-                slot={slot}
-                servico={servicoSel}
-                dataSel={dataSel}
-                horaSel={horaSel}
-                onPickDia={selecionarDia}
-                onPickHora={(h) => {
-                  setHoraSel(h);
-                  setAviso(null);
-                }}
-                aviso={aviso}
-                // Estabelecimento: a grade de remarcação olha a agenda do MESMO profissional
-                // do evento (remarcar v1 não troca de profissional). null no individual.
-                colaboradorId={agendamento.colaborador_id ?? null}
-              />
+
+              {/* Trocar serviço: por padrão MANTÉM o horário. O dono só vê a grade se
+                  optar por remarcar junto ("Escolher outro dia"). No remarcar a grade
+                  é sempre visível (é o ponto do modo). */}
+              {modo === 'trocar' && (
+                <ManterHorarioToggle
+                  manter={manterHorario}
+                  onManter={() => {
+                    setManterHorario(true);
+                    setDataSel(null);
+                    setHoraSel(null);
+                    setAviso(null);
+                  }}
+                  onTrocar={() => {
+                    setManterHorario(false);
+                    setAviso(null);
+                  }}
+                />
+              )}
+
+              {escolheNovoHorario && (
+                <SlotPicker
+                  slot={slot}
+                  servico={servicoSel}
+                  dataSel={dataSel}
+                  horaSel={horaSel}
+                  onPickDia={selecionarDia}
+                  onPickHora={(h) => {
+                    setHoraSel(h);
+                    setAviso(null);
+                  }}
+                  aviso={aviso}
+                  // Estabelecimento: a grade de remarcação olha a agenda do MESMO profissional
+                  // do evento (remarcar v1 não troca de profissional). null no individual.
+                  colaboradorId={agendamento.colaborador_id ?? null}
+                />
+              )}
+
+              {/* Aviso 409 (serviço mais longo) quando se mantém o horário — fora do
+                  SlotPicker, que nem é montado nesse caminho. */}
+              {modo === 'trocar' && manterHorario && aviso && (
+                <p
+                  role="status"
+                  className="mt-3 rounded-card-sm border border-amber/40 bg-amber-soft px-3.5 py-2.5 text-[13px] font-medium text-amber"
+                >
+                  {aviso}
+                </p>
+              )}
 
               {/* Resumo + salvar (fixo no rodapé do painel). */}
               <div className="mt-5">
@@ -340,6 +420,9 @@ function horaSelLabel(hora: string, servicoNome: string | null, servicos?: Servi
 }
 
 function DetalheView({
+  slot,
+  eventId,
+  mostrarValor,
   nome,
   servico,
   hora,
@@ -350,6 +433,10 @@ function DetalheView({
   onTrocar,
   onCancelar,
 }: {
+  slot: string;
+  eventId: string;
+  /** Gate do front: só consulta/edita dinheiro no clone com atend_from_agenda. */
+  mostrarValor: boolean;
   nome: string;
   servico: string;
   hora: string;
@@ -384,6 +471,10 @@ function DetalheView({
         )}
       </dl>
 
+      {/* Valor cobrado (item 3/6) — só aparece no clone do gate E quando há linha de
+          atendimento pra esse evento (by-evento 200). No individual nem é montada. */}
+      {mostrarValor && <AgendaValorSection slot={slot} eventId={eventId} />}
+
       {/* Ações. Remarcar (primária) + Trocar serviço (secundária) + Cancelar (destrutiva). */}
       <div className="mt-6 space-y-2.5">
         <Button onClick={onRemarcar}>
@@ -400,6 +491,65 @@ function DetalheView({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Toggle "Manter o mesmo horário" (default) vs "Escolher outro dia" no modo trocar.
+ * Sem o segundo, o PATCH viaja só com o serviço (item 1). Acessível (radiogroup).
+ */
+function ManterHorarioToggle({
+  manter,
+  onManter,
+  onTrocar,
+}: {
+  manter: boolean;
+  onManter: () => void;
+  onTrocar: () => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Horário do agendamento"
+      className="mb-4 flex flex-wrap gap-2"
+    >
+      <ToggleChip ativo={manter} onClick={onManter} label="Manter o mesmo horário">
+        <IconClock size={15} />
+      </ToggleChip>
+      <ToggleChip ativo={!manter} onClick={onTrocar} label="Escolher outro dia">
+        <IconCalendar size={15} />
+      </ToggleChip>
+    </div>
+  );
+}
+
+function ToggleChip({
+  ativo,
+  onClick,
+  label,
+  children,
+}: {
+  ativo: boolean;
+  onClick: () => void;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={ativo}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-9 items-center gap-1.5 rounded-pill border px-3.5 font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+        ativo
+          ? 'border-brand bg-brand text-bg'
+          : 'border-line bg-surface text-ink hover:bg-surface-hover',
+      )}
+    >
+      {children}
+      {label}
+    </button>
   );
 }
 

@@ -12,6 +12,8 @@
 import type {
   AtendimentoBaldeRow,
   AtendimentosListResponse,
+  Colaborador,
+  ComissaoPorProfissional,
   EditarAtendimentoBody,
   FormaPagamento,
 } from './api-types';
@@ -203,4 +205,196 @@ export function validateEdit(original: AtendimentoBaldeRow, draft: EditDraft): V
 /** True quando o PATCH não tem nenhum campo (nada mudou) — trava o botão "Salvar". */
 export function patchVazio(patch: EditarAtendimentoBody): boolean {
   return Object.keys(patch).length === 0;
+}
+
+// ── Agregações pro gráfico do Billing (3 visões) ─────────────────────────────
+//
+// Tudo PURO/testável. Soma SEMPRE o líquido (valorLiquidoCents) pra bater com o
+// total exibido na lista (somarTotalCents). NUNCA derivar o dia de `inicio_at`
+// (UTC) — a coluna `data` já vem em America/Sao_Paulo do backend (ADR 0027, bug
+// de data). Agrupar/ordenar por ela.
+
+export interface AggBucket {
+  /** Chave estável do balde (data 'YYYY-MM-DD', id do profissional, forma). */
+  chave: string;
+  /** Rótulo legível pra UI. */
+  rotulo: string;
+  /** Soma do líquido em centavos. */
+  total_cents: number;
+  /** Quantidade de linhas no balde. */
+  count: number;
+}
+
+/**
+ * Faturamento por DIA. Agrupa por `row.data` (YYYY-MM-DD, já em BR), ordenado
+ * cronologicamente. O rótulo fica a cargo da UI (formatAgendamentoDia) — aqui a
+ * chave é a própria data pra ordenação determinística.
+ */
+export function agruparPorDia(rows: AtendimentoBaldeRow[]): AggBucket[] {
+  const mapa = new Map<string, AggBucket>();
+  for (const r of rows) {
+    const chave = r.data;
+    const atual = mapa.get(chave) ?? { chave, rotulo: chave, total_cents: 0, count: 0 };
+    atual.total_cents += valorLiquidoCents(r);
+    atual.count += 1;
+    mapa.set(chave, atual);
+  }
+  return [...mapa.values()].sort((a, b) => a.chave.localeCompare(b.chave));
+}
+
+/**
+ * Faturamento por PROFISSIONAL. Agrupa por `colaborador_id` (estável; null = SOLO/
+ * sem profissional, num balde único). Rótulo = `profissional_nome` com fallback.
+ * Ordena por total desc (o maior aparece primeiro nas barras).
+ */
+export function agruparPorProfissional(rows: AtendimentoBaldeRow[]): AggBucket[] {
+  const mapa = new Map<string, AggBucket>();
+  for (const r of rows) {
+    const chave = r.colaborador_id != null ? String(r.colaborador_id) : '__sem__';
+    const atual = mapa.get(chave) ?? {
+      chave,
+      rotulo: profissionalLabel(r.profissional_nome),
+      total_cents: 0,
+      count: 0,
+    };
+    atual.total_cents += valorLiquidoCents(r);
+    atual.count += 1;
+    mapa.set(chave, atual);
+  }
+  return [...mapa.values()].sort((a, b) => b.total_cents - a.total_cents);
+}
+
+/**
+ * Faturamento por FORMA DE PAGAMENTO. Agrupa por `forma_pagamento` (null = "Sem
+ * forma" num balde próprio). Rótulo = formaPagamentoLabel. Ordena por total desc.
+ */
+export function agruparPorForma(rows: AtendimentoBaldeRow[]): AggBucket[] {
+  const mapa = new Map<string, AggBucket>();
+  for (const r of rows) {
+    const chave = r.forma_pagamento ?? '__sem__';
+    const atual = mapa.get(chave) ?? {
+      chave,
+      rotulo: formaPagamentoLabel(r.forma_pagamento),
+      total_cents: 0,
+      count: 0,
+    };
+    atual.total_cents += valorLiquidoCents(r);
+    atual.count += 1;
+    mapa.set(chave, atual);
+  }
+  return [...mapa.values()].sort((a, b) => b.total_cents - a.total_cents);
+}
+
+// ── Filtros client-side do Billing (cliente / colaborador / serviço) ─────────
+//
+// Os campos (`cliente_nome`, `colaborador_id`/`profissional_nome`, `servico_nome`)
+// JÁ chegam por linha → filtra-se 100% no cliente, sem novo fetch. Helpers PUROS
+// (testáveis sem React). O total é recomputado via somarTotalCents pelo chamador.
+
+export interface BillingFiltro {
+  /** Texto livre case-insensitive sobre cliente_nome ('' = sem filtro). */
+  cliente: string;
+  /** id do colaborador (null = todos). */
+  colaboradorId: number | null;
+  /** nome exato do serviço ('' = todos). */
+  servico: string;
+}
+
+export const FILTRO_VAZIO: BillingFiltro = { cliente: '', colaboradorId: null, servico: '' };
+
+/** Algum filtro ativo? (controla "Limpar filtros" + recomputo de total). */
+export function temFiltroAtivo(f: BillingFiltro): boolean {
+  return f.cliente.trim() !== '' || f.colaboradorId !== null || f.servico !== '';
+}
+
+/**
+ * Aplica os filtros sobre o array de atendimentos (AND entre os filtros ativos).
+ * Cliente = `includes` case-insensitive; colaborador = igualdade de id; serviço =
+ * igualdade exata de nome. Pura/testável.
+ */
+export function filtrarAtendimentos(
+  rows: AtendimentoBaldeRow[],
+  f: BillingFiltro,
+): AtendimentoBaldeRow[] {
+  const clienteBusca = f.cliente.trim().toLowerCase();
+  return rows.filter((r) => {
+    if (clienteBusca !== '') {
+      const nome = (r.cliente_nome ?? '').toLowerCase();
+      if (!nome.includes(clienteBusca)) return false;
+    }
+    if (f.colaboradorId !== null && r.colaborador_id !== f.colaboradorId) return false;
+    if (f.servico !== '' && (r.servico_nome ?? '') !== f.servico) return false;
+    return true;
+  });
+}
+
+// ── Comissão recomputada CLIENT-SIDE (sob filtro) ────────────────────────────
+//
+// Quando há filtro ativo no Billing, o relatório de comissão do backend (que olha o
+// período inteiro) não bate mais — recomputamos do MESMO array filtrado. Regra
+// (invariante 3): comissão é LIVE-COMPUTE = líquido × pct do colaborador, NUNCA
+// materializada. "Lista TODOS os profissionais ativos" mesmo sem booking (delta 0)
+// quando NÃO se filtra por colaborador específico. Pura/testável.
+
+export interface ComissaoComputeResult {
+  total_cents: number;
+  por_profissional: ComissaoPorProfissional[];
+}
+
+/**
+ * Recomputa a comissão a partir das linhas (já filtradas) + os colaboradores ATIVOS
+ * (pra listar quem não teve booking com 0). Só conta linhas com colaborador_id (SOLO
+ * não tem comissão). `forma_pagamento='pacote'` já entra com líquido 0 (valor 0).
+ *
+ * `colaboradoresAtivos`: usados pra incluir profissionais sem atendimento no período
+ *   (linha com bruto/comissão 0). Passe [] (ou só o filtrado) quando há filtro de
+ *   colaborador — aí só o(s) presente(s) aparece(m).
+ */
+export function computeComissaoFromRows(
+  rows: AtendimentoBaldeRow[],
+  colaboradoresAtivos: Pick<Colaborador, 'id' | 'nome' | 'comissao_pct'>[],
+): ComissaoComputeResult {
+  // Base: bruto líquido somado por colaborador presente nas linhas.
+  const brutoPorColab = new Map<number, { bruto: number; nome: string | null; count: number }>();
+  for (const r of rows) {
+    if (r.colaborador_id == null) continue;
+    const atual = brutoPorColab.get(r.colaborador_id) ?? {
+      bruto: 0,
+      nome: r.profissional_nome,
+      count: 0,
+    };
+    atual.bruto += valorLiquidoCents(r);
+    atual.count += 1;
+    if (atual.nome == null) atual.nome = r.profissional_nome;
+    brutoPorColab.set(r.colaborador_id, atual);
+  }
+
+  // pct + nome canônicos vêm da Equipe (fonte da verdade da % e do nome ativo).
+  const pctPorColab = new Map<number, { pct: number; nome: string }>();
+  for (const c of colaboradoresAtivos) pctPorColab.set(c.id, { pct: c.comissao_pct, nome: c.nome });
+
+  // União: todos os colaboradores ativos + os que aparecem nas linhas (defesa).
+  const ids = new Set<number>([...pctPorColab.keys(), ...brutoPorColab.keys()]);
+
+  const por_profissional: ComissaoPorProfissional[] = [];
+  let total = 0;
+  for (const id of ids) {
+    const base = brutoPorColab.get(id);
+    const info = pctPorColab.get(id);
+    const pct = info?.pct ?? null;
+    const bruto = base?.bruto ?? 0;
+    const comissao = pct != null && pct > 0 ? Math.round((bruto * pct) / 100) : 0;
+    total += comissao;
+    por_profissional.push({
+      colaborador_id: id,
+      profissional_nome: info?.nome ?? base?.nome ?? null,
+      total_bruto_cents: bruto,
+      comissao_pct: pct,
+      comissao_cents: comissao,
+      count: base?.count ?? 0,
+    });
+  }
+  // Ordena por comissão desc (maior primeiro), igual ao relatório.
+  por_profissional.sort((a, b) => b.comissao_cents - a.comissao_cents);
+  return { total_cents: total, por_profissional };
 }
