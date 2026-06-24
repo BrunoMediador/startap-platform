@@ -62,7 +62,8 @@ const cfg = {
   IDEMPOTENCY_ACTION_LOCK: false,
   ESTABELECIMENTO_ENABLED: false,
   PACOTES_ENABLED: false,
-  ATEND_FROM_AGENDA: false,
+  // Gate POR-CLONE (ADR 0027): lista de slots; vazio = OFF pra todos (default seguro).
+  ATEND_FROM_AGENDA_SLOTS: '',
 };
 vi.mock('../config.js', () => ({ config: cfg }));
 
@@ -153,7 +154,7 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -332,7 +333,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -564,7 +565,7 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
   });
@@ -637,7 +638,7 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
     mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
@@ -767,7 +768,7 @@ describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', 
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
     mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
@@ -863,7 +864,7 @@ describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', 
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
-// Billing DERIVADO DA AGENDA — gancho do BOT (ADR 0027, Fase D — gated por ATEND_FROM_AGENDA)
+// Billing DERIVADO DA AGENDA — gancho do BOT (ADR 0027, Fase D — gated POR-CLONE via ATEND_FROM_AGENDA_SLOTS)
 // ════════════════════════════════════════════════════════════════════════════════
 //
 // Garantias NÃO-NEGOCIÁVEIS do Bruno:
@@ -896,7 +897,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     cfg.ESTABELECIMENTO_ENABLED = false;
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
-    cfg.ATEND_FROM_AGENDA = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
     mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
@@ -936,8 +937,24 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     expect(calClient.createEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('gate POR-CLONE: slot FORA da lista (Cirilo/Samuel) = OFF byte-a-byte mesmo com SLOTS setado', async () => {
+    // SLOTS liga SÓ o dragon; o bot deste teste é teste_barbearia -> deve ficar OFF.
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_barber_dragon_caly8b';
+    const calClient = setupScheduleComCreate('evt-other');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res).toEqual({ ok: true, eventId: 'evt-other', summary: 'Fulano - Corte' });
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(mocks.getScopeBySlot).not.toHaveBeenCalled();
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+  });
+
   it('flag ON (individual): cria linha de previsão com tenant_id e colaborador null', async () => {
-    cfg.ATEND_FROM_AGENDA = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
     const calClient = setupScheduleComCreate('evt-ind');
     const inserir = await inserirToolFor();
     const res = await inserir.run({
@@ -964,7 +981,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
   });
 
   it('flag ON (individual): tenant_id NÃO resolvido -> NÃO grava, mas o bot responde normal', async () => {
-    cfg.ATEND_FROM_AGENDA = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
     mocks.getScopeBySlot.mockResolvedValue({
       product_type: 'individual',
       seat_cap: null,
@@ -983,7 +1000,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
   });
 
   it('flag ON (individual): helper LANÇANDO exceção NÃO quebra o agendamento (evento criado + pacote deduzido + resposta intacta)', async () => {
-    cfg.ATEND_FROM_AGENDA = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
     cfg.PACOTES_ENABLED = true;
     mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
       descontou_do_pacote: true,
@@ -1037,7 +1054,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
   });
 
   it('flag ON (estabelecimento): cria linha com o colaborador que recebeu o evento', async () => {
-    cfg.ATEND_FROM_AGENDA = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_estab_x';
     // o clone do estab resolve tenant próprio
     mocks.getScopeBySlot.mockResolvedValue({
       product_type: 'estabelecimento',
@@ -1070,7 +1087,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
   });
 
   it('flag ON (estabelecimento): helper LANÇANDO NÃO quebra o agendamento', async () => {
-    cfg.ATEND_FROM_AGENDA = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_estab_x';
     mocks.getScopeBySlot.mockResolvedValue({
       product_type: 'estabelecimento',
       seat_cap: 5,

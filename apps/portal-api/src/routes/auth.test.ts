@@ -12,7 +12,7 @@ const { configMock, getScopeBySlotMock } = vi.hoisted(() => ({
     PORTAL_SESSION_TTL_SECONDS: 3600,
     PORTAL_COOKIE_SECURE: false,
     ATENDIMENTOS_ENABLED: false,
-    ATEND_FROM_AGENDA: false,
+    ATEND_FROM_AGENDA_SLOTS: '',
     ESTABELECIMENTO_ENABLED: false,
   } as Record<string, unknown>,
   getScopeBySlotMock: vi.fn(),
@@ -97,7 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Estado padrão entre testes: flags OFF; scope individual sem tenant.
   configMock.ATENDIMENTOS_ENABLED = false;
-  configMock.ATEND_FROM_AGENDA = false;
+  configMock.ATEND_FROM_AGENDA_SLOTS = '';
   configMock.ESTABELECIMENTO_ENABLED = false;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'individual',
@@ -142,9 +142,9 @@ describe('GET /auth/me — atendimentos_enabled', () => {
 });
 
 // ── GET /auth/me — flag do billing derivado da agenda (ADR 0027) ─────────────
-describe('GET /auth/me — atend_from_agenda', () => {
-  it('atend_from_agenda=false quando a flag está OFF (sempre presente)', async () => {
-    configMock.ATEND_FROM_AGENDA = false;
+describe('GET /auth/me — atend_from_agenda (gate por-clone)', () => {
+  it('atend_from_agenda=false quando a lista está vazia (OFF pra todos; sempre presente)', async () => {
+    configMock.ATEND_FROM_AGENDA_SLOTS = '';
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/auth/me' });
     expect(res.statusCode).toBe(200);
@@ -152,14 +152,24 @@ describe('GET /auth/me — atend_from_agenda', () => {
     await app.close();
   });
 
-  it('atend_from_agenda=true quando a flag está ON (independe de atendimentos_enabled)', async () => {
-    configMock.ATEND_FROM_AGENDA = true;
+  it('atend_from_agenda=true quando o SLOT desta sessão está na lista (independe de atendimentos_enabled)', async () => {
+    // a sessão de teste é slot 'clone_x' (stub do withTenant).
+    configMock.ATEND_FROM_AGENDA_SLOTS = 'clone_x';
     configMock.ATENDIMENTOS_ENABLED = false;
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/auth/me' });
     const body = res.json();
     expect(body.atend_from_agenda).toBe(true);
     expect(body.atendimentos_enabled).toBe(false);
+    await app.close();
+  });
+
+  it('atend_from_agenda=false quando o SLOT desta sessão está FORA da lista (Cirilo/Samuel)', async () => {
+    // lista liga SÓ o dragon; a sessão é clone_x -> deve ficar OFF.
+    configMock.ATEND_FROM_AGENDA_SLOTS = 'clone_barber_dragon_caly8b';
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.json().atend_from_agenda).toBe(false);
     await app.close();
   });
 });
