@@ -25,9 +25,9 @@
  *            (cada campo enviado é pinado em dirty_fields; não volta pro catálogo).
  *   - DELETE /portal/atendimentos/:id                                — soft-delete (some).
  * Os relatórios contam SÓ linhas FATURADAS (passado) e NÃO deletadas; comissão idem.
- * A flag ATEND_FROM_AGENDA gateia o GANCHO de criar-no-agendamento (Fase B2, fora deste
- * arquivo); estes endpoints existem sob ATENDIMENTOS_ENABLED e o front gateia as abas
- * por atend_from_agenda (exposto no /auth/me).
+ * A env ATEND_FROM_AGENDA_SLOTS (gate POR-CLONE) gateia o GANCHO de criar-no-agendamento
+ * (Fase B2, fora deste arquivo); estes endpoints existem sob ATENDIMENTOS_ENABLED e o
+ * front gateia as abas por atend_from_agenda (exposto no /auth/me, já resolvido por slot).
  */
 import { logger } from '@startap/core/logger';
 import { atendimentos, cloneColaboradores } from '@startap/db';

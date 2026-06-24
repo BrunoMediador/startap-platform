@@ -1,3 +1,4 @@
+import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -337,8 +338,8 @@ export class TesteBarbeariaBot extends BotBase {
               servicoArg,
               usaPacoteArg,
             });
-            // Gancho de billing derivado da agenda (ADR 0027) — gated por ATEND_FROM_AGENDA;
-            // OFF = no-op. Best-effort: nunca quebra o agendamento (try/catch interno). Individual = colaborador null.
+            // Gancho de billing derivado da agenda (ADR 0027) — gated por slot (ATEND_FROM_AGENDA_SLOTS);
+            // slot fora da lista = no-op. Best-effort: nunca quebra o agendamento (try/catch interno). Individual = colaborador null.
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
               summary,
@@ -618,8 +619,9 @@ export class TesteBarbeariaBot extends BotBase {
    * então reprocesso de webhook / retry do MESMO evento NÃO duplica.
    *
    * GARANTIAS NÃO-NEGOCIÁVEIS (Bruno):
-   *  1) GATING: flag ATEND_FROM_AGENDA OFF (default) -> retorna IMEDIATAMENTE, zero linha,
-   *     zero efeito. O caminho do bot é byte-a-byte o de hoje (Cirilo/Samuel inalterados).
+   *  1) GATING POR-CLONE: slot fora de ATEND_FROM_AGENDA_SLOTS (lista vazia = todos)
+   *     -> retorna IMEDIATAMENTE, zero linha, zero efeito. O caminho do bot é byte-a-byte
+   *     o de hoje (Cirilo/Samuel inalterados).
    *  2) NUNCA QUEBRA O FLUXO: TODO o corpo é envolvido em try/catch. Qualquer falha
    *     (tenant não resolvido, DB fora, helper lançando) é LOGADA e ENGOLIDA — o bot já
    *     criou o evento, deduziu pacote e vai responder o cliente exatamente como hoje.
@@ -635,8 +637,9 @@ export class TesteBarbeariaBot extends BotBase {
     end: string;
     colaboradorId?: number | null;
   }): Promise<void> {
-    // GATE: flag OFF (default) -> nada acontece. Byte-a-byte o bot de hoje.
-    if (!config.ATEND_FROM_AGENDA) return;
+    // GATE POR-CLONE: slot fora da lista (vazia = todos) -> nada acontece. Byte-a-byte
+    // o bot de hoje (Cirilo/Samuel inalterados). this.slot SEMPRE do clone (isolamento).
+    if (!isAtendFromAgendaEnabled(this.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
     // Sem eventId (criação degradada / action-lock sem id) não há chave de idempotência
     // (gcal_event_id) -> NÃO cria (evitaria linha sem âncora de dedup).
     if (!input.eventId) return;

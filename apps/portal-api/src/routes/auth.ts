@@ -9,6 +9,7 @@
  * Lockout: PORTAL_LOGIN_MAX_ATTEMPTS erradas => trava PORTAL_LOGIN_LOCK_MINUTES.
  * Respostas de erro sao genericas (nao revelam se o username existe).
  */
+import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { canonicalE164 } from '@startap/core/phone';
 import { cloneColaboradores, portalUsers } from '@startap/db';
@@ -207,8 +208,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       atendimentos_enabled: !!config.ATENDIMENTOS_ENABLED,
       // Flag do billing derivado da agenda (ADR 0027). SEMPRE presente (boolean) — o
       // front gateia as ABAS previsão/faturado por ela (criar-no-agendamento da Fase B2
-      // também). !! garante boolean mesmo se a config vier indefinida.
-      atend_from_agenda: !!config.ATEND_FROM_AGENDA,
+      // também). Gate POR-CLONE: reflete se o SLOT DESTA sessão está na lista
+      // ATEND_FROM_AGENDA_SLOTS (vazia = OFF pra todos). Mantém o front coerente com o
+      // gate real do gancho (B2/D) — clone fora da lista NÃO vê as abas.
+      atend_from_agenda: isAtendFromAgendaEnabled(tenant.slot, config.ATEND_FROM_AGENDA_SLOTS),
       // Só envia os campos quando a feature está ON E o cliente é estabelecimento.
       // Ausentes = individual (o front trata ausência como 'individual').
       ...(productType === 'estabelecimento'
