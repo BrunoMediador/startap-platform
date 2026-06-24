@@ -26,7 +26,12 @@ import { Input } from '@/components/ui/input';
 import { Overlay } from '@/components/ui/overlay';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
-import type { AtendimentoBalde, AtendimentoBaldeRow, FormaPagamento } from '@/lib/api-types';
+import type {
+  AtendimentoBalde,
+  AtendimentoBaldeRow,
+  FormaPagamento,
+  Servico,
+} from '@/lib/api-types';
 import { FORMAS_PAGAMENTO } from '@/lib/atendimento';
 import {
   type EditDraft,
@@ -40,7 +45,7 @@ import {
 } from '@/lib/atendimentos-balde';
 import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
-import { useEditarAtendimento, useRemoverAtendimento } from '@/lib/queries';
+import { useEditarAtendimento, useRemoverAtendimento, useServicos } from '@/lib/queries';
 import { useEffect, useId, useState } from 'react';
 
 function is404(err: unknown): boolean {
@@ -70,6 +75,9 @@ export function AtendimentoEditSheet({
   const toast = useToast();
   const editar = useEditarAtendimento(slot, balde, de, ate);
   const remover = useRemoverAtendimento(slot, balde, de, ate);
+  // Catálogo do clone pra trocar o serviço por SELEÇÃO (evita digitar errado um
+  // nome que já existe). Cache quente — a lista de atendimentos já vive ao lado.
+  const servicosQ = useServicos(slot);
 
   const [draft, setDraft] = useState<EditDraft | null>(null);
   const [errors, setErrors] = useState<EditFieldErrors>({});
@@ -253,12 +261,11 @@ export function AtendimentoEditSheet({
           {/* Serviço + cliente */}
           <section aria-labelledby="ed-extra" className="mt-5 space-y-3">
             <SectionTitle id="ed-extra">Detalhes</SectionTitle>
-            <Input
-              label="Serviço"
-              placeholder="Ex.: Corte"
-              autoComplete="off"
+            <ServicoField
+              servicos={servicosQ.data ?? []}
+              carregando={servicosQ.isPending}
               value={draft.servicoNome}
-              onChange={(e) => setDraft((d) => (d ? { ...d, servicoNome: e.target.value } : d))}
+              onChange={(servicoNome) => setDraft((d) => (d ? { ...d, servicoNome } : d))}
             />
             <Input
               label="Cliente"
@@ -302,6 +309,114 @@ export function AtendimentoEditSheet({
         }}
       />
     </>
+  );
+}
+
+/** Sentinela do `<select>` que troca pro modo "digitar um serviço fora da lista". */
+const SERVICO_OUTRO = '__outro__';
+
+/**
+ * Campo Serviço: SELEÇÃO do catálogo do clone (mesmo dado da tela Registrar e do
+ * Novo agendamento) em vez de texto livre — evita digitar um nome que já existe e
+ * não casar com o catálogo. Comportamento preservado:
+ *   - catálogo vazio (ou ainda carregando sem dados) -> cai no input de texto, como antes;
+ *   - serviço atual fora do catálogo (linha antiga / serviço removido) -> entra como
+ *     opção "Manter: «valor»" pra NÃO se perder no save;
+ *   - "Outro (digitar)" reabre o texto livre quando o dono quer um nome avulso.
+ * Não mexe no Valor (diferente do Registrar): aqui o valor já foi lançado e é edição
+ * independente — trocar o serviço não deve sobrescrever o dinheiro do dono.
+ */
+function ServicoField({
+  servicos,
+  carregando,
+  value,
+  onChange,
+}: {
+  servicos: Servico[];
+  carregando: boolean;
+  value: string;
+  onChange: (servicoNome: string) => void;
+}) {
+  const id = useId();
+  const trimmed = value.trim();
+  const noCatalogo = servicos.some((s) => s.nome === trimmed);
+  // Texto livre quando: não há catálogo, ou o dono optou por "Outro", ou o valor
+  // atual está vazio e não há catálogo pra escolher.
+  const [digitando, setDigitando] = useState(false);
+
+  // Sem catálogo (vazio ou ainda sem dados) = comportamento antigo: texto livre.
+  if (servicos.length === 0) {
+    return (
+      <Input
+        label="Serviço"
+        placeholder={carregando ? 'Carregando serviços…' : 'Ex.: Corte'}
+        autoComplete="off"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
+  if (digitando) {
+    return (
+      <div className="flex w-full flex-col gap-[7px]">
+        <Input
+          label="Serviço"
+          placeholder="Ex.: Corte"
+          autoComplete="off"
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => setDigitando(false)}
+          className="self-start text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:underline"
+        >
+          Escolher da lista
+        </button>
+      </div>
+    );
+  }
+
+  // Valor selecionado no <select>: o serviço do catálogo, ou o sentinela de
+  // "manter o valor atual fora-do-catálogo" (string vazia também cai aqui).
+  const selectValue = noCatalogo ? trimmed : `__keep__${trimmed}`;
+
+  return (
+    <div className="flex w-full flex-col gap-[7px]">
+      <label htmlFor={id} className="text-[13px] font-semibold text-ink">
+        Serviço
+      </label>
+      <select
+        id={id}
+        value={selectValue}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === SERVICO_OUTRO) {
+            setDigitando(true);
+            return;
+          }
+          // Opção "manter" devolve o valor original; serviço do catálogo, o nome dele.
+          onChange(v.startsWith('__keep__') ? v.slice('__keep__'.length) : v);
+        }}
+        className="h-[46px] w-full cursor-pointer appearance-none rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 text-[15px] text-ink outline-none transition-colors hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus"
+      >
+        {/* Valor atual fora do catálogo (linha antiga ou serviço removido) ou vazio:
+            opção no topo pra não perder o que já estava gravado. */}
+        {!noCatalogo && (
+          <option value={`__keep__${trimmed}`}>
+            {trimmed === '' ? 'Sem serviço' : `Manter: ${trimmed}`}
+          </option>
+        )}
+        {servicos.map((s) => (
+          <option key={s.nome} value={s.nome}>
+            {s.nome}
+          </option>
+        ))}
+        <option value={SERVICO_OUTRO}>Outro (digitar)…</option>
+      </select>
+    </div>
   );
 }
 
