@@ -2,8 +2,14 @@
 
 import { cn } from '@/lib/cn';
 /**
- * Bottom nav mobile (<md) — spec 6.13. Sticky bottom, blur, itens em flex-1 (NAV_ITEMS),
- * area >=44px, respeita safe-area. Some em >=md (vira sidebar). Item ativo em brand.
+ * Bottom nav mobile (<md) — spec 6.13. Sticky bottom, blur, area >=44px, respeita
+ * safe-area. Some em >=md (vira sidebar). Item ativo em brand.
+ *
+ * Largura adaptativa por nº de itens (mobile-first): até 5 itens cabem confortáveis
+ * em flex-1 (distribuição uniforme, sem scroll). A partir de 6 (estabelecimento +
+ * Billing chegam a 9 itens) a barra vira ROLAGEM HORIZONTAL com itens de largura
+ * fixa (min-w ~62px) — cada item segue tappable (>=44px) e o rótulo ("Meu negócio",
+ * "Mensalidade") deixa de espremer/quebrar. snap pra parar alinhado em cada item.
  */
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -12,10 +18,18 @@ import { useConexaoNav } from './use-conexao-nav';
 export function BottomNav() {
   const pathname = usePathname();
   const { visibleItems, showDot } = useConexaoNav();
+  // >5 itens não cabem confortáveis no viewport mais estreito (~360px): rola.
+  const rola = visibleItems.length > 5;
   return (
     <nav
       aria-label="Navegação principal"
-      className="sticky bottom-0 z-30 flex border-t border-line bg-surface/[0.92] px-1.5 pb-[calc(9px+env(safe-area-inset-bottom))] pt-[9px] backdrop-blur-md md:hidden"
+      className={cn(
+        'sticky bottom-0 z-30 flex border-t border-line bg-surface/[0.92] px-1.5 pb-[calc(9px+env(safe-area-inset-bottom))] pt-[9px] backdrop-blur-md md:hidden',
+        // Poucos itens: distribui no full-width. Muitos: rola na horizontal com snap,
+        // escondendo a barra de rolagem (scrollbar-none).
+        rola &&
+          'snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+      )}
     >
       {visibleItems.map((item) => {
         const { href, label, Icon } = item;
@@ -29,7 +43,9 @@ export function BottomNav() {
             className={cn(
               // Bottom nav (spec 1.A.8): ativo = roxo + bloco brand-soft atras do
               // icone; inativo "acende" no toque (active:bg-surface-hover).
-              'group flex min-h-11 flex-1 flex-col items-center justify-center gap-1 py-1 text-[10.5px] font-semibold outline-none transition-colors focus-visible:rounded-card-sm focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset',
+              'group flex min-h-11 flex-col items-center justify-center gap-1 py-1 text-[10.5px] font-semibold outline-none transition-colors focus-visible:rounded-card-sm focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-inset',
+              // Poucos itens -> flex-1 (uniforme). Muitos -> largura fixa + snap pra rolar.
+              rola ? 'w-[62px] shrink-0 snap-start px-0.5' : 'flex-1',
               active ? 'text-brand' : 'text-ink-faint active:text-ink-soft',
             )}
           >
@@ -51,7 +67,9 @@ export function BottomNav() {
                 </>
               )}
             </span>
-            {label}
+            {/* Rótulo numa linha só: trunca em vez de quebrar e desalinhar a altura
+                dos itens (ex.: "Meu negócio"/"Mensalidade" no estabelecimento). */}
+            <span className="max-w-full truncate px-0.5 leading-none">{label}</span>
           </Link>
         );
       })}

@@ -54,9 +54,15 @@ export function ResumoFaturamento({ de, ate }: { de: string; ate: string }) {
 
   return (
     <div className="space-y-5">
-      {/* Métricas-chave */}
-      <div className="grid grid-cols-2 gap-3">
-        <MetricCard value={formatPrecoCents(q.data.total_cents)} caption="Total faturado" />
+      {/* Métricas-chave. Total ocupa a largura toda (número grande, sem espremer);
+          Atendimentos + Ticket dividem a linha de baixo. No desktop as 3 ficam lado
+          a lado. Evita o "card órfão" do grid-cols-2 com 3 itens. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <MetricCard
+          value={formatPrecoCents(q.data.total_cents)}
+          caption="Total faturado"
+          className="col-span-2 sm:col-span-1"
+        />
         <MetricCard value={q.data.count} caption="Atendimentos" />
         <MetricCard value={formatPrecoCents(q.data.ticket_medio_cents)} caption="Ticket médio" />
       </div>
