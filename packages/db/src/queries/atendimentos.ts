@@ -182,6 +182,15 @@ const _FATURADO_SQL =
 const _FATURADO_SQL_A =
   "a.deleted_at IS NULL AND a.status <> 'cancelado' AND (a.fim_at <= now() OR a.origem = 'manual')";
 
+// PREVISÃO (futuro/aberto) — fragmento ÚNICO reusado por getFaturamento, listAtendimentos e
+// getComissao (ADR 0027, unificação do predicado de previsão). Escolha de produto do PM:
+// `status <> 'cancelado'` (não `status = 'agendado'`), já usado por getFaturamento e
+// listAtendimentos — assim agendamento remarcado/realizado-no-futuro não some da Previsão por
+// causa de status divergente. Só colunas + now(): seguro pra interpolar (sem placeholder extra).
+const _PREVISAO_SQL = "status <> 'cancelado' AND fim_at > now()";
+// Versão prefixada com alias `a.` para as queries que usam JOIN.
+const _PREVISAO_SQL_A = "a.status <> 'cancelado' AND a.fim_at > now()";
+
 export interface FaturamentoPorFormaRow {
   forma_pagamento: string | null;
   total_cents: number;
@@ -223,7 +232,7 @@ export async function getFaturamento(
   const params = [slot, tenantId, de, ate];
 
   const totalQ = await query<{ total_cents: string | null; count: string }>(
-    `SELECT COALESCE(SUM(valor_cents - desconto_cents), 0)::bigint AS total_cents,
+    `SELECT COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos
       WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL}
@@ -237,7 +246,7 @@ export async function getFaturamento(
     count: string;
   }>(
     `SELECT forma_pagamento,
-            COALESCE(SUM(valor_cents - desconto_cents), 0)::bigint AS total_cents,
+            COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos
       WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL}
@@ -255,7 +264,7 @@ export async function getFaturamento(
   }>(
     `SELECT a.colaborador_id,
             c.nome AS profissional_nome,
-            COALESCE(SUM(a.valor_cents - a.desconto_cents), 0)::bigint AS total_cents,
+            COALESCE(SUM(GREATEST(a.valor_cents - a.desconto_cents, 0)), 0)::bigint AS total_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos a
        LEFT JOIN clone_colaboradores c
@@ -267,12 +276,13 @@ export async function getFaturamento(
     params,
   );
 
-  // PREVISTO (futuro/aberto): mesmo predicado do balde='previsao'. Aditivo, não altera total.
+  // PREVISTO (futuro/aberto): predicado de previsão UNIFICADO (_PREVISAO_SQL). Aditivo, não
+  // altera o total faturado. GREATEST clampa parcela negativa (desconto > valor) -> nunca soma < 0.
   const previstoQ = await query<{ total_cents: string | null }>(
-    `SELECT COALESCE(SUM(valor_cents - desconto_cents), 0)::bigint AS total_cents
+    `SELECT COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents
        FROM atendimentos
       WHERE slot = $1 AND tenant_id = $2
-        AND deleted_at IS NULL AND status <> 'cancelado' AND fim_at > now()
+        AND deleted_at IS NULL AND ${_PREVISAO_SQL}
         AND data >= $3 AND data <= $4`,
     params,
   );
@@ -339,9 +349,10 @@ export interface ComissaoReport {
  *    (congela o pct no instante da realização, p/ histórico imutável quando o pct muda depois);
  *    HOJE é LIVE-COMPUTE, fora de escopo deste fix.
  *
- *  - 'previsao': comissão PROJETADA dos agendamentos futuros (deleted_at NULL,
- *    status='agendado', fim_at>now()). MESMA fórmula AO VIVO do faturado, só muda a janela
- *    (futuro vs passado) — round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE.
+ *  - 'previsao': comissão PROJETADA dos agendamentos futuros (deleted_at NULL, _PREVISAO_SQL =
+ *    status<>'cancelado' AND fim_at>now()). MESMA fórmula AO VIVO do faturado, só muda a janela
+ *    (futuro vs passado) — round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE. O
+ *    predicado de previsão é o MESMO de getFaturamento/listAtendimentos (ADR 0027, unificado).
  *
  * TODOS OS ATIVOS APARECEM: a query PARTE de clone_colaboradores (ativo = TRUE) com LEFT
  * JOIN em atendimentos. Assim, TODO colaborador ativo do clone entra em por_profissional —
@@ -371,10 +382,10 @@ export async function getComissao(
   balde: Balde = 'faturado',
 ): Promise<ComissaoReport> {
   // Predicado do balde dentro do ON do LEFT JOIN — preserva colaboradores SEM atendimento
-  // (filtrar no ON, não no WHERE, é o que mantém a linha zerada). faturado: snapshot
-  // congelado; previsao: projeção sobre o pct corrente.
-  const baldeCond =
-    balde === 'previsao' ? "a.status = 'agendado' AND a.fim_at > now()" : _FATURADO_SQL_A;
+  // (filtrar no ON, não no WHERE, é o que mantém a linha zerada). faturado e previsao usam os
+  // fragmentos canônicos (_FATURADO_SQL_A / _PREVISAO_SQL_A) — mesmo predicado de previsão de
+  // getFaturamento e listAtendimentos (status <> 'cancelado' AND fim_at > now()).
+  const baldeCond = balde === 'previsao' ? _PREVISAO_SQL_A : _FATURADO_SQL_A;
 
   // comissao_cents — AO VIVO nos DOIS baldes (fix de dinheiro 2026-06-23): SUM por linha de
   // round(GREATEST(valor-desconto,0) * pct corrente / 100), com COALESCE(cc.comissao_pct,0)
@@ -486,6 +497,15 @@ export interface AtendimentoEventInput {
   inicioAt?: Date | string | null;
   /** Fim do evento (Date ou ISO). Define fim_at (split previsão×faturado é por fim_at). */
   fimAt?: Date | string | null;
+  /**
+   * REPRECIFICAR ao TROCAR O SERVIÇO (ADR 0027 — bug do valor preso). Quando true, o UPDATE do
+   * ON CONFLICT força valor_cents/desconto_cents pro preço do catálogo do NOVO serviço (EXCLUDED,
+   * desconto 0) — MAS só se a coluna NÃO estiver pinada em dirty_fields (edição manual da /billing
+   * vence o sticky) e NÃO for pacote (pacote força 0 antes do CASE). O caller (rota) liga isto
+   * APENAS numa troca de serviço genuína (mudaServico && !isPacote) — nunca em remarcação pura
+   * (preserva a marca/valor de pacote; não reabre o bug DOBRA). Default false.
+   */
+  reprecificarServico?: boolean;
 }
 
 const _RETURNING_COLS = `id, slot, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
@@ -586,6 +606,12 @@ export async function resolvePrecoCents(slot: string, servicoNome: string | null
  * linha existente — assim remarcar um agendamento pago por PACOTE NÃO reverte a marca pra
  * null (o que faria a receita dobrar). Forma informada ('pacote'/'pix'/null explícito) aplica.
  *
+ * REPRECIFICAR (ADR 0027 — bug do valor preso): quando `reprecificarServico=true` (o caller
+ * detectou TROCA de serviço, fora de pacote), o UPDATE força valor_cents/desconto_cents pro
+ * preço do catálogo do NOVO serviço (EXCLUDED, desconto 0), MESMO sem pagamento informado —
+ * exceto se a coluna estiver pinada em dirty_fields (edição manual da /billing vence o reprice).
+ * Sem reprice, remarcação pura PRESERVA o valor (não reabre o bug DOBRA). Pacote sempre 0.
+ *
  * Comissão NÃO é congelada aqui — o relatório calcula a comissão AO VIVO (getComissao); não
  * há snapshot de realização (split previsão×faturado é stateless por fim_at, sem cron).
  */
@@ -603,16 +629,23 @@ export async function upsertAtendimentoFromEvent(
   //    No INSERT (linha nova) "preservar" recai no default (forma null / valor calculado).
   const pagamentoInformado = input.formaPagamento !== undefined;
 
-  // Preço: explícito > catálogo. Pacote zera. Nunca negativo, sempre inteiro.
+  // REPRECIFICAR ao trocar serviço (ADR 0027): só fora de pacote. Quando ligado, IGNORAMOS um
+  // valorCents passado e resolvemos o preço do NOVO serviço pelo catálogo (EXCLUDED), com
+  // desconto 0 — o CASE de valor_cents/desconto_cents usa EXCLUDED quando reprice && !pinado.
+  const reprice = input.reprecificarServico === true && !isPacote;
+
+  // Preço: reprice/ausente -> catálogo do serviço; senão explícito. Pacote zera. >=0, inteiro.
   let valorCents: number;
   if (isPacote) {
     valorCents = 0;
-  } else if (input.valorCents != null) {
+  } else if (!reprice && input.valorCents != null) {
     valorCents = Math.max(0, Math.trunc(input.valorCents));
   } else {
+    // reprice OU valorCents ausente -> resolve do catálogo pelo servico_nome (preço do NOVO serviço).
     valorCents = await resolvePrecoCents(input.slot, input.servicoNome ?? null);
   }
-  const descontoCents = isPacote ? 0 : Math.max(0, Math.trunc(input.descontoCents ?? 0));
+  // Reprice zera o desconto (preço novo "limpo" do catálogo); senão preserva o desconto informado.
+  const descontoCents = isPacote || reprice ? 0 : Math.max(0, Math.trunc(input.descontoCents ?? 0));
   const colaboradorId = input.colaboradorId == null ? null : Math.trunc(input.colaboradorId);
 
   const inicioIso = toIso(input.inicioAt);
@@ -624,6 +657,12 @@ export async function upsertAtendimentoFromEvent(
   // NÃO estiver pinada (atendimentos.dirty_fields = a linha ANTIGA, via EXCLUDED é a nova).
   // `a.dirty_fields ? 'coluna'` (operador jsonb ?) testa pertença no array de strings.
   // $14 = pagamentoInformado: quando FALSE, o UPDATE preserva forma/valor/desconto antigos.
+  // $15 = reprice (troca de serviço): quando TRUE, valor/desconto vão pro catálogo do NOVO
+  //   serviço (EXCLUDED) MESMO sem pagamentoInformado — desde que a coluna NÃO esteja pinada
+  //   (edição manual da /billing vence o reprice). NUNCA reprecifica linha já marcada como
+  //   PACOTE (forma_pagamento='pacote' no banco): pacote vive com valor 0 (ADR 0027 bug DOBRA);
+  //   o reprice só vale fora de pacote. forma_pagamento NÃO é tocada pelo reprice (trocar de
+  //   serviço não muda a forma de pagamento). Sem reprice -> preserva (remarcação pura).
   const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
     `INSERT INTO atendimentos
        (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
@@ -642,9 +681,15 @@ export async function upsertAtendimentoFromEvent(
                                THEN atendimentos.cliente_contato ELSE EXCLUDED.cliente_contato END,
        servico_nome     = CASE WHEN atendimentos.dirty_fields ? 'servico_nome'
                                THEN atendimentos.servico_nome ELSE EXCLUDED.servico_nome END,
-       valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents' OR NOT $14::boolean
+       valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents'
+                                 OR (NOT $14::boolean
+                                     AND NOT ($15::boolean
+                                              AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
                                THEN atendimentos.valor_cents ELSE EXCLUDED.valor_cents END,
-       desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents' OR NOT $14::boolean
+       desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents'
+                                 OR (NOT $14::boolean
+                                     AND NOT ($15::boolean
+                                              AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
                                THEN atendimentos.desconto_cents ELSE EXCLUDED.desconto_cents END,
        forma_pagamento  = CASE WHEN atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $14::boolean
                                THEN atendimentos.forma_pagamento ELSE EXCLUDED.forma_pagamento END,
@@ -670,6 +715,7 @@ export async function upsertAtendimentoFromEvent(
       fimIso,
       dataDay,
       pagamentoInformado,
+      reprice,
     ],
   );
   const row = r.rows[0] as AtendimentoRow & { dirty_fields: unknown };
@@ -805,7 +851,7 @@ export async function listAtendimentos(
 ): Promise<AtendimentoListResult> {
   const baldeCond =
     balde === 'previsao'
-      ? "a.status <> 'cancelado' AND a.fim_at > now()"
+      ? _PREVISAO_SQL_A // predicado de previsão canônico (mesmo de getFaturamento/getComissao)
       : "(a.fim_at <= now() OR a.origem = 'manual')";
 
   const r = await query<JoinedRawRow>(
@@ -825,6 +871,34 @@ export async function listAtendimentos(
 
   const total_cents = atendimentos.reduce((acc, a) => acc + (a.valor_cents - a.desconto_cents), 0);
   return { atendimentos, total_cents };
+}
+
+/**
+ * Resolve a linha de atendimento ATIVA de um evento da agenda pelo gcal_event_id, no MESMO
+ * shape enriquecido da lista por balde (AtendimentoListRow, com profissional_nome). Escopado
+ * por slot + tenant_id (anti-IDOR): um eventId de outro tenant -> null (não vaza existência).
+ *
+ * Usada pelo GET /portal/atendimentos/by-evento/:eventId — o card da agenda só carrega o
+ * gcal_event_id; pra editar valor/desconto na /billing o front precisa do id numérico da linha.
+ * Só linhas NÃO deletadas (deleted_at IS NULL). Retorna a Row enriquecida ou null se não há
+ * atendimento ativo daquele evento neste escopo.
+ */
+export async function getAtendimentoByEvent(
+  slot: string,
+  tenantId: string,
+  gcalEventId: string,
+): Promise<AtendimentoListRow | null> {
+  const r = await query<JoinedRawRow>(
+    `SELECT ${_LIST_COLS}
+       FROM atendimentos a
+       LEFT JOIN clone_colaboradores c
+         ON c.id = a.colaborador_id AND c.slot = a.slot
+      WHERE a.slot = $1 AND a.tenant_id = $2 AND a.gcal_event_id = $3 AND a.deleted_at IS NULL
+      LIMIT 1`,
+    [slot, tenantId, gcalEventId],
+  );
+  const row = r.rows[0];
+  return row ? mapJoinedRow(row) : null;
 }
 
 // ── Edição manual (PATCH) — pina as colunas enviadas em dirty_fields (sticky) ────────

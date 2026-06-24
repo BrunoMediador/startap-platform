@@ -876,8 +876,11 @@ describe('PATCH /portal/agendamentos/:eventId — caminho feliz', () => {
     const [, fields] = client.patchEvent.mock.calls[0];
     // Recompõe: nome+telefone vêm do título atual, serviço é o novo.
     expect(fields.summary).toBe('João - Corte + barba | WhatsApp: 5511999990000');
-    // Não mudou data/hora → sem start/end no patch.
-    expect(fields.startISO).toBeUndefined();
+    // MUDANÇA 3 (revalida ao trocar serviço): "Corte+barba" (45min) é mais longo que o "Corte"
+    // atual (30min) → recalcula a janela A PARTIR DO MESMO INÍCIO (10:00 BRT) e estende o fim
+    // pra 10:45. O start é PRESERVADO; só o end muda. (Sem troca de duração, start/end ficam undefined.)
+    expect(fields.startISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60).toISOString());
+    expect(fields.endISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60 + 45).toISOString());
     await app.close();
   });
 
@@ -1536,6 +1539,152 @@ describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA_SLOTS, gate por-c
     // Evento alheio nunca passa a guarda → nada é apagado nem no GCal nem no atendimento.
     expect(client.deleteEvent).not.toHaveBeenCalled();
     expect(softDeleteAtendimentoByEventMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  // ── MUDANÇA 1: PATCH propaga reprecificarServico ao SYNC quando troca o serviço ──────
+  it('flag ON: trocar SÓ o serviço propaga reprecificarServico=true pro sync', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = injectedSlot;
+    // Mesmo serviço de mesma duração (Corte 30min -> Corte 30min) não revalida janela, mas a troca
+    // de serviço (servico no body) liga o reprice. Aqui trocamos pra "Corte" (igual) só pra isolar
+    // o flag sem disparar revalidação por duração — o reprice é independente.
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(syncAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    // mudaServico -> reprice ligado (o helper reprecifica respeitando sticky/pacote).
+    expect(syncAtendimentoFromEventMock.mock.calls[0][0].reprecificarServico).toBe(true);
+    await app.close();
+  });
+
+  it('flag ON: remarcação PURA (só hora) NÃO liga reprice (preserva valor/marca de pacote)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = injectedSlot;
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { hora: '11:00' }, // só remarca, não troca serviço
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(syncAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    // Sem troca de serviço -> reprice OMITIDO no eventInput (undefined = sem reprice no helper).
+    // Não reabre o bug DOBRA: remarcação pura preserva valor/marca de pacote.
+    expect(syncAtendimentoFromEventMock.mock.calls[0][0].reprecificarServico).toBeUndefined();
+    await app.close();
+  });
+});
+
+// ── MUDANÇA 3: revalidar janela ao trocar SÓ o serviço (REVALIDA E AVISA) ────────────
+// Quando vem só `servico` (sem data/hora) e o novo serviço é MAIS LONGO, recalculamos o fim a
+// partir do início atual e revalidamos janela + conflito. Se bater com o próximo -> 409
+// conflito_horario (mensagem tratável). Sem conflito, a troca segue (start preservado, fim estendido).
+describe('PATCH /portal/agendamentos/:eventId — MUDANÇA 3: revalida ao trocar serviço mais longo', () => {
+  it('200: serviço mais longo que CABE → remarca o fim preservando o início', async () => {
+    // Evento atual: Corte 30min (10:00-10:30). Troca pra "Corte + barba" 45min: 10:00-10:45 cabe
+    // (janela 09:00-19:00) e só o próprio evento está na agenda → sem conflito.
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte + barba' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, fields] = client.patchEvent.mock.calls[0];
+    // Início preservado (10:00), fim estendido pro novo serviço (10:45).
+    expect(fields.startISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60).toISOString());
+    expect(fields.endISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60 + 45).toISOString());
+    await app.close();
+  });
+
+  it('409 conflito_horario: serviço mais longo bate com o PRÓXIMO agendamento', async () => {
+    // Guarda (1ª listEvents) acha o evt_atual; recheck da nova janela (2ª) tem o próprio evento
+    // (ignorado) + um OUTRO evento ocupando 10:30-11:00 → "Corte + barba" (10:00-10:45) colide.
+    const client = gcalClientPatch([evtAtual()]);
+    client.listEvents.mockResolvedValueOnce([evtAtual()]).mockResolvedValueOnce([
+      evtAtual(),
+      {
+        id: 'evt_proximo',
+        summary: 'Maria - Corte | WhatsApp: 5511888880000',
+        start: { dateTime: `${FUTURO}T10:30:00-03:00` },
+        end: { dateTime: `${FUTURO}T11:00:00-03:00` },
+      },
+    ]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte + barba' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflito_horario');
+    expect(res.json().message).toContain('mais longo');
+    // CRÍTICO: conflito -> NÃO patcheia o evento.
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('409 conflito_horario: serviço mais longo ESTOURA a janela de funcionamento', async () => {
+    // Evento perto do fechamento: 18:45-19:15 não cabe (fecha 19:00) ao virar 45min. Reusa a
+    // janela do CONFIG_OK (fecha 19:00). Evento atual às 18:45 (Corte 30min cabe: 18:45-19:15?
+    // não — 19:15 > 19:00). Usamos 18:30 (Corte 30min: 18:30-19:00 cabe). Troca p/ 45min: 19:15 estoura.
+    const client = gcalClientPatch([
+      evtAtual({
+        start: { dateTime: `${FUTURO}T18:30:00-03:00` },
+        end: { dateTime: `${FUTURO}T19:00:00-03:00` },
+      }),
+    ]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte + barba' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflito_horario');
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('200: trocar p/ serviço de MESMA duração não revalida janela (não bloqueia à toa)', async () => {
+    // Config tem 2 serviços de durações diferentes; pra mesma duração precisamos de outro caso.
+    // Aqui trocamos Corte->Corte (mesma duração 30min) → revalidarPorServico=false, segue normal.
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, fields] = client.patchEvent.mock.calls[0];
+    // Mesma duração → NÃO recalcula janela (start/end ausentes no patch).
+    expect(fields.startISO).toBeUndefined();
+    expect(fields.endISO).toBeUndefined();
     await app.close();
   });
 });

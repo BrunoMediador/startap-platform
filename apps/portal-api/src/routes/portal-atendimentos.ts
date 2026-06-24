@@ -104,6 +104,17 @@ const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
+// :eventId do path (GET by-evento) — gcal_event_id (alfanumérico base32hex). Sanidade leve;
+// o escopo real (slot+tenant) é aplicado na data layer (anti-IDOR). Mesmo regex do agendamento.
+const eventIdParamSchema = z.object({
+  eventId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(1024)
+    .regex(/^[a-z0-9_-]+$/i, 'eventId invalido'),
+});
+
 /**
  * Gate: flag + resolução de tenant_id do slot da sessão. Responde 404 (flag OFF) ou 409
  * (clone sem tenant_id — dado inconsistente) e devolve null; senão devolve o escopo.
@@ -199,6 +210,36 @@ export const portalAtendimentosRoutes: FastifyPluginAsync = async (app) => {
     );
     return reply.code(200).send({ atendimentos: rows, total_cents });
   });
+
+  // GET /portal/atendimentos/by-evento/:eventId — resolve a linha de atendimento ATIVA de um
+  // evento da agenda pelo gcal_event_id (pré-req do front: o card da agenda só tem o eventId;
+  // pra editar valor/desconto na /billing precisa do id numérico da linha). Devolve a MESMA
+  // AtendimentoListRow do GET list. Escopado por slot+tenant da SESSÃO (anti-IDOR): eventId de
+  // outro tenant -> 404 (não vaza existência). Gated por ATENDIMENTOS_ENABLED (flag OFF -> 404).
+  app.get(
+    '/portal/atendimentos/by-evento/:eventId',
+    { preHandler: withTenant },
+    async (req, reply) => {
+      const gate = await gateAtendimentos(req, reply);
+      if (!gate) return reply;
+
+      const parsed = eventIdParamSchema.safeParse(req.params ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ error: 'eventId invalido' });
+      }
+      const row = await atendimentos.getAtendimentoByEvent(
+        gate.slot,
+        gate.tenantId,
+        parsed.data.eventId,
+      );
+      if (!row) {
+        // Não existe atendimento ativo desse evento NO ESCOPO (ou eventId alheio) -> 404 (anti-IDOR).
+        return reply.code(404).send({ error: 'atendimento nao encontrado' });
+      }
+      // CONTRATO: o front consome a AtendimentoListRow DIRETO (sem envelope) — 200 | 404.
+      return reply.code(200).send(row);
+    },
+  );
 
   // PATCH /portal/atendimentos/:id — edição manual STICKY. Cada campo enviado é gravado E
   // PINADO em dirty_fields (não volta pro catálogo num upsert futuro do evento). Escopado

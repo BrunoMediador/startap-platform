@@ -252,9 +252,13 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
     });
     const [sql, params] = lastCall();
     expect(params[13]).toBe(false); // pagamento NÃO informado -> preserva no UPDATE
-    // O SQL guarda a forma/valor/desconto antigos quando $14 é false.
+    expect(params[14]).toBe(false); // SEM reprice (remarcação pura, sem troca de serviço)
+    // O SQL guarda a forma antiga quando $14 é false; valor/desconto preservados quando NÃO há
+    // pagamento informado E NÃO há reprice-fora-de-pacote (remarcação pura preserva o valor).
     expect(sql).toContain("dirty_fields ? 'forma_pagamento' OR NOT $14::boolean");
-    expect(sql).toContain("dirty_fields ? 'valor_cents' OR NOT $14::boolean");
+    expect(sql).toMatch(
+      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$14::boolean\s+AND NOT \(\$15::boolean/,
+    );
   });
 });
 
@@ -297,6 +301,38 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(sqls.some((s) => s.includes('fim_at > now()'))).toBe(true);
   });
 
+  // ── MUDANÇA 4(a): GREATEST clampa parcela negativa (desconto > valor) -> nunca soma < 0 ──
+  it('getFaturamento: TODAS as somas usam SUM(GREATEST(valor - desconto, 0)) (clamp em 0)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getFaturamento('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
+    // total, por forma, por profissional, previsto — todas as 4 somas clampam com GREATEST.
+    const sqls = (mockQuery.mock.calls as [string, unknown[]][]).map(([s]) => s);
+    const somas = sqls.filter((s) => s.includes('SUM(GREATEST('));
+    expect(somas.length).toBe(4); // nenhuma soma de dinheiro sem GREATEST
+    for (const s of sqls) {
+      // Nenhuma soma "crua" de valor - desconto SEM GREATEST sobrou (regressão).
+      expect(s).not.toMatch(/SUM\(valor_cents - desconto_cents\)/);
+      expect(s).not.toMatch(/SUM\(a\.valor_cents - a\.desconto_cents\)/);
+    }
+  });
+
+  // ── MUDANÇA 4(b): predicado de previsão UNIFICADO (status <> 'cancelado' AND fim_at > now()) ──
+  it('predicado de previsão é UNIFICADO em getFaturamento (previsto) e getComissao (previsao)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getFaturamento('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30');
+    const fatSqls = (mockQuery.mock.calls as [string, unknown[]][]).map(([s]) => s);
+    // A query de PREVISTO usa o fragmento unificado (status <> 'cancelado' AND fim_at > now()).
+    expect(fatSqls.some((s) => s.includes("status <> 'cancelado' AND fim_at > now()"))).toBe(true);
+
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    const [sqlPrev] = lastCall();
+    // getComissao previsao usa o MESMO predicado (com alias a.), não mais status = 'agendado'.
+    expect(sqlPrev).toContain("a.status <> 'cancelado' AND a.fim_at > now()");
+    expect(sqlPrev).not.toContain("a.status = 'agendado'");
+  });
+
   it('getFaturamento: ticket médio = round(total/count) + previsto exposto', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ total_cents: '10000', count: '3' }], rowCount: 1 }) // total
@@ -333,6 +369,21 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(r.balde).toBe('faturado');
     expect(r.total_cents).toBe(0); // SOLO -> sem comissão (0 colaboradores)
     expect(r.por_profissional).toEqual([]);
+  });
+
+  // A comissão ACOMPANHA o reprice: ela é live-compute sobre o BRUTO (valor - desconto) DA LINHA.
+  // Quando a troca de serviço reprecifica valor_cents, o bruto muda e a comissão recalcula sozinha
+  // (a expr SQL lê a.valor_cents/a.desconto_cents correntes, não um snapshot). Travamos a expr.
+  it('comissão é live-compute sobre o BRUTO corrente da linha (reprice flui automático)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    const [sql] = lastCall();
+    // round(GREATEST(valor - desconto, 0) * pct corrente / 100) — sobre as colunas VIVAS da linha.
+    expect(sql).toContain(
+      'ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)',
+    );
+    // Não usa snapshot congelado (a.comissao_cents) -> repricar valor_cents reflete na comissão.
+    expect(sql).not.toContain('SUM(a.comissao_cents)');
   });
 
   it('getComissao (faturado) soma a comissão AO VIVO (pct corrente) por profissional', async () => {
@@ -422,9 +473,10 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
     const [sql, params] = lastCall();
-    // PREVISÃO: só futuro/agendado, nunca o predicado de faturado.
-    expect(sql).toContain("a.status = 'agendado'");
-    expect(sql).toContain('a.fim_at > now()');
+    // PREVISÃO unificada (ADR 0027): status <> 'cancelado' AND fim_at > now() (mesmo predicado
+    // de getFaturamento/listAtendimentos). Antes era status = 'agendado' (divergente).
+    expect(sql).toContain("a.status <> 'cancelado' AND a.fim_at > now()");
+    expect(sql).not.toContain("a.status = 'agendado'");
     expect(sql).not.toContain('a.fim_at <= now()');
     // Projeta sobre o pct corrente do colaborador (não usa o snapshot congelado).
     expect(sql).toContain('cc.comissao_pct');

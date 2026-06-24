@@ -114,7 +114,10 @@ export type {
 export type {
   AtendimentoStatus,
   AtendimentoRow,
+  AtendimentoListRow,
+  AtendimentoListResult,
   CreateAtendimentoInput,
+  AtendimentoEventInput,
   FaturamentoReport,
   FaturamentoPorFormaRow,
   FaturamentoPorProfissionalRow,

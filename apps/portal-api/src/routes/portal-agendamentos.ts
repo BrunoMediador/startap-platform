@@ -306,6 +306,13 @@ async function hookUpsertAtendimento(args: {
    * forma null). Paridade de assinatura com o gancho do bot (maybeRegistrarAtendimento).
    */
   formaPagamento?: string | null;
+  /**
+   * REPRECIFICAR ao TROCAR o serviço (ADR 0027 — bug do valor preso). True SÓ no PATCH quando
+   * houve troca genuína de serviço (e não é pacote) -> o helper força o valor_cents pro preço
+   * do catálogo do NOVO serviço (respeitando o sticky de dirty_fields). Nunca em remarcação pura
+   * (preserva o valor; não reabre o bug DOBRA). undefined/false = comportamento de previsão.
+   */
+  reprecificarServico?: boolean;
 }): Promise<void> {
   if (!isAtendFromAgendaEnabled(args.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
   try {
@@ -331,6 +338,8 @@ async function hookUpsertAtendimento(args: {
       fimAt: args.fimAt,
       // Só repassa quando informado (pacote) — undefined preserva o comportamento de previsão.
       ...(args.formaPagamento !== undefined ? { formaPagamento: args.formaPagamento } : {}),
+      // Reprice da troca de serviço — só ligado no PATCH com troca genuína (e não-pacote).
+      ...(args.reprecificarServico ? { reprecificarServico: true } : {}),
     };
     const row =
       args.mode === 'sync'
@@ -832,11 +841,22 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       const mudaTitulo =
         patch.cliente_nome !== undefined || mudaServico || patch.cliente_telefone !== undefined;
 
-      // ---- Reagendamento: calcula a nova janela e valida + anti-corrida --------
+      // ---- Revalidar janela ao trocar SÓ o serviço (decisão do Bruno: REVALIDA E AVISA) ----
+      // Quando vem só `servico` (sem data/hora), o evento NÃO era revalidado — um serviço novo
+      // mais LONGO podia estourar a janela de funcionamento ou bater com o próximo agendamento.
+      // Aqui detectamos a troca de duração (novo serviço vs duração do evento atual) e, se mudou,
+      // recalculamos o fim_at a partir do INÍCIO atual e revalidamos janela + conflito (ignorando
+      // o próprio evento). NÃO reagenda o início — só estende/encurta a duração. Conflito -> 409
+      // conflito_horario (mensagem tratável pelo front). `reprice` (valor) é independente disto.
+      const duracaoAtualMin = minutesBetween(atual.start?.dateTime, atual.end?.dateTime);
+      const revalidarPorServico =
+        mudaServico && !reagenda && svc != null && svc.min !== duracaoAtualMin;
+
+      // ---- Reagendamento OU revalidação por serviço: calcula a janela e valida + anti-corrida --
       let startISO: string | undefined;
       let endISO: string | undefined;
 
-      if (reagenda) {
+      if (reagenda || revalidarPorServico) {
         // config é garantido aqui (reagenda => carregamos config acima).
         const cfg = config as Awaited<ReturnType<typeof loadScheduleConfig>>;
         // Deriva a data/hora ATUAL do evento pra preencher o lado que não mudou.
@@ -884,6 +904,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         }
         const janela = cfg.work[wd];
         if (!janela || startMins < janela[0] || endMins > janela[1]) {
+          // Troca de serviço que estoura a janela de funcionamento -> mensagem tratável.
+          if (revalidarPorServico) {
+            return reply.code(409).send({
+              error: 'conflito_horario',
+              message:
+                'O serviço novo é mais longo e bate com o próximo agendamento. Escolha outro horário.',
+            });
+          }
           return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
         }
 
@@ -906,6 +934,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
             { slot, userId, eventId, data: dataAlvo, hora: minsToHHmm(startMins) },
             'edicao bloqueada: slot ocupado na nova janela',
           );
+          // Troca de serviço (mais longo) que colide com o próximo -> erro claro e tratável.
+          if (revalidarPorServico) {
+            return reply.code(409).send({
+              error: 'conflito_horario',
+              message:
+                'O serviço novo é mais longo e bate com o próximo agendamento. Escolha outro horário.',
+            });
+          }
           return reply.code(409).send({
             error: 'conflito',
             reason: 'ocupado',
@@ -953,6 +989,10 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         fimAt: fimSyncIso,
         colaboradorId: colaboradorId ?? null,
         mode: 'sync',
+        // TROCA de serviço -> reprecifica o valor pelo catálogo do NOVO serviço (respeitando o
+        // sticky/dirty_fields e nunca em pacote, no helper). Remarcação pura (sem mudaServico)
+        // NÃO reprecifica -> preserva valor/marca (não reabre o bug DOBRA, ADR 0027).
+        reprecificarServico: mudaServico,
       });
 
       log.info(

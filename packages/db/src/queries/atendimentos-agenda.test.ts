@@ -27,6 +27,7 @@ const {
   softDeleteAtendimentoByEvent,
   resolvePrecoCents,
   listAtendimentos,
+  getAtendimentoByEvent,
   patchAtendimento,
   softDeleteAtendimentoById,
 } = await import('./atendimentos.js');
@@ -172,15 +173,23 @@ describe('STICKY — o UPDATE do ON CONFLICT preserva colunas pinadas', () => {
     ]) {
       expect(sql).toContain(`atendimentos.dirty_fields ? '${col}'`);
     }
-    // Sticky comprovado: valor_cents só é trocado quando NÃO está pinado E o pagamento foi
-    // informado neste call ($14). Colunas de pagamento (valor/desconto/forma) também são
-    // preservadas quando a remarcação não traz info de pagamento (ADR 0027 bug DOBRA).
+    // Sticky comprovado: valor_cents só é trocado quando NÃO está pinado E (o pagamento foi
+    // informado $14 OU é reprice de troca de serviço $15 fora de pacote). Colunas de pagamento
+    // são preservadas quando a remarcação pura não traz info de pagamento (ADR 0027 bug DOBRA).
     expect(sql).toMatch(
-      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents' OR NOT \$14::boolean\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
+      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$14::boolean\s+AND NOT \(\$15::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'\)\)\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
     );
-    for (const col of ['valor_cents', 'desconto_cents', 'forma_pagamento']) {
-      expect(sql).toContain(`atendimentos.dirty_fields ? '${col}' OR NOT $14::boolean`);
+    // valor_cents/desconto_cents: pinado OU (sem pagamento informado E sem reprice-não-pacote).
+    for (const col of ['valor_cents', 'desconto_cents']) {
+      expect(sql).toContain(`atendimentos.dirty_fields ? '${col}'`);
+      expect(sql).toMatch(
+        new RegExp(
+          `${col}\\s*=\\s*CASE WHEN atendimentos\\.dirty_fields \\? '${col}'\\s+OR \\(NOT \\$14::boolean\\s+AND NOT \\(\\$15::boolean\\s+AND atendimentos\\.forma_pagamento IS DISTINCT FROM 'pacote'\\)\\)`,
+        ),
+      );
     }
+    // forma_pagamento: pinado OU sem pagamento informado (reprice NÃO toca a forma).
+    expect(sql).toContain("atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $14::boolean");
   });
 
   it('syncAtendimentoFromEvent é o mesmo caminho do upsert (alias B2)', async () => {
@@ -194,6 +203,126 @@ describe('STICKY — o UPDATE do ON CONFLICT preserva colunas pinadas', () => {
     });
     const [sql] = lastCall();
     expect(sql).toContain('ON CONFLICT (slot, gcal_event_id)');
+  });
+});
+
+// ── REPRECIFICAR ao TROCAR O SERVIÇO (ADR 0027 — bug do valor preso) ─────────────────────
+// Trocar o serviço pela agenda mudava servico_nome mas o valor ficava PRESO no preço antigo
+// (pagamentoInformado=false -> CASE preservava o valor). Fix: reprecificarServico=true força o
+// valor pro catálogo do NOVO serviço (EXCLUDED), respeitando o sticky (dirty_fields) e nunca em
+// pacote. A comissão (live-compute sobre o bruto) acompanha automaticamente.
+describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
+  it('reprecificarServico=true (não-pacote): IGNORA valorCents, resolve do catálogo do NOVO serviço, $15=true', async () => {
+    // Catálogo do novo serviço "Barba" = 3000. mesmo passando valorCents=5000 (antigo), reprice
+    // resolve do catálogo -> 3000 e zera desconto. $15 (reprice) = true no UPDATE.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ servicos: [{ nome: 'Barba', preco_cents: 3000 }] }] })
+      .mockResolvedValueOnce({ rows: [{ ...ROW, servico_nome: 'Barba', valor_cents: 3000 }] });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_troca',
+      servicoNome: 'Barba',
+      valorCents: 5000, // valor do serviço ANTIGO — deve ser IGNORADO no reprice
+      descontoCents: 500,
+      reprecificarServico: true,
+    });
+    // 2 queries: SELECT do catálogo (reprice resolve sempre) + UPSERT.
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    const [sql, params] = lastCall();
+    expect(params[6]).toBe(3000); // preço do NOVO serviço (catálogo), não o antigo (5000)
+    expect(params[7]).toBe(0); // desconto zerado no reprice
+    expect(params[13]).toBe(false); // pagamento NÃO informado (sync)
+    expect(params[14]).toBe(true); // reprice ($15) = true
+    // O CASE usa EXCLUDED quando reprice e a coluna não está pinada (e não é pacote).
+    expect(sql).toContain("IS DISTINCT FROM 'pacote'");
+  });
+
+  it("PACOTE: reprice NÃO reprecifica (forma='pacote' -> valor/desconto 0, $15 irrelevante)", async () => {
+    // Pacote força valor 0 ANTES do CASE; reprice (no helper) é desligado quando isPacote.
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, valor_cents: 0 }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_pac',
+      servicoNome: 'Barba',
+      valorCents: 5000,
+      formaPagamento: 'pacote',
+      reprecificarServico: true, // pedido, mas pacote o desliga
+    });
+    const [, params] = lastCall();
+    expect(params[6]).toBe(0); // pacote -> valor 0 (não conta 2×)
+    expect(params[7]).toBe(0); // desconto 0
+    expect(params[14]).toBe(false); // reprice desligado em pacote ($15=false)
+    // Pacote não consulta catálogo (valor já é 0).
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("o SQL nunca reprecifica linha PACOTE no banco (guard forma_pagamento IS DISTINCT FROM 'pacote')", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ servicos: [{ nome: 'Barba', preco_cents: 3000 }] }] })
+      .mockResolvedValueOnce({ rows: [{ ...ROW, valor_cents: 3000 }] });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_troca',
+      servicoNome: 'Barba',
+      reprecificarServico: true,
+    });
+    const [sql] = lastCall();
+    // A cláusula de reprice no CASE de valor/desconto é gateada pelo NÃO-pacote da linha do banco.
+    expect(sql).toMatch(
+      /\$15::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'/,
+    );
+  });
+
+  it('SEM reprice (remarcação pura, $15=false): preserva valor/desconto antigos quando não informado', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ servicos: [{ nome: 'Corte', preco_cents: 5000 }] }] })
+      .mockResolvedValueOnce({ rows: [{ ...ROW }] });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_remarca',
+      servicoNome: 'Corte',
+      // sem formaPagamento (sync) e sem reprecificarServico -> remarcação pura
+    });
+    const [, params] = lastCall();
+    expect(params[13]).toBe(false); // pagamento não informado
+    expect(params[14]).toBe(false); // SEM reprice -> CASE preserva valor/desconto antigos
+  });
+});
+
+describe('getAtendimentoByEvent — escopa slot+tenant pelo gcal_event_id (anti-IDOR)', () => {
+  it('resolve a linha ATIVA do evento, escopada por slot+tenant, shape enriquecido', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          ...ROW,
+          id: 7,
+          colaborador_id: 9,
+          profissional_nome: 'Eduardo',
+          dirty_fields: ['valor_cents'],
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getAtendimentoByEvent('clone_dragon', 'tid-2', 'evt_1');
+    expect(r?.id).toBe(7);
+    expect(r?.profissional_nome).toBe('Eduardo'); // veio do LEFT JOIN (mesmo shape da lista)
+    expect(r?.dirty_fields).toEqual(['valor_cents']);
+    const [sql, params] = lastCall();
+    expect(sql).toContain('LEFT JOIN clone_colaboradores c');
+    expect(sql).toContain('c.nome AS profissional_nome');
+    expect(sql).toContain(
+      'WHERE a.slot = $1 AND a.tenant_id = $2 AND a.gcal_event_id = $3 AND a.deleted_at IS NULL',
+    );
+    expect(params).toEqual(['clone_dragon', 'tid-2', 'evt_1']);
+  });
+
+  it('evento fora do escopo (outro tenant) ou inexistente -> null (anti-IDOR)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    expect(await getAtendimentoByEvent('clone_dragon', 'tid-2', 'evt_alheio')).toBeNull();
   });
 });
 
