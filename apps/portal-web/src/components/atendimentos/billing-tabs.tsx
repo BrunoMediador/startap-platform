@@ -1,30 +1,28 @@
 'use client';
 
 /**
- * Segmented control da área de faturamento (ADR 0027 Fase C). Três abas quando o
- * billing-da-agenda está ON: Previsão | Faturado | Resumo. "Resumo" é o relatório
- * agregado de hoje (por forma/profissional). Com a flag OFF, a página nem monta
- * essas abas (mostra só o Resumo) — SOLO fica idêntico ao de hoje.
+ * Segmented control da tela Billing: Previsão | Faturado. Controla a PÁGINA INTEIRA
+ * (total + lista de atendimentos + comissão). Substitui o controle de 3 abas antigo
+ * (Previsão/Faturado/Resumo) — "Resumo" foi absorvido: no billing-da-agenda a lista
+ * editável já é a fonte; o relatório agregado legado só aparece no SOLO/flag-off.
  *
  * `role=tablist` + `aria-selected` + setas ←/→ pra acessibilidade de teclado.
  */
+import type { AtendimentoBalde } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { useRef } from 'react';
 
-export type FaturamentoTab = 'previsao' | 'faturado' | 'resumo';
-
-const TABS: { id: FaturamentoTab; label: string }[] = [
+const TABS: { id: AtendimentoBalde; label: string }[] = [
   { id: 'previsao', label: 'Previsão' },
   { id: 'faturado', label: 'Faturado' },
-  { id: 'resumo', label: 'Resumo' },
 ];
 
-export function FaturamentoTabs({
+export function BillingTabs({
   value,
   onChange,
 }: {
-  value: FaturamentoTab;
-  onChange: (t: FaturamentoTab) => void;
+  value: AtendimentoBalde;
+  onChange: (t: AtendimentoBalde) => void;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -40,7 +38,7 @@ export function FaturamentoTabs({
   return (
     <div
       role="tablist"
-      aria-label="Visão do faturamento"
+      aria-label="Visão do billing"
       className="mb-5 flex gap-1 rounded-pill border border-line bg-surface p-1 shadow-card"
     >
       {TABS.map((t, idx) => {

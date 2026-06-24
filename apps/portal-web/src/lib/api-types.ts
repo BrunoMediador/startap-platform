@@ -629,13 +629,25 @@ export interface FaturamentoReport {
   por_profissional: FaturamentoPorProfissional[];
 }
 
-// Relatório de comissão (GET /portal/relatorios/comissao?de=&ate=). SOLO = vazio.
+// Relatório de comissão (GET /portal/relatorios/comissao?balde=&de=&ate=). SOLO =
+// vazio; só aparece no estabelecimento. O MESMO seletor Previsão|Faturado da tela
+// Billing filtra a comissão (balde) — assim o "quanto pagar" acompanha o que está
+// sendo olhado (esperado vs realizado). Default balde=faturado no backend.
+//
+// CONTRATO CONGELADO (backend constrói em paralelo). `comissao_pct` e
+// `total_bruto_cents` foram ADICIONADOS pro layout aprovado (bruto · % · comissão).
+// Se algo divergir no fim, QA reconcilia.
 
 export interface ComissaoPorProfissional {
   // O backend de comissão filtra colaborador_id IS NOT NULL — id é sempre presente.
   // `profissional_nome` ainda pode vir null (nome apagado); render usa fallback.
   colaborador_id: number;
   profissional_nome: string | null;
+  /** Bruto do período (base da comissão) em centavos. */
+  total_bruto_cents: number;
+  /** % de comissão aplicada (0–100). Pode vir null se não configurada -> fallback "—". */
+  comissao_pct: number | null;
+  /** Valor da comissão (bruto × pct) em centavos. */
   comissao_cents: number;
   count: number;
 }
@@ -643,6 +655,8 @@ export interface ComissaoPorProfissional {
 export interface ComissaoReport {
   de: string; // 'YYYY-MM-DD'
   ate: string; // 'YYYY-MM-DD'
+  /** Balde do recorte (espelha o seletor da tela Billing). Pode vir ausente. */
+  balde?: AtendimentoBalde;
   total_cents: number;
   por_profissional: ComissaoPorProfissional[];
 }

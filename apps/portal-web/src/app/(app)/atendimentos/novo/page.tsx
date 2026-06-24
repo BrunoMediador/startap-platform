@@ -120,8 +120,8 @@ export default function NovoAtendimentoPage() {
     <>
       <div className="mb-[18px] flex items-start gap-3">
         <Link
-          href="/relatorios/faturamento"
-          aria-label="Voltar pro faturamento"
+          href="/billing"
+          aria-label="Voltar pro Billing"
           className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-[11px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           <IconChevronLeft size={20} />
