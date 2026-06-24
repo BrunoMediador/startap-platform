@@ -325,19 +325,38 @@ export interface ComissaoReport {
 /**
  * Relatório de COMISSÃO por profissional num período. DOIS BALDES (ADR 0027):
  *
- *  - 'faturado' (DEFAULT — comportamento histórico inalterado): comissão sobre o REALIZADO.
- *    Soma o comissao_cents CONGELADO (snapshot da venda) sobre o predicado canônico de
- *    faturado (deleted_at NULL, status<>'cancelado', fim_at<=now() OU origem='manual').
+ *  - 'faturado' (DEFAULT — comportamento histórico inalterado nos valores): comissão sobre
+ *    o REALIZADO. Soma o comissao_cents CONGELADO (snapshot da venda) sobre o predicado
+ *    canônico de faturado (deleted_at NULL, status<>'cancelado', fim_at<=now() OU
+ *    origem='manual').
  *
- *  - 'previsao' (NOVO): comissão PROJETADA dos agendamentos futuros (deleted_at NULL,
+ *  - 'previsao': comissão PROJETADA dos agendamentos futuros (deleted_at NULL,
  *    status='agendado', fim_at>now()). As linhas de previsão têm comissao_cents=0 congelado
  *    (o snapshot só acontece ao virar faturado), então a comissão é CALCULADA: para cada
  *    linha, round(GREATEST(valor-desconto,0) * pct/100) com o pct CORRENTE do colaborador
  *    (clone_colaboradores.comissao_pct) — MESMA regra do calcComissaoCents, agregada em SQL.
  *
- * Comum aos dois: só linhas COM colaborador_id (SOLO não gera comissão -> lista vazia /
- * total 0). Profissional com comissao_pct=0 APARECE na lista (comissão 0). Escopo
- * slot + tenant_id (defesa em profundidade RLS). Período inclusivo por `data`.
+ * TODOS OS ATIVOS APARECEM: a query PARTE de clone_colaboradores (ativo = TRUE) com LEFT
+ * JOIN em atendimentos. Assim, TODO colaborador ativo do clone entra em por_profissional —
+ * com seu comissao_pct corrente e total_bruto/comissão 0 quando NÃO tem atendimento no
+ * balde/período. Antes a query partia de atendimentos (GROUP BY), então só quem TINHA
+ * booking aparecia — o que confundia o dono (setava % num barbeiro sem booking e ele sumia).
+ *
+ *  - Colaborador ATIVO sem atendimento -> total_bruto_cents=0, comissao_cents=0, mas com o
+ *    comissao_pct dele exposto (informativo). count=0.
+ *  - Colaborador INATIVO/removido -> NÃO aparece (filtro ativo = TRUE).
+ *  - SOLO/individual -> clone_colaboradores tem 0 linhas -> por_profissional vazio (gating de
+ *    comissão preservado). Atendimentos SOLO têm colaborador_id NULL e nunca casam o JOIN.
+ *  - total_cents (soma das comissões) NÃO muda: linhas zeradas somam 0.
+ *
+ * comissao_pct exposto:
+ *  - previsao: o pct CORRENTE do colaborador (uniforme por profissional, sempre presente).
+ *  - faturado: pct médio efetivo (comissao/bruto*100) quando há base; SEM base usa o pct
+ *    corrente do colaborador (cc.comissao_pct) — assim o zerado mostra o % configurado, não 0.
+ *
+ * Escopo: slot do colaborador + tenant_id do atendimento no ON do JOIN (defesa em
+ * profundidade RLS). Período inclusivo por `data`. Ordenação ESTÁVEL: comissão desc, com os
+ * zerados no fim, desempate por nome e id (determinístico).
  */
 export async function getComissao(
   slot: string,
@@ -346,30 +365,35 @@ export async function getComissao(
   ate: string,
   balde: Balde = 'faturado',
 ): Promise<ComissaoReport> {
-  // Predicado do balde — ambos com escopo slot+tenant + só linhas COM colaborador.
-  // faturado: snapshot congelado; previsao: projeção sobre o pct corrente.
+  // Predicado do balde dentro do ON do LEFT JOIN — preserva colaboradores SEM atendimento
+  // (filtrar no ON, não no WHERE, é o que mantém a linha zerada). faturado: snapshot
+  // congelado; previsao: projeção sobre o pct corrente.
   const baldeCond =
     balde === 'previsao' ? "a.status = 'agendado' AND a.fim_at > now()" : _FATURADO_SQL_A;
 
   // comissao_cents:
   //  - faturado: SUM do snapshot congelado (a.comissao_cents).
   //  - previsao: SUM por linha de round(GREATEST(valor-desconto,0) * pct corrente / 100),
-  //    com COALESCE(c.comissao_pct,0) — colaborador sem pct -> projeta 0 (mas aparece).
-  // comissao_pct exposto:
-  //  - faturado: pct médio efetivo (comissao/bruto*100), 0 se sem base — só informativo.
-  //  - previsao: o pct corrente do colaborador (uniforme por profissional).
+  //    com COALESCE(cc.comissao_pct,0) — colaborador sem pct -> projeta 0 (mas aparece).
+  // comissao_pct exposto (cc = clone_colaboradores, sempre presente pois é a tabela base):
+  //  - previsao: o pct corrente do colaborador.
+  //  - faturado: pct médio efetivo SE há base; sem base -> o pct corrente do colaborador (o
+  //    zerado mostra o % configurado, não 0 — é o ponto desta mudança).
   const comissaoExpr =
     balde === 'previsao'
-      ? 'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(c.comissao_pct, 0) / 100.0)), 0)::bigint'
+      ? 'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)), 0)::bigint'
       : 'COALESCE(SUM(a.comissao_cents), 0)::bigint';
   const pctExpr =
     balde === 'previsao'
-      ? 'COALESCE(MAX(c.comissao_pct), 0)::numeric'
+      ? 'COALESCE(cc.comissao_pct, 0)::numeric'
       : `CASE WHEN COALESCE(SUM(a.valor_cents - a.desconto_cents), 0) > 0
               THEN ROUND(COALESCE(SUM(a.comissao_cents), 0)::numeric
                          / SUM(a.valor_cents - a.desconto_cents)::numeric * 100, 2)
-              ELSE 0 END`;
+              ELSE COALESCE(cc.comissao_pct, 0) END`;
 
+  // PARTE de clone_colaboradores (ativos do slot) -> LEFT JOIN atendimentos com TODOS os
+  // filtros (tenant, período, balde, deleted) no ON, para preservar o zerado. GROUP BY pelas
+  // colunas do colaborador (cc.comissao_pct entra no GROUP BY: é um valor por colaborador).
   const r = await query<{
     colaborador_id: number;
     profissional_nome: string | null;
@@ -378,21 +402,23 @@ export async function getComissao(
     comissao_cents: string;
     count: string;
   }>(
-    `SELECT a.colaborador_id,
-            c.nome AS profissional_nome,
+    `SELECT cc.id AS colaborador_id,
+            cc.nome AS profissional_nome,
             COALESCE(SUM(a.valor_cents - a.desconto_cents), 0)::bigint AS total_bruto_cents,
             ${pctExpr} AS comissao_pct,
             ${comissaoExpr} AS comissao_cents,
-            COUNT(*)::bigint AS count
-       FROM atendimentos a
-       LEFT JOIN clone_colaboradores c
-         ON c.id = a.colaborador_id AND c.slot = a.slot
-      WHERE a.slot = $1 AND a.tenant_id = $2 AND ${baldeCond}
+            COUNT(a.id)::bigint AS count
+       FROM clone_colaboradores cc
+       LEFT JOIN atendimentos a
+         ON a.colaborador_id = cc.id
+        AND a.slot = cc.slot
+        AND a.tenant_id = $2
         AND a.deleted_at IS NULL
-        AND a.colaborador_id IS NOT NULL
         AND a.data >= $3 AND a.data <= $4
-      GROUP BY a.colaborador_id, c.nome
-      ORDER BY comissao_cents DESC`,
+        AND ${baldeCond}
+      WHERE cc.slot = $1 AND cc.ativo = TRUE
+      GROUP BY cc.id, cc.nome, cc.comissao_pct, cc.ordem
+      ORDER BY comissao_cents DESC, cc.ordem ASC, cc.nome ASC, cc.id ASC`,
     [slot, tenantId, de, ate],
   );
 

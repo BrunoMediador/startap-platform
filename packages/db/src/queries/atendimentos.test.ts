@@ -193,14 +193,17 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(r.previsto_total_cents).toBe(4500); // futuro/aberto, aditivo
   });
 
-  it('getComissao (default=faturado) filtra por slot+tenant, só FATURADO e só linhas COM colaborador (SOLO=vazio)', async () => {
+  it('getComissao (default=faturado) PARTE de clone_colaboradores ativos, escopo slot+tenant, só FATURADO; SOLO (0 colaboradores) -> vazio', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const r = await getComissao('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30');
     const [sql, params] = lastCall();
-    expect(sql).toMatch(/a\.slot = \$1/);
-    expect(sql).toMatch(/a\.tenant_id = \$2/);
-    expect(sql).toContain('a.colaborador_id IS NOT NULL');
-    // ADR 0027: comissão só sobre faturado (passado) e nunca sobre linha deletada.
+    // PARTE dos colaboradores ATIVOS do slot (tabela base) -> LEFT JOIN atendimentos.
+    expect(sql).toMatch(/FROM clone_colaboradores cc/);
+    expect(sql).toMatch(/LEFT JOIN atendimentos a/);
+    expect(sql).toContain('cc.slot = $1');
+    expect(sql).toContain('cc.ativo = TRUE');
+    // tenant + período + faturado ficam no ON do JOIN (preserva o colaborador zerado).
+    expect(sql).toContain('a.tenant_id = $2');
     expect(sql).toContain('a.deleted_at IS NULL');
     expect(sql).toContain('a.fim_at <= now()');
     // Default = faturado: NUNCA conta agendamento futuro.
@@ -209,7 +212,7 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(sql).toContain('SUM(a.comissao_cents)');
     expect(params).toEqual(['clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30']);
     expect(r.balde).toBe('faturado');
-    expect(r.total_cents).toBe(0); // SOLO -> sem comissão
+    expect(r.total_cents).toBe(0); // SOLO -> sem comissão (0 colaboradores)
     expect(r.por_profissional).toEqual([]);
   });
 
@@ -256,10 +259,10 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
     expect(sql).toContain('a.fim_at > now()');
     expect(sql).not.toContain('a.fim_at <= now()');
     // Projeta sobre o pct corrente do colaborador (não usa o snapshot congelado).
-    expect(sql).toContain('c.comissao_pct');
+    expect(sql).toContain('cc.comissao_pct');
     expect(sql).not.toContain('SUM(a.comissao_cents)');
-    // Mesmo escopo + só linhas COM colaborador + nunca deletado.
-    expect(sql).toContain('a.colaborador_id IS NOT NULL');
+    // PARTE dos colaboradores ativos do slot; nunca conta linha deletada.
+    expect(sql).toContain('cc.ativo = TRUE');
     expect(sql).toContain('a.deleted_at IS NULL');
     expect(params).toEqual(['clone_dragon', 'tid-2', '2026-06-01', '2026-06-30']);
     expect(r.balde).toBe('previsao');
@@ -315,6 +318,141 @@ describe('relatórios — ISOLAMENTO slot + tenant_id no WHERE', () => {
       comissao_cents: 0, // pct 0 -> projeção 0, mas aparece com a base bruta
       total_bruto_cents: 8000,
     });
+    expect(r.total_cents).toBe(0);
+  });
+});
+
+// ── TODOS OS ATIVOS aparecem (mesmo sem booking) — foco desta mudança ─────────────────
+describe('getComissao — lista TODOS os colaboradores ATIVOS (com e sem atendimento)', () => {
+  it('colaborador ATIVO SEM atendimento aparece com bruto 0 / comissão 0 + o comissao_pct dele', async () => {
+    // O LEFT JOIN devolve a linha do colaborador com zeros (e o pct corrente preservado).
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          colaborador_id: 7,
+          profissional_nome: 'eduardo',
+          total_bruto_cents: '0',
+          comissao_pct: '20',
+          comissao_cents: '0',
+          count: '0',
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    expect(r.por_profissional).toHaveLength(1);
+    expect(r.por_profissional[0]).toMatchObject({
+      colaborador_id: 7,
+      profissional_nome: 'eduardo',
+      total_bruto_cents: 0,
+      comissao_pct: 20, // o % configurado aparece mesmo sem booking
+      comissao_cents: 0,
+      count: 0,
+    });
+    expect(r.total_cents).toBe(0); // zerado não altera o total
+  });
+
+  it('mistura: quem tem booking traz valores reais, quem não tem vem zerado; total = só os reais', async () => {
+    // dragon na Previsão: Bruno 33% (com booking), eduardo 20% (sem), maria 10% (com), bruna 50% (sem).
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          colaborador_id: 1,
+          profissional_nome: 'Bruno',
+          total_bruto_cents: '10000',
+          comissao_pct: '33',
+          comissao_cents: '3300',
+          count: '2',
+        },
+        {
+          colaborador_id: 3,
+          profissional_nome: 'maria',
+          total_bruto_cents: '5000',
+          comissao_pct: '10',
+          comissao_cents: '500',
+          count: '1',
+        },
+        {
+          colaborador_id: 2,
+          profissional_nome: 'eduardo',
+          total_bruto_cents: '0',
+          comissao_pct: '20',
+          comissao_cents: '0',
+          count: '0',
+        },
+        {
+          colaborador_id: 4,
+          profissional_nome: 'bruna',
+          total_bruto_cents: '0',
+          comissao_pct: '50',
+          comissao_cents: '0',
+          count: '0',
+        },
+      ],
+      rowCount: 4,
+    });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'previsao');
+    // Os 4 ativos aparecem.
+    expect(r.por_profissional).toHaveLength(4);
+    expect(r.por_profissional.map((p) => p.profissional_nome)).toEqual([
+      'Bruno',
+      'maria',
+      'eduardo',
+      'bruna',
+    ]);
+    // % preservado mesmo nos zerados.
+    expect(r.por_profissional.find((p) => p.profissional_nome === 'eduardo')).toMatchObject({
+      total_bruto_cents: 0,
+      comissao_pct: 20,
+      comissao_cents: 0,
+    });
+    expect(r.por_profissional.find((p) => p.profissional_nome === 'bruna')).toMatchObject({
+      comissao_pct: 50,
+      comissao_cents: 0,
+    });
+    // total = soma só dos que têm comissão real (3300 + 500). Zerados somam 0.
+    expect(r.total_cents).toBe(3800);
+  });
+
+  it('colaborador INATIVO/removido NÃO aparece — a query filtra cc.ativo = TRUE', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    const [sql] = lastCall();
+    expect(sql).toContain('cc.ativo = TRUE'); // inativo nunca entra na base
+  });
+
+  it('faturado: colaborador ativo SEM booking expõe o pct CORRENTE (não 0) e bruto/comissão 0', async () => {
+    // No SQL, pctExpr no faturado cai no ELSE COALESCE(cc.comissao_pct,0) quando bruto=0.
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          colaborador_id: 8,
+          profissional_nome: 'eduardo',
+          total_bruto_cents: '0',
+          comissao_pct: '20', // pct corrente do colaborador, vindo do ELSE
+          comissao_cents: '0',
+          count: '0',
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getComissao('clone_dragon', 'tid-2', '2026-06-01', '2026-06-30', 'faturado');
+    expect(r.por_profissional[0]).toMatchObject({
+      profissional_nome: 'eduardo',
+      total_bruto_cents: 0,
+      comissao_pct: 20,
+      comissao_cents: 0,
+    });
+    expect(r.total_cents).toBe(0);
+    // Confirma que o ELSE expõe o pct do colaborador no faturado sem base.
+    const [sql] = lastCall();
+    expect(sql).toContain('ELSE COALESCE(cc.comissao_pct, 0) END');
+  });
+
+  it('SOLO/individual continua por_profissional vazio (0 colaboradores na tabela base)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const r = await getComissao('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30', 'faturado');
+    expect(r.por_profissional).toEqual([]);
     expect(r.total_cents).toBe(0);
   });
 });
