@@ -377,6 +377,153 @@ describe('POST /portal/agendamentos — caminho feliz', () => {
   });
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// POST /portal/agendamentos — ESTABELECIMENTO (multi-profissional)
+//
+// O clone NÃO tem agenda própria; o evento nasce na agenda de UM colaborador. O POST
+// aceita `colaborador_id` no body, resolve a agenda DESSE colaborador via
+// getGcalsForSlot (escopado por slot+tenant), cria o evento NELA e carimba o
+// colaboradorId no gancho de billing. getGcalForSlot (singular) NÃO é usado neste modo.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Agenda de colaborador cujo client cria/lista eventos (estabelecimento). */
+function colabAgendaCriar(colaboradorId: number, nome: string) {
+  return {
+    colaboradorId,
+    nome,
+    calendarId: `cal-${colaboradorId}`,
+    servicos: [],
+    client: {
+      listEvents: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn().mockImplementation((opts: { summary: string }) =>
+        Promise.resolve({
+          id: `evt_${colaboradorId}`,
+          summary: opts.summary,
+          start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+        }),
+      ),
+    },
+  };
+}
+
+describe('POST /portal/agendamentos — estabelecimento (multi-profissional)', () => {
+  beforeEach(() => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  it('201: cria o evento na agenda do colaborador escolhido (e SÓ nela)', async () => {
+    const bene = colabAgendaCriar(1, 'Bené');
+    const caly = colabAgendaCriar(2, 'Caly');
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, colaborador_id: 2 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.agendamento.id).toBe('evt_2');
+    // Eco do colaborador dono pro front renderizar na coluna certa.
+    expect(body.agendamento.colaborador_id).toBe(2);
+    // Criou na agenda do Caly (id 2); a do Bené não foi tocada.
+    expect(caly.client.createEvent).toHaveBeenCalledTimes(1);
+    expect(bene.client.createEvent).not.toHaveBeenCalled();
+    // Modo estabelecimento: o resolvedor singular NÃO é consultado.
+    expect(getGcalForSlotMock).not.toHaveBeenCalled();
+    expect(getGcalsForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('422 colaborador_obrigatorio: estabelecimento sem colaborador_id no body', async () => {
+    const bene = colabAgendaCriar(1, 'Bené');
+    getGcalsForSlotMock.mockResolvedValue([bene]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: PAYLOAD_OK, // sem colaborador_id
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('colaborador_obrigatorio');
+    expect(bene.client.createEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 anti-IDOR: colaborador_id de outro tenant NÃO está na lista → recusa, sem criar', async () => {
+    // getGcalsForSlot já é escopado por slot+tenant: só devolve colaboradores DESTE
+    // tenant. Um colaborador_id alheio jamais aparece → recusa (404) sem tocar nada.
+    const bene = colabAgendaCriar(1, 'Bené');
+    getGcalsForSlotMock.mockResolvedValue([bene]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, colaborador_id: 999 },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('colaborador_nao_encontrado');
+    expect(bene.client.createEvent).not.toHaveBeenCalled();
+    // A resolução foi escopada pelo slot da SESSÃO, nunca por input.
+    expect(getGcalsForSlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('422 gcal_nao_configurado: nenhum colaborador com agenda ativa (pré-setup)', async () => {
+    getGcalsForSlotMock.mockResolvedValue([]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, colaborador_id: 1 },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('gcal_nao_configurado');
+    await app.close();
+  });
+
+  it('flag ON: gancho de billing nasce com o colaborador escolhido (relatório de comissão)', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = injectedSlot;
+    const bene = colabAgendaCriar(1, 'Bené');
+    const caly = colabAgendaCriar(2, 'Caly');
+    getGcalsForSlotMock.mockResolvedValue([bene, caly]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, colaborador_id: 1 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(upsertAtendimentoFromEventMock).toHaveBeenCalledTimes(1);
+    const arg = upsertAtendimentoFromEventMock.mock.calls[0][0];
+    // A linha de previsão nasce com o colaborador dono do evento (não null).
+    expect(arg).toMatchObject({
+      slot: injectedSlot,
+      tenantId: 'tenant-xyz',
+      gcalEventId: 'evt_1',
+      colaboradorId: 1,
+    });
+    await app.close();
+  });
+});
+
 describe('POST /portal/agendamentos — conflito (409 estruturado)', () => {
   it('409 ocupado: slot tomado entre a grade e o submit — NÃO cria evento', async () => {
     const client = gcalClientLivre();
