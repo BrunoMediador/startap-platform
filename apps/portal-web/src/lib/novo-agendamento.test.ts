@@ -3,6 +3,7 @@ import type { Horarios } from './api-types';
 import {
   DIAS_STRIP,
   addMinutosHora,
+  buildCriarAgendamentoBody,
   buildDayStrip,
   dateKeyLocal,
   formatDiaCurto,
@@ -141,5 +142,59 @@ describe('validateNovoAgendamento', () => {
     const res = validateNovoAgendamento({ nome: 'Maria', telefone: '(11) 3333-4444' });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.cliente_telefone).toBe('551133334444');
+  });
+});
+
+describe('buildCriarAgendamentoBody (gating de profissional)', () => {
+  const base = {
+    servico: 'Corte',
+    data: '2026-06-13',
+    hora: '10:00',
+    cliente_nome: 'João',
+  } as const;
+
+  it('individual: nunca envia colaborador_id (mesmo com um selecionado)', () => {
+    const res = buildCriarAgendamentoBody({
+      productType: 'individual',
+      base: { ...base },
+      colaboradorId: 7,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.body).toEqual(base);
+      expect('colaborador_id' in res.body).toBe(false);
+    }
+  });
+
+  it('individual sem seleção: body byte-a-byte igual ao de hoje', () => {
+    const res = buildCriarAgendamentoBody({
+      productType: 'individual',
+      base: { ...base, cliente_telefone: '5511999990007' },
+      colaboradorId: null,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.body).toEqual({ ...base, cliente_telefone: '5511999990007' });
+    }
+  });
+
+  it('estabelecimento: envia o colaborador_id selecionado', () => {
+    const res = buildCriarAgendamentoBody({
+      productType: 'estabelecimento',
+      base: { ...base },
+      colaboradorId: 42,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.body).toEqual({ ...base, colaborador_id: 42 });
+  });
+
+  it('estabelecimento sem profissional escolhido: erro colaborador_obrigatorio', () => {
+    const res = buildCriarAgendamentoBody({
+      productType: 'estabelecimento',
+      base: { ...base },
+      colaboradorId: null,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('colaborador_obrigatorio');
   });
 });
