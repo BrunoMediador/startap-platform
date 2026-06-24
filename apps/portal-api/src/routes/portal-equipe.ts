@@ -57,9 +57,14 @@ const updateSchema = z
   })
   .strict();
 
-/** Mapeia ColaboradorRuleError -> resposta 409 com mensagem amigável. */
+/**
+ * Mapeia ColaboradorRuleError -> resposta HTTP. `unknown_servico` é input inválido
+ * do dono (serviço fora do catálogo) -> 400; os demais (seat_cap, homônimo) são
+ * conflito de estado/regra -> 409. Mensagem amigável em ambos.
+ */
 function sendRuleError(reply: FastifyReply, e: ColaboradorRuleError): FastifyReply {
-  return reply.code(409).send({ error: e.message, code: e.code });
+  const status = e.code === 'unknown_servico' ? 400 : 409;
+  return reply.code(status).send({ error: e.message, code: e.code });
 }
 
 /**

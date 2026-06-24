@@ -6026,6 +6026,40 @@ function _pkgNormalizeServicos(arr) {
   return out;
 }
 
+// Chave de comparacao de servico: trim + lowercase (espelha servicoKey do @startap/db).
+function _pkgServicoKey(s) {
+  return String(s ?? '').trim().toLowerCase();
+}
+
+// Le o catalogo de servicos do clone (flow_clones.servicos = [{nome,...}]) como Set
+// de chaves normalizadas. Usa o CLIENT da transacao + o MESMO slot (isolamento).
+// Catalogo vazio/ausente -> Set vazio (nenhum servico vinculavel).
+async function _pkgGetCatalogoKeys(client, slot) {
+  const r = await client.query(`SELECT servicos FROM flow_clones WHERE slot = $1 LIMIT 1`, [slot]);
+  const raw = r.rows[0]?.servicos;
+  const keys = new Set();
+  if (!Array.isArray(raw)) return keys;
+  for (const item of raw) {
+    const nome = item && typeof item === 'object' ? item.nome : item;
+    const key = _pkgServicoKey(nome);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+// Valida que todo servico vinculado a um colaborador existe no catalogo do clone
+// (por nome, case/trim-insensitive). Retorna o nome do 1o servico invalido, ou null
+// se todos existem. Lista vazia -> null (colaborador sem servico = fallback p/ todos).
+// Coracao do fix: sem isso, "cirurgia" (free-text) entrava direto no banco.
+async function _pkgServicosForaDoCatalogo(client, slot, servicos) {
+  if (!Array.isArray(servicos) || servicos.length === 0) return null;
+  const catalogo = await _pkgGetCatalogoKeys(client, slot);
+  for (const s of servicos) {
+    if (!catalogo.has(_pkgServicoKey(s))) return s;
+  }
+  return null;
+}
+
 // Resolve { slot, tenant_id, product_type, seat_cap } de um clone pelo id (404 se nao existe).
 // tenant_id e NOT NULL nas tabelas novas; flow_clones.tenant_id sempre populado (migr 045).
 async function _resolveCloneScope(cloneId) {
@@ -6129,6 +6163,12 @@ app.post('/api/clones/:id/colaboradores', async (req, res) => {
         return res.status(409).json({ error: `limite do plano atingido (${seat_cap} vagas). Desative um colaborador ou aumente o plano.` });
       }
     }
+    // Coracao do fix: todo servico vinculado tem que existir no catalogo do clone.
+    const svFora = await _pkgServicosForaDoCatalogo(client, slot, servicos);
+    if (svFora !== null) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `o serviço "${svFora}" não existe no catálogo deste cliente — cadastre na aba Serviços antes de vinculá-lo ao colaborador`, code: 'unknown_servico' });
+    }
     const ins = await client.query(
       `INSERT INTO clone_colaboradores (slot, tenant_id, nome, gcal_calendar_id, gcal_status, servicos, ativo, ordem)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
@@ -6161,6 +6201,9 @@ app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
     const sets = [];
     const vals = [];
     const b = req.body ?? {};
+    // Servicos normalizados quando o patch os inclui (validados contra o catalogo
+    // DENTRO da transacao, abaixo). null = patch nao mexe em servicos.
+    let servicosToValidate = null;
     if (b.nome !== undefined) {
       const nome = String(b.nome).trim().slice(0, 160);
       if (!nome) return res.status(400).json({ error: 'nome nao pode ser vazio' });
@@ -6178,7 +6221,8 @@ app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
       sets.push(`gcal_status = CASE WHEN gcal_calendar_id IS DISTINCT FROM $${gcalPh} THEN 'pending' ELSE gcal_status END`);
     }
     if (b.servicos !== undefined) {
-      vals.push(JSON.stringify(_pkgNormalizeServicos(b.servicos))); sets.push(`servicos = $${vals.length}::jsonb`);
+      servicosToValidate = _pkgNormalizeServicos(b.servicos);
+      vals.push(JSON.stringify(servicosToValidate)); sets.push(`servicos = $${vals.length}::jsonb`);
     }
     if (b.ordem !== undefined) {
       const ordem = Number(b.ordem);
@@ -6187,6 +6231,15 @@ app.patch('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
     }
 
     await client.query('BEGIN');
+    // Coracao do fix (PATCH): se o patch troca os servicos, todo nome tem que existir
+    // no catalogo do clone. Roda dentro da transacao (mesmo client/slot).
+    if (servicosToValidate !== null) {
+      const svFora = await _pkgServicosForaDoCatalogo(client, slot, servicosToValidate);
+      if (svFora !== null) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `o serviço "${svFora}" não existe no catálogo deste cliente — cadastre na aba Serviços antes de vinculá-lo ao colaborador`, code: 'unknown_servico' });
+      }
+    }
     // Ativar consome vaga: checa seat_cap se estiver virando ativo.
     if (b.ativo !== undefined) {
       const ativo = Boolean(b.ativo);
