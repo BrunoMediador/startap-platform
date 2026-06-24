@@ -81,8 +81,8 @@ export const qk = {
   relatoriosBase: (slot: string) => ['relatorios', slot] as const,
   faturamento: (slot: string, de: string, ate: string) =>
     ['relatorios', slot, 'faturamento', de, ate] as const,
-  comissao: (slot: string, de: string, ate: string) =>
-    ['relatorios', slot, 'comissao', de, ate] as const,
+  comissao: (slot: string, balde: AtendimentoBalde, de: string, ate: string) =>
+    ['relatorios', slot, 'comissao', balde, de, ate] as const,
   /** Prefixo por tenant — invalida TODAS as listas de baldes (ambos, qualquer período). */
   atendimentosBaldeBase: (slot: string) => ['atendimentos-balde', slot] as const,
   atendimentosBalde: (slot: string, balde: AtendimentoBalde, de: string, ate: string) =>
@@ -601,22 +601,26 @@ export function useFaturamento(
 }
 
 /**
- * GET /portal/relatorios/comissao?de=&ate= — só EMPRESA tem dados (SOLO volta
- * vazio). `de`/`ate` OBRIGATÓRIOS (enabled só com os dois). 404 (flag off) na tela.
+ * GET /portal/relatorios/comissao?balde=&de=&ate= — só EMPRESA tem dados (SOLO
+ * volta vazio). O `balde` (previsao|faturado) espelha o seletor da tela Billing: a
+ * comissão acompanha o que está sendo olhado (esperado vs realizado). `de`/`ate`
+ * OBRIGATÓRIOS (enabled só com os dois). 404 (flag off) na tela. Sem retry.
  */
 export function useComissao(
   slot: string,
+  balde: AtendimentoBalde,
   de: string | null,
   ate: string | null,
+  enabled = true,
 ): UseQueryResult<ComissaoReport> {
   return useQuery({
-    queryKey: qk.comissao(slot, de ?? '', ate ?? ''),
+    queryKey: qk.comissao(slot, balde, de ?? '', ate ?? ''),
     queryFn: ({ signal }) =>
       apiFetch<ComissaoReport>(
-        `/portal/relatorios/comissao?de=${encodeURIComponent(de ?? '')}&ate=${encodeURIComponent(ate ?? '')}`,
+        `/portal/relatorios/comissao?balde=${balde}&de=${encodeURIComponent(de ?? '')}&ate=${encodeURIComponent(ate ?? '')}`,
         { signal },
       ),
-    enabled: Boolean(de && ate),
+    enabled: enabled && Boolean(de && ate),
     retry: false,
   });
 }

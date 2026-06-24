@@ -1,50 +1,40 @@
 'use client';
 
 /**
- * Seletor de período dos relatórios (app de gestão). Dois inputs date (`de`/`ate`)
- * + presets rápidos (Este mês / Mês passado / Hoje). O default é mês corrente (dia
- * 1 até hoje) — quem monta a página decide o estado inicial; aqui só renderiza e
- * emite mudanças. O `ate` nunca passa de hoje (max). `de` não passa de `ate`.
+ * Seletor de período da tela Billing. Dois inputs date (`de`/`ate`) + presets
+ * rápidos. PARAMETRIZÁVEL: presets e limites (min/max de cada input) vêm por prop —
+ * a tela decide o que faz sentido pro contexto (Previsão olha o FUTURO, Faturado o
+ * passado). Antes este componente assumia `max=hoje` hardcoded nos dois inputs, o
+ * que travava o calendário na Previsão (datas futuras bloqueadas) — bug corrigido
+ * movendo a regra de limites pra `lib/billing-periodo` e injetando aqui via prop.
  *
  * Controlado: o estado de/ate vive na página (vira a query key dos relatórios).
  */
 import { Input } from '@/components/ui/input';
+import type { Periodo, PeriodoLimites, PeriodoPreset } from '@/lib/billing-periodo';
 import { cn } from '@/lib/cn';
-import { firstOfMonthISO, toISODate } from '@/lib/format';
 
-export interface Periodo {
-  de: string; // 'YYYY-MM-DD'
-  ate: string; // 'YYYY-MM-DD'
-}
-
-/** Presets relativos a hoje (calculados no client, fuso local). */
-function presets(now = new Date()): { label: string; value: Periodo }[] {
-  const hoje = toISODate(now);
-  const inicioMes = firstOfMonthISO(now);
-  const primeiroMesPassado = toISODate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const ultimoMesPassado = toISODate(new Date(now.getFullYear(), now.getMonth(), 0));
-  return [
-    { label: 'Este mês', value: { de: inicioMes, ate: hoje } },
-    { label: 'Mês passado', value: { de: primeiroMesPassado, ate: ultimoMesPassado } },
-    { label: 'Hoje', value: { de: hoje, ate: hoje } },
-  ];
-}
+export type { Periodo } from '@/lib/billing-periodo';
 
 export function PeriodSelector({
   value,
   onChange,
+  presets,
+  limites,
 }: {
   value: Periodo;
   onChange: (p: Periodo) => void;
+  /** Presets rápidos a exibir (dependem do balde — futuro vs passado). */
+  presets: PeriodoPreset[];
+  /** Limites min/max de cada input (libera/trava datas futuras conforme o balde). */
+  limites: PeriodoLimites;
 }) {
-  const hoje = toISODate();
-  const opcoes = presets();
   const ativo = (p: Periodo) => p.de === value.de && p.ate === value.ate;
 
   return (
     <div className="mb-5 space-y-3 rounded-card border border-line bg-surface p-4 shadow-card">
       <div className="flex flex-wrap gap-2" role="group" aria-label="Períodos rápidos">
-        {opcoes.map((o) => {
+        {presets.map((o) => {
           const sel = ativo(o.value);
           return (
             <button
@@ -69,15 +59,16 @@ export function PeriodSelector({
           label="De"
           type="date"
           value={value.de}
-          max={value.ate || hoje}
+          min={limites.de.min}
+          max={limites.de.max}
           onChange={(e) => onChange({ ...value, de: e.target.value })}
         />
         <Input
           label="Até"
           type="date"
           value={value.ate}
-          min={value.de}
-          max={hoje}
+          min={limites.ate.min}
+          max={limites.ate.max}
           onChange={(e) => onChange({ ...value, ate: e.target.value })}
         />
       </div>

@@ -13,7 +13,6 @@ import {
   IconCalendar,
   IconHome,
   IconPause,
-  IconPlus,
   IconServices,
   IconUser,
   IconUsers,
@@ -38,21 +37,10 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/inicio', label: 'Início', Icon: IconHome },
   { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: ['conexao'] },
   { href: '/equipe', label: 'Equipe', Icon: IconUsers, gated: ['estabelecimento'] },
-  // App de gestão (Fase 1): registrar atendimento + relatórios. Gated pela flag.
-  { href: '/atendimentos/novo', label: 'Registrar', Icon: IconPlus, gated: ['atendimentos'] },
-  {
-    href: '/relatorios/faturamento',
-    label: 'Faturamento',
-    Icon: IconWallet,
-    gated: ['atendimentos'],
-  },
-  // Comissão só faz sentido com profissionais (estabelecimento) E a flag ligada.
-  {
-    href: '/relatorios/comissao',
-    label: 'Comissão',
-    Icon: IconUsers,
-    gated: ['atendimentos', 'estabelecimento'],
-  },
+  // App de gestão (Fase 1): tela ÚNICA Billing (faturamento + comissão consolidados,
+  // Previsão|Faturado). Substitui os itens separados Faturamento/Comissão/Registrar
+  // — "Registrar" virou um botão DENTRO da tela Billing. Gated pela flag.
+  { href: '/billing', label: 'Billing', Icon: IconWallet, gated: ['atendimentos'] },
   { href: '/servicos', label: 'Serviços', Icon: IconServices },
   { href: '/horarios', label: 'Horários', Icon: IconCalendar },
   { href: '/perfil', label: 'Meu negócio', Icon: IconUser },
