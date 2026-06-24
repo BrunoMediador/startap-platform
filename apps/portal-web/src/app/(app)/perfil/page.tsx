@@ -1,6 +1,6 @@
 'use client';
 
-import { IconUser } from '@/components/icons';
+import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,7 +35,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 export default function PerfilPage() {
-  const { slot } = useTenant();
+  const { slot, atendFromAgenda } = useTenant();
   const toast = useToast();
   const client = useQueryClient();
   const perfilQ = usePerfil(slot);
@@ -189,6 +189,16 @@ export default function PerfilPage() {
                 : 'Tudo salvo. Você pode editar quando quiser — é tudo opcional.'}
           </p>
         </form>
+      )}
+
+      {/* Lembretes: seção da própria "Meu negócio" (config self-service do lembrete
+          automático). Só aparece pra quem tem agenda ativa (atend_from_agenda) —
+          sem agenda não há agendamento pra lembrar. O componente cuida do próprio
+          loading/erro/gating. */}
+      {atendFromAgenda && (
+        <div className="mt-8 border-t border-line pt-6">
+          <LembretesSection />
+        </div>
       )}
     </>
   );
