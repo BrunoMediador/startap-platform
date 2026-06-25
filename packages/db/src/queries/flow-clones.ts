@@ -479,6 +479,39 @@ export async function setCloneStatus(id: number, status: CloneStatus): Promise<C
 }
 
 /**
+ * Flipa flow_clones.status -> 'conectado' para o slot, IDEMPOTENTE, só quando ainda
+ * não está 'conectado'. Desacoplado da contagem de trial: roda em TODO WORKING.
+ *
+ * POR QUÊ: antes o flip de status p/ 'conectado' vivia SÓ como efeito colateral dentro
+ * de startTrial/consumeAdditionalNumber/markExempt (trial-ledger). Logo, quando o número
+ * já tinha sido contado no trial (caminho 'trial-already-counted', reconexão do mesmo
+ * número no mesmo clone), o hook de session.status retornava cedo SEM flipar — e o status
+ * ficava preso em 'desconectado' mesmo com a sessão WORKING. Isso some do monitor de
+ * sessões (alerts.listMonitoredSessions exige status='conectado') e dos alertas de
+ * sessão-caída ao dono. Esta função separa a responsabilidade (a) "está conectado" da
+ * (b) "contou o trial".
+ *
+ * SÓ toca a coluna `status` — NUNCA trial_status/cliente_telefone (sem regressão no
+ * dedup/tracking do trial). Invalida o cache apenas quando muda de fato.
+ *
+ * @returns true se ESTA chamada flipou (estava != 'conectado'); false se já estava
+ *          'conectado' ou o slot não é um clone (no-op idempotente).
+ */
+export async function markCloneConnectedBySlot(slot: string): Promise<boolean> {
+  const r = await query<{ slot: string }>(
+    `UPDATE flow_clones
+        SET status = 'conectado', updated_at = NOW()
+      WHERE slot = $1
+        AND status IS DISTINCT FROM 'conectado'
+      RETURNING slot`,
+    [slot],
+  );
+  const updated = (r.rowCount ?? 0) > 0;
+  if (updated) invalidateCloneCache({ slot });
+  return updated;
+}
+
+/**
  * Remove o clone e todos os registros dependentes via CASCADE de bot_config.
  * bot_prompt, bot_media e flow_clones são limpos por FK CASCADE.
  * flow_controls usa flow_id = slot — removido explicitamente pois não tem FK.

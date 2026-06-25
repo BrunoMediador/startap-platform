@@ -31,7 +31,7 @@ import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
 import { TrialPepperMissingError, trialPhoneHmac } from '@startap/core/trial';
 import type { WahaWebhookBody } from '@startap/core/types';
-import { flowExecutionLog, trialLedger } from '@startap/db';
+import { flowClones, flowExecutionLog, trialLedger } from '@startap/db';
 import { internalAlert, waha } from '@startap/integrations';
 import { z } from 'zod';
 import { autofillAlertOwnerPhone } from './alert-owner-autofill.js';
@@ -119,8 +119,28 @@ async function processSessionStatus(
   // webhook. Roda mesmo sem me.id (no-op interno) e para clones não-trial.
   await autofillAlertOwnerPhone(info.slot, meId);
 
+  // FLIP DE STATUS -> 'conectado' (fix: trial-already-counted silenciava alertas).
+  // A sessão chegou a WORKING => o clone ESTÁ conectado, ponto. Isto é INDEPENDENTE
+  // da contagem de trial. Antes o flip vivia SÓ dentro de startTrial/
+  // consumeAdditionalNumber/markExempt (trial-ledger), então 'trial-already-counted'
+  // (reconexão do mesmo número), 'trial-blocked' e os early-returns (none/exempt/
+  // no-me-id) deixavam o status preso em 'desconectado' mesmo com a sessão WORKING —
+  // sumindo do monitor (alerts.listMonitoredSessions exige status='conectado') e dos
+  // alertas de sessão-caída ao dono. Idempotente (só escreve se != conectado), SÓ
+  // toca a coluna status (nunca trial_status/cliente_telefone). Roda ANTES do gate de
+  // trial p/ valer também a clones 'none'/'exempt'. Fail-safe: nunca quebra o webhook
+  // nem bloqueia o pareamento de trial.
+  try {
+    await flowClones.markCloneConnectedBySlot(info.slot);
+  } catch (e) {
+    log.warn(
+      { ...baseLog, slot: info.slot, err: e instanceof Error ? e.message : String(e) },
+      'trial-pairing: flip de status p/ conectado falhou (ignorado, não afeta o pareamento)',
+    );
+  }
+
   // Clones manuais/legados: NOOP no que toca trial (Cirilo nunca passa daqui). O
-  // autofill acima JÁ rodou — só o fluxo de trial é pulado.
+  // autofill + flip de status acima JÁ rodaram — só o fluxo de trial é pulado.
   if (info.trial_status === 'none' || info.trial_status === 'exempt') {
     return { status: 'ignored:trial-none' };
   }
