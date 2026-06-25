@@ -350,6 +350,22 @@ export interface RestartAndWaitOpts extends WahaCallOpts {
   totalTimeoutMs?: number;
   /** Intervalo entre polls de status (ms). Default 2s. */
   pollIntervalMs?: number;
+  /**
+   * Habilita o escalonamento logout+start quando a sessão CONTINUA FAILED após a 1ª
+   * janela de poll do restart (kill-switch do portal-api: PORTAL_RECONEXAO_LOGOUT_FALLBACK,
+   * default ON). NOWEB com auth-state quebrado (me.id presente + FAILED): o restart só
+   * reconecta a credencial podre → cai de novo → nunca chega a SCAN_QR_CODE. O logout
+   * DESCARTA esse auth-state, e o start sobe limpo rumo a SCAN_QR_CODE. Default false aqui
+   * (a integração é config-free; o caller injeta a flag). NUNCA desloga WORKING (guarda
+   * acima retorna antes). Dispara no máximo UMA vez por orquestração.
+   */
+  logoutFallback?: boolean;
+  /**
+   * Janela (ms) a esperar após o restart antes de escalar pro logout, se ainda FAILED.
+   * Só relevante com logoutFallback. Default 9s (cobre 1-2 polls a 2s + a transição do
+   * NOWEB). Limitada ao deadline total.
+   */
+  failedEscalateAfterMs?: number;
 }
 
 export interface RestartAndWaitResult {
@@ -362,7 +378,8 @@ export interface RestartAndWaitResult {
 }
 
 /**
- * Orquestra restart + poll até a sessão ficar pronta para parear (ADR 0015).
+ * Orquestra restart (+ escalonamento opcional logout+start) até a sessão ficar pronta
+ * para parear (ADR 0015).
  *
  * Fluxo:
  *  1. Lê o status atual.
@@ -372,9 +389,15 @@ export interface RestartAndWaitResult {
  *     um código/QR já válido — "nunca 2 restarts seguidos", ADR 0015).
  *  4. Caso contrário (FAILED/STOPPED/STARTING) -> restart e poll a cada
  *     pollIntervalMs até SCAN_QR_CODE/WORKING ou estourar totalTimeoutMs.
+ *  5. ESCALONAMENTO (só com logoutFallback): se, após failedEscalateAfterMs, a sessão
+ *     CONTINUAR FAILED, escala UMA vez para logout + start. Numa NOWEB com auth-state
+ *     quebrado (me.id presente + FAILED), o restart só reconecta a credencial podre e
+ *     recai em FAILED; nunca chega a SCAN_QR_CODE. O logout DESCARTA esse auth-state e o
+ *     start sobe limpo rumo ao QR. Re-polla até o deadline. STOPPED/STARTING comuns NÃO
+ *     escalam (o restart resolve). WORKING nunca chega aqui (passo 2).
  *
- * NÃO usa logout em nenhum ponto (preserva a autenticação). Cada chamada interna
- * herda o timeout por-request; o deadline total é independente e encerra o poll.
+ * Idempotente: o escalonamento dispara no máximo UMA vez (a rota segura um lock Redis).
+ * Cada chamada interna herda o timeout por-request; o deadline total encerra o poll.
  */
 export async function restartAndWaitForScan(
   session: string,
@@ -382,6 +405,8 @@ export async function restartAndWaitForScan(
 ): Promise<RestartAndWaitResult> {
   const totalTimeoutMs = opts?.totalTimeoutMs ?? 30_000;
   const pollIntervalMs = opts?.pollIntervalMs ?? 2_000;
+  const logoutFallback = opts?.logoutFallback ?? false;
+  const failedEscalateAfterMs = opts?.failedEscalateAfterMs ?? 9_000;
   const perCall: WahaCallOpts = { timeoutMs: opts?.timeoutMs, signal: opts?.signal };
   const deadline = Date.now() + totalTimeoutMs;
 
@@ -396,6 +421,11 @@ export async function restartAndWaitForScan(
 
   // FAILED/STOPPED/STARTING -> dispara restart (leva a sessão rumo a SCAN_QR_CODE).
   await restartSession(session, perCall);
+
+  // Janela na qual o restart sozinho ainda pode transitar — só DEPOIS dela escalamos
+  // pro logout (guarda: nunca de cara). Limitada ao deadline total.
+  const escalateAt = Math.min(Date.now() + failedEscalateAfterMs, deadline);
+  let escalated = false;
 
   // Poll até pronto, terminal ou deadline.
   for (;;) {
@@ -412,6 +442,22 @@ export async function restartAndWaitForScan(
       // Reconectou sozinho durante o restart (sessão voltou) — saudável.
       return { status: 'WORKING', ready: false, alreadyWorking: true };
     }
-    // FAILED no meio do poll: o restart pode ainda transitar — continua até deadline.
+
+    // FAILED PERSISTENTE pós-janela: o restart reanexou auth-state quebrado e recaiu.
+    // Escala UMA vez para logout (descarta credencial podre) + start (sobe limpo). Só
+    // com a flag ligada e só após a janela — nunca em STOPPED/STARTING comuns.
+    if (
+      logoutFallback &&
+      !escalated &&
+      s.status === 'FAILED' &&
+      Date.now() >= escalateAt &&
+      Date.now() < deadline
+    ) {
+      escalated = true;
+      await logoutSession(session, perCall);
+      await startSession(session, perCall);
+      // Re-polla até o deadline (loop continua); nunca escala de novo (escalated=true).
+    }
+    // FAILED no meio do poll (sem escalar): o restart/start ainda pode transitar — segue.
   }
 }
