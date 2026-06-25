@@ -16,7 +16,12 @@ import { Badge } from '@/components/ui/badge';
 import { MetricCard } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/states';
 import type { AtendimentoBalde, AtendimentoBaldeRow, Colaborador } from '@/lib/api-types';
-import { computeComissaoFromRows, profissionalLabel } from '@/lib/atendimentos-balde';
+import {
+  computeComissaoFromRows,
+  computeLucroCents,
+  profissionalLabel,
+  somarTotalCents,
+} from '@/lib/atendimentos-balde';
 import { formatPctComissao } from '@/lib/comissao';
 import { formatPrecoCents } from '@/lib/format';
 import { useMemo } from 'react';
@@ -37,7 +42,18 @@ export function ComissaoBaldeFiltrada({
     [rows, colaboradoresAtivos],
   );
 
+  // Lucro = faturamento do balde (mesmas linhas filtradas) − comissão recomputada.
+  // 100% client-side: respeita o seletor Previsão|Faturado E os filtros via `rows`.
+  const lucroCents = useMemo(
+    () => computeLucroCents(somarTotalCents(rows), resultado.total_cents),
+    [rows, resultado.total_cents],
+  );
+
   const captionTotal = balde === 'previsao' ? 'Comissão prevista' : 'Comissão a pagar';
+  const captionLucro =
+    balde === 'previsao'
+      ? 'Lucro previsto · faturamento − comissão'
+      : 'Lucro · faturamento − comissão';
 
   return (
     <section aria-labelledby="bill-comissao" className="space-y-4">
@@ -55,7 +71,10 @@ export function ComissaoBaldeFiltrada({
         />
       ) : (
         <div className="space-y-3">
-          <MetricCard value={formatPrecoCents(resultado.total_cents)} caption={captionTotal} />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <MetricCard value={formatPrecoCents(resultado.total_cents)} caption={captionTotal} />
+            <MetricCard value={formatPrecoCents(lucroCents)} caption={captionLucro} />
+          </div>
 
           <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
             {resultado.por_profissional.map((p) => (
