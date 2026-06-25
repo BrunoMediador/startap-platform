@@ -24,6 +24,8 @@ import type {
   AtendimentoByEventoResponse,
   AtendimentosListResponse,
   AuthMe,
+  BotPauseResponse,
+  BotResumeResponse,
   ChargeView,
   CodigoResponse,
   ColaboradorInput,
@@ -60,6 +62,7 @@ import type {
   StatusResponse,
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
+import { applyPausaToConexao } from './bot-pausa';
 import { mapColaboradorRow } from './equipe';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
@@ -543,6 +546,54 @@ export function useCodigoConexao(): UseMutationResult<CodigoResponse, Error, voi
 export function useQrConexao(): UseMutationResult<QrResponse, Error, void> {
   return useMutation({
     mutationFn: () => apiFetch<QrResponse>('/portal/conexao/qr'),
+  });
+}
+
+// ── Pausa do atendimento (POST /portal/bot/pause | /resume) ──────────────────
+//
+// Eixo SEPARADO da reconexao WAHA: flow_enabled (pausa) vs status WAHA (conexao).
+// Gated por PORTAL_BOT_PAUSE no backend (404 se OFF — a tela ja esconde o card
+// quando o GET nao expoe os campos). Slot SEMPRE da sessao (withTenant) — o front
+// nunca envia slot. Atualiza otimista o cache da conexao e invalida conexao+status
+// (mesmo padrao do useAddPausa/useReconectar) pra o badge/banner reagirem.
+
+/** POST /portal/bot/pause — pausa o atendimento do proprio cliente (owner_request). */
+export function usePausarBot(slot: string): UseMutationResult<BotPauseResponse, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<BotPauseResponse>('/portal/bot/pause', { method: 'POST' }),
+    onSuccess: () => {
+      client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
+        prev ? applyPausaToConexao(prev, true) : prev,
+      );
+      client.invalidateQueries({ queryKey: qk.conexao(slot) });
+      client.invalidateQueries({ queryKey: qk.status(slot) });
+    },
+  });
+}
+
+/**
+ * POST /portal/bot/resume — retoma o atendimento. 200 quando a pausa era do
+ * proprio cliente; 409 { error:'suspensao_startap' } quando foi a Startap que
+ * pausou (billing/manual_other/abuse) — nesse caso a tela mostra a `message` e o
+ * cache fica intacto (o estado segue travado).
+ */
+export function useRetomarBot(slot: string): UseMutationResult<BotResumeResponse, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiFetch<BotResumeResponse>('/portal/bot/resume', { method: 'POST' }),
+    onSuccess: () => {
+      client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
+        prev ? applyPausaToConexao(prev, false) : prev,
+      );
+      client.invalidateQueries({ queryKey: qk.conexao(slot) });
+      client.invalidateQueries({ queryKey: qk.status(slot) });
+    },
+    onError: () => {
+      // 409 suspensao_startap (ou qualquer erro): ressincroniza o estado real do
+      // backend — a tela trata a message no onError do componente.
+      client.invalidateQueries({ queryKey: qk.conexao(slot) });
+    },
   });
 }
 

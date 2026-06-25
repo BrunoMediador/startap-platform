@@ -32,24 +32,40 @@ import {
   IconCheck,
   IconCopy,
   IconHeadset,
+  IconLock,
+  IconPause,
+  IconPlay,
   IconQr,
   IconRefresh,
   IconWhatsapp,
 } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { PageHead } from '@/components/ui/page-head';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
 import type { ConexaoResponse } from '@/lib/api-types';
+import {
+  MSG_SUSPENSAO_STARTAP,
+  type PausaEstado,
+  isAtendimentoLigado,
+  isPausaFeatureOff,
+  isPausaTravada,
+  resolvePausaEstado,
+} from '@/lib/bot-pausa';
 import { cn } from '@/lib/cn';
 import {
   useCodigoConexao,
   useConexao,
+  usePausarBot,
   useQrConexao,
   useReconectar,
+  useRetomarBot,
   useStatusConexao,
 } from '@/lib/queries';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
@@ -392,6 +408,12 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       <PageHead title="Conectar WhatsApp" subtitle={PAGE_SUBTITLE} />
 
       <div className="stagger stagger-2 space-y-3.5">
+        {/* Pausa do atendimento (eixo SEPARADO da reconexao WAHA). Aparece
+            independente da fase de conexao — um robo pode estar conectado E
+            pausado. Some sozinho quando a flag PORTAL_BOT_PAUSE esta OFF (o GET
+            nao expoe os campos). */}
+        <PausaCard slot={slot} conexao={conexaoQ.data ?? initial} />
+
         {phase === 'conectado' && (
           <ConectadoCard
             phoneMasked={phoneMasked}
@@ -442,6 +464,182 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
         {phase === 'sem_numero' && <SemNumeroCard onUsarQr={openQr} />}
       </div>
     </>
+  );
+}
+
+// ── Card de PAUSA do atendimento (eixo flow_enabled, separado da conexao WAHA) ──
+
+/**
+ * Card de pausar/retomar o atendimento automatico. SEPARADO da maquina de
+ * reconexao WAHA (sao eixos diferentes: WAHA=conexao; flow_enabled=pausa). Aparece
+ * independente do estado de conexao. 3 estados (do GET /portal/conexao):
+ *   ativo            -> "Pausar atendimento" (ConfirmDialog -> POST /bot/pause).
+ *   pausado_self     -> "Retomar atendimento" (POST /bot/resume).
+ *   pausado_startap  -> toggle TRAVADO + badge "Pausado pela Startap" + suporte.
+ * Com a flag PORTAL_BOT_PAUSE OFF (campos ausentes no GET) o card NAO renderiza.
+ *
+ * "atendimento"/"robo" na copy de proposito (PME nao fala "bot").
+ */
+function PausaCard({ slot, conexao }: { slot: string; conexao: ConexaoResponse }) {
+  const toast = useToast();
+  const pausar = usePausarBot(slot);
+  const retomar = useRetomarBot(slot);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Flag OFF -> backend nao expoe os campos -> esconde o card (degrada limpo).
+  if (isPausaFeatureOff(conexao)) return null;
+
+  const estado = resolvePausaEstado(conexao);
+  const ligado = isAtendimentoLigado(estado);
+  const travado = isPausaTravada(estado);
+  const ocupado = pausar.isPending || retomar.isPending;
+
+  function onToggle(next: boolean) {
+    if (travado || ocupado) return;
+    if (!next) {
+      // Ligado -> desligar: confirma antes (acao com efeito no WhatsApp do cliente).
+      setConfirmOpen(true);
+      return;
+    }
+    // Desligado -> ligar: retoma direto.
+    retomar.mutate(undefined, {
+      onSuccess: () => toast.success('Atendimento retomado'),
+      onError: (err) => toast.error(mensagemResume(err)),
+    });
+  }
+
+  function confirmarPausa() {
+    pausar.mutate(undefined, {
+      onSuccess: () => {
+        setConfirmOpen(false);
+        toast.success('Atendimento pausado');
+      },
+      onError: (err) => {
+        setConfirmOpen(false);
+        toast.error(mensagemErro(err));
+      },
+    });
+  }
+
+  return (
+    <PausaCardView
+      estado={estado}
+      ligado={ligado}
+      travado={travado}
+      ocupado={ocupado}
+      onToggle={onToggle}
+      onRetomar={() =>
+        retomar.mutate(undefined, {
+          onSuccess: () => toast.success('Atendimento retomado'),
+          onError: (err) => toast.error(mensagemResume(err)),
+        })
+      }
+      confirmOpen={confirmOpen}
+      onConfirm={confirmarPausa}
+      onCancelConfirm={() => setConfirmOpen(false)}
+      confirmando={pausar.isPending}
+    />
+  );
+}
+
+/**
+ * Apresentacao PURA do card de pausa (sem hooks de dados) — facil de testar e
+ * reusar. Recebe o estado ja resolvido por @/lib/bot-pausa.
+ */
+function PausaCardView({
+  estado,
+  ligado,
+  travado,
+  ocupado,
+  onToggle,
+  onRetomar,
+  confirmOpen,
+  onConfirm,
+  onCancelConfirm,
+  confirmando,
+}: {
+  estado: PausaEstado;
+  ligado: boolean;
+  travado: boolean;
+  ocupado: boolean;
+  onToggle: (next: boolean) => void;
+  onRetomar: () => void;
+  confirmOpen: boolean;
+  onConfirm: () => void;
+  onCancelConfirm: () => void;
+  confirmando: boolean;
+}) {
+  return (
+    <section
+      className="rounded-card border border-line bg-surface p-5 shadow-card"
+      aria-labelledby="pausa-titulo"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <span
+            className={cn(
+              'flex size-7 items-center justify-center rounded-full',
+              ligado ? 'bg-ok-soft text-ok' : 'bg-amber-soft text-amber',
+            )}
+          >
+            {ligado ? <IconPlay size={15} /> : <IconPause size={15} />}
+          </span>
+          <h2 id="pausa-titulo" className="font-display text-[17px] font-semibold text-ink">
+            Atendimento automático
+          </h2>
+        </div>
+
+        {travado ? (
+          <Badge tone="amber">
+            <IconLock size={12} />
+            Pausado pela Startap
+          </Badge>
+        ) : (
+          <Switch
+            checked={ligado}
+            onChange={onToggle}
+            disabled={ocupado}
+            label="Atendimento automático ligado"
+          />
+        )}
+      </div>
+
+      <p className="mt-2.5 text-[14px] leading-normal text-ink-soft">
+        {estado === 'ativo' && 'O robô está respondendo no WhatsApp.'}
+        {estado === 'pausado_self' &&
+          'O robô não responde até você retomar. O WhatsApp continua conectado.'}
+        {estado === 'pausado_startap' &&
+          'O atendimento está pausado pela Startap. Fale com o suporte pra reativar.'}
+      </p>
+
+      {/* Acao por estado: pausado-por-voce -> "Retomar"; travado -> suporte. */}
+      {estado === 'pausado_self' && (
+        <div className="mt-4">
+          <Button onClick={onRetomar} loading={ocupado} loadingLabel="Retomando…">
+            <IconPlay size={18} />
+            Retomar atendimento
+          </Button>
+        </div>
+      )}
+
+      {estado === 'pausado_startap' && (
+        <div className="mt-4">
+          <SuporteLink variant="secondary" />
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Pausar o atendimento?"
+        description="O robô vai parar de responder até você retomar. O WhatsApp continua conectado."
+        confirmLabel="Pausar atendimento"
+        confirmVariant="destructive"
+        loading={confirmando}
+        icon={<IconPause size={22} />}
+        onConfirm={onConfirm}
+        onCancel={onCancelConfirm}
+      />
+    </section>
   );
 }
 
@@ -1140,6 +1338,22 @@ function retryAfter(err: ApiError): number {
     if (typeof v === 'number' && v > 0) return Math.ceil(v);
   }
   return 30;
+}
+
+/**
+ * Mensagem do erro do POST /bot/resume. 409 { error:'suspensao_startap', message }
+ * = a Startap pausou (billing/manual_other/abuse): mostra a `message` do backend
+ * (com fallback fixo) sem expor o motivo cru. Outros erros caem no generico.
+ */
+function mensagemResume(err: unknown): string {
+  if (err instanceof ApiError && err.status === 409 && isErr(err, 'suspensao_startap')) {
+    if (typeof err.body === 'object' && err.body !== null) {
+      const msg = (err.body as { message?: unknown }).message;
+      if (typeof msg === 'string' && msg.trim()) return msg;
+    }
+    return MSG_SUSPENSAO_STARTAP;
+  }
+  return mensagemErro(err);
 }
 
 /** Mensagem amigavel (sem jargao) pra erros gerais das rotas de conexao. */
