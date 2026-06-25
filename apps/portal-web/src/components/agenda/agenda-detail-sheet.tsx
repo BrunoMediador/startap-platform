@@ -27,6 +27,7 @@ import {
   IconTrash,
   IconUser,
   IconWhatsapp,
+  IconX,
 } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
@@ -258,21 +259,26 @@ export function AgendaDetailSheet({
     <>
       <Overlay open={open} onClose={fechar} variant="detail" ariaLabelledBy={titleId}>
         <div className="flex min-h-0 flex-1 flex-col px-5 pt-3.5">
-          {/* Cabeçalho: volta (em modo edição) + título do modo. */}
-          <div className="mb-3 flex items-center gap-2">
-            {modo !== 'detalhe' && (
-              <button
-                type="button"
-                onClick={() => {
-                  setModo('detalhe');
-                  setAviso(null);
-                }}
-                aria-label="Voltar ao detalhe"
-                className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand"
-              >
-                <IconChevronLeft size={18} />
-              </button>
-            )}
+          {/* Cabeçalho STICKY: botão SEMPRE presente (no detalhe = Fechar/X; nos modos
+              de edição = Voltar ao detalhe). Sticky + bg pra o título e o botão de
+              saída nunca rolarem pra fora no mobile (o usuário nunca fica "preso").
+              -mx-5 px-5 faz o fundo cobrir o conteúdo que rola por baixo. */}
+          <div className="sticky top-0 z-10 -mx-5 mb-3 flex items-center gap-2 bg-surface-elev px-5 pb-3 pt-[max(2px,env(safe-area-inset-top))]">
+            <button
+              type="button"
+              onClick={() => {
+                if (modo === 'detalhe') {
+                  fechar();
+                  return;
+                }
+                setModo('detalhe');
+                setAviso(null);
+              }}
+              aria-label={modo === 'detalhe' ? 'Fechar' : 'Voltar ao detalhe'}
+              className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand"
+            >
+              {modo === 'detalhe' ? <IconX size={18} /> : <IconChevronLeft size={18} />}
+            </button>
             <h2 id={titleId} className="font-display text-[17px] font-semibold text-ink">
               {modo === 'detalhe'
                 ? 'Detalhe do horário'

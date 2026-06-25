@@ -32,7 +32,7 @@ export function PeriodSelector({
   const ativo = (p: Periodo) => p.de === value.de && p.ate === value.ate;
 
   return (
-    <div className="mb-5 space-y-3 rounded-card border border-line bg-surface p-4 shadow-card">
+    <div className="mb-4 space-y-3 rounded-card border border-line bg-surface p-3.5 shadow-card md:mb-5 md:p-4">
       <div className="flex flex-wrap gap-2" role="group" aria-label="Períodos rápidos">
         {presets.map((o) => {
           const sel = ativo(o.value);

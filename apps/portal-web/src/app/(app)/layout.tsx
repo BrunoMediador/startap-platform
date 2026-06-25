@@ -56,7 +56,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           {/* Banner de reconexao (acima de children, em TODAS as rotas quando
               needs_action; some em WORKING e na propria /conectar). Gated pela flag. */}
           <ReconnectBanner />
-          <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-24 pt-[18px] md:pb-12">
+          <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-[calc(96px+env(safe-area-inset-bottom))] pt-[18px] md:pb-12">
             {children}
           </main>
           <BottomNav />

@@ -47,14 +47,17 @@ export function HeroZone({
     // classes de espacamento do hero.
     <div className="-mx-5 mb-[18px] px-5 pt-1 md:-mx-0 md:px-0">
       {/* Saudacao editorial (1.D.3) */}
-      <div className="stagger stagger-1 px-0.5 pb-1 pt-1.5">
+      <div className="stagger stagger-1 min-w-0 px-0.5 pb-1 pt-1.5">
         <div className="mb-2.5 inline-flex items-center gap-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
           <span aria-hidden className="inline-block h-px w-[22px] bg-brand" />
           {saudacao()}
         </div>
+        {/* break-words/overflow-wrap:anywhere garante que um nome de negócio longo
+            quebre com elegância em vez de transbordar a borda do hero no mobile.
+            Mantém o tamanho grande (decisão Bruno) — só muda a quebra. */}
         <h1 className="font-display text-[clamp(23px,5.6vw,28px)] font-bold leading-[1.12] tracking-[-0.02em] text-ink">
           Olá,{' '}
-          <span className="bg-gradient-to-b from-ink to-ink-soft bg-clip-text text-transparent">
+          <span className="break-words [overflow-wrap:anywhere] bg-gradient-to-b from-ink to-ink-soft bg-clip-text text-transparent">
             {businessName}
           </span>
         </h1>
