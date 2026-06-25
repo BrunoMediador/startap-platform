@@ -15,7 +15,11 @@
  *   down→down => re-alerta SÓ se passou COOLDOWN (default 30 min);
  *   down→up   => alerta RECUPERADO, limpa down_since/last_alert_at;
  *   up→up     => silêncio.
- *   Debounce (só api:health): exige 2 observações down seguidas pra transicionar.
+ *   Debounce (api:health E waha:<sessao>): exige 2 observações down seguidas
+ *   (~4 min de carência) pra transicionar up→down. Mata o falso CAIU/RECUPERADO
+ *   de flap transitório do Baileys (reconecta sozinho em segundos). pg:main NÃO
+ *   debouncia (limiar 1) — SELECT 1 falhar é sinal forte. Limiar por observação
+ *   (CheckObservation.debounceThreshold; 1 = sem debounce).
  *
  * Hard cap global (spec §4): teto de N msgs/janela somando todos os checks
  * (ALERTS_MAX_PER_WINDOW / ALERTS_WINDOW_MIN). Protege o número da Lola.
@@ -42,12 +46,17 @@ import { config } from '../config.js';
 
 const log = logger.child({ job: 'monitor' });
 
-/** check_key do health da API (único com debounce de 2 ciclos). */
+/** check_key do health da API. */
 const HEALTH_KEY = 'api:health';
 /** check_key do Postgres direto. */
 const PG_KEY = 'pg:main';
-/** Quantas observações `down` seguidas o api:health exige pra transicionar. */
+/** Limiar de debounce do api:health: 2 observações down seguidas pra transicionar. */
 const HEALTH_DEBOUNCE = 2;
+/** Limiar de debounce do waha:<sessao>: 2 polls down seguidos (~4 min) pra
+ *  transicionar — absorve flap transitório do Baileys (reconecta sozinho). */
+const WAHA_DEBOUNCE = 2;
+/** Limiar de checks sem debounce (transiciona já na 1ª observação down). */
+const NO_DEBOUNCE = 1;
 /** Timeout do GET /health (a API e o PG estão na rede interna; deve responder rápido). */
 const HEALTH_TIMEOUT_MS = 5_000;
 const PG_TIMEOUT_MS = 3_000;
@@ -105,8 +114,9 @@ interface CheckObservation {
   obs: 'up' | 'down';
   /** detalhe curto pra mensagem DOWN (ex.: "status FAILED", "HTTP 503"). */
   detail: string;
-  /** true só pro api:health — aplica debounce de HEALTH_DEBOUNCE ciclos. */
-  debounced: boolean;
+  /** quantas observações `down` seguidas exige pra transicionar up→down.
+   *  1 = sem debounce (pg:main); 2 = debounce de ~4 min (api:health, waha). */
+  debounceThreshold: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,7 +158,7 @@ async function observeWaha(senderSlot: string): Promise<CheckObservation[]> {
         label: m.label,
         obs: 'down' as const,
         detail: 'WAHA inacessível (GET /api/sessions falhou)',
-        debounced: false,
+        debounceThreshold: WAHA_DEBOUNCE,
       };
     }
     const status = statusByName.get(m.sessao);
@@ -158,7 +168,7 @@ async function observeWaha(senderSlot: string): Promise<CheckObservation[]> {
       label: m.label,
       obs: up ? ('up' as const) : ('down' as const),
       detail: status ? `status ${status}` : 'sessão ausente na lista (404)',
-      debounced: false,
+      debounceThreshold: WAHA_DEBOUNCE,
     };
   });
 }
@@ -175,7 +185,7 @@ async function observeHealth(): Promise<CheckObservation> {
         label: 'API (startap-api)',
         obs: 'down',
         detail: `HTTP ${res.status}`,
-        debounced: true,
+        debounceThreshold: HEALTH_DEBOUNCE,
       };
     }
     const body = (await res.json()) as { checks?: { db?: unknown; redis?: unknown } };
@@ -187,7 +197,7 @@ async function observeHealth(): Promise<CheckObservation> {
         label: 'API (startap-api)',
         obs: 'down',
         detail: `checks db=${String(db)} redis=${String(redis)}`,
-        debounced: true,
+        debounceThreshold: HEALTH_DEBOUNCE,
       };
     }
     return {
@@ -195,7 +205,7 @@ async function observeHealth(): Promise<CheckObservation> {
       label: 'API (startap-api)',
       obs: 'up',
       detail: 'ok',
-      debounced: true,
+      debounceThreshold: HEALTH_DEBOUNCE,
     };
   } catch (e) {
     return {
@@ -203,7 +213,7 @@ async function observeHealth(): Promise<CheckObservation> {
       label: 'API (startap-api)',
       obs: 'down',
       detail: e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'inacessível',
-      debounced: true,
+      debounceThreshold: HEALTH_DEBOUNCE,
     };
   }
 }
@@ -219,7 +229,13 @@ async function observePg(): Promise<CheckObservation> {
     ]);
     try {
       await client.query('SELECT 1');
-      return { key: PG_KEY, label: 'Postgres', obs: 'up', detail: 'ok', debounced: false };
+      return {
+        key: PG_KEY,
+        label: 'Postgres',
+        obs: 'up',
+        detail: 'ok',
+        debounceThreshold: NO_DEBOUNCE,
+      };
     } finally {
       client.release();
     }
@@ -229,7 +245,7 @@ async function observePg(): Promise<CheckObservation> {
       label: 'Postgres',
       obs: 'down',
       detail: 'SELECT 1 falhou/timeout',
-      debounced: false,
+      debounceThreshold: NO_DEBOUNCE,
     };
   }
 }
@@ -360,10 +376,11 @@ async function applyTransition(
 
   // obs === 'down'
   if (prevState === 'up') {
-    // Debounce só pro api:health: precisa de HEALTH_DEBOUNCE observações seguidas.
-    if (obsItem.debounced) {
+    // Debounce por observação: precisa de `debounceThreshold` downs seguidos pra
+    // transicionar (api:health=2, waha=2, pg=1). Limiar 1 já transiciona na 1ª.
+    if (obsItem.debounceThreshold > 1) {
       const pending = prevPending + 1;
-      if (pending < HEALTH_DEBOUNCE) {
+      if (pending < obsItem.debounceThreshold) {
         // Ainda em observação — não alerta, só acumula (estado segue 'up').
         await alerts.upsertState({
           checkKey: obsItem.key,
