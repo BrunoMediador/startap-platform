@@ -15,7 +15,7 @@ Cron novo no worker (croner), **a cada 2 min** (`*/2 * * * *`), atrás de flag. 
 
 | Check | id (chave de estado) | DOWN quando | Limiar |
 |---|---|---|---|
-| Sessão WAHA por cliente | `waha:<sessao>` | status ∉ {WORKING} (ou 404/erro) | imediato |
+| Sessão WAHA por cliente | `waha:<sessao>` | status ∉ {WORKING} (ou 404/erro) | 2 ciclos seguidos (debounce ~4 min — absorve flap transitório do Baileys) |
 | /health do startap-api | `api:health` | HTTP ≠ 200 **ou** `checks.db != ok` **ou** `checks.redis != ok` | 2 ciclos seguidos (debounce) |
 | Postgres | `pg:main` | `SELECT 1` falha/timeout (já coberto via /health.checks.db; manter check direto como redundância barata do worker) | imediato |
 | Disco (`/`) | `host:disk` | uso ≥ 85% (WARN log já; alerta em 90%) | 90% |
@@ -60,7 +60,7 @@ Lógica por ciclo, por check:
    - `down → down`: se `now - last_alert_at ≥ COOLDOWN` (default **30 min**) → **re-alerta** ("🔴 ainda caído há Xmin"), `last_alert_at=now`, `alert_count++`. Senão, silêncio.
    - `down → up`: **dispara RECUPERADO** ("🟢 <check> voltou após Xmin"). Grava `state=up`, limpa `down_since`/`last_alert_at`.
    - `up → up`: silêncio.
-4. Debounce (só para `api:health`): exigir 2 observações `down` seguidas antes de transicionar para `down` (campo `pending_down_count`), evita alerta por blip de 1 ciclo.
+4. Debounce (para `api:health` **e** `waha:<sessao>`): exigir 2 observações `down` seguidas antes de transicionar para `down` (campo `pending_down_count`), evita alerta por blip de 1 ciclo. No WAHA mata o falso `🔴 CAIU`/`🟢 RECUPERADO` de flap transitório do Baileys (reconecta sozinho em segundos); queda real (ex.: `device_removed`) fica fora vários ciclos e ainda alerta após a carência (~4 min). `pg:main` segue imediato (limiar 1). Limiar é por observação (`CheckObservation.debounceThreshold`).
 
 **Proteção de flood adicional (hard cap global):** máximo de **N mensagens por janela** somando todos os checks (ex.: 10 msgs / 30 min). Se exceder, suprime e loga. Protege o número da Lola mesmo num cenário de "tudo caiu de uma vez". Contador em `alert_states` agregado ou linha sintética `__global__`.
 
