@@ -567,6 +567,52 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Credencial Google do CLIENTE (login do Google Agenda no cel/PC) — migration 061
+//
+// É a credencial de LOGIN HUMANO que a empresa cria pro cliente entrar no app do
+// Google Agenda — NÃO é a Service Account do bot (gcal_*, ADR 0024, escopo distinto).
+//
+// FORA do getCloneBySlot/CloneRow DE PROPÓSITO: a senha cifrada NUNCA pode entrar no
+// cache de clone (TTL 60s, hot path do webhook) nem vazar pra outras rotas que leem
+// CloneRow. Esta leitura é dedicada, SEM cache, parametrizada por slot, e só a usa o
+// endpoint que entrega a credencial ao dono (GET /portal/google-conta), que decifra a
+// senha server-side. Não seleciona NENHUMA coluna gcal_*.
+// ---------------------------------------------------------------------------
+
+export interface GoogleAccountRow {
+  /** E-mail da conta Google do cliente (texto claro; identificador de login). null = não configurado. */
+  google_account_email: string | null;
+  /**
+   * Senha CIFRADA (enc:v2:iv:tag:ciphertext). NUNCA decifrada aqui — a camada de cima
+   * (rota) chama decryptSecret de @startap/core no ponto de uso. null = não configurada.
+   */
+  google_account_password_enc: string | null;
+}
+
+/**
+ * Lê a credencial Google do cliente (e-mail + senha CIFRADA) de um slot. SEM cache (a
+ * senha cifrada nunca encosta no cache de clone). Parametrizado por slot ($1). Devolve a
+ * senha AINDA CIFRADA — quem chama decifra com decryptSecret no ponto de uso (e a senha
+ * NUNCA pode ser logada). Retorna null se o slot não existe.
+ */
+export async function getGoogleAccountBySlot(slot: string): Promise<GoogleAccountRow | null> {
+  const r = await query<{
+    google_account_email: string | null;
+    google_account_password_enc: string | null;
+  }>(
+    `SELECT google_account_email, google_account_password_enc
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+    [slot],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    google_account_email: row.google_account_email ?? null,
+    google_account_password_enc: row.google_account_password_enc ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Cancelamento escalado — destino do alerta pro DONO do clone (Missão 023 W5)
 // ---------------------------------------------------------------------------
 
