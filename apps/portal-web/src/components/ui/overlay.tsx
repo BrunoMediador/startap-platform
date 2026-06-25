@@ -127,10 +127,21 @@ export function Overlay({
             'w-full max-w-[330px] animate-[modalIn_180ms_var(--ease-out-soft)] rounded-[20px] border border-line-strong bg-surface-elev p-[22px_20px_18px] shadow-elev',
           // detail: sheet de baixo no mobile; no desktop, painel alto encostado à
           // direita (entra deslizando da direita), com scroll interno.
+          // overscroll-contain trava o scroll-chaining: ao chegar no fim do sheet o
+          // gesto NÃO rola a página de fundo (sensação de "tela bugada" no mobile).
           variant === 'detail' &&
-            'flex max-h-[88vh] w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] flex-col overflow-y-auto rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev sm:max-h-none sm:h-dvh sm:w-[420px] sm:origin-right sm:animate-[panelIn_200ms_var(--ease-out-soft)] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-[max(18px,env(safe-area-inset-bottom))]',
+            'flex max-h-[88vh] w-full origin-bottom animate-[sheetIn_180ms_var(--ease-out-soft)] flex-col overflow-y-auto overscroll-contain rounded-t-[22px] border-t border-line-strong bg-surface-elev pb-[calc(14px+env(safe-area-inset-bottom))] shadow-elev sm:max-h-none sm:h-dvh sm:w-[420px] sm:origin-right sm:animate-[panelIn_200ms_var(--ease-out-soft)] sm:rounded-none sm:border-l sm:border-t-0 sm:pb-[max(18px,env(safe-area-inset-bottom))]',
         )}
       >
+        {/* Alça de arrasto (grabber): pista visual nº1 de que o painel desce/fecha.
+            Só no mobile (no desktop o detail vira painel lateral). Espelha o grabber
+            do ContactSheet (variant='sheet') pra afordância consistente entre sheets. */}
+        {variant === 'detail' && (
+          <div
+            className="mx-auto mb-1 mt-2 h-1 w-10 shrink-0 rounded-pill bg-line-strong sm:hidden"
+            aria-hidden
+          />
+        )}
         {children}
       </div>
     </div>

@@ -52,7 +52,7 @@ export function ContactSheet({ open, slot, pausadosSet, onClose, onSelect }: Con
         </p>
       </div>
 
-      <div className="max-h-[60vh] overflow-auto px-3 pb-2">
+      <div className="max-h-[60vh] overflow-auto overscroll-contain px-3 pb-2">
         {contatos.isPending ? (
           <>
             <span className="sr-only">Carregando contatos…</span>

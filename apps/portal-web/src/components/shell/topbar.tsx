@@ -16,7 +16,7 @@ export function Topbar({ businessName }: { businessName: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-surface px-5 py-4 md:hidden">
+    <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-surface px-5 pb-4 pt-[calc(16px+env(safe-area-inset-top))] md:hidden">
       {/* Brandmark: simbolo Constelacao-S solto (Opcao A, sem quadrado roxo). */}
       <div className="inline-flex items-center gap-2 font-display text-[17px] font-bold tracking-[-0.01em] text-ink">
         <Brandmark size={30} />

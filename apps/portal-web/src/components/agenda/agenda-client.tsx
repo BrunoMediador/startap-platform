@@ -86,7 +86,10 @@ export function AgendaClient({ data }: { data: AgendamentosResponse }) {
     <div
       ref={containerRef}
       className={cn(
-        expandido && 'fixed inset-0 z-30 overflow-y-auto bg-bg px-5 py-5',
+        // Tela-cheia: reserva o topo (notch/status bar) e a base (home indicator)
+        // pra os controles (Lista/Semana, Recolher, Novo) não caírem sob o recorte.
+        expandido &&
+          'fixed inset-0 z-30 overflow-y-auto bg-bg px-5 pt-[calc(20px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))]',
         expandido && 'mx-auto max-w-[1100px]',
       )}
     >
@@ -113,7 +116,12 @@ export function AgendaClient({ data }: { data: AgendamentosResponse }) {
           className="flex h-9 items-center gap-1.5 rounded-pill border border-line-strong bg-surface px-3 font-display text-[13px] font-semibold text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           {expandido ? <IconArrowsIn size={16} /> : <IconArrowsOut size={16} />}
-          <span className="hidden sm:inline">{expandido ? 'Recolher' : 'Expandir'}</span>
+          {/* Em tela cheia, mostra o rótulo "Recolher" TAMBÉM no mobile: é a única
+              saída do modo expandido (sem chrome/bottom-nav), então não pode virar
+              só um ícone sem texto. "Expandir" segue oculto no mobile (espaço). */}
+          <span className={cn(expandido ? 'inline' : 'hidden sm:inline')}>
+            {expandido ? 'Recolher' : 'Expandir'}
+          </span>
         </button>
 
         <Link

@@ -62,13 +62,21 @@ export function SemanaGrade({
         </button>
       </div>
 
-      {/* Grade 7 colunas: scroll-x no mobile (min-w por coluna), fit no desktop. */}
-      <div className="-mx-1 overflow-x-auto pb-1">
-        <div className="grid min-w-[680px] grid-cols-7 gap-1.5 px-1 md:min-w-0">
-          {semana.dias.map((dia) => (
-            <ColunaDia key={dia.dateKey} dia={dia} onAbrir={onAbrir} />
-          ))}
+      {/* Grade 7 colunas: scroll-x no mobile (min-w por coluna), fit no desktop.
+          Fade na borda direita (mobile) sinaliza que há mais dias pra rolar — sem
+          ele o dono pode achar que a semana acaba na 1ª dobra (~3,5 dias). */}
+      <div className="relative -mx-1">
+        <div className="overflow-x-auto pb-1">
+          <div className="grid min-w-[680px] grid-cols-7 gap-1.5 px-1 md:min-w-0">
+            {semana.dias.map((dia) => (
+              <ColunaDia key={dia.dateKey} dia={dia} onAbrir={onAbrir} />
+            ))}
+          </div>
         </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 right-0 w-7 bg-gradient-to-l from-bg to-transparent md:hidden"
+        />
       </div>
 
       {semData > 0 && (

@@ -59,7 +59,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={api}>
       {children}
       <div
-        className="pointer-events-none fixed inset-x-0 bottom-[88px] z-50 flex flex-col items-center gap-2 px-5 md:bottom-6 md:left-auto md:right-6 md:items-end md:px-0"
+        className="pointer-events-none fixed inset-x-0 bottom-[calc(88px+env(safe-area-inset-bottom))] z-50 flex flex-col items-center gap-2 px-5 md:bottom-6 md:left-auto md:right-6 md:items-end md:px-0"
         aria-live="polite"
       >
         {items.map((t) => (

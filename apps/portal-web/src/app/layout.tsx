@@ -35,6 +35,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  // viewportFit:'cover' ATIVA o env(safe-area-inset-*) no iPhone (notch + home
+  // indicator). Sem isso todos os insets ficam em 0px e o codigo de safe-area que
+  // o app ja referencia (bottom-nav, sheets/overlay, topbar, toast) nao tem efeito
+  // — em PWA standalone a barrinha do iPhone passava por cima da bottom-nav.
+  viewportFit: 'cover',
   // Tema unico escuro "Cadencia Noturna": a barra do navegador acompanha o
   // fundo da app (#14121C) sempre — nao ha mais opcao de tema claro.
   themeColor: '#14121C',

@@ -18,7 +18,7 @@
  * flag off -> fecha com aviso). O endpoint do backend está em construção em
  * paralelo; até live, a UI degrada com toast amigável sem travar.
  */
-import { IconClock, IconTrash, IconUser } from '@/components/icons';
+import { IconClock, IconTrash, IconUser, IconX } from '@/components/icons';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -172,7 +172,18 @@ export function AtendimentoEditSheet({
     <>
       <Overlay open={open} onClose={fechar} variant="detail" ariaLabelledBy={titleId}>
         <div className="flex min-h-0 flex-1 flex-col px-5 pt-3.5">
-          <div className="mb-3 flex items-center gap-2">
+          {/* Cabeçalho STICKY com botão Fechar (X) sempre presente: no mobile o sheet
+              é alto (forma+valor+desconto+serviço+cliente) e o usuário não pode rolar
+              e perder a referência/saída. -mx-5 px-5 faz o bg cobrir o conteúdo. */}
+          <div className="sticky top-0 z-10 -mx-5 mb-3 flex items-center gap-2 bg-surface-elev px-5 pb-3 pt-[max(2px,env(safe-area-inset-top))]">
+            <button
+              type="button"
+              onClick={fechar}
+              aria-label="Fechar"
+              className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand"
+            >
+              <IconX size={18} />
+            </button>
             <h2 id={titleId} className="font-display text-[17px] font-semibold text-ink">
               Editar atendimento
             </h2>

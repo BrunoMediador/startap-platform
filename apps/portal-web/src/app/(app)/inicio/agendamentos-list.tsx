@@ -248,7 +248,7 @@ function AgendamentoRow({
         type="button"
         onClick={onExcluir}
         aria-label={`Cancelar horário de ${parseTitulo(ag.titulo).nome}`}
-        className="flex size-9 shrink-0 items-center justify-center rounded-[9px] text-ink-faint outline-none transition-colors hover:bg-danger/12 hover:text-danger focus-visible:bg-danger/12 focus-visible:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger sm:opacity-0 sm:group-hover:opacity-100"
+        className="flex size-9 shrink-0 items-center justify-center rounded-[9px] text-ink-soft outline-none transition-colors hover:bg-danger/12 hover:text-danger focus-visible:bg-danger/12 focus-visible:text-danger focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-danger active:bg-danger/12 active:text-danger sm:text-ink-faint sm:opacity-0 sm:group-hover:opacity-100"
       >
         <IconTrash size={17} />
       </button>
