@@ -1,5 +1,6 @@
 'use client';
 
+import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,7 @@ import { SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/cn';
+import { showPrestadorField } from '@/lib/google-conta';
 import {
   type PerfilDraft,
   type PerfilErrors,
@@ -35,8 +37,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 export default function PerfilPage() {
-  const { slot, atendFromAgenda } = useTenant();
+  const { slot, atendFromAgenda, productType } = useTenant();
   const toast = useToast();
+  // ESTABELECIMENTO: o "prestador" são os COLABORADORES (geridos na Equipe), então o
+  // campo único de prestador some. SOLO/individual mantém o campo. Esconder NÃO muda
+  // o submit: o valor atual segue no draft e vai pro PUT (mesmo shape PerfilNegocio).
+  const showPrestador = showPrestadorField(productType);
   const client = useQueryClient();
   const perfilQ = usePerfil(slot);
   const save = useSavePerfil(slot);
@@ -126,15 +132,17 @@ export default function PerfilPage() {
               autoComplete="organization"
               enterKeyHint="next"
             />
-            <Input
-              label="Nome do prestador de serviço"
-              placeholder="Ex.: José da Silva"
-              value={draft.nome_prestador}
-              error={errors.nome_prestador}
-              onChange={(e) => set('nome_prestador', e.target.value)}
-              autoComplete="name"
-              enterKeyHint="next"
-            />
+            {showPrestador && (
+              <Input
+                label="Nome do prestador de serviço"
+                placeholder="Ex.: José da Silva"
+                value={draft.nome_prestador}
+                error={errors.nome_prestador}
+                onChange={(e) => set('nome_prestador', e.target.value)}
+                autoComplete="name"
+                enterKeyHint="next"
+              />
+            )}
             <Input
               label="Telefone"
               type="tel"
@@ -200,6 +208,15 @@ export default function PerfilPage() {
           <LembretesSection />
         </div>
       )}
+
+      {/* Google Agenda: credencial da conta Google + guia pra instalar o app e ser
+          notificado no celular/computador. Bloco gateado por
+          GOOGLE_ACCOUNT_PORTAL_ENABLED (404 -> some) e por credencial cadastrada — o
+          componente cuida do próprio loading/erro/gating e some quando não há o que
+          mostrar (degrada limpo). */}
+      <div className="mt-8 border-t border-line pt-6">
+        <GoogleAgendaSection />
+      </div>
     </>
   );
 }
