@@ -4171,6 +4171,112 @@ app.delete('/api/clones/:id/gcal', async (req, res) => {
   }
 });
 
+// ── Conta Google do CLIENTE (login do Google Agenda) ─────────────────────────
+// DIFERENTE da Service Account (gcal_*, o "robô" do bot): aqui guardamos o
+// e-mail + senha da conta Google PESSOAL do cliente pra ele logar no Google
+// Agenda. Colunas google_account_email / google_account_password_enc /
+// google_account_updated_at vêm da migration 061 (PR feat/google-account-api).
+// A SENHA é cifrada com o MESMO AES-256-GCM (formato enc:v2:) usado pro gcal —
+// e NUNCA aparece em log (nem em erro). Diferente do /gcal/status (que jamais
+// devolve segredo), o GET aqui devolve a senha em claro DE PROPÓSITO: é o
+// operador que precisa ver pra entregar a conta ao cliente.
+
+// PUT /api/clones/:id/google-account { email, password } — grava cifrada.
+app.put('/api/clones/:id/google-account', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  const { email, password } = req.body ?? {};
+  if (!email || typeof email !== 'string' || email.trim() === '') {
+    return res.status(400).json({ error: 'email obrigatório' });
+  }
+  if (!password || typeof password !== 'string' || password === '') {
+    return res.status(400).json({ error: 'password obrigatório' });
+  }
+  const emailTrim = email.trim();
+  // Validação leve de formato (não bloqueia caso de borda, só erro óbvio de digitação).
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
+    return res.status(400).json({ error: 'email inválido' });
+  }
+
+  try {
+    const r = await pool.query(
+      `UPDATE flow_clones
+          SET google_account_email        = $1,
+              google_account_password_enc = $2,
+              google_account_updated_at   = NOW(),
+              updated_at                  = NOW()
+        WHERE id = $3
+        RETURNING id, slot, google_account_email, google_account_updated_at`,
+      [emailTrim, encryptGcalCredentials(password), id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    // Loga SÓ o e-mail — a senha NUNCA entra em log.
+    console.log(`[google-account] PUT clone ${id}: email=${emailTrim}`);
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/clones/:id/google-account — decifra server-side e devolve { email, password }.
+// Intencional: o operador precisa ver a senha pra entregar a conta ao cliente.
+app.get('/api/clones/:id/google-account', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  try {
+    const r = await pool.query(
+      `SELECT google_account_email, google_account_password_enc, google_account_updated_at
+         FROM flow_clones WHERE id = $1`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+
+    const { google_account_email, google_account_password_enc, google_account_updated_at } = r.rows[0];
+    let password = '';
+    if (google_account_password_enc) {
+      try {
+        password = decryptGcalCredentials(google_account_password_enc);
+      } catch {
+        // NÃO vaza o ciphertext/erro de cripto — só sinaliza que está corrompido.
+        return res.status(500).json({ error: 'falha ao decifrar a senha — dado corrompido' });
+      }
+    }
+    res.json({
+      email: google_account_email || '',
+      password,
+      updated_at: google_account_updated_at || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/clones/:id/google-account — zera as 2 colunas (+ updated_at).
+app.delete('/api/clones/:id/google-account', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+
+  try {
+    const r = await pool.query(
+      `UPDATE flow_clones
+          SET google_account_email        = NULL,
+              google_account_password_enc = NULL,
+              google_account_updated_at   = NOW(),
+              updated_at                  = NOW()
+        WHERE id = $1
+        RETURNING id`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    console.log(`[google-account] DELETE clone ${id}: conta removida`);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Helper: traduz erros crus do Google Calendar em hints acionáveis pro painel.
 // Detecta os 3 casos mais comuns que travam clientes novos.
 function enrichGcalError(rawError, credentialsJson) {
