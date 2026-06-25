@@ -302,9 +302,22 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
           timeoutMs: config.PORTAL_WAHA_TIMEOUT_MS,
           totalTimeoutMs: 30_000,
           pollIntervalMs: 2_000,
+          // Kill-switch (default ON): se a sessão NOWEB ficar FAILED-presa após o restart,
+          // escala logout+start pra descartar o auth-state quebrado e chegar a SCAN_QR_CODE.
+          logoutFallback: config.PORTAL_RECONEXAO_LOGOUT_FALLBACK,
         })
         .then((res) => {
-          log.info({ slot: tenant.slot, finalStatus: res.status }, 'reconexão concluída');
+          // Log HONESTO: só conta como sucesso se chegou em SCAN_QR_CODE (pronto pro QR/
+          // código) ou já estava WORKING. Qualquer outro finalStatus (ex.: FAILED preso) é
+          // um P1 visível — sai como warn pra aparecer no futuro. Sem dado sensível no log.
+          if (res.ready || res.alreadyWorking) {
+            log.info({ slot: tenant.slot, finalStatus: res.status }, 'reconexão concluída');
+          } else {
+            log.warn(
+              { slot: tenant.slot, finalStatus: res.status },
+              'reconexão não atingiu SCAN_QR_CODE',
+            );
+          }
         })
         .catch((err) => {
           log.warn(

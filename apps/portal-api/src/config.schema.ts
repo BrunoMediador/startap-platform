@@ -58,6 +58,18 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // Kill-switch do FALLBACK logout+start no reconectar self-service. DEFAULT ON (ausente
+  // ou qualquer valor != 'false' = ligado) — o fix funciona por padrão. Quando uma NOWEB
+  // está FAILED com auth-state quebrado, o `restart` só reanexa a credencial podre e recai
+  // em FAILED (nunca chega a SCAN_QR_CODE → cliente sem QR/código). Com o fallback, se a
+  // sessão CONTINUA FAILED após a 1ª janela do restart, escala UMA vez para logout (descarta
+  // o auth-state) + start (sobe limpo rumo ao QR). OFF (='false') = comportamento antigo (só
+  // restart). Permite desligar sem deploy se algum dia atrapalhar. NUNCA hardcoded.
+  PORTAL_RECONEXAO_LOGOUT_FALLBACK: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v !== 'false'),
+
   // Kill-switch da PAUSA self-service do bot pelo cliente no portal (POST /portal/bot/
   // pause|resume + os campos bot_paused/pause_self/pause_locked no GET /portal/conexao).
   // OPCIONAL no boot (ausente = OFF; feature dormente nunca derruba o portal-api). OFF ->

@@ -12,6 +12,7 @@ const { mockConfig } = vi.hoisted(() => ({
   mockConfig: {
     NODE_ENV: 'test',
     PORTAL_RECONEXAO_WAHA: true,
+    PORTAL_RECONEXAO_LOGOUT_FALLBACK: true,
     PORTAL_BOT_PAUSE: true,
     PORTAL_WAHA_TIMEOUT_MS: 8000,
     // Config WAHA usada para RECRIAR a sessão (recreateWahaConfig) — mesmo padrão
@@ -248,7 +249,7 @@ describe('POST /portal/conexao/reconectar', () => {
     await app.close();
   });
 
-  it('FAILED -> 202 restarting, adquire lock, restart async', async () => {
+  it('FAILED -> 202 restarting, adquire lock, restart async (logoutFallback ON por flag)', async () => {
     getCloneMock.mockResolvedValue(makeClone());
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'FAILED' });
     wahaMocks.restartAndWaitForScan.mockResolvedValue({ status: 'SCAN_QR_CODE', ready: true });
@@ -265,6 +266,11 @@ describe('POST /portal/conexao/reconectar', () => {
       'EX',
       35,
       'NX',
+    );
+    // O caller repassa o kill-switch (default ON) pra orquestração — fallback habilitado.
+    expect(wahaMocks.restartAndWaitForScan).toHaveBeenCalledWith(
+      'sess_x',
+      expect.objectContaining({ logoutFallback: true }),
     );
     await app.close();
   });
