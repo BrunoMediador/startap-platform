@@ -621,12 +621,15 @@ export function useRetomarBot(slot: string): UseMutationResult<BotResumeResponse
   });
 }
 
-// ── Equipe / Colaboradores (estabelecimento — GET/POST/PATCH/DELETE) ─────────
+// ── Equipe / Colaboradores (estabelecimento — GET/PATCH) ─────────────────────
 //
-// Toda rota é escopada por slot da sessão no backend (withTenant) + gated por
-// product_type. O front nunca envia slot. A query key carrega o slot pra isolar o
-// cache por tenant. As mutations invalidam a lista (refetch) em vez de editar o
-// cache na mão: o backend é a fonte de verdade do seat_cap/uso (usados/seat_cap).
+// O portal SÓ lista (GET) e edita (PATCH: renomear/serviços/ativo/ordem) as vagas
+// pré-provisionadas. Criar/excluir colaborador NÃO existem no portal de propósito
+// (preço por barbeiro; agendas pré-provisionadas pelo operador no gestão) — não há
+// mutation de POST/DELETE aqui. Toda rota é escopada por slot da sessão no backend
+// (withTenant) + gated por product_type. O front nunca envia slot. A query key
+// carrega o slot pra isolar o cache por tenant. A mutation invalida a lista
+// (refetch): o backend é a fonte de verdade do seat_cap/uso (usados/seat_cap).
 
 export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
   return useQuery({
@@ -638,24 +641,6 @@ export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
       return { ...res, colaboradores: res.colaboradores.map(mapColaboradorRow) };
     },
     retry: false,
-  });
-}
-
-export function useCreateColaborador(
-  slot: string,
-): UseMutationResult<SaveColaboradorResponse, Error, ColaboradorInput> {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: async (body) => {
-      const res = await apiFetch<SaveColaboradorResponse>('/portal/equipe', {
-        method: 'POST',
-        body,
-      });
-      return { ...res, colaborador: mapColaboradorRow(res.colaborador) };
-    },
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: qk.equipe(slot) });
-    },
   });
 }
 
@@ -671,16 +656,6 @@ export function useUpdateColaborador(
       });
       return { ...res, colaborador: mapColaboradorRow(res.colaborador) };
     },
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: qk.equipe(slot) });
-    },
-  });
-}
-
-export function useRemoveColaborador(slot: string): UseMutationResult<{ ok: true }, Error, number> {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (id) => apiFetch<{ ok: true }>(`/portal/equipe/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.equipe(slot) });
     },

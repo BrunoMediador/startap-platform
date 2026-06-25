@@ -1,13 +1,18 @@
 /**
- * Testes do GET/POST/PATCH/DELETE /portal/equipe (Fatia 1 — painel de
- * estabelecimento).
+ * Testes do GET/PATCH /portal/equipe (Fatia 1 — painel de estabelecimento).
+ *
+ * O portal do cliente só LISTA (GET) e EDITA (PATCH: renomear/serviços/ativo/ordem)
+ * as vagas pré-provisionadas. CRIAR (POST) e EXCLUIR (DELETE) foram REMOVIDOS do
+ * portal de propósito (preço por barbeiro; agendas pré-provisionadas pelo operador)
+ * — viram 404 de rota inexistente. Criar/excluir seguem só no gestão.
  *
  * Invariantes cobertos:
+ *  - POST/DELETE /portal/equipe -> 404 (rotas inexistentes; trava de verdade).
  *  - GATING em PROFUNDIDADE: flag OFF -> 404; product_type individual -> 409.
  *  - Anti-IDOR: o slot SEMPRE vem da sessão (withTenant) — nunca do body/params;
  *    a data layer (cloneColaboradores) é chamada com o slot injetado.
- *  - seat_cap / homônimo (ColaboradorRuleError) viram 409.
- *  - 404 quando o colaborador não existe NESTE slot (update/delete -> null/false).
+ *  - seat_cap / homônimo (ColaboradorRuleError) viram 409 (ao ATIVAR/renomear).
+ *  - 404 quando o colaborador não existe NESTE slot (update -> null).
  *
  * DB e config mockados (mesmo padrão de portal-perfil.test.ts). A flag
  * ESTABELECIMENTO_ENABLED é variável por teste (reconfigura o mock de config).
@@ -17,33 +22,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Tudo o que as factories de vi.mock (içadas pro topo) referenciam vai DENTRO de
 // vi.hoisted — senão dá TDZ ("Cannot access X before initialization"). Inclui o
 // configMock (mutável por teste pra alternar a flag) e a classe de erro.
-const {
-  configMock,
-  ColaboradorRuleError,
-  getScopeBySlotMock,
-  listBySlotMock,
-  createMock,
-  updateMock,
-  removeMock,
-} = vi.hoisted(() => {
-  class ColaboradorRuleError extends Error {
-    readonly code: string;
-    constructor(code: string, message: string) {
-      super(message);
-      this.name = 'ColaboradorRuleError';
-      this.code = code;
+const { configMock, ColaboradorRuleError, getScopeBySlotMock, listBySlotMock, updateMock } =
+  vi.hoisted(() => {
+    class ColaboradorRuleError extends Error {
+      readonly code: string;
+      constructor(code: string, message: string) {
+        super(message);
+        this.name = 'ColaboradorRuleError';
+        this.code = code;
+      }
     }
-  }
-  return {
-    configMock: { ESTABELECIMENTO_ENABLED: true } as { ESTABELECIMENTO_ENABLED: boolean },
-    ColaboradorRuleError,
-    getScopeBySlotMock: vi.fn(),
-    listBySlotMock: vi.fn(),
-    createMock: vi.fn(),
-    updateMock: vi.fn(),
-    removeMock: vi.fn(),
-  };
-});
+    return {
+      configMock: { ESTABELECIMENTO_ENABLED: true } as { ESTABELECIMENTO_ENABLED: boolean },
+      ColaboradorRuleError,
+      getScopeBySlotMock: vi.fn(),
+      listBySlotMock: vi.fn(),
+      updateMock: vi.fn(),
+    };
+  });
 
 vi.mock('../config.js', () => ({ config: configMock }));
 
@@ -56,9 +52,7 @@ vi.mock('@startap/db', () => ({
   cloneColaboradores: {
     getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a),
     listBySlot: (...a: unknown[]) => listBySlotMock(...a),
-    create: (...a: unknown[]) => createMock(...a),
     update: (...a: unknown[]) => updateMock(...a),
-    remove: (...a: unknown[]) => removeMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -144,86 +138,17 @@ describe('GET /portal/equipe', () => {
   });
 });
 
-describe('POST /portal/equipe', () => {
-  it('201: cria com o slot+tenant da sessão (nunca do body)', async () => {
-    createMock.mockResolvedValue(COLAB);
+describe('POST /portal/equipe (removido — criar é só no gestão)', () => {
+  // Trava de verdade (não só de UI): a rota de criação não existe mais no portal.
+  // Criar pelo portal geraria barbeiro SEM agenda e furaria o preço por barbeiro.
+  it('404: criar colaborador pelo portal não existe', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'POST',
       url: '/portal/equipe',
-      // slot no body deve ser IGNORADO (strict schema rejeita, mas mesmo se passasse
-      // o create é chamado com o slot da sessão).
       payload: { nome: 'Ana', servicos: ['Corte'] },
     });
-    expect(res.statusCode).toBe(201);
-    expect(createMock).toHaveBeenCalledTimes(1);
-    expect(createMock.mock.calls[0][0]).toMatchObject({
-      slot: injectedSlot,
-      tenantId: 'tid-1',
-      nome: 'Ana',
-    });
-    expect(createMock.mock.calls[0][1]).toBe(3); // seatCap repassado
-    await app.close();
-  });
-
-  it('201: comissao_pct vai pro create (cenário EMPRESA)', async () => {
-    createMock.mockResolvedValue({ ...COLAB, comissao_pct: 15 });
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/equipe',
-      payload: { nome: 'Ana', comissao_pct: 15 },
-    });
-    expect(res.statusCode).toBe(201);
-    expect(createMock.mock.calls[0][0]).toMatchObject({ nome: 'Ana', comissao_pct: 15 });
-    expect(res.json().colaborador.comissao_pct).toBe(15);
-    await app.close();
-  });
-
-  it('400: comissao_pct fora do range (>100) é rejeitado pelo schema', async () => {
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/equipe',
-      payload: { nome: 'Ana', comissao_pct: 150 },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(createMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('400: nome vazio (schema)', async () => {
-    const app = await buildApp();
-    const res = await app.inject({ method: 'POST', url: '/portal/equipe', payload: { nome: '' } });
-    expect(res.statusCode).toBe(400);
-    expect(createMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('400: campo extra (strict — ex.: tentar setar gcal/tenant pelo portal)', async () => {
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/equipe',
-      payload: { nome: 'Ana', gcal_calendar_id: 'x@grupo', tenant_id: 'forjado' },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(createMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('409: seat_cap cheio (ColaboradorRuleError)', async () => {
-    createMock.mockRejectedValue(
-      new ColaboradorRuleError('seat_cap_full', 'limite do plano atingido (3 vagas).'),
-    );
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/equipe',
-      payload: { nome: 'Ana' },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().code).toBe('seat_cap_full');
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 });
@@ -304,22 +229,29 @@ describe('PATCH /portal/equipe/:id', () => {
     expect(res.statusCode).toBe(404);
     await app.close();
   });
-});
 
-describe('DELETE /portal/equipe/:id', () => {
-  it('200: remove escopado por slot+id', async () => {
-    removeMock.mockResolvedValue(true);
+  it('409: ativar além do seat_cap (ColaboradorRuleError) — limite por barbeiro', async () => {
+    updateMock.mockRejectedValue(
+      new ColaboradorRuleError('seat_cap_full', 'limite do plano atingido (3 vagas).'),
+    );
     const app = await buildApp();
-    const res = await app.inject({ method: 'DELETE', url: '/portal/equipe/1' });
-    expect(res.statusCode).toBe(200);
-    expect(removeMock).toHaveBeenCalledWith(injectedSlot, 1);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/equipe/1',
+      payload: { ativo: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().code).toBe('seat_cap_full');
     await app.close();
   });
+});
 
-  it('404: nada removido (remove -> false)', async () => {
-    removeMock.mockResolvedValue(false);
+describe('DELETE /portal/equipe/:id (removido — excluir é só no gestão)', () => {
+  // Trava de verdade: a rota de exclusão não existe mais no portal. Excluir pelo
+  // portal apagaria a agenda pré-provisionada e quebraria o setup + o modelo de custo.
+  it('404: excluir colaborador pelo portal não existe', async () => {
     const app = await buildApp();
-    const res = await app.inject({ method: 'DELETE', url: '/portal/equipe/99' });
+    const res = await app.inject({ method: 'DELETE', url: '/portal/equipe/1' });
     expect(res.statusCode).toBe(404);
     await app.close();
   });

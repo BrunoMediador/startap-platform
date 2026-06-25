@@ -3,23 +3,26 @@
 /**
  * Equipe (Fatia 1 do painel de estabelecimento). Só aparece pro DONO de
  * estabelecimento (gating na nav por product_type; defesa em profundidade no
- * backend: rota responde 404/409 fora do estabelecimento). O dono LISTA / ADICIONA
- * / EDITA / REMOVE colaboradores (nome, serviços, ativo) e vê o uso de vagas
- * (seat_cap). NÃO gerencia agenda/calendarId (assistido pelo operador, ADR 0024).
+ * backend: rota responde 404/409 fora do estabelecimento). O dono LISTA e EDITA as
+ * vagas PRÉ-PROVISIONADAS: renomeia o profissional, marca os serviços que ele faz,
+ * ajusta a comissão e ATIVA/DESATIVA a vaga. NÃO cria nem exclui colaborador pelo
+ * portal — o preço é por barbeiro e o operador pré-provisiona as vagas (cada uma com
+ * agenda Google já conectada, ADR 0024). "Não vou usar essa vaga agora" = desativar;
+ * quando for usar, renomeia e ativa. NÃO gerencia agenda/calendarId (assistido pelo
+ * operador, ADR 0024).
  *
- * Defesa extra no client: se um INDIVIDUAL chegar nesta rota (ex.: link direto), a
- * página mostra "recurso indisponível" em vez de tentar a API — productType vem da
- * sessão (useTenant). O backend ainda assim recusa (404/409); isto é só UX.
+ * Defesa de UX: se um INDIVIDUAL chegar nesta rota (ex.: link direto), a página
+ * mostra "recurso indisponível" em vez de tentar a API — productType vem da sessão
+ * (useTenant). O backend ainda assim recusa (404/409); isto é só UX.
  *
- * UX: padrão da tela /servicos — lista editável com EditRow/ReadRow + ConfirmDialog
- * + Toast. As mutations invalidam a lista (o backend é a fonte de verdade do
- * seat_cap/uso), não editam o cache otimista — assim o card de vagas nunca diverge.
+ * UX: padrão da tela /servicos — lista editável com EditRow/ReadRow + Toast. As
+ * mutations invalidam a lista (o backend é a fonte de verdade do seat_cap/uso), não
+ * editam o cache otimista — assim o card de vagas nunca diverge.
  */
-import { IconCheck, IconPlus, IconTrash, IconUser, IconUsers } from '@/components/icons';
+import { IconCheck, IconUser, IconUsers } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
@@ -38,15 +41,10 @@ import {
   toggleServico,
   validate,
 } from '@/lib/equipe';
-import {
-  useCreateColaborador,
-  useEquipe,
-  useRemoveColaborador,
-  useServicos,
-  useUpdateColaborador,
-} from '@/lib/queries';
+import { useEquipe, useServicos, useUpdateColaborador } from '@/lib/queries';
 import { useState } from 'react';
 
+// Draft inicial só pro useState; o form de edição é sempre populado por toDraft(c).
 const EMPTY_DRAFT: Draft = { nome: '', servicos: [], ativo: true, comissao: '' };
 
 /** Extrai a mensagem amigável de um ApiError (409 seat_cap/homônimo) ou um fallback. */
@@ -67,14 +65,12 @@ export default function EquipePage() {
   // de novo agendamento (GET /portal/servicos), isolada por slot no cache.
   const servicosQ = useServicos(slot);
   const catalogo = (servicosQ.data ?? []).map((s) => s.nome);
-  const create = useCreateColaborador(slot);
   const update = useUpdateColaborador(slot);
-  const remove = useRemoveColaborador(slot);
 
-  const [editing, setEditing] = useState<number | 'new' | null>(null);
+  // editing = id da vaga em edição (ou null). NÃO existe 'new': criar é só no gestão.
+  const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [removeTarget, setRemoveTarget] = useState<Colaborador | null>(null);
 
   // Defesa de UX: individual não tem painel de equipe (o backend recusa de toda
   // forma). Mostra estado claro em vez de bater na API e levar 409.
@@ -101,61 +97,41 @@ export default function EquipePage() {
     setDraft(toDraft(c));
     setErrors({});
   }
-  function startAdd() {
-    setEditing('new');
-    setDraft(EMPTY_DRAFT);
-    setErrors({});
-  }
   function cancel() {
     setEditing(null);
     setErrors({});
   }
 
   function onSave() {
+    if (typeof editing !== 'number') return;
     const res = validate(draft);
     if (!res.ok) {
       setErrors(res.errors);
       return;
     }
-    if (editing === 'new') {
-      create.mutate(
-        {
+    update.mutate(
+      {
+        id: editing,
+        patch: {
           nome: res.value.nome,
           servicos: res.value.servicos,
           ativo: res.value.ativo,
           comissao_pct: res.value.comissao_pct,
         },
-        {
-          onSuccess: () => {
-            toast.success('Profissional adicionado');
-            setEditing(null);
-          },
-          onError: (e) => toast.error(errMsg(e, 'Não foi possível adicionar. Tente de novo.')),
+      },
+      {
+        onSuccess: () => {
+          toast.success('Profissional atualizado');
+          setEditing(null);
         },
-      );
-    } else if (typeof editing === 'number') {
-      update.mutate(
-        {
-          id: editing,
-          patch: {
-            nome: res.value.nome,
-            servicos: res.value.servicos,
-            ativo: res.value.ativo,
-            comissao_pct: res.value.comissao_pct,
-          },
-        },
-        {
-          onSuccess: () => {
-            toast.success('Profissional atualizado');
-            setEditing(null);
-          },
-          onError: (e) => toast.error(errMsg(e, 'Não foi possível salvar. Tente de novo.')),
-        },
-      );
-    }
+        onError: (e) => toast.error(errMsg(e, 'Não foi possível salvar. Tente de novo.')),
+      },
+    );
   }
 
-  /** Toggle ativo/inativo direto da linha (sem abrir o editor). */
+  /** Toggle ativo/inativo direto da linha (sem abrir o editor). É como o dono "não
+   *  usa" uma vaga: desativa; quando for usar, renomeia e ativa. Ao ativar, o backend
+   *  revalida o seat_cap (409 com mensagem amigável se estourar o limite). */
   function toggleAtivo(c: Colaborador) {
     update.mutate(
       { id: c.id, patch: { ativo: !c.ativo } },
@@ -167,17 +143,7 @@ export default function EquipePage() {
     );
   }
 
-  function confirmRemove() {
-    if (!removeTarget) return;
-    const target = removeTarget;
-    setRemoveTarget(null);
-    remove.mutate(target.id, {
-      onSuccess: () => toast.success('Profissional removido'),
-      onError: (e) => toast.error(errMsg(e, 'Não foi possível remover. Tente de novo.')),
-    });
-  }
-
-  const saving = create.isPending || update.isPending;
+  const saving = update.isPending;
 
   return (
     <>
@@ -199,8 +165,8 @@ export default function EquipePage() {
             </div>
             <p className="mt-0.5 text-[12.5px] text-ink-soft">
               {semVaga
-                ? 'Você atingiu o limite do plano. Desative um profissional ou fale com o suporte para aumentar.'
-                : 'Cada profissional ativo ocupa uma vaga do seu plano.'}
+                ? 'Todas as vagas do seu plano estão ativas. Desative um profissional para liberar uma vaga, ou fale com o suporte para aumentar.'
+                : 'Cada profissional ativo ocupa uma vaga do seu plano. Desative os que não estiver usando agora.'}
             </p>
           </div>
         </div>
@@ -213,44 +179,20 @@ export default function EquipePage() {
         </>
       ) : equipeQ.isError ? (
         <ErrorState onRetry={() => equipeQ.refetch()} />
-      ) : colaboradores.length === 0 && editing !== 'new' ? (
+      ) : colaboradores.length === 0 ? (
+        // Sem vagas = operador ainda não provisionou. NÃO há "adicionar" no portal
+        // (criar é só no gestão, junto com a agenda de cada profissional).
         <EmptyState
           icon={<IconUsers size={26} />}
-          title="Nenhum profissional cadastrado"
-          description="Adicione os profissionais do seu estabelecimento. O robô usa essa lista pra agendar atendimentos com cada um."
-          action={{ label: 'Adicionar profissional', onClick: startAdd }}
+          title="Nenhuma vaga configurada ainda"
+          description="As vagas da sua equipe são preparadas pela nossa equipe junto com a agenda de cada profissional. Assim que estiverem prontas, elas aparecem aqui para você renomear, escolher os serviços e ativar."
         />
       ) : (
-        <>
-          <div className="stagger stagger-2 mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
-            {colaboradores.map((c) =>
-              editing === c.id ? (
-                <EditRow
-                  key={`row-${c.id}`}
-                  draft={draft}
-                  errors={errors}
-                  catalogo={catalogo}
-                  catalogoLoading={servicosQ.isPending}
-                  catalogoError={servicosQ.isError}
-                  onChange={setDraft}
-                  onSave={onSave}
-                  onCancel={cancel}
-                  saving={saving}
-                />
-              ) : (
-                <ReadRow
-                  key={`row-${c.id}`}
-                  colaborador={c}
-                  onEdit={() => startEdit(c)}
-                  onToggle={() => toggleAtivo(c)}
-                  onDelete={() => setRemoveTarget(c)}
-                  toggling={update.isPending}
-                />
-              ),
-            )}
-            {editing === 'new' && (
+        <div className="stagger stagger-2 mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
+          {colaboradores.map((c) =>
+            editing === c.id ? (
               <EditRow
-                isNew
+                key={`row-${c.id}`}
                 draft={draft}
                 errors={errors}
                 catalogo={catalogo}
@@ -261,33 +203,18 @@ export default function EquipePage() {
                 onCancel={cancel}
                 saving={saving}
               />
-            )}
-          </div>
-
-          {editing !== 'new' && (
-            <button
-              type="button"
-              onClick={startAdd}
-              disabled={semVaga}
-              className="flex h-[52px] w-full items-center justify-center gap-2 rounded-card border-[1.5px] border-dashed border-line-strong bg-surface font-display text-[15px] font-semibold text-brand outline-none transition-colors hover:border-brand hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line-strong disabled:hover:bg-surface"
-            >
-              <IconPlus size={20} />
-              Adicionar profissional
-            </button>
+            ) : (
+              <ReadRow
+                key={`row-${c.id}`}
+                colaborador={c}
+                onEdit={() => startEdit(c)}
+                onToggle={() => toggleAtivo(c)}
+                toggling={update.isPending}
+              />
+            ),
           )}
-        </>
+        </div>
       )}
-
-      <ConfirmDialog
-        open={removeTarget !== null}
-        title={removeTarget ? `Remover "${removeTarget.nome}"?` : 'Remover profissional?'}
-        description="O robô deixa de agendar com esse profissional. Você pode adicioná-lo de novo depois."
-        confirmLabel="Remover"
-        confirmVariant="destructive"
-        loading={remove.isPending}
-        onConfirm={confirmRemove}
-        onCancel={() => setRemoveTarget(null)}
-      />
     </>
   );
 }
@@ -296,13 +223,11 @@ function ReadRow({
   colaborador,
   onEdit,
   onToggle,
-  onDelete,
   toggling,
 }: {
   colaborador: Colaborador;
   onEdit: () => void;
   onToggle: () => void;
-  onDelete: () => void;
   toggling: boolean;
 }) {
   const servicos = colaborador.servicos;
@@ -347,14 +272,6 @@ function ReadRow({
             <IconUser size={18} />
             <span className="sr-only">Editar</span>
           </button>
-          <button
-            type="button"
-            aria-label={`Remover ${colaborador.nome}`}
-            onClick={onDelete}
-            className="flex size-9 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:border-danger/60 hover:bg-danger/12 hover:text-danger focus-visible:ring-2 focus-visible:ring-danger sm:size-11"
-          >
-            <IconTrash size={18} />
-          </button>
         </div>
       </div>
     </div>
@@ -371,7 +288,6 @@ function EditRow({
   onSave,
   onCancel,
   saving,
-  isNew,
 }: {
   draft: Draft;
   errors: FieldErrors;
@@ -383,12 +299,11 @@ function EditRow({
   onSave: () => void;
   onCancel: () => void;
   saving: boolean;
-  isNew?: boolean;
 }) {
   return (
     <div className="flex animate-[rowIn_180ms_var(--ease-out-soft)] flex-col gap-3 border-b border-line-soft bg-brand-soft p-[15px] last:border-b-0">
       <span className="font-display text-[12px] font-bold uppercase tracking-[0.06em] text-brand">
-        {isNew ? 'Novo profissional' : 'Editando profissional'}
+        Editando profissional
       </span>
       <Input
         label="Nome do profissional"
