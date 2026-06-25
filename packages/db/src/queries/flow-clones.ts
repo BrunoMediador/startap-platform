@@ -59,6 +59,16 @@ export interface CloneRow {
   /** false = fluxo suspenso por billing/férias — WAHA permanece conectado */
   flow_enabled: boolean;
   suspended_reason: string | null;
+  /**
+   * Categoria ESTRUTURADA da suspensão (ADR 0013 / threat-model C1; ADR 0014 F1).
+   * ∈ billing | owner_request | manual_other | abuse | null.
+   * - 'owner_request' = pausa self-service do PRÓPRIO cliente pelo portal (NUNCA
+   *   reativada pelo PIX — só o dono levanta).
+   * - 'billing' = inadimplência; ÚNICO kind que o auto-resume do webhook PIX reativa.
+   * - 'manual_other' | 'abuse' = suspensão pela Startap; o cliente NÃO destrava (409).
+   * null em rows de SELECTs que não pedem a coluna (não quebra normalizeCloneRow).
+   */
+  suspended_kind: string | null;
   suspended_at: Date | null;
   horarios_funcionamento: HorariosFuncionamento | null;
   servicos: ServicoConfig[] | null;
@@ -541,7 +551,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   const r = await query<CloneRow & { id: string }>(
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome, fc.cliente_telefone,
             fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
-            fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
+            fc.flow_enabled, fc.suspended_reason, fc.suspended_kind, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
             cb.amount_cents AS billing_amount_cents,
@@ -764,6 +774,134 @@ export async function resumeClone(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Pausa/retomada SELF-SERVICE pelo DONO no portal (suspended_kind='owner_request')
+//
+// SEPARADO dos helpers legados suspendClone/resumeClone (que NÃO setam/filtram por
+// suspended_kind). O contrato é estrito: o cliente só mexe na PRÓPRIA pausa.
+//   - pauseBotByOwner: só pausa se HOJE flow_enabled=true. Se já suspenso pela Startap
+//     (billing/manual_other/abuse), NÃO sobrescreve o kind — devolve {changed:false}.
+//   - resumeBotByOwner: só destrava se suspended_kind='owner_request'. Suspensão da
+//     Startap não casa o WHERE -> {changed:false} -> o caller responde 409.
+// NUNCA usa suspended_kind='billing' aqui (senão o PIX reativaria a pausa do dono).
+// invalidateCloneCache é IMPRESCINDÍVEL (cache TTL 60s; senão a pausa demora a valer).
+// ---------------------------------------------------------------------------
+
+/** kind canônico da pausa self-service. NUNCA 'billing' (anti auto-resume do PIX). */
+export const OWNER_PAUSE_KIND = 'owner_request' as const;
+const OWNER_PAUSE_REASON = 'Pausado pelo cliente no portal';
+
+export interface OwnerPauseResult {
+  /** true se ESTA chamada mudou o estado (pausou/retomou de fato). */
+  changed: boolean;
+  /** estado de flow_enabled APÓS a operação (refletido para o caller responder). */
+  flow_enabled: boolean;
+}
+
+/**
+ * Pausa o bot a pedido do DONO (self-service no portal): flow_enabled=false,
+ * suspended_kind='owner_request'. WAHA permanece conectada.
+ *
+ * Idempotência/segurança (UPDATE condicional, sem read-then-write):
+ *  - WHERE flow_enabled = TRUE -> só pausa quem está ATIVO. Se já suspenso (por
+ *    qualquer kind), 0 linhas -> NÃO sobrescreve o kind da Startap (changed:false).
+ *  - Idempotente em retry: 2ª chamada não casa o WHERE (já está false) -> changed:false,
+ *    mas devolve flow_enabled=false (estado correto). SEM efeito colateral duplicado
+ *    (não loga 2 vezes; o INSERT no log só roda quando rowCount>0).
+ *  - slot é a âncora do tenant (vem da sessão pelo caller — anti-IDOR).
+ */
+export async function pauseBotByOwner(slot: string, actor: string): Promise<OwnerPauseResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query<{ slot: string; waha_sessao: string | null }>(
+      `UPDATE flow_clones
+          SET flow_enabled     = FALSE,
+              suspended_kind   = $2,
+              suspended_reason = $3,
+              suspended_at     = NOW(),
+              updated_at       = NOW()
+        WHERE slot = $1
+          AND flow_enabled = TRUE
+        RETURNING slot, waha_sessao`,
+      [slot, OWNER_PAUSE_KIND, OWNER_PAUSE_REASON],
+    );
+
+    const changed = (r.rowCount ?? 0) > 0;
+    let sessao: string | null = null;
+    if (changed) {
+      sessao = r.rows[0].waha_sessao;
+      await client.query(
+        `INSERT INTO flow_suspension_log (slot, action, reason, actor)
+         VALUES ($1, 'suspend', $2, $3)`,
+        [slot, OWNER_PAUSE_REASON, actor],
+      );
+    }
+
+    await client.query('COMMIT');
+    if (changed) invalidateCloneCache({ slot, sessao: sessao ?? undefined });
+    // flow_enabled APÓS a operação é sempre false (pausou agora ou já estava pausado).
+    return { changed, flow_enabled: false };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Retoma o bot a pedido do DONO: SÓ destrava a PRÓPRIA pausa (owner_request).
+ *
+ * UPDATE condicional WHERE flow_enabled=FALSE AND suspended_kind='owner_request':
+ *  - Suspensão da Startap (billing/manual_other/abuse) NÃO casa -> 0 linhas ->
+ *    changed:false -> o caller responde 409 suspensao_startap (o cliente NÃO levanta).
+ *  - Já ativo -> 0 linhas -> changed:false; o caller trata como "nada a fazer" (200).
+ *  - Idempotente em retry (2ª chamada não casa após reativar).
+ * Limpa kind/reason/at ao reativar. Loga 'resume' apenas quando rowCount>0.
+ */
+export async function resumeBotByOwner(slot: string, actor: string): Promise<OwnerPauseResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query<{ slot: string; waha_sessao: string | null }>(
+      `UPDATE flow_clones
+          SET flow_enabled     = TRUE,
+              suspended_kind   = NULL,
+              suspended_reason = NULL,
+              suspended_at     = NULL,
+              updated_at       = NOW()
+        WHERE slot = $1
+          AND flow_enabled = FALSE
+          AND suspended_kind = $2
+        RETURNING slot, waha_sessao`,
+      [slot, OWNER_PAUSE_KIND],
+    );
+
+    const changed = (r.rowCount ?? 0) > 0;
+    let sessao: string | null = null;
+    if (changed) {
+      sessao = r.rows[0].waha_sessao;
+      await client.query(
+        `INSERT INTO flow_suspension_log (slot, action, reason, actor)
+         VALUES ($1, 'resume', NULL, $2)`,
+        [slot, actor],
+      );
+    }
+
+    await client.query('COMMIT');
+    if (changed) invalidateCloneCache({ slot, sessao: sessao ?? undefined });
+    return { changed, flow_enabled: changed };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Normalização de tipos
 // ---------------------------------------------------------------------------
 
@@ -797,6 +935,10 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     suspended_reason:
       ((row as unknown as { suspended_reason?: unknown }).suspended_reason as string | null) ??
       null,
+    // suspended_kind: só vem de SELECTs que pedem a coluna (getCloneBySlot). Rows de
+    // outras origens (getCloneBySession, RETURNING * de queries legadas) -> null.
+    suspended_kind:
+      ((row as unknown as { suspended_kind?: unknown }).suspended_kind as string | null) ?? null,
     suspended_at:
       ((row as unknown as { suspended_at?: unknown }).suspended_at as Date | null) ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),

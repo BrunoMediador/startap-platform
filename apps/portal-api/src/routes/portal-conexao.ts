@@ -175,6 +175,28 @@ async function resolveClone(tenant: TenantContext) {
   };
 }
 
+/**
+ * Estado da pausa do bot derivado de flow_enabled + suspended_kind (contrato BE↔FE):
+ *  - bot_paused  = flow_enabled === false (bot mudo; WAHA segue conectada).
+ *  - pause_self  = pausado E suspended_kind === 'owner_request' (o PRÓPRIO cliente pausou
+ *                  pelo portal -> ele pode retomar).
+ *  - pause_locked = pausado E NÃO é pause_self (suspenso pela Startap: billing/
+ *                  manual_other/abuse) -> o cliente NÃO retoma (UI mostra "fale com suporte").
+ */
+function derivePauseState(clone: flowClones.CloneRow | null): {
+  bot_paused: boolean;
+  pause_self: boolean;
+  pause_locked: boolean;
+} {
+  const botPaused = clone?.flow_enabled === false;
+  const pauseSelf = botPaused && clone?.suspended_kind === flowClones.OWNER_PAUSE_KIND;
+  return {
+    bot_paused: botPaused,
+    pause_self: pauseSelf,
+    pause_locked: botPaused && !pauseSelf,
+  };
+}
+
 /** Quando a flag está OFF, rotas de ação respondem 404 (front esconde tudo). */
 function featureDisabled(reply: FastifyReply): FastifyReply {
   return reply.code(404).send({ error: 'recurso_indisponivel' });
@@ -200,11 +222,15 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(200).send({ enabled: false });
       }
       const tenant = requireTenant(req);
-      const { session, phoneDigits, phoneMasked } = await resolveClone(tenant);
+      const { clone, session, phoneDigits, phoneMasked } = await resolveClone(tenant);
 
       const status = await readWahaStatus(session, tenant.slot);
       const connected = status === 'WORKING';
       const cooldown = await reconnectCooldownSeconds(tenant.slot);
+
+      // Estado da pausa do bot (só exposto com a flag PORTAL_BOT_PAUSE ON; OFF -> campos
+      // omitidos e o front esconde a UI — produção byte-a-byte como antes da feature).
+      const pause = config.PORTAL_BOT_PAUSE ? derivePauseState(clone) : {};
 
       return reply.code(200).send({
         enabled: true,
@@ -219,6 +245,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         // Só pode reconectar se não está conectado e não há lock vigente.
         can_reconnect: !connected && cooldown === 0,
         reconnect_cooldown_seconds: cooldown,
+        ...pause,
       });
     },
   );
@@ -402,6 +429,58 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         // terminal: o front pode parar o polling (sucesso ou falha definitiva).
         terminal: status === 'WORKING' || status === 'FAILED',
       });
+    },
+  );
+
+  // ── POST /portal/bot/pause — pausa self-service do bot pelo DONO ──────────────
+  // Gated por PORTAL_BOT_PAUSE (404 se OFF). Seta suspended_kind='owner_request' (NUNCA
+  // 'billing' — senão o PIX reativaria a pausa do dono). NÃO sobrescreve suspensão da
+  // Startap: se já suspenso (flow_enabled=false), a query não casa o WHERE e devolve o
+  // estado atual (bot_paused:true) sem mexer no kind. slot SEMPRE da sessão (anti-IDOR).
+  app.post(
+    '/portal/bot/pause',
+    { preHandler: withTenant, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      if (!config.PORTAL_BOT_PAUSE) return featureDisabled(reply);
+      const tenant = requireTenant(req);
+      const actor = `portal:${tenant.userId}`;
+      const res = await flowClones.pauseBotByOwner(tenant.slot, actor);
+      if (res.changed) {
+        log.info({ slot: tenant.slot }, 'bot pausado pelo cliente no portal');
+      }
+      // bot_paused é o ESTADO após a operação (true se pausou agora OU já estava suspenso).
+      return reply.code(200).send({ bot_paused: !res.flow_enabled });
+    },
+  );
+
+  // ── POST /portal/bot/resume — retoma self-service (só a própria pausa) ────────
+  // Gated por PORTAL_BOT_PAUSE (404 se OFF). SÓ destrava suspended_kind='owner_request'.
+  // Se suspenso pela Startap (billing/manual_other/abuse) -> 409 suspensao_startap (o
+  // cliente NÃO levanta suspensão da Startap). slot SEMPRE da sessão (anti-IDOR).
+  app.post(
+    '/portal/bot/resume',
+    { preHandler: withTenant, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      if (!config.PORTAL_BOT_PAUSE) return featureDisabled(reply);
+      const tenant = requireTenant(req);
+      const actor = `portal:${tenant.userId}`;
+      const res = await flowClones.resumeBotByOwner(tenant.slot, actor);
+      if (res.changed) {
+        log.info({ slot: tenant.slot }, 'bot retomado pelo cliente no portal');
+        return reply.code(200).send({ bot_paused: false });
+      }
+      // Não destravou. Distingue 2 casos lendo o estado atual:
+      //  - suspenso pela Startap (flow_enabled=false, kind != owner_request) -> 409.
+      //  - já ativo (nada a fazer) -> 200 bot_paused:false (idempotente).
+      const { clone } = await resolveClone(tenant);
+      const { bot_paused, pause_locked } = derivePauseState(clone);
+      if (pause_locked) {
+        return reply.code(409).send({
+          error: 'suspensao_startap',
+          message: 'Seu atendimento foi pausado pela Startap. Fale com o suporte.',
+        });
+      }
+      return reply.code(200).send({ bot_paused });
     },
   );
 };

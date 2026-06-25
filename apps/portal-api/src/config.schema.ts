@@ -58,6 +58,16 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // Kill-switch da PAUSA self-service do bot pelo cliente no portal (POST /portal/bot/
+  // pause|resume + os campos bot_paused/pause_self/pause_locked no GET /portal/conexao).
+  // OPCIONAL no boot (ausente = OFF; feature dormente nunca derruba o portal-api). OFF ->
+  // as rotas de ação respondem 404 e o GET omite os campos de pausa (front esconde a UI);
+  // produção byte-a-byte como hoje. Liga em piloto sem novo deploy. NUNCA hardcoded.
+  PORTAL_BOT_PAUSE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // Timeout (ms) por chamada WAHA do portal-api. Default 8s (ADR 0015 — toda chamada
   // WAHA tem timeout). Opcional; ausente = 8000.
   PORTAL_WAHA_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
