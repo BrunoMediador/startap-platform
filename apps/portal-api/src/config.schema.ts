@@ -247,6 +247,20 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Entrega da credencial Google do CLIENTE no portal (migration 061) ──────
+  // Kill-switch do GET /portal/google-conta, que ENTREGA ao dono o login (e-mail +
+  // senha) da conta Google que a empresa criou pra ele logar no app Google Agenda no
+  // cel/PC. NÃO é a Service Account do bot (gcal_*). OPCIONAL no boot (ausente = OFF,
+  // lição #247: feature dormente nunca derruba o portal-api). OFF -> a rota responde 404
+  // (não vaza; nem consulta o banco; o front esconde a seção). A senha é decifrada
+  // server-side (decryptSecret) e a resposta vai com cache-control: no-store; a senha
+  // NUNCA entra em log. Sobe dormente; liga em prod sem novo deploy de código. NUNCA
+  // hardcoded.
+  GOOGLE_ACCOUNT_PORTAL_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

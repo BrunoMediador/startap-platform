@@ -47,6 +47,7 @@ export type {
   CloneSummary,
   CloneStatus,
   CloneAlertOwner,
+  GoogleAccountRow,
   HorarioDia,
   HorariosFuncionamento,
   ServicoConfig,

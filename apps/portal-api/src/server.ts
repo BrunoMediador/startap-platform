@@ -26,6 +26,7 @@ import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalEquipeRoutes } from './routes/portal-equipe.js';
+import { portalGoogleContaRoutes } from './routes/portal-google-conta.js';
 import { portalLembretesRoutes } from './routes/portal-lembretes.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalPerfilRoutes } from './routes/portal-perfil.js';
@@ -125,6 +126,10 @@ async function main() {
   // REMINDERS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual. O ENVIO vive
   // no worker (gated lá também); esta rota só liga/desliga e ajusta janelas pela UI.
   await app.register(portalLembretesRoutes);
+  // Entrega da credencial Google do CLIENTE (login do Google Agenda — migration 061).
+  // Gated por GOOGLE_ACCOUNT_PORTAL_ENABLED (404 se OFF) — feature dormente, não toca
+  // fluxo atual. Senha decifrada server-side + cache-control: no-store; nunca em log.
+  await app.register(portalGoogleContaRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);
