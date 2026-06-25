@@ -43,6 +43,7 @@ import type {
   EquipeResponse,
   ExcluirAgendamentoResponse,
   FaturamentoReport,
+  GoogleContaResponse,
   Horarios,
   HorariosResponse,
   LembretesConfig,
@@ -75,6 +76,7 @@ export const qk = {
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   lembretes: (slot: string) => ['lembretes', slot] as const,
+  googleConta: (slot: string) => ['google-conta', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
   /** Prefixo por tenant — usar pra invalidar TODAS as grades de slots de uma vez. */
@@ -425,6 +427,28 @@ export function useSaveLembretes(
     onSuccess: (config) => {
       client.setQueryData(qk.lembretes(slot), config);
     },
+  });
+}
+
+// ── Conta Google da agenda (GET /portal/google-conta) ────────────────────────
+//
+// Credencial (e-mail + senha JÁ decriptada server-side) pra logar o app Google
+// Agenda no celular/computador. Gated por GOOGLE_ACCOUNT_PORTAL_ENABLED (404 quando
+// OFF = feature-off, tratado na seção). Escopado por slot da sessão (withTenant) — o
+// front nunca envia slot; a query key carrega o slot pra isolar o cache por tenant.
+//
+// A SENHA vem `no-store` do backend e é sensível: NÃO cacheamos agressivo —
+// staleTime 0 + gcTime 0 (some do cache assim que a tela desmonta) + sem refetch em
+// foco/intervalo. Sem retry (404 não se resolve sozinho). NUNCA logar este dado.
+
+export function useGoogleConta(slot: string): UseQueryResult<GoogleContaResponse> {
+  return useQuery({
+    queryKey: qk.googleConta(slot),
+    queryFn: ({ signal }) => apiFetch<GoogleContaResponse>('/portal/google-conta', { signal }),
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 }
 

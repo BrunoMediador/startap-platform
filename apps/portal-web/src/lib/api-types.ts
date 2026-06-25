@@ -530,6 +530,27 @@ export interface LembretesPatch {
   windows_min?: number[];
 }
 
+// ── Conta Google da agenda (GET /portal/google-conta) ────────────────────────
+//
+// Credencial da conta Google que o dono usa pra instalar/logar o app Google
+// Agenda no celular/computador e receber notificação dos agendamentos. A SENHA já
+// vem DECRIPTADA do backend (decryptSecret de @startap/core; formato no banco =
+// enc:v2:iv:tag:ciphertext, o MESMO do gcal e do painel-admin). O backend responde
+// com header `cache-control: no-store` — o hook NÃO cacheia agressivo.
+//
+// Gated por GOOGLE_ACCOUNT_PORTAL_ENABLED (default OFF -> 404, tratado como
+// feature-off na tela: a seção some). Escopado por slot da sessão (withTenant) — o
+// front nunca envia slot. Campos null = feature ON mas sem credencial cadastrada.
+//
+// ⚠️ A senha NUNCA pode entrar em log (nem em erro) — não logar este objeto.
+
+export interface GoogleContaResponse {
+  /** E-mail da conta Google (null = não cadastrado). */
+  google_account_email: string | null;
+  /** Senha JÁ decriptada server-side (null = não cadastrada). NUNCA logar. */
+  google_account_password: string | null;
+}
+
 // ── App de gestão: atendimentos + relatórios (ADR 0026, migration 058) ────────
 //
 // Fase 1 do app de gestão (faturamento + comissão). TODA rota é gated por
