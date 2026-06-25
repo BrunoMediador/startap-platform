@@ -2,9 +2,14 @@
  * Equipe (colaboradores) do DONO de um estabelecimento no portal self-service
  * (Fatia 1 do painel de estabelecimento — design ADR 0023/0024).
  *
- * O dono LISTA / ADICIONA / EDITA / REMOVE colaboradores (nome, serviços, ativo,
- * ordem) e vê o uso de vagas (seat_cap). NÃO gerencia agenda/calendarId aqui (fica
- * assistido pelo operador, ADR 0024) nem pacotes/plano (fatias posteriores).
+ * O dono LISTA e EDITA colaboradores (renomeia, serviços, ativo/inativo, ordem) e
+ * vê o uso de vagas (seat_cap). NÃO CRIA nem REMOVE colaborador pelo portal: o
+ * preço é por barbeiro e o operador pré-provisiona EXATAMENTE seat_cap vagas, cada
+ * uma com agenda Google já conectada (ADR 0024, agenda assistida). Criar pelo portal
+ * geraria barbeiro SEM agenda (o portal não conecta calendarId); remover apagaria a
+ * agenda pré-provisionada e quebraria o setup + o modelo de custo. Criação/remoção
+ * vivem SÓ no GESTÃO (operador, painel-admin + @startap/db). NÃO gerencia
+ * agenda/calendarId aqui nem pacotes/plano (fatias posteriores).
  *
  * ISOLAMENTO (regra de ouro 5, ADR 0012 Decisão 4): o slot vem SEMPRE de
  * request.tenant.slot (withTenant) — NUNCA de body/query/params. Não existe rota
@@ -30,23 +35,13 @@ import { requireTenant, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'equipe' });
 
-// % de comissão sobre o BRUTO (cenário EMPRESA, ADR 0026). 0–100, 2 casas. Opcional:
-// no create ausente => 0 (default da coluna); no update ausente => NÃO altera o valor.
+// % de comissão sobre o BRUTO (cenário EMPRESA, ADR 0026). 0–100, 2 casas. Opcional
+// no update: ausente => NÃO altera o valor.
 const comissaoPctSchema = z.number().min(0).max(100);
 
-// Body de criação. strict() rejeita campos extras (ex.: alguém tentando setar
-// gcal_calendar_id/tenant pelo portal — agenda é assistida, tenant vem da sessão).
-const createSchema = z
-  .object({
-    nome: z.string().trim().min(1).max(160),
-    servicos: z.array(z.string()).max(50).optional(),
-    ativo: z.boolean().optional(),
-    ordem: z.number().int().optional(),
-    comissao_pct: comissaoPctSchema.optional(),
-  })
-  .strict();
-
-// Body de edição: todos os campos opcionais (PATCH parcial). strict() idem.
+// Body de edição: todos os campos opcionais (PATCH parcial). strict() rejeita campos
+// extras (ex.: alguém tentando setar gcal_calendar_id/tenant pelo portal — agenda é
+// assistida, tenant vem da sessão).
 const updateSchema = z
   .object({
     nome: z.string().trim().min(1).max(160).optional(),
@@ -116,29 +111,9 @@ export const portalEquipeRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(200).send({ seat_cap: gate.seatCap, usados, colaboradores });
   });
 
-  // POST /portal/equipe — cria colaborador (respeita seat_cap p/ ATIVOS).
-  app.post('/portal/equipe', { preHandler: withTenant }, async (req, reply) => {
-    const gate = await gateEstabelecimento(req, reply);
-    if (!gate) return reply;
-    const parsed = createSchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: 'dados invalidos',
-        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-      });
-    }
-    try {
-      const colaborador = await cloneColaboradores.create(
-        { slot: gate.slot, tenantId: gate.tenantId, ...parsed.data },
-        gate.seatCap,
-      );
-      log.info({ slot: gate.slot, colaboradorId: colaborador.id }, 'colaborador criado (portal)');
-      return reply.code(201).send({ ok: true, colaborador });
-    } catch (e) {
-      if (e instanceof ColaboradorRuleError) return sendRuleError(reply, e);
-      throw e;
-    }
-  });
+  // Criar (POST) e remover (DELETE) colaborador NÃO existem no portal de propósito:
+  // o operador pré-provisiona as vagas (com agenda) no gestão; o dono só personaliza
+  // as vagas existentes via PATCH abaixo. POST/DELETE caem no 404 padrão do Fastify.
 
   // PATCH /portal/equipe/:id — edita nome/serviços/ativo/ordem (revalida seat_cap ao ATIVAR).
   app.patch('/portal/equipe/:id', { preHandler: withTenant }, async (req, reply) => {
@@ -167,17 +142,5 @@ export const portalEquipeRoutes: FastifyPluginAsync = async (app) => {
       if (e instanceof ColaboradorRuleError) return sendRuleError(reply, e);
       throw e;
     }
-  });
-
-  // DELETE /portal/equipe/:id — remove colaborador (escopado por slot).
-  app.delete('/portal/equipe/:id', { preHandler: withTenant }, async (req, reply) => {
-    const gate = await gateEstabelecimento(req, reply);
-    if (!gate) return reply;
-    const id = await parseId(req, reply);
-    if (id === null) return reply;
-    const ok = await cloneColaboradores.remove(gate.slot, id);
-    if (!ok) return reply.code(404).send({ error: 'colaborador nao encontrado' });
-    log.info({ slot: gate.slot, colaboradorId: id }, 'colaborador removido (portal)');
-    return reply.code(200).send({ ok: true });
   });
 };
