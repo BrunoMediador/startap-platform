@@ -398,6 +398,16 @@ export interface SimularResponse {
  *   registered_phone_masked -> "55 11 9••••-1234" (so leitura, nunca editavel).
  *   can_reconnect           -> botao de reconectar habilitado (anti-abuso no back).
  *   reconnect_cooldown_seconds -> cooldown sugerido pro botao apos reconectar.
+ *
+ * PAUSA (eixo SEPARADO da conexao WAHA — flow_enabled, gated por PORTAL_BOT_PAUSE):
+ * a conexao WAHA e a pausa do atendimento sao independentes (um robo pode estar
+ * conectado E pausado). Os 3 campos abaixo sao OPCIONAIS: vem AUSENTES quando a
+ * flag PORTAL_BOT_PAUSE esta OFF no backend — nesse caso o card de pausa some
+ * (degrada limpo, sem regredir a tela atual).
+ *   bot_paused   -> flow_enabled === false (atendimento pausado, por quem quer que seja).
+ *   pause_self   -> bot_paused && suspended_kind === 'owner_request' (o cliente pausou; pode retomar).
+ *   pause_locked -> bot_paused && !pause_self (suspenso pela Startap: billing/manual_other/abuse;
+ *                   toggle TRAVADO, sem expor o motivo cru — so "fale com o suporte").
  */
 export interface ConexaoResponse {
   enabled: boolean;
@@ -409,6 +419,19 @@ export interface ConexaoResponse {
   registered_phone_masked: string | null;
   can_reconnect: boolean;
   reconnect_cooldown_seconds: number;
+  bot_paused?: boolean;
+  pause_self?: boolean;
+  pause_locked?: boolean;
+}
+
+/** POST /portal/bot/pause -> 200. Atendimento pausado pelo cliente. */
+export interface BotPauseResponse {
+  bot_paused: true;
+}
+
+/** POST /portal/bot/resume -> 200. Atendimento retomado pelo cliente. */
+export interface BotResumeResponse {
+  bot_paused: false;
 }
 
 /** POST /portal/conexao/reconectar -> 202. Inicia o restart da sessao. */
