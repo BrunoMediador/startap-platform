@@ -13,10 +13,16 @@ const mocks = vi.hoisted(() => ({
   getSessionStatus: vi.fn(),
   sendInternalAlert: vi.fn(),
   displayNameForSlot: vi.fn(),
+  markCloneConnectedBySlot: vi.fn(),
+  setCloneAlertOwnerPhoneIfEmpty: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
+  flowClones: {
+    markCloneConnectedBySlot: mocks.markCloneConnectedBySlot,
+    setCloneAlertOwnerPhoneIfEmpty: mocks.setCloneAlertOwnerPhoneIfEmpty,
+  },
   trialLedger: {
     getTrialInfoBySession: mocks.getTrialInfoBySession,
     findByPhoneHmac: mocks.findByPhoneHmac,
@@ -80,6 +86,9 @@ beforeEach(() => {
   mocks.logFlowEvent.mockResolvedValue(null);
   mocks.sendInternalAlert.mockResolvedValue({ sent: 1 });
   mocks.displayNameForSlot.mockResolvedValue('Barbearia do Trial');
+  // Flip de status -> conectado e autofill do dono: idempotentes, default no-op.
+  mocks.markCloneConnectedBySlot.mockResolvedValue(false);
+  mocks.setCloneAlertOwnerPhoneIfEmpty.mockResolvedValue(false);
   // Default: lock adquirido — executa a decisão (pass-through, como em prod sem
   // concorrência). Teste de lock ocupado sobrescreve com { acquired: false }.
   mocks.withTrialSlotLock.mockImplementation(async (_slot: string, fn: () => Promise<unknown>) => ({
@@ -345,5 +354,76 @@ describe('handleSessionStatusEvent', () => {
     expect(r.status).toBe('ok:trial-already-counted');
     expect(mocks.getTrialInfoBySession).toHaveBeenCalledTimes(2);
     expect(mocks.startTrial).not.toHaveBeenCalled();
+  });
+
+  // ── Flip de status -> 'conectado' DESACOPLADO da contagem de trial ──────────
+  // Regressão do bug: quando o número JÁ foi contado no trial, o hook retornava
+  // 'trial-already-counted' SEM flipar flow_clones.status — preso em 'desconectado'
+  // mesmo com a sessão WORKING, silenciando o monitor/alertas ao dono (Seven 7).
+  describe('flip de flow_clones.status -> conectado em TODO WORKING', () => {
+    it('trial JÁ contado (mesmo número/mesmo clone) => AINDA flipa status, sem recontar', async () => {
+      mocks.getTrialInfoBySession.mockResolvedValue({ ...TRIAL_CLONE, trial_status: 'active' });
+      mocks.findByPhoneHmac.mockResolvedValue({
+        id: 1,
+        phone_hmac: 'x',
+        phone_hint: '+55 31 •••••-••42',
+        status: 'consumed',
+        slot: TRIAL_CLONE.slot,
+        consumed_at: new Date(),
+        created_at: new Date(),
+        notes: null,
+      });
+
+      const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+      expect(r.status).toBe('ok:trial-already-counted');
+      // (a) flip de status acontece mesmo com trial já contado.
+      expect(mocks.markCloneConnectedBySlot).toHaveBeenCalledWith(TRIAL_CLONE.slot);
+      // (b) dedup do trial intacto: NÃO reconta.
+      expect(mocks.startTrial).not.toHaveBeenCalled();
+      expect(mocks.consumeAdditionalNumber).not.toHaveBeenCalled();
+      expect(mocks.blockTrial).not.toHaveBeenCalled();
+    });
+
+    it('regressão: trial NOVO (awaiting) => conta o trial E flipa status', async () => {
+      mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+      mocks.findByPhoneHmac.mockResolvedValue(null);
+      mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+
+      const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+      expect(r.status).toBe('ok:trial-started');
+      expect(mocks.startTrial).toHaveBeenCalled(); // (b) conta o trial
+      expect(mocks.markCloneConnectedBySlot).toHaveBeenCalledWith(TRIAL_CLONE.slot); // (a) flipa
+    });
+
+    it('clone trial_status=none (Cirilo/manuais) => flipa status mesmo saindo cedo do trial', async () => {
+      mocks.getTrialInfoBySession.mockResolvedValue({ ...TRIAL_CLONE, trial_status: 'none' });
+
+      const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+      expect(r.status).toBe('ignored:trial-none');
+      expect(mocks.markCloneConnectedBySlot).toHaveBeenCalledWith(TRIAL_CLONE.slot);
+      expect(mocks.startTrial).not.toHaveBeenCalled();
+    });
+
+    it('falha no flip de status NÃO quebra o pareamento (fail-safe)', async () => {
+      mocks.getTrialInfoBySession.mockResolvedValue(TRIAL_CLONE);
+      mocks.findByPhoneHmac.mockResolvedValue(null);
+      mocks.startTrial.mockResolvedValue({ nextDueDate: '2026-06-21' });
+      mocks.markCloneConnectedBySlot.mockRejectedValue(new Error('db hiccup'));
+
+      const r = await handleSessionStatusEvent(statusBody('WORKING', '5531999998842@c.us'), OPTS);
+
+      // O pareamento conclui normalmente apesar da falha do flip.
+      expect(r.status).toBe('ok:trial-started');
+      expect(mocks.startTrial).toHaveBeenCalled();
+    });
+
+    it('evento não-WORKING não flipa status', async () => {
+      const r = await handleSessionStatusEvent(statusBody('SCAN_QR_CODE'), OPTS);
+      expect(r.status).toBe('ignored:session-status');
+      expect(mocks.markCloneConnectedBySlot).not.toHaveBeenCalled();
+    });
   });
 });
