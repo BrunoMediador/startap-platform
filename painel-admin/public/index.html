@@ -2584,6 +2584,9 @@ const ICONS = {
   'volume-2':       '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>',
   'bell':           '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   'send':           '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+  'user':           '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  'eye':            '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>',
+  'eye-off':        '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
 };
 
 /* ── icon() helper ──────────────────────────────────────────────── */
@@ -8014,7 +8017,7 @@ async function _renderPauseTab(container, slot) {
  *  opts.reloadFn     — função sem argumentos para recarregar a aba
  * ================================================================ */
 function _renderGcalTab(opts) {
-  const { baseUrl, entityLabel, container, reloadFn, isEstabelecimento } = opts;
+  const { baseUrl, entityLabel, container, reloadFn, isEstabelecimento, cloneId } = opts;
 
   // Estabelecimento NÃO usa a agenda do nível do clone (flow_clones.gcal_*).
   // O bot de estabelecimento agenda nas agendas dos COLABORADORES
@@ -8132,8 +8135,127 @@ function _renderGcalTab(opts) {
     // A SA do clone é compartilhada por todos os colaboradores (1 robô, N agendas).
     // Sem ela gravada, getGcalsForSlot retorna [] e o bot não agenda em ninguém.
     // Aqui o calendarId do nível do clone NÃO é pedido — cada colab tem o seu.
-    if (isEstabelecimento) { _renderEstabelecimentoView(data); return; }
+    if (isEstabelecimento) { _renderEstabelecimentoView(data); _renderGoogleAccountCard(); return; }
     render(data);
+    _renderGoogleAccountCard();
+  }
+
+  // ── Card "Conta Google do cliente" (login do Google Agenda) ────────────────
+  // Só para CLONE (cloneId presente); a matriz não tem conta de cliente.
+  // É a conta Google PESSOAL do cliente (e-mail+senha) — separada da Service
+  // Account (o "robô" gcal_* acima). O operador cadastra aqui pra depois o
+  // cliente ver/usar no portal. A senha vem mascarada até o operador revelar.
+  function _renderGoogleAccountCard() {
+    if (!cloneId) return;
+    const card = document.createElement('div');
+    card.id = 'google-account-card';
+    card.style.cssText = 'margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)';
+    card.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:.875rem">
+        <div>
+          <div style="font-weight:600;display:flex;gap:.5rem;align-items:center">${icon('user', 16)} Conta Google do cliente</div>
+          <p class="muted" style="margin:.25rem 0 0;font-size:.8125rem;line-height:1.5">E-mail e senha da conta Google <strong>do próprio cliente</strong> (pra ele logar no Google Agenda). É <strong>diferente</strong> do robô (Service Account) acima. Fica salvo cifrado; o cliente vê depois no portal.</p>
+        </div>
+        <div class="field">
+          <label for="ga-email">E-mail Google</label>
+          <input type="email" id="ga-email" placeholder="ex: agenda.cliente@gmail.com" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="ga-password">Senha Google</label>
+          <div style="display:flex;gap:.5rem;align-items:center">
+            <input type="password" id="ga-password" placeholder="••••••••" autocomplete="new-password" style="flex:1" />
+            <button type="button" class="btn btn--sm btn--ghost btn--icon" id="ga-toggle" aria-label="Mostrar/ocultar senha" title="Mostrar/ocultar">${icon('eye', 14)}</button>
+            <button type="button" class="btn btn--sm btn--ghost" id="ga-copy">${icon('copy', 13)} Copiar senha</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:.625rem;flex-wrap:wrap">
+          <button type="button" class="btn btn--primary" id="ga-save">${icon('save', 14)} Salvar conta Google</button>
+          <button type="button" class="btn btn--ghost" id="ga-delete" style="color:var(--danger);display:none">${icon('trash-2', 13)} Remover</button>
+        </div>
+        <div id="ga-meta" class="muted" style="font-size:.75rem"></div>
+      </div>`;
+    container.appendChild(card);
+
+    const emailInput = card.querySelector('#ga-email');
+    const pwInput = card.querySelector('#ga-password');
+    const toggleBtn = card.querySelector('#ga-toggle');
+    const copyBtn = card.querySelector('#ga-copy');
+    const saveBtn = card.querySelector('#ga-save');
+    const deleteBtn = card.querySelector('#ga-delete');
+    const metaEl = card.querySelector('#ga-meta');
+
+    // Mostrar/ocultar senha.
+    toggleBtn.addEventListener('click', () => {
+      const reveal = pwInput.type === 'password';
+      pwInput.type = reveal ? 'text' : 'password';
+      toggleBtn.innerHTML = icon(reveal ? 'eye-off' : 'eye', 14);
+    });
+
+    // Copiar senha (padrão navigator.clipboard já usado no painel).
+    copyBtn.addEventListener('click', async () => {
+      if (!pwInput.value) { toast('Não há senha pra copiar.', 'warning'); return; }
+      try { await navigator.clipboard.writeText(pwInput.value); toast('Senha copiada!', 'success'); }
+      catch { toast('Não foi possível copiar — selecione e copie manualmente.', 'warning'); }
+    });
+
+    // Salvar (PUT).
+    saveBtn.addEventListener('click', async () => {
+      const email = (emailInput.value || '').trim();
+      const password = pwInput.value || '';
+      if (!email) { toast('Informe o e-mail Google.', 'warning'); return; }
+      if (!password) { toast('Informe a senha Google.', 'warning'); return; }
+      saveBtn.disabled = true;
+      try {
+        await api(`/api/clones/${cloneId}/google-account`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        toast('Conta Google do cliente salva!', 'success');
+        deleteBtn.style.display = '';
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    // Remover (DELETE).
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('Remover a conta Google cadastrada para este cliente?')) return;
+      deleteBtn.disabled = true;
+      try {
+        await api(`/api/clones/${cloneId}/google-account`, { method: 'DELETE' });
+        toast('Conta Google removida.', 'success');
+        emailInput.value = '';
+        pwInput.value = '';
+        pwInput.type = 'password';
+        toggleBtn.innerHTML = icon('eye', 14);
+        deleteBtn.style.display = 'none';
+        metaEl.textContent = '';
+      } catch (err) {
+        toast('Erro: ' + err.message, 'danger');
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+
+    // Pré-preenche no load (senha mascarada: vem em claro mas o input nasce type=password).
+    (async () => {
+      try {
+        const acc = await api(`/api/clones/${cloneId}/google-account`);
+        if (acc.email) emailInput.value = acc.email;
+        if (acc.password) {
+          pwInput.value = acc.password;
+          deleteBtn.style.display = '';
+        }
+        if (acc.updated_at) {
+          metaEl.textContent = `Atualizado em ${new Date(acc.updated_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
+        }
+      } catch (_) {
+        // Conta opcional — falha no GET não bloqueia a aba (ex.: migration ainda não aplicada).
+      }
+    })();
   }
 
   function _gcalInstructionsHtml() {
@@ -9995,6 +10117,7 @@ function loadCloneConfigTab(tab, clone) {
       container: content,
       reloadFn: null,
       isEstabelecimento: clone.product_type === 'estabelecimento',
+      cloneId: clone.id,
     });
   } else if (tab === 'pausa') {
     /* ── Palavras-chave de pausa/retomada do clone ── */
