@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/cn';
+import { getOverlayPortalTarget } from '@/lib/overlay-portal';
 /**
  * Overlay base para Sheet (bottom, mobile) e Modal (centralizado).
  * - trap de foco simples (Tab cicla dentro do dialog),
@@ -8,9 +9,15 @@ import { cn } from '@/lib/cn';
  * - foco inicial no primeiro foco util; foco volta ao gatilho ao fechar,
  * - aria-modal + role=dialog. Anima entrada (180ms).
  *
- * Sem portal de lib externa: renderiza inline com position fixed cobrindo a tela.
+ * Portala pro document.body (sem lib externa, via createPortal). Isso garante que o
+ * `position: fixed` ancore SEMPRE na viewport e nunca num ancestral transformado.
+ * (Ex.: o wrapper `.stagger` na Início retém `transform: translateY(0)` por causa do
+ * `animation-fill-mode: forwards`, virando containing block do fixed e cortando o sheet
+ * quando a página está rolada.) Teleportar pro <body> tira o overlay de qualquer pai
+ * com transform, resolvendo o clipping em Início, /agenda e estabelecimento de uma vez.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface OverlayProps {
   open: boolean;
@@ -43,6 +50,11 @@ export function Overlay({
 }: OverlayProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  // SSR/hydration guard: createPortal precisa de document.body (só existe no client).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Guarda o gatilho ao abrir e devolve o foco ao fechar.
   useEffect(() => {
@@ -95,9 +107,12 @@ export function Overlay({
     [onClose],
   );
 
-  if (!open) return null;
+  const portalTarget = getOverlayPortalTarget(
+    typeof document === 'undefined' ? undefined : document,
+  );
+  if (!open || !mounted || !portalTarget) return null;
 
-  return (
+  return createPortal(
     // biome-ignore lint/a11y/useKeyWithClickEvents: overlay de fundo; o conteudo trata teclado e Esc fecha
     <div
       className={cn(
@@ -144,6 +159,7 @@ export function Overlay({
         )}
         {children}
       </div>
-    </div>
+    </div>,
+    portalTarget,
   );
 }
