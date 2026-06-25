@@ -115,6 +115,136 @@ export function meIdToDigits(raw: string): string | null {
 }
 
 /**
+ * DDDs BR oficiais (Anatel). Whitelist usada por ensureDddBr para NÃO inferir
+ * DDI 55 em cima de número ambíguo/estrangeiro. Lista fechada — só códigos reais.
+ */
+const BR_DDD = new Set<string>([
+  // SP
+  '11',
+  '12',
+  '13',
+  '14',
+  '15',
+  '16',
+  '17',
+  '18',
+  '19',
+  // RJ/ES
+  '21',
+  '22',
+  '24',
+  '27',
+  '28',
+  // MG
+  '31',
+  '32',
+  '33',
+  '34',
+  '35',
+  '37',
+  '38',
+  // PR/SC
+  '41',
+  '42',
+  '43',
+  '44',
+  '45',
+  '46',
+  '47',
+  '48',
+  '49',
+  // RS
+  '51',
+  '53',
+  '54',
+  '55',
+  // DF/GO/TO/MT/MS/AC/RO
+  '61',
+  '62',
+  '63',
+  '64',
+  '65',
+  '66',
+  '67',
+  '68',
+  '69',
+  // BA/SE
+  '71',
+  '73',
+  '74',
+  '75',
+  '77',
+  '79',
+  // PE/AL/PB/RN/CE/PI
+  '81',
+  '82',
+  '83',
+  '84',
+  '85',
+  '86',
+  '87',
+  '88',
+  '89',
+  // PA/AM/RR/AP/MA
+  '91',
+  '92',
+  '93',
+  '94',
+  '95',
+  '96',
+  '97',
+  '98',
+  '99',
+]);
+
+/**
+ * Garante DDI 55 num telefone BR de forma CONSERVADORA para uso como destino de
+ * pareamento/envio WAHA. NUNCA adiciona nem remove o 9º dígito móvel — ao contrário
+ * de canonicalE164 (que REMOVE o 9 p/ a chave de identidade do trial). Preserva
+ * exatamente o número que veio; só decide se prefixa o DDI 55.
+ *
+ * Motivação: flow_clones.cliente_telefone tem formatos inconsistentes. O request-code
+ * do WAHA recebe o número CRU; sem o DDI 55 (ex.: dragon "3599247411", real
+ * "553599247411") o pareamento FALHA. Os pagantes têm 13 díg COM o 9
+ * (Cirilo 5511979630828, Samuel 5535991746797) e NÃO podem ser tocados.
+ *
+ * Regras (reusa a limpeza de envelope do meIdToDigits — corta ":device" e "@dominio",
+ * tira "+"/não-dígitos e o tronco "0" à esquerda):
+ *  - 12-13 dígitos JÁ começando com '55' → retorna como está (não toca no 9).
+ *  - 10-11 dígitos SEM '55' (nacional sem DDI) → valida o DDD e prefixa '55'.
+ *  - Em ambos os casos os 2 dígitos após o '55' (o DDD) precisam estar na whitelist
+ *    BR oficial; fora dela → null (não adivinha).
+ *  - Qualquer outro tamanho (JID de grupo de 18 díg, prefixo estrangeiro, curto/vazio)
+ *    → null. O chamador trata null como "telefone inválido" (não tenta parear com lixo).
+ *
+ * @returns dígitos COM DDI 55 (ex.: "553599247411") ou null se inválido/ambíguo.
+ */
+export function ensureDddBr(raw: string): string | null {
+  // Reusa a limpeza de envelope/tronco do meIdToDigits (corta @, :, +, 0 à esquerda).
+  const digits = meIdToDigits(raw);
+  if (!digits) return null;
+
+  // 10-11 dígitos sem DDI = número nacional (DDD + 8/9). Valida o DDD e prefixa 55.
+  if (digits.length === 10 || digits.length === 11) {
+    const ddd = digits.slice(0, 2);
+    if (!BR_DDD.has(ddd)) return null;
+    return `55${digits}`;
+  }
+
+  // 12-13 dígitos COM DDI 55 = já tem DDI. Valida o DDD (após o 55) e devolve intacto
+  // (NÃO toca no 9 — preserva pagantes de 13 díg e dragon de 12).
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
+    const ddd = digits.slice(2, 4);
+    if (!BR_DDD.has(ddd)) return null;
+    return digits;
+  }
+
+  // Qualquer outro caso (JID de grupo 18 díg, estrangeiro, 11 díg começando com 55
+  // que daria DDD inválido, etc.) → não adivinha.
+  return null;
+}
+
+/**
  * Hint mascarado para suporte/ops (LGPD — doc 020): "+55 31 •••••-••42".
  * NUNCA loga/grava o número completo; só DDD + 2 últimos dígitos.
  */

@@ -22,6 +22,9 @@
  */
 import { createHash } from 'node:crypto';
 import { logger } from '@startap/core/logger';
+// Subpath /phone (não a raiz) p/ não arrastar crypto.ts no load. Defesa em profundidade:
+// normaliza o DDI do dono antes do chatId — alert_owner_phone pode ter vindo cru.
+import { ensureDddBr } from '@startap/core/phone';
 import { alerts, flowClones } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
@@ -137,6 +140,17 @@ export async function sendClientCancellationAlert(input: {
       log.warn({ slot }, 'client-alert: clone sem alert_owner_phone — não há destino');
       return { ok: true, escalado: false, reason: 'no_owner' };
     }
+    // Defesa em profundidade: garante o DDI 55 do dono (conservador, NÃO toca no 9)
+    // antes de virar chatId. Se o número for irrecuperável (lixo/ambíguo), NÃO envia
+    // pra destino inválido — degrada gracioso (LGPD: só hint no log, nunca o número).
+    const ownerPhone = ensureDddBr(owner.phone);
+    if (!ownerPhone) {
+      log.warn(
+        { slot, ownerHint: phoneHint(owner.phone) },
+        'client-alert: alert_owner_phone não normalizável (DDI/DDD inválido) — alerta não enviado',
+      );
+      return { ok: true, escalado: false, reason: 'no_owner' };
+    }
 
     // Anti-flood por (slot, telefone do cliente).
     const allowed = await reserveCooldown(
@@ -172,7 +186,7 @@ export async function sendClientCancellationAlert(input: {
     await Promise.race([
       waha.sendText({
         sessao,
-        chatId: toChatId(owner.phone),
+        chatId: toChatId(ownerPhone),
         texto,
         typing: true,
         delayMs: ALERT_TYPING_DELAY_MS,

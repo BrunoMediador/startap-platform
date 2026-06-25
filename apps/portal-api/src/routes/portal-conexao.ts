@@ -26,6 +26,9 @@
  */
 import rateLimit from '@fastify/rate-limit';
 import { logger } from '@startap/core/logger';
+// Importa do subpath /phone (não da raiz @startap/core) para NÃO arrastar crypto.ts,
+// que valida GCAL_ENCRYPTION_KEY no load e quebraria o boot/teste sem a env.
+import { ensureDddBr } from '@startap/core/phone';
 import { flowClones } from '@startap/db';
 import { provisioning, waha } from '@startap/integrations';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -160,18 +163,27 @@ async function readWahaStatus(session: string | null, slot: string): Promise<str
   }
 }
 
-/** Resolve o clone do tenant e seus campos derivados (sessão + número mascarado). */
+/** Resolve o clone do tenant e seus campos derivados (sessão + número mascarado).
+ *
+ * O número de flow_clones.cliente_telefone tem formatos inconsistentes (alguns sem o
+ * DDI 55). ensureDddBr garante o DDI de forma CONSERVADORA (prefixa 55 em nacional sem
+ * DDI; NÃO toca no 9º dígito — preserva pagantes) ANTES de virar destino do request-code
+ * do WAHA. Se o número não for normalizável (lixo/ambíguo) → phoneDigits null e o
+ * has_registered_phone reflete isso; o codigo retorna 422 telefone_invalido. */
 async function resolveClone(tenant: TenantContext) {
   const clone = await flowClones.getCloneBySlot(tenant.slot);
   const session = clone?.waha_sessao ?? null;
   const rawPhone = clone?.cliente_telefone ?? null;
-  const phoneDigits = rawPhone ? rawPhone.replace(/\D/g, '') : '';
-  const hasPhone = phoneDigits.length >= 8;
+  // Normaliza o DDI antes de qualquer uso (request-code + flags do GET).
+  const phoneDigits = rawPhone ? ensureDddBr(rawPhone) : null;
   return {
     clone,
     session,
-    phoneDigits: hasPhone ? phoneDigits : null,
-    phoneMasked: hasPhone ? maskPhone(phoneDigits) : null,
+    phoneDigits,
+    phoneMasked: phoneDigits ? maskPhone(phoneDigits) : null,
+    // Diferencia "nunca cadastrou" de "cadastrou número que não normaliza" — o
+    // codigo escolhe 422 telefone_nao_cadastrado vs telefone_invalido.
+    hasRawPhone: Boolean(rawPhone && rawPhone.replace(/\D/g, '').length >= 8),
   };
 }
 
@@ -337,11 +349,15 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       if (!config.PORTAL_RECONEXAO_WAHA) return featureDisabled(reply);
       const tenant = requireTenant(req);
-      const { session, phoneDigits, phoneMasked } = await resolveClone(tenant);
+      const { session, phoneDigits, phoneMasked, hasRawPhone } = await resolveClone(tenant);
 
-      // Número vem SEMPRE de flow_clones.cliente_telefone (nunca de input). Null -> 422.
+      // Número vem SEMPRE de flow_clones.cliente_telefone (nunca de input). Após
+      // ensureDddBr, null pode ser "nunca cadastrou" OU "cadastrou número inválido"
+      // (sem DDI recuperável / DDD inexistente). Não tenta parear com lixo.
       if (!phoneDigits || !phoneMasked) {
-        return reply.code(422).send({ error: 'telefone_nao_cadastrado' });
+        return reply
+          .code(422)
+          .send({ error: hasRawPhone ? 'telefone_invalido' : 'telefone_nao_cadastrado' });
       }
       if (!session) {
         return reply.code(503).send({ error: 'waha_indisponivel' });

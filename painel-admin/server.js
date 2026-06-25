@@ -159,6 +159,53 @@ function decryptGcalCredentials(stored) {
   }
 }
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── DDI BR conservador — espelho de packages/core/src/phone.ts:ensureDddBr ───
+// MANTER 1:1 com @startap/core ensureDddBr (painel é JS puro, sem build-time dep
+// do core — mesmo padrão do espelho de cripto acima). O painel é o PIOR ofensor:
+// gravava cliente_telefone CRU (ex.: dragon "3599247411" sem o DDI 55), e o
+// request-code do WAHA falha sem o 55. Garante o DDI ANTES do INSERT/UPDATE, de
+// forma CONSERVADORA: prefixa 55 em nacional sem DDI; NUNCA adiciona/remove o 9º
+// dígito (preserva pagantes de 13 díg: Cirilo/Samuel). Número irrecuperável → null
+// → o handler responde erro de validação (não grava lixo).
+const _BR_DDD = new Set([
+  '11', '12', '13', '14', '15', '16', '17', '18', '19',
+  '21', '22', '24', '27', '28',
+  '31', '32', '33', '34', '35', '37', '38',
+  '41', '42', '43', '44', '45', '46', '47', '48', '49',
+  '51', '53', '54', '55',
+  '61', '62', '63', '64', '65', '66', '67', '68', '69',
+  '71', '73', '74', '75', '77', '79',
+  '81', '82', '83', '84', '85', '86', '87', '88', '89',
+  '91', '92', '93', '94', '95', '96', '97', '98', '99',
+]);
+
+// Espelho de meIdToDigits: corta envelope (@dominio / :device), tira "+"/não-dígitos
+// e o tronco "0" à esquerda. Retorna dígitos puros (>= 8) ou null.
+function _meIdToDigits(raw) {
+  if (!raw) return null;
+  const base = String(raw).split('@')[0].split(':')[0];
+  const digits = base.replace(/\D/g, '').replace(/^0+/, '');
+  return digits.length >= 8 ? digits : null;
+}
+
+// Espelho de ensureDddBr. Retorna dígitos COM DDI 55 ou null se inválido/ambíguo.
+function ensureDddBr(raw) {
+  const digits = _meIdToDigits(raw);
+  if (!digits) return null;
+  if (digits.length === 10 || digits.length === 11) {
+    const ddd = digits.slice(0, 2);
+    if (!_BR_DDD.has(ddd)) return null;
+    return `55${digits}`;
+  }
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) {
+    const ddd = digits.slice(2, 4);
+    if (!_BR_DDD.has(ddd)) return null;
+    return digits;
+  }
+  return null;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 const TS_API_URL = process.env.TS_API_URL || 'http://startap-api:3040';
 const TS_WEBHOOK_URL = process.env.TS_WEBHOOK_URL || `${TS_API_URL}/webhooks/waha`;
 
@@ -3323,6 +3370,15 @@ app.post('/api/clones', async (req, res) => {
   }
   const erroTipoConta = validarTipoConta(product_type, seat_cap);
   if (erroTipoConta) return res.status(400).json({ error: erroTipoConta });
+  // Normaliza o DDI do telefone ANTES de gravar (painel grava cru = pior ofensor).
+  // Se o operador digitou algo, exige que normalize (DDI 55 + DDD BR); senão null.
+  let clienteTelefoneFinal = null;
+  if (cliente_telefone !== undefined && cliente_telefone !== null && String(cliente_telefone).trim() !== '') {
+    clienteTelefoneFinal = ensureDddBr(cliente_telefone);
+    if (!clienteTelefoneFinal) {
+      return res.status(400).json({ error: 'cliente_telefone inválido (informe DDD + número com DDI BR)' });
+    }
+  }
   // Normaliza: default 'individual'; seat_cap só faz sentido p/ estabelecimento.
   const productTypeFinal =
     product_type !== undefined ? String(product_type) : 'individual';
@@ -3426,7 +3482,7 @@ app.post('/api/clones', async (req, res) => {
         matriz_slot,
         display_name,
         cliente_nome ?? null,
-        cliente_telefone ?? null,
+        clienteTelefoneFinal,
         JSON.stringify(pers),
         defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
@@ -3706,8 +3762,17 @@ app.patch('/api/clones/:id', async (req, res) => {
     vals.push(cliente_nome);
   }
   if (cliente_telefone !== undefined) {
+    // Normaliza o DDI antes de gravar (mesma regra do POST). Vazio/null = limpar o
+    // campo (permitido); valor preenchido que NÃO normaliza = 400 (não grava lixo).
+    let telPatch = null;
+    if (cliente_telefone !== null && String(cliente_telefone).trim() !== '') {
+      telPatch = ensureDddBr(cliente_telefone);
+      if (!telPatch) {
+        return res.status(400).json({ error: 'cliente_telefone inválido (informe DDD + número com DDI BR)' });
+      }
+    }
     sets.push(`cliente_telefone = $${i++}`);
-    vals.push(cliente_telefone);
+    vals.push(telPatch);
   }
   if (personalizacao !== undefined) {
     sets.push(`personalizacao = $${i++}::jsonb`);
@@ -4024,6 +4089,15 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
   if (!sessao_name || typeof sessao_name !== 'string') {
     return res.status(400).json({ error: 'sessao_name obrigatório' });
   }
+  // Normaliza o DDI do telefone (se vier) ANTES de gravar — mesma regra do POST/PATCH.
+  // Valor preenchido que não normaliza = 400 (não grava destino de pareamento inválido).
+  let telefoneFinal = null;
+  if (telefone && typeof telefone === 'string' && telefone.trim() !== '') {
+    telefoneFinal = ensureDddBr(telefone);
+    if (!telefoneFinal) {
+      return res.status(400).json({ error: 'telefone inválido (informe DDD + número com DDI BR)' });
+    }
+  }
   try {
     const r = await pool.query(
       `UPDATE flow_clones SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW()
@@ -4044,10 +4118,10 @@ app.post('/api/clones/:id/bind-session', async (req, res) => {
 
     // telefone é apenas informativo: atualiza cliente_telefone no clone, sem tocar routing_clientes.
     // Roteamento de clones é feito por sessão WAHA (waha_sessao), não por telefone do cliente final.
-    if (telefone && typeof telefone === 'string') {
+    if (telefoneFinal) {
       await pool.query(
         `UPDATE flow_clones SET cliente_telefone = $1, updated_at = NOW() WHERE id = $2`,
-        [telefone, id],
+        [telefoneFinal, id],
       );
     }
 
