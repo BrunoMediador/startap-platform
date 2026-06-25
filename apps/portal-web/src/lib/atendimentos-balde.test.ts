@@ -12,6 +12,7 @@ import {
   centsToInput,
   clienteLabel,
   computeComissaoFromRows,
+  computeLucroCents,
   draftFromRow,
   filtrarAtendimentos,
   formaPagamentoLabel,
@@ -360,5 +361,32 @@ describe('computeComissaoFromRows (live-compute, sob filtro)', () => {
     const res = computeComissaoFromRows(rows, []);
     expect(res.por_profissional).toHaveLength(0);
     expect(res.total_cents).toBe(0);
+  });
+});
+
+describe('computeLucroCents (faturamento − comissão)', () => {
+  it('subtrai a comissão do faturamento', () => {
+    expect(computeLucroCents(10000, 3000)).toBe(7000);
+  });
+
+  it('lucro = faturamento quando não há comissão (sem profissional/pct 0)', () => {
+    expect(computeLucroCents(8000, 0)).toBe(8000);
+  });
+
+  it('casa com o pipeline filtrado: total − comissão do MESMO array', () => {
+    // 2 linhas do mesmo balde filtrado: Bruno 100,00 (50%) + linha SOLO 40,00.
+    const rows = [
+      row({ id: 1, valor_cents: 10000, colaborador_id: 1, profissional_nome: 'Bruno' }),
+      row({ id: 2, valor_cents: 4000, colaborador_id: null }),
+    ];
+    const total = somarTotalCents(rows); // 14000
+    const comissao = computeComissaoFromRows(rows, [{ id: 1, nome: 'Bruno', comissao_pct: 50 }]);
+    expect(total).toBe(14000);
+    expect(comissao.total_cents).toBe(5000); // 10000 × 50%
+    expect(computeLucroCents(total, comissao.total_cents)).toBe(9000);
+  });
+
+  it('pode ficar negativo se a comissão superar o faturado (não clampa)', () => {
+    expect(computeLucroCents(1000, 1500)).toBe(-500);
   });
 });

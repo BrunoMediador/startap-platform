@@ -413,3 +413,15 @@ export function computeComissaoFromRows(
   por_profissional.sort((a, b) => b.comissao_cents - a.comissao_cents);
   return { total_cents: total, por_profissional };
 }
+
+/**
+ * Lucro do balde = faturamento (total líquido) − comissão, em centavos. Insight
+ * 100% derivado dos mesmos números já exibidos (somarTotalCents + comissão
+ * live-compute), sob o MESMO recorte (balde Previsão|Faturado + filtros). Pode ficar
+ * negativo se a comissão superar o faturado (ex.: filtro deixou só linhas SOLO de
+ * valor 0 mas a comissão herda 0 — na prática raro); não clampa pra não esconder o
+ * sinal. Pura/testável. SÓ usado no ramo estabelecimento (onde há comissão).
+ */
+export function computeLucroCents(totalCents: number, comissaoCents: number): number {
+  return totalCents - comissaoCents;
+}
