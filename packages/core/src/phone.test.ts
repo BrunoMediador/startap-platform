@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canonicalE164,
+  ensureDddBr,
   extractPhone,
   isGroupChat,
   meIdToDigits,
@@ -193,6 +194,54 @@ describe('meIdToDigits — autofill do alert_owner_phone (preserva o 9, NÃO can
     expect(meIdToDigits('')).toBeNull();
     expect(meIdToDigits('abc')).toBeNull();
     expect(meIdToDigits('123')).toBeNull();
+  });
+});
+
+describe('ensureDddBr — DDI 55 conservador p/ pareamento (NÃO toca no 9)', () => {
+  it('prefixa 55 em nacional de 10/11 díg SEM DDI (dragon: 3599247411 -> 553599247411)', () => {
+    expect(ensureDddBr('3599247411')).toBe('553599247411');
+  });
+
+  it('NÃO toca em pagante de 13 díg COM o 9 (Cirilo 5511979630828 inalterado)', () => {
+    expect(ensureDddBr('5511979630828')).toBe('5511979630828');
+  });
+
+  it('NÃO toca em pagante de 13 díg COM o 9 (Samuel 5535991746797 inalterado)', () => {
+    expect(ensureDddBr('5535991746797')).toBe('5535991746797');
+  });
+
+  it('NÃO toca em 12 díg SEM o 9 com DDI (Seven7 556599453860 inalterado)', () => {
+    expect(ensureDddBr('556599453860')).toBe('556599453860');
+  });
+
+  it('mantém qualquer número que já começa com 55 e tem 12-13 díg (não adiciona 9)', () => {
+    expect(ensureDddBr('553599247411')).toBe('553599247411');
+  });
+
+  it('limpa envelope/máscara antes (mesma limpeza do meIdToDigits)', () => {
+    expect(ensureDddBr('(11) 97963-0828')).toBe('5511979630828');
+    expect(ensureDddBr('+556599453860@c.us')).toBe('556599453860');
+    expect(ensureDddBr('031999998842')).toBe('5531999998842');
+  });
+
+  it('JID de grupo (18 díg, 120363...) -> null (não adivinha DDI)', () => {
+    expect(ensureDddBr('120363141126402430')).toBeNull();
+  });
+
+  it('prefixo/comprimento estrangeiro inválido -> null', () => {
+    // 13 díg começando com 44 (UK) não bate 55 nem é nacional de 10/11 -> null.
+    expect(ensureDddBr('4479111234567')).toBeNull();
+    // 12 díg com DDI 55 mas DDD inexistente (20) -> null.
+    expect(ensureDddBr('552012345678')).toBeNull();
+    // 10 díg nacional com DDD inexistente (00) -> null.
+    expect(ensureDddBr('0012345678')).toBeNull();
+  });
+
+  it('vazio/curto/irrecuperável -> null', () => {
+    expect(ensureDddBr('')).toBeNull();
+    expect(ensureDddBr('abc')).toBeNull();
+    expect(ensureDddBr('123')).toBeNull();
+    expect(ensureDddBr('5535')).toBeNull();
   });
 });
 
