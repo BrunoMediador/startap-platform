@@ -86,10 +86,14 @@ export function AgendaClient({ data }: { data: AgendamentosResponse }) {
     <div
       ref={containerRef}
       className={cn(
-        // Tela-cheia: reserva o topo (notch/status bar) e a base (home indicator)
-        // pra os controles (Lista/Semana, Recolher, Novo) não caírem sob o recorte.
+        // Tela-cheia: reserva o topo (notch/status bar) e a base (home indicator).
+        // No mobile a base precisa reservar a ALTURA REAL DA BOTTOM-NAV
+        // (var(--nav-clearance) = nav + safe-area + respiro), senao as ultimas
+        // linhas/paginacao/acoes da lista caem ATRAS da nav (que e sticky z-30 e
+        // pinta depois no DOM) e ficam inalcancaveis. No desktop (md) a nav some
+        // -> basta o respiro do home indicator.
         expandido &&
-          'fixed inset-0 z-30 overflow-y-auto bg-bg px-5 pt-[calc(20px+env(safe-area-inset-top))] pb-[calc(20px+env(safe-area-inset-bottom))]',
+          'fixed inset-0 z-30 overflow-y-auto bg-bg px-5 pt-[calc(20px+env(safe-area-inset-top))] pb-[var(--nav-clearance)] md:pb-[calc(20px+env(safe-area-inset-bottom))]',
         expandido && 'mx-auto max-w-[1100px]',
       )}
     >

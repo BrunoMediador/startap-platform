@@ -169,6 +169,19 @@
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 300ms;
+
+  /* Altura REAL da bottom-nav mobile (sem safe-area). Fonte unica da verdade pra
+     as folgas de fundo (<main>, agenda em tela-cheia, toast) — antes cada uma
+     usava um magic-number diferente (96/20/88) e a agenda expandida ficava curta,
+     escondendo as ultimas linhas/acoes atras da nav (regressao do #373: o
+     viewportFit:'cover' esticou a nav ~34px e expos o deficit).
+     Composicao (bottom-nav.tsx): pt-[9px] + conteudo do link (icon 22 + py-1 8 +
+     gap-1 4 + label 10.5 ~= 48px, respeitando o min-h-11=44px) + pb-[9px] base.
+     A safe-area (home indicator) entra a parte, somada onde a folga e aplicada. */
+  --nav-h: calc(9px + 48px + 9px); /* = 66px (altura base, pre-safe-area) */
+  /* Folga de fundo padrao: altura da nav + safe-area + respiro. Use em qualquer
+     superficie cujo conteudo do fim precise ficar acima da nav no mobile. */
+  --nav-clearance: calc(var(--nav-h) + env(safe-area-inset-bottom) + 16px);
 }
 
 * {

@@ -59,7 +59,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={api}>
       {children}
       <div
-        className="pointer-events-none fixed inset-x-0 bottom-[calc(88px+env(safe-area-inset-bottom))] z-50 flex flex-col items-center gap-2 px-5 md:bottom-6 md:left-auto md:right-6 md:items-end md:px-0"
+        // bottom mobile = var(--nav-clearance) (mesma altura real da nav que as
+        // demais superficies): o toast pousa ACIMA da bottom-nav, sem encostar
+        // na borda dela. Antes 88px < ~100px da nav -> sobrepunha levemente.
+        className="pointer-events-none fixed inset-x-0 bottom-[var(--nav-clearance)] z-50 flex flex-col items-center gap-2 px-5 md:bottom-6 md:left-auto md:right-6 md:items-end md:px-0"
         aria-live="polite"
       >
         {items.map((t) => (
