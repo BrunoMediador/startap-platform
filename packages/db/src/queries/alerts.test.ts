@@ -52,43 +52,56 @@ describe('getSenderSession — repoint do remetente (Missão 023 W3)', () => {
   });
 });
 
-describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup)', () => {
-  it('filtra SÓ clones conectados e NÃO awaiting, e adiciona a sessão remetente', async () => {
-    // 1ª query: clones monitorados. 2ª query (getSenderSession): waha_sessao remetente.
+describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vigia queda real)', () => {
+  it('vigia clones JÁ pareados (conectado/desconectado), NÃO awaiting, e adiciona o remetente', async () => {
+    // 1ª query: clones monitorados (agora retornam slot). 2ª query (getSenderSession): remetente.
     // Pós-repoint o remetente é a sessão dedicada 'ALERTAS' (sender_slot='alertas').
     mockQuery
       .mockResolvedValueOnce({
-        rows: [{ waha_sessao: 'cirilo_barbaershop', display_name: 'Barbearia do Cirilo' }],
+        rows: [
+          {
+            slot: 'clone_cirilo',
+            waha_sessao: 'cirilo_barbaershop',
+            display_name: 'Barbearia do Cirilo',
+          },
+        ],
       })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
     const sessions = await listMonitoredSessions('alertas');
 
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
-    // Só clones JÁ conectados (pareados) — pré-setup nunca entra.
-    expect(sql).toContain(`fc.status = 'conectado'`);
+    // FIX do bug (Seven 7): vigia clones que JÁ conectaram alguma vez (first_connected_at não
+    // nulo) e que estão em 'conectado' OU 'desconectado'. Antes era `status = 'conectado'` só —
+    // a sessão saía da lista no instante em que caía e o monitor nunca via a queda.
+    expect(sql).toContain('fc.first_connected_at IS NOT NULL');
+    expect(sql).toContain(`fc.status IN ('conectado', 'desconectado')`);
+    // ANTI-PRÉ-SETUP preservado: o filtro NÃO usa mais `status = 'conectado'` sozinho.
+    expect(sql).not.toContain(`fc.status = 'conectado'`);
     // Trials aguardando QR (FAILED esperado) jamais entram.
     expect(sql).toContain(`fc.trial_status <> 'awaiting'`);
     // Nunca seleciona sessão vazia/nula.
     expect(sql).toContain('fc.waha_sessao IS NOT NULL');
 
-    // Resultado: clone do Cirilo + a sessão remetente (label neutro, não "Lola").
+    // Resultado: clone do Cirilo (com slot p/ resolver o dono) + a sessão remetente (slot=null).
     expect(sessions).toEqual([
-      { sessao: 'cirilo_barbaershop', label: 'Barbearia do Cirilo' },
-      { sessao: 'ALERTAS', label: 'Sessão de alertas (remetente)' },
+      { sessao: 'cirilo_barbaershop', label: 'Barbearia do Cirilo', slot: 'clone_cirilo' },
+      { sessao: 'ALERTAS', label: 'Sessão de alertas (remetente)', slot: null },
     ]);
   });
 
   it('não duplica a sessão remetente se ela já for um clone monitorado', async () => {
     mockQuery
       .mockResolvedValueOnce({
-        rows: [{ waha_sessao: 'ALERTAS', display_name: 'Alertas' }],
+        rows: [{ slot: 'clone_alertas', waha_sessao: 'ALERTAS', display_name: 'Alertas' }],
       })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
     const sessions = await listMonitoredSessions('alertas');
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.sessao).toBe('ALERTAS');
+    // Quando o remetente JÁ é um clone monitorado, mantém o slot do clone (não vira null).
+    expect(sessions[0]?.slot).toBe('clone_alertas');
   });
 });
 

@@ -491,24 +491,39 @@ export async function setCloneStatus(id: number, status: CloneStatus): Promise<C
  * sessão-caída ao dono. Esta função separa a responsabilidade (a) "está conectado" da
  * (b) "contou o trial".
  *
- * SÓ toca a coluna `status` — NUNCA trial_status/cliente_telefone (sem regressão no
- * dedup/tracking do trial). Invalida o cache apenas quando muda de fato.
+ * SÓ toca `status` e `first_connected_at` — NUNCA trial_status/cliente_telefone (sem regressão
+ * no dedup/tracking do trial). Invalida o cache apenas quando muda de fato.
  *
- * @returns true se ESTA chamada flipou (estava != 'conectado'); false se já estava
- *          'conectado' ou o slot não é um clone (no-op idempotente).
+ * `first_connected_at` (migration 062): carimba NOW() na 1ª conexão e NUNCA sobrescreve
+ * (COALESCE preserva o valor já gravado). É o sinal durável de "este clone JÁ pareou alguma vez"
+ * que o monitor de sessões usa pra distinguir QUEDA REAL (alertar) de PRÉ-SETUP nunca-conectado
+ * (FAILED esperado, NÃO alertar) — ver alerts.listMonitoredSessions. Reconexões repetidas mantêm
+ * o carimbo original. NOTA: a UPDATE roda também quando o status já é 'conectado' MAS o carimbo
+ * está NULL (clone legado conectado ANTES da 062 sem backfill), pra preencher first_connected_at
+ * sem depender de backfill; o COALESCE garante no-op nessa coluna após a 1ª vez.
+ *
+ * @returns true se ESTA chamada flipou o STATUS (estava != 'conectado'); false se já estava
+ *          'conectado' (ainda que tenha carimbado first_connected_at agora) ou o slot não é um
+ *          clone (no-op idempotente). Contrato histórico preservado: o boolean reflete só a
+ *          mudança de status.
  */
 export async function markCloneConnectedBySlot(slot: string): Promise<boolean> {
-  const r = await query<{ slot: string }>(
+  const r = await query<{ slot: string; status_changed: boolean }>(
     `UPDATE flow_clones
-        SET status = 'conectado', updated_at = NOW()
+        SET status = 'conectado',
+            first_connected_at = COALESCE(first_connected_at, NOW()),
+            updated_at = NOW()
       WHERE slot = $1
-        AND status IS DISTINCT FROM 'conectado'
-      RETURNING slot`,
+        AND (status IS DISTINCT FROM 'conectado' OR first_connected_at IS NULL)
+      RETURNING slot, (status IS DISTINCT FROM 'conectado') AS status_changed`,
     [slot],
   );
-  const updated = (r.rowCount ?? 0) > 0;
-  if (updated) invalidateCloneCache({ slot });
-  return updated;
+  const row = r.rows[0];
+  // Linha afetada -> cache pode estar stale (status e/ou first_connected_at mudaram).
+  if (row) invalidateCloneCache({ slot });
+  // RETURNING avalia o predicado ANTES do SET (semântica do UPDATE) -> status_changed reflete o
+  // estado PRÉVIO, exatamente o que o contrato pede (true só quando o status realmente mudou).
+  return row?.status_changed === true;
 }
 
 /**
@@ -695,6 +710,62 @@ export async function getCloneAlertOwner(slot: string): Promise<CloneAlertOwner 
     phone: digits.length >= 8 ? digits : null,
     enabled: row.alert_owner_enabled !== false,
     displayName: row.display_name,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Auto-aviso de DESCONEXÃO ao próprio cliente (B2B) — destino + nome do negócio
+//
+// Reusa o MESMO contrato/precedência de getCloneAlertOwner (alert_owner_phone ->
+// cliente_telefone; toggle alert_owner_enabled), mas adiciona o nome do NEGÓCIO
+// (personalizacao->>'nome_negocio') pra montar a copy "o WhatsApp da {NOME} caiu".
+// SEPARADO de getCloneAlertOwner pra não inchar o caminho de cancelamento (W5) com
+// uma coluna jsonb a mais. A flag macro (CLIENT_DISCONNECT_ALERT_ENABLED) é do chamador.
+// ---------------------------------------------------------------------------
+
+export interface CloneDisconnectAlertTarget {
+  /** Telefone E.164 (só dígitos) do dono que RECEBE o aviso. null = sem destino -> não avisa. */
+  phone: string | null;
+  /** Toggle por-clone (alert_owner_enabled, default TRUE). false = opt-out -> não avisa. */
+  enabled: boolean;
+  /**
+   * Nome do negócio p/ a mensagem (personalizacao->>'nome_negocio'). null/vazio -> o chamador
+   * cai no fallback genérico ("seu atendimento"). NUNCA o display_name interno aqui (esse é nosso
+   * rótulo de gestão; o cliente reconhece o nome do negócio dele).
+   */
+  nomeNegocio: string | null;
+}
+
+/**
+ * Lê o destino do AUTO-AVISO DE DESCONEXÃO de um clone (mesma fonte de telefone do cancelamento
+ * escalado — migration 050 — + nome do negócio da personalizacao). Retorna null se o slot não
+ * for um clone. `enabled` reflete o opt-in por-clone; o gate macro de ambiente é do chamador.
+ * Telefone normalizado p/ dígitos, exige >=8 (senão phone=null -> não avisa).
+ */
+export async function getCloneDisconnectAlertTarget(
+  slot: string,
+): Promise<CloneDisconnectAlertTarget | null> {
+  const r = await query<{
+    alert_owner_phone: string | null;
+    cliente_telefone: string | null;
+    alert_owner_enabled: boolean | null;
+    nome_negocio: string | null;
+  }>(
+    `SELECT alert_owner_phone, cliente_telefone, alert_owner_enabled,
+            NULLIF(TRIM(personalizacao->>'nome_negocio'), '') AS nome_negocio
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+    [slot],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  // Mesma precedência do cancelamento escalado: alert_owner_phone -> cliente_telefone.
+  const ownerDigits = (row.alert_owner_phone ?? '').replace(/\D/g, '');
+  const fallbackDigits = (row.cliente_telefone ?? '').replace(/\D/g, '');
+  const digits = ownerDigits.length >= 8 ? ownerDigits : fallbackDigits;
+  return {
+    phone: digits.length >= 8 ? digits : null,
+    enabled: row.alert_owner_enabled !== false,
+    nomeNegocio: row.nome_negocio ?? null,
   };
 }
 

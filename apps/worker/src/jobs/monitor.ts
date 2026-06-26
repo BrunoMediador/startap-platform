@@ -43,6 +43,7 @@ import { alerts } from '@startap/db';
 import { pool } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
+import { notifyClientDisconnect } from './client-disconnect-notify.js';
 
 const log = logger.child({ job: 'monitor' });
 
@@ -93,6 +94,8 @@ export interface MonitorResult extends Record<string, unknown> {
   suppressed: number;
   /** falhas de envio (Lola caída etc.) — não derrubam o job. */
   sendErrors: number;
+  /** auto-avisos de desconexão ENVIADOS ao dono do clone (CLIENT_DISCONNECT_ALERT_ENABLED). */
+  clientNotified: number;
 }
 
 const EMPTY_RESULT: MonitorResult = {
@@ -102,6 +105,7 @@ const EMPTY_RESULT: MonitorResult = {
   sent: 0,
   suppressed: 0,
   sendErrors: 0,
+  clientNotified: 0,
 };
 
 /** Observação de um check num ciclo. */
@@ -117,6 +121,12 @@ interface CheckObservation {
   /** quantas observações `down` seguidas exige pra transicionar up→down.
    *  1 = sem debounce (pg:main); 2 = debounce de ~4 min (api:health, waha). */
   debounceThreshold: number;
+  /**
+   * slot do CLONE dono deste check (só checks waha:<sessao> de cliente). null pra checks de
+   * infra (api:health, pg:main) e pra sessão remetente ALERTAS — esses NUNCA disparam aviso ao
+   * "dono". Usado pra avisar o cliente quando a sessão DELE cai (up→down).
+   */
+  slot: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,6 +169,7 @@ async function observeWaha(senderSlot: string): Promise<CheckObservation[]> {
         obs: 'down' as const,
         detail: 'WAHA inacessível (GET /api/sessions falhou)',
         debounceThreshold: WAHA_DEBOUNCE,
+        slot: m.slot,
       };
     }
     const status = statusByName.get(m.sessao);
@@ -169,6 +180,7 @@ async function observeWaha(senderSlot: string): Promise<CheckObservation[]> {
       obs: up ? ('up' as const) : ('down' as const),
       detail: status ? `status ${status}` : 'sessão ausente na lista (404)',
       debounceThreshold: WAHA_DEBOUNCE,
+      slot: m.slot,
     };
   });
 }
@@ -186,6 +198,7 @@ async function observeHealth(): Promise<CheckObservation> {
         obs: 'down',
         detail: `HTTP ${res.status}`,
         debounceThreshold: HEALTH_DEBOUNCE,
+        slot: null,
       };
     }
     const body = (await res.json()) as { checks?: { db?: unknown; redis?: unknown } };
@@ -198,6 +211,7 @@ async function observeHealth(): Promise<CheckObservation> {
         obs: 'down',
         detail: `checks db=${String(db)} redis=${String(redis)}`,
         debounceThreshold: HEALTH_DEBOUNCE,
+        slot: null,
       };
     }
     return {
@@ -206,6 +220,7 @@ async function observeHealth(): Promise<CheckObservation> {
       obs: 'up',
       detail: 'ok',
       debounceThreshold: HEALTH_DEBOUNCE,
+      slot: null,
     };
   } catch (e) {
     return {
@@ -214,6 +229,7 @@ async function observeHealth(): Promise<CheckObservation> {
       obs: 'down',
       detail: e instanceof Error && e.name === 'TimeoutError' ? 'timeout' : 'inacessível',
       debounceThreshold: HEALTH_DEBOUNCE,
+      slot: null,
     };
   }
 }
@@ -235,6 +251,7 @@ async function observePg(): Promise<CheckObservation> {
         obs: 'up',
         detail: 'ok',
         debounceThreshold: NO_DEBOUNCE,
+        slot: null,
       };
     } finally {
       client.release();
@@ -246,6 +263,7 @@ async function observePg(): Promise<CheckObservation> {
       obs: 'down',
       detail: 'SELECT 1 falhou/timeout',
       debounceThreshold: NO_DEBOUNCE,
+      slot: null,
     };
   }
 }
@@ -334,14 +352,17 @@ function minutesSince(d: Date | null): number {
 /**
  * Aplica a transição de UM check e (talvez) enfileira uma mensagem. Toda a
  * persistência de estado acontece aqui (upsertState); o envio é delegado ao
- * `send` callback (que aplica o hard cap). Retorna se ficou DOWN no fim.
+ * `send` callback (que aplica o hard cap). Retorna se ficou DOWN no fim e se ESTE
+ * ciclo foi a transição up→down CONFIRMADA (`justWentDown`) — gatilho EXATO (1 vez
+ * por episódio) do auto-aviso ao dono do clone. Re-alertas down→down NÃO marcam
+ * justWentDown (o cooldown por-clone do aviso já protege, mas o sinal fica preciso).
  */
 async function applyTransition(
   obsItem: CheckObservation,
   prev: alerts.AlertStateRow | null,
   cooldownMin: number,
   send: (texto: string) => Promise<void>,
-): Promise<{ isDown: boolean }> {
+): Promise<{ isDown: boolean; justWentDown: boolean }> {
   const prevState: alerts.AlertState = prev?.state ?? 'up';
   const prevPending = prev?.pending_down_count ?? 0;
 
@@ -358,7 +379,7 @@ async function applyTransition(
         pendingDownCount: 0,
       });
       await send(`🟢 RECUPERADO: ${obsItem.label} voltou após ${mins} min.`);
-      return { isDown: false };
+      return { isDown: false, justWentDown: false };
     }
     // up → up: silêncio. Zera qualquer debounce pendente.
     if (prevPending !== 0 || !prev) {
@@ -371,7 +392,7 @@ async function applyTransition(
         pendingDownCount: 0,
       });
     }
-    return { isDown: false };
+    return { isDown: false, justWentDown: false };
   }
 
   // obs === 'down'
@@ -390,7 +411,7 @@ async function applyTransition(
           alertCount: prev?.alert_count ?? 0,
           pendingDownCount: pending,
         });
-        return { isDown: false };
+        return { isDown: false, justWentDown: false };
       }
     }
     // up → down (confirmado): alerta DOWN.
@@ -403,7 +424,8 @@ async function applyTransition(
       pendingDownCount: 0,
     });
     await send(`🔴 CAIU: ${obsItem.label} — ${obsItem.detail}.`);
-    return { isDown: true };
+    // Transição CONFIRMADA up→down: este é o instante exato pra avisar o dono do clone.
+    return { isDown: true, justWentDown: true };
   }
 
   // down → down: re-alerta só se passou o cooldown.
@@ -419,10 +441,10 @@ async function applyTransition(
       pendingDownCount: 0,
     });
     await send(`🔴 AINDA CAÍDO: ${obsItem.label} há ${downMins} min — ${obsItem.detail}.`);
-    return { isDown: true };
+    return { isDown: true, justWentDown: false };
   }
   // Dentro do cooldown: silêncio (estado já é down; nada a gravar).
-  return { isDown: true };
+  return { isDown: true, justWentDown: false };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -467,13 +489,24 @@ export async function runMonitor(): Promise<MonitorResult> {
         }
         await broadcast(senderSession, texto, recipients, result);
       };
-      const { isDown } = await applyTransition(
+      const { isDown, justWentDown } = await applyTransition(
         obsItem,
         stateByKey.get(obsItem.key) ?? null,
         cfg.cooldown_min,
         send,
       );
       if (isDown) result.down += 1;
+
+      // Auto-aviso de DESCONEXÃO ao DONO do clone (B2B) — ADICIONAL ao alerta interno acima
+      // (que NÃO é tocado). Dispara EXATAMENTE na transição up→down confirmada (justWentDown =
+      // 1 vez por episódio) e SÓ pra checks de CLONE (obsItem.slot != null — infra/remetente
+      // ficam de fora). Gate macro: CLIENT_DISCONNECT_ALERT_ENABLED. Opt-in por-clone, cooldown
+      // anti-flap e fail-safe vivem dentro de notifyClientDisconnect. Fire-and-forget: NUNCA
+      // derruba o monitor (já tem try/catch interno + este catch externo de rede).
+      if (justWentDown && obsItem.slot && config.CLIENT_DISCONNECT_ALERT_ENABLED) {
+        const r = await notifyClientDisconnect(obsItem.slot);
+        if (r.ok && r.sent) result.clientNotified += 1;
+      }
     } catch (e) {
       // Falha no processamento de UM check nunca derruba os demais.
       result.sendErrors += 1;
@@ -484,7 +517,7 @@ export async function runMonitor(): Promise<MonitorResult> {
     }
   }
 
-  if (result.sent > 0 || result.down > 0 || result.suppressed > 0) {
+  if (result.sent > 0 || result.down > 0 || result.suppressed > 0 || result.clientNotified > 0) {
     log.info({ ...result }, 'monitor cycle');
   }
   return result;
