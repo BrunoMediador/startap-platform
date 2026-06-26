@@ -35,6 +35,23 @@ const SLOT = 'teste_barbearia';
 const TZ = 'America/Sao_Paulo';
 
 /**
+ * Resultado da resolução do evento a remarcar (buildRemarcarTool). O caller injeta um
+ * resolver que encontra o agendamento DO PRÓPRIO cliente: individual = a agenda única do
+ * clone; estabelecimento = varre as agendas dos colaboradores e devolve a agenda DONA do
+ * evento + o colaborador (não move entre colaboradores). `ambiguous` = mais de um match
+ * (mesmo telefone+horário em agendas diferentes) -> pede ao cliente pra especificar.
+ */
+type RemarcarResolve =
+  | {
+      kind: 'found';
+      client: gcal.GoogleCalendarClient;
+      colaboradorId: number | null;
+      event: gcal.CalendarEvent;
+    }
+  | { kind: 'not_found' }
+  | { kind: 'ambiguous' };
+
+/**
  * SEED inicial — em runtime o prompt vem só do banco (bot_prompt).
  * Este template é referência para popular o banco em setup inicial; não é usado em execução.
  * Apenas persona + regras + fluxo + cartao. Dados do negocio, horarios,
@@ -107,7 +124,7 @@ export class TesteBarbeariaBot extends BotBase {
       description:
         'Use SOMENTE quando o cliente pedir explicitamente para CANCELAR/DESMARCAR um ' +
         'horario ja agendado e NAO quiser remarcar. NAO use para: remarcar/trocar de ' +
-        'horario (isso e novo agendamento via inserir_agendamento), confirmar presenca, ' +
+        'horario (isso e remarcar_agendamento, NUNCA inserir_agendamento), confirmar presenca, ' +
         'perguntar sobre horarios, ou desistir de algo que ainda nao foi agendado. ' +
         'Esta ferramenta NAO remove nada da agenda — ela apenas avisa o responsavel, ' +
         'que entra em contato com o cliente.',
@@ -143,6 +160,153 @@ export class TesteBarbeariaBot extends BotBase {
         // Pro modelo: sempre {ok:true, escalado:bool} — assim a IA fecha a resposta
         // ("ja avisei o responsavel") sem nunca afirmar que cancelou de fato.
         return { ok: true, escalado: r.escalado };
+      },
+    };
+  }
+
+  /**
+   * Tool `remarcar_agendamento` — REMARCAÇÃO via patchEvent (preserva o MESMO eventId).
+   *
+   * BUG que isto corrige: antes o bot só tinha `inserir_agendamento` (createEvent → eventId
+   * NOVO). Quando o cliente pedia pra REMARCAR, a IA criava um evento NOVO → (1) 2ª linha de
+   * `atendimentos` (fatura/comissão 2×), (2) **2ª baixa de pacote** (o UNIQUE(gcal_event_id,
+   * reason) do ledger não pega event_id novo → double-redeem, "dívida 5" do ADR 0025) e (3)
+   * lembrete pros DOIS horários. O PORTAL já resolvia isso preservando o event_id num PATCH
+   * (#331). Esta tool espelha a MESMA abordagem provada no caminho do bot.
+   *
+   * Compartilhada pelos DOIS caminhos (individual + estabelecimento). A diferença — onde o
+   * evento mora (1 agenda do clone vs. N agendas de colaborador) — fica encapsulada no
+   * `resolveEvent` injetado pelo caller. Aqui só: valida horários → resolve o evento DO
+   * PRÓPRIO cliente (telefone da CONVERSA, nunca de input do LLM) → recheca conflito na nova
+   * janela (ignorando o próprio evento) → `patchEvent` (mesmo eventId) → sincroniza a linha de
+   * atendimento (mesma linha; SEM forma de pagamento, pra preservar a marca 'pacote' e NÃO
+   * reabrir o bug DOBRA do ADR 0027). NÃO move o agendamento entre colaboradores (v1, igual ao
+   * portal) e NÃO troca o serviço (remarcação = só horário) — ambos seguem pelo fluxo normal.
+   */
+  private buildRemarcarTool(args: {
+    telefone: string;
+    resolveEvent: (startAtualISO: string) => Promise<RemarcarResolve>;
+  }): ToolDefinition {
+    const { telefone, resolveEvent } = args;
+    return {
+      name: 'remarcar_agendamento',
+      description:
+        'Use para REMARCAR/transferir um agendamento JA EXISTENTE do cliente para um novo ' +
+        'horario (MESMO servico). NUNCA use inserir_agendamento para remarcar — isso criaria ' +
+        'um evento DUPLICADO e cobraria/descontaria o pacote 2x. Antes, confirme com ' +
+        'consultar_agendamento qual agendamento o cliente quer mover. Passe start_atual = o ' +
+        'inicio ATUAL desse agendamento (ISO 8601, exatamente como veio em consultar_agendamento) ' +
+        'e novo_start/novo_end = o novo horario (use a duracao do servico). A ferramenta MOVE o ' +
+        'mesmo agendamento (preserva pacote/cobranca). Para TROCAR de servico ou de profissional, ' +
+        'nao use esta tool.',
+      parameters: {
+        type: 'object',
+        properties: {
+          start_atual: {
+            type: 'string',
+            description:
+              'Inicio ATUAL do agendamento a remarcar (ISO 8601, como veio em consultar_agendamento).',
+          },
+          novo_start: { type: 'string', description: 'Novo inicio ISO 8601 com timezone.' },
+          novo_end: { type: 'string', description: 'Novo fim ISO 8601 com timezone.' },
+        },
+        required: ['start_atual', 'novo_start', 'novo_end'],
+      },
+      run: async (rawArgs: unknown) => {
+        const {
+          start_atual: startAtual,
+          novo_start: novoStart,
+          novo_end: novoEnd,
+        } = rawArgs as { start_atual: string; novo_start: string; novo_end: string };
+
+        const atualMs = new Date(startAtual).getTime();
+        const novoStartMs = new Date(novoStart).getTime();
+        const novoEndMs = new Date(novoEnd).getTime();
+        if (
+          !Number.isFinite(atualMs) ||
+          !Number.isFinite(novoStartMs) ||
+          !Number.isFinite(novoEndMs) ||
+          novoEndMs <= novoStartMs
+        ) {
+          return {
+            ok: false,
+            error: 'PARAMETROS_INVALIDOS',
+            message: 'Horarios invalidos. Confirme o agendamento atual e o novo horario.',
+          };
+        }
+
+        // Resolve o evento DO PRÓPRIO cliente (telefone da conversa) que começa em start_atual.
+        // not_found / ambiguous nunca tocam o GCal — só devolvem instrução pro modelo.
+        const resolved = await resolveEvent(startAtual);
+        if (resolved.kind === 'not_found') {
+          return {
+            ok: false,
+            error: 'AGENDAMENTO_NAO_ENCONTRADO',
+            message:
+              'Nao encontrei esse agendamento. Confirme o horario atual com o cliente ' +
+              '(use consultar_agendamento) antes de remarcar.',
+          };
+        }
+        if (resolved.kind === 'ambiguous') {
+          return {
+            ok: false,
+            error: 'AGENDAMENTO_AMBIGUO',
+            message:
+              'Ha mais de um agendamento nesse horario. Pergunte ao cliente qual servico/' +
+              'profissional ele quer remarcar.',
+          };
+        }
+
+        const { client, colaboradorId, event } = resolved;
+        const eventId = event.id;
+
+        // Anti-corrida: recheca a NOVA janela NA MESMA agenda, IGNORANDO o proprio evento
+        // (mesma regra server-side do inserir_agendamento — o GCal e a fonte de verdade).
+        const existing = await client.listEvents({ timeMin: novoStart, timeMax: novoEnd });
+        const conflito = existing.find((ev) => {
+          if (ev.id === eventId) return false;
+          const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? novoStart).getTime();
+          const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? novoEnd).getTime();
+          return evStart < novoEndMs && evEnd > novoStartMs;
+        });
+        if (conflito) {
+          this.log.warn(
+            { slot: this.slot, telefone, eventId, novoStart, colaboradorId },
+            'remarcar_agendamento bloqueado: nova janela ocupada (conflito server-side)',
+          );
+          return {
+            ok: false,
+            error: 'CONFLITO',
+            conflito: { start: conflito.start.dateTime, end: conflito.end.dateTime },
+          };
+        }
+
+        // PATCH preserva o MESMO eventId -> sem 2o atendimento, sem 2a baixa de pacote, sem
+        // 2o lembrete (o reminder reaponta sozinho: mesma linha, novo inicio_at). NUNCA
+        // delete+create (ADR 0025 divida 5).
+        const updated = await client.patchEvent(eventId, {
+          startISO: novoStart,
+          endISO: novoEnd,
+          timeZone: TZ,
+        });
+        this.log.info(
+          { slot: this.slot, telefone, eventId, colaboradorId, novoStart, novoEnd },
+          'Agendamento remarcado (patchEvent — eventId preservado)',
+        );
+
+        // Sincroniza a linha de atendimento (MESMA linha, idempotente pelo eventId preservado):
+        // janela nova, SEM forma de pagamento -> o UPDATE PRESERVA forma/valor existentes
+        // (remarcar um agendamento pago via PACOTE NÃO reverte a marca -> não dobra a receita).
+        // Gated por slot (ATEND_FROM_AGENDA_SLOTS) e best-effort (nunca derruba a remarcação).
+        await this.maybeSincronizarAtendimento({
+          eventId,
+          summary: updated.summary ?? event.summary ?? '',
+          start: updated.start?.dateTime ?? novoStart,
+          end: updated.end?.dateTime ?? novoEnd,
+          colaboradorId,
+        });
+
+        return { ok: true, eventId, novo_start: novoStart, novo_end: novoEnd };
       },
     };
   }
@@ -298,7 +462,9 @@ export class TesteBarbeariaBot extends BotBase {
       {
         name: 'inserir_agendamento',
         description:
-          'Insere um agendamento no Google Calendar. Use APENAS apos o cliente confirmar com SIM. ' +
+          'Insere um agendamento NOVO no Google Calendar. Use APENAS apos o cliente confirmar com SIM. ' +
+          'Para REMARCAR um agendamento que JA existe, use remarcar_agendamento — NUNCA crie outro ' +
+          'evento aqui (duplicaria cobranca/pacote). ' +
           'Summary: "[Nome] - [Servico] | WhatsApp: [numero]". Se houver [SEU PACOTE] e o ' +
           'cliente quiser usar o pacote pra este servico, passe servico=<nome do servico> e ' +
           'usa_pacote=true; o SISTEMA decide e desconta (voce NUNCA da baixa). Se for avulso, ' +
@@ -486,6 +652,33 @@ export class TesteBarbeariaBot extends BotBase {
         },
       },
     ];
+
+    // ── Remarcação via patchEvent (individual) — SEMPRE exposta ──────────────────
+    // Resolve o agendamento DO PRÓPRIO cliente na agenda única do clone, casando telefone
+    // da CONVERSA (nunca input do LLM) + inicio ATUAL (start_atual). patchEvent preserva o
+    // eventId -> sem 2º atendimento/baixa de pacote/lembrete. Sempre disponível: sem ela, a
+    // IA recriava o evento (bug). Os ganchos de billing/pacote seguem gated por slot.
+    tools.push(
+      this.buildRemarcarTool({
+        telefone,
+        resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
+          const tMin = new Date().toISOString();
+          const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+          const evs = await calClient.listEvents({ timeMin: tMin, timeMax: tMax });
+          const phone = telefone.replace(/\D/g, '');
+          const targetMs = new Date(startAtualISO).getTime();
+          const matches = evs.filter(
+            (e) =>
+              (e.summary?.includes(phone) || e.description?.includes(phone)) &&
+              e.start.dateTime != null &&
+              new Date(e.start.dateTime).getTime() === targetMs,
+          );
+          if (matches.length === 0) return { kind: 'not_found' };
+          if (matches.length > 1) return { kind: 'ambiguous' };
+          return { kind: 'found', client: calClient, colaboradorId: null, event: matches[0] };
+        },
+      }),
+    );
 
     // ── Cancelamento escalado (Missão 023 W5 — DORMENTE por flag) ────────────────
     // A tool SÓ é exposta ao modelo quando a flag está ON. Com a flag OFF a lista de
@@ -728,6 +921,72 @@ export class TesteBarbeariaBot extends BotBase {
   }
 
   /**
+   * Gancho de billing na REMARCAÇÃO (espelha o PATCH do portal — hookUpsertAtendimento mode
+   * 'sync'). Sincroniza a MESMA linha de atendimento do evento (eventId preservado pelo
+   * patchEvent) com a nova janela. Best-effort + gated por slot (ATEND_FROM_AGENDA_SLOTS) —
+   * idêntico a maybeRegistrarAtendimento, com 2 diferenças DELIBERADAS:
+   *
+   *  1) usa syncAtendimentoFromEvent (intenção explícita de SINCRONIZAR um evento já existente);
+   *  2) NÃO passa formaPagamento -> o UPDATE PRESERVA forma/valor da linha (ADR 0027). Assim
+   *     remarcar um agendamento pago via PACOTE NÃO reverte a marca 'pacote' pra null (o que
+   *     faria a receita DOBRAR). Remarcação é só de horário; não reprecifica.
+   *
+   * NUNCA quebra a remarcação: todo o corpo em try/catch (o evento já foi movido no GCal).
+   */
+  private async maybeSincronizarAtendimento(input: {
+    eventId: string;
+    summary: string;
+    start: string;
+    end: string;
+    colaboradorId?: number | null;
+  }): Promise<void> {
+    if (!isAtendFromAgendaEnabled(this.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
+    try {
+      // tenant_id SEMPRE do clone (isolamento P0) — nunca de input.
+      const scope = await cloneColaboradores.getScopeBySlot(this.slot);
+      const tenantId = scope.tenant_id;
+      if (!tenantId) {
+        this.log.warn(
+          { slot: this.slot, eventId: input.eventId },
+          'atend-from-agenda (remarcar): tenant_id não resolvido — linha NÃO sincronizada (isolamento)',
+        );
+        return;
+      }
+      const servicoNome = servicoFromSummary(input.summary);
+      const clienteNome = clienteFromSummary(input.summary);
+      const row = await atendimentos.syncAtendimentoFromEvent({
+        slot: this.slot,
+        tenantId,
+        gcalEventId: input.eventId,
+        servicoNome: servicoNome || null,
+        colaboradorId: input.colaboradorId ?? null,
+        clienteNome: clienteNome || null,
+        inicioAt: input.start,
+        fimAt: input.end,
+        // formaPagamento OMITIDO de propósito -> UPDATE preserva forma/valor (não reabre DOBRA).
+      });
+      this.log.info(
+        {
+          slot: this.slot,
+          eventId: input.eventId,
+          atendimentoId: row.id,
+          colaboradorId: input.colaboradorId ?? null,
+        },
+        'atend-from-agenda (remarcar): linha sincronizada com a nova janela',
+      );
+    } catch (err) {
+      this.log.error(
+        {
+          err: err instanceof Error ? err.message : String(err),
+          slot: this.slot,
+          eventId: input.eventId,
+        },
+        'atend-from-agenda (remarcar): falha ao sincronizar — IGNORADA (remarcação OK)',
+      );
+    }
+  }
+
+  /**
    * Caminho ESTABELECIMENTO (ADR 0023/0024, Fase A — MVP). Só é alcançado quando
    * ESTABELECIMENTO_ENABLED=ON E product_type='estabelecimento' (gate feito em process).
    *
@@ -878,7 +1137,8 @@ export class TesteBarbeariaBot extends BotBase {
           'o cliente confirmar com SIM no CARTAO DE CONFIRMACAO E ter escolhido o profissional ' +
           '(id curto C1, C2, …). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
           'TODO agendamento, inclusive o 2º/3º na mesma conversa. Só agende o servico com um ' +
-          'profissional que faz aquele servico (ver [PROFISSIONAIS]). ' +
+          'profissional que faz aquele servico (ver [PROFISSIONAIS]). Para REMARCAR um ' +
+          'agendamento que JA existe, use remarcar_agendamento — NUNCA crie outro evento aqui. ' +
           'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
         parameters: {
           type: 'object',
@@ -1138,6 +1398,49 @@ export class TesteBarbeariaBot extends BotBase {
         },
       },
     ];
+
+    // ── Remarcação via patchEvent (estabelecimento) — SEMPRE exposta ─────────────
+    // Varre as agendas dos colaboradores ATIVOS (decorados) procurando o agendamento DO
+    // cliente (telefone da CONVERSA + inicio ATUAL). Devolve a agenda DONA + o colaborador;
+    // patchEvent acontece NELA (eventId preservado) — NÃO move entre colaboradores (v1, igual
+    // ao portal). Ambíguo (mesmo telefone+horário em 2 agendas) -> pede pra especificar.
+    tools.push(
+      this.buildRemarcarTool({
+        telefone,
+        resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
+          const tMin = new Date().toISOString();
+          const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+          const phone = telefone.replace(/\D/g, '');
+          const targetMs = new Date(startAtualISO).getTime();
+          const matches: Array<{
+            client: gcal.GoogleCalendarClient;
+            colaboradorId: number;
+            event: gcal.CalendarEvent;
+          }> = [];
+          for (const c of decorados) {
+            const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
+            for (const e of evs) {
+              if (
+                (e.summary?.includes(phone) || e.description?.includes(phone)) &&
+                e.start.dateTime != null &&
+                new Date(e.start.dateTime).getTime() === targetMs
+              ) {
+                matches.push({ client: c.client, colaboradorId: c.colaboradorId, event: e });
+              }
+            }
+          }
+          if (matches.length === 0) return { kind: 'not_found' };
+          if (matches.length > 1) return { kind: 'ambiguous' };
+          const m = matches[0];
+          return {
+            kind: 'found',
+            client: m.client,
+            colaboradorId: m.colaboradorId,
+            event: m.event,
+          };
+        },
+      }),
+    );
 
     // ── Cancelamento escalado (Missão 023 W5 — DORMENTE por flag) ────────────────
     // MESMO comportamento do caminho individual: a tool SÓ é exposta com a flag ON e
