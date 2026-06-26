@@ -52,6 +52,8 @@ export function CadastroForm() {
   const [whatsapp, setWhatsapp] = useState('');
   const [senha, setSenha] = useState('');
   const [showSenha, setShowSenha] = useState(false);
+  // Aceite dos Termos + Política de Privacidade (checkbox obrigatório — SCRUM-1).
+  const [aceite, setAceite] = useState(false);
   const [errors, setErrors] = useState<CadastroErrors>({});
   const [banner, setBanner] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -76,7 +78,7 @@ export function CadastroForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBanner(null);
-    const res = validateCadastro({ nome, area, whatsapp, senha });
+    const res = validateCadastro({ nome, area, whatsapp, senha, aceite });
     if (!res.ok) {
       setErrors(res.errors);
       return;
@@ -244,9 +246,14 @@ export function CadastroForm() {
                   />
                 </div>
 
-                <p className="mt-4 text-center text-[12px] leading-normal text-ink-faint">
-                  Ao continuar, você aceita os Termos de Uso e a Política de Privacidade.
-                </p>
+                <AceiteTermos
+                  checked={aceite}
+                  error={errors.aceite}
+                  onChange={(v) => {
+                    setAceite(v);
+                    if (errors.aceite) setErrors((prev) => ({ ...prev, aceite: undefined }));
+                  }}
+                />
 
                 <Button
                   type="submit"
@@ -280,6 +287,65 @@ export function CadastroForm() {
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Checkbox OBRIGATÓRIO de aceite (SCRUM-1). "Termos de Uso" e "Política de Privacidade"
+ * são LINKS pras rotas públicas (/termos, /privacidade) — abrem em nova aba pra não
+ * perder o cadastro digitado. O submit é bloqueado enquanto não marcado (validação em
+ * validateCadastro; o gate autoritativo é o backend). Acessível: input nativo, label
+ * associada, erro via aria-describedby.
+ */
+function AceiteTermos({
+  checked,
+  error,
+  onChange,
+}: {
+  checked: boolean;
+  error?: string;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="mt-4">
+      <label htmlFor="cad-aceite" className="flex items-start gap-2.5 text-left">
+        <input
+          id="cad-aceite"
+          type="checkbox"
+          checked={checked}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'cad-aceite-err' : undefined}
+          onChange={(e) => onChange(e.target.checked)}
+          className={`mt-0.5 size-[18px] shrink-0 cursor-pointer rounded-[5px] border-[1.5px] bg-surface-sunken accent-brand outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${error ? 'border-danger' : 'border-line-strong'}`}
+        />
+        <span className="text-[12.5px] leading-snug text-ink-soft">
+          Li e aceito os{' '}
+          <Link
+            href="/termos"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-brand outline-none focus-visible:underline"
+          >
+            Termos de Uso
+          </Link>{' '}
+          e a{' '}
+          <Link
+            href="/privacidade"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-brand outline-none focus-visible:underline"
+          >
+            Política de Privacidade
+          </Link>
+          .
+        </span>
+      </label>
+      {error && (
+        <p id="cad-aceite-err" className="mt-1.5 text-[12.5px] text-danger">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

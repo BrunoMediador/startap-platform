@@ -33,6 +33,8 @@ export interface CadastroDraft {
   area: Area | null;
   whatsapp: string;
   senha: string;
+  /** Aceite dos Termos + Política de Privacidade (checkbox obrigatório — SCRUM-1). */
+  aceite: boolean;
 }
 
 export interface CadastroErrors {
@@ -40,6 +42,7 @@ export interface CadastroErrors {
   area?: string;
   whatsapp?: string;
   senha?: string;
+  aceite?: string;
 }
 
 export interface CadastroPayload {
@@ -47,6 +50,8 @@ export interface CadastroPayload {
   area: Area;
   whatsapp: string;
   senha: string;
+  /** Sempre `true`: só monta payload com o aceite marcado (o gate de verdade é o backend). */
+  aceite_termos: true;
 }
 
 /** Cards que SUBSTITUEM o form da /cadastro (spec A3.10: beco com saída). */
@@ -128,13 +133,32 @@ export function validateCadastro(
     errors.senha = `Use no máximo ${SENHA_MAX} caracteres`;
   }
 
+  // Checkbox obrigatório (SCRUM-1): sem aceite, o form não envia (1ª barreira; o
+  // gate autoritativo é o backend, 422 aceite_obrigatorio).
+  if (!d.aceite) {
+    errors.aceite = 'Pra continuar, aceite os Termos de Uso e a Política de Privacidade';
+  }
+
   // isArea já garante d.area aqui, mas o TS não estreita por meio de errors —
   // o guard explícito mantém o payload tipado sem cast.
-  if (errors.nome || errors.area || errors.whatsapp || errors.senha || !isArea(d.area)) {
+  if (
+    errors.nome ||
+    errors.area ||
+    errors.whatsapp ||
+    errors.senha ||
+    errors.aceite ||
+    !isArea(d.area)
+  ) {
     return { ok: false, errors };
   }
   return {
     ok: true,
-    value: { nome_negocio: nome, area: d.area, whatsapp: digits, senha: d.senha },
+    value: {
+      nome_negocio: nome,
+      area: d.area,
+      whatsapp: digits,
+      senha: d.senha,
+      aceite_termos: true,
+    },
   };
 }

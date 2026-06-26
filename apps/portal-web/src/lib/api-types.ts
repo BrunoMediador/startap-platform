@@ -43,6 +43,25 @@ export interface SignupResponse {
 
 export type ProductType = 'individual' | 'estabelecimento';
 
+/**
+ * GET /portal/aceite/status (SCRUM-1, fluxo 2). `needs_acceptance` = o tenant logado
+ * ainda NÃO aceitou a versão vigente dos Termos/Privacidade -> o app bloqueia até aceitar.
+ */
+export interface AceiteStatus {
+  needs_acceptance: boolean;
+  terms_version: string;
+  privacy_version: string;
+  accepted_terms_version: string | null;
+  accepted_privacy_version: string | null;
+}
+
+/** 201 do POST /portal/aceite (registro do aceite pós-login). */
+export interface AceiteResponse {
+  ok: true;
+  terms_version: string;
+  privacy_version: string;
+}
+
 export interface AuthMe {
   username: string;
   slot: string;

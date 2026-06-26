@@ -7,7 +7,7 @@
  * /login pra mandar logados direto pra home. Server-only.
  */
 import { cookies } from 'next/headers';
-import type { AuthMe, StatusResponse } from './api-types';
+import type { AceiteStatus, AuthMe, StatusResponse } from './api-types';
 
 const SESSION_COOKIE = 'portal.sid';
 const PORTAL_API_URL = process.env.PORTAL_API_URL ?? 'http://localhost:3051';
@@ -37,4 +37,15 @@ export function getServerSession(): Promise<AuthMe | null> {
 export async function getServerBusinessName(fallback: string): Promise<string> {
   const status = await serverGet<StatusResponse>('/portal/status');
   return status?.display_name ?? fallback;
+}
+
+/**
+ * Status do aceite dos Termos/Privacidade do tenant logado (SCRUM-1, fluxo 2). Usado
+ * pelo guard do shell (app) pra redirecionar ao /aceite quem ainda nao aceitou a versao
+ * vigente. FAIL-OPEN: se o portal-api estiver indisponivel (null), NAO bloqueia o app
+ * (um blip de rede nao tranca o cliente pra fora) — o gate reaparece na proxima
+ * navegacao quando a API voltar. A prova so e gravada no aceite explicito (POST).
+ */
+export function getServerAceiteStatus(): Promise<AceiteStatus | null> {
+  return serverGet<AceiteStatus>('/portal/aceite/status');
 }

@@ -4,7 +4,7 @@ import { ReconnectBanner } from '@/components/shell/reconnect-banner';
 import { SessionProvider } from '@/components/shell/session-context';
 import { Sidebar } from '@/components/shell/sidebar';
 import { Topbar } from '@/components/shell/topbar';
-import { getServerBusinessName, getServerSession } from '@/lib/server-auth';
+import { getServerAceiteStatus, getServerBusinessName, getServerSession } from '@/lib/server-auth';
 import { redirect } from 'next/navigation';
 
 /**
@@ -24,6 +24,14 @@ import { redirect } from 'next/navigation';
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getServerSession();
   if (!session) redirect('/login');
+
+  // Gate de aceite pós-login (SCRUM-1, fluxo 2): clientes que se cadastraram antes do
+  // checkbox precisam aceitar a versão vigente dos Termos/Privacidade ANTES de usar o
+  // app. needs_acceptance -> manda pro /aceite (fora do (app), sem shell), que só
+  // libera de volta após o "Li e aceito". Fail-open: API fora não tranca (ver
+  // getServerAceiteStatus).
+  const aceite = await getServerAceiteStatus();
+  if (aceite?.needs_acceptance) redirect('/aceite');
 
   const businessName = await getServerBusinessName(session.slot);
 

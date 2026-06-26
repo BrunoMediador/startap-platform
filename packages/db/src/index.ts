@@ -26,6 +26,7 @@ export * as tenantReadRollup from './queries/tenant-read-rollup.js';
 export * as packages from './queries/packages.js';
 export * as atendimentos from './queries/atendimentos.js';
 export * as reminders from './queries/reminders.js';
+export * as termsAcceptance from './queries/terms-acceptance.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -132,3 +133,7 @@ export type {
   DueReminderRow,
   ClaimedReminder,
 } from './queries/reminders.js';
+export type {
+  TermsAcceptanceRow,
+  RecordTermsAcceptanceInput,
+} from './queries/terms-acceptance.js';
