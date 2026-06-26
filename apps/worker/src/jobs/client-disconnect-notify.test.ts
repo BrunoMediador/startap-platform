@@ -181,6 +181,25 @@ describe('notifyClientDisconnect — anti-flap (cooldown)', () => {
     expect(r).toEqual({ ok: true, sent: true });
     expect(sendText).toHaveBeenCalledTimes(1);
   });
+
+  it('FAIL-CLOSED: erro de DB no cooldown -> NÃO avisa (não arrisca spam ao cliente)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue({
+      phone: '5535999991234',
+      enabled: true,
+      nomeNegocio: 'Seven 7 Barber',
+    });
+    // alerts.getState lança (DB indisponível) -> reserveCooldown devolve false (fail-closed).
+    // DIFERENTE do client-alert de cancelamento (fail-OPEN): aqui o alerta interno pro Bruno já
+    // dá visibilidade do incidente, então preferimos NÃO arriscar spam ao cliente que flapa.
+    getState.mockRejectedValue(new Error('db down'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: true, sent: false, reason: 'cooldown' });
+    expect(sendText).not.toHaveBeenCalled();
+    // Não conseguiu ler o estado -> também não tenta gravar (sem upsert).
+    expect(upsertState).not.toHaveBeenCalled();
+  });
 });
 
 describe('notifyClientDisconnect — fail-safe', () => {
