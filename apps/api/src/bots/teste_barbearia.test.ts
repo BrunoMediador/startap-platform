@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   getCloneBySlot: vi.fn(),
   getScopeBySlot: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
+  syncAtendimentoFromEvent: vi.fn(),
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
@@ -52,7 +53,10 @@ vi.mock('@startap/db', () => ({
     getScopeBySlot: mocks.getScopeBySlot,
   },
   flowClones: { getCloneBySlot: mocks.getCloneBySlot },
-  atendimentos: { upsertAtendimentoFromEvent: mocks.upsertAtendimentoFromEvent },
+  atendimentos: {
+    upsertAtendimentoFromEvent: mocks.upsertAtendimentoFromEvent,
+    syncAtendimentoFromEvent: mocks.syncAtendimentoFromEvent,
+  },
   pausa: {},
 }));
 
@@ -240,12 +244,24 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
 // Estabelecimento multi-colaborador (ADR 0023/0024, Fase A — BLOCO 1)
 // ════════════════════════════════════════════════════════════════════════════════
 
-/** Stub de client de colaborador: listEvents/createEvent espionáveis. */
+/** Stub de client de colaborador: listEvents/createEvent/patchEvent espionáveis. */
 function colabClientStub(calendarId: string, existing: unknown[] = []) {
   return {
     calendarId,
     listEvents: vi.fn().mockResolvedValue(existing),
     createEvent: vi.fn().mockResolvedValue({ id: `evt-${calendarId}`, summary: 'S' }),
+    // patchEvent ecoa o eventId recebido (preserva o id) + a nova janela — é o coração da
+    // remarcação (NUNCA delete+create). Testes de reschedule sobrescrevem o retorno se preciso.
+    patchEvent: vi
+      .fn()
+      .mockImplementation((eventId: string, fields: { startISO?: string; endISO?: string }) =>
+        Promise.resolve({
+          id: eventId,
+          summary: 'S',
+          start: { dateTime: fields.startISO },
+          end: { dateTime: fields.endISO },
+        }),
+      ),
   };
 }
 
@@ -1251,6 +1267,282 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
       expect.objectContaining({ colaboradorId: 10, formaPagamento: 'pacote' }),
     );
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Remarcação via patchEvent (fix do double-redeem) — individual + estabelecimento
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// BUG: o bot só tinha inserir_agendamento (createEvent -> eventId NOVO). Remarcar criava
+// um evento NOVO -> 2ª linha de atendimentos (fatura 2x), 2ª baixa de pacote (UNIQUE
+// (gcal_event_id,reason) não pega id novo) e lembrete pros 2 horários. A tool
+// remarcar_agendamento usa patchEvent (preserva o eventId), espelhando o PATCH do portal
+// (#331). Garantias verificadas aqui:
+//  - patchEvent é chamado com o MESMO eventId; createEvent NUNCA é chamado;
+//  - NÃO há 2º atendimento (upsert da CRIAÇÃO não roda) nem 2ª dedução de pacote;
+//  - a linha é SINCRONIZADA (mesma linha, nova janela) SEM formaPagamento -> preserva a
+//    marca 'pacote' e reaponta o lembrete (mesmo atendimento_id, novo inicio_at);
+//  - resolve só o agendamento DO PRÓPRIO cliente (telefone da conversa); not_found/conflito
+//    não tocam o GCal; estabelecimento patcha na agenda do colaborador DONO (não move).
+
+/** Evento existente do cliente da conversa (telefone 5511988887777) às 14h. */
+const EVT_EXISTENTE = {
+  id: 'evt-existente',
+  summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+  start: { dateTime: '2026-06-20T14:00:00-03:00' },
+  end: { dateTime: '2026-06-20T14:30:00-03:00' },
+};
+
+/** setupSchedule individual com listEvents (existentes) + patchEvent espionáveis. */
+function setupScheduleComPatch(existingEvents: unknown[]) {
+  const calClient = {
+    listEvents: vi.fn().mockResolvedValue(existingEvents),
+    createEvent: vi.fn().mockResolvedValue({ id: 'evt-novo', summary: 'X' }),
+    patchEvent: vi
+      .fn()
+      .mockImplementation((id: string, f: { startISO?: string; endISO?: string }) =>
+        Promise.resolve({
+          id, // preserva o eventId
+          summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+          start: { dateTime: f.startISO },
+          end: { dateTime: f.endISO },
+        }),
+      ),
+  };
+  mocks.getGcalForSlot.mockResolvedValue(calClient);
+  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
+  mocks.renderPrompt.mockResolvedValue('PERSONA');
+  mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+  mocks.runAgentConfigured.mockResolvedValue({ reply: 'ok' });
+  mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+  mocks.getProductType.mockResolvedValue('individual');
+  mocks.getArea.mockResolvedValue('barbearia');
+  return calClient;
+}
+
+/** Roda process() (individual) e devolve a tool remarcar_agendamento. */
+async function remarcarToolIndividual(): Promise<{
+  run: (a: unknown) => Promise<Record<string, unknown>>;
+}> {
+  const bot = new TesteBarbeariaBot();
+  await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+    makeCtx('quero remarcar meu horario'),
+  );
+  const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{
+    name: string;
+    run: (a: unknown) => Promise<Record<string, unknown>>;
+  }>;
+  return tools.find((t) => t.name === 'remarcar_agendamento') as {
+    run: (a: unknown) => Promise<Record<string, unknown>>;
+  };
+}
+
+describe('TesteBarbeariaBot — remarcação via patchEvent (individual)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: 't-uuid',
+    });
+    mocks.servicoFromSummary.mockReturnValue('Corte');
+    mocks.clienteFromSummary.mockReturnValue('Fulano');
+    mocks.syncAtendimentoFromEvent.mockResolvedValue({ id: 555 });
+  });
+
+  it('expõe remarcar_agendamento e NENHUMA tool de create disfarçada', async () => {
+    setupScheduleComPatch([EVT_EXISTENTE]);
+    const bot = new TesteBarbeariaBot();
+    await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero remarcar'),
+    );
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toContain('remarcar_agendamento');
+  });
+
+  it('caminho feliz: PATCH preserva o MESMO eventId e NÃO cria evento novo', async () => {
+    const calClient = setupScheduleComPatch([EVT_EXISTENTE]);
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T16:00:00-03:00',
+      novo_end: '2026-06-20T16:30:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-existente' });
+    // patchEvent no MESMO eventId, com a nova janela; createEvent NUNCA chamado.
+    expect(calClient.patchEvent).toHaveBeenCalledTimes(1);
+    expect(calClient.patchEvent).toHaveBeenCalledWith(
+      'evt-existente',
+      expect.objectContaining({
+        startISO: '2026-06-20T16:00:00-03:00',
+        endISO: '2026-06-20T16:30:00-03:00',
+      }),
+    );
+    expect(calClient.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('gate ON: sincroniza a MESMA linha (não cria 2º atendimento) e SEM forma de pagamento', async () => {
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
+    cfg.PACOTES_ENABLED = true; // mesmo com pacotes ON, remarcar NÃO deduz de novo
+    setupScheduleComPatch([EVT_EXISTENTE]);
+    const remarcar = await remarcarToolIndividual();
+    await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T16:00:00-03:00',
+      novo_end: '2026-06-20T16:30:00-03:00',
+    });
+    // SYNC (mesma linha) — não a CRIAÇÃO. E SEM 2ª baixa de pacote.
+    expect(mocks.syncAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(mocks.deduzirPacoteNoAgendamento).not.toHaveBeenCalled();
+    const arg = mocks.syncAtendimentoFromEvent.mock.calls[0][0];
+    // MESMO eventId (idempotente) + janela NOVA (reaponta o lembrete: mesmo atendimento_id, novo inicio_at).
+    expect(arg).toMatchObject({
+      slot: 'teste_barbearia',
+      tenantId: 't-uuid',
+      gcalEventId: 'evt-existente',
+      colaboradorId: null,
+      inicioAt: '2026-06-20T16:00:00-03:00',
+      fimAt: '2026-06-20T16:30:00-03:00',
+    });
+    // formaPagamento NÃO é passado -> o UPDATE preserva a marca 'pacote' (não dobra a receita).
+    expect(arg).not.toHaveProperty('formaPagamento');
+  });
+
+  it('gate OFF (default): NÃO sincroniza atendimento (byte-a-byte), mas remarca normal', async () => {
+    const calClient = setupScheduleComPatch([EVT_EXISTENTE]);
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T16:00:00-03:00',
+      novo_end: '2026-06-20T16:30:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true });
+    expect(calClient.patchEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.syncAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(mocks.getScopeBySlot).not.toHaveBeenCalled();
+  });
+
+  it('start_atual não encontrado: AGENDAMENTO_NAO_ENCONTRADO e NÃO toca o GCal', async () => {
+    const calClient = setupScheduleComPatch([EVT_EXISTENTE]);
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-21T10:00:00-03:00', // nenhum evento do cliente nesse horário
+      novo_start: '2026-06-21T11:00:00-03:00',
+      novo_end: '2026-06-21T11:30:00-03:00',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('AGENDAMENTO_NAO_ENCONTRADO');
+    expect(calClient.patchEvent).not.toHaveBeenCalled();
+    expect(mocks.syncAtendimentoFromEvent).not.toHaveBeenCalled();
+  });
+
+  it('conflito na nova janela: CONFLITO e NÃO patcha (anti-corrida, ignora o próprio evento)', async () => {
+    const outro = {
+      id: 'evt-outro',
+      summary: 'Outro - Barba',
+      start: { dateTime: '2026-06-20T16:00:00-03:00' },
+      end: { dateTime: '2026-06-20T16:30:00-03:00' },
+    };
+    const calClient = setupScheduleComPatch([EVT_EXISTENTE, outro]);
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T16:00:00-03:00',
+      novo_end: '2026-06-20T16:30:00-03:00',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('CONFLITO');
+    expect(calClient.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it('parâmetros inválidos (fim <= início): PARAMETROS_INVALIDOS sem tocar o GCal', async () => {
+    const calClient = setupScheduleComPatch([EVT_EXISTENTE]);
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T16:30:00-03:00',
+      novo_end: '2026-06-20T16:00:00-03:00', // fim antes do início
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('PARAMETROS_INVALIDOS');
+    expect(calClient.patchEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.servicoFromSummary.mockReturnValue('Corte');
+    mocks.clienteFromSummary.mockReturnValue('Fulano');
+    mocks.syncAtendimentoFromEvent.mockResolvedValue({ id: 999 });
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 't-estab',
+    });
+  });
+
+  it('expõe remarcar_agendamento no estabelecimento', async () => {
+    const tools = await estabToolsFor('quero remarcar', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
+    ]);
+    expect(tools.map((t) => t.name)).toContain('remarcar_agendamento');
+  });
+
+  it('acha o evento na agenda do colaborador DONO, patcha LÁ (mesmo eventId) e não toca o outro', async () => {
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_estab_x';
+    const evtMaria = {
+      id: 'evt-est-maria',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-20T14:00:00-03:00' },
+      end: { dateTime: '2026-06-20T14:30:00-03:00' },
+    };
+    const cJoao = colabClientStub('cal-joao', []); // sem eventos do cliente
+    const cMaria = colabClientStub('cal-maria', [evtMaria]); // o evento vive aqui
+    const tools = await estabToolsFor('quero remarcar', [
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client: cJoao },
+      { colaboradorId: 11, nome: 'Maria', shortId: 'C2', client: cMaria },
+    ]);
+    const remarcar = tools.find((t) => t.name === 'remarcar_agendamento') as {
+      run: (a: unknown) => Promise<Record<string, unknown>>;
+    };
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T17:00:00-03:00',
+      novo_end: '2026-06-20T17:30:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-est-maria' });
+    // Patch na agenda da Maria (dona do evento), preservando o eventId; João intocado.
+    expect(cMaria.patchEvent).toHaveBeenCalledWith('evt-est-maria', expect.any(Object));
+    expect(cJoao.patchEvent).not.toHaveBeenCalled();
+    expect(cMaria.createEvent).not.toHaveBeenCalled();
+    // Sincroniza a MESMA linha com o colaborador DONO (comissão fica com Maria), sem 2º atendimento.
+    expect(mocks.syncAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(mocks.syncAtendimentoFromEvent.mock.calls[0][0]).toMatchObject({
+      slot: 'clone_estab_x',
+      tenantId: 't-estab',
+      gcalEventId: 'evt-est-maria',
+      colaboradorId: 11,
+      inicioAt: '2026-06-20T17:00:00-03:00',
+    });
   });
 });
 
