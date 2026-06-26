@@ -119,6 +119,30 @@ export const WorkerConfigSchema = z.object({
   REMINDERS_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
   // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
   REMINDERS_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  // ── Auto-aviso de DESCONEXÃO ao próprio cliente (B2B) ──────────────────────
+  // Quando a sessão WAHA de um clone que JÁ conectou cai (up->down no monitor), avisa
+  // AUTOMATICAMENTE o DONO do clone pelo WhatsApp (sessão ALERTAS), além do alerta interno
+  // pro Bruno. GATE MACRO: SÓ dispara com CLIENT_DISCONNECT_ALERT_ENABLED=true (default OFF —
+  // lição #247: nada aqui é obrigatório no boot; ausente = OFF = nenhum aviso). Gate fino
+  // POR-CLONE = flow_clones.alert_owner_enabled + destino presente. Roda DENTRO do job monitor
+  // já existente (reaproveita o debounce anti-flap); NÃO registra cron novo. Pra ligar em prod:
+  // devops seta CLIENT_DISCONNECT_ALERT_ENABLED=true + restart do worker (o monitor já precisa
+  // estar ON via ALERTS_ENABLED). NUNCA hardcoded.
+  CLIENT_DISCONNECT_ALERT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Cooldown (min) anti-flap por CLONE: depois de avisar o dono de uma queda, NÃO re-avisa o
+  // mesmo clone dentro desta janela — só volta a avisar se a sessão reconectar e cair de novo.
+  // A sessão do Seven 7 flapa MUITO (device_removed); somado ao debounce do monitor (~4 min) e à
+  // máquina up->down (1 msg por episódio), isto blinda contra spam ao cliente. Default 6h.
+  CLIENT_DISCONNECT_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(360),
+  // Delay humanizador (ms) antes do envio (typing + pausa) — reduz risco de a sessão ALERTAS ser
+  // derrubada por padrão de bot. Default 1500.
+  CLIENT_DISCONNECT_ALERT_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
+  // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
+  CLIENT_DISCONNECT_ALERT_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

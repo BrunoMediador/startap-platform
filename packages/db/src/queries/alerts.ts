@@ -263,27 +263,43 @@ export interface MonitoredSession {
   sessao: string;
   /** Rótulo amigável p/ a mensagem (display_name do clone, ou o próprio nome). */
   label: string;
+  /**
+   * slot do clone dono desta sessão. null pra a sessão remetente sintética (ALERTAS) —
+   * que NÃO é um clone de cliente. Usado pelo monitor pra resolver o DONO e avisá-lo
+   * quando a sessão dele cai (auto-aviso de desconexão — CLIENT_DISCONNECT_ALERT_ENABLED).
+   */
+  slot: string | null;
 }
 
 /**
  * Sessões WAHA a monitorar:
- *  - clones com sessão dedicada E status 'conectado' (já pareados — Cirilo/Samuel);
- *    NÃO monitora pré-setup (rascunho/aguardando_qr — FAILED esperado) nem trials
- *    'awaiting' (ver memória project_fluxos_pre_setup);
- *  - + a própria sessão remetente (bot_config do sender_slot — hoje a sessão dedicada
- *    `ALERTAS`; antes era a Lola), pra detectar se o remetente caiu (ainda que, caído,
- *    o alerta não saia — limitação conhecida §3).
+ *  - clones com sessão dedicada que JÁ parearam alguma vez (first_connected_at IS NOT NULL,
+ *    migration 062), em status 'conectado' OU 'desconectado'. Inclui o caso CRÍTICO da sessão
+ *    que ACABOU de cair: o sync do painel (WAHA FAILED/STOPPED -> 'desconectado') tira o
+ *    'conectado' em ~60s; com o filtro antigo `status = 'conectado'` a sessão SAÍA da lista no
+ *    instante em que caía e o monitor NUNCA via a transição up->down (bug provado em prod: Seven 7
+ *    ficou FAILED ~20 min sem 1 alerta; alert_states seguiu 'up'). Agora ela CONTINUA vigiada: o
+ *    observeWaha do monitor a vê como down (status != WORKING na WAHA) e dispara o alerta —
+ *    interno (Bruno) E, com a flag nova, ao próprio dono do clone.
+ *  - ANTI-PRÉ-SETUP: clones que NUNCA conectaram (first_connected_at NULL — rascunho/
+ *    aguardando_qr/falhou nunca-pareados) ficam FORA. FAILED/SCAN_QR_CODE de pré-setup é estado
+ *    ESPERADO, não incidente. Trials 'awaiting' também ficam fora (ver memória project_fluxos_
+ *    pre_setup). Sem o carimbo, a sessão jamais entra na lista -> jamais gera falso CAIU.
+ *  - + a própria sessão remetente (bot_config do sender_slot — hoje a sessão dedicada `ALERTAS`),
+ *    pra detectar se o remetente caiu (ainda que, caído, o alerta não saia — limitação §3).
+ *    slot=null nessa entrada (não é clone de cliente; nunca avisa "dono").
  *
- * Exclui sessões de teste por nunca casarem com clone 'conectado' (WHATSAPP_ROUTER_TESTE
- * não é flow_clone de cliente). Dedup por nome de sessão.
+ * Exclui sessões de teste por nunca terem first_connected_at de um clone de cliente real.
+ * Dedup por nome de sessão.
  */
 export async function listMonitoredSessions(senderSlot: string): Promise<MonitoredSession[]> {
-  const r = await query<{ waha_sessao: string; display_name: string | null }>(
-    `SELECT fc.waha_sessao, fc.display_name
+  const r = await query<{ slot: string; waha_sessao: string; display_name: string | null }>(
+    `SELECT fc.slot, fc.waha_sessao, fc.display_name
        FROM flow_clones fc
       WHERE fc.waha_sessao IS NOT NULL
         AND fc.waha_sessao <> ''
-        AND fc.status = 'conectado'
+        AND fc.first_connected_at IS NOT NULL
+        AND fc.status IN ('conectado', 'desconectado')
         AND fc.trial_status <> 'awaiting'`,
   );
   const out = new Map<string, MonitoredSession>();
@@ -291,12 +307,14 @@ export async function listMonitoredSessions(senderSlot: string): Promise<Monitor
     out.set(row.waha_sessao, {
       sessao: row.waha_sessao,
       label: row.display_name ?? row.waha_sessao,
+      slot: row.slot,
     });
   }
-  // A sessão remetente (resolvida pelo sender_slot) — monitorada também.
+  // A sessão remetente (resolvida pelo sender_slot) — monitorada também. slot=null:
+  // é infra de transporte, não um clone de cliente (nunca dispara aviso ao "dono").
   const sender = await getSenderSession(senderSlot);
   if (sender && !out.has(sender)) {
-    out.set(sender, { sessao: sender, label: 'Sessão de alertas (remetente)' });
+    out.set(sender, { sessao: sender, label: 'Sessão de alertas (remetente)', slot: null });
   }
   return [...out.values()];
 }

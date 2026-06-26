@@ -13,7 +13,8 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { getCloneAlertOwner, setCloneAlertOwnerPhoneIfEmpty } = await import('./flow-clones.js');
+const { getCloneAlertOwner, setCloneAlertOwnerPhoneIfEmpty, getCloneDisconnectAlertTarget } =
+  await import('./flow-clones.js');
 
 describe('getCloneAlertOwner — fallback alert_owner_phone -> cliente_telefone', () => {
   beforeEach(() => {
@@ -176,5 +177,79 @@ describe('setCloneAlertOwnerPhoneIfEmpty — autofill do número da sessão (só
 
     expect(filled).toBe(false);
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('getCloneDisconnectAlertTarget — destino + nome do negócio (auto-aviso de desconexão)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('retorna phone (mesma precedência) + nome do negócio da personalizacao', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: '5535999991234',
+          cliente_telefone: '5511888887777',
+          alert_owner_enabled: true,
+          nome_negocio: 'Seven 7 Barber',
+        },
+      ],
+    });
+
+    const target = await getCloneDisconnectAlertTarget('clone_seven_7');
+
+    // Lê personalizacao->>'nome_negocio' (selecionado como nome_negocio).
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(`personalizacao->>'nome_negocio'`);
+    expect(target).toEqual({
+      phone: '5535999991234',
+      enabled: true,
+      nomeNegocio: 'Seven 7 Barber',
+    });
+  });
+
+  it('FALLBACK do telefone: alert_owner_phone NULL -> cliente_telefone (clone sem backfill)', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: null,
+          cliente_telefone: '+55 (35) 98888-7777',
+          alert_owner_enabled: true,
+          nome_negocio: null,
+        },
+      ],
+    });
+
+    const target = await getCloneDisconnectAlertTarget('clone_novo');
+
+    expect(target?.phone).toBe('5535988887777');
+    // Sem nome do negócio -> null (o chamador cai no fallback "seu atendimento").
+    expect(target?.nomeNegocio).toBeNull();
+  });
+
+  it('opt-out: alert_owner_enabled=false -> enabled=false (chamador não avisa)', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: '5535999991234',
+          cliente_telefone: null,
+          alert_owner_enabled: false,
+          nome_negocio: 'Clone de teste',
+        },
+      ],
+    });
+
+    const target = await getCloneDisconnectAlertTarget('clone_teste');
+
+    expect(target?.enabled).toBe(false);
+  });
+
+  it('slot inexistente -> null', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+
+    const target = await getCloneDisconnectAlertTarget('clone_nao_existe');
+
+    expect(target).toBeNull();
   });
 });
