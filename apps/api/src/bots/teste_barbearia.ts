@@ -457,20 +457,23 @@ export class TesteBarbeariaBot extends BotBase {
       },
       {
         name: 'consultar_agendamento',
-        description: 'Consulta agendamentos futuros do cliente no Google Calendar.',
+        description:
+          'Consulta os agendamentos futuros do PRÓPRIO cliente da conversa no Google ' +
+          'Calendar. Não precisa de telefone — usa sempre o número de quem está falando.',
         parameters: {
           type: 'object',
-          properties: {
-            telefone: { type: 'string', description: 'WhatsApp do cliente (so digitos)' },
-          },
-          required: ['telefone'],
+          properties: {},
+          required: [],
         },
-        run: async (args: unknown) => {
-          const { telefone: tel } = args as { telefone: string };
+        run: async () => {
+          // SEGURANÇA (IDOR/PII cross-cliente): ignora QUALQUER telefone vindo do LLM e
+          // usa SEMPRE o número da CONVERSA (o remetente). Antes a tool filtrava pelo
+          // telefone cru passado pelo modelo → um cliente pedia "ver o horário do 5511…"
+          // e recebia nome/horário de OUTRO cliente do mesmo tenant.
+          const phone = telefone.replace(/\D/g, '');
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
           const evs = await calClient.listEvents({ timeMin: tMin, timeMax: tMax });
-          const phone = tel.replace(/\D/g, '');
           const matching = evs.filter(
             (e) => e.summary?.includes(phone) || e.description?.includes(phone),
           );
@@ -511,20 +514,16 @@ export class TesteBarbeariaBot extends BotBase {
           'calculados (ativos, expirados e esgotados).',
         parameters: {
           type: 'object',
-          properties: {
-            telefone: {
-              type: 'string',
-              description: 'WhatsApp do cliente (so digitos). Vazio = usa o numero da conversa.',
-            },
-          },
+          properties: {},
           required: [],
         },
-        run: async (args: unknown) => {
-          const a = (args ?? {}) as { telefone?: unknown };
-          const tel = typeof a.telefone === 'string' && a.telefone.trim() ? a.telefone : telefone;
+        run: async () => {
+          // SEGURANÇA (IDOR/PII cross-cliente): NUNCA aceita telefone do LLM. O saldo é
+          // SEMPRE o do número da CONVERSA (o remetente). Antes a tool usava o telefone
+          // passado pelo modelo quando presente → vazava o pacote/saldo de OUTRO cliente.
           const credits = await resolveClientPackages({
             slot: this.slot,
-            telefone: tel,
+            telefone,
             apenasAtivos: false,
           });
           // Devolve já calculado; NUNCA o número cru, NUNCA o HMAC (resolvido internamente).
@@ -1099,19 +1098,20 @@ export class TesteBarbeariaBot extends BotBase {
       },
       {
         name: 'consultar_agendamento',
-        description: 'Consulta agendamentos futuros do cliente nas agendas dos profissionais.',
+        description:
+          'Consulta os agendamentos futuros do PRÓPRIO cliente da conversa nas agendas dos ' +
+          'profissionais. Não precisa de telefone — usa sempre o número de quem está falando.',
         parameters: {
           type: 'object',
-          properties: {
-            telefone: { type: 'string', description: 'WhatsApp do cliente (so digitos)' },
-          },
-          required: ['telefone'],
+          properties: {},
+          required: [],
         },
-        run: async (args: unknown) => {
-          const { telefone: tel } = args as { telefone: string };
+        run: async () => {
+          // SEGURANÇA (IDOR/PII cross-cliente): ignora QUALQUER telefone do LLM; usa SEMPRE
+          // o número da CONVERSA (o remetente) ao cruzar as agendas dos colaboradores.
+          const phone = telefone.replace(/\D/g, '');
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const phone = tel.replace(/\D/g, '');
           const matching: Array<{
             summary?: string;
             start?: string;

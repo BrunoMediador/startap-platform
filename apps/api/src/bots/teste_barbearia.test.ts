@@ -1253,3 +1253,111 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     );
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════════
+// IDOR / vazamento de PII cross-cliente — as tools consultar_* SEMPRE usam o telefone
+// da CONVERSA (o remetente), NUNCA o que o LLM passa.
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// Bug fechado: `consultar_agendamento` (individual + estabelecimento) e `consultar_pacote`
+// usavam o `telefone` cru vindo do modelo. Um cliente pedia "ver o pacote/horário do 5511…"
+// e o bot devolvia nome/horário/saldo de OUTRO cliente do MESMO tenant. Agora o telefone
+// vem SEMPRE da conversa; o argumento do LLM é ignorado (param deixou de ser obrigatório).
+
+describe('TesteBarbeariaBot — IDOR/PII: consultar_* usam o telefone da CONVERSA, não do LLM', () => {
+  const CONVERSA = '5511988887777'; // = makeCtx (remetente real da conversa)
+  const OUTRO = '5511777776666'; // número de OUTRO cliente que o atacante tenta espiar
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  it('consultar_agendamento (individual) IGNORA o telefone do LLM e só devolve o horário da CONVERSA', async () => {
+    const calClient = setupSchedule();
+    // A agenda do tenant tem o horário do PRÓPRIO cliente E o de OUTRO cliente.
+    calClient.listEvents.mockResolvedValue([
+      {
+        summary: `Fulano - Corte | WhatsApp: ${CONVERSA}`,
+        start: { dateTime: 'A' },
+        end: { dateTime: 'B' },
+      },
+      {
+        summary: `Vizinho - Corte | WhatsApp: ${OUTRO}`,
+        start: { dateTime: 'C' },
+        end: { dateTime: 'D' },
+      },
+    ]);
+    const bot = new TesteBarbeariaBot();
+    await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero ver meus agendamentos'),
+    );
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    const consultar = tools.find((t) => t.name === 'consultar_agendamento') as unknown as {
+      parameters: { required: string[] };
+      run: (a: unknown) => Promise<{ events: Array<{ summary?: string }> }>;
+    };
+    // telefone deixou de ser obrigatório — o LLM não tem como alvejar outro número.
+    expect(consultar.parameters.required).not.toContain('telefone');
+    // Atacante tenta espiar o horário de OUTRO cliente...
+    const res = await consultar.run({ telefone: OUTRO });
+    // ...mas só recebe o agendamento do PRÓPRIO número da conversa.
+    expect(res.events).toHaveLength(1);
+    expect(res.events[0].summary).toContain(CONVERSA);
+    expect(JSON.stringify(res.events)).not.toContain(OUTRO);
+  });
+
+  it('consultar_pacote IGNORA o telefone do LLM e consulta o saldo do número da CONVERSA', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    const { tools } = await runIndividual('quanto saldo eu tenho?');
+    const consultar = tools.find((t) => t.name === 'consultar_pacote') as unknown as {
+      parameters: { required: string[] };
+      run: (a: unknown) => Promise<unknown>;
+    };
+    expect(consultar.parameters.required).not.toContain('telefone');
+    // Atacante passa o número de OUTRO cliente.
+    await consultar.run({ telefone: OUTRO });
+    // resolveClientPackages NUNCA é chamado com o número do atacante...
+    expect(mocks.resolveClientPackages).not.toHaveBeenCalledWith(
+      expect.objectContaining({ telefone: OUTRO }),
+    );
+    // ...e É chamado com o telefone da conversa.
+    expect(mocks.resolveClientPackages).toHaveBeenCalledWith(
+      expect.objectContaining({ telefone: CONVERSA }),
+    );
+  });
+
+  it('consultar_agendamento (estabelecimento) IGNORA o telefone do LLM ao cruzar as agendas', async () => {
+    const c1 = colabClientStub('cal-joao', [
+      {
+        summary: `Fulano - Corte | WhatsApp: ${CONVERSA}`,
+        start: { dateTime: 'A' },
+        end: { dateTime: 'B' },
+      },
+      {
+        summary: `Vizinho - Corte | WhatsApp: ${OUTRO}`,
+        start: { dateTime: 'C' },
+        end: { dateTime: 'D' },
+      },
+    ]);
+    const tools = await estabToolsFor('quero ver meus agendamentos', [
+      { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1 },
+    ]);
+    const consultar = tools.find((t) => t.name === 'consultar_agendamento') as unknown as {
+      parameters: { required: string[] };
+      run: (a: unknown) => Promise<{ events: Array<{ summary?: string }> }>;
+    };
+    expect(consultar.parameters.required).not.toContain('telefone');
+    const res = await consultar.run({ telefone: OUTRO });
+    expect(res.events).toHaveLength(1);
+    expect(res.events[0].summary).toContain(CONVERSA);
+    expect(JSON.stringify(res.events)).not.toContain(OUTRO);
+  });
+});
