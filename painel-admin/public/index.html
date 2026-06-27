@@ -9080,6 +9080,108 @@ const PacotesUI = (() => {
   return { _servicosChecklist, _collectChecked, _fmtCents, _estadoBadge, _estadoRank, _uuid };
 })();
 
+/* ── ColabCredUI — credencial de LOGIN do colaborador no portal (SCRUM-32) ─────
+ *
+ * Namespace isolado (padrão IIFE do painel legado). Gera/REGENERA a senha de
+ * acesso de UM colaborador ao portal (app.startap.tech) via
+ *   POST /api/clones/:id/colaboradores/:colabId/gerar-senha
+ * e mostra usuário + senha UMA vez num modal com "copiar" + aviso de que a senha
+ * não será exibida de novo (o backend só guarda o hash). O MESMO botão cobre
+ * gerar e regenerar (o endpoint é idempotente, ON CONFLICT DO UPDATE) — por isso
+ * o modal de intenção avisa que uma senha anterior, se existir, deixa de valer.
+ * Reusa os helpers globais openModal/closeModal/api/toast/icon/escapeHtml. */
+const ColabCredUI = (() => {
+  // Passo 1 — modal de intenção (confirma a ação destrutiva da regeneração).
+  function gerarSenha(clone, colab) {
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">${icon('key',18)} Senha de acesso — <span class="mono">${escapeHtml(colab.nome)}</span></span>
+        <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
+      </div>
+      <div style="padding:.25rem 0 .5rem;font-size:.875rem;line-height:1.55;color:var(--muted)">
+        <p style="margin:0 0 .6rem">Cria a senha de login de <strong>${escapeHtml(colab.nome)}</strong> no portal do cliente (<span class="mono">app.startap.tech</span>). Lá ele vê — <strong>só leitura</strong> — a agenda dele e a comissão/faturamento dele.</p>
+        <p style="margin:0;padding:.55rem .7rem;background:var(--surface-2);border-left:3px solid var(--warning,#d4a017);border-radius:var(--radius-sm)">${icon('alert-triangle',13)} Se este colaborador <strong>já tiver</strong> uma senha, ela será <strong>substituída</strong> — a anterior para de funcionar na hora.</p>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem">
+        <button class="btn btn--ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn--primary" id="colab-genpass-confirm">${icon('key',14)} Gerar senha</button>
+      </div>`);
+    const confirmBtn = document.getElementById('colab-genpass-confirm');
+    if (confirmBtn) confirmBtn.addEventListener('click', () => _executar(clone, colab, confirmBtn));
+  }
+
+  // Passo 2 — chama o backend e troca pro modal de revelação (ou mostra erro).
+  async function _executar(clone, colab, btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = `${icon('refresh-cw',14)} Gerando…`; }
+    try {
+      const res = await api(`/api/clones/${clone.id}/colaboradores/${colab.id}/gerar-senha`, { method: 'POST' });
+      _revelar(res.username, res.generated_password);
+    } catch (err) {
+      // 409 = clone não é estabelecimento; 404 = colaborador fora do escopo; 500 = erro server.
+      toast('Erro ao gerar senha: ' + (err.message || 'tente de novo'), 'danger');
+      if (btn) { btn.disabled = false; btn.innerHTML = `${icon('key',14)} Gerar senha`; }
+    }
+  }
+
+  // Passo 3 — revela usuário + senha UMA vez, com copiar + aviso.
+  function _revelar(username, password) {
+    openModal(`
+      <div class="modal__header">
+        <span class="modal__title">${icon('check-circle-2',18)} Senha gerada</span>
+        <button class="btn btn--sm btn--ghost" onclick="closeModal()" aria-label="Fechar">✕</button>
+      </div>
+      <div style="padding:.25rem 0 .5rem">
+        <p style="margin:0 0 .75rem;font-size:.85rem;line-height:1.5;color:var(--muted)">${icon('alert-triangle',13)} <strong>Anote ou repasse agora</strong> — por segurança a senha <strong>não será mostrada de novo</strong>. Se perder, é só gerar outra.</p>
+        <div class="field" style="margin-bottom:.6rem">
+          <label for="colab-cred-user" style="font-size:.78rem">Usuário (login)</label>
+          <div style="display:flex;gap:.5rem;align-items:center;margin-top:.25rem">
+            <input id="colab-cred-user" type="text" readonly value="${escapeHtml(username)}" class="mono" style="flex:1;font-family:var(--font-mono,monospace)" aria-label="Usuário de login" />
+            <button class="btn btn--sm" id="colab-cred-user-copy" style="white-space:nowrap">${icon('copy',13)} Copiar</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="colab-cred-pw" style="font-size:.78rem">Senha</label>
+          <div style="display:flex;gap:.5rem;align-items:center;margin-top:.25rem">
+            <input id="colab-cred-pw" type="text" readonly value="${escapeHtml(password)}" class="mono" style="flex:1;font-family:var(--font-mono,monospace)" aria-label="Senha gerada" />
+            <button class="btn btn--primary btn--sm" id="colab-cred-pw-copy" style="white-space:nowrap">${icon('copy',13)} Copiar</button>
+          </div>
+        </div>
+        <p style="margin:.7rem 0 0;font-size:.78rem;color:var(--muted)">Entrega para o colaborador acessar <span class="mono">app.startap.tech</span> e entrar com esse usuário e senha.</p>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.5rem">
+        <button class="btn btn--primary" id="colab-cred-done">Fechar</button>
+      </div>`);
+    _wireCopy('colab-cred-user-copy', 'colab-cred-user', 'Usuário copiado!');
+    _wireCopy('colab-cred-pw-copy', 'colab-cred-pw', 'Senha copiada!');
+    const done = document.getElementById('colab-cred-done');
+    if (done) done.addEventListener('click', closeModal);
+    const pw = document.getElementById('colab-cred-pw');
+    if (pw) { pw.focus(); pw.select(); }
+  }
+
+  // Copiar com fallback execCommand (mesmo padrão dos outros copies do painel).
+  function _wireCopy(btnId, inputId, okMsg) {
+    const btn = document.getElementById(btnId);
+    const inp = document.getElementById(inputId);
+    if (!btn || !inp) return;
+    btn.addEventListener('click', async () => {
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(inp.value);
+        else { inp.select(); document.execCommand('copy'); }
+        const prev = btn.innerHTML;
+        btn.innerHTML = `${icon('check-circle-2',13)} Copiado`;
+        setTimeout(() => { btn.innerHTML = prev; }, 1800);
+        toast(okMsg, 'success');
+      } catch (_) {
+        inp.select();
+        toast('Selecione e copie manualmente (Ctrl+C / Cmd+C)', 'warning');
+      }
+    });
+  }
+
+  return { gerarSenha };
+})();
+
 /* ── Aba COLABORADORES ──────────────────────────────────────────────────────── */
 async function _renderColaboradoresTab(content, clone) {
   content.innerHTML = `<div style="padding:1rem 0;display:flex;justify-content:center"><div class="spinner"></div></div>`;
@@ -9134,7 +9236,8 @@ async function _renderColaboradoresTab(content, clone) {
           <strong>${escapeHtml(c.nome)}</strong>
           ${c.ativo ? '<span class="badge badge--success" style="font-size:.62rem">Ativo</span>' : '<span class="badge badge--muted" style="font-size:.62rem">Inativo</span>'}
           ${gcalBadge}
-          <span style="margin-left:auto;display:flex;gap:.35rem">
+          <span style="margin-left:auto;display:flex;gap:.35rem;flex-wrap:wrap">
+            <button class="btn btn--sm colab-genpass" data-id="${c.id}" title="Gerar a senha de acesso de ${escapeHtml(c.nome)} ao portal (app.startap.tech)">${icon('key',13)} Senha</button>
             <button class="btn btn--sm colab-edit" data-id="${c.id}">${icon('settings',13)} Editar</button>
             <button class="btn btn--sm btn--ghost btn--icon colab-del" data-id="${c.id}" style="color:var(--danger)" aria-label="Remover ${escapeHtml(c.nome)}">${icon('trash-2',13)}</button>
           </span>
@@ -9186,6 +9289,10 @@ async function _renderColaboradoresTab(content, clone) {
 
   const addBtn = content.querySelector('#colab-add-btn');
   if (addBtn) addBtn.addEventListener('click', () => _renderColaboradorForm(content, clone, null));
+  content.querySelectorAll('.colab-genpass').forEach(b => b.addEventListener('click', () => {
+    const c = (data.colaboradores || []).find(x => String(x.id) === b.dataset.id);
+    if (c) ColabCredUI.gerarSenha(clone, c);
+  }));
   content.querySelectorAll('.colab-edit').forEach(b => b.addEventListener('click', () => {
     const c = (data.colaboradores || []).find(x => String(x.id) === b.dataset.id);
     _renderColaboradorForm(content, clone, c);

@@ -21,11 +21,33 @@ function userIndexKey(userId: number): string {
   return USER_INDEX_PREFIX + userId;
 }
 
+/**
+ * Chave de índice de sessões role-aware. OWNER usa o id do portal_users; COLABORADOR
+ * (SCRUM-32) usa um namespace SEPARADO (`colab:<id>`) pra NÃO colidir com o id de um
+ * portal_user homônimo no set de invalidação (um owner #7 não derruba um colaborador #7).
+ */
+function sessionIndexKey(data: SessionData): string {
+  return data.role === 'colaborador'
+    ? `${USER_INDEX_PREFIX}colab:${data.colaboradorId}`
+    : userIndexKey(data.userId);
+}
+
+/** Papel do dono da sessão. Ausente = 'owner' (compat com sessões pré-SCRUM-32). */
+export type SessionRole = 'owner' | 'colaborador';
+
 export interface SessionData {
+  /** owner: portal_users.id. colaborador: 0 (a identidade é colaboradorId). */
   userId: number;
   username: string;
   slot: string;
   createdAt: number;
+  /**
+   * Papel da sessão (SCRUM-32). Ausente/'owner' = dono (comportamento atual byte-a-byte).
+   * 'colaborador' = barbeiro de estabelecimento com visão READ-ONLY escopada.
+   */
+  role?: SessionRole;
+  /** Presente SÓ em sessão de colaborador: clone_colaboradores.id (a identidade dele). */
+  colaboradorId?: number;
 }
 
 let redis: Redis | null = null;
@@ -54,11 +76,12 @@ export async function createSession(data: SessionData): Promise<string> {
   const sid = newSessionId();
   const r = getRedis();
   await r.set(KEY_PREFIX + sid, JSON.stringify(data), 'EX', config.PORTAL_SESSION_TTL_SECONDS);
-  // Indexa a sessao no set do user. TTL do set > TTL da sessao para nao expirar
-  // o indice no meio de uma sessao deslizante (sliding); membros stale sao
-  // ignorados na invalidacao (SISMEMBER da sessao real confirma).
-  await r.sadd(userIndexKey(data.userId), sid);
-  await r.expire(userIndexKey(data.userId), config.PORTAL_SESSION_TTL_SECONDS * 2);
+  // Indexa a sessao no set do principal (owner por userId / colaborador por colab:id).
+  // TTL do set > TTL da sessao para nao expirar o indice no meio de uma sessao
+  // deslizante (sliding); membros stale sao ignorados na invalidacao.
+  const idxKey = sessionIndexKey(data);
+  await r.sadd(idxKey, sid);
+  await r.expire(idxKey, config.PORTAL_SESSION_TTL_SECONDS * 2);
   return sid;
 }
 
@@ -87,7 +110,7 @@ export async function destroySession(sid: string): Promise<void> {
   if (raw) {
     try {
       const data = JSON.parse(raw) as SessionData;
-      await r.srem(userIndexKey(data.userId), sid);
+      await r.srem(sessionIndexKey(data), sid);
     } catch {
       // payload corrompido: a sessao ja foi removida; ignora o indice.
     }

@@ -7,7 +7,7 @@
  * /login pra mandar logados direto pra home. Server-only.
  */
 import { cookies } from 'next/headers';
-import type { AceiteStatus, AuthMe, StatusResponse } from './api-types';
+import type { AceiteStatus, AuthMe, ColaboradorMe, StatusResponse } from './api-types';
 
 const SESSION_COOKIE = 'portal.sid';
 const PORTAL_API_URL = process.env.PORTAL_API_URL ?? 'http://localhost:3051';
@@ -31,6 +31,17 @@ async function serverGet<T>(path: string): Promise<T | null> {
 
 export function getServerSession(): Promise<AuthMe | null> {
   return serverGet<AuthMe>('/auth/me');
+}
+
+/**
+ * Sessão de COLABORADOR (SCRUM-32). Chama /auth/colaborador/me (withColaborador):
+ * só responde 200 quando o cookie é de uma sessão role='colaborador' E a flag
+ * COLABORADOR_PORTAL_ENABLED está ON — senão 403/404 -> null. Usado pelo guard do
+ * grupo (colaborador) pra mandar quem não é colaborador de volta ao /login. A
+ * identidade (colaborador_id/slot) vem SEMPRE da sessão, nunca do client.
+ */
+export function getServerColaboradorSession(): Promise<ColaboradorMe | null> {
+  return serverGet<ColaboradorMe>('/auth/colaborador/me');
 }
 
 /** Nome do negocio (display_name) pro shell. Fallback no slot se indisponivel. */
