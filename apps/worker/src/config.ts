@@ -143,6 +143,34 @@ export const WorkerConfigSchema = z.object({
   CLIENT_DISCONNECT_ALERT_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
   // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
   CLIENT_DISCONNECT_ALERT_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  // ── Health-check do Google Calendar (SCRUM-27 — fim do "active mentiroso") ──────────────────
+  // Cron que REVALIDA periodicamente as agendas marcadas 'active' (clones individuais em
+  // flow_clones + colaboradores em clone_colaboradores) reusando o MESMO testConnection() do
+  // botão "Testar conexão" do painel. Se a agenda quebrou (403/404/creds inválidas) o status cai
+  // pra 'invalid' — o bot para de prometer agenda que não existe. Se voltar a passar, re-promove
+  // 'invalid'->'active' (auto-heal). NUNCA mexe em 'pending' (confirmação do operador) nem
+  // 'disabled' (desligado de propósito). Forward-only, idempotente, não destrutivo.
+  //
+  // GATE: SÓ registra o cron com GCAL_HEALTHCHECK_ENABLED=true. OPCIONAL no boot (lição #247: nada
+  // aqui é obrigatório — worker sobe normal sem a env). Com OFF o cron NEM é registrado (zero query,
+  // zero chamada ao Google). ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR) — NÃO assumir.
+  GCAL_HEALTHCHECK_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrão cron (croner). Default a cada 2h no minuto 23 (não colide com :00 cleanup-chat, :15
+  // close-stale, :30 trial-orphan, :08 billing, :09 reconcile). Padrão inválido NUNCA crasha o boot
+  // — worker.ts cai pro fallback via scheduleCronSafe.
+  GCAL_HEALTHCHECK_CRON: z.string().default('23 */2 * * *'),
+  // Teto de validações por CICLO (anti-burst contra a API do Google + previsibilidade de custo). O
+  // cron prioriza as agendas com check mais ANTIGO (NULLS FIRST) e dá a volta em todas ao longo de
+  // vários ciclos. Default 50 — folgado pros ~5 clones de hoje (todos checados todo ciclo).
+  GCAL_HEALTHCHECK_MAX_PER_RUN: z.coerce.number().int().positive().default(50),
+  // Timeout duro (ms) por validação — nunca aguardar o Google infinito (regra 7). Timeout NÃO
+  // demove a agenda (transitório = inconclusivo, status preservado): só falha DEFINITIVA
+  // (403/404/creds inválidas) vira 'invalid'. Default 8s.
+  GCAL_HEALTHCHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

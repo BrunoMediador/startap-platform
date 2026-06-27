@@ -13,6 +13,7 @@ import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
+import { runGcalHealthcheck } from './jobs/gcal-healthcheck.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 import { runMonitor } from './jobs/monitor.js';
 import { runReconcilePackages } from './jobs/reconcile-packages.js';
@@ -428,6 +429,65 @@ async function main() {
     );
   } else {
     log.info('reminders: REMINDERS_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Health-check do Google Calendar (SCRUM-27 — fim do "active mentiroso"). Revalida as agendas
+  // marcadas 'active' (clones individuais + colaboradores de estabelecimento) reusando o
+  // testConnection() do painel; quem quebrou cai pra 'invalid' (o bot para de prometer agenda
+  // que não existe). GATE: SÓ registra o cron com GCAL_HEALTHCHECK_ENABLED=true (default OFF —
+  // lição #247). Com a env ausente o worker sobe normal e este cron NÃO existe (zero query, zero
+  // chamada ao Google). A cada 2h (GCAL_HEALTHCHECK_CRON, default '23 */2'). Padrão inválido cai
+  // no fallback via scheduleCronSafe. ⚠️ Ligar ON/OFF em prod = decisão do Bruno (ver corpo do PR).
+  if (config.GCAL_HEALTHCHECK_ENABLED) {
+    log.info(
+      { cron: config.GCAL_HEALTHCHECK_CRON },
+      'gcal-healthcheck: cron registrado (GCAL_HEALTHCHECK_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.GCAL_HEALTHCHECK_CRON,
+      '23 */2 * * *',
+      { name: 'gcal-healthcheck', timezone: 'America/Sao_Paulo' },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let gcalResult: Awaited<ReturnType<typeof runGcalHealthcheck>> | null = null;
+        let gcalError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:gcal-healthcheck',
+          flowName: 'gcal-healthcheck',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job gcal-healthcheck iniciado',
+        });
+        try {
+          gcalResult = await runGcalHealthcheck();
+          // Só loga ciclo com atividade relevante — sem demoções/inconclusivos fica mudo.
+          if (gcalResult.demoted > 0 || gcalResult.inconclusive > 0) {
+            log.warn({ ...gcalResult }, 'gcal-healthcheck: atividade neste ciclo');
+          }
+        } catch (e) {
+          gcalError = e;
+          log.error({ err: e }, 'gcal-healthcheck crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:gcal-healthcheck',
+            flowName: 'gcal-healthcheck',
+            bot: 'worker',
+            eventType: gcalError ? 'worker.job-failed' : 'worker.job-finished',
+            status: gcalError ? 'error' : 'success',
+            message: gcalError ? 'Job gcal-healthcheck falhou' : 'Job gcal-healthcheck concluído',
+            ...(gcalResult ? { metadata: gcalResult } : {}),
+            ...(gcalError ? { error: gcalError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('gcal-healthcheck: GCAL_HEALTHCHECK_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {
