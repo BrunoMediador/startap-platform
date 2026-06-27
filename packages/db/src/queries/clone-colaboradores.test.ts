@@ -62,6 +62,16 @@ describe('listBySlot — comissao_pct vem como number', () => {
     const [row] = await listBySlot('clone_x');
     expect(row.comissao_pct).toBe(0);
   });
+
+  // REGRESSÃO (bug de produção 2026-06-27): id é BIGINT no banco e o driver pg devolve
+  // bigint como STRING. O contrato ColaboradorRow.id é `number`; mapColaboradorRow tem
+  // de honrar o tipo (senão consumidores que comparam id com `===` quebram em runtime).
+  it('id (bigint do pg) chega como STRING e sai como number (honra o tipo do contrato)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...RAW_ROW, id: '4' }], rowCount: 1 });
+    const [row] = await listBySlot('clone_x');
+    expect(row.id).toBe(4);
+    expect(typeof row.id).toBe('number');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

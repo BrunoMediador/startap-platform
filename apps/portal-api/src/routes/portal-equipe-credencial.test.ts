@@ -187,4 +187,24 @@ describe('caminho feliz', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     await app.close();
   });
+
+  // REGRESSÃO (bug de produção 2026-06-27): clone_colaboradores.id é BIGINT e o driver pg
+  // devolve bigint como STRING ('3'), não number. O :id da rota vem como number (parseId).
+  // O lookup `c.id === id` ('3' === 3) dava SEMPRE false -> 404 "colaborador nao encontrado",
+  // mesmo o colaborador EXISTINDO no slot do dono. O fix normaliza os dois lados (Number).
+  it('201: acha o colaborador mesmo quando listBySlot devolve id como STRING (bigint do pg)', async () => {
+    listBySlotMock.mockResolvedValue([{ ...COLAB, id: '3' as unknown as number }]);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/equipe/3/gerar-senha' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({
+      ok: true,
+      username: 'thomas',
+      generated_password: 'Plain1senhAxy',
+    });
+    expect(upsertCredentialsMock).toHaveBeenCalledTimes(1);
+    // O colaboradorId gravado é o :id numérico da rota (3), não a string crua.
+    expect(upsertCredentialsMock.mock.calls[0][0].colaboradorId).toBe(3);
+    await app.close();
+  });
 });

@@ -206,8 +206,11 @@ export const portalEquipeRoutes: FastifyPluginAsync = async (app) => {
 
     // Anti-IDOR: listBySlot é escopado pelo slot da sessão; um id de outro tenant não
     // aparece aqui -> 404. (Resolvido pelo MESMO caminho do gestão: slot+id.)
+    // Number(c.id) === id: defesa em profundidade contra o id BIGINT vir como string do
+    // pg (a data layer já normaliza, mas o `===` aqui não pode depender disso) — sem
+    // isso, '4' === 4 dava false e o colaborador EXISTENTE caía no 404.
     const colaboradores = await cloneColaboradores.listBySlot(gate.slot);
-    const colaborador = colaboradores.find((c) => c.id === id);
+    const colaborador = colaboradores.find((c) => Number(c.id) === id);
     if (!colaborador) {
       return reply.code(404).send({ error: 'colaborador nao encontrado' });
     }

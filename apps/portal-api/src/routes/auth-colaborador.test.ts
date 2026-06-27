@@ -183,4 +183,70 @@ describe('POST /auth/login — colaborador (SCRUM-32)', () => {
     expect(res.json()).toEqual({ error: 'usuario ou senha invalidos' });
     await app.close();
   });
+
+  // REGRESSÃO (bug de produção 2026-06-27, colaborador 'robson' do dragon): um
+  // portal_users INATIVO homônimo SOMBREAVA a credencial do colaborador. O login
+  // achava o owner inativo, retornava 403 "usuario desativado" e o compare da senha
+  // do colaborador NUNCA era alcançado (failed_attempts ficava 0, last_login_at NULL).
+  // Com o fix, sem owner ATIVO casando o username, o login de colaborador é tentado.
+  it('flag ON + owner homônimo INATIVO + senha de colaborador certa: loga como colaborador (não sombreia)', async () => {
+    configMock.COLABORADOR_PORTAL_ENABLED = true;
+    // Existe um portal_users 'bene-silva' porém DESATIVADO (active=false).
+    findOwnerMock.mockResolvedValue({
+      id: 18,
+      username: 'bene-silva',
+      display_name: 'Bene (owner velho)',
+      password_hash: '$2a$12$ownerhash',
+      active: false,
+      must_change_password: false,
+      locked_until: null,
+    } as never);
+    // E existe a credencial de COLABORADOR ATIVA com o mesmo username.
+    findColabMock.mockResolvedValue(COLAB);
+    compareMock.mockResolvedValue(true as never);
+    createSessionMock.mockResolvedValue('sid-colab');
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'bene-silva', password: 'senhaForte99' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().role).toBe('colaborador');
+    expect(recordColabOkMock).toHaveBeenCalledWith(7);
+    expect(createSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'colaborador', colaboradorId: 7 }),
+    );
+    await app.close();
+  });
+
+  // Owner INATIVO homônimo SEM colaborador correspondente: mantém o 403 explícito
+  // (comportamento atual preservado — não vira 401 genérico nem tenta logar ninguém).
+  it('flag ON + owner INATIVO sem colaborador correspondente: mantém 403 (comportamento atual)', async () => {
+    configMock.COLABORADOR_PORTAL_ENABLED = true;
+    findOwnerMock.mockResolvedValue({
+      id: 18,
+      username: 'so-owner',
+      display_name: 'x',
+      password_hash: '$2a$12$ownerhash',
+      active: false,
+      must_change_password: false,
+      locked_until: null,
+    } as never);
+    findColabMock.mockResolvedValue(null); // não há colaborador com esse username
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { username: 'so-owner', password: 'x' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'usuario desativado' });
+    expect(createSessionMock).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
