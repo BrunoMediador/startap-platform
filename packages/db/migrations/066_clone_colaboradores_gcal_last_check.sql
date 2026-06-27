@@ -1,4 +1,4 @@
--- Migration 065: clone_colaboradores.gcal_last_check_at — carimbo da última validação da agenda.
+-- Migration 066: clone_colaboradores.gcal_last_check_at — carimbo da última validação da agenda.
 --
 -- MOTIVO (SCRUM-27 — "active mentiroso"): o status GCal de um colaborador só muda quando alguém
 --   clica "Testar conexão" no painel (POST /api/clones/:id/colaboradores/:colabId/gcal/test). Uma
