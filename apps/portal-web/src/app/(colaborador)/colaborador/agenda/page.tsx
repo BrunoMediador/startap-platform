@@ -5,8 +5,13 @@
  *   - pending              -> skeleton.
  *   - erro                 -> ErrorState com retry.
  *   - gcal_configured:false -> empty "agenda não conectada" (pré-setup, não erro).
- *   - sem eventos          -> empty "nenhum horário".
- *   - com eventos          -> ColaboradorAgendaClient (lista só-leitura).
+ *   - conectada            -> ColaboradorAgendaClient (filtro de data + lista). O
+ *                             vazio "nada nesse período" mora no client pra o filtro
+ *                             seguir visível quando a janela vier vazia.
+ *
+ * O FILTRO DE DATA mora aqui (page) porque controla a JANELA do fetch: a janela
+ * [de, ate] vira past/ahead (lib/colaborador-agenda-periodo) e entra na query —
+ * mesmo padrão visual de período do dono (PeriodSelector / lib/billing-periodo).
  */
 import { ColaboradorAgendaClient } from '@/components/colaborador/colaborador-agenda-client';
 import { useColaborador } from '@/components/colaborador/colaborador-session-context';
@@ -14,15 +19,19 @@ import { IconCalendar } from '@/components/icons';
 import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { agendaPeriodoPadrao, periodoParaPastAhead } from '@/lib/colaborador-agenda-periodo';
 import { useColaboradorAgenda } from '@/lib/queries';
+import { useMemo, useState } from 'react';
 
 export default function ColaboradorAgendaPage() {
   const { slot, colaboradorId } = useColaborador();
-  const q = useColaboradorAgenda(slot, colaboradorId);
+  const [periodo, setPeriodo] = useState(() => agendaPeriodoPadrao());
+  const { past, ahead } = useMemo(() => periodoParaPastAhead(periodo), [periodo]);
+  const q = useColaboradorAgenda(slot, colaboradorId, past, ahead);
 
   return (
     <>
-      <PageHead title="Minha agenda" subtitle="Os horários marcados pra você. Só pra acompanhar." />
+      <PageHead title="Minha agenda" subtitle="Os horários marcados pra você." />
 
       {q.isPending ? (
         <>
@@ -37,14 +46,8 @@ export default function ColaboradorAgendaPage() {
           title="Agenda ainda não conectada"
           description="Quando sua agenda do Google estiver ligada, os horários aparecem aqui pra você acompanhar."
         />
-      ) : q.data.agendamentos.length === 0 ? (
-        <EmptyState
-          icon={<IconCalendar size={26} />}
-          title="Nenhum horário ainda"
-          description="Assim que o robô marcar um atendimento pra você no WhatsApp, ele aparece aqui."
-        />
       ) : (
-        <ColaboradorAgendaClient data={q.data} />
+        <ColaboradorAgendaClient data={q.data} periodo={periodo} onPeriodoChange={setPeriodo} />
       )}
     </>
   );

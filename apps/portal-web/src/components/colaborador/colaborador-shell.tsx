@@ -1,10 +1,14 @@
 'use client';
 
 /**
- * Shell do painel READ-ONLY do colaborador (SCRUM-32). Bem mais enxuto que o shell
- * do dono: NÃO tem sidebar, bottom-nav do dono, nem ações de gestão — só a marca, o
- * nome do colaborador + selo "Somente leitura", o botão Sair e duas abas
- * (Agenda / Faturamento). Mobile-first; no desktop centraliza num container estreito.
+ * Shell do painel do colaborador (SCRUM-32). Bem mais enxuto que o shell do dono:
+ * NÃO tem sidebar, bottom-nav do dono, nem ações de gestão — só a marca, o nome do
+ * colaborador, o botão Sair e duas abas (Agenda / Faturamento). Mobile-first; no
+ * desktop centraliza num container estreito.
+ *
+ * NOTA: a visão segue read-only por design (sem botões de criar/editar/cancelar —
+ * isolamento no backend, ADR/SCRUM-32). O que saiu foi só o RÓTULO "Somente leitura"
+ * (decisão do Bruno: profissionalismo) — a função read-only NÃO mudou.
  */
 import { Brandmark, IconCalendar, IconLogout, IconWallet } from '@/components/icons';
 import { cn } from '@/lib/cn';
@@ -40,12 +44,9 @@ export function ColaboradorShell({
           </div>
 
           <div className="flex items-center gap-2.5">
-            <div className="hidden min-w-0 flex-col items-end sm:flex">
+            <div className="hidden min-w-0 items-center sm:flex">
               <span className="max-w-[180px] truncate text-[13px] font-semibold text-ink">
                 {displayName}
-              </span>
-              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-                Somente leitura
               </span>
             </div>
             <button
