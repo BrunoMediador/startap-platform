@@ -22,6 +22,10 @@ export interface TermsAcceptanceRow {
   portal_user_id: number | null;
   terms_version: string;
   privacy_version: string;
+  /** sha256 do conteúdo canônico dos Termos aceitos (SCRUM-31). NULL = aceite pré-hash. */
+  terms_hash: string | null;
+  /** sha256 do conteúdo canônico da Política aceita (SCRUM-31). NULL = aceite pré-hash. */
+  privacy_hash: string | null;
   ip: string | null;
   user_agent: string | null;
   accepted_at: Date;
@@ -39,6 +43,13 @@ export interface RecordTermsAcceptanceInput {
   termsVersion: string;
   /** Versão da Política de Privacidade aceita — server-authoritative (ex.: 'v1'). */
   privacyVersion: string;
+  /**
+   * sha256(conteúdo canônico + versão) dos Termos aceitos — server-authoritative (SCRUM-31).
+   * null tolerado (forward-only): caller que ainda não computa o hash grava null.
+   */
+  termsHash: string | null;
+  /** sha256(conteúdo canônico + versão) da Política aceita — server-authoritative (SCRUM-31). */
+  privacyHash: string | null;
   /** IP de origem (LGPD: dado pessoal; nunca logar em claro). */
   ip: string | null;
   /** User-agent do navegador no ato do aceite (trilha de auditoria). */
@@ -62,16 +73,19 @@ export async function recordTermsAcceptance(
 ): Promise<TermsAcceptanceRow> {
   const r = await query<TermsAcceptanceRow & { id: string }>(
     `INSERT INTO terms_acceptances
-       (slot, tenant_id, portal_user_id, terms_version, privacy_version, ip, user_agent)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (slot, tenant_id, portal_user_id, terms_version, privacy_version,
+        terms_hash, privacy_hash, ip, user_agent)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, slot, tenant_id, portal_user_id, terms_version, privacy_version,
-               ip, user_agent, accepted_at, created_at`,
+               terms_hash, privacy_hash, ip, user_agent, accepted_at, created_at`,
     [
       input.slot,
       input.tenantId,
       input.portalUserId,
       input.termsVersion,
       input.privacyVersion,
+      input.termsHash,
+      input.privacyHash,
       input.ip,
       input.userAgent,
     ],
@@ -86,7 +100,7 @@ export async function recordTermsAcceptance(
 export async function getLatestAcceptanceForSlot(slot: string): Promise<TermsAcceptanceRow | null> {
   const r = await query<TermsAcceptanceRow & { id: string }>(
     `SELECT id, slot, tenant_id, portal_user_id, terms_version, privacy_version,
-            ip, user_agent, accepted_at, created_at
+            terms_hash, privacy_hash, ip, user_agent, accepted_at, created_at
        FROM terms_acceptances
       WHERE slot = $1
       ORDER BY accepted_at DESC, id DESC

@@ -41,7 +41,12 @@ import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { PRIVACY_VERSION, TERMS_VERSION, USER_AGENT_MAX } from '../lib/legal-version.js';
+import {
+  PRIVACY_VERSION,
+  TERMS_VERSION,
+  USER_AGENT_MAX,
+  currentLegalHashes,
+} from '../lib/legal-version.js';
 import { createSession } from '../lib/session.js';
 import { SESSION_COOKIE } from '../lib/tenant.js';
 import { cookieSecure } from './auth.js';
@@ -225,12 +230,16 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
       // LGPD: ip/user_agent ficam SÓ na prova, nunca em log claro.
       const tenantId = await tenant.resolveTenantId(slot);
       const uaRaw = req.headers['user-agent'];
+      // Hash de prova (SCRUM-31): sha256(conteúdo canônico + versão), server-authoritative.
+      const { termsHash, privacyHash } = currentLegalHashes();
       await termsAcceptance.recordTermsAcceptance({
         slot,
         tenantId,
         portalUserId: createdUser.id,
         termsVersion: TERMS_VERSION,
         privacyVersion: PRIVACY_VERSION,
+        termsHash,
+        privacyHash,
         ip: req.ip || null,
         userAgent: typeof uaRaw === 'string' ? uaRaw.slice(0, USER_AGENT_MAX) : null,
       });

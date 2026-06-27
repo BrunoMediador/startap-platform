@@ -37,6 +37,8 @@ describe('recordTermsAcceptance', () => {
           portal_user_id: '7',
           terms_version: 'v1',
           privacy_version: 'v1',
+          terms_hash: 'aaa',
+          privacy_hash: 'bbb',
           ip: '203.0.113.7',
           user_agent: 'UA/1.0',
           accepted_at: new Date('2026-06-26T00:00:00Z'),
@@ -51,22 +53,38 @@ describe('recordTermsAcceptance', () => {
       portalUserId: 7,
       termsVersion: 'v1',
       privacyVersion: 'v1',
+      termsHash: 'aaa',
+      privacyHash: 'bbb',
       ip: '203.0.113.7',
       userAgent: 'UA/1.0',
     });
 
     expect(row.id).toBe(42);
     expect(row.portal_user_id).toBe(7);
+    expect(row.terms_hash).toBe('aaa');
+    expect(row.privacy_hash).toBe('bbb');
 
     const [sql, params] = lastCall();
     expect(sql).toContain('INSERT INTO terms_acceptances');
-    // Ordem: slot, tenant_id, portal_user_id, terms_version, privacy_version, ip, user_agent
-    expect(params).toEqual(['clone_x', 't-uuid', 7, 'v1', 'v1', '203.0.113.7', 'UA/1.0']);
-    // tenant_id é o 2º placeholder ($2) — NÃO reusa o $1 do slot.
-    expect(sql).toMatch(/VALUES\s*\(\$1,\s*\$2,\s*\$3,\s*\$4,\s*\$5,\s*\$6,\s*\$7\)/);
+    // Ordem: slot, tenant_id, portal_user_id, terms_version, privacy_version,
+    //        terms_hash, privacy_hash, ip, user_agent
+    expect(params).toEqual([
+      'clone_x',
+      't-uuid',
+      7,
+      'v1',
+      'v1',
+      'aaa',
+      'bbb',
+      '203.0.113.7',
+      'UA/1.0',
+    ]);
+    // tenant_id é o 2º placeholder ($2) — NÃO reusa o $1 do slot. Hashes em $6/$7.
+    expect(sql).toMatch(/VALUES\s*\(\$1,\s*\$2,\s*\$3,\s*\$4,\s*\$5,\s*\$6,\s*\$7,\s*\$8,\s*\$9\)/);
+    expect(sql).toContain('terms_hash, privacy_hash');
   });
 
-  it('tenant_id null e portal_user_id null são tolerados (fail-safe RLS / churn)', async () => {
+  it('tenant_id, portal_user_id e hashes null são tolerados (fail-safe / forward-only)', async () => {
     mockQuery.mockResolvedValue({
       rows: [
         {
@@ -76,6 +94,8 @@ describe('recordTermsAcceptance', () => {
           portal_user_id: null,
           terms_version: 'v1',
           privacy_version: 'v1',
+          terms_hash: null,
+          privacy_hash: null,
           ip: null,
           user_agent: null,
           accepted_at: new Date(),
@@ -89,14 +109,20 @@ describe('recordTermsAcceptance', () => {
       portalUserId: null,
       termsVersion: 'v1',
       privacyVersion: 'v1',
+      termsHash: null,
+      privacyHash: null,
       ip: null,
       userAgent: null,
     });
     expect(row.tenant_id).toBeNull();
     expect(row.portal_user_id).toBeNull();
+    expect(row.terms_hash).toBeNull();
+    expect(row.privacy_hash).toBeNull();
     const [, params] = lastCall();
     expect(params[1]).toBeNull(); // tenant_id
     expect(params[2]).toBeNull(); // portal_user_id
+    expect(params[5]).toBeNull(); // terms_hash
+    expect(params[6]).toBeNull(); // privacy_hash
   });
 });
 
@@ -111,6 +137,8 @@ describe('getLatestAcceptanceForSlot', () => {
           portal_user_id: '3',
           terms_version: 'v1',
           privacy_version: 'v1',
+          terms_hash: 'aaa',
+          privacy_hash: 'bbb',
           ip: null,
           user_agent: null,
           accepted_at: new Date(),
@@ -120,8 +148,10 @@ describe('getLatestAcceptanceForSlot', () => {
     });
     const row = await getLatestAcceptanceForSlot('clone_z');
     expect(row?.id).toBe(9);
+    expect(row?.terms_hash).toBe('aaa');
     const [sql, params] = lastCall();
     expect(sql).toContain('WHERE slot = $1');
+    expect(sql).toContain('terms_hash, privacy_hash');
     expect(params).toEqual(['clone_z']);
   });
 

@@ -236,6 +236,9 @@ describe('POST /auth/signup', () => {
         portalUserId: 7,
         termsVersion: 'v1',
         privacyVersion: 'v1',
+        // Hash de prova v1 server-authoritative (SCRUM-31): sha256 hex de 64 chars.
+        termsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        privacyHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         tenantId: '11111111-1111-1111-1111-111111111111',
         userAgent: 'TestAgent/1.0',
       }),

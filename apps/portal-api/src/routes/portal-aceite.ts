@@ -19,6 +19,7 @@ import {
   PRIVACY_VERSION,
   TERMS_VERSION,
   USER_AGENT_MAX,
+  currentLegalHashes,
   needsAcceptance,
 } from '../lib/legal-version.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
@@ -45,12 +46,16 @@ export const portalAceiteRoutes: FastifyPluginAsync = async (app) => {
     const { slot, userId } = requireTenant(req);
     const tenantId = await tenant.resolveTenantId(slot);
     const uaRaw = req.headers['user-agent'];
+    // Hash de prova (SCRUM-31): sha256(conteúdo canônico + versão), server-authoritative.
+    const { termsHash, privacyHash } = currentLegalHashes();
     await termsAcceptance.recordTermsAcceptance({
       slot,
       tenantId,
       portalUserId: userId,
       termsVersion: TERMS_VERSION,
       privacyVersion: PRIVACY_VERSION,
+      termsHash,
+      privacyHash,
       ip: req.ip || null,
       userAgent: typeof uaRaw === 'string' ? uaRaw.slice(0, USER_AGENT_MAX) : null,
     });
@@ -59,6 +64,8 @@ export const portalAceiteRoutes: FastifyPluginAsync = async (app) => {
       ok: true,
       terms_version: TERMS_VERSION,
       privacy_version: PRIVACY_VERSION,
+      terms_hash: termsHash,
+      privacy_hash: privacyHash,
     });
   });
 };

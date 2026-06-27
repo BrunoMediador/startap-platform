@@ -13,6 +13,31 @@
 export const TERMS_VERSION = 'v1';
 export const PRIVACY_VERSION = 'v1';
 
+/**
+ * Hash de prova (SCRUM-31 / ADR 0029): sha256(conteúdo canônico + versão) de cada
+ * documento. SERVER-AUTHORITATIVE — gravado em CADA aceite (terms_acceptances) ao lado
+ * da versão, como impressão digital imutável do TEXTO aceito (tamper-evidence: detecta
+ * edição de texto sem bump de versão; permite verificar a prova contra um texto arquivado).
+ *
+ * Valor é uma CONSTANTE por versão: o conteúdo de uma versão é fixo, logo o hash também.
+ * Estes literais são o sha256 do conteúdo v1 PUBLICADO (apps/portal-web/src/lib/legal.ts),
+ * computado pela serialização canônica de ../lib/legal-hash.ts (canonicalizeLegalDoc).
+ *
+ * ⚠️ AO BUMPAR A VERSÃO (v1 -> v2) E/OU MUDAR O TEXTO LEGAL: recompute estes hashes.
+ *   Procedimento (a partir do conteúdo canônico de portal-web/src/lib/legal.ts):
+ *     computeLegalDocHash(TERMOS_DE_USO)  -> novo TERMS_HASH
+ *     computeLegalDocHash(POLITICA_PRIVACIDADE) -> novo PRIVACY_HASH
+ *   (canonicalizeLegalDoc inclui a VERSÃO na string, então o hash muda no bump mesmo que
+ *   o texto não mude.) MANTER EM SINCRONIA com portal-web — ver legal.ts.
+ */
+export const TERMS_HASH = '214f5c8e5230edd9a9b483458ec03ce851ae49b24bb1ce57fc5e414f0db9a7bd';
+export const PRIVACY_HASH = '63e04f55b713f5c422ec22df3a5cf7aba14f08368d21e9e9fade86ea33eb4d8d';
+
+/** Hashes vigentes (server-authoritative) gravados na prova de aceite. */
+export function currentLegalHashes(): { termsHash: string; privacyHash: string } {
+  return { termsHash: TERMS_HASH, privacyHash: PRIVACY_HASH };
+}
+
 /** Teto do user_agent persistido na prova (header é livre; evita linha gigante). */
 export const USER_AGENT_MAX = 512;
 
