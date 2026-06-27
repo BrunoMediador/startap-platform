@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FORMAS_PAGAMENTO_OPCOES,
+  formasPagamentoSchema,
+  formasPagamentoToString,
   horarioDiaSchema,
   horariosSchema,
+  parseFormasPagamento,
   perfilSchema,
   servicoSchema,
   servicosSchema,
@@ -146,6 +150,77 @@ describe('horariosSchema', () => {
   });
 });
 
+describe('formasPagamentoSchema', () => {
+  it('aceita subconjunto valido das opcoes fixas', () => {
+    const r = formasPagamentoSchema.safeParse(['PIX', 'Dinheiro']);
+    expect(r.success).toBe(true);
+  });
+
+  it('normaliza para a ordem canonica e deduplica', () => {
+    const r = formasPagamentoSchema.safeParse(['Cartão de crédito', 'PIX', 'PIX', 'Dinheiro']);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data).toEqual(['Dinheiro', 'PIX', 'Cartão de crédito']);
+  });
+
+  it('aceita lista vazia (limpar) e undefined (opcional)', () => {
+    expect(formasPagamentoSchema.safeParse([]).success).toBe(true);
+    expect(formasPagamentoSchema.safeParse(undefined).success).toBe(true);
+  });
+
+  it('rejeita valor fora da lista permitida (400 no portal-api)', () => {
+    expect(formasPagamentoSchema.safeParse(['Boleto']).success).toBe(false);
+    expect(formasPagamentoSchema.safeParse(['PIX', 'fiado']).success).toBe(false);
+  });
+
+  it('rejeita tipo invalido (string em vez de array)', () => {
+    expect(formasPagamentoSchema.safeParse('PIX').success).toBe(false);
+  });
+});
+
+describe('parseFormasPagamento (migracao best-effort do texto livre antigo)', () => {
+  it('mapeia free-text com acento/caixa pras opcoes canonicas', () => {
+    expect(parseFormasPagamento('Pix, dinheiro, cartão')).toEqual([
+      'Dinheiro',
+      'PIX',
+      'Cartão de débito',
+      'Cartão de crédito',
+    ]);
+  });
+
+  it('distingue debito de credito quando o texto qualifica', () => {
+    expect(parseFormasPagamento('cartão de débito e dinheiro')).toEqual([
+      'Dinheiro',
+      'Cartão de débito',
+    ]);
+  });
+
+  it('ignora tokens nao-mapeaveis (ex.: fiado/boleto)', () => {
+    expect(parseFormasPagamento('Pix, fiado, boleto')).toEqual(['PIX']);
+  });
+
+  it('entrada vazia/invalida vira []', () => {
+    expect(parseFormasPagamento('')).toEqual([]);
+    expect(parseFormasPagamento('   ')).toEqual([]);
+    expect(parseFormasPagamento(null)).toEqual([]);
+    expect(parseFormasPagamento(42)).toEqual([]);
+  });
+});
+
+describe('formasPagamentoToString (serializacao pro storage)', () => {
+  it('junta na ordem canonica com ", "', () => {
+    expect(formasPagamentoToString(['Cartão de crédito', 'PIX'])).toBe('PIX, Cartão de crédito');
+  });
+
+  it('lista vazia vira ""', () => {
+    expect(formasPagamentoToString([])).toBe('');
+  });
+
+  it('round-trip estavel: parse(toString(x)) preserva o conjunto', () => {
+    const x = [...FORMAS_PAGAMENTO_OPCOES];
+    expect(parseFormasPagamento(formasPagamentoToString(x))).toEqual(x);
+  });
+});
+
 describe('perfilSchema', () => {
   it('aceita perfil completo valido', () => {
     const r = perfilSchema.safeParse({
@@ -154,21 +229,27 @@ describe('perfilSchema', () => {
       telefone_contato: '(11) 99999-0000',
       endereco: 'Rua X, 123',
       instagram: 'barbeariaedu',
-      formas_pagamento: 'Pix, cartao, dinheiro',
+      formas_pagamento: ['PIX', 'Dinheiro'],
     });
     expect(r.success).toBe(true);
+    if (r.success) expect(r.data.formas_pagamento).toEqual(['Dinheiro', 'PIX']);
+  });
+
+  it('rejeita forma de pagamento fora da lista', () => {
+    const r = perfilSchema.safeParse({ formas_pagamento: ['Boleto'] });
+    expect(r.success).toBe(false);
   });
 
   it('aceita objeto vazio (todos os campos opcionais)', () => {
     expect(perfilSchema.safeParse({}).success).toBe(true);
   });
 
-  it('aceita campos vazios ("") como limpar o campo', () => {
-    const r = perfilSchema.safeParse({ nome_negocio: '', formas_pagamento: '' });
+  it('aceita campos vazios ("" / []) como limpar o campo', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: '', formas_pagamento: [] });
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.nome_negocio).toBe('');
-      expect(r.data.formas_pagamento).toBe('');
+      expect(r.data.formas_pagamento).toEqual([]);
     }
   });
 

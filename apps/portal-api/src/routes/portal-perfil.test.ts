@@ -49,7 +49,7 @@ const PERFIL_OK = {
   telefone_contato: '11999990000',
   endereco: 'Rua X, 1',
   instagram: 'edubarber',
-  formas_pagamento: 'Pix, cartao',
+  formas_pagamento: ['Dinheiro', 'PIX'],
 };
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -154,6 +154,21 @@ describe('PUT /portal/perfil', () => {
     });
 
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('400: forma de pagamento fora da lista permitida (selecionar, nao digitar)', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { formas_pagamento: ['Boleto'] } },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('perfil invalido');
+    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 

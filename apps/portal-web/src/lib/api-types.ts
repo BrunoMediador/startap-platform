@@ -502,13 +502,29 @@ export interface StatusConexaoResponse {
 // Regra do PUT: chave ausente no body = nao toca; "" = limpa. Instagram e
 // guardado SEM "@" no backend (a normalizacao client casa com isso).
 
+/**
+ * Formas de pagamento = SELECAO de opcoes FIXAS (checklist), nao texto livre
+ * (SCRUM-23, "selecionar, nao digitar"). Espelha FORMAS_PAGAMENTO_OPCOES do
+ * backend (@startap/core/schemas) — manter em sincronia. Lista provisoria do
+ * Bruno: pode mudar antes do merge.
+ */
+export const FORMAS_PAGAMENTO_OPCOES = [
+  'Dinheiro',
+  'PIX',
+  'Cartão de débito',
+  'Cartão de crédito',
+] as const;
+
+export type FormaPagamentoOpcao = (typeof FORMAS_PAGAMENTO_OPCOES)[number];
+
 export interface PerfilNegocio {
   nome_negocio: string;
   nome_prestador: string;
   telefone_contato: string;
   endereco: string;
   instagram: string;
-  formas_pagamento: string;
+  /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
+  formas_pagamento: FormaPagamentoOpcao[];
 }
 
 /** GET /portal/perfil -> 200. O perfil vem dentro do envelope `perfil`. */

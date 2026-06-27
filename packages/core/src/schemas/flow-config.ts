@@ -128,13 +128,105 @@ export type Horarios = z.infer<typeof horariosSchema>;
 // cliente preenche o que quiser; vazio/ausente nao polui o contexto do bot
 // (free-slots.ts omite chave vazia). `instagram` aceita com ou sem '@' (o
 // renderer ja prefixa '@'); aqui so normalizamos removendo um '@' inicial pra
-// nao virar '@@'. `formas_pagamento` e texto livre (ex.: "Pix, cartao,
-// dinheiro"). String vazia ("") e aceita como "limpar o campo".
+// nao virar '@@'. `formas_pagamento` agora e uma SELECAO (checklist), nao mais
+// texto livre: array das opcoes fixas que o negocio aceita (SCRUM-23, principio
+// "selecionar, nao digitar" — #365/#367). Array vazio ([]) limpa o campo.
+// Storage continua STRING canonica no personalizacao (o bot/gestao leem string);
+// a conversao array<->string vive no data layer (portal-config.ts).
 // ---------------------------------------------------------------------------
 
 /** Remove um unico '@' inicial e espacos das pontas (idempotente). */
 function stripAtPrefix(v: string): string {
   return v.trim().replace(/^@+/, '');
+}
+
+// ---------------------------------------------------------------------------
+// Formas de pagamento: lista FIXA de opcoes (decisao provisoria do Bruno —
+// pode mudar antes do merge). Fonte unica usada pelo schema (validacao),
+// pelo parser do legado e pelo serializador de storage.
+// ---------------------------------------------------------------------------
+
+export const FORMAS_PAGAMENTO_OPCOES = [
+  'Dinheiro',
+  'PIX',
+  'Cartão de débito',
+  'Cartão de crédito',
+] as const;
+
+export type FormaPagamentoOpcao = (typeof FORMAS_PAGAMENTO_OPCOES)[number];
+
+/**
+ * Array das formas aceitas, validado contra a lista fixa. Valor fora da lista
+ * => ZodError (path `formas_pagamento`) => 400 no portal-api. Deduplica e
+ * devolve SEMPRE na ordem canonica de FORMAS_PAGAMENTO_OPCOES (estavel pro
+ * diff/dirty e pra string de storage). `[]` = "limpar". Campo opcional.
+ */
+export const formasPagamentoSchema = z
+  .array(z.enum(FORMAS_PAGAMENTO_OPCOES), {
+    invalid_type_error: 'formas de pagamento deve ser lista',
+  })
+  .max(FORMAS_PAGAMENTO_OPCOES.length, 'formas de pagamento invalidas')
+  .transform((arr) => {
+    const set = new Set<FormaPagamentoOpcao>(arr);
+    return FORMAS_PAGAMENTO_OPCOES.filter((o) => set.has(o));
+  })
+  .optional();
+
+/** Tokens normalizados (sem acento, minusculo) -> forma canonica, pro legado. */
+const FORMA_PAGAMENTO_SINONIMOS: Record<string, FormaPagamentoOpcao> = {
+  dinheiro: 'Dinheiro',
+  especie: 'Dinheiro',
+  cash: 'Dinheiro',
+  pix: 'PIX',
+  debito: 'Cartão de débito',
+  'cartao de debito': 'Cartão de débito',
+  'cartao debito': 'Cartão de débito',
+  credito: 'Cartão de crédito',
+  'cartao de credito': 'Cartão de crédito',
+  'cartao credito': 'Cartão de crédito',
+};
+
+function normalizarToken(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '') // tira acentos (combining diacritics)
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Best-effort: converte o `formas_pagamento` ANTIGO (texto livre, ex.: "Pix,
+ * cartao, dinheiro") guardado no personalizacao para o array canonico do
+ * checklist. Migracao LAZY: nada e reescrito no banco ate o dono salvar; aqui
+ * so interpretamos pra pre-marcar os chips. Tokens nao-mapeaveis sao IGNORADOS
+ * (ex.: "fiado" some do checklist; o texto antigo segue no DB ate o save).
+ * "cartao" generico (sem debito/credito) marca AMBOS os cartoes. Ordem canonica,
+ * deduplicado. Entrada vazia/invalida => [].
+ */
+export function parseFormasPagamento(raw: unknown): FormaPagamentoOpcao[] {
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+  const achadas = new Set<FormaPagamentoOpcao>();
+  for (const parte of raw.split(/[,;/\n•·|]+|\be\b/i)) {
+    const tok = normalizarToken(parte);
+    if (tok === '') continue;
+    const direto = FORMA_PAGAMENTO_SINONIMOS[tok];
+    if (direto) {
+      achadas.add(direto);
+      continue;
+    }
+    // "cartao" / "cartoes" generico, sem qualificar debito/credito => ambos.
+    if (/\bcart(a|o|ao|oes|ões)/.test(tok) && !/debito|credito/.test(tok)) {
+      achadas.add('Cartão de débito');
+      achadas.add('Cartão de crédito');
+    }
+  }
+  return FORMAS_PAGAMENTO_OPCOES.filter((o) => achadas.has(o));
+}
+
+/** Serializa o array canonico pra STRING de storage no personalizacao. [] => "". */
+export function formasPagamentoToString(arr: readonly FormaPagamentoOpcao[]): string {
+  const set = new Set<FormaPagamentoOpcao>(arr);
+  return FORMAS_PAGAMENTO_OPCOES.filter((o) => set.has(o)).join(', ');
 }
 
 export const perfilSchema = z
@@ -149,7 +241,7 @@ export const perfilSchema = z
       .max(120, 'instagram muito longo')
       .transform(stripAtPrefix)
       .optional(),
-    formas_pagamento: z.string().trim().max(240, 'formas de pagamento muito longo').optional(),
+    formas_pagamento: formasPagamentoSchema,
   })
   .strict();
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
+import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
@@ -9,6 +10,7 @@ import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
+import { FORMAS_PAGAMENTO_OPCOES, type FormaPagamentoOpcao } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { showPrestadorField } from '@/lib/google-conta';
 import {
@@ -16,6 +18,7 @@ import {
   type PerfilErrors,
   isDirty,
   toPerfilDraft,
+  toggleFormaPagamento,
   validatePerfil,
 } from '@/lib/perfil';
 import { qk, usePerfil, useSavePerfil } from '@/lib/queries';
@@ -66,10 +69,16 @@ export default function PerfilPage() {
 
   const dirty = isDirty(draft, saved);
 
-  function set(field: keyof PerfilDraft, value: string) {
+  // Campos de texto: keyof PerfilDraft menos `formas_pagamento` (que e checklist).
+  function set(field: Exclude<keyof PerfilDraft, 'formas_pagamento'>, value: string) {
     touched.current = true;
     setDraft((d) => ({ ...d, [field]: value }));
     if (errors[field]) setErrors((e) => ({ ...e, [field]: undefined }));
+  }
+
+  function toggleForma(forma: FormaPagamentoOpcao) {
+    touched.current = true;
+    setDraft((d) => ({ ...d, formas_pagamento: toggleFormaPagamento(d.formas_pagamento, forma) }));
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -172,14 +181,9 @@ export default function PerfilPage() {
               autoCorrect="off"
               spellCheck={false}
             />
-            <TextArea
-              label="Formas de pagamento"
-              placeholder="Ex.: Pix, dinheiro, cartão"
-              hint="Separe por vírgula. Aparece pro cliente quando ele pergunta."
-              rows={2}
-              value={draft.formas_pagamento}
-              error={errors.formas_pagamento}
-              onChange={(v) => set('formas_pagamento', v)}
+            <FormasPagamentoChecklist
+              selecionadas={draft.formas_pagamento}
+              onToggle={toggleForma}
             />
           </div>
 
@@ -221,7 +225,82 @@ export default function PerfilPage() {
   );
 }
 
-/** Campo de texto multi-linha (Endereço, Formas de pagamento) no padrão visual do Input. */
+/**
+ * Formas de pagamento: CHECKLIST de opções FIXAS (SCRUM-23, "selecionar, não
+ * digitar" — #365/#367). O dono marca as que aceita; não dá pra digitar uma forma
+ * inexistente (o backend também valida → 400). Mesmo padrão visual do checklist de
+ * serviços da Equipe (chip = checkbox, `role=checkbox`/`aria-checked`, alvo ~36px).
+ * Nada marcado = não aparece pro cliente quando ele pergunta.
+ */
+function FormasPagamentoChecklist({
+  selecionadas,
+  onToggle,
+}: {
+  selecionadas: FormaPagamentoOpcao[];
+  onToggle: (forma: FormaPagamentoOpcao) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-[13px] font-semibold text-ink">Formas de pagamento</span>
+      <div
+        role="group"
+        aria-label="Formas de pagamento que você aceita"
+        className="flex flex-wrap gap-2"
+      >
+        {FORMAS_PAGAMENTO_OPCOES.map((forma) => (
+          <FormaChip
+            key={forma}
+            label={forma}
+            marcada={selecionadas.includes(forma)}
+            onToggle={() => onToggle(forma)}
+          />
+        ))}
+      </div>
+      <p className="text-[12px] text-ink-soft">
+        Marque as que você aceita. O robô avisa o cliente quando ele pergunta.
+      </p>
+    </div>
+  );
+}
+
+/** Chip-checkbox de uma forma de pagamento (mesmo visual do chip de serviço da Equipe). */
+function FormaChip({
+  label,
+  marcada,
+  onToggle,
+}: {
+  label: string;
+  marcada: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={marcada}
+      onClick={onToggle}
+      className={cn(
+        'flex min-h-9 items-center gap-1.5 rounded-full border-[1.5px] px-3 py-1.5 text-left font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-brand-soft',
+        marcada
+          ? 'border-brand bg-brand text-bg'
+          : 'border-line-strong bg-surface text-ink hover:bg-surface-hover',
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          'flex size-[15px] shrink-0 items-center justify-center rounded-full border',
+          marcada ? 'border-bg/60 bg-bg/15' : 'border-line-strong',
+        )}
+      >
+        {marcada && <IconCheck size={11} />}
+      </span>
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+/** Campo de texto multi-linha (Endereço) no padrão visual do Input. */
 function TextArea({
   label,
   value,

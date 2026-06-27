@@ -9,7 +9,7 @@
  * pegar a versao nova em ate ~0s em vez de ate 60s.
  */
 import type { Horarios, Perfil, Servicos } from '@startap/core/schemas';
-import { PERFIL_KEYS } from '@startap/core/schemas';
+import { PERFIL_KEYS, formasPagamentoToString, parseFormasPagamento } from '@startap/core/schemas';
 import { query } from '../client.js';
 import { invalidateCloneCache, updateClone } from './flow-clones.js';
 
@@ -91,8 +91,14 @@ export async function updateHorariosBySlot(slot: string, horarios: Horarios): Pr
 
 /**
  * Le as 6 chaves do perfil do personalizacao do clone. `null` se o slot nao
- * existe (clone ausente). Chaves nao preenchidas saem como '' (campo vazio),
- * para o front renderizar inputs controlados sem `undefined`.
+ * existe (clone ausente). As 5 chaves de texto saem como '' (campo vazio) quando
+ * ausentes, para o front renderizar inputs controlados sem `undefined`.
+ *
+ * `formas_pagamento` e guardado como STRING canonica no JSONB (o bot/gestao leem
+ * string), mas o portal troca um ARRAY de opcoes fixas (checklist, SCRUM-23).
+ * Aqui convertemos string->array best-effort (parseFormasPagamento): mapeia o
+ * texto livre ANTIGO pras opcoes quando da; tokens nao-mapeaveis sao ignorados.
+ * Migracao LAZY — nada e reescrito no banco ate o dono salvar o perfil.
  */
 export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
   const r = await query<{ personalizacao: unknown }>(
@@ -101,8 +107,12 @@ export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
   );
   if (r.rows.length === 0) return null;
   const pers = parseJsonbOrNull<Record<string, string>>(r.rows[0].personalizacao) ?? {};
-  const perfil: Record<string, string> = {};
+  const perfil: Record<string, unknown> = {};
   for (const key of PERFIL_KEYS) {
+    if (key === 'formas_pagamento') {
+      perfil[key] = parseFormasPagamento(pers[key]);
+      continue;
+    }
     const v = pers[key];
     perfil[key] = typeof v === 'string' ? v : '';
   }
@@ -135,6 +145,13 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
   //    do personalizacao (observacoes, promocoes, etc.) ficam intactas.
   const merged: Record<string, string> = { ...atual };
   for (const key of PERFIL_KEYS) {
+    if (key === 'formas_pagamento') {
+      // Array (ja validado contra a lista fixa) -> STRING canonica de storage.
+      // Ausente no payload (undefined) = nao toca a chave; [] = limpa ('').
+      const arr = data.formas_pagamento;
+      if (arr !== undefined) merged[key] = formasPagamentoToString(arr);
+      continue;
+    }
     const v = (data as Record<string, string | undefined>)[key];
     if (v !== undefined) merged[key] = v;
   }
