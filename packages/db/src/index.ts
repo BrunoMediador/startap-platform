@@ -13,6 +13,7 @@ export * as flowExecutionLog from './queries/flow-execution-log.js';
 export * as flowControl from './queries/flow-control.js';
 export * as flowClones from './queries/flow-clones.js';
 export * as cloneColaboradores from './queries/clone-colaboradores.js';
+export * as colaboradorAuth from './queries/colaborador-auth.js';
 export * as botCourses from './queries/bot-courses.js';
 export * as portalConfig from './queries/portal-config.js';
 export * as portalUsers from './queries/portal-users.js';
@@ -67,6 +68,7 @@ export { ColaboradorRuleError } from './queries/clone-colaboradores.js';
 export type { BotCourseRow } from './queries/bot-courses.js';
 export type { PortalPausaRow } from './queries/portal-config.js';
 export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';
+export type { ColaboradorAuthRow } from './queries/colaborador-auth.js';
 export type { ClientBillingRow, BillingStatus } from './queries/client-billing.js';
 export type { BillingChargeRow, ChargeStatus } from './queries/billing-charges.js';
 export type {
@@ -126,6 +128,7 @@ export type {
   FaturamentoPorProfissionalRow,
   ComissaoReport,
   ComissaoPorProfissionalRow,
+  ComissaoColaboradorReport,
 } from './queries/atendimentos.js';
 export type {
   ReminderConfigRow,

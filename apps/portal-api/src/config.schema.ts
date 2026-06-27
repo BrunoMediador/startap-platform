@@ -221,6 +221,19 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Painel do COLABORADOR (barbeiro de estabelecimento) no portal (SCRUM-32) ──
+  // Kill-switch do login + visão READ-ONLY escopada do colaborador (rotas /auth/login
+  // detectando role + /colaborador/*). OPCIONAL no boot (ausente = OFF, lição #247:
+  // feature dormente nunca derruba o portal-api). OFF -> o login NUNCA tenta credencial
+  // de colaborador (byte-a-byte como hoje) e as rotas /colaborador/* respondem 404. É
+  // defesa em PROFUNDIDADE: o acesso real exige credencial gerada no gestão (só
+  // estabelecimento) + colaborador ativo. Sobe dormente; liga em piloto sem novo deploy
+  // de código. NUNCA hardcoded.
+  COLABORADOR_PORTAL_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Atendimentos / financeiro do negócio do cliente (ADR 0026, Fase 1 MVP) ──
   // Kill-switch da camada de atendimentos (POST /portal/atendimentos + relatórios de
   // faturamento e comissão). OPCIONAL no boot (ausente = OFF, lição #247: feature

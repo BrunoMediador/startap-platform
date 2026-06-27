@@ -24,6 +24,7 @@ import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
+import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalEquipeRoutes } from './routes/portal-equipe.js';
@@ -127,6 +128,10 @@ async function main() {
   // Gated por ATENDIMENTOS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual.
   // Cobre os dois cenários: individual (SOLO, sem comissão) e estabelecimento (EMPRESA).
   await app.register(portalAtendimentosRoutes);
+  // Painel do COLABORADOR (barbeiro de estabelecimento) — visão READ-ONLY escopada só aos
+  // dados dele (SCRUM-32). Gated por COLABORADOR_PORTAL_ENABLED (404 se OFF). As rotas usam
+  // withColaborador (role='colaborador'); withTenant barra colaborador em TODA rota do dono.
+  await app.register(portalColaboradorRoutes);
   // Config do lembrete de agendamento (one-way, por clone — migration 060). Gated por
   // REMINDERS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual. O ENVIO vive
   // no worker (gated lá também); esta rota só liga/desliga e ajusta janelas pela UI.
