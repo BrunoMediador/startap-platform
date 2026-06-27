@@ -11,6 +11,7 @@
 import {
   type UseMutationResult,
   type UseQueryResult,
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -105,8 +106,8 @@ export const qk = {
     ['atendimento-by-evento', slot, eventId] as const,
   // Colaborador (SCRUM-32): chaves escopadas por (slot + colaboradorId) DA SESSÃO
   // pra isolar o cache do barbeiro — nunca colide com o do dono nem de outro colab.
-  colaboradorAgenda: (slot: string, colaboradorId: number) =>
-    ['colaborador-agenda', slot, colaboradorId] as const,
+  colaboradorAgenda: (slot: string, colaboradorId: number, past: number, ahead: number) =>
+    ['colaborador-agenda', slot, colaboradorId, past, ahead] as const,
   colaboradorComissao: (slot: string, colaboradorId: number, de: string, ate: string) =>
     ['colaborador-comissao', slot, colaboradorId, de, ate] as const,
 };
@@ -151,15 +152,27 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
 // com as PÁGINAS Next (/colaborador/agenda|comissao) e o fetch cai no HTML da página em vez
 // do portal-api -> agenda/comissão vazias. As ROTAS de navegação (hrefs) seguem /colaborador/*.
 
-/** Agenda do colaborador logado (read-only). Espelha useAgendamentos. */
+/**
+ * Agenda do colaborador logado (read-only). Espelha useAgendamentos. A janela
+ * [past, ahead] (dias relativos a hoje) vem do filtro de data da tela — derivada da
+ * janela [de, ate] escolhida no picker (lib/colaborador-agenda-periodo). Com
+ * `keepPreviousData`, trocar o período NÃO pisca o skeleton: a lista anterior fica
+ * na tela enquanto a nova janela carrega (o filtro segue visível).
+ */
 export function useColaboradorAgenda(
   slot: string,
   colaboradorId: number,
+  past: number,
+  ahead: number,
 ): UseQueryResult<ColaboradorAgendaResponse> {
   return useQuery({
-    queryKey: qk.colaboradorAgenda(slot, colaboradorId),
+    queryKey: qk.colaboradorAgenda(slot, colaboradorId, past, ahead),
     queryFn: ({ signal }) =>
-      apiFetch<ColaboradorAgendaResponse>('/portal/colaborador/agenda', { signal }),
+      apiFetch<ColaboradorAgendaResponse>(
+        `/portal/colaborador/agenda?past=${past}&ahead=${ahead}`,
+        { signal },
+      ),
+    placeholderData: keepPreviousData,
   });
 }
 

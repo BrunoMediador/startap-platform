@@ -1,69 +1,59 @@
 'use client';
 
 /**
- * Agenda do COLABORADOR — visão READ-ONLY (SCRUM-32). Reusa a MESMA lógica de
- * filtro por período (filtrarAgendamentos) e a formatação de dia/hora do painel do
- * dono, mas as linhas NÃO são clicáveis: o colaborador só CONSULTA (sem remarcar /
- * trocar serviço / cancelar — isso é do dono). Recebe `data` já pronta (estados
- * loading/erro/empty ficam na página).
+ * Agenda do COLABORADOR (SCRUM-32). Filtro de DATA igual ao do dono (PeriodSelector
+ * + lib/billing-periodo): presets rápidos + janela [de, ate]. O período é
+ * CONTROLADO pela página (ele vira a janela past/ahead do fetch); aqui só
+ * renderizamos o seletor e aparamos a lista pro intervalo EXATO (filtrarPorPeriodo).
+ *
+ * As linhas NÃO são clicáveis: o colaborador só CONSULTA (sem remarcar / trocar
+ * serviço / cancelar — isso é do dono). Recebe `data` já pronta (loading/erro/
+ * agenda-não-conectada ficam na página).
  */
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
+import { PeriodSelector } from '@/components/relatorios/period-selector';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
-import { type PeriodoFiltro, filtrarAgendamentos } from '@/lib/agendamentos';
 import type { Agendamento, ColaboradorAgendaResponse } from '@/lib/api-types';
-import { cn } from '@/lib/cn';
+import type { Periodo } from '@/lib/billing-periodo';
+import {
+  agendaPeriodoLimites,
+  agendaPeriodoPresets,
+  filtrarPorPeriodo,
+} from '@/lib/colaborador-agenda-periodo';
 import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
-const ABAS: { value: PeriodoFiltro; label: string }[] = [
-  { value: 'todos', label: 'Todos' },
-  { value: 'hoje', label: 'Hoje' },
-  { value: 'proximos', label: 'Próximos' },
-  { value: 'recentes', label: 'Recentes' },
-];
-
-export function ColaboradorAgendaClient({ data }: { data: ColaboradorAgendaResponse }) {
-  const [periodo, setPeriodo] = useState<PeriodoFiltro>('todos');
-
+export function ColaboradorAgendaClient({
+  data,
+  periodo,
+  onPeriodoChange,
+}: {
+  data: ColaboradorAgendaResponse;
+  periodo: Periodo;
+  onPeriodoChange: (p: Periodo) => void;
+}) {
+  const presets = useMemo(() => agendaPeriodoPresets(), []);
+  const limites = useMemo(() => agendaPeriodoLimites(periodo), [periodo]);
   const filtradas = useMemo(
-    () => filtrarAgendamentos(data.agendamentos, { periodo, busca: '', data: '' }),
+    () => filtrarPorPeriodo(data.agendamentos, periodo),
     [data.agendamentos, periodo],
   );
 
   return (
     <div>
-      <div
-        role="tablist"
-        aria-label="Filtrar por período"
-        className="mb-3 flex gap-1.5 overflow-x-auto pb-0.5"
-      >
-        {ABAS.map((aba) => {
-          const ativo = periodo === aba.value;
-          return (
-            <button
-              key={aba.value}
-              type="button"
-              role="tab"
-              aria-selected={ativo}
-              onClick={() => setPeriodo(aba.value)}
-              className={cn(
-                'shrink-0 rounded-pill px-3.5 py-1.5 font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
-                ativo
-                  ? 'bg-brand-soft text-brand'
-                  : 'border border-line bg-surface text-ink-soft hover:bg-surface-hover hover:text-ink',
-              )}
-            >
-              {aba.label}
-            </button>
-          );
-        })}
-      </div>
+      <PeriodSelector
+        value={periodo}
+        onChange={onPeriodoChange}
+        presets={presets}
+        limites={limites}
+      />
 
       {filtradas.length === 0 ? (
         <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
           <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
           <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
-            Os horários que o robô marcar pra você aparecem aqui.
+            Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você aparecem
+            aqui.
           </p>
         </div>
       ) : (
