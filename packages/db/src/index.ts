@@ -14,6 +14,7 @@ export * as flowControl from './queries/flow-control.js';
 export * as flowClones from './queries/flow-clones.js';
 export * as cloneColaboradores from './queries/clone-colaboradores.js';
 export * as colaboradorAuth from './queries/colaborador-auth.js';
+export * as gcalHealth from './queries/gcal-health.js';
 export * as botCourses from './queries/bot-courses.js';
 export * as portalConfig from './queries/portal-config.js';
 export * as portalUsers from './queries/portal-users.js';
