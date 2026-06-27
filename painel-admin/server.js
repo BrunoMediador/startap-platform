@@ -6476,6 +6476,97 @@ app.delete('/api/clones/:id/colaboradores/:colabId', async (req, res) => {
   }
 });
 
+// ─── LOGIN DO COLABORADOR no portal (SCRUM-32, migration 065 colaborador_auth) ──────
+//
+// Slug do nome -> username de login do colaborador. ESPELHA slugifyColaboradorUsername
+// em @startap/db (packages/db/src/queries/colaborador-auth.ts) — fonte de verdade da
+// regra (o painel é JS sem build-time dep do @startap/db, mesma situação dos _pkg*).
+function _colabSlugify(nome) {
+  const slug = String(nome ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '') // tira acentos (combining diacritics pós-NFD)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '');
+  return slug || 'colaborador';
+}
+
+// Deriva um username GLOBALMENTE único: slug + sufixo -2/-3... se já em uso por OUTRO
+// colaborador. ESPELHA deriveColaboradorUsername em @startap/db. Resolve colisão cross-clone
+// e dois nomes que geram o mesmo slug no mesmo clone (clone_colaboradores já força nome
+// único por clone, então o sufixo é raro).
+async function _colabDeriveUsername(nome, excludeColabId) {
+  const base = _colabSlugify(nome);
+  const r = await pool.query(
+    `SELECT lower(username) AS u FROM colaborador_auth WHERE colaborador_id <> $1`,
+    [excludeColabId],
+  );
+  const taken = new Set(r.rows.map((x) => x.u));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 1000; n++) {
+    const cand = `${base}-${n}`;
+    if (!taken.has(cand)) return cand;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+// POST /api/clones/:id/colaboradores/:colabId/gerar-senha — gera/REGENERA a credencial de
+// LOGIN do colaborador no portal (app.startap.tech). username = slug do nome (único global);
+// senha aleatória forte; grava SÓ o hash (bcrypt cost 12, MESMO esquema de portal_users).
+// A senha em texto aparece UMA VEZ na resposta pro dono repassar ao colaborador — NUNCA é
+// persistida em claro nem logada. Regenerar INVALIDA a senha anterior (novo hash sobrescreve).
+app.post('/api/clones/:id/colaboradores/:colabId/gerar-senha', async (req, res) => {
+  try {
+    const resolved = await _resolveCloneScope(req.params.id);
+    if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+    const { slot, tenant_id, product_type } = resolved.scope;
+    if (product_type !== 'estabelecimento') {
+      return res.status(409).json({ error: 'login de colaborador so existe em clientes do tipo estabelecimento' });
+    }
+    const colabId = Number(req.params.colabId);
+    if (!Number.isInteger(colabId) || colabId <= 0) return res.status(400).json({ error: 'colabId invalido' });
+
+    // Colaborador tem que pertencer a ESTE slot/tenant (anti-IDOR).
+    const colab = await pool.query(
+      `SELECT id, nome, ativo FROM clone_colaboradores WHERE slot = $1 AND id = $2 AND tenant_id = $3`,
+      [slot, colabId, tenant_id],
+    );
+    if (colab.rowCount === 0) return res.status(404).json({ error: 'colaborador nao encontrado neste clone' });
+    const nome = colab.rows[0].nome;
+
+    const username = await _colabDeriveUsername(nome, colabId);
+    const plainPassword = _genPortalPassword(); // geração forte (14 chars, sem ambíguos)
+    const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_COST);
+
+    const ins = await pool.query(
+      `INSERT INTO colaborador_auth
+         (colaborador_id, slot, tenant_id, username, password_hash, active, failed_attempts, locked_until, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, TRUE, 0, NULL, NOW(), NOW())
+       ON CONFLICT (colaborador_id) DO UPDATE
+         SET username = EXCLUDED.username, password_hash = EXCLUDED.password_hash,
+             active = TRUE, failed_attempts = 0, locked_until = NULL, updated_at = NOW()
+       RETURNING colaborador_id, username`,
+      [colabId, slot, tenant_id, username, passwordHash],
+    );
+
+    // Auditoria SEM a senha (NUNCA logar o texto puro — só username + ids).
+    console.log(JSON.stringify({
+      audit: 'colaborador-credential-generated',
+      operator: req.session?.userId || 'unknown',
+      slot, colaborador_id: colabId, username,
+      at: new Date().toISOString(),
+    }));
+
+    // Senha em claro SÓ agora — a UI mostra UMA vez pro dono repassar ao colaborador.
+    res.status(201).json({ ok: true, username: ins.rows[0].username, generated_password: plainPassword });
+  } catch (e) {
+    console.error(JSON.stringify({ at: 'colaborador-gerar-senha', pg_code: e?.code, pg_constraint: e?.constraint, msg: 'falha ao gerar senha do colaborador' }));
+    res.status(500).json({ error: 'erro ao gerar senha do colaborador' });
+  }
+});
+
 // POST /api/clones/:id/colaboradores/:colabId/gcal/test
 // Testa a agenda de UM colaborador no Google de verdade: usa a Service Account do
 // CLONE (flow_clones.gcal_credentials_json) + o calendarId DO COLABORADOR e roda

@@ -447,6 +447,92 @@ export async function getComissao(
   };
 }
 
+/** Faturamento + comissão de UM colaborador num balde (visão escopada — SCRUM-32). */
+export interface ComissaoColaboradorReport {
+  de: string;
+  ate: string;
+  balde: Balde;
+  colaborador_id: number;
+  profissional_nome: string | null;
+  /** Base BRUTA (SUM(valor - desconto)) das linhas do balde — o FATURAMENTO dele. */
+  total_bruto_cents: number;
+  /** % corrente do colaborador (clone_colaboradores.comissao_pct). */
+  comissao_pct: number;
+  /** O que ELE ganha: SUM(round(GREATEST(bruto,0) * pct corrente / 100)) AO VIVO. */
+  comissao_cents: number;
+  count: number;
+}
+
+/**
+ * COMISSÃO + FATURAMENTO de UM ÚNICO colaborador num período/balde (SCRUM-32 — painel do
+ * colaborador, visão READ-ONLY escopada). Mesma fórmula AO VIVO de getComissao, mas
+ * filtrada a UM colaborador.
+ *
+ * ANTI-IDOR (regra de ouro 5): escopa por (slot + tenant_id + colaborador_id), TODOS
+ * vindos da SESSÃO do colaborador no caller — nunca de input. Um colaborador_id de outro
+ * slot/tenant (ou inexistente/inativo) NÃO casa o WHERE -> retorna null (não vaza
+ * existência cross-tenant). Por construção, é IMPOSSÍVEL este método devolver dados de
+ * outro colaborador: a query parte de clone_colaboradores cc com cc.id = $colaboradorId
+ * E cc.slot = $slot E cc.ativo, e o JOIN de atendimentos casa a.colaborador_id = cc.id.
+ *
+ * Retorna null quando o colaborador não pertence a este slot/tenant ou está inativo.
+ */
+export async function getComissaoColaborador(
+  slot: string,
+  tenantId: string,
+  colaboradorId: number,
+  de: string,
+  ate: string,
+  balde: Balde = 'faturado',
+): Promise<ComissaoColaboradorReport | null> {
+  const baldeCond = balde === 'previsao' ? _PREVISAO_SQL_A : _FATURADO_SQL_A;
+  const comissaoExpr =
+    'COALESCE(SUM(ROUND(GREATEST(a.valor_cents - a.desconto_cents, 0) * COALESCE(cc.comissao_pct, 0) / 100.0)), 0)::bigint';
+  const pctExpr = 'COALESCE(cc.comissao_pct, 0)::numeric';
+
+  const r = await query<{
+    colaborador_id: number;
+    profissional_nome: string | null;
+    total_bruto_cents: string;
+    comissao_pct: string;
+    comissao_cents: string;
+    count: string;
+  }>(
+    `SELECT cc.id AS colaborador_id,
+            cc.nome AS profissional_nome,
+            COALESCE(SUM(a.valor_cents - a.desconto_cents), 0)::bigint AS total_bruto_cents,
+            ${pctExpr} AS comissao_pct,
+            ${comissaoExpr} AS comissao_cents,
+            COUNT(a.id)::bigint AS count
+       FROM clone_colaboradores cc
+       LEFT JOIN atendimentos a
+         ON a.colaborador_id = cc.id
+        AND a.slot = cc.slot
+        AND a.tenant_id = $2
+        AND a.deleted_at IS NULL
+        AND a.data >= $4 AND a.data <= $5
+        AND ${baldeCond}
+      WHERE cc.slot = $1 AND cc.id = $3 AND cc.ativo = TRUE
+      GROUP BY cc.id, cc.nome, cc.comissao_pct`,
+    [slot, tenantId, colaboradorId, de, ate],
+  );
+
+  const row = r.rows[0];
+  if (!row) return null; // colaborador não é deste slot/tenant ou está inativo (anti-IDOR)
+
+  return {
+    de,
+    ate,
+    balde,
+    colaborador_id: Number(row.colaborador_id),
+    profissional_nome: row.profissional_nome,
+    total_bruto_cents: Number(row.total_bruto_cents),
+    comissao_pct: Number(row.comissao_pct),
+    comissao_cents: Number(row.comissao_cents),
+    count: Number(row.count),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────
 // ADR 0027 — billing DERIVADO DA AGENDA (split previsão×faturado + sticky de edição)
 //

@@ -12,13 +12,19 @@
 import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { canonicalE164 } from '@startap/core/phone';
-import { cloneColaboradores, portalUsers } from '@startap/db';
+import { cloneColaboradores, colaboradorAuth, portalUsers } from '@startap/db';
 import bcrypt from 'bcryptjs';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { createSession, destroySession, invalidateOtherUserSessions } from '../lib/session.js';
-import { SESSION_COOKIE, requireTenant, withTenant } from '../lib/tenant.js';
+import {
+  SESSION_COOKIE,
+  requireColaborador,
+  requireTenant,
+  withColaborador,
+  withTenant,
+} from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'auth' });
 
@@ -37,6 +43,91 @@ export const changePasswordSchema = z.object({
 export function cookieSecure(): boolean {
   if (config.PORTAL_COOKIE_SECURE !== undefined) return config.PORTAL_COOKIE_SECURE;
   return config.NODE_ENV === 'production';
+}
+
+/** Opções do cookie de sessão (compartilhadas por owner e colaborador). */
+function sessionCookieOpts() {
+  return {
+    httpOnly: true,
+    secure: cookieSecure(),
+    sameSite: 'lax' as const,
+    signed: true,
+    path: '/',
+    maxAge: config.PORTAL_SESSION_TTL_SECONDS,
+  };
+}
+
+/**
+ * Login de COLABORADOR (SCRUM-32). Tentado SÓ quando nenhum owner casou o username E a
+ * flag COLABORADOR_PORTAL_ENABLED está ON. Retorna `true` quando RESOLVEU o login do
+ * colaborador (já enviou a resposta 200/401/403/429) ou `false` quando NÃO há colaborador
+ * com esse username — nesse caso o caller cai no dummy-compare + 401 genérico (sem oráculo
+ * de enumeração, sem bcrypt em dobro). Devolver boolean (em vez do reply) evita depender do
+ * valor de retorno de reply.send() — o caller só decide se já respondeu.
+ *
+ * Mesma disciplina do owner: lockout progressivo, compare bcrypt, respostas genéricas. A
+ * sessão nasce com role='colaborador' + colaboradorId — o withTenant passa a barrá-la em
+ * TODA rota do dono (chokepoint), e ela só alcança /colaborador/* (READ-ONLY).
+ */
+async function loginColaborador(
+  reply: FastifyReply,
+  username: string,
+  password: string,
+): Promise<boolean> {
+  const c = await colaboradorAuth.findColaboradorForAuth(username);
+  if (!c) return false; // não é colaborador — caller faz o dummy-compare + 401
+
+  // Credencial ou colaborador desativado: nega (mesma semântica do owner inativo).
+  if (!c.active || !c.colaborador_ativo) {
+    await reply.code(403).send({ error: 'usuario desativado' });
+    return true;
+  }
+
+  if (c.locked_until && c.locked_until.getTime() > Date.now()) {
+    log.warn({ colaboradorId: c.colaborador_id }, 'login de colaborador bloqueado por lockout');
+    await reply
+      .code(429)
+      .send({ error: 'muitas tentativas — tente novamente mais tarde', locked: true });
+    return true;
+  }
+
+  const ok = await bcrypt.compare(password, c.password_hash);
+  if (!ok) {
+    const state = await colaboradorAuth.recordColaboradorFailedLogin(
+      c.colaborador_id,
+      config.PORTAL_LOGIN_MAX_ATTEMPTS,
+      config.PORTAL_LOGIN_LOCK_MINUTES,
+    );
+    const locked = state.locked_until !== null;
+    log.warn({ colaboradorId: c.colaborador_id, locked }, 'login de colaborador falhou');
+    await reply
+      .code(locked ? 429 : 401)
+      .send(
+        locked
+          ? { error: 'muitas tentativas — tente novamente mais tarde', locked: true }
+          : { error: 'usuario ou senha invalidos' },
+      );
+    return true;
+  }
+
+  await colaboradorAuth.recordColaboradorSuccessfulLogin(c.colaborador_id);
+  const sid = await createSession({
+    userId: 0, // colaborador não é portal_users; a identidade é colaboradorId
+    username: c.username,
+    slot: c.slot,
+    createdAt: Date.now(),
+    role: 'colaborador',
+    colaboradorId: c.colaborador_id,
+  });
+  reply.setCookie(SESSION_COOKIE, sid, sessionCookieOpts());
+
+  log.info({ colaboradorId: c.colaborador_id }, 'login de colaborador ok');
+  await reply.code(200).send({
+    ok: true,
+    role: 'colaborador',
+    user: { username: c.username, display_name: c.nome },
+  });
+  return true;
 }
 
 /**
@@ -92,6 +183,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const user = await findUserAcceptingPhoneFormats(username);
     // Resposta generica para username inexistente (sem oraculo de enumeracao).
     if (!user) {
+      // Fallback: credencial de COLABORADOR (SCRUM-32). Só quando a feature está ON —
+      // com a flag OFF o login é byte-a-byte como hoje (nunca toca colaborador_auth).
+      if (config.COLABORADOR_PORTAL_ENABLED) {
+        const handled = await loginColaborador(reply, username, password);
+        if (handled) return reply; // colaborador resolveu (200/401/403/429), resposta já enviada
+      }
       // Custo constante: roda um compare dummy para nao vazar timing.
       await bcrypt.compare(
         password,
@@ -142,18 +239,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       createdAt: Date.now(),
     });
 
-    reply.setCookie(SESSION_COOKIE, sid, {
-      httpOnly: true,
-      secure: cookieSecure(),
-      sameSite: 'lax',
-      signed: true,
-      path: '/',
-      maxAge: config.PORTAL_SESSION_TTL_SECONDS,
-    });
+    reply.setCookie(SESSION_COOKIE, sid, sessionCookieOpts());
 
     log.info({ userId: user.id }, 'login ok');
     return reply.code(200).send({
       ok: true,
+      // role explícito (SCRUM-32) — o front roteia owner vs colaborador. Aditivo:
+      // owners existentes recebem 'owner' (antes ausente; o front trata ausência como dono).
+      role: 'owner',
       user: {
         username: user.username,
         display_name: user.display_name,
@@ -276,5 +369,22 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     log.info({ userId: tenant.userId, otherSessionsRevoked: revoked }, 'senha trocada');
 
     return reply.code(200).send({ ok: true });
+  });
+
+  // GET /auth/colaborador/me — identidade da sessão de COLABORADOR (SCRUM-32). withColaborador
+  // EXIGE role='colaborador' (sessão de dono -> 403) e re-deriva do banco. Identidade SEMPRE
+  // da sessão — nunca de input. Espelha /auth/me, mas pro painel READ-ONLY do colaborador.
+  app.get('/auth/colaborador/me', { preHandler: withColaborador }, async (req, reply) => {
+    if (!config.COLABORADOR_PORTAL_ENABLED) {
+      return reply.code(404).send({ error: 'recurso indisponivel' });
+    }
+    const c = requireColaborador(req);
+    return reply.code(200).send({
+      role: 'colaborador',
+      username: c.username,
+      display_name: c.nome,
+      colaborador_id: c.colaboradorId,
+      slot: c.slot,
+    });
   });
 };
