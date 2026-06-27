@@ -49,19 +49,26 @@ export interface ColaboradorRow {
   updated_at: string;
 }
 
-/** Linha crua do banco (comissao_pct chega como string do pg). */
-interface ColaboradorRowRaw extends Omit<ColaboradorRow, 'comissao_pct'> {
+/**
+ * Linha crua do banco. id é BIGINT e o driver pg o devolve como STRING (não number);
+ * comissao_pct (NUMERIC) idem. Ambos são normalizados pra number em mapColaboradorRow.
+ */
+interface ColaboradorRowRaw extends Omit<ColaboradorRow, 'id' | 'comissao_pct'> {
+  id: string | number;
   comissao_pct: string | number | null;
 }
 
 /**
- * Normaliza a linha crua do pg pro contrato público: NUMERIC vem como string, então
- * comissao_pct é convertido pra number (NULL/indef -> 0, fallback seguro). Única
- * porta de saída das funções que retornam ColaboradorRow.
+ * Normaliza a linha crua do pg pro contrato público: o pg devolve BIGINT (id) e NUMERIC
+ * (comissao_pct) como string. id vira number (o contrato ColaboradorRow.id é number — sem
+ * isso, consumidores que comparam id com `===` quebram em runtime, ex.: gerar-senha do
+ * portal) e comissao_pct vira number (NULL/indef -> 0, fallback seguro). Única porta de
+ * saída das funções que retornam ColaboradorRow.
  */
 function mapColaboradorRow(row: ColaboradorRowRaw): ColaboradorRow {
   return {
     ...row,
+    id: Number(row.id),
     comissao_pct: row.comissao_pct == null ? 0 : Number(row.comissao_pct),
   };
 }

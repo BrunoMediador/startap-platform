@@ -181,24 +181,36 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const { username, password } = parsed.data;
 
     const user = await findUserAcceptingPhoneFormats(username);
-    // Resposta generica para username inexistente (sem oraculo de enumeracao).
-    if (!user) {
+
+    // O fluxo do DONO só roda quando há um owner ATIVO casando o username. Quando NÃO
+    // há owner ativo (owner inexistente OU owner INATIVO homônimo), tentamos a
+    // credencial de COLABORADOR antes de qualquer 401/403.
+    //
+    // Bug de produção (2026-06-27): um portal_users INATIVO com o mesmo username de um
+    // colaborador (ex.: 'robson' no dragon) SOMBREAVA o login — o handler achava o owner
+    // inativo e retornava 403 "usuario desativado" ANTES de tentar o colaborador, então o
+    // compare da senha do colaborador NUNCA era alcançado (failed_attempts=0,
+    // last_login_at=NULL). Movendo o gate de inatividade para DEPOIS do fallback, o
+    // colaborador real loga; o owner inativo SEM colaborador correspondente mantém o 403.
+    if (!user?.active) {
       // Fallback: credencial de COLABORADOR (SCRUM-32). Só quando a feature está ON —
       // com a flag OFF o login é byte-a-byte como hoje (nunca toca colaborador_auth).
       if (config.COLABORADOR_PORTAL_ENABLED) {
         const handled = await loginColaborador(reply, username, password);
         if (handled) return reply; // colaborador resolveu (200/401/403/429), resposta já enviada
       }
-      // Custo constante: roda um compare dummy para nao vazar timing.
+      // Owner INATIVO homônimo sem colaborador que resolva: mantém o 403 explícito
+      // (comportamento atual preservado — mesma semântica de antes do fix).
+      if (user) {
+        return reply.code(403).send({ error: 'usuario desativado' });
+      }
+      // Username inexistente: 401 genérico (sem oraculo de enumeracao). Custo constante:
+      // roda um compare dummy para nao vazar timing.
       await bcrypt.compare(
         password,
         '$2a$12$00000000000000000000000000000000000000000000000000000',
       );
       return reply.code(401).send({ error: 'usuario ou senha invalidos' });
-    }
-
-    if (!user.active) {
-      return reply.code(403).send({ error: 'usuario desativado' });
     }
 
     if (user.locked_until && user.locked_until.getTime() > Date.now()) {
