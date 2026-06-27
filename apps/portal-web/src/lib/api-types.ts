@@ -19,8 +19,17 @@ export interface LoginUser {
   must_change_password: boolean;
 }
 
+/**
+ * Papel da sessão criada no login (SCRUM-32). `owner` = dono (fluxo de hoje);
+ * `colaborador` = barbeiro de estabelecimento, visão READ-ONLY (/colaborador/*).
+ * Owners legados pré-#394 podem vir SEM `role` -> o front trata ausência como owner.
+ */
+export type LoginRole = 'owner' | 'colaborador';
+
 export interface LoginResponse {
   ok: true;
+  /** SCRUM-32: roteia o front pra área certa após o login. Ver LoginRole. */
+  role?: LoginRole;
   user: LoginUser;
 }
 
@@ -83,6 +92,59 @@ export interface AuthMe {
    * de faturamento fica IDÊNTICA à de hoje (SOLO Cirilo/Samuel não regride).
    */
   atend_from_agenda?: boolean;
+}
+
+// ── Colaborador (painel READ-ONLY do barbeiro — SCRUM-32, portal-colaborador.ts) ──
+//
+// O colaborador loga com username (slug do nome) + senha gerada pelo dono no gestão.
+// A sessão nasce com role='colaborador' + colaboradorId; TODA query escopa por
+// (slot + tenant + colaboradorId) DA SESSÃO no backend — o front nunca envia id.
+// Visão só-leitura: a agenda dele e a comissão/faturamento dele. Sem ações do dono.
+
+/** GET /auth/colaborador/me — identidade da sessão do colaborador (server guard). */
+export interface ColaboradorMe {
+  role: 'colaborador';
+  username: string;
+  display_name: string;
+  colaborador_id: number;
+  slot: string;
+}
+
+/**
+ * GET /colaborador/agenda — agenda do colaborador logado (read-only). MESMO shape
+ * de AgendamentosResponse (id/titulo/inicio/fim); `gcal_configured:false` = agenda
+ * dele ainda não conectada (pré-setup, estado esperado -> empty, não erro).
+ */
+export interface ColaboradorAgendaResponse {
+  gcal_configured: boolean;
+  count: number;
+  agendamentos: Agendamento[];
+}
+
+/** Um balde do relatório de comissão do colaborador (faturado OU previsão). */
+export interface ColaboradorComissaoBalde {
+  /** Faturamento bruto dele no período (base da comissão), em centavos. */
+  total_bruto_cents: number;
+  /** % de comissão configurada (0–100). null = não configurada -> "—" na UI. */
+  comissao_pct: number | null;
+  /** O que ELE recebe (bruto × pct), em centavos. */
+  comissao_cents: number;
+  count: number;
+  balde: AtendimentoBalde;
+}
+
+/**
+ * GET /colaborador/comissao?de=&ate= — faturamento + comissão do colaborador nos
+ * DOIS baldes de uma vez (faturado = realizado/passado; previsao = agendado/futuro),
+ * dentro da janela [de, ate]. profissional_nome pode vir null (nome apagado) -> fallback.
+ */
+export interface ColaboradorComissaoResponse {
+  de: string; // 'YYYY-MM-DD'
+  ate: string; // 'YYYY-MM-DD'
+  colaborador_id: number;
+  profissional_nome: string | null;
+  faturado: ColaboradorComissaoBalde;
+  previsao: ColaboradorComissaoBalde;
 }
 
 // ── Servicos ─────────────────────────────────────────────────────────────────

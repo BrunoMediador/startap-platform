@@ -28,6 +28,8 @@ import type {
   BotResumeResponse,
   ChargeView,
   CodigoResponse,
+  ColaboradorAgendaResponse,
+  ColaboradorComissaoResponse,
   ColaboradorInput,
   ComissaoReport,
   ConexaoResponse,
@@ -100,6 +102,12 @@ export const qk = {
   /** Linha de atendimento resolvida pelo event_id da agenda (edição de dinheiro no card). */
   atendimentoByEvento: (slot: string, eventId: string) =>
     ['atendimento-by-evento', slot, eventId] as const,
+  // Colaborador (SCRUM-32): chaves escopadas por (slot + colaboradorId) DA SESSÃO
+  // pra isolar o cache do barbeiro — nunca colide com o do dono nem de outro colab.
+  colaboradorAgenda: (slot: string, colaboradorId: number) =>
+    ['colaborador-agenda', slot, colaboradorId] as const,
+  colaboradorComissao: (slot: string, colaboradorId: number, de: string, ate: string) =>
+    ['colaborador-comissao', slot, colaboradorId, de, ate] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -128,6 +136,41 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
   return useQuery({
     queryKey: qk.agendamentos(slot),
     queryFn: ({ signal }) => apiFetch<AgendamentosResponse>('/portal/agendamentos', { signal }),
+  });
+}
+
+// ── Colaborador (painel READ-ONLY — SCRUM-32) ────────────────────────────────
+//
+// O backend escopa TUDO por (slot + tenant + colaboradorId) DA SESSÃO; o front
+// não envia identidade. slot/colaboradorId aqui entram só na query KEY (isolamento
+// de cache por barbeiro). Logout faz queryClient.clear() (use-logout) — nada vaza.
+
+/** Agenda do colaborador logado (read-only). Espelha useAgendamentos. */
+export function useColaboradorAgenda(
+  slot: string,
+  colaboradorId: number,
+): UseQueryResult<ColaboradorAgendaResponse> {
+  return useQuery({
+    queryKey: qk.colaboradorAgenda(slot, colaboradorId),
+    queryFn: ({ signal }) => apiFetch<ColaboradorAgendaResponse>('/colaborador/agenda', { signal }),
+  });
+}
+
+/** Faturamento + comissão do colaborador no período [de, ate] (read-only). */
+export function useColaboradorComissao(
+  slot: string,
+  colaboradorId: number,
+  de: string,
+  ate: string,
+): UseQueryResult<ColaboradorComissaoResponse> {
+  return useQuery({
+    queryKey: qk.colaboradorComissao(slot, colaboradorId, de, ate),
+    queryFn: ({ signal }) =>
+      apiFetch<ColaboradorComissaoResponse>(
+        `/colaborador/comissao?de=${encodeURIComponent(de)}&ate=${encodeURIComponent(ate)}`,
+        { signal },
+      ),
+    enabled: Boolean(de && ate),
   });
 }
 
