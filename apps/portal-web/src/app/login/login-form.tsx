@@ -4,6 +4,7 @@ import { ParticleField } from '@/components/fx/particle-field';
 import { Brandmark, IconEye, IconEyeOff, IconInfo, IconLock, IconUser } from '@/components/icons';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { LoginErrorBody, LoginResponse } from '@/lib/api-types';
+import { loginRedirectPath } from '@/lib/colaborador';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 /**
  * Login v2 (spec 1.B + login-v2.html). Split full-bleed no desktop (marca/tagline
@@ -35,7 +36,7 @@ export function LoginForm() {
     setError(null);
     setPending(true);
     try {
-      await apiFetch<LoginResponse>('/auth/login', {
+      const res = await apiFetch<LoginResponse>('/auth/login', {
         method: 'POST',
         body: { username: username.trim(), password },
       });
@@ -43,7 +44,10 @@ export function LoginForm() {
       // provisória" (o portal não tem fluxo de troca self-service e não deve
       // alarmar o cliente). A flag `must_change_password` da API é ignorada aqui
       // de propósito; ela permanece na coluna só para uso interno futuro.
-      router.replace('/inicio');
+      //
+      // SCRUM-32: colaborador (role) vai pra área READ-ONLY dele; dono vai pra
+      // /inicio. O role vem do backend; ausência = dono (owner legado pré-#394).
+      router.replace(loginRedirectPath(res.role));
       router.refresh();
     } catch (err) {
       if (err instanceof ApiError) {
