@@ -14,6 +14,7 @@ import { Skeleton, SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { agruparAgendamentos } from '@/lib/agendamentos';
 import { useAgendamentos, useStatus } from '@/lib/queries';
+import { resolveMotivoPausa } from '@/lib/suspensao';
 import Link from 'next/link';
 import { AgendamentosList } from './agendamentos-list';
 import { HeroZone } from './hero-zone';
@@ -54,6 +55,8 @@ export default function InicioPage() {
 
   const data = status.data;
   const nome = data.display_name ?? 'Seu negócio';
+  // Motivo da pausa (null se ativo). A Home só fala em mensalidade na inadimplência.
+  const motivoPausa = resolveMotivoPausa(data);
 
   // "Proximos" no metric = hoje + futuro (a janela do backend traz tambem
   // recentes/-7d, que nao contam como "proximos"). gcal off -> "—".
@@ -66,7 +69,7 @@ export default function InicioPage() {
 
   return (
     <>
-      {!data.flow_enabled && <SuspendedNotice />}
+      {motivoPausa && <SuspendedNotice motivo={motivoPausa} />}
 
       {/* Hero-zone (1.D): saudacao editorial + status (E1) + billing (E2),
           com aurora de topo + fade. Stagger interno nos cards-heroi. O fundo

@@ -18,6 +18,7 @@
  */
 import type { StatusResponse } from '@/lib/api-types';
 import { dataPorExtenso, saudacao } from '@/lib/format';
+import { resolveMotivoPausa } from '@/lib/suspensao';
 import { BillingCard } from './billing-card';
 import { StatusHero } from './status-hero';
 
@@ -28,18 +29,27 @@ function resolveState(status: StatusResponse): BotState {
   return (status.waha.status ?? '').toUpperCase() === 'WORKING' ? 'ativo' : 'desconectado';
 }
 
-/** Frase de contexto calorosa por estado do bot (1.D.3). Sem emoji. */
-const CONTEXTO: Record<BotState, string> = {
+/** Frase de contexto calorosa (1.D.3). Sem emoji. A pausa varia POR MOTIVO pra
+ *  não dizer "regularize" quando foi o próprio dono que pausou / está em dia. */
+const CONTEXTO_BASE: Record<'ativo' | 'desconectado', string> = {
   ativo: 'tudo rodando por aqui.',
   desconectado: 'seu robô precisa de você — toque no status.',
-  pausado: 'atendimento pausado, regularize pra voltar.',
 };
+const CONTEXTO_PAUSADO = {
+  owner: 'você pausou o atendimento — retome quando quiser.',
+  inadimplencia: 'atendimento pausado, regularize pra voltar.',
+  startap_outro: 'atendimento pausado, fale com o suporte.',
+} as const;
 
 export function HeroZone({
   status,
   businessName,
 }: { status: StatusResponse; businessName: string }) {
   const state = resolveState(status);
+  const contexto =
+    state === 'pausado'
+      ? CONTEXTO_PAUSADO[resolveMotivoPausa(status) ?? 'startap_outro']
+      : CONTEXTO_BASE[state];
 
   return (
     // Sem wrappers de stacking: o fundo vivo (constelacao) vem do shell
@@ -62,7 +72,7 @@ export function HeroZone({
           </span>
         </h1>
         <p className="mt-[7px] text-[13.5px] text-ink-soft">
-          {dataPorExtenso()} · {CONTEXTO[state]}
+          {dataPorExtenso()} · {contexto}
         </p>
       </div>
 

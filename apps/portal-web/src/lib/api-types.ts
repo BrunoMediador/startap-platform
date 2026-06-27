@@ -273,10 +273,15 @@ export interface StatusBilling {
   status: BillingStatus;
 }
 
+/** PORQUÊ da pausa (flow_enabled=false). null quando ativo OU pausa legada sem categoria. */
+export type SuspendedKind = 'billing' | 'owner_request' | 'manual_other' | 'abuse';
+
 export interface StatusResponse {
   slot: string;
   display_name: string | null;
   flow_enabled: boolean;
+  /** Categoria da suspensão. Distingue pausa do dono de inadimplência (ver lib/suspensao). */
+  suspended_kind: SuspendedKind | null;
   waha: { session: string | null; status: string };
   pausas_ativas: number;
   billing: StatusBilling | null;

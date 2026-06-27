@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import type { StatusResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { useConexao } from '@/lib/queries';
+import { type MotivoPausa, resolveMotivoPausa } from '@/lib/suspensao';
 import Link from 'next/link';
 
 type BotState = 'ativo' | 'desconectado' | 'pausado';
@@ -28,16 +29,26 @@ function resolveState(status: StatusResponse): BotState {
   return 'desconectado';
 }
 
-const COPY: Record<BotState, { title: string; sub: string }> = {
+const COPY: Record<'ativo' | 'desconectado', { title: string; sub: string }> = {
   ativo: { title: 'Bot ativo', sub: 'Atendendo no WhatsApp agora' },
   desconectado: {
     title: 'Bot desconectado',
     // Fallback quando a reconexao self-service esta OFF (sem rota /conectar).
     sub: 'Fale com o suporte para reconectar',
   },
-  pausado: {
+};
+
+// Copy da pausa POR MOTIVO (corrige o "regularize a mensalidade" falso): só
+// `inadimplencia` fala em mensalidade; pausa do dono manda retomar; o resto, suporte.
+const COPY_PAUSADO: Record<MotivoPausa, { title: string; sub: string }> = {
+  owner: { title: 'Atendimento pausado por você', sub: 'Retome quando quiser, em Conectar' },
+  inadimplencia: {
     title: 'Atendimento pausado',
     sub: 'Regularize a mensalidade para reativar',
+  },
+  startap_outro: {
+    title: 'Atendimento pausado',
+    sub: 'Fale com o suporte para reativar',
   },
 };
 
@@ -70,9 +81,15 @@ export function StatusHero({ status }: { status: StatusResponse }) {
   // link "Toque pra reconectar" pra /conectar. Off -> fallback "fale com o suporte".
   const conexao = useConexao(slot);
   const reconectavel = state === 'desconectado' && conexao.data?.enabled === true;
+  // Pausa do dono: o card vira link pra /conectar (lá ele retoma). Inadimplência/
+  // outros NÃO viram link aqui (a ação é pagar/suporte, em outras telas).
+  const motivo = state === 'pausado' ? resolveMotivoPausa(status) : null;
+  const linkavel = reconectavel || motivo === 'owner';
   const copy = reconectavel
     ? { title: 'Bot desconectado', sub: 'Toque pra reconectar' }
-    : COPY[state];
+    : state === 'pausado'
+      ? COPY_PAUSADO[motivo ?? 'startap_outro']
+      : COPY[state];
 
   const inner = (
     <div className="flex items-center justify-between gap-3">
@@ -96,11 +113,15 @@ export function StatusHero({ status }: { status: StatusResponse }) {
   const cardCls =
     'hero-e1 relative block h-full overflow-hidden rounded-card border border-line-strong bg-surface p-[18px]';
 
-  if (reconectavel) {
+  if (linkavel) {
     return (
       <Link
         href="/conectar"
-        aria-label="Robô desconectado — toque pra reconectar"
+        aria-label={
+          reconectavel
+            ? 'Robô desconectado — toque pra reconectar'
+            : 'Atendimento pausado por você — toque pra retomar'
+        }
         className={cn(
           cardCls,
           'transition-colors hover:bg-surface-hover active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
