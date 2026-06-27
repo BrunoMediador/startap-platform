@@ -19,6 +19,7 @@ import { parseTrustProxy } from './lib/trust-proxy.js';
 import { authRoutes } from './routes/auth.js';
 import { demoChatRoutes } from './routes/demo-chat.js';
 import { healthRoute } from './routes/health.js';
+import { portalAceiteRoutes } from './routes/portal-aceite.js';
 import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
@@ -107,6 +108,10 @@ async function main() {
   await app.register(portalPerfilRoutes);
   await app.register(portalPausasRoutes);
   await app.register(portalStatusRoutes);
+  // Gate de aceite dos Termos/Privacidade pós-login (SCRUM-1, fluxo 2). Authed
+  // (withTenant nas rotas). status + registro do aceite versionado; sem flag —
+  // o gate é exigência LGPD pra TODO cliente logado.
+  await app.register(portalAceiteRoutes);
   await app.register(portalAgendamentosRoutes);
   // Grade de horarios livres pro agendamento manual (Missao 020 F4).
   await app.register(portalAgendaSlotsRoutes);

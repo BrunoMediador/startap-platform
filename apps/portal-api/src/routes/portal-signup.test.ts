@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   findPortalUserForAuth: vi.fn(),
   recordSuccessfulLogin: vi.fn(),
   upsertBilling: vi.fn(),
+  resolveTenantId: vi.fn(),
+  recordTermsAcceptance: vi.fn(),
   generateCloneSlot: vi.fn(),
   provisionCloneWithWaha: vi.fn(),
   teardownProvisionedClone: vi.fn(),
@@ -48,6 +50,8 @@ vi.mock('@startap/db', () => ({
     recordSuccessfulLogin: mocks.recordSuccessfulLogin,
   },
   clientBilling: { upsertBilling: mocks.upsertBilling },
+  tenant: { resolveTenantId: mocks.resolveTenantId },
+  termsAcceptance: { recordTermsAcceptance: mocks.recordTermsAcceptance },
 }));
 vi.mock('@startap/integrations', () => ({
   provisioning: {
@@ -91,6 +95,7 @@ const PAYLOAD = {
   nome_negocio: 'Barbearia do João',
   whatsapp: '(31) 99999-8842',
   senha: 'senhaForte99',
+  aceite_termos: true,
 };
 
 beforeEach(() => {
@@ -114,6 +119,8 @@ beforeEach(() => {
   });
   mocks.hash.mockResolvedValue('$2a$12$hash');
   mocks.createPortalUser.mockResolvedValue({ id: 7, slot: SLOT, username: '553199998842' });
+  mocks.resolveTenantId.mockResolvedValue('11111111-1111-1111-1111-111111111111');
+  mocks.recordTermsAcceptance.mockResolvedValue({ id: 1, slot: SLOT });
   mocks.upsertBilling.mockResolvedValue({ slot: SLOT });
   mocks.setTrialAwaiting.mockResolvedValue(undefined);
   mocks.findPortalUserForAuth.mockResolvedValue({ id: 7, username: '553199998842' });
@@ -185,6 +192,67 @@ describe('POST /auth/signup', () => {
     // Auto-login: cookie de sessão httpOnly setado.
     expect(mocks.createSession).toHaveBeenCalled();
     expect(res.headers['set-cookie']).toBeDefined();
+    await app.close();
+  });
+
+  // ── Aceite dos Termos + Política de Privacidade (SCRUM-1 / LGPD) ────────────
+  it('422 aceite_obrigatorio quando aceite_termos=false (gate antes de provisionar)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, aceite_termos: false },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: 'aceite_obrigatorio' });
+    // NADA é criado sem aceite.
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    expect(mocks.recordTermsAcceptance).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('400 dados_invalidos quando aceite_termos ausente (schema exige o campo)', async () => {
+    const app = await buildApp();
+    const { aceite_termos, ...semAceite } = PAYLOAD;
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: semAceite });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'dados_invalidos' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('caminho feliz GRAVA a prova de aceite (slot, user, versões v1, ip/user-agent)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: PAYLOAD,
+      headers: { 'user-agent': 'TestAgent/1.0' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(mocks.recordTermsAcceptance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: SLOT,
+        portalUserId: 7,
+        termsVersion: 'v1',
+        privacyVersion: 'v1',
+        tenantId: '11111111-1111-1111-1111-111111111111',
+        userAgent: 'TestAgent/1.0',
+      }),
+    );
+    await app.close();
+  });
+
+  it('prova com falha => 500 + teardown do clone órfão (não há conta sem prova)', async () => {
+    mocks.recordTermsAcceptance.mockRejectedValue(new Error('pg timeout'));
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'erro_ao_criar_conta' });
+    expect(mocks.teardownProvisionedClone).toHaveBeenCalledWith(expect.anything(), {
+      slot: SLOT,
+      sessionName: SLOT,
+    });
     await app.close();
   });
 

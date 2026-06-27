@@ -49,9 +49,10 @@ describe('validateCadastro', () => {
     area: 'barbearia' as const,
     whatsapp: '(31) 99999-8842',
     senha: '12345678',
+    aceite: true,
   };
 
-  it('aceita draft valido e monta payload do signup (digitos locais + area)', () => {
+  it('aceita draft valido e monta payload do signup (digitos locais + area + aceite)', () => {
     const res = validateCadastro(ok);
     expect(res).toEqual({
       ok: true,
@@ -60,8 +61,19 @@ describe('validateCadastro', () => {
         area: 'barbearia',
         whatsapp: '31999998842',
         senha: '12345678',
+        aceite_termos: true,
       },
     });
+  });
+
+  it('rejeita quando o aceite dos termos não foi marcado (checkbox obrigatório)', () => {
+    const res = validateCadastro({ ...ok, aceite: false });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.errors.aceite).toBe(
+        'Pra continuar, aceite os Termos de Uso e a Política de Privacidade',
+      );
+    }
   });
 
   it('rejeita quando nenhuma area foi escolhida (null)', () => {
@@ -110,13 +122,20 @@ describe('validateCadastro', () => {
   });
 
   it('acumula erros de todos os campos de uma vez', () => {
-    const res = validateCadastro({ nome: '', area: null, whatsapp: '123', senha: 'abc' });
+    const res = validateCadastro({
+      nome: '',
+      area: null,
+      whatsapp: '123',
+      senha: 'abc',
+      aceite: false,
+    });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.errors.nome).toBeTruthy();
       expect(res.errors.area).toBeTruthy();
       expect(res.errors.whatsapp).toBeTruthy();
       expect(res.errors.senha).toBeTruthy();
+      expect(res.errors.aceite).toBeTruthy();
     }
   });
 });

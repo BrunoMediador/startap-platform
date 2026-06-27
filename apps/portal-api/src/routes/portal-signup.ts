@@ -28,12 +28,20 @@
 import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
 import { isTrialPepperConfigured, trialPhoneHmac } from '@startap/core/trial';
-import { clientBilling, pool, portalUsers, trialLedger } from '@startap/db';
+import {
+  clientBilling,
+  pool,
+  portalUsers,
+  tenant,
+  termsAcceptance,
+  trialLedger,
+} from '@startap/db';
 import { internalAlert, provisioning } from '@startap/integrations';
 import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
+import { PRIVACY_VERSION, TERMS_VERSION, USER_AGENT_MAX } from '../lib/legal-version.js';
 import { createSession } from '../lib/session.js';
 import { SESSION_COOKIE } from '../lib/tenant.js';
 import { cookieSecure } from './auth.js';
@@ -61,6 +69,11 @@ export const signupSchema = z
     // o front não envia — onboarding antigo/cliente que pulou o seletor não quebra.
     // Valor FORA da taxonomia => 400 dados_invalidos (.strict + enum).
     area: z.enum(AREA_VALUES).default('outro'),
+    // Aceite dos Termos + Política de Privacidade (SCRUM-1 / LGPD). REQUERIDO: o
+    // gate (422 aceite_obrigatorio) roda ANTES de provisionar — sem aceite, nada é
+    // criado. Booleano (o front manda `true` só com o checkbox marcado); as VERSÕES
+    // são server-authoritative (constantes acima), nunca vêm do cliente.
+    aceite_termos: z.boolean(),
   })
   .strict();
 
@@ -89,7 +102,14 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'dados_invalidos' });
     }
-    const { nome_negocio, whatsapp, senha, area } = parsed.data;
+    const { nome_negocio, whatsapp, senha, area, aceite_termos } = parsed.data;
+
+    // ── Gate de aceite (SCRUM-1 / LGPD): EXIGE o aceite ANTES de qualquer escrita.
+    // Sem aceite -> 422, nada é provisionado (nem clone, nem sessão WAHA). É a regra
+    // de negócio (o checkbox do front é só a 1ª barreira; esta é a autoritativa).
+    if (!aceite_termos) {
+      return reply.code(422).send({ error: 'aceite_obrigatorio' });
+    }
 
     const canonical = canonicalE164(whatsapp);
     if (!canonical) {
@@ -190,12 +210,29 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     // ── Usuário do portal + billing + estado de trial ───────────────────────────
     try {
       const passwordHash = await bcrypt.hash(senha, config.PORTAL_BCRYPT_COST);
-      await portalUsers.createPortalUser({
+      const createdUser = await portalUsers.createPortalUser({
         slot,
         username: canonical,
         passwordHash,
         displayName: nome_negocio,
         mustChangePassword: false, // o cliente escolheu a própria senha
+      });
+
+      // ── Prova de aceite (SCRUM-1 / LGPD consentimento demonstrável) ─────────────
+      // Append-only em terms_acceptances. Dentro do MESMO try -> se falhar, o
+      // teardown abaixo remove o clone órfão (não há conta sem prova de aceite).
+      // tenant_id é fail-safe (resolveTenantId pode devolver null sem derrubar).
+      // LGPD: ip/user_agent ficam SÓ na prova, nunca em log claro.
+      const tenantId = await tenant.resolveTenantId(slot);
+      const uaRaw = req.headers['user-agent'];
+      await termsAcceptance.recordTermsAcceptance({
+        slot,
+        tenantId,
+        portalUserId: createdUser.id,
+        termsVersion: TERMS_VERSION,
+        privacyVersion: PRIVACY_VERSION,
+        ip: req.ip || null,
+        userAgent: typeof uaRaw === 'string' ? uaRaw.slice(0, USER_AGENT_MAX) : null,
       });
 
       // Preço de tabela nasce aqui; next_due_date = NULL (trial AINDA não começou
