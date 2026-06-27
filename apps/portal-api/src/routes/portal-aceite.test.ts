@@ -43,6 +43,7 @@ vi.mock('../lib/tenant.js', async () => {
 });
 
 import Fastify, { type FastifyInstance } from 'fastify';
+import { PRIVACY_HASH, TERMS_HASH } from '../lib/legal-version.js';
 import { portalAceiteRoutes } from './portal-aceite.js';
 
 async function buildApp(): Promise<FastifyInstance> {
@@ -97,7 +98,7 @@ describe('GET /portal/aceite/status', () => {
 });
 
 describe('POST /portal/aceite', () => {
-  it('201 grava a prova com slot+user da sessão, versões v1 e user-agent', async () => {
+  it('201 grava a prova com slot+user da sessão, versões v1, hashes v1 e user-agent', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'POST',
@@ -105,13 +106,22 @@ describe('POST /portal/aceite', () => {
       headers: { 'user-agent': 'TestAgent/2.0' },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ ok: true, terms_version: 'v1', privacy_version: 'v1' });
+    // Hashes v1 server-authoritative (SCRUM-31) — vêm das constantes, nunca do body.
+    expect(res.json()).toEqual({
+      ok: true,
+      terms_version: 'v1',
+      privacy_version: 'v1',
+      terms_hash: TERMS_HASH,
+      privacy_hash: PRIVACY_HASH,
+    });
     expect(mocks.recordTermsAcceptance).toHaveBeenCalledWith(
       expect.objectContaining({
         slot: injectedSlot,
         portalUserId: 7,
         termsVersion: 'v1',
         privacyVersion: 'v1',
+        termsHash: TERMS_HASH,
+        privacyHash: PRIVACY_HASH,
         tenantId: '11111111-1111-1111-1111-111111111111',
         userAgent: 'TestAgent/2.0',
       }),
