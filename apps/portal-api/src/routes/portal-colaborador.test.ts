@@ -3,11 +3,18 @@
  * injetar uma sessão fixa de colaborador (colaboradorId=7, slot 'clone_seven') — a unidade
  * do preHandler vive em tenant-colaborador.test.ts.
  *
+ * CONTRATO DE NAMESPACE (fix SCRUM-32 — agenda/comissão vazias em prod): as rotas de DADOS
+ * do colaborador vivem sob o prefixo PROXIADO `/portal/*` (o portal-web só encaminha
+ * /auth, /portal e /demo pro portal-api). O caminho ANTIGO `/colaborador/*` COLIDIA com as
+ * PÁGINAS Next em /colaborador/agenda|comissao, então o `apiFetch` caía no HTML da página e
+ * nunca chegava ao portal-api -> agenda/comissão sempre vazias. Estes testes fixam o
+ * namespace certo e garantem que o caminho colidente não é mais servido.
+ *
  * Prova o ISOLAMENTO no nível da ROTA:
  *  - flag OFF -> 404 (feature dormente).
- *  - /colaborador/agenda: devolve SÓ os eventos da agenda DO colaborador da sessão (a
+ *  - /portal/colaborador/agenda: devolve SÓ os eventos da agenda DO colaborador da sessão (a
  *    agenda de OUTRO colaborador do mesmo estabelecimento NÃO aparece).
- *  - /colaborador/comissao: chama getComissaoColaborador com o colaboradorId DA SESSÃO
+ *  - /portal/colaborador/comissao: chama getComissaoColaborador com o colaboradorId DA SESSÃO
  *    (não há id no request — anti-IDOR por construção).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -62,13 +69,13 @@ beforeEach(() => {
 });
 
 describe('gating COLABORADOR_PORTAL_ENABLED', () => {
-  it('OFF -> 404 em /colaborador/agenda e /colaborador/comissao', async () => {
+  it('OFF -> 404 em /portal/colaborador/agenda e /portal/colaborador/comissao', async () => {
     configMock.COLABORADOR_PORTAL_ENABLED = false;
     const app = await buildApp();
-    const a = await app.inject({ method: 'GET', url: '/colaborador/agenda' });
+    const a = await app.inject({ method: 'GET', url: '/portal/colaborador/agenda' });
     const c = await app.inject({
       method: 'GET',
-      url: '/colaborador/comissao?de=2026-06-01&ate=2026-06-30',
+      url: '/portal/colaborador/comissao?de=2026-06-01&ate=2026-06-30',
     });
     expect(a.statusCode).toBe(404);
     expect(c.statusCode).toBe(404);
@@ -76,7 +83,30 @@ describe('gating COLABORADOR_PORTAL_ENABLED', () => {
   });
 });
 
-describe('GET /colaborador/agenda — só a agenda DELE', () => {
+// REGRESSÃO do bug "agenda/comissão vazias": as rotas NÃO podem viver no namespace
+// /colaborador/* (colidia com as páginas Next + não era proxiado). Têm de estar sob
+// /portal/*. Se alguém reverter o prefixo, estes 404 quebram o build.
+describe('namespace proxiado /portal/* (não o /colaborador/* colidente)', () => {
+  it('o caminho ANTIGO /colaborador/agenda NÃO é mais servido (404)', async () => {
+    getGcalsMock.mockResolvedValue([]);
+    const app = await buildApp();
+    const old = await app.inject({ method: 'GET', url: '/colaborador/agenda' });
+    expect(old.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('o caminho ANTIGO /colaborador/comissao NÃO é mais servido (404)', async () => {
+    const app = await buildApp();
+    const old = await app.inject({
+      method: 'GET',
+      url: '/colaborador/comissao?de=2026-06-01&ate=2026-06-30',
+    });
+    expect(old.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe('GET /portal/colaborador/agenda — só a agenda DELE', () => {
   it('devolve eventos do colaborador da sessão e IGNORA os de outro colaborador', async () => {
     const eventosBene = [
       {
@@ -115,7 +145,7 @@ describe('GET /colaborador/agenda — só a agenda DELE', () => {
     ]);
 
     const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/colaborador/agenda' });
+    const res = await app.inject({ method: 'GET', url: '/portal/colaborador/agenda' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.gcal_configured).toBe(true);
@@ -138,14 +168,14 @@ describe('GET /colaborador/agenda — só a agenda DELE', () => {
       },
     ]);
     const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/colaborador/agenda' });
+    const res = await app.inject({ method: 'GET', url: '/portal/colaborador/agenda' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ gcal_configured: false, count: 0, agendamentos: [] });
     await app.close();
   });
 });
 
-describe('GET /colaborador/comissao — escopo pela sessão (anti-IDOR)', () => {
+describe('GET /portal/colaborador/comissao — escopo pela sessão (anti-IDOR)', () => {
   it('chama getComissaoColaborador com o colaboradorId DA SESSÃO (7), nunca de input', async () => {
     getComissaoColabMock.mockImplementation(async (_slot, _t, _id, de, ate, balde) => ({
       de,
@@ -164,7 +194,7 @@ describe('GET /colaborador/comissao — escopo pela sessão (anti-IDOR)', () => 
     // parâmetro de id na rota — a identidade vem da sessão).
     const res = await app.inject({
       method: 'GET',
-      url: '/colaborador/comissao?de=2026-06-01&ate=2026-06-30&colaborador_id=8',
+      url: '/portal/colaborador/comissao?de=2026-06-01&ate=2026-06-30&colaborador_id=8',
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -184,7 +214,7 @@ describe('GET /colaborador/comissao — escopo pela sessão (anti-IDOR)', () => 
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/colaborador/comissao?de=xx&ate=2026-06-30',
+      url: '/portal/colaborador/comissao?de=xx&ate=2026-06-30',
     });
     expect(res.statusCode).toBe(400);
     await app.close();

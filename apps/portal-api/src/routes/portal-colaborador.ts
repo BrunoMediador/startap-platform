@@ -62,8 +62,10 @@ function gateEnabled(reply: FastifyReply): boolean {
 }
 
 export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
-  // GET /colaborador/agenda?past=&ahead= — SÓ os agendamentos da agenda DELE (read-only).
-  app.get('/colaborador/agenda', { preHandler: withColaborador }, async (req, reply) => {
+  // GET /portal/colaborador/agenda?past=&ahead= — SÓ os agendamentos da agenda DELE
+  // (read-only). Vive sob /portal/* (namespace PROXIADO pelo portal-web): o caminho antigo
+  // /colaborador/* colidia com as PÁGINAS Next e nunca chegava aqui (agenda sempre vazia).
+  app.get('/portal/colaborador/agenda', { preHandler: withColaborador }, async (req, reply) => {
     if (!gateEnabled(reply)) return reply;
     const { slot, colaboradorId } = requireColaborador(req);
 
@@ -123,9 +125,10 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // GET /colaborador/comissao?de=&ate= — FATURAMENTO (bruto dele) + PREVISÃO + COMISSÃO
-  // (o que ELE ganha), nos dois baldes. Escopado ao colaborador DA SESSÃO (read-only).
-  app.get('/colaborador/comissao', { preHandler: withColaborador }, async (req, reply) => {
+  // GET /portal/colaborador/comissao?de=&ate= — FATURAMENTO (bruto dele) + PREVISÃO +
+  // COMISSÃO (o que ELE ganha), nos dois baldes. Escopado ao colaborador DA SESSÃO
+  // (read-only). Sob /portal/* pelo mesmo motivo de roteamento da agenda (acima).
+  app.get('/portal/colaborador/comissao', { preHandler: withColaborador }, async (req, reply) => {
     if (!gateEnabled(reply)) return reply;
     const { slot, tenantId, colaboradorId, nome } = requireColaborador(req);
 

@@ -145,6 +145,11 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
 // O backend escopa TUDO por (slot + tenant + colaboradorId) DA SESSÃO; o front
 // não envia identidade. slot/colaboradorId aqui entram só na query KEY (isolamento
 // de cache por barbeiro). Logout faz queryClient.clear() (use-logout) — nada vaza.
+//
+// ATENÇÃO: os FETCHES vão pra /portal/colaborador/* (namespace PROXIADO pelo portal-web —
+// só /auth, /portal e /demo chegam ao portal-api). NÃO usar /colaborador/* aqui: colide
+// com as PÁGINAS Next (/colaborador/agenda|comissao) e o fetch cai no HTML da página em vez
+// do portal-api -> agenda/comissão vazias. As ROTAS de navegação (hrefs) seguem /colaborador/*.
 
 /** Agenda do colaborador logado (read-only). Espelha useAgendamentos. */
 export function useColaboradorAgenda(
@@ -153,7 +158,8 @@ export function useColaboradorAgenda(
 ): UseQueryResult<ColaboradorAgendaResponse> {
   return useQuery({
     queryKey: qk.colaboradorAgenda(slot, colaboradorId),
-    queryFn: ({ signal }) => apiFetch<ColaboradorAgendaResponse>('/colaborador/agenda', { signal }),
+    queryFn: ({ signal }) =>
+      apiFetch<ColaboradorAgendaResponse>('/portal/colaborador/agenda', { signal }),
   });
 }
 
@@ -168,7 +174,7 @@ export function useColaboradorComissao(
     queryKey: qk.colaboradorComissao(slot, colaboradorId, de, ate),
     queryFn: ({ signal }) =>
       apiFetch<ColaboradorComissaoResponse>(
-        `/colaborador/comissao?de=${encodeURIComponent(de)}&ate=${encodeURIComponent(ate)}`,
+        `/portal/colaborador/comissao?de=${encodeURIComponent(de)}&ate=${encodeURIComponent(ate)}`,
         { signal },
       ),
     enabled: Boolean(de && ate),
