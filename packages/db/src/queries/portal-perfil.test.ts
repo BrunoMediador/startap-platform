@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe('getPerfilBySlot', () => {
-  it('le as 6 chaves do personalizacao; ausentes viram ""', async () => {
+  it('le as 6 chaves; texto ausente vira "" e formas_pagamento vira [] (checklist)', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{ personalizacao: { nome_negocio: 'Barbearia Edu', instagram: 'edubarber' } }],
     });
@@ -44,10 +44,21 @@ describe('getPerfilBySlot', () => {
       telefone_contato: '',
       endereco: '',
       instagram: 'edubarber',
-      formas_pagamento: '',
+      formas_pagamento: [],
     });
     // slot vai parametrizado ($1), nunca interpolado.
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE slot = $1'), [SLOT]);
+  });
+
+  it('migracao LAZY: converte o texto livre ANTIGO em array canonico (best-effort)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ personalizacao: { formas_pagamento: 'Pix, dinheiro, cartão de crédito' } }],
+    });
+
+    const perfil = await getPerfilBySlot(SLOT);
+
+    // tokens mapeados, ordem canonica; nada e reescrito no banco aqui.
+    expect(perfil?.formas_pagamento).toEqual(['Dinheiro', 'PIX', 'Cartão de crédito']);
   });
 
   it('retorna null quando o slot nao existe', async () => {
@@ -135,10 +146,20 @@ describe('updatePerfilBySlot', () => {
     expect(merged.endereco).toBe('Rua X, 1');
   });
 
-  it('campo "" (string vazia) grava como limpar', async () => {
+  it('formas_pagamento: array de opcoes vira STRING canonica no storage', async () => {
+    const captured = armMocks({});
+
+    await updatePerfilBySlot(SLOT, { formas_pagamento: ['Cartão de crédito', 'PIX'] });
+
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    // string canonica (ordem fixa) — o bot/gestao leem string, nao array.
+    expect(merged.formas_pagamento).toBe('PIX, Cartão de crédito');
+  });
+
+  it('formas_pagamento: [] (lista vazia) grava como limpar ("")', async () => {
     const captured = armMocks({ formas_pagamento: 'Pix' });
 
-    await updatePerfilBySlot(SLOT, { formas_pagamento: '' });
+    await updatePerfilBySlot(SLOT, { formas_pagamento: [] });
 
     const merged = JSON.parse(captured.mergedJson ?? '{}');
     expect(merged.formas_pagamento).toBe('');

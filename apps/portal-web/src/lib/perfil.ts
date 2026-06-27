@@ -13,7 +13,7 @@
  *    a conta existe.
  * Erro inline aqui evita bater na API pra tomar 400.
  */
-import type { PerfilNegocio } from './api-types';
+import { FORMAS_PAGAMENTO_OPCOES, type FormaPagamentoOpcao, type PerfilNegocio } from './api-types';
 
 export interface PerfilDraft {
   nome_negocio: string;
@@ -21,20 +21,40 @@ export interface PerfilDraft {
   telefone_contato: string;
   endereco: string;
   instagram: string;
-  formas_pagamento: string;
+  /** Opcoes FIXAS marcadas (checklist) — subconjunto de FORMAS_PAGAMENTO_OPCOES. */
+  formas_pagamento: FormaPagamentoOpcao[];
+}
+
+/** Marca/desmarca uma forma de pagamento, devolvendo a lista na ordem canonica. */
+export function toggleFormaPagamento(
+  atuais: readonly FormaPagamentoOpcao[],
+  forma: FormaPagamentoOpcao,
+): FormaPagamentoOpcao[] {
+  const set = new Set(atuais);
+  if (set.has(forma)) set.delete(forma);
+  else set.add(forma);
+  return FORMAS_PAGAMENTO_OPCOES.filter((o) => set.has(o));
+}
+
+/** Filtra/normaliza uma lista crua pras opcoes validas, na ordem canonica. */
+function normalizeFormas(arr: readonly string[] | undefined | null): FormaPagamentoOpcao[] {
+  if (!arr) return [];
+  const set = new Set(arr);
+  return FORMAS_PAGAMENTO_OPCOES.filter((o) => set.has(o));
 }
 
 export type PerfilField = keyof PerfilDraft;
 export type PerfilErrors = Partial<Record<PerfilField, string>>;
 
-/** Campos do perfil na ordem em que aparecem no form. */
-export const PERFIL_FIELDS: PerfilField[] = [
+/** Campos de TEXTO do perfil (trim + maxlen). `formas_pagamento` e checklist (a parte). */
+export type PerfilTextField = Exclude<PerfilField, 'formas_pagamento'>;
+
+const PERFIL_TEXT_FIELDS: PerfilTextField[] = [
   'nome_negocio',
   'nome_prestador',
   'telefone_contato',
   'endereco',
   'instagram',
-  'formas_pagamento',
 ];
 
 const MAX = {
@@ -43,16 +63,14 @@ const MAX = {
   telefone_contato: 40,
   endereco: 240,
   instagram: 80,
-  formas_pagamento: 240,
-} as const satisfies Record<PerfilField, number>;
+} as const satisfies Record<PerfilTextField, number>;
 
-const LABEL: Record<PerfilField, string> = {
+const LABEL: Record<PerfilTextField, string> = {
   nome_negocio: 'Nome do negócio',
   nome_prestador: 'Nome do prestador de serviço',
   telefone_contato: 'Telefone',
   endereco: 'Endereço',
   instagram: 'Instagram',
-  formas_pagamento: 'Formas de pagamento',
 };
 
 const EMPTY: PerfilDraft = {
@@ -61,10 +79,10 @@ const EMPTY: PerfilDraft = {
   telefone_contato: '',
   endereco: '',
   instagram: '',
-  formas_pagamento: '',
+  formas_pagamento: [],
 };
 
-/** Converte a resposta da API em draft de edicao (campos ausentes -> ''). */
+/** Converte a resposta da API em draft de edicao (texto ausente -> ''; formas -> []). */
 export function toPerfilDraft(p: Partial<PerfilNegocio> | undefined | null): PerfilDraft {
   if (!p) return { ...EMPTY };
   return {
@@ -73,7 +91,7 @@ export function toPerfilDraft(p: Partial<PerfilNegocio> | undefined | null): Per
     telefone_contato: p.telefone_contato ?? '',
     endereco: p.endereco ?? '',
     instagram: p.instagram ?? '',
-    formas_pagamento: p.formas_pagamento ?? '',
+    formas_pagamento: normalizeFormas(p.formas_pagamento),
   };
 }
 
@@ -106,7 +124,7 @@ export function validatePerfil(
   const errors: PerfilErrors = {};
   const out: PerfilDraft = { ...EMPTY };
 
-  for (const f of PERFIL_FIELDS) {
+  for (const f of PERFIL_TEXT_FIELDS) {
     const trimmed = d[f].trim();
     if (trimmed.length > MAX[f]) {
       errors[f] = `${LABEL[f]} é muito longo (máx. ${MAX[f]} caracteres)`;
@@ -125,11 +143,24 @@ export function validatePerfil(
     }
   }
 
+  // Formas de pagamento: checklist — so passam as opcoes da lista fixa (a UI ja
+  // impede outras; aqui filtramos de novo por seguranca antes do PUT).
+  out.formas_pagamento = normalizeFormas(d.formas_pagamento);
+
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value: out };
 }
 
+/** Compara os arrays de formas (ja em ordem canonica) por igualdade de conteudo. */
+function formasIguais(
+  a: readonly FormaPagamentoOpcao[],
+  b: readonly FormaPagamentoOpcao[],
+): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 /** True quando o draft difere do salvo (libera o botao Salvar). */
 export function isDirty(draft: PerfilDraft, saved: PerfilDraft): boolean {
-  return PERFIL_FIELDS.some((f) => draft[f].trim() !== saved[f].trim());
+  if (PERFIL_TEXT_FIELDS.some((f) => draft[f].trim() !== saved[f].trim())) return true;
+  return !formasIguais(draft.formas_pagamento, saved.formas_pagamento);
 }

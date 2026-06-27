@@ -4,6 +4,7 @@ import {
   isDirty,
   normalizeInstagram,
   toPerfilDraft,
+  toggleFormaPagamento,
   validatePerfil,
 } from './perfil';
 
@@ -13,7 +14,7 @@ const EMPTY: PerfilDraft = {
   telefone_contato: '',
   endereco: '',
   instagram: '',
-  formas_pagamento: '',
+  formas_pagamento: [],
 };
 
 function draft(over: Partial<PerfilDraft>): PerfilDraft {
@@ -51,15 +52,22 @@ describe('validatePerfil', () => {
       draft({
         nome_negocio: '  Barbearia do Zé  ',
         instagram: ' @barbearia.do.ze ',
-        formas_pagamento: 'Pix, dinheiro, cartão ',
+        formas_pagamento: ['PIX', 'Dinheiro'],
       }),
     );
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.value.nome_negocio).toBe('Barbearia do Zé');
       expect(res.value.instagram).toBe('barbearia.do.ze');
-      expect(res.value.formas_pagamento).toBe('Pix, dinheiro, cartão');
+      // checklist normalizado na ordem canonica.
+      expect(res.value.formas_pagamento).toEqual(['Dinheiro', 'PIX']);
     }
+  });
+
+  it('filtra forma de pagamento fora da lista fixa (defesa antes do PUT)', () => {
+    const res = validatePerfil(draft({ formas_pagamento: ['PIX', 'Boleto'] as never }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.formas_pagamento).toEqual(['PIX']);
   });
 
   it('rejeita Instagram com caracteres inválidos (espaço)', () => {
@@ -76,9 +84,22 @@ describe('validatePerfil', () => {
 });
 
 describe('toPerfilDraft', () => {
-  it('converte campos ausentes em string vazia', () => {
+  it('converte campos ausentes (texto -> "", formas -> [])', () => {
     expect(toPerfilDraft(null)).toEqual(EMPTY);
     expect(toPerfilDraft({ nome_negocio: 'X' })).toEqual(draft({ nome_negocio: 'X' }));
+  });
+
+  it('normaliza formas vindas da API (filtra invalida + ordem canonica)', () => {
+    const d = toPerfilDraft({ formas_pagamento: ['Cartão de crédito', 'Boleto', 'PIX'] as never });
+    expect(d.formas_pagamento).toEqual(['PIX', 'Cartão de crédito']);
+  });
+});
+
+describe('toggleFormaPagamento', () => {
+  it('marca/desmarca e mantém a ordem canonica', () => {
+    expect(toggleFormaPagamento([], 'PIX')).toEqual(['PIX']);
+    expect(toggleFormaPagamento(['PIX'], 'Dinheiro')).toEqual(['Dinheiro', 'PIX']);
+    expect(toggleFormaPagamento(['Dinheiro', 'PIX'], 'PIX')).toEqual(['Dinheiro']);
   });
 });
 
@@ -89,5 +110,12 @@ describe('isDirty', () => {
 
   it('detecta mudança real', () => {
     expect(isDirty(draft({ telefone_contato: '11999' }), EMPTY)).toBe(true);
+  });
+
+  it('detecta mudança nas formas de pagamento', () => {
+    expect(isDirty(draft({ formas_pagamento: ['PIX'] }), EMPTY)).toBe(true);
+    expect(
+      isDirty(draft({ formas_pagamento: ['PIX'] }), draft({ formas_pagamento: ['PIX'] })),
+    ).toBe(false);
   });
 });
