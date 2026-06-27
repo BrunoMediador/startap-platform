@@ -45,6 +45,7 @@ import type {
   EquipeResponse,
   ExcluirAgendamentoResponse,
   FaturamentoReport,
+  GerarSenhaColaboradorResponse,
   GoogleContaResponse,
   Horarios,
   HorariosResponse,
@@ -702,6 +703,26 @@ export function useUpdateColaborador(
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.equipe(slot) });
     },
+  });
+}
+
+/**
+ * Gera/REGENERA a senha de login de um colaborador (POST /portal/equipe/:id/gerar-senha).
+ * O backend devolve a senha em claro UMA vez (só guarda o hash) — por isso NÃO invalida a
+ * lista nem cacheia: o componente exibe o resultado da mutation direto e descarta ao
+ * fechar. Regenerar invalida a senha anterior no backend (idempotente). Mesma rota
+ * escopada por slot da sessão (withTenant); o front nunca envia slot.
+ */
+export function useGerarSenhaColaborador(): UseMutationResult<
+  GerarSenhaColaboradorResponse,
+  Error,
+  { id: number }
+> {
+  return useMutation({
+    mutationFn: ({ id }) =>
+      apiFetch<GerarSenhaColaboradorResponse>(`/portal/equipe/${id}/gerar-senha`, {
+        method: 'POST',
+      }),
   });
 }
 

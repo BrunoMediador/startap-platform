@@ -206,6 +206,17 @@ export interface ColaboradorInput {
   comissao_pct?: number;
 }
 
+/**
+ * Resposta de POST /portal/equipe/:id/gerar-senha — o dono gera/regenera a senha de
+ * login de um colaborador dele. A senha em claro vem UMA vez (o backend só guarda o
+ * hash); a UI mostra + permite copiar e nunca a refetcha.
+ */
+export interface GerarSenhaColaboradorResponse {
+  ok: true;
+  username: string;
+  generated_password: string;
+}
+
 // ── Horarios ─────────────────────────────────────────────────────────────────
 
 export interface HorarioDia {
