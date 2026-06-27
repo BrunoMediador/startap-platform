@@ -7,6 +7,7 @@ import {
   isAtendimentoLigado,
   isPausaFeatureOff,
   isPausaTravada,
+  pausaFromResposta,
   resolvePausaEstado,
 } from './bot-pausa';
 
@@ -114,6 +115,49 @@ describe('applyPausaToConexao — update otimista', () => {
   it('resolvePausaEstado casa com o estado aplicado (round-trip)', () => {
     expect(resolvePausaEstado(applyPausaToConexao(base, true))).toBe('pausado_self');
     expect(resolvePausaEstado(applyPausaToConexao(base, false))).toBe('ativo');
+  });
+});
+
+describe('pausaFromResposta — update reflete o SERVIDOR, nao um palpite local', () => {
+  const base: ConexaoResponse = {
+    enabled: true,
+    session: 'sess',
+    status: 'WORKING',
+    connected: true,
+    needs_action: false,
+    has_registered_phone: true,
+    registered_phone_masked: '55 11 9••••-1234',
+    can_reconnect: true,
+    reconnect_cooldown_seconds: 30,
+    bot_paused: true,
+    pause_self: true,
+    pause_locked: false,
+  };
+
+  it('servidor confirma resume (bot_paused:false) -> UI vira ativo', () => {
+    const next = pausaFromResposta(base, { bot_paused: false });
+    expect(next.bot_paused).toBe(false);
+    expect(resolvePausaEstado(next)).toBe('ativo');
+  });
+
+  it('servidor diz que CONTINUA pausado (bot_paused:true) -> UI NAO mente "ativo"', () => {
+    // Regressao do bug do Samuel: o resume otimista hardcodava "ativo" e a UI
+    // dessincronizava do backend. Agora a UI segue a resposta do servidor.
+    const next = pausaFromResposta(
+      { ...base, bot_paused: false, pause_self: false },
+      {
+        bot_paused: true,
+      },
+    );
+    expect(next.bot_paused).toBe(true);
+    expect(resolvePausaEstado(next)).not.toBe('ativo');
+  });
+
+  it('nao mexe no eixo de conexao WAHA (so nos campos de pausa)', () => {
+    const next = pausaFromResposta(base, { bot_paused: false });
+    expect(next.connected).toBe(true);
+    expect(next.status).toBe('WORKING');
+    expect(next.session).toBe('sess');
   });
 });
 

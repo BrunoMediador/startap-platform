@@ -70,6 +70,10 @@ export const portalStatusRoutes: FastifyPluginAsync = async (app) => {
       slot,
       display_name: clone.display_name,
       flow_enabled: clone.flow_enabled,
+      // PORQUÊ da pausa (∈ billing|owner_request|manual_other|abuse|null). A Home
+      // usa isto pra NÃO confundir pausa do dono (owner_request) com inadimplência:
+      // só mostra "regularize a mensalidade" quando é cobrança de verdade.
+      suspended_kind: clone.suspended_kind,
       waha: { session, status: wahaStatus },
       pausas_ativas: pausasAtivas,
       billing: billing

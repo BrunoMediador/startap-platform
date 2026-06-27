@@ -66,7 +66,7 @@ import type {
   StatusResponse,
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
-import { applyPausaToConexao } from './bot-pausa';
+import { pausaFromResposta } from './bot-pausa';
 import { mapColaboradorRow } from './equipe';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
@@ -630,9 +630,11 @@ export function usePausarBot(slot: string): UseMutationResult<BotPauseResponse, 
   const client = useQueryClient();
   return useMutation({
     mutationFn: () => apiFetch<BotPauseResponse>('/portal/bot/pause', { method: 'POST' }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Reflete o estado REPORTADO pelo servidor (data.bot_paused), nunca um
+      // palpite local. O invalidate logo abaixo re-deriva tudo do backend.
       client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
-        prev ? applyPausaToConexao(prev, true) : prev,
+        prev ? pausaFromResposta(prev, data) : prev,
       );
       client.invalidateQueries({ queryKey: qk.conexao(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });
@@ -650,9 +652,12 @@ export function useRetomarBot(slot: string): UseMutationResult<BotResumeResponse
   const client = useQueryClient();
   return useMutation({
     mutationFn: () => apiFetch<BotResumeResponse>('/portal/bot/resume', { method: 'POST' }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Reflete o estado REPORTADO pelo servidor (data.bot_paused), nunca um
+      // palpite local "ativo": se o resume nao destravou, a UI nao mente. O
+      // invalidate logo abaixo re-deriva tudo do backend (fonte da verdade).
       client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
-        prev ? applyPausaToConexao(prev, false) : prev,
+        prev ? pausaFromResposta(prev, data) : prev,
       );
       client.invalidateQueries({ queryKey: qk.conexao(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });

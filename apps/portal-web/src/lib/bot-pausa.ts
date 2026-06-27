@@ -80,3 +80,18 @@ export function applyPausaToConexao(prev: ConexaoResponse, paused: boolean): Con
     pause_locked: false,
   };
 }
+
+/**
+ * Atualiza o cache da conexao a partir da RESPOSTA do servidor ao pause/resume
+ * (`{ bot_paused }`), NUNCA de um palpite local. O servidor e a fonte da verdade
+ * do estado de pausa: se o resume NAO destravou (ex.: condicao no backend nao
+ * casou), a resposta traz `bot_paused:true` e a UI segue mostrando "pausado" em
+ * vez de mentir "ativo". O refetch (invalidate) que vem logo depois reconcilia o
+ * estado completo — este update so evita o flash entre o clique e o refetch.
+ */
+export function pausaFromResposta(
+  prev: ConexaoResponse,
+  resp: { bot_paused: boolean },
+): ConexaoResponse {
+  return applyPausaToConexao(prev, resp.bot_paused);
+}
