@@ -111,7 +111,7 @@ export interface ColaboradorMe {
 }
 
 /**
- * GET /colaborador/agenda — agenda do colaborador logado (read-only). MESMO shape
+ * GET /portal/colaborador/agenda — agenda do colaborador logado (read-only). MESMO shape
  * de AgendamentosResponse (id/titulo/inicio/fim); `gcal_configured:false` = agenda
  * dele ainda não conectada (pré-setup, estado esperado -> empty, não erro).
  */
@@ -134,7 +134,7 @@ export interface ColaboradorComissaoBalde {
 }
 
 /**
- * GET /colaborador/comissao?de=&ate= — faturamento + comissão do colaborador nos
+ * GET /portal/colaborador/comissao?de=&ate= — faturamento + comissão do colaborador nos
  * DOIS baldes de uma vez (faturado = realizado/passado; previsao = agendado/futuro),
  * dentro da janela [de, ate]. profissional_nome pode vir null (nome apagado) -> fallback.
  */
