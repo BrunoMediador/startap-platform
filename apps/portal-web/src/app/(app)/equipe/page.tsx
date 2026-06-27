@@ -19,7 +19,8 @@
  * mutations invalidam a lista (o backend é a fonte de verdade do seat_cap/uso), não
  * editam o cache otimista — assim o card de vagas nunca diverge.
  */
-import { IconCheck, IconUser, IconUsers } from '@/components/icons';
+import { GerarSenhaModal } from '@/components/equipe/gerar-senha-modal';
+import { IconCheck, IconLock, IconUser, IconUsers } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -71,6 +72,8 @@ export default function EquipePage() {
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<FieldErrors>({});
+  // Colaborador cujo modal de "gerar senha" está aberto (null = fechado).
+  const [senhaColab, setSenhaColab] = useState<Colaborador | null>(null);
 
   // Defesa de UX: individual não tem painel de equipe (o backend recusa de toda
   // forma). Mostra estado claro em vez de bater na API e levar 409.
@@ -209,11 +212,22 @@ export default function EquipePage() {
                 colaborador={c}
                 onEdit={() => startEdit(c)}
                 onToggle={() => toggleAtivo(c)}
+                onGerarSenha={() => setSenhaColab(c)}
                 toggling={update.isPending}
               />
             ),
           )}
         </div>
+      )}
+
+      {/* Modal "gerar senha" do colaborador. key=id remonta (reseta o passo/segredo)
+          ao trocar de profissional; só monta quando aberto (some o segredo ao fechar). */}
+      {senhaColab && (
+        <GerarSenhaModal
+          key={senhaColab.id}
+          colaborador={senhaColab}
+          onClose={() => setSenhaColab(null)}
+        />
       )}
     </>
   );
@@ -223,11 +237,13 @@ function ReadRow({
   colaborador,
   onEdit,
   onToggle,
+  onGerarSenha,
   toggling,
 }: {
   colaborador: Colaborador;
   onEdit: () => void;
   onToggle: () => void;
+  onGerarSenha: () => void;
   toggling: boolean;
 }) {
   const servicos = colaborador.servicos;
@@ -263,6 +279,15 @@ function ReadRow({
           label={`${colaborador.ativo ? 'Desativar' : 'Ativar'} ${colaborador.nome}`}
         />
         <div className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 max-md:opacity-100 sm:gap-2">
+          <button
+            type="button"
+            aria-label={`Gerar senha de acesso de ${colaborador.nome}`}
+            onClick={onGerarSenha}
+            className="flex size-9 items-center justify-center rounded-[11px] border border-line-strong text-ink-soft outline-none transition-[color,background-color] hover:bg-surface-elev-hover hover:text-brand focus-visible:ring-2 focus-visible:ring-brand sm:size-11"
+          >
+            <IconLock size={18} />
+            <span className="sr-only">Gerar senha</span>
+          </button>
           <button
             type="button"
             aria-label={`Editar ${colaborador.nome}`}
