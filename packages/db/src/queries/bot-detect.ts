@@ -109,27 +109,44 @@ export async function getMessageTimestamps(sessao: string, telefone: string): Pr
  * Conteúdo das últimas N mensagens `human` (= do número analisado, não as respostas `ai` do nosso
  * bot) na chat_table do clone. Base dos sinais de CONTEÚDO (templated/repetido + marketing).
  *
- * session_id em chat_histories = `${slot}:${sessao}:${flowId}:${telefone}` -> termina em
- * `:<telefone>`. Filtra por sufixo (LIKE '%:' || telefone) — telefone é só dígitos (sem curinga),
- * concatenado a um parâmetro bindado (não interpolado). O NOME DA TABELA é validado contra
- * isValidChatTableName ANTES de interpolar (não dá pra parametrizar identificador) — defesa SQLi.
+ * ⚠️ ISOLAMENTO (A1, SCRUM-4 #404): a chat_table é COMPARTILHADA entre clones — a migration 017
+ * atribui `chat_table` por `matriz_slot` com `ELSE 'chat_histories'`, então em prod cirilo/samuel/
+ * barber_dragon/seven_7 dividem `chat_histories`. Filtrar SÓ pelo sufixo do telefone casaria
+ * mensagens de TODOS os clones daquela tabela -> leitura cross-tenant de conteúdo de conversa (PII).
+ * Por isso a query é ANCORADA POR SLOT.
+ *
+ * session_id em chat_histories = `${slot}:${sessao}:${flowId}:${telefone}` -> SEMPRE começa com
+ * `${slot}:` e termina em `:<telefone>`. Âncoras (ambas bindadas):
+ *  - SLOT: `split_part(session_id, ':', 1) = $1` -> igualdade EXATA no 1º segmento (slot não tem
+ *    `:`); evita o footgun do `_` do slot virar curinga single-char num `LIKE $slot || ...`.
+ *  - TELEFONE: `session_id LIKE '%:' || $2` -> sufixo. `telefone` é validado como só-dígitos antes
+ *    (sem `%`/`_`), e é parâmetro bindado (não interpolado).
+ * O NOME DA TABELA é validado contra isValidChatTableName ANTES de interpolar (não dá pra
+ * parametrizar identificador) — defesa SQLi.
  */
 export async function getHumanMessages(
   chatTable: string,
+  slot: string,
   telefone: string,
   limit: number,
 ): Promise<string[]> {
   if (!isValidChatTableName(chatTable)) {
     throw new Error(`chat_table inválida: ${chatTable}`);
   }
+  // A2 (#404): higiene — telefone tem que ser só dígitos. Sem isso, um `%`/`_` vindo do input
+  // viraria curinga no LIKE (mesmo bindado, é higiene). Não-dígito -> não lê conteúdo (não classifica).
+  if (!/^\d+$/.test(telefone)) {
+    return [];
+  }
   const r = await query<{ content: string | null }>(
     `SELECT COALESCE(message->'data'->>'content', message->>'content') AS content
        FROM ${chatTable}
-      WHERE session_id LIKE '%:' || $1
+      WHERE split_part(session_id, ':', 1) = $1
+        AND session_id LIKE '%:' || $2
         AND message->>'type' = 'human'
       ORDER BY id DESC
-      LIMIT $2`,
-    [telefone, limit],
+      LIMIT $3`,
+    [slot, telefone, limit],
   );
   return r.rows
     .map((x) => x.content)

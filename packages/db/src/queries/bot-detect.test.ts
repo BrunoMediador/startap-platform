@@ -30,22 +30,79 @@ beforeEach(() => {
 describe('getHumanMessages — guarda contra SQL injection no nome da tabela', () => {
   it('rejeita chat_table fora do padrão chat_histories[_suffix]', async () => {
     await expect(
-      getHumanMessages('chat_histories; DROP TABLE flow_clones', '5511999990000', 20),
+      getHumanMessages('chat_histories; DROP TABLE flow_clones', 'clone_x', '5511999990000', 20),
     ).rejects.toThrow(/chat_table inválida/);
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
-  it('aceita chat_table válida e filtra por sufixo de telefone + type=human', async () => {
+  it('aceita chat_table válida e ancora por slot + sufixo de telefone + type=human', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{ content: 'oi' }, { content: null }, { content: 'promo' }],
       rowCount: 3,
     });
-    const out = await getHumanMessages('chat_histories_dragon', '5511999990000', 20);
+    const out = await getHumanMessages('chat_histories_dragon', 'clone_x', '5511999990000', 20);
     expect(out).toEqual(['oi', 'promo']); // descarta content null
     const [sql, params] = mockQuery.mock.calls[0];
     expect(sql).toContain('chat_histories_dragon');
     expect(sql).toContain("message->>'type' = 'human'");
-    expect(params).toEqual(['5511999990000', 20]);
+    // ÂNCORA DE SLOT (#404 A1): igualdade exata no 1º segmento do session_id + sufixo de telefone.
+    expect(sql).toContain("split_part(session_id, ':', 1) = $1");
+    expect(sql).toContain("session_id LIKE '%:' || $2");
+    expect(params).toEqual(['clone_x', '5511999990000', 20]); // [slot, telefone, limit]
+  });
+
+  it('A2: telefone não-dígito não toca o banco (não classifica)', async () => {
+    const out = await getHumanMessages('chat_histories', 'clone_x', '5511%990000', 20);
+    expect(out).toEqual([]);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * REGRESSÃO A1 (#404) — ISOLAMENTO cross-tenant.
+ *
+ * `chat_histories` é COMPARTILHADA entre clones (migration 017: ELSE 'chat_histories'). O MESMO
+ * telefone tem linhas sob DOIS slots (A e B) na MESMA tabela. A query precisa devolver SOMENTE as
+ * linhas do slot consultado. O mock emula o Postgres pra ESTA query: aplica `type=human`, o sufixo
+ * de telefone (LIKE '%:'||tel) e — quando a SQL traz a âncora `split_part(...)=$1` (= o fix) — o
+ * filtro de slot. SEM a âncora (código vulnerável) o filtro de slot não é aplicado -> vaza os dois.
+ */
+describe('getHumanMessages — ISOLAMENTO cross-tenant (A1, #404)', () => {
+  const TELEFONE = '5511988887777';
+  const SLOT_A = 'clone_barber_dragon_caly8b';
+  const SLOT_B = 'clone_barbearia_seven_7_barber_dqjzb4';
+  const SHARED_TABLE = 'chat_histories';
+
+  // session_id = `${slot}:${sessao}:${flowId}:${telefone}` — MESMO número, tabela compartilhada.
+  const sharedRows = [
+    { session_id: `${SLOT_A}:SESSAO_A:flowA:${TELEFONE}`, content: 'conteudo-do-slot-A' },
+    { session_id: `${SLOT_B}:SESSAO_B:flowB:${TELEFONE}`, content: 'conteudo-do-slot-B' },
+  ];
+
+  beforeEach(() => {
+    // Mini-Postgres fiel à query de conteúdo: lê a SQL/params reais e aplica o WHERE.
+    mockQuery.mockImplementation((sql: string, params: unknown[]) => {
+      const slotAnchored = sql.includes('split_part(session_id');
+      const slot = slotAnchored ? (params[0] as string) : null;
+      const telefone = (slotAnchored ? params[1] : params[0]) as string;
+      const rows = sharedRows
+        .filter((r) => r.session_id.endsWith(`:${telefone}`)) // LIKE '%:' || telefone
+        .filter((r) => (slot === null ? true : r.session_id.split(':')[0] === slot)) // split_part=slot
+        .map((r) => ({ content: r.content }));
+      return Promise.resolve({ rows, rowCount: rows.length });
+    });
+  });
+
+  it('consultar o slot A devolve SÓ o conteúdo do slot A (não vaza o slot B)', async () => {
+    const out = await getHumanMessages(SHARED_TABLE, SLOT_A, TELEFONE, 20);
+    expect(out).toEqual(['conteudo-do-slot-A']);
+    expect(out).not.toContain('conteudo-do-slot-B');
+  });
+
+  it('consultar o slot B devolve SÓ o conteúdo do slot B (simetria)', async () => {
+    const out = await getHumanMessages(SHARED_TABLE, SLOT_B, TELEFONE, 20);
+    expect(out).toEqual(['conteudo-do-slot-B']);
+    expect(out).not.toContain('conteudo-do-slot-A');
   });
 });
 

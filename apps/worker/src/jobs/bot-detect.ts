@@ -479,7 +479,8 @@ export async function runBotDetect(): Promise<BotDetectResult> {
         const timing = computeTimingSignals(timestamps.map((d) => d.getTime()));
         const contents = info.chat_table
           ? await botDetect
-              .getHumanMessages(info.chat_table, telefone, config.BOT_DETECT_CONTENT_LIMIT)
+              // ancora por slot: chat_table é COMPARTILHADA entre clones (#404 A1)
+              .getHumanMessages(info.chat_table, slot, telefone, config.BOT_DETECT_CONTENT_LIMIT)
               .catch((e: unknown) => {
                 log.warn(
                   { slot, err: e instanceof Error ? e.message : String(e) },
