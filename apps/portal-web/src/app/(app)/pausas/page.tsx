@@ -33,7 +33,8 @@ import { useAddPausa, useContatos, usePausas, useRemovePausa } from '@/lib/queri
  * mascara/espacos) e por nome (se houver) + paginacao client-side de 10 em 10
  * (anterior/proxima + "X–Y de N"). Busca reseta pra pagina 1.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BotSuspeitosSection } from './bot-suspeitos-section';
 import { ContactSheet } from './contact-sheet';
 
 const PAGE_SIZE = 10;
@@ -87,6 +88,12 @@ export default function PausasPage() {
   function nomePausado(p: PausaRow): string | null {
     return nomePorTelefone.get(normalizePhone(p.telefone)) ?? null;
   }
+
+  // Resolve nome por telefone — reusado pela seção de suspeita de bot (SCRUM-4 PR-E).
+  const resolveName = useCallback(
+    (telefone: string): string | null => nomePorTelefone.get(normalizePhone(telefone)) ?? null,
+    [nomePorTelefone],
+  );
 
   // Filtro por numero (normalizado) e por nome. Busca vazia = lista inteira.
   const buscaDigitos = busca.replace(/\D/g, '');
@@ -161,6 +168,9 @@ export default function PausasPage() {
         title="Pausas"
         subtitle="Números que o robô não vai responder. Útil pra atender alguém na mão."
       />
+
+      {/* Suspeita de bot (SCRUM-4 PR-E): some sozinha enquanto a auto-pausa estiver OFF. */}
+      <BotSuspeitosSection slot={slot} resolveName={resolveName} />
 
       {pausasQ.isPending ? (
         <>

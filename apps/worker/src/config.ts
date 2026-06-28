@@ -222,6 +222,33 @@ export const WorkerConfigSchema = z.object({
   // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
   BOT_DETECT_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 
+  // ── Auto-pausa de bot (SCRUM-4 PR-E, Fase 2: escalação -> auto-pausa + TTL/reversão) ──────────
+  // Passo ADITIVO sobre o bot-detect: depois que a Fase 1 ALERTA o dono, se após uma JANELA DE
+  // CARÊNCIA (BOT_DETECT_GRACE_HOURS) o dono não agiu, o número não parou e ainda classifica como
+  // bot -> PAUSA AUTOMÁTICO (flow_pauses source='bot_detected' + contact_classification.paused_at).
+  // Reversível SEMPRE: TTL (BOT_DETECT_PAUSE_TTL_HOURS) + despausar do cliente no portal.
+  //
+  // GATE: SÓ roda com BOT_DETECT_AUTOPAUSE=true (default OFF — lição #247; ausente = OFF). Roda
+  // DENTRO do cron bot-detect (que já exige BOT_DETECT_ENABLED) + nos MESMOS BOT_DETECT_SLOTS.
+  // Com a flag ausente/false a escalação NEM é avaliada (zero query extra) — byte-a-byte OFF.
+  // KILL-SWITCH = limpar a env (as pausas já criadas expiram pelo TTL ou o cliente despausa).
+  // ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR). NUNCA hardcoded.
+  BOT_DETECT_AUTOPAUSE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // CARÊNCIA (horas) entre o alerta ao dono e a auto-pausa. Dá tempo do dono agir. Default 24h.
+  BOT_DETECT_GRACE_HOURS: z.coerce.number().int().positive().default(24),
+  // TTL (horas) da pausa source='bot_detected': depois disso o job a remove sozinho (auto-expira).
+  // Reversibilidade garantida sem ação humana. Default 168h (7 dias).
+  BOT_DETECT_PAUSE_TTL_HOURS: z.coerce.number().int().positive().default(168),
+  // Janela (horas) de "atividade recente" em message_log pra considerar que o número NÃO parou.
+  // Sem atividade nesta janela -> não auto-pausa (conservador; o número já parou sozinho). message_log
+  // retém ~24h, então valores acima disso são efetivamente 24h. Default 12h.
+  BOT_DETECT_ACTIVITY_WINDOW_HOURS: z.coerce.number().int().positive().default(12),
+  // Teto de AUTO-PAUSAS por CICLO por clone (custo previsível + conservador). Default 10.
+  BOT_DETECT_AUTOPAUSE_MAX_PER_RUN: z.coerce.number().int().positive().default(10),
+
   // ── Classificador LLM na ZONA-CINZA do bot-detect (SCRUM-4 PR-D) ─────────────────────────────
   // Só a ZONA-CINZA da heurística (exatamente 1 eixo ortogonal disparou — ambíguo) paga LLM. Fora
   // dela (≥2 eixos = bot; 0 eixos = humano) NUNCA chama LLM. GATE: BOT_DETECT_LLM=true habilita a

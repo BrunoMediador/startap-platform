@@ -25,6 +25,7 @@ import type {
   AtendimentoByEventoResponse,
   AtendimentosListResponse,
   AuthMe,
+  BotDetectPausasResponse,
   BotPauseResponse,
   BotResumeResponse,
   ChargeView,
@@ -79,6 +80,7 @@ export const qk = {
   perfil: (slot: string) => ['perfil', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
+  botDetectPausas: (slot: string) => ['bot-detect-pausas', slot] as const,
   lembretes: (slot: string) => ['lembretes', slot] as const,
   googleConta: (slot: string) => ['google-conta', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
@@ -453,6 +455,31 @@ export function useRemovePausa(slot: string): UseMutationResult<unknown, Error, 
       apiFetch(`/portal/pausas/${encodeURIComponent(telefone)}`, { method: 'DELETE' }),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.pausas(slot) });
+      client.invalidateQueries({ queryKey: qk.status(slot) });
+    },
+  });
+}
+
+// ── Suspeita de bot (SCRUM-4 PR-E) ──────────────────────────────────────────
+//
+// Lista os números que a auto-pausa do bot-detect pausou (source='bot_detected') e despausar do
+// cliente (rede de proteção). Vem vazia enquanto a auto-pausa do worker estiver OFF -> a seção some.
+
+export function useBotDetectPausas(slot: string): UseQueryResult<BotDetectPausasResponse> {
+  return useQuery({
+    queryKey: qk.botDetectPausas(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<BotDetectPausasResponse>('/portal/bot-detect/pausas', { signal }),
+  });
+}
+
+export function useRemoveBotDetectPausa(slot: string): UseMutationResult<unknown, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (telefone: string) =>
+      apiFetch(`/portal/bot-detect/pausas/${encodeURIComponent(telefone)}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.botDetectPausas(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });
     },
   });
