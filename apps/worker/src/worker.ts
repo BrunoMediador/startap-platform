@@ -9,6 +9,7 @@ import { flowExecutionLog } from '@startap/db';
 import { Cron } from 'croner';
 import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
+import { runBotDetect } from './jobs/bot-detect.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
@@ -490,6 +491,68 @@ async function main() {
     );
   } else {
     log.info('gcal-healthcheck: GCAL_HEALTHCHECK_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Detecção de bot (SCRUM-4 PR-C, Fase 1: heurística + alerta-only, NÃO pausa). Camada 1 do
+  // rollout: SÓ registra o cron com BOT_DETECT_ENABLED=true (default OFF — lição #247). Com a env
+  // ausente o worker sobe normal e este cron NÃO existe (zero query, zero WAHA). Camada 2 (gate
+  // por-clone BOT_DETECT_SLOTS) vive dentro do runBotDetect — sem slots = NO-OP. A cada hora
+  // (BOT_DETECT_CRON, default '17 * * * *'). Padrão inválido cai no fallback via scheduleCronSafe.
+  if (config.BOT_DETECT_ENABLED) {
+    log.info(
+      { cron: config.BOT_DETECT_CRON },
+      'bot-detect: cron registrado (BOT_DETECT_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.BOT_DETECT_CRON,
+      '17 * * * *',
+      { name: 'bot-detect', timezone: 'America/Sao_Paulo' },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let botDetectResult: Awaited<ReturnType<typeof runBotDetect>> | null = null;
+        let botDetectError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:bot-detect',
+          flowName: 'bot-detect',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job bot-detect iniciado',
+        });
+        try {
+          botDetectResult = await runBotDetect();
+          // Só loga ciclo com atividade — sem candidatos novos fica mudo.
+          if (
+            !botDetectResult.skipped &&
+            (botDetectResult.bots > 0 ||
+              botDetectResult.alerts > 0 ||
+              botDetectResult.classified > 0)
+          ) {
+            log.info({ ...botDetectResult }, 'bot-detect cycle');
+          }
+        } catch (e) {
+          botDetectError = e;
+          log.error({ err: e }, 'bot-detect crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:bot-detect',
+            flowName: 'bot-detect',
+            bot: 'worker',
+            eventType: botDetectError ? 'worker.job-failed' : 'worker.job-finished',
+            status: botDetectError ? 'error' : 'success',
+            message: botDetectError ? 'Job bot-detect falhou' : 'Job bot-detect concluído',
+            ...(botDetectResult ? { metadata: botDetectResult } : {}),
+            ...(botDetectError ? { error: botDetectError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('bot-detect: BOT_DETECT_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

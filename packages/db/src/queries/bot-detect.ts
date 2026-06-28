@@ -1,0 +1,206 @@
+/**
+ * bot-detect — queries do job de detecção de bot (SCRUM-4 PR-C, Fase 1).
+ *
+ * Spec: docs/bot-detect/sinais.md + docs/bot-detect/README.md.
+ *
+ * Tudo escopado por CLONE: o `flow_id` (= slot do clone, mesma semântica de flow_pauses/antibot)
+ * é a fronteira de tenant; a sessão WAHA (message_log.chat_id) e a chat_table são SEMPRE derivadas
+ * do slot (nunca de input). Queries 100% parametrizadas. A leitura de conteúdo usa o nome da
+ * chat_table validado contra isValidChatTableName (defesa contra SQL injection — nome de tabela
+ * não pode ser parametrizado).
+ *
+ * Fonte de cache: tabela contact_classification (migration 067). Fase 1 grava 'bot' | 'human'
+ * (heurística + allowlist) e nunca pausa.
+ */
+import { query } from '../client.js';
+import { isValidChatTableName } from './chat-memory.js';
+
+export type ContactVerdict = 'bot' | 'human' | 'gray';
+export type ContactSource = 'allowlist' | 'heuristic' | 'llm';
+
+export interface ContactClassificationRow {
+  flow_id: string;
+  telefone: string;
+  verdict: ContactVerdict;
+  confidence: number;
+  signals: Record<string, unknown>;
+  source: ContactSource;
+  decided_at: Date;
+  alerted_at: Date | null;
+  paused_at: Date | null;
+}
+
+/** Info do clone necessária pro job: como filtrar message_log (sessão) + ler conteúdo (chat_table). */
+export interface BotDetectCloneInfo {
+  slot: string;
+  waha_sessao: string;
+  chat_table: string | null;
+}
+
+/** Candidato a classificar: telefone ativo na sessão do clone, ainda SEM veredito em cache. */
+export interface CandidatePhone {
+  telefone: string;
+  total: number;
+}
+
+/**
+ * Resolve os dados do clone a partir do slot. Retorna null se o slot não for um clone ou não tiver
+ * sessão WAHA (sem sessão não há message_log -> nada a classificar). `waha_sessao` aqui já é
+ * garantidamente não-vazio.
+ */
+export async function getCloneInfo(slot: string): Promise<BotDetectCloneInfo | null> {
+  const r = await query<{ slot: string; waha_sessao: string | null; chat_table: string | null }>(
+    `SELECT slot, waha_sessao, chat_table
+       FROM flow_clones
+      WHERE slot = $1
+      LIMIT 1`,
+    [slot],
+  );
+  const row = r.rows[0];
+  if (!row || !row.waha_sessao || row.waha_sessao.trim() === '') return null;
+  return { slot: row.slot, waha_sessao: row.waha_sessao, chat_table: row.chat_table };
+}
+
+/**
+ * Lista telefones ATIVOS na sessão do clone (últimas ~24h — janela do message_log) que AINDA NÃO
+ * têm veredito em cache (NOT EXISTS em contact_classification). Esse NOT EXISTS É o cache: número
+ * já classificado nunca volta como candidato -> nunca é reclassificado.
+ *
+ * ISOLAMENTO: filtra por `chat_id = sessao` (a sessão é dedicada ao clone) E escopa o NOT EXISTS
+ * por `flow_id = slot`. Ordena pelos mais ativos primeiro (mais provável de ser bot barulhento).
+ */
+export async function listUnclassifiedCandidates(
+  slot: string,
+  sessao: string,
+  limit: number,
+): Promise<CandidatePhone[]> {
+  const r = await query<{ phone: string; total: string }>(
+    `SELECT ml.phone, COUNT(*)::text AS total
+       FROM message_log ml
+      WHERE ml.chat_id = $1
+        AND NOT EXISTS (
+          SELECT 1 FROM contact_classification cc
+           WHERE cc.flow_id = $2 AND cc.telefone = ml.phone
+        )
+      GROUP BY ml.phone
+      ORDER BY COUNT(*) DESC
+      LIMIT $3`,
+    [sessao, slot, limit],
+  );
+  return r.rows.map((x) => ({ telefone: x.phone, total: Number(x.total) }));
+}
+
+/**
+ * created_at (ascendente) das mensagens RECEBIDAS daquele telefone na sessão do clone (~24h). Base
+ * dos sinais de TIMING (flood / cadência regular). Escopado por sessão + telefone.
+ */
+export async function getMessageTimestamps(sessao: string, telefone: string): Promise<Date[]> {
+  const r = await query<{ created_at: Date }>(
+    `SELECT created_at
+       FROM message_log
+      WHERE chat_id = $1 AND phone = $2
+      ORDER BY created_at ASC`,
+    [sessao, telefone],
+  );
+  return r.rows.map((x) => x.created_at);
+}
+
+/**
+ * Conteúdo das últimas N mensagens `human` (= do número analisado, não as respostas `ai` do nosso
+ * bot) na chat_table do clone. Base dos sinais de CONTEÚDO (templated/repetido + marketing).
+ *
+ * session_id em chat_histories = `${slot}:${sessao}:${flowId}:${telefone}` -> termina em
+ * `:<telefone>`. Filtra por sufixo (LIKE '%:' || telefone) — telefone é só dígitos (sem curinga),
+ * concatenado a um parâmetro bindado (não interpolado). O NOME DA TABELA é validado contra
+ * isValidChatTableName ANTES de interpolar (não dá pra parametrizar identificador) — defesa SQLi.
+ */
+export async function getHumanMessages(
+  chatTable: string,
+  telefone: string,
+  limit: number,
+): Promise<string[]> {
+  if (!isValidChatTableName(chatTable)) {
+    throw new Error(`chat_table inválida: ${chatTable}`);
+  }
+  const r = await query<{ content: string | null }>(
+    `SELECT COALESCE(message->'data'->>'content', message->>'content') AS content
+       FROM ${chatTable}
+      WHERE session_id LIKE '%:' || $1
+        AND message->>'type' = 'human'
+      ORDER BY id DESC
+      LIMIT $2`,
+    [telefone, limit],
+  );
+  return r.rows
+    .map((x) => x.content)
+    .filter((c): c is string => typeof c === 'string' && c.length > 0);
+}
+
+/**
+ * Grava (ou atualiza) o veredito no cache. Idempotente: ON CONFLICT atualiza o veredito + sinais
+ * (re-rodar não duplica). PRESERVA `alerted_at`/`paused_at` no UPDATE (não zera trilha de alerta).
+ */
+export async function upsertClassification(input: {
+  flowId: string;
+  telefone: string;
+  verdict: ContactVerdict;
+  confidence: number;
+  signals: Record<string, unknown>;
+  source: ContactSource;
+}): Promise<void> {
+  await query(
+    `INSERT INTO contact_classification
+       (flow_id, telefone, verdict, confidence, signals, source, decided_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW(), NOW())
+     ON CONFLICT (flow_id, telefone) DO UPDATE SET
+       verdict    = EXCLUDED.verdict,
+       confidence = EXCLUDED.confidence,
+       signals    = EXCLUDED.signals,
+       source     = EXCLUDED.source,
+       decided_at = NOW(),
+       updated_at = NOW()`,
+    [
+      input.flowId,
+      input.telefone,
+      input.verdict,
+      input.confidence,
+      JSON.stringify(input.signals),
+      input.source,
+    ],
+  );
+}
+
+/**
+ * Carimba `alerted_at` (1× por número). Guarda `alerted_at IS NULL` -> idempotente: 2 ciclos
+ * concorrentes não duplicam o alerta. Retorna true se ESTE chamador foi quem carimbou.
+ */
+export async function markAlerted(
+  flowId: string,
+  telefone: string,
+  at: Date = new Date(),
+): Promise<boolean> {
+  const r = await query(
+    `UPDATE contact_classification
+        SET alerted_at = $3, updated_at = NOW()
+      WHERE flow_id = $1 AND telefone = $2 AND alerted_at IS NULL`,
+    [flowId, telefone, at],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Lê o veredito em cache de um número (null = nunca classificado). Usado por testes/observabilidade. */
+export async function getClassification(
+  flowId: string,
+  telefone: string,
+): Promise<ContactClassificationRow | null> {
+  const r = await query<ContactClassificationRow & { confidence: string }>(
+    `SELECT flow_id, telefone, verdict, confidence, signals, source, decided_at, alerted_at, paused_at
+       FROM contact_classification
+      WHERE flow_id = $1 AND telefone = $2
+      LIMIT 1`,
+    [flowId, telefone],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return { ...row, confidence: Number(row.confidence) };
+}

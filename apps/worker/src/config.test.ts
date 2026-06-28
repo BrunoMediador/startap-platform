@@ -35,4 +35,22 @@ describe('WorkerConfigSchema', () => {
     const result = WorkerConfigSchema.parse({ TRIAL_ORPHAN_CLEANUP_ENABLED: 'false' });
     expect(result.TRIAL_ORPHAN_CLEANUP_ENABLED).toBe(false);
   });
+
+  it('bot-detect (SCRUM-4) nasce OFF e sem slots — gate macro + por-clone default seguro', () => {
+    const result = WorkerConfigSchema.parse({});
+    expect(result.BOT_DETECT_ENABLED).toBe(false); // ausente = OFF (cron nem registra)
+    expect(result.BOT_DETECT_SLOTS).toBe(''); // vazio = OFF pra todos os clones
+    expect(result.BOT_DETECT_CRON).toBe('17 * * * *');
+    expect(result.BOT_DETECT_MAX_PER_RUN).toBe(50);
+    expect(result.BOT_DETECT_MAX_ALERTS_PER_RUN).toBe(3);
+  });
+
+  it('bot-detect ON + slots explícitos liga o gate por-clone', () => {
+    const result = WorkerConfigSchema.parse({
+      BOT_DETECT_ENABLED: 'true',
+      BOT_DETECT_SLOTS: 'clone_barber_dragon_caly8b',
+    });
+    expect(result.BOT_DETECT_ENABLED).toBe(true);
+    expect(result.BOT_DETECT_SLOTS).toBe('clone_barber_dragon_caly8b');
+  });
 });

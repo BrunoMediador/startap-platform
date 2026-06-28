@@ -184,6 +184,43 @@ export const WorkerConfigSchema = z.object({
   // demove a agenda (transitório = inconclusivo, status preservado): só falha DEFINITIVA
   // (403/404/creds inválidas) vira 'invalid'. Default 8s.
   GCAL_HEALTHCHECK_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  // ── Detecção de bot (SCRUM-4 PR-C, Fase 1: heurística + alerta-only, NÃO pausa) ──────────────
+  // Detecta números que parecem OUTRO bot/empresa (não cliente humano) conversando com o nosso
+  // bot e AVISA o dono via ALERTAS ("número X parece um bot — quer que eu pare de responder?").
+  // Fase 1 NUNCA pausa (auto-pausa = PR-E). WORKER-ONLY: zero mudança no router/ingestion.
+  //
+  // GATE MACRO: SÓ registra o cron com BOT_DETECT_ENABLED=true (default OFF — lição #247: nada
+  // aqui é obrigatório no boot; ausente = OFF). Com OFF o worker sobe normal e o cron NEM é
+  // registrado (zero query, zero WAHA). GATE POR-CLONE: BOT_DETECT_SLOTS (CSV, estilo
+  // ATEND_FROM_AGENDA_SLOTS) — vazio/ausente = OFF pra TODOS; só os slots listados são varridos
+  // (match EXATO, sem prefixo). Pagante fora da lista = OFF byte-a-byte. KILL-SWITCH = limpar a
+  // env. ⚠️ Decisão ON/OFF + quais slots em prod é do Bruno (ver corpo do PR). NUNCA hardcoded.
+  BOT_DETECT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Lista (CSV) de slots onde o job roda. Vazio/ausente = OFF pra todos (default seguro).
+  BOT_DETECT_SLOTS: z.string().default(''),
+  // Padrão cron (croner). Default a cada hora no minuto 17 (não colide com :00 cleanup, :15
+  // close-stale, :23 gcal, :30 trial). Padrão inválido NUNCA crasha o boot — fallback via
+  // scheduleCronSafe.
+  BOT_DETECT_CRON: z.string().default('17 * * * *'),
+  // Teto de candidatos (números novos) classificados por CICLO por clone (custo previsível +
+  // anti-burst). O cache (contact_classification) garante que cada número é visto 1× — os que
+  // sobram entram nos próximos ciclos. Default 50.
+  BOT_DETECT_MAX_PER_RUN: z.coerce.number().int().positive().default(50),
+  // Teto de ALERTAS ao dono por CICLO por clone (anti-spam = "cooldown"). Bots além do teto NÃO
+  // são cacheados neste ciclo -> são reavaliados/alertados no próximo (nenhum alerta é perdido).
+  // Combinado com o cron horário, espaça os avisos. Default 3.
+  BOT_DETECT_MAX_ALERTS_PER_RUN: z.coerce.number().int().positive().default(3),
+  // Quantas mensagens `human` recentes o sinal de CONTEÚDO analisa por número. Default 20.
+  BOT_DETECT_CONTENT_LIMIT: z.coerce.number().int().positive().default(20),
+  // Delay humanizador (ms) antes do envio do alerta (typing + pausa) — reduz risco de a sessão
+  // ALERTAS ser derrubada por padrão de bot. Default 1500.
+  BOT_DETECT_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
+  // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
+  BOT_DETECT_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
