@@ -10,6 +10,7 @@
  * Pausa e isolada por fluxo — nao afeta outros bots do mesmo numero.
  */
 import { logger } from '@startap/core/logger';
+import { phoneHint } from '@startap/core/phone';
 import { antibot, flowClones, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
@@ -17,9 +18,22 @@ const log = logger.child({ job: 'antibot' });
 const THRESHOLD = 6; // mensagens (>= dispara pausa)
 const WINDOW_SEC = 60;
 
-export async function runAntibot(): Promise<{ blocked: number; pruned: number }> {
+/** Opções do job. allowlistEnabled vem da env ANTIBOT_ALLOWLIST_ENABLED (default OFF). */
+export interface RunAntibotOptions {
+  /**
+   * ALLOWLIST DURA (SCRUM-4 PR-A): quando true, NÃO pausa um suspeito que já tem histórico de
+   * agendamento no clone (cliente real). Default false = comportamento de hoje, ZERO query nova.
+   */
+  allowlistEnabled?: boolean;
+}
+
+export async function runAntibot(
+  opts: RunAntibotOptions = {},
+): Promise<{ blocked: number; pruned: number; skipped: number }> {
+  const allowlistEnabled = opts.allowlistEnabled === true;
   const suspects = await antibot.findSuspects(THRESHOLD, WINDOW_SEC);
   let blocked = 0;
+  let skipped = 0;
 
   for (const s of suspects) {
     log.warn(
@@ -42,6 +56,32 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
     }
 
     if (flowId) {
+      // ── ALLOWLIST DURA (SCRUM-4 PR-A; gated por ANTIBOT_ALLOWLIST_ENABLED) ──────────────
+      // Telefone que JÁ agendou neste clone = cliente real -> NÃO pausa (anti-falso-positivo).
+      // Só consulta o banco com a flag ON; OFF = comportamento idêntico ao de hoje (sem query).
+      // O flowId aqui é o slot do clone — escopo de tenant da checagem (ver hasScheduledHistory).
+      if (allowlistEnabled) {
+        const jaAgendou = await antibot
+          .hasScheduledHistory(flowId, s.telefone)
+          .catch((e: unknown) => {
+            // Falha na checagem NÃO deve cancelar a pausa nem allowlistar por engano:
+            // fail-closed (retorna false -> segue pausando, comportamento legado).
+            log.warn(
+              { err: e, slot: flowId, telefone: phoneHint(s.telefone) },
+              'antibot: erro ao checar allowlist — fail-closed (segue pausa)',
+            );
+            return false;
+          });
+        if (jaAgendou) {
+          log.info(
+            { slot: flowId, telefone: phoneHint(s.telefone), total: s.total },
+            'antibot: allowlist — telefone já agendou neste clone, NÃO pausando',
+          );
+          skipped++;
+          continue;
+        }
+      }
+
       await pausa.addFlowPause({
         flowId,
         telefone: s.telefone,
@@ -60,6 +100,7 @@ export async function runAntibot(): Promise<{ blocked: number; pruned: number }>
 
   // Limpa logs com mais de 24h
   const pruned = await antibot.pruneOldLogs(24);
-  if (blocked > 0 || pruned > 0) log.info({ blocked, pruned }, 'Antibot pass complete');
-  return { blocked, pruned };
+  if (blocked > 0 || pruned > 0 || skipped > 0)
+    log.info({ blocked, pruned, skipped }, 'Antibot pass complete');
+  return { blocked, pruned, skipped };
 }

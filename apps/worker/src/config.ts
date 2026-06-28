@@ -8,6 +8,19 @@ export const WorkerConfigSchema = z.object({
   CHAT_MEMORY_RETENTION: z.coerce.number().int().positive().default(30),
   CHAT_STALE_RUNNING_MAX_MINUTES: z.coerce.number().int().positive().default(30),
 
+  // ── Allowlist DURA do antibot (SCRUM-4 PR-A) ───────────────────────────────
+  // Quando ON, ANTES de o antibot pausar um suspeito de flood, checa se aquele telefone JÁ
+  // tem histórico de agendamento NAQUELE clone (atendimentos) — se tem, é cliente real e NÃO
+  // é pausado (reduz falso-positivo de pausar cliente). Default OFF (ausente/false) =
+  // comportamento IDÊNTICO ao de hoje: zero mudança, zero query nova (a checagem só roda com a
+  // flag ON). OPCIONAL no boot (lição #247: nada aqui é obrigatório — worker sobe sem a env).
+  // Pra ligar em prod: devops seta ANTIBOT_ALLOWLIST_ENABLED=true + restart do worker.
+  // ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR) — NÃO assumir. NUNCA hardcoded.
+  ANTIBOT_ALLOWLIST_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── AbacatePay (pagamento PIX — ADR 0013) ──────────────────────────────────
   // OPCIONAL no boot. Pagamento e feature DORMENTE — o cron de geracao (F4) ainda nao
   // esta ativo em prod. Exigir a key no boot derrubou o worker no incidente P0 de

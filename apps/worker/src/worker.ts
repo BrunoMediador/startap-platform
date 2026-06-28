@@ -61,8 +61,10 @@ async function main() {
       message: 'Job antibot iniciado',
     });
     try {
-      jobResult = await runAntibot();
-      if (jobResult.blocked > 0) log.info({ ...jobResult }, 'antibot cycle');
+      // ANTIBOT_ALLOWLIST_ENABLED (SCRUM-4 PR-A): default OFF -> não pausa quem já agendou.
+      jobResult = await runAntibot({ allowlistEnabled: config.ANTIBOT_ALLOWLIST_ENABLED });
+      if (jobResult.blocked > 0 || jobResult.skipped > 0)
+        log.info({ ...jobResult }, 'antibot cycle');
     } catch (e) {
       jobError = e;
       log.error({ err: e }, 'antibot crashed');
