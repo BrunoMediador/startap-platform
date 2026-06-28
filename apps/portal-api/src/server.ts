@@ -24,6 +24,7 @@ import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
+import { portalBotDetectRoutes } from './routes/portal-bot-detect.js';
 import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
@@ -108,6 +109,9 @@ async function main() {
   // Perfil do negocio (Missao 023 W13): cliente edita dados do negocio no portal.
   await app.register(portalPerfilRoutes);
   await app.register(portalPausasRoutes);
+  // Números pausados por SUSPEITA DE BOT (SCRUM-4 PR-E). Lista source='bot_detected' + despausar.
+  // Sem flag própria: vem vazio enquanto a auto-pausa (worker BOT_DETECT_AUTOPAUSE) estiver OFF.
+  await app.register(portalBotDetectRoutes);
   await app.register(portalStatusRoutes);
   // Gate de aceite dos Termos/Privacidade pós-login (SCRUM-1, fluxo 2). Authed
   // (withTenant nas rotas). status + registro do aceite versionado; sem flag —

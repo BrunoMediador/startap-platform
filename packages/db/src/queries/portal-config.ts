@@ -174,12 +174,34 @@ export interface PortalPausaRow {
   updated_at: Date;
 }
 
-/** Lista pausas ATIVAS do fluxo do cliente (escopado por slot/flow_id). */
+/**
+ * Lista pausas ATIVAS do fluxo do cliente (escopado por slot/flow_id), EXCETO as de suspeita de bot
+ * (source='bot_detected', SCRUM-4 PR-E) — essas têm seção própria no portal (listBotDetectPausasBySlot)
+ * pra o dono reconhecer/despausar separado. `IS DISTINCT FROM` mantém as pausas de source NULL.
+ * Byte-a-byte com o comportamento anterior enquanto não houver linha 'bot_detected' (auto-pausa OFF).
+ */
 export async function listPausasBySlot(slot: string): Promise<PortalPausaRow[]> {
   const r = await query<PortalPausaRow>(
     `SELECT telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at
      FROM flow_pauses
-     WHERE flow_id = $1 AND active = TRUE
+     WHERE flow_id = $1 AND active = TRUE AND source IS DISTINCT FROM 'bot_detected'
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT 500`,
+    [slot],
+  );
+  return r.rows;
+}
+
+/**
+ * Lista pausas ATIVAS por SUSPEITA DE BOT (source='bot_detected') do fluxo do cliente (escopado por
+ * slot/flow_id). Alimenta a seção "Números pausados (suspeita de bot)" do portal — o dono vê e
+ * despausa num clique (rede de proteção da auto-pausa). Vazio enquanto a auto-pausa estiver OFF.
+ */
+export async function listBotDetectPausasBySlot(slot: string): Promise<PortalPausaRow[]> {
+  const r = await query<PortalPausaRow>(
+    `SELECT telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at
+     FROM flow_pauses
+     WHERE flow_id = $1 AND active = TRUE AND source = 'bot_detected'
      ORDER BY updated_at DESC, created_at DESC
      LIMIT 500`,
     [slot],

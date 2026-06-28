@@ -258,6 +258,13 @@ export interface PausasResponse {
   pausas: PausaRow[];
 }
 
+// Suspeita de bot (SCRUM-4 PR-E): mesma forma de PausasResponse, só source='bot_detected'.
+//   portal-bot-detect.ts -> GET /portal/bot-detect/pausas
+export interface BotDetectPausasResponse {
+  count: number;
+  pausas: PausaRow[];
+}
+
 // ── Contatos recentes ────────────────────────────────────────────────────────
 
 export interface RecentContact {

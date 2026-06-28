@@ -9,6 +9,7 @@ import { flowExecutionLog } from '@startap/db';
 import { Cron } from 'croner';
 import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
+import { runBotDetectAutopause } from './jobs/bot-detect-autopause.js';
 import { runBotDetect } from './jobs/bot-detect.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
@@ -531,6 +532,23 @@ async function main() {
               botDetectResult.classified > 0)
           ) {
             log.info({ ...botDetectResult }, 'bot-detect cycle');
+          }
+
+          // PR-E (Fase 2): passo ADITIVO de escalação -> auto-pausa + TTL/reversão. Gated por
+          // BOT_DETECT_AUTOPAUSE (default OFF). Com a flag ausente/false é NO-OP total (zero query)
+          // — a detecção/alerta da Fase 1 segue idêntica. Falha aqui NÃO derruba o ciclo do detect.
+          if (config.BOT_DETECT_AUTOPAUSE) {
+            try {
+              const autopause = await runBotDetectAutopause();
+              if (
+                !autopause.skipped &&
+                (autopause.paused > 0 || autopause.ttlExpired > 0 || autopause.autoResumed > 0)
+              ) {
+                log.info({ ...autopause }, 'bot-detect-autopause cycle');
+              }
+            } catch (e) {
+              log.error({ err: e }, 'bot-detect-autopause crashed');
+            }
           }
         } catch (e) {
           botDetectError = e;

@@ -221,3 +221,104 @@ export async function getClassification(
   if (!row) return null;
   return { ...row, confidence: Number(row.confidence) };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR-E (SCRUM-4, Fase 2: auto-pausa após carência) — queries ADITIVAS.
+//
+// Nada aqui altera a Fase 1: estas funções SÓ são chamadas pelo job bot-detect-autopause, gated
+// por BOT_DETECT_AUTOPAUSE (default OFF). Reusam a coluna `paused_at` (reservada na migration 067)
+// e o índice (flow_id, verdict) — ZERO migration nova. `paused_at` é o marcador ONE-SHOT: uma vez
+// carimbado (auto-pausa nossa OU o dono já tinha pausado), o número NUNCA volta à escalação —
+// rede de proteção contra loop pausa/despausa. Tudo escopado por flow_id (fronteira de tenant).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Candidato à ESCALAÇÃO: bot já alertado, carência vencida, ainda NÃO auto-pausado. */
+export interface EscalationCandidate {
+  telefone: string;
+  alerted_at: Date;
+}
+
+/**
+ * Lista os números do clone elegíveis a auto-pausa: verdict='bot' E já alertado (alerted_at NOT
+ * NULL) E a carência venceu (alerted_at <= graceCutoff) E ainda NÃO auto-pausado (paused_at IS
+ * NULL). Usa o índice (flow_id, verdict). Ordena pelos alertados há mais tempo. Escopo por flow_id.
+ */
+export async function listEscalationCandidates(
+  flowId: string,
+  graceCutoff: Date,
+  limit: number,
+): Promise<EscalationCandidate[]> {
+  const r = await query<{ telefone: string; alerted_at: Date }>(
+    `SELECT telefone, alerted_at
+       FROM contact_classification
+      WHERE flow_id = $1
+        AND verdict = 'bot'
+        AND alerted_at IS NOT NULL
+        AND alerted_at <= $2
+        AND paused_at IS NULL
+      ORDER BY alerted_at ASC
+      LIMIT $3`,
+    [flowId, graceCutoff, limit],
+  );
+  return r.rows;
+}
+
+/**
+ * Carimba `paused_at` (1× — guarda `paused_at IS NULL` -> idempotente). Marca que a escalação
+ * concluiu que o número está pausado (auto-pausa nossa OU o dono já tinha pausado manualmente).
+ * Uma vez carimbado, o número NUNCA volta à fila de escalação (one-shot). Retorna true se ESTE
+ * chamador carimbou.
+ */
+export async function markPaused(
+  flowId: string,
+  telefone: string,
+  at: Date = new Date(),
+): Promise<boolean> {
+  const r = await query(
+    `UPDATE contact_classification
+        SET paused_at = $3, updated_at = NOW()
+      WHERE flow_id = $1 AND telefone = $2 AND paused_at IS NULL`,
+    [flowId, telefone, at],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Rebaixa o veredito pra 'human' (override). Usado quando, na escalação/auto-resume, o número se
+ * revela cliente real (allowlist / agendou) ou a heurística não confirma mais bot. Tira o número
+ * da fila de escalação PRA SEMPRE (verdict != 'bot'). PRESERVA `paused_at`/`alerted_at`. `signals`
+ * recebe um patch (merge jsonb) — nunca grava texto de conversa.
+ */
+export async function markHumanOverride(input: {
+  flowId: string;
+  telefone: string;
+  source: ContactSource;
+  signalsPatch?: Record<string, unknown>;
+}): Promise<void> {
+  await query(
+    `UPDATE contact_classification
+        SET verdict    = 'human',
+            confidence = 1,
+            source     = $3,
+            signals    = signals || $4::jsonb,
+            updated_at = NOW()
+      WHERE flow_id = $1 AND telefone = $2`,
+    [input.flowId, input.telefone, input.source, JSON.stringify(input.signalsPatch ?? {})],
+  );
+}
+
+/** true se há mensagem RECEBIDA daquele número na sessão DESDE `since` (sinal "não parou"). */
+export async function hasRecentMessages(
+  sessao: string,
+  telefone: string,
+  since: Date,
+): Promise<boolean> {
+  const r = await query(
+    `SELECT 1
+       FROM message_log
+      WHERE chat_id = $1 AND phone = $2 AND created_at >= $3
+      LIMIT 1`,
+    [sessao, telefone, since],
+  );
+  return (r.rowCount ?? 0) > 0;
+}

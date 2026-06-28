@@ -189,3 +189,22 @@ export async function listFlowPauseKeywords(flowId: string): Promise<FlowPauseKe
   );
   return r.rows;
 }
+
+/**
+ * Pausas ATIVAS de um fluxo por `source` (ex.: 'bot_detected' — auto-pausa do bot-detect PR-E).
+ * Usada pelo job de TTL/auto-resume pra varrer só as pausas que a auto-pausa criou. Escopo por
+ * flow_id (fronteira de tenant) + source. Query parametrizada.
+ */
+export async function listActiveFlowPausesBySource(
+  flowId: string,
+  source: string,
+): Promise<Array<{ telefone: string; session: string | null; updated_at: Date }>> {
+  const r = await query<{ telefone: string; session: string | null; updated_at: Date }>(
+    `SELECT telefone, session, updated_at
+       FROM flow_pauses
+      WHERE flow_id = $1 AND source = $2 AND active = TRUE
+      ORDER BY updated_at ASC`,
+    [flowId, source],
+  );
+  return r.rows;
+}
