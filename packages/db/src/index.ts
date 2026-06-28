@@ -29,6 +29,7 @@ export * as packages from './queries/packages.js';
 export * as atendimentos from './queries/atendimentos.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
+export * as botDetect from './queries/bot-detect.js';
 
 // Re-exporta tipos para import direto
 export type { ChatTurn, Role } from './queries/chat-memory.js';
@@ -141,3 +142,10 @@ export type {
   TermsAcceptanceRow,
   RecordTermsAcceptanceInput,
 } from './queries/terms-acceptance.js';
+export type {
+  ContactVerdict,
+  ContactSource,
+  ContactClassificationRow,
+  BotDetectCloneInfo,
+  CandidatePhone,
+} from './queries/bot-detect.js';
