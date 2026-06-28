@@ -32,6 +32,9 @@ const getCloneDisconnectAlertTarget = vi.fn();
 const getConfig = vi.fn();
 const getSenderSession = vi.fn();
 const sendText = vi.fn();
+// Classificador LLM da zona-cinza (PR-D): mockado pra testar SÓ o WIRING (a lógica do LLM tem
+// teste próprio em bot-detect-llm.test.ts). isGrayZone é REAL (vive em bot-detect.ts).
+const classifyGrayZone = vi.fn();
 
 vi.mock('@startap/db', () => ({
   botDetect: {
@@ -47,6 +50,7 @@ vi.mock('@startap/db', () => ({
   alerts: { getConfig, getSenderSession },
 }));
 vi.mock('@startap/integrations', () => ({ waha: { sendText } }));
+vi.mock('./bot-detect-llm.js', () => ({ classifyGrayZone }));
 vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
@@ -384,6 +388,141 @@ describe('runBotDetect — veredito + alerta', () => {
     expect(r.bots).toBe(0);
     expect(upsertClassification).not.toHaveBeenCalled(); // não cacheia -> reavalia depois
     expect(markAlerted).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ZONA-CINZA — wiring do classificador LLM (SCRUM-4 PR-D), gated por BOT_DETECT_LLM
+// ─────────────────────────────────────────────────────────────────────────────
+describe('runBotDetect — zona-cinza (LLM gated)', () => {
+  // 1 eixo só (conteúdo dispara; timing insuficiente) = ZONA-CINZA (ambíguo).
+  function wireGrayCandidate(phones: string[], content: string[] = BOT_CONTENT) {
+    getCloneInfo.mockResolvedValue({
+      slot: 'clone_x',
+      waha_sessao: 'SESS',
+      chat_table: 'chat_histories',
+    });
+    listUnclassifiedCandidates.mockResolvedValue(phones.map((p) => ({ telefone: p, total: 4 })));
+    hasScheduledHistory.mockResolvedValue(false);
+    getMessageTimestamps.mockResolvedValue([new Date(0), new Date(30_000)]); // timing NÃO dispara
+    getHumanMessages.mockResolvedValue(content); // conteúdo dispara -> 1 eixo
+  }
+  function wireAlertTarget() {
+    getCloneDisconnectAlertTarget.mockResolvedValue(aliveTarget());
+    getConfig.mockResolvedValue({ sender_slot: 'startap' });
+    getSenderSession.mockResolvedValue('ALERTAS_SESSION');
+    sendText.mockResolvedValue(undefined);
+    markAlerted.mockResolvedValue(true);
+  }
+
+  it('flag ON + zona-cinza: chama o LLM; bot (conf>=0.85) -> alerta + cache source=llm', async () => {
+    wireGrayCandidate(['5511999990050']);
+    wireAlertTarget();
+    classifyGrayZone.mockResolvedValue({
+      verdict: 'bot',
+      confidence: 0.9,
+      signals: { llm: { model: 'gpt-4o-mini', is_bot: true, confidence: 0.9 } },
+    });
+
+    const { runBotDetect } = await loadJob({ BOT_DETECT_LLM: true });
+    const r = await runBotDetect();
+
+    expect(classifyGrayZone).toHaveBeenCalledTimes(1);
+    // entrada ancorada por slot (chatTable + slot + telefone).
+    expect(classifyGrayZone).toHaveBeenCalledWith({
+      slot: 'clone_x',
+      telefone: '5511999990050',
+      chatTable: 'chat_histories',
+    });
+    expect(r.bots).toBe(1);
+    expect(r.alerts).toBe(1);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'bot', source: 'llm' }),
+    );
+    expect(sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('flag OFF (ausente): zona-cinza NÃO chama LLM (cai no comportamento atual = human)', async () => {
+    wireGrayCandidate(['5511999990051']);
+    const { runBotDetect } = await loadJob(); // BOT_DETECT_LLM ausente => OFF
+    const r = await runBotDetect();
+    expect(classifyGrayZone).not.toHaveBeenCalled();
+    expect(r.humans).toBe(1);
+    expect(r.bots).toBe(0);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'human', source: 'heuristic' }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('flag ON + LLM confidence<0.85 -> human (source=llm), sem alerta', async () => {
+    wireGrayCandidate(['5511999990052']);
+    classifyGrayZone.mockResolvedValue({
+      verdict: 'human',
+      confidence: 0.6,
+      signals: { llm: { is_bot: true, confidence: 0.6, parseOk: true } },
+    });
+    const { runBotDetect } = await loadJob({ BOT_DETECT_LLM: true });
+    const r = await runBotDetect();
+    expect(classifyGrayZone).toHaveBeenCalledTimes(1);
+    expect(r.humans).toBe(1);
+    expect(r.bots).toBe(0);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'human', source: 'llm' }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('flag ON + LLM indisponível (null): mantém heurística (human, source=heuristic)', async () => {
+    wireGrayCandidate(['5511999990053']);
+    classifyGrayZone.mockResolvedValue(null);
+    const { runBotDetect } = await loadJob({ BOT_DETECT_LLM: true });
+    const r = await runBotDetect();
+    expect(classifyGrayZone).toHaveBeenCalledTimes(1);
+    expect(r.humans).toBe(1);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'human', source: 'heuristic' }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('fora da zona-cinza (2 eixos = bot heurístico): NÃO chama LLM mesmo com flag ON', async () => {
+    getCloneInfo.mockResolvedValue({
+      slot: 'clone_x',
+      waha_sessao: 'SESS',
+      chat_table: 'chat_histories',
+    });
+    listUnclassifiedCandidates.mockResolvedValue([{ telefone: '5511999990054', total: 8 }]);
+    hasScheduledHistory.mockResolvedValue(false);
+    getMessageTimestamps.mockResolvedValue(regularTimestamps()); // timing dispara
+    getHumanMessages.mockResolvedValue(BOT_CONTENT); // conteúdo dispara -> 2 eixos
+    wireAlertTarget();
+    const { runBotDetect } = await loadJob({ BOT_DETECT_LLM: true });
+    const r = await runBotDetect();
+    expect(classifyGrayZone).not.toHaveBeenCalled();
+    expect(r.bots).toBe(1);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'bot', source: 'heuristic' }),
+    );
+  });
+
+  it('fora da zona-cinza (0 eixos = humano claro): NÃO chama LLM', async () => {
+    getCloneInfo.mockResolvedValue({
+      slot: 'clone_x',
+      waha_sessao: 'SESS',
+      chat_table: 'chat_histories',
+    });
+    listUnclassifiedCandidates.mockResolvedValue([{ telefone: '5511999990055', total: 3 }]);
+    hasScheduledHistory.mockResolvedValue(false);
+    getMessageTimestamps.mockResolvedValue([new Date(0), new Date(30_000)]); // timing insuficiente
+    getHumanMessages.mockResolvedValue(['oi tem horario amanha?']); // humano, sem sinal
+    const { runBotDetect } = await loadJob({ BOT_DETECT_LLM: true });
+    const r = await runBotDetect();
+    expect(classifyGrayZone).not.toHaveBeenCalled();
+    expect(r.humans).toBe(1);
+    expect(upsertClassification).toHaveBeenCalledWith(
+      expect.objectContaining({ verdict: 'human', source: 'heuristic' }),
+    );
   });
 });
 
