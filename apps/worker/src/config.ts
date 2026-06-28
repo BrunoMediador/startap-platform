@@ -221,6 +221,25 @@ export const WorkerConfigSchema = z.object({
   BOT_DETECT_TYPING_DELAY_MS: z.coerce.number().int().nonnegative().default(1_500),
   // Timeout duro (ms) do sendText — nunca aguardar WAHA infinito (regra 7). Default 8s.
   BOT_DETECT_SEND_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
+  // ── Classificador LLM na ZONA-CINZA do bot-detect (SCRUM-4 PR-D) ─────────────────────────────
+  // Só a ZONA-CINZA da heurística (exatamente 1 eixo ortogonal disparou — ambíguo) paga LLM. Fora
+  // dela (≥2 eixos = bot; 0 eixos = humano) NUNCA chama LLM. GATE: BOT_DETECT_LLM=true habilita a
+  // chamada na zona-cinza; default OFF (ausente/false) = zona-cinza cai no comportamento atual da
+  // heurística (não-bot), ZERO chamada LLM. Independe de BOT_DETECT_ENABLED/SLOTS (que já portam o
+  // job): com BOT_DETECT_LLM off, o job roda igual a hoje. ⚠️ Ligar em prod é decisão do Bruno (ver
+  // corpo do PR). Pra ligar: devops seta BOT_DETECT_LLM=true + OPENAI_API_KEY no worker + restart.
+  // NUNCA hardcoded.
+  BOT_DETECT_LLM: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Modelo da zona-cinza. Default gpt-4o-mini (barato; custo input-dominado). Persona-free, temp 0.
+  BOT_DETECT_LLM_MODEL: z.string().default('gpt-4o-mini'),
+  // Quantas mensagens `human` recentes (cronológicas) vão no prompt do LLM. Default 12 (v1.md).
+  BOT_DETECT_LLM_MAX_MSGS: z.coerce.number().int().positive().default(12),
+  // Timeout duro (ms) da chamada LLM — nunca aguardar o provider infinito (regra 7). Default 30s.
+  BOT_DETECT_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

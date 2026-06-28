@@ -35,8 +35,10 @@
 import { logger } from '@startap/core/logger';
 import { canonicalE164, ensureDddBr, phoneHint } from '@startap/core/phone';
 import { alerts, antibot, botDetect, flowClones } from '@startap/db';
+import type { ContactSource } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
+import { classifyGrayZone } from './bot-detect-llm.js';
 
 const log = logger.child({ job: 'bot-detect' });
 
@@ -248,6 +250,16 @@ export function classifyHeuristic(
       rule: 'timing+content',
     },
   };
+}
+
+/**
+ * ZONA-CINZA (SCRUM-4 PR-D): a heurística é ambígua — exatamente 1 eixo ortogonal disparou. Não é
+ * bot (≥2 eixos) nem claramente humano (0 eixos). SÓ aqui, e SÓ com BOT_DETECT_LLM=true, o LLM é
+ * chamado. Fora da zona-cinza (0 ou 2 eixos) o veredito é da heurística, sem LLM. Pura.
+ */
+export function isGrayZone(timing: TimingSignals, content: ContentSignals): boolean {
+  const axes = (timing.fired ? 1 : 0) + (content.fired ? 1 : 0);
+  return axes === 1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -490,7 +502,40 @@ export async function runBotDetect(): Promise<BotDetectResult> {
               })
           : [];
         const content = computeContentSignals(contents);
-        const { verdict, confidence, signals } = classifyHeuristic(timing, content);
+        const heuristic = classifyHeuristic(timing, content);
+        let verdict = heuristic.verdict;
+        let confidence = heuristic.confidence;
+        let signals: Record<string, unknown> = heuristic.signals;
+        let source: ContactSource = 'heuristic';
+
+        // ZONA-CINZA (PR-D): exatamente 1 eixo ortogonal (ambíguo). SÓ aqui, e SÓ com
+        // BOT_DETECT_LLM ON, paga LLM. Fora da zona-cinza (0 ou 2 eixos) mantém a heurística, sem
+        // LLM. Flag OFF = zona-cinza cai no comportamento atual (heurística = não-bot), zero LLM.
+        // Entrada do LLM = getHumanMessages(chatTable, SLOT, telefone, N) (ancorado por slot, dentro
+        // de classifyGrayZone). Em falha/timeout o LLM devolve null -> seguimos a heurística.
+        if (config.BOT_DETECT_LLM && info.chat_table && isGrayZone(timing, content)) {
+          const llm = await classifyGrayZone({
+            slot,
+            telefone,
+            chatTable: info.chat_table,
+          }).catch((e: unknown) => {
+            log.warn(
+              {
+                slot,
+                telefone: phoneHint(telefone),
+                err: e instanceof Error ? e.message : String(e),
+              },
+              'bot-detect: classificador LLM lançou — mantém heurística',
+            );
+            return null;
+          });
+          if (llm) {
+            verdict = llm.verdict;
+            confidence = llm.confidence;
+            signals = { ...heuristic.signals, ...llm.signals };
+            source = 'llm';
+          }
+        }
 
         if (verdict === 'human') {
           await botDetect.upsertClassification({
@@ -499,7 +544,7 @@ export async function runBotDetect(): Promise<BotDetectResult> {
             verdict,
             confidence,
             signals,
-            source: 'heuristic',
+            source,
           });
           result.humans++;
           result.classified++;
@@ -526,7 +571,7 @@ export async function runBotDetect(): Promise<BotDetectResult> {
             verdict,
             confidence,
             signals,
-            source: 'heuristic',
+            source,
           });
           await botDetect.markAlerted(slot, telefone);
           alertsForSlot++;
@@ -541,7 +586,7 @@ export async function runBotDetect(): Promise<BotDetectResult> {
             verdict,
             confidence,
             signals,
-            source: 'heuristic',
+            source,
           });
           result.bots++;
           result.classified++;
