@@ -12,7 +12,7 @@
  */
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
 import { PeriodSelector } from '@/components/relatorios/period-selector';
-import { useTenantTz } from '@/components/shell/tenant-tz-context';
+import { TenantTzValueProvider, useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
 import type { Agendamento, ColaboradorAgendaResponse } from '@/lib/api-types';
 import type { Periodo } from '@/lib/billing-periodo';
@@ -41,30 +41,34 @@ export function ColaboradorAgendaClient({
   );
 
   return (
-    <div>
-      <PeriodSelector
-        value={periodo}
-        onChange={onPeriodoChange}
-        presets={presets}
-        limites={limites}
-      />
+    // Fuso do clone (vem na resposta da agenda — portal-colaborador.ts): o colaborador tem
+    // sessão própria, sem /portal/status. Default São Paulo se ausente (TenantTzValueProvider).
+    <TenantTzValueProvider timeZone={data.timezone}>
+      <div>
+        <PeriodSelector
+          value={periodo}
+          onChange={onPeriodoChange}
+          presets={presets}
+          limites={limites}
+        />
 
-      {filtradas.length === 0 ? (
-        <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
-          <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
-          <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
-            Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você aparecem
-            aqui.
-          </p>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-card-sm border border-line bg-surface">
-          {filtradas.map((ag) => (
-            <AgendaRow key={ag.id} ag={ag} />
-          ))}
-        </div>
-      )}
-    </div>
+        {filtradas.length === 0 ? (
+          <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
+            <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
+            <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
+              Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você
+              aparecem aqui.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-card-sm border border-line bg-surface">
+            {filtradas.map((ag) => (
+              <AgendaRow key={ag.id} ag={ag} />
+            ))}
+          </div>
+        )}
+      </div>
+    </TenantTzValueProvider>
   );
 }
 

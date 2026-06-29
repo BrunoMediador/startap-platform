@@ -119,6 +119,13 @@ export interface ColaboradorAgendaResponse {
   gcal_configured: boolean;
   count: number;
   agendamentos: Agendamento[];
+  /**
+   * Fuso IANA do clone (mesmo de StatusResponse.timezone), servido por portal-colaborador.ts.
+   * O colaborador tem sessão própria (sem /portal/status); o painel dele lê o fuso DAQUI pra
+   * exibir a agenda no horário da barbearia. Opcional: undefined enquanto a portal-api não
+   * devolve -> default São Paulo (TenantTzValueProvider).
+   */
+  timezone?: string;
 }
 
 /** Um balde do relatório de comissão do colaborador (faturado OU previsão). */
@@ -306,10 +313,10 @@ export interface StatusResponse {
   /**
    * Fuso IANA do clone (ex.: "America/Sao_Paulo", "America/Cuiaba"). Usado pra exibir
    * datas/horas da agenda no fuso da barbearia. Backend grava em flow_clones.timezone
-   * (default São Paulo). Pode vir undefined se a portal-api ainda não foi atualizada —
+   * (default São Paulo). Opcional: vem undefined enquanto a portal-api não foi atualizada —
    * o front cai no default São Paulo (ver TenantTzProvider).
    */
-  timezone: string;
+  timezone?: string;
 }
 
 // ── Agendamentos ─────────────────────────────────────────────────────────────
