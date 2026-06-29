@@ -13,6 +13,7 @@
  */
 import { IconChevronRight, IconWallet } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Badge } from '@/components/ui/badge';
 import { MetricCard } from '@/components/ui/card';
 import { SkeletonList } from '@/components/ui/skeleton';
@@ -196,8 +197,9 @@ function LinhaAtendimento({
   onClick: () => void;
   mostrarVendedor?: boolean;
 }) {
-  const dia = formatAgendamentoDia(row.inicio_at ?? row.data);
-  const hora = formatAgendamentoHora(row.inicio_at);
+  const tz = useTenantTz();
+  const dia = formatAgendamentoDia(row.inicio_at ?? row.data, undefined, tz);
+  const hora = formatAgendamentoHora(row.inicio_at, tz);
   const quando = [dia, hora].filter(Boolean).join(' · ') || 'Sem data';
   const liquido = valorLiquidoCents(row);
   const temDesconto = row.desconto_cents > 0;

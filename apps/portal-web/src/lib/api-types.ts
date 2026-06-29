@@ -303,6 +303,13 @@ export interface StatusResponse {
   waha: { session: string | null; status: string };
   pausas_ativas: number;
   billing: StatusBilling | null;
+  /**
+   * Fuso IANA do clone (ex.: "America/Sao_Paulo", "America/Cuiaba"). Usado pra exibir
+   * datas/horas da agenda no fuso da barbearia. Backend grava em flow_clones.timezone
+   * (default São Paulo). Pode vir undefined se a portal-api ainda não foi atualizada —
+   * o front cai no default São Paulo (ver TenantTzProvider).
+   */
+  timezone: string;
 }
 
 // ── Agendamentos ─────────────────────────────────────────────────────────────

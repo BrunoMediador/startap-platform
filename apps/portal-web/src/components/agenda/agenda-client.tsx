@@ -13,6 +13,7 @@
  */
 import { IconCalendar, IconChevronLeft, IconChevronRight, IconPlus } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
 import { type PeriodoFiltro, filtrarAgendamentos } from '@/lib/agendamentos';
 import type { Agendamento, AgendamentosResponse } from '@/lib/api-types';
@@ -244,8 +245,9 @@ function VisaoBtn({
 
 /** Linha clicável da Lista — abre o detalhe; nome 2-linhas + marquee no PC. */
 function ListaRow({ ag, onClick }: { ag: Agendamento; onClick: () => void }) {
-  const hora = formatAgendamentoHora(ag.inicio);
-  const dia = formatAgendamentoDia(ag.inicio);
+  const tz = useTenantTz();
+  const hora = formatAgendamentoHora(ag.inicio, tz);
+  const dia = formatAgendamentoDia(ag.inicio, undefined, tz);
   return (
     <button
       type="button"

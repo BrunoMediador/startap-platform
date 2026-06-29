@@ -121,3 +121,73 @@ describe('formatAgendamentoDia (fuso da barbearia — Bug 3)', () => {
     expect(formatAgendamentoDia(null, now)).toBe('Sem data');
   });
 });
+
+// ── FUSO POR CLONE (Mato Grosso / America/Cuiaba, UTC-4) ─────────────────────────────────────
+// O clone passa seu timeZone (vindo de /portal/status). Default = São Paulo, e a saída TEM de
+// ser byte-idêntica ao comportamento anterior (invariante dura). Cuiabá = 1h a menos que SP.
+describe('timeZone param — DEFAULT São Paulo é byte-idêntico (invariante)', () => {
+  const now = new Date('2026-06-23T15:00:00.000Z');
+  const iso = '2026-06-24T01:00:00.000Z'; // 22:00 SP (= 01:00 UTC do dia seguinte)
+
+  it('formatAgendamentoHora: sem tz === passar America/Sao_Paulo', () => {
+    expect(formatAgendamentoHora(iso)).toBe(formatAgendamentoHora(iso, 'America/Sao_Paulo'));
+    expect(formatAgendamentoHora(iso, 'America/Sao_Paulo')).toBe('22:00');
+  });
+  it('formatAgendamentoDia: sem tz === passar America/Sao_Paulo', () => {
+    expect(formatAgendamentoDia(iso, now)).toBe(
+      formatAgendamentoDia(iso, now, 'America/Sao_Paulo'),
+    );
+    expect(formatAgendamentoDia(iso, now, 'America/Sao_Paulo')).toBe('Hoje');
+  });
+  it('date puro: default === America/Sao_Paulo', () => {
+    expect(formatAgendamentoDia('2026-06-24', now)).toBe(
+      formatAgendamentoDia('2026-06-24', now, 'America/Sao_Paulo'),
+    );
+  });
+});
+
+describe('formatAgendamentoHora — Cuiabá (UTC-4) mostra 1h a MENOS que SP', () => {
+  it('13:00 SP (= 16:00 UTC) -> "12:00" em Cuiabá', () => {
+    const iso = '2026-06-23T16:00:00.000Z';
+    expect(formatAgendamentoHora(iso, 'America/Sao_Paulo')).toBe('13:00');
+    expect(formatAgendamentoHora(iso, 'America/Cuiaba')).toBe('12:00');
+  });
+  it('22:00 SP (= 01:00 UTC do dia seguinte) -> "21:00" em Cuiabá', () => {
+    const iso = '2026-06-24T01:00:00.000Z';
+    expect(formatAgendamentoHora(iso, 'America/Sao_Paulo')).toBe('22:00');
+    expect(formatAgendamentoHora(iso, 'America/Cuiaba')).toBe('21:00');
+  });
+});
+
+describe('formatAgendamentoDia — a BORDA do dia muda com o fuso', () => {
+  const now = new Date('2026-06-23T15:00:00.000Z'); // 12:00 SP / 11:00 Cuiabá do dia 23
+
+  it('00:30 SP do dia 24 (= 23:30 Cuiabá do dia 23): "Amanhã" em SP, "Hoje" em Cuiabá', () => {
+    // 03:30 UTC: SP (-3) = 00:30 do dia 24; Cuiabá (-4) = 23:30 do dia 23.
+    const iso = '2026-06-24T03:30:00.000Z';
+    expect(formatAgendamentoDia(iso, now, 'America/Sao_Paulo')).toBe('Amanhã');
+    expect(formatAgendamentoDia(iso, now, 'America/Cuiaba')).toBe('Hoje');
+  });
+});
+
+describe('parseLocalDate (via date puro): âncora 12:00Z dá o MESMO dia civil que o antigo 03:00Z', () => {
+  const now = new Date('2026-06-23T15:00:00.000Z');
+
+  it('relativo: date puro "2026-06-23" === datetime 12:00Z === datetime 03:00Z (antigo) em SP', () => {
+    expect(formatAgendamentoDia('2026-06-23', now, 'America/Sao_Paulo')).toBe('Hoje');
+    expect(formatAgendamentoDia('2026-06-23T12:00:00.000Z', now, 'America/Sao_Paulo')).toBe('Hoje');
+    // 03:00Z era a âncora ANTIGA (meia-noite SP) — segue caindo no mesmo dia civil SP.
+    expect(formatAgendamentoDia('2026-06-23T03:00:00.000Z', now, 'America/Sao_Paulo')).toBe('Hoje');
+  });
+
+  it('não-relativo: date puro e 12:00Z dão o MESMO rótulo "10 de jul" em SP', () => {
+    expect(formatAgendamentoDia('2026-07-10', now, 'America/Sao_Paulo')).toBe(
+      formatAgendamentoDia('2026-07-10T12:00:00.000Z', now, 'America/Sao_Paulo'),
+    );
+    expect(formatAgendamentoDia('2026-07-10', now, 'America/Sao_Paulo')).toBe('10 de jul');
+  });
+
+  it('date puro 12:00Z é seguro em Cuiabá (08:00 local) — mesmo dia civil', () => {
+    expect(formatAgendamentoDia('2026-06-23', now, 'America/Cuiaba')).toBe('Hoje');
+  });
+});

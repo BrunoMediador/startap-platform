@@ -10,6 +10,7 @@
  * no desktop cabem lado a lado. Eventos sem data aparecem num aviso à parte.
  */
 import { IconChevronLeft, IconChevronRight } from '@/components/icons';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { type DiaSemanaAgenda, buildSemana, semDataCount } from '@/lib/agenda-semana';
 import { parseTitulo } from '@/lib/agenda-titulo';
 import type { Agendamento } from '@/lib/api-types';
@@ -142,9 +143,10 @@ function ColunaDia({
 }
 
 function ChipEvento({ ag, onClick }: { ag: Agendamento; onClick: () => void }) {
+  const tz = useTenantTz();
   const { nome, raw } = parseTitulo(ag.titulo);
-  const inicio = formatAgendamentoHora(ag.inicio);
-  const fim = formatAgendamentoHora(ag.fim);
+  const inicio = formatAgendamentoHora(ag.inicio, tz);
+  const fim = formatAgendamentoHora(ag.fim, tz);
   const faixa = inicio && fim ? `${inicio}–${fim}` : inicio || '';
   return (
     <button

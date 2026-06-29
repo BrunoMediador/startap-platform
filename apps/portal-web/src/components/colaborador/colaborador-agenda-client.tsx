@@ -12,6 +12,7 @@
  */
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
 import { PeriodSelector } from '@/components/relatorios/period-selector';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
 import type { Agendamento, ColaboradorAgendaResponse } from '@/lib/api-types';
 import type { Periodo } from '@/lib/billing-periodo';
@@ -69,8 +70,9 @@ export function ColaboradorAgendaClient({
 
 /** Linha de consulta (não clicável) — nome + serviço + dia/hora. */
 function AgendaRow({ ag }: { ag: Agendamento }) {
-  const hora = formatAgendamentoHora(ag.inicio);
-  const dia = formatAgendamentoDia(ag.inicio);
+  const tz = useTenantTz();
+  const hora = formatAgendamentoHora(ag.inicio, tz);
+  const dia = formatAgendamentoDia(ag.inicio, undefined, tz);
   return (
     <div className="group flex min-h-14 items-center gap-3.5 border-b border-line-soft px-[15px] py-[13px] last:border-b-0">
       <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-brand-soft font-display text-[13px] font-bold text-brand">

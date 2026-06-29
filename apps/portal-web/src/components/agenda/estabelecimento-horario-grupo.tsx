@@ -11,6 +11,7 @@
  * clicável (abre o sheet de detalhe), com a COR do profissional na barra lateral
  * + nome do profissional + cliente/serviço (tratamento de nome longo do #332).
  */
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { corDoProfissional } from '@/lib/agenda-estabelecimento';
 import type { GrupoHorario } from '@/lib/agenda-estabelecimento';
 import { parseTitulo } from '@/lib/agenda-titulo';
@@ -27,8 +28,9 @@ export function EstabelecimentoHorarioGrupo({
   mostrarDia: boolean;
   onAbrir: (ag: Agendamento) => void;
 }) {
-  const hora = formatAgendamentoHora(grupo.inicio);
-  const dia = formatAgendamentoDia(grupo.inicio);
+  const tz = useTenantTz();
+  const hora = formatAgendamentoHora(grupo.inicio, tz);
+  const dia = formatAgendamentoDia(grupo.inicio, undefined, tz);
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:gap-3.5">
