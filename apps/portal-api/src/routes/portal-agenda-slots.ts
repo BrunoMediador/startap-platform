@@ -82,17 +82,10 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
     }
     const { data, servico, colaborador_id } = parsed.data;
 
-    // Janela: nada no passado (calendário de SP), nada além de +60 dias.
-    const hoje = nowPartsInTz();
-    if (data < hoje.dateKey) {
-      return reply.code(400).send({ error: 'data_no_passado' });
-    }
-    const limite = nowPartsInTz(new Date(Date.now() + MAX_AHEAD_DAYS * 86_400_000));
-    if (data > limite.dateKey) {
-      return reply.code(400).send({ error: 'data_fora_da_janela', max_dias: MAX_AHEAD_DAYS });
-    }
-
-    // Config do tenant (horários + serviços) — mesma fonte do bot.
+    // Config do tenant (horários + serviços) — mesma fonte do bot. Carregada ANTES da
+    // checagem de janela porque "passado/futuro" precisa do FUSO do clone (migration 068).
+    // REORDENADO: o window-check usava nowPartsInTz() (SP fixo) antes do load; agora usa
+    // config.timezone. Para clone SP é byte-idêntico ao comportamento de hoje.
     let config: Awaited<ReturnType<typeof loadScheduleConfig>>;
     try {
       config = await loadScheduleConfig(slot);
@@ -104,6 +97,19 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(422).send({ error: 'config_ausente' });
     }
 
+    // Fuso do clone (default SP) — relógio da barbearia. Clone SP = byte-idêntico.
+    const tz = config.timezone;
+
+    // Janela: nada no passado (calendário do clone), nada além de +60 dias.
+    const hoje = nowPartsInTz(new Date(), tz);
+    if (data < hoje.dateKey) {
+      return reply.code(400).send({ error: 'data_no_passado' });
+    }
+    const limite = nowPartsInTz(new Date(Date.now() + MAX_AHEAD_DAYS * 86_400_000), tz);
+    if (data > limite.dateKey) {
+      return reply.code(400).send({ error: 'data_fora_da_janela', max_dias: MAX_AHEAD_DAYS });
+    }
+
     const svc = config.services.find((s) => s.name.toLowerCase() === servico.toLowerCase());
     if (!svc) {
       return reply.code(400).send({ error: 'servico_nao_encontrado' });
@@ -112,7 +118,7 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
     const servicoOut = { nome: svc.name, duracao_min: svc.min };
     const vazio = { count: 0, slots: [], grupos: { manha: [], tarde: [], noite: [] } };
 
-    const wd = weekdayOfDateKey(data);
+    const wd = weekdayOfDateKey(data, tz);
     if (wd === null) {
       return reply.code(400).send({ error: 'parametros_invalidos', detalhe: 'data inexistente' });
     }
@@ -171,14 +177,15 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      // Janela exata do dia em SP (00:00 → 24:00 hora de parede).
-      const timeMin = zonedWallTimeToUtc(data, 0).toISOString();
-      const timeMax = zonedWallTimeToUtc(data, 24 * 60).toISOString();
+      // Janela exata do dia no fuso do clone (00:00 → 24:00 hora de parede).
+      const timeMin = zonedWallTimeToUtc(data, 0, tz).toISOString();
+      const timeMax = zonedWallTimeToUtc(data, 24 * 60, tz).toISOString();
       const events = await client.listEvents({ timeMin, timeMax });
 
       const slots = computeFreeSlotsForDay(events, config.work, {
         dateKey: data,
         durationMin: svc.min,
+        timeZone: tz,
       });
 
       return reply.code(200).send({

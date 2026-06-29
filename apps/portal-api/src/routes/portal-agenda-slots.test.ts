@@ -95,6 +95,7 @@ const CONFIG_OK = {
     { name: 'Corte + barba', min: 45 },
   ],
   source: 'flow_clones' as const,
+  timezone: 'America/Sao_Paulo',
 };
 
 // Dias dinâmicos (sem fake timers — fastify.inject não gosta): grade aberta

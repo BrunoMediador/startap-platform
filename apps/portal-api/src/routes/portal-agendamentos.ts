@@ -336,6 +336,8 @@ async function hookUpsertAtendimento(args: {
       clienteContato: args.clienteContato,
       inicioAt: args.inicioAt,
       fimAt: args.fimAt,
+      // Fuso do clone (default SP) — deriva `data` no relógio da barbearia (idêntico p/ SP).
+      timezone: scope.timezone,
       // Só repassa quando informado (pacote) — undefined preserva o comportamento de previsão.
       ...(args.formaPagamento !== undefined ? { formaPagamento: args.formaPagamento } : {}),
       // Reprice da troca de serviço — só ligado no PATCH com troca genuína (e não-pacote).
@@ -471,14 +473,18 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'servico_nao_encontrado' });
     }
 
-    const wd = weekdayOfDateKey(data);
+    // Fuso do clone (default SP via config.timezone) — relógio da barbearia. Clone SP =
+    // byte-idêntico ao de hoje em weekday/now/conversão de horário-de-parede.
+    const tz = config.timezone;
+
+    const wd = weekdayOfDateKey(data, tz);
     if (wd === null) {
       return reply.code(400).send({ error: 'payload_invalido', detalhe: 'data inexistente' });
     }
 
     // Janela de aceitação: hoje..+60d (mesma do GET /slots).
-    const agora = nowPartsInTz();
-    const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000));
+    const agora = nowPartsInTz(new Date(), tz);
+    const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000), tz);
     if (data > limite.dateKey) {
       return reply.code(400).send({ error: 'data_fora_da_janela', max_dias: POST_MAX_AHEAD_DAYS });
     }
@@ -543,8 +549,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       client = single;
     }
 
-    const startUtc = zonedWallTimeToUtc(data, startMins);
-    const endUtc = zonedWallTimeToUtc(data, endMins);
+    const startUtc = zonedWallTimeToUtc(data, startMins, tz);
+    const endUtc = zonedWallTimeToUtc(data, endMins, tz);
 
     try {
       // Double-check anti-corrida: recheca contra o GCal AGORA (mesma regra
@@ -583,7 +589,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         summary,
         startISO: startUtc.toISOString(),
         endISO: endUtc.toISOString(),
-        timeZone: TZ,
+        timeZone: tz,
       });
 
       log.info(
@@ -859,6 +865,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       if (reagenda || revalidarPorServico) {
         // config é garantido aqui (reagenda => carregamos config acima).
         const cfg = config as Awaited<ReturnType<typeof loadScheduleConfig>>;
+        // Fuso do clone (default SP) — relógio da barbearia. Clone SP = byte-idêntico.
+        const tz = cfg.timezone;
         // Deriva a data/hora ATUAL do evento pra preencher o lado que não mudou.
         const inicioAtualIso = atual.start?.dateTime ?? null;
         if (!inicioAtualIso) {
@@ -866,11 +874,11 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
           // (o bot/portal sempre cria com dateTime). 422 explícito.
           return reply.code(422).send({ error: 'evento_sem_horario' });
         }
-        const partsAtual = nowPartsInTz(new Date(inicioAtualIso));
+        const partsAtual = nowPartsInTz(new Date(inicioAtualIso), tz);
         const dataAlvo = patch.data ?? partsAtual.dateKey;
         const horaAlvoMins = patch.hora !== undefined ? hhmmToMins(patch.hora) : partsAtual.mins;
 
-        const wd = weekdayOfDateKey(dataAlvo);
+        const wd = weekdayOfDateKey(dataAlvo, tz);
         if (wd === null) {
           return reply.code(400).send({ error: 'payload_invalido', detalhe: 'data inexistente' });
         }
@@ -889,8 +897,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         const endMins = startMins + duracaoMin;
 
         // Janela hoje..+60d + piso de 10min pra HOJE (mesma regra do POST).
-        const agora = nowPartsInTz();
-        const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000));
+        const agora = nowPartsInTz(new Date(), tz);
+        const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000), tz);
         if (dataAlvo > limite.dateKey) {
           return reply
             .code(400)
@@ -915,8 +923,8 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
         }
 
-        const startUtc = zonedWallTimeToUtc(dataAlvo, startMins);
-        const endUtc = zonedWallTimeToUtc(dataAlvo, endMins);
+        const startUtc = zonedWallTimeToUtc(dataAlvo, startMins, tz);
+        const endUtc = zonedWallTimeToUtc(dataAlvo, endMins, tz);
 
         // Anti-corrida: recheca a NOVA janela IGNORANDO o próprio evento.
         const existing = await client.listEvents({
@@ -968,7 +976,11 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         ...(summary !== undefined ? { summary } : {}),
         ...(startISO !== undefined ? { startISO } : {}),
         ...(endISO !== undefined ? { endISO } : {}),
-        ...(startISO !== undefined || endISO !== undefined ? { timeZone: TZ } : {}),
+        // timeZone só acompanha quando há start/end (=> config carregado): usa o fuso do
+        // clone, com TZ (SP) como rede de segurança. Clone SP = byte-idêntico ao de hoje.
+        ...(startISO !== undefined || endISO !== undefined
+          ? { timeZone: config?.timezone ?? TZ }
+          : {}),
       });
 
       // ── Gancho de billing derivado da agenda (ADR 0027 Fase B2) ────────────
