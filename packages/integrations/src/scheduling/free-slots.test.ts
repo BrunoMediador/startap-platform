@@ -3,7 +3,7 @@
  *
  * Não conecta no banco — usa mocks do módulo @startap/db.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mocks devem ser declarados antes do import do módulo testado.
 vi.mock('@startap/db', () => ({
@@ -15,8 +15,11 @@ vi.mock('@startap/db', () => ({
 
 import { flowClones, query } from '@startap/db';
 import {
+  type ScheduleConfig,
   computeFreeSlotsForDay,
+  formatarAgendaComConfig,
   loadScheduleConfig,
+  reanchorWallTimeToTz,
   weekdayOfDateKey,
   zonedWallTimeToUtc,
 } from './free-slots.js';
@@ -283,5 +286,151 @@ describe('zonedWallTimeToUtc / weekdayOfDateKey', () => {
     expect(weekdayOfDateKey('2026-06-13')).toBe(6);
     expect(weekdayOfDateKey('2026-06-14')).toBe(0);
     expect(weekdayOfDateKey('2026-02-31')).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────
+// FUSO POR CLONE (migration 068) — Mato Grosso = America/Cuiaba (UTC-4).
+// Invariante: clone SP (default) é BYTE-IDÊNTICO ao de hoje; Cuiabá corrige a 1h de erro.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+describe('fuso por clone — zonedWallTimeToUtc / reanchorWallTimeToTz / weekdayOfDateKey', () => {
+  it('zonedWallTimeToUtc: 14:00 de parede em Cuiabá (−04) → 18:00Z (SP daria 17:00Z)', () => {
+    expect(zonedWallTimeToUtc('2026-06-30', 14 * 60, 'America/Cuiaba').toISOString()).toBe(
+      '2026-06-30T18:00:00.000Z',
+    );
+    // SP (default, sem tz) do MESMO horário de parede → 17:00Z (byte-idêntico ao de hoje).
+    expect(zonedWallTimeToUtc('2026-06-30', 14 * 60).toISOString()).toBe(
+      '2026-06-30T17:00:00.000Z',
+    );
+  });
+
+  it('reanchorWallTimeToTz: ignora o offset do LLM e reinterpreta no fuso do clone', () => {
+    // O LLM emite -03:00 (offset de SP chumbado). Reancorado em Cuiabá = 18:00Z.
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiaba')).toBe(
+      '2026-06-30T18:00:00.000Z',
+    );
+    // Reancorado em SP = 17:00Z = EXATAMENTE o instante que o -03:00 já representava.
+    // PROVA DE IGUALDADE: clone SP não muda nada vs. o comportamento de hoje.
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Sao_Paulo')).toBe(
+      '2026-06-30T17:00:00.000Z',
+    );
+    expect(new Date('2026-06-30T14:00:00-03:00').toISOString()).toBe('2026-06-30T17:00:00.000Z');
+  });
+
+  it('reanchorWallTimeToTz: aceita "YYYY-MM-DD HH:mm" e devolve null em formato inválido', () => {
+    expect(reanchorWallTimeToTz('2026-06-30 14:00', 'America/Cuiaba')).toBe(
+      '2026-06-30T18:00:00.000Z',
+    );
+    expect(reanchorWallTimeToTz('amanhã às 14h', 'America/Cuiaba')).toBeNull();
+  });
+
+  it('reanchorWallTimeToTz: IANA inválido → null SEM lançar (falha fechada, isolada a 1 clone)', () => {
+    // 'America/Cuiba' (digitação errada) faria Intl lançar RangeError — capturado → null.
+    expect(() => reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiba')).not.toThrow();
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiba')).toBeNull();
+    // Fusos VÁLIDOS seguem funcionando normalmente.
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Sao_Paulo')).toBe(
+      '2026-06-30T17:00:00.000Z',
+    );
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiaba')).toBe(
+      '2026-06-30T18:00:00.000Z',
+    );
+  });
+
+  it('weekdayOfDateKey: mesmo dateKey → mesmo weekday em SP e Cuiabá', () => {
+    expect(weekdayOfDateKey('2026-06-13', 'America/Cuiaba')).toBe(6);
+    expect(weekdayOfDateKey('2026-06-13', 'America/Sao_Paulo')).toBe(6);
+    expect(weekdayOfDateKey('2026-06-14', 'America/Cuiaba')).toBe(0);
+  });
+});
+
+describe('fuso por clone — computeFreeSlotsForDay (Cuiabá UTC-4)', () => {
+  it('evento bucketizado pelo fuso: 13:00Z ocupa 09:00 (Cuiabá) vs 10:00 (SP)', () => {
+    const ev = evento('2026-06-13T13:00:00Z', '2026-06-13T13:30:00Z');
+    // SP (−03): evento é 10:00–10:30 → some o slot 10:00.
+    const sp = computeFreeSlotsForDay([ev], WORK_SAB_09_12, {
+      dateKey: '2026-06-13',
+      durationMin: 30,
+      now: NOW_REF,
+      timeZone: 'America/Sao_Paulo',
+    });
+    expect(sp).toEqual(['09:00', '09:30', '10:30', '11:00', '11:30']);
+    // Cuiabá (−04): evento é 09:00–09:30 → some o slot 09:00.
+    const cuiaba = computeFreeSlotsForDay([ev], WORK_SAB_09_12, {
+      dateKey: '2026-06-13',
+      durationMin: 30,
+      now: NOW_REF,
+      timeZone: 'America/Cuiaba',
+    });
+    expect(cuiaba).toEqual(['09:30', '10:00', '10:30', '11:00', '11:30']);
+  });
+
+  it('now de borda: 03:00Z é 13/06 (passado p/ SP) mas 12/06 23:00 (hoje p/ Cuiabá)', () => {
+    const now = new Date('2026-06-13T03:00:00Z'); // SP = 00:00 13/06 ; Cuiabá = 23:00 12/06
+    const WORK_SEX_NOITE: Record<number, [number, number] | null> = {
+      0: null,
+      1: null,
+      2: null,
+      3: null,
+      4: null,
+      5: [23 * 60, 24 * 60], // sexta 23:00–24:00 (janela noturna p/ exercitar a borda)
+      6: null,
+    };
+    // SP: 13/06 já começou → o dia-alvo 12/06 é PASSADO → vazio.
+    const sp = computeFreeSlotsForDay([], WORK_SEX_NOITE, {
+      dateKey: '2026-06-12',
+      durationMin: 30,
+      now,
+      timeZone: 'America/Sao_Paulo',
+    });
+    expect(sp).toEqual([]);
+    // Cuiabá: ainda é 23:00 de 12/06 (HOJE) → oferece o slot 23:30.
+    const cuiaba = computeFreeSlotsForDay([], WORK_SEX_NOITE, {
+      dateKey: '2026-06-12',
+      durationMin: 30,
+      now,
+      timeZone: 'America/Cuiaba',
+    });
+    expect(cuiaba).toEqual(['23:30']);
+  });
+});
+
+describe('fuso por clone — formatarAgendaComConfig (Cuiabá UTC-4)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // SP 09:00 / Cuiabá 08:00 — MESMO dia 15/06 nos dois fusos (label HOJE idêntico).
+    vi.setSystemTime(new Date('2026-06-15T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const WORK_TODOS_09_12: Record<number, [number, number] | null> = {
+    0: [9 * 60, 12 * 60],
+    1: [9 * 60, 12 * 60],
+    2: [9 * 60, 12 * 60],
+    3: [9 * 60, 12 * 60],
+    4: [9 * 60, 12 * 60],
+    5: [9 * 60, 12 * 60],
+    6: [9 * 60, 12 * 60],
+  };
+  const baseCfg = (timezone: string): ScheduleConfig => ({
+    work: WORK_TODOS_09_12,
+    services: [{ name: 'Corte', min: 60 }],
+    source: 'flow_clones',
+    timezone,
+  });
+  // Evento 14:00Z–15:00Z: em SP = 11:00–12:00; em Cuiabá = 10:00–11:00.
+  const ev = evento('2026-06-15T14:00:00Z', '2026-06-15T15:00:00Z');
+
+  it('SP (default): evento ocupa 11:00 → HOJE oferece 10:00', () => {
+    const out = formatarAgendaComConfig([ev], baseCfg('America/Sao_Paulo'), { daysAhead: 0 });
+    expect(out).toBe('HOJE (15/06):\n  Corte (60min): 10:00');
+  });
+
+  it('Cuiabá: evento ocupa 10:00 → HOJE oferece 09:00 e 11:00', () => {
+    const out = formatarAgendaComConfig([ev], baseCfg('America/Cuiaba'), { daysAhead: 0 });
+    expect(out).toBe('HOJE (15/06):\n  Corte (60min): 09:00, 11:00');
   });
 });

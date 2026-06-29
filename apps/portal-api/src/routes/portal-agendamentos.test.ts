@@ -107,6 +107,7 @@ const CONFIG_OK = {
     { name: 'Corte + barba', min: 45 },
   ],
   source: 'flow_clones' as const,
+  timezone: 'America/Sao_Paulo',
 };
 
 const FUTURO = nowPartsInTz(new Date(Date.now() + 3 * 86_400_000)).dateKey;

@@ -10,6 +10,7 @@ import {
   colaboradorFazServico,
   formatarAgendaComConfig,
   loadScheduleConfig,
+  reanchorWallTimeToTz,
   resolveColaboradorByShortId,
   servicosDoColaborador,
 } from '@startap/integrations/scheduling';
@@ -32,7 +33,6 @@ import { runAgentConfigured } from '../lib/run-agent.js';
 import { BotBase } from './base.js';
 
 const SLOT = 'teste_barbearia';
-const TZ = 'America/Sao_Paulo';
 
 /**
  * Resultado da resolução do evento a remarcar (buildRemarcarTool). O caller injeta um
@@ -186,8 +186,10 @@ export class TesteBarbeariaBot extends BotBase {
   private buildRemarcarTool(args: {
     telefone: string;
     resolveEvent: (startAtualISO: string) => Promise<RemarcarResolve>;
+    /** Fuso (IANA) do clone (default SP). Reancora SÓ a NOVA janela; start_atual fica intacto. */
+    cloneTz: string;
   }): ToolDefinition {
-    const { telefone, resolveEvent } = args;
+    const { telefone, resolveEvent, cloneTz } = args;
     return {
       name: 'remarcar_agendamento',
       description:
@@ -215,9 +217,16 @@ export class TesteBarbeariaBot extends BotBase {
       run: async (rawArgs: unknown) => {
         const {
           start_atual: startAtual,
-          novo_start: novoStart,
-          novo_end: novoEnd,
+          novo_start: novoStartRaw,
+          novo_end: novoEndRaw,
         } = rawArgs as { start_atual: string; novo_start: string; novo_end: string };
+
+        // Reancora SÓ a NOVA janela no fuso do clone — o LLM emite wall-time com o offset
+        // errado chumbado (−03 de SP). start_atual NÃO é reancorado: é instante absoluto do
+        // GCal usado pra casar o evento por .getTime() no resolveEvent. Clone SP = no-op
+        // (reancorar 14:00−03 em SP devolve o MESMO instante → byte-idêntico ao de hoje).
+        const novoStart = reanchorWallTimeToTz(novoStartRaw, cloneTz) ?? novoStartRaw;
+        const novoEnd = reanchorWallTimeToTz(novoEndRaw, cloneTz) ?? novoEndRaw;
 
         const atualMs = new Date(startAtual).getTime();
         const novoStartMs = new Date(novoStart).getTime();
@@ -287,7 +296,7 @@ export class TesteBarbeariaBot extends BotBase {
         const updated = await client.patchEvent(eventId, {
           startISO: novoStart,
           endISO: novoEnd,
-          timeZone: TZ,
+          timeZone: cloneTz,
         });
         this.log.info(
           { slot: this.slot, telefone, eventId, colaboradorId, novoStart, novoEnd },
@@ -374,6 +383,10 @@ export class TesteBarbeariaBot extends BotBase {
       return null;
     }
 
+    // Fuso do clone (default 'America/Sao_Paulo' via migration 068) — relógio da barbearia.
+    // Clone SP é byte-idêntico ao comportamento de hoje em todos os pontos abaixo.
+    const cloneTz = scheduleConfig.timezone;
+
     const events = await calClient.listEvents({ timeMin, timeMax }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(this.slot);
@@ -400,7 +413,7 @@ export class TesteBarbeariaBot extends BotBase {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
-      timeZone: TZ,
+      timeZone: cloneTz,
     });
 
     // O bot_prompt no banco contém SOMENTE persona+regras+fluxo+cartão (parte
@@ -505,14 +518,21 @@ export class TesteBarbeariaBot extends BotBase {
             usa_pacote?: unknown;
           };
 
+          // Reancora o horário-de-parede do LLM no fuso do clone ANTES de tudo (conflito,
+          // criação, atendimento). O LLM emite start/end com o offset errado chumbado (−03 de
+          // SP); reinterpretamos a hora-de-parede no relógio da barbearia. Clone SP = no-op
+          // (byte-idêntico ao de hoje). startISO/endISO viram a fonte de verdade do instante.
+          const startISO = reanchorWallTimeToTz(start, cloneTz) ?? start;
+          const endISO = reanchorWallTimeToTz(end, cloneTz) ?? end;
+
           // Validação server-side: impede criação de evento com overlap real no Calendar.
           // O LLM pode alucinar disponibilidade — esta verificação é a fonte de verdade.
-          const existing = await calClient.listEvents({ timeMin: start, timeMax: end });
-          const reqStart = new Date(start).getTime();
-          const reqEnd = new Date(end).getTime();
+          const existing = await calClient.listEvents({ timeMin: startISO, timeMax: endISO });
+          const reqStart = new Date(startISO).getTime();
+          const reqEnd = new Date(endISO).getTime();
           const conflito = existing.find((ev) => {
-            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? start).getTime();
-            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? end).getTime();
+            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? startISO).getTime();
+            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? endISO).getTime();
             return evStart < reqEnd && evEnd > reqStart;
           });
           if (conflito) {
@@ -523,8 +543,8 @@ export class TesteBarbeariaBot extends BotBase {
                   start: conflito.start.dateTime,
                   end: conflito.end.dateTime,
                 },
-                requestedStart: start,
-                requestedEnd: end,
+                requestedStart: startISO,
+                requestedEnd: endISO,
                 telefone,
               },
               'inserir_agendamento bloqueado: conflito detectado server-side',
@@ -543,9 +563,9 @@ export class TesteBarbeariaBot extends BotBase {
           const createEvent = () =>
             calClient.createEvent({
               summary,
-              startISO: start,
-              endISO: end,
-              timeZone: TZ,
+              startISO,
+              endISO,
+              timeZone: cloneTz,
             });
 
           // ── Action-lock (ADR 0019, passo 3) ──────────────────────────────
@@ -568,8 +588,8 @@ export class TesteBarbeariaBot extends BotBase {
               eventId: ev.id,
               summary,
               servicoArg,
-              start,
-              end,
+              start: startISO,
+              end: endISO,
               colaboradorId: null,
               formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
             });
@@ -580,7 +600,7 @@ export class TesteBarbeariaBot extends BotBase {
           // (slot, telefone, inicio). Quem adquire cria; quem nao adquire
           // entende que a acao ja foi feita por outro processamento e PULA.
           // Fail-open: Redis down -> cria mesmo assim (degraded=true).
-          const lockKey = gcalActionLockKey(this.slot, telefone, start);
+          const lockKey = gcalActionLockKey(this.slot, telefone, startISO);
           const lock = await withActionLock(lockKey, createEvent);
           if (!lock.executed) {
             // Acao ja em andamento/feita por outro processamento da mesma
@@ -664,6 +684,7 @@ export class TesteBarbeariaBot extends BotBase {
     tools.push(
       this.buildRemarcarTool({
         telefone,
+        cloneTz,
         resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -896,6 +917,9 @@ export class TesteBarbeariaBot extends BotBase {
         inicioAt: input.start,
         fimAt: input.end,
         formaPagamento: input.formaPagamento ?? null,
+        // Fuso do clone (default SP) — deriva `data` (dia-de-parede) no relógio da barbearia.
+        // Clone SP = byte-idêntico; clone em outro fuso evita booking noturno vazar de dia.
+        timezone: scope.timezone,
       });
       this.log.info(
         {
@@ -962,6 +986,8 @@ export class TesteBarbeariaBot extends BotBase {
         clienteNome: clienteNome || null,
         inicioAt: input.start,
         fimAt: input.end,
+        // Fuso do clone (default SP) — deriva `data` no relógio da barbearia (idêntico p/ SP).
+        timezone: scope.timezone,
         // formaPagamento OMITIDO de propósito -> UPDATE preserva forma/valor (não reabre DOBRA).
       });
       this.log.info(
@@ -1030,6 +1056,10 @@ export class TesteBarbeariaBot extends BotBase {
       return null;
     }
 
+    // Fuso do clone (default 'America/Sao_Paulo' via migration 068) — relógio da barbearia.
+    // Clone SP é byte-idêntico ao comportamento de hoje em todos os pontos abaixo.
+    const cloneTz = scheduleConfig.timezone;
+
     const now = new Date();
     const timeMin = now.toISOString();
     const timeMax = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000).toISOString();
@@ -1071,7 +1101,7 @@ export class TesteBarbeariaBot extends BotBase {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
-      timeZone: TZ,
+      timeZone: cloneTz,
     });
 
     let promptPersona: string;
@@ -1181,6 +1211,12 @@ export class TesteBarbeariaBot extends BotBase {
             usa_pacote?: unknown;
           };
 
+          // Reancora o horário-de-parede do LLM no fuso do clone (mesmo do individual). O LLM
+          // emite start/end com offset errado chumbado (−03 de SP); reinterpretamos no relógio
+          // da barbearia. Clone SP = no-op (byte-idêntico). startISO/endISO = fonte do instante.
+          const startISO = reanchorWallTimeToTz(start, cloneTz) ?? start;
+          const endISO = reanchorWallTimeToTz(end, cloneTz) ?? end;
+
           // Resolve calendarId SERVER-SIDE a partir do id curto, validando contra a
           // lista ATIVA daquele slot/tenant (decorados). Id inválido / inativo / de
           // OUTRO estabelecimento -> null -> rejeita (sem vazamento cross-tenant).
@@ -1232,12 +1268,12 @@ export class TesteBarbeariaBot extends BotBase {
           const colabClient = colaborador.client;
 
           // Validação server-side de overlap NA AGENDA DO COLABORADOR (fonte de verdade).
-          const existing = await colabClient.listEvents({ timeMin: start, timeMax: end });
-          const reqStart = new Date(start).getTime();
-          const reqEnd = new Date(end).getTime();
+          const existing = await colabClient.listEvents({ timeMin: startISO, timeMax: endISO });
+          const reqStart = new Date(startISO).getTime();
+          const reqEnd = new Date(endISO).getTime();
           const conflito = existing.find((ev) => {
-            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? start).getTime();
-            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? end).getTime();
+            const evStart = new Date(ev.start.dateTime ?? ev.start.date ?? startISO).getTime();
+            const evEnd = new Date(ev.end.dateTime ?? ev.end.date ?? endISO).getTime();
             return evStart < reqEnd && evEnd > reqStart;
           });
           if (conflito) {
@@ -1246,8 +1282,8 @@ export class TesteBarbeariaBot extends BotBase {
                 slot: this.slot,
                 colaboradorId: colaborador.colaboradorId,
                 conflito: { start: conflito.start.dateTime, end: conflito.end.dateTime },
-                requestedStart: start,
-                requestedEnd: end,
+                requestedStart: startISO,
+                requestedEnd: endISO,
                 telefone,
               },
               'inserir_agendamento (estab) bloqueado: conflito na agenda do colaborador',
@@ -1260,7 +1296,7 @@ export class TesteBarbeariaBot extends BotBase {
           }
 
           const createEvent = () =>
-            colabClient.createEvent({ summary, startISO: start, endISO: end, timeZone: TZ });
+            colabClient.createEvent({ summary, startISO, endISO, timeZone: cloneTz });
 
           // Action-lock por (slot, colaborador, telefone, inicio): flag OFF -> cria direto.
           if (!config.IDEMPOTENCY_ACTION_LOCK) {
@@ -1289,8 +1325,8 @@ export class TesteBarbeariaBot extends BotBase {
               eventId: ev.id,
               summary,
               servicoArg,
-              start,
-              end,
+              start: startISO,
+              end: endISO,
               colaboradorId: colaborador.colaboradorId,
               formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
             });
@@ -1306,7 +1342,7 @@ export class TesteBarbeariaBot extends BotBase {
           const lockKey = gcalActionLockKey(
             `${this.slot}:${colaborador.colaboradorId}`,
             telefone,
-            start,
+            startISO,
           );
           const lock = await withActionLock(lockKey, createEvent);
           if (!lock.executed) {
@@ -1407,6 +1443,7 @@ export class TesteBarbeariaBot extends BotBase {
     tools.push(
       this.buildRemarcarTool({
         telefone,
+        cloneTz,
         resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();

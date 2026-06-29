@@ -69,6 +69,9 @@ export const portalStatusRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(200).send({
       slot,
       display_name: clone.display_name,
+      // Fuso (IANA) do clone (migration 068) — o frontend usa pra rotular horários no
+      // relógio da barbearia. Default 'America/Sao_Paulo' (clone sem fuso declarado).
+      timezone: clone.timezone,
       flow_enabled: clone.flow_enabled,
       // PORQUÊ da pausa (∈ billing|owner_request|manual_other|abuse|null). A Home
       // usa isto pra NÃO confundir pausa do dono (owner_request) com inadimplência:

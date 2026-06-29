@@ -155,6 +155,11 @@ export interface DueReminderRow {
   inicio_at: string;
   /** Nome do profissional (clone_colaboradores.nome via colaborador_id). NULL = SOLO -> omite. */
   profissional_nome: string | null;
+  /**
+   * Fuso (IANA) do clone (migration 068). Usado pra rotular o horário do lembrete no relógio
+   * da barbearia. Default 'America/Sao_Paulo' (clone sem fuso = byte-idêntico ao de hoje).
+   */
+  timezone: string;
 }
 
 /**
@@ -183,6 +188,7 @@ export async function findDueAgendaAtendimentos(horizonMinutes: number): Promise
     servico_nome: string | null;
     inicio_at: string;
     profissional_nome: string | null;
+    timezone: string | null;
   }>(
     `SELECT a.id            AS atendimento_id,
             a.slot          AS slot,
@@ -196,7 +202,8 @@ export async function findDueAgendaAtendimentos(horizonMinutes: number): Promise
             a.cliente_nome    AS cliente_nome,
             a.servico_nome    AS servico_nome,
             a.inicio_at       AS inicio_at,
-            c.nome            AS profissional_nome
+            c.nome            AS profissional_nome,
+            f.timezone        AS timezone
        FROM atendimentos a
        JOIN flow_clones f
          ON f.slot = a.slot
@@ -226,6 +233,7 @@ export async function findDueAgendaAtendimentos(horizonMinutes: number): Promise
     servico_nome: x.servico_nome,
     inicio_at: x.inicio_at,
     profissional_nome: x.profissional_nome ?? null,
+    timezone: x.timezone ?? 'America/Sao_Paulo',
   }));
 }
 

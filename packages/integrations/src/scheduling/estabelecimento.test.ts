@@ -36,6 +36,7 @@ const CONFIG: ScheduleConfig = {
   },
   services: [{ name: 'Corte', min: 30 }],
   source: 'flow_clones',
+  timezone: 'America/Sao_Paulo',
 };
 
 /** Stub mínimo de GoogleCalendarClient: só os métodos que o estabelecimento usa. */
