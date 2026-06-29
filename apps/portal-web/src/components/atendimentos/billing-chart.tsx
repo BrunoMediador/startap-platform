@@ -1,5 +1,6 @@
 'use client';
 
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import type { AtendimentoBaldeRow } from '@/lib/api-types';
 import {
   type AggBucket,
@@ -42,6 +43,7 @@ const FATIA_CORES = [
 ];
 
 export function BillingChart({ rows }: { rows: AtendimentoBaldeRow[] }) {
+  const tz = useTenantTz();
   const [visao, setVisao] = useState<Visao>('dia');
 
   const dadosDia = useMemo(() => agruparPorDia(rows), [rows]);
@@ -92,7 +94,7 @@ export function BillingChart({ rows }: { rows: AtendimentoBaldeRow[] }) {
       {visao === 'dia' && (
         <Barras
           buckets={dadosDia}
-          rotulo={(b) => formatAgendamentoDia(b.chave)}
+          rotulo={(b) => formatAgendamentoDia(b.chave, undefined, tz)}
           aria="Faturamento por dia"
         />
       )}

@@ -30,6 +30,7 @@ import {
   IconX,
 } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Overlay } from '@/components/ui/overlay';
@@ -91,6 +92,7 @@ export function AgendaDetailSheet({
   onClose: () => void;
 }) {
   const titleId = useId();
+  const tz = useTenantTz();
   const toast = useToast();
   const queryClient = useQueryClient();
   const { atendFromAgenda } = useTenant();
@@ -251,8 +253,8 @@ export function AgendaDetailSheet({
 
   if (!open || !agendamento || !parsed) return null;
 
-  const hora = formatAgendamentoHora(agendamento.inicio);
-  const dia = formatAgendamentoDia(agendamento.inicio);
+  const hora = formatAgendamentoHora(agendamento.inicio, tz);
+  const dia = formatAgendamentoDia(agendamento.inicio, undefined, tz);
   const telefone = parsed.telefone ? formatPhoneDisplay(parsed.telefone) : null;
 
   return (

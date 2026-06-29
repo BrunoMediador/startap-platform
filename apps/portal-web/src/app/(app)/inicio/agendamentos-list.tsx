@@ -18,6 +18,7 @@ import { AgendaDetailSheet } from '@/components/agenda/agenda-detail-sheet';
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
 import { IconCalendar, IconChevronRight, IconTrash } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
 import { inicialDoTitulo, parseTitulo } from '@/lib/agenda-titulo';
@@ -213,8 +214,9 @@ function AgendamentoRow({
   onAbrir: () => void;
   onExcluir: () => void;
 }) {
-  const hora = formatAgendamentoHora(ag.inicio);
-  const dia = formatAgendamentoDia(ag.inicio);
+  const tz = useTenantTz();
+  const hora = formatAgendamentoHora(ag.inicio, tz);
+  const dia = formatAgendamentoDia(ag.inicio, undefined, tz);
   return (
     <div
       className={cn(

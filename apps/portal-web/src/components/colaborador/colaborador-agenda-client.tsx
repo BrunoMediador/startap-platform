@@ -11,7 +11,9 @@
  * agenda-não-conectada ficam na página).
  */
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
+import { useColaborador } from '@/components/colaborador/colaborador-session-context';
 import { PeriodSelector } from '@/components/relatorios/period-selector';
+import { TenantTzValueProvider, useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
 import type { Agendamento, ColaboradorAgendaResponse } from '@/lib/api-types';
 import type { Periodo } from '@/lib/billing-periodo';
@@ -32,6 +34,9 @@ export function ColaboradorAgendaClient({
   periodo: Periodo;
   onPeriodoChange: (p: Periodo) => void;
 }) {
+  // Fuso do clone vem da SESSÃO do colaborador (/auth/colaborador/me): ele não tem acesso a
+  // /portal/status. Default São Paulo se ausente (TenantTzValueProvider).
+  const { timezone } = useColaborador();
   const presets = useMemo(() => agendaPeriodoPresets(), []);
   const limites = useMemo(() => agendaPeriodoLimites(periodo), [periodo]);
   const filtradas = useMemo(
@@ -40,37 +45,40 @@ export function ColaboradorAgendaClient({
   );
 
   return (
-    <div>
-      <PeriodSelector
-        value={periodo}
-        onChange={onPeriodoChange}
-        presets={presets}
-        limites={limites}
-      />
+    <TenantTzValueProvider timeZone={timezone}>
+      <div>
+        <PeriodSelector
+          value={periodo}
+          onChange={onPeriodoChange}
+          presets={presets}
+          limites={limites}
+        />
 
-      {filtradas.length === 0 ? (
-        <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
-          <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
-          <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
-            Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você aparecem
-            aqui.
-          </p>
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-card-sm border border-line bg-surface">
-          {filtradas.map((ag) => (
-            <AgendaRow key={ag.id} ag={ag} />
-          ))}
-        </div>
-      )}
-    </div>
+        {filtradas.length === 0 ? (
+          <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
+            <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
+            <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
+              Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você
+              aparecem aqui.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-card-sm border border-line bg-surface">
+            {filtradas.map((ag) => (
+              <AgendaRow key={ag.id} ag={ag} />
+            ))}
+          </div>
+        )}
+      </div>
+    </TenantTzValueProvider>
   );
 }
 
 /** Linha de consulta (não clicável) — nome + serviço + dia/hora. */
 function AgendaRow({ ag }: { ag: Agendamento }) {
-  const hora = formatAgendamentoHora(ag.inicio);
-  const dia = formatAgendamentoDia(ag.inicio);
+  const tz = useTenantTz();
+  const hora = formatAgendamentoHora(ag.inicio, tz);
+  const dia = formatAgendamentoDia(ag.inicio, undefined, tz);
   return (
     <div className="group flex min-h-14 items-center gap-3.5 border-b border-line-soft px-[15px] py-[13px] last:border-b-0">
       <span className="flex size-[38px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-brand-soft font-display text-[13px] font-bold text-brand">

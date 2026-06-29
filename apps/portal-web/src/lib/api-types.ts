@@ -108,6 +108,12 @@ export interface ColaboradorMe {
   display_name: string;
   colaborador_id: number;
   slot: string;
+  /**
+   * Fuso IANA do clone (ex.: "America/Sao_Paulo", "America/Cuiaba"). FONTE DE VERDADE do tz do
+   * colaborador: o /auth/colaborador/me hidrata a sessão e o painel READ-ONLY exibe a agenda
+   * neste fuso. Opcional: undefined enquanto a portal-api não devolve -> default São Paulo.
+   */
+  timezone?: string;
 }
 
 /**
@@ -303,6 +309,13 @@ export interface StatusResponse {
   waha: { session: string | null; status: string };
   pausas_ativas: number;
   billing: StatusBilling | null;
+  /**
+   * Fuso IANA do clone (ex.: "America/Sao_Paulo", "America/Cuiaba"). Usado pra exibir
+   * datas/horas da agenda no fuso da barbearia. Backend grava em flow_clones.timezone
+   * (default São Paulo). Opcional: vem undefined enquanto a portal-api não foi atualizada —
+   * o front cai no default São Paulo (ver TenantTzProvider).
+   */
+  timezone?: string;
 }
 
 // ── Agendamentos ─────────────────────────────────────────────────────────────

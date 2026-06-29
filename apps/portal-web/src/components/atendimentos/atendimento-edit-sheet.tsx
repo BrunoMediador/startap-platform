@@ -19,6 +19,7 @@
  * paralelo; até live, a UI degrada com toast amigável sem travar.
  */
 import { IconClock, IconTrash, IconUser, IconX } from '@/components/icons';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -72,6 +73,7 @@ export function AtendimentoEditSheet({
   onFlagOff: () => void;
 }) {
   const titleId = useId();
+  const tz = useTenantTz();
   const toast = useToast();
   const editar = useEditarAtendimento(slot, balde, de, ate);
   const remover = useRemoverAtendimento(slot, balde, de, ate);
@@ -165,8 +167,8 @@ export function AtendimentoEditSheet({
   const podeSalvar = resAtual.ok && !patchVazio(resAtual.patch);
 
   const badge = rowBadge(row);
-  const dia = formatAgendamentoDia(row.inicio_at ?? row.data);
-  const hora = formatAgendamentoHora(row.inicio_at);
+  const dia = formatAgendamentoDia(row.inicio_at ?? row.data, undefined, tz);
+  const hora = formatAgendamentoHora(row.inicio_at, tz);
 
   return (
     <>
