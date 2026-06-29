@@ -80,6 +80,11 @@ export interface CloneScope {
   seat_cap: number | null;
   /** tenant_id do clone (carimbado na criação de colaborador). NULL = dado inconsistente. */
   tenant_id: string | null;
+  /**
+   * Fuso (IANA) do relógio da barbearia (migration 068). DEFAULT 'America/Sao_Paulo'
+   * — clone que não declarou outro fuso é byte-idêntico ao comportamento de hoje.
+   */
+  timezone: string;
 }
 
 const SELECT_COLAB_COLS =
@@ -186,15 +191,25 @@ export async function getScopeBySlot(slot: string): Promise<CloneScope> {
       product_type: string | null;
       seat_cap: number | null;
       tenant_id: string | null;
-    }>('SELECT product_type, seat_cap, tenant_id FROM flow_clones WHERE slot = $1 LIMIT 1', [slot]);
+      timezone: string | null;
+    }>(
+      'SELECT product_type, seat_cap, tenant_id, timezone FROM flow_clones WHERE slot = $1 LIMIT 1',
+      [slot],
+    );
     const row = r.rows[0];
     return {
       product_type: row?.product_type === 'estabelecimento' ? 'estabelecimento' : 'individual',
       seat_cap: row?.seat_cap == null ? null : Number(row.seat_cap),
       tenant_id: row?.tenant_id ?? null,
+      timezone: row?.timezone ?? 'America/Sao_Paulo',
     };
   } catch {
-    return { product_type: 'individual', seat_cap: null, tenant_id: null };
+    return {
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: null,
+      timezone: 'America/Sao_Paulo',
+    };
   }
 }
 

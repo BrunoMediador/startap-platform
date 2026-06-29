@@ -73,6 +73,13 @@ export interface CloneRow {
   horarios_funcionamento: HorariosFuncionamento | null;
   servicos: ServicoConfig[] | null;
   /**
+   * Fuso (IANA) do relógio da barbearia (migration 068). DEFAULT 'America/Sao_Paulo'
+   * carimba todo clone existente — todo clone que não declarou outro fuso permanece
+   * byte-idêntico ao comportamento de hoje. Ex.: 'America/Cuiaba' (Seven 7, Mato Grosso).
+   * normalizeCloneRow garante 'America/Sao_Paulo' quando a coluna não vem no SELECT.
+   */
+  timezone: string;
+  /**
    * Vencimento do billing do slot (LEFT JOIN client_billing). null se nao ha linha
    * de billing. Usado SO pelo gate de silencio por cobranca (ADR 0016) — derivado
    * puro, nunca escrito por este caminho. 'YYYY-MM-DD'.
@@ -336,7 +343,7 @@ export async function listClones(): Promise<CloneSummary[]> {
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
-            fc.horarios_funcionamento, fc.servicos,
+            fc.horarios_funcionamento, fc.servicos, fc.timezone,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
      FROM flow_clones fc
@@ -355,7 +362,7 @@ export async function getClone(id: number): Promise<CloneSummary | null> {
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome,
             fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
-            fc.horarios_funcionamento, fc.servicos,
+            fc.horarios_funcionamento, fc.servicos, fc.timezone,
             fc.created_at, fc.updated_at,
             bc.display_name AS matriz_display_name
      FROM flow_clones fc
@@ -575,7 +582,7 @@ export async function getCloneBySession(sessao: string): Promise<CloneRow | null
     `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
             personalizacao, waha_sessao, waha_shard_id, status,
             flow_enabled, suspended_reason, suspended_at,
-            horarios_funcionamento, servicos,
+            horarios_funcionamento, servicos, timezone,
             created_at, updated_at
      FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
     [sessao],
@@ -600,7 +607,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
     `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome, fc.cliente_telefone,
             fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_kind, fc.suspended_at,
-            fc.horarios_funcionamento, fc.servicos,
+            fc.horarios_funcionamento, fc.servicos, fc.timezone,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
             cb.amount_cents AS billing_amount_cents,
             fc.created_at, fc.updated_at
@@ -1093,6 +1100,11 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
       ((row as unknown as { suspended_at?: unknown }).suspended_at as Date | null) ?? null,
     horarios_funcionamento: parseJsonbOrNull<HorariosFuncionamento>(row.horarios_funcionamento),
     servicos: parseJsonbOrNull<ServicoConfig[]>(row.servicos),
+    // timezone (migration 068): só vem de SELECTs que pedem a coluna. Rows de outras
+    // origens (RETURNING * legado) ou antes da migration em dev -> 'America/Sao_Paulo'
+    // (default chumbado = byte-idêntico ao comportamento de hoje).
+    timezone:
+      ((row as unknown as { timezone?: unknown }).timezone as string | null) ?? 'America/Sao_Paulo',
     // Campos do LEFT JOIN client_billing (so vem de getCloneBySlot). Rows de outras
     // origens (getCloneBySession, RETURNING *) nao tem -> null. pg ja devolve
     // amount_cents como number; o ?? null cobre o caso da coluna ausente.

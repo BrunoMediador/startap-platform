@@ -232,6 +232,69 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
     expect(params[12]).toBe('2026-06-23');
   });
 
+  // FUSO POR CLONE (migration 068) — Mato Grosso (America/Cuiaba, UTC-4). O MESMO instante
+  // (01:00Z) que em SP (UTC-3) é 22:00 do dia anterior, em Cuiabá é 21:00 do dia anterior.
+  // Provamos que o `timezone` informado projeta o dia NO RELÓGIO DO CLONE: o booking noturno
+  // de Cuiabá NÃO vaza pro dia seguinte. SP segue byte-idêntico ao de hoje (default).
+  it('data derivada em Cuiabá (UTC-4): 01:00Z → data = dia anterior no relógio do clone', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 11, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_barbearia_seven_7_barber_dqjzb4',
+      tenantId: 'tid-seven',
+      gcalEventId: 'evt-cuiaba-noturno',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: 'pix',
+      // 01:00Z = 21:00 do dia 30/06 em Cuiabá (−04). Em SP (−03) seria 22:00 do dia 30/06.
+      inicioAt: '2026-07-01T01:00:00.000Z',
+      fimAt: '2026-07-01T01:30:00.000Z',
+      timezone: 'America/Cuiaba',
+    });
+    const [, params] = lastCall();
+    // Cuiabá: data = 30/06 (NÃO 01/07). Em SP daria 30/06 também aqui — mas a borda Cuiabá
+    // pega 1h antes; ver o teste de borda abaixo onde SP e Cuiabá DIVERGEM no dia.
+    expect(params[12]).toBe('2026-06-30');
+    // O instante absoluto (inicio_at) segue em UTC, intacto.
+    expect(params[10]).toBe('2026-07-01T01:00:00.000Z');
+  });
+
+  it('data em Cuiabá DIVERGE de SP na borda: 03:00Z → 30/06 (Cuiabá) vs 01/07 (SP)', async () => {
+    // 03:00Z = 23:00 do dia 30/06 em Cuiabá (−04) → data 30/06.
+    //        = 00:00 do dia 01/07 em SP       (−03) → data 01/07.
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 12, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_barbearia_seven_7_barber_dqjzb4',
+      tenantId: 'tid-seven',
+      gcalEventId: 'evt-cuiaba-borda',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: 'pix',
+      inicioAt: '2026-07-01T03:00:00.000Z',
+      fimAt: '2026-07-01T03:30:00.000Z',
+      timezone: 'America/Cuiaba',
+    });
+    const [, paramsCuiaba] = lastCall();
+    expect(paramsCuiaba[12]).toBe('2026-06-30');
+
+    // MESMO instante, default SP (sem timezone) → 01/07 (byte-idêntico ao de hoje).
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 13, dirty_fields: [] }], rowCount: 1 });
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_cirilo',
+      tenantId: 'tid-1',
+      gcalEventId: 'evt-sp-borda',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      colaboradorId: 1,
+      formaPagamento: 'pix',
+      inicioAt: '2026-07-01T03:00:00.000Z',
+      fimAt: '2026-07-01T03:30:00.000Z',
+    });
+    const [, paramsSp] = lastCall();
+    expect(paramsSp[12]).toBe('2026-07-01');
+  });
+
   // REMARCAÇÃO sem info de pagamento (sync) NÃO pode reverter a marca de pacote -> $14 FALSE
   // faz o UPDATE preservar forma_pagamento/valor/desconto antigos (senão a receita dobrava).
   it('REMARCAR (formaPagamento undefined): UPDATE preserva forma/valor antigos ($14=false)', async () => {

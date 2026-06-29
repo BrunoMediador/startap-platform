@@ -584,6 +584,12 @@ export interface AtendimentoEventInput {
   /** Fim do evento (Date ou ISO). Define fim_at (split previsão×faturado é por fim_at). */
   fimAt?: Date | string | null;
   /**
+   * Fuso (IANA) do clone (migration 068) — usado SÓ pra derivar `data` (dia-de-parede) de
+   * inicio_at. Ausente/undefined -> 'America/Sao_Paulo' (byte-idêntico ao de hoje). Clone em
+   * outro fuso (ex.: 'America/Cuiaba') evita que booking noturno vaze pro dia seguinte.
+   */
+  timezone?: string;
+  /**
    * REPRECIFICAR ao TROCAR O SERVIÇO (ADR 0027 — bug do valor preso). Quando true, o UPDATE do
    * ON CONFLICT força valor_cents/desconto_cents pro preço do catálogo do NOVO serviço (EXCLUDED,
    * desconto 0) — MAS só se a coluna NÃO estiver pinada em dirty_fields (edição manual da /billing
@@ -627,18 +633,22 @@ function toIso(d: Date | string | null | undefined): string | null {
  * BUG de dinheiro: o slice(0,10) do ISO devolvia o dia em UTC. Um agendamento às 22:00 BRT
  * (= 01:00Z do dia seguinte) caía em `data` do dia seguinte → faturamento/comissão/lista
  * (que filtram por `data`) não mostravam o atendimento noturno em "Hoje" e ele vazava pro
- * mês seguinte. Aqui derivamos o dia DE PAREDE no TZ canônico (en-CA já produz YYYY-MM-DD),
+ * mês seguinte. Aqui derivamos o dia DE PAREDE no TZ do CLONE (en-CA já produz YYYY-MM-DD),
  * batendo com o LABEL exibido (format.ts) e com o relógio do dono. NÃO afeta inicio_at/fim_at
  * (TIMESTAMPTZ — instante absoluto, corretos).
+ *
+ * `timeZone` default = 'America/Sao_Paulo' (migration 068): clone sem fuso declarado é
+ * byte-idêntico ao de hoje. Clones em outro fuso (ex.: 'America/Cuiaba', UTC-4) derivam o dia
+ * no relógio deles — um booking noturno NÃO vaza pro dia seguinte.
  */
 const TZ_SAO_PAULO = 'America/Sao_Paulo';
 
-function isoToDateOnly(iso: string | null): string | null {
+function isoToDateOnly(iso: string | null, timeZone: string = TZ_SAO_PAULO): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  // en-CA formata como YYYY-MM-DD; timeZone projeta o instante no calendário de SP.
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ_SAO_PAULO }).format(d);
+  // en-CA formata como YYYY-MM-DD; timeZone projeta o instante no calendário do clone.
+  return new Intl.DateTimeFormat('en-CA', { timeZone }).format(d);
 }
 
 /**
@@ -736,7 +746,7 @@ export async function upsertAtendimentoFromEvent(
 
   const inicioIso = toIso(input.inicioAt);
   const fimIso = toIso(input.fimAt);
-  const dataDay = isoToDateOnly(inicioIso);
+  const dataDay = isoToDateOnly(inicioIso, input.timezone ?? TZ_SAO_PAULO);
 
   // INSERT ... ON CONFLICT (slot, gcal_event_id) WHERE ... DO UPDATE. O coalesce com
   // dirty_fields é a chave do sticky: para cada coluna derivável, só atualiza se a coluna
