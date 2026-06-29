@@ -25,6 +25,12 @@ export interface ScheduleConfig {
   services: Array<{ name: string; min: number }>;
   /** Origem da config — útil para log/debug. */
   source: 'flow_clones' | 'bot_config';
+  /**
+   * Fuso (IANA) do relógio da barbearia (migration 068). DEFAULT 'America/Sao_Paulo'
+   * — clone sem fuso declarado é byte-idêntico ao comportamento de hoje. Usado pra
+   * converter horário-de-parede <-> instante absoluto e formatar a agenda no relógio do dono.
+   */
+  timezone: string;
 }
 
 // ---- Seed (referência para popular banco em setup inicial — NÃO usar em runtime) ---
@@ -158,12 +164,13 @@ export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> 
       const work = horariosToWork(clone.horarios_funcionamento);
       const services = servicosToServices(clone.servicos);
       if (work && services && services.length > 0) {
-        return { work, services, source: 'flow_clones' };
+        return { work, services, source: 'flow_clones', timezone: clone.timezone };
       }
       // Clone existe mas config incompleta — cai pra matriz (matriz_slot do clone).
+      // Fuso ainda vem do CLONE (a matriz só empresta horários/serviços, não o relógio).
       const matrizCfg = await loadFromBotConfig(clone.matriz_slot);
       if (matrizCfg) {
-        return { ...matrizCfg, source: 'bot_config' };
+        return { ...matrizCfg, source: 'bot_config', timezone: clone.timezone };
       }
       throw new Error(
         `Configuração de horários/serviços ausente para o slot '${slot}' (clone de '${clone.matriz_slot}') — configure no painel antes de ativar`,
@@ -176,9 +183,10 @@ export async function loadScheduleConfig(slot: string): Promise<ScheduleConfig> 
   }
 
   // 2) Slot pode ser uma matriz rodando direto (ex: teste_barbearia sem clone).
+  //    Sem clone => sem fuso declarado => default 'America/Sao_Paulo' (byte-idêntico ao de hoje).
   const matrizCfg = await loadFromBotConfig(slot);
   if (matrizCfg) {
-    return { ...matrizCfg, source: 'bot_config' };
+    return { ...matrizCfg, source: 'bot_config', timezone: TZ };
   }
 
   // 3) Sem config — erro explícito. Não usar defaults fictícios em runtime.
@@ -489,13 +497,15 @@ interface SpParts {
   mins: number;
 }
 
-function spParts(date: Date): SpParts {
+function spParts(date: Date, timeZone: string = TZ): SpParts {
   // hourCycle: 'h23' forca formato 00-23 (em vez de 24:00 que en-US com
   // hour12:false produzia a meia-noite). Bug descoberto 2026-05-20: bot
   // dizia "hoje sem vaga" entre 00:00-00:59 BRT porque mins virava 1456
   // (24*60+16) e o piso svcStart ficava maior que wEnd, zerando o loop.
+  // timeZone default 'America/Sao_Paulo' (byte-idêntico ao de hoje); o caller
+  // passa o fuso do clone pra projetar o instante no relógio da barbearia.
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: TZ,
+    timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -552,13 +562,16 @@ export function formatarAgendaComConfig(
 ): string {
   const daysAhead = opts.daysAhead ?? 5;
   const now = new Date();
+  // Fuso do clone (default SP em ScheduleConfig.timezone). Toda projeção de relógio
+  // (spParts) usa o relógio da barbearia — clone SP é byte-idêntico ao de hoje.
+  const tz = config.timezone;
 
   const occupied: Record<string, Array<{ s: number; e: number }>> = {};
   for (const ev of events) {
     const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
     const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
-    const sp = spParts(s);
-    const sep = spParts(e);
+    const sp = spParts(s, tz);
+    const sep = spParts(e, tz);
     const key = sp.key;
     if (!occupied[key]) occupied[key] = [];
     occupied[key].push({ s: sp.mins, e: sep.mins });
@@ -569,7 +582,7 @@ export function formatarAgendaComConfig(
   for (let offset = 0; offset <= daysAhead; offset++) {
     const date = new Date(now);
     date.setDate(date.getDate() + offset);
-    const sp = spParts(date);
+    const sp = spParts(date, tz);
     const wh = config.work[sp.wd];
     if (!wh) continue;
 
@@ -617,12 +630,17 @@ export function formatarAgendaComConfig(
 const TODAY_FLOOR_MIN = 10;
 
 export interface FreeSlotsDayOpts {
-  /** Dia alvo no formato YYYY-MM-DD (calendário de America/Sao_Paulo). */
+  /** Dia alvo no formato YYYY-MM-DD (calendário do fuso do clone). */
   dateKey: string;
   /** Duração do serviço em minutos — define o passo e o encaixe da grade. */
   durationMin: number;
   /** Relógio de referência (default: agora). Testável por injeção. */
   now?: Date;
+  /**
+   * Fuso (IANA) do clone (migration 068). Ausente -> 'America/Sao_Paulo'
+   * (byte-idêntico ao de hoje). Projeta o relógio da barbearia na grade.
+   */
+  timeZone?: string;
 }
 
 /**
@@ -641,15 +659,18 @@ export function computeFreeSlotsForDay(
 ): string[] {
   const { dateKey, durationMin } = opts;
   const now = opts.now ?? new Date();
+  // Fuso do clone (default SP). 15:00Z é meio-dia em -03 e 11h em -04 — longe da
+  // borda do dia nos dois fusos, então o anchor é seguro; só o spParts usa o tz.
+  const tz = opts.timeZone ?? TZ;
   if (!Number.isFinite(durationMin) || durationMin <= 0) return [];
 
-  // Weekday do dia alvo no TZ: meio-dia BRT (15:00Z) evita borda de fuso.
+  // Weekday do dia alvo no TZ do clone: 15:00Z evita borda de fuso (−03 e −04).
   const refDate = new Date(`${dateKey}T15:00:00Z`);
   if (Number.isNaN(refDate.getTime())) return [];
-  const ref = spParts(refDate);
+  const ref = spParts(refDate, tz);
   if (ref.key !== dateKey) return []; // dateKey inválido (ex: 2026-02-31)
 
-  const nowSp = spParts(now);
+  const nowSp = spParts(now, tz);
   if (dateKey < nowSp.key) return []; // dia já passou
 
   const wh = work[ref.wd];
@@ -660,9 +681,9 @@ export function computeFreeSlotsForDay(
   for (const ev of events) {
     const s = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`);
     const e = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`);
-    const sp = spParts(s);
+    const sp = spParts(s, tz);
     if (sp.key !== dateKey) continue;
-    occ.push({ s: sp.mins, e: spParts(e).mins });
+    occ.push({ s: sp.mins, e: spParts(e, tz).mins });
   }
 
   const [wStart, wEnd] = wh;
@@ -729,19 +750,48 @@ export function hhmmToMins(hora: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
-/** Partes de data/hora de um instante no TZ canônico (exposto pro portal). */
-export function nowPartsInTz(date: Date = new Date()): { dateKey: string; mins: number } {
-  const sp = spParts(date);
+/**
+ * Partes de data/hora de um instante no fuso informado (exposto pro portal/bot).
+ * timeZone default 'America/Sao_Paulo' (byte-idêntico ao de hoje).
+ */
+export function nowPartsInTz(
+  date: Date = new Date(),
+  timeZone: string = TZ,
+): { dateKey: string; mins: number } {
+  const sp = spParts(date, timeZone);
   return { dateKey: sp.key, mins: sp.mins };
 }
 
 /**
- * Weekday (0=Dom .. 6=Sab) de uma data 'YYYY-MM-DD' no calendário do TZ
- * canônico. Retorna null se a data for inválida (ex: 2026-02-31).
+ * Weekday (0=Dom .. 6=Sab) de uma data 'YYYY-MM-DD' no calendário do fuso
+ * informado. Retorna null se a data for inválida (ex: 2026-02-31).
+ * timeZone default 'America/Sao_Paulo'. 15:00Z (meio-dia em −03, 11h em −04) fica
+ * longe da borda do dia nos dois fusos → o weekday é o mesmo pro mesmo dateKey.
  */
-export function weekdayOfDateKey(dateKey: string): number | null {
+export function weekdayOfDateKey(dateKey: string, timeZone: string = TZ): number | null {
   const refDate = new Date(`${dateKey}T15:00:00Z`); // meio-dia BRT, longe de borda de fuso
   if (Number.isNaN(refDate.getTime())) return null;
-  const sp = spParts(refDate);
+  const sp = spParts(refDate, timeZone);
   return sp.key === dateKey ? sp.wd : null;
+}
+
+/**
+ * REANCORA o horário-de-parede que o LLM emite (com o offset ERRADO chumbado nele,
+ * tipicamente −03:00 de SP) para o instante UTC correto NO FUSO DO CLONE.
+ *
+ * O LLM recebe a agenda já formatada no relógio da barbearia (formatarAgendaComConfig
+ * usa config.timezone) e devolve algo como '2026-06-30T14:00:00-03:00'. Nós IGNORAMOS o
+ * offset textual e re-interpretamos o componente data+hora-de-parede (14:00) como hora
+ * local NO FUSO DO CLONE. Para um clone SP isso é byte-idêntico (−03 == −03). Para Cuiabá
+ * (−04) corrige a 1h de erro: 14:00 local vira 18:00Z (em vez do 17:00Z que o offset
+ * do LLM produziria).
+ *
+ * Aceita 'YYYY-MM-DDTHH:mm...' e 'YYYY-MM-DD HH:mm...'. Retorna ISO (UTC) ou null se
+ * o formato não casar (o caller cai no valor original = comportamento de hoje).
+ */
+export function reanchorWallTimeToTz(llmIso: string, timeZone: string): string | null {
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/.exec(llmIso.trim());
+  if (!m) return null;
+  const mins = Number(m[2]) * 60 + Number(m[3]);
+  return zonedWallTimeToUtc(m[1], mins, timeZone).toISOString();
 }

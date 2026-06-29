@@ -261,6 +261,9 @@ export async function buildEstabelecimentoContext(
     calendarIds,
     timeMin: opts.timeMin,
     timeMax: opts.timeMax,
+    // Fuso do clone (default SP via ScheduleConfig.timezone). buildHorariosBlock ->
+    // formatarAgendaComConfig já herda config.timezone; aqui alinhamos o freeBusy.
+    timeZone: config.timezone,
   });
 
   return {
