@@ -391,12 +391,17 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: 'recurso indisponivel' });
     }
     const c = requireColaborador(req);
+    // Fuso (IANA) do clone DO PRÓPRIO colaborador (migration 068) — escopado SEMPRE ao slot
+    // da SESSÃO (c.slot), nunca de input/outro tenant. Default 'America/Sao_Paulo'. O painel
+    // do colaborador (estab Cuiabá) usa pra renderizar agenda/comissão no relógio da barbearia.
+    const scope = await cloneColaboradores.getScopeBySlot(c.slot);
     return reply.code(200).send({
       role: 'colaborador',
       username: c.username,
       display_name: c.nome,
       colaborador_id: c.colaboradorId,
       slot: c.slot,
+      timezone: scope.timezone,
     });
   });
 };

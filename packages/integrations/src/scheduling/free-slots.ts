@@ -793,5 +793,13 @@ export function reanchorWallTimeToTz(llmIso: string, timeZone: string): string |
   const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/.exec(llmIso.trim());
   if (!m) return null;
   const mins = Number(m[2]) * 60 + Number(m[3]);
-  return zonedWallTimeToUtc(m[1], mins, timeZone).toISOString();
+  // FALHA FECHADA E ISOLADA A 1 CLONE: um IANA inválido na coluna timezone (ex.: 'America/Cuiba'
+  // por erro de digitação num UPDATE manual) faz Intl lançar RangeError dentro de zonedWallTimeToUtc.
+  // Capturamos e devolvemos null -> o caller cai no valor original (= comportamento de hoje) em vez
+  // de derrubar o agendamento daquele clone.
+  try {
+    return zonedWallTimeToUtc(m[1], mins, timeZone).toISOString();
+  } catch {
+    return null;
+  }
 }

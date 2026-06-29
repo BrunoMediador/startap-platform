@@ -325,6 +325,19 @@ describe('fuso por clone — zonedWallTimeToUtc / reanchorWallTimeToTz / weekday
     expect(reanchorWallTimeToTz('amanhã às 14h', 'America/Cuiaba')).toBeNull();
   });
 
+  it('reanchorWallTimeToTz: IANA inválido → null SEM lançar (falha fechada, isolada a 1 clone)', () => {
+    // 'America/Cuiba' (digitação errada) faria Intl lançar RangeError — capturado → null.
+    expect(() => reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiba')).not.toThrow();
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiba')).toBeNull();
+    // Fusos VÁLIDOS seguem funcionando normalmente.
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Sao_Paulo')).toBe(
+      '2026-06-30T17:00:00.000Z',
+    );
+    expect(reanchorWallTimeToTz('2026-06-30T14:00:00-03:00', 'America/Cuiaba')).toBe(
+      '2026-06-30T18:00:00.000Z',
+    );
+  });
+
   it('weekdayOfDateKey: mesmo dateKey → mesmo weekday em SP e Cuiabá', () => {
     expect(weekdayOfDateKey('2026-06-13', 'America/Cuiaba')).toBe(6);
     expect(weekdayOfDateKey('2026-06-13', 'America/Sao_Paulo')).toBe(6);
