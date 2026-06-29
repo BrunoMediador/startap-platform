@@ -11,6 +11,7 @@
  * agenda-não-conectada ficam na página).
  */
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
+import { useColaborador } from '@/components/colaborador/colaborador-session-context';
 import { PeriodSelector } from '@/components/relatorios/period-selector';
 import { TenantTzValueProvider, useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
@@ -33,6 +34,9 @@ export function ColaboradorAgendaClient({
   periodo: Periodo;
   onPeriodoChange: (p: Periodo) => void;
 }) {
+  // Fuso do clone vem da SESSÃO do colaborador (/auth/colaborador/me): ele não tem acesso a
+  // /portal/status. Default São Paulo se ausente (TenantTzValueProvider).
+  const { timezone } = useColaborador();
   const presets = useMemo(() => agendaPeriodoPresets(), []);
   const limites = useMemo(() => agendaPeriodoLimites(periodo), [periodo]);
   const filtradas = useMemo(
@@ -41,9 +45,7 @@ export function ColaboradorAgendaClient({
   );
 
   return (
-    // Fuso do clone (vem na resposta da agenda — portal-colaborador.ts): o colaborador tem
-    // sessão própria, sem /portal/status. Default São Paulo se ausente (TenantTzValueProvider).
-    <TenantTzValueProvider timeZone={data.timezone}>
+    <TenantTzValueProvider timeZone={timezone}>
       <div>
         <PeriodSelector
           value={periodo}

@@ -14,6 +14,8 @@ interface ColaboradorCtx {
   colaboradorId: number;
   displayName: string;
   username: string;
+  /** Fuso IANA do clone (do /auth/colaborador/me). null = ausente -> display cai no default SP. */
+  timezone: string | null;
 }
 
 const Ctx = createContext<ColaboradorCtx | null>(null);
@@ -23,10 +25,13 @@ export function ColaboradorSessionProvider({
   colaboradorId,
   displayName,
   username,
+  timezone,
   children,
 }: ColaboradorCtx & { children: React.ReactNode }) {
   return (
-    <Ctx.Provider value={{ slot, colaboradorId, displayName, username }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ slot, colaboradorId, displayName, username, timezone }}>
+      {children}
+    </Ctx.Provider>
   );
 }
 

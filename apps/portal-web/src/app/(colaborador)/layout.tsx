@@ -23,6 +23,7 @@ export default async function ColaboradorLayout({ children }: { children: React.
       colaboradorId={colaborador.colaborador_id}
       displayName={colaborador.display_name}
       username={colaborador.username}
+      timezone={colaborador.timezone ?? null}
     >
       <ParticleField variant="appbg" />
       <div className="app-vignette pointer-events-none fixed inset-0 z-[-1]" aria-hidden />
