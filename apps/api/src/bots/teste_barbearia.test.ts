@@ -110,6 +110,8 @@ vi.mock('@startap/integrations/scheduling', async () => {
     // validação serviço×profissional (Bug 2) usa a lógica REAL — queremos exercitá-la.
     colaboradorFazServico: real.colaboradorFazServico,
     servicosDoColaborador: real.servicosDoColaborador,
+    // reancoragem de fuso (migration 068) usa a lógica REAL — clone SP = no-op (byte-idêntico).
+    reanchorWallTimeToTz: real.reanchorWallTimeToTz,
   };
 });
 
@@ -126,7 +128,11 @@ function makeCtx(texto: string): BotContext {
 function setupSchedule() {
   const calClient = { listEvents: vi.fn().mockResolvedValue([]) };
   mocks.getGcalForSlot.mockResolvedValue(calClient);
-  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.loadScheduleConfig.mockResolvedValue({
+    source: 'flow_clones',
+    services: [],
+    timezone: 'America/Sao_Paulo',
+  });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
@@ -286,6 +292,7 @@ function setupEstabelecimento(
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
     services: opts?.services ?? [],
+    timezone: 'America/Sao_Paulo',
   });
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
@@ -798,7 +805,11 @@ function setupScheduleComCreate(eventId = 'evt-novo') {
     createEvent: vi.fn().mockResolvedValue({ id: eventId, summary: 'Fulano - Corte' }),
   };
   mocks.getGcalForSlot.mockResolvedValue(calClient);
-  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.loadScheduleConfig.mockResolvedValue({
+    source: 'flow_clones',
+    services: [],
+    timezone: 'America/Sao_Paulo',
+  });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
@@ -1037,8 +1048,10 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
         servicoNome: 'Corte',
         clienteNome: 'Fulano',
         colaboradorId: null,
-        inicioAt: '2026-06-16T13:00:00-03:00',
-        fimAt: '2026-06-16T13:30:00-03:00',
+        // Reancorado no fuso do clone (SP): 13:00−03:00 == 16:00Z — MESMO instante, forma ISO
+        // normalizada (prova de igualdade do clone SP; migration 068).
+        inicioAt: '2026-06-16T16:00:00.000Z',
+        fimAt: '2026-06-16T16:30:00.000Z',
       }),
     );
     // BUG 2: sem dedução de pacote -> forma null (previsão conta a receita 1×).
@@ -1311,7 +1324,11 @@ function setupScheduleComPatch(existingEvents: unknown[]) {
       ),
   };
   mocks.getGcalForSlot.mockResolvedValue(calClient);
-  mocks.loadScheduleConfig.mockResolvedValue({ source: 'flow_clones', services: [] });
+  mocks.loadScheduleConfig.mockResolvedValue({
+    source: 'flow_clones',
+    services: [],
+    timezone: 'America/Sao_Paulo',
+  });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
   mocks.renderPrompt.mockResolvedValue('PERSONA');
   mocks.buildContextBlock.mockResolvedValue('CONTEXT');
@@ -1383,8 +1400,9 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (individual)', () =>
     expect(calClient.patchEvent).toHaveBeenCalledWith(
       'evt-existente',
       expect.objectContaining({
-        startISO: '2026-06-20T16:00:00-03:00',
-        endISO: '2026-06-20T16:30:00-03:00',
+        // Nova janela reancorada no fuso do clone (SP): 16:00−03:00 == 19:00Z (MESMO instante).
+        startISO: '2026-06-20T19:00:00.000Z',
+        endISO: '2026-06-20T19:30:00.000Z',
       }),
     );
     expect(calClient.createEvent).not.toHaveBeenCalled();
@@ -1411,8 +1429,9 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (individual)', () =>
       tenantId: 't-uuid',
       gcalEventId: 'evt-existente',
       colaboradorId: null,
-      inicioAt: '2026-06-20T16:00:00-03:00',
-      fimAt: '2026-06-20T16:30:00-03:00',
+      // Janela reancorada no fuso do clone (SP): 16:00−03:00 == 19:00Z (MESMO instante).
+      inicioAt: '2026-06-20T19:00:00.000Z',
+      fimAt: '2026-06-20T19:30:00.000Z',
     });
     // formaPagamento NÃO é passado -> o UPDATE preserva a marca 'pacote' (não dobra a receita).
     expect(arg).not.toHaveProperty('formaPagamento');
@@ -1541,7 +1560,8 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       tenantId: 't-estab',
       gcalEventId: 'evt-est-maria',
       colaboradorId: 11,
-      inicioAt: '2026-06-20T17:00:00-03:00',
+      // Reancorado no fuso do clone (SP): 17:00−03:00 == 20:00Z (MESMO instante).
+      inicioAt: '2026-06-20T20:00:00.000Z',
     });
   });
 });
