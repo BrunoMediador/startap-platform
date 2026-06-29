@@ -131,6 +131,12 @@ export interface ReminderRenderVars {
   negocio: string;
   /** Override de template (do clone). Vazio/null -> usa o DEFAULT_REMINDER_TEMPLATE. */
   template?: string | null;
+  /**
+   * Fuso (IANA) do clone (migration 068) — relógio em que {horario} é renderizado. Ausente ->
+   * 'America/Sao_Paulo' (REMINDER_TZ; byte-idêntico ao de hoje). NÃO afeta a janela de disparo
+   * (essa é fuso-agnóstica — opera sobre minutos até o instante absoluto).
+   */
+  timeZone?: string;
 }
 
 /**
@@ -155,7 +161,7 @@ export function renderReminderTemplate(vars: ReminderRenderVars): string {
   const replaced = tpl
     .replace(/\{cliente_nome\}/g, clienteNome ? `, ${clienteNome}` : '')
     .replace(/\{servico_nome\}/g, servicoNome ? `de ${servicoNome} ` : '')
-    .replace(/\{horario\}/g, formatHorarioBRT(vars.inicioAt))
+    .replace(/\{horario\}/g, formatHorarioBRT(vars.inicioAt, vars.timeZone))
     .replace(/\{profissional\}/g, profissionalNome ? ` com ${profissionalNome}` : '')
     .replace(/\{negocio\}/g, vars.negocio);
 

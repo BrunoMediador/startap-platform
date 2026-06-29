@@ -102,6 +102,8 @@ async function sendReminder(row: DueReminderRow, chatId: string): Promise<void> 
     profissionalNome: row.profissional_nome,
     negocio: row.display_name,
     template: row.reminder_template,
+    // Fuso do clone (default SP) — {horario} no relógio da barbearia (idêntico p/ SP).
+    timeZone: row.timezone,
   });
 
   await Promise.race([
