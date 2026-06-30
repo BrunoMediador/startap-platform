@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   getScopeBySlot: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
+  withActionLock: vi.fn(),
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
@@ -84,7 +85,7 @@ vi.mock('../lib/package-context.js', () => ({
 }));
 vi.mock('../lib/action-lock.js', () => ({
   gcalActionLockKey: () => 'k',
-  withActionLock: vi.fn(),
+  withActionLock: mocks.withActionLock,
 }));
 vi.mock('../lib/render-prompt.js', () => ({ renderPrompt: mocks.renderPrompt }));
 vi.mock('@startap/integrations', () => ({
@@ -1279,6 +1280,171 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
     expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
     expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
       expect.objectContaining({ colaboradorId: 10, formaPagamento: 'pacote' }),
+    );
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Billing-da-agenda sob ACTION-LOCK + fuso por clone (regressão do fix #407/#408)
+// ════════════════════════════════════════════════════════════════════════════════
+//
+// BUG (verificação adversarial 30/06): com IDEMPOTENCY_ACTION_LOCK=true (caminho VIVO em
+// prod), o ramo action-lock do inserir_agendamento passava o start/end CRU (hora-de-parede
+// do LLM com offset −03 chumbado) pro gancho de atendimento, em vez do startISO/endISO
+// REANCORADO no fuso do clone (que o createEvent e o ramo sem-lock já usavam). Resultado:
+// o EVENTO no GCal caía na hora certa, mas o /billing gravava 1h ADIANTADO em clones
+// não-SP (Seven 7 / America/Cuiaba −04). Clone SP (−03) = byte-idêntico (no-op).
+//
+// Garantias verificadas aqui (com a flag LIGADA, como em prod):
+//  - não-SP (Cuiabá): upsert recebe o INSTANTE REANCORADO (22:00 local = 02:00Z), não o cru;
+//  - SP: regressão — reancorar é no-op, mesmo instante do ramo sem-lock (nada muda p/ pagantes);
+//  - vale pro individual E pro estabelecimento (os 2 ramos action-lock foram corrigidos).
+
+describe('TesteBarbeariaBot — atendimento sob action-lock + fuso por clone (fix #407/#408)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    mocks.getCloneBySlot.mockResolvedValue({ slot: 'teste_barbearia', tenant_id: 't-uuid' });
+    mocks.servicoFromSummary.mockImplementation((s: string) => {
+      const sem = s.split('|')[0] ?? s;
+      const i = sem.indexOf(' - ');
+      return i < 0 ? '' : sem.slice(i + 3).trim();
+    });
+    mocks.clienteFromSummary.mockImplementation((s: string) => {
+      const sem = s.split('|')[0] ?? s;
+      const i = sem.indexOf(' - ');
+      return i < 0 ? '' : sem.slice(0, i).trim();
+    });
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'individual',
+      seat_cap: null,
+      tenant_id: 't-uuid',
+    });
+    mocks.upsertAtendimentoFromEvent.mockResolvedValue({ id: 777 });
+    // action-lock VIVO (flag ON em prod): adquire o lock, EXECUTA o createEvent e devolve o
+    // evento — espelha o caminho real de quem ganha o lock (executed=true).
+    mocks.withActionLock.mockImplementation(async (_key: string, fn: () => Promise<unknown>) => ({
+      executed: true,
+      value: await fn(),
+      degraded: false,
+    }));
+  });
+
+  it('action-lock ON (individual, Cuiabá −04): grava inicio_at REANCORADO (22:00 local = 02:00Z), não o cru (01:00Z)', async () => {
+    cfg.IDEMPOTENCY_ACTION_LOCK = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
+    const calClient = setupScheduleComCreate('evt-cba');
+    // fuso do clone = America/Cuiaba (−04). O reanchorWallTimeToTz REAL reinterpreta a
+    // hora-de-parede 22:00 nesse fuso → 02:00Z (em vez do 01:00Z que o offset −03 do LLM dá).
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      services: [],
+      timezone: 'America/Cuiaba',
+    });
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-30T22:00:00-03:00',
+      end: '2026-06-30T23:00:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-cba' });
+    // o evento foi criado SOB o action-lock (caminho VIVO em prod)
+    expect(mocks.withActionLock).toHaveBeenCalledTimes(1);
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    // PROVA DO FIX: instante REANCORADO no fuso do clone. O cru (offset −03 do LLM) seria
+    // '2026-07-01T01:00:00.000Z' = 1h adiantado (o bug). Reancorado em −04 = 02:00Z.
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gcalEventId: 'evt-cba',
+        inicioAt: '2026-07-01T02:00:00.000Z',
+        fimAt: '2026-07-01T03:00:00.000Z',
+      }),
+    );
+  });
+
+  it('action-lock ON (individual, São Paulo −03): regressão — inicio_at inalterado (reancorar é no-op, 16:00Z)', async () => {
+    cfg.IDEMPOTENCY_ACTION_LOCK = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'teste_barbearia';
+    // timezone default = America/Sao_Paulo (do setupScheduleComCreate)
+    const calClient = setupScheduleComCreate('evt-sp');
+    const inserir = await inserirToolFor();
+    const res = await inserir.run({
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-06-16T13:00:00-03:00',
+      end: '2026-06-16T13:30:00-03:00',
+    });
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-sp' });
+    expect(mocks.withActionLock).toHaveBeenCalledTimes(1);
+    expect(calClient.createEvent).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    // SP: −03 == −03 → reancorar é no-op. MESMO instante do ramo sem-lock (16:00Z): Cirilo/
+    // Samuel byte-a-byte (o fix NÃO muda nada pra clones de São Paulo).
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gcalEventId: 'evt-sp',
+        inicioAt: '2026-06-16T16:00:00.000Z',
+        fimAt: '2026-06-16T16:30:00.000Z',
+      }),
+    );
+  });
+
+  it('action-lock ON (estabelecimento, Cuiabá −04): grava inicio_at REANCORADO no colaborador certo', async () => {
+    cfg.IDEMPOTENCY_ACTION_LOCK = true;
+    cfg.ATEND_FROM_AGENDA_SLOTS = 'clone_estab_x';
+    mocks.getScopeBySlot.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 't-estab',
+    });
+    const cBruno = colabClientStub('cal-bruno');
+    setupEstabelecimento(
+      [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    // override do fuso do clone do estabelecimento: Cuiabá (−04)
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      services: [{ name: 'Corte', min: 30 }],
+      timezone: 'America/Cuiaba',
+    });
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero cortar'),
+    );
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{
+      name: string;
+      run: (a: unknown) => Promise<Record<string, unknown>>;
+    }>;
+    const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+      run: (a: unknown) => Promise<Record<string, unknown>>;
+    };
+    const res = await inserir.run({
+      colaborador_id: 'C1',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      servico: 'Corte',
+      start: '2026-06-30T22:00:00-03:00',
+      end: '2026-06-30T23:00:00-03:00',
+    });
+    expect(res.ok).toBe(true);
+    expect((cBruno as { createEvent: ReturnType<typeof vi.fn> }).createEvent).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(mocks.withActionLock).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledTimes(1);
+    // mesmo fix do individual, agora no ramo action-lock do estabelecimento: instante reancorado.
+    expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        colaboradorId: 10,
+        inicioAt: '2026-07-01T02:00:00.000Z',
+        fimAt: '2026-07-01T03:00:00.000Z',
+      }),
     );
   });
 });

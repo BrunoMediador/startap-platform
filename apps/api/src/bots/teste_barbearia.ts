@@ -629,12 +629,15 @@ export class TesteBarbeariaBot extends BotBase {
           // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
           // OFF = no-op. Idempotente pelo unique parcial (slot, gcal_event_id). Individual = colaborador null.
           // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
+          // start/end REANCORADOS no fuso do clone (startISO/endISO), IGUAL ao ramo sem-lock e ao
+          // createEvent. Passar o cru (offset −03 do LLM) gravava o atendimento 1h adiantado em
+          // clones não-SP (ex.: Seven/Cuiabá −04). Clone SP = byte-idêntico (no-op).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary,
             servicoArg,
-            start,
-            end,
+            start: startISO,
+            end: endISO,
             colaboradorId: null,
             formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
           });
@@ -1374,12 +1377,15 @@ export class TesteBarbeariaBot extends BotBase {
           // Gancho de billing derivado da agenda (ADR 0027) sob o MESMO action-lock — gated;
           // OFF = no-op. Best-effort. Estabelecimento: colaborador que recebeu o evento.
           // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
+          // start/end REANCORADOS no fuso do clone (startISO/endISO), IGUAL ao ramo sem-lock e ao
+          // createEvent. Passar o cru (offset −03 do LLM) gravava o atendimento 1h adiantado em
+          // clones não-SP (ex.: Seven/Cuiabá −04). Clone SP = byte-idêntico (no-op).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary,
             servicoArg,
-            start,
-            end,
+            start: startISO,
+            end: endISO,
             colaboradorId: colaborador.colaboradorId,
             formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
           });
