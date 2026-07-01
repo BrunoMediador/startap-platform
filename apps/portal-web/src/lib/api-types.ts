@@ -623,24 +623,27 @@ export interface PerfilNegocio {
   instagram: string;
   /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
   formas_pagamento: FormaPagamentoOpcao[];
-  /**
-   * Fuso IANA do negócio (ex.: "America/Sao_Paulo", "America/Cuiaba"). Opcional: o GET
-   * pode ainda não devolver (backend em deploy) — nesse caso a tela pré-seleciona pelo
-   * /portal/status (useTenantTz). Vai no PUT pra gravar em flow_clones.timezone; o backend
-   * valida contra Intl.supportedValuesOf('timeZone') (default São Paulo).
-   */
+}
+
+/**
+ * GET /portal/perfil -> 200 { perfil, timezone }. O `timezone` (IANA) é TOP-LEVEL,
+ * FORA do objeto perfil: vem da coluna flow_clones.timezone (não da personalizacao).
+ * Opcional: undefined enquanto a portal-api não devolve -> a tela pré-seleciona pelo
+ * /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil` no cache.
+ */
+export interface PerfilResponse {
+  perfil: PerfilNegocio;
   timezone?: string;
 }
 
-/** GET /portal/perfil -> 200. O perfil vem dentro do envelope `perfil`. */
-export interface PerfilResponse {
-  perfil: PerfilNegocio;
-}
-
-/** PUT /portal/perfil -> 200. Devolve `ok` + o perfil salvo no mesmo envelope. */
+/**
+ * PUT /portal/perfil -> 200 { ok, perfil, timezone }. Request body = { perfil, timezone }
+ * (timezone TOP-LEVEL). Devolve o perfil salvo + o timezone efetivo.
+ */
 export interface SavePerfilResponse {
   ok: true;
   perfil: PerfilNegocio;
+  timezone?: string;
 }
 
 // ── Lembretes de agendamento (portal-lembretes.ts — config self-service) ──────

@@ -51,8 +51,10 @@ export default function PerfilPage() {
   const client = useQueryClient();
   const perfilQ = usePerfil(slot);
   const save = useSavePerfil(slot);
-  // Fuso atual do clone pro display da agenda (lê /portal/status). Serve de semente
-  // do combobox quando o GET /portal/perfil ainda não devolve `timezone`.
+  // Fuso atual do clone (= flow_clones.timezone) vindo do /portal/status. É a FONTE
+  // do fuso pra pré-seleção: o GET /portal/perfil devolve timezone TOP-LEVEL, mas o
+  // hook usePerfil desembrulha só `r.perfil` no cache — então o tz vive à parte, no
+  // status. O PUT também manda timezone TOP-LEVEL (irmão de `perfil`), nunca dentro dele.
   const tenantTz = useTenantTz();
 
   // `saved` = última versão confirmada (do servidor/cache); `draft` = edição em
@@ -64,10 +66,9 @@ export default function PerfilPage() {
   const [errors, setErrors] = useState<PerfilErrors>({});
   const touched = useRef(false);
 
-  // Fuso gerido À PARTE do PerfilDraft: a fonte confiável do fuso atual é o
-  // /portal/status (tenantTz); o GET /portal/perfil pode ainda não devolver `timezone`.
-  // Prefere o do perfil quando vier; senão o do status — nunca chumba São Paulo sobre o
-  // fuso real (evita clobber num save que não tocou no campo).
+  // Fuso gerido À PARTE do PerfilDraft (é campo TOP-LEVEL da request/response, não do
+  // objeto perfil). Semente = tenantTz (status = flow_clones.timezone). Nunca chumba São
+  // Paulo sobre o fuso real num save que não tocou no campo.
   const [timezone, setTimezone] = useState<string>(tenantTz);
   const [savedTz, setSavedTz] = useState<string>(tenantTz);
   const tzTouched = useRef(false);
@@ -81,10 +82,9 @@ export default function PerfilPage() {
   }, [perfilQ.data]);
 
   useEffect(() => {
-    const next = perfilQ.data?.timezone ?? tenantTz;
-    setSavedTz(next);
-    if (!tzTouched.current) setTimezone(next);
-  }, [perfilQ.data, tenantTz]);
+    setSavedTz(tenantTz);
+    if (!tzTouched.current) setTimezone(tenantTz);
+  }, [tenantTz]);
 
   const dirty = isDirty(draft, saved) || timezone !== savedTz;
 
@@ -116,38 +116,44 @@ export default function PerfilPage() {
     }
     setErrors({});
 
-    // Fuso entra no MESMO PUT (envelope perfil). O backend grava em flow_clones.timezone.
-    const value = { ...res.value, timezone };
-    const next = toPerfilDraft(value); // normalizado (ex.: Instagram sem "@")
+    // O perfil (envelope `perfil`) e o fuso (campo TOP-LEVEL) viajam SEPARADOS no PUT:
+    // body = { perfil, timezone }. O backend grava perfil na personalizacao e o timezone
+    // na coluna flow_clones.timezone. O cache de perfil guarda SÓ o perfil (sem tz), igual
+    // ao shape do GET (r.perfil) — o tz mora no estado dedicado + no /portal/status.
+    const perfil = res.value;
+    const next = toPerfilDraft(perfil); // normalizado (ex.: Instagram sem "@")
     const prev = client.getQueryData(qk.perfil(slot));
     const prevTz = savedTz;
 
     // Otimista (D5): aplica no cache + reflete normalização na tela na hora.
-    client.setQueryData(qk.perfil(slot), value);
+    client.setQueryData(qk.perfil(slot), perfil);
     setSaved(next);
     setDraft(next);
     setSavedTz(timezone);
     touched.current = false; // sincronizado com o servidor a partir daqui
     tzTouched.current = false;
 
-    save.mutate(value, {
-      onSuccess: () => {
-        toast.success('Perfil atualizado');
-        // O fuso alimenta o display da agenda (useTenantTz lê /portal/status): revalida.
-        client.invalidateQueries({ queryKey: qk.status(slot) });
+    save.mutate(
+      { perfil, timezone },
+      {
+        onSuccess: () => {
+          toast.success('Perfil atualizado');
+          // O fuso alimenta o display da agenda (useTenantTz lê /portal/status): revalida.
+          client.invalidateQueries({ queryKey: qk.status(slot) });
+        },
+        onError: () => {
+          if (prev !== undefined) client.setQueryData(qk.perfil(slot), prev);
+          const back = toPerfilDraft(prev as Parameters<typeof toPerfilDraft>[0]);
+          setSaved(back);
+          setDraft(back);
+          setSavedTz(prevTz);
+          setTimezone(prevTz);
+          touched.current = false;
+          tzTouched.current = false;
+          toast.error('Não foi possível salvar. Tente de novo.');
+        },
       },
-      onError: () => {
-        if (prev !== undefined) client.setQueryData(qk.perfil(slot), prev);
-        const back = toPerfilDraft(prev as Parameters<typeof toPerfilDraft>[0]);
-        setSaved(back);
-        setDraft(back);
-        setSavedTz(prevTz);
-        setTimezone(prevTz);
-        touched.current = false;
-        tzTouched.current = false;
-        toast.error('Não foi possível salvar. Tente de novo.');
-      },
-    });
+    );
   }
 
   return (
