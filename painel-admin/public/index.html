@@ -493,6 +493,40 @@ textarea, input, select { font-family: inherit; }
 /* ── Forms ──────────────────────────────────────────────────────────── */
 .field { display: flex; flex-direction: column; gap: .375rem; }
 .field label { font-size: .75rem; font-weight: 600; color: var(--text-muted); }
+
+/* ── Combobox de fuso horário (TZCombo) — Brasil no topo + busca mundial ── */
+.tzc { position: relative; }
+.tzc-trigger {
+  display: flex; align-items: center; gap: .5rem; width: 100%;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: .4375rem .75rem; font-size: .875rem; font-family: inherit;
+  cursor: pointer; text-align: left;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.tzc-trigger:hover { border-color: var(--border-light); }
+.tzc-trigger:focus-visible { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
+.tzc-trigger__lead { color: var(--text-muted); display: inline-flex; flex-shrink: 0; }
+.tzc-trigger__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tzc-trigger__offset { flex-shrink: 0; color: var(--text-muted); font-size: .8125rem; font-variant-numeric: tabular-nums; }
+.tzc-trigger__chev { display: inline-flex; flex-shrink: 0; color: var(--text-muted); transition: transform var(--transition); }
+.tzc.tzc--open .tzc-trigger__chev { transform: rotate(180deg); }
+.tzc-pop {
+  position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface-2); border: 1px solid var(--border-light);
+  border-radius: var(--radius-md); overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .45);
+}
+.tzc-search { border-bottom: 1px solid var(--border); padding: .375rem .5rem; }
+.tzc-search input { background: var(--bg); }
+.tzc-list { max-height: 260px; overflow-y: auto; padding: .25rem 0; }
+.tzc-group { padding: .5rem .75rem .25rem; font-size: .6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-subtle); }
+.tzc-opt { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; cursor: pointer; font-size: .8125rem; min-height: 40px; }
+.tzc-opt:hover, .tzc-opt.tzc-opt--active { background: var(--surface-3); }
+.tzc-opt__check { flex-shrink: 0; width: 16px; display: inline-flex; color: var(--primary); }
+.tzc-opt__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tzc-opt__offset { flex-shrink: 0; color: var(--text-muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.tzc-empty { padding: 1.25rem .75rem; text-align: center; color: var(--text-muted); font-size: .8125rem; }
 input, select, textarea {
   background: var(--bg);
   color: var(--text);
@@ -7365,6 +7399,226 @@ const MATRIZ_OPTS = [
   { slot: 'teste_vendas_barbearia', name: 'Misto',         desc: 'Atendimento de agenda + venda de curso no mesmo número' },
 ];
 
+/* ══════════════════════════════════════════════════════════════════════════
+   TZCombo — combobox de fuso horário (Brasil no topo + busca mundial)
+   ──────────────────────────────────────────────────────────────────────────
+   Legado JS vanilla (painel de gestão): IIFE namespaced, sem framework. Espelha
+   o TimezoneCombobox do portal (apps/portal-web) — mesma lista Brasil-first,
+   mesma computação de offset via Intl (DST-correto, NUNCA chumbado) e mesma busca
+   sem acento. Emite/consome o nome IANA. Duplicação menor consciente: o @startap/
+   core ainda não exporta tabela de fusos; se exportar, reusar.
+   Uso: const c = TZCombo.mount(el, { id, value, onChange }); c.getValue().
+   ══════════════════════════════════════════════════════════════════════════ */
+window.TZCombo = (function () {
+  const DEFAULT = 'America/Sao_Paulo';
+  // Fusos canônicos do Brasil, ordem de prioridade (id IANA = contrato; rótulo = exibição).
+  const BRAZIL = [
+    { id: 'America/Sao_Paulo', label: 'São Paulo / Brasília' },
+    { id: 'America/Fortaleza', label: 'Fortaleza' },
+    { id: 'America/Recife', label: 'Recife' },
+    { id: 'America/Belem', label: 'Belém' },
+    { id: 'America/Campo_Grande', label: 'Campo Grande' },
+    { id: 'America/Cuiaba', label: 'Cuiabá' },
+    { id: 'America/Manaus', label: 'Manaus' },
+    { id: 'America/Porto_Velho', label: 'Porto Velho' },
+    { id: 'America/Boa_Vista', label: 'Boa Vista' },
+    { id: 'America/Rio_Branco', label: 'Rio Branco' },
+    { id: 'America/Noronha', label: 'Fernando de Noronha' },
+  ];
+  const BR_LABEL = Object.fromEntries(BRAZIL.map((t) => [t.id, t.label]));
+  const BR_SET = new Set(BRAZIL.map((t) => t.id));
+
+  function allIds() {
+    try {
+      if (typeof Intl.supportedValuesOf === 'function') {
+        const v = Intl.supportedValuesOf('timeZone');
+        if (Array.isArray(v) && v.length) return Array.from(new Set(v.filter(Boolean)));
+      }
+    } catch (_) { /* runtime sem suporte -> fallback */ }
+    return BRAZIL.map((t) => t.id).concat(['America/New_York', 'Europe/Lisbon', 'UTC']);
+  }
+
+  // "(UTC±N)" atual via Intl — DST-correto, nunca chumbado.
+  function offsetLabel(id) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: id, timeZoneName: 'shortOffset' }).formatToParts(new Date());
+      const name = (parts.find((p) => p.type === 'timeZoneName') || {}).value || '';
+      const m = name.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/);
+      if (!m) return 'UTC±0';
+      const hour = String(Number(m[2]));
+      const min = m[3] && m[3] !== '00' ? ':' + m[3] : '';
+      if (hour === '0' && min === '') return 'UTC±0';
+      return 'UTC' + (m[1] === '-' ? '−' : '+') + hour + min;
+    } catch (_) { return 'UTC'; }
+  }
+
+  function friendly(id) {
+    return BR_LABEL[id] || (id.split('/').pop() || id).replace(/_/g, ' ');
+  }
+  function norm(s) {
+    return (s || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+  }
+  function buildOptions(selected) {
+    const brazil = BRAZIL.map((t) => ({ id: t.id, label: t.label, offset: offsetLabel(t.id), brazil: true }));
+    const world = allIds()
+      .filter((id) => !BR_SET.has(id))
+      .map((id) => ({ id, label: friendly(id), offset: offsetLabel(id), brazil: false }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+    if (selected && !BR_SET.has(selected) && !world.some((o) => o.id === selected)) {
+      world.unshift({ id: selected, label: friendly(selected), offset: offsetLabel(selected), brazil: false });
+    }
+    return { brazil, world };
+  }
+  function matches(o, q) {
+    const n = norm(q);
+    if (!n) return true;
+    return norm(o.id).includes(n) || norm(o.label).includes(n) || norm(o.offset).includes(n);
+  }
+
+  function mount(container, opts) {
+    opts = opts || {};
+    let value = opts.value || DEFAULT;
+    let open = false;
+    let query = '';
+    let active = 0;
+    let flat = [];
+    const groups = buildOptions(value);
+    const baseId = opts.id || 'tzc-' + Math.random().toString(36).slice(2, 8);
+
+    container.classList.add('tzc');
+    container.innerHTML =
+      '<button type="button" class="tzc-trigger" aria-haspopup="listbox" aria-expanded="false">' +
+        '<span class="tzc-trigger__lead">' + icon('clock', 15) + '</span>' +
+        '<span class="tzc-trigger__label"></span>' +
+        '<span class="tzc-trigger__offset"></span>' +
+        '<span class="tzc-trigger__chev">' + icon('chevron-down', 14) + '</span>' +
+      '</button>' +
+      '<div class="tzc-pop" hidden>' +
+        '<div class="tzc-search"><input type="text" placeholder="Buscar cidade ou país…" aria-label="Buscar fuso horário" autocomplete="off" role="combobox" aria-expanded="true" aria-controls="' + baseId + '-list" aria-autocomplete="list" /></div>' +
+        '<div class="tzc-list" role="listbox" tabindex="-1" id="' + baseId + '-list"></div>' +
+      '</div>';
+
+    const trigger = container.querySelector('.tzc-trigger');
+    const labelEl = container.querySelector('.tzc-trigger__label');
+    const offsetEl = container.querySelector('.tzc-trigger__offset');
+    const pop = container.querySelector('.tzc-pop');
+    const search = container.querySelector('.tzc-search input');
+    const list = container.querySelector('.tzc-list');
+
+    function renderTrigger() {
+      labelEl.textContent = friendly(value);
+      offsetEl.textContent = offsetLabel(value);
+      trigger.setAttribute('aria-label', 'Fuso horário: ' + friendly(value) + ' ' + offsetLabel(value));
+    }
+    function computeFlat() {
+      const all = groups.brazil.concat(groups.world);
+      return query.trim() ? all.filter((o) => matches(o, query)) : all;
+    }
+    function renderList() {
+      flat = computeFlat();
+      const searching = query.trim().length > 0;
+      let html = '';
+      if (flat.length === 0) {
+        html = '<div class="tzc-empty">Nenhum fuso encontrado.</div>';
+      } else {
+        flat.forEach((o, i) => {
+          if (!searching) {
+            if (i === 0 && o.brazil) html += '<div class="tzc-group">Brasil</div>';
+            if (!o.brazil && (i === 0 || flat[i - 1].brazil)) html += '<div class="tzc-group">Todos os fusos</div>';
+          }
+          const sel = o.id === value;
+          html +=
+            '<div class="tzc-opt' + (i === active ? ' tzc-opt--active' : '') + '" role="option" id="' + baseId + '-opt-' + i + '" data-i="' + i + '" aria-selected="' + sel + '">' +
+              '<span class="tzc-opt__check">' + (sel ? icon('check', 15) : '') + '</span>' +
+              '<span class="tzc-opt__label">' + escapeHtml(o.label) + '</span>' +
+              '<span class="tzc-opt__offset">' + escapeHtml(o.offset) + '</span>' +
+            '</div>';
+        });
+      }
+      list.innerHTML = html;
+      syncActiveAttr();
+      scrollActive();
+    }
+    function syncActiveAttr() {
+      search.setAttribute('aria-activedescendant', flat[active] ? baseId + '-opt-' + active : '');
+    }
+    function highlight() {
+      list.querySelectorAll('.tzc-opt').forEach((el) => {
+        el.classList.toggle('tzc-opt--active', Number(el.dataset.i) === active);
+      });
+      syncActiveAttr();
+      scrollActive();
+    }
+    function scrollActive() {
+      const el = list.querySelector('.tzc-opt[data-i="' + active + '"]');
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    }
+    function openPop() {
+      open = true;
+      container.classList.add('tzc--open');
+      pop.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      query = '';
+      search.value = '';
+      const idx = computeFlat().findIndex((o) => o.id === value);
+      active = idx >= 0 ? idx : 0;
+      renderList();
+      setTimeout(() => search.focus(), 0);
+      document.addEventListener('mousedown', onDocDown, true);
+    }
+    function closePop() {
+      open = false;
+      container.classList.remove('tzc--open');
+      pop.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onDocDown, true);
+    }
+    function onDocDown(e) {
+      if (!container.contains(e.target)) closePop();
+    }
+    function choose() {
+      const o = flat[active];
+      if (!o) return;
+      value = o.id;
+      renderTrigger();
+      if (typeof opts.onChange === 'function') opts.onChange(value);
+      closePop();
+      trigger.focus();
+    }
+
+    trigger.addEventListener('click', () => (open ? closePop() : openPop()));
+    search.addEventListener('input', () => { query = search.value; active = 0; renderList(); });
+    search.addEventListener('keydown', (e) => {
+      switch (e.key) {
+        case 'ArrowDown': e.preventDefault(); if (active < flat.length - 1) { active++; highlight(); } break;
+        case 'ArrowUp': e.preventDefault(); if (active > 0) { active--; highlight(); } break;
+        case 'Home': e.preventDefault(); active = 0; highlight(); break;
+        case 'End': e.preventDefault(); active = flat.length - 1; highlight(); break;
+        case 'Enter': e.preventDefault(); choose(); break;
+        case 'Escape': e.preventDefault(); closePop(); trigger.focus(); break;
+      }
+    });
+    list.addEventListener('mousedown', (e) => {
+      const opt = e.target.closest('.tzc-opt');
+      if (!opt) return;
+      e.preventDefault(); // não deixa o input perder foco antes do clique
+      active = Number(opt.dataset.i);
+      choose();
+    });
+    list.addEventListener('mousemove', (e) => {
+      const opt = e.target.closest('.tzc-opt');
+      if (!opt) return;
+      const i = Number(opt.dataset.i);
+      if (i !== active) { active = i; highlight(); }
+    });
+
+    renderTrigger();
+    return { getValue: () => value, setValue: (v) => { value = v || DEFAULT; renderTrigger(); } };
+  }
+
+  return { mount, offsetLabel, friendlyLabel: friendly, DEFAULT, BRAZIL };
+})();
+
 let _wizardState = {};
 
 function openCloneWizard(preSelectMatriz) {
@@ -7388,6 +7642,7 @@ function openCloneWizard(preSelectMatriz) {
     modelo_ia_label: '', // label do modelo selecionado
     product_type: 'individual', // 'individual' | 'estabelecimento' (escolha no passo 2)
     seat_cap: '',               // vagas; só usado quando estabelecimento; '' = sem teto
+    timezone: 'America/Sao_Paulo', // fuso IANA do clone (default São Paulo; passo 2)
   };
   if (preSelectMatriz) _wizardState.step = 2;
   renderWizardStep();
@@ -7468,6 +7723,11 @@ function renderWizardStep() {
           <label for="wz-seat-cap">Vagas do plano (colaboradores)</label>
           <input id="wz-seat-cap" type="number" min="1" max="100" step="1" value="${escapeHtml(String(s.seat_cap ?? ''))}" placeholder="ex: 3" />
           <span class="field-hint">Quantos colaboradores ATIVOS o plano permite. Vazio = sem teto.</span>
+        </div>
+        <div class="field">
+          <label id="wz-tz-label">Fuso horário</label>
+          <div id="wz-tz-combo" role="group" aria-labelledby="wz-tz-label"></div>
+          <span class="field-hint">Fuso da cidade do cliente. O bot agenda nesse horário (default São Paulo).</span>
         </div>
       </div>`;
     footerHtml = `
@@ -7603,6 +7863,15 @@ function renderWizardStep() {
       const field = document.getElementById('wz-seatcap-field');
       if (field) field.style.display = ev.target.value === 'estabelecimento' ? '' : 'none';
     });
+    // Combobox de fuso: escreve direto no estado do wizard (persiste em back/next).
+    const tzMount = document.getElementById('wz-tz-combo');
+    if (tzMount) {
+      TZCombo.mount(tzMount, {
+        id: 'wz-tz',
+        value: _wizardState.timezone || TZCombo.DEFAULT,
+        onChange: (v) => { _wizardState.timezone = v; },
+      });
+    }
   }
 
   if (s.step === 3) {
@@ -7728,6 +7997,7 @@ function wizardCloneBody() {
     cliente_nome:     s.cliente_nome || undefined,
     cliente_telefone: s.cliente_telefone || undefined,
     personalizacao:   Object.keys(s.personalizacao).length ? s.personalizacao : undefined,
+    timezone:         s.timezone || 'America/Sao_Paulo',
   };
   if (s.product_type === 'estabelecimento') {
     body.product_type = 'estabelecimento';
@@ -10028,6 +10298,11 @@ function loadCloneConfigTab(tab, clone) {
           <input id="cd-seat-cap" type="number" min="1" max="100" step="1" value="${Number.isInteger(Number(clone.seat_cap)) ? Number(clone.seat_cap) : ''}" placeholder="ex: 3" />
           <p class="muted" style="font-size:.75rem;margin:.25rem 0 0">Quantos colaboradores ATIVOS o plano permite. Vazio = sem teto.</p>
         </div>
+        <div class="field">
+          <label id="cd-tz-label">Fuso horário</label>
+          <div id="cd-tz-combo" role="group" aria-labelledby="cd-tz-label"></div>
+          <p class="muted" style="font-size:.75rem;margin:.25rem 0 0">Fuso da cidade do cliente. O bot agenda nesse horário (default São Paulo).</p>
+        </div>
         <button type="submit" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar</button>
       </form>`;
 
@@ -10036,6 +10311,12 @@ function loadCloneConfigTab(tab, clone) {
       const field = content.querySelector('#cd-seatcap-field');
       if (field) field.style.display = ev.target.value === 'estabelecimento' ? '' : 'none';
     });
+
+    // Combobox de fuso: pré-seleciona pelo timezone atual do clone (default São Paulo).
+    const tzMount = content.querySelector('#cd-tz-combo');
+    const tzCombo = tzMount
+      ? TZCombo.mount(tzMount, { id: 'cd-tz', value: clone.timezone || TZCombo.DEFAULT })
+      : null;
 
     content.querySelector('#clone-dados-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
@@ -10054,6 +10335,7 @@ function loadCloneConfigTab(tab, clone) {
             cliente_telefone: (content.querySelector('#cd-cliente-tel')?.value || '').trim() || undefined,
             product_type:     productType,
             seat_cap:         seatCap,
+            timezone:         tzCombo ? tzCombo.getValue() : (clone.timezone || 'America/Sao_Paulo'),
           }),
         });
         Object.assign(clone, updated);

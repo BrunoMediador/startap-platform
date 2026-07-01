@@ -623,6 +623,13 @@ export interface PerfilNegocio {
   instagram: string;
   /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
   formas_pagamento: FormaPagamentoOpcao[];
+  /**
+   * Fuso IANA do negócio (ex.: "America/Sao_Paulo", "America/Cuiaba"). Opcional: o GET
+   * pode ainda não devolver (backend em deploy) — nesse caso a tela pré-seleciona pelo
+   * /portal/status (useTenantTz). Vai no PUT pra gravar em flow_clones.timezone; o backend
+   * valida contra Intl.supportedValuesOf('timeZone') (default São Paulo).
+   */
+  timezone?: string;
 }
 
 /** GET /portal/perfil -> 200. O perfil vem dentro do envelope `perfil`. */

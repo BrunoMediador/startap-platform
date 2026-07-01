@@ -4,11 +4,13 @@ import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-se
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { useTenant } from '@/components/shell/session-context';
+import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
+import { TimezoneCombobox } from '@/components/ui/timezone-combobox';
 import { useToast } from '@/components/ui/toast';
 import { FORMAS_PAGAMENTO_OPCOES, type FormaPagamentoOpcao } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
@@ -49,6 +51,9 @@ export default function PerfilPage() {
   const client = useQueryClient();
   const perfilQ = usePerfil(slot);
   const save = useSavePerfil(slot);
+  // Fuso atual do clone pro display da agenda (lê /portal/status). Serve de semente
+  // do combobox quando o GET /portal/perfil ainda não devolve `timezone`.
+  const tenantTz = useTenantTz();
 
   // `saved` = última versão confirmada (do servidor/cache); `draft` = edição em
   // andamento. `touched` marca que o usuário começou a editar — usado pra NÃO
@@ -59,6 +64,14 @@ export default function PerfilPage() {
   const [errors, setErrors] = useState<PerfilErrors>({});
   const touched = useRef(false);
 
+  // Fuso gerido À PARTE do PerfilDraft: a fonte confiável do fuso atual é o
+  // /portal/status (tenantTz); o GET /portal/perfil pode ainda não devolver `timezone`.
+  // Prefere o do perfil quando vier; senão o do status — nunca chumba São Paulo sobre o
+  // fuso real (evita clobber num save que não tocou no campo).
+  const [timezone, setTimezone] = useState<string>(tenantTz);
+  const [savedTz, setSavedTz] = useState<string>(tenantTz);
+  const tzTouched = useRef(false);
+
   useEffect(() => {
     if (!perfilQ.data) return;
     const next = toPerfilDraft(perfilQ.data);
@@ -67,7 +80,13 @@ export default function PerfilPage() {
     if (!touched.current) setDraft(next);
   }, [perfilQ.data]);
 
-  const dirty = isDirty(draft, saved);
+  useEffect(() => {
+    const next = perfilQ.data?.timezone ?? tenantTz;
+    setSavedTz(next);
+    if (!tzTouched.current) setTimezone(next);
+  }, [perfilQ.data, tenantTz]);
+
+  const dirty = isDirty(draft, saved) || timezone !== savedTz;
 
   // Campos de texto: keyof PerfilDraft menos `formas_pagamento` (que e checklist).
   function set(field: Exclude<keyof PerfilDraft, 'formas_pagamento'>, value: string) {
@@ -81,6 +100,11 @@ export default function PerfilPage() {
     setDraft((d) => ({ ...d, formas_pagamento: toggleFormaPagamento(d.formas_pagamento, forma) }));
   }
 
+  function onTimezoneChange(tz: string) {
+    tzTouched.current = true;
+    setTimezone(tz);
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!dirty || save.isPending) return;
@@ -92,24 +116,35 @@ export default function PerfilPage() {
     }
     setErrors({});
 
-    const value = res.value;
+    // Fuso entra no MESMO PUT (envelope perfil). O backend grava em flow_clones.timezone.
+    const value = { ...res.value, timezone };
     const next = toPerfilDraft(value); // normalizado (ex.: Instagram sem "@")
     const prev = client.getQueryData(qk.perfil(slot));
+    const prevTz = savedTz;
 
     // Otimista (D5): aplica no cache + reflete normalização na tela na hora.
     client.setQueryData(qk.perfil(slot), value);
     setSaved(next);
     setDraft(next);
+    setSavedTz(timezone);
     touched.current = false; // sincronizado com o servidor a partir daqui
+    tzTouched.current = false;
 
     save.mutate(value, {
-      onSuccess: () => toast.success('Perfil atualizado'),
+      onSuccess: () => {
+        toast.success('Perfil atualizado');
+        // O fuso alimenta o display da agenda (useTenantTz lê /portal/status): revalida.
+        client.invalidateQueries({ queryKey: qk.status(slot) });
+      },
       onError: () => {
         if (prev !== undefined) client.setQueryData(qk.perfil(slot), prev);
         const back = toPerfilDraft(prev as Parameters<typeof toPerfilDraft>[0]);
         setSaved(back);
         setDraft(back);
+        setSavedTz(prevTz);
+        setTimezone(prevTz);
         touched.current = false;
+        tzTouched.current = false;
         toast.error('Não foi possível salvar. Tente de novo.');
       },
     });
@@ -180,6 +215,13 @@ export default function PerfilPage() {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
+            />
+            <TimezoneCombobox
+              id="perfil-tz"
+              label="Fuso horário"
+              hint="O robô usa esse fuso pra agendar no horário certo da sua cidade."
+              value={timezone || tenantTz}
+              onChange={onTimezoneChange}
             />
             <FormasPagamentoChecklist
               selecionadas={draft.formas_pagamento}
