@@ -17,6 +17,7 @@
  * do banco da MATRIZ (bot_config) — zero default de modelo hardcoded.
  */
 import { logger } from '@startap/core/logger';
+import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 
 const log = logger.child({ module: 'clone-provisioning' });
 
@@ -791,6 +792,12 @@ export interface ProvisionInput {
   personalizacao?: Record<string, unknown>;
   /** Nome da sessão WAHA. Default: wahaSessionName(novoSlot) — comportamento do gestão. */
   sessionName?: string;
+  /**
+   * Fuso IANA do clone (migration 068), COLUNA top-level (NÃO vai no personalizacao,
+   * diferente do `area`). Ausente/inválido -> 'America/Sao_Paulo' (byte-idêntico ao
+   * default do banco / comportamento de hoje). Validado defensivamente no INSERT.
+   */
+  timezone?: string | null;
 }
 
 export interface ProvisionResult {
@@ -928,13 +935,18 @@ export async function createCloneRecords(
     // novo já sai oferecendo os serviços comuns DAQUELA vertical (corrige o bug
     // do clone de manicure com serviços de barbearia). Sem área (gestão legado)
     // -> getCloneDefaults mantém o comportamento histórico (matriz/barbearia).
+    // Fuso IANA (migration 068): COLUNA top-level. Validação defensiva no ponto de
+    // escrita (o follow-up prometido pela migration 068) — inválido/ausente cai pro
+    // default SP -> clone que não escolheu fuso fica byte-idêntico ao de hoje.
+    const timezoneValue = isValidIanaTimezone(input.timezone) ? input.timezone : DEFAULT_TIMEZONE;
+
     const defaults = await getCloneDefaults(db, input.matrizSlot, areaValue);
     const cloneR = await client.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-          personalizacao, area, horarios_funcionamento, servicos,
+          personalizacao, area, horarios_funcionamento, servicos, timezone,
           status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, 'rascunho', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10, 'rascunho', NOW(), NOW())
        RETURNING *`,
       [
         input.novoSlot,
@@ -946,6 +958,7 @@ export async function createCloneRecords(
         areaValue,
         defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
+        timezoneValue,
       ],
     );
 

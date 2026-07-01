@@ -673,6 +673,42 @@ describe('createCloneRecords — idempotência/unicidade', () => {
     });
     expect(String(cloneInsert()?.values?.[8])).toContain('Corte');
   });
+
+  // Fuso IANA (migration 068): COLUNA top-level, 10º parâmetro do INSERT ($10 -> índice 9).
+  it('timezone ausente grava America/Sao_Paulo (byte-idêntico ao default do banco)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_sem_tz_ab12cd',
+      displayName: 'Negocio X',
+      personalizacao: { nome_negocio: 'Negocio X' },
+    });
+    expect(cloneInsert()?.values?.[9]).toBe('America/Sao_Paulo');
+  });
+
+  it('timezone válido não-SP (America/Cuiaba) grava na coluna flow_clones.timezone', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_cuiaba_ab12cd',
+      displayName: 'Barbearia MT',
+      personalizacao: { nome_negocio: 'Barbearia MT' },
+      timezone: 'America/Cuiaba',
+    });
+    expect(cloneInsert()?.values?.[9]).toBe('America/Cuiaba');
+  });
+
+  it('timezone inválido (defesa em profundidade no write) cai pro default SP — nunca grava lixo', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_tz_lixo_ab12cd',
+      displayName: 'Negocio Y',
+      personalizacao: { nome_negocio: 'Negocio Y' },
+      timezone: 'Marte/Olympus',
+    });
+    expect(cloneInsert()?.values?.[9]).toBe('America/Sao_Paulo');
+  });
 });
 
 // ---------------------------------------------------------------------------

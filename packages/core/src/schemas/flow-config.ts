@@ -13,6 +13,10 @@
  */
 import { z } from 'zod';
 
+// Re-export do validador de fuso (timezones.ts) para quem consome só o subpath
+// @startap/core/schemas (portal-perfil, signup) achar timezoneSchema aqui também.
+export { DEFAULT_TIMEZONE, isValidIanaTimezone, timezoneSchema } from '../timezones.js';
+
 // ---------------------------------------------------------------------------
 // Servicos: array de { nome, preco_cents, duracao_min }
 // ---------------------------------------------------------------------------

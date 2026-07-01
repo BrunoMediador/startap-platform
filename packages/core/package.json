@@ -16,6 +16,7 @@
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
     "./reminders": "./dist/reminders.js",
     "./client-disconnect-alert": "./dist/client-disconnect-alert.js",
+    "./timezones": "./dist/timezones.js",
     "./schemas": "./dist/schemas/flow-config.js"
   },
   "scripts": {
