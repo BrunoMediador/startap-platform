@@ -279,24 +279,35 @@ export const DEFAULT_MONITOR_EXTRA_SESSIONS: readonly string[] = ['STARTAP_AI_PR
 
 /**
  * Resolve a lista de sessões extra (não-clone) a vigiar, a partir da env CSV opcional
- * `MONITOR_EXTRA_SESSIONS`. Semântica de SOBREPOSIÇÃO (não união):
- *  - env ausente/vazia -> vale o default do código (DEFAULT_MONITOR_EXTRA_SESSIONS);
- *  - env com valor      -> SUBSTITUI o default (o operador declara a lista inteira).
- * ⚠️ Consequência: quem setar a env e quiser continuar vigiando a Lola precisa incluir
- * `STARTAP_AI_PROD` na lista. Trim + dedupe; itens vazios são ignorados. `env` injetável
- * só p/ teste (mesmo padrão de model-usage.summaryByPeriod).
+ * `MONITOR_EXTRA_SESSIONS`. Semântica de UNIÃO (mesmo padrão do bot-blocklist #329):
+ *  - o default (DEFAULT_MONITOR_EXTRA_SESSIONS) está SEMPRE presente;
+ *  - a env ADICIONA sessões extras por cima (não substitui).
+ * Escolha deliberada p/ uma lista de VIGIA: o modo de falha do "override" seria silencioso
+ * e perigoso (setar a env pra adicionar UMA sessão e esquecer de reincluir STARTAP_AI_PROD
+ * tiraria a Lola da vigia sem ninguém ver — exatamente o ponto cego que o SCRUM-56 mata).
+ * Remover uma sessão do default passa a EXIGIR mudança de código — o certo p/ infra crítica.
+ * Trim + dedupe; itens vazios são ignorados. `env` injetável só p/ teste (padrão de
+ * model-usage.summaryByPeriod).
  */
 export function resolveMonitorExtraSessions(env: NodeJS.ProcessEnv = process.env): string[] {
-  const raw = env.MONITOR_EXTRA_SESSIONS;
-  const source = raw && raw.trim().length > 0 ? raw.split(',') : DEFAULT_MONITOR_EXTRA_SESSIONS;
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const item of source) {
-    const name = item.trim();
-    if (name.length === 0 || seen.has(name)) continue;
+  const add = (value: string): void => {
+    const name = value.trim();
+    if (name.length === 0 || seen.has(name)) return;
     seen.add(name);
     out.push(name);
+  };
+
+  // Default de segurança — SEMPRE presente (a env não tira, só soma).
+  for (const name of DEFAULT_MONITOR_EXTRA_SESSIONS) add(name);
+
+  // Sessões extras da env (CSV). Ausente/vazia = só o default.
+  const raw = env.MONITOR_EXTRA_SESSIONS;
+  if (raw && raw.trim().length > 0) {
+    for (const part of raw.split(',')) add(part);
   }
+
   return out;
 }
 
@@ -364,7 +375,7 @@ export async function listMonitoredSessions(
   if (sender && !out.has(sender)) {
     out.set(sender, { sessao: sender, label: 'Sessão de alertas (remetente)', slot: null });
   }
-  // Sessões CRÍTICAS não-clone (default: Lola/STARTAP_AI_PROD; override via env). slot=null:
+  // Sessões CRÍTICAS não-clone (default Lola/STARTAP_AI_PROD + o que a env somar). slot=null:
   // não é clone de cliente — dispara só o alerta interno (Bruno), nunca o aviso ao "dono".
   // Dedup: se a sessão já entrou como clone (com slot real), NÃO a rebaixa pra slot=null.
   for (const sessao of resolveMonitorExtraSessions(env)) {

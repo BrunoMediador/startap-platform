@@ -105,15 +105,15 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vig
       })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
-    // Override da env desliga o default (sem STARTAP_AI_PROD) p/ isolar o teste ao dedup do remetente.
+    // Env soma ALERTAS às extras (união): ALERTAS já é clone (query 1), o remetente E a
+    // sessão extra colidem no dedup -> aparece UMA vez só, com o slot do clone preservado.
     const sessions = await listMonitoredSessions('alertas', {
       MONITOR_EXTRA_SESSIONS: 'ALERTAS',
     });
-    // ALERTAS aparece UMA vez: já é clone (query 1), o remetente E a sessão extra colidem no dedup.
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.sessao).toBe('ALERTAS');
+    const alertasEntries = sessions.filter((s) => s.sessao === 'ALERTAS');
+    expect(alertasEntries).toHaveLength(1);
     // Quando o remetente/extra JÁ é um clone monitorado, mantém o slot do clone (não vira null).
-    expect(sessions[0]?.slot).toBe('clone_alertas');
+    expect(alertasEntries[0]?.slot).toBe('clone_alertas');
   });
 });
 
@@ -132,20 +132,26 @@ describe('resolveMonitorExtraSessions — sessões críticas não-clone (SCRUM-5
     ]);
   });
 
-  it('env com valor SOBREPÕE o default (o operador declara a lista inteira)', () => {
+  it('env ADICIONA ao default (união) — nunca tira a Lola da vigia', () => {
+    // O default vem SEMPRE primeiro; a env soma por cima.
     expect(
-      resolveMonitorExtraSessions({
-        MONITOR_EXTRA_SESSIONS: 'STARTAP_AI_PROD, WHATSAPP_ROUTER_TESTE',
-      }),
+      resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: 'WHATSAPP_ROUTER_TESTE' }),
     ).toEqual(['STARTAP_AI_PROD', 'WHATSAPP_ROUTER_TESTE']);
-    // ⚠️ footgun documentado: setar a env SEM a Lola tira a Lola da vigia.
-    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: 'OUTRA_SESSAO' })).toEqual([
-      'OUTRA_SESSAO',
-    ]);
+    // Fail-safe: setar a env com OUTRA sessão NÃO remove a Lola (contraste com override).
+    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: 'OUTRA_SESSAO' })).toContain(
+      'STARTAP_AI_PROD',
+    );
   });
 
-  it('trim + dedupe + ignora itens vazios', () => {
+  it('dedupe entre default e env (env repetindo a Lola não duplica)', () => {
+    expect(
+      resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: 'STARTAP_AI_PROD, EXTRA' }),
+    ).toEqual(['STARTAP_AI_PROD', 'EXTRA']);
+  });
+
+  it('trim + dedupe + ignora itens vazios (default sempre incluso)', () => {
     expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: ' A , A ,, B ,' })).toEqual([
+      'STARTAP_AI_PROD',
       'A',
       'B',
     ]);
@@ -171,7 +177,7 @@ describe('listMonitoredSessions — vigia sessões críticas não-clone (SCRUM-5
     });
   });
 
-  it('env override troca a sessão extra vigiada (default some, nova entra)', async () => {
+  it('env ADICIONA sessão extra e mantém o default (união — Lola nunca sai)', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
@@ -180,7 +186,8 @@ describe('listMonitoredSessions — vigia sessões críticas não-clone (SCRUM-5
       MONITOR_EXTRA_SESSIONS: 'LOLA_V2',
     });
 
-    expect(sessions.some((s) => s.sessao === 'STARTAP_AI_PROD')).toBe(false);
+    // União: a Lola (default) CONTINUA vigiada mesmo com a env somando outra sessão.
+    expect(sessions.some((s) => s.sessao === 'STARTAP_AI_PROD')).toBe(true);
     expect(sessions.some((s) => s.sessao === 'LOLA_V2')).toBe(true);
   });
 
