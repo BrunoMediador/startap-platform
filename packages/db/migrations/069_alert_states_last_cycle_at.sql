@@ -8,30 +8,40 @@
 --   minuto) -> restart desnecessário.
 --
 -- O QUE ESTA COLUNA FAZ:
---   Guarda, na linha sintética '__global__' de alert_states, o instante do ÚLTIMO tick do monitor.
---   O job carimba last_cycle_at = NOW() a cada ciclo ativo -> a prova de vida passa a ser
---   verificável por SELECT (SELECT last_cycle_at FROM alert_states WHERE check_key='__global__'),
---   além do log "monitor cycle" que agora sai em TODO ciclo. NULL = nenhum tick registrado ainda.
+--   Guarda, na linha sintética DEDICADA '__heartbeat__' de alert_states, o instante do ÚLTIMO tick
+--   do monitor. O job carimba last_cycle_at = NOW() a cada ciclo ativo -> a prova de vida passa a
+--   ser verificável por SELECT (SELECT last_cycle_at FROM alert_states WHERE check_key='__heartbeat__'
+--   -> vivo se now()-last_cycle_at < ~3min), além do log "monitor cycle" que agora sai em TODO
+--   ciclo. NULL = nenhum tick registrado ainda.
 --
--- POR QUE NA __global__ (e não numa tabela nova):
---   A __global__ já é a linha de estado global do monitor (hard cap de mensagens por janela).
---   O heartbeat é global (o monitor é 1 job do time, sem tenant) -> mora junto. Aditivo puro: a
---   coluna é usada SÓ pela __global__; as demais linhas (waha:*, api:health, pg:main) a mantêm NULL.
---   O carimbo é um UPDATE isolado de last_cycle_at — NÃO toca down_since (window_start) nem
---   alert_count (contador da janela) usados pelo hard cap.
+-- POR QUE NUMA LINHA DEDICADA '__heartbeat__' (decisão do arquiteto, SCRUM-54):
+--   Separar liveness do hard cap POR CONSTRUÇÃO. A __global__ já é outlier semântico (contador
+--   anti-flood + window_start); empilhar liveness nela seria a 3ª semântica na mesma linha e abriria
+--   dúvida de contenção. Com linha própria, o SELECT de liveness fica inequívoco e o carimbo nunca
+--   toca down_since/alert_count do cap. Tabela dedicada (worker_heartbeats) foi descartada por ora
+--   (over-engineering com 1 worker) — dívida de roadmap se um dia houver >1 worker.
+--   Aditivo puro: a coluna é usada SÓ pela __heartbeat__; as demais linhas (waha:*, api:health,
+--   pg:main, __global__) a mantêm NULL. A linha __heartbeat__ é INERTE na máquina de estado (o
+--   monitor nunca a processa como check — igual à __global__).
 --
--- Idempotente: ADD COLUMN IF NOT EXISTS. NÃO destrutiva: nenhum DROP/DELETE/TRUNCATE; nenhuma
---   coluna removida; nada na mesma release.
+-- Idempotente: ADD COLUMN IF NOT EXISTS + seed ON CONFLICT DO NOTHING. NÃO destrutiva: nenhum
+--   DROP/DELETE/TRUNCATE; nenhuma coluna removida; nada na mesma release.
 --
 -- ── ROLLBACK (rodar manualmente; NUNCA no mesmo release que adiciona) ───────────────
 --   BEGIN;
+--   DELETE FROM alert_states WHERE check_key = '__heartbeat__';
 --   ALTER TABLE alert_states DROP COLUMN IF EXISTS last_cycle_at;
 --   COMMIT;
 -- ───────────────────────────────────────────────────────────────────────────────────
 
 BEGIN;
 
--- Heartbeat do último tick do monitor (carimbado na linha '__global__'). NULL = nenhum tick ainda.
+-- Heartbeat do último tick do monitor (carimbado na linha '__heartbeat__'). NULL = nenhum tick ainda.
 ALTER TABLE alert_states ADD COLUMN IF NOT EXISTS last_cycle_at TIMESTAMPTZ;
+
+-- Seed idempotente da linha dedicada (last_cycle_at NULL até o 1º tick). O recordCycleHeartbeat
+-- também faz UPSERT, então isto é só pra o SELECT de liveness já retornar uma linha pós-migration.
+INSERT INTO alert_states (check_key, state) VALUES ('__heartbeat__', 'up')
+ON CONFLICT (check_key) DO NOTHING;
 
 COMMIT;

@@ -53,6 +53,14 @@ export const MAX_RECIPIENTS = 5;
 /** check_key sintético que agrega o hard cap global de mensagens por janela. */
 export const GLOBAL_STATE_KEY = '__global__';
 
+/**
+ * check_key sintético DEDICADO ao heartbeat de liveness do monitor (SCRUM-54, ADR do arquiteto):
+ * separado do __global__ (hard cap) POR CONSTRUÇÃO — desacopla liveness do anti-flood e deixa o
+ * SELECT de liveness inequívoco. NUNCA é um check observado (o monitor nunca o processa em
+ * applyTransition; é inerte na máquina de estado, igual ao __global__).
+ */
+export const HEARTBEAT_STATE_KEY = '__heartbeat__';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Recipients — CRUD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -388,10 +396,10 @@ export async function upsertState(input: {
 
 /**
  * Heartbeat de liveness do job monitor (SCRUM-54). Carimba last_cycle_at = NOW() na linha
- * sintética '__global__' a cada tick — pra que "saudável e quieto" deixe de ser indistinguível
- * de "travado" (a prova de vida vira verificável por SELECT). UPDATE isolado de last_cycle_at:
- * NÃO toca down_since (window_start) nem alert_count (contador da janela) usados pelo hard cap.
- * Idempotente (só avança um timestamp); garante a linha antes (ON CONFLICT).
+ * sintética DEDICADA '__heartbeat__' a cada tick — pra que "saudável e quieto" deixe de ser
+ * indistinguível de "travado" (a prova de vida vira verificável por SELECT). UPSERT idempotente:
+ * SEED a linha na 1ª vez (ela não existe na migration) e, nas seguintes, só avança o timestamp.
+ * Linha separada do __global__ (hard cap) por construção — zero contenção com o anti-flood.
  */
 export async function recordCycleHeartbeat(): Promise<void> {
   await query(
@@ -400,15 +408,15 @@ export async function recordCycleHeartbeat(): Promise<void> {
      ON CONFLICT (check_key) DO UPDATE SET
        last_cycle_at = NOW(),
        updated_at    = NOW()`,
-    [GLOBAL_STATE_KEY],
+    [HEARTBEAT_STATE_KEY],
   );
 }
 
-/** Lê o último heartbeat do monitor (last_cycle_at da __global__). null se nunca ticou. */
+/** Lê o último heartbeat do monitor (last_cycle_at da __heartbeat__). null se nunca ticou. */
 export async function getMonitorHeartbeat(): Promise<Date | null> {
   const r = await query<{ last_cycle_at: Date | null }>(
     'SELECT last_cycle_at FROM alert_states WHERE check_key = $1',
-    [GLOBAL_STATE_KEY],
+    [HEARTBEAT_STATE_KEY],
   );
   return r.rows[0]?.last_cycle_at ?? null;
 }
