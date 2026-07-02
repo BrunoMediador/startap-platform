@@ -387,6 +387,33 @@ export async function upsertState(input: {
 }
 
 /**
+ * Heartbeat de liveness do job monitor (SCRUM-54). Carimba last_cycle_at = NOW() na linha
+ * sintética '__global__' a cada tick — pra que "saudável e quieto" deixe de ser indistinguível
+ * de "travado" (a prova de vida vira verificável por SELECT). UPDATE isolado de last_cycle_at:
+ * NÃO toca down_since (window_start) nem alert_count (contador da janela) usados pelo hard cap.
+ * Idempotente (só avança um timestamp); garante a linha antes (ON CONFLICT).
+ */
+export async function recordCycleHeartbeat(): Promise<void> {
+  await query(
+    `INSERT INTO alert_states (check_key, state, last_cycle_at, updated_at)
+     VALUES ($1, 'up', NOW(), NOW())
+     ON CONFLICT (check_key) DO UPDATE SET
+       last_cycle_at = NOW(),
+       updated_at    = NOW()`,
+    [GLOBAL_STATE_KEY],
+  );
+}
+
+/** Lê o último heartbeat do monitor (last_cycle_at da __global__). null se nunca ticou. */
+export async function getMonitorHeartbeat(): Promise<Date | null> {
+  const r = await query<{ last_cycle_at: Date | null }>(
+    'SELECT last_cycle_at FROM alert_states WHERE check_key = $1',
+    [GLOBAL_STATE_KEY],
+  );
+  return r.rows[0]?.last_cycle_at ?? null;
+}
+
+/**
  * Hard cap global: conta quantas mensagens foram enviadas na janela atual e
  * incrementa de forma atômica. A linha sintética '__global__' guarda o contador
  * (alert_count) e o início da janela (down_since reaproveitado como window_start).

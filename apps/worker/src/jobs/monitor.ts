@@ -455,9 +455,11 @@ export async function runMonitor(): Promise<MonitorResult> {
   const result: MonitorResult = { ...EMPTY_RESULT };
 
   // Camada 2 do rollout (kill-switch quente): lê o toggle de banco. OFF => NO-OP
-  // barato — não chama WAHA, não lê destinatários, não toca estado.
+  // barato — não chama WAHA, não lê destinatários, não toca estado. Ainda assim loga o tick
+  // (heartbeat de liveness, SCRUM-54): "desligado" nunca fica indistinguível de "travado".
   const cfg = await alerts.getConfig();
   if (!cfg.enabled) {
+    log.info({ skipped: true }, 'monitor cycle (skipped: toggle off)');
     return { ...result, skipped: true };
   }
 
@@ -517,8 +519,19 @@ export async function runMonitor(): Promise<MonitorResult> {
     }
   }
 
-  if (result.sent > 0 || result.down > 0 || result.suppressed > 0 || result.clientNotified > 0) {
-    log.info({ ...result }, 'monitor cycle');
+  // Heartbeat de liveness (SCRUM-54): SEMPRE loga o ciclo (mesmo down=0/sem atividade) e carimba
+  // last_cycle_at na __global__. Antes o log só saía quando havia atividade -> com tudo saudável o
+  // worker ficava mudo e "quieto" era indistinguível de "travado" (causou restart desnecessário em
+  // 02/07). Agora a prova de vida é verificável por log E por SELECT (alert_states.__global__).
+  try {
+    await alerts.recordCycleHeartbeat();
+  } catch (e) {
+    // Fail-safe: uma falha no heartbeat NUNCA derruba o ciclo (o log abaixo ainda dá a prova de vida).
+    log.warn(
+      { err: e instanceof Error ? e.message : String(e) },
+      'monitor: falha ao carimbar last_cycle_at (heartbeat) — ciclo segue',
+    );
   }
+  log.info({ ...result }, 'monitor cycle');
   return result;
 }

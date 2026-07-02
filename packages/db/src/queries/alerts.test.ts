@@ -21,7 +21,9 @@ vi.mock('../client.js', () => ({
 const {
   addRecipient,
   getSenderSession,
+  getMonitorHeartbeat,
   listMonitoredSessions,
+  recordCycleHeartbeat,
   reserveGlobalSend,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
@@ -201,5 +203,33 @@ describe('reserveGlobalSend — hard cap global anti-flood', () => {
     expect(r.allowed).toBe(true);
     expect(r.sentInWindow).toBe(1);
     expect(queries.some((q) => q.includes('alert_count = 1, down_since = NOW()'))).toBe(true);
+  });
+});
+
+describe('heartbeat de liveness do monitor (SCRUM-54)', () => {
+  it('recordCycleHeartbeat: upsert da __global__ só avança last_cycle_at (não toca cap)', async () => {
+    await recordCycleHeartbeat();
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('INSERT INTO alert_states');
+    expect(sql).toContain('last_cycle_at = NOW()');
+    // Isolamento do hard cap: NÃO mexe em down_since (window_start) nem alert_count (contador).
+    expect(sql).not.toContain('down_since');
+    expect(sql).not.toContain('alert_count');
+    // Carimba a linha sintética global.
+    expect(params).toEqual(['__global__']);
+  });
+
+  it('getMonitorHeartbeat: lê last_cycle_at da __global__ (null quando nunca ticou)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await getMonitorHeartbeat()).toBeNull();
+
+    const ts = new Date('2026-07-02T12:00:00.000Z');
+    mockQuery.mockResolvedValueOnce({ rows: [{ last_cycle_at: ts }] });
+    expect(await getMonitorHeartbeat()).toBe(ts);
+
+    const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('SELECT last_cycle_at FROM alert_states WHERE check_key = $1');
+    expect(params).toEqual(['__global__']);
   });
 });
