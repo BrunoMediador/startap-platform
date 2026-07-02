@@ -67,34 +67,95 @@ function sessionKey(sessao: string): string {
 }
 
 /**
- * Verifica + reserva o cooldown anti-flap por slot. Retorna true se PODE avisar (e marca o envio),
- * false se ainda está na janela. Reusa a máquina alert_states (sem tabela nova). DIFERENTE do
- * client-alert de cancelamento: aqui, em FALHA de DB no check, fail-CLOSED (return false) — pra
- * uma sessão que flapa, preferimos NÃO avisar a arriscar spam ao cliente se o estado não puder
- * ser lido/gravado. (O alerta interno pro Bruno já cobre a visibilidade do incidente.)
+ * Reserva do cooldown anti-flap por slot. `allowed:false` = suprimir (dentro da janela OU
+ * fail-closed por erro de DB). `allowed:true` carrega o SNAPSHOT anterior + o que ESTE ciclo
+ * carimbou (reservedAt/reservedCount) — necessários pra desfazer a reserva com segurança
+ * (releaseCooldown) se o envio falhar depois.
  */
-async function reserveCooldown(slot: string, cooldownMin: number): Promise<boolean> {
+type CooldownReservation =
+  | { allowed: false }
+  | {
+      allowed: true;
+      reservedAt: Date;
+      reservedCount: number;
+      prev: alerts.AlertStateRow | null;
+    };
+
+/**
+ * Verifica + reserva o cooldown anti-flap por slot. `allowed:true` se PODE avisar (e JÁ carimba
+ * o envio, otimista — protege contra dois ciclos concorrentes avisarem o mesmo episódio),
+ * `allowed:false` se ainda está na janela. Reusa a máquina alert_states (sem tabela nova).
+ * DIFERENTE do client-alert de cancelamento: aqui, em FALHA de DB no check, fail-CLOSED
+ * (allowed:false) — pra uma sessão que flapa, preferimos NÃO avisar a arriscar spam ao cliente
+ * se o estado não puder ser lido/gravado. (O alerta interno pro Bruno já cobre a visibilidade.)
+ *
+ * ⚠️ A reserva é OTIMISTA: carimba ANTES do envio. Se o `sendText` falhar, o chamador DEVE chamar
+ * releaseCooldown(...) pra desfazer — senão um envio que nunca saiu fica registrado como "avisado"
+ * e suprime o próximo ciclo por até `cooldownMin` (SCRUM-53).
+ */
+async function reserveCooldown(slot: string, cooldownMin: number): Promise<CooldownReservation> {
   const checkKey = disconnectCooldownKey(slot);
   try {
     const state = await alerts.getState(checkKey);
     const last = state?.last_alert_at ?? null;
     if (last && Date.now() - last.getTime() < cooldownMin * 60_000) {
-      return false; // dentro da janela -> suprime (anti-flap)
+      return { allowed: false }; // dentro da janela -> suprime (anti-flap)
     }
+    const reservedAt = new Date();
+    const reservedCount = (state?.alert_count ?? 0) + 1;
     await alerts.upsertState({
       checkKey,
       state: 'down', // semântica local: "este clone está em episódio de queda já avisado"
-      lastAlertAt: new Date(),
-      alertCount: (state?.alert_count ?? 0) + 1,
+      lastAlertAt: reservedAt,
+      alertCount: reservedCount,
     });
-    return true;
+    return { allowed: true, reservedAt, reservedCount, prev: state };
   } catch (e) {
     // Fail-CLOSED: sem poder serializar, não arrisca spam ao cliente. Loga e suprime.
     log.warn(
       { slot, err: e instanceof Error ? e.message : String(e) },
       'client-disconnect-notify: cooldown check falhou — fail-closed (NÃO avisa neste ciclo)',
     );
-    return false;
+    return { allowed: false };
+  }
+}
+
+/**
+ * Desfaz uma reserva de cooldown quando o envio NÃO saiu (send falhou), restaurando o snapshot
+ * anterior — pra o próximo ciclo re-tentar. CONDICIONAL: só restaura se a linha ainda contém o
+ * que ESTE ciclo carimbou (reservedAt/reservedCount via restoreStateIfUnchanged); se outro ciclo
+ * já re-reservou (novo carimbo), NÃO pisa — preserva o anti-duplicata. Nunca lança (best-effort).
+ */
+async function releaseCooldown(
+  slot: string,
+  reservation: Extract<CooldownReservation, { allowed: true }>,
+): Promise<void> {
+  const checkKey = disconnectCooldownKey(slot);
+  const prev = reservation.prev;
+  try {
+    await alerts.restoreStateIfUnchanged({
+      checkKey,
+      expect: {
+        state: 'down',
+        lastAlertAt: reservation.reservedAt,
+        alertCount: reservation.reservedCount,
+      },
+      restore: {
+        // Sem episódio anterior -> volta ao neutro 'up' (last_alert_at null = janela livre).
+        state: prev?.state ?? 'up',
+        downSince: prev?.down_since ?? null,
+        lastAlertAt: prev?.last_alert_at ?? null,
+        alertCount: prev?.alert_count ?? 0,
+        pendingDownCount: prev?.pending_down_count ?? 0,
+      },
+    });
+  } catch (e) {
+    // Best-effort: se nem desfazer der, o pior caso é 1 aviso suprimido até o cooldown expirar
+    // (degradação, não spam). NUNCA propaga — o fail-safe do notify já cobre o job.
+    log.warn(
+      { slot, err: e instanceof Error ? e.message : String(e) },
+      'client-disconnect-notify: falha ao desfazer reserva de cooldown (segue fail-safe)',
+    );
   }
 }
 
@@ -133,17 +194,8 @@ export async function notifyClientDisconnect(slot: string): Promise<ClientDiscon
       return { ok: true, sent: false, reason: 'no_target' };
     }
 
-    // Cooldown anti-flap por slot (1 msg por episódio de queda).
-    const allowed = await reserveCooldown(slot, config.CLIENT_DISCONNECT_ALERT_COOLDOWN_MIN);
-    if (!allowed) {
-      log.info(
-        { slot },
-        'client-disconnect-notify: dentro do cooldown — aviso suprimido (anti-flap)',
-      );
-      return { ok: true, sent: false, reason: 'cooldown' };
-    }
-
-    // Resolve a sessão remetente (ALERTAS, via sender_slot -> bot_config.waha_sessao).
+    // Resolve a sessão remetente (ALERTAS) ANTES de reservar o cooldown: se não houver remetente,
+    // não faz sentido carimbar "avisado" (SCRUM-53 — reserva só se o envio é de fato tentável).
     const cfg = await alerts.getConfig();
     const sessao = await alerts.getSenderSession(cfg.sender_slot);
     if (!sessao) {
@@ -154,23 +206,41 @@ export async function notifyClientDisconnect(slot: string): Promise<ClientDiscon
       return { ok: false, sent: false, reason: 'no_sender' };
     }
 
+    // Cooldown anti-flap por slot (1 msg por episódio de queda). Reserva OTIMISTA (carimba antes
+    // do envio p/ travar ciclos concorrentes). É desfeita se o envio falhar (releaseCooldown).
+    const reservation = await reserveCooldown(slot, config.CLIENT_DISCONNECT_ALERT_COOLDOWN_MIN);
+    if (!reservation.allowed) {
+      log.info(
+        { slot },
+        'client-disconnect-notify: dentro do cooldown — aviso suprimido (anti-flap)',
+      );
+      return { ok: true, sent: false, reason: 'cooldown' };
+    }
+
     const texto = renderClientDisconnectMessage({ nomeNegocio: target.nomeNegocio });
 
-    await Promise.race([
-      waha.sendText({
-        sessao,
-        chatId: toChatId(ownerPhone),
-        texto,
-        typing: true,
-        delayMs: config.CLIENT_DISCONNECT_ALERT_TYPING_DELAY_MS,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error('sendText timeout')),
-          config.CLIENT_DISCONNECT_ALERT_SEND_TIMEOUT_MS,
+    try {
+      await Promise.race([
+        waha.sendText({
+          sessao,
+          chatId: toChatId(ownerPhone),
+          texto,
+          typing: true,
+          delayMs: config.CLIENT_DISCONNECT_ALERT_TYPING_DELAY_MS,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('sendText timeout')),
+            config.CLIENT_DISCONNECT_ALERT_SEND_TIMEOUT_MS,
+          ),
         ),
-      ),
-    ]);
+      ]);
+    } catch (sendErr) {
+      // SCRUM-53: o envio NÃO saiu -> desfaz a reserva pra o próximo ciclo re-tentar (sem isto,
+      // o carimbo "avisado" persistiria por até cooldownMin e o aviso ficaria perdido em silêncio).
+      await releaseCooldown(slot, reservation);
+      throw sendErr; // cai no catch externo -> resultado tipado { ok:false, reason:'error' }
+    }
 
     // NÃO loga o número do dono em claro (LGPD) — só hint + slot + hash da sessão remetente.
     log.info(

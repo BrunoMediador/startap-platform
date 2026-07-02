@@ -278,17 +278,25 @@ function toChatId(phone: string): string {
 }
 
 /**
+ * Resultado de um disparo. `delivered` = ao menos 1 destinatário recebeu; `noop` = nada a fazer
+ * ou suprimido pelo hard cap (decisão deliberada, NÃO é falha); `failed` = tentou e nenhum
+ * destinatário recebeu (sessão remetente caída etc.). SÓ `failed` dispara a compensação do
+ * carimbo de estado (SCRUM-53) — cap/no-op mantêm o carimbo (comportamento anti-flood original).
+ */
+export type SendOutcome = 'delivered' | 'noop' | 'failed';
+
+/**
  * Envia `texto` a todos os destinatários habilitados pela Lola. Consome 1 unidade
  * do hard cap global por DISPARO (não por destinatário — 1 evento = 1 reserva).
- * Retorna a contagem efetiva (0 se suprimido pelo cap ou se tudo falhou).
+ * Retorna o desfecho (ver SendOutcome).
  */
 async function broadcast(
   sessao: string,
   texto: string,
   recipients: alerts.AlertRecipientRow[],
   result: MonitorResult,
-): Promise<void> {
-  if (recipients.length === 0) return;
+): Promise<SendOutcome> {
+  if (recipients.length === 0) return 'noop';
 
   const reservation = await alerts.reserveGlobalSend({
     maxPerWindow: config.ALERTS_MAX_PER_WINDOW,
@@ -300,7 +308,7 @@ async function broadcast(
       { sentInWindow: reservation.sentInWindow, max: config.ALERTS_MAX_PER_WINDOW },
       'monitor: hard cap global atingido — mensagem suprimida (anti-flood)',
     );
-    return;
+    return 'noop';
   }
 
   // Espaça broadcasts que saem no MESMO ciclo (ex.: WAHA + PG caem juntos): se já
@@ -337,7 +345,11 @@ async function broadcast(
     // Pausa antes do próximo destinatário (não depois do último).
     if (i < recipients.length - 1) await sleep(ALERT_BETWEEN_RECIPIENTS_MS);
   }
-  if (anyOk) result.sent += 1;
+  if (anyOk) {
+    result.sent += 1;
+    return 'delivered';
+  }
+  return 'failed';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -361,10 +373,31 @@ async function applyTransition(
   obsItem: CheckObservation,
   prev: alerts.AlertStateRow | null,
   cooldownMin: number,
-  send: (texto: string) => Promise<void>,
+  send: (texto: string) => Promise<SendOutcome>,
 ): Promise<{ isDown: boolean; justWentDown: boolean }> {
   const prevState: alerts.AlertState = prev?.state ?? 'up';
   const prevPending = prev?.pending_down_count ?? 0;
+
+  /**
+   * Compensação SCRUM-53: desfaz o carimbo de alerta (que foi gravado ANTES do envio, como lock
+   * otimista contra ciclos concorrentes) quando o envio FALHOU — restaurando o snapshot anterior
+   * pra o próximo ciclo re-tentar. CONDICIONAL ao valor que ESTE ciclo gravou (state='down' +
+   * expectCount + stampedAt): se outro ciclo já regravou, NÃO pisa (preserva o anti-duplicata).
+   */
+  const rollbackStamp = async (stampedAt: Date, expectCount: number): Promise<void> => {
+    await alerts.restoreStateIfUnchanged({
+      checkKey: obsItem.key,
+      expect: { state: 'down', lastAlertAt: stampedAt, alertCount: expectCount },
+      restore: {
+        state: prevState,
+        downSince: prev?.down_since ?? null,
+        lastAlertAt: prev?.last_alert_at ?? null,
+        alertCount: prev?.alert_count ?? 0,
+        // Preserva o pending anterior: um check debounçado re-confirma a queda no ciclo seguinte.
+        pendingDownCount: prev?.pending_down_count ?? 0,
+      },
+    });
+  };
 
   if (obsItem.obs === 'up') {
     if (prevState === 'down') {
@@ -414,17 +447,25 @@ async function applyTransition(
         return { isDown: false, justWentDown: false };
       }
     }
-    // up → down (confirmado): alerta DOWN.
+    // up → down (confirmado): alerta DOWN. Carimba ANTES do envio (lock otimista contra ciclo
+    // concorrente); se o envio falhar, desfaz o carimbo (SCRUM-53) pra re-tentar no próximo ciclo.
+    const stampedAt = new Date();
     await alerts.upsertState({
       checkKey: obsItem.key,
       state: 'down',
-      downSince: new Date(),
-      lastAlertAt: new Date(),
+      downSince: stampedAt,
+      lastAlertAt: stampedAt,
       alertCount: 1,
       pendingDownCount: 0,
     });
-    await send(`🔴 CAIU: ${obsItem.label} — ${obsItem.detail}.`);
-    // Transição CONFIRMADA up→down: este é o instante exato pra avisar o dono do clone.
+    const outcome = await send(`🔴 CAIU: ${obsItem.label} — ${obsItem.detail}.`);
+    if (outcome === 'failed') {
+      await rollbackStamp(stampedAt, 1);
+      // Envio não saiu -> NÃO é uma transição "avisada": não dispara o aviso ao dono do clone
+      // (que sairia pela mesma sessão remetente e também falharia). O ciclo seguinte re-tenta.
+      return { isDown: true, justWentDown: false };
+    }
+    // Transição CONFIRMADA up→down (avisada): instante exato pra avisar o dono do clone.
     return { isDown: true, justWentDown: true };
   }
 
@@ -432,15 +473,24 @@ async function applyTransition(
   const sinceLast = minutesSince(prev?.last_alert_at ?? prev?.down_since ?? null);
   if (sinceLast >= cooldownMin) {
     const downMins = minutesSince(prev?.down_since ?? null);
+    const stampedAt = new Date();
+    const expectCount = (prev?.alert_count ?? 0) + 1;
     await alerts.upsertState({
       checkKey: obsItem.key,
       state: 'down',
-      downSince: prev?.down_since ?? new Date(),
-      lastAlertAt: new Date(),
-      alertCount: (prev?.alert_count ?? 0) + 1,
+      downSince: prev?.down_since ?? stampedAt,
+      lastAlertAt: stampedAt,
+      alertCount: expectCount,
       pendingDownCount: 0,
     });
-    await send(`🔴 AINDA CAÍDO: ${obsItem.label} há ${downMins} min — ${obsItem.detail}.`);
+    const outcome = await send(
+      `🔴 AINDA CAÍDO: ${obsItem.label} há ${downMins} min — ${obsItem.detail}.`,
+    );
+    if (outcome === 'failed') {
+      // Restaura o last_alert_at anterior: o re-alerta que falhou NÃO reinicia o relógio do
+      // cooldown, então o próximo ciclo (ainda ≥ cooldown) re-tenta (SCRUM-53).
+      await rollbackStamp(stampedAt, expectCount);
+    }
     return { isDown: true, justWentDown: false };
   }
   // Dentro do cooldown: silêncio (estado já é down; nada a gravar).
@@ -478,16 +528,17 @@ export async function runMonitor(): Promise<MonitorResult> {
 
   for (const obsItem of observations) {
     try {
-      const send = async (texto: string): Promise<void> => {
+      const send = async (texto: string): Promise<SendOutcome> => {
         if (!senderSession) {
-          // sender_slot sem waha_sessao mapeado — degradação graciosa (spec §3).
+          // sender_slot sem waha_sessao mapeado — degradação graciosa (spec §3). 'failed' aciona a
+          // compensação do carimbo (SCRUM-53): quando o remetente for configurado, o alerta re-sai.
           log.error(
             { senderSlot: cfg.sender_slot },
             'monitor: sender_slot sem waha_sessao — alerta NÃO enviado (configurar remetente)',
           );
-          return;
+          return 'failed';
         }
-        await broadcast(senderSession, texto, recipients, result);
+        return broadcast(senderSession, texto, recipients, result);
       };
       const { isDown, justWentDown } = await applyTransition(
         obsItem,
