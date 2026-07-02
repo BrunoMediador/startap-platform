@@ -5,6 +5,7 @@
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
 import { meIdToDigits } from '@startap/core/phone';
+import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
 
@@ -181,10 +182,11 @@ export async function createClone(input: {
 }): Promise<CloneRow> {
   const { matrizSlot, displayName, clienteNome, clienteTelefone } = input;
   const personalizacao = input.personalizacao ?? {};
-  const timezone =
-    typeof input.timezone === 'string' && input.timezone.trim() !== ''
-      ? input.timezone
-      : 'America/Sao_Paulo';
+  // Guard IANA (defesa em profundidade, P3-1): valida contra a lista suportada —
+  // ausente/inválido -> DEFAULT SP (nunca persiste lixo). Mesmo padrão de
+  // createCloneRecords/provisioning. Sem lançar: só não deixa gravar tz quebrado
+  // que derrubaria agenda/billing/GCal do clone com RangeError na leitura.
+  const timezone = isValidIanaTimezone(input.timezone) ? input.timezone : DEFAULT_TIMEZONE;
 
   const slug = `clone_${slugify(displayName).slice(0, 40)}_${shortid(6)}`;
 
@@ -555,14 +557,17 @@ export async function getTimezoneBySlot(slot: string): Promise<string> {
 }
 
 /**
- * Grava o fuso (IANA) do clone. Espera que `timezone` JÁ tenha passado por
- * isValidIanaTimezone no chamador (defesa: o portal/gestão validam contra a lista
- * IANA antes de chegar aqui). Escopado por slot (SEMPRE parametrizado, nunca
- * interpolado) — o slot vem da sessão (withTenant), jamais do input do cliente.
- * Invalida o cache de clone (TTL 60s) pro bot/free-slots pegarem o fuso novo.
- * Retorna false se o slot não existe.
+ * Grava o fuso (IANA) do clone. O único caller (portal-perfil) JÁ valida com
+ * isValidIanaTimezone; a guarda interna abaixo (P3-2, defesa em profundidade) cobre
+ * um 2º caller futuro: tz fora da lista IANA => NO-OP, retorna false (nunca escreve
+ * lixo que derrubaria agenda/billing/GCal na leitura). Escopado por slot (SEMPRE
+ * parametrizado, nunca interpolado) — o slot vem da sessão (withTenant), jamais do
+ * input do cliente. Invalida o cache de clone (TTL 60s) pro bot/free-slots pegarem
+ * o fuso novo. Retorna false se o tz é inválido OU se o slot não existe.
  */
 export async function updateTimezoneBySlot(slot: string, timezone: string): Promise<boolean> {
+  // Guard IANA (P3-2): tz inválido não toca a coluna — mantém o fuso atual do clone.
+  if (!isValidIanaTimezone(timezone)) return false;
   const r = await query(
     'UPDATE flow_clones SET timezone = $2, updated_at = NOW() WHERE slot = $1',
     [slot, timezone],
