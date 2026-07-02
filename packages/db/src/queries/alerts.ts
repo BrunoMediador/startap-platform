@@ -387,6 +387,58 @@ export async function upsertState(input: {
 }
 
 /**
+ * Compensação (rollback) do estado de um check, CONDICIONAL ao valor que o próprio
+ * chamador acabou de gravar. Restaura `restore` SOMENTE SE a linha atual ainda contém
+ * exatamente os valores de `expect` (state + alert_count + last_alert_at). Retorna true
+ * se restaurou, false se a linha já mudou (outro ciclo regravou) ou sumiu.
+ *
+ * Por quê: o job de alertas RESERVA o estado (carimba last_alert_at/alert_count) ANTES do
+ * envio, pra que dois ciclos concorrentes não mandem a mesma mensagem (lock otimista). Se o
+ * envio FALHA, precisamos desfazer a reserva pra o próximo ciclo re-tentar — mas SEM pisar
+ * numa reserva mais nova feita por outro ciclo. O predicado `expect` é o valor que ESTE ciclo
+ * gravou: só o dono da reserva a desfaz. Preserva a semântica anti-duplicata.
+ *
+ * `IS NOT DISTINCT FROM` compara last_alert_at tratando NULL corretamente.
+ */
+export async function restoreStateIfUnchanged(input: {
+  checkKey: string;
+  expect: { state: AlertState; lastAlertAt: Date | null; alertCount: number };
+  restore: {
+    state: AlertState;
+    downSince: Date | null;
+    lastAlertAt: Date | null;
+    alertCount: number;
+    pendingDownCount: number;
+  };
+}): Promise<boolean> {
+  const r = await query(
+    `UPDATE alert_states SET
+       state              = $1,
+       down_since         = $2,
+       last_alert_at      = $3,
+       alert_count        = $4,
+       pending_down_count = $5,
+       updated_at         = NOW()
+     WHERE check_key = $6
+       AND state       = $7
+       AND alert_count = $8
+       AND last_alert_at IS NOT DISTINCT FROM $9`,
+    [
+      input.restore.state,
+      input.restore.downSince ?? null,
+      input.restore.lastAlertAt ?? null,
+      input.restore.alertCount,
+      input.restore.pendingDownCount,
+      input.checkKey,
+      input.expect.state,
+      input.expect.alertCount,
+      input.expect.lastAlertAt ?? null,
+    ],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
  * Hard cap global: conta quantas mensagens foram enviadas na janela atual e
  * incrementa de forma atômica. A linha sintética '__global__' guarda o contador
  * (alert_count) e o início da janela (down_since reaproveitado como window_start).

@@ -21,13 +21,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getState = vi.fn();
 const upsertState = vi.fn();
+const restoreStateIfUnchanged = vi.fn();
 const getConfig = vi.fn();
 const getSenderSession = vi.fn();
 const getCloneDisconnectAlertTarget = vi.fn();
 const sendText = vi.fn();
 
 vi.mock('@startap/db', () => ({
-  alerts: { getState, upsertState, getConfig, getSenderSession },
+  alerts: { getState, upsertState, restoreStateIfUnchanged, getConfig, getSenderSession },
   flowClones: { getCloneDisconnectAlertTarget },
 }));
 
@@ -57,6 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getState.mockResolvedValue(null); // sem cooldown anterior
   upsertState.mockResolvedValue(undefined);
+  restoreStateIfUnchanged.mockResolvedValue(true);
   getConfig.mockResolvedValue({ sender_slot: 'alertas' });
   getSenderSession.mockResolvedValue('ALERTAS');
   sendText.mockResolvedValue(undefined);
@@ -229,6 +231,133 @@ describe('notifyClientDisconnect — fail-safe', () => {
 
     expect(r.ok).toBe(false);
     expect(r.sent).toBe(false);
+  });
+});
+
+describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consumida quando o envio falha DEFINITIVAMENTE', () => {
+  const target = { phone: '5535999991234', enabled: true, nomeNegocio: 'Seven 7 Barber' };
+  // Falha DEFINITIVA = o incidente real (ALERTAS morta -> WAHA recusa com 422 sessão não-WORKING).
+  const definitiveErr = new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING');
+
+  it('send falha DEFINITIVA -> DESFAZ a reserva (restore condicional ao carimbo) -> ciclo seguinte re-tenta', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null); // primeiro episódio: sem carimbo anterior
+    sendText.mockRejectedValue(definitiveErr);
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: false, sent: false, reason: 'error' });
+    // 1) reservou (carimbou 'avisado') ANTES do envio (lock otimista).
+    expect(upsertState).toHaveBeenCalledTimes(1);
+    const reserved = upsertState.mock.calls[0][0];
+    expect(reserved.checkKey).toBe(disconnectCooldownKey(SLOT));
+    expect(reserved.state).toBe('down');
+    // 2) send falhou DEFINITIVAMENTE -> compensou: restaurou o estado anterior (neutro 'up').
+    expect(restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    const comp = restoreStateIfUnchanged.mock.calls[0][0];
+    // O predicado (expect) usa EXATAMENTE o que este ciclo gravou -> só o dono desfaz a reserva.
+    expect(comp.expect.state).toBe('down');
+    expect(comp.expect.lastAlertAt).toBe(reserved.lastAlertAt);
+    expect(comp.expect.alertCount).toBe(reserved.alertCount);
+    // Restaura pro neutro: last_alert_at null = próximo ciclo NÃO está mais em cooldown -> re-tenta.
+    expect(comp.restore.state).toBe('up');
+    expect(comp.restore.lastAlertAt).toBeNull();
+    expect(comp.restore.alertCount).toBe(0);
+  });
+
+  it('send TIMEOUT (ambíguo, pode ter entregue) -> MANTÉM o cooldown -> próximo ciclo NÃO reenvia (P2)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null);
+    // Timeout do Promise.race: NÃO prova não-entrega. Não pode reverter (risco de duplicar ao pagante).
+    sendText.mockRejectedValue(new Error('sendText timeout'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: false, sent: false, reason: 'error' });
+    // Reservou o cooldown e o MANTÉM (não desfaz) -> o carimbo segura o reenvio no próximo ciclo.
+    expect(upsertState).toHaveBeenCalledTimes(1);
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('send 5xx genérico (ambíguo) -> também MANTÉM o cooldown (não reverte)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null);
+    sendText.mockRejectedValue(new Error('WAHA /api/sendText -> HTTP 500: internal error'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r.ok).toBe(false);
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('send falha DEFINITIVA após episódio anterior -> restaura o last_alert_at ANTERIOR (não o novo carimbo)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    const prevAt = new Date(Date.now() - 7 * 60 * 60_000); // 7h atrás (fora do cooldown 6h -> reserva)
+    getState.mockResolvedValue({
+      check_key: disconnectCooldownKey(SLOT),
+      state: 'down',
+      down_since: null,
+      last_alert_at: prevAt,
+      alert_count: 2,
+      pending_down_count: 0,
+      updated_at: new Date(),
+    });
+    sendText.mockRejectedValue(new Error('connect ECONNREFUSED 10.0.0.3:3000'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r.ok).toBe(false);
+    expect(restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    const comp = restoreStateIfUnchanged.mock.calls[0][0];
+    // Volta ao carimbo do episódio anterior (não deixa o relógio do cooldown adiantado por um
+    // envio que nunca saiu). alert_count também retorna ao valor anterior.
+    expect(comp.restore.lastAlertAt).toBe(prevAt);
+    expect(comp.restore.alertCount).toBe(2);
+  });
+
+  it('send OK -> NÃO desfaz nada: cooldown legítimo permanece (anti-duplicata preservado)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null);
+    sendText.mockResolvedValue(undefined);
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: true, sent: true });
+    expect(upsertState).toHaveBeenCalledTimes(1); // reserva permanece
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled(); // nada a compensar
+  });
+
+  it('ciclo concorrente já reservou (carimbo recente) -> este suprime SEM enviar (1 envio só)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    // Outro ciclo carimbou há 2 min; cooldown 360 min -> este ciclo vê a reserva e NÃO reenvia.
+    getState.mockResolvedValue({
+      check_key: disconnectCooldownKey(SLOT),
+      state: 'down',
+      down_since: null,
+      last_alert_at: new Date(Date.now() - 2 * 60_000),
+      alert_count: 1,
+      pending_down_count: 0,
+      updated_at: new Date(),
+    });
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: true, sent: false, reason: 'cooldown' });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(upsertState).not.toHaveBeenCalled(); // não re-reserva
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('sem remetente NÃO reserva (resolve ALERTAS antes do cooldown) -> nada a desfazer', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getSenderSession.mockResolvedValue(null);
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: false, sent: false, reason: 'no_sender' });
+    // Reordenado (SCRUM-53): o cooldown só é reservado DEPOIS de garantir o remetente.
+    expect(upsertState).not.toHaveBeenCalled();
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 });
 
