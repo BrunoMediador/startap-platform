@@ -266,6 +266,40 @@ export async function getSenderSession(senderSlot: string): Promise<string | nul
 // Sessões a monitorar — clientes reais com sessão dedicada + Lola (spec §1)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Sessões CRÍTICAS que NÃO são clones de cliente (não vivem em flow_clones) e NÃO são
+ * a remetente — mas precisam ser vigiadas. Default no código (padrão do bot-blocklist #329:
+ * o comportamento em prod NÃO depende de setar env; o deploy já ativa a vigia).
+ *
+ * Hoje: `STARTAP_AI_PROD` = Lola, nosso bot de prospecção (slot 'startap'). Ficava FORA
+ * do monitor porque não é flow_clone nem a remetente ALERTAS — bug provado em prod: caiu
+ * por device_removed em 02/07 22:22 UTC e o monitor nem tentou alertar (SCRUM-56).
+ */
+export const DEFAULT_MONITOR_EXTRA_SESSIONS: readonly string[] = ['STARTAP_AI_PROD'];
+
+/**
+ * Resolve a lista de sessões extra (não-clone) a vigiar, a partir da env CSV opcional
+ * `MONITOR_EXTRA_SESSIONS`. Semântica de SOBREPOSIÇÃO (não união):
+ *  - env ausente/vazia -> vale o default do código (DEFAULT_MONITOR_EXTRA_SESSIONS);
+ *  - env com valor      -> SUBSTITUI o default (o operador declara a lista inteira).
+ * ⚠️ Consequência: quem setar a env e quiser continuar vigiando a Lola precisa incluir
+ * `STARTAP_AI_PROD` na lista. Trim + dedupe; itens vazios são ignorados. `env` injetável
+ * só p/ teste (mesmo padrão de model-usage.summaryByPeriod).
+ */
+export function resolveMonitorExtraSessions(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.MONITOR_EXTRA_SESSIONS;
+  const source = raw && raw.trim().length > 0 ? raw.split(',') : DEFAULT_MONITOR_EXTRA_SESSIONS;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of source) {
+    const name = item.trim();
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
 export interface MonitoredSession {
   /** Nome da sessão WAHA (ex.: 'cirilo_barbaershop', 'STARTAP_AI_PROD'). */
   sessao: string;
@@ -296,11 +330,17 @@ export interface MonitoredSession {
  *  - + a própria sessão remetente (bot_config do sender_slot — hoje a sessão dedicada `ALERTAS`),
  *    pra detectar se o remetente caiu (ainda que, caído, o alerta não saia — limitação §3).
  *    slot=null nessa entrada (não é clone de cliente; nunca avisa "dono").
+ *  - + sessões CRÍTICAS não-clone (resolveMonitorExtraSessions — hoje a Lola/STARTAP_AI_PROD),
+ *    que não vivem em flow_clones nem são a remetente. slot=null (não é clone; nunca avisa
+ *    "dono", só o alerta interno ao Bruno). Corrige o SCRUM-56: a Lola ficava cega ao monitor.
  *
  * Exclui sessões de teste por nunca terem first_connected_at de um clone de cliente real.
- * Dedup por nome de sessão.
+ * Dedup por nome de sessão (clone com slot real tem precedência sobre entrada extra slot=null).
  */
-export async function listMonitoredSessions(senderSlot: string): Promise<MonitoredSession[]> {
+export async function listMonitoredSessions(
+  senderSlot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<MonitoredSession[]> {
   const r = await query<{ slot: string; waha_sessao: string; display_name: string | null }>(
     `SELECT fc.slot, fc.waha_sessao, fc.display_name
        FROM flow_clones fc
@@ -323,6 +363,14 @@ export async function listMonitoredSessions(senderSlot: string): Promise<Monitor
   const sender = await getSenderSession(senderSlot);
   if (sender && !out.has(sender)) {
     out.set(sender, { sessao: sender, label: 'Sessão de alertas (remetente)', slot: null });
+  }
+  // Sessões CRÍTICAS não-clone (default: Lola/STARTAP_AI_PROD; override via env). slot=null:
+  // não é clone de cliente — dispara só o alerta interno (Bruno), nunca o aviso ao "dono".
+  // Dedup: se a sessão já entrou como clone (com slot real), NÃO a rebaixa pra slot=null.
+  for (const sessao of resolveMonitorExtraSessions(env)) {
+    if (!out.has(sessao)) {
+      out.set(sessao, { sessao, label: `${sessao} (sessão crítica)`, slot: null });
+    }
   }
   return [...out.values()];
 }

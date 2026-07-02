@@ -25,7 +25,9 @@ const {
   listMonitoredSessions,
   recordCycleHeartbeat,
   reserveGlobalSend,
+  resolveMonitorExtraSessions,
   restoreStateIfUnchanged,
+  DEFAULT_MONITOR_EXTRA_SESSIONS,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
 } = await import('./alerts.js');
@@ -71,7 +73,8 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vig
       })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
-    const sessions = await listMonitoredSessions('alertas');
+    // env {} = sem override -> vale o default do código (STARTAP_AI_PROD/Lola entra na vigia).
+    const sessions = await listMonitoredSessions('alertas', {});
 
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     // FIX do bug (Seven 7): vigia clones que JÁ conectaram alguma vez (first_connected_at não
@@ -86,10 +89,12 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vig
     // Nunca seleciona sessão vazia/nula.
     expect(sql).toContain('fc.waha_sessao IS NOT NULL');
 
-    // Resultado: clone do Cirilo (com slot p/ resolver o dono) + a sessão remetente (slot=null).
+    // Resultado: clone do Cirilo (com slot p/ resolver o dono) + a sessão remetente (slot=null)
+    // + a sessão crítica não-clone do default (Lola/STARTAP_AI_PROD, slot=null — SCRUM-56).
     expect(sessions).toEqual([
       { sessao: 'cirilo_barbaershop', label: 'Barbearia do Cirilo', slot: 'clone_cirilo' },
       { sessao: 'ALERTAS', label: 'Sessão de alertas (remetente)', slot: null },
+      { sessao: 'STARTAP_AI_PROD', label: 'STARTAP_AI_PROD (sessão crítica)', slot: null },
     ]);
   });
 
@@ -100,11 +105,115 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vig
       })
       .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
 
-    const sessions = await listMonitoredSessions('alertas');
+    // Override da env desliga o default (sem STARTAP_AI_PROD) p/ isolar o teste ao dedup do remetente.
+    const sessions = await listMonitoredSessions('alertas', {
+      MONITOR_EXTRA_SESSIONS: 'ALERTAS',
+    });
+    // ALERTAS aparece UMA vez: já é clone (query 1), o remetente E a sessão extra colidem no dedup.
     expect(sessions).toHaveLength(1);
     expect(sessions[0]?.sessao).toBe('ALERTAS');
-    // Quando o remetente JÁ é um clone monitorado, mantém o slot do clone (não vira null).
+    // Quando o remetente/extra JÁ é um clone monitorado, mantém o slot do clone (não vira null).
     expect(sessions[0]?.slot).toBe('clone_alertas');
+  });
+});
+
+describe('resolveMonitorExtraSessions — sessões críticas não-clone (SCRUM-56)', () => {
+  it('env ausente -> default do código (STARTAP_AI_PROD/Lola)', () => {
+    expect(resolveMonitorExtraSessions({})).toEqual(['STARTAP_AI_PROD']);
+    expect(DEFAULT_MONITOR_EXTRA_SESSIONS).toContain('STARTAP_AI_PROD');
+  });
+
+  it('env vazia/whitespace -> cai no default (não zera a vigia)', () => {
+    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: '' })).toEqual([
+      'STARTAP_AI_PROD',
+    ]);
+    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: '   ' })).toEqual([
+      'STARTAP_AI_PROD',
+    ]);
+  });
+
+  it('env com valor SOBREPÕE o default (o operador declara a lista inteira)', () => {
+    expect(
+      resolveMonitorExtraSessions({
+        MONITOR_EXTRA_SESSIONS: 'STARTAP_AI_PROD, WHATSAPP_ROUTER_TESTE',
+      }),
+    ).toEqual(['STARTAP_AI_PROD', 'WHATSAPP_ROUTER_TESTE']);
+    // ⚠️ footgun documentado: setar a env SEM a Lola tira a Lola da vigia.
+    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: 'OUTRA_SESSAO' })).toEqual([
+      'OUTRA_SESSAO',
+    ]);
+  });
+
+  it('trim + dedupe + ignora itens vazios', () => {
+    expect(resolveMonitorExtraSessions({ MONITOR_EXTRA_SESSIONS: ' A , A ,, B ,' })).toEqual([
+      'A',
+      'B',
+    ]);
+  });
+});
+
+describe('listMonitoredSessions — vigia sessões críticas não-clone (SCRUM-56, Lola)', () => {
+  it('inclui STARTAP_AI_PROD (default) na lista mesmo sem clone/env, slot=null', async () => {
+    // Sem clones (query 1 vazia) e remetente ALERTAS (query 2). O default deve trazer a Lola.
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
+
+    const sessions = await listMonitoredSessions('alertas', {});
+
+    // A Lola vira um item que o monitor consome como check `waha:STARTAP_AI_PROD` (slot=null:
+    // dispara só o alerta INTERNO ao Bruno, nunca aviso ao "dono" — não é clone de cliente).
+    const lola = sessions.find((s) => s.sessao === 'STARTAP_AI_PROD');
+    expect(lola).toEqual({
+      sessao: 'STARTAP_AI_PROD',
+      label: 'STARTAP_AI_PROD (sessão crítica)',
+      slot: null,
+    });
+  });
+
+  it('env override troca a sessão extra vigiada (default some, nova entra)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
+
+    const sessions = await listMonitoredSessions('alertas', {
+      MONITOR_EXTRA_SESSIONS: 'LOLA_V2',
+    });
+
+    expect(sessions.some((s) => s.sessao === 'STARTAP_AI_PROD')).toBe(false);
+    expect(sessions.some((s) => s.sessao === 'LOLA_V2')).toBe(true);
+  });
+
+  it('não rebaixa a slot=null se a sessão extra JÁ for um clone (mantém o dono)', async () => {
+    // A sessão extra colide com um clone real (slot preenchido) -> o clone tem precedência.
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [{ slot: 'clone_x', waha_sessao: 'STARTAP_AI_PROD', display_name: 'Clone X' }],
+      })
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
+
+    const sessions = await listMonitoredSessions('alertas', {});
+    const entry = sessions.filter((s) => s.sessao === 'STARTAP_AI_PROD');
+    expect(entry).toHaveLength(1);
+    expect(entry[0]?.slot).toBe('clone_x'); // não virou null
+  });
+
+  it('clones do #390 continuam vigiados junto das sessões críticas (não regride)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [
+          { slot: 'clone_cirilo', waha_sessao: 'cirilo_barbaershop', display_name: 'Cirilo' },
+          { slot: 'clone_samuel', waha_sessao: 'samuel_barber', display_name: 'Samuel' },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ waha_sessao: 'ALERTAS' }] });
+
+    const sessions = await listMonitoredSessions('alertas', {});
+    const names = sessions.map((s) => s.sessao);
+    expect(names).toContain('cirilo_barbaershop');
+    expect(names).toContain('samuel_barber');
+    expect(names).toContain('ALERTAS');
+    expect(names).toContain('STARTAP_AI_PROD');
   });
 });
 
