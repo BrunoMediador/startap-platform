@@ -4,6 +4,7 @@ import { ParticleField } from '@/components/fx/particle-field';
 import { Brandmark, IconEye, IconEyeOff, IconInfo, IconWhatsapp } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { TimezoneCombobox } from '@/components/ui/timezone-combobox';
 import { useToast } from '@/components/ui/toast';
 import { ApiError, apiFetch } from '@/lib/api';
 import type { SignupResponse } from '@/lib/api-types';
@@ -16,6 +17,7 @@ import {
   validateCadastro,
 } from '@/lib/cadastro';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
+import { DEFAULT_TIMEZONE } from '@/lib/timezones';
 /**
  * Cadastro self-service (spec A3.1 da Missao 020). Mesma identidade do login v2:
  * tema escuro forcado, constelacao + vinheta, split >=880px (marca | card), card
@@ -50,6 +52,8 @@ export function CadastroForm() {
   const [nome, setNome] = useState('');
   const [area, setArea] = useState<Area | null>(null);
   const [whatsapp, setWhatsapp] = useState('');
+  // Fuso do negócio: pré-selecionado em São Paulo; o combobox só troca por seleção.
+  const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
   const [senha, setSenha] = useState('');
   const [showSenha, setShowSenha] = useState(false);
   // Aceite dos Termos + Política de Privacidade (checkbox obrigatório — SCRUM-1).
@@ -78,7 +82,7 @@ export function CadastroForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBanner(null);
-    const res = validateCadastro({ nome, area, whatsapp, senha, aceite });
+    const res = validateCadastro({ nome, area, whatsapp, timezone, senha, aceite });
     if (!res.ok) {
       setErrors(res.errors);
       return;
@@ -233,6 +237,14 @@ export function CadastroForm() {
                       </span>
                     </p>
                   </div>
+
+                  <TimezoneCombobox
+                    id="cad-tz"
+                    label="Fuso horário do seu negócio"
+                    hint="Usado pra agendar no horário certo da sua cidade. Já vem em São Paulo."
+                    value={timezone}
+                    onChange={setTimezone}
+                  />
 
                   <SenhaField
                     value={senha}

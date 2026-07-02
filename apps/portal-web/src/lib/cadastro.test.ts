@@ -49,10 +49,11 @@ describe('validateCadastro', () => {
     area: 'barbearia' as const,
     whatsapp: '(31) 99999-8842',
     senha: '12345678',
+    timezone: 'America/Sao_Paulo',
     aceite: true,
   };
 
-  it('aceita draft valido e monta payload do signup (digitos locais + area + aceite)', () => {
+  it('aceita draft valido e monta payload do signup (digitos locais + area + aceite + fuso)', () => {
     const res = validateCadastro(ok);
     expect(res).toEqual({
       ok: true,
@@ -61,9 +62,16 @@ describe('validateCadastro', () => {
         area: 'barbearia',
         whatsapp: '31999998842',
         senha: '12345678',
+        timezone: 'America/Sao_Paulo',
         aceite_termos: true,
       },
     });
+  });
+
+  it('fuso vazio no draft cai no default São Paulo', () => {
+    const res = validateCadastro({ ...ok, timezone: '' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.timezone).toBe('America/Sao_Paulo');
   });
 
   it('rejeita quando o aceite dos termos não foi marcado (checkbox obrigatório)', () => {
@@ -126,6 +134,7 @@ describe('validateCadastro', () => {
       nome: '',
       area: null,
       whatsapp: '123',
+      timezone: 'America/Sao_Paulo',
       senha: 'abc',
       aceite: false,
     });

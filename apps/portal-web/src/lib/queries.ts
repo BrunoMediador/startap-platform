@@ -378,15 +378,22 @@ export function usePerfil(slot: string): UseQueryResult<PerfilNegocio> {
   });
 }
 
+/**
+ * PUT /portal/perfil. Body = { perfil, timezone } — o `timezone` (IANA) é campo
+ * TOP-LEVEL, irmão de `perfil` (o backend valida com isValidIanaTimezone e grava na
+ * coluna flow_clones.timezone; NÃO entra no perfilSchema/personalizacao). A resposta
+ * devolve `r.perfil` (sem tz) e é isso que fica no cache qk.perfil — o tz vive no
+ * /portal/status (useTenantTz).
+ */
 export function useSavePerfil(
   slot: string,
-): UseMutationResult<PerfilNegocio, Error, PerfilNegocio> {
+): UseMutationResult<PerfilNegocio, Error, { perfil: PerfilNegocio; timezone: string }> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (perfil: PerfilNegocio) =>
+    mutationFn: ({ perfil, timezone }) =>
       apiFetch<SavePerfilResponse>('/portal/perfil', {
         method: 'PUT',
-        body: { perfil },
+        body: { perfil, timezone },
       }).then((r) => r.perfil),
     onSuccess: (perfil) => {
       client.setQueryData(qk.perfil(slot), perfil);

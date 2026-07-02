@@ -625,15 +625,25 @@ export interface PerfilNegocio {
   formas_pagamento: FormaPagamentoOpcao[];
 }
 
-/** GET /portal/perfil -> 200. O perfil vem dentro do envelope `perfil`. */
+/**
+ * GET /portal/perfil -> 200 { perfil, timezone }. O `timezone` (IANA) é TOP-LEVEL,
+ * FORA do objeto perfil: vem da coluna flow_clones.timezone (não da personalizacao).
+ * Opcional: undefined enquanto a portal-api não devolve -> a tela pré-seleciona pelo
+ * /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil` no cache.
+ */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
+  timezone?: string;
 }
 
-/** PUT /portal/perfil -> 200. Devolve `ok` + o perfil salvo no mesmo envelope. */
+/**
+ * PUT /portal/perfil -> 200 { ok, perfil, timezone }. Request body = { perfil, timezone }
+ * (timezone TOP-LEVEL). Devolve o perfil salvo + o timezone efetivo.
+ */
 export interface SavePerfilResponse {
   ok: true;
   perfil: PerfilNegocio;
+  timezone?: string;
 }
 
 // ── Lembretes de agendamento (portal-lembretes.ts — config self-service) ──────

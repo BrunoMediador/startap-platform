@@ -7,6 +7,8 @@
  * A3.1/A5 (docs/missoes/020-ux-onboarding-e-agendamento-manual.md).
  */
 
+import { DEFAULT_TIMEZONE } from './timezones';
+
 export const SENHA_MIN = 8;
 export const SENHA_MAX = 72;
 export const NOME_MIN = 2;
@@ -33,6 +35,8 @@ export interface CadastroDraft {
   area: Area | null;
   whatsapp: string;
   senha: string;
+  /** Fuso IANA do negócio (default São Paulo). Pré-selecionado; sempre concreto. */
+  timezone: string;
   /** Aceite dos Termos + Política de Privacidade (checkbox obrigatório — SCRUM-1). */
   aceite: boolean;
 }
@@ -50,6 +54,8 @@ export interface CadastroPayload {
   area: Area;
   whatsapp: string;
   senha: string;
+  /** Fuso IANA (default São Paulo). O backend valida contra Intl.supportedValuesOf. */
+  timezone: string;
   /** Sempre `true`: só monta payload com o aceite marcado (o gate de verdade é o backend). */
   aceite_termos: true;
 }
@@ -158,6 +164,9 @@ export function validateCadastro(
       area: d.area,
       whatsapp: digits,
       senha: d.senha,
+      // Fuso já vem concreto do combobox (default São Paulo); guarda de segurança
+      // caso o draft venha vazio.
+      timezone: d.timezone || DEFAULT_TIMEZONE,
       aceite_termos: true,
     },
   };
