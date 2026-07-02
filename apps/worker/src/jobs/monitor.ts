@@ -44,6 +44,7 @@ import { pool } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
 import { notifyClientDisconnect } from './client-disconnect-notify.js';
+import { isDefinitiveNonDelivery } from './waha-send-failure.js';
 
 const log = logger.child({ job: 'monitor' });
 
@@ -278,17 +279,23 @@ function toChatId(phone: string): string {
 }
 
 /**
- * Resultado de um disparo. `delivered` = ao menos 1 destinatário recebeu; `noop` = nada a fazer
- * ou suprimido pelo hard cap (decisão deliberada, NÃO é falha); `failed` = tentou e nenhum
- * destinatário recebeu (sessão remetente caída etc.). SÓ `failed` dispara a compensação do
- * carimbo de estado (SCRUM-53) — cap/no-op mantêm o carimbo (comportamento anti-flood original).
+ * Resultado de um disparo:
+ *  - `delivered`         = ao menos 1 destinatário recebeu;
+ *  - `noop`              = nada a fazer OU suprimido pelo hard cap (decisão deliberada, não é falha);
+ *  - `failed-definitive` = tentou e NENHUM recebeu, e TODA falha é definitiva (sessão FAILED/404/
+ *                          conexão recusada) — temos certeza de que não saiu;
+ *  - `failed-ambiguous`  = tentou e nenhum recebeu, mas ao menos uma falha é AMBÍGUA (timeout/5xx/
+ *                          desconhecido) — pode ter entregue.
+ * SÓ `failed-definitive` dispara a compensação do carimbo (SCRUM-53 + P2 do security). `noop` e
+ * `failed-ambiguous` MANTÊM o carimbo (anti-flood/anti-duplicata; comportamento pré-PR pra ambíguo).
  */
-export type SendOutcome = 'delivered' | 'noop' | 'failed';
+export type SendOutcome = 'delivered' | 'noop' | 'failed-definitive' | 'failed-ambiguous';
 
 /**
  * Envia `texto` a todos os destinatários habilitados pela Lola. Consome 1 unidade
  * do hard cap global por DISPARO (não por destinatário — 1 evento = 1 reserva).
- * Retorna o desfecho (ver SendOutcome).
+ * Retorna o desfecho (ver SendOutcome). Como todos os destinatários usam a MESMA sessão
+ * remetente, a natureza da falha é uniforme na prática (sessão FAILED = 422 pra todos).
  */
 async function broadcast(
   sessao: string,
@@ -316,6 +323,7 @@ async function broadcast(
   if (result.sent > 0) await sleep(ALERT_BETWEEN_BROADCASTS_MS);
 
   let anyOk = false;
+  let sawAmbiguous = false; // alguma falha "possivelmente entregue" (timeout/5xx/desconhecido)?
   // SEQUENCIAL e espaçado (anti-rajada — nunca Promise.all): "digitando…" + delay
   // humanizador antes de cada envio; pausa ENTRE destinatários.
   for (let i = 0; i < recipients.length; i++) {
@@ -336,6 +344,7 @@ async function broadcast(
       anyOk = true;
     } catch (e) {
       result.sendErrors += 1;
+      if (!isDefinitiveNonDelivery(e)) sawAmbiguous = true;
       // NÃO loga o número (LGPD) — só o id do destinatário e o erro.
       log.error(
         { recipientId: r.id, err: e instanceof Error ? e.message : String(e) },
@@ -349,7 +358,8 @@ async function broadcast(
     result.sent += 1;
     return 'delivered';
   }
-  return 'failed';
+  // Nenhum recebeu: só compensa o carimbo se TODA falha foi definitiva (certeza de não-entrega).
+  return sawAmbiguous ? 'failed-ambiguous' : 'failed-definitive';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,18 +395,28 @@ async function applyTransition(
    * expectCount + stampedAt): se outro ciclo já regravou, NÃO pisa (preserva o anti-duplicata).
    */
   const rollbackStamp = async (stampedAt: Date, expectCount: number): Promise<void> => {
-    await alerts.restoreStateIfUnchanged({
-      checkKey: obsItem.key,
-      expect: { state: 'down', lastAlertAt: stampedAt, alertCount: expectCount },
-      restore: {
-        state: prevState,
-        downSince: prev?.down_since ?? null,
-        lastAlertAt: prev?.last_alert_at ?? null,
-        alertCount: prev?.alert_count ?? 0,
-        // Preserva o pending anterior: um check debounçado re-confirma a queda no ciclo seguinte.
-        pendingDownCount: prev?.pending_down_count ?? 0,
-      },
-    });
+    // Best-effort e simétrico ao releaseCooldown do client-disconnect: engole o próprio erro. Se o
+    // restore falhar (DB blip), o pior caso é 1 alerta suprimido até o cooldown — NÃO deixa o erro
+    // subir pro try/catch por-check do runMonitor (que contaria sendErrors+1 espúrio).
+    try {
+      await alerts.restoreStateIfUnchanged({
+        checkKey: obsItem.key,
+        expect: { state: 'down', lastAlertAt: stampedAt, alertCount: expectCount },
+        restore: {
+          state: prevState,
+          downSince: prev?.down_since ?? null,
+          lastAlertAt: prev?.last_alert_at ?? null,
+          alertCount: prev?.alert_count ?? 0,
+          // Preserva o pending anterior: um check debounçado re-confirma a queda no ciclo seguinte.
+          pendingDownCount: prev?.pending_down_count ?? 0,
+        },
+      });
+    } catch (e) {
+      log.warn(
+        { checkKey: obsItem.key, err: e instanceof Error ? e.message : String(e) },
+        'monitor: falha ao desfazer carimbo de alerta (rollback) — ciclo segue',
+      );
+    }
   };
 
   if (obsItem.obs === 'up') {
@@ -459,13 +479,16 @@ async function applyTransition(
       pendingDownCount: 0,
     });
     const outcome = await send(`🔴 CAIU: ${obsItem.label} — ${obsItem.detail}.`);
-    if (outcome === 'failed') {
+    if (outcome === 'failed-definitive') {
+      // Certeza de não-entrega (sessão FAILED/404/conexão recusada): desfaz o carimbo (SCRUM-53) e
+      // NÃO marca a transição como avisada — o aviso ao dono sairia pela mesma sessão morta e também
+      // falharia. O ciclo seguinte re-tenta. Falha AMBÍGUA (timeout/5xx) NÃO reverte (P2 do security):
+      // mantém o carimbo (pode ter entregue) e segue como transição avisada.
       await rollbackStamp(stampedAt, 1);
-      // Envio não saiu -> NÃO é uma transição "avisada": não dispara o aviso ao dono do clone
-      // (que sairia pela mesma sessão remetente e também falharia). O ciclo seguinte re-tenta.
       return { isDown: true, justWentDown: false };
     }
-    // Transição CONFIRMADA up→down (avisada): instante exato pra avisar o dono do clone.
+    // Transição CONFIRMADA up→down (entregue OU ambígua = possivelmente avisada): instante do aviso
+    // ao dono do clone (o notify tem cooldown+taxonomia próprios que evitam duplicar).
     return { isDown: true, justWentDown: true };
   }
 
@@ -486,9 +509,10 @@ async function applyTransition(
     const outcome = await send(
       `🔴 AINDA CAÍDO: ${obsItem.label} há ${downMins} min — ${obsItem.detail}.`,
     );
-    if (outcome === 'failed') {
-      // Restaura o last_alert_at anterior: o re-alerta que falhou NÃO reinicia o relógio do
-      // cooldown, então o próximo ciclo (ainda ≥ cooldown) re-tenta (SCRUM-53).
+    if (outcome === 'failed-definitive') {
+      // Só em falha DEFINITIVA restaura o last_alert_at anterior: o re-alerta que comprovadamente
+      // não saiu NÃO reinicia o relógio do cooldown, então o próximo ciclo (ainda ≥ cooldown)
+      // re-tenta (SCRUM-53). Ambíguo (timeout/5xx) mantém o carimbo (P2 do security — pode ter saído).
       await rollbackStamp(stampedAt, expectCount);
     }
     return { isDown: true, justWentDown: false };
@@ -530,13 +554,14 @@ export async function runMonitor(): Promise<MonitorResult> {
     try {
       const send = async (texto: string): Promise<SendOutcome> => {
         if (!senderSession) {
-          // sender_slot sem waha_sessao mapeado — degradação graciosa (spec §3). 'failed' aciona a
-          // compensação do carimbo (SCRUM-53): quando o remetente for configurado, o alerta re-sai.
+          // sender_slot sem waha_sessao mapeado — degradação graciosa (spec §3). Sem remetente a
+          // mensagem DEFINITIVAMENTE não saiu -> 'failed-definitive' aciona a compensação (SCRUM-53):
+          // quando o remetente for configurado, o alerta re-sai.
           log.error(
             { senderSlot: cfg.sender_slot },
             'monitor: sender_slot sem waha_sessao — alerta NÃO enviado (configurar remetente)',
           );
-          return 'failed';
+          return 'failed-definitive';
         }
         return broadcast(senderSession, texto, recipients, result);
       };

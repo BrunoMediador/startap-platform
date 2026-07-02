@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   restoreStateIfUnchanged: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
+  notifyClientDisconnect: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -41,6 +42,10 @@ vi.mock('@startap/integrations', () => ({
   waha: { sendText: mocks.sendText },
 }));
 
+vi.mock('./client-disconnect-notify.js', () => ({
+  notifyClientDisconnect: mocks.notifyClientDisconnect,
+}));
+
 vi.mock('../config.js', () => ({
   config: {
     WAHA_URL: 'http://waha:3000',
@@ -48,6 +53,9 @@ vi.mock('../config.js', () => ({
     ALERTS_API_HEALTH_URL: 'http://startap-api:3040/health',
     ALERTS_MAX_PER_WINDOW: 50,
     ALERTS_WINDOW_MIN: 30,
+    // Flag ON: torna a checagem "up→down falho NÃO avisa o dono" LOAD-BEARING (senão o bloco de
+    // notify nunca roda e a asserção clientNotified===0 seria vácua).
+    CLIENT_DISCONNECT_ALERT_ENABLED: true,
   },
 }));
 
@@ -114,18 +122,22 @@ beforeEach(() => {
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.restoreStateIfUnchanged.mockResolvedValue(true);
+  mocks.notifyClientDisconnect.mockResolvedValue({ ok: true, sent: true });
   mocks.listEnabledRecipients.mockResolvedValue([recipient(1, '5535999990011')]);
   pgUp();
 });
 
-describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha', () => {
-  it('up->down + send FALHA (recipient rejeita) -> desfaz o carimbo e o ciclo seguinte re-tenta', async () => {
+describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha DEFINITIVAMENTE', () => {
+  // Falha DEFINITIVA (certeza de não-entrega): sessão FAILED -> WAHA recusa o /api/sendText com 422.
+  const DEFINITIVE = new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING');
+
+  it('up->down + send FALHA DEFINITIVA (recipient rejeita) -> desfaz o carimbo e o ciclo seguinte re-tenta', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
     mocks.listStates.mockResolvedValue([wahaPending('clone_seven_7')]);
-    mocks.sendText.mockRejectedValue(new Error('ALERTAS morta'));
+    mocks.sendText.mockRejectedValue(DEFINITIVE);
 
     const r = await runMonitor();
 
@@ -148,18 +160,39 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha'
     expect(comp.restore.pendingDownCount).toBe(1);
   });
 
-  it('up->down + send FALHA -> NÃO marca a transição como avisada (não avisa o dono do clone)', async () => {
+  it('up->down + send FALHA DEFINITIVA -> NÃO marca a transição como avisada (não avisa o dono do clone)', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
     mocks.listStates.mockResolvedValue([wahaPending('clone_seven_7')]);
-    mocks.sendText.mockRejectedValue(new Error('ALERTAS morta'));
+    mocks.sendText.mockRejectedValue(DEFINITIVE);
 
     const r = await runMonitor();
 
-    // O aviso ao dono sairia pela MESMA sessão remetente (também falharia); não dispara.
+    // LOAD-BEARING (flag ON no mock): o aviso ao dono sairia pela MESMA sessão remetente (também
+    // falharia) -> NÃO dispara na falha definitiva (justWentDown=false).
+    expect(mocks.notifyClientDisconnect).not.toHaveBeenCalled();
     expect(r.clientNotified).toBe(0);
+  });
+
+  it('up->down + send AMBÍGUO (timeout) -> NÃO compensa (mantém carimbo) e SEGUE como transição avisada', async () => {
+    stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
+    mocks.listMonitoredSessions.mockResolvedValue([
+      { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
+    ]);
+    mocks.listStates.mockResolvedValue([wahaPending('clone_seven_7')]);
+    // Timeout do Promise.race: NÃO prova não-entrega (pode ter saído) -> mantém o carimbo (P2).
+    mocks.sendText.mockRejectedValue(new Error('sendText timeout'));
+
+    const r = await runMonitor();
+
+    expect(r.sent).toBe(0); // nada CONFIRMADO como entregue
+    // Ambíguo: NÃO reverte o carimbo (não re-tenta a cada ciclo -> não spamma).
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
+    // E segue como transição avisada (justWentDown=true) -> o aviso ao dono é TENTADO (o notify tem
+    // cooldown+taxonomia próprios que evitam duplicar).
+    expect(mocks.notifyClientDisconnect).toHaveBeenCalledTimes(1);
   });
 
   it('up->down + send OK -> NÃO compensa (carimbo legítimo permanece)', async () => {
@@ -206,7 +239,7 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha'
         alert_count: 2,
       }),
     ]);
-    mocks.sendText.mockRejectedValue(new Error('ALERTAS morta'));
+    mocks.sendText.mockRejectedValue(DEFINITIVE);
 
     const r = await runMonitor();
 

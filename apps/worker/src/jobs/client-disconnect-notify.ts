@@ -36,6 +36,7 @@ import { ensureDddBr } from '@startap/core/phone';
 import { alerts, flowClones } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
+import { isDefinitiveNonDelivery } from './waha-send-failure.js';
 
 const log = logger.child({ module: 'client-disconnect-notify' });
 
@@ -236,9 +237,19 @@ export async function notifyClientDisconnect(slot: string): Promise<ClientDiscon
         ),
       ]);
     } catch (sendErr) {
-      // SCRUM-53: o envio NÃO saiu -> desfaz a reserva pra o próximo ciclo re-tentar (sem isto,
-      // o carimbo "avisado" persistiria por até cooldownMin e o aviso ficaria perdido em silêncio).
-      await releaseCooldown(slot, reservation);
+      // SCRUM-53 + P2 do security: só desfaz a reserva em falha DEFINITIVA (temos certeza de que
+      // NÃO saiu: sessão FAILED/404/conexão recusada) -> o próximo ciclo re-tenta. Falha AMBÍGUA
+      // (timeout/5xx/desconhecido = POSSIVELMENTE entregue) MANTÉM o cooldown: preferimos perder 1
+      // aviso a reenviar a cada ciclo pro PAGANTE (risco de duplicata/ban). O incidente real
+      // (ALERTAS morta -> WAHA 422) é definitivo, então o fix do "alerta perdido" NÃO regride.
+      if (isDefinitiveNonDelivery(sendErr)) {
+        await releaseCooldown(slot, reservation);
+      } else {
+        log.warn(
+          { slot, err: sendErr instanceof Error ? sendErr.message : String(sendErr) },
+          'client-disconnect-notify: falha ambígua no envio — MANTÉM cooldown (não arrisca duplicar)',
+        );
+      }
       throw sendErr; // cai no catch externo -> resultado tipado { ok:false, reason:'error' }
     }
 

@@ -234,13 +234,15 @@ describe('notifyClientDisconnect — fail-safe', () => {
   });
 });
 
-describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consumida quando o envio falha', () => {
+describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consumida quando o envio falha DEFINITIVAMENTE', () => {
   const target = { phone: '5535999991234', enabled: true, nomeNegocio: 'Seven 7 Barber' };
+  // Falha DEFINITIVA = o incidente real (ALERTAS morta -> WAHA recusa com 422 sessão não-WORKING).
+  const definitiveErr = new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING');
 
-  it('send falha -> DESFAZ a reserva (restore condicional ao carimbo) -> ciclo seguinte re-tenta', async () => {
+  it('send falha DEFINITIVA -> DESFAZ a reserva (restore condicional ao carimbo) -> ciclo seguinte re-tenta', async () => {
     getCloneDisconnectAlertTarget.mockResolvedValue(target);
     getState.mockResolvedValue(null); // primeiro episódio: sem carimbo anterior
-    sendText.mockRejectedValue(new Error('ALERTAS morta (send timeout)'));
+    sendText.mockRejectedValue(definitiveErr);
 
     const r = await notifyClientDisconnect(SLOT);
 
@@ -250,7 +252,7 @@ describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consum
     const reserved = upsertState.mock.calls[0][0];
     expect(reserved.checkKey).toBe(disconnectCooldownKey(SLOT));
     expect(reserved.state).toBe('down');
-    // 2) send falhou -> compensou: restaurou o estado anterior (neutro 'up', janela livre).
+    // 2) send falhou DEFINITIVAMENTE -> compensou: restaurou o estado anterior (neutro 'up').
     expect(restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
     const comp = restoreStateIfUnchanged.mock.calls[0][0];
     // O predicado (expect) usa EXATAMENTE o que este ciclo gravou -> só o dono desfaz a reserva.
@@ -263,7 +265,32 @@ describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consum
     expect(comp.restore.alertCount).toBe(0);
   });
 
-  it('send falha após episódio anterior -> restaura o last_alert_at ANTERIOR (não o novo carimbo)', async () => {
+  it('send TIMEOUT (ambíguo, pode ter entregue) -> MANTÉM o cooldown -> próximo ciclo NÃO reenvia (P2)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null);
+    // Timeout do Promise.race: NÃO prova não-entrega. Não pode reverter (risco de duplicar ao pagante).
+    sendText.mockRejectedValue(new Error('sendText timeout'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r).toEqual({ ok: false, sent: false, reason: 'error' });
+    // Reservou o cooldown e o MANTÉM (não desfaz) -> o carimbo segura o reenvio no próximo ciclo.
+    expect(upsertState).toHaveBeenCalledTimes(1);
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('send 5xx genérico (ambíguo) -> também MANTÉM o cooldown (não reverte)', async () => {
+    getCloneDisconnectAlertTarget.mockResolvedValue(target);
+    getState.mockResolvedValue(null);
+    sendText.mockRejectedValue(new Error('WAHA /api/sendText -> HTTP 500: internal error'));
+
+    const r = await notifyClientDisconnect(SLOT);
+
+    expect(r.ok).toBe(false);
+    expect(restoreStateIfUnchanged).not.toHaveBeenCalled();
+  });
+
+  it('send falha DEFINITIVA após episódio anterior -> restaura o last_alert_at ANTERIOR (não o novo carimbo)', async () => {
     getCloneDisconnectAlertTarget.mockResolvedValue(target);
     const prevAt = new Date(Date.now() - 7 * 60 * 60_000); // 7h atrás (fora do cooldown 6h -> reserva)
     getState.mockResolvedValue({
@@ -275,7 +302,7 @@ describe('notifyClientDisconnect — SCRUM-53: reserva otimista NÃO fica consum
       pending_down_count: 0,
       updated_at: new Date(),
     });
-    sendText.mockRejectedValue(new Error('waha down'));
+    sendText.mockRejectedValue(new Error('connect ECONNREFUSED 10.0.0.3:3000'));
 
     const r = await notifyClientDisconnect(SLOT);
 
