@@ -25,6 +25,7 @@ const {
   listMonitoredSessions,
   recordCycleHeartbeat,
   reserveGlobalSend,
+  restoreStateIfUnchanged,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
 } = await import('./alerts.js');
@@ -233,5 +234,77 @@ describe('heartbeat de liveness do monitor (SCRUM-54)', () => {
     const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
     expect(sql).toContain('SELECT last_cycle_at FROM alert_states WHERE check_key = $1');
     expect(params).toEqual(['__heartbeat__']);
+  });
+});
+
+describe('restoreStateIfUnchanged — compensação condicional do carimbo (SCRUM-53)', () => {
+  const stampedAt = new Date('2026-07-02T12:00:00.000Z');
+  const prevAt = new Date('2026-07-02T06:00:00.000Z');
+
+  it('restaura quando a linha AINDA contém o carimbo deste ciclo (rowCount 1 -> true)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    const restored = await restoreStateIfUnchanged({
+      checkKey: 'clientdown:clone_x',
+      expect: { state: 'down', lastAlertAt: stampedAt, alertCount: 3 },
+      restore: {
+        state: 'down',
+        downSince: prevAt,
+        lastAlertAt: prevAt,
+        alertCount: 2,
+        pendingDownCount: 0,
+      },
+    });
+
+    expect(restored).toBe(true);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // Predicado de lock otimista: só bate se state/alert_count/last_alert_at forem os que gravamos.
+    expect(sql).toContain('UPDATE alert_states');
+    expect(sql).toContain('AND state       = $7');
+    expect(sql).toContain('AND alert_count = $8');
+    // NULL-safe: compara last_alert_at com IS NOT DISTINCT FROM (não `=`, que falha com NULL).
+    expect(sql).toContain('last_alert_at IS NOT DISTINCT FROM $9');
+    // $7/$8/$9 = o valor esperado (o que ESTE ciclo carimbou).
+    expect(params[6]).toBe('down');
+    expect(params[7]).toBe(3);
+    expect(params[8]).toBe(stampedAt);
+  });
+
+  it('NÃO restaura quando outro ciclo já regravou a linha (rowCount 0 -> false)', async () => {
+    // rowCount 0 = o predicado do WHERE não bateu -> reserva de OUTRO ciclo preservada (anti-dup).
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const restored = await restoreStateIfUnchanged({
+      checkKey: 'clientdown:clone_x',
+      expect: { state: 'down', lastAlertAt: stampedAt, alertCount: 3 },
+      restore: {
+        state: 'up',
+        downSince: null,
+        lastAlertAt: null,
+        alertCount: 0,
+        pendingDownCount: 0,
+      },
+    });
+
+    expect(restored).toBe(false);
+  });
+
+  it('lida com expect.lastAlertAt null (primeiro episódio, sem carimbo anterior)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+
+    await restoreStateIfUnchanged({
+      checkKey: 'waha:pg:main',
+      expect: { state: 'down', lastAlertAt: null, alertCount: 1 },
+      restore: {
+        state: 'up',
+        downSince: null,
+        lastAlertAt: null,
+        alertCount: 0,
+        pendingDownCount: 0,
+      },
+    });
+
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params[8]).toBeNull(); // expect.lastAlertAt null vira $9 = null (IS NOT DISTINCT FROM NULL)
   });
 });
