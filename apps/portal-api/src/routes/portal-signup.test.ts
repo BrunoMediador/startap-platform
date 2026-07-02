@@ -195,6 +195,50 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
+  // ── Fuso horário por clone (migration 068 — seletor no signup) ──────────────
+  it('timezone omitido => provisiona com America/Sao_Paulo (COLUNA top-level, byte-idêntico)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+
+    expect(res.statusCode).toBe(201);
+    const provInput = mocks.provisionCloneWithWaha.mock.calls[0]?.[1] as {
+      timezone?: unknown;
+      personalizacao: Record<string, unknown>;
+    };
+    // Fuso é COLUNA top-level do provisioning — NUNCA dentro de personalizacao.
+    expect(provInput.timezone).toBe('America/Sao_Paulo');
+    expect(provInput.personalizacao).not.toHaveProperty('timezone');
+    await app.close();
+  });
+
+  it('timezone válido não-SP (America/Cuiaba) chega no provisioning como COLUNA', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, timezone: 'America/Cuiaba' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const provInput = mocks.provisionCloneWithWaha.mock.calls[0]?.[1] as { timezone?: unknown };
+    expect(provInput.timezone).toBe('America/Cuiaba');
+    await app.close();
+  });
+
+  it('400 dados_invalidos quando timezone é inválido (fora da lista IANA) — nada é provisionado', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/auth/signup',
+      payload: { ...PAYLOAD, timezone: 'Marte/Olympus' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'dados_invalidos' });
+    expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   // ── Aceite dos Termos + Política de Privacidade (SCRUM-1 / LGPD) ────────────
   it('422 aceite_obrigatorio quando aceite_termos=false (gate antes de provisionar)', async () => {
     const app = await buildApp();

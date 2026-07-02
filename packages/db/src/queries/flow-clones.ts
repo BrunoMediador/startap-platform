@@ -5,6 +5,7 @@
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
 import { meIdToDigits } from '@startap/core/phone';
+import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
 
@@ -175,9 +176,17 @@ export async function createClone(input: {
   clienteNome?: string | null;
   clienteTelefone?: string | null;
   personalizacao?: Record<string, string>;
+  /** Fuso IANA do clone (migration 068). Ausente/vazio -> 'America/Sao_Paulo'
+   * (byte-idêntico ao default do banco). Espera-se JÁ validado (isValidIanaTimezone). */
+  timezone?: string | null;
 }): Promise<CloneRow> {
   const { matrizSlot, displayName, clienteNome, clienteTelefone } = input;
   const personalizacao = input.personalizacao ?? {};
+  // Guard IANA (defesa em profundidade, P3-1): valida contra a lista suportada —
+  // ausente/inválido -> DEFAULT SP (nunca persiste lixo). Mesmo padrão de
+  // createCloneRecords/provisioning. Sem lançar: só não deixa gravar tz quebrado
+  // que derrubaria agenda/billing/GCal do clone com RangeError na leitura.
+  const timezone = isValidIanaTimezone(input.timezone) ? input.timezone : DEFAULT_TIMEZONE;
 
   const slug = `clone_${slugify(displayName).slice(0, 40)}_${shortid(6)}`;
 
@@ -299,8 +308,8 @@ export async function createClone(input: {
     // 5. INSERT flow_clones
     const cloneRes = await client.query<CloneRow>(
       `INSERT INTO flow_clones
-         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'rascunho', NOW(), NOW())
+         (slot, matriz_slot, display_name, cliente_nome, cliente_telefone, personalizacao, timezone, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'rascunho', NOW(), NOW())
        RETURNING *`,
       [
         slug,
@@ -309,6 +318,7 @@ export async function createClone(input: {
         clienteNome ?? null,
         clienteTelefone ?? null,
         JSON.stringify(personalizacao),
+        timezone,
       ],
     );
 
@@ -531,6 +541,40 @@ export async function markCloneConnectedBySlot(slot: string): Promise<boolean> {
   // RETURNING avalia o predicado ANTES do SET (semântica do UPDATE) -> status_changed reflete o
   // estado PRÉVIO, exatamente o que o contrato pede (true só quando o status realmente mudou).
   return row?.status_changed === true;
+}
+
+/**
+ * Fuso (IANA) do clone (migration 068). Retorna 'America/Sao_Paulo' quando o slot
+ * não existe ou a coluna vier vazia — nunca `null` (o default do banco garante o
+ * carimbo). Consumido pelo GET /portal/perfil pra pré-selecionar o seletor.
+ */
+export async function getTimezoneBySlot(slot: string): Promise<string> {
+  const r = await query<{ timezone: string | null }>(
+    'SELECT timezone FROM flow_clones WHERE slot = $1',
+    [slot],
+  );
+  return r.rows[0]?.timezone ?? 'America/Sao_Paulo';
+}
+
+/**
+ * Grava o fuso (IANA) do clone. O único caller (portal-perfil) JÁ valida com
+ * isValidIanaTimezone; a guarda interna abaixo (P3-2, defesa em profundidade) cobre
+ * um 2º caller futuro: tz fora da lista IANA => NO-OP, retorna false (nunca escreve
+ * lixo que derrubaria agenda/billing/GCal na leitura). Escopado por slot (SEMPRE
+ * parametrizado, nunca interpolado) — o slot vem da sessão (withTenant), jamais do
+ * input do cliente. Invalida o cache de clone (TTL 60s) pro bot/free-slots pegarem
+ * o fuso novo. Retorna false se o tz é inválido OU se o slot não existe.
+ */
+export async function updateTimezoneBySlot(slot: string, timezone: string): Promise<boolean> {
+  // Guard IANA (P3-2): tz inválido não toca a coluna — mantém o fuso atual do clone.
+  if (!isValidIanaTimezone(timezone)) return false;
+  const r = await query(
+    'UPDATE flow_clones SET timezone = $2, updated_at = NOW() WHERE slot = $1',
+    [slot, timezone],
+  );
+  if (r.rowCount === 0) return false;
+  invalidateCloneCache({ slot });
+  return true;
 }
 
 /**

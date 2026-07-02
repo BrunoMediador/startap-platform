@@ -27,6 +27,7 @@
  */
 import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
+import { timezoneSchema } from '@startap/core/timezones';
 import { isTrialPepperConfigured, trialPhoneHmac } from '@startap/core/trial';
 import {
   clientBilling,
@@ -74,6 +75,11 @@ export const signupSchema = z
     // o front não envia — onboarding antigo/cliente que pulou o seletor não quebra.
     // Valor FORA da taxonomia => 400 dados_invalidos (.strict + enum).
     area: z.enum(AREA_VALUES).default('outro'),
+    // Fuso IANA do clone (migration 068). DEFAULT 'America/Sao_Paulo' quando o front
+    // não envia -> clone nasce byte-idêntico ao de hoje. Valor fora da lista IANA
+    // suportada (Intl.supportedValuesOf) => 400 dados_invalidos (mesmo padrão do enum).
+    // É COLUNA top-level de flow_clones, NÃO vai no personalizacao (diferente do area).
+    timezone: timezoneSchema,
     // Aceite dos Termos + Política de Privacidade (SCRUM-1 / LGPD). REQUERIDO: o
     // gate (422 aceite_obrigatorio) roda ANTES de provisionar — sem aceite, nada é
     // criado. Booleano (o front manda `true` só com o checkbox marcado); as VERSÕES
@@ -107,7 +113,7 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'dados_invalidos' });
     }
-    const { nome_negocio, whatsapp, senha, area, aceite_termos } = parsed.data;
+    const { nome_negocio, whatsapp, senha, area, timezone, aceite_termos } = parsed.data;
 
     // ── Gate de aceite (SCRUM-1 / LGPD): EXIGE o aceite ANTES de qualquer escrita.
     // Sem aceite -> 422, nada é provisionado (nem clone, nem sessão WAHA). É a regra
@@ -191,6 +197,10 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
         // resolver {{area_artigo}} no render do prompt E grava em flow_clones.area
         // (coluna tipada). Sem mudança de assinatura — espelha {{nome_negocio}}.
         personalizacao: { nome_negocio, area },
+        // `timezone` (migration 068) é COLUNA top-level de flow_clones — vai FORA do
+        // personalizacao (o provisioning grava direto na coluna). Já validado pelo
+        // timezoneSchema (default SP); o provisioning revalida por defesa em profundidade.
+        timezone,
         // Slot já nasce prefixado clone_ — usa o próprio slot como sessão WAHA
         // (evita duplo prefixo do wahaSessionName, pensado pro gestão).
         sessionName: slot,

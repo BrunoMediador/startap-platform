@@ -1000,6 +1000,36 @@ function validarTipoConta(product_type, seat_cap) {
   return null;
 }
 
+// Fuso IANA por clone (migration 068). ESPELHA isValidIanaTimezone de @startap/core
+// (packages/core/src/timezones.ts) — o painel é JS standalone sem build-time dep do
+// @startap/*, mesma situação dos _pkg* e do ensureDddBr. Fonte da verdade da validade
+// = Intl.supportedValuesOf('timeZone') (Node 20+), memoizado num Set. MANTER 1:1.
+const DEFAULT_TIMEZONE = 'America/Sao_Paulo';
+let _tzSet = null;
+function timezoneSuportado(tz) {
+  if (_tzSet === null) {
+    const values =
+      typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+    _tzSet = new Set(values);
+  }
+  return typeof tz === 'string' && _tzSet.has(tz);
+}
+
+/**
+ * Normaliza o `timezone` recebido do painel (POST/PATCH de clone). Ausente/vazio =>
+ * default SP (byte-idêntico ao de hoje). Valor FORA da lista IANA => { erro }.
+ * Retorna { valor } com o nome IANA a gravar, ou { erro } com mensagem PT-BR.
+ */
+function resolverTimezone(tz) {
+  if (tz === undefined || tz === null || String(tz).trim() === '') {
+    return { valor: DEFAULT_TIMEZONE };
+  }
+  if (!timezoneSuportado(tz)) {
+    return { erro: 'timezone_invalido' };
+  }
+  return { valor: tz };
+}
+
 app.put('/api/bots/:slot', async (req, res) => {
   try {
     const { slot } = req.params;
@@ -3341,7 +3371,7 @@ app.get('/api/clones', async (_req, res) => {
              fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
              fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
              fc.horarios_funcionamento, fc.servicos,
-             fc.product_type, fc.seat_cap,
+             fc.product_type, fc.seat_cap, fc.timezone,
              fc.created_at, fc.updated_at,
              bc.display_name AS matriz_display_name
       FROM flow_clones fc
@@ -3361,7 +3391,7 @@ app.post('/api/clones', async (req, res) => {
   // Tipo de conta opcional no momento da clonagem (escolha já no wizard "Clonar").
   // Default 'individual' quando ausente = retrocompatível (quem clona sem escolher
   // continua igual a hoje). product_type/seat_cap validados pela MESMA regra do PATCH.
-  const { product_type, seat_cap } = req.body ?? {};
+  const { product_type, seat_cap, timezone } = req.body ?? {};
   if (!matriz_slot || typeof matriz_slot !== 'string') {
     return res.status(400).json({ error: 'matriz_slot obrigatório' });
   }
@@ -3370,6 +3400,10 @@ app.post('/api/clones', async (req, res) => {
   }
   const erroTipoConta = validarTipoConta(product_type, seat_cap);
   if (erroTipoConta) return res.status(400).json({ error: erroTipoConta });
+  // Fuso IANA (migration 068): default SP quando ausente; inválido => 400 timezone_invalido.
+  const tzResolvido = resolverTimezone(timezone);
+  if (tzResolvido.erro) return res.status(400).json({ error: tzResolvido.erro });
+  const timezoneFinal = tzResolvido.valor;
   // Normaliza o DDI do telefone ANTES de gravar (painel grava cru = pior ofensor).
   // Se o operador digitou algo, exige que normalize (DDI 55 + DDD BR); senão null.
   let clienteTelefoneFinal = null;
@@ -3473,9 +3507,9 @@ app.post('/api/clones', async (req, res) => {
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
           personalizacao, horarios_funcionamento, servicos,
-          product_type, seat_cap,
+          product_type, seat_cap, timezone,
           status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,'rascunho',NOW(),NOW())
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,'rascunho',NOW(),NOW())
        RETURNING *`,
       [
         slug,
@@ -3488,6 +3522,7 @@ app.post('/api/clones', async (req, res) => {
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
         productTypeFinal,
         seatCapFinal,
+        timezoneFinal,
       ],
     );
 
@@ -3536,7 +3571,12 @@ async function createWahaSession(name) {
 // Clone sempre fica em 'rascunho'. Transição para 'active' via POST /api/clones/:id/activate
 // quando UI confirmar QR scan (implementado em 005-D).
 app.post('/api/clones/with-waha', async (req, res) => {
-  const { matriz_slot, novo_slot, display_name, telefone_contato, personalizacao } = req.body ?? {};
+  const { matriz_slot, novo_slot, display_name, telefone_contato, personalizacao, timezone } =
+    req.body ?? {};
+
+  // Fuso IANA (migration 068): default SP quando ausente; inválido => 400.
+  const tzResolvido = resolverTimezone(timezone);
+  if (tzResolvido.erro) return res.status(400).json({ error: tzResolvido.erro });
 
   // --- validações ---
   if (!matriz_slot || typeof matriz_slot !== 'string' || !MATRIZES_ROUTAVEIS.includes(matriz_slot))
@@ -3592,6 +3632,8 @@ app.post('/api/clones/with-waha', async (req, res) => {
         displayName: display_name,
         telefoneContato: telefone_contato ?? null,
         personalizacao: pers,
+        // COLUNA top-level (não vai no personalizacao). Default SP já resolvido acima.
+        timezone: tzResolvido.valor,
       },
     );
   } catch (e) {
@@ -3695,7 +3737,7 @@ app.get('/api/clones/:id', async (req, res) => {
               fc.cliente_telefone, fc.personalizacao, fc.waha_sessao, fc.status,
               fc.flow_enabled, fc.suspended_reason, fc.suspended_at,
               fc.horarios_funcionamento, fc.servicos,
-              fc.product_type, fc.seat_cap,
+              fc.product_type, fc.seat_cap, fc.timezone,
               fc.created_at, fc.updated_at,
               bc.display_name AS matriz_display_name
        FROM flow_clones fc
@@ -3724,6 +3766,7 @@ app.patch('/api/clones/:id', async (req, res) => {
     status: newStatus,
     product_type,
     seat_cap,
+    timezone,
   } = req.body ?? {};
 
   // Validacao leve dos novos campos.
@@ -3736,6 +3779,15 @@ app.patch('/api/clones/:id', async (req, res) => {
   // banco. Regra ÚNICA em validarTipoConta — mesma usada pelo POST /api/clones.
   const erroTipoConta = validarTipoConta(product_type, seat_cap);
   if (erroTipoConta) return res.status(400).json({ error: erroTipoConta });
+  // Fuso IANA (migration 068): valida SÓ se enviado (edição parcial). Inválido =>
+  // 400 timezone_invalido. Ausente = não toca a coluna (fuso atual do clone fica).
+  let timezoneSet;
+  if (timezone !== undefined) {
+    if (!timezoneSuportado(timezone)) {
+      return res.status(400).json({ error: 'timezone_invalido' });
+    }
+    timezoneSet = timezone;
+  }
   if (servicos !== undefined) {
     if (!Array.isArray(servicos)) {
       return res.status(400).json({ error: 'servicos deve ser array' });
@@ -3797,6 +3849,11 @@ app.patch('/api/clones/:id', async (req, res) => {
   if (seat_cap !== undefined) {
     sets.push(`seat_cap = $${i++}`);
     vals.push(seat_cap === null ? null : Number(seat_cap));
+  }
+  if (timezoneSet !== undefined) {
+    // Já validado contra a lista IANA acima; grava o nome canônico (nunca offset cru).
+    sets.push(`timezone = $${i++}`);
+    vals.push(timezoneSet);
   }
 
   if (sets.length === 0) return res.status(400).json({ error: 'Nenhum campo para atualizar' });

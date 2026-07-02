@@ -16,14 +16,25 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 
-const { getPerfilBySlotMock, updatePerfilBySlotMock } = vi.hoisted(() => ({
+const {
+  getPerfilBySlotMock,
+  updatePerfilBySlotMock,
+  getTimezoneBySlotMock,
+  updateTimezoneBySlotMock,
+} = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
   updatePerfilBySlotMock: vi.fn(),
+  getTimezoneBySlotMock: vi.fn(),
+  updateTimezoneBySlotMock: vi.fn(),
 }));
 vi.mock('@startap/db', () => ({
   portalConfig: {
     getPerfilBySlot: (...a: unknown[]) => getPerfilBySlotMock(...a),
     updatePerfilBySlot: (...a: unknown[]) => updatePerfilBySlotMock(...a),
+  },
+  flowClones: {
+    getTimezoneBySlot: (...a: unknown[]) => getTimezoneBySlotMock(...a),
+    updateTimezoneBySlot: (...a: unknown[]) => updateTimezoneBySlotMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -61,6 +72,9 @@ async function buildApp(): Promise<FastifyInstance> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Defaults: fuso vigente do clone (SP) e escrita OK — testes específicos sobrescrevem.
+  getTimezoneBySlotMock.mockResolvedValue('America/Sao_Paulo');
+  updateTimezoneBySlotMock.mockResolvedValue(true);
 });
 
 describe('GET /portal/perfil', () => {
@@ -84,6 +98,19 @@ describe('GET /portal/perfil', () => {
     const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
 
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('200: devolve o timezone (COLUNA) junto do perfil, escopado pelo slot da sessao', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getTimezoneBySlotMock.mockResolvedValue('America/Cuiaba');
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().timezone).toBe('America/Cuiaba');
+    expect(getTimezoneBySlotMock).toHaveBeenCalledWith(injectedSlot);
     await app.close();
   });
 });
@@ -183,6 +210,83 @@ describe('PUT /portal/perfil', () => {
     });
 
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('200: timezone valido grava a COLUNA (updateTimezoneBySlot) escopado ao slot da sessao', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getTimezoneBySlotMock.mockResolvedValue('America/Cuiaba');
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { nome_negocio: 'X' }, timezone: 'America/Cuiaba' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().timezone).toBe('America/Cuiaba');
+    // COLUNA gravada por caminho separado, slot da SESSAO (nunca do body).
+    expect(updateTimezoneBySlotMock).toHaveBeenCalledWith(injectedSlot, 'America/Cuiaba');
+    // timezone NUNCA vai no personalizacao (perfilSchema) — perfil gravado sem ele.
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.not.objectContaining({ timezone: expect.anything() }),
+    );
+    await app.close();
+  });
+
+  it('400: timezone invalido => timezone_invalido, NAO grava perfil nem coluna', async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { nome_negocio: 'X' }, timezone: 'Marte/Olympus' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('timezone_invalido');
+    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
+    expect(updateTimezoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('timezone omitido => NAO toca a coluna (byte-identico: mantem o fuso atual)', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { nome_negocio: 'X' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updateTimezoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('anti-IDOR: timezone gravado no slot da SESSAO mesmo com slot no body', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: {
+        slot: 'clone_de_OUTRO_cliente',
+        perfil: { nome_negocio: 'X' },
+        timezone: 'America/Cuiaba',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updateTimezoneBySlotMock).toHaveBeenCalledTimes(1);
+    expect(updateTimezoneBySlotMock.mock.calls[0][0]).toBe(injectedSlot);
     await app.close();
   });
 });
