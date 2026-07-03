@@ -27,11 +27,15 @@ const {
   updatePerfilBySlotMock,
   getTimezoneBySlotMock,
   updateTimezoneBySlotMock,
+  getAlertOwnerPhoneBySlotMock,
+  updateAlertOwnerPhoneBySlotMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
   updatePerfilBySlotMock: vi.fn(),
   getTimezoneBySlotMock: vi.fn(),
   updateTimezoneBySlotMock: vi.fn(),
+  getAlertOwnerPhoneBySlotMock: vi.fn(),
+  updateAlertOwnerPhoneBySlotMock: vi.fn(),
 }));
 vi.mock('@startap/db', () => ({
   portalConfig: {
@@ -41,6 +45,8 @@ vi.mock('@startap/db', () => ({
   flowClones: {
     getTimezoneBySlot: (...a: unknown[]) => getTimezoneBySlotMock(...a),
     updateTimezoneBySlot: (...a: unknown[]) => updateTimezoneBySlotMock(...a),
+    getAlertOwnerPhoneBySlot: (...a: unknown[]) => getAlertOwnerPhoneBySlotMock(...a),
+    updateAlertOwnerPhoneBySlot: (...a: unknown[]) => updateAlertOwnerPhoneBySlotMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -83,6 +89,9 @@ beforeEach(() => {
   updateTimezoneBySlotMock.mockResolvedValue(true);
   // Default: modo atendente OFF pra todos (byte-a-byte). Testes específicos ligam.
   cfgMock.MODO_ATENDENTE_SLOTS = '';
+  // Defaults do destino dos avisos: nenhum setado / escrita OK.
+  getAlertOwnerPhoneBySlotMock.mockResolvedValue(null);
+  updateAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
 });
 
 describe('GET /portal/perfil', () => {
@@ -392,6 +401,146 @@ describe('PUT /portal/perfil', () => {
     expect(res.statusCode).toBe(200);
     expect(updateTimezoneBySlotMock).toHaveBeenCalledTimes(1);
     expect(updateTimezoneBySlotMock.mock.calls[0][0]).toBe(injectedSlot);
+    await app.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SCRUM-59 PR-E: recepcao_telefone (destino dos avisos ao dono = alert_owner_phone)
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
+  it('GET: expõe recepcao_telefone SÓ quando o modo atendente está ON pro slot', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getAlertOwnerPhoneBySlotMock.mockResolvedValue('5535998877248');
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().recepcao_telefone).toBe('5535998877248');
+    expect(getAlertOwnerPhoneBySlotMock).toHaveBeenCalledWith(injectedSlot); // anti-IDOR
+    await app.close();
+  });
+
+  it('GET: com o modo OFF, NÃO expõe recepcao_telefone (nem consulta a coluna)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).not.toHaveProperty('recepcao_telefone');
+    expect(getAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PUT: número válido é NORMALIZADO (strip de máscara) e gravado no slot da SESSÃO', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getAlertOwnerPhoneBySlotMock.mockResolvedValue('5535998877248');
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: {}, recepcao_telefone: '+55 (35) 99887-7248' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // máscara removida -> só dígitos; slot da SESSÃO (anti-IDOR).
+    expect(updateAlertOwnerPhoneBySlotMock).toHaveBeenCalledWith(injectedSlot, '5535998877248');
+    expect(res.json().recepcao_telefone).toBe('5535998877248');
+    await app.close();
+  });
+
+  it('PUT: formato inválido (não 55 / curto) => 400 telefone_invalido, NÃO grava', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    const app = await buildApp();
+
+    for (const bad of ['11999998888', '5535999', '00998877248', 'abc']) {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/portal/perfil',
+        payload: { perfil: {}, recepcao_telefone: bad },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('telefone_invalido');
+    }
+    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PUT: vazio ("") NÃO zera — 400 telefone_invalido (mantém o atual)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: {}, recepcao_telefone: '' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('telefone_invalido');
+    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PUT: com o modo OFF, tentar setar recepcao_telefone => 404 indisponivel, NÃO grava', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // feature off pro clone
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: {}, recepcao_telefone: '5535998877248' },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('recepcao_telefone_indisponivel');
+    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('anti-IDOR: slot no body é ignorado — grava no slot da SESSÃO', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: {
+        slot: 'clone_de_OUTRO_cliente',
+        perfil: {},
+        recepcao_telefone: '5535998877248',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updateAlertOwnerPhoneBySlotMock.mock.calls[0][0]).toBe(injectedSlot);
+    await app.close();
+  });
+
+  it('PUT: recepcao_telefone AUSENTE não toca a coluna (byte-a-byte)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { nome_negocio: 'X' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
