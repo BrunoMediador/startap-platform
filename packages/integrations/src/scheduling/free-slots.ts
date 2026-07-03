@@ -246,7 +246,19 @@ const _PERS_LABELS: Record<string, string> = {
   instagram: 'Instagram',
   telefone_contato: 'Telefone',
   formas_pagamento: 'Formas de pagamento',
+  // MODO ATENDENTE (SCRUM-59): link de agendamento externo do cliente, rotulado no bloco
+  // [NEGOCIO]. Vazio/ausente e omitido (byte-identico p/ clones sem link). O bot atendente
+  // entrega esse link no fim do funil; clones com agenda automatica normalmente nao o tem.
+  link_agendamento: 'Link de agendamento',
 };
+
+/**
+ * Chaves de personalizacao que sao FLAGS DE CONTROLE (nao dados de negocio) e NUNCA
+ * devem vazar pro contexto do bot no bloco [OBSERVACOES]. Ex.: agenda_automatica e o
+ * toggle do modo atendente — "Agenda Automatica: true" nao e informacao pro cliente e
+ * poluiria/mudaria o contexto de clones normais. Mantem byte-identico p/ Cirilo/Samuel.
+ */
+const _PERS_CONTROL_KEYS = new Set<string>(['agenda_automatica']);
 
 function humanizarChave(key: string): string {
   // 'horario_feriado' -> 'Horario feriado'
@@ -357,6 +369,7 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
   const observacoes: string[] = [];
   for (const [key, val] of Object.entries(e.personalizacao)) {
     if (persUsadas.has(key)) continue;
+    if (_PERS_CONTROL_KEYS.has(key)) continue; // flags de controle nunca vao pro contexto
     if (!val || String(val).trim() === '') continue;
     observacoes.push(`${humanizarChave(key)}: ${val}`);
   }

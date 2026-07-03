@@ -274,4 +274,32 @@ describe('perfilSchema', () => {
     const r = perfilSchema.safeParse({ nome_negocio: 123 });
     expect(r.success).toBe(false);
   });
+
+  // ── MODO ATENDENTE (SCRUM-59) ────────────────────────────────────────────
+  it('aceita agenda_automatica boolean (true/false)', () => {
+    expect(perfilSchema.safeParse({ agenda_automatica: false }).success).toBe(true);
+    expect(perfilSchema.safeParse({ agenda_automatica: true }).success).toBe(true);
+  });
+
+  it('rejeita agenda_automatica nao-boolean', () => {
+    expect(perfilSchema.safeParse({ agenda_automatica: 'false' }).success).toBe(false);
+    expect(perfilSchema.safeParse({ agenda_automatica: 1 }).success).toBe(false);
+  });
+
+  it('agenda_automatica NAO tem default (ausente = undefined, pra nao clobbar no PATCH)', () => {
+    const r = perfilSchema.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.agenda_automatica).toBeUndefined();
+  });
+
+  it('link_agendamento: aceita URL valida e e OPCIONAL SEMPRE (mesmo com agenda_automatica=false)', () => {
+    expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
+    // link opcional mesmo quando o modo atendente esta ligado (decisao Bruno 03/07).
+    expect(perfilSchema.safeParse({ agenda_automatica: false }).success).toBe(true);
+  });
+
+  it('link_agendamento: rejeita string que nao e URL', () => {
+    const r = perfilSchema.safeParse({ link_agendamento: 'nao-e-url' });
+    expect(r.success).toBe(false);
+  });
 });

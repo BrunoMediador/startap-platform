@@ -10,10 +10,12 @@
  * escrita, o data layer reusa updateClone -> re-renderiza o bot_prompt e
  * invalida o cache de clone (webhook pega a versao nova em ~0s).
  */
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { perfilSchema } from '@startap/core/schemas';
 import { isValidIanaTimezone } from '@startap/core/timezones';
 import { flowClones, portalConfig } from '@startap/db';
 import type { FastifyPluginAsync } from 'fastify';
+import { config } from '../config.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
 export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
@@ -24,7 +26,13 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // timezone (migration 068) é COLUNA top-level (fora do personalizacao) — devolvida
     // aqui pro front pré-selecionar o seletor. Nunca null (default SP no data layer).
     const timezone = await flowClones.getTimezoneBySlot(slot);
-    return reply.code(200).send({ perfil, timezone });
+    // features: gate POR-CLONE do modo atendente (SCRUM-59). Contrato pro front (PR-D):
+    // só o(s) clone(s) no MODO_ATENDENTE_SLOTS veem a seção "agenda automática / link".
+    // Escopado pelo slot da SESSÃO (withTenant) — nunca do input.
+    const features = {
+      modo_atendente: isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS),
+    };
+    return reply.code(200).send({ perfil, timezone, features });
   });
 
   app.put('/portal/perfil', { preHandler: withTenant }, async (req, reply) => {

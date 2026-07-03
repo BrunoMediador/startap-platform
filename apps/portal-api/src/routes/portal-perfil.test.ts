@@ -8,9 +8,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // config.js valida process.env no import (cadeia tenant.js -> session.js) — mockamos.
-vi.mock('../config.js', () => ({
-  config: { NODE_ENV: 'test', REDIS_HOST: 'localhost', REDIS_PORT: 6379, REDIS_PASSWORD: '' },
+// MUTÁVEL (vi.hoisted) pra testar o gate POR-CLONE de features.modo_atendente (SCRUM-59).
+const cfgMock = vi.hoisted(() => ({
+  NODE_ENV: 'test',
+  REDIS_HOST: 'localhost',
+  REDIS_PORT: 6379,
+  REDIS_PASSWORD: '',
+  MODO_ATENDENTE_SLOTS: '',
 }));
+vi.mock('../config.js', () => ({ config: cfgMock }));
 
 vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
@@ -75,6 +81,8 @@ beforeEach(() => {
   // Defaults: fuso vigente do clone (SP) e escrita OK — testes específicos sobrescrevem.
   getTimezoneBySlotMock.mockResolvedValue('America/Sao_Paulo');
   updateTimezoneBySlotMock.mockResolvedValue(true);
+  // Default: modo atendente OFF pra todos (byte-a-byte). Testes específicos ligam.
+  cfgMock.MODO_ATENDENTE_SLOTS = '';
 });
 
 describe('GET /portal/perfil', () => {
@@ -111,6 +119,41 @@ describe('GET /portal/perfil', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().timezone).toBe('America/Cuiaba');
     expect(getTimezoneBySlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('SCRUM-59: features.modo_atendente=false por default (clientes atuais nao veem a secao)', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features).toEqual({ modo_atendente: false });
+    await app.close();
+  });
+
+  it('SCRUM-59: features.modo_atendente=true SO quando o slot da sessao esta no gate', async () => {
+    // gate POR-CLONE: liga so pro slot injetado (o do piloto).
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features.modo_atendente).toBe(true);
+    await app.close();
+  });
+
+  it('SCRUM-59: outro slot no gate NAO liga a feature pro slot da sessao (isolado por-clone)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = 'clone_de_OUTRO_cliente';
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.json().features.modo_atendente).toBe(false);
     await app.close();
   });
 });
@@ -210,6 +253,48 @@ describe('PUT /portal/perfil', () => {
     });
 
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('SCRUM-59: aceita agenda_automatica=false SEM link (link OPCIONAL sempre)', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    // sem link_agendamento no payload -> NAO ha 400 (decisao Bruno 03/07).
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: false } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ agenda_automatica: false }),
+    );
+    await app.close();
+  });
+
+  it('SCRUM-59: aceita link_agendamento URL valida; rejeita string nao-URL (400)', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const ok = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: false, link_agendamento: 'https://booksy.com/x' } },
+    });
+    expect(ok.statusCode).toBe(200);
+
+    const bad = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { link_agendamento: 'nao-e-url' } },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('perfil invalido');
     await app.close();
   });
 

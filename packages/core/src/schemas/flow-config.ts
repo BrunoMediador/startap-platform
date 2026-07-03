@@ -246,6 +246,17 @@ export const perfilSchema = z
       .transform(stripAtPrefix)
       .optional(),
     formas_pagamento: formasPagamentoSchema,
+    // ── MODO ATENDENTE (SCRUM-59) ──────────────────────────────────────────
+    // Toggle fino por-clone: false = MODO ATENDENTE (bot sem agenda automática).
+    // Efetivo-default TRUE via AUSÊNCIA (NÃO usa .default(true) de proposito: com
+    // PATCH/merge, um .default reescreveria a chave em toda gravacao parcial e
+    // CLOBBARIA um clone que estava em modo atendente). Ausente no payload = nao toca.
+    // O bot/data-layer tratam ausencia como TRUE (agenda automatica = comportamento atual).
+    agenda_automatica: z.boolean().optional(),
+    // Link do sistema de agendamento externo do cliente (Booksy/Trinks/agenda propria).
+    // OPCIONAL SEMPRE (decisao Bruno 03/07: o piloto insere depois): sem link, o bot
+    // direciona pra "equipe confirma"; com link, entrega o link. z.url() valida formato.
+    link_agendamento: z.string().trim().url('link de agendamento invalido').max(500).optional(),
   })
   .strict();
 
@@ -259,6 +270,8 @@ export const PERFIL_KEYS = [
   'endereco',
   'instagram',
   'formas_pagamento',
+  'agenda_automatica',
+  'link_agendamento',
 ] as const;
 
 export type PerfilKey = (typeof PERFIL_KEYS)[number];
