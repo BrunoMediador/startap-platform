@@ -19,6 +19,7 @@ import {
 import { atualizarAgendamento, removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
+  AgendaConfig,
   AgendaSlotsResponse,
   AgendamentosResponse,
   AtendimentoBalde,
@@ -78,6 +79,8 @@ export const qk = {
   status: (slot: string) => ['status', slot] as const,
   servicos: (slot: string) => ['servicos', slot] as const,
   perfil: (slot: string) => ['perfil', slot] as const,
+  /** Config de Agendamento (modo atendente) — derivada do GET /portal/perfil. */
+  agendaConfig: (slot: string) => ['agenda-config', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   botDetectPausas: (slot: string) => ['bot-detect-pausas', slot] as const,
@@ -397,6 +400,67 @@ export function useSavePerfil(
       }).then((r) => r.perfil),
     onSuccess: (perfil) => {
       client.setQueryData(qk.perfil(slot), perfil);
+    },
+  });
+}
+
+// ── Agendamento / modo atendente (SCRUM-59) ──────────────────────────────────
+//
+// Deriva do MESMO GET/PUT /portal/perfil, mas numa query própria (qk.agendaConfig)
+// pra NÃO tocar no cache/otimista do formulário principal do perfil (regressão zero
+// pros clientes atuais). Uma leitura extra do endpoint (tiny, cacheado) é o preço da
+// isolação. A seção só renderiza quando `modo_atendente` é true (calculado por-clone
+// no backend via MODO_ATENDENTE_SLOTS — NÃO é flag global).
+
+export function useAgendaConfig(slot: string): UseQueryResult<AgendaConfig> {
+  return useQuery({
+    queryKey: qk.agendaConfig(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
+        modo_atendente: r.features?.modo_atendente === true,
+        agenda_automatica: r.perfil?.agenda_automatica ?? true,
+        link_agendamento:
+          typeof r.perfil?.link_agendamento === 'string' ? r.perfil.link_agendamento : '',
+        recepcao_telefone: typeof r.recepcao_telefone === 'string' ? r.recepcao_telefone : '',
+      })),
+  });
+}
+
+/**
+ * PUT parcial /portal/perfil com os campos da seção Agendamento: `{ perfil:
+ * { agenda_automatica, link_agendamento }, recepcao_telefone? }`. O `perfil` é merge
+ * parcial (chave ausente = não toca); `recepcao_telefone` é TOP-LEVEL (E.164 BR) e só
+ * viaja quando o chamador o inclui — VAZIO não zera (backend rejeita). Erros:
+ * 400 telefone_invalido, 404 recepcao_telefone_indisponivel.
+ */
+export function useSaveAgendaConfig(
+  slot: string,
+): UseMutationResult<
+  SavePerfilResponse,
+  Error,
+  { agenda_automatica: boolean; link_agendamento: string; recepcao_telefone?: string }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ agenda_automatica, link_agendamento, recepcao_telefone }) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: {
+          perfil: { agenda_automatica, link_agendamento },
+          ...(recepcao_telefone !== undefined ? { recepcao_telefone } : {}),
+        },
+      }),
+    onSuccess: (res) => {
+      client.setQueryData(qk.agendaConfig(slot), (prev: AgendaConfig | undefined) => ({
+        modo_atendente: prev?.modo_atendente ?? true,
+        agenda_automatica: res.perfil.agenda_automatica ?? true,
+        link_agendamento:
+          typeof res.perfil.link_agendamento === 'string' ? res.perfil.link_agendamento : '',
+        recepcao_telefone:
+          typeof res.recepcao_telefone === 'string'
+            ? res.recepcao_telefone
+            : (prev?.recepcao_telefone ?? ''),
+      }));
     },
   });
 }

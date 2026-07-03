@@ -623,27 +623,64 @@ export interface PerfilNegocio {
   instagram: string;
   /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
   formas_pagamento: FormaPagamentoOpcao[];
+  /**
+   * Modo atendente (SCRUM-59). Quando false, o bot NÃO agenda pela agenda do Google:
+   * só atende, tira dúvidas e (se houver) manda o link_agendamento. Default true.
+   * Só relevante/editável quando a feature `modo_atendente` está ligada pro clone.
+   * Opcional: clone sem a feature nunca recebe/envia estes campos.
+   */
+  agenda_automatica?: boolean;
+  /** Link externo de agendamento (Booksy/Trinks/agenda própria...). Opcional. */
+  link_agendamento?: string | null;
 }
 
 /**
- * GET /portal/perfil -> 200 { perfil, timezone }. O `timezone` (IANA) é TOP-LEVEL,
- * FORA do objeto perfil: vem da coluna flow_clones.timezone (não da personalizacao).
- * Opcional: undefined enquanto a portal-api não devolve -> a tela pré-seleciona pelo
- * /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil` no cache.
+ * GET /portal/perfil -> 200 { perfil, timezone, features }. O `timezone` (IANA) é
+ * TOP-LEVEL, FORA do objeto perfil: vem da coluna flow_clones.timezone (não da
+ * personalizacao). Opcional: undefined enquanto a portal-api não devolve -> a tela
+ * pré-seleciona pelo /portal/status (useTenantTz). O hook usePerfil expõe só
+ * `r.perfil` no cache.
+ *
+ * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS CSV,
+ * NÃO flag global): só o clone do piloto recebe modo_atendente=true. Ausente/false =
+ * a seção "Agendamento" não renderiza (byte-idêntico pros clientes atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
+  features?: { modo_atendente: boolean };
+  /**
+   * WhatsApp da recepção (SCRUM-59 PR-E) = destino dos avisos de lead/escalação ao
+   * dono (RAW `alert_owner_phone`, E.164 BR "55DDDNUMERO"). TOP-LEVEL, presente SÓ com
+   * features.modo_atendente; null quando não setado. Também é o destino do aviso de
+   * desconexão (#390) — um único "número da equipe".
+   */
+  recepcao_telefone?: string | null;
 }
 
 /**
- * PUT /portal/perfil -> 200 { ok, perfil, timezone }. Request body = { perfil, timezone }
- * (timezone TOP-LEVEL). Devolve o perfil salvo + o timezone efetivo.
+ * Visão FLAT da config de Agendamento (modo atendente), derivada do GET /portal/perfil
+ * pela tela "Meu negócio" (features.modo_atendente + perfil.agenda_automatica +
+ * perfil.link_agendamento + recepcao_telefone). Ver @/lib/agenda-config.
+ */
+export interface AgendaConfig {
+  modo_atendente: boolean;
+  agenda_automatica: boolean;
+  link_agendamento: string;
+  /** RAW E.164 BR ("55DDDNUMERO") ou "" quando não setado. */
+  recepcao_telefone: string;
+}
+
+/**
+ * PUT /portal/perfil -> 200 { ok, perfil, timezone, recepcao_telefone? }. Request body =
+ * { perfil, timezone?, recepcao_telefone? } (timezone + recepcao_telefone TOP-LEVEL).
+ * Devolve o perfil salvo, o timezone efetivo e (com modo atendente) o telefone vigente.
  */
 export interface SavePerfilResponse {
   ok: true;
   perfil: PerfilNegocio;
   timezone?: string;
+  recepcao_telefone?: string | null;
 }
 
 // ── Lembretes de agendamento (portal-lembretes.ts — config self-service) ──────
