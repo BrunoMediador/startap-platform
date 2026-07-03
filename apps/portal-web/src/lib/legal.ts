@@ -39,7 +39,10 @@ export interface LegalDocument {
 
 // Versões — MANTER EM SINCRONIA com apps/portal-api/src/lib/legal-version.ts.
 export const TERMS_VERSION = 'v1';
-export const PRIVACY_VERSION = 'v1';
+// v2 (03/07/2026): append da finalidade de encaminhamento de resumo à equipe do
+// Estabelecimento (condição LGPD da Fase 1 do modo atendente, SCRUM-59). Bump força
+// re-aceite de 1 clique dos clientes atuais (decisão Bruno 03/07 — prova do texto novo).
+export const PRIVACY_VERSION = 'v2';
 
 // Data de vigência v1 (decisão Bruno/PM).
 const VIGENCIA = '26/06/2026';

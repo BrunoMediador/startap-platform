@@ -265,7 +265,7 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
-  it('caminho feliz GRAVA a prova de aceite (slot, user, versões v1, ip/user-agent)', async () => {
+  it('caminho feliz GRAVA a prova de aceite (slot, user, Termos v1/Política v2, ip/user-agent)', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'POST',
@@ -279,8 +279,8 @@ describe('POST /auth/signup', () => {
         slot: SLOT,
         portalUserId: 7,
         termsVersion: 'v1',
-        privacyVersion: 'v1',
-        // Hash de prova v1 server-authoritative (SCRUM-31): sha256 hex de 64 chars.
+        privacyVersion: 'v2',
+        // Hash de prova vigente server-authoritative (SCRUM-31): sha256 hex de 64 chars.
         termsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         privacyHash: expect.stringMatching(/^[0-9a-f]{64}$/),
         tenantId: '11111111-1111-1111-1111-111111111111',
