@@ -256,19 +256,27 @@ export const perfilSchema = z
     // Link do sistema de agendamento externo do cliente (Booksy/Trinks/agenda propria).
     // OPCIONAL SEMPRE (decisao Bruno 03/07: o piloto insere depois): sem link, o bot
     // direciona pra "equipe confirma"; com link, entrega o link.
+    // P1 (qa review SCRUM-59): o front envia '' quando o dono liga o modo SEM link (fluxo
+    // PRIMARIO do piloto). .optional() so cobre `undefined`, entao '' cairia no .url() e
+    // daria 400 "perfil invalido" -> Save quebra. O preprocess normaliza '' (e so-espacos)
+    // para `undefined` ANTES de validar: '' vira AUSENTE (nao persiste lixo no JSONB), e
+    // valores nao-vazios seguem validados como hoje.
     // SECURITY (review SCRUM-59): z.url() sozinho aceita javascript:/data:/ftp: (so faz
     // new URL()). O backend e a fonte da verdade -> exige explicitamente http(s):// (o link
     // vai pro contexto do LLM e, no front, pode virar href). refine roda apos url().
-    link_agendamento: z
-      .string()
-      .trim()
-      .url('link de agendamento invalido')
-      .max(500)
-      .refine(
-        (v) => /^https?:\/\//i.test(v),
-        'link de agendamento deve comecar com http:// ou https://',
-      )
-      .optional(),
+    link_agendamento: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z
+        .string()
+        .trim()
+        .url('link de agendamento invalido')
+        .max(500)
+        .refine(
+          (v) => /^https?:\/\//i.test(v),
+          'link de agendamento deve comecar com http:// ou https://',
+        )
+        .optional(),
+    ),
   })
   .strict();
 

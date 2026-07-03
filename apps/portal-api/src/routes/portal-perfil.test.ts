@@ -298,6 +298,26 @@ describe('PUT /portal/perfil', () => {
     await app.close();
   });
 
+  it('P1: liga o modo SEM link (link_agendamento "") -> 200 e link NAO persiste (nao 400)', async () => {
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    // Fluxo PRIMARIO do piloto (dono sem link, ex.: Raone): o front envia ''.
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: false, link_agendamento: '' } },
+    });
+
+    expect(res.statusCode).toBe(200); // antes dava 400 "perfil invalido"
+    const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
+    // '' normalizado pra undefined pelo preprocess -> NAO vira chave (nao persiste lixo).
+    expect(dataArg.agenda_automatica).toBe(false);
+    expect(dataArg.link_agendamento).toBeUndefined();
+    await app.close();
+  });
+
   it('200: timezone valido grava a COLUNA (updateTimezoneBySlot) escopado ao slot da sessao', async () => {
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);

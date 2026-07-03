@@ -303,6 +303,17 @@ describe('perfilSchema', () => {
     expect(r.success).toBe(false);
   });
 
+  it('P1: link_agendamento "" (e só-espaços) e ACEITO e vira undefined (nao persiste lixo)', () => {
+    // Fluxo primario do piloto: ligar modo atendente SEM link -> front envia ''.
+    const vazio = perfilSchema.safeParse({ agenda_automatica: false, link_agendamento: '' });
+    expect(vazio.success).toBe(true);
+    if (vazio.success) expect(vazio.data.link_agendamento).toBeUndefined();
+
+    const espacos = perfilSchema.safeParse({ link_agendamento: '   ' });
+    expect(espacos.success).toBe(true);
+    if (espacos.success) expect(espacos.data.link_agendamento).toBeUndefined();
+  });
+
   it('link_agendamento: rejeita esquemas perigosos (javascript:/data:/ftp:) — so http(s)', () => {
     expect(perfilSchema.safeParse({ link_agendamento: 'javascript:alert(1)' }).success).toBe(false);
     expect(perfilSchema.safeParse({ link_agendamento: 'data:text/html,<script>' }).success).toBe(
