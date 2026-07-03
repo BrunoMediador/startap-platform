@@ -15,6 +15,15 @@ describe('buildModoAtendenteBlock', () => {
     expect(b).toMatch(/NAO invente/);
   });
 
+  it('transparencia LGPD (art. 9): avisa 1x que repassa os dados pra equipe, informativo (nao gate)', () => {
+    const b = buildModoAtendenteBlock({ hasLink: false });
+    expect(b).toContain('TRANSPARENCIA');
+    expect(b).toMatch(/passar pra equipe/i);
+    // informativo, nao permissao: nao trava esperando "sim"; nao repete.
+    expect(b).toMatch(/NAO e permissao/i);
+    expect(b).toMatch(/NAO repita/i);
+  });
+
   it('hasLink=true: instrui ENTREGAR o link, não fala "equipe confirma"', () => {
     const b = buildModoAtendenteBlock({ hasLink: true });
     expect(b).toContain('entregue o LINK');
