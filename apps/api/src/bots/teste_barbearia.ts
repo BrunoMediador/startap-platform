@@ -21,7 +21,7 @@ import {
   buildCartaoEmojiOverrideBlock,
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
-import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
+import { phoneHint, sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
 import { buildModoAtendenteBlock } from '../lib/modo-atendente.js';
 import {
   buildSeuPacoteBlock,
@@ -965,7 +965,7 @@ export class TesteBarbeariaBot extends BotBase {
       promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
     } catch (err) {
       this.log.error(
-        { err, slot: this.slot, telefone },
+        { err, slot: this.slot, telefone: phoneHint(telefone) },
         'renderPrompt falhou (modo atendente) — bot nao responde',
       );
       return null;
