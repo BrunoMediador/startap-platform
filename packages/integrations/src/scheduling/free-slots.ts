@@ -213,8 +213,12 @@ interface ContextBlockOpts {
   dataAtual: string;
   /** Ano (string) para a IA usar nos calculos. */
   ano: string;
-  /** Tabela de horarios disponiveis ja formatada (vinda de formatarAgendaComConfig). */
-  agendaFormatada: string;
+  /**
+   * Tabela de horarios disponiveis ja formatada (vinda de formatarAgendaComConfig).
+   * OPCIONAL: omitido no MODO ATENDENTE (SCRUM-59) — sem agenda em tempo real, o bloco
+   * [HORARIOS DISPONIVEIS] nao e injetado (o render ja guarda com `if (opts.agendaFormatada)`).
+   */
+  agendaFormatada?: string;
   /**
    * Lista de cursos formatada para IA (usada pelos bots de vendas).
    * Quando presente, injeta bloco [CURSOS DISPONIVEIS] no contexto.

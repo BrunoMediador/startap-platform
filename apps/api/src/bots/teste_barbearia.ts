@@ -1,6 +1,7 @@
 import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import type { BotContext } from '@startap/core/types';
-import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
+import { atendimentos, cloneColaboradores, flowClones, pausa } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
@@ -20,7 +21,8 @@ import {
   buildCartaoEmojiOverrideBlock,
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
-import { sendClientCancellationAlert } from '../lib/client-alert.js';
+import { phoneHint, sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
+import { buildModoAtendenteBlock } from '../lib/modo-atendente.js';
 import {
   buildSeuPacoteBlock,
   clienteFromSummary,
@@ -162,6 +164,151 @@ export class TesteBarbeariaBot extends BotBase {
         return { ok: true, escalado: r.escalado };
       },
     };
+  }
+
+  /**
+   * Tool `escalar_para_humano` (MODO ATENDENTE — SCRUM-59). Passa a bola pro humano quando
+   * o bot NÃO deve/consegue resolver: reclamação, negociação de preço, pedido fora do padrão
+   * ou pedido explícito de falar com uma pessoa. Espelha `escalar_cancelamento`:
+   * fire-and-forget (sendOwnerAlert captura toda falha), NUNCA toca agenda, SEMPRE devolve
+   * {ok:true} pro modelo — a IA só manda a mensagem de transição, nunca trava a conversa.
+   *
+   * Transporte = sessão do PRÓPRIO clone (não a ALERTAS, muda por 463). Após escalar,
+   * AUTO-PAUSA o número (source='escalated_human'): base.ts silencia esse telefone até o
+   * dono despausar pela UI de pausas do portal (mesma lista do anti-bot).
+   */
+  private buildEscalarParaHumanoTool(telefone: string, session: string): ToolDefinition {
+    return {
+      name: 'escalar_para_humano',
+      description:
+        'Use quando: (1) reclamacao/insatisfacao, (2) negociacao de preco/desconto/condicao ' +
+        'especial, (3) pedido fora do padrao ou que voce NAO consegue responder com o contexto, ' +
+        '(4) pedido explicito de falar com uma pessoa/atendente/humano. NAO use para agendar ' +
+        '(isso e registrar_interesse) nem para duvida que voce sabe responder com o contexto. ' +
+        'Esta ferramenta apenas AVISA a equipe/dono — quem assume e um humano.',
+      parameters: {
+        type: 'object',
+        properties: {
+          motivo: {
+            type: 'string',
+            enum: ['reclamacao', 'negociacao', 'fora_do_padrao', 'pediu_humano'],
+            description: 'Categoria do que o cliente quer.',
+          },
+          resumo: {
+            type: 'string',
+            description: '1-2 frases do que o cliente quer, pra equipe entrar ja situada.',
+          },
+        },
+        required: ['motivo', 'resumo'],
+      },
+      run: async (args: unknown): Promise<{ ok: boolean; escalado: boolean }> => {
+        const a = (args ?? {}) as { motivo?: unknown; resumo?: unknown };
+        const motivo = typeof a.motivo === 'string' ? a.motivo : '';
+        const resumo = typeof a.resumo === 'string' ? a.resumo : '';
+        // Fire-and-forget: o resultado do envio nunca derruba o atendimento.
+        const r = await sendOwnerAlert({
+          slot: this.slot,
+          clienteTelefone: telefone,
+          kind: 'escalonamento',
+          transport: 'clone_session',
+          payload: { motivo, resumo },
+        });
+        // Auto-pausa o número após escalar (best-effort — NUNCA derruba a resposta).
+        this.autoPauseAfterEscalation(telefone, session);
+        return { ok: true, escalado: r.escalado };
+      },
+    };
+  }
+
+  /**
+   * Tool `registrar_interesse` (MODO ATENDENTE — SCRUM-59). Registra o lead (interesse em
+   * agendar) e AVISA o dono pra dar sequência. NÃO agenda nada. Espelha o padrão do escalar:
+   * fire-and-forget, SEMPRE {ok:true} pro modelo. Transporte = sessão do PRÓPRIO clone.
+   *
+   * Persistência (fase 1): o próprio sendOwnerAlert emite log estruturado no envio bem-
+   * sucedido (registro mínimo). NUNCA carimba "avisado" antes do envio (lição #412): o
+   * campo `registrado` reflete o resultado REAL do envio (r.escalado).
+   */
+  private buildRegistrarInteresseTool(telefone: string): ToolDefinition {
+    return {
+      name: 'registrar_interesse',
+      description:
+        'Use quando o cliente demonstrar que quer AGENDAR e voce ja juntou o minimo (servico + ' +
+        'melhor dia/faixa de horario). Registra o interesse e avisa a equipe/dono para dar ' +
+        'sequencia. NAO agenda nada — apenas registra e dispara o aviso. Chame UMA vez por ' +
+        'conversa (a menos que os dados mudem muito).',
+      parameters: {
+        type: 'object',
+        properties: {
+          nome: {
+            type: 'string',
+            description: 'Nome do cliente (ja conhecido). Nao pergunte de novo se ja tem.',
+          },
+          servico: { type: 'string', description: 'Servico desejado, como o cliente falou.' },
+          profissional: {
+            type: 'string',
+            description: 'Preferencia de profissional; "" se tanto faz ou negocio individual.',
+          },
+          janela: {
+            type: 'string',
+            description: 'Melhor dia/faixa, ex.: "sabado de manha", "quinta a tarde".',
+          },
+          observacao: {
+            type: 'string',
+            description: 'Opcional: algo relevante ("cliente novo", "veio do instagram").',
+          },
+        },
+        required: ['servico', 'janela'],
+      },
+      run: async (args: unknown): Promise<{ ok: boolean; registrado: boolean }> => {
+        const a = (args ?? {}) as {
+          nome?: unknown;
+          servico?: unknown;
+          profissional?: unknown;
+          janela?: unknown;
+          observacao?: unknown;
+        };
+        const r = await sendOwnerAlert({
+          slot: this.slot,
+          clienteTelefone: telefone,
+          kind: 'lead',
+          transport: 'clone_session',
+          payload: {
+            nome: typeof a.nome === 'string' ? a.nome : undefined,
+            servico: typeof a.servico === 'string' ? a.servico : '',
+            profissional: typeof a.profissional === 'string' ? a.profissional : undefined,
+            janela: typeof a.janela === 'string' ? a.janela : '',
+            observacao: typeof a.observacao === 'string' ? a.observacao : undefined,
+          },
+        });
+        return { ok: true, registrado: r.escalado };
+      },
+    };
+  }
+
+  /**
+   * Auto-pausa o número após uma escalação (MODO ATENDENTE). BEST-EFFORT: nunca lança, nunca
+   * derruba a resposta ao cliente (o .catch loga e segue). Reusa flow_pauses com
+   * source='escalated_human' — o base.ts checa isFlowPaused(flowId=slot) ANTES de process()
+   * e silencia o número; o dono despausa pela UI de pausas do portal (mesma lista do anti-bot).
+   * flow_id=slot: pra clone, workflow_id === slot (== ctx.flowId), então a pausa é a mesma
+   * chave que o base.ts consulta E aparece na lista do portal (escopada por slot).
+   */
+  private autoPauseAfterEscalation(telefone: string, session: string): void {
+    void pausa
+      .addFlowPause({
+        flowId: this.slot,
+        telefone,
+        session,
+        source: 'escalated_human',
+        reason: 'Escalado para atendimento humano (modo atendente)',
+      })
+      .catch((e) =>
+        this.log.warn(
+          { err: e instanceof Error ? e.message : String(e), slot: this.slot },
+          'modo-atendente: auto-pausa pós-escalação falhou (best-effort)',
+        ),
+      );
   }
 
   /**
@@ -343,6 +490,21 @@ export class TesteBarbeariaBot extends BotBase {
         'cancelamento detectado (botão literal) — bot NÃO cancela; escala pro dono se flag ON',
       );
       return 'ok! vou avisar o time, e logo entraremos em contato!';
+    }
+
+    // ── Modo ATENDENTE (SCRUM-59 — DORMENTE por gate por-clone) ──────────────────
+    // GATE DUPLO: só entra no ramo atendente se MODO_ATENDENTE_SLOTS inclui este slot
+    // **E** o perfil do clone tem agenda_automatica=false (flow_clones.personalizacao).
+    // Qualquer um falso -> o código abaixo (estabelecimento/individual) roda BYTE-A-BYTE
+    // como hoje. Cirilo/Samuel estão fora do gate -> nunca alcançam processAtendente. O
+    // modo atendente NÃO tem agenda, então precede o gate de estabelecimento (que resolve
+    // agenda por colaborador). personalizacao pode guardar boolean OU string — checa ambos.
+    if (isModoAtendenteEnabled(this.slot, config.MODO_ATENDENTE_SLOTS)) {
+      const cloneModo = await flowClones.getCloneBySlot(this.slot);
+      const rawAgenda: unknown = cloneModo?.personalizacao?.agenda_automatica;
+      if (rawAgenda === false || rawAgenda === 'false') {
+        return this.processAtendente(ctx);
+      }
     }
 
     // ── Estabelecimento multi-colaborador (ADR 0023/0024, Fase A — DORMENTE) ──────
@@ -758,6 +920,89 @@ export class TesteBarbeariaBot extends BotBase {
         },
       });
     }
+
+    const result = await runAgentConfigured({
+      slot: this.slot,
+      projectId: this.slot,
+      flowId: ctx.flowId,
+      telefone,
+      systemPrompt,
+      history,
+      userMessage: texto,
+      tools,
+      maxTurns: 5,
+    });
+
+    return sanitizarResposta(result.reply);
+  }
+
+  /**
+   * MODO ATENDENTE (SCRUM-59). Ramo do bot para clones SEM agenda automática: atende, tira
+   * dúvida (com os dados do CONTEXTO), qualifica interesse e ESCALA pro humano — sem NUNCA
+   * tocar a agenda. Reusa o mesmo runner: renderPrompt (persona do banco) + buildContextBlock
+   * SEM `agendaFormatada` (nega disponibilidade em tempo real; mantém [NEGOCIO]/[FUNCIONAMENTO]/
+   * [SERVICOS]/[OBSERVACOES], onde o link_agendamento cai) + buildModoAtendenteBlock (guardrail).
+   *
+   * Tools = [escalar_para_humano, registrar_interesse]. NENHUMA tool de agenda (inserir/
+   * remarcar/consultar) — o bot fica INCAPAZ de fechar pelo GCal por construção (requisito nº1
+   * do cliente). Não injeta [SEU PACOTE] nem cartão de confirmação (não há agendamento aqui).
+   */
+  private async processAtendente(ctx: BotContext): Promise<string | null> {
+    const { telefone, texto, pushName, sessao } = ctx.message;
+
+    // 1 leitura do clone (cacheada): fuso + link_agendamento. Não usa loadScheduleConfig
+    // (que exige agenda e silenciaria). timezone default SP via normalizeCloneRow.
+    const clone = await flowClones.getCloneBySlot(this.slot);
+    const cloneTz = clone?.timezone ?? 'America/Sao_Paulo';
+    const linkRaw: unknown = clone?.personalizacao?.link_agendamento;
+    const hasLink = typeof linkRaw === 'string' && linkRaw.trim() !== '';
+
+    const now = new Date();
+
+    // Persona vem só do banco (bot_prompt) — igual ao caminho individual.
+    let promptPersona: string;
+    try {
+      promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
+    } catch (err) {
+      this.log.error(
+        { err, slot: this.slot, telefone: phoneHint(telefone) },
+        'renderPrompt falhou (modo atendente) — bot nao responde',
+      );
+      return null;
+    }
+
+    const dataAtual = now.toLocaleDateString('pt-BR', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: cloneTz,
+    });
+
+    // Contexto SEM agendaFormatada: nega disponibilidade em tempo real, mas mantém os
+    // dados do negócio (funcionamento/serviços/preços/endereço/pagamento/link).
+    const contextBlock = await buildContextBlock({
+      slot: this.slot,
+      nomeCliente: pushName || telefone,
+      telefoneCliente: telefone,
+      dataAtual,
+      ano: String(now.getFullYear()),
+    });
+
+    const modoBlock = buildModoAtendenteBlock({ hasLink });
+
+    const systemPrompt = [promptPersona, contextBlock, modoBlock]
+      .filter((b) => b !== '')
+      .join('\n\n');
+
+    const fullHistory = await this.loadHistory(ctx);
+    const history = fullHistory.slice(0, -1);
+
+    // SÓ as 2 tools do modo atendente. NENHUMA tool de agenda (incapacidade por construção).
+    const tools: ToolDefinition[] = [
+      this.buildEscalarParaHumanoTool(telefone, sessao),
+      this.buildRegistrarInteresseTool(telefone),
+    ];
 
     const result = await runAgentConfigured({
       slot: this.slot,

@@ -276,6 +276,21 @@ export const ConfigSchema = z.object({
   // Ligar SÓ no clone de teste (dragon = clone_barber_dragon_caly8b) com QA. NUNCA hardcoded.
   ATEND_FROM_AGENDA_SLOTS: z.string().optional().default(''),
 
+  // ── Modo ATENDENTE — gate POR-CLONE do bot sem agenda automática (SCRUM-59) ──
+  // Lista de slots (CSV) em que o bot roda no MODO ATENDENTE: atende/tira dúvida/
+  // qualifica interesse e ESCALA pro humano, SEM tools de agenda (não fecha pelo GCal).
+  // Avaliado com isModoAtendenteEnabled(slot, ...). OPCIONAL no boot (ausente = OFF,
+  // lição #247: feature dormente NUNCA derruba a api do bot). O ramo processAtendente
+  // só entra se ESTE gate está ON **E** o perfil do clone tem agenda_automatica=false
+  // (flow_clones.personalizacao) — o gate por env é o macro, o perfil é o toggle fino.
+  //   vazio/ausente   -> OFF pra TODOS (produção byte-a-byte: Cirilo/Samuel intactos).
+  //   'slot_a,slot_b'  -> ON só nos slots listados (piloto).
+  //   '*'              -> ON pra TODOS (enable global futuro).
+  // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy de código.
+  // Decisão do Bruno: estrear só no clone do piloto, não tocar os que estão rodando.
+  // NUNCA hardcoded.
+  MODO_ATENDENTE_SLOTS: z.string().optional().default(''),
+
   SERVICE_NAME: z.string().optional(),
 });
 
