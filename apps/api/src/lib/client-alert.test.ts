@@ -21,7 +21,27 @@ const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
   upsertState: vi.fn(),
   sendText: vi.fn(),
+  // captura TODA chamada de log pra provar que telefone NUNCA vai em claro no log (LGPD).
+  logCalls: [] as unknown[][],
 }));
+
+// Logger mockado que grava os args de cada log em mocks.logCalls.
+vi.mock('@startap/core/logger', () => {
+  const rec =
+    (level: string) =>
+    (...a: unknown[]) =>
+      mocks.logCalls.push([level, ...a]);
+  return {
+    logger: {
+      child: () => ({
+        info: rec('info'),
+        warn: rec('warn'),
+        error: rec('error'),
+        debug: rec('debug'),
+      }),
+    },
+  };
+});
 
 vi.mock('@startap/db', () => ({
   flowClones: {
@@ -44,7 +64,7 @@ vi.mock('../config.js', () => ({
   config: { CANCELAMENTO_ESCALADO_COOLDOWN_MIN: 30 },
 }));
 
-const { sendClientCancellationAlert, sendOwnerAlert, phoneHint } = await import(
+const { sendClientCancellationAlert, sendOwnerAlert, phoneHint, phoneDisplay } = await import(
   './client-alert.js'
 );
 
@@ -151,6 +171,16 @@ describe('sendClientCancellationAlert', () => {
     expect(phoneHint('5535999991234')).toBe('5535****1234');
     expect(phoneHint('123')).toBe('***');
   });
+
+  it('phoneDisplay formata BR legível (só p/ o corpo ao dono) e degrada gracioso', () => {
+    // 55 + DDD + 9 dígitos -> "(DD) 9XXXX-XXXX"
+    expect(phoneDisplay('5511988887777')).toBe('(11) 98888-7777');
+    // 55 + DDD + 8 dígitos (fixo) -> "(DD) XXXX-XXXX"
+    expect(phoneDisplay('551938018908')).toBe('(19) 3801-8908');
+    // fora do padrão BR -> devolve os dígitos (fallback), nunca quebra.
+    expect(phoneDisplay('12345')).toBe('12345');
+    expect(phoneDisplay('')).toBe('(número indisponível)');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -160,6 +190,7 @@ describe('sendClientCancellationAlert', () => {
 describe('sendOwnerAlert — kinds e transporte', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.logCalls.length = 0;
     mocks.getCloneAlertOwner.mockResolvedValue({
       phone: '5535999991234',
       enabled: true,
@@ -191,8 +222,13 @@ describe('sendOwnerAlert — kinds e transporte', () => {
     expect(mocks.getSenderSession).not.toHaveBeenCalled();
     expect(arg.texto).toContain('ESCALADO');
     expect(arg.texto).toContain('reclamacao');
-    expect(arg.texto).toContain(phoneHint('5511988887777'));
-    expect(arg.texto).not.toContain('5511988887777'); // telefone cru NUNCA
+    // telefone EM CLARO no corpo (dono assume a conversa) — decisão Bruno 03/07.
+    expect(arg.texto).toContain(phoneDisplay('5511988887777')); // "(11) 98888-7777"
+    // ...mas o LOG NUNCA leva o número em claro (só phoneHint).
+    const logStr = JSON.stringify(mocks.logCalls);
+    expect(logStr).not.toContain(phoneDisplay('5511988887777'));
+    expect(logStr).not.toContain('5511988887777');
+    expect(logStr).toContain(phoneHint('5511988887777'));
   });
 
   it('kind=lead + transport=clone_session -> envia resumo do interesse pela sessão do clone', async () => {
@@ -216,9 +252,12 @@ describe('sendOwnerAlert — kinds e transporte', () => {
     expect(arg.texto).toContain('Corte + Barba');
     expect(arg.texto).toContain('Juliano');
     expect(arg.texto).toContain('sábado de manhã');
-    // resumo do lead vai pro dono; telefone do cliente mascarado (LGPD).
-    expect(arg.texto).toContain(phoneHint('5511988887777'));
-    expect(arg.texto).not.toContain('5511988887777');
+    // telefone EM CLARO no corpo (dono confirma o horário) — decisão Bruno 03/07.
+    expect(arg.texto).toContain(phoneDisplay('5511988887777')); // "(11) 98888-7777"
+    // ...e o LOG segue mascarado (nunca o número em claro).
+    const logStr = JSON.stringify(mocks.logCalls);
+    expect(logStr).not.toContain(phoneDisplay('5511988887777'));
+    expect(logStr).not.toContain('5511988887777');
   });
 
   it('clone_session sem waha_sessao -> send_failed (degrada gracioso), não envia', async () => {

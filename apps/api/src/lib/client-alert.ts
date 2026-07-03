@@ -125,6 +125,19 @@ export function phoneHint(raw: string): string {
 }
 
 /**
+ * Telefone EM CLARO, formatado legível pro DONO ligar de volta (decisão Bruno 03/07).
+ * USO RESTRITO: só no CORPO da mensagem de WhatsApp ao dono (controlador que precisa do
+ * contato) nos kinds lead/escalonamento — NUNCA em LOG (log usa sempre phoneHint). BR E.164
+ * (55 + DDD + 8/9 dígitos) -> "(19) 98101-8908"; fora do padrão -> devolve os dígitos crus.
+ */
+export function phoneDisplay(raw: string): string {
+  const d = (raw ?? '').replace(/\D/g, '');
+  const m = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(d);
+  if (m) return `(${m[1]}) ${m[2]}-${m[3]}`;
+  return d || '(número indisponível)';
+}
+
+/**
  * check_key do cooldown: por slot + KIND + hash curto do telefone do cliente (sem PII na
  * chave). O `cancelamento` mantém a chave LEGADA (sem kind) → cooldown byte-idêntico ao de
  * hoje (nenhum estado órfão no deploy). Kinds novos namespaceiam por kind (isolados entre si).
@@ -142,23 +155,29 @@ function toChatId(phone: string): string {
   return `${phone.replace(/\D/g, '')}@c.us`;
 }
 
-/** Monta a mensagem LGPD-safe pro dono. Só o CORPO varia por kind; nunca telefone cru. */
+/**
+ * Monta a mensagem pro dono. Só o CORPO varia por kind. Telefone do cliente:
+ *  - `cancelamento` -> MASCARADO (phoneHint), byte-idêntico ao de hoje;
+ *  - `escalonamento`/`lead` -> EM CLARO (phoneDisplay), pra o dono ligar de volta
+ *    (decisão Bruno 03/07). O dono é o controlador e já tem relação com o contato.
+ * LOG segue SEMPRE mascarado (o clear é só aqui, no corpo do WhatsApp ao dono).
+ */
 function buildOwnerMessage(input: {
   kind: OwnerAlertKind;
   cloneDisplayName: string;
-  clientePhoneHint: string;
+  clienteTelefone: string;
   payload: CancelamentoPayload | EscalonamentoPayload | LeadPayload;
 }): string {
-  const { kind, cloneDisplayName, clientePhoneHint } = input;
+  const { kind, cloneDisplayName, clienteTelefone } = input;
 
   if (kind === 'cancelamento') {
-    // BYTE-IDÊNTICO ao de hoje (Cirilo/Samuel) — NÃO alterar sem regressão do cancelamento.
+    // BYTE-IDÊNTICO ao de hoje (Cirilo/Samuel) — telefone MASCARADO. NÃO alterar.
     const p = input.payload as CancelamentoPayload;
     const ref = p.referenciaHorario.trim() || 'não especificado';
     const motivo = p.motivo.trim();
     const linhas = [
       `Pedido de CANCELAMENTO no ${cloneDisplayName}.`,
-      `Cliente: ${clientePhoneHint}`,
+      `Cliente: ${phoneHint(clienteTelefone)}`,
       `Horário citado: ${ref}`,
     ];
     if (motivo) linhas.push(`Motivo: ${motivo}`);
@@ -172,7 +191,8 @@ function buildOwnerMessage(input: {
     const resumo = p.resumo.trim();
     const linhas = [
       `Atendimento ESCALADO no ${cloneDisplayName}.`,
-      `Cliente: ${clientePhoneHint}`,
+      // EM CLARO: o dono precisa do número pra assumir o atendimento.
+      `📱 Telefone: ${phoneDisplay(clienteTelefone)}`,
       `Motivo: ${motivo}`,
     ];
     if (resumo) linhas.push(`Resumo: ${resumo}`);
@@ -189,7 +209,8 @@ function buildOwnerMessage(input: {
   const observacao = (p.observacao ?? '').trim();
   const linhas = [
     `Novo INTERESSE em agendar no ${cloneDisplayName}.`,
-    `Cliente: ${clientePhoneHint}`,
+    // EM CLARO: o dono precisa do número pra confirmar o horário com o cliente.
+    `📱 Telefone: ${phoneDisplay(clienteTelefone)}`,
   ];
   if (nome) linhas.push(`Nome: ${nome}`);
   linhas.push(`Serviço: ${servico}`);
@@ -306,7 +327,8 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
     const texto = buildOwnerMessage({
       kind,
       cloneDisplayName: owner.displayName,
-      clientePhoneHint: phoneHint(clienteTelefone),
+      // Telefone CRU: buildOwnerMessage decide mascarar (cancelamento) ou clear (lead/escalonamento).
+      clienteTelefone,
       payload: input.payload,
     });
 
