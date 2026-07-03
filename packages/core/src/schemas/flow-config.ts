@@ -246,6 +246,37 @@ export const perfilSchema = z
       .transform(stripAtPrefix)
       .optional(),
     formas_pagamento: formasPagamentoSchema,
+    // ── MODO ATENDENTE (SCRUM-59) ──────────────────────────────────────────
+    // Toggle fino por-clone: false = MODO ATENDENTE (bot sem agenda automática).
+    // Efetivo-default TRUE via AUSÊNCIA (NÃO usa .default(true) de proposito: com
+    // PATCH/merge, um .default reescreveria a chave em toda gravacao parcial e
+    // CLOBBARIA um clone que estava em modo atendente). Ausente no payload = nao toca.
+    // O bot/data-layer tratam ausencia como TRUE (agenda automatica = comportamento atual).
+    agenda_automatica: z.boolean().optional(),
+    // Link do sistema de agendamento externo do cliente (Booksy/Trinks/agenda propria).
+    // OPCIONAL SEMPRE (decisao Bruno 03/07: o piloto insere depois): sem link, o bot
+    // direciona pra "equipe confirma"; com link, entrega o link.
+    // P1 (qa review SCRUM-59): o front envia '' quando o dono liga o modo SEM link (fluxo
+    // PRIMARIO do piloto). .optional() so cobre `undefined`, entao '' cairia no .url() e
+    // daria 400 "perfil invalido" -> Save quebra. O preprocess normaliza '' (e so-espacos)
+    // para `undefined` ANTES de validar: '' vira AUSENTE (nao persiste lixo no JSONB), e
+    // valores nao-vazios seguem validados como hoje.
+    // SECURITY (review SCRUM-59): z.url() sozinho aceita javascript:/data:/ftp: (so faz
+    // new URL()). O backend e a fonte da verdade -> exige explicitamente http(s):// (o link
+    // vai pro contexto do LLM e, no front, pode virar href). refine roda apos url().
+    link_agendamento: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z
+        .string()
+        .trim()
+        .url('link de agendamento invalido')
+        .max(500)
+        .refine(
+          (v) => /^https?:\/\//i.test(v),
+          'link de agendamento deve comecar com http:// ou https://',
+        )
+        .optional(),
+    ),
   })
   .strict();
 
@@ -259,6 +290,8 @@ export const PERFIL_KEYS = [
   'endereco',
   'instagram',
   'formas_pagamento',
+  'agenda_automatica',
+  'link_agendamento',
 ] as const;
 
 export type PerfilKey = (typeof PERFIL_KEYS)[number];

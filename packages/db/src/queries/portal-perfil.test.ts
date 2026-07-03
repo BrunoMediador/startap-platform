@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe('getPerfilBySlot', () => {
-  it('le as 6 chaves; texto ausente vira "" e formas_pagamento vira [] (checklist)', async () => {
+  it('le as chaves; texto ausente vira "", formas_pagamento [] e agenda_automatica default TRUE', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [{ personalizacao: { nome_negocio: 'Barbearia Edu', instagram: 'edubarber' } }],
     });
@@ -45,9 +45,30 @@ describe('getPerfilBySlot', () => {
       endereco: '',
       instagram: 'edubarber',
       formas_pagamento: [],
+      // SCRUM-59: ausente -> agenda automática ON (comportamento atual); link vazio.
+      agenda_automatica: true,
+      link_agendamento: '',
     });
     // slot vai parametrizado ($1), nunca interpolado.
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE slot = $1'), [SLOT]);
+  });
+
+  it('SCRUM-59: agenda_automatica lê false de STRING "false" E de boolean false', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { personalizacao: { agenda_automatica: 'false', link_agendamento: 'https://x.co/a' } },
+      ],
+    });
+    const p1 = await getPerfilBySlot(SLOT);
+    expect(p1?.agenda_automatica).toBe(false);
+    expect(p1?.link_agendamento).toBe('https://x.co/a');
+
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ personalizacao: { agenda_automatica: false } }],
+    });
+    const p2 = await getPerfilBySlot(SLOT);
+    expect(p2?.agenda_automatica).toBe(false);
+    expect(p2?.link_agendamento).toBe('');
   });
 
   it('migracao LAZY: converte o texto livre ANTIGO em array canonico (best-effort)', async () => {
@@ -163,6 +184,31 @@ describe('updatePerfilBySlot', () => {
 
     const merged = JSON.parse(captured.mergedJson ?? '{}');
     expect(merged.formas_pagamento).toBe('');
+  });
+
+  it('SCRUM-59: agenda_automatica (boolean) vira STRING "true"/"false" no storage', async () => {
+    const capturedFalse = armMocks({});
+    await updatePerfilBySlot(SLOT, {
+      agenda_automatica: false,
+      link_agendamento: 'https://x.co/a',
+    });
+    const mergedFalse = JSON.parse(capturedFalse.mergedJson ?? '{}');
+    expect(mergedFalse.agenda_automatica).toBe('false'); // STRING, não boolean
+    expect(mergedFalse.link_agendamento).toBe('https://x.co/a');
+
+    const capturedTrue = armMocks({});
+    await updatePerfilBySlot(SLOT, { agenda_automatica: true });
+    const mergedTrue = JSON.parse(capturedTrue.mergedJson ?? '{}');
+    expect(mergedTrue.agenda_automatica).toBe('true');
+  });
+
+  it('SCRUM-59: agenda_automatica ausente NÃO toca a chave (não clobbar modo atual)', async () => {
+    // clone já em modo atendente ('false'); um PATCH que não envia agenda_automatica preserva.
+    const captured = armMocks({ agenda_automatica: 'false' });
+    await updatePerfilBySlot(SLOT, { nome_negocio: 'Novo Nome' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect(merged.nome_negocio).toBe('Novo Nome');
+    expect(merged.agenda_automatica).toBe('false'); // preservado
   });
 
   it('retorna false quando o slot nao existe', async () => {
