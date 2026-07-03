@@ -4,16 +4,32 @@ import {
   ajudaLink,
   isAgendaDirty,
   isLinkValido,
+  isRecepcaoPreenchida,
+  isRecepcaoValida,
   normalizeLink,
+  recepcaoToE164,
   toAgendaDraft,
   validateAgenda,
 } from './agenda-config';
 
-const ON: AgendaConfigDraft = { agenda_automatica: true, link_agendamento: '' };
-const OFF: AgendaConfigDraft = { agenda_automatica: false, link_agendamento: '' };
+const ON: AgendaConfigDraft = {
+  agenda_automatica: true,
+  link_agendamento: '',
+  recepcao_telefone: '',
+};
+const OFF: AgendaConfigDraft = {
+  agenda_automatica: false,
+  link_agendamento: '',
+  recepcao_telefone: '',
+};
+
+/** Draft a partir de ON com overrides (evita repetir recepcao_telefone nos testes). */
+function d(over: Partial<AgendaConfigDraft>): AgendaConfigDraft {
+  return { ...ON, ...over };
+}
 
 describe('toAgendaDraft', () => {
-  it('default = automático ligado, link vazio (campos ausentes)', () => {
+  it('default = automático ligado, link/telefone vazios (campos ausentes)', () => {
     expect(toAgendaDraft(null)).toEqual(ON);
     expect(toAgendaDraft(undefined)).toEqual(ON);
     expect(toAgendaDraft({})).toEqual(ON);
@@ -22,13 +38,25 @@ describe('toAgendaDraft', () => {
   it('preserva agenda_automatica=false e o link', () => {
     expect(
       toAgendaDraft({ agenda_automatica: false, link_agendamento: 'https://x.com/a' }),
-    ).toEqual({ agenda_automatica: false, link_agendamento: 'https://x.com/a' });
+    ).toEqual({
+      agenda_automatica: false,
+      link_agendamento: 'https://x.com/a',
+      recepcao_telefone: '',
+    });
   });
 
   it('trata link null como vazio', () => {
     expect(
       toAgendaDraft({ agenda_automatica: false, link_agendamento: null }).link_agendamento,
     ).toBe('');
+  });
+
+  it('mascara o telefone RAW E.164 do backend pra exibição BR (tira o DDI 55)', () => {
+    expect(toAgendaDraft({ recepcao_telefone: '5531987654321' }).recepcao_telefone).toBe(
+      '(31) 98765-4321',
+    );
+    expect(toAgendaDraft({ recepcao_telefone: null }).recepcao_telefone).toBe('');
+    expect(toAgendaDraft({}).recepcao_telefone).toBe('');
   });
 });
 
@@ -77,15 +105,21 @@ describe('validateAgenda — link SEMPRE opcional', () => {
   });
 
   it('normaliza o link no payload (completa https://)', () => {
-    const res = validateAgenda({ agenda_automatica: false, link_agendamento: 'booksy.com/ze' });
+    const res = validateAgenda(d({ agenda_automatica: false, link_agendamento: 'booksy.com/ze' }));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.link_agendamento).toBe('https://booksy.com/ze');
   });
 
   it('rejeita FORMATO inválido quando preenchido', () => {
-    const res = validateAgenda({ agenda_automatica: false, link_agendamento: 'não é link' });
+    const res = validateAgenda(d({ agenda_automatica: false, link_agendamento: 'não é link' }));
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toMatch(/inválido/i);
+  });
+
+  it('NÃO inclui recepcao_telefone no value (é campo top-level, fora do perfil)', () => {
+    const res = validateAgenda(d({ recepcao_telefone: '(31) 98765-4321' }));
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value).toEqual({ agenda_automatica: true, link_agendamento: '' });
   });
 });
 
@@ -97,16 +131,54 @@ describe('isAgendaDirty', () => {
   it('detecta mudança no link (ignora espaços nas bordas)', () => {
     expect(
       isAgendaDirty(
-        { agenda_automatica: false, link_agendamento: ' https://x.com/a ' },
-        { agenda_automatica: false, link_agendamento: 'https://x.com/a' },
+        d({ agenda_automatica: false, link_agendamento: ' https://x.com/a ' }),
+        d({ agenda_automatica: false, link_agendamento: 'https://x.com/a' }),
       ),
     ).toBe(false);
     expect(
       isAgendaDirty(
-        { agenda_automatica: false, link_agendamento: 'https://y.com' },
-        { agenda_automatica: false, link_agendamento: 'https://x.com' },
+        d({ agenda_automatica: false, link_agendamento: 'https://y.com' }),
+        d({ agenda_automatica: false, link_agendamento: 'https://x.com' }),
       ),
     ).toBe(true);
+  });
+
+  it('detecta mudança no telefone da recepção (compara só dígitos)', () => {
+    // Mesmo número, máscaras diferentes -> não é mudança.
+    expect(
+      isAgendaDirty(
+        d({ recepcao_telefone: '(31) 98765-4321' }),
+        d({ recepcao_telefone: '31987654321' }),
+      ),
+    ).toBe(false);
+    // Número diferente -> mudança.
+    expect(
+      isAgendaDirty(d({ recepcao_telefone: '(31) 98765-4321' }), d({ recepcao_telefone: '' })),
+    ).toBe(true);
+  });
+});
+
+describe('telefone da recepção', () => {
+  it('isRecepcaoPreenchida: true só quando há dígitos', () => {
+    expect(isRecepcaoPreenchida('')).toBe(false);
+    expect(isRecepcaoPreenchida('  ')).toBe(false);
+    expect(isRecepcaoPreenchida('(31) 9')).toBe(true);
+  });
+
+  it('isRecepcaoValida: 10 (fixo) ou 11 (móvel) dígitos locais', () => {
+    expect(isRecepcaoValida('(31) 98765-4321')).toBe(true); // 11
+    expect(isRecepcaoValida('(31) 3333-4444')).toBe(true); // 10
+    expect(isRecepcaoValida('(31) 9')).toBe(false); // curto
+    expect(isRecepcaoValida('')).toBe(false);
+    // Aceita paste com DDI colado (phoneDigits tira o 55).
+    expect(isRecepcaoValida('+55 31 98765-4321')).toBe(true);
+  });
+
+  it('recepcaoToE164: prefixa 55; vazio/inválido -> ""', () => {
+    expect(recepcaoToE164('(31) 98765-4321')).toBe('5531987654321');
+    expect(recepcaoToE164('+55 31 98765-4321')).toBe('5531987654321');
+    expect(recepcaoToE164('')).toBe('');
+    expect(recepcaoToE164('(31) 9')).toBe('');
   });
 });
 

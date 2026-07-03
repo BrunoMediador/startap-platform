@@ -15,9 +15,13 @@ import { IconCalendar } from '@/components/icons';
  * renderiza null (sem flash) — se a feature estiver off, o cliente nunca vê nem
  * esqueleto.
  *
+ * Também traz o "WhatsApp da recepção" (SCRUM-59 PR-E): número que recebe os avisos de
+ * lead/escalação ao dono (top-level `recepcao_telefone`, E.164 BR). Vazio NÃO zera — a
+ * UI só envia mudança válida.
+ *
  * Dados isolados do formulário principal do perfil: query própria (qk.agendaConfig)
- * derivada do mesmo /portal/perfil, salvamento parcial (só os 2 campos). Edição
- * OTIMISTA com revert (padrão D5 das telas servicos/horarios/perfil/lembretes).
+ * derivada do mesmo /portal/perfil, salvamento parcial. Edição OTIMISTA com revert
+ * (padrão D5 das telas servicos/horarios/perfil/lembretes).
  *
  * O link é OPCIONAL mesmo com o automático desligado (o piloto insere depois). Só
  * validamos o formato quando preenchido. Desligar o toggle pede confirmação (muda o
@@ -30,12 +34,20 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import {
+  AJUDA_RECEPCAO,
   type AgendaConfigDraft,
+  RECEPCAO_TELEFONE_ERRO,
   ajudaLink,
   isAgendaDirty,
+  isRecepcaoIndisponivel,
+  isRecepcaoPreenchida,
+  isRecepcaoValida,
+  isTelefoneInvalido,
+  recepcaoToE164,
   toAgendaDraft,
   validateAgenda,
 } from '@/lib/agenda-config';
+import { maskPhoneBR } from '@/lib/cadastro';
 import { qk, useAgendaConfig, useSaveAgendaConfig } from '@/lib/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -52,6 +64,7 @@ export function AgendamentoSection() {
   const [draft, setDraft] = useState<AgendaConfigDraft>(() => toAgendaDraft(cfgQ.data));
   const [saved, setSaved] = useState<AgendaConfigDraft>(() => toAgendaDraft(cfgQ.data));
   const [linkError, setLinkError] = useState<string | undefined>(undefined);
+  const [recepcaoError, setRecepcaoError] = useState<string | undefined>(undefined);
   const [confirmOff, setConfirmOff] = useState(false);
   // Evita estourar o rascunho do usuário num refetch em background (mesmo padrão do
   // perfil/lembretes): o effect só re-hidrata enquanto não houve edição.
@@ -99,6 +112,13 @@ export function AgendamentoSection() {
     if (linkError) setLinkError(undefined);
   }
 
+  function onRecepcaoChange(v: string) {
+    touched.current = true;
+    // Máscara progressiva BR na digitação (mesmo padrão do signup).
+    setDraft((d) => ({ ...d, recepcao_telefone: maskPhoneBR(v) }));
+    if (recepcaoError) setRecepcaoError(undefined);
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!dirty || save.isPending) return;
@@ -110,28 +130,56 @@ export function AgendamentoSection() {
     }
     setLinkError(undefined);
 
+    // Telefone da recepção (TOP-LEVEL, opcional). Preenchido e inválido -> erro; vazio
+    // -> NÃO envia (backend não zera); válido e MUDADO -> manda o E.164.
+    let recepE164: string | undefined;
+    if (isRecepcaoPreenchida(draft.recepcao_telefone)) {
+      if (!isRecepcaoValida(draft.recepcao_telefone)) {
+        setRecepcaoError(RECEPCAO_TELEFONE_ERRO);
+        return;
+      }
+      const e164 = recepcaoToE164(draft.recepcao_telefone);
+      if (e164 !== recepcaoToE164(saved.recepcao_telefone)) recepE164 = e164;
+    }
+    setRecepcaoError(undefined);
+
     const value = res.value;
-    const nextSaved: AgendaConfigDraft = { ...value };
+    const input = {
+      ...value,
+      ...(recepE164 !== undefined ? { recepcao_telefone: recepE164 } : {}),
+    };
+    // Display salvo: se mandou o telefone, mostra o mascarado do E.164; senão mantém o
+    // telefone que já estava salvo (limpar/inválido não persiste — o campo volta pro nº).
+    const nextRecepDisplay =
+      recepE164 !== undefined ? maskPhoneBR(recepE164) : saved.recepcao_telefone;
+    const nextSaved: AgendaConfigDraft = { ...value, recepcao_telefone: nextRecepDisplay };
     const prev = client.getQueryData(qk.agendaConfig(slot));
 
     // Otimista: aplica no cache + fixa o draft normalizado na tela.
     client.setQueryData(qk.agendaConfig(slot), (p: typeof cfgQ.data) => ({
       modo_atendente: p?.modo_atendente ?? true,
       ...value,
+      recepcao_telefone: recepE164 !== undefined ? recepE164 : (p?.recepcao_telefone ?? ''),
     }));
     setSaved(nextSaved);
     setDraft(nextSaved);
     touched.current = false;
 
-    save.mutate(value, {
+    save.mutate(input, {
       onSuccess: () => toast.success('Agendamento atualizado'),
-      onError: () => {
+      onError: (err) => {
         if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
         const back = toAgendaDraft(prev as Parameters<typeof toAgendaDraft>[0]);
         setSaved(back);
         setDraft(back);
         touched.current = false;
-        toast.error('Não foi possível salvar. Tente de novo.');
+        if (isTelefoneInvalido(err)) {
+          toast.error('Não foi possível salvar o telefone da recepção. Confere o número.');
+        } else if (isRecepcaoIndisponivel(err)) {
+          toast.error('O telefone da recepção não está disponível agora.');
+        } else {
+          toast.error('Não foi possível salvar. Tente de novo.');
+        }
       },
     });
   }
@@ -194,6 +242,23 @@ export function AgendamentoSection() {
               </p>
             </div>
           )}
+
+          {/* WhatsApp da recepção (SCRUM-59 PR-E): destino dos avisos de lead/escalação.
+              Sempre visível na seção (mesma gate). Vazio não zera (a UI só envia mudança
+              válida — ver onSubmit). */}
+          <div className="flex flex-col gap-2 border-t border-line pt-4">
+            <Input
+              label="WhatsApp da recepção"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="(11) 99999-9999"
+              value={draft.recepcao_telefone}
+              error={recepcaoError}
+              onChange={(e) => onRecepcaoChange(e.target.value)}
+            />
+            <p className="text-[12.5px] leading-normal text-ink-soft">{AJUDA_RECEPCAO}</p>
+          </div>
 
           <div className="flex items-center gap-3">
             <Button

@@ -421,35 +421,45 @@ export function useAgendaConfig(slot: string): UseQueryResult<AgendaConfig> {
         agenda_automatica: r.perfil?.agenda_automatica ?? true,
         link_agendamento:
           typeof r.perfil?.link_agendamento === 'string' ? r.perfil.link_agendamento : '',
+        recepcao_telefone: typeof r.recepcao_telefone === 'string' ? r.recepcao_telefone : '',
       })),
   });
 }
 
 /**
- * PUT parcial /portal/perfil só com os campos de agendamento: `{ perfil:
- * { agenda_automatica, link_agendamento } }`. O backend faz merge parcial (chave
- * ausente = não toca), então os demais campos do perfil ficam intactos.
+ * PUT parcial /portal/perfil com os campos da seção Agendamento: `{ perfil:
+ * { agenda_automatica, link_agendamento }, recepcao_telefone? }`. O `perfil` é merge
+ * parcial (chave ausente = não toca); `recepcao_telefone` é TOP-LEVEL (E.164 BR) e só
+ * viaja quando o chamador o inclui — VAZIO não zera (backend rejeita). Erros:
+ * 400 telefone_invalido, 404 recepcao_telefone_indisponivel.
  */
 export function useSaveAgendaConfig(
   slot: string,
 ): UseMutationResult<
-  PerfilNegocio,
+  SavePerfilResponse,
   Error,
-  { agenda_automatica: boolean; link_agendamento: string }
+  { agenda_automatica: boolean; link_agendamento: string; recepcao_telefone?: string }
 > {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input) =>
+    mutationFn: ({ agenda_automatica, link_agendamento, recepcao_telefone }) =>
       apiFetch<SavePerfilResponse>('/portal/perfil', {
         method: 'PUT',
-        body: { perfil: input },
-      }).then((r) => r.perfil),
-    onSuccess: (perfil) => {
+        body: {
+          perfil: { agenda_automatica, link_agendamento },
+          ...(recepcao_telefone !== undefined ? { recepcao_telefone } : {}),
+        },
+      }),
+    onSuccess: (res) => {
       client.setQueryData(qk.agendaConfig(slot), (prev: AgendaConfig | undefined) => ({
         modo_atendente: prev?.modo_atendente ?? true,
-        agenda_automatica: perfil.agenda_automatica ?? true,
+        agenda_automatica: res.perfil.agenda_automatica ?? true,
         link_agendamento:
-          typeof perfil.link_agendamento === 'string' ? perfil.link_agendamento : '',
+          typeof res.perfil.link_agendamento === 'string' ? res.perfil.link_agendamento : '',
+        recepcao_telefone:
+          typeof res.recepcao_telefone === 'string'
+            ? res.recepcao_telefone
+            : (prev?.recepcao_telefone ?? ''),
       }));
     },
   });

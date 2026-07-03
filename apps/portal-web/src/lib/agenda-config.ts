@@ -7,28 +7,39 @@
  * dúvidas e — se houver um link — manda o link externo pro cliente agendar. Sem link,
  * o bot coleta os dados e avisa a equipe pra confirmar.
  *
- * CONTRATO (backend PR-C, em paralelo — combinado por este contrato):
+ * CONTRATO (backend PR-C/PR-E, combinado por este contrato):
  *   GET  /portal/perfil -> { perfil: { agenda_automatica?, link_agendamento? },
- *                            features?: { modo_atendente } }
- *   PUT  /portal/perfil body { perfil: { agenda_automatica, link_agendamento } }
- *        (parcial: chave ausente = não toca).
+ *                            features?: { modo_atendente }, recepcao_telefone? }
+ *   PUT  /portal/perfil body { perfil: { agenda_automatica, link_agendamento },
+ *                             recepcao_telefone? }
+ *        (perfil = parcial; recepcao_telefone é TOP-LEVEL, E.164 BR; VAZIO não zera →
+ *        a UI omite a chave quando o campo está vazio). Erros: 400 telefone_invalido,
+ *        404 recepcao_telefone_indisponivel (feature off).
  *
  * O link é OPCIONAL mesmo com o automático desligado (decisão do Bruno 03/07: o cliente
  * piloto ainda não tem o link, insere depois). Só validamos o FORMATO quando preenchido.
+ * O telefone da recepção também é opcional; só validamos formato BR quando preenchido.
  */
+import { ApiError } from './api';
 import type { AgendaConfig } from './api-types';
+import { maskPhoneBR, phoneDigits } from './cadastro';
 
 export interface AgendaConfigDraft {
   agenda_automatica: boolean;
   link_agendamento: string;
+  /** Valor de EXIBIÇÃO/edição do telefone da recepção (mascarado "(11) 99999-9999"). */
+  recepcao_telefone: string;
 }
 
 /** Resposta (flat) do backend -> draft de UI. Tolera campos ausentes (default = automático). */
 export function toAgendaDraft(data: Partial<AgendaConfig> | null | undefined): AgendaConfigDraft {
   const link = data?.link_agendamento;
+  const recep = data?.recepcao_telefone;
   return {
     agenda_automatica: data?.agenda_automatica ?? true,
     link_agendamento: typeof link === 'string' ? link : '',
+    // Backend guarda RAW E.164 ("55DDDNUMERO"); maskPhoneBR tira o DDI 55 e formata BR.
+    recepcao_telefone: typeof recep === 'string' ? maskPhoneBR(recep) : '',
   };
 }
 
@@ -82,7 +93,62 @@ export function validateAgenda(
 export function isAgendaDirty(a: AgendaConfigDraft, b: AgendaConfigDraft): boolean {
   return (
     a.agenda_automatica !== b.agenda_automatica ||
-    a.link_agendamento.trim() !== b.link_agendamento.trim()
+    a.link_agendamento.trim() !== b.link_agendamento.trim() ||
+    phoneDigits(a.recepcao_telefone) !== phoneDigits(b.recepcao_telefone)
+  );
+}
+
+// ── Telefone da recepção (SCRUM-59 PR-E) ─────────────────────────────────────
+
+/** Mensagem de erro do telefone (mesma microcopy do signup). */
+export const RECEPCAO_TELEFONE_ERRO = 'Confere o número? Parece faltar dígito.';
+
+/** Há algo digitado (após limpar máscara)? */
+export function isRecepcaoPreenchida(display: string): boolean {
+  return phoneDigits(display).length > 0;
+}
+
+/** Telefone BR válido (10 fixo / 11 móvel dígitos locais, sem o DDI 55). */
+export function isRecepcaoValida(display: string): boolean {
+  const d = phoneDigits(display);
+  return d.length === 10 || d.length === 11;
+}
+
+/**
+ * Converte o valor de exibição no E.164 BR ("55" + DDD + número) que o backend espera.
+ * Vazio -> "" (o chamador OMITE a chave: backend não permite zerar). Inválido -> "".
+ */
+export function recepcaoToE164(display: string): string {
+  const d = phoneDigits(display);
+  return d.length === 10 || d.length === 11 ? `55${d}` : '';
+}
+
+/** Texto de ajuda fixo do campo de telefone da recepção. */
+export const AJUDA_RECEPCAO =
+  'É pra este número que o assistente envia os pedidos de agendamento e os casos que precisam de uma pessoa.';
+
+/** Código de erro (body.error) de um ApiError, quando string. */
+function errorCode(err: unknown): string | undefined {
+  if (!(err instanceof ApiError)) return undefined;
+  const body = err.body;
+  if (body && typeof body === 'object' && 'error' in body) {
+    const code = (body as { error?: unknown }).error;
+    if (typeof code === 'string') return code;
+  }
+  return undefined;
+}
+
+/** 400 telefone_invalido: o telefone da recepção não passou na validação do backend. */
+export function isTelefoneInvalido(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 400 && errorCode(err) === 'telefone_invalido';
+}
+
+/** 404 recepcao_telefone_indisponivel: modo atendente off pro clone (não deveria ocorrer na UI gateada). */
+export function isRecepcaoIndisponivel(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 404 &&
+    errorCode(err) === 'recepcao_telefone_indisponivel'
   );
 }
 

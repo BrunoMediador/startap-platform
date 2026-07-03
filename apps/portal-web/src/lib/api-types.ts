@@ -649,27 +649,38 @@ export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
   features?: { modo_atendente: boolean };
+  /**
+   * WhatsApp da recepção (SCRUM-59 PR-E) = destino dos avisos de lead/escalação ao
+   * dono (RAW `alert_owner_phone`, E.164 BR "55DDDNUMERO"). TOP-LEVEL, presente SÓ com
+   * features.modo_atendente; null quando não setado. Também é o destino do aviso de
+   * desconexão (#390) — um único "número da equipe".
+   */
+  recepcao_telefone?: string | null;
 }
 
 /**
  * Visão FLAT da config de Agendamento (modo atendente), derivada do GET /portal/perfil
  * pela tela "Meu negócio" (features.modo_atendente + perfil.agenda_automatica +
- * perfil.link_agendamento). Ver @/lib/agenda-config.
+ * perfil.link_agendamento + recepcao_telefone). Ver @/lib/agenda-config.
  */
 export interface AgendaConfig {
   modo_atendente: boolean;
   agenda_automatica: boolean;
   link_agendamento: string;
+  /** RAW E.164 BR ("55DDDNUMERO") ou "" quando não setado. */
+  recepcao_telefone: string;
 }
 
 /**
- * PUT /portal/perfil -> 200 { ok, perfil, timezone }. Request body = { perfil, timezone }
- * (timezone TOP-LEVEL). Devolve o perfil salvo + o timezone efetivo.
+ * PUT /portal/perfil -> 200 { ok, perfil, timezone, recepcao_telefone? }. Request body =
+ * { perfil, timezone?, recepcao_telefone? } (timezone + recepcao_telefone TOP-LEVEL).
+ * Devolve o perfil salvo, o timezone efetivo e (com modo atendente) o telefone vigente.
  */
 export interface SavePerfilResponse {
   ok: true;
   perfil: PerfilNegocio;
   timezone?: string;
+  recepcao_telefone?: string | null;
 }
 
 // ── Lembretes de agendamento (portal-lembretes.ts — config self-service) ──────
