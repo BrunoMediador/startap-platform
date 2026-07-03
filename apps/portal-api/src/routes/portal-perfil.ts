@@ -29,15 +29,25 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // features: gate POR-CLONE do modo atendente (SCRUM-59). Contrato pro front (PR-D):
     // só o(s) clone(s) no MODO_ATENDENTE_SLOTS veem a seção "agenda automática / link".
     // Escopado pelo slot da SESSÃO (withTenant) — nunca do input.
-    const features = {
-      modo_atendente: isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS),
-    };
-    return reply.code(200).send({ perfil, timezone, features });
+    const modoAtendente = isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS);
+    const features = { modo_atendente: modoAtendente };
+    // recepcao_telefone (SCRUM-59): destino dos avisos de lead/escalação ao dono
+    // (= flow_clones.alert_owner_phone RAW). Exposto SÓ quando o modo atendente está ON pro
+    // clone (mesmo gate da seção). null quando não setado; o dono edita pelo campo do portal.
+    const payload: Record<string, unknown> = { perfil, timezone, features };
+    if (modoAtendente) {
+      payload.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
+    }
+    return reply.code(200).send(payload);
   });
 
   app.put('/portal/perfil', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
-    const body = (req.body ?? {}) as { perfil?: unknown; timezone?: unknown };
+    const body = (req.body ?? {}) as {
+      perfil?: unknown;
+      timezone?: unknown;
+      recepcao_telefone?: unknown;
+    };
     const parsed = perfilSchema.safeParse(body.perfil);
     if (!parsed.success) {
       return reply.code(400).send({
@@ -55,15 +65,41 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       }
       timezoneToSet = body.timezone;
     }
+    // recepcao_telefone (SCRUM-59): destino dos avisos ao dono (= flow_clones.alert_owner_phone,
+    // COLUNA top-level, fora do perfilSchema). Só editável com o modo atendente ON pro clone
+    // (defesa em profundidade — o front só mostra o campo então). Normaliza pra dígitos e exige
+    // E.164 BR (12-13 dígitos começando com 55). Vazio/formato inválido => 400 (NÃO zera). Toda
+    // validação ANTES de qualquer escrita (sem write parcial).
+    let recepcaoToSet: string | undefined;
+    if (body.recepcao_telefone !== undefined) {
+      if (!isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
+        return reply.code(404).send({ error: 'recepcao_telefone_indisponivel' });
+      }
+      const digits = (
+        typeof body.recepcao_telefone === 'string' ? body.recepcao_telefone : ''
+      ).replace(/\D/g, '');
+      if (!/^55\d{10,11}$/.test(digits)) {
+        return reply.code(400).send({ error: 'telefone_invalido' });
+      }
+      recepcaoToSet = digits;
+    }
     const ok = await portalConfig.updatePerfilBySlot(slot, parsed.data);
     if (!ok) return reply.code(404).send({ error: 'fluxo nao encontrado' });
     // Escrita do fuso escopada ao slot da SESSÃO (withTenant) — nunca outro tenant.
     if (timezoneToSet !== undefined) {
       await flowClones.updateTimezoneBySlot(slot, timezoneToSet);
     }
+    // Escrita do destino dos avisos, escopada ao slot da SESSÃO (anti-IDOR: slot nunca do body).
+    if (recepcaoToSet !== undefined) {
+      await flowClones.updateAlertOwnerPhoneBySlot(slot, recepcaoToSet);
+    }
     // Devolve o perfil canonico (ja MERGE-ado/normalizado) + o fuso vigente pro front sincronizar.
     const perfil = await portalConfig.getPerfilBySlot(slot);
     const timezone = await flowClones.getTimezoneBySlot(slot);
-    return reply.code(200).send({ ok: true, perfil, timezone });
+    const out: Record<string, unknown> = { ok: true, perfil, timezone };
+    if (isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
+      out.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
+    }
+    return reply.code(200).send(out);
   });
 };
