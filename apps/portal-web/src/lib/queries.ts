@@ -19,6 +19,7 @@ import {
 import { atualizarAgendamento, removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
+  AgendaConfig,
   AgendaSlotsResponse,
   AgendamentosResponse,
   AtendimentoBalde,
@@ -78,6 +79,8 @@ export const qk = {
   status: (slot: string) => ['status', slot] as const,
   servicos: (slot: string) => ['servicos', slot] as const,
   perfil: (slot: string) => ['perfil', slot] as const,
+  /** Config de Agendamento (modo atendente) — derivada do GET /portal/perfil. */
+  agendaConfig: (slot: string) => ['agenda-config', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   botDetectPausas: (slot: string) => ['bot-detect-pausas', slot] as const,
@@ -397,6 +400,57 @@ export function useSavePerfil(
       }).then((r) => r.perfil),
     onSuccess: (perfil) => {
       client.setQueryData(qk.perfil(slot), perfil);
+    },
+  });
+}
+
+// ── Agendamento / modo atendente (SCRUM-59) ──────────────────────────────────
+//
+// Deriva do MESMO GET/PUT /portal/perfil, mas numa query própria (qk.agendaConfig)
+// pra NÃO tocar no cache/otimista do formulário principal do perfil (regressão zero
+// pros clientes atuais). Uma leitura extra do endpoint (tiny, cacheado) é o preço da
+// isolação. A seção só renderiza quando `modo_atendente` é true (calculado por-clone
+// no backend via MODO_ATENDENTE_SLOTS — NÃO é flag global).
+
+export function useAgendaConfig(slot: string): UseQueryResult<AgendaConfig> {
+  return useQuery({
+    queryKey: qk.agendaConfig(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
+        modo_atendente: r.features?.modo_atendente === true,
+        agenda_automatica: r.perfil?.agenda_automatica ?? true,
+        link_agendamento:
+          typeof r.perfil?.link_agendamento === 'string' ? r.perfil.link_agendamento : '',
+      })),
+  });
+}
+
+/**
+ * PUT parcial /portal/perfil só com os campos de agendamento: `{ perfil:
+ * { agenda_automatica, link_agendamento } }`. O backend faz merge parcial (chave
+ * ausente = não toca), então os demais campos do perfil ficam intactos.
+ */
+export function useSaveAgendaConfig(
+  slot: string,
+): UseMutationResult<
+  PerfilNegocio,
+  Error,
+  { agenda_automatica: boolean; link_agendamento: string }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: { perfil: input },
+      }).then((r) => r.perfil),
+    onSuccess: (perfil) => {
+      client.setQueryData(qk.agendaConfig(slot), (prev: AgendaConfig | undefined) => ({
+        modo_atendente: prev?.modo_atendente ?? true,
+        agenda_automatica: perfil.agenda_automatica ?? true,
+        link_agendamento:
+          typeof perfil.link_agendamento === 'string' ? perfil.link_agendamento : '',
+      }));
     },
   });
 }

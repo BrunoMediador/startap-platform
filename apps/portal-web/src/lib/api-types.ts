@@ -623,17 +623,43 @@ export interface PerfilNegocio {
   instagram: string;
   /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
   formas_pagamento: FormaPagamentoOpcao[];
+  /**
+   * Modo atendente (SCRUM-59). Quando false, o bot NÃO agenda pela agenda do Google:
+   * só atende, tira dúvidas e (se houver) manda o link_agendamento. Default true.
+   * Só relevante/editável quando a feature `modo_atendente` está ligada pro clone.
+   * Opcional: clone sem a feature nunca recebe/envia estes campos.
+   */
+  agenda_automatica?: boolean;
+  /** Link externo de agendamento (Booksy/Trinks/agenda própria...). Opcional. */
+  link_agendamento?: string | null;
 }
 
 /**
- * GET /portal/perfil -> 200 { perfil, timezone }. O `timezone` (IANA) é TOP-LEVEL,
- * FORA do objeto perfil: vem da coluna flow_clones.timezone (não da personalizacao).
- * Opcional: undefined enquanto a portal-api não devolve -> a tela pré-seleciona pelo
- * /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil` no cache.
+ * GET /portal/perfil -> 200 { perfil, timezone, features }. O `timezone` (IANA) é
+ * TOP-LEVEL, FORA do objeto perfil: vem da coluna flow_clones.timezone (não da
+ * personalizacao). Opcional: undefined enquanto a portal-api não devolve -> a tela
+ * pré-seleciona pelo /portal/status (useTenantTz). O hook usePerfil expõe só
+ * `r.perfil` no cache.
+ *
+ * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS CSV,
+ * NÃO flag global): só o clone do piloto recebe modo_atendente=true. Ausente/false =
+ * a seção "Agendamento" não renderiza (byte-idêntico pros clientes atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
+  features?: { modo_atendente: boolean };
+}
+
+/**
+ * Visão FLAT da config de Agendamento (modo atendente), derivada do GET /portal/perfil
+ * pela tela "Meu negócio" (features.modo_atendente + perfil.agenda_automatica +
+ * perfil.link_agendamento). Ver @/lib/agenda-config.
+ */
+export interface AgendaConfig {
+  modo_atendente: boolean;
+  agenda_automatica: boolean;
+  link_agendamento: string;
 }
 
 /**
