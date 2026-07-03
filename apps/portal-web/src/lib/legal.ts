@@ -39,10 +39,18 @@ export interface LegalDocument {
 
 // Versões — MANTER EM SINCRONIA com apps/portal-api/src/lib/legal-version.ts.
 export const TERMS_VERSION = 'v1';
-export const PRIVACY_VERSION = 'v1';
+// v2 (03/07/2026): append da finalidade de encaminhamento de resumo à equipe do
+// Estabelecimento (condição LGPD da Fase 1 do modo atendente, SCRUM-59). Bump força
+// re-aceite de 1 clique dos clientes atuais (decisão Bruno 03/07 — prova do texto novo).
+export const PRIVACY_VERSION = 'v2';
 
 // Data de vigência v1 (decisão Bruno/PM).
 const VIGENCIA = '26/06/2026';
+
+// Última atualização da Política de Privacidade (append da finalidade de encaminhamento
+// de resumo de atendimento à equipe do Estabelecimento — condição LGPD da Fase 1 do modo
+// atendente, SCRUM-59). Só a Política mudou; os Termos seguem em VIGENCIA.
+const PRIVACIDADE_ATUALIZADA = '03/07/2026';
 
 // CPF SEMPRE mascarado nesta página pública (o completo vive só no aceite gravado).
 const CPF_MASCARADO = '136.***.***-70';
@@ -293,7 +301,7 @@ export const POLITICA_PRIVACIDADE: LegalDocument = {
   slug: 'privacidade',
   title: 'Política de Privacidade',
   version: PRIVACY_VERSION,
-  updatedAt: VIGENCIA,
+  updatedAt: PRIVACIDADE_ATUALIZADA,
   intro: [],
   sections: [
     {
@@ -448,7 +456,7 @@ export const POLITICA_PRIVACIDADE: LegalDocument = {
         sub('5.2 Dados dos Clientes Finais (Operadora: Startap; Controladora: Estabelecimento)'),
         p('A Startap trata esses dados sob instrução do Estabelecimento, para as finalidades de:'),
         ul([
-          'atender o Cliente Final via WhatsApp e realizar/gerenciar agendamentos;',
+          'atender o Cliente Final via WhatsApp, esclarecer dúvidas, realizar/gerenciar agendamentos e, quando o Estabelecimento assim configurar, encaminhar à equipe do Estabelecimento um resumo do atendimento (nome, contato e preferências de horário/serviço/profissional) para que a recepção conclua o atendimento;',
           'transcrever áudios para permitir o atendimento;',
           'enviar comunicações transacionais relacionadas ao agendamento (ex.: confirmação; lembrete, quando ativado pelo Estabelecimento).',
         ]),
