@@ -19,6 +19,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   runAgentConfigured: vi.fn(),
   sendClientCancellationAlert: vi.fn(),
+  sendOwnerAlert: vi.fn(),
+  addFlowPause: vi.fn(),
   getGcalForSlot: vi.fn(),
   getGcalsForSlot: vi.fn(),
   invalidateGcalCache: vi.fn(),
@@ -58,7 +60,7 @@ vi.mock('@startap/db', () => ({
     upsertAtendimentoFromEvent: mocks.upsertAtendimentoFromEvent,
     syncAtendimentoFromEvent: mocks.syncAtendimentoFromEvent,
   },
-  pausa: {},
+  pausa: { addFlowPause: mocks.addFlowPause },
 }));
 
 // Flag controlada por teste (mutável via objeto).
@@ -69,12 +71,15 @@ const cfg = {
   PACOTES_ENABLED: false,
   // Gate POR-CLONE (ADR 0027): lista de slots; vazio = OFF pra todos (default seguro).
   ATEND_FROM_AGENDA_SLOTS: '',
+  // Gate POR-CLONE do MODO ATENDENTE (SCRUM-59): CSV de slots; vazio = OFF pra todos.
+  MODO_ATENDENTE_SLOTS: '',
 };
 vi.mock('../config.js', () => ({ config: cfg }));
 
 vi.mock('../lib/run-agent.js', () => ({ runAgentConfigured: mocks.runAgentConfigured }));
 vi.mock('../lib/client-alert.js', () => ({
   sendClientCancellationAlert: mocks.sendClientCancellationAlert,
+  sendOwnerAlert: mocks.sendOwnerAlert,
 }));
 vi.mock('../lib/package-context.js', () => ({
   resolveClientPackages: mocks.resolveClientPackages,
@@ -166,6 +171,7 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
     cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = '';
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -358,6 +364,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     cfg.IDEMPOTENCY_ACTION_LOCK = false;
     cfg.PACOTES_ENABLED = false;
     cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = '';
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
@@ -1837,5 +1844,163 @@ describe('TesteBarbeariaBot — IDOR/PII: consultar_* usam o telefone da CONVERS
     expect(res.events).toHaveLength(1);
     expect(res.events[0].summary).toContain(CONVERSA);
     expect(JSON.stringify(res.events)).not.toContain(OUTRO);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// MODO ATENDENTE (SCRUM-59) — bot sem agenda automática
+// ════════════════════════════════════════════════════════════════════════════════
+
+/** Configura os mocks p/ o ramo ATENDENTE completar até o runAgent. */
+function setupAtendente(opts?: { agendaAutomatica?: unknown; link?: string }) {
+  mocks.renderPrompt.mockResolvedValue('PERSONA');
+  mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+  mocks.runAgentConfigured.mockResolvedValue({ reply: 'posso te ajudar com isso' });
+  mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+  // getCloneBySlot alimenta o gate (agenda_automatica) + fuso + link no processAtendente.
+  mocks.getCloneBySlot.mockResolvedValue({
+    timezone: 'America/Sao_Paulo',
+    personalizacao: {
+      agenda_automatica: opts?.agendaAutomatica ?? false,
+      ...(opts?.link ? { link_agendamento: opts.link } : {}),
+    },
+  });
+  mocks.sendOwnerAlert.mockResolvedValue({ ok: true, escalado: true });
+  mocks.addFlowPause.mockResolvedValue(undefined);
+}
+
+/** Roda process() no modo atendente e devolve o array `tools` passado ao runAgent. */
+async function atendenteToolsFor(texto: string): Promise<Array<{ name: string }>> {
+  const bot = new TesteBarbeariaBot();
+  await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+    makeCtx(texto),
+  );
+  return mocks.runAgentConfigured.mock.calls[0][0].tools;
+}
+
+describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = '';
+  });
+
+  it('gate OFF (default): NÃO entra no modo atendente — caminho individual byte-a-byte', async () => {
+    setupSchedule(); // caminho individual completo (com agenda)
+    const tools = await atendenteToolsFor('quanto é o corte?');
+    const names = tools.map((t) => t.name);
+    // tools de AGENDA presentes (caminho individual), nenhuma tool de atendente.
+    expect(names).toContain('inserir_agendamento');
+    expect(names).toContain('consultar_agendamento');
+    expect(names).not.toContain('escalar_para_humano');
+    expect(names).not.toContain('registrar_interesse');
+    // gate OFF short-circuita ANTES de ler o clone pro modo (byte-a-byte: 0 leitura extra).
+    expect(mocks.getGcalForSlot).toHaveBeenCalled();
+  });
+
+  it('gate ON + agenda_automatica=false: RESPONDE sem gcal e só com as 2 tools do atendente', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    const reply = await (
+      new TesteBarbeariaBot() as unknown as { process: (c: BotContext) => Promise<string | null> }
+    ).process(makeCtx('quanto é o corte?'));
+    expect(reply).toBe('posso te ajudar com isso');
+    // NUNCA consulta a agenda (sem gate de gcal no modo atendente).
+    expect(mocks.getGcalForSlot).not.toHaveBeenCalled();
+    expect(mocks.loadScheduleConfig).not.toHaveBeenCalled();
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(['escalar_para_humano', 'registrar_interesse']);
+  });
+
+  it('modo atendente NÃO registra NENHUMA tool de agenda (incapacidade por construção)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    const tools = await atendenteToolsFor('quero marcar');
+    for (const t of tools) {
+      expect(t.name).not.toMatch(/inserir_agendamento|remarcar_agendamento|consultar_agendamento/);
+    }
+  });
+
+  it('buildContextBlock é chamado SEM agendaFormatada (nega disponibilidade real-time)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    await atendenteToolsFor('abre domingo?');
+    const arg = mocks.buildContextBlock.mock.calls[0][0];
+    expect(arg.agendaFormatada).toBeUndefined();
+  });
+
+  it('gate ON mas agenda_automatica=true: NÃO entra no atendente — caminho individual (agenda)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    // gate liga, mas o perfil mantém agenda automática -> cai no individual.
+    mocks.getCloneBySlot.mockResolvedValue({
+      timezone: 'America/Sao_Paulo',
+      personalizacao: { agenda_automatica: true },
+    });
+    setupSchedule();
+    const tools = await atendenteToolsFor('quanto é o corte?');
+    const names = tools.map((t) => t.name);
+    expect(names).toContain('inserir_agendamento');
+    expect(names).not.toContain('escalar_para_humano');
+    expect(mocks.getGcalForSlot).toHaveBeenCalled();
+  });
+
+  it('agenda_automatica como STRING "false" também liga o modo atendente (defensivo)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: 'false' });
+    await atendenteToolsFor('oi');
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toEqual(['escalar_para_humano', 'registrar_interesse']);
+  });
+
+  it('tool registrar_interesse -> chama sendOwnerAlert(kind=lead, transport=clone_session)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    const tools = await atendenteToolsFor('quero marcar corte sábado de manhã');
+    const tool = tools.find((t) => t.name === 'registrar_interesse') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; registrado: boolean }>;
+    };
+    const res = await tool.run({ servico: 'Corte', janela: 'sábado de manhã', profissional: '' });
+    expect(res).toEqual({ ok: true, registrado: true });
+    expect(mocks.sendOwnerAlert).toHaveBeenCalledTimes(1);
+    const arg = mocks.sendOwnerAlert.mock.calls[0][0];
+    expect(arg).toMatchObject({ kind: 'lead', transport: 'clone_session' });
+    expect(arg.payload).toMatchObject({ servico: 'Corte', janela: 'sábado de manhã' });
+    // registrar_interesse NÃO auto-pausa (só escalar pausa).
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('tool escalar_para_humano -> alerta escalonamento + AUTO-PAUSA (source=escalated_human)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    const tools = await atendenteToolsFor('quero falar com uma pessoa');
+    const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
+    };
+    const res = await tool.run({ motivo: 'pediu_humano', resumo: 'quer falar com atendente' });
+    expect(res).toEqual({ ok: true, escalado: true });
+    const arg = mocks.sendOwnerAlert.mock.calls[0][0];
+    expect(arg).toMatchObject({ kind: 'escalonamento', transport: 'clone_session' });
+    // Auto-pausa best-effort: flow_id = slot, source escalated_human.
+    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
+    const pauseArg = mocks.addFlowPause.mock.calls[0][0];
+    expect(pauseArg).toMatchObject({ flowId: 'teste_barbearia', source: 'escalated_human' });
+  });
+
+  it('escalar_para_humano: falha da auto-pausa NÃO quebra a tool (best-effort)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    mocks.addFlowPause.mockRejectedValue(new Error('DB down'));
+    const tools = await atendenteToolsFor('reclamação');
+    const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
+    };
+    // Não relança mesmo com addFlowPause rejeitando (void + .catch).
+    const res = await tool.run({ motivo: 'reclamacao', resumo: 'algo deu errado' });
+    expect(res).toEqual({ ok: true, escalado: true });
   });
 });
