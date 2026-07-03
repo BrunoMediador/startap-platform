@@ -255,8 +255,20 @@ export const perfilSchema = z
     agenda_automatica: z.boolean().optional(),
     // Link do sistema de agendamento externo do cliente (Booksy/Trinks/agenda propria).
     // OPCIONAL SEMPRE (decisao Bruno 03/07: o piloto insere depois): sem link, o bot
-    // direciona pra "equipe confirma"; com link, entrega o link. z.url() valida formato.
-    link_agendamento: z.string().trim().url('link de agendamento invalido').max(500).optional(),
+    // direciona pra "equipe confirma"; com link, entrega o link.
+    // SECURITY (review SCRUM-59): z.url() sozinho aceita javascript:/data:/ftp: (so faz
+    // new URL()). O backend e a fonte da verdade -> exige explicitamente http(s):// (o link
+    // vai pro contexto do LLM e, no front, pode virar href). refine roda apos url().
+    link_agendamento: z
+      .string()
+      .trim()
+      .url('link de agendamento invalido')
+      .max(500)
+      .refine(
+        (v) => /^https?:\/\//i.test(v),
+        'link de agendamento deve comecar com http:// ou https://',
+      )
+      .optional(),
   })
   .strict();
 

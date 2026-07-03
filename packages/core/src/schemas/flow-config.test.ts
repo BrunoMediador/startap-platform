@@ -302,4 +302,15 @@ describe('perfilSchema', () => {
     const r = perfilSchema.safeParse({ link_agendamento: 'nao-e-url' });
     expect(r.success).toBe(false);
   });
+
+  it('link_agendamento: rejeita esquemas perigosos (javascript:/data:/ftp:) — so http(s)', () => {
+    expect(perfilSchema.safeParse({ link_agendamento: 'javascript:alert(1)' }).success).toBe(false);
+    expect(perfilSchema.safeParse({ link_agendamento: 'data:text/html,<script>' }).success).toBe(
+      false,
+    );
+    expect(perfilSchema.safeParse({ link_agendamento: 'ftp://x.co/a' }).success).toBe(false);
+    // http e https continuam OK.
+    expect(perfilSchema.safeParse({ link_agendamento: 'http://booksy.com/x' }).success).toBe(true);
+    expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
+  });
 });
