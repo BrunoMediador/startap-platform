@@ -56,6 +56,11 @@ export function AgendamentoSection() {
   // Evita estourar o rascunho do usuário num refetch em background (mesmo padrão do
   // perfil/lembretes): o effect só re-hidrata enquanto não houve edição.
   const touched = useRef(false);
+  // A11y: quando o campo de link APARECE por ação do usuário (ligou->desligou), move
+  // o foco pra ele. `prevAutomatico` evita roubar foco/rolar a página no mount inicial
+  // de um clone que já está com o automático desligado.
+  const linkRef = useRef<HTMLInputElement>(null);
+  const prevAutomatico = useRef(draft.agenda_automatica);
 
   useEffect(() => {
     if (!cfgQ.data) return;
@@ -63,6 +68,11 @@ export function AgendamentoSection() {
     setSaved(next);
     if (!touched.current) setDraft(next);
   }, [cfgQ.data]);
+
+  useEffect(() => {
+    if (prevAutomatico.current && !draft.agenda_automatica) linkRef.current?.focus();
+    prevAutomatico.current = draft.agenda_automatica;
+  }, [draft.agenda_automatica]);
 
   const dirty = isAgendaDirty(draft, saved);
 
@@ -156,7 +166,7 @@ export function AgendamentoSection() {
               <p className="text-[14px] font-semibold text-ink">{TOGGLE_LABEL}</p>
               <p className="mt-0.5 text-[12.5px] leading-normal text-ink-soft">
                 {automatico
-                  ? 'O assistente marca o horário direto na sua agenda do Google.'
+                  ? 'O assistente marca os horários dos clientes sozinho no WhatsApp.'
                   : 'O assistente não marca sozinho — ele atende e direciona o cliente.'}
               </p>
             </div>
@@ -167,10 +177,11 @@ export function AgendamentoSection() {
           {!automatico && (
             <div className="flex flex-col gap-2 border-t border-line pt-4">
               <Input
+                ref={linkRef}
                 label="Link de agendamento"
                 type="url"
                 inputMode="url"
-                placeholder="https://..."
+                placeholder="https://... (Booksy, Trinks, seu site...)"
                 value={draft.link_agendamento}
                 error={linkError}
                 onChange={(e) => onLinkChange(e.target.value)}
@@ -211,10 +222,10 @@ export function AgendamentoSection() {
       <ConfirmDialog
         open={confirmOff}
         icon={<IconCalendar size={22} />}
-        title="Desligar o agendamento automático?"
-        description="O assistente deixa de marcar horários pela sua agenda do Google. Ele passa a atender, tirar dúvidas e — se você informar um link — direcionar o cliente pra agendar. Você pode religar quando quiser."
+        title="Parar de marcar horários sozinho?"
+        description="O assistente vai parar de marcar horários sozinho. Ele continua atendendo seus clientes no WhatsApp normalmente: quando alguém quiser agendar, envia seu link ou avisa sua equipe pra confirmar o horário. Você pode religar quando quiser."
         confirmLabel="Desligar"
-        cancelLabel="Cancelar"
+        cancelLabel="Manter ligado"
         onConfirm={confirmarDesligar}
         onCancel={() => setConfirmOff(false)}
       />

@@ -93,6 +93,6 @@ export function isAgendaDirty(a: AgendaConfigDraft, b: AgendaConfigDraft): boole
  */
 export function ajudaLink(linkPreenchido: boolean): string {
   return linkPreenchido
-    ? 'O assistente envia este link para o cliente agendar.'
-    : 'Sem o link, o assistente coleta os dados do cliente e avisa sua equipe para confirmar o horário.';
+    ? 'O assistente envia este link para o cliente marcar o horário.'
+    : 'Sem o link, o assistente anota os dados de quem quer marcar e avisa sua equipe pra confirmar o horário.';
 }
