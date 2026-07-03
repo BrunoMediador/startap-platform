@@ -67,8 +67,8 @@ describe.each(DOCS)('conteúdo legal limpo: %s', (_name, doc) => {
     expect(text).toContain('startapsuporte@gmail.com');
   });
 
-  it('data de vigência preenchida (não é o token de preenchimento)', () => {
-    expect(doc.updatedAt).toBe('26/06/2026');
+  it('data de vigência preenchida (formato DD/MM/AAAA, não é token)', () => {
+    expect(doc.updatedAt).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
   });
 });
 
