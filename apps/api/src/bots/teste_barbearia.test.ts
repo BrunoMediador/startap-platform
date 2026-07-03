@@ -1949,6 +1949,23 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     expect(mocks.getGcalForSlot).toHaveBeenCalled();
   });
 
+  it('gate ON + agenda_automatica AUSENTE (undefined): NÃO entra no atendente — fluxo normal (gap qa)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    // gate liga, MAS a chave agenda_automatica nem existe no perfil (undefined) -> como
+    // undefined != false/'false', o bot NÃO vira atendente e segue o caminho individual.
+    mocks.getCloneBySlot.mockResolvedValue({
+      timezone: 'America/Sao_Paulo',
+      personalizacao: { nome_negocio: 'X' }, // SEM agenda_automatica
+    });
+    setupSchedule();
+    const tools = await atendenteToolsFor('quanto é o corte?');
+    const names = tools.map((t) => t.name);
+    expect(names).toContain('inserir_agendamento');
+    expect(names).not.toContain('escalar_para_humano');
+    expect(names).not.toContain('registrar_interesse');
+    expect(mocks.getGcalForSlot).toHaveBeenCalled();
+  });
+
   it('agenda_automatica como STRING "false" também liga o modo atendente (defensivo)', async () => {
     cfg.MODO_ATENDENTE_SLOTS = '*';
     setupAtendente({ agendaAutomatica: 'false' });
