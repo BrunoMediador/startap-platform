@@ -250,6 +250,9 @@ const _PERS_LABELS: Record<string, string> = {
   // [NEGOCIO]. Vazio/ausente e omitido (byte-identico p/ clones sem link). O bot atendente
   // entrega esse link no fim do funil; clones com agenda automatica normalmente nao o tem.
   link_agendamento: 'Link de agendamento',
+  // Planos/assinaturas/benefícios (pedido do cliente Meduzza, SCRUM-59). Texto livre multi-linha,
+  // rotulado no contexto do LLM. Vazio/ausente é omitido (byte-idêntico p/ clones sem planos).
+  planos_beneficios: 'Planos e assinaturas',
 };
 
 /**

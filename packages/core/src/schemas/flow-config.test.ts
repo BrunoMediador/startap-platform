@@ -324,4 +324,28 @@ describe('perfilSchema', () => {
     expect(perfilSchema.safeParse({ link_agendamento: 'http://booksy.com/x' }).success).toBe(true);
     expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
   });
+
+  // ── planos_beneficios (SCRUM-59, pedido do cliente Meduzza) ──────────────
+  it('planos_beneficios: aceita texto livre multi-linha', () => {
+    const r = perfilSchema.safeParse({
+      planos_beneficios: 'Plano Mensal R$99: corte ilimitado.\nPlano Anual R$999: 2 meses grátis.',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.planos_beneficios).toContain('Plano Mensal');
+  });
+
+  it('planos_beneficios: "" (e só-espaços) é ACEITO e vira undefined (não persiste lixo)', () => {
+    const vazio = perfilSchema.safeParse({ planos_beneficios: '' });
+    expect(vazio.success).toBe(true);
+    if (vazio.success) expect(vazio.data.planos_beneficios).toBeUndefined();
+
+    const espacos = perfilSchema.safeParse({ planos_beneficios: '   \n  ' });
+    expect(espacos.success).toBe(true);
+    if (espacos.success) expect(espacos.data.planos_beneficios).toBeUndefined();
+  });
+
+  it('planos_beneficios: rejeita acima de 4000 chars', () => {
+    expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4001) }).success).toBe(false);
+    expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4000) }).success).toBe(true);
+  });
 });
