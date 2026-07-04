@@ -623,17 +623,37 @@ export interface PerfilNegocio {
   instagram: string;
   /** Subconjunto de FORMAS_PAGAMENTO_OPCOES que o negocio aceita ([] = nenhuma). */
   formas_pagamento: FormaPagamentoOpcao[];
+  /**
+   * Planos e assinaturas (SCRUM-59). Texto livre (máx 4000) que o dono escreve sobre os
+   * planos/benefícios da barbearia; cai no contexto do bot pela personalização. Só
+   * relevante/editável com features.modo_atendente. ''/ausente = sem planos.
+   */
+  planos_beneficios?: string | null;
 }
 
 /**
- * GET /portal/perfil -> 200 { perfil, timezone }. O `timezone` (IANA) é TOP-LEVEL,
- * FORA do objeto perfil: vem da coluna flow_clones.timezone (não da personalizacao).
- * Opcional: undefined enquanto a portal-api não devolve -> a tela pré-seleciona pelo
- * /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil` no cache.
+ * GET /portal/perfil -> 200 { perfil, timezone, features }. O `timezone` (IANA) é
+ * TOP-LEVEL, FORA do objeto perfil: vem da coluna flow_clones.timezone (não da
+ * personalizacao). Opcional: undefined enquanto a portal-api não devolve -> a tela
+ * pré-seleciona pelo /portal/status (useTenantTz). O hook usePerfil expõe só `r.perfil`.
+ *
+ * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS CSV, NÃO
+ * flag global). Ausente/false = as seções gateadas (Agendamento, Planos) não renderizam
+ * (byte-idêntico pros clientes atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
+  features?: { modo_atendente: boolean };
+}
+
+/**
+ * Visão FLAT da config de Planos (modo atendente), derivada do GET /portal/perfil pela
+ * tela "Meu negócio" (features.modo_atendente + perfil.planos_beneficios). Ver @/lib/planos.
+ */
+export interface PlanosConfig {
+  modo_atendente: boolean;
+  planos_beneficios: string;
 }
 
 /**
