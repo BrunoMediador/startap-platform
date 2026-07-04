@@ -17,10 +17,12 @@
  */
 
 /**
- * @param opts.hasLink  true se o clone tem `link_agendamento` preenchido no perfil.
- *                      Muda o "próximo passo" (entregar link vs. equipe confirma).
+ * @param opts.hasLink    true se o clone tem `link_agendamento` preenchido no perfil.
+ *                        Muda o "próximo passo" (entregar link vs. equipe confirma).
+ * @param opts.hasEquipe  true se o clone é estabelecimento com colaboradores ativos (há
+ *                        bloco [EQUIPE] no contexto). Liga a instrução de "quem faz X".
  */
-export function buildModoAtendenteBlock(opts: { hasLink: boolean }): string {
+export function buildModoAtendenteBlock(opts: { hasLink: boolean; hasEquipe?: boolean }): string {
   const linhas: string[] = [
     '[MODO ATENDENTE - REGRAS CRITICAS, VIOLACAO = ERRO GRAVE]',
     'Voce ATENDE e tira duvidas, mas NAO tem acesso a agenda e NAO fecha agendamento.',
@@ -57,6 +59,19 @@ export function buildModoAtendenteBlock(opts: { hasLink: boolean }): string {
     );
   }
 
+  if (opts.hasEquipe) {
+    linhas.push(
+      '',
+      '[EQUIPE - VARIOS PROFISSIONAIS]',
+      '- Se perguntarem "quem faz X" ou "quero com o Fulano", responda pelo bloco [EQUIPE] do',
+      '  contexto (nome do profissional + os servicos que ele faz). Se um profissional nao',
+      '  aparece no [EQUIPE], NAO invente que ele existe.',
+      '- NAO ha agenda por profissional aqui: se pedirem dias/horarios de um profissional',
+      '  especifico, siga o fluxo normal (registrar_interesse + a recepcao confirma) — NUNCA',
+      '  invente disponibilidade de nenhum profissional.',
+    );
+  }
+
   linhas.push(
     '',
     '[EXPECTATIVA FORA DO EXPEDIENTE]',
@@ -75,5 +90,34 @@ export function buildModoAtendenteBlock(opts: { hasLink: boolean }): string {
     '- Nunca 2 cobrancas seguidas. Se so quer informacao, entregue e encerre gentil.',
   );
 
+  return linhas.join('\n');
+}
+
+/** Profissional pro bloco [EQUIPE] — SÓ nome + serviços vinculados (NADA de gcal/agenda). */
+export interface EquipeMembro {
+  nome: string;
+  /** Serviços que o profissional faz (checklist do catálogo). Vazio = "faz de tudo". */
+  servicos: string[];
+}
+
+/**
+ * Bloco [EQUIPE] do MODO ATENDENTE (SCRUM-59) — só pro estabelecimento. Lista nome +
+ * serviços de cada profissional ATIVO pra o bot responder "quem faz X" / "quero com Fulano"
+ * SEM agenda (não há disponibilidade por profissional no modo atendente). NADA de calendarId/
+ * gcal aqui. Colaborador sem serviços vinculados = só o nome (o front trata "faz de tudo").
+ *
+ * Sem membros -> '' (bloco ausente; o bot não menciona equipe além do que estiver no perfil).
+ */
+export function buildEquipeBlock(membros: EquipeMembro[]): string {
+  const validos = membros.filter((m) => m.nome.trim() !== '');
+  if (validos.length === 0) return '';
+  const linhas: string[] = [
+    '[EQUIPE - PROFISSIONAIS DESTE NEGOCIO]',
+    'Profissionais e os servicos que cada um faz (sem servicos listados = faz os servicos gerais):',
+  ];
+  for (const m of validos) {
+    const servicos = m.servicos.map((s) => s.trim()).filter((s) => s !== '');
+    linhas.push(servicos.length > 0 ? `- ${m.nome}: ${servicos.join(', ')}` : `- ${m.nome}`);
+  }
   return linhas.join('\n');
 }
