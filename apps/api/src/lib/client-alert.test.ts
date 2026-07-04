@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getSenderSession: vi.fn(),
   getState: vi.fn(),
   upsertState: vi.fn(),
+  restoreStateIfUnchanged: vi.fn(),
   sendText: vi.fn(),
   // captura TODA chamada de log pra provar que telefone NUNCA vai em claro no log (LGPD).
   logCalls: [] as unknown[][],
@@ -53,6 +54,7 @@ vi.mock('@startap/db', () => ({
     getSenderSession: mocks.getSenderSession,
     getState: mocks.getState,
     upsertState: mocks.upsertState,
+    restoreStateIfUnchanged: mocks.restoreStateIfUnchanged,
   },
 }));
 
@@ -331,5 +333,125 @@ describe('sendOwnerAlert — kinds e transporte', () => {
     expect(arg.sessao).toBe('ALERTAS'); // transporte alertas, não clone_session
     expect(mocks.getCloneBySlot).not.toHaveBeenCalled();
     expect(arg.texto).toContain('CANCELAMENTO');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Rollback do cooldown em falha DEFINITIVA (SCRUM-59 / mesma classe do #412)
+// ════════════════════════════════════════════════════════════════════════════════
+
+interface StoredState {
+  last_alert_at: Date | null;
+  alert_count: number;
+}
+
+describe('sendOwnerAlert — rollback de cooldown (stateful)', () => {
+  // Simula a linha de alert_states pra UMA chave, ligando getState/upsertState/restore.
+  let stored: StoredState | null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logCalls.length = 0;
+    stored = null;
+    mocks.getCloneAlertOwner.mockResolvedValue({
+      phone: '5535999991234',
+      enabled: true,
+      displayName: 'Barbearia do Bene',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({ waha_sessao: 'clone_session' });
+    mocks.getConfig.mockResolvedValue({ id: 1, sender_slot: 'alertas' });
+    mocks.getSenderSession.mockResolvedValue('ALERTAS');
+    // getState reflete o estado carimbado; null = fora de cooldown.
+    mocks.getState.mockImplementation(async () =>
+      stored
+        ? {
+            check_key: 'k',
+            state: 'up',
+            down_since: null,
+            last_alert_at: stored.last_alert_at,
+            alert_count: stored.alert_count,
+            pending_down_count: 0,
+            updated_at: new Date(),
+          }
+        : null,
+    );
+    mocks.upsertState.mockImplementation(
+      async (i: { lastAlertAt?: Date | null; alertCount?: number }) => {
+        stored = { last_alert_at: i.lastAlertAt ?? null, alert_count: i.alertCount ?? 0 };
+      },
+    );
+    // CAS real: só restaura se o estado atual ainda é o que o chamador espera.
+    mocks.restoreStateIfUnchanged.mockImplementation(
+      async (i: {
+        expect: { lastAlertAt: Date | null; alertCount: number };
+        restore: { lastAlertAt: Date | null; alertCount: number };
+      }) => {
+        if (
+          stored &&
+          stored.last_alert_at === i.expect.lastAlertAt &&
+          stored.alert_count === i.expect.alertCount
+        ) {
+          stored = {
+            last_alert_at: i.restore.lastAlertAt ?? null,
+            alert_count: i.restore.alertCount ?? 0,
+          };
+          return true;
+        }
+        return false;
+      },
+    );
+  });
+
+  const base = {
+    slot: 'clone_bene_x',
+    clienteTelefone: '5511988887777',
+    kind: 'lead' as const,
+    transport: 'clone_session' as const,
+    payload: { servico: 'Corte', janela: 'hoje' },
+  };
+
+  it('DEFINITIVO (sendText 422): reverte o carimbo -> o RETRY seguinte ENVIA (não é suprimido)', async () => {
+    mocks.sendText.mockRejectedValueOnce(
+      new Error('WAHA /api/sendText -> HTTP 422: session status FAILED'),
+    );
+    const r1 = await sendOwnerAlert(base);
+    expect(r1).toEqual({ ok: false, escalado: false, reason: 'error' });
+    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(stored?.last_alert_at ?? null).toBeNull(); // carimbo desfeito
+
+    // retry: agora a sessão voltou e o envio dá certo. Como o carimbo foi revertido, NÃO suprime.
+    mocks.sendText.mockResolvedValueOnce(undefined);
+    const r2 = await sendOwnerAlert(base);
+    expect(r2).toEqual({ ok: true, escalado: true });
+    expect(mocks.sendText).toHaveBeenCalledTimes(2);
+  });
+
+  it('AMBÍGUO (timeout): MANTÉM o carimbo -> o RETRY seguinte é SUPRIMIDO (anti-duplicata #412)', async () => {
+    mocks.sendText.mockRejectedValueOnce(new Error('sendText timeout'));
+    const r1 = await sendOwnerAlert(base);
+    expect(r1).toEqual({ ok: false, escalado: false, reason: 'error' });
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
+    expect(stored?.last_alert_at ?? null).not.toBeNull(); // carimbo mantido
+
+    const r2 = await sendOwnerAlert(base);
+    expect(r2).toEqual({ ok: true, escalado: false, reason: 'cooldown' }); // suprimido
+    expect(mocks.sendText).toHaveBeenCalledTimes(1); // 2º nem tentou enviar
+  });
+
+  it('CAS: expect = o que carimbou; restore = o estado anterior (null/0)', async () => {
+    mocks.sendText.mockRejectedValueOnce(new Error('WAHA /api/sendText -> HTTP 404: not found'));
+    await sendOwnerAlert(base);
+    const reservedAt = mocks.upsertState.mock.calls[0][0].lastAlertAt as Date;
+    const arg = mocks.restoreStateIfUnchanged.mock.calls[0][0];
+    expect(arg.expect).toMatchObject({ state: 'up', lastAlertAt: reservedAt, alertCount: 1 });
+    expect(arg.restore).toMatchObject({ lastAlertAt: null, alertCount: 0, pendingDownCount: 0 });
+  });
+
+  it('sem sessão remetente (clone_session sem waha_sessao): reverte, send_failed, não envia', async () => {
+    mocks.getCloneBySlot.mockResolvedValue({ waha_sessao: null });
+    const r = await sendOwnerAlert(base);
+    expect(r).toEqual({ ok: false, escalado: false, reason: 'send_failed' });
+    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(mocks.sendText).not.toHaveBeenCalled();
   });
 });
