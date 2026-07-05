@@ -48,6 +48,8 @@ import type {
   EquipeResponse,
   ExcluirAgendamentoResponse,
   FaturamentoReport,
+  FrasePausa,
+  FrasesPausaResponse,
   GerarSenhaColaboradorResponse,
   GoogleContaResponse,
   Horarios,
@@ -115,6 +117,8 @@ export const qk = {
     ['colaborador-agenda', slot, colaboradorId, past, ahead] as const,
   colaboradorComissao: (slot: string, colaboradorId: number, de: string, ate: string) =>
     ['colaborador-comissao', slot, colaboradorId, de, ate] as const,
+  /** Frases de comando (modo atendente) — GET/PUT /portal/frases-pausa. */
+  frasesPausa: (slot: string) => ['frases-pausa', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1068,6 +1072,46 @@ export function useRemoverAtendimento(
       );
       client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
       client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
+  });
+}
+
+// ── Frases de comando (GET/PUT /portal/frases-pausa) ─────────────────────────
+//
+// Modo atendente (SCRUM-59): as frases que a recepção digita no chat pra pausar/
+// retomar o assistente quando IA e humano dividem o MESMO número. Só é buscada quando
+// a feature está ligada pro clone (`enabled` = features.modo_atendente do /portal/
+// perfil) — clone sem a feature NÃO chama a rota (byte-idêntico). 404 = feature off no
+// backend (rede de proteção): a seção some (mesmo critério do lembrete). retry:false
+// pra não repetir um 404 que não se resolve sozinho. Escopado por slot da sessão.
+
+export function useFrasesPausa(
+  slot: string,
+  enabled: boolean,
+): UseQueryResult<FrasesPausaResponse> {
+  return useQuery({
+    queryKey: qk.frasesPausa(slot),
+    queryFn: ({ signal }) => apiFetch<FrasesPausaResponse>('/portal/frases-pausa', { signal }),
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * PUT /portal/frases-pausa — salva a LISTA COMPLETA (replace-set). Não é otimista: o
+ * backend valida (máx 10, keyword 2..80, sem duplicata) e devolve o estado efetivo,
+ * que fixamos no cache. A tela trava o Salvar em estado inválido; o 400 é rede de
+ * proteção (tratado na seção).
+ */
+export function useSaveFrasesPausa(
+  slot: string,
+): UseMutationResult<FrasesPausaResponse, Error, FrasePausa[]> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (frases: FrasePausa[]) =>
+      apiFetch<FrasesPausaResponse>('/portal/frases-pausa', { method: 'PUT', body: { frases } }),
+    onSuccess: (res) => {
+      client.setQueryData(qk.frasesPausa(slot), res);
     },
   });
 }

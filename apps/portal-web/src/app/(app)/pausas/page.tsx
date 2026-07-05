@@ -1,5 +1,6 @@
 'use client';
 
+import { FrasesPausaSection } from '@/components/frases-pausa/frases-pausa-section';
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -304,6 +305,10 @@ export default function PausasPage() {
           </button>
         </>
       )}
+
+      {/* Frases de comando (modo atendente, SCRUM-59): auto-gated — some byte-idêntico
+          pros clientes sem a feature. Carrega o próprio divisor (mt-8/border-t). */}
+      <FrasesPausaSection slot={slot} />
 
       <ContactSheet
         open={sheetOpen}
