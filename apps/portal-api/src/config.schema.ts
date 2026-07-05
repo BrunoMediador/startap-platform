@@ -261,6 +261,19 @@ export const ConfigSchema = z.object({
   // independem deste gate. Mesma env no apps/api (bot). NUNCA hardcoded.
   ATEND_FROM_AGENDA_SLOTS: z.string().optional().default(''),
 
+  // ── Modo ATENDENTE — gate POR-CLONE (SCRUM-59) ─────────────────────────────
+  // Lista de slots (CSV) em que o clone roda no MODO ATENDENTE (bot sem agenda automática).
+  // Mesma env do apps/api (bot). No portal, é o que decide se a seção "agenda automática/
+  // link" aparece pro cliente: features.modo_atendente do GET /portal/perfil é calculado
+  // POR-CLONE com isModoAtendenteEnabled(slot, ...) — assim os clientes atuais NÃO veem a
+  // seção nova; só o clone do piloto (e quem o Bruno adicionar depois). OPCIONAL no boot
+  // (ausente = OFF, lição #247: feature dormente NUNCA derruba o portal-api).
+  //   vazio/ausente   -> OFF pra TODOS (byte-a-byte de hoje).
+  //   'slot_a,slot_b'  -> ON só nos slots listados.
+  //   '*'              -> ON pra TODOS.
+  // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy. NUNCA hardcoded.
+  MODO_ATENDENTE_SLOTS: z.string().optional().default(''),
+
   // ── Lembrete de agendamento (one-way, configurável por clone — migration 060) ──
   // Kill-switch da camada de CONFIG do lembrete no portal (GET/PATCH /portal/lembretes).
   // OPCIONAL no boot (ausente = OFF, lição #247: feature dormente nunca derruba o

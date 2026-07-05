@@ -577,6 +577,51 @@ export async function updateTimezoneBySlot(slot: string, timezone: string): Prom
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Destino dos avisos ao DONO (alert_owner_phone) — editável no portal (SCRUM-59)
+//
+// O DONO edita no portal o número que recebe os avisos de lead/escalação do modo
+// atendente. É a MESMA coluna alert_owner_phone (migration 050) que também é destino
+// do aviso de DESCONEXÃO (CLIENT_DISCONNECT) — comportamento COMPARTILHADO e
+// INTENCIONAL (é o "número da equipe" do negócio, um só destino p/ os avisos ao dono).
+// ---------------------------------------------------------------------------
+
+/** E.164 BR: 55 + DDD(2) + numero(8 ou 9) = 12 ou 13 dígitos. */
+const ALERT_OWNER_PHONE_RE = /^55\d{10,11}$/;
+
+/**
+ * Lê o alert_owner_phone RAW (só dígitos) do clone — o que o DONO definiu, SEM o fallback
+ * pra cliente_telefone do getCloneAlertOwner (que é do caminho de ENVIO). Pro portal exibir
+ * o campo editável. Retorna null quando não setado ou o slot não existe. Parametrizado ($1).
+ */
+export async function getAlertOwnerPhoneBySlot(slot: string): Promise<string | null> {
+  const r = await query<{ alert_owner_phone: string | null }>(
+    'SELECT alert_owner_phone FROM flow_clones WHERE slot = $1',
+    [slot],
+  );
+  if (r.rows.length === 0) return null;
+  const digits = (r.rows[0].alert_owner_phone ?? '').replace(/\D/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+/**
+ * Grava alert_owner_phone do clone (destino dos avisos ao dono — lead/escalação E
+ * desconexão). Guarda defensiva (12-13 dígitos começando com 55) — o caller (portal) JÁ
+ * valida; guard aqui = defesa em profundidade: número inválido/vazio = NO-OP (retorna false,
+ * NUNCA zera nem grava lixo). Escopado por slot (SEMPRE parametrizado; o slot vem da sessão
+ * withTenant, jamais do input). Não invalida cache: alert_owner_phone NÃO está no CloneRow
+ * cacheado e getCloneAlertOwner lê direto do banco. false se inválido OU slot inexistente.
+ */
+export async function updateAlertOwnerPhoneBySlot(slot: string, phone: string): Promise<boolean> {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  if (!ALERT_OWNER_PHONE_RE.test(digits)) return false;
+  const r = await query(
+    'UPDATE flow_clones SET alert_owner_phone = $2, updated_at = NOW() WHERE slot = $1',
+    [slot, digits],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 /**
  * Remove o clone e todos os registros dependentes via CASCADE de bot_config.
  * bot_prompt, bot_media e flow_clones são limpos por FK CASCADE.

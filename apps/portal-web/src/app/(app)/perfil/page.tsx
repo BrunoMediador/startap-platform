@@ -1,5 +1,6 @@
 'use client';
 
+import { AgendamentoSection } from '@/components/agendamento/agendamento-section';
 import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
@@ -251,6 +252,12 @@ export default function PerfilPage() {
           </p>
         </form>
       )}
+
+      {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
+          link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
+          MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
+          órfão) pros clientes atuais (byte-idêntico). */}
+      <AgendamentoSection />
 
       {/* Planos e assinaturas (modo atendente, SCRUM-59): texto livre que alimenta o
           contexto do bot. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,

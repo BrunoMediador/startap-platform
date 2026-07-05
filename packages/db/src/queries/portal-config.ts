@@ -113,6 +113,14 @@ export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
       perfil[key] = parseFormasPagamento(pers[key]);
       continue;
     }
+    if (key === 'agenda_automatica') {
+      // Storage e STRING 'true'/'false' no JSONB (pipeline e string-only), mas o JSONB pode
+      // ter boolean cru (gestao/SQL). Default TRUE por AUSENCIA: so 'false'/false = modo
+      // atendente. O front recebe boolean pra renderizar o toggle.
+      const raw: unknown = (pers as Record<string, unknown>)[key];
+      perfil[key] = !(raw === false || raw === 'false');
+      continue;
+    }
     const v = pers[key];
     perfil[key] = typeof v === 'string' ? v : '';
   }
@@ -150,6 +158,13 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
       // Ausente no payload (undefined) = nao toca a chave; [] = limpa ('').
       const arr = data.formas_pagamento;
       if (arr !== undefined) merged[key] = formasPagamentoToString(arr);
+      continue;
+    }
+    if (key === 'agenda_automatica') {
+      // Boolean -> STRING 'true'/'false' no JSONB (pipeline string-only). Ausente
+      // (undefined) NAO toca a chave -> preserva o modo atual (nunca clobbar em PATCH parcial).
+      const v = data.agenda_automatica;
+      if (v !== undefined) merged[key] = v ? 'true' : 'false';
       continue;
     }
     const v = (data as Record<string, string | undefined>)[key];

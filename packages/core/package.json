@@ -14,6 +14,7 @@
     "./trial": "./dist/trial.js",
     "./package-phone": "./dist/package-phone.js",
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
+    "./modo-atendente-gate": "./dist/modo-atendente-gate.js",
     "./reminders": "./dist/reminders.js",
     "./client-disconnect-alert": "./dist/client-disconnect-alert.js",
     "./timezones": "./dist/timezones.js",

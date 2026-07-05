@@ -67,15 +67,16 @@ describe.each(DOCS)('conteúdo legal limpo: %s', (_name, doc) => {
     expect(text).toContain('startapsuporte@gmail.com');
   });
 
-  it('data de vigência preenchida (não é o token de preenchimento)', () => {
-    expect(doc.updatedAt).toBe('26/06/2026');
+  it('data de vigência preenchida (formato DD/MM/AAAA, não é token)', () => {
+    expect(doc.updatedAt).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
   });
 });
 
-describe('versões sincronizadas (v1)', () => {
-  it('Termos e Política em v1, batendo com as constantes', () => {
+describe('versões sincronizadas (Termos v1, Política v2)', () => {
+  it('cada doc bate com sua constante de versão', () => {
+    // Política foi pra v2 no append da finalidade (SCRUM-59); Termos seguem v1.
     expect(TERMS_VERSION).toBe('v1');
-    expect(PRIVACY_VERSION).toBe('v1');
+    expect(PRIVACY_VERSION).toBe('v2');
     expect(TERMOS_DE_USO.version).toBe(TERMS_VERSION);
     expect(POLITICA_PRIVACIDADE.version).toBe(PRIVACY_VERSION);
   });

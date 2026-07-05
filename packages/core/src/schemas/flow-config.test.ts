@@ -274,4 +274,54 @@ describe('perfilSchema', () => {
     const r = perfilSchema.safeParse({ nome_negocio: 123 });
     expect(r.success).toBe(false);
   });
+
+  // ── MODO ATENDENTE (SCRUM-59) ────────────────────────────────────────────
+  it('aceita agenda_automatica boolean (true/false)', () => {
+    expect(perfilSchema.safeParse({ agenda_automatica: false }).success).toBe(true);
+    expect(perfilSchema.safeParse({ agenda_automatica: true }).success).toBe(true);
+  });
+
+  it('rejeita agenda_automatica nao-boolean', () => {
+    expect(perfilSchema.safeParse({ agenda_automatica: 'false' }).success).toBe(false);
+    expect(perfilSchema.safeParse({ agenda_automatica: 1 }).success).toBe(false);
+  });
+
+  it('agenda_automatica NAO tem default (ausente = undefined, pra nao clobbar no PATCH)', () => {
+    const r = perfilSchema.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.agenda_automatica).toBeUndefined();
+  });
+
+  it('link_agendamento: aceita URL valida e e OPCIONAL SEMPRE (mesmo com agenda_automatica=false)', () => {
+    expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
+    // link opcional mesmo quando o modo atendente esta ligado (decisao Bruno 03/07).
+    expect(perfilSchema.safeParse({ agenda_automatica: false }).success).toBe(true);
+  });
+
+  it('link_agendamento: rejeita string que nao e URL', () => {
+    const r = perfilSchema.safeParse({ link_agendamento: 'nao-e-url' });
+    expect(r.success).toBe(false);
+  });
+
+  it('P1: link_agendamento "" (e só-espaços) e ACEITO e vira undefined (nao persiste lixo)', () => {
+    // Fluxo primario do piloto: ligar modo atendente SEM link -> front envia ''.
+    const vazio = perfilSchema.safeParse({ agenda_automatica: false, link_agendamento: '' });
+    expect(vazio.success).toBe(true);
+    if (vazio.success) expect(vazio.data.link_agendamento).toBeUndefined();
+
+    const espacos = perfilSchema.safeParse({ link_agendamento: '   ' });
+    expect(espacos.success).toBe(true);
+    if (espacos.success) expect(espacos.data.link_agendamento).toBeUndefined();
+  });
+
+  it('link_agendamento: rejeita esquemas perigosos (javascript:/data:/ftp:) — so http(s)', () => {
+    expect(perfilSchema.safeParse({ link_agendamento: 'javascript:alert(1)' }).success).toBe(false);
+    expect(perfilSchema.safeParse({ link_agendamento: 'data:text/html,<script>' }).success).toBe(
+      false,
+    );
+    expect(perfilSchema.safeParse({ link_agendamento: 'ftp://x.co/a' }).success).toBe(false);
+    // http e https continuam OK.
+    expect(perfilSchema.safeParse({ link_agendamento: 'http://booksy.com/x' }).success).toBe(true);
+    expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
+  });
 });
