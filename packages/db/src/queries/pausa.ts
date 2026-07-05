@@ -1,4 +1,4 @@
-import { query } from '../client.js';
+import { pool, query } from '../client.js';
 
 /**
  * Tabelas de pausa por projeto, com colunas distintas:
@@ -22,6 +22,13 @@ export interface FlowPauseInput {
   session?: string | null;
   source?: string | null;
   reason?: string | null;
+  /**
+   * Validade da pausa (SCRUM-59). NULL/ausente = pausa PERMANENTE (comportamento de
+   * TODAS as pausas de hoje: keyword/escalated_human/portal/antibot). Só a pausa por
+   * resposta humana à mão (source='human_reply') seta um futuro; renovar = novo upsert
+   * com um `expiresAt` mais adiante.
+   */
+  expiresAt?: Date | null;
 }
 
 export type FlowPauseCommand = 'pause' | 'resume';
@@ -99,9 +106,12 @@ export async function isFlowPaused(input: {
   telefone: string;
 }): Promise<boolean> {
   const r = await query<{ count: string }>(
+    // Pausada = ativa E (permanente OU ainda dentro da validade). expires_at no passado
+    // (SCRUM-59: TTL da pausa human_reply) => leitura LAZY já "solta" o bot, sem cron.
     `SELECT COUNT(*)::text AS count
      FROM flow_pauses
-     WHERE flow_id = $1 AND telefone = $2 AND active = TRUE`,
+     WHERE flow_id = $1 AND telefone = $2 AND active = TRUE
+       AND (expires_at IS NULL OR expires_at > NOW())`,
     [input.flowId, input.telefone],
   );
   return Number(r.rows[0]?.count ?? 0) > 0;
@@ -109,15 +119,21 @@ export async function isFlowPaused(input: {
 
 export async function addFlowPause(input: FlowPauseInput): Promise<void> {
   await query(
+    // expires_at = EXCLUDED.expires_at no upsert: renova o TTL a cada resposta humana
+    // (human_reply manda um futuro novo) E, quando uma pausa PERMANENTE (keyword/portal/
+    // escalated: expiresAt ausente => NULL) sobrescreve uma temporária, ZERA o TTL =>
+    // vira permanente. Como só human_reply seta expires_at, clones fora do modo atendente
+    // sempre gravam NULL aqui — byte-idêntico ao comportamento anterior à coluna.
     `INSERT INTO flow_pauses
-       (flow_id, flow_name, telefone, session, active, source, reason, updated_at)
-     VALUES ($1,$2,$3,$4,TRUE,$5,$6,NOW())
+       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, updated_at)
+     VALUES ($1,$2,$3,$4,TRUE,$5,$6,$7,NOW())
      ON CONFLICT (flow_id, telefone) DO UPDATE SET
        flow_name = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
        session = COALESCE(EXCLUDED.session, flow_pauses.session),
        active = TRUE,
        source = COALESCE(EXCLUDED.source, flow_pauses.source),
        reason = COALESCE(EXCLUDED.reason, flow_pauses.reason),
+       expires_at = EXCLUDED.expires_at,
        updated_at = NOW()`,
     [
       input.flowId,
@@ -126,6 +142,7 @@ export async function addFlowPause(input: FlowPauseInput): Promise<void> {
       input.session ?? null,
       input.source ?? 'manual',
       input.reason ?? null,
+      input.expiresAt ?? null,
     ],
   );
 }
@@ -188,6 +205,46 @@ export async function listFlowPauseKeywords(flowId: string): Promise<FlowPauseKe
     [flowId],
   );
   return r.rows;
+}
+
+export interface FlowPauseKeywordInput {
+  command: FlowPauseCommand;
+  keyword: string;
+  keyword_norm: string;
+  enabled: boolean;
+}
+
+/**
+ * Replace-set das frases de pausa/retomada de UM fluxo (SCRUM-59, PUT /portal/frases-pausa).
+ * DELETE de TODAS as frases do `flowId` + INSERT da lista nova, dentro de UMA transação
+ * (atômico: nunca deixa o fluxo com metade das frases). O `flowId` é sempre o slot do
+ * tenant da sessão (withTenant) — jamais do input do cliente (anti-IDOR na camada da rota).
+ * A validação (limite/tamanho/duplicata/substring) roda ANTES, na rota.
+ */
+export async function replaceFlowPauseKeywords(
+  flowId: string,
+  rows: FlowPauseKeywordInput[],
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM flow_pause_keywords WHERE flow_id = $1', [flowId]);
+    for (const row of rows) {
+      await client.query(
+        `INSERT INTO flow_pause_keywords
+           (flow_id, command, keyword, keyword_norm, enabled, updated_at)
+         VALUES ($1,$2,$3,$4,$5,NOW())
+         ON CONFLICT (flow_id, command, keyword_norm) DO NOTHING`,
+        [flowId, row.command, row.keyword, row.keyword_norm, row.enabled],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /**
