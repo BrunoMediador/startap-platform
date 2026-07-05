@@ -36,6 +36,9 @@ import { logger } from '@startap/core/logger';
 // Subpath /phone (não a raiz) p/ não arrastar crypto.ts no load. Defesa em profundidade:
 // normaliza o DDI do dono antes do chatId — alert_owner_phone pode ter vindo cru.
 import { ensureDddBr } from '@startap/core/phone';
+// Taxonomia de falha de envio (fonte única no core; reusada pelo worker) — decide se um envio
+// falho é DEFINITIVO (rollback seguro do cooldown) ou AMBÍGUO (mantém, anti-duplicata). Lição #412.
+import { isDefinitiveNonDelivery } from '@startap/core/waha-send-failure';
 import { alerts, flowClones } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
@@ -222,30 +225,90 @@ function buildOwnerMessage(input: {
 }
 
 /**
- * Verifica + reserva o cooldown anti-flood. Retorna true se PODE enviar (e marca o envio),
- * false se ainda está na janela. Fail-open: erro de DB no check NÃO bloqueia o envio
- * (preferimos avisar o dono a silenciar por falha de infra).
+ * Reserva do cooldown anti-flood. `allowed:false` = dentro da janela (suprime). `allowed:true` =
+ * pode enviar; carimba o estado ANTES do envio (lock otimista anti-duplicata). Devolve o que
+ * carimbou (reservedAt/reservedCount) + o estado ANTERIOR (prevAlertAt/prevCount) pra permitir o
+ * ROLLBACK CAS quando o envio comprovadamente NÃO sai (lição #412). Fail-open: erro de DB NÃO
+ * bloqueia o envio — nesse caso reservedAt=null (nada foi carimbado de forma confiável → sem revert).
  */
-async function reserveCooldown(checkKey: string, cooldownMin: number): Promise<boolean> {
+type CooldownReservation =
+  | { allowed: false }
+  | {
+      allowed: true;
+      /** timestamp carimbado; null = fail-open (nada a reverter). */
+      reservedAt: Date | null;
+      reservedCount: number;
+      prevAlertAt: Date | null;
+      prevCount: number;
+    };
+
+async function reserveCooldown(
+  checkKey: string,
+  cooldownMin: number,
+): Promise<CooldownReservation> {
   try {
     const state = await alerts.getState(checkKey);
     const last = state?.last_alert_at ?? null;
     if (last && Date.now() - last.getTime() < cooldownMin * 60_000) {
-      return false; // dentro da janela -> suprime
+      return { allowed: false }; // dentro da janela -> suprime
     }
+    const prevCount = state?.alert_count ?? 0;
+    const reservedAt = new Date();
+    const reservedCount = prevCount + 1;
     await alerts.upsertState({
       checkKey,
       state: 'up',
-      lastAlertAt: new Date(),
-      alertCount: (state?.alert_count ?? 0) + 1,
+      lastAlertAt: reservedAt,
+      alertCount: reservedCount,
     });
-    return true;
+    return { allowed: true, reservedAt, reservedCount, prevAlertAt: last, prevCount };
   } catch (e) {
     log.warn(
       { err: e instanceof Error ? e.message : String(e) },
       'client-alert: cooldown check falhou — fail-open (envia mesmo assim)',
     );
-    return true;
+    // Fail-open: nada carimbado de forma confiável -> reservedAt=null (sem reserva a reverter).
+    return { allowed: true, reservedAt: null, reservedCount: 0, prevAlertAt: null, prevCount: 0 };
+  }
+}
+
+/**
+ * Rollback do carimbo de cooldown quando o envio FALHA DEFINITIVO (não saiu): restaura o estado
+ * ANTERIOR pra que o próximo retry ENVIE (em vez de ser suprimido como anti-flood). CAS (#412):
+ * só reverte se a linha ainda contém EXATAMENTE o que ESTE envio carimbou — não pisa numa reserva
+ * mais nova de outro fluxo. Best-effort: falha do revert NUNCA propaga (o pior caso vira só 1
+ * alerta suprimido, não um crash no caminho do bot).
+ */
+async function revertCooldownReservation(
+  checkKey: string,
+  reservation: {
+    reservedAt: Date;
+    reservedCount: number;
+    prevAlertAt: Date | null;
+    prevCount: number;
+  },
+): Promise<void> {
+  try {
+    await alerts.restoreStateIfUnchanged({
+      checkKey,
+      expect: {
+        state: 'up',
+        lastAlertAt: reservation.reservedAt,
+        alertCount: reservation.reservedCount,
+      },
+      restore: {
+        state: 'up',
+        downSince: null,
+        lastAlertAt: reservation.prevAlertAt,
+        alertCount: reservation.prevCount,
+        pendingDownCount: 0,
+      },
+    });
+  } catch (e) {
+    log.warn(
+      { err: e instanceof Error ? e.message : String(e) },
+      'owner-alert: revert do cooldown falhou (best-effort)',
+    );
   }
 }
 
@@ -303,11 +366,9 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
     }
 
     // Anti-flood por (slot, kind, telefone do cliente).
-    const allowed = await reserveCooldown(
-      cooldownKey(slot, kind, clienteTelefone),
-      config.CANCELAMENTO_ESCALADO_COOLDOWN_MIN,
-    );
-    if (!allowed) {
+    const cdKey = cooldownKey(slot, kind, clienteTelefone);
+    const reservation = await reserveCooldown(cdKey, config.CANCELAMENTO_ESCALADO_COOLDOWN_MIN);
+    if (!reservation.allowed) {
       log.info(
         { slot, kind, clientHint: phoneHint(clienteTelefone) },
         'owner-alert: dentro do cooldown — alerta suprimido (anti-flood)',
@@ -317,9 +378,19 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
 
     const sessao = await resolveTransportSession(transport, slot);
     if (!sessao) {
+      // Sem sessão remetente = definitivamente NÃO saiu -> reverte o carimbo pra o próximo
+      // retry ENVIAR (não suprimir como anti-flood). Mesma classe do #412.
+      if (reservation.reservedAt) {
+        await revertCooldownReservation(cdKey, {
+          reservedAt: reservation.reservedAt,
+          reservedCount: reservation.reservedCount,
+          prevAlertAt: reservation.prevAlertAt,
+          prevCount: reservation.prevCount,
+        });
+      }
       log.error(
         { slot, kind, transport },
-        'owner-alert: sem sessão remetente — alerta não enviado (degrada gracioso)',
+        'owner-alert: sem sessão remetente — alerta não enviado (cooldown revertido)',
       );
       return { ok: false, escalado: false, reason: 'send_failed' };
     }
@@ -332,18 +403,44 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
       payload: input.payload,
     });
 
-    await Promise.race([
-      waha.sendText({
-        sessao,
-        chatId: toChatId(ownerPhone),
-        texto,
-        typing: true,
-        delayMs: ALERT_TYPING_DELAY_MS,
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
-      ),
-    ]);
+    try {
+      await Promise.race([
+        waha.sendText({
+          sessao,
+          chatId: toChatId(ownerPhone),
+          texto,
+          typing: true,
+          delayMs: ALERT_TYPING_DELAY_MS,
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
+        ),
+      ]);
+    } catch (sendErr) {
+      // ROLLBACK do cooldown SÓ em falha DEFINITIVA (404/422/ECONNREFUSED): o carimbo "avisado"
+      // foi feito ANTES do envio; se o envio comprovadamente NÃO saiu, desfaz pra o retry seguinte
+      // ENVIAR (bug provado no piloto: sendText 422 com a sessão FAILED deixava o carimbo → todos
+      // os retests do lead viravam 'dentro do cooldown'). Ambíguo (timeout/5xx) MANTÉM o carimbo
+      // (anti-duplicata a pagante, lição #412). CAS: só o dono da reserva desfaz.
+      if (isDefinitiveNonDelivery(sendErr) && reservation.reservedAt) {
+        await revertCooldownReservation(cdKey, {
+          reservedAt: reservation.reservedAt,
+          reservedCount: reservation.reservedCount,
+          prevAlertAt: reservation.prevAlertAt,
+          prevCount: reservation.prevCount,
+        });
+        log.warn(
+          {
+            slot,
+            kind,
+            transport,
+            err: sendErr instanceof Error ? sendErr.message : String(sendErr),
+          },
+          'owner-alert: envio falhou (definitivo) — cooldown revertido p/ o próximo retry enviar',
+        );
+      }
+      throw sendErr; // outer catch -> {ok:false, reason:'error'} (mantém carimbo se ambíguo)
+    }
 
     // NÃO loga o número do dono nem o do cliente em claro (LGPD) — só hints/slot.
     log.info(

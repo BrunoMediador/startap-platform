@@ -81,6 +81,13 @@ export interface CloneRow {
    */
   timezone: string;
   /**
+   * true = o bot_prompt deste clone foi escrito à mão (persona custom); updateClone NÃO
+   * re-renderiza do template da matriz ao mudar personalizacao (migration 070, SCRUM-59).
+   * DEFAULT false = render default (Cirilo/Samuel — re-renderizam como hoje). normalizeCloneRow
+   * garante false quando a coluna não vem no SELECT (byte-idêntico ao comportamento de hoje).
+   */
+  prompt_custom: boolean;
+  /**
    * Vencimento do billing do slot (LEFT JOIN client_billing). null se nao ha linha
    * de billing. Usado SO pelo gate de silencio por cobranca (ADR 0016) — derivado
    * puro, nunca escrito por este caminho. 'YYYY-MM-DD'.
@@ -436,8 +443,13 @@ export async function updateClone(
 
   const row = normalizeCloneRow(r.rows[0]);
 
-  // Se personalizacao mudou, regenera bot_prompt a partir da matriz
-  if (patch.personalizacao !== undefined) {
+  // Se personalizacao mudou, regenera bot_prompt a partir da matriz — SALVO se o clone tem
+  // prompt CUSTOM (migration 070, SCRUM-59): re-renderizar apagaria a persona escrita à mão
+  // (bug provado no piloto Meduzza — salvar o perfil, inclusive o toggle agenda_automatica da
+  // seção nova, jogava a persona de 6141 chars fora). prompt_custom=false (default) = re-renderiza
+  // como hoje (Cirilo/Samuel byte-a-byte). RETURNING * traz a coluna; normalizeCloneRow => false
+  // quando ausente. O gestão (PATCH /api/clones) já não re-renderiza desde maio.
+  if (patch.personalizacao !== undefined && !row.prompt_custom) {
     const personalizacao = patch.personalizacao;
     const matrizRes = await query<{ matriz_slot: string }>(
       'SELECT matriz_slot FROM flow_clones WHERE id = $1',
@@ -1194,6 +1206,10 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     // (default chumbado = byte-idêntico ao comportamento de hoje).
     timezone:
       ((row as unknown as { timezone?: unknown }).timezone as string | null) ?? 'America/Sao_Paulo',
+    // prompt_custom (migration 070): só vem de SELECTs que pedem a coluna (updateClone usa
+    // RETURNING *). Rows de outras origens ou antes da migration em dev -> false (render default
+    // = byte-idêntico ao comportamento de hoje). Só === true protege do re-render.
+    prompt_custom: (row as unknown as { prompt_custom?: unknown }).prompt_custom === true,
     // Campos do LEFT JOIN client_billing (so vem de getCloneBySlot). Rows de outras
     // origens (getCloneBySession, RETURNING *) nao tem -> null. pg ja devolve
     // amount_cents como number; o ?? null cobre o caso da coluna ausente.
