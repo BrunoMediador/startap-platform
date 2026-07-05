@@ -45,9 +45,10 @@ describe('getPerfilBySlot', () => {
       endereco: '',
       instagram: 'edubarber',
       formas_pagamento: [],
-      // SCRUM-59: ausente -> agenda automática ON (comportamento atual); link vazio.
+      // SCRUM-59: ausente -> agenda automática ON (comportamento atual); link/planos vazios.
       agenda_automatica: true,
       link_agendamento: '',
+      planos_beneficios: '',
     });
     // slot vai parametrizado ($1), nunca interpolado.
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE slot = $1'), [SLOT]);
@@ -209,6 +210,24 @@ describe('updatePerfilBySlot', () => {
     const merged = JSON.parse(captured.mergedJson ?? '{}');
     expect(merged.nome_negocio).toBe('Novo Nome');
     expect(merged.agenda_automatica).toBe('false'); // preservado
+  });
+
+  it('SCRUM-59: planos_beneficios (texto) faz round-trip como STRING no personalizacao', async () => {
+    const captured = armMocks({ observacoes_gerais: 'Estacionamento' });
+    await updatePerfilBySlot(SLOT, {
+      planos_beneficios: 'Plano Mensal R$99: corte ilimitado.',
+    });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect(merged.planos_beneficios).toBe('Plano Mensal R$99: corte ilimitado.');
+    // MERGE preserva outras chaves.
+    expect(merged.observacoes_gerais).toBe('Estacionamento');
+  });
+
+  it('SCRUM-59: planos_beneficios ausente (undefined) NÃO toca a chave', async () => {
+    const captured = armMocks({ planos_beneficios: 'Plano antigo' });
+    await updatePerfilBySlot(SLOT, { nome_negocio: 'X' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect(merged.planos_beneficios).toBe('Plano antigo'); // preservado
   });
 
   it('retorna false quando o slot nao existe', async () => {
