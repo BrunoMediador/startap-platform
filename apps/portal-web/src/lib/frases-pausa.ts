@@ -33,10 +33,26 @@ export const COMMAND_LABEL: Record<FraseCommand, string> = {
   resume: 'Retomar',
 };
 
+/** Rótulo do CAMPO de texto por tipo (a11y — o input é sr-only na UI). */
+export const COMMAND_FIELD_LABEL: Record<FraseCommand, string> = {
+  pause: 'Frase para você assumir a conversa',
+  resume: 'Frase para devolver ao assistente',
+};
+
 /** Placeholder (exemplo concreto) por tipo — a frase aparece na conversa. */
 export const COMMAND_PLACEHOLDER: Record<FraseCommand, string> = {
   pause: 'Ex.: Oi! Aqui é a equipe Meduzza 👋',
-  resume: 'Ex.: Pronto! Te deixo com nosso assistente 🤖',
+  resume: 'Ex.: Vou te deixar com nosso atendente, qualquer coisa é só chamar 🙌',
+};
+
+/**
+ * Helper sob cada campo. IMPORTANTE (fato do backend, manual-pause.ts): o match NÃO é
+ * exato — é SUBSTRING sobre texto normalizado (minúsculas, sem acentos, sem espaços),
+ * então a frase pode vir DENTRO de uma mensagem maior. NÃO dizer "digite exatamente".
+ */
+export const COMMAND_MATCH_HELP: Record<FraseCommand, string> = {
+  pause: 'Pode digitar a frase dentro de uma mensagem maior — maiúsculas e acentos não importam.',
+  resume: 'Pode digitar a frase dentro de uma mensagem maior — maiúsculas e acentos não importam.',
 };
 
 /** Linha do rascunho de UI: uma frase + id só de cliente (React key + edição). */

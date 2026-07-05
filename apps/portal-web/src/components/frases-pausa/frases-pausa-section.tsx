@@ -1,6 +1,6 @@
 'use client';
 
-import { IconInfo, IconPlus, IconTrash } from '@/components/icons';
+import { IconAlert, IconPlus, IconTrash } from '@/components/icons';
 /**
  * Seção "Frases de comando" na tela Pausas (modo atendente, SCRUM-59).
  *
@@ -32,7 +32,9 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/cn';
 import {
+  COMMAND_FIELD_LABEL,
   COMMAND_LABEL,
+  COMMAND_MATCH_HELP,
   COMMAND_PLACEHOLDER,
   FRASE_ERROR_MSG,
   type FraseCommand,
@@ -161,27 +163,31 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
   return (
     <SectionShell>
       <p className="text-[13px] leading-normal text-ink-soft">
-        Quando alguém da sua equipe digitar uma destas frases numa conversa, o assistente para de
-        responder aquele cliente e deixa o atendimento com vocês. A frase de retomada devolve a
-        conversa pro assistente.
+        Quando alguém da equipe quiser responder um cliente à mão, é só digitar sua frase de pausa
+        na conversa do WhatsApp — o assistente para de responder aquela pessoa. Quando terminar,
+        digite a frase de retomada e o assistente volta a atender. Vale só para aquela conversa; os
+        outros clientes seguem no automático.
       </p>
 
-      {/* Aviso visível: a frase aparece pro cliente final. */}
+      {/* Aviso (P0 da seção): a frase aparece pro cliente final. Rótulo textual
+          "Atenção:" + ícone — não depende só de cor (WCAG). */}
       <div className="mt-3 flex items-start gap-2.5 rounded-[12px] border border-warn/30 bg-warn-soft px-3.5 py-3 text-warn">
-        <span className="mt-0.5 shrink-0">
-          <IconInfo size={17} />
+        <span className="mt-0.5 shrink-0" aria-hidden="true">
+          <IconAlert size={17} />
         </span>
         <p className="text-[12.5px] leading-normal">
-          A frase aparece na conversa — o cliente vê. Escolha algo natural, tipo{' '}
-          <span className="font-semibold">"Oi! Aqui é a equipe Meduzza 👋"</span>.
+          <span className="font-semibold">Atenção:</span> a frase que você digitar aparece na
+          conversa e o cliente lê. Escolha algo com a cara do seu negócio — ex.:{' '}
+          <span className="font-semibold">"Oi! Aqui é a equipe Meduzza 👋"</span>. Evite frases que
+          pareçam comando de robô ("/pausar", "ativar humano").
         </p>
       </div>
 
       <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-3" noValidate>
         {draft.length === 0 ? (
           <p className="rounded-[12px] border border-dashed border-line-strong bg-surface-sunken px-4 py-6 text-center text-[13px] text-ink-soft">
-            Você ainda não criou nenhuma frase. Adicione uma frase de pausa pra sua equipe assumir a
-            conversa.
+            Defina suas frases para poder assumir uma conversa quando quiser. Comece adicionando uma
+            frase de pausa abaixo.
           </p>
         ) : (
           <ul className="flex flex-col gap-3">
@@ -222,7 +228,7 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
             loading={save.isPending}
             disabled={!dirty || !valido}
           >
-            Salvar
+            Salvar minhas frases
           </Button>
         </div>
 
@@ -251,7 +257,7 @@ function SectionShell({ children }: { children: React.ReactNode }) {
     >
       <div>
         <h2 id="frases-title" className="font-display text-[17px] font-semibold text-ink">
-          Frases de comando
+          Responder você mesmo quando quiser
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
           Frases que sua equipe digita no WhatsApp pra assumir ou devolver o atendimento.
@@ -320,7 +326,7 @@ function FraseCard({
       </div>
 
       <Input
-        label={`Frase de ${tipoLabel.toLowerCase()}`}
+        label={COMMAND_FIELD_LABEL[frase.command]}
         hideLabel
         value={frase.keyword}
         onChange={(e) => onKeyword(e.target.value)}
@@ -330,6 +336,9 @@ function FraseCard({
         autoComplete="off"
         className={cn(!frase.enabled && 'opacity-60')}
       />
+      <p className="text-[12px] leading-normal text-ink-soft">
+        {COMMAND_MATCH_HELP[frase.command]}
+      </p>
     </li>
   );
 }
