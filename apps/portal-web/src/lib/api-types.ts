@@ -949,3 +949,27 @@ export interface ComissaoReport {
   total_cents: number;
   por_profissional: ComissaoPorProfissional[];
 }
+
+// ── Frases de comando (portal-frases-pausa.ts — modo atendente, SCRUM-59) ─────
+//
+// Quando a IA e o atendente humano dividem o MESMO número, a recepção digita uma frase
+// no próprio chat pra pausar/retomar o assistente. O dono personaliza essas frases
+// (elas APARECEM na conversa — o cliente final vê). Escopado por slot da sessão
+// (withTenant) — o front nunca envia slot; a query key carrega o slot pra isolar cache.
+//
+// CONTRATO (backend em paralelo; NÃO mudar — se divergir, PARAR e reportar):
+//   GET /portal/frases-pausa -> 200 { frases: FrasePausa[] }        (404 = feature off)
+//   PUT /portal/frases-pausa body { frases: FrasePausa[] } -> 200 { frases } (replace-set)
+//   Regras: máx 10; keyword 2..80; sem duplicata por (command, keyword normalizada);
+//   400 { error } na violação. Gate: features.modo_atendente (GET /portal/perfil).
+// A normalização/validação dessas regras vive em @/lib/frases-pausa (pura, testável).
+
+export interface FrasePausa {
+  command: 'pause' | 'resume';
+  keyword: string;
+  enabled: boolean;
+}
+
+export interface FrasesPausaResponse {
+  frases: FrasePausa[];
+}
