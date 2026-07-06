@@ -53,6 +53,7 @@ vi.mock('../config.js', () => ({
     ALERTS_API_HEALTH_URL: 'http://startap-api:3040/health',
     ALERTS_MAX_PER_WINDOW: 50,
     ALERTS_WINDOW_MIN: 30,
+    MONITOR_REALERT_HOURS: 24,
     // Flag ON: torna a checagem "up→down falho NÃO avisa o dono" LOAD-BEARING (senão o bloco de
     // notify nunca roda e a asserção clientNotified===0 seria vácua).
     CLIENT_DISCONNECT_ALERT_ENABLED: true,
@@ -224,13 +225,13 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
   });
 
-  it('down->down (re-alerta) + send FALHA -> restaura o last_alert_at ANTERIOR (cooldown não reinicia)', async () => {
+  it('down->down (re-alerta) + send FALHA -> restaura o last_alert_at ANTERIOR (relógio de re-alerta não reinicia)', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
-    const downSince = new Date(Date.now() - 90 * 60_000);
-    const prevAlertAt = new Date(Date.now() - 60 * 60_000); // 60 min atrás (cooldown 30 -> re-alerta)
+    const downSince = new Date(Date.now() - 26 * 60 * 60_000); // caído há 26h
+    const prevAlertAt = new Date(Date.now() - 25 * 60 * 60_000); // último aviso 25h atrás (>24h -> re-alerta)
     mocks.listStates.mockResolvedValue([
       stateRow('waha:clone_seven_7', {
         state: 'down',
@@ -246,8 +247,8 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(r.sent).toBe(0);
     expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
     const comp = mocks.restoreStateIfUnchanged.mock.calls[0][0];
-    // Restaura o carimbo anterior: um re-alerta que não saiu NÃO adianta o relógio do cooldown,
-    // então o próximo ciclo (ainda >= cooldown) re-tenta.
+    // Restaura o carimbo anterior: um re-alerta que não saiu NÃO adianta o relógio de re-alerta,
+    // então o próximo ciclo (ainda >= intervalo) re-tenta.
     expect(comp.restore.lastAlertAt).toBe(prevAlertAt);
     expect(comp.restore.alertCount).toBe(2);
     expect(comp.restore.state).toBe('down');
