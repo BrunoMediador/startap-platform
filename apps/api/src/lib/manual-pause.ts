@@ -1,10 +1,14 @@
+import { normalizePauseKeyword } from '@startap/core/pause-keyword';
 import { pausa } from '@startap/db';
 import { findBotByFlowId } from '../registry.js';
 
 export type ManualPauseCommand = 'pause' | 'resume';
 
+// Delega à normalização CANÔNICA (@startap/core) — a MESMA que o portal usa pra gravar
+// keyword_norm. Uma fonte só evita frase que o dono cadastra e o bot nunca casa. Output
+// byte-idêntico ao anterior (minúsculas + NFD sem acento + sem espaço).
 export function normalizeManualPauseCommand(text: string): string {
-  return text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/\s+/g, '');
+  return normalizePauseKeyword(text);
 }
 
 export function getFlowManualCommand(text: string): ManualPauseCommand | null {

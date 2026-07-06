@@ -197,9 +197,13 @@ export interface PortalPausaRow {
  */
 export async function listPausasBySlot(slot: string): Promise<PortalPausaRow[]> {
   const r = await query<PortalPausaRow>(
+    // Exclui pausas EXPIRADAS (SCRUM-59 human_reply com TTL vencido): o bot já voltou pra
+    // esse contato, não mostrar como "pausado". Byte-a-byte enquanto não houver expires_at
+    // (só o modo atendente seta) — clones fora do gate nunca têm linha com validade.
     `SELECT telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at
      FROM flow_pauses
      WHERE flow_id = $1 AND active = TRUE AND source IS DISTINCT FROM 'bot_detected'
+       AND (expires_at IS NULL OR expires_at > NOW())
      ORDER BY updated_at DESC, created_at DESC
      LIMIT 500`,
     [slot],
@@ -291,7 +295,9 @@ export async function removePausaBySlot(input: {
 /** Contagem de pausas ativas do fluxo (usado na home/status). */
 export async function countPausasAtivasBySlot(slot: string): Promise<number> {
   const r = await query<{ count: string }>(
-    'SELECT COUNT(*)::text AS count FROM flow_pauses WHERE flow_id = $1 AND active = TRUE',
+    // Não conta pausa expirada (SCRUM-59): bate com listPausasBySlot e com o que o bot faz.
+    `SELECT COUNT(*)::text AS count FROM flow_pauses
+      WHERE flow_id = $1 AND active = TRUE AND (expires_at IS NULL OR expires_at > NOW())`,
     [slot],
   );
   return Number(r.rows[0]?.count ?? 0);

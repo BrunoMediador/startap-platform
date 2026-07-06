@@ -29,6 +29,7 @@ import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
 import { portalEquipeRoutes } from './routes/portal-equipe.js';
+import { portalFrasesPausaRoutes } from './routes/portal-frases-pausa.js';
 import { portalGoogleContaRoutes } from './routes/portal-google-conta.js';
 import { portalLembretesRoutes } from './routes/portal-lembretes.js';
 import { portalPausasRoutes } from './routes/portal-pausas.js';
@@ -109,6 +110,7 @@ async function main() {
   // Perfil do negocio (Missao 023 W13): cliente edita dados do negocio no portal.
   await app.register(portalPerfilRoutes);
   await app.register(portalPausasRoutes);
+  await app.register(portalFrasesPausaRoutes);
   // Números pausados por SUSPEITA DE BOT (SCRUM-4 PR-E). Lista source='bot_detected' + despausar.
   // Sem flag própria: vem vazio enquanto a auto-pausa (worker BOT_DETECT_AUTOPAUSE) estiver OFF.
   await app.register(portalBotDetectRoutes);

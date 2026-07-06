@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   isPaused: vi.fn(),
   isFlowPaused: vi.fn(),
   addFlowPause: vi.fn(),
+  addHumanReplyPause: vi.fn(),
   removeFlowPause: vi.fn(),
   addPause: vi.fn(),
   removePause: vi.fn(),
@@ -24,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   isGroupChat: vi.fn(),
   // Dedup (ADR 0019): mockado pra nao tocar Redis real nos testes do router.
   checkAndMarkDuplicate: vi.fn(),
+  // Modo atendente (SCRUM-59): anti-eco + self-chat mockados pra nao tocar Redis real.
+  isBotEcho: vi.fn(),
+  isSelfChat: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -34,6 +38,7 @@ vi.mock('@startap/db', () => ({
     isPaused: mocks.isPaused,
     isFlowPaused: mocks.isFlowPaused,
     addFlowPause: mocks.addFlowPause,
+    addHumanReplyPause: mocks.addHumanReplyPause,
     removeFlowPause: mocks.removeFlowPause,
     addPause: mocks.addPause,
     removePause: mocks.removePause,
@@ -91,12 +96,22 @@ vi.mock('./lib/idempotency.js', () => ({
   checkAndMarkDuplicate: mocks.checkAndMarkDuplicate,
 }));
 
+// Modo atendente (SCRUM-59): mocka o helper pra não tocar Redis (isBotEcho/registerBotReplyEcho)
+// no teste do router. HUMAN_REPLY_PAUSE_TTL_MS é a constante real (60 min).
+vi.mock('./lib/human-reply-pause.js', () => ({
+  isBotEcho: mocks.isBotEcho,
+  isSelfChat: mocks.isSelfChat,
+  HUMAN_REPLY_PAUSE_TTL_MS: 60 * 60 * 1000,
+}));
+
 const { handleWebhook } = await import('./router.js');
 
 // Flag de dedup (ADR 0019) lida via process.env no router. Acesso por chave
 // computada (mesmo padrao do bloco BILLING_OVERDUE_SILENCE) — delete em membro
 // estatico dispara lint/performance/noDelete; em membro computado nao.
 const DEDUP_ENV_KEY = 'IDEMPOTENCY_DEDUP';
+// Gate por-clone do modo atendente (SCRUM-59), lido via process.env no router.
+const MODO_ENV_KEY = 'MODO_ATENDENTE_SLOTS';
 
 // Bot stub para sessão 'startap' — simula o que startap.ts faz ao ser importado.
 const STARTAP_WORKFLOW_ID = 'uUS3Ux1cU2DquKxo';
@@ -168,6 +183,10 @@ describe('handleWebhook', () => {
     // Dedup desligado por padrao (flag OFF) e, se chamado, default = nao duplicata.
     delete process.env[DEDUP_ENV_KEY];
     mocks.checkAndMarkDuplicate.mockResolvedValue({ duplicate: false, degraded: false });
+    // Modo atendente OFF por padrão (nenhum clone no gate) -> ramo novo nunca entra.
+    delete process.env[MODO_ENV_KEY];
+    mocks.isBotEcho.mockResolvedValue('human');
+    mocks.isSelfChat.mockReturnValue(false);
   });
 
   it('nao usa fallback da Lola para sessao de teste do router', async () => {
@@ -801,5 +820,178 @@ describe('handleWebhook — dedup de evento de mensagem (ADR 0019)', () => {
     // FAIL-OPEN: mensagem real do cliente NUNCA dropada por hiccup de Redis.
     expect(result).toEqual({ status: 'ok' });
     expect(stubBot.handle).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRUM-59 — ramo fromMe do MODO ATENDENTE ("mesmo número IA + atendente").
+// Pausa automática por resposta humana (TTL) + anti-eco + self-chat. GATED por-clone.
+// ---------------------------------------------------------------------------
+describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
+  const MEDUZZA = 'clone_meduzza_barbearia_q23psc';
+
+  function fromMeBody(text: string): WahaWebhookBody {
+    const body = makeBody('TESTE_STARTAP');
+    body.payload!.fromMe = true;
+    body.payload!.body = text;
+    return body;
+  }
+
+  function meduzzaRoute() {
+    return {
+      id: 42,
+      telefone: '553598877248',
+      workflow_id: MEDUZZA,
+      workflow_name: 'meduzza',
+      webhook_url: 'http://api/webhooks/waha',
+      nome_cliente: 'Cliente',
+      ativo: true,
+      criado_em: new Date(),
+      atualizado_em: new Date(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logFlowEvent.mockResolvedValue(null);
+    mocks.logMessage.mockResolvedValue(undefined);
+    mocks.addFlowPause.mockResolvedValue(undefined);
+    mocks.addHumanReplyPause.mockResolvedValue(undefined);
+    mocks.removeFlowPause.mockResolvedValue(undefined);
+    mocks.addPause.mockResolvedValue(undefined);
+    mocks.removePause.mockResolvedValue(undefined);
+    mocks.extractPhone.mockReturnValue('553598877248');
+    mocks.isGroupChat.mockReturnValue(false);
+    mocks.getCloneBySession.mockResolvedValue(null);
+    mocks.getCloneBySlot.mockResolvedValue({ cliente_telefone: '5511977776666' });
+    mocks.findRouting.mockResolvedValue(meduzzaRoute());
+    // Nenhuma frase casa por padrão (frase que não aparece na mensagem de teste).
+    mocks.listFlowPauseKeywords.mockResolvedValue([
+      {
+        flow_id: MEDUZZA,
+        command: 'pause',
+        keyword: 'atendente aqui!!',
+        keyword_norm: 'atendenteaqui!!',
+        enabled: true,
+        updated_at: new Date(),
+      },
+    ]);
+    mocks.isBotEcho.mockResolvedValue('human');
+    mocks.isSelfChat.mockReturnValue(false);
+    delete process.env[DEDUP_ENV_KEY];
+    process.env[MODO_ENV_KEY] = MEDUZZA;
+  });
+
+  afterEach(() => {
+    delete process.env[MODO_ENV_KEY];
+  });
+
+  it('resposta HUMANA à mão (não-keyword, não-eco) → pausa human_reply com TTL', async () => {
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-human-reply',
+      startedAt: 0,
+    });
+
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    // human_reply usa addHumanReplyPause (guarda N1: nunca rebaixa permanente) — NÃO addFlowPause.
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as {
+      flowId: string;
+      telefone: string;
+      expiresAt: Date;
+    };
+    expect(arg.flowId).toBe(MEDUZZA);
+    expect(arg.telefone).toBe('553598877248');
+    // TTL ~ agora + 60 min (tolerância larga pra não flakar).
+    expect(arg.expiresAt).toBeInstanceOf(Date);
+    const deltaMs = arg.expiresAt.getTime() - Date.now();
+    expect(deltaMs).toBeGreaterThan(59 * 60 * 1000);
+    expect(deltaMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
+  });
+
+  it('cada resposta humana RENOVA (novo upsert com expiresAt adiante)', async () => {
+    await handleWebhook(fromMeBody('primeiro toque'), { executionId: 'e1', startedAt: 0 });
+    await handleWebhook(fromMeBody('segundo toque'), { executionId: 'e2', startedAt: 0 });
+    // Dois upserts human_reply (renovação = novo addHumanReplyPause com expires_at novo).
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(2);
+    for (const call of mocks.addHumanReplyPause.mock.calls) {
+      expect((call[0] as { expiresAt: Date }).expiresAt).toBeInstanceOf(Date);
+    }
+  });
+
+  it('ECO do próprio bot (fromMe) → NÃO pausa (ignored:fromMe)', async () => {
+    mocks.isBotEcho.mockResolvedValue('echo');
+    const result = await handleWebhook(fromMeBody('mensagem que o bot mesmo enviou'), {
+      executionId: 'exec-echo',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('ECO cujo texto CONTÉM keyword → keyword é PULADA (não comanda/pausa)', async () => {
+    mocks.isBotEcho.mockResolvedValue('echo');
+    const result = await handleWebhook(fromMeBody('atendente aqui!! (frase dentro do eco)'), {
+      executionId: 'exec-echo-keyword',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+  });
+
+  it('SELF-CHAT (msg pro próprio número) → ignored:fromMe:self-chat, não pausa', async () => {
+    mocks.isSelfChat.mockReturnValue(true);
+    const result = await handleWebhook(fromMeBody('eco do alerta de lead'), {
+      executionId: 'exec-self-chat',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe:self-chat' });
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    // Nem chega a consultar as frases (retorna antes do keyword match).
+    expect(mocks.listFlowPauseKeywords).not.toHaveBeenCalled();
+  });
+
+  it('KEYWORD humana continua funcionando (pausa manual source=fromMe, sem TTL)', async () => {
+    const result = await handleWebhook(fromMeBody('atendente aqui!!'), {
+      executionId: 'exec-keyword',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:manual-pause' });
+    // Keyword usa applyFlowManualCommand -> addFlowPause (permanente); NUNCA human_reply.
+    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    const arg = mocks.addFlowPause.mock.calls[0]![0] as { source: string; expiresAt?: Date };
+    // Pausa manual/keyword é PERMANENTE (source fromMe, sem expiresAt) — não é human_reply.
+    expect(arg.source).toBe('fromMe');
+    expect(arg.expiresAt ?? null).toBeNull();
+  });
+
+  it('Redis DEGRADED → fail-safe: NÃO auto-pausa (keyword ainda roda, mas sem match aqui)', async () => {
+    mocks.isBotEcho.mockResolvedValue('degraded');
+    const result = await handleWebhook(fromMeBody('resposta qualquer nao-keyword'), {
+      executionId: 'exec-degraded',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('clone FORA do gate → byte-idêntico: fromMe não-keyword vira ignored:fromMe, SEM pausa', async () => {
+    delete process.env[MODO_ENV_KEY]; // nenhum clone no gate
+    const result = await handleWebhook(fromMeBody('resposta humana num clone normal'), {
+      executionId: 'exec-nao-gated',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    // Caminho legado: nunca cria pausa; isBotEcho/isSelfChat/addHumanReplyPause nem são chamados.
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
   });
 });

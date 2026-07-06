@@ -10,12 +10,14 @@
  *  - Antibot + pausa global aplicados aqui (antes de chegar nos bots).
  */
 import { logger } from '@startap/core/logger';
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
 import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { isBlockedNumber } from './lib/bot-blocklist.js';
+import { HUMAN_REPLY_PAUSE_TTL_MS, isBotEcho, isSelfChat } from './lib/human-reply-pause.js';
 import { checkAndMarkDuplicate } from './lib/idempotency.js';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 import { handleSessionStatusEvent } from './lib/trial-pairing.js';
@@ -305,6 +307,118 @@ export async function handleWebhook(
 
   if (fromMe) {
     const route = await findRoute(telefone, sessao, sessionEntry);
+
+    // === SCRUM-59 — ramo MODO ATENDENTE ("mesmo número IA + atendente"), GATED por-clone. ===
+    // Só clones no MODO_ATENDENTE_SLOTS entram aqui; os demais (Cirilo/Samuel/dragon) PULAM
+    // este bloco e caem na lógica byte-idêntica de sempre logo abaixo. Flag lida do
+    // process.env (mesmo padrão dos gates IDEMPOTENCY_DEDUP/BILLING_OVERDUE_SILENCE no router).
+    if (route && isModoAtendenteEnabled(route.workflow_id, process.env.MODO_ATENDENTE_SLOTS)) {
+      const text = body.payload?.body ?? '';
+
+      // (1) SELF-CHAT: mensagem fromMe pro PRÓPRIO número da sessão (ex.: eco do alerta de
+      // lead no cenário mesmo-número). NUNCA pausa nem comanda — antes do keyword e da
+      // auto-pausa. cliente_telefone = número pareado (me.id) do clone; cache TTL 60s.
+      const cloneForSelf = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
+      if (isSelfChat(telefone, cloneForSelf?.cliente_telefone)) {
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          eventType: 'router.ignored',
+          status: 'ignored',
+          message: 'Mensagem fromMe no self-chat ignorada (modo atendente)',
+          metadata: { reason: 'fromMe-self-chat', source: 'fromMe' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ignored:fromMe:self-chat' };
+      }
+
+      // (2) ANTI-ECO: a resposta que o PRÓPRIO bot envia via WAHA volta no webhook como
+      // fromMe. Mesma fonte de verdade pro keyword match E pra auto-pausa — evita o bot
+      // se auto-pausar/auto-comandar ao ver a própria resposta.
+      //   'echo'     = eco confirmado do bot -> pula keyword e NÃO pausa;
+      //   'human'    = digitado por humano   -> casa keyword / pode pausar;
+      //   'degraded' = Redis indisponível    -> keyword AINDA roda (comando humano
+      //                explícito), mas NÃO auto-pausa (fail-safe: nunca auto-pausa na dúvida).
+      const echoState = await isBotEcho(sessao, telefone, text);
+      const confirmedEcho = echoState === 'echo';
+
+      // (3) KEYWORD (frase de pausa/retomada editável do dono) — pulada só em eco confirmado.
+      const flowManualCommand = confirmedEcho
+        ? null
+        : await getFlowManualCommandForFlow(route.workflow_id, text);
+      if (flowManualCommand) {
+        await applyFlowManualCommand({
+          command: flowManualCommand,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          telefone,
+          session: sessao,
+          source: 'fromMe',
+          reason: 'Comando manual no WhatsApp',
+        });
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          eventType: flowManualCommand === 'pause' ? 'router.manual-pause' : 'router.manual-resume',
+          status: 'success',
+          message:
+            flowManualCommand === 'pause'
+              ? 'Atendente assumiu a conversa neste fluxo'
+              : 'Atendimento humano finalizado; IA do fluxo retomada',
+          metadata: { pauseScope: 'flow', source: 'fromMe', modo: 'atendente' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: `ok:manual-${flowManualCommand}` };
+      }
+
+      // (4) RESPOSTA HUMANA À MÃO (fromMe, texto, não-keyword, não-eco): pausa AQUELE
+      // contato por TTL e o bot volta sozinho; cada resposta humana renova o expires_at.
+      // Fail-safe: só em 'human' CONFIRMADO — eco/degraded NÃO pausam.
+      if (echoState === 'human' && text.trim().length > 0) {
+        // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
+        // outro source (keyword/escalated/antibot/portal) pro TTL — só cria/renova a própria
+        // human_reply (review security N1, SCRUM-60).
+        await pausa.addHumanReplyPause({
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          telefone,
+          session: sessao,
+          reason: 'Atendente respondeu à mão — pausa temporária (modo atendente)',
+          expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),
+        });
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          eventType: 'router.human-reply-pause',
+          status: 'success',
+          message: 'Atendente respondeu à mão; bot pausado temporariamente neste contato',
+          metadata: {
+            pauseScope: 'flow',
+            source: 'human_reply',
+            ttlMs: HUMAN_REPLY_PAUSE_TTL_MS,
+          },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ok:human-reply-pause' };
+      }
+
+      // Eco confirmado / degraded / texto vazio -> sem efeito (como hoje: ignored:fromMe).
+      await flowExecutionLog.logFlowEvent({
+        ...phoneLog,
+        flowId: route.workflow_id,
+        flowName: route.workflow_name,
+        eventType: 'router.ignored',
+        status: 'ignored',
+        message: 'Mensagem enviada pelo próprio bot (modo atendente)',
+        metadata: { reason: 'fromMe', echoState, source: 'fromMe' },
+        durationMs: Date.now() - startedAt,
+      });
+      return { status: 'ignored:fromMe' };
+    }
+
     const flowManualCommand = route
       ? await getFlowManualCommandForFlow(route.workflow_id, body.payload?.body ?? '')
       : null;

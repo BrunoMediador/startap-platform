@@ -5,10 +5,12 @@
  * envio de resposta com typing humanizado.
  */
 import { logger } from '@startap/core/logger';
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import type { Bot, BotContext } from '@startap/core/types';
 import { chatMemory, flowExecutionLog, pausa as pausaQueries } from '@startap/db';
 import type { Role } from '@startap/db';
 import { waha } from '@startap/integrations';
+import { registerBotReplyEcho } from '../lib/human-reply-pause.js';
 
 export interface BotConfig {
   /** Nome único do bot (usado em logs). */
@@ -122,6 +124,13 @@ export abstract class BotBase implements Bot {
       const reply = await this.process(ctx);
       if (reply) {
         await waha.sendText({ sessao, chatId, texto: reply, typing: true, delayMs: 1500 });
+        // SCRUM-59: marca o eco desta resposta pra distinguir "app enviou via API" de
+        // "humano digitou" no ramo fromMe do router (anti-auto-pausa). SÓ p/ clones em
+        // modo atendente (gate barato = string compare); best-effort, nunca lança. Clones
+        // fora do gate: byte-idêntico (o if é false, nem toca no Redis).
+        if (isModoAtendenteEnabled(this.slot, process.env.MODO_ATENDENTE_SLOTS)) {
+          await registerBotReplyEcho(sessao, telefone, reply);
+        }
         await this.logEvent({
           ...baseLog,
           eventType: 'bot.reply-sent',
