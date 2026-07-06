@@ -22,7 +22,7 @@ import {
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
 import { phoneHint, sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
-import { buildModoAtendenteBlock } from '../lib/modo-atendente.js';
+import { buildEquipeBlock, buildModoAtendenteBlock } from '../lib/modo-atendente.js';
 import {
   buildSeuPacoteBlock,
   clienteFromSummary,
@@ -989,9 +989,31 @@ export class TesteBarbeariaBot extends BotBase {
       ano: String(now.getFullYear()),
     });
 
-    const modoBlock = buildModoAtendenteBlock({ hasLink });
+    // ── Bloco [EQUIPE] (SCRUM-59) — só pro estabelecimento com colaboradores ativos ──
+    // O clone do piloto virou product_type='estabelecimento' pra usar a Equipe do portal; mesmo
+    // SEM agenda, o bot precisa responder "quem faz X"/"quero com Fulano". listBySlot dá nome +
+    // serviços SEM tocar gcal/calendarId (não há agenda no modo). getProductType degrada pra
+    // 'individual' em erro -> individual/erro = sem bloco (bot não menciona equipe). Best-effort:
+    // falha aqui não derruba o atendimento (o bloco fica vazio).
+    let equipeBlock = '';
+    try {
+      const productType = await cloneColaboradores.getProductType(this.slot);
+      if (productType === 'estabelecimento') {
+        const colaboradores = await cloneColaboradores.listBySlot(this.slot);
+        equipeBlock = buildEquipeBlock(
+          colaboradores.filter((c) => c.ativo).map((c) => ({ nome: c.nome, servicos: c.servicos })),
+        );
+      }
+    } catch (err) {
+      this.log.warn(
+        { err: err instanceof Error ? err.message : String(err), slot: this.slot },
+        'modo-atendente: falha ao montar [EQUIPE] (segue sem o bloco)',
+      );
+    }
 
-    const systemPrompt = [promptPersona, contextBlock, modoBlock]
+    const modoBlock = buildModoAtendenteBlock({ hasLink, hasEquipe: equipeBlock !== '' });
+
+    const systemPrompt = [promptPersona, contextBlock, equipeBlock, modoBlock]
       .filter((b) => b !== '')
       .join('\n\n');
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildModoAtendenteBlock } from './modo-atendente.js';
+import { buildEquipeBlock, buildModoAtendenteBlock } from './modo-atendente.js';
 
 describe('buildModoAtendenteBlock', () => {
   it('regras duras comuns: não agenda, escala, registra interesse, não invasivo, expediente', () => {
@@ -37,5 +37,49 @@ describe('buildModoAtendenteBlock', () => {
     expect(b).toContain('EQUIPE vai confirmar');
     expect(b).toMatch(/NAO mencione nem invente link/);
     expect(b).not.toContain('entregue o LINK');
+  });
+
+  // ── EQUIPE (SCRUM-59) ──────────────────────────────────────────────────────
+  it('hasEquipe=true: instrui responder "quem faz X" pelo [EQUIPE] e NÃO inventar disponibilidade', () => {
+    const b = buildModoAtendenteBlock({ hasLink: false, hasEquipe: true });
+    expect(b).toContain('[EQUIPE - VARIOS PROFISSIONAIS]');
+    expect(b).toMatch(/quem faz X/i);
+    expect(b).toMatch(/NAO ha agenda por profissional/i);
+    expect(b).toMatch(/invente disponibilidade/i);
+  });
+
+  it('hasEquipe ausente/false: nenhuma instrução de equipe (individual byte-a-byte)', () => {
+    expect(buildModoAtendenteBlock({ hasLink: false })).not.toContain('VARIOS PROFISSIONAIS');
+    expect(buildModoAtendenteBlock({ hasLink: false, hasEquipe: false })).not.toContain(
+      'VARIOS PROFISSIONAIS',
+    );
+  });
+});
+
+describe('buildEquipeBlock', () => {
+  it('lista nome + serviços de cada profissional', () => {
+    const b = buildEquipeBlock([
+      { nome: 'Thomas', servicos: ['corte', 'barba'] },
+      { nome: 'Isaac', servicos: ['corte'] },
+    ]);
+    expect(b).toContain('[EQUIPE - PROFISSIONAIS DESTE NEGOCIO]');
+    expect(b).toContain('- Thomas: corte, barba');
+    expect(b).toContain('- Isaac: corte');
+  });
+
+  it('colaborador SEM serviços vinculados = só o nome', () => {
+    const b = buildEquipeBlock([{ nome: 'Bene', servicos: [] }]);
+    expect(b).toContain('- Bene');
+    expect(b).not.toContain('- Bene:'); // sem ": <servicos>"
+  });
+
+  it('sem membros (ou só nomes vazios) -> bloco ausente ("")', () => {
+    expect(buildEquipeBlock([])).toBe('');
+    expect(buildEquipeBlock([{ nome: '   ', servicos: ['x'] }])).toBe('');
+  });
+
+  it('NUNCA menciona gcal/calendarId/agenda (só nome + serviços)', () => {
+    const b = buildEquipeBlock([{ nome: 'Thomas', servicos: ['corte'] }]);
+    expect(b).not.toMatch(/gcal|calendar|agenda|horario/i);
   });
 });

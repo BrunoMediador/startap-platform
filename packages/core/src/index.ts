@@ -12,6 +12,7 @@ export {
 export { isAtendFromAgendaEnabled } from './atend-from-agenda-gate.js';
 export { isModoAtendenteEnabled } from './modo-atendente-gate.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
+export { isDefinitiveNonDelivery } from './waha-send-failure.js';
 export { DEFAULT_TIMEZONE, isValidIanaTimezone, timezoneSchema } from './timezones.js';
 export {
   REMINDER_TZ,

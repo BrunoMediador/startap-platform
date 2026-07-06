@@ -277,6 +277,15 @@ export const perfilSchema = z
         )
         .optional(),
     ),
+    // Planos / assinaturas / benefícios do negócio (pedido do cliente Meduzza, SCRUM-59).
+    // Texto livre MULTI-LINHA — cai sozinho no bloco [OBSERVACOES E DADOS EXTRAS] do contexto do
+    // LLM via _PERS_LABELS (free-slots), sem mudar o bot. preprocess '' -> undefined (mesmo do
+    // link): não persiste string vazia no JSONB; vazio/ausente = chave não aparece no contexto
+    // (clone que não preencheu = byte-a-byte). max 4000 chars (guarda contra payload abusivo).
+    planos_beneficios: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.string().trim().max(4000, 'planos e assinaturas: texto muito longo').optional(),
+    ),
   })
   .strict();
 
@@ -292,6 +301,7 @@ export const PERFIL_KEYS = [
   'formas_pagamento',
   'agenda_automatica',
   'link_agendamento',
+  'planos_beneficios',
 ] as const;
 
 export type PerfilKey = (typeof PERFIL_KEYS)[number];

@@ -16,6 +16,7 @@ vi.mock('@startap/db', () => ({
 import { flowClones, query } from '@startap/db';
 import {
   type ScheduleConfig,
+  buildContextBlock,
   computeFreeSlotsForDay,
   formatarAgendaComConfig,
   loadScheduleConfig,
@@ -432,5 +433,51 @@ describe('fuso por clone — formatarAgendaComConfig (Cuiabá UTC-4)', () => {
   it('Cuiabá: evento ocupa 10:00 → HOJE oferece 09:00 e 11:00', () => {
     const out = formatarAgendaComConfig([ev], baseCfg('America/Cuiaba'), { daysAhead: 0 });
     expect(out).toBe('HOJE (15/06):\n  Corte (60min): 09:00, 11:00');
+  });
+});
+
+describe('buildContextBlock — planos_beneficios (SCRUM-59)', () => {
+  const baseOpts = {
+    slot: 'clone_meduzza',
+    nomeCliente: 'Fulano',
+    telefoneCliente: '5511999998888',
+    dataAtual: 'segunda-feira, 7 de julho de 2026',
+    ano: '2026',
+  };
+
+  // Clone com horarios+servicos preenchidos -> loadEntityForContext NÃO consulta a matriz.
+  function cloneWith(pers: Record<string, unknown>) {
+    return {
+      personalizacao: pers,
+      horarios_funcionamento: HORARIOS_VALIDOS,
+      servicos: SERVICOS_VALIDOS,
+      matriz_slot: 'teste_barbearia',
+    };
+  }
+
+  it('planos preenchido -> aparece rotulado "Planos e assinaturas" no contexto', async () => {
+    mockGetCloneBySlot.mockResolvedValue(
+      cloneWith({
+        nome_negocio: 'Meduzza',
+        planos_beneficios: 'Plano Mensal R$99: corte ilimitado.',
+      }) as never,
+    );
+    const ctx = await buildContextBlock(baseOpts);
+    expect(ctx).toContain('Planos e assinaturas: Plano Mensal R$99: corte ilimitado.');
+  });
+
+  it('planos AUSENTE -> contexto não menciona planos (byte-a-byte p/ quem não preencheu)', async () => {
+    mockGetCloneBySlot.mockResolvedValue(cloneWith({ nome_negocio: 'Cirilo' }) as never);
+    const ctx = await buildContextBlock(baseOpts);
+    expect(ctx).not.toContain('Planos e assinaturas');
+    expect(ctx).not.toMatch(/planos/i);
+  });
+
+  it('planos vazio ("") -> omitido (não vira linha vazia no contexto)', async () => {
+    mockGetCloneBySlot.mockResolvedValue(
+      cloneWith({ nome_negocio: 'X', planos_beneficios: '' }) as never,
+    );
+    const ctx = await buildContextBlock(baseOpts);
+    expect(ctx).not.toContain('Planos e assinaturas');
   });
 });

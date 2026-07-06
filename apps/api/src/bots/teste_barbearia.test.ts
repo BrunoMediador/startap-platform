@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   buildContextBlock: vi.fn(),
   buildEstabelecimentoContext: vi.fn(),
   getProductType: vi.fn(),
+  listColaboradores: vi.fn(),
   getArea: vi.fn(),
   renderPrompt: vi.fn(),
   loadHistory: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('@startap/db', () => ({
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
   cloneColaboradores: {
     getProductType: mocks.getProductType,
+    listBySlot: mocks.listColaboradores,
     getArea: mocks.getArea,
     getScopeBySlot: mocks.getScopeBySlot,
   },
@@ -1867,6 +1869,9 @@ function setupAtendente(opts?: { agendaAutomatica?: unknown; link?: string }) {
   });
   mocks.sendOwnerAlert.mockResolvedValue({ ok: true, escalado: true });
   mocks.addFlowPause.mockResolvedValue(undefined);
+  // Default: individual (sem bloco [EQUIPE]). Testes de estabelecimento sobrescrevem.
+  mocks.getProductType.mockResolvedValue('individual');
+  mocks.listColaboradores.mockResolvedValue([]);
 }
 
 /** Roda process() no modo atendente e devolve o array `tools` passado ao runAgent. */
@@ -2019,5 +2024,57 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     // Não relança mesmo com addFlowPause rejeitando (void + .catch).
     const res = await tool.run({ motivo: 'reclamacao', resumo: 'algo deu errado' });
     expect(res).toEqual({ ok: true, escalado: true });
+  });
+
+  // ── Bloco [EQUIPE] no modo atendente (estabelecimento) ──────────────────────
+  it('estabelecimento + atendente: injeta [EQUIPE] (nome+serviços) SEM tocar gcal', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false });
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    mocks.listColaboradores.mockResolvedValue([
+      { id: 1, nome: 'Thomas', servicos: ['corte', 'barba'], ativo: true },
+      { id: 2, nome: 'Isaac', servicos: [], ativo: true },
+      { id: 3, nome: 'Inativo', servicos: ['corte'], ativo: false }, // filtrado
+    ]);
+    await (
+      new TesteBarbeariaBot() as unknown as { process: (c: BotContext) => Promise<string | null> }
+    ).process(makeCtx('quem faz barba?'));
+    const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    expect(systemPrompt).toContain('[EQUIPE - PROFISSIONAIS DESTE NEGOCIO]');
+    expect(systemPrompt).toContain('- Thomas: corte, barba');
+    expect(systemPrompt).toContain('- Isaac'); // sem serviços -> só nome
+    expect(systemPrompt).not.toContain('Inativo'); // colaborador inativo não entra
+    // instrução de equipe no guardrail + NUNCA agenda por profissional.
+    expect(systemPrompt).toContain('[EQUIPE - VARIOS PROFISSIONAIS]');
+    // Modo atendente NÃO resolve agenda de colaborador (sem gcal).
+    expect(mocks.getGcalsForSlot).not.toHaveBeenCalled();
+    expect(mocks.getGcalForSlot).not.toHaveBeenCalled();
+  });
+
+  it('individual + atendente: SEM bloco [EQUIPE] (byte-a-byte)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    setupAtendente({ agendaAutomatica: false }); // getProductType='individual'
+    await atendenteToolsFor('oi');
+    const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    // "EQUIPE" aparece no texto normal do guardrail ("EQUIPE vai confirmar"); o que NÃO deve
+    // existir é o BLOCO de equipe (lista de profissionais + instrução de vários profissionais).
+    expect(systemPrompt).not.toContain('[EQUIPE - PROFISSIONAIS DESTE NEGOCIO]');
+    expect(systemPrompt).not.toContain('[EQUIPE - VARIOS PROFISSIONAIS]');
+    expect(mocks.listColaboradores).not.toHaveBeenCalled();
+  });
+
+  it('GATE ORDER: estabelecimento + gate ON + agenda_automatica=false -> processAtendente (não processEstabelecimento)', async () => {
+    cfg.MODO_ATENDENTE_SLOTS = '*';
+    cfg.ESTABELECIMENTO_ENABLED = true; // mesmo com estabelecimento ligado...
+    setupAtendente({ agendaAutomatica: false });
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    mocks.listColaboradores.mockResolvedValue([
+      { id: 1, nome: 'Thomas', servicos: [], ativo: true },
+    ]);
+    const tools = await atendenteToolsFor('quero com o Thomas');
+    // ...o modo atendente GANHA: só as 2 tools de atendente, ZERO tool/agenda de estabelecimento.
+    expect(tools.map((t) => t.name)).toEqual(['escalar_para_humano', 'registrar_interesse']);
+    expect(mocks.getGcalsForSlot).not.toHaveBeenCalled();
+    expect(mocks.buildEstabelecimentoContext).not.toHaveBeenCalled();
   });
 });
