@@ -4,6 +4,7 @@ import { AgendamentoSection } from '@/components/agendamento/agendamento-section
 import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
+import { PlanosSection } from '@/components/planos/planos-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Button } from '@/components/ui/button';
@@ -257,6 +258,12 @@ export default function PerfilPage() {
           MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
           órfão) pros clientes atuais (byte-idêntico). */}
       <AgendamentoSection />
+
+      {/* Planos e assinaturas (modo atendente, SCRUM-59): texto livre que alimenta o
+          contexto do bot. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
+          MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
+          órfão) pros clientes atuais (byte-idêntico). */}
+      <PlanosSection />
 
       {/* Lembretes: seção da própria "Meu negócio" (config self-service do lembrete
           automático). Só aparece pra quem tem agenda ativa (atend_from_agenda) —

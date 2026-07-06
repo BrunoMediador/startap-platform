@@ -632,6 +632,12 @@ export interface PerfilNegocio {
   agenda_automatica?: boolean;
   /** Link externo de agendamento (Booksy/Trinks/agenda própria...). Opcional. */
   link_agendamento?: string | null;
+  /**
+   * Planos e assinaturas (SCRUM-59). Texto livre (máx 4000) que o dono escreve sobre os
+   * planos/benefícios da barbearia; cai no contexto do bot pela personalização. Só
+   * relevante/editável com features.modo_atendente. ''/ausente = sem planos.
+   */
+  planos_beneficios?: string | null;
 }
 
 /**
@@ -643,7 +649,8 @@ export interface PerfilNegocio {
  *
  * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS CSV,
  * NÃO flag global): só o clone do piloto recebe modo_atendente=true. Ausente/false =
- * a seção "Agendamento" não renderiza (byte-idêntico pros clientes atuais).
+ * as seções gateadas (Agendamento, Planos) não renderizam (byte-idêntico pros clientes
+ * atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
@@ -656,6 +663,15 @@ export interface PerfilResponse {
    * desconexão (#390) — um único "número da equipe".
    */
   recepcao_telefone?: string | null;
+}
+
+/**
+ * Visão FLAT da config de Planos (modo atendente), derivada do GET /portal/perfil pela
+ * tela "Meu negócio" (features.modo_atendente + perfil.planos_beneficios). Ver @/lib/planos.
+ */
+export interface PlanosConfig {
+  modo_atendente: boolean;
+  planos_beneficios: string;
 }
 
 /**
