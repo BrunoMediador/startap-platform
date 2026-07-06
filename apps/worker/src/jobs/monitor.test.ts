@@ -49,6 +49,7 @@ vi.mock('../config.js', () => ({
     ALERTS_API_HEALTH_URL: 'http://startap-api:3040/health',
     ALERTS_MAX_PER_WINDOW: 50,
     ALERTS_WINDOW_MIN: 30,
+    MONITOR_REALERT_HOURS: 24,
   },
 }));
 

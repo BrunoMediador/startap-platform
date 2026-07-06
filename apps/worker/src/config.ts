@@ -87,6 +87,14 @@ export const WorkerConfigSchema = z.object({
   // janela (spec §4). Protege o numero da Lola num cenario "tudo caiu de uma vez".
   ALERTS_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
   ALERTS_WINDOW_MIN: z.coerce.number().int().positive().default(30),
+  // Intervalo MÍNIMO (horas) entre RE-lembretes "🔴 AINDA CAÍDO" do MESMO check enquanto ele segue
+  // down. O alerta de TRANSIÇÃO (up→down "🔴 CAIU") sai NA HORA e é INTOCADO — isto governa SÓ o
+  // lembrete recorrente. Antes o intervalo vinha de alert_config.cooldown_min (~30 min no banco) e
+  // gerava flood noturno (100+ alertas por sessão caída = risco de BAN do número remetente). Agora o
+  // padrão é 1 lembrete a cada 24h (ordem do Bruno 05/07). NÃO é flag de on/off — o re-alerta segue
+  // existindo, só espaçado; ajustável por env sem deploy (ex.: 12 = 2×/dia). OPCIONAL no boot (lição
+  // #247: nada aqui é obrigatório — worker sobe sem a env, cai no default 24). NUNCA hardcoded.
+  MONITOR_REALERT_HOURS: z.coerce.number().positive().default(24),
 
   // ── Reconciliacao de pacotes (ADR 0025 divida 5: cancelar+reagendar) ───────
   // RELATORIO read-only de suspeitas de dupla-baixa (2+ redeem do mesmo servico/credito
