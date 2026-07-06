@@ -41,6 +41,19 @@ describe('registerBotReplyEcho + isBotEcho', () => {
     expect(await isBotEcho('sess', '5535999998888', 'Oi! O corte sai R$40.')).toBe('echo');
   });
 
+  it('P3a: a chave NÃO carrega o telefone em claro (PII hasheada)', async () => {
+    await registerBotReplyEcho('sess', '5535999998888', 'Oi!');
+    const key = mocks.set.mock.calls[0]![0] as string;
+    expect(key).toMatch(/^bot-echo:sess:/);
+    expect(key).not.toContain('5535999998888');
+  });
+
+  it('P3a: casa envio↔eco mesmo com/sem o 9º dígito (canonicalE164 antes do hash)', async () => {
+    // registra com 13 díg (com 9); confere com 12 díg (sem 9) = MESMA identidade canônica.
+    await registerBotReplyEcho('sess', '5535991746797', 'resposta');
+    expect(await isBotEcho('sess', '553591746797', 'resposta')).toBe('echo');
+  });
+
   it('normaliza espaço/caixa: eco casa mesmo com espaçamento/caixa diferentes', async () => {
     await registerBotReplyEcho('sess', '55351111', 'Bom  dia,  tudo bem?');
     expect(await isBotEcho('sess', '55351111', 'bom dia, TUDO bem?')).toBe('echo');

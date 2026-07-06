@@ -119,11 +119,13 @@ export async function isFlowPaused(input: {
 
 export async function addFlowPause(input: FlowPauseInput): Promise<void> {
   await query(
-    // expires_at = EXCLUDED.expires_at no upsert: renova o TTL a cada resposta humana
-    // (human_reply manda um futuro novo) E, quando uma pausa PERMANENTE (keyword/portal/
-    // escalated: expiresAt ausente => NULL) sobrescreve uma temporária, ZERA o TTL =>
-    // vira permanente. Como só human_reply seta expires_at, clones fora do modo atendente
-    // sempre gravam NULL aqui — byte-idêntico ao comportamento anterior à coluna.
+    // Pausa EXPLÍCITA/permanente (keyword/portal/escalated_human/antibot): expiresAt ausente
+    // => NULL. `expires_at = EXCLUDED.expires_at` no upsert ZERA qualquer TTL prévio => a
+    // pausa explícita SEMPRE PROMOVE pra permanente (regra "permanente sobe": ex.: dono digita
+    // a frase de pausa sobre uma human_reply expirada => vira permanente, sem herdar validade
+    // vencida). A pausa TEMPORÁRIA por resposta humana usa addHumanReplyPause (com guarda que
+    // NUNCA rebaixa uma permanente). Fora do modo atendente ninguém seta expires_at => byte-
+    // idêntico ao comportamento anterior à coluna.
     `INSERT INTO flow_pauses
        (flow_id, flow_name, telefone, session, active, source, reason, expires_at, updated_at)
      VALUES ($1,$2,$3,$4,TRUE,$5,$6,$7,NOW())
@@ -143,6 +145,59 @@ export async function addFlowPause(input: FlowPauseInput): Promise<void> {
       input.source ?? 'manual',
       input.reason ?? null,
       input.expiresAt ?? null,
+    ],
+  );
+}
+
+export interface HumanReplyPauseInput {
+  flowId: string;
+  flowName?: string | null;
+  telefone: string;
+  session?: string | null;
+  reason?: string | null;
+  /** Fim da pausa temporária (agora + TTL). Obrigatório — human_reply é SEMPRE com validade. */
+  expiresAt: Date;
+}
+
+/**
+ * Pausa por RESPOSTA HUMANA à mão (source='human_reply', com TTL) — SCRUM-59/60.
+ *
+ * Semântica de produto (review security N1): a resposta humana só CRIA ou RENOVA a pausa do
+ * PRÓPRIO source 'human_reply'; NUNCA rebaixa uma pausa EXPLÍCITA ativa de outro source
+ * (keyword/escalated_human/antibot/portal — todas permanentes, expires_at NULL). Sem isso o
+ * dono que digita a frase de pausa e segue respondendo veria o bot VOLTAR sozinho em 60min,
+ * contra a copy "digite a frase de retomada e o assistente volta" (a permanente só volta por
+ * frase/portal). Regra: permanente pode SUBIR (promoção pra permanente é do addFlowPause da
+ * keyword); a TTL NUNCA faz DESCER uma permanente ativa.
+ *
+ * Implementado no ON CONFLICT ... DO UPDATE ... WHERE: só atualiza (renova/recria como
+ * human_reply) se a linha existente NÃO for uma pausa explícita ativa de outro source — i.e.
+ * está inativa, OU já é human_reply, OU está expirada. Caso contrário o UPDATE é suprimido pelo
+ * WHERE e o INSERT pelo conflito => no-op (a pausa explícita permanente fica intacta).
+ */
+export async function addHumanReplyPause(input: HumanReplyPauseInput): Promise<void> {
+  await query(
+    `INSERT INTO flow_pauses
+       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, updated_at)
+     VALUES ($1,$2,$3,$4,TRUE,'human_reply',$5,$6,NOW())
+     ON CONFLICT (flow_id, telefone) DO UPDATE SET
+       flow_name = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
+       session = COALESCE(EXCLUDED.session, flow_pauses.session),
+       active = TRUE,
+       source = 'human_reply',
+       reason = COALESCE(EXCLUDED.reason, flow_pauses.reason),
+       expires_at = EXCLUDED.expires_at,
+       updated_at = NOW()
+     WHERE flow_pauses.active = FALSE
+        OR flow_pauses.source = 'human_reply'
+        OR (flow_pauses.expires_at IS NOT NULL AND flow_pauses.expires_at <= NOW())`,
+    [
+      input.flowId,
+      input.flowName ?? null,
+      input.telefone,
+      input.session ?? null,
+      input.reason ?? null,
+      input.expiresAt,
     ],
   );
 }

@@ -377,12 +377,14 @@ export async function handleWebhook(
       // contato por TTL e o bot volta sozinho; cada resposta humana renova o expires_at.
       // Fail-safe: só em 'human' CONFIRMADO — eco/degraded NÃO pausam.
       if (echoState === 'human' && text.trim().length > 0) {
-        await pausa.addFlowPause({
+        // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
+        // outro source (keyword/escalated/antibot/portal) pro TTL — só cria/renova a própria
+        // human_reply (review security N1, SCRUM-60).
+        await pausa.addHumanReplyPause({
           flowId: route.workflow_id,
           flowName: route.workflow_name,
           telefone,
           session: sessao,
-          source: 'human_reply',
           reason: 'Atendente respondeu à mão — pausa temporária (modo atendente)',
           expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),
         });

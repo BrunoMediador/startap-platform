@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   isPaused: vi.fn(),
   isFlowPaused: vi.fn(),
   addFlowPause: vi.fn(),
+  addHumanReplyPause: vi.fn(),
   removeFlowPause: vi.fn(),
   addPause: vi.fn(),
   removePause: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@startap/db', () => ({
     isPaused: mocks.isPaused,
     isFlowPaused: mocks.isFlowPaused,
     addFlowPause: mocks.addFlowPause,
+    addHumanReplyPause: mocks.addHumanReplyPause,
     removeFlowPause: mocks.removeFlowPause,
     addPause: mocks.addPause,
     removePause: mocks.removePause,
@@ -854,6 +856,7 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     mocks.logFlowEvent.mockResolvedValue(null);
     mocks.logMessage.mockResolvedValue(undefined);
     mocks.addFlowPause.mockResolvedValue(undefined);
+    mocks.addHumanReplyPause.mockResolvedValue(undefined);
     mocks.removeFlowPause.mockResolvedValue(undefined);
     mocks.addPause.mockResolvedValue(undefined);
     mocks.removePause.mockResolvedValue(undefined);
@@ -890,16 +893,16 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     });
 
     expect(result).toEqual({ status: 'ok:human-reply-pause' });
-    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
-    const arg = mocks.addFlowPause.mock.calls[0]![0] as {
+    // human_reply usa addHumanReplyPause (guarda N1: nunca rebaixa permanente) — NÃO addFlowPause.
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as {
       flowId: string;
       telefone: string;
-      source: string;
       expiresAt: Date;
     };
     expect(arg.flowId).toBe(MEDUZZA);
     expect(arg.telefone).toBe('553598877248');
-    expect(arg.source).toBe('human_reply');
     // TTL ~ agora + 60 min (tolerância larga pra não flakar).
     expect(arg.expiresAt).toBeInstanceOf(Date);
     const deltaMs = arg.expiresAt.getTime() - Date.now();
@@ -910,10 +913,9 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
   it('cada resposta humana RENOVA (novo upsert com expiresAt adiante)', async () => {
     await handleWebhook(fromMeBody('primeiro toque'), { executionId: 'e1', startedAt: 0 });
     await handleWebhook(fromMeBody('segundo toque'), { executionId: 'e2', startedAt: 0 });
-    // Dois upserts human_reply (renovação = novo addFlowPause com expires_at novo).
-    expect(mocks.addFlowPause).toHaveBeenCalledTimes(2);
-    for (const call of mocks.addFlowPause.mock.calls) {
-      expect((call[0] as { source: string }).source).toBe('human_reply');
+    // Dois upserts human_reply (renovação = novo addHumanReplyPause com expires_at novo).
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(2);
+    for (const call of mocks.addHumanReplyPause.mock.calls) {
       expect((call[0] as { expiresAt: Date }).expiresAt).toBeInstanceOf(Date);
     }
   });
@@ -925,6 +927,7 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
       startedAt: 0,
     });
     expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 
@@ -936,6 +939,7 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     });
     expect(result).toEqual({ status: 'ignored:fromMe' });
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
   });
 
   it('SELF-CHAT (msg pro próprio número) → ignored:fromMe:self-chat, não pausa', async () => {
@@ -946,6 +950,7 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     });
     expect(result).toEqual({ status: 'ignored:fromMe:self-chat' });
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     // Nem chega a consultar as frases (retorna antes do keyword match).
     expect(mocks.listFlowPauseKeywords).not.toHaveBeenCalled();
   });
@@ -956,7 +961,9 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
       startedAt: 0,
     });
     expect(result).toEqual({ status: 'ok:manual-pause' });
+    // Keyword usa applyFlowManualCommand -> addFlowPause (permanente); NUNCA human_reply.
     expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     const arg = mocks.addFlowPause.mock.calls[0]![0] as { source: string; expiresAt?: Date };
     // Pausa manual/keyword é PERMANENTE (source fromMe, sem expiresAt) — não é human_reply.
     expect(arg.source).toBe('fromMe');
@@ -970,6 +977,7 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
       startedAt: 0,
     });
     expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 
@@ -980,8 +988,9 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
       startedAt: 0,
     });
     expect(result).toEqual({ status: 'ignored:fromMe' });
-    // Caminho legado: nunca cria pausa human_reply; isBotEcho/isSelfChat nem são chamados.
+    // Caminho legado: nunca cria pausa; isBotEcho/isSelfChat/addHumanReplyPause nem são chamados.
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.isBotEcho).not.toHaveBeenCalled();
     expect(mocks.isSelfChat).not.toHaveBeenCalled();
   });

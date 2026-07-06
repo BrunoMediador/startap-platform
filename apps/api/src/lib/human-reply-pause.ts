@@ -63,11 +63,18 @@ function normalizeEchoText(text: string): string {
   return text.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
-/** Chave da marca de eco. telefone = dígitos do chat (extractPhone dá o MESMO nº do
- *  contato tanto no envio quanto no eco fromMe — é o remoteJid da conversa). */
+/** Chave da marca de eco. O telefone é HASHEADO (P3a, defesa em profundidade — review
+ *  security): sem PII em claro na chave => `KEYS bot-echo:*` não enumera número de cliente.
+ *  Determinístico dos dois lados; canonicalE164 ainda casa envio↔eco mesmo se um lado vier
+ *  com o 9º dígito e o outro não (extractPhone dá o mesmo nº do contato — remoteJid da
+ *  conversa — no envio e no eco fromMe; canonicalE164 normaliza a identidade). */
 function botEchoKey(session: string, telefone: string, text: string): string {
-  const hash = createHash('sha1').update(normalizeEchoText(text)).digest('hex').slice(0, 20);
-  return `bot-echo:${session}:${telefone}:${hash}`;
+  const phoneHash = createHash('sha1')
+    .update(canonicalE164(telefone) ?? telefone)
+    .digest('hex')
+    .slice(0, 20);
+  const textHash = createHash('sha1').update(normalizeEchoText(text)).digest('hex').slice(0, 20);
+  return `bot-echo:${session}:${phoneHash}:${textHash}`;
 }
 
 /**

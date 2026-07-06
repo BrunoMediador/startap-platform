@@ -16,7 +16,9 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { isFlowPaused, addFlowPause, replaceFlowPauseKeywords } = await import('./pausa.js');
+const { isFlowPaused, addFlowPause, addHumanReplyPause, replaceFlowPauseKeywords } = await import(
+  './pausa.js'
+);
 
 describe('isFlowPaused — respeita expires_at (TTL, SCRUM-59)', () => {
   beforeEach(() => mockQuery.mockReset());
@@ -41,31 +43,67 @@ describe('isFlowPaused — respeita expires_at (TTL, SCRUM-59)', () => {
   });
 });
 
-describe('addFlowPause — grava expires_at', () => {
+describe('addFlowPause — pausa permanente/keyword (promove: zera TTL prévio)', () => {
   beforeEach(() => mockQuery.mockReset());
 
-  it('human_reply: passa expiresAt como $7 e SQL usa expires_at = EXCLUDED.expires_at', async () => {
+  it('sem expiresAt (keyword/portal/escalated) → grava NULL e SQL usa expires_at = EXCLUDED.expires_at', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await addFlowPause({ flowId: 'clone_cirilo', telefone: '5511999990000', source: 'fromMe' });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // expires_at = EXCLUDED.expires_at + expiresAt ausente => NULL: promove qualquer TTL
+    // prévio (ex.: human_reply expirada) pra permanente, sem herdar validade vencida.
+    expect(sql).toMatch(/expires_at = EXCLUDED\.expires_at/i);
+    // $7 = expires_at (ordem: flowId, flowName, telefone, session, source, reason, expires_at)
+    expect(params[6]).toBeNull();
+  });
+
+  it('NÃO tem WHERE-guard: a permanente sempre atualiza no conflito (permanente SOBE)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await addFlowPause({ flowId: 'f', telefone: 't', source: 'fromMe' });
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // O guard "não rebaixar permanente" é EXCLUSIVO do addHumanReplyPause.
+    expect(sql).not.toMatch(/DO UPDATE[\s\S]*WHERE/i);
+  });
+});
+
+describe('addHumanReplyPause — NÃO rebaixa pausa permanente ativa (N1, SCRUM-60)', () => {
+  beforeEach(() => mockQuery.mockReset());
+
+  it('INSERT source human_reply + ON CONFLICT DO UPDATE com WHERE-guard das 3 condições', async () => {
     mockQuery.mockResolvedValue({ rows: [] });
     const exp = new Date(Date.now() + 3_600_000);
-    await addFlowPause({
+    await addHumanReplyPause({
       flowId: 'clone_meduzza',
       telefone: '5535999998888',
-      source: 'human_reply',
+      session: 'SESS',
+      reason: 'à mão',
       expiresAt: exp,
     });
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-    expect(sql).toContain('expires_at');
+    expect(sql).toMatch(/VALUES \(\$1,\$2,\$3,\$4,TRUE,'human_reply'/i);
+    expect(sql).toMatch(/source = 'human_reply'/i);
     expect(sql).toMatch(/expires_at = EXCLUDED\.expires_at/i);
-    // $7 = expiresAt (ordem: flowId, flowName, telefone, session, source, reason, expires_at)
-    expect(params[6]).toBe(exp);
-    expect(params[4]).toBe('human_reply');
+    // O guard: só atualiza se inativa OU já human_reply OU expirada (=> nunca rebaixa
+    // permanente ativa de outro source: aí WHERE=false, UPDATE suprimido, INSERT no conflito).
+    expect(sql).toMatch(/DO UPDATE SET[\s\S]*WHERE/i);
+    expect(sql).toMatch(/flow_pauses\.active = FALSE/i);
+    expect(sql).toMatch(/flow_pauses\.source = 'human_reply'/i);
+    expect(sql).toMatch(
+      /flow_pauses\.expires_at IS NOT NULL AND flow_pauses\.expires_at <= NOW\(\)/i,
+    );
+    // $6 = expiresAt (ordem: flowId, flowName, telefone, session, reason, expires_at) — sem source no param.
+    expect(params[5]).toBe(exp);
+    expect(params).toHaveLength(6);
   });
 
-  it('sem expiresAt (keyword/portal/escalated) → grava NULL (pausa permanente)', async () => {
+  it('expiresAt obrigatório é repassado; telefone/flow escopados por param ($1/$3)', async () => {
     mockQuery.mockResolvedValue({ rows: [] });
-    await addFlowPause({ flowId: 'clone_cirilo', telefone: '5511999990000', source: 'fromMe' });
+    const exp = new Date(Date.now() + 3_600_000);
+    await addHumanReplyPause({ flowId: 'clone_x', telefone: '5511999990000', expiresAt: exp });
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-    expect(params[6]).toBeNull();
+    expect(params[0]).toBe('clone_x');
+    expect(params[2]).toBe('5511999990000');
+    expect(params[5]).toBe(exp);
   });
 });
 
