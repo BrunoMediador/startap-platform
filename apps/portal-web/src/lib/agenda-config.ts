@@ -104,7 +104,7 @@ export function isAgendaDirty(a: AgendaConfigDraft, b: AgendaConfigDraft): boole
 // ── Telefone da recepção (SCRUM-59 PR-E) ─────────────────────────────────────
 
 /** Mensagem de erro do telefone (mesma microcopy do signup). */
-export const RECEPCAO_TELEFONE_ERRO = 'Confere o número? Parece faltar dígito.';
+export const RECEPCAO_TELEFONE_ERRO = 'Número incompleto. Confira o DDD e os 9 dígitos.';
 
 /** Há algo digitado (após limpar máscara)? */
 export function isRecepcaoPreenchida(display: string): boolean {
@@ -154,7 +154,7 @@ export function recepcaoPayload(draftDisplay: string, savedDisplay: string): Rec
 
 /** Texto de ajuda fixo do campo de telefone da recepção (SCRUM-62: consequência de deixar vazio). */
 export const AJUDA_RECEPCAO =
-  'Opcional. É pra este número que o assistente envia os pedidos de agendamento e os casos que precisam de uma pessoa. Se deixar em branco, esses avisos chegam no próprio WhatsApp do seu negócio (o número que está conectado aqui).';
+  'Opcional. É pra este número que o assistente envia os pedidos de agendamento e os casos que precisam de uma pessoa. Se deixar em branco, os avisos de novos contatos vão pro próprio WhatsApp do seu negócio (o número conectado aqui).';
 
 /** Código de erro (body.error) de um ApiError, quando string. */
 function errorCode(err: unknown): string | undefined {

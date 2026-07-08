@@ -185,8 +185,9 @@ describe('telefone da recepção', () => {
 
   it('AJUDA_RECEPCAO deixa claro que é opcional e o que acontece se ficar vazio', () => {
     expect(AJUDA_RECEPCAO.toLowerCase()).toContain('opcional');
-    // Consequência de deixar em branco (SCRUM-62): avisos vão pro WhatsApp do negócio.
+    // Consequência de deixar em branco (SCRUM-62): avisos de novos contatos vão pro WhatsApp do negócio.
     expect(AJUDA_RECEPCAO.toLowerCase()).toContain('em branco');
+    expect(AJUDA_RECEPCAO.toLowerCase()).toContain('novos contatos');
     expect(AJUDA_RECEPCAO.toLowerCase()).toContain('whatsapp do seu negócio');
   });
 });
