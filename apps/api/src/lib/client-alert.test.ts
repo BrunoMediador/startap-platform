@@ -22,8 +22,15 @@ const mocks = vi.hoisted(() => ({
   upsertState: vi.fn(),
   restoreStateIfUnchanged: vi.fn(),
   sendText: vi.fn(),
+  registerBotReplyEcho: vi.fn(),
   // captura TODA chamada de log pra provar que telefone NUNCA vai em claro no log (LGPD).
   logCalls: [] as unknown[][],
+}));
+
+// config MUTÁVEL (hoisted) pra ligar/desligar o gate do modo atendente por teste (SCRUM-62).
+const cfgMock = vi.hoisted(() => ({
+  CANCELAMENTO_ESCALADO_COOLDOWN_MIN: 30,
+  MODO_ATENDENTE_SLOTS: '',
 }));
 
 // Logger mockado que grava os args de cada log em mocks.logCalls.
@@ -62,8 +69,11 @@ vi.mock('@startap/integrations', () => ({
   waha: { sendText: mocks.sendText },
 }));
 
-vi.mock('../config.js', () => ({
-  config: { CANCELAMENTO_ESCALADO_COOLDOWN_MIN: 30 },
+vi.mock('../config.js', () => ({ config: cfgMock }));
+
+// registerBotReplyEcho mockado — client-alert marca o eco do alerta em clone_session/modo ON.
+vi.mock('./human-reply-pause.js', () => ({
+  registerBotReplyEcho: mocks.registerBotReplyEcho,
 }));
 
 const { sendClientCancellationAlert, sendOwnerAlert, phoneHint, phoneDisplay } = await import(
@@ -453,5 +463,68 @@ describe('sendOwnerAlert — rollback de cooldown (stateful)', () => {
     expect(r).toEqual({ ok: false, escalado: false, reason: 'send_failed' });
     expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
     expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Eco do alerta (SCRUM-62): cinto+suspensório contra pausar o contato do DONO
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('sendOwnerAlert — eco do alerta (clone_session + modo atendente)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logCalls.length = 0;
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    mocks.getCloneAlertOwner.mockResolvedValue({
+      phone: '5535998877248',
+      enabled: true,
+      displayName: 'Meduzza Barbearia',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({ waha_sessao: 'MEDUZZA_SESS' });
+    mocks.getConfig.mockResolvedValue({ id: 1, sender_slot: 'alertas' });
+    mocks.getSenderSession.mockResolvedValue('ALERTAS');
+    mocks.getState.mockResolvedValue(null);
+    mocks.upsertState.mockResolvedValue(undefined);
+    mocks.sendText.mockResolvedValue(undefined);
+  });
+
+  const leadInput = {
+    slot: 'clone_meduzza_barbearia_q23psc',
+    clienteTelefone: '5511988887777',
+    kind: 'lead' as const,
+    transport: 'clone_session' as const,
+    payload: { servico: 'Corte', janela: 'sábado de manhã' },
+  };
+
+  it('modo ON + clone_session: marca o eco (sessão do clone, número do DONO, texto do alerta)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '*';
+    const r = await sendOwnerAlert(leadInput);
+    expect(r).toEqual({ ok: true, escalado: true });
+    expect(mocks.registerBotReplyEcho).toHaveBeenCalledTimes(1);
+    const [sess, phone, texto] = mocks.registerBotReplyEcho.mock.calls[0];
+    // Marca na sessão do CLONE, pro número do DONO (destino normalizado), com o texto do alerta.
+    // Sem isso, o eco fromMe do alerta viraria 'resposta humana' e pausaria o contato do dono.
+    expect(sess).toBe('MEDUZZA_SESS');
+    expect(phone).toBe('5535998877248');
+    expect(String(texto)).toContain('Meduzza Barbearia');
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('modo OFF: NÃO marca eco mesmo em clone_session (byte-idêntico)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    await sendOwnerAlert(leadInput);
+    expect(mocks.registerBotReplyEcho).not.toHaveBeenCalled();
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('transport=alertas (cancelamento legado): NUNCA marca eco, mesmo com modo ON', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '*';
+    await sendClientCancellationAlert({
+      slot: 'clone_meduzza_barbearia_q23psc',
+      clienteTelefone: '5511988887777',
+      motivo: 'viajei',
+      referenciaHorario: 'sexta 10h',
+    });
+    expect(mocks.registerBotReplyEcho).not.toHaveBeenCalled();
   });
 });

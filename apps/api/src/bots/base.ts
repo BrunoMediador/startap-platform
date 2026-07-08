@@ -123,14 +123,18 @@ export abstract class BotBase implements Bot {
     try {
       const reply = await this.process(ctx);
       if (reply) {
-        await waha.sendText({ sessao, chatId, texto: reply, typing: true, delayMs: 1500 });
-        // SCRUM-59: marca o eco desta resposta pra distinguir "app enviou via API" de
-        // "humano digitou" no ramo fromMe do router (anti-auto-pausa). SÓ p/ clones em
-        // modo atendente (gate barato = string compare); best-effort, nunca lança. Clones
-        // fora do gate: byte-idêntico (o if é false, nem toca no Redis).
+        // SCRUM-59/62: marca o eco ANTES do envio pra distinguir "app enviou via API" de
+        // "humano digitou" no ramo fromMe do router (anti-auto-pausa). ORDEM importa: sob
+        // WEBHOOK_ASYNC o eco fromMe da própria resposta pode voltar no webhook ANTES do
+        // sendText retornar; se a marca só existisse DEPOIS, o router veria o eco como
+        // 'human' e auto-pausaria o cliente por 60min (SCRUM-62). Marcar antes é
+        // estritamente mais seguro: se o envio falhar, a marca só expira em 5min sem efeito.
+        // SÓ p/ clones em modo atendente (gate barato = string compare); best-effort, nunca
+        // lança. Clones fora do gate: byte-idêntico (o if é false, nem toca no Redis).
         if (isModoAtendenteEnabled(this.slot, process.env.MODO_ATENDENTE_SLOTS)) {
           await registerBotReplyEcho(sessao, telefone, reply);
         }
+        await waha.sendText({ sessao, chatId, texto: reply, typing: true, delayMs: 1500 });
         await this.logEvent({
           ...baseLog,
           eventType: 'bot.reply-sent',

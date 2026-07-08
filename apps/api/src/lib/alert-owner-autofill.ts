@@ -23,6 +23,7 @@
  *  - LGPD: telefone NUNCA logado em claro — só phoneHint (DDD + 2 últimos).
  */
 import { logger } from '@startap/core/logger';
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits, phoneHint } from '@startap/core/phone';
 import { flowClones } from '@startap/db';
 
@@ -30,7 +31,7 @@ const log = logger.child({ module: 'alert-owner-autofill' });
 
 export type AlertOwnerAutofillResult =
   | { status: 'filled'; slot: string }
-  | { status: 'skipped'; reason: 'already-set-or-not-clone' | 'bad-me-id' }
+  | { status: 'skipped'; reason: 'already-set-or-not-clone' | 'bad-me-id' | 'modo-atendente' }
   | { status: 'error' };
 
 /**
@@ -45,6 +46,14 @@ export async function autofillAlertOwnerPhone(
   meId: string | null,
 ): Promise<AlertOwnerAutofillResult> {
   try {
+    // SCRUM-62: NÃO re-preenche o alert_owner_phone de clones em MODO ATENDENTE. Esses donos
+    // podem LIMPAR o campo no portal (grava NULL) pra o alerta cair no fallback da PRÓPRIA
+    // sessão; se o autofill re-preenchesse a cada WORKING (o me.id), o clear NUNCA colaria.
+    // Demais clones (individual/estabelecimento) seguem preenchendo normal.
+    if (isModoAtendenteEnabled(slot, process.env.MODO_ATENDENTE_SLOTS)) {
+      return { status: 'skipped', reason: 'modo-atendente' };
+    }
+
     // Normaliza só p/ validar/logar o hint; a gravação re-normaliza dentro da query
     // (fonte de verdade do formato gravado). meIdToDigits preserva o 9.
     const digits = meId ? meIdToDigits(meId) : null;

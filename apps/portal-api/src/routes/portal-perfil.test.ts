@@ -29,6 +29,7 @@ const {
   updateTimezoneBySlotMock,
   getAlertOwnerPhoneBySlotMock,
   updateAlertOwnerPhoneBySlotMock,
+  clearAlertOwnerPhoneBySlotMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
   updatePerfilBySlotMock: vi.fn(),
@@ -36,6 +37,7 @@ const {
   updateTimezoneBySlotMock: vi.fn(),
   getAlertOwnerPhoneBySlotMock: vi.fn(),
   updateAlertOwnerPhoneBySlotMock: vi.fn(),
+  clearAlertOwnerPhoneBySlotMock: vi.fn(),
 }));
 vi.mock('@startap/db', () => ({
   portalConfig: {
@@ -47,6 +49,7 @@ vi.mock('@startap/db', () => ({
     updateTimezoneBySlot: (...a: unknown[]) => updateTimezoneBySlotMock(...a),
     getAlertOwnerPhoneBySlot: (...a: unknown[]) => getAlertOwnerPhoneBySlotMock(...a),
     updateAlertOwnerPhoneBySlot: (...a: unknown[]) => updateAlertOwnerPhoneBySlotMock(...a),
+    clearAlertOwnerPhoneBySlot: (...a: unknown[]) => clearAlertOwnerPhoneBySlotMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -92,6 +95,7 @@ beforeEach(() => {
   // Defaults do destino dos avisos: nenhum setado / escrita OK.
   getAlertOwnerPhoneBySlotMock.mockResolvedValue(null);
   updateAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
+  clearAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
 });
 
 describe('GET /portal/perfil', () => {
@@ -457,11 +461,12 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
     await app.close();
   });
 
-  it('PUT: formato inválido (não 55 / curto) => 400 telefone_invalido, NÃO grava', async () => {
+  it('PUT: NÃO-vazio que não casa E.164 BR (não 55 / curto / longo) => 400, NÃO grava', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
     const app = await buildApp();
 
-    for (const bad of ['11999998888', '5535999', '00998877248', 'abc']) {
+    // Todos têm dígitos mas NÃO casam 55\d{10,11} -> erro real de digitação (não é clear).
+    for (const bad of ['11999998888', '5535999', '00998877248', '55119999988881234']) {
       const res = await app.inject({
         method: 'PUT',
         url: '/portal/perfil',
@@ -471,11 +476,14 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
       expect(res.json().error).toBe('telefone_invalido');
     }
     expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    expect(clearAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it('PUT: vazio ("") NÃO zera — 400 telefone_invalido (mantém o atual)', async () => {
+  it('SCRUM-62 PUT: vazio ("") LIMPA o campo (200 + clearAlertOwnerPhoneBySlot NULL)', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
 
     const res = await app.inject({
@@ -484,8 +492,27 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
       payload: { perfil: {}, recepcao_telefone: '' },
     });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('telefone_invalido');
+    expect(res.statusCode).toBe(200);
+    // Vazio = CLEAR (grava NULL, alerta cai no fallback da própria sessão) — NÃO é erro.
+    expect(clearAlertOwnerPhoneBySlotMock).toHaveBeenCalledWith(injectedSlot);
+    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('SCRUM-62 PUT: null também LIMPA o campo (200 + clear)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: {}, recepcao_telefone: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(clearAlertOwnerPhoneBySlotMock).toHaveBeenCalledWith(injectedSlot);
     expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
