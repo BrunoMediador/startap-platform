@@ -456,8 +456,9 @@ export function usePlanosConfig(slot: string): UseQueryResult<PlanosConfig> {
  * PUT parcial /portal/perfil com os campos da seção Agendamento: `{ perfil:
  * { agenda_automatica, link_agendamento }, recepcao_telefone? }`. O `perfil` é merge
  * parcial (chave ausente = não toca); `recepcao_telefone` é TOP-LEVEL (E.164 BR) e só
- * viaja quando o chamador o inclui — VAZIO não zera (backend rejeita). Erros:
- * 400 telefone_invalido, 404 recepcao_telefone_indisponivel.
+ * viaja quando o chamador o inclui — chave AUSENTE não toca; string "" LIMPA o telefone
+ * (SCRUM-62; requer o backend que aceita ""). Erros: 400 telefone_invalido,
+ * 404 recepcao_telefone_indisponivel.
  */
 export function useSaveAgendaConfig(
   slot: string,

@@ -12,9 +12,12 @@
  *                            features?: { modo_atendente }, recepcao_telefone? }
  *   PUT  /portal/perfil body { perfil: { agenda_automatica, link_agendamento },
  *                             recepcao_telefone? }
- *        (perfil = parcial; recepcao_telefone é TOP-LEVEL, E.164 BR; VAZIO não zera →
- *        a UI omite a chave quando o campo está vazio). Erros: 400 telefone_invalido,
- *        404 recepcao_telefone_indisponivel (feature off).
+ *        (perfil = parcial; recepcao_telefone é TOP-LEVEL, E.164 BR. Chave AUSENTE = não
+ *        toca; string vazia "" = LIMPAR o telefone (SCRUM-62 — o dono pode remover o
+ *        número da recepção; sem número, os avisos passam a sair pelo próprio WhatsApp
+ *        conectado do negócio). A UI só envia "" quando o campo tinha número e foi
+ *        esvaziado; campo intocado/sempre-vazio segue OMITIDO). Erros: 400
+ *        telefone_invalido, 404 recepcao_telefone_indisponivel (feature off).
  *
  * O link é OPCIONAL mesmo com o automático desligado (decisão do Bruno 03/07: o cliente
  * piloto ainda não tem o link, insere depois). Só validamos o FORMATO quando preenchido.
@@ -116,16 +119,42 @@ export function isRecepcaoValida(display: string): boolean {
 
 /**
  * Converte o valor de exibição no E.164 BR ("55" + DDD + número) que o backend espera.
- * Vazio -> "" (o chamador OMITE a chave: backend não permite zerar). Inválido -> "".
+ * Vazio/inválido -> "". (Para decidir o payload do PUT use `recepcaoPayload`.)
  */
 export function recepcaoToE164(display: string): string {
   const d = phoneDigits(display);
   return d.length === 10 || d.length === 11 ? `55${d}` : '';
 }
 
-/** Texto de ajuda fixo do campo de telefone da recepção. */
+/**
+ * Decisão do que enviar no PUT pro campo `recepcao_telefone`, comparando o rascunho
+ * editado com o valor salvo (ambos em formato de EXIBIÇÃO mascarado). SCRUM-62.
+ *
+ *   'omit'    -> não envia a chave (sem mudança OU campo sempre-vazio).
+ *   'set'     -> envia o E.164 novo (`value`).
+ *   'clear'   -> envia "" (o dono APAGOU um número que existia -> limpar no backend).
+ *   'invalid' -> tem dígitos mas o formato BR é inválido (o chamador mostra o erro).
+ */
+export type RecepcaoPayload =
+  | { kind: 'omit' }
+  | { kind: 'set'; value: string }
+  | { kind: 'clear' }
+  | { kind: 'invalid' };
+
+export function recepcaoPayload(draftDisplay: string, savedDisplay: string): RecepcaoPayload {
+  if (isRecepcaoPreenchida(draftDisplay)) {
+    if (!isRecepcaoValida(draftDisplay)) return { kind: 'invalid' };
+    const e164 = recepcaoToE164(draftDisplay);
+    if (e164 === recepcaoToE164(savedDisplay)) return { kind: 'omit' };
+    return { kind: 'set', value: e164 };
+  }
+  // Campo vazio: só LIMPA (envia "") se antes havia um número salvo; senão nem toca.
+  return isRecepcaoPreenchida(savedDisplay) ? { kind: 'clear' } : { kind: 'omit' };
+}
+
+/** Texto de ajuda fixo do campo de telefone da recepção (SCRUM-62: consequência de deixar vazio). */
 export const AJUDA_RECEPCAO =
-  'É pra este número que o assistente envia os pedidos de agendamento e os casos que precisam de uma pessoa.';
+  'Opcional. É pra este número que o assistente envia os pedidos de agendamento e os casos que precisam de uma pessoa. Se deixar em branco, esses avisos chegam no próprio WhatsApp do seu negócio (o número que está conectado aqui).';
 
 /** Código de erro (body.error) de um ApiError, quando string. */
 function errorCode(err: unknown): string | undefined {
