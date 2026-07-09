@@ -11,6 +11,7 @@ import {
   getSessionQR,
   getSessionStatus,
   requestPairingCode,
+  resolveLidToPn,
   restartAndWaitForScan,
 } from './sessions.js';
 
@@ -53,6 +54,43 @@ function httpErr(status: number, body = ''): Response {
     arrayBuffer: async () => new ArrayBuffer(0),
   } as unknown as Response;
 }
+
+// ── resolveLidToPn (SCRUM-63 — @lid → telefone) ───────────────────────────────────
+describe('resolveLidToPn', () => {
+  it('happy path: GET /lids/{lid} → {pn} → dígitos do telefone', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonOk({ lid: '100206033039600@lid', pn: '5519981018908@c.us' }),
+    );
+    await expect(resolveLidToPn('sess', '100206033039600')).resolves.toBe('5519981018908');
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain('/api/sess/lids/100206033039600');
+  });
+
+  it('limpa o @lid do argumento antes de montar o path', async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({ pn: '5519981018908@s.whatsapp.net' }));
+    await expect(resolveLidToPn('sess', '100206033039600@lid')).resolves.toBe('5519981018908');
+  });
+
+  it('404 (WAHA não conhece o mapeamento) → null (fail-safe, não lança)', async () => {
+    fetchMock.mockResolvedValueOnce(httpErr(404, 'not found'));
+    await expect(resolveLidToPn('sess', '100206033039600')).resolves.toBeNull();
+  });
+
+  it('pn ausente/curto na resposta → null', async () => {
+    fetchMock.mockResolvedValueOnce(jsonOk({ lid: '100206033039600@lid' }));
+    await expect(resolveLidToPn('sess', '100206033039600')).resolves.toBeNull();
+  });
+
+  it('erro de rede → null (nunca lança no hot path)', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    await expect(resolveLidToPn('sess', '100206033039600')).resolves.toBeNull();
+  });
+
+  it('lid vazio/sem dígitos → null sem chamar a WAHA', async () => {
+    await expect(resolveLidToPn('sess', '@lid')).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
 
 // ── getSessionStatus (404 -> WahaSessionNotFoundError) ────────────────────────────
 describe('getSessionStatus', () => {

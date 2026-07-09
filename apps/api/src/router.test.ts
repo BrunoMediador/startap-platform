@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   // Modo atendente (SCRUM-59): anti-eco + self-chat mockados pra nao tocar Redis real.
   isBotEcho: vi.fn(),
   isSelfChat: vi.fn(),
+  // SCRUM-63: resolução @lid→telefone mockada aqui (foco do router = reagir à identidade
+  // resolvida); a lógica real do resolver é testada em lib/lid-resolver.test.ts.
+  resolveFromMeIdentity: vi.fn(),
 }));
 
 vi.mock('@startap/db', () => ({
@@ -104,7 +107,18 @@ vi.mock('./lib/human-reply-pause.js', () => ({
   HUMAN_REPLY_PAUSE_TTL_MS: 60 * 60 * 1000,
 }));
 
+// SCRUM-63: resolução @lid→telefone. Default = passthrough (não-lid): devolve o telefone
+// que o extractPhone deu, wasLid=false — mantém TODO teste pré-existente byte-idêntico.
+vi.mock('./lib/lid-resolver.js', () => ({
+  resolveFromMeIdentity: mocks.resolveFromMeIdentity,
+}));
+
 const { handleWebhook } = await import('./router.js');
+
+// Default global do resolver = passthrough (clearAllMocks NÃO reseta implementação).
+mocks.resolveFromMeIdentity.mockImplementation((_session: string, _body: unknown, phone: string) =>
+  Promise.resolve({ phone, wasLid: false, via: 'not-lid' }),
+);
 
 // Flag de dedup (ADR 0019) lida via process.env no router. Acesso por chave
 // computada (mesmo padrao do bloco BILLING_OVERDUE_SILENCE) — delete em membro
@@ -878,6 +892,11 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     ]);
     mocks.isBotEcho.mockResolvedValue('human');
     mocks.isSelfChat.mockReturnValue(false);
+    // SCRUM-63: default = passthrough não-lid (identity.phone === telefone do extractPhone).
+    mocks.resolveFromMeIdentity.mockImplementation(
+      (_session: string, _body: unknown, phone: string) =>
+        Promise.resolve({ phone, wasLid: false, via: 'not-lid' }),
+    );
     delete process.env[DEDUP_ENV_KEY];
     process.env[MODO_ENV_KEY] = MEDUZZA;
   });
@@ -993,5 +1012,77 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.isBotEcho).not.toHaveBeenCalled();
     expect(mocks.isSelfChat).not.toHaveBeenCalled();
+  });
+
+  // ── SCRUM-63 — contato migrado (@lid): identidade resolvida ANTES das decisões ──
+  // Pseudo-número do lid que o extractPhone devolveria pra um contato migrado.
+  const LID_PSEUDO = '100206033039600';
+  // Telefone REAL (E.164) pro qual o lid resolve — o que a marca de eco/pausa usa.
+  const REAL_PN = '5519981018908';
+
+  it('SCRUM-63: ECO do bot por @lid (marca sob o PN) → echo, NÃO pausa + usa o PN resolvido', async () => {
+    mocks.extractPhone.mockReturnValue(LID_PSEUDO); // extractPhone cai no pseudo-lid
+    mocks.resolveFromMeIdentity.mockResolvedValue({ phone: REAL_PN, wasLid: true, via: 'payload' });
+    mocks.isBotEcho.mockResolvedValue('echo');
+    const result = await handleWebhook(fromMeBody('resposta que o bot mesmo enviou'), {
+      executionId: 'exec-lid-echo',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    // A decisão de eco roda sob o PN RESOLVIDO (não o pseudo-lid) — é o que casa a marca.
+    expect(mocks.isBotEcho).toHaveBeenCalledWith('TESTE_STARTAP', REAL_PN, expect.any(String));
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('SCRUM-63: resposta MANUAL real por @lid → pausa criada sob o PN E.164 (feature restaurada)', async () => {
+    mocks.extractPhone.mockReturnValue(LID_PSEUDO);
+    mocks.resolveFromMeIdentity.mockResolvedValue({ phone: REAL_PN, wasLid: true, via: 'rest' });
+    mocks.isBotEcho.mockResolvedValue('human');
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-lid-human',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as { telefone: string };
+    // A pausa NASCE sob o telefone REAL, nunca sob o pseudo-número do lid.
+    expect(arg.telefone).toBe(REAL_PN);
+    expect(arg.telefone).not.toBe(LID_PSEUDO);
+  });
+
+  it('SCRUM-63: @lid NÃO resolvido (API erro + cache vazio) → NENHUMA pausa + fail-safe', async () => {
+    mocks.extractPhone.mockReturnValue(LID_PSEUDO);
+    mocks.resolveFromMeIdentity.mockResolvedValue({ phone: null, wasLid: true, via: 'none' });
+    const result = await handleWebhook(fromMeBody('resposta manual num contato migrado'), {
+      executionId: 'exec-lid-unresolved',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe:lid-unresolved' });
+    // Fail-safe: retorna ANTES de self-chat/eco/keyword; NUNCA cria linha em flow_pauses.
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.listFlowPauseKeywords).not.toHaveBeenCalled();
+  });
+
+  it('SCRUM-63: SELF-SEND eco por @lid (resolve pro próprio número) → self-chat ignora, não pausa', async () => {
+    mocks.extractPhone.mockReturnValue(LID_PSEUDO);
+    mocks.resolveFromMeIdentity.mockResolvedValue({
+      phone: '5511977776666',
+      wasLid: true,
+      via: 'payload',
+    });
+    mocks.isSelfChat.mockReturnValue(true); // 5511977776666 == cliente_telefone do clone
+    const result = await handleWebhook(fromMeBody('eco do alerta de lead'), {
+      executionId: 'exec-lid-self',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe:self-chat' });
+    // self-chat avaliado com o número RESOLVIDO, não o pseudo-lid.
+    expect(mocks.isSelfChat).toHaveBeenCalledWith('5511977776666', '5511977776666');
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 });

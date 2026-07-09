@@ -33,6 +33,84 @@ export function extractChatId(body: WahaWebhookBody): string {
   return body.payload?.from ?? '';
 }
 
+// ---------------------------------------------------------------------------
+// Resolução LID → telefone (SCRUM-63) — pós-migração LID do WhatsApp
+// ---------------------------------------------------------------------------
+//
+// Depois da migração LID, o store da engine NOWEB fica LID-first: contatos
+// migrados são endereçados por `<lid>@lid` (um identificador opaco, NÃO um
+// telefone). No INBOUND o número real vem em `_data.key.remoteJidAlt`
+// (extractPhone já resolve). Mas o ECO fromMe (e respostas manuais do dono) a um
+// contato migrado pode chegar SEM o remoteJidAlt → extractPhone cai no
+// pseudo-número do lid. Estes helpers puros detectam o caso e tentam achar o pn
+// DIRETO no payload; o fallback REST (GET /lids/{lid}) mora no chamador.
+
+/** Domínios de JID que carregam um número de telefone REAL (pn), em oposição a `@lid`. */
+const PN_JID_DOMAINS = ['@s.whatsapp.net', '@c.us'] as const;
+
+/** Limpa um JID/valor para os dígitos puros do telefone (sem domínio, sem não-dígitos). */
+function jidToDigits(raw: string): string {
+  return raw
+    .replace('@c.us', '')
+    .replace('@s.whatsapp.net', '')
+    .replace('@lid', '')
+    .replace(/\D/g, '');
+}
+
+/**
+ * Retorna os dígitos do LID quando o chat é endereçado por `@lid` (contato migrado
+ * cujo `from`/`remoteJid` é `<lid>@lid`), senão null. NÃO é um telefone — é o
+ * identificador opaco do WhatsApp; serve só para (a) detectar que precisamos resolver
+ * o pn e (b) alimentar o lookup `GET /api/{session}/lids/{lid}`.
+ */
+export function extractLidDigits(body: WahaWebhookBody): string | null {
+  const payload = body.payload;
+  if (!payload) return null;
+  const from = payload.from ?? '';
+  const remoteJid = payload._data?.key?.remoteJid ?? '';
+  const lidJid = from.endsWith('@lid') ? from : remoteJid.endsWith('@lid') ? remoteJid : '';
+  if (!lidJid) return null;
+  const digits = jidToDigits(lidJid);
+  return digits.length > 0 ? digits : null;
+}
+
+/** true se o chat é endereçado por LID (contato migrado). */
+export function isLidAddressed(body: WahaWebhookBody): boolean {
+  return extractLidDigits(body) !== null;
+}
+
+/**
+ * Tenta extrair o telefone REAL (pn) DIRETO do payload do webhook, olhando os campos
+ * que o Baileys moderno anexa ao par lid/pn: `remoteJidAlt` (o alternativo do `remoteJid`)
+ * e `senderPn`/`participantPn` (em `_data.key`, `_data` ou no topo do payload). Só aceita
+ * valor de domínio pn (`@s.whatsapp.net`/`@c.us`) — NUNCA `@lid`. É o MESMO mecanismo que
+ * resolve o inbound de contato migrado (extractPhone via remoteJidAlt), reusado para o
+ * ramo fromMe onde o remoteJidAlt pode faltar. Retorna dígitos (>=10) ou null.
+ */
+export function extractPnFromPayload(body: WahaWebhookBody): string | null {
+  const payload = body.payload;
+  if (!payload) return null;
+  const key = (payload._data?.key ?? {}) as Record<string, unknown>;
+  const data = (payload._data ?? {}) as Record<string, unknown>;
+  const top = payload as unknown as Record<string, unknown>;
+  const candidates: unknown[] = [
+    key.remoteJidAlt,
+    key.senderPn,
+    key.participantPn,
+    data.senderPn,
+    data.participantPn,
+    top.senderPn,
+    top.participantPn,
+  ];
+  for (const c of candidates) {
+    if (typeof c !== 'string' || !c) continue;
+    if (!PN_JID_DOMAINS.some((d) => c.endsWith(d))) continue;
+    const digits = jidToDigits(c);
+    if (digits.length >= 10) return digits;
+  }
+  return null;
+}
+
 /** Formata um telefone bruto para um chat_id válido WhatsApp (`5535...@c.us`). */
 export function toChatId(phone: string): string {
   const digits = phone.replace(/\D/g, '');
