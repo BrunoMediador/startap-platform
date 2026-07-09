@@ -16,8 +16,9 @@ import { IconCalendar } from '@/components/icons';
  * esqueleto.
  *
  * Também traz o "WhatsApp da recepção" (SCRUM-59 PR-E): número que recebe os avisos de
- * lead/escalação ao dono (top-level `recepcao_telefone`, E.164 BR). Vazio NÃO zera — a
- * UI só envia mudança válida.
+ * lead/escalação ao dono (top-level `recepcao_telefone`, E.164 BR). OPCIONAL (SCRUM-62): o
+ * dono pode LIMPAR um número já salvo (a UI envia "") — sem número, os avisos saem pelo
+ * próprio WhatsApp conectado do negócio. Campo sempre-vazio/sem mudança não é enviado.
  *
  * Dados isolados do formulário principal do perfil: query própria (qk.agendaConfig)
  * derivada do mesmo /portal/perfil, salvamento parcial. Edição OTIMISTA com revert
@@ -40,10 +41,8 @@ import {
   ajudaLink,
   isAgendaDirty,
   isRecepcaoIndisponivel,
-  isRecepcaoPreenchida,
-  isRecepcaoValida,
   isTelefoneInvalido,
-  recepcaoToE164,
+  recepcaoPayload,
   toAgendaDraft,
   validateAgenda,
 } from '@/lib/agenda-config';
@@ -130,28 +129,32 @@ export function AgendamentoSection() {
     }
     setLinkError(undefined);
 
-    // Telefone da recepção (TOP-LEVEL, opcional). Preenchido e inválido -> erro; vazio
-    // -> NÃO envia (backend não zera); válido e MUDADO -> manda o E.164.
-    let recepE164: string | undefined;
-    if (isRecepcaoPreenchida(draft.recepcao_telefone)) {
-      if (!isRecepcaoValida(draft.recepcao_telefone)) {
-        setRecepcaoError(RECEPCAO_TELEFONE_ERRO);
-        return;
-      }
-      const e164 = recepcaoToE164(draft.recepcao_telefone);
-      if (e164 !== recepcaoToE164(saved.recepcao_telefone)) recepE164 = e164;
+    // Telefone da recepção (TOP-LEVEL, opcional). SCRUM-62: preenchido+inválido -> erro;
+    // preenchido+mudado -> manda o E.164; ESVAZIADO (tinha número, o dono apagou) -> manda
+    // "" pra LIMPAR (avisos passam a sair pelo próprio WhatsApp do negócio); sempre-vazio
+    // ou sem mudança -> não envia a chave.
+    const recep = recepcaoPayload(draft.recepcao_telefone, saved.recepcao_telefone);
+    if (recep.kind === 'invalid') {
+      setRecepcaoError(RECEPCAO_TELEFONE_ERRO);
+      return;
     }
     setRecepcaoError(undefined);
+    // undefined = omite a chave; '' = limpar; 'NNN' = número novo.
+    const recepValue = recep.kind === 'set' ? recep.value : recep.kind === 'clear' ? '' : undefined;
 
     const value = res.value;
     const input = {
       ...value,
-      ...(recepE164 !== undefined ? { recepcao_telefone: recepE164 } : {}),
+      ...(recepValue !== undefined ? { recepcao_telefone: recepValue } : {}),
     };
-    // Display salvo: se mandou o telefone, mostra o mascarado do E.164; senão mantém o
-    // telefone que já estava salvo (limpar/inválido não persiste — o campo volta pro nº).
+    // Display salvo pós-save: número novo -> mascarado; limpou -> vazio; sem mudança ->
+    // mantém o telefone que já estava salvo (inválido nunca chega aqui: já deu return).
     const nextRecepDisplay =
-      recepE164 !== undefined ? maskPhoneBR(recepE164) : saved.recepcao_telefone;
+      recep.kind === 'set'
+        ? maskPhoneBR(recep.value)
+        : recep.kind === 'clear'
+          ? ''
+          : saved.recepcao_telefone;
     const nextSaved: AgendaConfigDraft = { ...value, recepcao_telefone: nextRecepDisplay };
     const prev = client.getQueryData(qk.agendaConfig(slot));
 
@@ -159,7 +162,7 @@ export function AgendamentoSection() {
     client.setQueryData(qk.agendaConfig(slot), (p: typeof cfgQ.data) => ({
       modo_atendente: p?.modo_atendente ?? true,
       ...value,
-      recepcao_telefone: recepE164 !== undefined ? recepE164 : (p?.recepcao_telefone ?? ''),
+      recepcao_telefone: recepValue !== undefined ? recepValue : (p?.recepcao_telefone ?? ''),
     }));
     setSaved(nextSaved);
     setDraft(nextSaved);
@@ -244,11 +247,12 @@ export function AgendamentoSection() {
           )}
 
           {/* WhatsApp da recepção (SCRUM-59 PR-E): destino dos avisos de lead/escalação.
-              Sempre visível na seção (mesma gate). Vazio não zera (a UI só envia mudança
-              válida — ver onSubmit). */}
+              Sempre visível na seção (mesma gate). OPCIONAL (SCRUM-62): esvaziar um número
+              já salvo LIMPA o campo (envia "") e os avisos passam a sair pelo próprio
+              WhatsApp do negócio; campo sempre-vazio/sem mudança não envia — ver onSubmit. */}
           <div className="flex flex-col gap-2 border-t border-line pt-4">
             <Input
-              label="WhatsApp da recepção"
+              label="WhatsApp da recepção (opcional)"
               type="tel"
               inputMode="tel"
               autoComplete="tel"

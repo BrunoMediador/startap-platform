@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AJUDA_RECEPCAO,
   type AgendaConfigDraft,
   ajudaLink,
   isAgendaDirty,
@@ -7,6 +8,7 @@ import {
   isRecepcaoPreenchida,
   isRecepcaoValida,
   normalizeLink,
+  recepcaoPayload,
   recepcaoToE164,
   toAgendaDraft,
   validateAgenda,
@@ -179,6 +181,49 @@ describe('telefone da recepção', () => {
     expect(recepcaoToE164('+55 31 98765-4321')).toBe('5531987654321');
     expect(recepcaoToE164('')).toBe('');
     expect(recepcaoToE164('(31) 9')).toBe('');
+  });
+
+  it('AJUDA_RECEPCAO deixa claro que é opcional e o que acontece se ficar vazio', () => {
+    expect(AJUDA_RECEPCAO.toLowerCase()).toContain('opcional');
+    // Consequência de deixar em branco (SCRUM-62): avisos de novos contatos vão pro WhatsApp do negócio.
+    expect(AJUDA_RECEPCAO.toLowerCase()).toContain('em branco');
+    expect(AJUDA_RECEPCAO.toLowerCase()).toContain('novos contatos');
+    expect(AJUDA_RECEPCAO.toLowerCase()).toContain('whatsapp do seu negócio');
+  });
+});
+
+describe('recepcaoPayload — clear explícito (SCRUM-62)', () => {
+  it('sempre-vazio (nunca teve número) -> omite a chave', () => {
+    expect(recepcaoPayload('', '')).toEqual({ kind: 'omit' });
+    expect(recepcaoPayload('  ', '')).toEqual({ kind: 'omit' });
+  });
+
+  it('esvaziou um número que existia -> clear (envia "")', () => {
+    expect(recepcaoPayload('', '(31) 98765-4321')).toEqual({ kind: 'clear' });
+    // Máscara/DDI no salvo não muda o veredito.
+    expect(recepcaoPayload('', '5531987654321')).toEqual({ kind: 'clear' });
+  });
+
+  it('preenchido e MUDADO -> set com o E.164 novo', () => {
+    expect(recepcaoPayload('(31) 98765-4321', '')).toEqual({
+      kind: 'set',
+      value: '5531987654321',
+    });
+    expect(recepcaoPayload('(11) 3333-4444', '(31) 98765-4321')).toEqual({
+      kind: 'set',
+      value: '551133334444',
+    });
+  });
+
+  it('preenchido mas SEM mudança (só a máscara difere) -> omite', () => {
+    expect(recepcaoPayload('(31) 98765-4321', '31987654321')).toEqual({ kind: 'omit' });
+    expect(recepcaoPayload('(31) 98765-4321', '5531987654321')).toEqual({ kind: 'omit' });
+  });
+
+  it('preenchido mas formato inválido -> invalid (nem clear nem set)', () => {
+    expect(recepcaoPayload('(31) 9', '')).toEqual({ kind: 'invalid' });
+    // Inválido continua inválido mesmo com número salvo (não vira clear).
+    expect(recepcaoPayload('(31) 9', '(31) 98765-4321')).toEqual({ kind: 'invalid' });
   });
 });
 
