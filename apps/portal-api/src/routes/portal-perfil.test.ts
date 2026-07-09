@@ -413,12 +413,14 @@ describe('PUT /portal/perfil', () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
-// SCRUM-59 PR-E: recepcao_telefone (destino dos avisos ao dono = alert_owner_phone)
+// Onda 1 de-gate (SCRUM-68 / ADR 0030): recepcao_telefone universal — TODO formato edita o
+// destino dos avisos ao dono (= alert_owner_phone). Antes preso ao modo atendente (SCRUM-59/62);
+// agora individual/agenda também recebe/salva. Validação (E.164 BR / clear) mantida INTACTA.
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
-  it('GET: expõe recepcao_telefone SÓ quando o modo atendente está ON pro slot', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+describe('recepcao_telefone (GET/PUT — universal, todos os formatos)', () => {
+  it('GET: expõe recepcao_telefone pra clone INDIVIDUAL (modo atendente OFF) — de-gate', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // individual/agenda, sem modo atendente
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     getAlertOwnerPhoneBySlotMock.mockResolvedValue('5535998877248');
     const app = await buildApp();
@@ -431,21 +433,34 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
     await app.close();
   });
 
-  it('GET: com o modo OFF, NÃO expõe recepcao_telefone (nem consulta a coluna)', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = '';
+  it('GET: também expõe com o modo atendente ON (paridade — não regride)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getAlertOwnerPhoneBySlotMock.mockResolvedValue('5535998877248');
     const app = await buildApp();
 
     const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).not.toHaveProperty('recepcao_telefone');
-    expect(getAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    expect(res.json().recepcao_telefone).toBe('5535998877248');
     await app.close();
   });
 
-  it('PUT: número válido é NORMALIZADO (strip de máscara) e gravado no slot da SESSÃO', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+  it('GET: null quando não setado (fallback número da própria sessão — SCRUM-62 intacto)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // individual
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    getAlertOwnerPhoneBySlotMock.mockResolvedValue(null);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().recepcao_telefone).toBeNull();
+    await app.close();
+  });
+
+  it('PUT: clone INDIVIDUAL (modo OFF) SALVA número válido NORMALIZADO no slot da SESSÃO', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // de-gate: individual/agenda agora pode setar
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     getAlertOwnerPhoneBySlotMock.mockResolvedValue('5535998877248');
@@ -464,8 +479,8 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
     await app.close();
   });
 
-  it('PUT: NÃO-vazio que não casa E.164 BR (não 55 / curto / longo) => 400, NÃO grava', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+  it('PUT: validação SEGUE — não casa E.164 BR (não 55 / curto / longo) => 400, NÃO grava (modo OFF)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // individual: a validação continua valendo
     const app = await buildApp();
 
     // Todos têm dígitos mas NÃO casam 55\d{10,11} -> erro real de digitação (não é clear).
@@ -483,8 +498,8 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
     await app.close();
   });
 
-  it('SCRUM-62 PUT: vazio ("") LIMPA o campo (200 + clearAlertOwnerPhoneBySlot NULL)', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+  it('SCRUM-62 PUT: vazio ("") LIMPA o campo (200 + clear NULL -> fallback sessão) mesmo em individual', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = ''; // individual
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -503,7 +518,7 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
   });
 
   it('SCRUM-62 PUT: null também LIMPA o campo (200 + clear)', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -520,24 +535,8 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
     await app.close();
   });
 
-  it('PUT: com o modo OFF, tentar setar recepcao_telefone => 404 indisponivel, NÃO grava', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = ''; // feature off pro clone
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: {}, recepcao_telefone: '5535998877248' },
-    });
-
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toBe('recepcao_telefone_indisponivel');
-    expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('anti-IDOR: slot no body é ignorado — grava no slot da SESSÃO', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+  it('anti-IDOR: slot no body é ignorado — grava no slot da SESSÃO (modo OFF)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -558,7 +557,7 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
   });
 
   it('PUT: recepcao_telefone AUSENTE não toca a coluna (byte-a-byte)', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -571,6 +570,69 @@ describe('recepcao_telefone (GET/PUT — modo atendente)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(updateAlertOwnerPhoneBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Onda 1 de-gate (SCRUM-68 / ADR 0030): planos_beneficios universal. O backend PUT já aceitava
+// a chave via perfilSchema (sem gate) e o bot já a renderiza em [NEGOCIO] pra todos (free-slots).
+// Estes testes travam a regressão: individual/agenda (modo OFF) salva planos; validação segue.
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('planos_beneficios (universal, todos os formatos)', () => {
+  it('PUT: clone INDIVIDUAL (modo OFF) SALVA planos_beneficios (200)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { planos_beneficios: 'Plano Ouro: R$120/mes\nInclui 4 cortes' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ planos_beneficios: 'Plano Ouro: R$120/mes\nInclui 4 cortes' }),
+    );
+    await app.close();
+  });
+
+  it('PUT: texto acima de 4000 chars => 400 perfil invalido, NÃO grava', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { planos_beneficios: 'x'.repeat(4001) } },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('perfil invalido');
+    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PUT: só-espaços NÃO persiste a chave (preprocess "" -> undefined; byte-a-byte)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { planos_beneficios: '   ' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(dataArg.planos_beneficios).toBeUndefined();
     await app.close();
   });
 });

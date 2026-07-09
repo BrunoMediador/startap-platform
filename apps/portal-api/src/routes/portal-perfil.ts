@@ -36,13 +36,14 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // o front usa esse boolean como `enabled` da query (clone fora do gate = zero request).
     const faqPersonalizado = isFaqPersonalizadoEnabled(slot, config.FAQ_PERSONALIZADO_SLOTS);
     const features = { modo_atendente: modoAtendente, faq_personalizado: faqPersonalizado };
-    // recepcao_telefone (SCRUM-59): destino dos avisos de lead/escalação ao dono
-    // (= flow_clones.alert_owner_phone RAW). Exposto SÓ quando o modo atendente está ON pro
-    // clone (mesmo gate da seção). null quando não setado; o dono edita pelo campo do portal.
+    // recepcao_telefone (SCRUM-59 → Onda 1 de-gate, SCRUM-68 / ADR 0030): destino dos avisos de
+    // lead/escalação/desconexão ao dono (= flow_clones.alert_owner_phone RAW). UNIVERSAL: exposto
+    // pra TODO formato (individual/estabelecimento, agenda/atendente). O alert_owner_phone já é
+    // usado por todos os kinds de alerta — só o EDITOR estava preso ao modo atendente por acidente
+    // de rollout. null quando não setado -> o bot cai no fallback "número da própria sessão"
+    // (SCRUM-62, intacto). O dono edita pelo campo do portal.
     const payload: Record<string, unknown> = { perfil, timezone, features };
-    if (modoAtendente) {
-      payload.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
-    }
+    payload.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
     return reply.code(200).send(payload);
   });
 
@@ -81,9 +82,10 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       }
       timezoneToSet = body.timezone;
     }
-    // recepcao_telefone (SCRUM-59/62): destino dos avisos ao dono (= flow_clones.alert_owner_phone,
-    // COLUNA top-level, fora do perfilSchema). Só editável com o modo atendente ON pro clone
-    // (defesa em profundidade — o front só mostra o campo então). Tri-estado:
+    // recepcao_telefone (SCRUM-59/62 → Onda 1 de-gate, SCRUM-68 / ADR 0030): destino dos avisos ao
+    // dono (= flow_clones.alert_owner_phone, COLUNA top-level, fora do perfilSchema). UNIVERSAL:
+    // editável por TODO formato (o gate modo-atendente era acidente de rollout; alert_owner_phone
+    // já serve todos os kinds de alerta). Validação mantida INTACTA. Tri-estado:
     //   - AUSENTE (undefined)       -> não toca a coluna (byte-a-byte).
     //   - VAZIO/null                -> CLEAR: grava NULL (dono optou por não ter destino
     //                                  dedicado; o alerta cai no fallback da PRÓPRIA sessão via
@@ -93,9 +95,6 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // Toda validação ANTES de qualquer escrita (sem write parcial).
     let recepcaoAction: { kind: 'clear' } | { kind: 'set'; digits: string } | undefined;
     if (body.recepcao_telefone !== undefined) {
-      if (!isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
-        return reply.code(404).send({ error: 'recepcao_telefone_indisponivel' });
-      }
       const raw = body.recepcao_telefone == null ? '' : String(body.recepcao_telefone);
       const digits = raw.replace(/\D/g, '');
       if (digits.length === 0) {
@@ -124,9 +123,8 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     const perfil = await portalConfig.getPerfilBySlot(slot);
     const timezone = await flowClones.getTimezoneBySlot(slot);
     const out: Record<string, unknown> = { ok: true, perfil, timezone };
-    if (isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
-      out.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
-    }
+    // recepcao_telefone universal (Onda 1 de-gate): devolvido pra TODO formato (front sincroniza).
+    out.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
     return reply.code(200).send(out);
   });
 };
