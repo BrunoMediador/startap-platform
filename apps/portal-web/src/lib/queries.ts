@@ -47,6 +47,8 @@ import type {
   EditarAtendimentoResponse,
   EquipeResponse,
   ExcluirAgendamentoResponse,
+  FaqConfig,
+  FaqItem,
   FaturamentoReport,
   FrasePausa,
   FrasesPausaResponse,
@@ -86,6 +88,8 @@ export const qk = {
   agendaConfig: (slot: string) => ['agenda-config', slot] as const,
   /** Config de Planos (modo atendente) — derivada do GET /portal/perfil. */
   planosConfig: (slot: string) => ['planos-config', slot] as const,
+  /** Config do FAQ personalizado (SCRUM-65) — derivada do GET /portal/perfil. */
+  faqConfig: (slot: string) => ['faq-config', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   botDetectPausas: (slot: string) => ['bot-detect-pausas', slot] as const,
@@ -511,6 +515,61 @@ export function useSavePlanos(
         modo_atendente: prev?.modo_atendente ?? true,
         planos_beneficios:
           typeof perfil.planos_beneficios === 'string' ? perfil.planos_beneficios : '',
+      }));
+    },
+  });
+}
+
+// ── FAQ personalizado (SCRUM-65) ─────────────────────────────────────────────
+//
+// Deriva do MESMO GET/PUT /portal/perfil, numa query própria (qk.faqConfig) pra NÃO
+// tocar no cache/otimista do formulário principal do perfil (regressão zero pros
+// clientes atuais) — mesma isolação de planos/agenda. A seção só renderiza quando
+// `faq_personalizado` é true (por-clone via FAQ_PERSONALIZADO_SLOTS — NÃO flag global).
+// FAQ ausente no GET (feature off) -> []. O array de pares vem em perfil.faq_personalizado.
+
+/** Narrow do array cru do /portal/perfil pros pares {pergunta,resposta} (default []). */
+function toFaqItens(raw: unknown): FaqItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((v) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    return {
+      pergunta: typeof o.pergunta === 'string' ? o.pergunta : '',
+      resposta: typeof o.resposta === 'string' ? o.resposta : '',
+    };
+  });
+}
+
+export function useFaqConfig(slot: string): UseQueryResult<FaqConfig> {
+  return useQuery({
+    queryKey: qk.faqConfig(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
+        faq_personalizado: r.features?.faq_personalizado === true,
+        faq: toFaqItens(r.perfil?.faq_personalizado),
+      })),
+  });
+}
+
+/**
+ * PUT parcial /portal/perfil só com `{ perfil: { faq_personalizado } }` (lista completa =
+ * replace-set). Merge parcial no backend (chave ausente = não toca; [] = limpa). Os demais
+ * campos do perfil ficam intactos. Preserva o flag `faq_personalizado` no cache derivado.
+ */
+export function useSaveFaq(
+  slot: string,
+): UseMutationResult<PerfilNegocio, Error, { faq_personalizado: FaqItem[] }> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: { perfil: input },
+      }).then((r) => r.perfil),
+    onSuccess: (perfil) => {
+      client.setQueryData(qk.faqConfig(slot), (prev: FaqConfig | undefined) => ({
+        faq_personalizado: prev?.faq_personalizado ?? true,
+        faq: toFaqItens(perfil.faq_personalizado),
       }));
     },
   });

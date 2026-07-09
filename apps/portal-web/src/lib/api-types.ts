@@ -615,6 +615,18 @@ export const FORMAS_PAGAMENTO_OPCOES = [
 
 export type FormaPagamentoOpcao = (typeof FORMAS_PAGAMENTO_OPCOES)[number];
 
+/**
+ * Um par pergunta/resposta do FAQ personalizado (SCRUM-65). `pergunta` = título do
+ * assunto (<=120 chars após trim); `resposta` = o texto que a assistente usa ao
+ * responder aquele assunto (<=300 chars após trim). Ambos já trimados pelo backend;
+ * pares com pergunta OU resposta vazia são descartados no backend e nunca chegam aqui.
+ * Injetado no bloco [PERGUNTAS FREQUENTES DO NEGOCIO] do contexto do bot em runtime.
+ */
+export interface FaqItem {
+  pergunta: string;
+  resposta: string;
+}
+
 export interface PerfilNegocio {
   nome_negocio: string;
   nome_prestador: string;
@@ -638,6 +650,13 @@ export interface PerfilNegocio {
    * relevante/editável com features.modo_atendente. ''/ausente = sem planos.
    */
   planos_beneficios?: string | null;
+  /**
+   * FAQ personalizado (SCRUM-65). Até 10 pares pergunta/resposta que o dono cadastra;
+   * cada par vira uma linha P:/R: no bloco [PERGUNTAS FREQUENTES DO NEGOCIO] do contexto
+   * do bot. Só relevante/editável com features.faq_personalizado (gate por-clone,
+   * FAQ_PERSONALIZADO_SLOTS). Ausente/[] = sem FAQ (bloco não injetado, zero token).
+   */
+  faq_personalizado?: FaqItem[] | null;
 }
 
 /**
@@ -647,15 +666,15 @@ export interface PerfilNegocio {
  * pré-seleciona pelo /portal/status (useTenantTz). O hook usePerfil expõe só
  * `r.perfil` no cache.
  *
- * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS CSV,
- * NÃO flag global): só o clone do piloto recebe modo_atendente=true. Ausente/false =
- * as seções gateadas (Agendamento, Planos) não renderizam (byte-idêntico pros clientes
- * atuais).
+ * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS /
+ * FAQ_PERSONALIZADO_SLOTS CSV, NÃO flags globais): só o clone do piloto recebe
+ * modo_atendente/faq_personalizado=true. Ausente/false = as seções gateadas
+ * (Agendamento, Planos, FAQ) não renderizam (byte-idêntico pros clientes atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
-  features?: { modo_atendente: boolean };
+  features?: { modo_atendente: boolean; faq_personalizado?: boolean };
   /**
    * WhatsApp da recepção (SCRUM-59 PR-E) = destino dos avisos de lead/escalação ao
    * dono (RAW `alert_owner_phone`, E.164 BR "55DDDNUMERO"). TOP-LEVEL, presente SÓ com
@@ -672,6 +691,17 @@ export interface PerfilResponse {
 export interface PlanosConfig {
   modo_atendente: boolean;
   planos_beneficios: string;
+}
+
+/**
+ * Visão FLAT da config do FAQ personalizado (SCRUM-65), derivada do GET /portal/perfil
+ * pela tela "Meu negócio" (features.faq_personalizado + perfil.faq_personalizado). Ver
+ * @/lib/faq. Gate por-clone (FAQ_PERSONALIZADO_SLOTS) — NÃO flag global; clone sem a
+ * feature -> faq_personalizado=false e a seção não renderiza.
+ */
+export interface FaqConfig {
+  faq_personalizado: boolean;
+  faq: FaqItem[];
 }
 
 /**

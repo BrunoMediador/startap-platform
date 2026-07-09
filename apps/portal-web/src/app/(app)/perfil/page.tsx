@@ -1,6 +1,7 @@
 'use client';
 
 import { AgendamentoSection } from '@/components/agendamento/agendamento-section';
+import { FaqSection } from '@/components/faq/faq-section';
 import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
@@ -264,6 +265,12 @@ export default function PerfilPage() {
           MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
           órfão) pros clientes atuais (byte-idêntico). */}
       <PlanosSection />
+
+      {/* Perguntas frequentes (FAQ personalizado, SCRUM-65): até 10 pares P/R que o dono
+          cadastra e a assistente usa ao responder. A seção SE AUTO-GATEIA por
+          features.faq_personalizado (por-clone, FAQ_PERSONALIZADO_SLOTS) e traz o próprio
+          divisor — some INTEIRA (sem divisor órfão) pros clientes atuais (byte-idêntico). */}
+      <FaqSection />
 
       {/* Lembretes: seção da própria "Meu negócio" (config self-service do lembrete
           automático). Só aparece pra quem tem agenda ativa (atend_from_agenda) —
