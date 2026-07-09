@@ -116,7 +116,7 @@ export function FaqSection() {
         onError: (err) => {
           // O rascunho FICA na tela pro dono corrigir (não reverte). 400 = backend recusou.
           if (isFaqRejeitada(err)) {
-            toast.error('Não foi possível salvar. Revise as perguntas e tente de novo.');
+            toast.error('Não foi possível salvar. Confira os campos destacados e tente de novo.');
           } else {
             toast.error('Não foi possível salvar. Tente de novo.');
           }
@@ -152,13 +152,19 @@ export function FaqSection() {
         <span className="mt-0.5 shrink-0 text-brand" aria-hidden="true">
           <IconInfo size={17} />
         </span>
-        <p className="text-[12.5px] leading-normal">
-          Escreva como se estivesse respondendo o cliente. Ex.:{' '}
-          <span className="font-semibold text-ink">Vocês atendem sem agendamento?</span> →{' '}
-          <span className="font-semibold text-ink">
-            Atendo por ordem de chegada de terça a sábado, das 9h às 18h.
-          </span>
-        </p>
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[12.5px] leading-normal">
+            Escreva como se estivesse respondendo o cliente. Ex.:{' '}
+            <span className="font-semibold text-ink">Vocês atendem sem agendamento?</span> →{' '}
+            <span className="font-semibold text-ink">
+              Atendo por ordem de chegada de terça a sábado, das 9h às 18h.
+            </span>
+          </p>
+          <p className="text-[12px] leading-normal text-ink-faint">
+            Use aqui só informações do seu negócio (horários, serviços, formas de pagamento). Não
+            coloque dados de clientes, como nome, telefone ou CPF.
+          </p>
+        </div>
       </div>
 
       <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-3" noValidate>
@@ -195,7 +201,7 @@ export function FaqSection() {
         <p className="text-[12px] leading-normal text-ink-soft">
           {noLimite
             ? `Você chegou ao limite de ${FAQ_MAX} perguntas.`
-            : `${usados} de ${FAQ_MAX} perguntas.`}
+            : `${usados} de ${FAQ_MAX} cadastradas.`}
         </p>
 
         <div className="mt-1 flex items-center gap-3">
