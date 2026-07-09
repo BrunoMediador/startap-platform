@@ -54,7 +54,20 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       timezone?: unknown;
       recepcao_telefone?: unknown;
     };
-    const parsed = perfilSchema.safeParse(body.perfil);
+    // FIX (SCRUM-68 Onda 1 / ADR 0030): o save "recepcao-only" do portal (useSaveRecepcao) manda
+    // { recepcao_telefone } SEM o envelope `perfil`. Antes, perfilSchema.safeParse(undefined) dava
+    // success:false -> 400 'perfil invalido' em TODO save recepcao-only, e REGREDIA Meduzza/dragon
+    // (que editavam a recepção pela AgendamentoSection, mandando `perfil: {}` junto e funcionando).
+    // Fix: quando `perfil` vem AUSENTE mas há um campo top-level processável (recepcao_telefone /
+    // timezone), trata `perfil` como {} (patch vazio = no-op no merge) em vez de 400 — o MESMO
+    // objeto vazio que a AgendamentoSection já enviava. Body sem NADA processável (ex.: {} puro)
+    // segue 400 'perfil invalido' (byte-a-byte, não afrouxa demais). A semântica de quem MANDA
+    // `perfil` (inclusive `{}` explícito, `null` ou objeto inválido) é INTOCADA: a tolerância cobre
+    // SÓ a ausência da chave (body.perfil === undefined).
+    const hasProcessableTopLevel =
+      body.recepcao_telefone !== undefined || body.timezone !== undefined;
+    const perfilInput = body.perfil === undefined && hasProcessableTopLevel ? {} : body.perfil;
+    const parsed = perfilSchema.safeParse(perfilInput);
     if (!parsed.success) {
       return reply.code(400).send({
         error: 'perfil invalido',
