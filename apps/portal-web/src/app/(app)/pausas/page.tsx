@@ -306,8 +306,9 @@ export default function PausasPage() {
         </>
       )}
 
-      {/* Frases de comando (modo atendente, SCRUM-59): auto-gated — some byte-idêntico
-          pros clientes sem a feature. Carrega o próprio divisor (mt-8/border-t). */}
+      {/* Frases de comando (Onda 1, SCRUM-68 — DE-GATE): editáveis por TODOS os formatos
+          (o bot já honra a keyword em todos os ramos). O cliente define quais frases
+          pausam/retomam a assistente. Carrega o próprio divisor (mt-8/border-t). */}
       <FrasesPausaSection slot={slot} />
 
       <ContactSheet

@@ -53,3 +53,14 @@ export function toPlanosValue(draft: PlanosDraft): string {
 export function isPlanosDirty(a: PlanosDraft, b: PlanosDraft): boolean {
   return a.planos_beneficios.trim() !== b.planos_beneficios.trim();
 }
+
+/**
+ * Onda 1 (SCRUM-68) — DE-GATE: a seção passa a aparecer pra TODOS os formatos (não só
+ * modo atendente). O bot já renderiza planos em [NEGOCIO] pra todos SEM gate; aqui só
+ * destravamos a EDIÇÃO no portal. Visível assim que o /portal/perfil carrega, INDEPENDE
+ * de `modo_atendente`. Undefined (load/erro) = ainda não visível (evita flash). É
+ * ADITIVO/byte-seguro: o bloco de contexto do bot não muda; a seção só aparece a mais.
+ */
+export function isPlanosVisivel(cfg: Partial<PlanosConfig> | null | undefined): boolean {
+  return cfg != null;
+}

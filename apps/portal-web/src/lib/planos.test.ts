@@ -4,6 +4,7 @@ import {
   type PlanosDraft,
   isPlanosDirty,
   isPlanosValido,
+  isPlanosVisivel,
   planosRestante,
   toPlanosDraft,
   toPlanosValue,
@@ -59,5 +60,22 @@ describe('isPlanosDirty', () => {
   it('detecta mudança real (inclusive limpar)', () => {
     expect(isPlanosDirty({ planos_beneficios: 'Plano A' }, EMPTY)).toBe(true);
     expect(isPlanosDirty(EMPTY, { planos_beneficios: 'Plano A' })).toBe(true);
+  });
+});
+
+// Onda 1 (SCRUM-68): a seção Planos passa a aparecer pra TODOS os formatos — não gateia
+// mais por modo_atendente. Prova o de-gate no nível da lógica de visibilidade.
+describe('isPlanosVisivel (de-gate SCRUM-68)', () => {
+  it('visível pra perfil individual+agenda (modo_atendente false)', () => {
+    expect(isPlanosVisivel({ modo_atendente: false, planos_beneficios: '' })).toBe(true);
+  });
+
+  it('visível também pra modo atendente (superset — byte-seguro pra quem já via)', () => {
+    expect(isPlanosVisivel({ modo_atendente: true, planos_beneficios: 'Plano A' })).toBe(true);
+  });
+
+  it('não visível enquanto o perfil não carregou (evita flash)', () => {
+    expect(isPlanosVisivel(undefined)).toBe(false);
+    expect(isPlanosVisivel(null)).toBe(false);
   });
 });

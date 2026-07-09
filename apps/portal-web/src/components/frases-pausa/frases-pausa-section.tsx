@@ -10,11 +10,12 @@ import { IconAlert, IconPlus, IconTrash } from '@/components/icons';
  * atendimento pro assistente. Como a frase APARECE na conversa (o cliente final vê), o
  * dono personaliza o texto com a cara da marca dele.
  *
- * Gating (byte-idêntico pros demais clientes): a seção só aparece com
- * `features.modo_atendente === true` (por-clone no backend, NÃO flag global) — lido via
- * useAgendaConfig (deriva do /portal/perfil, já cacheado). Durante o load renderiza null
- * (sem flash pra quem não tem a feature). Defesa em profundidade: 404 no GET
- * /portal/frases-pausa = feature off -> some (mesmo critério do lembrete #368). O próprio
+ * Onda 1 (SCRUM-68) — DE-GATE: a seção aparece pra TODOS os formatos (o bot já honra a
+ * keyword de pausa/retomada em todos os ramos). Aqui só destravamos a EDIÇÃO no portal —
+ * ADITIVO/byte-seguro (o comportamento do bot não muda). A busca das frases liga assim
+ * que o /portal/perfil carrega (frasesHabilitadas), então o clone chama a rota só depois
+ * de saber quem é. Durante o load renderiza null (sem flash). Defesa em profundidade: 404
+ * no GET /portal/frases-pausa -> some (mesmo critério do lembrete #368). O próprio
  * <section> carrega seu divisor/espaçamento (mt-8/border-t) — nunca num wrapper de página
  * (lição #415: null não pode deixar spacer órfão).
  *
@@ -44,6 +45,7 @@ import {
   MAX_FRASES,
   addFrase,
   atMaxFrases,
+  frasesHabilitadas,
   isFrasesDirty,
   isFrasesFeatureOff,
   isFrasesRejeitadas,
@@ -63,11 +65,11 @@ import { useEffect, useRef, useState } from 'react';
 export function FrasesPausaSection({ slot }: { slot: string }) {
   const toast = useToast();
   const client = useQueryClient();
-  // modo_atendente vem do /portal/perfil (derivado em qk.agendaConfig, já cacheado).
+  // O perfil vem do /portal/perfil (derivado em qk.agendaConfig, já cacheado).
   const cfgQ = useAgendaConfig(slot);
-  const modoAtendente = cfgQ.data?.modo_atendente === true;
-  // Só busca as frases quando a feature está ligada -> clone sem a feature nunca chama a rota.
-  const frasesQ = useFrasesPausa(slot, modoAtendente);
+  // Onda 1 (SCRUM-68): liga a busca das frases assim que o perfil carrega, pra TODOS os
+  // formatos (não gateia mais por modo_atendente). Só chama a rota depois de saber o clone.
+  const frasesQ = useFrasesPausa(slot, frasesHabilitadas(cfgQ.data));
   const save = useSaveFrasesPausa(slot);
 
   // `saved` = última versão confirmada; `draft` = edição em andamento. `touched` evita
@@ -134,10 +136,9 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
     });
   }
 
-  // Load: nada renderiza (sem flash pra quem não tem a feature).
+  // Load: nada renderiza (sem flash). Onda 1 (SCRUM-68): visível pra TODOS os formatos —
+  // não gateia mais por modo_atendente. O 404 do GET (abaixo) segue como rede de proteção.
   if (cfgQ.isPending || cfgQ.isError) return null;
-  // Feature OFF pro clone -> some (byte-idêntico pros clientes atuais).
-  if (!modoAtendente) return null;
 
   if (frasesQ.isPending) {
     return (
@@ -163,10 +164,11 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
   return (
     <SectionShell>
       <p className="text-[13px] leading-normal text-ink-soft">
-        Quando alguém da equipe quiser responder um cliente à mão, é só digitar sua frase de pausa
-        na conversa do WhatsApp — o assistente para de responder aquela pessoa. Quando terminar,
-        digite a frase de retomada e o assistente volta a atender. Vale só para aquela conversa; os
-        outros clientes seguem no automático.
+        As frases são suas: você escolhe quais palavras pausam e retomam a assistente. Quando alguém
+        da equipe quiser responder um cliente à mão, é só digitar sua frase de pausa na conversa do
+        WhatsApp — o assistente para de responder aquela pessoa. Quando terminar, digite a frase de
+        retomada e o assistente volta a atender. Vale só para aquela conversa; os outros clientes
+        seguem no automático.
       </p>
 
       {/* Aviso (P0 da seção): a frase aparece pro cliente final. Rótulo textual
@@ -260,7 +262,8 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           Responder você mesmo quando quiser
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Frases que sua equipe digita no WhatsApp pra assumir ou devolver o atendimento.
+          Você define as frases que sua equipe digita no WhatsApp pra assumir ou devolver o
+          atendimento — do jeito que preferir.
         </p>
       </div>
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">

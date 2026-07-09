@@ -7,6 +7,7 @@ import {
   isLinkValido,
   isRecepcaoPreenchida,
   isRecepcaoValida,
+  isRecepcaoVisivel,
   normalizeLink,
   recepcaoPayload,
   recepcaoToE164,
@@ -231,5 +232,24 @@ describe('ajudaLink', () => {
   it('varia conforme o link estar preenchido', () => {
     expect(ajudaLink(true)).toMatch(/envia este link/i);
     expect(ajudaLink(false)).toMatch(/avisa sua equipe/i);
+  });
+});
+
+// Onda 1 (SCRUM-68): o "WhatsApp da recepção" vira seção própria, editável por TODOS os
+// formatos (inclusive quem usa agenda) — não gateia mais por modo_atendente.
+describe('isRecepcaoVisivel (de-gate SCRUM-68)', () => {
+  it('visível pra perfil individual+agenda (modo_atendente false)', () => {
+    expect(isRecepcaoVisivel({ modo_atendente: false, recepcao_telefone: '' })).toBe(true);
+  });
+
+  it('visível também pra modo atendente (superset — byte-seguro pra quem já via)', () => {
+    expect(isRecepcaoVisivel({ modo_atendente: true, recepcao_telefone: '5531987654321' })).toBe(
+      true,
+    );
+  });
+
+  it('não visível enquanto o perfil não carregou (evita flash)', () => {
+    expect(isRecepcaoVisivel(undefined)).toBe(false);
+    expect(isRecepcaoVisivel(null)).toBe(false);
   });
 });

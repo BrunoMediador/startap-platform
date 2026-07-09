@@ -7,10 +7,11 @@
  * texto cai no contexto do bot pela personalização existente — o assistente passa a
  * responder sobre planos usando exatamente o que estiver aqui.
  *
- * Gating: só aparece quando `features.modo_atendente === true` (por-clone via
- * MODO_ATENDENTE_SLOTS — NÃO é flag global). Clone sem a feature -> nada renderiza
- * (byte-idêntico pros clientes atuais). Durante o load renderiza null (sem flash), e a
- * seção traz o próprio divisor -> some INTEIRA (sem divisor órfão).
+ * Onda 1 (SCRUM-68) — DE-GATE: a seção aparece pra TODOS os formatos (não só modo
+ * atendente). O bot já renderiza planos em [NEGOCIO] pra todos SEM gate; aqui só
+ * destravamos a EDIÇÃO no portal — mudança ADITIVA/byte-segura (o bloco de contexto do
+ * bot não muda). Durante o load renderiza null (sem flash), e a seção traz o próprio
+ * divisor -> some INTEIRA (sem divisor órfão) enquanto carrega.
  *
  * Dados isolados do formulário principal do perfil: query própria (qk.planosConfig)
  * derivada do mesmo /portal/perfil, salvamento parcial (só planos_beneficios; '' limpa).
@@ -25,6 +26,7 @@ import {
   type PlanosDraft,
   isPlanosDirty,
   isPlanosValido,
+  isPlanosVisivel,
   planosRestante,
   toPlanosDraft,
   toPlanosValue,
@@ -101,10 +103,10 @@ export function PlanosSection() {
     );
   }
 
-  // Load: não renderiza nada (sem flash pra quem não tem a feature).
+  // Load: não renderiza nada (sem flash). Onda 1 (SCRUM-68): visível pra TODOS os
+  // formatos assim que o perfil carrega — não gateia mais por modo_atendente.
   if (cfgQ.isPending || cfgQ.isError) return null;
-  // Feature OFF pro clone -> some (byte-idêntico pros clientes atuais).
-  if (!cfgQ.data?.modo_atendente) return null;
+  if (!isPlanosVisivel(cfgQ.data)) return null;
 
   return (
     <section

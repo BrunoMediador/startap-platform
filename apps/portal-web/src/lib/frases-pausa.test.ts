@@ -6,6 +6,7 @@ import {
   MAX_FRASES,
   addFrase,
   atMaxFrases,
+  frasesHabilitadas,
   isFrasesDirty,
   isFrasesFeatureOff,
   isFrasesRejeitadas,
@@ -213,5 +214,23 @@ describe('isFrasesRejeitadas — 400 do backend', () => {
     expect(isFrasesRejeitadas(new ApiError(400, 'invalid', null))).toBe(true);
     expect(isFrasesRejeitadas(new ApiError(500, 'boom', null))).toBe(false);
     expect(isFrasesRejeitadas(new Error('x'))).toBe(false);
+  });
+});
+
+// Onda 1 (SCRUM-68): a busca das frases liga pra TODOS os formatos assim que o perfil
+// carrega — não gateia mais por modo_atendente. Prova o de-gate (o clone individual+agenda
+// passa a chamar a rota /portal/frases-pausa).
+describe('frasesHabilitadas (de-gate SCRUM-68)', () => {
+  it('liga a busca pra perfil individual+agenda (modo_atendente false)', () => {
+    expect(frasesHabilitadas({ modo_atendente: false })).toBe(true);
+  });
+
+  it('liga também pra modo atendente (superset — byte-seguro pra quem já via)', () => {
+    expect(frasesHabilitadas({ modo_atendente: true })).toBe(true);
+  });
+
+  it('não liga antes do perfil carregar (não chama a rota no boot)', () => {
+    expect(frasesHabilitadas(undefined)).toBe(false);
+    expect(frasesHabilitadas(null)).toBe(false);
   });
 });

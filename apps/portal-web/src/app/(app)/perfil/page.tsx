@@ -6,6 +6,7 @@ import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-se
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { PlanosSection } from '@/components/planos/planos-section';
+import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Button } from '@/components/ui/button';
@@ -260,10 +261,16 @@ export default function PerfilPage() {
           órfão) pros clientes atuais (byte-idêntico). */}
       <AgendamentoSection />
 
-      {/* Planos e assinaturas (modo atendente, SCRUM-59): texto livre que alimenta o
-          contexto do bot. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
-          MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
-          órfão) pros clientes atuais (byte-idêntico). */}
+      {/* WhatsApp da recepção (Onda 1, SCRUM-68): destino dos avisos ao dono
+          (alert_owner_phone). DE-GATE — editável por TODOS os formatos (saiu da
+          AgendamentoSection, que segue gated por modo atendente). Vazio = fallback pro
+          próprio WhatsApp do negócio (SCRUM-62). Traz o próprio divisor. */}
+      <RecepcaoSection />
+
+      {/* Planos e assinaturas (Onda 1, SCRUM-68 — DE-GATE): texto livre que alimenta o
+          contexto do bot. Passa a aparecer pra TODOS os formatos (o bot já renderiza
+          planos em [NEGOCIO] sem gate); só destravamos a edição no portal. Traz o próprio
+          divisor. */}
       <PlanosSection />
 
       {/* Perguntas frequentes (FAQ personalizado, SCRUM-65): até 10 pares P/R que o dono

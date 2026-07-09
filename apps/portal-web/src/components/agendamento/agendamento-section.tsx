@@ -15,10 +15,10 @@ import { IconCalendar } from '@/components/icons';
  * renderiza null (sem flash) — se a feature estiver off, o cliente nunca vê nem
  * esqueleto.
  *
- * Também traz o "WhatsApp da recepção" (SCRUM-59 PR-E): número que recebe os avisos de
- * lead/escalação ao dono (top-level `recepcao_telefone`, E.164 BR). OPCIONAL (SCRUM-62): o
- * dono pode LIMPAR um número já salvo (a UI envia "") — sem número, os avisos saem pelo
- * próprio WhatsApp conectado do negócio. Campo sempre-vazio/sem mudança não é enviado.
+ * O "WhatsApp da recepção" (destino do alerta ao dono) NÃO vive mais aqui: Onda 1
+ * (SCRUM-68) o extraiu pra RecepcaoSection, editável por TODOS os formatos (não só modo
+ * atendente). Esta seção segue gateada por modo_atendente — o toggle de agenda automática
+ * muda o comportamento do bot e não faz parte do de-gate desta onda.
  *
  * Dados isolados do formulário principal do perfil: query própria (qk.agendaConfig)
  * derivada do mesmo /portal/perfil, salvamento parcial. Edição OTIMISTA com revert
@@ -35,18 +35,12 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import {
-  AJUDA_RECEPCAO,
   type AgendaConfigDraft,
-  RECEPCAO_TELEFONE_ERRO,
   ajudaLink,
   isAgendaDirty,
-  isRecepcaoIndisponivel,
-  isTelefoneInvalido,
-  recepcaoPayload,
   toAgendaDraft,
   validateAgenda,
 } from '@/lib/agenda-config';
-import { maskPhoneBR } from '@/lib/cadastro';
 import { qk, useAgendaConfig, useSaveAgendaConfig } from '@/lib/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -63,7 +57,6 @@ export function AgendamentoSection() {
   const [draft, setDraft] = useState<AgendaConfigDraft>(() => toAgendaDraft(cfgQ.data));
   const [saved, setSaved] = useState<AgendaConfigDraft>(() => toAgendaDraft(cfgQ.data));
   const [linkError, setLinkError] = useState<string | undefined>(undefined);
-  const [recepcaoError, setRecepcaoError] = useState<string | undefined>(undefined);
   const [confirmOff, setConfirmOff] = useState(false);
   // Evita estourar o rascunho do usuário num refetch em background (mesmo padrão do
   // perfil/lembretes): o effect só re-hidrata enquanto não houve edição.
@@ -111,13 +104,6 @@ export function AgendamentoSection() {
     if (linkError) setLinkError(undefined);
   }
 
-  function onRecepcaoChange(v: string) {
-    touched.current = true;
-    // Máscara progressiva BR na digitação (mesmo padrão do signup).
-    setDraft((d) => ({ ...d, recepcao_telefone: maskPhoneBR(v) }));
-    if (recepcaoError) setRecepcaoError(undefined);
-  }
-
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!dirty || save.isPending) return;
@@ -129,60 +115,31 @@ export function AgendamentoSection() {
     }
     setLinkError(undefined);
 
-    // Telefone da recepção (TOP-LEVEL, opcional). SCRUM-62: preenchido+inválido -> erro;
-    // preenchido+mudado -> manda o E.164; ESVAZIADO (tinha número, o dono apagou) -> manda
-    // "" pra LIMPAR (avisos passam a sair pelo próprio WhatsApp do negócio); sempre-vazio
-    // ou sem mudança -> não envia a chave.
-    const recep = recepcaoPayload(draft.recepcao_telefone, saved.recepcao_telefone);
-    if (recep.kind === 'invalid') {
-      setRecepcaoError(RECEPCAO_TELEFONE_ERRO);
-      return;
-    }
-    setRecepcaoError(undefined);
-    // undefined = omite a chave; '' = limpar; 'NNN' = número novo.
-    const recepValue = recep.kind === 'set' ? recep.value : recep.kind === 'clear' ? '' : undefined;
-
+    // Só os campos da agenda (o "WhatsApp da recepção" saiu pra RecepcaoSection). Mantém o
+    // recepcao_telefone que já estava no rascunho — esta seção não o edita.
     const value = res.value;
-    const input = {
-      ...value,
-      ...(recepValue !== undefined ? { recepcao_telefone: recepValue } : {}),
-    };
-    // Display salvo pós-save: número novo -> mascarado; limpou -> vazio; sem mudança ->
-    // mantém o telefone que já estava salvo (inválido nunca chega aqui: já deu return).
-    const nextRecepDisplay =
-      recep.kind === 'set'
-        ? maskPhoneBR(recep.value)
-        : recep.kind === 'clear'
-          ? ''
-          : saved.recepcao_telefone;
-    const nextSaved: AgendaConfigDraft = { ...value, recepcao_telefone: nextRecepDisplay };
+    const nextSaved: AgendaConfigDraft = { ...value, recepcao_telefone: saved.recepcao_telefone };
     const prev = client.getQueryData(qk.agendaConfig(slot));
 
     // Otimista: aplica no cache + fixa o draft normalizado na tela.
     client.setQueryData(qk.agendaConfig(slot), (p: typeof cfgQ.data) => ({
       modo_atendente: p?.modo_atendente ?? true,
       ...value,
-      recepcao_telefone: recepValue !== undefined ? recepValue : (p?.recepcao_telefone ?? ''),
+      recepcao_telefone: p?.recepcao_telefone ?? '',
     }));
     setSaved(nextSaved);
     setDraft(nextSaved);
     touched.current = false;
 
-    save.mutate(input, {
+    save.mutate(value, {
       onSuccess: () => toast.success('Agendamento atualizado'),
-      onError: (err) => {
+      onError: () => {
         if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
         const back = toAgendaDraft(prev as Parameters<typeof toAgendaDraft>[0]);
         setSaved(back);
         setDraft(back);
         touched.current = false;
-        if (isTelefoneInvalido(err)) {
-          toast.error('Não foi possível salvar o telefone da recepção. Confere o número.');
-        } else if (isRecepcaoIndisponivel(err)) {
-          toast.error('O telefone da recepção não está disponível agora.');
-        } else {
-          toast.error('Não foi possível salvar. Tente de novo.');
-        }
+        toast.error('Não foi possível salvar. Tente de novo.');
       },
     });
   }
@@ -245,24 +202,6 @@ export function AgendamentoSection() {
               </p>
             </div>
           )}
-
-          {/* WhatsApp da recepção (SCRUM-59 PR-E): destino dos avisos de lead/escalação.
-              Sempre visível na seção (mesma gate). OPCIONAL (SCRUM-62): esvaziar um número
-              já salvo LIMPA o campo (envia "") e os avisos passam a sair pelo próprio
-              WhatsApp do negócio; campo sempre-vazio/sem mudança não envia — ver onSubmit. */}
-          <div className="flex flex-col gap-2 border-t border-line pt-4">
-            <Input
-              label="WhatsApp da recepção (opcional)"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              placeholder="(11) 99999-9999"
-              value={draft.recepcao_telefone}
-              error={recepcaoError}
-              onChange={(e) => onRecepcaoChange(e.target.value)}
-            />
-            <p className="text-[12.5px] leading-normal text-ink-soft">{AJUDA_RECEPCAO}</p>
-          </div>
 
           <div className="flex items-center gap-3">
             <Button

@@ -172,13 +172,25 @@ export function isTelefoneInvalido(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400 && errorCode(err) === 'telefone_invalido';
 }
 
-/** 404 recepcao_telefone_indisponivel: modo atendente off pro clone (não deveria ocorrer na UI gateada). */
+/** 404 recepcao_telefone_indisponivel: rede de proteção (o backend Onda 1 destrava a edição pra todos). */
 export function isRecepcaoIndisponivel(err: unknown): boolean {
   return (
     err instanceof ApiError &&
     err.status === 404 &&
     errorCode(err) === 'recepcao_telefone_indisponivel'
   );
+}
+
+/**
+ * Onda 1 (SCRUM-68) — DE-GATE: o "WhatsApp da recepção" (destino do alerta ao dono,
+ * `alert_owner_phone`) passa a ser EDITÁVEL por TODOS os formatos, inclusive quem usa
+ * agenda. O número já é usado por TODOS os kinds de alerta; aqui só destravamos a
+ * edição no portal, mantendo o fallback "número da própria sessão" quando vazio
+ * (SCRUM-62 intacto). Visível assim que o /portal/perfil carrega, INDEPENDE de
+ * `modo_atendente`. Undefined (load/erro) = ainda não visível (evita flash).
+ */
+export function isRecepcaoVisivel(cfg: Partial<AgendaConfig> | null | undefined): boolean {
+  return cfg != null;
 }
 
 /**
