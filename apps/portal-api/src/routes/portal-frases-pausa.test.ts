@@ -1,14 +1,16 @@
 /**
- * Testes de GET/PUT /portal/frases-pausa (SCRUM-59, ENTREGA 2).
+ * Testes de GET/PUT /portal/frases-pausa (SCRUM-59 → Onda 1 de-gate, SCRUM-68).
  *
  * Invariantes:
- *  - GATE: modo atendente OFF pro slot -> 404 (feature dormente; não toca o data layer).
+ *  - UNIVERSAL (Onda 1): serve TODO formato (modo atendente OFF inclusive) — SEM mais 404 de gate.
  *  - Anti-IDOR: replace-set escopado ao slot da SESSÃO (withTenant) — nunca do body.
  *  - Validação: max 10; keyword normalizada >= 4 chars; duplicata (command,norm); substring
  *    (ambiguidade no match do bot); strict (campo extra -> 400).
  *  - keyword_norm gravado = normalização canônica (@startap/core).
  *
- * config, @startap/db e tenant mockados (mesmo padrão de portal-atendimentos.test.ts).
+ * config, @startap/db e tenant mockados (mesmo padrão de portal-atendimentos.test.ts). O mock de
+ * config.js segue necessário: vi.importActual('../lib/tenant.js') carrega a cadeia real que valida
+ * process.env — a rota em si NÃO gateia mais por modo atendente.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -52,43 +54,50 @@ async function buildApp(): Promise<FastifyInstance> {
   return app;
 }
 
-function enableGate() {
-  configMock.MODO_ATENDENTE_SLOTS = injectedSlot;
-}
-
 describe('/portal/frases-pausa', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: clone FORA do modo atendente (individual/agenda). Prova a universalização (Onda 1).
     configMock.MODO_ATENDENTE_SLOTS = '';
     listMock.mockResolvedValue([]);
     replaceMock.mockResolvedValue(undefined);
   });
 
-  describe('gate do modo atendente', () => {
-    it('GET 404 quando o clone não está no gate (feature dormente)', async () => {
+  describe('universal — todo formato (Onda 1 de-gate SCRUM-68)', () => {
+    it('GET 200 mesmo com o clone FORA do modo atendente (feature universal)', async () => {
+      // modo atendente OFF (default): antes dava 404; agora serve todo formato.
       const app = await buildApp();
       const res = await app.inject({ method: 'GET', url: '/portal/frases-pausa' });
-      expect(res.statusCode).toBe(404);
-      expect(listMock).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ frases: [] });
+      // Anti-IDOR: consulta pelo slot da SESSÃO.
+      expect(listMock).toHaveBeenCalledWith(injectedSlot);
       await app.close();
     });
 
-    it('PUT 404 quando o clone não está no gate (não toca o data layer)', async () => {
+    it('PUT 200 mesmo com o clone FORA do modo atendente (grava no data layer)', async () => {
+      // modo atendente OFF (default): antes dava 404; agora grava.
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
         url: '/portal/frases-pausa',
-        payload: { frases: [] },
+        payload: { frases: [{ command: 'pause', keyword: 'atendente aqui', enabled: true }] },
       });
-      expect(res.statusCode).toBe(404);
-      expect(replaceMock).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(replaceMock).toHaveBeenCalledWith(injectedSlot, [
+        {
+          command: 'pause',
+          keyword: 'atendente aqui',
+          keyword_norm: 'atendenteaqui',
+          enabled: true,
+        },
+      ]);
       await app.close();
     });
   });
 
   describe('GET', () => {
     it('devolve as frases do slot da sessão', async () => {
-      enableGate();
       listMock.mockResolvedValue([
         {
           flow_id: injectedSlot,
@@ -113,7 +122,6 @@ describe('/portal/frases-pausa', () => {
 
   describe('PUT — replace-set', () => {
     it('lista válida → grava com keyword_norm canônico, escopado ao slot da sessão, 200', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -147,7 +155,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('enabled omitido → default true', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -161,7 +168,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('lista vazia → zera as frases (replace-set com [])', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -174,7 +180,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('mais de 10 frases → 400 frases_demais', async () => {
-      enableGate();
       const frases = Array.from({ length: 11 }, (_, i) => ({
         command: 'pause' as const,
         keyword: `frase numero ${i}`,
@@ -193,7 +198,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('keyword curta (< 4 chars normalizados) → 400 frase_muito_curta', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -207,7 +211,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('duplicata por (command, keyword_norm) → 400 frase_duplicada', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -226,7 +229,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('substring de outra frase → 400 frase_ambigua', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
@@ -245,7 +247,6 @@ describe('/portal/frases-pausa', () => {
     });
 
     it('campo extra (strict) → 400', async () => {
-      enableGate();
       const app = await buildApp();
       const res = await app.inject({
         method: 'PUT',
