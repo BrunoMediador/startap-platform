@@ -37,9 +37,23 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: TypeScript build (all workspaces)
         run: npm run build --workspaces --if-present
-      - name: Tests
-        # PG_TEST_URL liga os testes de integração de SQL real contra o service postgres:16 acima.
-        # O suite de integração cria/dropa as próprias tabelas num banco vazio (autocontido).
+      - name: Tests (suíte real na raiz)
+        # SCRUM-50: o comando antigo `npm test --workspaces --if-present` PULAVA
+        # 92/149 test files (~62%): apps/* (api, portal-api, portal-web, worker) NÃO
+        # têm script `test`, então `--if-present` os ignorava em SILÊNCIO — só rodavam
+        # os 3 packages/* (core, db, integrations = 57 files / ~826 testes). "CI verde"
+        # era falsa confiança (classes inteiras de defeito em apps/* invisíveis).
+        #
+        # `npx vitest run` na RAIZ usa o vitest.config.ts da raiz e descobre TODOS os
+        # test files (packages/* + apps/* + scripts/ = 149 files / 2165 testes),
+        # respeitando os excludes (.claude/worktrees, dist, node_modules,
+        # painel-admin/test que usa node:test). O build acima é PRÉ-REQUISITO: os
+        # packages exportam via ./dist/*.js, então sem build os apps/* que importam
+        # @startap/* quebram na resolução.
+        #
+        # PG_TEST_URL liga os testes de integração de SQL real (packages-deducao.integration)
+        # contra o service postgres:16 acima. O suite de integração cria/dropa as próprias
+        # tabelas num banco vazio (autocontido). Sem ele, esse teste AUTO-SKIPA.
         env:
           PG_TEST_URL: postgres://itestuser:itestpass@localhost:5432/itestdb
-        run: npm test --workspaces --if-present
+        run: npx vitest run
