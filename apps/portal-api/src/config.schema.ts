@@ -274,6 +274,17 @@ export const ConfigSchema = z.object({
   // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy. NUNCA hardcoded.
   MODO_ATENDENTE_SLOTS: z.string().optional().default(''),
 
+  // ── FAQ PERSONALIZADO — gate POR-CLONE (SCRUM-65) ─────────────────────────────
+  // Lista de slots (CSV) em que o portal EXPÕE a seção de FAQ personalizado: features.faq_personalizado
+  // no GET /portal/perfil e o PUT aceita a chave `faq_personalizado` (fora do gate => 404 indisponivel,
+  // padrão recepcao_telefone). Avaliado com isFaqPersonalizadoEnabled(slot, ...). OPCIONAL no boot
+  // (ausente = OFF, lição #247). MESMA env no apps/api — la liga a INJEÇÃO do bloco no bot. Precisa
+  // existir nas DUAS apps senão vira no-op silencioso (lição do security/knowledge).
+  //   vazio/ausente   -> OFF pra TODOS (front esconde a seção; PUT recusa a chave).
+  //   'slot_a,slot_b'  -> ON só nos slots listados (deploy inclui a Meduzza).
+  //   '*'              -> ON pra TODOS. KILL-SWITCH: esvaziar a env. NUNCA hardcoded.
+  FAQ_PERSONALIZADO_SLOTS: z.string().optional().default(''),
+
   // ── Lembrete de agendamento (one-way, configurável por clone — migration 060) ──
   // Kill-switch da camada de CONFIG do lembrete no portal (GET/PATCH /portal/lembretes).
   // OPCIONAL no boot (ausente = OFF, lição #247: feature dormente nunca derruba o

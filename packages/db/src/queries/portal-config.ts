@@ -121,6 +121,25 @@ export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
       perfil[key] = !(raw === false || raw === 'false');
       continue;
     }
+    if (key === 'faq_personalizado') {
+      // FAQ personalizado (SCRUM-65): array de {pergunta, resposta} guardado CRU no JSONB
+      // (1o valor nao-string do personalizacao). Narrow defensivo — o gestao legado poderia
+      // gravar shape torto; so devolve pares com pergunta+resposta string. Default []: o
+      // front renderiza a lista de campos repetiveis controlada sem `undefined`.
+      const raw: unknown = (pers as Record<string, unknown>)[key];
+      perfil[key] = Array.isArray(raw)
+        ? raw
+            .filter(
+              (it): it is { pergunta: string; resposta: string } =>
+                it != null &&
+                typeof it === 'object' &&
+                typeof (it as Record<string, unknown>).pergunta === 'string' &&
+                typeof (it as Record<string, unknown>).resposta === 'string',
+            )
+            .map((it) => ({ pergunta: it.pergunta, resposta: it.resposta }))
+        : [];
+      continue;
+    }
     const v = pers[key];
     perfil[key] = typeof v === 'string' ? v : '';
   }
@@ -151,7 +170,9 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
   // 2. MERGE: parte do objeto existente e sobrescreve SÓ as chaves presentes no
   //    payload. `undefined` (campo nao enviado) nao toca a chave. As demais chaves
   //    do personalizacao (observacoes, promocoes, etc.) ficam intactas.
-  const merged: Record<string, string> = { ...atual };
+  //    Tipo `unknown` (nao `string`) porque `faq_personalizado` (SCRUM-65) e o 1o
+  //    valor NAO-string do JSONB — array gravado as-is.
+  const merged: Record<string, unknown> = { ...atual };
   for (const key of PERFIL_KEYS) {
     if (key === 'formas_pagamento') {
       // Array (ja validado contra a lista fixa) -> STRING canonica de storage.
@@ -165,6 +186,14 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
       // (undefined) NAO toca a chave -> preserva o modo atual (nunca clobbar em PATCH parcial).
       const v = data.agenda_automatica;
       if (v !== undefined) merged[key] = v ? 'true' : 'false';
+      continue;
+    }
+    if (key === 'faq_personalizado') {
+      // FAQ personalizado (SCRUM-65): array de {pergunta, resposta} gravado CRU no JSONB
+      // (nao serializa pra string). Ausente (undefined) NAO toca a chave (PATCH parcial);
+      // [] limpa (some do contexto). Ja validado pelo faqPersonalizadoSchema do chamador.
+      const arr = data.faq_personalizado;
+      if (arr !== undefined) merged[key] = arr;
       continue;
     }
     const v = (data as Record<string, string | undefined>)[key];

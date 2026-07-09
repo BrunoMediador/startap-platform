@@ -10,6 +10,7 @@
  * escrita, o data layer reusa updateClone -> re-renderiza o bot_prompt e
  * invalida o cache de clone (webhook pega a versao nova em ~0s).
  */
+import { isFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { perfilSchema } from '@startap/core/schemas';
 import { isValidIanaTimezone } from '@startap/core/timezones';
@@ -30,7 +31,11 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // só o(s) clone(s) no MODO_ATENDENTE_SLOTS veem a seção "agenda automática / link".
     // Escopado pelo slot da SESSÃO (withTenant) — nunca do input.
     const modoAtendente = isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS);
-    const features = { modo_atendente: modoAtendente };
+    // features.faq_personalizado (SCRUM-65): gate POR-CLONE. Só o(s) clone(s) no
+    // FAQ_PERSONALIZADO_SLOTS veem a seção de FAQ personalizado. Mesmo padrão do modo_atendente;
+    // o front usa esse boolean como `enabled` da query (clone fora do gate = zero request).
+    const faqPersonalizado = isFaqPersonalizadoEnabled(slot, config.FAQ_PERSONALIZADO_SLOTS);
+    const features = { modo_atendente: modoAtendente, faq_personalizado: faqPersonalizado };
     // recepcao_telefone (SCRUM-59): destino dos avisos de lead/escalação ao dono
     // (= flow_clones.alert_owner_phone RAW). Exposto SÓ quando o modo atendente está ON pro
     // clone (mesmo gate da seção). null quando não setado; o dono edita pelo campo do portal.
@@ -54,6 +59,17 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
         error: 'perfil invalido',
         issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
+    }
+    // FAQ personalizado (SCRUM-65): a chave só é aceita com o gate ON pro clone (defesa em
+    // profundidade — o front só mostra a seção então). Checa presença RAW no perfil ANTES de
+    // qualquer escrita (o schema strict aceitaria a chave; o gate é a autorização). Fora do gate
+    // e chave presente => 404 indisponivel (coerente com recepcao_telefone). Ausente = byte-a-byte.
+    const rawPerfil = (body.perfil ?? {}) as Record<string, unknown>;
+    if (
+      rawPerfil.faq_personalizado !== undefined &&
+      !isFaqPersonalizadoEnabled(slot, config.FAQ_PERSONALIZADO_SLOTS)
+    ) {
+      return reply.code(404).send({ error: 'faq_personalizado_indisponivel' });
     }
     // timezone é COLUNA top-level (NÃO entra no personalizacao/perfilSchema): validada
     // e gravada por caminho SEPARADO. Opcional — só toca a coluna se enviado; ausente

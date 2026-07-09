@@ -580,6 +580,7 @@ export class TesteBarbeariaBot extends BotBase {
       dataAtual,
       ano: String(now.getFullYear()),
       agendaFormatada: agenda,
+      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
     });
 
     // ── Bloco [SEU PACOTE] (ADR 0025 — DORMENTE por flag) ────────────────────────
@@ -968,6 +969,7 @@ export class TesteBarbeariaBot extends BotBase {
       telefoneCliente: telefone,
       dataAtual,
       ano: String(now.getFullYear()),
+      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
     });
 
     // ── Bloco [EQUIPE] (SCRUM-59) — só pro estabelecimento com colaboradores ativos ──
@@ -1372,6 +1374,7 @@ export class TesteBarbeariaBot extends BotBase {
       dataAtual,
       ano: String(now.getFullYear()),
       agendaFormatada: '',
+      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
     });
 
     // Blocos runtime, não-editáveis, SÓ no estabelecimento (ADR 0024 §6 / panorama §6).
