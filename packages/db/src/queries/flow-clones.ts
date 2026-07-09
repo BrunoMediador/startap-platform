@@ -155,18 +155,19 @@ function shortid(len: number): string {
  * Aplica substituições {{chave}} no template usando personalizacao.
  * Fallback: se personalizacao contiver cliente_nome, substitui [Ricardo] por [clienteNome].
  */
-function applyPersonalizacao(template: string, personalizacao: Record<string, string>): string {
+function applyPersonalizacao(template: string, personalizacao: Record<string, unknown>): string {
   let result = template;
 
-  // Substitui {{chave}} por valor correspondente
+  // Substitui {{chave}} por valor correspondente. So valores STRING sao substituidos —
+  // valores estruturados (ex.: faq_personalizado = array, SCRUM-65) nunca tem placeholder
+  // no template e nao devem ser coeridos pra '[object Object]'; mantem o placeholder literal.
   result = result.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
-    return Object.prototype.hasOwnProperty.call(personalizacao, key)
-      ? personalizacao[key]
-      : `{{${key}}}`;
+    const v = personalizacao[key];
+    return typeof v === 'string' ? v : `{{${key}}}`;
   });
 
   // Fallback legado: [Ricardo] -> [clienteNome] quando cliente_nome fornecido
-  if (personalizacao.cliente_nome) {
+  if (typeof personalizacao.cliente_nome === 'string' && personalizacao.cliente_nome) {
     result = result.replace(/\[Ricardo\]/g, `[${personalizacao.cliente_nome}]`);
   }
 
@@ -401,7 +402,10 @@ export async function updateClone(
     displayName?: string;
     clienteNome?: string | null;
     clienteTelefone?: string | null;
-    personalizacao?: Record<string, string>;
+    // `unknown` (nao `string`): personalizacao carrega valores estruturados (faq_personalizado
+    // = array, SCRUM-65) alem das strings. Gravado como JSONB as-is; o re-render do prompt so
+    // substitui placeholders de valores string (applyPersonalizacao).
+    personalizacao?: Record<string, unknown>;
     status?: CloneStatus;
   },
 ): Promise<CloneRow | null> {

@@ -233,6 +233,60 @@ export function formasPagamentoToString(arr: readonly FormaPagamentoOpcao[]): st
   return FORMAS_PAGAMENTO_OPCOES.filter((o) => set.has(o)).join(', ');
 }
 
+// ---------------------------------------------------------------------------
+// FAQ PERSONALIZADO (SCRUM-65): ate 10 pares pergunta+resposta que o dono
+// cadastra no portal pra EXPANDIR a base de conhecimento do bot (assuntos que a
+// gente nao mapeou: estacionamento, formas de entrega, politica de crianca...).
+// Storage: array de {pergunta, resposta} na chave `faq_personalizado` do JSONB
+// flow_clones.personalizacao — 1o valor NAO-string do personalizacao (grava as-is,
+// nao serializa pra string como formas_pagamento). Injecao no bot e em RUNTIME
+// (free-slots.renderFaqBlock), nunca via re-render do bot_prompt — vale pra
+// prompt_custom (Meduzza) e no ato de salvar (cache invalidado).
+//
+// LIMITES (spec do ai-engineer): pergunta 1..120, resposta 1..300 (apos trim);
+// max 10 pares. O custo do bot e input-dominado; 10x(120+300)+framing ~1.2k tokens
+// no PIOR caso (comparavel a uma agenda enxuta, NAO dobra o custo).
+// ---------------------------------------------------------------------------
+
+/** Um par pergunta/resposta do FAQ. Ambos obrigatorios, trim aplicado antes dos limites. */
+export const faqItemSchema = z
+  .object({
+    pergunta: z
+      .string({ invalid_type_error: 'pergunta deve ser texto' })
+      .trim()
+      .min(1, 'pergunta obrigatoria')
+      .max(120, 'pergunta muito longa (max 120 caracteres)'),
+    resposta: z
+      .string({ invalid_type_error: 'resposta deve ser texto' })
+      .trim()
+      .min(1, 'resposta obrigatoria')
+      .max(300, 'resposta muito longa (max 300 caracteres)'),
+  })
+  .strict();
+
+export type FaqItem = z.infer<typeof faqItemSchema>;
+
+/**
+ * Array de pares do FAQ, max 10. O preprocess (a) devolve `undefined` quando o valor
+ * NAO e array (nao toca a chave no PATCH parcial) e (b) trima cada par e DESCARTA os
+ * que tem pergunta OU resposta vazia (nao viram erro — decisao do produto: linha em
+ * branco no formulario simplesmente some). O que sobra e validado DURO por faqItemSchema:
+ * pergunta >120, resposta >300 ou >10 itens => ZodError => 400 (nao persiste). `[]` = limpar.
+ */
+export const faqPersonalizadoSchema = z.preprocess((v) => {
+  if (!Array.isArray(v)) return undefined;
+  const out: Array<{ pergunta: string; resposta: string }> = [];
+  for (const item of v) {
+    if (item == null || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const pergunta = typeof rec.pergunta === 'string' ? rec.pergunta.trim() : '';
+    const resposta = typeof rec.resposta === 'string' ? rec.resposta.trim() : '';
+    if (pergunta === '' || resposta === '') continue; // par vazio = descartado (nao e erro)
+    out.push({ pergunta, resposta });
+  }
+  return out;
+}, z.array(faqItemSchema).max(10, 'maximo de 10 perguntas frequentes').optional());
+
 export const perfilSchema = z
   .object({
     nome_negocio: z.string().trim().max(120, 'nome do negocio muito longo').optional(),
@@ -286,6 +340,10 @@ export const perfilSchema = z
       (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
       z.string().trim().max(4000, 'planos e assinaturas: texto muito longo').optional(),
     ),
+    // FAQ personalizado (SCRUM-65): ate 10 pares pergunta+resposta cadastrados pelo dono.
+    // Ausente/nao-array => undefined (nao toca a chave). [] => limpa. Injecao no bot em runtime.
+    // Gate por-clone (FAQ_PERSONALIZADO_SLOTS): a rota recusa a chave quando OFF pro clone.
+    faq_personalizado: faqPersonalizadoSchema,
   })
   .strict();
 
@@ -302,6 +360,7 @@ export const PERFIL_KEYS = [
   'agenda_automatica',
   'link_agendamento',
   'planos_beneficios',
+  'faq_personalizado',
 ] as const;
 
 export type PerfilKey = (typeof PERFIL_KEYS)[number];
