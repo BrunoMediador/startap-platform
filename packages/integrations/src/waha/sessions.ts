@@ -18,6 +18,12 @@ const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 /** Timeout default (ms) por chamada WAHA. */
 export const DEFAULT_WAHA_TIMEOUT_MS = 8_000;
 
+/**
+ * Timeout curto (ms) do lookup LID→telefone (SCRUM-63). Roda no hot path do webhook
+ * (ramo fromMe do modo atendente) — nunca pode pendurar. Fail-safe: estourou → null.
+ */
+export const DEFAULT_LID_LOOKUP_TIMEOUT_MS = 1_500;
+
 /** Opções comuns a toda chamada WAHA: timeout, AbortSignal externo e/ou shard. */
 export interface WahaCallOpts {
   /** Timeout por chamada (ms). Default DEFAULT_WAHA_TIMEOUT_MS. */
@@ -300,6 +306,52 @@ export async function getSessionStatus(
  */
 export async function logoutSession(name: string, opts?: WahaCallOpts): Promise<void> {
   await wahaReq('POST', `/api/sessions/${name}/logout`, {}, opts);
+}
+
+/**
+ * Resolve um LID (identificador opaco pós-migração LID do WhatsApp) para o número de
+ * telefone real (pn). WAHA 2026.6.2 expõe `GET /api/{session}/lids/{lid}` → `{ lid, pn }`,
+ * onde `pn` é um JID de telefone ("5519...@c.us"/"...@s.whatsapp.net"). Retorna SÓ os
+ * dígitos do telefone, ou null quando a WAHA não conhece o mapeamento (404), responde erro
+ * ou estoura o timeout — o chamador trata null como "não resolvido" (fail-safe: não cria
+ * pausa). Timeout curto (default 1500ms) porque roda no hot path do webhook. NUNCA lança:
+ * qualquer falha vira null.
+ */
+export async function resolveLidToPn(
+  session: string,
+  lid: string,
+  opts?: WahaCallOpts,
+): Promise<string | null> {
+  const cleanLid = lid.replace('@lid', '').replace(/\D/g, '');
+  if (!cleanLid) return null;
+  const path = `/api/${encodeURIComponent(session)}/lids/${cleanLid}`;
+  try {
+    const res = await wahaFetch(
+      path,
+      { method: 'GET', headers: headers() },
+      {
+        timeoutMs: opts?.timeoutMs ?? DEFAULT_LID_LOOKUP_TIMEOUT_MS,
+        signal: opts?.signal,
+        shardId: opts?.shardId,
+      },
+    );
+    if (!res.ok) {
+      await res.text().catch(() => '');
+      return null;
+    }
+    const data = (await res.json().catch(() => null)) as { lid?: string; pn?: string } | null;
+    const pn = data?.pn;
+    if (!pn || typeof pn !== 'string') return null;
+    const digits = pn
+      .replace('@c.us', '')
+      .replace('@s.whatsapp.net', '')
+      .replace('@lid', '')
+      .replace(/\D/g, '');
+    return digits.length >= 10 ? digits : null;
+  } catch {
+    // timeout/rede/parse — fail-safe null (chamador não cria pausa).
+    return null;
+  }
 }
 
 // ─── Reconexão self-service (ADR 0015) ──────────────────────────────────────────

@@ -19,6 +19,7 @@ import { waha, whisper } from '@startap/integrations';
 import { isBlockedNumber } from './lib/bot-blocklist.js';
 import { HUMAN_REPLY_PAUSE_TTL_MS, isBotEcho, isSelfChat } from './lib/human-reply-pause.js';
 import { checkAndMarkDuplicate } from './lib/idempotency.js';
+import { resolveFromMeIdentity } from './lib/lid-resolver.js';
 import { applyFlowManualCommand, getFlowManualCommandForFlow } from './lib/manual-pause.js';
 import { handleSessionStatusEvent } from './lib/trial-pairing.js';
 import {
@@ -315,11 +316,40 @@ export async function handleWebhook(
     if (route && isModoAtendenteEnabled(route.workflow_id, process.env.MODO_ATENDENTE_SLOTS)) {
       const text = body.payload?.body ?? '';
 
+      // (0) SCRUM-63 — CONTATO MIGRADO (LID): pós-migração LID do WhatsApp, o eco fromMe (e a
+      // resposta manual do dono) a um contato migrado chega endereçado por `<lid>@lid`; o
+      // pseudo-número do lid NÃO é o telefone e não casa a marca de eco (por E.164) nem a
+      // chave de pausa (bug de prod na Meduzza: pausas-fantasma "…3730"/"…9600"). Resolvemos
+      // `@lid`→E.164 ANTES de QUALQUER decisão (self-chat, eco, keyword, pausa). FAIL-SAFE:
+      // não resolveu → nenhuma pausa (nunca criar linha em flow_pauses com identidade que não
+      // é telefone). Não-lid = byte-idêntico (identity.phone === telefone). Envio NÃO muda.
+      const identity = await resolveFromMeIdentity(sessao, body, telefone);
+      if (identity.wasLid && identity.phone === null) {
+        log.warn(
+          { ...baseLog, lidVia: identity.via },
+          'fromMe de contato migrado (@lid) sem resolução de telefone — fail-safe (sem pausa)',
+        );
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          eventType: 'router.ignored',
+          status: 'ignored',
+          message: 'fromMe de contato migrado (@lid) sem resolução de telefone — fail-safe',
+          metadata: { reason: 'fromMe-lid-unresolved', via: identity.via, source: 'fromMe' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ignored:fromMe:lid-unresolved' };
+      }
+      // Identidade resolvida (ou não-lid): usada em TODAS as decisões abaixo no lugar do
+      // `telefone` cru (que, num contato migrado, seria o pseudo-número do lid).
+      const atendenteTelefone = identity.phone ?? telefone;
+
       // (1) SELF-CHAT: mensagem fromMe pro PRÓPRIO número da sessão (ex.: eco do alerta de
       // lead no cenário mesmo-número). NUNCA pausa nem comanda — antes do keyword e da
       // auto-pausa. cliente_telefone = número pareado (me.id) do clone; cache TTL 60s.
       const cloneForSelf = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
-      if (isSelfChat(telefone, cloneForSelf?.cliente_telefone)) {
+      if (isSelfChat(atendenteTelefone, cloneForSelf?.cliente_telefone)) {
         await flowExecutionLog.logFlowEvent({
           ...phoneLog,
           flowId: route.workflow_id,
@@ -340,7 +370,7 @@ export async function handleWebhook(
       //   'human'    = digitado por humano   -> casa keyword / pode pausar;
       //   'degraded' = Redis indisponível    -> keyword AINDA roda (comando humano
       //                explícito), mas NÃO auto-pausa (fail-safe: nunca auto-pausa na dúvida).
-      const echoState = await isBotEcho(sessao, telefone, text);
+      const echoState = await isBotEcho(sessao, atendenteTelefone, text);
       const confirmedEcho = echoState === 'echo';
 
       // (3) KEYWORD (frase de pausa/retomada editável do dono) — pulada só em eco confirmado.
@@ -352,7 +382,7 @@ export async function handleWebhook(
           command: flowManualCommand,
           flowId: route.workflow_id,
           flowName: route.workflow_name,
-          telefone,
+          telefone: atendenteTelefone,
           session: sessao,
           source: 'fromMe',
           reason: 'Comando manual no WhatsApp',
@@ -377,13 +407,38 @@ export async function handleWebhook(
       // contato por TTL e o bot volta sozinho; cada resposta humana renova o expires_at.
       // Fail-safe: só em 'human' CONFIRMADO — eco/degraded NÃO pausam.
       if (echoState === 'human' && text.trim().length > 0) {
+        // Guard defensivo (SCRUM-63, 2ª barreira): uma identidade de contato migrado (@lid)
+        // sem resolução NUNCA vira linha em flow_pauses. O fail-safe no topo do ramo já
+        // retorna nesse caso; este check protege contra regressão futura (se alguém remover
+        // o early-return, a pausa AINDA não nasce com o pseudo-número do lid).
+        if (identity.wasLid && identity.phone === null) {
+          log.warn(
+            { ...baseLog, lidVia: identity.via },
+            'human-reply-pause abortada: identidade @lid não resolvida (guard)',
+          );
+          await flowExecutionLog.logFlowEvent({
+            ...phoneLog,
+            flowId: route.workflow_id,
+            flowName: route.workflow_name,
+            eventType: 'router.ignored',
+            status: 'ignored',
+            message: 'human-reply-pause abortada: identidade @lid não resolvida (guard)',
+            metadata: {
+              reason: 'fromMe-lid-unresolved-guard',
+              via: identity.via,
+              source: 'fromMe',
+            },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 'ignored:fromMe:lid-unresolved' };
+        }
         // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
         // outro source (keyword/escalated/antibot/portal) pro TTL — só cria/renova a própria
         // human_reply (review security N1, SCRUM-60).
         await pausa.addHumanReplyPause({
           flowId: route.workflow_id,
           flowName: route.workflow_name,
-          telefone,
+          telefone: atendenteTelefone,
           session: sessao,
           reason: 'Atendente respondeu à mão — pausa temporária (modo atendente)',
           expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),

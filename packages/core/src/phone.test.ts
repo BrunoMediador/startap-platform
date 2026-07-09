@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalE164,
   ensureDddBr,
+  extractLidDigits,
   extractPhone,
+  extractPnFromPayload,
   isGroupChat,
+  isLidAddressed,
   meIdToDigits,
   phoneHint,
   toChatId,
@@ -55,6 +58,71 @@ describe('extractPhone', () => {
 describe('toChatId', () => {
   it('formata número limpo em chat_id', () => {
     expect(toChatId('55 35 99999-8888')).toBe('5535999998888@c.us');
+  });
+});
+
+// ── SCRUM-63 — resolução LID (contato migrado pós-migração LID do WhatsApp) ──
+describe('extractLidDigits / isLidAddressed', () => {
+  function body(overrides: Partial<NonNullable<WahaWebhookBody['payload']>>): WahaWebhookBody {
+    return { event: 'message', session: 's', payload: { id: 'm', fromMe: true, ...overrides } };
+  }
+
+  it('retorna os dígitos do lid quando o from é <lid>@lid', () => {
+    expect(extractLidDigits(body({ from: '100206033039600@lid' }))).toBe('100206033039600');
+    expect(isLidAddressed(body({ from: '100206033039600@lid' }))).toBe(true);
+  });
+
+  it('detecta lid pelo remoteJid do _data.key quando o from não é @lid', () => {
+    const b = body({ from: '', _data: { key: { remoteJid: '100206033039600@lid' } } });
+    expect(extractLidDigits(b)).toBe('100206033039600');
+    expect(isLidAddressed(b)).toBe(true);
+  });
+
+  it('contato NÃO migrado (from pn) → null / false', () => {
+    expect(extractLidDigits(body({ from: '5519981018908@c.us' }))).toBeNull();
+    expect(isLidAddressed(body({ from: '553598877248@s.whatsapp.net' }))).toBe(false);
+  });
+
+  it('payload ausente → null / false', () => {
+    const b: WahaWebhookBody = { event: 'message', session: 's', payload: null };
+    expect(extractLidDigits(b)).toBeNull();
+    expect(isLidAddressed(b)).toBe(false);
+  });
+});
+
+describe('extractPnFromPayload — pn direto do payload (par lid/pn do Baileys)', () => {
+  function body(overrides: Partial<NonNullable<WahaWebhookBody['payload']>>): WahaWebhookBody {
+    return { event: 'message', session: 's', payload: { id: 'm', fromMe: true, ...overrides } };
+  }
+
+  it('resolve pelo remoteJidAlt (@s.whatsapp.net) — mesmo campo que o inbound usa', () => {
+    const b = body({
+      from: '100206033039600@lid',
+      _data: { key: { addressingMode: 'lid', remoteJidAlt: '5519981018908@s.whatsapp.net' } },
+    });
+    expect(extractPnFromPayload(b)).toBe('5519981018908');
+  });
+
+  it('resolve por senderPn no _data.key (@c.us)', () => {
+    // senderPn não está no schema tipado (passthrough) — cast para injetar o campo cru.
+    const b = body({
+      from: '100206033039600@lid',
+      _data: { key: { senderPn: '5519981018908@c.us' } as Record<string, unknown> },
+    });
+    expect(extractPnFromPayload(b)).toBe('5519981018908');
+  });
+
+  it('IGNORA campo que é @lid (não é telefone) → null', () => {
+    const b = body({
+      from: '100206033039600@lid',
+      _data: { key: { remoteJidAlt: '999999999999@lid' } },
+    });
+    expect(extractPnFromPayload(b)).toBeNull();
+  });
+
+  it('sem nenhum campo pn → null (dispara o fallback REST no chamador)', () => {
+    const b = body({ from: '100206033039600@lid', _data: { key: { addressingMode: 'lid' } } });
+    expect(extractPnFromPayload(b)).toBeNull();
   });
 });
 
