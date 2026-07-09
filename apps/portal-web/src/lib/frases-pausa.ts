@@ -224,3 +224,14 @@ export function toFrasesPayload(drafts: readonly FrasePausaDraft[]): FrasePausa[
 export function isFrasesRejeitadas(err: unknown): boolean {
   return err instanceof ApiError && err.status === 400;
 }
+
+/**
+ * Onda 1 (SCRUM-68) — DE-GATE: as frases de pausa/retomada passam a ser editáveis por
+ * TODOS os formatos (o bot já honra a keyword em todos os ramos). Retorna se a busca de
+ * frases deve ser ligada: assim que o /portal/perfil carrega (INDEPENDE de
+ * `modo_atendente`) — clone sem perfil carregado ainda NÃO chama a rota (evita request
+ * a mais no boot). O 404 do GET segue como rede de proteção na seção.
+ */
+export function frasesHabilitadas(cfg: { modo_atendente?: boolean } | null | undefined): boolean {
+  return cfg != null;
+}

@@ -497,6 +497,43 @@ export function useSaveAgendaConfig(
 }
 
 /**
+ * Onda 1 (SCRUM-68) — DE-GATE do "WhatsApp da recepção" (destino do alerta ao dono,
+ * `alert_owner_phone`) numa SEÇÃO PRÓPRIA, editável por TODOS os formatos (o toggle de
+ * agenda automática NÃO é tocado — segue na AgendamentoSection, modo atendente).
+ *
+ * PUT /portal/perfil enviando SÓ o TOP-LEVEL `recepcao_telefone` (sem a chave `perfil`)
+ * pra não escrever `agenda_automatica`/`link_agendamento` num clone que não tem modo
+ * atendente (aquele campo segue gated no backend). '' LIMPA (SCRUM-62; fallback = número
+ * da própria sessão). Só toca `recepcao_telefone` no cache de qk.agendaConfig; os demais
+ * campos (que a AgendamentoSection lê) ficam intactos.
+ */
+export function useSaveRecepcao(
+  slot: string,
+): UseMutationResult<SavePerfilResponse, Error, { recepcao_telefone: string }> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ recepcao_telefone }) =>
+      apiFetch<SavePerfilResponse>('/portal/perfil', {
+        method: 'PUT',
+        body: { recepcao_telefone },
+      }),
+    onSuccess: (res) => {
+      client.setQueryData(qk.agendaConfig(slot), (prev: AgendaConfig | undefined) =>
+        prev
+          ? {
+              ...prev,
+              recepcao_telefone:
+                typeof res.recepcao_telefone === 'string'
+                  ? res.recepcao_telefone
+                  : prev.recepcao_telefone,
+            }
+          : prev,
+      );
+    },
+  });
+}
+
+/**
  * PUT parcial /portal/perfil só com `{ perfil: { planos_beneficios } }`. Merge parcial no
  * backend (chave ausente = não toca); '' LIMPA. Os demais campos do perfil ficam intactos.
  */
