@@ -13,8 +13,12 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { getCloneAlertOwner, setCloneAlertOwnerPhoneIfEmpty, getCloneDisconnectAlertTarget } =
-  await import('./flow-clones.js');
+const {
+  getCloneAlertOwner,
+  setCloneAlertOwnerPhoneIfEmpty,
+  clearAlertOwnerPhoneBySlot,
+  getCloneDisconnectAlertTarget,
+} = await import('./flow-clones.js');
 
 describe('getCloneAlertOwner — fallback alert_owner_phone -> cliente_telefone', () => {
   beforeEach(() => {
@@ -177,6 +181,52 @@ describe('setCloneAlertOwnerPhoneIfEmpty — autofill do número da sessão (só
 
     expect(filled).toBe(false);
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('clearAlertOwnerPhoneBySlot — LIMPA o destino (grava NULL, SCRUM-62)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('grava NULL escopado por slot ($1) e retorna true quando afetou 1 linha', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 });
+
+    const cleared = await clearAlertOwnerPhoneBySlot('clone_meduzza_barbearia_q23psc');
+
+    expect(cleared).toBe(true);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // NULL literal (não sentinela) + slot parametrizado (anti-IDOR: slot vem da sessão).
+    expect(sql).toContain('alert_owner_phone = NULL');
+    expect(sql).toContain('WHERE slot = $1');
+    expect(params).toEqual(['clone_meduzza_barbearia_q23psc']);
+  });
+
+  it('slot inexistente (rowCount 0) -> retorna false', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const cleared = await clearAlertOwnerPhoneBySlot('clone_nao_existe');
+
+    expect(cleared).toBe(false);
+  });
+
+  it('após CLEAR, getCloneAlertOwner (alert_owner_phone NULL) cai no fallback cliente_telefone', async () => {
+    // Prova o comportamento-alvo: limpar o campo => alerta sai pro número da PRÓPRIA sessão.
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: null, // limpo pelo dono
+          cliente_telefone: '5531999998842', // = número pareado da sessão
+          alert_owner_enabled: true,
+          display_name: 'Meduzza Barbearia',
+        },
+      ],
+    });
+
+    const owner = await getCloneAlertOwner('clone_meduzza_barbearia_q23psc');
+
+    expect(owner?.phone).toBe('5531999998842');
+    expect(owner?.enabled).toBe(true);
   });
 });
 

@@ -65,23 +65,30 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       }
       timezoneToSet = body.timezone;
     }
-    // recepcao_telefone (SCRUM-59): destino dos avisos ao dono (= flow_clones.alert_owner_phone,
+    // recepcao_telefone (SCRUM-59/62): destino dos avisos ao dono (= flow_clones.alert_owner_phone,
     // COLUNA top-level, fora do perfilSchema). Só editável com o modo atendente ON pro clone
-    // (defesa em profundidade — o front só mostra o campo então). Normaliza pra dígitos e exige
-    // E.164 BR (12-13 dígitos começando com 55). Vazio/formato inválido => 400 (NÃO zera). Toda
-    // validação ANTES de qualquer escrita (sem write parcial).
-    let recepcaoToSet: string | undefined;
+    // (defesa em profundidade — o front só mostra o campo então). Tri-estado:
+    //   - AUSENTE (undefined)       -> não toca a coluna (byte-a-byte).
+    //   - VAZIO/null                -> CLEAR: grava NULL (dono optou por não ter destino
+    //                                  dedicado; o alerta cai no fallback da PRÓPRIA sessão via
+    //                                  getCloneAlertOwner -> cliente_telefone). Vazio NÃO é erro.
+    //   - NÃO-VAZIO que casa E.164 BR -> SET (12-13 dígitos começando com 55).
+    //   - NÃO-VAZIO que NÃO casa      -> 400 telefone_invalido (erro real de digitação).
+    // Toda validação ANTES de qualquer escrita (sem write parcial).
+    let recepcaoAction: { kind: 'clear' } | { kind: 'set'; digits: string } | undefined;
     if (body.recepcao_telefone !== undefined) {
       if (!isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
         return reply.code(404).send({ error: 'recepcao_telefone_indisponivel' });
       }
-      const digits = (
-        typeof body.recepcao_telefone === 'string' ? body.recepcao_telefone : ''
-      ).replace(/\D/g, '');
-      if (!/^55\d{10,11}$/.test(digits)) {
+      const raw = body.recepcao_telefone == null ? '' : String(body.recepcao_telefone);
+      const digits = raw.replace(/\D/g, '');
+      if (digits.length === 0) {
+        recepcaoAction = { kind: 'clear' };
+      } else if (!/^55\d{10,11}$/.test(digits)) {
         return reply.code(400).send({ error: 'telefone_invalido' });
+      } else {
+        recepcaoAction = { kind: 'set', digits };
       }
-      recepcaoToSet = digits;
     }
     const ok = await portalConfig.updatePerfilBySlot(slot, parsed.data);
     if (!ok) return reply.code(404).send({ error: 'fluxo nao encontrado' });
@@ -90,8 +97,12 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       await flowClones.updateTimezoneBySlot(slot, timezoneToSet);
     }
     // Escrita do destino dos avisos, escopada ao slot da SESSÃO (anti-IDOR: slot nunca do body).
-    if (recepcaoToSet !== undefined) {
-      await flowClones.updateAlertOwnerPhoneBySlot(slot, recepcaoToSet);
+    if (recepcaoAction !== undefined) {
+      if (recepcaoAction.kind === 'clear') {
+        await flowClones.clearAlertOwnerPhoneBySlot(slot);
+      } else {
+        await flowClones.updateAlertOwnerPhoneBySlot(slot, recepcaoAction.digits);
+      }
     }
     // Devolve o perfil canonico (ja MERGE-ado/normalizado) + o fuso vigente pro front sincronizar.
     const perfil = await portalConfig.getPerfilBySlot(slot);

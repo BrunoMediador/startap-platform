@@ -1,7 +1,7 @@
 import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import type { BotContext } from '@startap/core/types';
-import { atendimentos, cloneColaboradores, flowClones, pausa } from '@startap/db';
+import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import {
@@ -173,11 +173,17 @@ export class TesteBarbeariaBot extends BotBase {
    * fire-and-forget (sendOwnerAlert captura toda falha), NUNCA toca agenda, SEMPRE devolve
    * {ok:true} pro modelo — a IA só manda a mensagem de transição, nunca trava a conversa.
    *
-   * Transporte = sessão do PRÓPRIO clone (não a ALERTAS, muda por 463). Após escalar,
-   * AUTO-PAUSA o número (source='escalated_human'): base.ts silencia esse telefone até o
-   * dono despausar pela UI de pausas do portal (mesma lista do anti-bot).
+   * Transporte = sessão do PRÓPRIO clone (não a ALERTAS, muda por 463).
+   *
+   * SCRUM-62: escalar SÓ ALERTA — NÃO auto-pausa mais (removida a chamada e o método
+   * autoPauseAfterEscalation). A pausa `escalated_human` SEM expires_at era PERMANENTE
+   * (pausa.ts): o cliente pedia "cancelar/falar com humano", o bot alertava o dono E calava
+   * o número pra sempre, sem nada que despausasse sozinho (evidência prod: 2 pausas
+   * escalated_human na Meduzza em 06/07, uma despausada à mão). A pausa automática do modo
+   * atendente vive AGORA só onde deve: quando o atendente responde À MÃO (human_reply, 60min,
+   * router.ts) ou por frase de pausa explícita/portal.
    */
-  private buildEscalarParaHumanoTool(telefone: string, session: string): ToolDefinition {
+  private buildEscalarParaHumanoTool(telefone: string): ToolDefinition {
     return {
       name: 'escalar_para_humano',
       description:
@@ -213,8 +219,8 @@ export class TesteBarbeariaBot extends BotBase {
           transport: 'clone_session',
           payload: { motivo, resumo },
         });
-        // Auto-pausa o número após escalar (best-effort — NUNCA derruba a resposta).
-        this.autoPauseAfterEscalation(telefone, session);
+        // SCRUM-62: NÃO auto-pausa. Escalar só alerta o dono; a pausa (temporária, 60min)
+        // acontece quando o atendente responde à mão (router.ts) ou por frase de pausa.
         return { ok: true, escalado: r.escalado };
       },
     };
@@ -284,31 +290,6 @@ export class TesteBarbeariaBot extends BotBase {
         return { ok: true, registrado: r.escalado };
       },
     };
-  }
-
-  /**
-   * Auto-pausa o número após uma escalação (MODO ATENDENTE). BEST-EFFORT: nunca lança, nunca
-   * derruba a resposta ao cliente (o .catch loga e segue). Reusa flow_pauses com
-   * source='escalated_human' — o base.ts checa isFlowPaused(flowId=slot) ANTES de process()
-   * e silencia o número; o dono despausa pela UI de pausas do portal (mesma lista do anti-bot).
-   * flow_id=slot: pra clone, workflow_id === slot (== ctx.flowId), então a pausa é a mesma
-   * chave que o base.ts consulta E aparece na lista do portal (escopada por slot).
-   */
-  private autoPauseAfterEscalation(telefone: string, session: string): void {
-    void pausa
-      .addFlowPause({
-        flowId: this.slot,
-        telefone,
-        session,
-        source: 'escalated_human',
-        reason: 'Escalado para atendimento humano (modo atendente)',
-      })
-      .catch((e) =>
-        this.log.warn(
-          { err: e instanceof Error ? e.message : String(e), slot: this.slot },
-          'modo-atendente: auto-pausa pós-escalação falhou (best-effort)',
-        ),
-      );
   }
 
   /**
@@ -948,7 +929,7 @@ export class TesteBarbeariaBot extends BotBase {
    * do cliente). Não injeta [SEU PACOTE] nem cartão de confirmação (não há agendamento aqui).
    */
   private async processAtendente(ctx: BotContext): Promise<string | null> {
-    const { telefone, texto, pushName, sessao } = ctx.message;
+    const { telefone, texto, pushName } = ctx.message;
 
     // 1 leitura do clone (cacheada): fuso + link_agendamento. Não usa loadScheduleConfig
     // (que exige agenda e silenciaria). timezone default SP via normalizeCloneRow.
@@ -1022,7 +1003,7 @@ export class TesteBarbeariaBot extends BotBase {
 
     // SÓ as 2 tools do modo atendente. NENHUMA tool de agenda (incapacidade por construção).
     const tools: ToolDefinition[] = [
-      this.buildEscalarParaHumanoTool(telefone, sessao),
+      this.buildEscalarParaHumanoTool(telefone),
       this.buildRegistrarInteresseTool(telefone),
     ];
 

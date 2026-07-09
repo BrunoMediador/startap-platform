@@ -635,6 +635,27 @@ export async function updateAlertOwnerPhoneBySlot(slot: string, phone: string): 
 }
 
 /**
+ * LIMPA o alert_owner_phone do clone (grava NULL) — SCRUM-62. O DONO optou por não ter um
+ * destino dedicado pros avisos de lead/escalação. Com a coluna NULL, getCloneAlertOwner cai
+ * no FALLBACK cliente_telefone (= número pareado da PRÓPRIA sessão): o alerta sai como
+ * self-send, SEM exigir chamada de rede no caminho do alerta. Grava NULL de fato (não
+ * sentinela) — o autofill #329 passa a PULAR clones em modo atendente, então o clear PERSISTE
+ * (senão o próximo WORKING re-preencheria com o me.id). Escopado por slot (SEMPRE
+ * parametrizado; o slot vem da sessão withTenant, jamais do input — anti-IDOR). Invalida o
+ * cache de clone (igual setCloneAlertOwnerPhoneIfEmpty; defensivo — getCloneAlertOwner lê
+ * direto do banco). false se o slot não existir.
+ */
+export async function clearAlertOwnerPhoneBySlot(slot: string): Promise<boolean> {
+  const r = await query(
+    'UPDATE flow_clones SET alert_owner_phone = NULL, updated_at = NOW() WHERE slot = $1',
+    [slot],
+  );
+  const updated = (r.rowCount ?? 0) > 0;
+  if (updated) invalidateCloneCache({ slot });
+  return updated;
+}
+
+/**
  * Remove o clone e todos os registros dependentes via CASCADE de bot_config.
  * bot_prompt, bot_media e flow_clones são limpos por FK CASCADE.
  * flow_controls usa flow_id = slot — removido explicitamente pois não tem FK.

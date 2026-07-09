@@ -1996,7 +1996,7 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 
-  it('tool escalar_para_humano -> alerta escalonamento + AUTO-PAUSA (source=escalated_human)', async () => {
+  it('SCRUM-62: escalar_para_humano SÓ alerta (escalonamento) e NÃO auto-pausa', async () => {
     cfg.MODO_ATENDENTE_SLOTS = '*';
     setupAtendente({ agendaAutomatica: false });
     const tools = await atendenteToolsFor('quero falar com uma pessoa');
@@ -2007,23 +2007,9 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     expect(res).toEqual({ ok: true, escalado: true });
     const arg = mocks.sendOwnerAlert.mock.calls[0][0];
     expect(arg).toMatchObject({ kind: 'escalonamento', transport: 'clone_session' });
-    // Auto-pausa best-effort: flow_id = slot, source escalated_human.
-    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
-    const pauseArg = mocks.addFlowPause.mock.calls[0][0];
-    expect(pauseArg).toMatchObject({ flowId: 'teste_barbearia', source: 'escalated_human' });
-  });
-
-  it('escalar_para_humano: falha da auto-pausa NÃO quebra a tool (best-effort)', async () => {
-    cfg.MODO_ATENDENTE_SLOTS = '*';
-    setupAtendente({ agendaAutomatica: false });
-    mocks.addFlowPause.mockRejectedValue(new Error('DB down'));
-    const tools = await atendenteToolsFor('reclamação');
-    const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
-      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
-    };
-    // Não relança mesmo com addFlowPause rejeitando (void + .catch).
-    const res = await tool.run({ motivo: 'reclamacao', resumo: 'algo deu errado' });
-    expect(res).toEqual({ ok: true, escalado: true });
+    // SCRUM-62: escalar NUNCA pausa (a pausa escalated_human PERMANENTE foi removida). A
+    // pausa temporária só ocorre quando o atendente responde à mão (router.ts, human_reply).
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 
   // ── Bloco [EQUIPE] no modo atendente (estabelecimento) ──────────────────────

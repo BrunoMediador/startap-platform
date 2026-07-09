@@ -33,6 +33,7 @@
  */
 import { createHash } from 'node:crypto';
 import { logger } from '@startap/core/logger';
+import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 // Subpath /phone (não a raiz) p/ não arrastar crypto.ts no load. Defesa em profundidade:
 // normaliza o DDI do dono antes do chatId — alert_owner_phone pode ter vindo cru.
 import { ensureDddBr } from '@startap/core/phone';
@@ -42,6 +43,8 @@ import { isDefinitiveNonDelivery } from '@startap/core/waha-send-failure';
 import { alerts, flowClones } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
+// SCRUM-62: marca do eco do alerta (mesma máquina do base.ts). Ver nota no envio.
+import { registerBotReplyEcho } from './human-reply-pause.js';
 
 const log = logger.child({ module: 'client-alert' });
 
@@ -402,6 +405,19 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
       clienteTelefone,
       payload: input.payload,
     });
+
+    // SCRUM-62 (cinto+suspensório): quando o alerta sai pela PRÓPRIA sessão do clone
+    // (transport clone_session, modo atendente) e o destino (alert_owner_phone) é um número
+    // DIFERENTE da sessão, o self-chat guard do router NÃO barra o eco fromMe desta mensagem.
+    // Sem a marca, esse eco viraria 'resposta humana' e pausaria o CONTATO DO DONO por 60min
+    // (suspeita real: pausa human_reply do ...8908 em 06/07). Marca o texto ANTES do envio
+    // (mesma razão de ordem do base.ts): best-effort, nunca lança. Gated pelo modo atendente.
+    if (
+      transport === 'clone_session' &&
+      isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)
+    ) {
+      await registerBotReplyEcho(sessao, ownerPhone, texto);
+    }
 
     try {
       await Promise.race([
