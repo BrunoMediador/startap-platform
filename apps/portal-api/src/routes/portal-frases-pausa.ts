@@ -1,13 +1,17 @@
 import { logger } from '@startap/core/logger';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 /**
- * Frases de pausa/retomada editáveis pelo cliente no portal (SCRUM-59 — "mesmo número
- * IA + atendente"). O dono cadastra as frases que, digitadas À MÃO no WhatsApp da própria
+ * Frases de pausa/retomada editáveis pelo cliente no portal (SCRUM-59 → Onda 1 de-gate,
+ * SCRUM-68 / ADR 0030). O dono cadastra as frases que, digitadas À MÃO no WhatsApp da própria
  * barbearia, pausam ("atendente assumiu") ou retomam o bot naquele contato.
  *
+ * UNIVERSAL (Onda 1): serve TODO formato (individual/estabelecimento, agenda/atendente). O bot
+ * já honra a keyword em todos os ramos do router (getFlowManualCommandForFlow) — só o EDITOR
+ * estava preso ao modo atendente por acidente de rollout, sem requisito de domínio. Decisão do
+ * Bruno (09/07): as frases ficam no PERFIL do cliente e é ELE quem define quais quiser
+ * ("tirar a responsabilidade nossa do que der") — self-service total, sem passo do time.
+ *
  * Escopado por request.tenant.slot (withTenant) — flow_id = slot; o slot NUNCA vem do
- * input (anti-IDOR, regra de ouro 5). Gated pelo modo atendente (isModoAtendenteEnabled):
- * flag/clone OFF -> 404 (feature dormente, padrão da casa).
+ * input (anti-IDOR, regra de ouro 5).
  *
  * Validação (o match do bot é por SUBSTRING de keyword_norm — manual-pause.ts): frase curta
  * ou substring de outra é perigosa (casa demais), por isso o mínimo de 4 chars normalizados
@@ -16,9 +20,8 @@ import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
  */
 import { normalizePauseKeyword } from '@startap/core/pause-keyword';
 import { pausa } from '@startap/db';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { config } from '../config.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'frases-pausa' });
@@ -46,23 +49,13 @@ interface OutFrase {
   enabled: boolean;
 }
 
-/** Gate do modo atendente: flag/clone OFF -> 404 (feature dormente). Slot da SESSÃO. */
-function gateModoAtendente(slot: string, reply: FastifyReply): boolean {
-  if (!isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)) {
-    reply.code(404).send({ error: 'recurso indisponivel' });
-    return false;
-  }
-  return true;
-}
-
 export const portalFrasesPausaRoutes: FastifyPluginAsync = async (app) => {
-  // GET: lista as frases atuais do fluxo do dono.
+  // GET: lista as frases atuais do fluxo do dono. Universal (Onda 1): serve todo formato.
   app.get(
     '/portal/frases-pausa',
     { preHandler: withTenant },
     async (req: FastifyRequest, reply) => {
       const { slot } = requireTenant(req);
-      if (!gateModoAtendente(slot, reply)) return reply;
 
       const rows = await pausa.listFlowPauseKeywords(slot);
       const frases: OutFrase[] = rows.map((r) => ({
@@ -80,7 +73,6 @@ export const portalFrasesPausaRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: withTenant },
     async (req: FastifyRequest, reply) => {
       const { slot, userId } = requireTenant(req);
-      if (!gateModoAtendente(slot, reply)) return reply;
 
       const parsed = putSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
