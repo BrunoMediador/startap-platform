@@ -74,16 +74,61 @@ function httpStatusFromError(msg: string): number | null {
 }
 
 /**
+ * Razões (`error.errors[].reason` no corpo do Google) que indicam causa TRANSITÓRIA:
+ * rate-limit / quota / backend momentâneo. O ponto do SCRUM-41: o Google devolve HTTP 403
+ * TANTO para "forbidden" real (SA sem acesso — definitivo) QUANTO para rate-limit
+ * (`rateLimitExceeded` / `userRateLimitExceeded`) — só o `reason` distingue os dois. Rebaixar
+ * por rate-limit derruba uma agenda BOA num pico de tráfego e o bot para de agendar pra um
+ * cliente que estava OK. Comparação em lower-case (o Google emite camelCase; normalizamos).
+ */
+const TRANSIENT_GOOGLE_REASONS: ReadonlySet<string> = new Set([
+  'ratelimitexceeded',
+  'userratelimitexceeded',
+  'quotaexceeded',
+  'backenderror',
+]);
+
+/**
+ * Extrai os `reason` de um corpo de erro do Google embutido na mensagem do client
+ * (`... -> HTTP 403: {"error":{"errors":[{"reason":"rateLimitExceeded",...}]}}`). Devolve
+ * tudo em lower-case. Sem match (corpo ausente / outro formato) = []. Não faz JSON.parse
+ * (o corpo vem concatenado, pode estar truncado) — regex tolerante é suficiente e robusto.
+ */
+function extractGoogleReasons(errorMessage: string): string[] {
+  const matches = errorMessage.matchAll(/"reason"\s*:\s*"([^"]+)"/gi);
+  return Array.from(matches, (m) => m[1].toLowerCase());
+}
+
+/** true se o corpo do erro carrega um `reason` de rate-limit/quota/backend (transitório). */
+function hasTransientGoogleReason(errorMessage: string): boolean {
+  return extractGoogleReasons(errorMessage).some((r) => TRANSIENT_GOOGLE_REASONS.has(r));
+}
+
+/**
  * Classifica a mensagem de erro de uma validação que FALHOU em DEFINITIVA ('invalid') vs
- * TRANSITÓRIA (null = inconclusivo). Definitiva = a agenda realmente não dá pra agendar:
- * 400 (calendarId malformado), 401 (creds/token rejeitados), 403 (SA sem permissão), 404
- * (agenda inexistente). Transitória = 408/429/5xx/rede/timeout — preserva o status.
+ * TRANSITÓRIA (null = inconclusivo, NÃO demove).
+ *
+ * DEFINITIVA (a agenda realmente não dá pra agendar): 400 (calendarId malformado), 401
+ * (creds/token rejeitados), 403 forbidden REAL (SA sem permissão), 404 (agenda inexistente).
+ *
+ * TRANSITÓRIA (preserva status + re-tenta no próximo ciclo): timeout/rede; 408/429/5xx; e — o
+ * fix do SCRUM-41 — QUALQUER status (inclusive 403) cujo `reason` do Google seja
+ * rate-limit/quota/backend. Um pico de rate-limit devolve 403 e NÃO pode rebaixar uma agenda
+ * que está OK.
  */
 function classifyFailure(errorMessage: string): Verdict {
   if (errorMessage === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL) return null; // timeout = inconclusivo
+
+  // Rate-limit/quota/backend reconhecido pelo `reason` do corpo, ANTES do status: o Google usa
+  // 403 tanto pra rate-limit quanto pra forbidden real, então o status sozinho não decide.
+  if (hasTransientGoogleReason(errorMessage)) return null;
+
   const status = httpStatusFromError(errorMessage);
+  // 429 (Too Many Requests) e 5xx = transitório mesmo sem `reason` no corpo.
+  if (status === 429 || (status !== null && status >= 500)) return null;
+  // Definitiva: 400/401/403/404 (403 aqui já é forbidden REAL — o rate-limit saiu acima).
   if (status === 400 || status === 401 || status === 403 || status === 404) return 'invalid';
-  // Sem status HTTP (erro de rede/DNS), ou 429/5xx/408: transitório -> não demove.
+  // Sem status HTTP (erro de rede/DNS), ou 408: transitório -> não demove.
   return null;
 }
 
@@ -135,12 +180,19 @@ async function checkOne(
 
   const verdict = classifyFailure(res.error);
   const status = httpStatusFromError(res.error);
+  // Anexa o 1º `reason` do Google à categoria (ex.: `http_403:ratelimitexceeded` vs
+  // `http_403:forbidden`) — torna visível NO LOG por que um 403 demoveu ou foi preservado,
+  // sem vazar o corpo cru. Ajuda a auditar o risco "403 rate-limit rebaixaria agenda boa".
+  const reason = extractGoogleReasons(res.error)[0];
+  const reasonTag = reason ? `:${reason}` : '';
   const errorCategory =
     res.error === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL
       ? 'timeout'
       : status
-        ? `http_${status}`
-        : 'network';
+        ? `http_${status}${reasonTag}`
+        : reason
+          ? `error${reasonTag}`
+          : 'network';
   return { verdict, errorCategory };
 }
 
