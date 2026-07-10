@@ -9,6 +9,7 @@ import { flowExecutionLog } from '@startap/db';
 import { Cron } from 'croner';
 import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
+import { runBillingSilenceAlert } from './jobs/billing-silence-alert.js';
 import { runBotDetectAutopause } from './jobs/bot-detect-autopause.js';
 import { runBotDetect } from './jobs/bot-detect.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
@@ -571,6 +572,76 @@ async function main() {
     );
   } else {
     log.info('bot-detect: BOT_DETECT_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Alerta interno de bot PAGANTE silenciado por inadimplência (SCRUM-67) — VISIBILIDADE, não muda o
+  // gate. Camada 1 do rollout: SÓ registra o cron com BILLING_SILENCE_ALERT_ENABLED=true (default OFF —
+  // lição #247). Com a env ausente o worker sobe normal e este cron NÃO existe (zero query, zero WAHA).
+  // Camada 2: o job só age quando o PRÓPRIO gate de silêncio está ON (process.env.BILLING_OVERDUE_SILENCE
+  // === 'true', mesma fonte do router) — com o gate OFF é NO-OP (nenhum alerta falso). { protect:true }
+  // impede overlap de ciclos. A cada hora no :43 (BILLING_SILENCE_ALERT_CRON). Padrão inválido cai no
+  // fallback via scheduleCronSafe. ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR).
+  if (config.BILLING_SILENCE_ALERT_ENABLED) {
+    log.info(
+      { cron: config.BILLING_SILENCE_ALERT_CRON },
+      'billing-silence-alert: cron registrado (BILLING_SILENCE_ALERT_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.BILLING_SILENCE_ALERT_CRON,
+      '43 * * * *',
+      { name: 'billing-silence-alert', timezone: 'America/Sao_Paulo', protect: true },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let silenceResult: Awaited<ReturnType<typeof runBillingSilenceAlert>> | null = null;
+        let silenceError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:billing-silence-alert',
+          flowName: 'billing-silence-alert',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job billing-silence-alert iniciado',
+        });
+        try {
+          silenceResult = await runBillingSilenceAlert({
+            // Espelha o gate real do router (mesma env). Missing no worker = OFF = NO-OP seguro.
+            overdueSilenceEnabled: process.env.BILLING_OVERDUE_SILENCE === 'true',
+            cooldownMin: config.BILLING_SILENCE_ALERT_COOLDOWN_MIN,
+          });
+          // Só loga ciclo com atividade — sem silenciados/alertas fica mudo.
+          if (!silenceResult.skipped && (silenceResult.silenced > 0 || silenceResult.alerted > 0)) {
+            log.warn(
+              { ...silenceResult },
+              'billing-silence-alert: pagante(s) silenciado(s) por atraso',
+            );
+          }
+        } catch (e) {
+          silenceError = e;
+          log.error({ err: e }, 'billing-silence-alert crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:billing-silence-alert',
+            flowName: 'billing-silence-alert',
+            bot: 'worker',
+            eventType: silenceError ? 'worker.job-failed' : 'worker.job-finished',
+            status: silenceError ? 'error' : 'success',
+            message: silenceError
+              ? 'Job billing-silence-alert falhou'
+              : 'Job billing-silence-alert concluído',
+            ...(silenceResult ? { metadata: silenceResult } : {}),
+            ...(silenceError ? { error: silenceError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info(
+      'billing-silence-alert: BILLING_SILENCE_ALERT_ENABLED ausente/false — cron NÃO registrado',
+    );
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

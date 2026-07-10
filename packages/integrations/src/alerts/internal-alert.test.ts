@@ -37,6 +37,7 @@ vi.mock('@startap/core/logger', () => ({
 import {
   displayNameForSlot,
   formatBRLFromCents,
+  msgBotSilenciadoInadimplencia,
   msgClienteAtivou,
   msgClientePagou,
   msgNovoCadastro,
@@ -225,5 +226,40 @@ describe('mensagens LGPD-safe', () => {
     expect(m).toContain('Edu Barbeiro');
     expect(m).toContain('R$31,00');
     expect(m).toContain('clone-edu');
+  });
+
+  it('E: bot silenciado por inadimplência (SCRUM-67) — nome + slot + venc + dias, sem PII', () => {
+    const m = msgBotSilenciadoInadimplencia({
+      displayName: 'Barbearia do Cirilo',
+      slot: 'clone_cirilo_ab12',
+      nextDueDate: '2026-06-04',
+      diasAtraso: 10,
+    });
+    expect(m).toContain('Barbearia do Cirilo');
+    expect(m).toContain('clone_cirilo_ab12');
+    expect(m).toContain('2026-06-04');
+    expect(m).toContain('10 dias');
+    expect(m.toLowerCase()).toContain('churn');
+    // LGPD: nenhum bloco de 8+ dígitos (telefone/CPF) — a data 2026-06-04 tem separadores.
+    expect(m).not.toMatch(/\d{8,}/);
+  });
+
+  it('E: 1 dia de atraso usa singular e clampa negativo em 0', () => {
+    expect(
+      msgBotSilenciadoInadimplencia({
+        displayName: 'X',
+        slot: 'clone_x',
+        nextDueDate: '2026-06-04',
+        diasAtraso: 1,
+      }),
+    ).toContain('1 dia de atraso');
+    expect(
+      msgBotSilenciadoInadimplencia({
+        displayName: 'X',
+        slot: 'clone_x',
+        nextDueDate: '2026-06-04',
+        diasAtraso: -2,
+      }),
+    ).toContain('0 dias');
   });
 });

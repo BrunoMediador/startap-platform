@@ -169,6 +169,69 @@ export function daysUntilDue(nextDueDate: string | null, today = new Date()): nu
   return Math.round((due - todayUtc) / 86_400_000);
 }
 
+// ─── Varredura de pagantes silenciados por inadimplência (SCRUM-67) ────────────
+
+/**
+ * Candidato à checagem de silêncio-por-inadimplência (SCRUM-67). 1 linha por clone
+ * com config de cobrança (data + valor). Traz o dado bruto pra o job DECIDIR em TS
+ * (parity com o gate do router) se o clone está de fato silenciado.
+ */
+export interface BillingSilenceCandidate {
+  slot: string;
+  /** Nome amigável do clone (flow_clones.display_name). null = usa o slot na mensagem. */
+  display_name: string | null;
+  /** Vencimento 'YYYY-MM-DD' (garantido não-nulo pelo WHERE). */
+  next_due_date: string | null;
+  /** Valor da mensalidade em centavos (garantido > 0 pelo WHERE). */
+  amount_cents: number | null;
+  /** Último pagamento registrado. null = NÃO é pagante (não alerta — trial/sintético). */
+  last_payment_at: Date | null;
+  /** Dias de ATRASO = hoje(UTC) − vencimento. Negativo = ainda não venceu (mesmo eixo UTC do
+   *  daysUntilDue do gate: silenciado ⟺ daysUntilDue < −GRACE_DAYS ⟺ dias_atraso > GRACE_DAYS). */
+  dias_atraso: number;
+}
+
+/**
+ * Lista os clones com config de cobrança (data + valor) para a varredura do alerta de silêncio
+ * por inadimplência (SCRUM-67). Escopo IDÊNTICO ao gate do router (só `clone_%`, ADR 0016) e o
+ * `dias_atraso` é computado no MESMO eixo UTC do `daysUntilDue` (parity garantida: silenciado ⟺
+ * dias_atraso > GRACE_DAYS).
+ *
+ * NÃO filtra por pagante/atraso aqui de propósito — retorna também os em-dia e os sem pagamento
+ * (trial) pra o job DECIDIR em TS (mantém a decisão pura e testável sem banco). O WHERE só exige
+ * "tem cobrança configurada" (data E valor>0), espelhando o `temBilling` do gate.
+ */
+export async function listBillingClonesForSilenceCheck(): Promise<BillingSilenceCandidate[]> {
+  const r = await query<{
+    slot: string;
+    display_name: string | null;
+    next_due_date: string | null;
+    amount_cents: string | number | null;
+    last_payment_at: Date | null;
+    dias_atraso: string | number;
+  }>(
+    `SELECT cb.slot,
+            fc.display_name,
+            to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
+            cb.amount_cents,
+            cb.last_payment_at,
+            (((NOW() AT TIME ZONE 'UTC')::date) - cb.next_due_date)::int AS dias_atraso
+       FROM client_billing cb
+       JOIN flow_clones fc ON fc.slot = cb.slot
+      WHERE left(cb.slot, 6) = 'clone_'
+        AND cb.next_due_date IS NOT NULL
+        AND cb.amount_cents > 0`,
+  );
+  return r.rows.map((row) => ({
+    slot: row.slot,
+    display_name: row.display_name,
+    next_due_date: row.next_due_date,
+    amount_cents: row.amount_cents == null ? null : Number(row.amount_cents),
+    last_payment_at: row.last_payment_at,
+    dias_atraso: Number(row.dias_atraso),
+  }));
+}
+
 // ─── Modelo por DATA DE VENCIMENTO (ADR 0014) ──────────────────────────────────
 
 /** Janela de pagamento default: 7 dias antes do vencimento (decisao do Bruno, ADR 0014). */
