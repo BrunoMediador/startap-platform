@@ -262,6 +262,57 @@ describe('updatePerfilBySlot', () => {
     expect(merged.planos_beneficios).toBe('Plano antigo'); // preservado
   });
 
+  // ── SCRUM-75: link_agendamento / planos_beneficios — '' LIMPA (remove a chave do JSONB) ──
+  it('SCRUM-75: link_agendamento "" REMOVE a chave do JSONB (limpar, não persiste "")', async () => {
+    const captured = armMocks({
+      link_agendamento: 'https://booksy.com/antigo',
+      observacoes_gerais: 'Estacionamento',
+    });
+    await updatePerfilBySlot(SLOT, { link_agendamento: '' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    // chave APAGADA (não vira '' residual): byte-idêntico a quem nunca preencheu.
+    expect('link_agendamento' in merged).toBe(false);
+    // MERGE preserva as demais chaves do personalizacao.
+    expect(merged.observacoes_gerais).toBe('Estacionamento');
+  });
+
+  it('SCRUM-75: link_agendamento nova URL SOBRESCREVE a antiga (alterar — regressão)', async () => {
+    // Este é o teste do "alterar": mudar o link pra outra URL. Já funcionava no código ANTIGO
+    // (não-vazio nunca virava undefined; o merge escrevia) — travamos o comportamento aqui.
+    const captured = armMocks({ link_agendamento: 'https://booksy.com/antigo' });
+    await updatePerfilBySlot(SLOT, { link_agendamento: 'https://trinks.com/novo' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect(merged.link_agendamento).toBe('https://trinks.com/novo');
+  });
+
+  it('SCRUM-75: link_agendamento ausente (undefined) NÃO toca a chave', async () => {
+    const captured = armMocks({ link_agendamento: 'https://booksy.com/antigo' });
+    await updatePerfilBySlot(SLOT, { nome_negocio: 'X' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect(merged.link_agendamento).toBe('https://booksy.com/antigo'); // preservado
+  });
+
+  it('SCRUM-75: planos_beneficios "" REMOVE a chave do JSONB (limpar)', async () => {
+    const captured = armMocks({
+      planos_beneficios: 'Plano Mensal R$99',
+      observacoes_gerais: 'Estacionamento',
+    });
+    await updatePerfilBySlot(SLOT, { planos_beneficios: '' });
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect('planos_beneficios' in merged).toBe(false);
+    expect(merged.observacoes_gerais).toBe('Estacionamento');
+  });
+
+  it('SCRUM-75: limpar link com a chave AUSENTE no personalizacao é no-op seguro (idempotente)', async () => {
+    // Dono clica "limpar" num clone que nunca teve link: '' -> delete de chave inexistente = ok.
+    const captured = armMocks({ nome_negocio: 'Barbearia' });
+    const ok = await updatePerfilBySlot(SLOT, { link_agendamento: '' });
+    expect(ok).toBe(true);
+    const merged = JSON.parse(captured.mergedJson ?? '{}');
+    expect('link_agendamento' in merged).toBe(false);
+    expect(merged.nome_negocio).toBe('Barbearia');
+  });
+
   it('SCRUM-65: faq_personalizado (array) faz round-trip como ARRAY no JSONB (não string)', async () => {
     const captured = armMocks({ observacoes_gerais: 'Estacionamento' });
     const faq = [{ pergunta: 'Tem estacionamento?', resposta: 'Sim, gratuito.' }];
