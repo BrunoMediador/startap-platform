@@ -5116,23 +5116,27 @@ app.get('/api/sessions/:name/recent-contacts', async (req, res) => {
   // Busca os telefones que conversaram com esta sessao nos ultimos N dias a partir
   // de message_log (chat_id = nome da sessao WAHA). Filtros:
   //   - phone com ate 15 digitos (telefones reais BR/internacionais; >15 sao IDs de grupo)
-  //   - exclui o proprio numero do bot (busca waha_sessao=name em bot_config)
+  //   - exclui o proprio numero do bot (flow_clones.alert_owner_phone, por waha_sessao=name)
   // Retorna array no mesmo shape { phone, name, last_interaction } que o caminho WAHA.
   async function fallbackFromDB() {
-    // Descobre o numero do proprio bot pra excluir da lista (coluna opcional).
-    // Se coluna waha_number nao existir, botPhone fica null e o filtro e ignorado.
+    // Descobre o numero do proprio bot pra excluir da lista.
+    // Fonte correta: flow_clones.alert_owner_phone — autofilled com o me.id da sessao
+    // ao conectar; MESMO formato de digitos (com o 9) que message_log.phone. bot_config
+    // NAO tem coluna de numero (SCRUM-43: 'SELECT waha_number FROM bot_config' era drift
+    // de schema e falhava ~26x/dia). Se nao houver clone/valor, botPhone fica null e o
+    // filtro e ignorado.
     let botPhone = null;
     try {
       const botRow = await pool.query(
-        `SELECT b.waha_number
-         FROM bot_config b
-         WHERE b.waha_sessao = $1
+        `SELECT alert_owner_phone
+         FROM flow_clones
+         WHERE waha_sessao = $1
          LIMIT 1`,
         [name],
       );
-      botPhone = botRow.rows[0]?.waha_number ?? null;
+      botPhone = botRow.rows[0]?.alert_owner_phone ?? null;
     } catch (_) {
-      // coluna waha_number pode nao existir — ignora, nao filtra pelo numero do bot
+      // fail-safe: sem o numero do bot, nao filtra (nao quebra o recent-contacts)
     }
 
     // Busca contatos distintos, mais recente interacao primeiro.
