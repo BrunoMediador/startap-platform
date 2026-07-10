@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   sendInternalAlert: vi.fn(),
   displayNameForSlot: vi.fn(),
   markCloneConnectedBySlot: vi.fn(),
+  markCloneStoppedBySession: vi.fn(),
   setCloneAlertOwnerPhoneIfEmpty: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock('@startap/db', () => ({
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
   flowClones: {
     markCloneConnectedBySlot: mocks.markCloneConnectedBySlot,
+    markCloneStoppedBySession: mocks.markCloneStoppedBySession,
     setCloneAlertOwnerPhoneIfEmpty: mocks.setCloneAlertOwnerPhoneIfEmpty,
   },
   trialLedger: {
@@ -86,8 +88,9 @@ beforeEach(() => {
   mocks.logFlowEvent.mockResolvedValue(null);
   mocks.sendInternalAlert.mockResolvedValue({ sent: 1 });
   mocks.displayNameForSlot.mockResolvedValue('Barbearia do Trial');
-  // Flip de status -> conectado e autofill do dono: idempotentes, default no-op.
+  // Flip de status -> conectado/parado e autofill do dono: idempotentes, default no-op.
   mocks.markCloneConnectedBySlot.mockResolvedValue(false);
+  mocks.markCloneStoppedBySession.mockResolvedValue(false);
   mocks.setCloneAlertOwnerPhoneIfEmpty.mockResolvedValue(false);
   // Default: lock adquirido — executa a decisão (pass-through, como em prod sem
   // concorrência). Teste de lock ocupado sobrescreve com { acquired: false }.
@@ -102,10 +105,37 @@ afterEach(() => {
 });
 
 describe('handleSessionStatusEvent', () => {
-  it('ignora eventos que não são WORKING', async () => {
+  it('ignora eventos que não são WORKING nem STOPPED', async () => {
     const r = await handleSessionStatusEvent(statusBody('SCAN_QR_CODE'), OPTS);
     expect(r.status).toBe('ignored:session-status');
     expect(mocks.getTrialInfoBySession).not.toHaveBeenCalled();
+    expect(mocks.markCloneStoppedBySession).not.toHaveBeenCalled();
+  });
+
+  // SCRUM-64: sessão parada de propósito (POST /stop) -> status 'parado', sem mentir
+  // 'conectado' e sem entrar na vigia do monitor (que exclui 'parado').
+  describe('STOPPED -> flow_clones.status parado (SCRUM-64)', () => {
+    it('flipa para parado pela sessão e NÃO toca o fluxo de trial', async () => {
+      mocks.markCloneStoppedBySession.mockResolvedValue(true);
+
+      const r = await handleSessionStatusEvent(statusBody('STOPPED'), OPTS);
+
+      expect(r.status).toBe('ok:session-stopped');
+      expect(mocks.markCloneStoppedBySession).toHaveBeenCalledWith('clone_barbearia_x_ab12cd');
+      // Nada de trial: STOPPED não consulta ledger, não flipa 'conectado', não bloqueia.
+      expect(mocks.getTrialInfoBySession).not.toHaveBeenCalled();
+      expect(mocks.markCloneConnectedBySlot).not.toHaveBeenCalled();
+      expect(mocks.startTrial).not.toHaveBeenCalled();
+      expect(mocks.blockTrial).not.toHaveBeenCalled();
+    });
+
+    it('fail-safe: erro no flip p/ parado ainda responde 2xx (ok:session-stopped)', async () => {
+      mocks.markCloneStoppedBySession.mockRejectedValue(new Error('db hiccup'));
+
+      const r = await handleSessionStatusEvent(statusBody('STOPPED'), OPTS);
+
+      expect(r.status).toBe('ok:session-stopped');
+    });
   });
 
   it('NOOP absoluto para clone com trial_status=none (Cirilo/manuais intactos)', async () => {

@@ -7200,6 +7200,7 @@ function statusCloneBadge(status) {
     'aguardando_qr':  { cls: 'badge--warning',  label: 'Aguardando QR',  dot: true  },
     'conectado':      { cls: 'badge--success',  label: 'Conectado',      dot: true  },
     'desconectado':   { cls: 'badge--danger',   label: 'Desconectado',   dot: false },
+    'parado':         { cls: 'badge--muted',    label: 'Parada',         dot: false },
     'falhou':         { cls: 'badge--danger',   label: 'Falhou',         dot: false },
   };
   const s = map[status] || { cls: 'badge--muted', label: escapeHtml(status || 'Desconhecido'), dot: false };
