@@ -5,9 +5,8 @@
  * envio de resposta com typing humanizado.
  */
 import { logger } from '@startap/core/logger';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import type { Bot, BotContext } from '@startap/core/types';
-import { chatMemory, flowExecutionLog, pausa as pausaQueries } from '@startap/db';
+import { chatMemory, flowClones, flowExecutionLog, pausa as pausaQueries } from '@startap/db';
 import type { Role } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { registerBotReplyEcho } from '../lib/human-reply-pause.js';
@@ -131,7 +130,12 @@ export abstract class BotBase implements Bot {
         // estritamente mais seguro: se o envio falhar, a marca só expira em 5min sem efeito.
         // SÓ p/ clones em modo atendente (gate barato = string compare); best-effort, nunca
         // lança. Clones fora do gate: byte-idêntico (o if é false, nem toca no Redis).
-        if (isModoAtendenteEnabled(this.slot, process.env.MODO_ATENDENTE_SLOTS)) {
+        if (
+          await flowClones.resolveModoAtendenteEnabledForSlot(
+            this.slot,
+            process.env.MODO_ATENDENTE_SLOTS,
+          )
+        ) {
           await registerBotReplyEcho(sessao, telefone, reply);
         }
         await waha.sendText({ sessao, chatId, texto: reply, typing: true, delayMs: 1500 });

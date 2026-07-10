@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { isFaqPersonalizadoEnabled } from './faq-personalizado-gate.js';
+import {
+  isFaqPersonalizadoEnabled,
+  resolveFaqPersonalizadoEnabled,
+} from './faq-personalizado-gate.js';
 
 describe('isFaqPersonalizadoEnabled', () => {
   const MEDUZZA = 'clone_meduzza_barbearia_q23psc';
@@ -46,5 +49,45 @@ describe('isFaqPersonalizadoEnabled', () => {
   it('match é EXATO — prefixo não liga (sem cruzar tenant)', () => {
     expect(isFaqPersonalizadoEnabled(`${MEDUZZA}_extra`, MEDUZZA)).toBe(false);
     expect(isFaqPersonalizadoEnabled('clone_meduzza', MEDUZZA)).toBe(false);
+  });
+});
+
+describe('resolveFaqPersonalizadoEnabled (env→coluna, ADR 0030 D1)', () => {
+  const MEDUZZA = 'clone_meduzza_barbearia_q23psc';
+  const OUTRO = 'clone_cirilobarbearia_c8w2f0';
+
+  it('env liga sem coluna (env é kill-switch/override global)', () => {
+    expect(resolveFaqPersonalizadoEnabled(MEDUZZA, MEDUZZA, false)).toBe(true);
+    expect(resolveFaqPersonalizadoEnabled(OUTRO, '*', false)).toBe(true);
+    expect(resolveFaqPersonalizadoEnabled(OUTRO, '*', undefined)).toBe(true);
+  });
+
+  it('coluna liga sem env (self-service por-clone quando env deixar de ser "*")', () => {
+    expect(resolveFaqPersonalizadoEnabled(MEDUZZA, '', true)).toBe(true);
+    expect(resolveFaqPersonalizadoEnabled(OUTRO, undefined, true)).toBe(true);
+  });
+
+  it('ambos off -> off', () => {
+    expect(resolveFaqPersonalizadoEnabled(MEDUZZA, '', false)).toBe(false);
+    expect(resolveFaqPersonalizadoEnabled(OUTRO, 'outro_slot', false)).toBe(false);
+    expect(resolveFaqPersonalizadoEnabled(MEDUZZA, undefined, undefined)).toBe(false);
+  });
+
+  it('BYTE-IDENTIDADE: com o env atual "*", o efetivo == env-only (ON) p/ qualquer coluna', () => {
+    // env de produção hoje: FAQ_PERSONALIZADO_SLOTS = '*' -> cobre TODOS via a UNIÃO.
+    const env = '*';
+    for (const slot of [
+      'clone_meduzza_barbearia_q23psc',
+      'clone_cirilobarbearia_c8w2f0',
+      'clone_barbearia_samuel_uefpqc',
+      'clone_barber_dragon_caly8b',
+    ]) {
+      for (const col of [true, false, undefined, null] as const) {
+        expect(resolveFaqPersonalizadoEnabled(slot, env, col)).toBe(
+          isFaqPersonalizadoEnabled(slot, env),
+        );
+        expect(resolveFaqPersonalizadoEnabled(slot, env, col)).toBe(true);
+      }
+    }
   });
 });

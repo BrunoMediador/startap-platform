@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // configMock e o mock de cloneColaboradores são içados pro topo (vi.hoisted) porque as
 // factories de vi.mock referenciam essas refs — sem hoisted dá TDZ. configMock é MUTÁVEL
 // por teste pra alternar ATENDIMENTOS_ENABLED/ESTABELECIMENTO_ENABLED no /auth/me.
-const { configMock, getScopeBySlotMock } = vi.hoisted(() => ({
+const { configMock, getScopeBySlotMock, csvGateMock } = vi.hoisted(() => ({
   configMock: {
     PORTAL_BCRYPT_COST: 12,
     NODE_ENV: 'test',
@@ -16,6 +16,16 @@ const { configMock, getScopeBySlotMock } = vi.hoisted(() => ({
     ESTABELECIMENTO_ENABLED: false,
   } as Record<string, unknown>,
   getScopeBySlotMock: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — o teste exercita o gate por env
+  // (configMock.ATEND_FROM_AGENDA_SLOTS); byte-idêntico ao isAtendFromAgendaEnabled de antes.
+  csvGateMock: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 // Mocks ANTES de importar o modulo sob teste.
@@ -33,6 +43,10 @@ vi.mock('@startap/db', () => ({
   },
   cloneColaboradores: {
     getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a),
+  },
+  flowClones: {
+    resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
+      csvGateMock(slot, csv),
   },
 }));
 vi.mock('bcryptjs', () => ({

@@ -11,7 +11,7 @@
  * O bot deve tratar esse erro e silenciar a resposta ao cliente (não enviar
  * horários fictícios de uma barbearia que não é a do cliente).
  */
-import { isFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
+import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import type { HorariosFuncionamento, ServicoConfig } from '@startap/db';
 import { flowClones, query } from '@startap/db';
 import type { CalendarEvent } from '../google-calendar/client.js';
@@ -237,11 +237,17 @@ interface ContextBlockOpts {
   estadoConversa?: string;
   /**
    * FAQ personalizado (SCRUM-65) — gate POR-CLONE. Valor CRU de `config.FAQ_PERSONALIZADO_SLOTS`
-   * (CSV) passado pelos apps; avaliado aqui com isFaqPersonalizadoEnabled(slot, ...). Ausente/OFF
+   * (CSV) passado pelos apps; avaliado aqui com resolveFaqPersonalizadoEnabled(slot, ...). Ausente/OFF
    * pro slot => o bloco [PERGUNTAS FREQUENTES...] NAO e injetado (byte-a-byte pros clones de fora
    * do gate). ON + faq preenchido => bloco entre [OBSERVACOES] e [FUNCIONAMENTO].
    */
   faqSlotsConfig?: string;
+  /**
+   * Eixo COLUNA da resolução env→coluna (ADR 0030 D1): `flow_clones.faq_personalizado_enabled`
+   * do clone. O efetivo é a UNIÃO env||coluna. Passado pelo caller (que já carrega o clone);
+   * ausente => só o env decide (byte-a-byte — hoje o env é '*', então cobre todos).
+   */
+  faqColumnEnabled?: boolean;
 }
 
 // Campos da personalizacao com label especifico no bloco [NEGOCIO].
@@ -478,7 +484,11 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
 
   // [PERGUNTAS FREQUENTES...] (SCRUM-65): FAQ do dono, GATED por-clone (FAQ_PERSONALIZADO_SLOTS).
   // '' quando o gate esta OFF pro slot OU nao ha par valido => bloco ausente (byte-a-byte).
-  const faqBlock = isFaqPersonalizadoEnabled(opts.slot, opts.faqSlotsConfig)
+  const faqBlock = resolveFaqPersonalizadoEnabled(
+    opts.slot,
+    opts.faqSlotsConfig,
+    opts.faqColumnEnabled,
+  )
     ? renderFaqBlock(e.personalizacao as Record<string, unknown>)
     : '';
 

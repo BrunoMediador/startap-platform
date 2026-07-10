@@ -9,9 +9,15 @@ export {
   isPackagePepperConfigured,
   packagePhoneHmac,
 } from './package-phone.js';
-export { isAtendFromAgendaEnabled } from './atend-from-agenda-gate.js';
-export { isModoAtendenteEnabled } from './modo-atendente-gate.js';
-export { isFaqPersonalizadoEnabled } from './faq-personalizado-gate.js';
+export {
+  isAtendFromAgendaEnabled,
+  resolveAtendFromAgendaEnabled,
+} from './atend-from-agenda-gate.js';
+export { isModoAtendenteEnabled, resolveModoAtendenteEnabled } from './modo-atendente-gate.js';
+export {
+  isFaqPersonalizadoEnabled,
+  resolveFaqPersonalizadoEnabled,
+} from './faq-personalizado-gate.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { isDefinitiveNonDelivery } from './waha-send-failure.js';
 export { DEFAULT_TIMEZONE, isValidIanaTimezone, timezoneSchema } from './timezones.js';

@@ -9,10 +9,9 @@
  * Lockout: PORTAL_LOGIN_MAX_ATTEMPTS erradas => trava PORTAL_LOGIN_LOCK_MINUTES.
  * Respostas de erro sao genericas (nao revelam se o username existe).
  */
-import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { canonicalE164 } from '@startap/core/phone';
-import { cloneColaboradores, colaboradorAuth, portalUsers } from '@startap/db';
+import { cloneColaboradores, colaboradorAuth, flowClones, portalUsers } from '@startap/db';
 import bcrypt from 'bcryptjs';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -304,6 +303,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // Resolução env→coluna (ADR 0030 D1): env ATEND_FROM_AGENDA_SLOTS OR flow_clones.billing_from_agenda_enabled.
+    const atendFromAgenda = await flowClones.resolveAtendFromAgendaEnabledForSlot(
+      tenant.slot,
+      config.ATEND_FROM_AGENDA_SLOTS,
+    );
+
     return reply.code(200).send({
       username: tenant.username,
       slot: tenant.slot,
@@ -316,7 +321,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // também). Gate POR-CLONE: reflete se o SLOT DESTA sessão está na lista
       // ATEND_FROM_AGENDA_SLOTS (vazia = OFF pra todos). Mantém o front coerente com o
       // gate real do gancho (B2/D) — clone fora da lista NÃO vê as abas.
-      atend_from_agenda: isAtendFromAgendaEnabled(tenant.slot, config.ATEND_FROM_AGENDA_SLOTS),
+      atend_from_agenda: atendFromAgenda,
       // Só envia os campos quando a feature está ON E o cliente é estabelecimento.
       // Ausentes = individual (o front trata ausência como 'individual').
       ...(productType === 'estabelecimento'

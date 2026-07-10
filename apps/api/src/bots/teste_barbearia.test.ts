@@ -45,6 +45,17 @@ const mocks = vi.hoisted(() => ({
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
   withActionLock: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por env
+  // (cfg.MODO_ATENDENTE_SLOTS / ATEND_FROM_AGENDA_SLOTS); NÃO lê getCloneBySlot (mantém as
+  // asserções de "getCloneBySlot não chamado" intactas). Byte-idêntico ao gate de antes.
+  csvGate: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
@@ -57,7 +68,13 @@ vi.mock('@startap/db', () => ({
     getArea: mocks.getArea,
     getScopeBySlot: mocks.getScopeBySlot,
   },
-  flowClones: { getCloneBySlot: mocks.getCloneBySlot },
+  flowClones: {
+    getCloneBySlot: mocks.getCloneBySlot,
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
+    resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
+  },
   atendimentos: {
     upsertAtendimentoFromEvent: mocks.upsertAtendimentoFromEvent,
     syncAtendimentoFromEvent: mocks.syncAtendimentoFromEvent,

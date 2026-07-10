@@ -9,6 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   setCloneAlertOwnerPhoneIfEmpty: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — o teste usa process.env
+  // (stubEnv MODO_ATENDENTE_SLOTS); byte-idêntico ao isModoAtendenteEnabled de antes.
+  csvGate: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 vi.mock('@startap/core/logger', () => ({
@@ -16,7 +26,11 @@ vi.mock('@startap/core/logger', () => ({
 }));
 
 vi.mock('@startap/db', () => ({
-  flowClones: { setCloneAlertOwnerPhoneIfEmpty: mocks.setCloneAlertOwnerPhoneIfEmpty },
+  flowClones: {
+    setCloneAlertOwnerPhoneIfEmpty: mocks.setCloneAlertOwnerPhoneIfEmpty,
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
+  },
 }));
 
 import { autofillAlertOwnerPhone } from './alert-owner-autofill.js';

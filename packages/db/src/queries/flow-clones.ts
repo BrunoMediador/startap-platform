@@ -4,6 +4,9 @@
  * Um clone herda bot_config/bot_prompt/bot_media de uma matriz, com personalizacao
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
+import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
+import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
+import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
 import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
@@ -87,6 +90,17 @@ export interface CloneRow {
    * garante false quando a coluna não vem no SELECT (byte-idêntico ao comportamento de hoje).
    */
   prompt_custom: boolean;
+  /**
+   * Gates de produtização POR-CLONE (migration 072, ADR 0030 D1). Cada um é o eixo `coluna` da
+   * resolução env→coluna: `efetivo = isEnabledFromCsv(slot, envCsv) OR coluna`. DEFAULT false
+   * carimba toda linha existente — enquanto o env cobrir o clone (ou for '*'), a UNIÃO mantém ON
+   * INDEPENDENTE da coluna (byte-idêntico). normalizeCloneRow garante false quando a coluna não
+   * vem no SELECT (só === true liga). A resolução vive nos gates de @startap/core (resolveX...) e
+   * nos async helpers resolveXEnabledForSlot abaixo.
+   */
+  modo_atendente_enabled: boolean;
+  faq_personalizado_enabled: boolean;
+  billing_from_agenda_enabled: boolean;
   /**
    * Vencimento do billing do slot (LEFT JOIN client_billing). null se nao ha linha
    * de billing. Usado SO pelo gate de silencio por cobranca (ADR 0016) — derivado
@@ -709,6 +723,7 @@ export async function getCloneBySession(sessao: string): Promise<CloneRow | null
             personalizacao, waha_sessao, waha_shard_id, status,
             flow_enabled, suspended_reason, suspended_at,
             horarios_funcionamento, servicos, timezone,
+            modo_atendente_enabled, faq_personalizado_enabled, billing_from_agenda_enabled,
             created_at, updated_at
      FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
     [sessao],
@@ -734,6 +749,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
             fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_kind, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos, fc.timezone,
+            fc.modo_atendente_enabled, fc.faq_personalizado_enabled, fc.billing_from_agenda_enabled,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
             cb.amount_cents AS billing_amount_cents,
             fc.created_at, fc.updated_at
@@ -745,6 +761,51 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
   bySlotCache.set(slot, { value, expiresAt: Date.now() + CACHE_TTL_MS });
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Resolução env→coluna dos gates de produtização (ADR 0030 D1, migration 072)
+//
+// efetivo(feature, slot) = isEnabledFromCsv(slot, envCsv)  OR  flow_clones.<coluna>
+//
+// Estes helpers async fazem a UNIÃO usando o clone JÁ CARREGADO no hot path (getCloneBySlot,
+// cache 60s) — NÃO abrem query nova por-turno na prática. Curto-circuitam no env ANTES de
+// qualquer leitura: se o env já cobre o slot (ou é '*'), retornam true sem tocar o banco (que é
+// o caso de TODOS os clones vivos hoje -> byte-idêntico + zero leitura extra). Só quando o env
+// NÃO cobre é que consultam a coluna (self-service: ligar por-clone sem env).
+//
+// O slot vem SEMPRE da sessão / requireTenant (isolamento P0) — nunca de input do usuário.
+// ---------------------------------------------------------------------------
+
+/** MODO ATENDENTE (SCRUM-59): env MODO_ATENDENTE_SLOTS OR flow_clones.modo_atendente_enabled. */
+export async function resolveModoAtendenteEnabledForSlot(
+  slot: string,
+  envCsv: string | undefined | null,
+): Promise<boolean> {
+  // Curto-circuito no env (kill-switch global) — evita leitura pra quem já está no CSV/'*'.
+  if (resolveModoAtendenteEnabled(slot, envCsv, false)) return true;
+  const clone = await getCloneBySlot(slot);
+  return resolveModoAtendenteEnabled(slot, envCsv, clone?.modo_atendente_enabled);
+}
+
+/** BILLING DA AGENDA (ADR 0027): env ATEND_FROM_AGENDA_SLOTS OR flow_clones.billing_from_agenda_enabled. */
+export async function resolveAtendFromAgendaEnabledForSlot(
+  slot: string,
+  envCsv: string | undefined | null,
+): Promise<boolean> {
+  if (resolveAtendFromAgendaEnabled(slot, envCsv, false)) return true;
+  const clone = await getCloneBySlot(slot);
+  return resolveAtendFromAgendaEnabled(slot, envCsv, clone?.billing_from_agenda_enabled);
+}
+
+/** FAQ PERSONALIZADO (SCRUM-65): env FAQ_PERSONALIZADO_SLOTS OR flow_clones.faq_personalizado_enabled. */
+export async function resolveFaqPersonalizadoEnabledForSlot(
+  slot: string,
+  envCsv: string | undefined | null,
+): Promise<boolean> {
+  if (resolveFaqPersonalizadoEnabled(slot, envCsv, false)) return true;
+  const clone = await getCloneBySlot(slot);
+  return resolveFaqPersonalizadoEnabled(slot, envCsv, clone?.faq_personalizado_enabled);
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,6 +1296,17 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
     // RETURNING *). Rows de outras origens ou antes da migration em dev -> false (render default
     // = byte-idêntico ao comportamento de hoje). Só === true protege do re-render.
     prompt_custom: (row as unknown as { prompt_custom?: unknown }).prompt_custom === true,
+    // Gates de produtização por-clone (migration 072): só vêm de SELECTs que pedem a coluna (hot
+    // path getCloneBySession/BySlot). Rows de outras origens ou antes da migration em dev -> false
+    // (= byte-idêntico: a UNIÃO com o env não muda nada). Só === true liga a coluna.
+    modo_atendente_enabled:
+      (row as unknown as { modo_atendente_enabled?: unknown }).modo_atendente_enabled === true,
+    faq_personalizado_enabled:
+      (row as unknown as { faq_personalizado_enabled?: unknown }).faq_personalizado_enabled ===
+      true,
+    billing_from_agenda_enabled:
+      (row as unknown as { billing_from_agenda_enabled?: unknown }).billing_from_agenda_enabled ===
+      true,
     // Campos do LEFT JOIN client_billing (so vem de getCloneBySlot). Rows de outras
     // origens (getCloneBySession, RETURNING *) nao tem -> null. pg ja devolve
     // amount_cents como number; o ?? null cobre o caso da coluna ausente.

@@ -1,5 +1,3 @@
-import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -480,7 +478,9 @@ export class TesteBarbeariaBot extends BotBase {
     // como hoje. Cirilo/Samuel estão fora do gate -> nunca alcançam processAtendente. O
     // modo atendente NÃO tem agenda, então precede o gate de estabelecimento (que resolve
     // agenda por colaborador). personalizacao pode guardar boolean OU string — checa ambos.
-    if (isModoAtendenteEnabled(this.slot, config.MODO_ATENDENTE_SLOTS)) {
+    if (
+      await flowClones.resolveModoAtendenteEnabledForSlot(this.slot, config.MODO_ATENDENTE_SLOTS)
+    ) {
       const cloneModo = await flowClones.getCloneBySlot(this.slot);
       const rawAgenda: unknown = cloneModo?.personalizacao?.agenda_automatica;
       if (rawAgenda === false || rawAgenda === 'false') {
@@ -581,6 +581,11 @@ export class TesteBarbeariaBot extends BotBase {
       ano: String(now.getFullYear()),
       agendaFormatada: agenda,
       faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
+      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
+      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
+      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
+      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
+      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // ── Bloco [SEU PACOTE] (ADR 0025 — DORMENTE por flag) ────────────────────────
@@ -970,6 +975,11 @@ export class TesteBarbeariaBot extends BotBase {
       dataAtual,
       ano: String(now.getFullYear()),
       faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
+      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
+      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
+      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
+      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
+      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // ── Bloco [EQUIPE] (SCRUM-59) — só pro estabelecimento com colaboradores ativos ──
@@ -1131,7 +1141,14 @@ export class TesteBarbeariaBot extends BotBase {
   }): Promise<void> {
     // GATE POR-CLONE: slot fora da lista (vazia = todos) -> nada acontece. Byte-a-byte
     // o bot de hoje (Cirilo/Samuel inalterados). this.slot SEMPRE do clone (isolamento).
-    if (!isAtendFromAgendaEnabled(this.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
+    // Resolução env→coluna (ADR 0030 D1): env ATEND_FROM_AGENDA_SLOTS OR flow_clones.billing_from_agenda_enabled.
+    if (
+      !(await flowClones.resolveAtendFromAgendaEnabledForSlot(
+        this.slot,
+        config.ATEND_FROM_AGENDA_SLOTS,
+      ))
+    )
+      return;
     // Sem eventId (criação degradada / action-lock sem id) não há chave de idempotência
     // (gcal_event_id) -> NÃO cria (evitaria linha sem âncora de dedup).
     if (!input.eventId) return;
@@ -1216,7 +1233,13 @@ export class TesteBarbeariaBot extends BotBase {
     end: string;
     colaboradorId?: number | null;
   }): Promise<void> {
-    if (!isAtendFromAgendaEnabled(this.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
+    if (
+      !(await flowClones.resolveAtendFromAgendaEnabledForSlot(
+        this.slot,
+        config.ATEND_FROM_AGENDA_SLOTS,
+      ))
+    )
+      return;
     try {
       // tenant_id SEMPRE do clone (isolamento P0) — nunca de input.
       const scope = await cloneColaboradores.getScopeBySlot(this.slot);
@@ -1375,6 +1398,11 @@ export class TesteBarbeariaBot extends BotBase {
       ano: String(now.getFullYear()),
       agendaFormatada: '',
       faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
+      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
+      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
+      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
+      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
+      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // Blocos runtime, não-editáveis, SÓ no estabelecimento (ADR 0024 §6 / panorama §6).

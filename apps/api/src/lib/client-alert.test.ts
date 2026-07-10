@@ -25,6 +25,15 @@ const mocks = vi.hoisted(() => ({
   registerBotReplyEcho: vi.fn(),
   // captura TODA chamada de log pra provar que telefone NUNCA vai em claro no log (LGPD).
   logCalls: [] as unknown[][],
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — testa o gate por env (cfgMock).
+  csvGate: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 // config MUTÁVEL (hoisted) pra ligar/desligar o gate do modo atendente por teste (SCRUM-62).
@@ -55,6 +64,8 @@ vi.mock('@startap/db', () => ({
   flowClones: {
     getCloneAlertOwner: mocks.getCloneAlertOwner,
     getCloneBySlot: mocks.getCloneBySlot,
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
   },
   alerts: {
     getConfig: mocks.getConfig,

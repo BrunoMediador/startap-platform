@@ -31,6 +31,16 @@ const mocks = vi.hoisted(() => ({
   // SCRUM-63: resolução @lid→telefone mockada aqui (foco do router = reagir à identidade
   // resolvida); a lógica real do resolver é testada em lib/lid-resolver.test.ts.
   resolveFromMeIdentity: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — o router testa o gate por env
+  // (process.env.MODO_ATENDENTE_SLOTS); byte-idêntico ao isModoAtendenteEnabled de antes.
+  csvGate: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 vi.mock('@startap/db', () => ({
@@ -51,6 +61,8 @@ vi.mock('@startap/db', () => ({
   flowClones: {
     getCloneBySession: mocks.getCloneBySession,
     getCloneBySlot: mocks.getCloneBySlot,
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
   },
   // clientBilling: gate de silêncio por cobrança (ADR 0016) usa daysUntilDue + GRACE_DAYS.
   // Reimplementacao fiel das funcoes PURAS (mesma ancoragem UTC meia-noite do real).
