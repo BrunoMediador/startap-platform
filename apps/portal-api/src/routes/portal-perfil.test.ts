@@ -32,6 +32,7 @@ const {
   updateAlertOwnerPhoneBySlotMock,
   clearAlertOwnerPhoneBySlotMock,
   isAwaitingAgendaConnectionMock,
+  isAgendaConfiguradaBySlotMock,
   csvGateMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
@@ -42,6 +43,7 @@ const {
   updateAlertOwnerPhoneBySlotMock: vi.fn(),
   clearAlertOwnerPhoneBySlotMock: vi.fn(),
   isAwaitingAgendaConnectionMock: vi.fn(),
+  isAgendaConfiguradaBySlotMock: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por
   // env (cfgMock.MODO_ATENDENTE_SLOTS / FAQ_PERSONALIZADO_SLOTS); byte-idêntico ao gate de antes.
   csvGateMock: (slot: string, csv?: string | null): boolean => {
@@ -69,6 +71,7 @@ vi.mock('@startap/db', () => ({
     resolveFaqPersonalizadoEnabledForSlot: (slot: string, csv?: string | null) =>
       csvGateMock(slot, csv),
     isAwaitingAgendaConnection: (...a: unknown[]) => isAwaitingAgendaConnectionMock(...a),
+    isAgendaConfiguradaBySlot: (...a: unknown[]) => isAgendaConfiguradaBySlotMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -119,6 +122,8 @@ beforeEach(() => {
   clearAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
   // Default: não aguardando agenda (clone conectado / atendente). Testes específicos ligam.
   isAwaitingAgendaConnectionMock.mockResolvedValue(false);
+  // Default: agenda NÃO configurada (estado da maioria dos clones — SCRUM-74). Testes ligam.
+  isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
 });
 
 describe('GET /portal/perfil', () => {
@@ -165,7 +170,37 @@ describe('GET /portal/perfil', () => {
     const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().features).toEqual({ modo_atendente: false, faq_personalizado: false });
+    expect(res.json().features).toEqual({
+      modo_atendente: false,
+      faq_personalizado: false,
+      agenda_configurada: false,
+    });
+    await app.close();
+  });
+
+  it('SCRUM-74: features.agenda_configurada expõe o estado da agenda (false por default)', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features.agenda_configurada).toBe(false);
+    // Anti-IDOR: derivada do slot da SESSÃO, nunca do input.
+    expect(isAgendaConfiguradaBySlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('SCRUM-74: features.agenda_configurada=true quando o time já conectou a agenda', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(true);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features.agenda_configurada).toBe(true);
     await app.close();
   });
 
@@ -453,6 +488,114 @@ describe('PUT /portal/perfil', () => {
     expect(res.statusCode).toBe(200);
     expect(updateTimezoneBySlotMock).toHaveBeenCalledTimes(1);
     expect(updateTimezoneBySlotMock.mock.calls[0][0]).toBe(injectedSlot);
+    await app.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SCRUM-74: religar o agendamento automático (agenda_automatica false→true) NÃO é self-service.
+// Só barra a TRANSIÇÃO false→true sem agenda configurada (409). Desligar / true→true / salvar o
+// resto do payload seguem intactos. Habilitar = comercial + o time conecta a agenda no gestão.
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('PUT /portal/perfil — gate agenda_automatica false→true (SCRUM-74)', () => {
+  it('409: false→true SEM agenda configurada => agenda_nao_configurada, NÃO grava', async () => {
+    // Estado atual: agendamento DESLIGADO (modo atendente). Agenda não conectada pelo time.
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, agenda_automatica: false });
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: true } },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('agenda_nao_configurada');
+    // Recusa ANTES de qualquer escrita (sem write parcial).
+    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
+    // Anti-IDOR: agenda checada pelo slot da SESSÃO, nunca do body.
+    expect(isAgendaConfiguradaBySlotMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('200: false→true COM agenda configurada (time já conectou) => grava', async () => {
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, agenda_automatica: false });
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(true);
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: true } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ agenda_automatica: true }),
+    );
+    await app.close();
+  });
+
+  it('200: →false (desligar) NUNCA barra — nem checa agenda (salvar o resto segue igual)', async () => {
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, agenda_automatica: true });
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: false, nome_negocio: 'X' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // input != true -> nem consulta a agenda.
+    expect(isAgendaConfiguradaBySlotMock).not.toHaveBeenCalled();
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ agenda_automatica: false }),
+    );
+    await app.close();
+  });
+
+  it('200: true→true (no-op) passa mesmo SEM agenda configurada (só a transição é barrada)', async () => {
+    // Já estava LIGADO: re-salvar não reexige config (ex.: aguardando conexão do time).
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, agenda_automatica: true });
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { agenda_automatica: true } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ agenda_automatica: true }),
+    );
+    await app.close();
+  });
+
+  it('anti-IDOR: slot no body é ignorado — a agenda é checada no slot da SESSÃO', async () => {
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, agenda_automatica: false });
+    isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { slot: 'clone_de_OUTRO_cliente', perfil: { agenda_automatica: true } },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(isAgendaConfiguradaBySlotMock.mock.calls[0][0]).toBe(injectedSlot);
     await app.close();
   });
 });
