@@ -258,6 +258,37 @@ export function msgClientePagou(input: {
 }
 
 /**
+ * F — ENTREGA falhando numa sessão (SCRUM-58): N outbounds receberam nack TERMINAL (ack -1/463) ou
+ * ficaram PRESOS sem confirmação de entrega. Agregado por SESSÃO (1 alerta cobre N mensagens) —
+ * evita flood quando a sessão inteira fica muda. LGPD-safe: só nome da sessão/negócio + slot +
+ * contagens + UM telefone-hint JÁ mascarado (nunca número em claro/CPF, nunca conteúdo).
+ */
+export function msgOutboundNaoEntregue(input: {
+  session: string;
+  displayName: string;
+  slot: string | null;
+  /** total de outbounds alertáveis nesta sessão neste ciclo. */
+  total: number;
+  /** quantos são nack TERMINAL (ack -1 / 463). */
+  nackTerminal: number;
+  /** quantos estão PRESOS sem entrega (PENDING/SERVER além do timeout). */
+  presos: number;
+  /** telefone-hint JÁ mascarado de um exemplo (LGPD). */
+  sampleHint: string;
+  /** status do exemplo (ERROR/PENDING/SERVER). */
+  sampleStatus: string;
+}): string {
+  const alvo = input.slot
+    ? `sessão ${input.session} (clone ${input.slot} — "${input.displayName}")`
+    : `sessão ${input.session} ("${input.displayName}")`;
+  const detalhe = `${input.nackTerminal} nack/463, ${input.presos} presa(s) sem ack`;
+  return (
+    `🔴 Entrega falhando: ${alvo} — ${input.total} mensagem(ns) do bot sem confirmação de entrega ` +
+    `(${detalhe}). Ex.: destino …${input.sampleHint} em ${input.sampleStatus}. Verificar a sessão/número.`
+  );
+}
+
+/**
  * E — bot de um clone PAGANTE silenciado pelo gate de inadimplência (SCRUM-67). Visibilidade
  * pro time agir (reconciliar pagamento OU confirmar churn) — o gate/silêncio NÃO é tocado.
  * LGPD-safe: SEM telefone em claro/CPF (só nome do negócio + slot + data de vencimento + dias).

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   appendMessage: vi.fn(),
   pruneHistory: vi.fn(),
   logFlowEvent: vi.fn(),
+  recordOutbound: vi.fn(),
   order: [] as string[],
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only (o teste exercita o gate por env;
   // sem coluna por-clone aqui) — mesma verdade que o isModoAtendenteEnabled de antes.
@@ -47,6 +48,7 @@ vi.mock('@startap/db', () => ({
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
   },
+  outboundMessages: { recordOutbound: (...a: unknown[]) => mocks.recordOutbound(...a) },
 }));
 
 vi.mock('@startap/integrations', () => ({
@@ -102,8 +104,9 @@ function ctx(): BotContext {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.order.length = 0;
-  mocks.sendText.mockResolvedValue(undefined);
+  mocks.sendText.mockResolvedValue({ messageId: null });
   mocks.registerBotReplyEcho.mockResolvedValue(undefined);
+  mocks.recordOutbound.mockResolvedValue(true);
   mocks.appendMessage.mockResolvedValue(undefined);
   mocks.pruneHistory.mockResolvedValue(undefined);
   mocks.logFlowEvent.mockResolvedValue(null);
@@ -163,6 +166,53 @@ describe('BotBase — ordem eco-antes-do-envio (SCRUM-62, modo atendente)', () =
 
     expect(mocks.registerBotReplyEcho).not.toHaveBeenCalled();
     expect(mocks.order).toEqual(['send']);
+    vi.unstubAllEnvs();
+  });
+});
+
+describe('BotBase — rastreio de entrega (SCRUM-58, MESSAGE_ACK_TRACKING_ENABLED)', () => {
+  it('flag ON + id extraído: registra o outbound com slot + telefone-hint MASCARADO', async () => {
+    vi.stubEnv('MESSAGE_ACK_TRACKING_ENABLED', 'true');
+    mocks.sendText.mockResolvedValue({ messageId: 'true_55@c.us_WAMID1' });
+
+    await new OrderTestBot().handle(ctx());
+
+    expect(mocks.recordOutbound).toHaveBeenCalledTimes(1);
+    const arg = mocks.recordOutbound.mock.calls[0][0] as {
+      messageId: string;
+      session: string;
+      slot: string;
+      phoneHint: string;
+    };
+    expect(arg.messageId).toBe('true_55@c.us_WAMID1');
+    expect(arg.session).toBe('MEDUZZA_SESS');
+    expect(arg.slot).toBe(SLOT);
+    // LGPD: nunca o número em claro — hint mascarado (não contém a sequência crua).
+    expect(arg.phoneHint).not.toContain('5531999998842');
+    expect(arg.phoneHint).toMatch(/•/);
+    vi.unstubAllEnvs();
+  });
+
+  it('flag OFF: NÃO registra nada (byte-idêntico), só envia', async () => {
+    mocks.sendText.mockResolvedValue({ messageId: 'true_55@c.us_WAMID1' });
+    await new OrderTestBot().handle(ctx());
+    expect(mocks.recordOutbound).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it('flag ON mas sem id extraído (messageId null): não registra (nada a correlacionar)', async () => {
+    vi.stubEnv('MESSAGE_ACK_TRACKING_ENABLED', 'true');
+    mocks.sendText.mockResolvedValue({ messageId: null });
+    await new OrderTestBot().handle(ctx());
+    expect(mocks.recordOutbound).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it('falha ao registrar NUNCA quebra o fluxo (resposta já saiu)', async () => {
+    vi.stubEnv('MESSAGE_ACK_TRACKING_ENABLED', 'true');
+    mocks.sendText.mockResolvedValue({ messageId: 'true_55@c.us_WAMID1' });
+    mocks.recordOutbound.mockRejectedValue(new Error('db down'));
+    await expect(new OrderTestBot().handle(ctx())).resolves.toBeUndefined();
     vi.unstubAllEnvs();
   });
 });

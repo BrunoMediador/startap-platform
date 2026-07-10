@@ -11,9 +11,18 @@
  */
 import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
+import { parseWahaAckPayload } from '@startap/core/message-ack';
 import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
-import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
+import {
+  antibot,
+  clientBilling,
+  flowClones,
+  flowExecutionLog,
+  outboundMessages,
+  pausa,
+  routing,
+} from '@startap/db';
 import type { RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { isBlockedNumber } from './lib/bot-blocklist.js';
@@ -111,6 +120,16 @@ export async function handleWebhook(
   // clones manuais) são no-op absoluto — comportamento atual intacto.
   if (body.event === 'session.status') {
     return handleSessionStatusEvent(body, { executionId: opts.executionId, startedAt });
+  }
+
+  // 0b. SCRUM-58 — RASTREIO DE ENTREGA: evento `message.ack` do WAHA atualiza o status de entrega
+  // do outbound correspondente (PENDING→SERVER→DEVICE→READ, ou ERROR/nack). GATED por
+  // MESSAGE_ACK_TRACKING_ENABLED (env, mesmo padrão de IDEMPOTENCY_DEDUP): OFF (default) = este bloco
+  // NÃO existe — o `message.ack` cai no filtro NON_INCOMING de sempre e vira `ignored:event`
+  // (byte-idêntico). A assinatura de `message.ack` na config das sessões WAHA é passo de deploy
+  // separado (sem ela, este ramo nunca é exercido). handleAckEvent é FAIL-SAFE: nunca lança.
+  if (body.event === 'message.ack' && process.env.MESSAGE_ACK_TRACKING_ENABLED === 'true') {
+    return handleAckEvent(body, { executionId: opts.executionId, startedAt });
   }
 
   // 1. Aceita qualquer evento de mensagem nova (`message`, `message.any` e
@@ -867,6 +886,65 @@ export async function handleWebhook(
       durationMs: Date.now() - startedAt,
     });
     return { status: 'error:bot-failed' };
+  }
+}
+
+/**
+ * SCRUM-58 — processa um evento `message.ack` do WAHA: atualiza o status de entrega do outbound
+ * correspondente (por message_id). FAIL-SAFE por construção — NUNCA lança (o webhook não pode
+ * quebrar por causa disso) e é INÓCUO pra acks que não conhecemos:
+ *  - payload não-parseável (sem id / sem ack)          → ignored:ack-unparseable
+ *  - ack que não é do NOSSO envio (fromMe === false)   → ignored:ack-not-outbound
+ *  - mensagem desconhecida OU ack fora de ordem (no-op)→ ignored:ack-unknown
+ *  - erro inesperado                                    → ignored:ack-error (logado como warn)
+ * LGPD: loga só sessão/slot/status/ack — NUNCA telefone em claro nem conteúdo da mensagem.
+ */
+async function handleAckEvent(
+  body: WahaWebhookBody,
+  opts: { executionId: string; startedAt: number },
+): Promise<{ status: string }> {
+  const baseLog = { executionId: opts.executionId, session: body.session };
+  try {
+    const parsed = parseWahaAckPayload(body.payload);
+    if (!parsed) {
+      return { status: 'ignored:ack-unparseable' };
+    }
+    // Só rastreamos NOSSOS envios (fromMe). Quando o payload traz fromMe=false é ack de mensagem
+    // recebida (não é outbound nosso) — ignora. fromMe ausente (null) segue: o match por message_id
+    // no applyAck já filtra (devolve null se não for um outbound registrado).
+    if (parsed.fromMe === false) {
+      return { status: 'ignored:ack-not-outbound' };
+    }
+    const updated = await outboundMessages.applyAck({
+      messageId: parsed.messageId,
+      ackCode: parsed.ackCode,
+      ackName: parsed.ackName,
+    });
+    if (!updated) {
+      return { status: 'ignored:ack-unknown' };
+    }
+    log.info(
+      { ...baseLog, slot: updated.slot, ackStatus: updated.ack_status, ackCode: updated.ack_code },
+      'Ack de entrega de outbound atualizado',
+    );
+    await flowExecutionLog.logFlowEvent({
+      ...baseLog,
+      flowId: updated.slot,
+      eventType: 'router.ack-updated',
+      status: 'success',
+      message: 'Ack de entrega de outbound atualizado',
+      metadata: {
+        ackStatus: updated.ack_status,
+        ackCode: updated.ack_code,
+        slot: updated.slot,
+      },
+      durationMs: Date.now() - opts.startedAt,
+    });
+    return { status: `ok:ack-${updated.ack_status.toLowerCase()}` };
+  } catch (e) {
+    // Fail-safe: erro no processamento do ack JAMAIS quebra o webhook.
+    log.warn({ ...baseLog, err: e }, 'Falha ao processar message.ack (ignorado)');
+    return { status: 'ignored:ack-error' };
   }
 }
 

@@ -304,6 +304,44 @@ export const WorkerConfigSchema = z.object({
   // alerta por janela (não 1 por ciclo). Reusa alert_states (chave 'billsilence:<slot>'). Default 1440
   // (24h) = 1 lembrete/dia enquanto pendente — igual à cadência do "🔴 AINDA CAÍDO" do monitor.
   BILLING_SILENCE_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(1_440),
+
+  // ── Rastreio de ENTREGA de outbound + alerta de nack/preso (SCRUM-58) ────────────────────────
+  // O app é CEGO à entrega: loga `bot.reply-sent` no 2xx do WAHA, mas o `ack error:463` e outros
+  // nacks acontecem DEPOIS (nível WhatsApp) e ninguém sabe (Bruno "chegou?"; Lola 3 dias muda —
+  // SCRUM-55). Com o rastreio ON, cada resposta do bot registra o message.id (tabela outbound_
+  // messages, migration 073), o evento message.ack atualiza o status (PENDING→SERVER→DEVICE→READ /
+  // ERROR) e ESTE cron varre nack TERMINAL (ack -1/463) + outbound PRESO sem entrega além do
+  // timeout, avisando o time via ALERTAS (agregado por sessão, com cooldown — não spamma).
+  //
+  // GATE ÚNICO (mesma env do api): MESSAGE_ACK_TRACKING_ENABLED (default OFF — lição #247). Com a
+  // env ausente/false o worker sobe normal e o cron NEM é registrado (zero query, zero WAHA) e o
+  // api não registra/atualiza nada (byte-idêntico). A assinatura de `message.ack` na config das
+  // sessões WAHA é passo de deploy SEPARADO. ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do
+  // PR). Pra ligar: devops seta MESSAGE_ACK_TRACKING_ENABLED=true nos DOIS serviços (api + worker)
+  // + assina message.ack nas sessões + restart. NUNCA hardcoded.
+  MESSAGE_ACK_TRACKING_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrão cron (croner). Default a cada 5 min no offset :2 (2-59/5 — evita colidir com :00 cleanup,
+  // */5 reminders, :08 billing, :15 close-stale, :17 bot-detect, :23 gcal, :30 trial, :43 billsilence).
+  // Padrão inválido NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
+  MESSAGE_ACK_ALERT_CRON: z.string().default('2-59/5 * * * *'),
+  // Janela (min) que um outbound pode ficar em PENDING/SERVER (aceito, mas sem confirmação de
+  // ENTREGA ao aparelho) antes de ser considerado PRESO e virar alerta. Cobre o caso 463 em que o
+  // DEVICE nunca chega. Default 5.
+  MESSAGE_ACK_STUCK_MIN: z.coerce.number().int().positive().default(5),
+  // Cooldown (min) por SESSÃO entre alertas de entrega falhando da MESMA sessão. Uma sessão mute
+  // (463) falharia N mensagens; agregamos por sessão e alertamos no máx 1×/janela (reusa
+  // alert_states, chave 'msgack:<session>'). Default 360 (6h) — mesma cadência do auto-aviso de
+  // desconexão.
+  MESSAGE_ACK_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(360),
+  // Teto de outbounds alertáveis lidos por CICLO (anti-burst). O agregado por sessão + o cooldown já
+  // limitam o ENVIO; isto limita a LEITURA. Default 200.
+  MESSAGE_ACK_ALERT_MAX_PER_RUN: z.coerce.number().int().positive().default(200),
+  // Retenção (dias) das linhas de tracking (efêmeras, não fonte de verdade). O cron poda as antigas
+  // (mesmo padrão de pruneOldFlowEvents). Default 7.
+  MESSAGE_ACK_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

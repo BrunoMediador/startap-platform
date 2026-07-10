@@ -30,8 +30,10 @@ export * as atendimentos from './queries/atendimentos.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
 export * as botDetect from './queries/bot-detect.js';
+export * as outboundMessages from './queries/outbound-messages.js';
 
 // Re-exporta tipos para import direto
+export type { OutboundMessageRow, OutboundAckUpdate } from './queries/outbound-messages.js';
 export type { ChatTurn, Role } from './queries/chat-memory.js';
 export type { RoutingRow } from './queries/routing.js';
 export type { SuspectRow } from './queries/antibot.js';

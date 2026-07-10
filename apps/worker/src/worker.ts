@@ -18,6 +18,7 @@ import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
 import { runGcalHealthcheck } from './jobs/gcal-healthcheck.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
+import { runMessageAckAlert } from './jobs/message-ack-alert.js';
 import { runMonitor } from './jobs/monitor.js';
 import { runReconcilePackages } from './jobs/reconcile-packages.js';
 import { runReminders } from './jobs/reminders.js';
@@ -642,6 +643,70 @@ async function main() {
     log.info(
       'billing-silence-alert: BILLING_SILENCE_ALERT_ENABLED ausente/false — cron NÃO registrado',
     );
+  }
+
+  // Rastreio de ENTREGA de outbound: alerta de nack terminal (463/ack -1) + outbound preso sem
+  // entrega (SCRUM-58). Camada 1 do rollout: SÓ registra o cron com MESSAGE_ACK_TRACKING_ENABLED=true
+  // (default OFF — lição #247). Com a env ausente o worker sobe normal e este cron NÃO existe (zero
+  // query, zero WAHA) E o api não registra/atualiza nada (byte-idêntico). { protect:true } impede
+  // overlap. A cada 5 min no offset :2 (MESSAGE_ACK_ALERT_CRON). Padrão inválido cai no fallback via
+  // scheduleCronSafe. ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR). A env precisa estar ON
+  // TAMBÉM no api (registro + handler do ack) + assinar message.ack nas sessões WAHA.
+  if (config.MESSAGE_ACK_TRACKING_ENABLED) {
+    log.info(
+      { cron: config.MESSAGE_ACK_ALERT_CRON },
+      'message-ack-alert: cron registrado (MESSAGE_ACK_TRACKING_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.MESSAGE_ACK_ALERT_CRON,
+      '2-59/5 * * * *',
+      { name: 'message-ack-alert', timezone: 'America/Sao_Paulo', protect: true },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let ackResult: Awaited<ReturnType<typeof runMessageAckAlert>> | null = null;
+        let ackError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:message-ack-alert',
+          flowName: 'message-ack-alert',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job message-ack-alert iniciado',
+        });
+        try {
+          ackResult = await runMessageAckAlert({
+            stuckMin: config.MESSAGE_ACK_STUCK_MIN,
+            cooldownMin: config.MESSAGE_ACK_ALERT_COOLDOWN_MIN,
+            maxPerRun: config.MESSAGE_ACK_ALERT_MAX_PER_RUN,
+            retentionDays: config.MESSAGE_ACK_RETENTION_DAYS,
+          });
+          // Só loga ciclo com atividade — sem entrega falhando fica mudo.
+          if (ackResult.alerted > 0 || ackResult.sessions > 0 || ackResult.sendFailed > 0) {
+            log.warn({ ...ackResult }, 'message-ack-alert: entrega falhando neste ciclo');
+          }
+        } catch (e) {
+          ackError = e;
+          log.error({ err: e }, 'message-ack-alert crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:message-ack-alert',
+            flowName: 'message-ack-alert',
+            bot: 'worker',
+            eventType: ackError ? 'worker.job-failed' : 'worker.job-finished',
+            status: ackError ? 'error' : 'success',
+            message: ackError ? 'Job message-ack-alert falhou' : 'Job message-ack-alert concluído',
+            ...(ackResult ? { metadata: ackResult } : {}),
+            ...(ackError ? { error: ackError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('message-ack-alert: MESSAGE_ACK_TRACKING_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   // SCRUM-63: resolução @lid→telefone mockada aqui (foco do router = reagir à identidade
   // resolvida); a lógica real do resolver é testada em lib/lid-resolver.test.ts.
   resolveFromMeIdentity: vi.fn(),
+  // SCRUM-58: update de ack de outbound mockado (data layer testada em outbound-messages.test.ts).
+  applyAck: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — o router testa o gate por env
   // (process.env.MODO_ATENDENTE_SLOTS); byte-idêntico ao isModoAtendenteEnabled de antes.
   csvGate: (slot: string, csv?: string | null): boolean => {
@@ -64,6 +66,7 @@ vi.mock('@startap/db', () => ({
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
   },
+  outboundMessages: { applyAck: mocks.applyAck },
   // clientBilling: gate de silêncio por cobrança (ADR 0016) usa daysUntilDue + GRACE_DAYS.
   // Reimplementacao fiel das funcoes PURAS (mesma ancoragem UTC meia-noite do real).
   clientBilling: {
@@ -1311,5 +1314,131 @@ describe('handleWebhook — fromMe ramo AGENDA / human-reply (SCRUM-68 Onda 4)',
     expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.isBotEcho).not.toHaveBeenCalled();
     expect(mocks.resolveFromMeIdentity).not.toHaveBeenCalled();
+  });
+});
+
+// SCRUM-58 — ramo message.ack (rastreio de ENTREGA), gated por MESSAGE_ACK_TRACKING_ENABLED.
+describe('handleWebhook — message.ack (SCRUM-58)', () => {
+  const ACK_ENV_KEY = 'MESSAGE_ACK_TRACKING_ENABLED';
+
+  function ackBody(over: Record<string, unknown> = {}): WahaWebhookBody {
+    return {
+      event: 'message.ack',
+      session: 'cirilo',
+      payload: {
+        id: 'true_5511999998888@c.us_WAMID1',
+        from: '5511999998888@c.us',
+        fromMe: true,
+        ack: 2,
+        ackName: 'DEVICE',
+        ...over,
+      },
+    } as unknown as WahaWebhookBody;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logFlowEvent.mockResolvedValue(null);
+    delete process.env[ACK_ENV_KEY];
+    mocks.applyAck.mockResolvedValue({
+      message_id: 'true_5511999998888@c.us_WAMID1',
+      session: 'cirilo',
+      slot: 'clone_cirilo',
+      ack_status: 'DEVICE',
+      ack_code: 2,
+    });
+  });
+
+  it('flag OFF → byte-idêntico: ack cai no filtro NON_INCOMING (ignored:event), sem applyAck', async () => {
+    const result = await handleWebhook(ackBody(), { executionId: 'e', startedAt: 0 });
+    expect(result).toEqual({ status: 'ignored:event' });
+    expect(mocks.applyAck).not.toHaveBeenCalled();
+  });
+
+  it('flag ON + DEVICE (entregue) → atualiza status, ok:ack-device', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    const result = await handleWebhook(ackBody({ ack: 2, ackName: 'DEVICE' }), {
+      executionId: 'e',
+      startedAt: 0,
+    });
+    expect(mocks.applyAck).toHaveBeenCalledWith({
+      messageId: 'true_5511999998888@c.us_WAMID1',
+      ackCode: 2,
+      ackName: 'DEVICE',
+    });
+    expect(result).toEqual({ status: 'ok:ack-device' });
+  });
+
+  it('flag ON + nack/463 (ack -1) → status terminal', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    mocks.applyAck.mockResolvedValue({
+      message_id: 'x',
+      session: 'cirilo',
+      slot: 'clone_cirilo',
+      ack_status: 'ERROR',
+      ack_code: -1,
+    });
+    const result = await handleWebhook(ackBody({ ack: -1, ackName: 'ERROR' }), {
+      executionId: 'e',
+      startedAt: 0,
+    });
+    expect(mocks.applyAck).toHaveBeenCalledWith({
+      messageId: expect.any(String),
+      ackCode: -1,
+      ackName: 'ERROR',
+    });
+    expect(result).toEqual({ status: 'ok:ack-error' });
+  });
+
+  it('flag ON + read (ack 3) NÃO dispara nada de negativo — só marca READ', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    mocks.applyAck.mockResolvedValue({
+      message_id: 'x',
+      session: 'cirilo',
+      slot: 'clone_cirilo',
+      ack_status: 'READ',
+      ack_code: 3,
+    });
+    const result = await handleWebhook(ackBody({ ack: 3, ackName: 'READ' }), {
+      executionId: 'e',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:ack-read' });
+  });
+
+  it('flag ON + mensagem desconhecida (applyAck null) → ignored:ack-unknown', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    mocks.applyAck.mockResolvedValue(null);
+    const result = await handleWebhook(ackBody(), { executionId: 'e', startedAt: 0 });
+    expect(result).toEqual({ status: 'ignored:ack-unknown' });
+  });
+
+  it('flag ON + fromMe=false (ack de mensagem recebida) → ignora, sem applyAck', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    const result = await handleWebhook(ackBody({ fromMe: false }), {
+      executionId: 'e',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:ack-not-outbound' });
+    expect(mocks.applyAck).not.toHaveBeenCalled();
+  });
+
+  it('flag ON + payload sem id → ignored:ack-unparseable, sem applyAck', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    const body = {
+      event: 'message.ack',
+      session: 'cirilo',
+      payload: { ack: 2 },
+    } as unknown as WahaWebhookBody;
+    const result = await handleWebhook(body, { executionId: 'e', startedAt: 0 });
+    expect(result).toEqual({ status: 'ignored:ack-unparseable' });
+    expect(mocks.applyAck).not.toHaveBeenCalled();
+  });
+
+  it('flag ON + erro no applyAck → fail-safe ignored:ack-error (não quebra o webhook)', async () => {
+    process.env[ACK_ENV_KEY] = 'true';
+    mocks.applyAck.mockRejectedValue(new Error('pg down'));
+    const result = await handleWebhook(ackBody(), { executionId: 'e', startedAt: 0 });
+    expect(result).toEqual({ status: 'ignored:ack-error' });
   });
 });

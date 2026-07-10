@@ -6,8 +6,15 @@
  */
 import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
+import { phoneHint } from '@startap/core/phone';
 import type { Bot, BotContext } from '@startap/core/types';
-import { chatMemory, flowClones, flowExecutionLog, pausa as pausaQueries } from '@startap/db';
+import {
+  chatMemory,
+  flowClones,
+  flowExecutionLog,
+  outboundMessages,
+  pausa as pausaQueries,
+} from '@startap/db';
 import type { Role } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { registerBotReplyEcho } from '../lib/human-reply-pause.js';
@@ -143,7 +150,32 @@ export abstract class BotBase implements Bot {
         ) {
           await registerBotReplyEcho(sessao, telefone, reply);
         }
-        await waha.sendText({ sessao, chatId, texto: reply, typing: true, delayMs: 1500 });
+        const sendResult = await waha.sendText({
+          sessao,
+          chatId,
+          texto: reply,
+          typing: true,
+          delayMs: 1500,
+        });
+        // SCRUM-58 — RASTREIO DE ENTREGA: registra o outbound (id + slot + telefone-hint
+        // mascarado). O `bot.reply-sent` abaixo é só "WAHA aceitou (2xx)"; a ENTREGA (ou o
+        // nack/463) chega DEPOIS, via evento message.ack (handler no router). GATED por
+        // MESSAGE_ACK_TRACKING_ENABLED (lida do env, mesmo padrão de IDEMPOTENCY_DEDUP): OFF
+        // (default) = byte-idêntico, zero registro. Best-effort: NUNCA quebra o envio (a
+        // resposta já saiu) — falha aqui é só warn. Sem messageId extraível (2026.6.2 pode não
+        // trazer id) = pula (não há como correlacionar o ack). LGPD: só phoneHint mascarado.
+        if (process.env.MESSAGE_ACK_TRACKING_ENABLED === 'true' && sendResult.messageId) {
+          await outboundMessages
+            .recordOutbound({
+              messageId: sendResult.messageId,
+              session: sessao,
+              slot: this.slot,
+              phoneHint: phoneHint(telefone),
+            })
+            .catch((err) =>
+              this.log.warn({ err, session: sessao }, 'Falha ao registrar outbound (ack tracking)'),
+            );
+        }
         await this.logEvent({
           ...baseLog,
           eventType: 'bot.reply-sent',
