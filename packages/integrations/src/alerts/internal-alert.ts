@@ -256,3 +256,25 @@ export function msgClientePagou(input: {
     `${formatBRLFromCents(input.paidAmountCents)} via PIX. slot ${input.slot}.`
   );
 }
+
+/**
+ * E — bot de um clone PAGANTE silenciado pelo gate de inadimplência (SCRUM-67). Visibilidade
+ * pro time agir (reconciliar pagamento OU confirmar churn) — o gate/silêncio NÃO é tocado.
+ * LGPD-safe: SEM telefone em claro/CPF (só nome do negócio + slot + data de vencimento + dias).
+ */
+export function msgBotSilenciadoInadimplencia(input: {
+  displayName: string;
+  slot: string;
+  /** Vencimento 'YYYY-MM-DD'. */
+  nextDueDate: string;
+  /** Dias de atraso (positivo). */
+  diasAtraso: number;
+}): string {
+  const dias = Math.max(0, Math.trunc(input.diasAtraso));
+  const plural = dias === 1 ? 'dia' : 'dias';
+  const acao = 'Reconciliar o pagamento ou confirmar churn.';
+  return (
+    `⚠️ Bot silenciado por atraso: "${input.displayName}" (slot ${input.slot}) está MUDO por ` +
+    `inadimplência — venceu em ${input.nextDueDate} (${dias} ${plural} de atraso). ${acao}`
+  );
+}

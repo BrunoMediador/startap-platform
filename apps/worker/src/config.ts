@@ -275,6 +275,35 @@ export const WorkerConfigSchema = z.object({
   BOT_DETECT_LLM_MAX_MSGS: z.coerce.number().int().positive().default(12),
   // Timeout duro (ms) da chamada LLM — nunca aguardar o provider infinito (regra 7). Default 30s.
   BOT_DETECT_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
+  // ── Alerta interno: bot PAGANTE silenciado por inadimplência (SCRUM-67) ──────────────────────
+  // VISIBILIDADE (não muda o gate): quando um clone PAGANTE (client_billing.last_payment_at
+  // preenchido) é silenciado pelo gate de inadimplência (router: vencido > GRACE_DAYS, atrás de
+  // BILLING_OVERDUE_SILENCE), o bot fica mudo e HOJE ninguém sabe (aconteceu com o Cirilo: ~2 dias
+  // mudo, 37 msgs ignoradas). Este cron varre os pagantes silenciados e manda UM alerta interno via
+  // ALERTAS ("bot do <cliente> silenciado por atraso — reconciliar ou confirmar churn"), com cooldown
+  // por-slot pra não spammar todo ciclo. NÃO toca o silêncio (comportamento intocado) — só avisa o time.
+  //
+  // GATE: SÓ registra o cron com BILLING_SILENCE_ALERT_ENABLED=true (default OFF — lição #247: nada
+  // aqui é obrigatório no boot; ausente = OFF = nenhum alerta). Com OFF o worker sobe normal e o cron
+  // NEM é registrado (zero query, zero WAHA). Além disso, o job só age quando o PRÓPRIO gate está ON
+  // (process.env.BILLING_OVERDUE_SILENCE === 'true', mesma fonte do router): com o gate OFF ninguém
+  // está silenciado -> NO-OP (nenhum alerta falso). ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo
+  // do PR). Pra ligar: devops seta BILLING_SILENCE_ALERT_ENABLED=true (+ garantir BILLING_OVERDUE_SILENCE
+  // no worker) + restart do worker; o monitor de alertas (ALERTS_ENABLED) já precisa estar configurado
+  // pra a ALERTAS/destinatários existirem. NUNCA hardcoded.
+  BILLING_SILENCE_ALERT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrão cron (croner). Default de hora em hora no minuto 43 (não colide com :00 cleanup, :08
+  // billing, :09 reconcile, :15 close-stale, :17 bot-detect, :23 gcal, :30 trial). Padrão inválido
+  // NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
+  BILLING_SILENCE_ALERT_CRON: z.string().default('43 * * * *'),
+  // Cooldown (min) por CLONE entre alertas do MESMO clone silenciado: enquanto seguir mudo, no máx 1
+  // alerta por janela (não 1 por ciclo). Reusa alert_states (chave 'billsilence:<slot>'). Default 1440
+  // (24h) = 1 lembrete/dia enquanto pendente — igual à cadência do "🔴 AINDA CAÍDO" do monitor.
+  BILLING_SILENCE_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(1_440),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

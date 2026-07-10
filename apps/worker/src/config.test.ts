@@ -53,4 +53,20 @@ describe('WorkerConfigSchema', () => {
     expect(result.BOT_DETECT_ENABLED).toBe(true);
     expect(result.BOT_DETECT_SLOTS).toBe('clone_barber_dragon_caly8b');
   });
+
+  it('billing-silence-alert (SCRUM-67) nasce OFF com defaults seguros', () => {
+    const result = WorkerConfigSchema.parse({});
+    expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(false); // ausente = OFF (cron nem registra)
+    expect(result.BILLING_SILENCE_ALERT_CRON).toBe('43 * * * *');
+    expect(result.BILLING_SILENCE_ALERT_COOLDOWN_MIN).toBe(1_440); // 24h
+  });
+
+  it('billing-silence-alert ON via env, cooldown ajustável sem deploy', () => {
+    const result = WorkerConfigSchema.parse({
+      BILLING_SILENCE_ALERT_ENABLED: 'true',
+      BILLING_SILENCE_ALERT_COOLDOWN_MIN: '720',
+    });
+    expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(true);
+    expect(result.BILLING_SILENCE_ALERT_COOLDOWN_MIN).toBe(720);
+  });
 });
