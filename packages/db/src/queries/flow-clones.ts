@@ -13,7 +13,17 @@ import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
 
-export type CloneStatus = 'rascunho' | 'aguardando_qr' | 'conectado' | 'desconectado' | 'falhou';
+export type CloneStatus =
+  | 'rascunho'
+  | 'aguardando_qr'
+  | 'conectado'
+  | 'desconectado'
+  // 'parado' (SCRUM-64): sessão WAHA PARADA de propósito (POST /stop). DISTINTO de
+  // 'desconectado' (queda inesperada) — o monitor (alerts.listMonitoredSessions filtra
+  // status IN ('conectado','desconectado')) exclui 'parado', então parar uma sessão de
+  // propósito NÃO gera alerta de queda falso. Sem constraint no banco (status é VARCHAR(24)).
+  | 'parado'
+  | 'falhou';
 
 export interface HorarioDia {
   abre: string | null; // "HH:MM" ou null se fechado
@@ -572,6 +582,47 @@ export async function markCloneConnectedBySlot(slot: string): Promise<boolean> {
   // RETURNING avalia o predicado ANTES do SET (semântica do UPDATE) -> status_changed reflete o
   // estado PRÉVIO, exatamente o que o contrato pede (true só quando o status realmente mudou).
   return row?.status_changed === true;
+}
+
+/**
+ * Flipa flow_clones.status -> 'parado' para a sessão WAHA parada de propósito (SCRUM-64),
+ * IDEMPOTENTE e chaveado por `waha_sessao` (a mesma âncora do sync do painel-admin).
+ *
+ * POR QUÊ: o webhook `session.status` só flipava o status em WORKING (-> 'conectado'). Quando
+ * a sessão era PARADA (POST /stop no WAHA) o evento STOPPED chegava mas o status seguia
+ * 'conectado' — o painel/portal MENTIAM ("conectado" com a sessão morta) e o monitor
+ * (alerts.listMonitoredSessions) seguia vigiando a sessão como se estivesse no ar, arriscando
+ * um alerta de queda FALSO (STOPPED != WORKING no observeWaha).
+ *
+ * 'parado' é um estado HONESTO e DISTINTO de 'desconectado' (queda inesperada que EXIGE ação):
+ * o operador vê "Parada" (foi de propósito) vs "Desconectado" (caiu, reconectar). E como o
+ * filtro do monitor é `status IN ('conectado','desconectado')`, 'parado' fica FORA da vigia —
+ * zero alerta de queda falso pra sessão parada de propósito, SEM tocar o código do monitor.
+ *
+ * TRANSICIONA APENAS de 'conectado'/'desconectado' -> 'parado': só as sessões que já estavam
+ * no ar (e portanto candidatas ao "conectado mentiroso" e à vigia). NÃO clobbera estados de
+ * pré-setup ('rascunho'/'aguardando_qr'/'falhou') — parar uma sessão em onboarding não a torna
+ * "parada". Idempotente ('parado' -> 'parado' cai fora do WHERE). SÓ toca `status`.
+ *
+ * Quando a sessão volta (Bruno dá /start), o WAHA emite WORKING e markCloneConnectedBySlot
+ * flipa de volta pra 'conectado' — recuperação normal, sem re-scan.
+ *
+ * @returns true se ESTA chamada flipou o status (estava conectado/desconectado); false se
+ *          nada mudou (já 'parado', pré-setup, ou sessão inexistente) — no-op idempotente.
+ */
+export async function markCloneStoppedBySession(session: string): Promise<boolean> {
+  const r = await query<{ slot: string }>(
+    `UPDATE flow_clones
+        SET status = 'parado',
+            updated_at = NOW()
+      WHERE waha_sessao = $1
+        AND status IN ('conectado', 'desconectado')
+      RETURNING slot`,
+    [session],
+  );
+  const row = r.rows[0];
+  if (row) invalidateCloneCache({ slot: row.slot, sessao: session });
+  return !!row;
 }
 
 /**

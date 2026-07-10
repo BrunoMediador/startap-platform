@@ -96,6 +96,27 @@ async function processSessionStatus(
   const parsed = SessionStatusPayload.safeParse(body.payload ?? {});
   const sessionStatus = parsed.success ? (parsed.data.status ?? null) : null;
 
+  // SCRUM-64: sessão PARADA de propósito (POST /stop no WAHA). Antes o webhook só flipava
+  // o status em WORKING; STOPPED chegava e o status seguia 'conectado' (mentira do painel/
+  // portal) e a sessão continuava na vigia do monitor -> risco de alerta de queda FALSO.
+  // markCloneStoppedBySession flipa 'conectado'/'desconectado' -> 'parado' (estado honesto e
+  // DISTINTO de 'desconectado'/queda), que o monitor exclui por design (listMonitoredSessions
+  // filtra status IN ('conectado','desconectado')). Idempotente, chaveado por waha_sessao,
+  // fail-safe (nunca quebra o webhook — WAHA precisa de 2xx). STARTING é transitório (resolve
+  // sozinho pra WORKING/FAILED) e permanece ignorado abaixo pra não flapar o status.
+  if (sessionStatus === 'STOPPED') {
+    try {
+      const changed = await flowClones.markCloneStoppedBySession(body.session);
+      log.info({ ...baseLog, changed }, 'trial-pairing: sessão STOPPED -> status parado');
+    } catch (e) {
+      log.warn(
+        { ...baseLog, err: e instanceof Error ? e.message : String(e) },
+        'trial-pairing: flip de status p/ parado falhou (ignorado, webhook responde 2xx)',
+      );
+    }
+    return { status: 'ok:session-stopped' };
+  }
+
   if (sessionStatus !== 'WORKING') {
     return { status: 'ignored:session-status' };
   }

@@ -84,6 +84,9 @@ describe('listMonitoredSessions — guardas no SQL (não alertar pré-setup; vig
     expect(sql).toContain(`fc.status IN ('conectado', 'desconectado')`);
     // ANTI-PRÉ-SETUP preservado: o filtro NÃO usa mais `status = 'conectado'` sozinho.
     expect(sql).not.toContain(`fc.status = 'conectado'`);
+    // SCRUM-64: sessão PARADA de propósito (status 'parado') NUNCA entra na vigia -> sem
+    // alerta de queda falso. Guarda contra alguém adicionar 'parado' ao filtro por engano.
+    expect(sql).not.toContain('parado');
     // Trials aguardando QR (FAILED esperado) jamais entram.
     expect(sql).toContain(`fc.trial_status <> 'awaiting'`);
     // Nunca seleciona sessão vazia/nula.

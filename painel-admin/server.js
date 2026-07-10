@@ -5378,7 +5378,13 @@ const WAHA_SYNC_INTERVAL_MS = 60_000;
 const WAHA_STATUS_MAP = {
   WORKING: 'conectado',
   FAILED: 'desconectado',
-  STOPPED: 'desconectado',
+  // STOPPED = sessão parada de propósito (POST /stop), NÃO queda. Mapeia pra 'parado'
+  // (SCRUM-64), consistente com o webhook session.status (apps/api trial-pairing). Antes
+  // era 'desconectado', o que (a) mentia visualmente (parada != caída) e (b) mantinha a
+  // sessão na vigia do monitor -> alerta de queda FALSO. 'parado' fica FORA do filtro do
+  // monitor (status IN ('conectado','desconectado')). Sem esta linha, este sync de 60s
+  // reverteria o 'parado' do webhook de volta pra 'desconectado' e o falso alerta voltaria.
+  STOPPED: 'parado',
   SCAN_QR_CODE: 'aguardando_qr',
 };
 

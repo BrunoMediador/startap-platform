@@ -328,12 +328,15 @@ export interface MonitoredSession {
  * Sessões WAHA a monitorar:
  *  - clones com sessão dedicada que JÁ parearam alguma vez (first_connected_at IS NOT NULL,
  *    migration 062), em status 'conectado' OU 'desconectado'. Inclui o caso CRÍTICO da sessão
- *    que ACABOU de cair: o sync do painel (WAHA FAILED/STOPPED -> 'desconectado') tira o
+ *    que ACABOU de cair: o sync do painel (WAHA FAILED -> 'desconectado') tira o
  *    'conectado' em ~60s; com o filtro antigo `status = 'conectado'` a sessão SAÍA da lista no
  *    instante em que caía e o monitor NUNCA via a transição up->down (bug provado em prod: Seven 7
  *    ficou FAILED ~20 min sem 1 alerta; alert_states seguiu 'up'). Agora ela CONTINUA vigiada: o
  *    observeWaha do monitor a vê como down (status != WORKING na WAHA) e dispara o alerta —
  *    interno (Bruno) E, com a flag nova, ao próprio dono do clone.
+ *    NOTA (SCRUM-64): STOPPED (parada de PROPÓSITO via POST /stop) NÃO cai em 'desconectado' e
+ *    sim em 'parado' (webhook session.status + sync do painel) — FORA deste filtro de propósito,
+ *    pra não gerar alerta de queda falso pra uma sessão intencionalmente parada.
  *  - ANTI-PRÉ-SETUP: clones que NUNCA conectaram (first_connected_at NULL — rascunho/
  *    aguardando_qr/falhou nunca-pareados) ficam FORA. FAILED/SCAN_QR_CODE de pré-setup é estado
  *    ESPERADO, não incidente. Trials 'awaiting' também ficam fora (ver memória project_fluxos_
