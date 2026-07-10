@@ -45,16 +45,28 @@ jobs:
         run: |
           git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
 
-      - name: Dump + compress
+      - name: Dump + compress (+ cifra opcional com age)
         id: dump
+        env:
+          # Chave PÚBLICA age (cifra assimétrica). GUARD:
+          #   - AUSENTE/vazia → gzip puro (.sql.gz), byte-idêntico ao histórico.
+          #   - presente      → cifra o dump ANTES do commit (.sql.gz.age); só a
+          #                     chave PRIVADA (offline, com o Bruno) decifra.
+          # Ligar a cripto = só cadastrar este secret no repo (sem deploy).
+          # Passo a passo: docs/empresa/backup-cripto-SETUP.md (repo time-empresa-automacao).
+          BACKUP_AGE_PUBKEY: ${{ secrets.BACKUP_AGE_PUBKEY }}
         run: |
           TIMESTAMP=$(date -u '+%Y-%m-%d-%H%M%S')
           YEAR=$(date -u '+%Y')
           MONTH=$(date -u '+%m')
           OUTDIR="startap-backups/dumps/${YEAR}/${MONTH}"
-          OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz"
 
           mkdir -p "${OUTDIR}"
+
+          # Dump + gzip para arquivo TEMPORÁRIO fora do repo. A validação de
+          # integridade (SCRUM-70) roda SEMPRE sobre o .gz em CLARO — depois de
+          # cifrado, gzip -t e o grep do marcador não conseguem inspecionar o .age.
+          TMPGZ="${RUNNER_TEMP}/${TIMESTAMP}.sql.gz"
 
           # pg_dump roda dentro do container; falha visível se SSH cair
           ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes root@187.77.242.220 \
@@ -62,17 +74,17 @@ jobs:
               -U startap_user \
               -d startap_database \
               --no-owner --no-acl" \
-            | gzip > "${OUTFILE}"
+            | gzip > "${TMPGZ}"
 
           # Confirma que o arquivo não está vazio
-          SIZE=$(stat -c%s "${OUTFILE}")
+          SIZE=$(stat -c%s "${TMPGZ}")
           if [ "${SIZE}" -lt 1024 ]; then
             echo "ERRO: dump gerado é menor que 1 KB (${SIZE} bytes) — suspeito de falha silenciosa"
             exit 1
           fi
 
           # Integridade do gzip: pega stream corrompido/truncado no transporte SSH.
-          if ! gzip -t "${OUTFILE}"; then
+          if ! gzip -t "${TMPGZ}"; then
             echo "ERRO: gzip corrompido — dump inválido"
             exit 1
           fi
@@ -80,15 +92,37 @@ jobs:
           # Marcador de conclusão do pg_dump: garante dump COMPLETO (não truncado no meio)
           # e que o conteúdo é mesmo um dump — não uma mensagem de erro do docker/ssh
           # que passou pelo pipe e ainda assim ficou >1 KB.
-          COMPLETE=$(gzip -dc "${OUTFILE}" | grep -c "PostgreSQL database dump complete" || true)
+          COMPLETE=$(gzip -dc "${TMPGZ}" | grep -c "PostgreSQL database dump complete" || true)
           if [ "${COMPLETE}" -lt 1 ]; then
             echo "ERRO: dump sem marcador de conclusão do pg_dump — truncado ou conteúdo inválido"
             exit 1
           fi
 
+          # GUARD de criptografia — só APÓS o dump validado.
+          if [ -n "${BACKUP_AGE_PUBKEY}" ]; then
+            # age só é necessário quando a cripto está ligada; instala sob demanda.
+            if ! command -v age >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends age
+            fi
+            OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz.age"
+            age -r "${BACKUP_AGE_PUBKEY}" -o "${OUTFILE}" "${TMPGZ}"
+            rm -f "${TMPGZ}"
+            echo "backup CIFRADO com age → ${OUTFILE}"
+          else
+            # Sem secret → comportamento histórico: gzip puro em claro.
+            # mv preserva os bytes do stream gzip (idêntico a 'gzip > OUTFILE').
+            OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz"
+            mv "${TMPGZ}" "${OUTFILE}"
+            echo "backup NÃO cifrado (secret BACKUP_AGE_PUBKEY ausente) → ${OUTFILE}"
+          fi
+
+          # Tamanho do arquivo FINAL que vai ao commit (gz ou age).
+          FINAL_SIZE=$(stat -c%s "${OUTFILE}")
+
           echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
           echo "outfile=${OUTFILE}" >> "$GITHUB_OUTPUT"
-          echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
+          echo "size=${FINAL_SIZE}" >> "$GITHUB_OUTPUT"
 
       - name: Commit e push
         run: |
