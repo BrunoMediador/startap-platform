@@ -17,6 +17,17 @@ export const AJUDA_WHATSAPP_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURICompo
 )}`;
 
 /**
+ * "Falar com o suporte" da seção Agendamento quando a agenda NÃO está configurada
+ * (SCRUM-74): habilitar o agendamento automático é comercial (preço novo) + o time
+ * conecta a agenda do negócio no gestão (ADR 0024) — não é self-service. Mesmo número
+ * de suporte, com texto pré-preenchido do cliente pedindo pra habilitar. NÃO é número
+ * novo — reusa SUPORTE_WHATSAPP_URL (regra de ouro: número único, nunca espalhar).
+ */
+export const SUPORTE_AGENDA_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
+  'Olá! Quero habilitar o agendamento automático (agenda do Google) no meu plano da Startap.',
+)}`;
+
+/**
  * Instagram público da Startap (W12) — handle @startap.ia. Centralizado aqui
  * junto dos canais públicos pra não espalhar o link.
  */

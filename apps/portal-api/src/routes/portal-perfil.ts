@@ -39,7 +39,16 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       slot,
       config.FAQ_PERSONALIZADO_SLOTS,
     );
-    const features = { modo_atendente: modoAtendente, faq_personalizado: faqPersonalizado };
+    // features.agenda_configurada (SCRUM-74): o clone tem Google Calendar utilizável, conectado
+    // pelo TIME no gestão (ADR 0024). Contrato pro front: o toggle "agendamento automático" só
+    // pode ser LIGADO quando isto é true; desligado, o front mostra "fale com o suporte pra
+    // habilitar". Escopado pelo slot da SESSÃO (withTenant) — nunca do input.
+    const agendaConfigurada = await flowClones.isAgendaConfiguradaBySlot(slot);
+    const features = {
+      modo_atendente: modoAtendente,
+      faq_personalizado: faqPersonalizado,
+      agenda_configurada: agendaConfigurada,
+    };
     // recepcao_telefone (SCRUM-59 → Onda 1 de-gate, SCRUM-68 / ADR 0030): destino dos avisos de
     // lead/escalação/desconexão ao dono (= flow_clones.alert_owner_phone RAW). UNIVERSAL: exposto
     // pra TODO formato (individual/estabelecimento, agenda/atendente). O alert_owner_phone já é
@@ -128,6 +137,24 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'telefone_invalido' });
       } else {
         recepcaoAction = { kind: 'set', digits };
+      }
+    }
+    // SCRUM-74: religar o agendamento automático NÃO é self-service. Habilitar é comercial
+    // (preço novo) + o time conecta a agenda no gestão (ADR 0024). Recusamos APENAS a TRANSIÇÃO
+    // agenda_automatica false→true quando a agenda ainda não está configurada:
+    //   - input agenda_automatica != true (ausente/false) -> nunca barra (desligar / salvar
+    //     link/telefone/o resto do payload segue igual);
+    //   - já estava LIGADO (true→true, no-op)             -> passa (é o estado atual; não reexige config);
+    //   - false→true E agenda configurada                 -> passa (o time já conectou);
+    //   - false→true E !agenda configurada                -> 409 agenda_nao_configurada.
+    // Checagem ANTES de qualquer escrita (sem write parcial). agendaConfigurada é derivada do
+    // slot da SESSÃO (anti-IDOR: nunca de input) e fail-closed (na dúvida, não religa).
+    if (parsed.data.agenda_automatica === true) {
+      const perfilAtual = await portalConfig.getPerfilBySlot(slot);
+      if (perfilAtual === null) return reply.code(404).send({ error: 'fluxo nao encontrado' });
+      const estavaDesligado = perfilAtual.agenda_automatica === false;
+      if (estavaDesligado && !(await flowClones.isAgendaConfiguradaBySlot(slot))) {
+        return reply.code(409).send({ error: 'agenda_nao_configurada' });
       }
     }
     const ok = await portalConfig.updatePerfilBySlot(slot, parsed.data);

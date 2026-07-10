@@ -914,6 +914,57 @@ export async function isAwaitingAgendaConnection(slot: string): Promise<boolean>
   }
 }
 
+/**
+ * "Agenda configurada?" (SCRUM-74) — o clone tem um Google Calendar UTILIZÁVEL, conectado
+ * pelo TIME via painel gestão (ADR 0024). É o MESMO critério (`gcalConfigured`) que
+ * getGcalForSlot/getGcalsForSlot exigem pra devolver um client — só o inverso do que
+ * isAwaitingAgendaConnection considera "aguardando" — derivado do MESMO jeito, sem inventar:
+ *  - individual: flow_clones tem gcal_status='active' + credenciais + calendarId próprios.
+ *  - estabelecimento: ≥1 colaborador ATIVO com agenda 'active' + calendarId (a credencial é a
+ *    Service Account do CLONE, 1 por cliente — ADR 0024 §2).
+ *
+ * Usado pelo PUT /portal/perfil pra BARRAR a auto-religação do agendamento automático
+ * (agenda_automatica false→true) quando a agenda ainda não foi configurada: habilitar é
+ * comercial (preço novo) + o time conecta a agenda no gestão, NUNCA self-service pelo portal.
+ *
+ * Escopado por slot (SEMPRE da sessão / withTenant — nunca de input). NÃO decifra a credencial
+ * (só checa presença): é pergunta de configuração, não de uso. Best-effort: em erro de query
+ * devolve false (fail-closed — na dúvida, NÃO religa o agendamento).
+ */
+export async function isAgendaConfiguradaBySlot(slot: string): Promise<boolean> {
+  try {
+    const r = await query<{
+      product_type: string | null;
+      gcal_status: string | null;
+      has_creds: boolean;
+      has_calendar: boolean;
+    }>(
+      `SELECT product_type, gcal_status,
+              (gcal_credentials_json IS NOT NULL) AS has_creds,
+              (gcal_calendar_id IS NOT NULL)      AS has_calendar
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (!row) return false;
+
+    if (row.product_type === 'estabelecimento') {
+      // estabelecimento: ≥1 colaborador ativo com agenda 'active' + calendarId (getGcalsForSlot).
+      const c = await query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM clone_colaboradores
+         WHERE slot = $1 AND ativo = TRUE AND gcal_status = 'active' AND gcal_calendar_id IS NOT NULL`,
+        [slot],
+      );
+      return Number(c.rows[0]?.n ?? 0) > 0;
+    }
+
+    // individual: mesma condição que getGcalForSlot exige pra devolver um client.
+    return row.gcal_status === 'active' && row.has_creds && row.has_calendar;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Credencial Google do CLIENTE (login do Google Agenda no cel/PC) — migration 061
 //

@@ -181,6 +181,35 @@ export function isRecepcaoIndisponivel(err: unknown): boolean {
   );
 }
 
+// ── Agenda configurada / gate de auto-habilitar (SCRUM-74) ───────────────────
+//
+// Habilitar o agendamento automático NÃO é self-service: é comercial (preço novo) + o
+// time conecta a agenda do negócio no gestão (ADR 0024). O GET /portal/perfil expõe
+// `features.agenda_configurada`; quando false, o portal esconde o Switch e mostra um CTA
+// "fale com o suporte". O PUT recusa a transição false→true sem agenda com 409.
+
+/**
+ * Retrocompat do gate SCRUM-74: resolve `features.agenda_configurada` num boolean.
+ * AUSENTE/undefined/null (backend antigo que ainda não expõe o campo) -> TRUE, pra NÃO
+ * travar clone já em produção cujo agendamento funciona. SÓ o literal `false` (backend
+ * novo dizendo "sem agenda conectada") esconde o Switch e liga o CTA de suporte.
+ */
+export function isAgendaConfigurada(value: boolean | null | undefined): boolean {
+  return value !== false;
+}
+
+/**
+ * 409 agenda_nao_configurada: rede de proteção do PUT /portal/perfil. Religar o
+ * agendamento automático (false→true) exige a agenda conectada pelo time; se a config
+ * mudou entre o load e o salvar, o backend recusa. A UI reverte o rascunho (padrão
+ * otimista D5) e mostra um toast claro apontando pro suporte.
+ */
+export function isAgendaNaoConfigurada(err: unknown): boolean {
+  return (
+    err instanceof ApiError && err.status === 409 && errorCode(err) === 'agenda_nao_configurada'
+  );
+}
+
 /**
  * Onda 1 (SCRUM-68) — DE-GATE: o "WhatsApp da recepção" (destino do alerta ao dono,
  * `alert_owner_phone`) passa a ser EDITÁVEL por TODOS os formatos, inclusive quem usa

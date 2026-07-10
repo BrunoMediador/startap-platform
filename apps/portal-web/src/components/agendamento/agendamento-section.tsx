@@ -1,6 +1,6 @@
 'use client';
 
-import { IconCalendar } from '@/components/icons';
+import { IconCalendar, IconHeadset } from '@/components/icons';
 /**
  * Seção "Agendamento" dentro de "Meu negócio" (modo atendente, SCRUM-59).
  *
@@ -38,10 +38,12 @@ import {
   type AgendaConfigDraft,
   ajudaLink,
   isAgendaDirty,
+  isAgendaNaoConfigurada,
   toAgendaDraft,
   validateAgenda,
 } from '@/lib/agenda-config';
 import { qk, useAgendaConfig, useSaveAgendaConfig } from '@/lib/queries';
+import { SUPORTE_AGENDA_URL } from '@/lib/suporte';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
@@ -126,6 +128,8 @@ export function AgendamentoSection() {
       modo_atendente: p?.modo_atendente ?? true,
       ...value,
       recepcao_telefone: p?.recepcao_telefone ?? '',
+      // SCRUM-74: salvar não muda o estado da agenda — preserva (default TRUE).
+      agenda_configurada: p?.agenda_configurada ?? true,
     }));
     setSaved(nextSaved);
     setDraft(nextSaved);
@@ -133,13 +137,19 @@ export function AgendamentoSection() {
 
     save.mutate(value, {
       onSuccess: () => toast.success('Agendamento atualizado'),
-      onError: () => {
+      onError: (err) => {
         if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
         const back = toAgendaDraft(prev as Parameters<typeof toAgendaDraft>[0]);
         setSaved(back);
         setDraft(back);
         touched.current = false;
-        toast.error('Não foi possível salvar. Tente de novo.');
+        // 409 agenda_nao_configurada (rede de proteção): religar o automático não é
+        // self-service — aponta pro suporte em vez do erro genérico.
+        toast.error(
+          isAgendaNaoConfigurada(err)
+            ? 'O agendamento automático é habilitado pela nossa equipe. Fale com o suporte para ativar.'
+            : 'Não foi possível salvar. Tente de novo.',
+        );
       },
     });
   }
@@ -151,6 +161,12 @@ export function AgendamentoSection() {
 
   const automatico = draft.agenda_automatica;
   const linkPreenchido = draft.link_agendamento.trim() !== '';
+  // SCRUM-74: agenda conectada pelo time (default TRUE via retrocompat no hook). Sem
+  // ela, NÃO oferecemos o Switch de auto-habilitar — vira CTA de suporte.
+  const configurada = cfgQ.data.agenda_configurada;
+  // O link (operação do modo atendente) segue editável independentemente do toggle:
+  // sempre com o automático desligado E sempre quando a agenda não está configurada.
+  const mostrarLink = !automatico || !configurada;
 
   return (
     <section
@@ -168,21 +184,42 @@ export function AgendamentoSection() {
 
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">
         <form onSubmit={onSubmit} className="flex flex-col gap-4" noValidate>
-          {/* Toggle principal */}
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[14px] font-semibold text-ink">{TOGGLE_LABEL}</p>
-              <p className="mt-0.5 text-[12.5px] leading-normal text-ink-soft">
-                {automatico
-                  ? 'O assistente marca os horários dos clientes sozinho no WhatsApp.'
-                  : 'O assistente não marca sozinho — ele atende e direciona o cliente.'}
-              </p>
+          {/* Toggle principal — só quando a agenda está configurada pelo time (SCRUM-74). */}
+          {configurada ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[14px] font-semibold text-ink">{TOGGLE_LABEL}</p>
+                <p className="mt-0.5 text-[12.5px] leading-normal text-ink-soft">
+                  {automatico
+                    ? 'O assistente marca os horários dos clientes sozinho no WhatsApp.'
+                    : 'O assistente não marca sozinho — ele atende e direciona o cliente.'}
+                </p>
+              </div>
+              <Switch checked={automatico} onChange={onToggle} label={TOGGLE_LABEL} />
             </div>
-            <Switch checked={automatico} onChange={onToggle} label={TOGGLE_LABEL} />
-          </div>
+          ) : (
+            /* Sem agenda configurada: sem Switch self-service — CTA de suporte (SCRUM-74). */
+            <div className="rounded-card-sm border border-line bg-brand-soft p-3.5">
+              <p className="text-[14px] font-semibold text-ink">{TOGGLE_LABEL}</p>
+              <p className="mt-1 text-[12.5px] leading-normal text-ink-soft">
+                O agendamento automático não faz parte do seu plano atual e é habilitado pela nossa
+                equipe: nós configuramos a agenda do seu negócio (Google) e liberamos a função para
+                você.
+              </p>
+              <a
+                href={SUPORTE_AGENDA_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-btn border border-line-strong bg-surface px-4 font-display text-[13.5px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              >
+                <IconHeadset size={16} aria-hidden />
+                Falar com o suporte
+              </a>
+            </div>
+          )}
 
-          {/* Link externo (só com o automático desligado) */}
-          {!automatico && (
+          {/* Link externo (com o automático desligado OU sem agenda configurada) */}
+          {mostrarLink && (
             <div className="flex flex-col gap-2 border-t border-line pt-4">
               <Input
                 ref={linkRef}
@@ -220,7 +257,7 @@ export function AgendamentoSection() {
               ? 'Salvando…'
               : dirty
                 ? 'Você tem alterações não salvas.'
-                : automatico
+                : configurada && automatico
                   ? 'Agendamento automático ligado.'
                   : 'Modo atendente ligado — o assistente atende sem marcar sozinho.'}
           </p>

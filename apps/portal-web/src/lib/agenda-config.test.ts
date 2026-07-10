@@ -3,7 +3,9 @@ import {
   AJUDA_RECEPCAO,
   type AgendaConfigDraft,
   ajudaLink,
+  isAgendaConfigurada,
   isAgendaDirty,
+  isAgendaNaoConfigurada,
   isLinkValido,
   isRecepcaoPreenchida,
   isRecepcaoValida,
@@ -14,6 +16,7 @@ import {
   toAgendaDraft,
   validateAgenda,
 } from './agenda-config';
+import { ApiError } from './api';
 
 const ON: AgendaConfigDraft = {
   agenda_automatica: true,
@@ -232,6 +235,49 @@ describe('ajudaLink', () => {
   it('varia conforme o link estar preenchido', () => {
     expect(ajudaLink(true)).toMatch(/envia este link/i);
     expect(ajudaLink(false)).toMatch(/avisa sua equipe/i);
+  });
+});
+
+// SCRUM-74: só quem tem a agenda conectada pelo time pode LIGAR o agendamento automático
+// pelo portal. features.agenda_configurada=false esconde o Switch e mostra o CTA de suporte.
+describe('isAgendaConfigurada (gate do Switch — SCRUM-74)', () => {
+  it('true quando o backend diz agenda configurada', () => {
+    expect(isAgendaConfigurada(true)).toBe(true);
+  });
+
+  it('false SOMENTE quando o backend diz explicitamente que NÃO está configurada', () => {
+    expect(isAgendaConfigurada(false)).toBe(false);
+  });
+
+  it('retrocompat: ausente/undefined/null -> true (backend antigo não trava o clone)', () => {
+    expect(isAgendaConfigurada(undefined)).toBe(true);
+    expect(isAgendaConfigurada(null)).toBe(true);
+  });
+});
+
+// SCRUM-74: rede de proteção do PUT — 409 agenda_nao_configurada quando a transição
+// false→true não é permitida (agenda não conectada). A UI reverte + aponta pro suporte.
+describe('isAgendaNaoConfigurada (409 do PUT — SCRUM-74)', () => {
+  it('true SÓ pro 409 com error=agenda_nao_configurada', () => {
+    expect(
+      isAgendaNaoConfigurada(new ApiError(409, 'conflict', { error: 'agenda_nao_configurada' })),
+    ).toBe(true);
+  });
+
+  it('false pra outros status (mesmo com o mesmo código) e outros códigos no 409', () => {
+    expect(
+      isAgendaNaoConfigurada(new ApiError(400, 'bad', { error: 'agenda_nao_configurada' })),
+    ).toBe(false);
+    expect(isAgendaNaoConfigurada(new ApiError(409, 'conflict', { error: 'outra_coisa' }))).toBe(
+      false,
+    );
+    expect(isAgendaNaoConfigurada(new ApiError(409, 'conflict', null))).toBe(false);
+  });
+
+  it('false pra erro que não é ApiError (falha de rede, throw genérico)', () => {
+    expect(isAgendaNaoConfigurada(new Error('boom'))).toBe(false);
+    expect(isAgendaNaoConfigurada(null)).toBe(false);
+    expect(isAgendaNaoConfigurada(undefined)).toBe(false);
   });
 });
 
