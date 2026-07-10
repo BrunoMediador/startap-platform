@@ -178,6 +178,23 @@ describe('listClientCredits — isolamento + saldo do ledger', () => {
   });
 });
 
+describe('validade no FUSO DO CLONE, não UTC (SCRUM-46)', () => {
+  // A validade do pacote (data_expiracao, uma DATE de parede) tem de ser comparada contra o dia
+  // do RELÓGIO DO DONO. Antes usava (NOW() AT TIME ZONE 'utc')::date: perto da meia-noite (a
+  // partir de ~21h BRT) um pacote que vence HOJE aparecia expirado cedo demais.
+  it('listClientCredits: expirado deriva o "hoje" de flow_clones.timezone, não de UTC', async () => {
+    await listClientCredits({ slot: 'clone_barbearia_seven_7', phoneHmac: 'h' });
+    const [sql] = mockQuery.mock.calls[0] as [string];
+    // compara a validade contra o dia-de-parede no fuso do clone (subquery em flow_clones)
+    expect(sql).toMatch(/c\.data_expiracao\s*<\s*\(NOW\(\) AT TIME ZONE COALESCE/);
+    expect(sql).toContain('SELECT fc.timezone FROM flow_clones fc WHERE fc.slot = c.slot');
+    // fallback defensivo pro default de produção (migration 068)
+    expect(sql).toContain("'America/Sao_Paulo'");
+    // a comparação de validade NÃO pode mais depender de UTC
+    expect(sql).not.toMatch(/data_expiracao\s*<\s*\(NOW\(\) AT TIME ZONE 'utc'\)/i);
+  });
+});
+
 describe('listActiveClientCredits — só utilizáveis', () => {
   it('filtra para ATIVO (descarta EXPIRADO/ESGOTADO/CANCELADO)', async () => {
     mockQuery.mockResolvedValue({

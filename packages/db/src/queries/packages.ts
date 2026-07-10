@@ -27,9 +27,32 @@
  * (Cirilo/Samuel intocados).
  */
 import { logger } from '@startap/core/logger';
+import { DEFAULT_TIMEZONE } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 
 const log = logger.child({ module: 'packages-deducao' });
+
+/**
+ * Fragmento SQL: "hoje" (DATE) no FUSO DO CLONE (flow_clones.timezone, migration 068), com
+ * fallback defensivo pro default '${DEFAULT_TIMEZONE}' quando o slot não tem linha/fuso conhecido.
+ *
+ * A validade do pacote (client_package_credits.data_expiracao — uma DATE de PAREDE, "vence dia X")
+ * TEM de ser comparada contra o dia do RELÓGIO DO DONO, não UTC (SCRUM-46).
+ *
+ * BUG que isto corrige: antes a comparação usava `(NOW() AT TIME ZONE 'utc')::date`. A partir de
+ * ~21h BRT o UTC já virou o dia seguinte, então perto da meia-noite um pacote que vence HOJE
+ * aparecia EXPIRADO cedo demais (e um que venceu ONTEM podia parecer válido) — vencido/válido no
+ * dia errado. Espelha o fix da coluna atendimentos.data (UTC -> fuso-do-clone).
+ *
+ * `NOW() AT TIME ZONE <tz>` projeta o instante no relógio de PAREDE do fuso; `::date` extrai o
+ * dia-calendário local. Subquery escalar correlacionada por `c.slot` — legal sob GROUP BY (c.slot
+ * é funcionalmente dependente de c.id, a PK agrupada) e sob FOR UPDATE OF c (não agrega no nível
+ * externo). EXIGE que client_package_credits esteja aliasada como `c` no escopo onde é interpolado.
+ * O `${DEFAULT_TIMEZONE}` é constante de código (não input) — sem risco de injeção.
+ */
+const HOJE_NO_FUSO_DO_CLONE = `(NOW() AT TIME ZONE COALESCE(
+        (SELECT fc.timezone FROM flow_clones fc WHERE fc.slot = c.slot), '${DEFAULT_TIMEZONE}'
+      ))::date`;
 
 /** Estado calculado de um crédito, do ponto de vista do bot. */
 export type PackageState = 'ATIVO' | 'EXPIRADO' | 'ESGOTADO' | 'CANCELADO';
@@ -62,7 +85,7 @@ export interface ClientPackageCredit {
   sessoes_restantes: number;
   sessoes_total: number;
   data_expiracao: string; // 'YYYY-MM-DD'
-  /** true se data_expiracao < hoje (UTC). */
+  /** true se data_expiracao < hoje NO FUSO DO CLONE (flow_clones.timezone; SCRUM-46). */
   expirado: boolean;
   /** Estado para o bloco de prompt / tool. */
   estado: PackageState;
@@ -222,7 +245,7 @@ function normalizeCredit(r: CreditRowRaw): ClientPackageCredit {
  *
  * O saldo é recomputado do LEDGER (fonte da verdade), não confia no cache
  * sessoes_restantes. LEFT JOIN no ledger cobre crédito sem nenhum movimento
- * (saldo = sessoes_total). data_expiracao < hoje (UTC) => expirado.
+ * (saldo = sessoes_total). data_expiracao < hoje NO FUSO DO CLONE => expirado (SCRUM-46).
  *
  * NÃO loga o número (só HMAC entra). Escopado por (slot, hmac).
  */
@@ -247,7 +270,7 @@ export async function listClientCredits(input: {
             c.sessoes_restantes AS sessoes_restantes_cache,
             (c.sessoes_total + COALESCE(SUM(pr.delta), 0)) AS saldo_ledger,
             to_char(c.data_expiracao, 'YYYY-MM-DD')        AS data_expiracao,
-            (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
+            (c.data_expiracao < ${HOJE_NO_FUSO_DO_CLONE}) AS expirado,
             c.status        AS status,
             sp.servicos_cobertos AS servicos_cobertos,
             sp.colaborador_id    AS colaborador_id,
@@ -1166,7 +1189,7 @@ async function selectActiveCreditsTx(
               (SELECT SUM(pr.delta) FROM package_redemptions pr WHERE pr.credit_id = c.id), 0)
             ) AS saldo_ledger,
             to_char(c.data_expiracao, 'YYYY-MM-DD')        AS data_expiracao,
-            (c.data_expiracao < (NOW() AT TIME ZONE 'utc')::date) AS expirado,
+            (c.data_expiracao < ${HOJE_NO_FUSO_DO_CLONE}) AS expirado,
             c.status        AS status,
             sp.servicos_cobertos AS servicos_cobertos,
             sp.colaborador_id    AS colaborador_id,
