@@ -149,10 +149,18 @@ export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
 /**
  * Grava o perfil do negocio MERGE-ando as 6 chaves no personalizacao existente
  * (preserva qualquer outra chave). Espera `data` JA validado pelo perfilSchema
- * do chamador. Campos `undefined` (ausentes no PUT) sao IGNORADOS; campos com
- * '' (string vazia) sao gravados como "limpar". Reusa updateClone -> re-renderiza
- * o bot_prompt ({{nome_negocio}} etc.) e invalida o cache de clone.
+ * do chamador. Campos `undefined` (ausentes no PUT) sao IGNORADOS.
  *
+ * Semantica de "limpar" por tipo de chave:
+ *   - texto simples (nome_negocio, etc.)   -> '' grava '' (campo vazio).
+ *   - formas_pagamento                     -> [] grava '' (limpa).
+ *   - link_agendamento / planos_beneficios -> '' DELETA a chave do JSONB (SCRUM-75). Um clone
+ *     que limpou fica byte-identico a quem NUNCA preencheu (os consumidores — bot/free-slots —
+ *     tratam ausencia e '' igual, entao removemos pra nao deixar string vazia residual). Antes,
+ *     o schema mapeava '' -> undefined e o merge NUNCA tocava a chave -> limpar o link no portal
+ *     era no-op silencioso (salvava 200 mas o link antigo ficava).
+ *
+ * Reusa updateClone -> re-renderiza o bot_prompt ({{nome_negocio}} etc.) e invalida o cache.
  * Retorna false se o slot nao existe.
  */
 export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<boolean> {
@@ -194,6 +202,15 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
       // [] limpa (some do contexto). Ja validado pelo faqPersonalizadoSchema do chamador.
       const arr = data.faq_personalizado;
       if (arr !== undefined) merged[key] = arr;
+      continue;
+    }
+    if (key === 'link_agendamento' || key === 'planos_beneficios') {
+      // TRI-STATE (SCRUM-75): ausente (undefined) = nao toca; '' = LIMPAR (remove a chave do
+      // JSONB, byte-identico a quem nunca preencheu); nao-vazio (ja validado) = grava. Nao
+      // persistimos '' pra nao deixar string vazia residual no personalizacao.
+      const v = (data as Record<string, string | undefined>)[key];
+      if (v === '') delete merged[key];
+      else if (v !== undefined) merged[key] = v;
       continue;
     }
     const v = (data as Record<string, string | undefined>)[key];

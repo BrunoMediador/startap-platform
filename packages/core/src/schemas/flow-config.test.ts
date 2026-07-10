@@ -304,15 +304,24 @@ describe('perfilSchema', () => {
     expect(r.success).toBe(false);
   });
 
-  it('P1: link_agendamento "" (e só-espaços) e ACEITO e vira undefined (nao persiste lixo)', () => {
+  it('SCRUM-75: link_agendamento "" (e só-espaços) é ACEITO e vira "" (sentinela de LIMPAR)', () => {
     // Fluxo primario do piloto: ligar modo atendente SEM link -> front envia ''.
+    // ANTES (SCRUM-59) '' virava undefined e o data layer nunca limpava -> impossivel remover
+    // o link. AGORA '' e sentinela de limpar (o data layer apaga a chave do JSONB).
     const vazio = perfilSchema.safeParse({ agenda_automatica: false, link_agendamento: '' });
     expect(vazio.success).toBe(true);
-    if (vazio.success) expect(vazio.data.link_agendamento).toBeUndefined();
+    if (vazio.success) expect(vazio.data.link_agendamento).toBe('');
 
+    // so-espacos normaliza pra '' (mesma sentinela de limpar).
     const espacos = perfilSchema.safeParse({ link_agendamento: '   ' });
     expect(espacos.success).toBe(true);
-    if (espacos.success) expect(espacos.data.link_agendamento).toBeUndefined();
+    if (espacos.success) expect(espacos.data.link_agendamento).toBe('');
+  });
+
+  it('SCRUM-75: link_agendamento AUSENTE segue ausente (undefined — não toca a chave)', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: 'X' });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.link_agendamento).toBeUndefined();
   });
 
   it('link_agendamento: rejeita esquemas perigosos (javascript:/data:/ftp:) — so http(s)', () => {
@@ -335,14 +344,20 @@ describe('perfilSchema', () => {
     if (r.success) expect(r.data.planos_beneficios).toContain('Plano Mensal');
   });
 
-  it('planos_beneficios: "" (e só-espaços) é ACEITO e vira undefined (não persiste lixo)', () => {
+  it('SCRUM-75: planos_beneficios "" (e só-espaços) é ACEITO e vira "" (sentinela de LIMPAR)', () => {
     const vazio = perfilSchema.safeParse({ planos_beneficios: '' });
     expect(vazio.success).toBe(true);
-    if (vazio.success) expect(vazio.data.planos_beneficios).toBeUndefined();
+    if (vazio.success) expect(vazio.data.planos_beneficios).toBe('');
 
     const espacos = perfilSchema.safeParse({ planos_beneficios: '   \n  ' });
     expect(espacos.success).toBe(true);
-    if (espacos.success) expect(espacos.data.planos_beneficios).toBeUndefined();
+    if (espacos.success) expect(espacos.data.planos_beneficios).toBe('');
+  });
+
+  it('SCRUM-75: planos_beneficios AUSENTE segue ausente (undefined — não toca a chave)', () => {
+    const r = perfilSchema.safeParse({ nome_negocio: 'X' });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.planos_beneficios).toBeUndefined();
   });
 
   it('planos_beneficios: rejeita acima de 4000 chars', () => {

@@ -310,16 +310,21 @@ export const perfilSchema = z
     // Link do sistema de agendamento externo do cliente (Booksy/Trinks/agenda propria).
     // OPCIONAL SEMPRE (decisao Bruno 03/07: o piloto insere depois): sem link, o bot
     // direciona pra "equipe confirma"; com link, entrega o link.
-    // P1 (qa review SCRUM-59): o front envia '' quando o dono liga o modo SEM link (fluxo
-    // PRIMARIO do piloto). .optional() so cobre `undefined`, entao '' cairia no .url() e
-    // daria 400 "perfil invalido" -> Save quebra. O preprocess normaliza '' (e so-espacos)
-    // para `undefined` ANTES de validar: '' vira AUSENTE (nao persiste lixo no JSONB), e
-    // valores nao-vazios seguem validados como hoje.
+    // TRI-STATE (SCRUM-75 — corrige o SCRUM-59): o campo distingue 3 intencoes ->
+    //   - AUSENTE (chave nao enviada)  = nao mexe (patch parcial).
+    //   - ''  (ou so-espacos)          = LIMPAR (sentinela): o dono removeu o link. O data layer
+    //                                    apaga a chave do JSONB (ver updatePerfilBySlot).
+    //   - URL valida http(s)           = gravar (validada como hoje).
+    // O preprocess normaliza so-espacos -> '' (NAO mais -> undefined). A justificativa antiga
+    // ('' -> undefined pra "nao persistir lixo") ESTAVA ERRADA: mapear pra undefined fazia o
+    // merge do data layer tratar '' como "chave ausente", entao LIMPAR o link virava no-op
+    // silencioso (salvava 200 mas o link antigo ficava — bug reportado pelo Eduardo, SCRUM-75).
+    // Agora '' e um valor de primeira classe (aceito via z.literal('')) que sinaliza limpar.
     // SECURITY (review SCRUM-59): z.url() sozinho aceita javascript:/data:/ftp: (so faz
     // new URL()). O backend e a fonte da verdade -> exige explicitamente http(s):// (o link
     // vai pro contexto do LLM e, no front, pode virar href). refine roda apos url().
     link_agendamento: z.preprocess(
-      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      (v) => (typeof v === 'string' && v.trim() === '' ? '' : v),
       z
         .string()
         .trim()
@@ -329,15 +334,18 @@ export const perfilSchema = z
           (v) => /^https?:\/\//i.test(v),
           'link de agendamento deve comecar com http:// ou https://',
         )
+        .or(z.literal('')) // '' = sentinela de LIMPAR (aceito; nunca cai no .url())
         .optional(),
     ),
     // Planos / assinaturas / benefícios do negócio (pedido do cliente Meduzza, SCRUM-59).
     // Texto livre MULTI-LINHA — cai sozinho no bloco [OBSERVACOES E DADOS EXTRAS] do contexto do
-    // LLM via _PERS_LABELS (free-slots), sem mudar o bot. preprocess '' -> undefined (mesmo do
-    // link): não persiste string vazia no JSONB; vazio/ausente = chave não aparece no contexto
-    // (clone que não preencheu = byte-a-byte). max 4000 chars (guarda contra payload abusivo).
+    // LLM via _PERS_LABELS (free-slots), sem mudar o bot. TRI-STATE igual ao link_agendamento
+    // (SCRUM-75): ausente = nao mexe; '' (ou so-espacos) = LIMPAR (o data layer apaga a chave do
+    // JSONB); texto nao-vazio = grava (max 4000 chars, guarda contra payload abusivo). O preprocess
+    // normaliza so-espacos -> '' (antes -> undefined, que transformava "limpar" em no-op silencioso).
+    // z.string().max(4000) ja aceita '' nativamente (sem .url()), entao nao precisa de .literal('').
     planos_beneficios: z.preprocess(
-      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      (v) => (typeof v === 'string' && v.trim() === '' ? '' : v),
       z.string().trim().max(4000, 'planos e assinaturas: texto muito longo').optional(),
     ),
     // FAQ personalizado (SCRUM-65): ate 10 pares pergunta+resposta cadastrados pelo dono.

@@ -394,7 +394,7 @@ describe('PUT /portal/perfil', () => {
     await app.close();
   });
 
-  it('P1: liga o modo SEM link (link_agendamento "") -> 200 e link NAO persiste (nao 400)', async () => {
+  it('P1/SCRUM-75: liga o modo SEM link (link_agendamento "") -> 200 e "" chega ao data layer (limpar)', async () => {
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -408,9 +408,10 @@ describe('PUT /portal/perfil', () => {
 
     expect(res.statusCode).toBe(200); // antes dava 400 "perfil invalido"
     const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
-    // '' normalizado pra undefined pelo preprocess -> NAO vira chave (nao persiste lixo).
     expect(dataArg.agenda_automatica).toBe(false);
-    expect(dataArg.link_agendamento).toBeUndefined();
+    // SCRUM-75: '' é sentinela de LIMPAR (o data layer apaga a chave do JSONB) — antes o
+    // preprocess mapeava pra undefined e "limpar" era no-op silencioso.
+    expect(dataArg.link_agendamento).toBe('');
     await app.close();
   });
 
@@ -981,7 +982,7 @@ describe('planos_beneficios (universal, todos os formatos)', () => {
     await app.close();
   });
 
-  it('PUT: só-espaços NÃO persiste a chave (preprocess "" -> undefined; byte-a-byte)', async () => {
+  it('SCRUM-75: só-espaços vira "" (sentinela de LIMPAR) e chega ao data layer', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = '';
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
@@ -995,7 +996,83 @@ describe('planos_beneficios (universal, todos os formatos)', () => {
 
     expect(res.statusCode).toBe(200);
     const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(dataArg.planos_beneficios).toBeUndefined();
+    // SCRUM-75: '' = limpar (data layer remove a chave). Antes o preprocess mapeava pra undefined.
+    expect(dataArg.planos_beneficios).toBe('');
+    await app.close();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// SCRUM-75 (bug do Eduardo): "ao inserir o link, não é possível removê-lo ou alterá-lo. Salva mas
+// nada muda". A raiz era o schema mapear '' -> undefined + o merge do data layer ignorar undefined:
+// LIMPAR o link virava no-op silencioso. Estes testes de contrato travam a correção end-to-end
+// (com o data layer MOCKADO — a prova de persistência real está no data-layer test).
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('link_agendamento — limpar / alterar (SCRUM-75)', () => {
+  it('PUT link "" -> 200 e o GET canônico volta SEM link ("")', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    // canônico pós-write: o data layer apagou a chave -> getPerfilBySlot devolve '' (chave ausente).
+    getPerfilBySlotMock.mockResolvedValue({ ...PERFIL_OK, link_agendamento: '' });
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { link_agendamento: '' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // '' (sentinela de limpar) chega ao data layer, escopado ao slot da SESSÃO (anti-IDOR).
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ link_agendamento: '' }),
+    );
+    // O perfil devolvido ao front reflete a limpeza.
+    expect(res.json().perfil.link_agendamento).toBe('');
+    await app.close();
+  });
+
+  it('PUT alterando link existente pra OUTRA URL -> 200 e o GET canônico volta a URL NOVA', async () => {
+    // Regressão do "alterar": já funcionava no código antigo (não-vazio nunca virava undefined),
+    // mas travamos aqui pra garantir que a correção do "limpar" não quebrou o "alterar".
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    updatePerfilBySlotMock.mockResolvedValue(true);
+    getPerfilBySlotMock.mockResolvedValue({
+      ...PERFIL_OK,
+      link_agendamento: 'https://trinks.com/novo',
+    });
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { link_agendamento: 'https://trinks.com/novo' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
+      injectedSlot,
+      expect.objectContaining({ link_agendamento: 'https://trinks.com/novo' }),
+    );
+    expect(res.json().perfil.link_agendamento).toBe('https://trinks.com/novo');
+    await app.close();
+  });
+
+  it('PUT link javascript: SEGUE 400 (limpar não afrouxou a validação de segurança)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = injectedSlot;
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/perfil',
+      payload: { perfil: { link_agendamento: 'javascript:alert(1)' } },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('perfil invalido');
+    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
