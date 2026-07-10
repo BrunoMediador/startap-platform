@@ -204,9 +204,33 @@ function buildProfissionaisBlock(
 }
 
 /**
+ * Deriva um ScheduleConfig com `services` restrito aos serviços que ESTE colaborador
+ * faz — reusa `servicosDoColaborador` (MESMA fonte + fallback do bloco [PROFISSIONAIS]),
+ * então a grade [HORARIOS] fica coerente com o que o [PROFISSIONAIS] anuncia.
+ *
+ * Filtra `config.services` por MEMBERSHIP (preservando ORDEM e duração `min` dos serviços
+ * globais). No fallback — colaborador SEM serviços marcados → `servicosDoColaborador`
+ * devolve TODOS os globais → o filtro mantém `config.services` intacto → a grade é
+ * BYTE-IDÊNTICA ao comportamento anterior (nada muda pra quem não configurou).
+ *
+ * Guard: se o filtro esvaziar (não deve — `servicosDoColaborador` já tem fallback próprio),
+ * mantém os globais para nunca deixar o profissional sem nenhuma grade.
+ */
+function scheduleConfigDoColaborador(
+  colaborador: ColaboradorAgenda,
+  config: ScheduleConfig,
+): ScheduleConfig {
+  const efetivos = new Set(servicosDoColaborador(colaborador, config).map(normServico));
+  const services = config.services.filter((s) => efetivos.has(normServico(s.name)));
+  return { ...config, services: services.length > 0 ? services : config.services };
+}
+
+/**
  * Monta o bloco [HORARIOS DISPONIVEIS] rotulado por colaborador. Cada colaborador
  * ganha sua sub-seção com a MESMA grade do bot individual (por serviço/dia),
- * calculada a partir da SUA ocupação (do freebusy batched).
+ * calculada a partir da SUA ocupação (do freebusy batched) e RESTRITA aos serviços
+ * que ELE faz (clone_colaboradores.servicos — "selecionar não digitar"; SCRUM-28):
+ * um barbeiro que só faz Corte não aparece mais com a grade de Barba/Manicure.
  *
  * Colaborador cuja agenda não veio no freebusy (erro/sem acesso) é tratado de forma
  * CONSERVADORA: a grade é calculada como se não tivéssemos a ocupação — então o
@@ -221,7 +245,8 @@ function buildHorariosBlock(
   const partes: string[] = [];
   for (const c of colaboradores) {
     const events = busyToEvents(freebusy[c.calendarId]);
-    const agenda = formatarAgendaComConfig(events, config);
+    // Grade só dos serviços DESTE profissional (fallback = todos os globais → byte-idêntico).
+    const agenda = formatarAgendaComConfig(events, scheduleConfigDoColaborador(c, config));
     partes.push(`### ${c.shortId} — ${nomeLimpo(c.nome)}`);
     partes.push(agenda);
     partes.push('');
