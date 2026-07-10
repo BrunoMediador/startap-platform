@@ -238,8 +238,18 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
       //    / 2 eventos GCal. Fail-open: Redis down → degraded → processa mesmo
       //    assim (idempotência nunca cala o bot). O router recebe skipDedup=true
       //    pra não deduplicar de novo lá dentro.
+      //    SCRUM-58: EXCEÇÃO pra `message.ack`. O dedup chaveia por (sessão, payload.id); num
+      //    evento de ack o payload.id é o id da MENSAGEM ACKada — os vários acks do MESMO outbound
+      //    (SERVER→DEVICE→READ) compartilham esse id e seriam colapsados pelo dedup (só o 1º
+      //    passaria), matando o rastreio de entrega. Acks não geram resposta/efeito duplicável, então
+      //    pulamos o dedup pra eles SÓ quando o rastreio está ON. Flag OFF = dedup roda como hoje
+      //    (byte-idêntico) — de todo modo, com a flag OFF o router ignora o ack (ignored:event).
+      const isAckDelivery =
+        parsed.data.event === 'message.ack' && process.env.MESSAGE_ACK_TRACKING_ENABLED === 'true';
       const messageId = parsed.data.payload?.id ?? '';
-      const dedup = await checkAndMarkDuplicate(parsed.data.session, messageId);
+      const dedup = isAckDelivery
+        ? { duplicate: false as const, degraded: false as const }
+        : await checkAndMarkDuplicate(parsed.data.session, messageId);
       if (dedup.duplicate) {
         log.info(
           { session: parsed.data.session },

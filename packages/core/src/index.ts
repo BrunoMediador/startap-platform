@@ -21,6 +21,13 @@ export {
 } from './faq-personalizado-gate.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { isDefinitiveNonDelivery } from './waha-send-failure.js';
+export {
+  ackStatusRank,
+  extractSentMessageId,
+  mapWahaAck,
+  parseWahaAckPayload,
+} from './message-ack.js';
+export type { AckMapping, OutboundAckStatus, ParsedAckEvent } from './message-ack.js';
 export { isAgendaAutomaticaIntent, resolveEffectiveAgenda } from './agenda-degrade.js';
 export {
   DEFAULT_ESTABELECIMENTO_SEAT_CAP,

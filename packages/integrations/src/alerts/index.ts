@@ -7,6 +7,7 @@ export {
   msgClientePagou,
   msgAguardandoAgenda,
   msgBotSilenciadoInadimplencia,
+  msgOutboundNaoEntregue,
   type SendInternalAlertOpts,
   type SendInternalAlertResult,
 } from './internal-alert.js';

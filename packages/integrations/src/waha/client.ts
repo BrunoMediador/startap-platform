@@ -4,6 +4,7 @@
  * Substitui os nós "WAHA → Send a text message", "Start/Stop Typing", "Send Seen".
  */
 import { logger } from '@startap/core/logger';
+import { extractSentMessageId } from '@startap/core/message-ack';
 import { DEFAULT_WAHA_SHARD_ID, resolveWahaUrl } from './shard.js';
 
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
@@ -68,11 +69,26 @@ export interface SendTextOpts {
   shardId?: number;
 }
 
-export async function sendText(opts: SendTextOpts): Promise<void> {
-  const { sessao, chatId, texto, typing = true, delayMs = 0, shardId = DEFAULT_WAHA_SHARD_ID } = opts;
+/** Resultado do envio. `messageId` = id serializado do WAHA da mensagem enviada, quando extraível
+ *  (rastreio de entrega — SCRUM-58). null = a resposta não trouxe id conhecido (2026.6.2 nem sempre
+ *  traz id no topo — waha.md); o envio funcionou, só não há como correlacionar o ack daquele
+ *  outbound. Todos os callers atuais ignoram o retorno (compat retroativa). */
+export interface SendTextResult {
+  messageId: string | null;
+}
+
+export async function sendText(opts: SendTextOpts): Promise<SendTextResult> {
+  const {
+    sessao,
+    chatId,
+    texto,
+    typing = true,
+    delayMs = 0,
+    shardId = DEFAULT_WAHA_SHARD_ID,
+  } = opts;
   if (typing) await startTyping(sessao, chatId, shardId);
   if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
-  await wahaPost(
+  const res = await wahaPost<unknown>(
     '/api/sendText',
     {
       session: sessao,
@@ -82,6 +98,8 @@ export async function sendText(opts: SendTextOpts): Promise<void> {
     shardId,
   );
   if (typing) await stopTyping(sessao, chatId, shardId);
+  // Extração best-effort do id (rastreio de entrega). NUNCA lança — se não achar, messageId=null.
+  return { messageId: extractSentMessageId(res) };
 }
 
 export async function startTyping(
@@ -158,6 +176,7 @@ export async function downloadMedia(
     fullUrl = `${base}${url.startsWith('/') ? '' : '/'}${url}`;
   }
   const res = await fetch(fullUrl, { headers: { 'X-Api-Key': WAHA_API_KEY } });
-  if (!res.ok) throw new Error(`Download media failed: HTTP ${res.status} (url=${fullUrl.slice(0, 80)})`);
+  if (!res.ok)
+    throw new Error(`Download media failed: HTTP ${res.status} (url=${fullUrl.slice(0, 80)})`);
   return Buffer.from(await res.arrayBuffer());
 }
