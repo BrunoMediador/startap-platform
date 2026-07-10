@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatoFields,
   isArea,
   maskPhoneBR,
   phoneDigits,
@@ -146,6 +147,116 @@ describe('validateCadastro', () => {
       expect(res.errors.senha).toBeTruthy();
       expect(res.errors.aceite).toBeTruthy();
     }
+  });
+});
+
+describe('formato do negócio (Onda 3) — as 2 perguntas do signup', () => {
+  const ok = {
+    nome: 'Barbearia do João',
+    area: 'barbearia' as const,
+    whatsapp: '(31) 99999-8842',
+    senha: '12345678',
+    timezone: 'America/Sao_Paulo',
+    aceite: true,
+  };
+
+  // O combo default (sozinho + a IA marca na agenda) É o signup vivo em produção.
+  // Prova de REGRESSÃO ZERO: o payload precisa sair SEM os campos de formato, byte a
+  // byte igual ao que a rota recebe hoje.
+  it('combo default (individual+agenda) OMITE tipo_atendimento/modo_ia — payload byte-idêntico ao atual', () => {
+    const semTocar = validateCadastro(ok);
+    const explicito = validateCadastro({
+      ...ok,
+      tipoAtendimento: 'individual',
+      modoIa: 'agenda',
+    });
+    const esperado = {
+      ok: true,
+      value: {
+        nome_negocio: 'Barbearia do João',
+        area: 'barbearia',
+        whatsapp: '31999998842',
+        senha: '12345678',
+        timezone: 'America/Sao_Paulo',
+        aceite_termos: true,
+      },
+    };
+    // Ausente no draft = default; explícito no default = mesmo resultado.
+    expect(semTocar).toEqual(esperado);
+    expect(explicito).toEqual(esperado);
+    if (semTocar.ok) {
+      expect('tipo_atendimento' in semTocar.value).toBe(false);
+      expect('modo_ia' in semTocar.value).toBe(false);
+      expect(Object.keys(semTocar.value).sort()).toEqual(Object.keys(esperado.value).sort());
+    }
+  });
+
+  it('estabelecimento+agenda envia os 2 campos (equipe, IA agenda)', () => {
+    const res = validateCadastro({ ...ok, tipoAtendimento: 'estabelecimento', modoIa: 'agenda' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.tipo_atendimento).toBe('estabelecimento');
+      expect(res.value.modo_ia).toBe('agenda');
+    }
+  });
+
+  it('individual+atendente envia os 2 campos (sozinho, só atende)', () => {
+    const res = validateCadastro({ ...ok, tipoAtendimento: 'individual', modoIa: 'atendente' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.tipo_atendimento).toBe('individual');
+      expect(res.value.modo_ia).toBe('atendente');
+    }
+  });
+
+  it('estabelecimento+atendente envia os 2 campos (equipe, só atende)', () => {
+    const res = validateCadastro({
+      ...ok,
+      tipoAtendimento: 'estabelecimento',
+      modoIa: 'atendente',
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.tipo_atendimento).toBe('estabelecimento');
+      expect(res.value.modo_ia).toBe('atendente');
+    }
+  });
+
+  it('os 3 combos não-default sempre mandam o PAR completo (nunca só metade)', () => {
+    const combos = [
+      { tipoAtendimento: 'estabelecimento', modoIa: 'agenda' },
+      { tipoAtendimento: 'individual', modoIa: 'atendente' },
+      { tipoAtendimento: 'estabelecimento', modoIa: 'atendente' },
+    ] as const;
+    for (const c of combos) {
+      const res = validateCadastro({ ...ok, ...c });
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect('tipo_atendimento' in res.value).toBe(true);
+        expect('modo_ia' in res.value).toBe(true);
+      }
+    }
+  });
+});
+
+describe('formatoFields', () => {
+  it('default (individual+agenda) -> {} (byte-identidade do funil vivo)', () => {
+    expect(formatoFields('individual', 'agenda')).toEqual({});
+  });
+
+  it('qualquer combo não-default -> par { tipo_atendimento, modo_ia }', () => {
+    expect(formatoFields('estabelecimento', 'agenda')).toEqual({
+      tipo_atendimento: 'estabelecimento',
+      modo_ia: 'agenda',
+    });
+    expect(formatoFields('individual', 'atendente')).toEqual({
+      tipo_atendimento: 'individual',
+      modo_ia: 'atendente',
+    });
+    expect(formatoFields('estabelecimento', 'atendente')).toEqual({
+      tipo_atendimento: 'estabelecimento',
+      modo_ia: 'atendente',
+    });
   });
 });
 

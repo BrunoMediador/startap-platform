@@ -11,7 +11,11 @@ import type { SignupResponse } from '@/lib/api-types';
 import {
   type Area,
   type CadastroErrors,
+  DEFAULT_MODO_IA,
+  DEFAULT_TIPO_ATENDIMENTO,
+  type ModoIa,
   type SignupCardView,
+  type TipoAtendimento,
   maskPhoneBR,
   signupCardFromError,
   validateCadastro,
@@ -37,6 +41,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { AreaSelector } from './area-selector';
+import { FormatoSelector } from './formato-selector';
 
 type View = 'form' | SignupCardView;
 
@@ -51,6 +56,11 @@ export function CadastroForm() {
   const [view, setView] = useState<View>('form');
   const [nome, setNome] = useState('');
   const [area, setArea] = useState<Area | null>(null);
+  // Formato do negócio (Onda 3) — pré-selecionado no combo mais comum (sozinho + a
+  // IA marca na agenda) pra não travar quem só quer o padrão. Nesse default o payload
+  // sai byte-idêntico ao signup atual (lib/cadastro formatoFields).
+  const [tipoAtendimento, setTipoAtendimento] = useState<TipoAtendimento>(DEFAULT_TIPO_ATENDIMENTO);
+  const [modoIa, setModoIa] = useState<ModoIa>(DEFAULT_MODO_IA);
   const [whatsapp, setWhatsapp] = useState('');
   // Fuso do negócio: pré-selecionado em São Paulo; o combobox só troca por seleção.
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
@@ -82,7 +92,16 @@ export function CadastroForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBanner(null);
-    const res = validateCadastro({ nome, area, whatsapp, timezone, senha, aceite });
+    const res = validateCadastro({
+      nome,
+      area,
+      whatsapp,
+      timezone,
+      senha,
+      aceite,
+      tipoAtendimento,
+      modoIa,
+    });
     if (!res.ok) {
       setErrors(res.errors);
       return;
@@ -205,6 +224,15 @@ export function CadastroForm() {
                       setArea(a);
                       if (errors.area) setErrors((prev) => ({ ...prev, area: undefined }));
                     }}
+                  />
+
+                  {/* Formato do negócio (Onda 3): as 2 perguntas que abrem os 4
+                      formatos pro signup. Combo default pré-selecionado. */}
+                  <FormatoSelector
+                    tipoAtendimento={tipoAtendimento}
+                    modoIa={modoIa}
+                    onChangeTipo={setTipoAtendimento}
+                    onChangeModo={setModoIa}
                   />
 
                   <div>

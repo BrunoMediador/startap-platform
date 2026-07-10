@@ -338,6 +338,17 @@ export interface AgendamentosResponse {
   gcal_configured: boolean;
   count: number;
   agendamentos: Agendamento[];
+  /**
+   * Onda 3 (SCRUM-68 / ADR 0030 D3): o clone ESCOLHEU agenda no signup, mas a agenda
+   * Google ainda NÃO foi conectada pela nossa equipe (Service Account, ADR 0024).
+   * Derivado no backend = `agenda_automatica === true && gcal_configured === false`.
+   *
+   * `true` -> a UI mostra o card "estamos conectando sua agenda" (em vez do empty
+   * genérico "agenda não conectada"), com SLA e a tranquilização de que a assistente
+   * já atende enquanto isso (degrade elegante). AUSENTE/`false` = comportamento de
+   * hoje, byte-idêntico: clone em modo atendente (nunca terá agenda) OU já conectado.
+   */
+  aguardando_agenda?: boolean;
 }
 
 // ── Agenda: slots livres + criação manual (Missão 020 F4) ────────────────────
