@@ -182,6 +182,11 @@ describe('redeemForBooking — dedução', () => {
     const selSql = String(selCall?.[0]);
     expect(selSql).not.toMatch(/GROUP BY/i);
     expect(selSql).toContain('FOR UPDATE OF c');
+    // SCRUM-46: a validade (expirado) do SELECT de lock deriva o "hoje" do FUSO DO CLONE
+    // (flow_clones.timezone), nunca de UTC — senão perto da meia-noite um pacote ATIVO some
+    // da dedução (agenda avulso quando deveria descontar) no dia errado.
+    expect(selSql).toContain('SELECT fc.timezone FROM flow_clones fc WHERE fc.slot = c.slot');
+    expect(selSql).not.toMatch(/data_expiracao\s*<\s*\(NOW\(\) AT TIME ZONE 'utc'\)/i);
     // NUNCA UPDATE solto no cache: a baixa é reconstruída do ledger.
     const cacheUpd = mockClientQuery.mock.calls.find((c) =>
       /UPDATE client_package_credits/.test(String(c[0])),

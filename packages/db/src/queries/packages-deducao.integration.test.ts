@@ -23,6 +23,7 @@
  *  - estorno (+1) devolve a sessão e é idempotente.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { ClientPackageCredit } from './packages.js';
 
 const PG_TEST_URL = process.env.PG_TEST_URL;
 const describeIf = PG_TEST_URL ? describe : describe.skip;
@@ -50,10 +51,21 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     return pgPool.query(sql, params);
   }
 
-  /** Cria as 3 tabelas de pacotes SEM as FKs externas (flow_clones/clone_colaboradores) —
-   * as queries sob teste não dependem delas; assim o suite é autocontido. Mesmas colunas,
-   * mesmos tipos, mesmo UNIQUE(gcal_event_id,reason) e CHECK do cache. */
+  /** Cria as tabelas de pacotes SEM as FKs externas (clone_colaboradores) — as queries sob teste
+   * não dependem delas; assim o suite é autocontido. Mesmas colunas, mesmos tipos, mesmo
+   * UNIQUE(gcal_event_id,reason) e CHECK do cache. INCLUI um flow_clones mínimo (slot,timezone)
+   * porque a validade do pacote agora é comparada no FUSO DO CLONE (SCRUM-46) via subquery
+   * correlacionada em flow_clones.timezone — sem a tabela a query nem executa. */
   async function createSchema() {
+    await exec(`CREATE TABLE IF NOT EXISTS flow_clones (
+      slot TEXT PRIMARY KEY, timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo')`);
+    // Fuso do clone de teste = SP (default de produção). data_expiracao '2999-12-31' segue no
+    // futuro e '2020-01-01' no passado em QUALQUER fuso, então as asserções não mudam.
+    await exec(
+      `INSERT INTO flow_clones (slot, timezone) VALUES ($1, 'America/Sao_Paulo')
+         ON CONFLICT (slot) DO NOTHING`,
+      [SLOT],
+    );
     await exec(`CREATE TABLE IF NOT EXISTS service_packages (
       id BIGSERIAL PRIMARY KEY, slot TEXT NOT NULL, tenant_id UUID NOT NULL,
       nome VARCHAR(160) NOT NULL, descricao TEXT,
@@ -84,6 +96,7 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     await exec('DROP TABLE IF EXISTS package_redemptions');
     await exec('DROP TABLE IF EXISTS client_package_credits');
     await exec('DROP TABLE IF EXISTS service_packages');
+    await exec('DROP TABLE IF EXISTS flow_clones');
   }
 
   /** Insere um template + um crédito do cliente com `total`/`restantes` sessões. Retorna creditId. */
@@ -264,5 +277,75 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     expect(ref2.reason).toBe('already_refunded');
     expect(await ledgerSaldo(creditId)).toBe(3);
     expect(await countRedeems(creditId, 'refund')).toBe(1);
+  });
+
+  // ── SCRUM-46: validade do pacote no FUSO DO CLONE (não UTC) ──────────────────────────────
+  it('pacote que vence HOJE no fuso do clone NÃO aparece vencido; venceu ONTEM aparece', async () => {
+    // Acceptance direto do card: "pacote que vence hoje 23h BRT NÃO aparece vencido antes da
+    // meia-noite no fuso do clone". Vale em QUALQUER hora do relógio: "hoje"/"ontem" derivam da
+    // MESMA regra que a query usa (NOW() AT TIME ZONE <fuso do clone>::date).
+    await exec("UPDATE flow_clones SET timezone = 'America/Sao_Paulo' WHERE slot = $1", [SLOT]);
+    const dRes = await exec(
+      `SELECT (NOW() AT TIME ZONE 'America/Sao_Paulo')::date::text       AS hoje,
+              ((NOW() AT TIME ZONE 'America/Sao_Paulo')::date - 1)::text AS ontem`,
+    );
+    const hoje = dRes.rows[0].hoje as string;
+    const ontem = dRes.rows[0].ontem as string;
+    const idHoje = await seedCredit({ total: 3, restantes: 3, dataExpiracao: hoje });
+    const idOntem = await seedCredit({ total: 3, restantes: 3, dataExpiracao: ontem });
+    const credits = await pkg.listClientCredits({ slot: SLOT, phoneHmac: HMAC });
+    const byId = new Map((credits as ClientPackageCredit[]).map((c) => [c.credit_id, c] as const));
+    // vence HOJE = ainda válido (comparação é estritamente `<`; o dia da validade ainda conta).
+    expect(byId.get(idHoje)?.expirado).toBe(false);
+    expect(byId.get(idHoje)?.estado).toBe('ATIVO');
+    // venceu ONTEM = expirado.
+    expect(byId.get(idOntem)?.expirado).toBe(true);
+    expect(byId.get(idOntem)?.estado).toBe('EXPIRADO');
+  });
+
+  it('a validade é lida POR CLONE: fusos extremos divergem no MESMO data_expiracao', async () => {
+    // Guarda anti-regressão de "hardcode SP/UTC": Pacific/Kiritimati (UTC+14) está SEMPRE ≥1 dia à
+    // frente de Etc/GMT+12 (UTC-12) — 26h de diferença. Com data_expiracao = HOJE no fuso ATRASADO,
+    // o clone atrasado vê "vence hoje" (válido) e o adiantado vê "venceu ontem" (expirado). Prova,
+    // de forma determinística e a qualquer hora, que a query lê flow_clones.timezone POR clone.
+    const slotWest = 'itest_tz_west'; // Etc/GMT+12 = UTC-12 (atrasado)
+    const slotEast = 'itest_tz_east'; // Pacific/Kiritimati = UTC+14 (adiantado)
+    const hmacTz = 'itest-hmac-tz';
+    for (const s of [slotWest, slotEast]) {
+      await exec('DELETE FROM client_package_credits WHERE slot = $1', [s]);
+      await exec('DELETE FROM service_packages WHERE slot = $1', [s]);
+    }
+    await exec(
+      `INSERT INTO flow_clones (slot, timezone)
+         VALUES ($1,'Etc/GMT+12'), ($2,'Pacific/Kiritimati')
+       ON CONFLICT (slot) DO UPDATE SET timezone = EXCLUDED.timezone`,
+      [slotWest, slotEast],
+    );
+    const dRes = await exec("SELECT (NOW() AT TIME ZONE 'Etc/GMT+12')::date::text AS hoje_oeste");
+    const hojeOeste = dRes.rows[0].hoje_oeste as string;
+    const seedTz = async (slot: string) => {
+      const p = await exec(
+        `INSERT INTO service_packages (slot, tenant_id, nome, servicos_cobertos, total_sessoes)
+         VALUES ($1,$2,'Pacote TZ','["Corte"]'::jsonb,3) RETURNING id`,
+        [slot, TENANT],
+      );
+      await exec(
+        `INSERT INTO client_package_credits
+           (package_id, slot, tenant_id, cliente_phone_hmac, sessoes_total, sessoes_restantes, data_expiracao)
+         VALUES ($1,$2,$3,$4,3,3,$5)`,
+        [p.rows[0].id, slot, TENANT, hmacTz, hojeOeste],
+      );
+    };
+    await seedTz(slotWest);
+    await seedTz(slotEast);
+    const west = await pkg.listClientCredits({ slot: slotWest, phoneHmac: hmacTz });
+    const east = await pkg.listClientCredits({ slot: slotEast, phoneHmac: hmacTz });
+    expect(west[0]?.expirado).toBe(false); // UTC-12: vence hoje → válido
+    expect(east[0]?.expirado).toBe(true); // UTC+14: já é o dia seguinte → expirado
+    for (const s of [slotWest, slotEast]) {
+      await exec('DELETE FROM client_package_credits WHERE slot = $1', [s]);
+      await exec('DELETE FROM service_packages WHERE slot = $1', [s]);
+      await exec('DELETE FROM flow_clones WHERE slot = $1', [s]);
+    }
   });
 });
