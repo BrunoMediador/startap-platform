@@ -551,11 +551,25 @@ export class TesteBarbeariaBot extends BotBase {
 
     const calClient = await gcal.getGcalForSlot(this.slot);
     if (!calClient) {
-      this.log.error(
+      // ── DEGRADE ELEGANTE (ADR 0030 D3, Onda 3) ─────────────────────────────────
+      // Clone individual que escolheu AGENDA mas cuja Service Account do Google AINDA
+      // não foi conectada pelo time (etapa manual, ADR 0024): em vez do gate DURO
+      // ("agenda ainda não configurada, avise o admin"), o bot degrada pra ATENDENTE
+      // (coleta lead + encaminha, SEM tool de agenda, SEM [HORARIOS], sem prometer
+      // horário) até o gcal ficar de pé.
+      //
+      // É derivação de RUNTIME: efetivo = agenda_automatica && gcalConfigured
+      // (resolveEffectiveAgenda). getGcalForSlot=null => gcalConfigured=false => efetivo
+      // atendente. NÃO há flip do valor armazenado — ao conectar a SA, getGcalForSlot
+      // volta não-nula e este ramo NÃO roda mais (bot vira agenda sozinho, sem deploy).
+      //
+      // BYTE-IDÊNTICO pros clones JÁ conectados (Cirilo/Samuel): gcal ativo =>
+      // calClient != null => nunca entram aqui. Só clones sem agenda conectada degradam.
+      this.log.info(
         { slot: this.slot },
-        'gcal_not_configured — bot exige Service Account configurada via painel',
+        'gcal ainda não conectado — degrade elegante para atendente (ADR 0030 D3)',
       );
-      return 'Desculpe, a agenda deste fluxo ainda não foi configurada. Avise o administrador.';
+      return this.processAtendente(ctx);
     }
 
     // Buscar agenda

@@ -4,6 +4,7 @@
  * Um clone herda bot_config/bot_prompt/bot_media de uma matriz, com personalizacao
  * própria e sessão WAHA dedicada. Toda criação ocorre em transação única.
  */
+import { isAgendaAutomaticaIntent } from '@startap/core/agenda-degrade';
 import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
@@ -806,6 +807,60 @@ export async function resolveFaqPersonalizadoEnabledForSlot(
   if (resolveFaqPersonalizadoEnabled(slot, envCsv, false)) return true;
   const clone = await getCloneBySlot(slot);
   return resolveFaqPersonalizadoEnabled(slot, envCsv, clone?.faq_personalizado_enabled);
+}
+
+/**
+ * Estado "aguardando conexão da agenda" (ADR 0030 D3, Onda 3): clone que escolheu
+ * AGENDA (personalizacao.agenda_automatica != false) mas cuja agenda Google AINDA NÃO
+ * foi conectada pelo time (etapa manual, ADR 0024). Derivado de RUNTIME (NÃO é coluna
+ * de estado): `agendaIntent && !gcalConfigured`.
+ *
+ * gcalConfigured por formato:
+ *  - individual: flow_clones tem gcal_status='active' + credenciais + calendarId próprios.
+ *  - estabelecimento: ao menos 1 colaborador ATIVO com agenda 'active' + calendarId.
+ *
+ * Usado pelo GET /portal/perfil pra o front mostrar o card "nossa equipe está conectando
+ * sua agenda do Google (até 24h úteis)". Escopado por slot (SEMPRE da sessão / withTenant).
+ * Best-effort: em erro de query devolve false (o card some — nunca derruba o perfil).
+ */
+export async function isAwaitingAgendaConnection(slot: string): Promise<boolean> {
+  try {
+    const r = await query<{
+      product_type: string | null;
+      personalizacao: unknown;
+      gcal_status: string | null;
+      has_creds: boolean;
+      has_calendar: boolean;
+    }>(
+      `SELECT product_type, personalizacao, gcal_status,
+              (gcal_credentials_json IS NOT NULL) AS has_creds,
+              (gcal_calendar_id IS NOT NULL)      AS has_calendar
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+      [slot],
+    );
+    const row = r.rows[0];
+    if (!row) return false;
+
+    const pers = parseJsonbOrNull<Record<string, unknown>>(row.personalizacao) ?? {};
+    // Só clones de AGENDA aguardam conexão; atendente (agenda_automatica=false) nunca.
+    if (!isAgendaAutomaticaIntent(pers.agenda_automatica)) return false;
+
+    if (row.product_type === 'estabelecimento') {
+      const c = await query<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM clone_colaboradores
+         WHERE slot = $1 AND ativo = TRUE AND gcal_status = 'active' AND gcal_calendar_id IS NOT NULL`,
+        [slot],
+      );
+      const configured = Number(c.rows[0]?.n ?? 0) > 0;
+      return !configured;
+    }
+
+    // individual: mesma condição que getGcalForSlot exige pra devolver um client.
+    const configured = row.gcal_status === 'active' && row.has_creds && row.has_calendar;
+    return !configured;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------

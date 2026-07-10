@@ -798,6 +798,19 @@ export interface ProvisionInput {
    * default do banco / comportamento de hoje). Validado defensivamente no INSERT.
    */
   timezone?: string | null;
+  /**
+   * Formato do clone (ADR 0030 D2, signup dos 4 combos). Colunas de flow_clones —
+   * TODAS opcionais e com default que reproduz o clone do signup ATUAL byte-a-byte:
+   *  - productType default 'individual' (= default da coluna, migration 052).
+   *  - seatCap default NULL (individual).
+   *  - modoAtendenteEnabled / billingFromAgendaEnabled default false (= default da
+   *    migration 072). O gestão-legado e o combo individual+agenda não passam nada
+   *    aqui -> o INSERT grava os defaults -> row byte-idêntica ao de hoje.
+   */
+  productType?: 'individual' | 'estabelecimento' | null;
+  seatCap?: number | null;
+  modoAtendenteEnabled?: boolean | null;
+  billingFromAgendaEnabled?: boolean | null;
 }
 
 export interface ProvisionResult {
@@ -940,13 +953,25 @@ export async function createCloneRecords(
     // default SP -> clone que não escolheu fuso fica byte-idêntico ao de hoje.
     const timezoneValue = isValidIanaTimezone(input.timezone) ? input.timezone : DEFAULT_TIMEZONE;
 
+    // Formato do clone (ADR 0030 D2). Defaults reproduzem o clone do signup ATUAL:
+    // individual / sem seat_cap / gates false. As colunas NOVAS ($11-$14) ficam DEPOIS
+    // de timezone ($10) DE PROPÓSITO — preserva os índices de $1-$10 que os testes fixam.
+    const productTypeValue =
+      input.productType === 'estabelecimento' ? 'estabelecimento' : 'individual';
+    const seatCapValue =
+      typeof input.seatCap === 'number' && Number.isFinite(input.seatCap) ? input.seatCap : null;
+    const modoAtendenteValue = input.modoAtendenteEnabled === true;
+    const billingFromAgendaValue = input.billingFromAgendaEnabled === true;
+
     const defaults = await getCloneDefaults(db, input.matrizSlot, areaValue);
     const cloneR = await client.query(
       `INSERT INTO flow_clones
          (slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
           personalizacao, area, horarios_funcionamento, servicos, timezone,
+          product_type, seat_cap, modo_atendente_enabled, billing_from_agenda_enabled,
           status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10, 'rascunho', NOW(), NOW())
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10,
+               $11, $12, $13, $14, 'rascunho', NOW(), NOW())
        RETURNING *`,
       [
         input.novoSlot,
@@ -959,6 +984,10 @@ export async function createCloneRecords(
         defaults.horarios_funcionamento ? JSON.stringify(defaults.horarios_funcionamento) : null,
         defaults.servicos ? JSON.stringify(defaults.servicos) : null,
         timezoneValue,
+        productTypeValue,
+        seatCapValue,
+        modoAtendenteValue,
+        billingFromAgendaValue,
       ],
     );
 

@@ -31,6 +31,7 @@ const {
   getAlertOwnerPhoneBySlotMock,
   updateAlertOwnerPhoneBySlotMock,
   clearAlertOwnerPhoneBySlotMock,
+  isAwaitingAgendaConnectionMock,
   csvGateMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
@@ -40,6 +41,7 @@ const {
   getAlertOwnerPhoneBySlotMock: vi.fn(),
   updateAlertOwnerPhoneBySlotMock: vi.fn(),
   clearAlertOwnerPhoneBySlotMock: vi.fn(),
+  isAwaitingAgendaConnectionMock: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por
   // env (cfgMock.MODO_ATENDENTE_SLOTS / FAQ_PERSONALIZADO_SLOTS); byte-idêntico ao gate de antes.
   csvGateMock: (slot: string, csv?: string | null): boolean => {
@@ -66,6 +68,7 @@ vi.mock('@startap/db', () => ({
       csvGateMock(slot, csv),
     resolveFaqPersonalizadoEnabledForSlot: (slot: string, csv?: string | null) =>
       csvGateMock(slot, csv),
+    isAwaitingAgendaConnection: (...a: unknown[]) => isAwaitingAgendaConnectionMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -114,6 +117,8 @@ beforeEach(() => {
   getAlertOwnerPhoneBySlotMock.mockResolvedValue(null);
   updateAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
   clearAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
+  // Default: não aguardando agenda (clone conectado / atendente). Testes específicos ligam.
+  isAwaitingAgendaConnectionMock.mockResolvedValue(false);
 });
 
 describe('GET /portal/perfil', () => {
@@ -161,6 +166,31 @@ describe('GET /portal/perfil', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().features).toEqual({ modo_atendente: false, faq_personalizado: false });
+    await app.close();
+  });
+
+  it('ADR 0030 D3: aguardando_agenda no payload, escopado pelo slot da sessao (anti-IDOR)', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    isAwaitingAgendaConnectionMock.mockResolvedValue(true);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aguardando_agenda).toBe(true);
+    expect(isAwaitingAgendaConnectionMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('ADR 0030 D3: aguardando_agenda=false quando a agenda ja esta conectada (byte-a-byte)', async () => {
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    isAwaitingAgendaConnectionMock.mockResolvedValue(false);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aguardando_agenda).toBe(false);
     await app.close();
   });
 

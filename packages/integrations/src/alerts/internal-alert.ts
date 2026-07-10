@@ -226,6 +226,25 @@ export function msgClienteAtivou(input: { displayName: string; slot: string }): 
   );
 }
 
+/**
+ * D — cliente escolheu AGENDA no signup e o time precisa conectar a Service Account
+ * do Google (etapa manual, ADR 0024 / ADR 0030 D3). Enquanto não conecta, o bot opera
+ * em degrade (atendente). LGPD-safe (sem telefone/CPF). SLA operacional = 24h úteis.
+ */
+export function msgAguardandoAgenda(input: {
+  nomeNegocio: string;
+  slot: string;
+  formato: 'individual' | 'estabelecimento';
+}): string {
+  const tipo =
+    input.formato === 'estabelecimento' ? 'estabelecimento (agenda por colaborador)' : 'individual';
+  const detalhe = 'Enquanto a Service Account não for conectada, o bot atende como recepção';
+  return (
+    `📅 Conectar agenda do Google: "${input.nomeNegocio}" (${tipo}) escolheu AGENDA no ` +
+    `cadastro — slot ${input.slot}. ${detalhe} (sem marcar). SLA: até 24h úteis.`
+  );
+}
+
 /** C — PRIMEIRO pagamento (cliente novo virou pagante). NÃO usar em renovação. */
 export function msgClientePagou(input: {
   displayName: string;

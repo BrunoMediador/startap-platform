@@ -27,6 +27,7 @@
  */
 import { logger } from '@startap/core/logger';
 import { canonicalE164, phoneHint } from '@startap/core/phone';
+import { mapSignupFormat } from '@startap/core/signup-format';
 import { timezoneSchema } from '@startap/core/timezones';
 import { isTrialPepperConfigured, trialPhoneHmac } from '@startap/core/trial';
 import {
@@ -85,6 +86,13 @@ export const signupSchema = z
     // criado. Booleano (o front manda `true` só com o checkbox marcado); as VERSÕES
     // são server-authoritative (constantes acima), nunca vêm do cliente.
     aceite_termos: z.boolean(),
+    // ── Formato do produto (ADR 0030 D2, signup dos 4 combos) ──────────────────────
+    // Pergunta 1 "Você atende sozinho ou tem uma equipe?" → product_type.
+    // Pergunta 2 "A IA marca sozinha na sua agenda, ou só atende e encaminha?" → agenda.
+    // DEFAULTS = sozinho+agenda: reproduzem o signup ATUAL byte-a-byte quando o front
+    // NÃO envia os campos (funil vivo / front antigo). Valor fora do enum => 400 (.strict).
+    tipo_atendimento: z.enum(['sozinho', 'equipe']).default('sozinho'),
+    modo_ia: z.enum(['agenda', 'atende']).default('agenda'),
   })
   .strict();
 
@@ -113,7 +121,20 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'dados_invalidos' });
     }
-    const { nome_negocio, whatsapp, senha, area, timezone, aceite_termos } = parsed.data;
+    const {
+      nome_negocio,
+      whatsapp,
+      senha,
+      area,
+      timezone,
+      aceite_termos,
+      tipo_atendimento,
+      modo_ia,
+    } = parsed.data;
+
+    // Mapa formato → provisioning (ADR 0030 D2). PURO/testável. amountCents do combo
+    // individual+agenda = PORTAL_SIGNUP_AMOUNT_CENTS (byte-identidade do funil vivo).
+    const formato = mapSignupFormat(tipo_atendimento, modo_ia, config.PORTAL_SIGNUP_AMOUNT_CENTS);
 
     // ── Gate de aceite (SCRUM-1 / LGPD): EXIGE o aceite ANTES de qualquer escrita.
     // Sem aceite -> 422, nada é provisionado (nem clone, nem sessão WAHA). É a regra
@@ -196,7 +217,22 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
         // `area` (W8) vai DENTRO de personalizacao: o provisioning a usa pra
         // resolver {{area_artigo}} no render do prompt E grava em flow_clones.area
         // (coluna tipada). Sem mudança de assinatura — espelha {{nome_negocio}}.
-        personalizacao: { nome_negocio, area },
+        //
+        // agenda_automatica (ADR 0030 D2): a INTENÇÃO do formato vai no personalizacao,
+        // MESMA chave/storage do gestão. Só grava 'false' pro ATENDENTE — pro combo de
+        // AGENDA a chave fica AUSENTE (default true em getPerfilBySlot), preservando o
+        // personalizacao byte-idêntico do funil vivo (individual+agenda).
+        personalizacao: {
+          nome_negocio,
+          area,
+          ...(formato.agendaAutomatica ? {} : { agenda_automatica: 'false' }),
+        },
+        // Colunas de formato (ADR 0030 D2 / migration 052+072). Individual+agenda =>
+        // productType 'individual' + gates false (= defaults) => row byte-idêntica.
+        productType: formato.productType,
+        seatCap: formato.seatCap,
+        modoAtendenteEnabled: formato.modoAtendenteEnabled,
+        billingFromAgendaEnabled: formato.billingFromAgendaEnabled,
         // `timezone` (migration 068) é COLUNA top-level de flow_clones — vai FORA do
         // personalizacao (o provisioning grava direto na coluna). Já validado pelo
         // timezoneSchema (default SP); o provisioning revalida por defesa em profundidade.
@@ -256,9 +292,11 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
 
       // Preço de tabela nasce aqui; next_due_date = NULL (trial AINDA não começou
       // — sem data o gate ADR-0016 não silencia e o clone fica em rascunho).
+      // amount_cents = placeholder POR FORMATO (ADR 0030 D2). individual+agenda =
+      // PORTAL_SIGNUP_AMOUNT_CENTS (byte-idêntico ao funil vivo); editável no gestão.
       await clientBilling.upsertBilling({
         slot,
-        amountCents: config.PORTAL_SIGNUP_AMOUNT_CENTS,
+        amountCents: formato.amountCents,
         notes: 'signup self-service — trial inicia no pareamento (Missão 020 F1)',
       });
 
@@ -315,7 +353,7 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
           nomeNegocio: nome_negocio,
           phoneHint: hint,
           slot,
-          amountCents: config.PORTAL_SIGNUP_AMOUNT_CENTS,
+          amountCents: formato.amountCents,
         }),
       )
       .catch((e: unknown) => {
@@ -324,6 +362,27 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
           'signup: alerta de novo cadastro falhou (não afeta o cadastro)',
         );
       });
+
+    // Alerta interno (ADR 0030 D3 / fila "aguardando agenda"): clone que escolheu
+    // AGENDA precisa que o time conecte a Service Account do Google (etapa manual,
+    // ADR 0024). Só dispara pro formato AGENDA (atendente não usa agenda). Aditivo,
+    // fire-and-forget SEGURO — não toca o clone nem o 201 do cliente.
+    if (formato.agendaAutomatica) {
+      void internalAlert
+        .sendInternalAlert(
+          internalAlert.msgAguardandoAgenda({
+            nomeNegocio: nome_negocio,
+            slot,
+            formato: formato.productType,
+          }),
+        )
+        .catch((e: unknown) => {
+          log.error(
+            { err: e instanceof Error ? e.message : String(e) },
+            'signup: alerta de aguardando-agenda falhou (não afeta o cadastro)',
+          );
+        });
+    }
 
     return reply.code(201).send({
       ok: true,
