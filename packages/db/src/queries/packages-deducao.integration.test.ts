@@ -23,6 +23,7 @@
  *  - estorno (+1) devolve a sessão e é idempotente.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { ClientPackageCredit } from './packages.js';
 
 const PG_TEST_URL = process.env.PG_TEST_URL;
 const describeIf = PG_TEST_URL ? describe : describe.skip;
@@ -293,7 +294,7 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     const idHoje = await seedCredit({ total: 3, restantes: 3, dataExpiracao: hoje });
     const idOntem = await seedCredit({ total: 3, restantes: 3, dataExpiracao: ontem });
     const credits = await pkg.listClientCredits({ slot: SLOT, phoneHmac: HMAC });
-    const byId = new Map(credits.map((c: { credit_id: number }) => [c.credit_id, c]));
+    const byId = new Map((credits as ClientPackageCredit[]).map((c) => [c.credit_id, c] as const));
     // vence HOJE = ainda válido (comparação é estritamente `<`; o dia da validade ainda conta).
     expect(byId.get(idHoje)?.expirado).toBe(false);
     expect(byId.get(idHoje)?.estado).toBe('ATIVO');
