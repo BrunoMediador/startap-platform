@@ -23,7 +23,6 @@
  *  - LGPD: telefone NUNCA logado em claro — só phoneHint (DDD + 2 últimos).
  */
 import { logger } from '@startap/core/logger';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits, phoneHint } from '@startap/core/phone';
 import { flowClones } from '@startap/db';
 
@@ -50,7 +49,9 @@ export async function autofillAlertOwnerPhone(
     // podem LIMPAR o campo no portal (grava NULL) pra o alerta cair no fallback da PRÓPRIA
     // sessão; se o autofill re-preenchesse a cada WORKING (o me.id), o clear NUNCA colaria.
     // Demais clones (individual/estabelecimento) seguem preenchendo normal.
-    if (isModoAtendenteEnabled(slot, process.env.MODO_ATENDENTE_SLOTS)) {
+    if (
+      await flowClones.resolveModoAtendenteEnabledForSlot(slot, process.env.MODO_ATENDENTE_SLOTS)
+    ) {
       return { status: 'skipped', reason: 'modo-atendente' };
     }
 

@@ -10,7 +10,6 @@
  *  - Antibot + pausa global aplicados aqui (antes de chegar nos bots).
  */
 import { logger } from '@startap/core/logger';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
 import { antibot, clientBilling, flowClones, flowExecutionLog, pausa, routing } from '@startap/db';
@@ -313,7 +312,13 @@ export async function handleWebhook(
     // Só clones no MODO_ATENDENTE_SLOTS entram aqui; os demais (Cirilo/Samuel/dragon) PULAM
     // este bloco e caem na lógica byte-idêntica de sempre logo abaixo. Flag lida do
     // process.env (mesmo padrão dos gates IDEMPOTENCY_DEDUP/BILLING_OVERDUE_SILENCE no router).
-    if (route && isModoAtendenteEnabled(route.workflow_id, process.env.MODO_ATENDENTE_SLOTS)) {
+    if (
+      route &&
+      (await flowClones.resolveModoAtendenteEnabledForSlot(
+        route.workflow_id,
+        process.env.MODO_ATENDENTE_SLOTS,
+      ))
+    ) {
       const text = body.payload?.body ?? '';
 
       // (0) SCRUM-63 — CONTATO MIGRADO (LID): pós-migração LID do WhatsApp, o eco fromMe (e a

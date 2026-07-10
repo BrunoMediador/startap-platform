@@ -37,14 +37,29 @@ const {
   upsertAtendimentoFromEventMock,
   syncAtendimentoFromEventMock,
   softDeleteAtendimentoByEventMock,
+  csvGateMock,
 } = vi.hoisted(() => ({
   getScopeBySlotMock: vi.fn(),
   upsertAtendimentoFromEventMock: vi.fn(),
   syncAtendimentoFromEventMock: vi.fn(),
   softDeleteAtendimentoByEventMock: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por env
+  // (estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS); byte-idêntico ao gate de antes.
+  csvGateMock: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 vi.mock('@startap/db', () => ({
-  flowClones: { getCloneBySlot: vi.fn() },
+  flowClones: {
+    getCloneBySlot: vi.fn(),
+    resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
+      csvGateMock(slot, csv),
+  },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
   cloneColaboradores: { getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a) },

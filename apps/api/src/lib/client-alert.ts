@@ -33,7 +33,6 @@
  */
 import { createHash } from 'node:crypto';
 import { logger } from '@startap/core/logger';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 // Subpath /phone (não a raiz) p/ não arrastar crypto.ts no load. Defesa em profundidade:
 // normaliza o DDI do dono antes do chatId — alert_owner_phone pode ter vindo cru.
 import { ensureDddBr } from '@startap/core/phone';
@@ -414,7 +413,7 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
     // (mesma razão de ordem do base.ts): best-effort, nunca lança. Gated pelo modo atendente.
     if (
       transport === 'clone_session' &&
-      isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS)
+      (await flowClones.resolveModoAtendenteEnabledForSlot(slot, config.MODO_ATENDENTE_SLOTS))
     ) {
       await registerBotReplyEcho(sessao, ownerPhone, texto);
     }

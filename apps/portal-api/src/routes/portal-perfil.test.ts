@@ -31,6 +31,7 @@ const {
   getAlertOwnerPhoneBySlotMock,
   updateAlertOwnerPhoneBySlotMock,
   clearAlertOwnerPhoneBySlotMock,
+  csvGateMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
   updatePerfilBySlotMock: vi.fn(),
@@ -39,6 +40,16 @@ const {
   getAlertOwnerPhoneBySlotMock: vi.fn(),
   updateAlertOwnerPhoneBySlotMock: vi.fn(),
   clearAlertOwnerPhoneBySlotMock: vi.fn(),
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por
+  // env (cfgMock.MODO_ATENDENTE_SLOTS / FAQ_PERSONALIZADO_SLOTS); byte-idêntico ao gate de antes.
+  csvGateMock: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 vi.mock('@startap/db', () => ({
   portalConfig: {
@@ -51,6 +62,10 @@ vi.mock('@startap/db', () => ({
     getAlertOwnerPhoneBySlot: (...a: unknown[]) => getAlertOwnerPhoneBySlotMock(...a),
     updateAlertOwnerPhoneBySlot: (...a: unknown[]) => updateAlertOwnerPhoneBySlotMock(...a),
     clearAlertOwnerPhoneBySlot: (...a: unknown[]) => clearAlertOwnerPhoneBySlotMock(...a),
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      csvGateMock(slot, csv),
+    resolveFaqPersonalizadoEnabledForSlot: (slot: string, csv?: string | null) =>
+      csvGateMock(slot, csv),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));

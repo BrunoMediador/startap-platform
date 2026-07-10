@@ -43,3 +43,26 @@ export function isFaqPersonalizadoEnabled(
   if (entries.includes('*')) return true;
   return entries.includes(slot);
 }
+
+/**
+ * Camada de resolução env→coluna (ADR 0030 D1). O efetivo é a UNIÃO do gate por-env com o
+ * gate por-clone (coluna `flow_clones.faq_personalizado_enabled`):
+ *
+ *     efetivo = isFaqPersonalizadoEnabled(slot, envCsv)  OR  columnEnabled === true
+ *
+ * O env permanece como kill-switch/override GLOBAL: se o slot está no CSV (ou o CSV é '*',
+ * estado atual de produção), segue ON independente da coluna — preserva a byte-identidade. A
+ * coluna só ADICIONA capacidade (ligar por-clone quando o env for enxugado de '*'), nunca remove.
+ * Helper PURO: a leitura da coluna acontece no caller (que já carrega o clone).
+ *
+ * @param slot          slot do clone (SEMPRE da sessão / requireTenant — nunca de input).
+ * @param slotsConfig   valor de `config.FAQ_PERSONALIZADO_SLOTS` (string da env).
+ * @param columnEnabled valor de `flow_clones.faq_personalizado_enabled` (boolean; ausente = false).
+ */
+export function resolveFaqPersonalizadoEnabled(
+  slot: string,
+  slotsConfig: string | undefined | null,
+  columnEnabled: boolean | undefined | null,
+): boolean {
+  return isFaqPersonalizadoEnabled(slot, slotsConfig) || columnEnabled === true;
+}

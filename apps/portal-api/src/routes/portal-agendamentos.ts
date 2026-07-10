@@ -20,9 +20,8 @@
  * DTO whitelist (parecer-001): apenas id, titulo, inicio, fim. NAO expor
  * telefone/descricao/summary cru alem do titulo.
  */
-import { isAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { logger } from '@startap/core/logger';
-import { atendimentos, cloneColaboradores } from '@startap/db';
+import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import {
   TZ,
@@ -314,7 +313,13 @@ async function hookUpsertAtendimento(args: {
    */
   reprecificarServico?: boolean;
 }): Promise<void> {
-  if (!isAtendFromAgendaEnabled(args.slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
+  if (
+    !(await flowClones.resolveAtendFromAgendaEnabledForSlot(
+      args.slot,
+      config.ATEND_FROM_AGENDA_SLOTS,
+    ))
+  )
+    return;
   try {
     const scope = await cloneColaboradores.getScopeBySlot(args.slot);
     if (!scope.tenant_id) {
@@ -372,7 +377,10 @@ async function hookUpsertAtendimento(args: {
  * Idempotente: re-rodar é no-op. Não derruba o cancelamento se falhar.
  */
 async function hookSoftDeleteAtendimento(slot: string, eventId: string): Promise<void> {
-  if (!isAtendFromAgendaEnabled(slot, config.ATEND_FROM_AGENDA_SLOTS)) return;
+  if (
+    !(await flowClones.resolveAtendFromAgendaEnabledForSlot(slot, config.ATEND_FROM_AGENDA_SLOTS))
+  )
+    return;
   try {
     const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId);
     log.info(

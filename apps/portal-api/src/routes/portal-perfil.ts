@@ -10,8 +10,6 @@
  * escrita, o data layer reusa updateClone -> re-renderiza o bot_prompt e
  * invalida o cache de clone (webhook pega a versao nova em ~0s).
  */
-import { isFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
-import { isModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { perfilSchema } from '@startap/core/schemas';
 import { isValidIanaTimezone } from '@startap/core/timezones';
 import { flowClones, portalConfig } from '@startap/db';
@@ -30,11 +28,17 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // features: gate POR-CLONE do modo atendente (SCRUM-59). Contrato pro front (PR-D):
     // só o(s) clone(s) no MODO_ATENDENTE_SLOTS veem a seção "agenda automática / link".
     // Escopado pelo slot da SESSÃO (withTenant) — nunca do input.
-    const modoAtendente = isModoAtendenteEnabled(slot, config.MODO_ATENDENTE_SLOTS);
+    const modoAtendente = await flowClones.resolveModoAtendenteEnabledForSlot(
+      slot,
+      config.MODO_ATENDENTE_SLOTS,
+    );
     // features.faq_personalizado (SCRUM-65): gate POR-CLONE. Só o(s) clone(s) no
     // FAQ_PERSONALIZADO_SLOTS veem a seção de FAQ personalizado. Mesmo padrão do modo_atendente;
     // o front usa esse boolean como `enabled` da query (clone fora do gate = zero request).
-    const faqPersonalizado = isFaqPersonalizadoEnabled(slot, config.FAQ_PERSONALIZADO_SLOTS);
+    const faqPersonalizado = await flowClones.resolveFaqPersonalizadoEnabledForSlot(
+      slot,
+      config.FAQ_PERSONALIZADO_SLOTS,
+    );
     const features = { modo_atendente: modoAtendente, faq_personalizado: faqPersonalizado };
     // recepcao_telefone (SCRUM-59 → Onda 1 de-gate, SCRUM-68 / ADR 0030): destino dos avisos de
     // lead/escalação/desconexão ao dono (= flow_clones.alert_owner_phone RAW). UNIVERSAL: exposto
@@ -81,7 +85,10 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     const rawPerfil = (body.perfil ?? {}) as Record<string, unknown>;
     if (
       rawPerfil.faq_personalizado !== undefined &&
-      !isFaqPersonalizadoEnabled(slot, config.FAQ_PERSONALIZADO_SLOTS)
+      !(await flowClones.resolveFaqPersonalizadoEnabledForSlot(
+        slot,
+        config.FAQ_PERSONALIZADO_SLOTS,
+      ))
     ) {
       return reply.code(404).send({ error: 'faq_personalizado_indisponivel' });
     }

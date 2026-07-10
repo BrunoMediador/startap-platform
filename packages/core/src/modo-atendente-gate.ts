@@ -45,3 +45,26 @@ export function isModoAtendenteEnabled(
   if (entries.includes('*')) return true;
   return entries.includes(slot);
 }
+
+/**
+ * Camada de resolução env→coluna (ADR 0030 D1). O efetivo é a UNIÃO do gate por-env com o
+ * gate por-clone (coluna `flow_clones.modo_atendente_enabled`):
+ *
+ *     efetivo = isModoAtendenteEnabled(slot, envCsv)  OR  columnEnabled === true
+ *
+ * O env permanece como kill-switch/override GLOBAL: se o slot está no CSV (ou o CSV é '*'),
+ * segue ON independente da coluna — preserva a byte-identidade de quem já roda. A coluna só
+ * ADICIONA capacidade (ligar por-clone sem env), nunca remove. Helper PURO: a leitura da coluna
+ * acontece no caller (que já carrega o clone); aqui só combinamos os dois booleanos.
+ *
+ * @param slot          slot do clone (SEMPRE da sessão / requireTenant — nunca de input).
+ * @param slotsConfig   valor de `config.MODO_ATENDENTE_SLOTS` (string da env).
+ * @param columnEnabled valor de `flow_clones.modo_atendente_enabled` (boolean; ausente = false).
+ */
+export function resolveModoAtendenteEnabled(
+  slot: string,
+  slotsConfig: string | undefined | null,
+  columnEnabled: boolean | undefined | null,
+): boolean {
+  return isModoAtendenteEnabled(slot, slotsConfig) || columnEnabled === true;
+}

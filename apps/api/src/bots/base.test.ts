@@ -16,6 +16,16 @@ const mocks = vi.hoisted(() => ({
   pruneHistory: vi.fn(),
   logFlowEvent: vi.fn(),
   order: [] as string[],
+  // Resolver env→coluna (ADR 0030 D1) mockado como env-only (o teste exercita o gate por env;
+  // sem coluna por-clone aqui) — mesma verdade que o isModoAtendenteEnabled de antes.
+  csvGate: (slot: string, csv?: string | null): boolean => {
+    if (!csv) return false;
+    const e = csv
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return e.includes('*') || e.includes(slot);
+  },
 }));
 
 vi.mock('@startap/core/logger', () => ({
@@ -32,6 +42,10 @@ vi.mock('@startap/db', () => ({
   pausa: {
     isFlowPaused: vi.fn().mockResolvedValue(false),
     isPaused: vi.fn().mockResolvedValue(false),
+  },
+  flowClones: {
+    resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
+      mocks.csvGate(slot, csv),
   },
 }));
 
