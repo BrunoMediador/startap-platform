@@ -48,6 +48,11 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     // (SCRUM-62, intacto). O dono edita pelo campo do portal.
     const payload: Record<string, unknown> = { perfil, timezone, features };
     payload.recepcao_telefone = await flowClones.getAlertOwnerPhoneBySlot(slot);
+    // aguardando_agenda (ADR 0030 D3): clone que escolheu AGENDA e cuja Service Account
+    // do Google ainda não foi conectada pelo time. O front usa isto pra mostrar o card
+    // "nossa equipe está conectando sua agenda (até 24h úteis)" no Início/agenda.
+    // Derivado de runtime, escopado pelo slot da SESSÃO (withTenant) — nunca do input.
+    payload.aguardando_agenda = await flowClones.isAwaitingAgendaConnection(slot);
     return reply.code(200).send(payload);
   });
 

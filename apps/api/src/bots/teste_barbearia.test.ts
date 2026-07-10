@@ -427,17 +427,35 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     expect(inserir.parameters.required).toContain('colaborador_id');
   });
 
-  it('estabelecimento sem colaborador agendável → silencia (NÃO cai pro individual)', async () => {
+  it('estabelecimento+agenda SEM colaborador agendável → DEGRADE elegante p/ atendente (ADR 0030 D3, NÃO silencia, NÃO cai pro individual)', async () => {
     cfg.ESTABELECIMENTO_ENABLED = true;
     mocks.getProductType.mockResolvedValue('estabelecimento');
-    mocks.getGcalsForSlot.mockResolvedValue([]); // nenhum colaborador ativo
+    mocks.getGcalsForSlot.mockResolvedValue([]); // nenhum colaborador com agenda ativa (pré-setup)
+    // Intenção AGENDA (não é atendente por escolha) + gcal não conectado => degrada.
+    mocks.getCloneBySlot.mockResolvedValue({
+      timezone: 'America/Sao_Paulo',
+      personalizacao: { agenda_automatica: true },
+    });
+    mocks.getArea.mockResolvedValue('barbearia');
+    mocks.listColaboradores.mockResolvedValue([]);
+    mocks.renderPrompt.mockResolvedValue('PERSONA');
+    mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+    mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+    mocks.runAgentConfigured.mockResolvedValue({ reply: 'posso te ajudar com isso' });
+
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     const reply = await (
       bot as unknown as { process: (c: BotContext) => Promise<string | null> }
     ).process(makeCtx('quero um corte'));
-    expect(reply).toBeNull();
-    expect(mocks.getGcalForSlot).not.toHaveBeenCalled(); // sem fallback p/ agenda do clone
-    expect(mocks.runAgentConfigured).not.toHaveBeenCalled();
+
+    // Respondeu (não silenciou) via ATENDENTE.
+    expect(reply).toBe('posso te ajudar com isso');
+    // NUNCA usa a agenda principal do clone (sem fallback p/ individual) e NÃO monta contexto de estab.
+    expect(mocks.getGcalForSlot).not.toHaveBeenCalled();
+    expect(mocks.buildEstabelecimentoContext).not.toHaveBeenCalled();
+    // Rodou o agente do atendente: só as 2 tools de atendente, ZERO tool de agenda.
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toEqual(['escalar_para_humano', 'registrar_interesse']);
   });
 
   // (c) inserir_agendamento roteia pro calendarId CERTO e rejeita colaborador inválido.
@@ -2222,5 +2240,81 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     expect(tools.map((t) => t.name)).toEqual(['escalar_para_humano', 'registrar_interesse']);
     expect(mocks.getGcalsForSlot).not.toHaveBeenCalled();
     expect(mocks.buildEstabelecimentoContext).not.toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
+// DEGRADE ELEGANTE agenda→atendente (ADR 0030 D3, Onda 3)
+//
+// Clone individual que escolheu AGENDA mas cuja Service Account do Google ainda NÃO
+// foi conectada pelo time: em vez do gate DURO ("agenda não configurada, avise o
+// admin"), o bot degrada pra atendente. É derivação de RUNTIME (efetivo = agenda &&
+// gcalConfigured) — o valor armazenado NÃO muda; ao conectar o gcal, vira agenda só.
+// O modo-atendente por gate está OFF (MODO_ATENDENTE_SLOTS='') DE PROPÓSITO: prova que
+// é o DEGRADE (gcal ausente), não o gate por-clone, que roteia pro atendente.
+// ════════════════════════════════════════════════════════════════════════════════
+describe('TesteBarbeariaBot — DEGRADE ELEGANTE agenda→atendente (ADR 0030 D3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = ''; // modo atendente OFF: o degrade é quem roteia.
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  /** Clone AGENDA (agenda_automatica=true), individual, mas SEM gcal conectado. */
+  function setupDegrade() {
+    mocks.getGcalForSlot.mockResolvedValue(null); // Service Account ainda não conectada
+    mocks.getProductType.mockResolvedValue('individual');
+    mocks.getCloneBySlot.mockResolvedValue({
+      timezone: 'America/Sao_Paulo',
+      personalizacao: { agenda_automatica: true }, // INTENÇÃO agenda (não é atendente)
+    });
+    mocks.renderPrompt.mockResolvedValue('PERSONA');
+    mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+    mocks.runAgentConfigured.mockResolvedValue({ reply: 'posso te ajudar com isso' });
+    mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+    mocks.listColaboradores.mockResolvedValue([]);
+    mocks.getArea.mockResolvedValue('barbearia');
+  }
+
+  it('clone agenda SEM gcal => degrada pra atendente: SÓ as 2 tools de atendente, NENHUMA de agenda', async () => {
+    setupDegrade();
+    const reply = await (
+      new TesteBarbeariaBot() as unknown as { process: (c: BotContext) => Promise<string | null> }
+    ).process(makeCtx('quero marcar um corte'));
+    expect(reply).toBe('posso te ajudar com isso');
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    const names = tools.map((t) => t.name);
+    expect(names).toEqual(['escalar_para_humano', 'registrar_interesse']);
+    expect(names).not.toContain('inserir_agendamento');
+    expect(names).not.toContain('consultar_agendamento');
+    expect(names).not.toContain('remarcar_agendamento');
+  });
+
+  it('degrade NÃO promete horário: buildContextBlock chamado SEM agendaFormatada', async () => {
+    setupDegrade();
+    await (
+      new TesteBarbeariaBot() as unknown as { process: (c: BotContext) => Promise<string | null> }
+    ).process(makeCtx('tem horário amanhã?'));
+    // getGcalForSlot foi consultado (é o sinal de "configurado?"), mas não devolveu client.
+    expect(mocks.getGcalForSlot).toHaveBeenCalledTimes(1);
+    expect(mocks.loadScheduleConfig).not.toHaveBeenCalled();
+    const ctxArg = mocks.buildContextBlock.mock.calls[0][0];
+    expect(ctxArg.agendaFormatada).toBeUndefined();
+  });
+
+  it('clone agenda COM gcal => caminho AGENDA normal (Cirilo/Samuel inalterados): tools de agenda, NÃO degrada', async () => {
+    // setupSchedule liga o gcal (getGcalForSlot -> client) + product individual.
+    const tools = await toolsPassedFor('quero marcar um corte');
+    const names = tools.map((t) => t.name);
+    expect(names).toContain('inserir_agendamento');
+    expect(names).toContain('consultar_agendamento');
+    expect(names).not.toContain('escalar_para_humano');
+    expect(names).not.toContain('registrar_interesse');
   });
 });

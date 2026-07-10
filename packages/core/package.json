@@ -19,6 +19,8 @@
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./pause-keyword": "./dist/pause-keyword.js",
     "./waha-send-failure": "./dist/waha-send-failure.js",
+    "./agenda-degrade": "./dist/agenda-degrade.js",
+    "./signup-format": "./dist/signup-format.js",
     "./reminders": "./dist/reminders.js",
     "./client-disconnect-alert": "./dist/client-disconnect-alert.js",
     "./timezones": "./dist/timezones.js",

@@ -709,6 +709,79 @@ describe('createCloneRecords — idempotência/unicidade', () => {
     });
     expect(cloneInsert()?.values?.[9]).toBe('America/Sao_Paulo');
   });
+
+  // ── Formato do clone (ADR 0030 D2, Onda 3). Novas colunas $11-$14 => índices 10-13.
+  //    product_type=$11(idx10), seat_cap=$12(idx11), modo_atendente_enabled=$13(idx12),
+  //    billing_from_agenda_enabled=$14(idx13).
+  it('AUSENTE (gestão legado / individual+agenda): defaults byte-idênticos (individual, null, false, false)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_default_ab12cd',
+      displayName: 'Negocio X',
+      personalizacao: { nome_negocio: 'Negocio X' },
+    });
+    const v = cloneInsert()?.values;
+    expect(v?.[10]).toBe('individual');
+    expect(v?.[11]).toBeNull();
+    expect(v?.[12]).toBe(false);
+    expect(v?.[13]).toBe(false);
+    // e os índices ANTIGOS não deslizaram (area idx6, servicos idx8, timezone idx9).
+    expect(v?.[9]).toBe('America/Sao_Paulo');
+  });
+
+  it('estabelecimento + agenda: product_type/seat_cap/billing_from_agenda gravados', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_estab_ag_ab12cd',
+      displayName: 'Equipe X',
+      personalizacao: { nome_negocio: 'Equipe X' },
+      productType: 'estabelecimento',
+      seatCap: 5,
+      modoAtendenteEnabled: false,
+      billingFromAgendaEnabled: true,
+    });
+    const v = cloneInsert()?.values;
+    expect(v?.[10]).toBe('estabelecimento');
+    expect(v?.[11]).toBe(5);
+    expect(v?.[12]).toBe(false);
+    expect(v?.[13]).toBe(true);
+  });
+
+  it('individual + atendente: modo_atendente_enabled=true, seat_cap null, billing false', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_ind_at_ab12cd',
+      displayName: 'Solo Y',
+      personalizacao: { nome_negocio: 'Solo Y', agenda_automatica: 'false' },
+      productType: 'individual',
+      seatCap: null,
+      modoAtendenteEnabled: true,
+      billingFromAgendaEnabled: false,
+    });
+    const v = cloneInsert()?.values;
+    expect(v?.[10]).toBe('individual');
+    expect(v?.[11]).toBeNull();
+    expect(v?.[12]).toBe(true);
+    expect(v?.[13]).toBe(false);
+  });
+
+  it('productType inválido/ausente cai pro individual (defesa em profundidade)', async () => {
+    const { pool, cloneInsert } = fakePoolCapturingClone();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_pt_lixo_ab12cd',
+      displayName: 'Negocio Z',
+      personalizacao: { nome_negocio: 'Negocio Z' },
+      productType: 'lixo' as unknown as 'individual',
+      seatCap: Number.NaN,
+    });
+    const v = cloneInsert()?.values;
+    expect(v?.[10]).toBe('individual');
+    expect(v?.[11]).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

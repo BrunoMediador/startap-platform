@@ -37,12 +37,14 @@ const {
   upsertAtendimentoFromEventMock,
   syncAtendimentoFromEventMock,
   softDeleteAtendimentoByEventMock,
+  isAwaitingAgendaConnectionMock,
   csvGateMock,
 } = vi.hoisted(() => ({
   getScopeBySlotMock: vi.fn(),
   upsertAtendimentoFromEventMock: vi.fn(),
   syncAtendimentoFromEventMock: vi.fn(),
   softDeleteAtendimentoByEventMock: vi.fn(),
+  isAwaitingAgendaConnectionMock: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por env
   // (estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS); byte-idêntico ao gate de antes.
   csvGateMock: (slot: string, csv?: string | null): boolean => {
@@ -59,6 +61,7 @@ vi.mock('@startap/db', () => ({
     getCloneBySlot: vi.fn(),
     resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
       csvGateMock(slot, csv),
+    isAwaitingAgendaConnection: (...a: unknown[]) => isAwaitingAgendaConnectionMock(...a),
   },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
@@ -173,6 +176,8 @@ beforeEach(() => {
   upsertAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
   syncAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
   softDeleteAtendimentoByEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
+  // Default: NÃO aguardando agenda (clone já conectado / não-agenda) — byte-idêntico a hoje.
+  isAwaitingAgendaConnectionMock.mockResolvedValue(false);
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -217,6 +222,36 @@ describe('GET /portal/agendamentos — individual (single-agenda)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().gcal_configured).toBe(false);
     expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+  });
+
+  // SCRUM-68 Onda 3 (ADR 0030 D3): o card "estamos conectando sua agenda" RENDERIZA a partir
+  // do aguardando_agenda deste endpoint (AgendamentosResponse). Sem ele o card nunca aparece.
+  it('200 expõe aguardando_agenda=true quando o clone escolheu agenda e o gcal não está conectado (card)', async () => {
+    // Clone de AGENDA em pré-setup: gcal não conectado (lista vazia) + isAwaitingAgendaConnection true.
+    getGcalForSlotMock.mockResolvedValue(null);
+    isAwaitingAgendaConnectionMock.mockResolvedValue(true);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.gcal_configured).toBe(false);
+    expect(body.aguardando_agenda).toBe(true);
+    // Escopado pelo slot da SESSÃO (withTenant), nunca do input.
+    expect(isAwaitingAgendaConnectionMock).toHaveBeenCalledWith(injectedSlot);
+  });
+
+  it('200 aguardando_agenda=false (default) quando já conectado — byte-idêntico a hoje', async () => {
+    const client = { listEvents: vi.fn().mockResolvedValue([]) };
+    getGcalForSlotMock.mockResolvedValue(client);
+    // isAwaitingAgendaConnection default = false (beforeEach).
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/agendamentos' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().aguardando_agenda).toBe(false);
   });
 });
 

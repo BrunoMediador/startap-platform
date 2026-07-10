@@ -21,6 +21,18 @@ export {
 } from './faq-personalizado-gate.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { isDefinitiveNonDelivery } from './waha-send-failure.js';
+export { isAgendaAutomaticaIntent, resolveEffectiveAgenda } from './agenda-degrade.js';
+export {
+  DEFAULT_ESTABELECIMENTO_SEAT_CAP,
+  SIGNUP_AMOUNT_CENTS_BY_FORMAT,
+  mapSignupFormat,
+} from './signup-format.js';
+export type {
+  TipoAtendimento,
+  ModoIa,
+  SignupProductType,
+  SignupFormatProvisioning,
+} from './signup-format.js';
 export { DEFAULT_TIMEZONE, isValidIanaTimezone, timezoneSchema } from './timezones.js';
 export {
   REMINDER_TZ,

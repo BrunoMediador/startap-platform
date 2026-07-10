@@ -5,6 +5,7 @@ export {
   msgNovoCadastro,
   msgClienteAtivou,
   msgClientePagou,
+  msgAguardandoAgenda,
   type SendInternalAlertOpts,
   type SendInternalAlertResult,
 } from './internal-alert.js';

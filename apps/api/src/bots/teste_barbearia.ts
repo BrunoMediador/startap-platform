@@ -551,11 +551,25 @@ export class TesteBarbeariaBot extends BotBase {
 
     const calClient = await gcal.getGcalForSlot(this.slot);
     if (!calClient) {
-      this.log.error(
+      // ── DEGRADE ELEGANTE (ADR 0030 D3, Onda 3) ─────────────────────────────────
+      // Clone individual que escolheu AGENDA mas cuja Service Account do Google AINDA
+      // não foi conectada pelo time (etapa manual, ADR 0024): em vez do gate DURO
+      // ("agenda ainda não configurada, avise o admin"), o bot degrada pra ATENDENTE
+      // (coleta lead + encaminha, SEM tool de agenda, SEM [HORARIOS], sem prometer
+      // horário) até o gcal ficar de pé.
+      //
+      // É derivação de RUNTIME: efetivo = agenda_automatica && gcalConfigured
+      // (resolveEffectiveAgenda). getGcalForSlot=null => gcalConfigured=false => efetivo
+      // atendente. NÃO há flip do valor armazenado — ao conectar a SA, getGcalForSlot
+      // volta não-nula e este ramo NÃO roda mais (bot vira agenda sozinho, sem deploy).
+      //
+      // BYTE-IDÊNTICO pros clones JÁ conectados (Cirilo/Samuel): gcal ativo =>
+      // calClient != null => nunca entram aqui. Só clones sem agenda conectada degradam.
+      this.log.info(
         { slot: this.slot },
-        'gcal_not_configured — bot exige Service Account configurada via painel',
+        'gcal ainda não conectado — degrade elegante para atendente (ADR 0030 D3)',
       );
-      return 'Desculpe, a agenda deste fluxo ainda não foi configurada. Avise o administrador.';
+      return this.processAtendente(ctx);
     }
 
     // Buscar agenda
@@ -1323,15 +1337,22 @@ export class TesteBarbeariaBot extends BotBase {
     // O resolvedor já filtra ativo/gcal active no banco e isola por slot+tenant.
     const colaboradores = await gcal.getGcalsForSlot(this.slot);
     if (colaboradores.length === 0) {
-      // Estabelecimento sem nenhum colaborador agendável (nenhum cadastrado ou todos
-      // com agenda pending/invalid). NÃO cai pro caminho individual (vazaria a agenda
-      // principal do clone) e NÃO inventa disponibilidade — silencia, igual ao
-      // individual quando a config está ausente.
-      this.log.error(
+      // ── DEGRADE ELEGANTE do ESTABELECIMENTO (ADR 0030 D3, Onda 3) ───────────────
+      // Estabelecimento que escolheu AGENDA mas cuja Service Account do Google / agendas
+      // dos colaboradores AINDA não foram conectadas pelo time (etapa manual, ADR 0024):
+      // nenhum colaborador agendável. Em vez de SILENCIAR (gate DURO, que deixava o cliente
+      // novo sem resposta), degrada pra ATENDENTE — coleta lead + encaminha, SEM tool de
+      // agenda e SEM vazar a agenda principal do clone (processAtendente não toca gcal) —
+      // até as agendas ficarem de pé. Paridade com o degrade INDIVIDUAL acima.
+      //
+      // Derivação de RUNTIME: ao conectar as agendas, getGcalsForSlot volta não-vazio e este
+      // ramo NÃO roda mais (vira estabelecimento com agenda, sem deploy). BYTE-IDÊNTICO pro
+      // dragon (que TEM colaboradores/gcal): getGcalsForSlot != [] => nunca entra aqui.
+      this.log.info(
         { slot: this.slot, telefone },
-        'estabelecimento: nenhum colaborador agendável — bot não responde (sem fallback p/ agenda do clone)',
+        'estabelecimento sem colaborador agendável — degrade elegante para atendente (ADR 0030 D3)',
       );
-      return null;
+      return this.processAtendente(ctx);
     }
 
     // Config de agenda (horários + serviços globais do clone) — mesma fonte do individual.
