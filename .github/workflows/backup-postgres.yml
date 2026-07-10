@@ -71,6 +71,21 @@ jobs:
             exit 1
           fi
 
+          # Integridade do gzip: pega stream corrompido/truncado no transporte SSH.
+          if ! gzip -t "${OUTFILE}"; then
+            echo "ERRO: gzip corrompido — dump inválido"
+            exit 1
+          fi
+
+          # Marcador de conclusão do pg_dump: garante dump COMPLETO (não truncado no meio)
+          # e que o conteúdo é mesmo um dump — não uma mensagem de erro do docker/ssh
+          # que passou pelo pipe e ainda assim ficou >1 KB.
+          COMPLETE=$(gzip -dc "${OUTFILE}" | grep -c "PostgreSQL database dump complete" || true)
+          if [ "${COMPLETE}" -lt 1 ]; then
+            echo "ERRO: dump sem marcador de conclusão do pg_dump — truncado ou conteúdo inválido"
+            exit 1
+          fi
+
           echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
           echo "outfile=${OUTFILE}" >> "$GITHUB_OUTPUT"
           echo "size=${SIZE}" >> "$GITHUB_OUTPUT"
@@ -87,3 +102,76 @@ jobs:
       - name: Limpa chaves SSH
         if: always()
         run: rm -f ~/.ssh/id_ed25519 ~/.ssh/backup_deploy ~/.ssh/config
+
+  # ── Alerta de falha (SCRUM-70) ──────────────────────────────────────────────
+  # JOB SEPARADO de propósito. Quando o runner GitHub-hosted não é adquirido, o
+  # job `backup` é CANCELADO sem rodar NENHUM step (foi o caso de 09/07:
+  # "job was not acquired by Runner of type hosted even after multiple attempts").
+  # Um `if: failure()` DENTRO do job backup nunca rodaria nesse cenário — sem
+  # runner, nenhum step existe. Um job separado re-solicita runner e cobre tanto
+  # falha de step quanto job cancelado por falta de runner.
+  # `always() && result != 'success'` cobre failure, cancelled E skipped.
+  # Transporte = sessão ALERTAS, disparada SERVER-SIDE na VPS pelo SSH que este
+  # workflow já usa → a chave WAHA e os números internos (PII) NUNCA entram em
+  # secret do GitHub nem no YAML; ficam só dentro da VPS.
+  notify-failure:
+    name: Alerta de falha via ALERTAS
+    needs: backup
+    if: ${{ always() && needs.backup.result != 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispara alerta ALERTAS (server-side na VPS)
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts 2>/dev/null
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RESULT="${{ needs.backup.result }}"
+
+          # Tudo abaixo roda DENTRO da VPS: resolve o remetente (ALERTAS via
+          # alert_config.sender_slot) e os destinatários internos (alert_recipients
+          # habilitados) no Postgres, e envia pelo worker — que já tem WAHA_URL e
+          # WAHA_API_KEY no próprio env. Número e chave não saem da VPS.
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes root@187.77.242.220 \
+            "RUN_URL='${RUN_URL}' RESULT='${RESULT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          MSG=$(printf '%s\n' \
+            "🔴 BACKUP POSTGRES FALHOU (${RESULT})" \
+            "O backup diário do Postgres NÃO completou hoje — sem dump novo no repo startap-backups." \
+            "Sem ponto de restauração de hoje. Rodar backup manual e checar o runner do GitHub Actions." \
+            "Run: ${RUN_URL}")
+
+          PSQL="docker exec automacoes-postgres-1 psql -U startap_user -d startap_database -tAc"
+          SESSION=$($PSQL "SELECT bc.waha_sessao FROM alert_config ac JOIN bot_config bc ON bc.slot = ac.sender_slot WHERE ac.id = 1" | tr -d '[:space:]')
+          PHONES=$($PSQL "SELECT phone FROM alert_recipients WHERE enabled = TRUE")
+
+          if [ -z "${SESSION}" ] || [ -z "${PHONES}" ]; then
+            echo "ABORT: remetente ('${SESSION}') ou destinatarios internos ausentes"
+            exit 1
+          fi
+
+          SENT=0
+          for P in ${PHONES}; do
+            if docker exec \
+                -e ALERT_CHAT="${P}@c.us" \
+                -e ALERT_TEXT="${MSG}" \
+                -e ALERT_SESSION="${SESSION}" \
+                startap-worker node -e 'const u=process.env.WAHA_URL,k=process.env.WAHA_API_KEY;fetch(u+"/api/sendText",{method:"POST",headers:{"Content-Type":"application/json","X-Api-Key":k},body:JSON.stringify({session:process.env.ALERT_SESSION,chatId:process.env.ALERT_CHAT,text:process.env.ALERT_TEXT})}).then(r=>{if(!r.ok){console.error("waha-status",r.status);process.exit(1)}process.exit(0)}).catch(e=>{console.error(e.code||e.message);process.exit(1)})'; then
+              SENT=$((SENT+1))
+            else
+              echo "falha ao enviar alerta para 1 destinatario"
+            fi
+          done
+
+          echo "alertas ALERTAS enviados: ${SENT}"
+          # Falha o step (visibilidade nativa + e-mail) se NENHUM alerta saiu.
+          [ "${SENT}" -ge 1 ]
+          REMOTE
+
+      - name: Limpa chave SSH
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
