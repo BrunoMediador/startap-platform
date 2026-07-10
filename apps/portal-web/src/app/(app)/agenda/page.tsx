@@ -1,5 +1,7 @@
 'use client';
 
+import { AgendaClient } from '@/components/agenda/agenda-client';
+import { AgendaEstabelecimentoClient } from '@/components/agenda/agenda-estabelecimento-client';
 /**
  * Agenda completa (Bloco A — rota dedicada). Reusa a query da Início
  * (useAgendamentos: cache quente). Full-width, PAGE_SIZE maior, seletor de visão
@@ -12,13 +14,13 @@
  *   - sem eventos na janela -> empty "nenhum agendamento" + CTA Novo.
  *   - com eventos        -> AgendaClient (Lista/Semana).
  */
-import { AgendaClient } from '@/components/agenda/agenda-client';
-import { AgendaEstabelecimentoClient } from '@/components/agenda/agenda-estabelecimento-client';
+import { AguardandoAgendaCard } from '@/components/agenda/aguardando-agenda-card';
 import { IconCalendar } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { agendaConexaoEstado } from '@/lib/agenda-conexao';
 import { useAgendamentos } from '@/lib/queries';
 import { useRouter } from 'next/navigation';
 
@@ -48,6 +50,8 @@ export default function AgendaPage() {
         </>
       ) : q.isError || !q.data ? (
         <ErrorState title="Não foi possível carregar a agenda" onRetry={() => q.refetch()} />
+      ) : agendaConexaoEstado(q.data) === 'aguardando' ? (
+        <AguardandoAgendaCard />
       ) : !q.data.gcal_configured ? (
         <EmptyState
           icon={<IconCalendar size={26} />}

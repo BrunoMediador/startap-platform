@@ -29,6 +29,33 @@ export function isArea(v: unknown): v is Area {
   return typeof v === 'string' && (AREAS_SLUGS as readonly string[]).includes(v);
 }
 
+/**
+ * Formato do negócio — os DOIS eixos de domínio decididos no signup (ADR 0030 D2,
+ * Onda 3 do SCRUM-68). São o contrato do POST /auth/signup:
+ *
+ *   - `tipo_atendimento` (pergunta 1: "atende sozinho ou tem equipe?")
+ *       individual     → product_type=individual
+ *       estabelecimento→ product_type=estabelecimento (+ seat_cap default no backend)
+ *
+ *   - `modo_ia` (pergunta 2: "a IA marca sozinha na agenda ou só atende?")
+ *       agenda    → agenda_automatica=true  (+ billing_from_agenda_enabled)
+ *       atendente → agenda_automatica=false (+ modo_atendente_enabled)
+ *
+ * O DEFAULT (individual + agenda) é o signup que já existe e roda em produção. Pra
+ * garantir REGRESSÃO ZERO no funil vivo, o payload do combo default OMITE os dois
+ * campos → o corpo do POST fica BYTE-IDÊNTICO ao de hoje (ver validateCadastro). O
+ * backend trata a ausência dos campos como esse mesmo default (individual+agenda).
+ */
+export const TIPOS_ATENDIMENTO = ['individual', 'estabelecimento'] as const;
+export type TipoAtendimento = (typeof TIPOS_ATENDIMENTO)[number];
+
+export const MODOS_IA = ['agenda', 'atendente'] as const;
+export type ModoIa = (typeof MODOS_IA)[number];
+
+/** Combo default = o signup atual (sozinho + a IA marca na agenda). */
+export const DEFAULT_TIPO_ATENDIMENTO: TipoAtendimento = 'individual';
+export const DEFAULT_MODO_IA: ModoIa = 'agenda';
+
 export interface CadastroDraft {
   nome: string;
   /** Slug da área escolhida, ou null enquanto nada foi marcado. */
@@ -39,6 +66,13 @@ export interface CadastroDraft {
   timezone: string;
   /** Aceite dos Termos + Política de Privacidade (checkbox obrigatório — SCRUM-1). */
   aceite: boolean;
+  /**
+   * Formato do negócio (Onda 3). OPCIONAIS no draft: ausentes = combo default
+   * (individual + agenda), o mesmo do signup atual — quem não mexe nas 2 perguntas
+   * cai no caminho vivo sem mudar 1 byte do payload.
+   */
+  tipoAtendimento?: TipoAtendimento;
+  modoIa?: ModoIa;
 }
 
 export interface CadastroErrors {
@@ -58,6 +92,31 @@ export interface CadastroPayload {
   timezone: string;
   /** Sempre `true`: só monta payload com o aceite marcado (o gate de verdade é o backend). */
   aceite_termos: true;
+  /**
+   * Formato do negócio (Onda 3, ADR 0030). PRESENTES só quando o combo NÃO é o
+   * default — nesse caso viajam juntos (ambos), pro backend provisionar
+   * product_type/seat_cap/agenda_automatica + as flags por-clone. AUSENTES no combo
+   * default (individual+agenda): o payload fica byte-idêntico ao signup atual e o
+   * backend cai no caminho vivo. Ver formatoFields().
+   */
+  tipo_atendimento?: TipoAtendimento;
+  modo_ia?: ModoIa;
+}
+
+/**
+ * Decide os campos de formato do payload (helper puro, testável sem DOM).
+ *
+ * Regra: o combo default (individual + agenda) OMITE os dois campos → byte-idêntico
+ * ao signup atual (regressão zero no funil vivo). Qualquer outro combo envia os DOIS
+ * campos juntos (contrato: presente-ou-ausente em par, nunca só metade). Assim o
+ * backend só precisa distinguir "veio formato" de "não veio (= default)".
+ */
+export function formatoFields(
+  tipo: TipoAtendimento,
+  modo: ModoIa,
+): { tipo_atendimento: TipoAtendimento; modo_ia: ModoIa } | Record<string, never> {
+  const isDefault = tipo === DEFAULT_TIPO_ATENDIMENTO && modo === DEFAULT_MODO_IA;
+  return isDefault ? {} : { tipo_atendimento: tipo, modo_ia: modo };
 }
 
 /** Cards que SUBSTITUEM o form da /cadastro (spec A3.10: beco com saída). */
@@ -157,6 +216,11 @@ export function validateCadastro(
   ) {
     return { ok: false, errors };
   }
+  // Formato (Onda 3): ausente no draft = default (individual + agenda). O helper
+  // OMITE os campos no combo default → payload byte-idêntico ao signup atual.
+  const tipo = d.tipoAtendimento ?? DEFAULT_TIPO_ATENDIMENTO;
+  const modo = d.modoIa ?? DEFAULT_MODO_IA;
+
   return {
     ok: true,
     value: {
@@ -168,6 +232,7 @@ export function validateCadastro(
       // caso o draft venha vazio.
       timezone: d.timezone || DEFAULT_TIMEZONE,
       aceite_termos: true,
+      ...formatoFields(tipo, modo),
     },
   };
 }

@@ -15,12 +15,14 @@
  * rápido (lixeira) continua na linha, abrindo a confirmação destrutiva.
  */
 import { AgendaDetailSheet } from '@/components/agenda/agenda-detail-sheet';
+import { AguardandoAgendaCard } from '@/components/agenda/aguardando-agenda-card';
 import { EventoTitulo } from '@/components/agenda/evento-titulo';
 import { IconCalendar, IconChevronRight, IconTrash } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useToast } from '@/components/ui/toast';
+import { agendaConexaoEstado } from '@/lib/agenda-conexao';
 import { inicialDoTitulo, parseTitulo } from '@/lib/agenda-titulo';
 import { type PeriodoFiltro, classify, filtrarAgendamentos } from '@/lib/agendamentos';
 import { ApiError } from '@/lib/api';
@@ -87,7 +89,13 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
     return hoje?.id ?? null;
   }, [filtradas]);
 
-  // gcal off (pré-setup): empty especifico, sem filtros.
+  // Onda 3: escolheu agenda e a equipe ainda está conectando -> card tranquilizador
+  // com SLA (em vez do empty genérico). Some sozinho quando gcal conecta.
+  if (agendaConexaoEstado(data) === 'aguardando') {
+    return <AguardandoAgendaCard />;
+  }
+
+  // gcal off (pré-setup / modo atendente): empty especifico, sem filtros.
   if (!data.gcal_configured) {
     return (
       <EmptyBox
