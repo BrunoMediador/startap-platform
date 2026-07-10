@@ -8,9 +8,11 @@
  *
  * Cobre:
  *  - caminho feliz: agenda 'active' que valida OK -> setIndividualGcalStatus('active') + healthy.
- *  - DEMOÇÃO (o fix): HTTP 403 (SA sem permissão) -> setIndividualGcalStatus('invalid') + demoted.
+ *  - DEMOÇÃO: HTTP 403 forbidden REAL (SA sem permissão) -> setIndividualGcalStatus('invalid') + demoted.
  *  - INCONCLUSIVO conservador: HTTP 503 (transitório) -> NÃO escreve status (preserva), inconclusive.
- *  - colaborador (estabelecimento) demovido por 404.
+ *  - SCRUM-41: HTTP 403 rate-limit/quota (rateLimitExceeded/userRateLimitExceeded/quotaExceeded) e
+ *    HTTP 429 -> NÃO demovem (o `reason` do corpo distingue rate-limit de forbidden), inconclusive.
+ *  - colaborador (estabelecimento) demovido por 404; e preservado em 403 rate-limit.
  *  - fail-safe: erro num item NÃO derruba o ciclo nem afeta os outros.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -125,6 +127,92 @@ describe('runGcalHealthcheck', () => {
 
     expect(setIndividualGcalStatus).not.toHaveBeenCalled();
     expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
+  });
+
+  // ── SCRUM-41: 403 rate-limit é TRANSITÓRIO (não pode rebaixar agenda boa num pico) ──
+  it('SCRUM-41: HTTP 403 rateLimitExceeded NÃO demove — status preservado (inconclusive)', async () => {
+    listActiveIndividualGcals.mockResolvedValue([individual()]);
+    testConnection.mockResolvedValue({
+      ok: false,
+      error:
+        'GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"Rate Limit Exceeded"}],"code":403,"message":"Rate Limit Exceeded"}}',
+    });
+
+    const { runGcalHealthcheck } = await loadJob();
+    const r = await runGcalHealthcheck();
+
+    // NÃO escreve status: um 403 de rate-limit não é sinal de agenda quebrada.
+    expect(setIndividualGcalStatus).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
+  });
+
+  it('SCRUM-41: HTTP 403 userRateLimitExceeded / quotaExceeded NÃO demovem (inconclusive)', async () => {
+    for (const reason of ['userRateLimitExceeded', 'quotaExceeded']) {
+      vi.clearAllMocks();
+      listActiveIndividualGcals.mockResolvedValue([individual()]);
+      setIndividualGcalStatus.mockResolvedValue(1);
+      testConnection.mockResolvedValue({
+        ok: false,
+        error: `GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"usageLimits","reason":"${reason}"}],"code":403}}`,
+      });
+
+      const { runGcalHealthcheck } = await loadJob();
+      const r = await runGcalHealthcheck();
+
+      expect(setIndividualGcalStatus).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ scanned: 1, demoted: 0, inconclusive: 1 });
+    }
+  });
+
+  it('SCRUM-41: HTTP 403 forbidden REAL (SA sem permissão) SEGUE demovendo pra invalid', async () => {
+    listActiveIndividualGcals.mockResolvedValue([individual()]);
+    testConnection.mockResolvedValue({
+      ok: false,
+      error:
+        'GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"global","reason":"forbidden","message":"Forbidden"}],"code":403,"message":"Forbidden"}}',
+    });
+
+    const { runGcalHealthcheck } = await loadJob();
+    const r = await runGcalHealthcheck();
+
+    expect(setIndividualGcalStatus).toHaveBeenCalledWith(1, 'invalid');
+    expect(r).toMatchObject({ scanned: 1, demoted: 1, inconclusive: 0 });
+  });
+
+  it('SCRUM-41: HTTP 429 (Too Many Requests) NÃO demove — transitório (inconclusive)', async () => {
+    listActiveIndividualGcals.mockResolvedValue([individual()]);
+    testConnection.mockResolvedValue({
+      ok: false,
+      error: 'GCal /calendars/cal/events -> HTTP 429: rate limited',
+    });
+
+    const { runGcalHealthcheck } = await loadJob();
+    const r = await runGcalHealthcheck();
+
+    expect(setIndividualGcalStatus).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ scanned: 1, demoted: 0, inconclusive: 1 });
+  });
+
+  it('SCRUM-41: colaborador com 403 rateLimitExceeded NÃO é demovido (inconclusive)', async () => {
+    listActiveColaboradorGcals.mockResolvedValue([
+      {
+        colaborador_id: 7,
+        slot: 'clone_barber_dragon_caly8b',
+        gcal_calendar_id: 'colab@group.calendar.google.com',
+        clone_credentials_json: 'enc:clonecreds',
+      },
+    ]);
+    testConnection.mockResolvedValue({
+      ok: false,
+      error:
+        'GCal /calendars/colab/events -> HTTP 403: {"error":{"errors":[{"reason":"userRateLimitExceeded"}],"code":403}}',
+    });
+
+    const { runGcalHealthcheck } = await loadJob();
+    const r = await runGcalHealthcheck();
+
+    expect(setColaboradorGcalStatus).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ scanned: 1, demoted: 0, inconclusive: 1 });
   });
 
   it('colaborador (estabelecimento) com 404 -> invalid', async () => {
