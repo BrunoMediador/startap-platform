@@ -14,6 +14,7 @@ export {
   resolveAtendFromAgendaEnabled,
 } from './atend-from-agenda-gate.js';
 export { isModoAtendenteEnabled, resolveModoAtendenteEnabled } from './modo-atendente-gate.js';
+export { isHumanReplyAgendaEnabled } from './human-reply-agenda-gate.js';
 export {
   isFaqPersonalizadoEnabled,
   resolveFaqPersonalizadoEnabled,

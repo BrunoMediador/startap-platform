@@ -9,6 +9,7 @@
  *  - Suporta múltiplas sessões WAHA na mesma instância.
  *  - Antibot + pausa global aplicados aqui (antes de chegar nos bots).
  */
+import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { extractPhone, isGroupChat } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
@@ -494,6 +495,91 @@ export async function handleWebhook(
       return { status: 'ignored:manual-pause-no-routing' };
     }
     if (!flowManualCommand) {
+      // === SCRUM-68 Onda 4 — RESPOSTA HUMANA À MÃO no ramo AGENDA, GATED por-clone. ===
+      // Keyword NÃO casou (comando manual explícito já foi tratado acima e segue INTACTO).
+      // Quando o gate está ON pra este slot, o dono que respondeu À MÃO pelo MESMO número
+      // (fromMe, texto livre, NÃO-eco) pausa AQUELE contato por 60min com volta automática —
+      // a MESMA pausa human_reply do modo atendente, agora nos formatos de agenda.
+      // OFF (env vazia/não-setada = default): NADA disto roda -> cai byte-idêntico no
+      // 'ignored:fromMe' de sempre (nenhuma pausa, nenhuma leitura de identidade/eco).
+      if (isHumanReplyAgendaEnabled(route.workflow_id, process.env.HUMAN_REPLY_AGENDA_SLOTS)) {
+        const text = body.payload?.body ?? '';
+
+        // (0) CONTATO MIGRADO (LID, SCRUM-63): resolve `@lid`→E.164 ANTES de qualquer decisão
+        // chaveada por identidade (self-chat / eco / pausa). FAIL-SAFE: não resolveu → nenhuma
+        // pausa (nunca criar linha em flow_pauses com pseudo-número de lid). Não-lid = byte-
+        // idêntico (identity.phone === telefone). O ENVIO não muda (a engine resolve sozinha).
+        const identity = await resolveFromMeIdentity(sessao, body, telefone);
+        if (identity.wasLid && identity.phone === null) {
+          log.warn(
+            { ...baseLog, lidVia: identity.via },
+            'fromMe de contato migrado (@lid) sem resolução — fail-safe (sem human-reply-pause, ramo agenda)',
+          );
+          await flowExecutionLog.logFlowEvent({
+            ...phoneLog,
+            flowId: route.workflow_id,
+            flowName: route.workflow_name,
+            eventType: 'router.ignored',
+            status: 'ignored',
+            message: 'fromMe de contato migrado (@lid) sem resolução de telefone — fail-safe',
+            metadata: { reason: 'fromMe-lid-unresolved', via: identity.via, source: 'fromMe' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 'ignored:fromMe:lid-unresolved' };
+        }
+        const atendenteTelefone = identity.phone ?? telefone;
+
+        // (1) SELF-CHAT: fromMe pro PRÓPRIO número da sessão (ex.: eco de alerta self-send).
+        // NUNCA pausa nem comanda. cliente_telefone = número pareado (me.id) do clone.
+        const cloneForSelf = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
+        if (isSelfChat(atendenteTelefone, cloneForSelf?.cliente_telefone)) {
+          await flowExecutionLog.logFlowEvent({
+            ...phoneLog,
+            flowId: route.workflow_id,
+            flowName: route.workflow_name,
+            eventType: 'router.ignored',
+            status: 'ignored',
+            message: 'Mensagem fromMe no self-chat ignorada (ramo agenda)',
+            metadata: { reason: 'fromMe-self-chat', source: 'fromMe' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 'ignored:fromMe:self-chat' };
+        }
+
+        // (2) ANTI-ECO: a resposta que o PRÓPRIO bot envia via WAHA volta como fromMe. Só
+        // pausa em 'human' CONFIRMADO — 'echo'/'degraded' NÃO pausam (fail-safe: nunca auto-
+        // pausar o próprio bot). Exige que base.ts registre o eco pros slots deste gate.
+        const echoState = await isBotEcho(sessao, atendenteTelefone, text);
+        if (echoState === 'human' && text.trim().length > 0) {
+          // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
+          // outro source (keyword/portal/antibot) pro TTL — só cria/renova a própria human_reply.
+          await pausa.addHumanReplyPause({
+            flowId: route.workflow_id,
+            flowName: route.workflow_name,
+            telefone: atendenteTelefone,
+            session: sessao,
+            reason: 'Atendente respondeu à mão — pausa temporária (ramo agenda)',
+            expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),
+          });
+          await flowExecutionLog.logFlowEvent({
+            ...phoneLog,
+            flowId: route.workflow_id,
+            flowName: route.workflow_name,
+            eventType: 'router.human-reply-pause',
+            status: 'success',
+            message: 'Atendente respondeu à mão; bot pausado temporariamente neste contato',
+            metadata: {
+              pauseScope: 'flow',
+              source: 'human_reply',
+              ttlMs: HUMAN_REPLY_PAUSE_TTL_MS,
+            },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 'ok:human-reply-pause' };
+        }
+        // Eco confirmado / degraded / texto vazio -> segue pro 'ignored:fromMe' de sempre.
+      }
+
       await flowExecutionLog.logFlowEvent({
         ...phoneLog,
         flowId: route.workflow_id,

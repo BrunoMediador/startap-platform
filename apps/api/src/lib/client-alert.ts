@@ -32,6 +32,11 @@
  *                       ALERTAS por engano enquanto durar o bloqueio.
  */
 import { createHash } from 'node:crypto';
+// SCRUM-68 (Onda 4): gate por-clone da pausa por resposta humana no ramo AGENDA. Usado aqui na
+// UNIÃO com o modo atendente pra marcar o eco do alerta também sob HUMAN_REPLY_AGENDA (mesma
+// classe do SCRUM-63/base.ts) — sem a marca, o eco fromMe do alerta ao dono viraria 'resposta
+// humana' e auto-pausaria o CONTATO DO DONO por 60min.
+import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
 // Subpath /phone (não a raiz) p/ não arrastar crypto.ts no load. Defesa em profundidade:
 // normaliza o DDI do dono antes do chatId — alert_owner_phone pode ter vindo cru.
@@ -410,10 +415,16 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
     // DIFERENTE da sessão, o self-chat guard do router NÃO barra o eco fromMe desta mensagem.
     // Sem a marca, esse eco viraria 'resposta humana' e pausaria o CONTATO DO DONO por 60min
     // (suspeita real: pausa human_reply do ...8908 em 06/07). Marca o texto ANTES do envio
-    // (mesma razão de ordem do base.ts): best-effort, nunca lança. Gated pelo modo atendente.
+    // (mesma razão de ordem do base.ts): best-effort, nunca lança.
+    // SCRUM-68 (Onda 4, MESMA classe do SCRUM-63): o ramo AGENDA também liga o human_reply de
+    // 60min quando o clone está no gate HUMAN_REPLY_AGENDA_SLOTS. Um clone de agenda com esse gate
+    // ON (modo atendente OFF) que alerta o dono num número != sessão teria o eco fromMe do alerta
+    // lido como 'resposta humana' → auto-pausaria o contato do dono. Por isso a marca é gated pela
+    // UNIÃO dos dois (mesmo padrão do base.ts). Fora de AMBOS os gates: byte-idêntico (if false).
     if (
       transport === 'clone_session' &&
-      (await flowClones.resolveModoAtendenteEnabledForSlot(slot, config.MODO_ATENDENTE_SLOTS))
+      ((await flowClones.resolveModoAtendenteEnabledForSlot(slot, config.MODO_ATENDENTE_SLOTS)) ||
+        isHumanReplyAgendaEnabled(slot, config.HUMAN_REPLY_AGENDA_SLOTS))
     ) {
       await registerBotReplyEcho(sessao, ownerPhone, texto);
     }

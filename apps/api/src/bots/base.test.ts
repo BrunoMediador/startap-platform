@@ -136,4 +136,33 @@ describe('BotBase — ordem eco-antes-do-envio (SCRUM-62, modo atendente)', () =
     expect(mocks.order).toEqual(['send']);
     vi.unstubAllEnvs();
   });
+
+  // SCRUM-68 Onda 4: o eco também precisa ser marcado quando o clone está no gate de
+  // human-reply da AGENDA (mesmo com o modo atendente OFF) — senão o eco fromMe do próprio
+  // bot seria lido como "resposta humana" e o bot se auto-pausaria por 60min.
+  it('marca o eco quando o clone está no gate HUMAN_REPLY_AGENDA (modo atendente OFF)', async () => {
+    vi.stubEnv('MODO_ATENDENTE_SLOTS', '');
+    vi.stubEnv('HUMAN_REPLY_AGENDA_SLOTS', SLOT);
+    await new OrderTestBot().handle(ctx());
+
+    expect(mocks.registerBotReplyEcho).toHaveBeenCalledTimes(1);
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+    expect(mocks.order).toEqual(['echo', 'send']);
+    expect(mocks.registerBotReplyEcho).toHaveBeenCalledWith(
+      'MEDUZZA_SESS',
+      '5531999998842',
+      'olá, tudo certo por aqui!',
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it('fora de AMBOS os gates (modo E human-reply agenda vazios): NÃO marca eco', async () => {
+    vi.stubEnv('MODO_ATENDENTE_SLOTS', '');
+    vi.stubEnv('HUMAN_REPLY_AGENDA_SLOTS', '');
+    await new OrderTestBot().handle(ctx());
+
+    expect(mocks.registerBotReplyEcho).not.toHaveBeenCalled();
+    expect(mocks.order).toEqual(['send']);
+    vi.unstubAllEnvs();
+  });
 });
