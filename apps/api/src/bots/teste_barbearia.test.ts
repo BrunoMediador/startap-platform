@@ -427,17 +427,35 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     expect(inserir.parameters.required).toContain('colaborador_id');
   });
 
-  it('estabelecimento sem colaborador agendável → silencia (NÃO cai pro individual)', async () => {
+  it('estabelecimento+agenda SEM colaborador agendável → DEGRADE elegante p/ atendente (ADR 0030 D3, NÃO silencia, NÃO cai pro individual)', async () => {
     cfg.ESTABELECIMENTO_ENABLED = true;
     mocks.getProductType.mockResolvedValue('estabelecimento');
-    mocks.getGcalsForSlot.mockResolvedValue([]); // nenhum colaborador ativo
+    mocks.getGcalsForSlot.mockResolvedValue([]); // nenhum colaborador com agenda ativa (pré-setup)
+    // Intenção AGENDA (não é atendente por escolha) + gcal não conectado => degrada.
+    mocks.getCloneBySlot.mockResolvedValue({
+      timezone: 'America/Sao_Paulo',
+      personalizacao: { agenda_automatica: true },
+    });
+    mocks.getArea.mockResolvedValue('barbearia');
+    mocks.listColaboradores.mockResolvedValue([]);
+    mocks.renderPrompt.mockResolvedValue('PERSONA');
+    mocks.buildContextBlock.mockResolvedValue('CONTEXT');
+    mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
+    mocks.runAgentConfigured.mockResolvedValue({ reply: 'posso te ajudar com isso' });
+
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     const reply = await (
       bot as unknown as { process: (c: BotContext) => Promise<string | null> }
     ).process(makeCtx('quero um corte'));
-    expect(reply).toBeNull();
-    expect(mocks.getGcalForSlot).not.toHaveBeenCalled(); // sem fallback p/ agenda do clone
-    expect(mocks.runAgentConfigured).not.toHaveBeenCalled();
+
+    // Respondeu (não silenciou) via ATENDENTE.
+    expect(reply).toBe('posso te ajudar com isso');
+    // NUNCA usa a agenda principal do clone (sem fallback p/ individual) e NÃO monta contexto de estab.
+    expect(mocks.getGcalForSlot).not.toHaveBeenCalled();
+    expect(mocks.buildEstabelecimentoContext).not.toHaveBeenCalled();
+    // Rodou o agente do atendente: só as 2 tools de atendente, ZERO tool de agenda.
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toEqual(['escalar_para_humano', 'registrar_interesse']);
   });
 
   // (c) inserir_agendamento roteia pro calendarId CERTO e rejeita colaborador inválido.
