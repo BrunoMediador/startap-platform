@@ -21,7 +21,7 @@ import {
   resolveColaboradorByShortId,
   servicosDoColaborador,
 } from './estabelecimento.js';
-import type { ScheduleConfig } from './free-slots.js';
+import { type ScheduleConfig, formatarAgendaComConfig } from './free-slots.js';
 
 // Config de agenda fixa: ter-sab 09-18, 1 serviço de 30min. Suficiente para a grade.
 const CONFIG: ScheduleConfig = {
@@ -320,5 +320,82 @@ describe('buildProfissionaisBlock — serviços por profissional', () => {
     expect(ctx.profissionaisBlock).toContain(
       'C1 = Curinga (faz: Corte, Barba, Manicure, Sobrancelha)',
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRUM-28 (resíduo) — a grade [HORARIOS] filtra os serviços POR profissional
+// (não lista todos os serviços do clone debaixo de cada barbeiro).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildHorariosBlock — serviços por profissional na grade [HORARIOS]', () => {
+  it('grade de cada profissional mostra SÓ os serviços que ele faz', async () => {
+    const shared = makeClient(() => ({}));
+    const colaboradores: ColaboradorGcal[] = [
+      colab({
+        colaboradorId: 1,
+        nome: 'Bruno',
+        calendarId: 'cal-bruno',
+        client: shared,
+        servicos: ['Corte', 'Barba'],
+      }),
+      colab({
+        colaboradorId: 2,
+        nome: 'Maria',
+        calendarId: 'cal-maria',
+        client: shared,
+        servicos: ['Manicure', 'Sobrancelha'],
+      }),
+    ];
+
+    const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG_MULTI, TIME);
+
+    // A sub-seção do Bruno traz Corte/Barba; a da Maria traz Manicure/Sobrancelha.
+    const brunoSec = ctx.horariosBlock.slice(
+      ctx.horariosBlock.indexOf('C1 — Bruno'),
+      ctx.horariosBlock.indexOf('C2 — Maria'),
+    );
+    const mariaSec = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('C2 — Maria'));
+
+    expect(brunoSec).toMatch(/Corte \(30min\)/);
+    expect(brunoSec).toMatch(/Barba \(30min\)/);
+    // Bruno NÃO faz Manicure/Sobrancelha → não aparecem na grade dele (o bug do card).
+    expect(brunoSec).not.toMatch(/Manicure/);
+    expect(brunoSec).not.toMatch(/Sobrancelha/);
+
+    expect(mariaSec).toMatch(/Manicure \(40min\)/);
+    expect(mariaSec).toMatch(/Sobrancelha \(20min\)/);
+    // Maria NÃO faz Corte/Barba → não aparecem na grade dela.
+    expect(mariaSec).not.toMatch(/Corte/);
+    expect(mariaSec).not.toMatch(/Barba/);
+  });
+
+  it('colaborador SEM serviços marcados → grade com TODOS os globais (fallback byte-idêntico)', async () => {
+    const shared = makeClient(() => ({}));
+    // Curinga (sem serviços) deve ter a MESMA grade que a formatação global do config —
+    // ou seja, a introdução do filtro não muda nada pra quem não configurou.
+    const curinga = colab({
+      colaboradorId: 1,
+      nome: 'Curinga',
+      calendarId: 'cal-curinga',
+      client: shared,
+      servicos: [],
+    });
+
+    const ctx = await buildEstabelecimentoContext([curinga], CONFIG_MULTI, TIME);
+    const grade = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('C1 — Curinga'));
+
+    // Todos os 4 serviços globais aparecem na grade do Curinga (comportamento anterior).
+    expect(grade).toMatch(/Corte \(30min\)/);
+    expect(grade).toMatch(/Barba \(30min\)/);
+    expect(grade).toMatch(/Manicure \(40min\)/);
+    expect(grade).toMatch(/Sobrancelha \(20min\)/);
+
+    // A grade do fallback é IGUAL, linha a linha, à formatação global do config
+    // (prova de byte-identidade da introdução do filtro no caminho fallback).
+    const gradeGlobal = formatarAgendaComConfig([], CONFIG_MULTI);
+    for (const linha of gradeGlobal.split('\n')) {
+      expect(grade).toContain(linha);
+    }
   });
 });
