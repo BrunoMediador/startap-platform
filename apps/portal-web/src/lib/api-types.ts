@@ -685,7 +685,18 @@ export interface PerfilNegocio {
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
-  features?: { modo_atendente: boolean; faq_personalizado?: boolean };
+  features?: {
+    modo_atendente: boolean;
+    faq_personalizado?: boolean;
+    /**
+     * SCRUM-74: o clone tem um Google Calendar UTILIZÁVEL, conectado pelo TIME no
+     * gestão (ADR 0024). Só quando true o portal deixa o dono LIGAR o agendamento
+     * automático (Switch); false = seção vira CTA "fale com o suporte pra habilitar".
+     * AUSENTE/undefined (backend antigo) = tratado como true (retrocompat — não trava
+     * clone cujo agendamento já funciona). Ver @/lib/agenda-config#isAgendaConfigurada.
+     */
+    agenda_configurada?: boolean;
+  };
   /**
    * WhatsApp da recepção (SCRUM-59 PR-E) = destino dos avisos de lead/escalação ao
    * dono (RAW `alert_owner_phone`, E.164 BR "55DDDNUMERO"). TOP-LEVEL, presente SÓ com
@@ -726,6 +737,12 @@ export interface AgendaConfig {
   link_agendamento: string;
   /** RAW E.164 BR ("55DDDNUMERO") ou "" quando não setado. */
   recepcao_telefone: string;
+  /**
+   * SCRUM-74: a agenda (Google) já está conectada pelo time (features.agenda_configurada,
+   * com retrocompat default TRUE). false = esconde o Switch de auto-habilitar e mostra o
+   * CTA de suporte; true = comportamento atual. Normalizado no hook useAgendaConfig.
+   */
+  agenda_configurada: boolean;
 }
 
 /**

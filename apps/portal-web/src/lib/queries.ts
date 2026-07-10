@@ -16,6 +16,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
+import { isAgendaConfigurada } from './agenda-config';
 import { atualizarAgendamento, removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
@@ -433,6 +434,8 @@ export function useAgendaConfig(slot: string): UseQueryResult<AgendaConfig> {
         link_agendamento:
           typeof r.perfil?.link_agendamento === 'string' ? r.perfil.link_agendamento : '',
         recepcao_telefone: typeof r.recepcao_telefone === 'string' ? r.recepcao_telefone : '',
+        // SCRUM-74: default TRUE quando o backend ainda não expõe o campo (retrocompat).
+        agenda_configurada: isAgendaConfigurada(r.features?.agenda_configurada),
       })),
   });
 }
@@ -491,6 +494,8 @@ export function useSaveAgendaConfig(
           typeof res.recepcao_telefone === 'string'
             ? res.recepcao_telefone
             : (prev?.recepcao_telefone ?? ''),
+        // SCRUM-74: salvar link/telefone não muda o estado da agenda — preserva (default TRUE).
+        agenda_configurada: prev?.agenda_configurada ?? true,
       }));
     },
   });
