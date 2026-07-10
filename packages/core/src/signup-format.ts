@@ -5,18 +5,26 @@
  * Pergunta 1: "Você atende sozinho ou tem uma equipe?"  → tipo_atendimento
  * Pergunta 2: "A IA marca sozinha na sua agenda, ou só atende e encaminha?" → modo_ia
  *
+ * VOCABULÁRIO (contrato com o front — SCRUM-68 Onda 3): o front envia
+ *   - tipo_atendimento ∈ {'individual','estabelecimento'} (default 'individual')
+ *   - modo_ia          ∈ {'agenda','atendente'}          (default 'agenda')
+ * O back ACEITA o que o front manda. `'atende'` é aceito como SINÔNIMO de `'atendente'`
+ * (a spec do PM cita `'atende'`; o front manda `'atendente'`) — ambos = modo atendente.
+ *
  * Helper PURO (sem I/O): a validação Zod acontece no app (portal-signup); aqui só
  * traduz as respostas JÁ validadas → colunas/flags/preço. Reusável pelo wizard do
  * gestão (paridade ADR 0030 D2).
  *
- * REGRESSÃO ZERO (funil vivo): o combo `sozinho + agenda` = o signup ATUAL. O default
- * do schema (sozinho+agenda quando os campos vêm ausentes) reproduz isso, e o mapa
- * abaixo garante que individual+agenda NÃO ganha nenhuma flag/coluna nova nem preço
- * diferente do de hoje — byte-idêntico ao clone que o signup produz hoje.
+ * REGRESSÃO ZERO (funil vivo): o combo `individual + agenda` = o signup ATUAL. O default
+ * do schema (individual+agenda quando os campos vêm ausentes) reproduz o PROVISIONAMENTO
+ * de hoje byte-a-byte (product_type='individual', sem carimbar agenda_automatica no
+ * personalizacao). O PREÇO desse combo passa a seguir a grade oficial (R$147; ADR 0030 D2)
+ * — mudança de tabela INTENCIONAL, não regressão de comportamento.
  */
 
-export type TipoAtendimento = 'sozinho' | 'equipe';
-export type ModoIa = 'agenda' | 'atende';
+export type TipoAtendimento = 'individual' | 'estabelecimento';
+// 'atende' e 'atendente' são sinônimos (modo atendente). Front manda 'atendente'.
+export type ModoIa = 'agenda' | 'atende' | 'atendente';
 export type SignupProductType = 'individual' | 'estabelecimento';
 
 /**
@@ -27,13 +35,13 @@ export type SignupProductType = 'individual' | 'estabelecimento';
 export const DEFAULT_ESTABELECIMENTO_SEAT_CAP = 5;
 
 /**
- * Grade de PREÇO placeholder por formato, em CENTAVOS (ADR 0030 D2; editável no gestão
- * depois via client_billing.amount_cents). O combo individual+agenda NÃO aparece aqui
- * de propósito: usa `baseIndividualAgendaCents` (= config.PORTAL_SIGNUP_AMOUNT_CENTS)
- * pra ficar byte-idêntico ao funil vivo.
+ * Grade de PREÇO por formato, em CENTAVOS (ADR 0030 D2; editável no gestão depois via
+ * client_billing.amount_cents). Os 4 combos têm preço FIXO de tabela — individual+agenda
+ * NÃO depende mais de env (PORTAL_SIGNUP_AMOUNT_CENTS): é R$147 pela grade oficial do PM.
  */
 export const SIGNUP_AMOUNT_CENTS_BY_FORMAT = {
   individual_atendente: 9700, // R$97,00
+  individual_agenda: 14700, // R$147,00
   estabelecimento_atendente: 19700, // R$197,00
   estabelecimento_agenda: 29700, // R$297,00
 } as const;
@@ -60,32 +68,30 @@ export interface SignupFormatProvisioning {
 /**
  * Mapeia (tipo_atendimento, modo_ia) → config de provisioning dos 4 combos.
  *
- * @param tipo  resposta 1 (sozinho|equipe) → product_type.
- * @param modo  resposta 2 (agenda|atende)  → agenda_automatica.
- * @param baseIndividualAgendaCents  preço do combo individual+agenda = o do funil vivo
- *   (config.PORTAL_SIGNUP_AMOUNT_CENTS) — garante byte-identidade do signup atual.
+ * @param tipo  resposta 1 (individual|estabelecimento) → product_type.
+ * @param modo  resposta 2 (agenda|atende|atendente)    → agenda_automatica.
  *
  * Mapa das colunas (migration 072 / ADR 0030 D2):
  *  - modo_atendente_enabled      = (agenda_automatica == false)  → liga o ramo atendente do bot.
- *  - billing_from_agenda_enabled = (agenda_automatica == true) SÓ no estabelecimento (formato
- *      NOVO). individual+agenda = FUNIL VIVO → NÃO liga a coluna (segue byte-idêntico; billing-da-
- *      agenda permanece env-gated/flip no gestão, sem regressão). Ver campo de prova de regressão.
+ *  - billing_from_agenda_enabled = (agenda_automatica == true)   → segue a fórmula do ADR 0027
+ *      (agenda ⇒ billing-da-agenda) pra TODO formato de agenda, INCLUSIVE individual+agenda: o
+ *      clone novo ganha o /billing derivado da agenda. É MELHORIA (não regressão) — o
+ *      "byte-idêntico" do funil vivo se refere ao provisioning do clone, não a esta coluna nova.
  */
-export function mapSignupFormat(
-  tipo: TipoAtendimento,
-  modo: ModoIa,
-  baseIndividualAgendaCents: number,
-): SignupFormatProvisioning {
-  const productType: SignupProductType = tipo === 'equipe' ? 'estabelecimento' : 'individual';
+export function mapSignupFormat(tipo: TipoAtendimento, modo: ModoIa): SignupFormatProvisioning {
+  const productType: SignupProductType =
+    tipo === 'estabelecimento' ? 'estabelecimento' : 'individual';
   const agendaAutomatica = modo === 'agenda';
   const seatCap = productType === 'estabelecimento' ? DEFAULT_ESTABELECIMENTO_SEAT_CAP : null;
   const modoAtendenteEnabled = !agendaAutomatica;
-  const billingFromAgendaEnabled = agendaAutomatica && productType === 'estabelecimento';
+  // ADR 0027: agenda ⇒ billing-da-agenda. Vale pra individual+agenda também (formato novo
+  // ganha o /billing bom; env-gated por-clone segue controlando o rollout efetivo).
+  const billingFromAgendaEnabled = agendaAutomatica;
 
   let amountCents: number;
   if (productType === 'individual') {
     amountCents = agendaAutomatica
-      ? baseIndividualAgendaCents // combo vivo — byte-idêntico
+      ? SIGNUP_AMOUNT_CENTS_BY_FORMAT.individual_agenda
       : SIGNUP_AMOUNT_CENTS_BY_FORMAT.individual_atendente;
   } else {
     amountCents = agendaAutomatica

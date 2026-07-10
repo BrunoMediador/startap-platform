@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   hash: vi.fn(),
   sendInternalAlert: vi.fn(),
+  isAwaitingAgendaConnection: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({ config: cfg }));
@@ -50,6 +51,7 @@ vi.mock('@startap/db', () => ({
     recordSuccessfulLogin: mocks.recordSuccessfulLogin,
   },
   clientBilling: { upsertBilling: mocks.upsertBilling },
+  flowClones: { isAwaitingAgendaConnection: mocks.isAwaitingAgendaConnection },
   tenant: { resolveTenantId: mocks.resolveTenantId },
   termsAcceptance: { recordTermsAcceptance: mocks.recordTermsAcceptance },
 }));
@@ -128,6 +130,9 @@ beforeEach(() => {
   mocks.findPortalUserForAuth.mockResolvedValue({ id: 7, username: '553199998842' });
   mocks.createSession.mockResolvedValue('sid-novo');
   mocks.sendInternalAlert.mockResolvedValue({ sent: 1 });
+  // Clone recém-provisionado de AGENDA nasce SEM gcal conectado (etapa manual, ADR 0024)
+  // => aguarda conexão. É o predicado do alerta "aguardando agenda" (point 6) e do card.
+  mocks.isAwaitingAgendaConnection.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -144,7 +149,7 @@ describe('POST /auth/signup', () => {
     await app.close();
   });
 
-  it('201 no caminho feliz: provisiona clone, cria user (login=número), billing R$99,99 e trial awaiting', async () => {
+  it('201 no caminho feliz: provisiona clone, cria user (login=número), billing R$147 (grade individual+agenda) e trial awaiting', async () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
 
@@ -184,9 +189,10 @@ describe('POST /auth/signup', () => {
         mustChangePassword: false,
       }),
     );
-    // Preço default do Bruno (R$99,99); next_due_date NÃO é passado (trial não começou).
+    // Preço da grade oficial pro individual+agenda (R$147, server-authoritative); next_due_date
+    // NÃO é passado (trial não começou).
     expect(mocks.upsertBilling).toHaveBeenCalledWith(
-      expect.objectContaining({ slot: SLOT, amountCents: 9999 }),
+      expect.objectContaining({ slot: SLOT, amountCents: 14700 }),
     );
     expect(mocks.upsertBilling.mock.calls[0]?.[0]).not.toHaveProperty('nextDueDate');
     expect(mocks.setTrialAwaiting).toHaveBeenCalledWith(SLOT);
@@ -562,7 +568,7 @@ describe('POST /auth/signup', () => {
       return mocks.sendInternalAlert.mock.calls.map((c) => String(c[0])).join(' | ');
     }
 
-    it('AUSENTE (front antigo / funil vivo) => sozinho+agenda BYTE-IDÊNTICO: individual, sem gate, R$99,99, sem agenda_automatica no personalizacao', async () => {
+    it('AUSENTE (front antigo / funil vivo) => individual+agenda: PROVISIONING byte-idêntico (individual, sem gate atendente, sem agenda_automatica no personalizacao)', async () => {
       const app = await buildApp();
       const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
       expect(res.statusCode).toBe(201);
@@ -570,39 +576,42 @@ describe('POST /auth/signup', () => {
       expect(p.productType).toBe('individual');
       expect(p.seatCap).toBeNull();
       expect(p.modoAtendenteEnabled).toBe(false);
-      expect(p.billingFromAgendaEnabled).toBe(false);
       // personalizacao byte-idêntico ao de hoje: NÃO carimba agenda_automatica (ausência = agenda).
       expect(p.personalizacao).not.toHaveProperty('agenda_automatica');
+      // Preço = grade oficial (R$147), server-authoritative.
       expect(mocks.upsertBilling).toHaveBeenCalledWith(
-        expect.objectContaining({ slot: SLOT, amountCents: 9999 }),
+        expect.objectContaining({ slot: SLOT, amountCents: 14700 }),
       );
       await app.close();
     });
 
-    it('sozinho + agenda EXPLÍCITO = idêntico ao ausente (byte-idêntico ao funil vivo)', async () => {
+    it("CONTRATO: {tipo_atendimento:'individual', modo_ia:'agenda'} EXPLÍCITO => 200, provisiona individual+agenda, billing_from_agenda ON, R$147", async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: 'POST',
         url: '/auth/signup',
-        payload: { ...PAYLOAD, tipo_atendimento: 'sozinho', modo_ia: 'agenda' },
+        payload: { ...PAYLOAD, tipo_atendimento: 'individual', modo_ia: 'agenda' },
       });
       expect(res.statusCode).toBe(201);
       const p = provInput();
       expect(p.productType).toBe('individual');
-      expect(p.billingFromAgendaEnabled).toBe(false);
+      expect(p.seatCap).toBeNull();
+      expect(p.modoAtendenteEnabled).toBe(false);
+      // ADR 0027: individual+agenda ganha billing-da-agenda (melhoria; env-gated no rollout).
+      expect(p.billingFromAgendaEnabled).toBe(true);
       expect(p.personalizacao).not.toHaveProperty('agenda_automatica');
       expect(mocks.upsertBilling).toHaveBeenCalledWith(
-        expect.objectContaining({ amountCents: 9999 }),
+        expect.objectContaining({ amountCents: 14700 }),
       );
       await app.close();
     });
 
-    it('sozinho + atende: individual, modo_atendente_enabled, agenda_automatica=false, R$97, SEM alerta de agenda', async () => {
+    it('individual + atende: individual, modo_atendente_enabled, agenda_automatica=false, R$97, SEM alerta de agenda', async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: 'POST',
         url: '/auth/signup',
-        payload: { ...PAYLOAD, tipo_atendimento: 'sozinho', modo_ia: 'atende' },
+        payload: { ...PAYLOAD, tipo_atendimento: 'individual', modo_ia: 'atende' },
       });
       expect(res.statusCode).toBe(201);
       const p = provInput();
@@ -614,17 +623,35 @@ describe('POST /auth/signup', () => {
       expect(mocks.upsertBilling).toHaveBeenCalledWith(
         expect.objectContaining({ amountCents: 9700 }),
       );
-      // Atendente NÃO precisa de agenda -> sem alerta "aguardando agenda".
+      // Atendente NÃO precisa de agenda -> nem consulta o predicado, sem alerta "aguardando agenda".
       expect(allAlertTexts()).not.toContain('aguardando-agenda');
+      expect(mocks.isAwaitingAgendaConnection).not.toHaveBeenCalled();
       await app.close();
     });
 
-    it('equipe + agenda: estabelecimento, seat_cap 5, billing_from_agenda, R$297, COM alerta de agenda', async () => {
+    it("modo_ia:'atendente' (VALOR REAL DO FRONT) === 'atende': aceito, provisiona atendente (não 400)", async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: 'POST',
         url: '/auth/signup',
-        payload: { ...PAYLOAD, tipo_atendimento: 'equipe', modo_ia: 'agenda' },
+        payload: { ...PAYLOAD, tipo_atendimento: 'individual', modo_ia: 'atendente' },
+      });
+      expect(res.statusCode).toBe(201);
+      const p = provInput();
+      expect(p.modoAtendenteEnabled).toBe(true);
+      expect(p.personalizacao.agenda_automatica).toBe('false');
+      expect(mocks.upsertBilling).toHaveBeenCalledWith(
+        expect.objectContaining({ amountCents: 9700 }),
+      );
+      await app.close();
+    });
+
+    it('estabelecimento + agenda: estabelecimento, seat_cap 5, billing_from_agenda, R$297, COM alerta de agenda', async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/signup',
+        payload: { ...PAYLOAD, tipo_atendimento: 'estabelecimento', modo_ia: 'agenda' },
       });
       expect(res.statusCode).toBe(201);
       const p = provInput();
@@ -636,18 +663,18 @@ describe('POST /auth/signup', () => {
       expect(mocks.upsertBilling).toHaveBeenCalledWith(
         expect.objectContaining({ amountCents: 29700 }),
       );
-      // Escolheu agenda -> alerta interno pro time conectar a Service Account.
+      // Escolheu agenda E aguarda conexão (mock true) -> alerta interno pro time conectar a SA.
       expect(allAlertTexts()).toContain('aguardando-agenda');
       expect(allAlertTexts()).toContain('estabelecimento');
       await app.close();
     });
 
-    it('equipe + atende: estabelecimento, seat_cap 5, modo_atendente, agenda_automatica=false, R$197, SEM alerta de agenda', async () => {
+    it("CONTRATO: {tipo_atendimento:'estabelecimento', modo_ia:'atende'} => estabelecimento+atendente, seat_cap 5, agenda_automatica=false, R$197, SEM alerta de agenda", async () => {
       const app = await buildApp();
       const res = await app.inject({
         method: 'POST',
         url: '/auth/signup',
-        payload: { ...PAYLOAD, tipo_atendimento: 'equipe', modo_ia: 'atende' },
+        payload: { ...PAYLOAD, tipo_atendimento: 'estabelecimento', modo_ia: 'atende' },
       });
       expect(res.statusCode).toBe(201);
       const p = provInput();
@@ -660,6 +687,36 @@ describe('POST /auth/signup', () => {
         expect.objectContaining({ amountCents: 19700 }),
       );
       expect(allAlertTexts()).not.toContain('aguardando-agenda');
+      await app.close();
+    });
+
+    it('point 6: agenda que NÃO aguarda (gcal já conectado) NÃO dispara "aguardando agenda" (não spamma) + só 1 alerta de cadastro', async () => {
+      // Predicado do card retorna false (edge: clone de agenda já com gcal ligado).
+      mocks.isAwaitingAgendaConnection.mockResolvedValue(false);
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/signup',
+        payload: { ...PAYLOAD, tipo_atendimento: 'individual', modo_ia: 'agenda' },
+      });
+      expect(res.statusCode).toBe(201);
+      // Exatamente 1 alerta (só o "novo cadastro"); nenhum "aguardando-agenda".
+      expect(mocks.sendInternalAlert).toHaveBeenCalledTimes(1);
+      expect(allAlertTexts()).toContain('cadastro');
+      expect(allAlertTexts()).not.toContain('aguardando-agenda');
+      await app.close();
+    });
+
+    it("CONTRATO: enum inválido ('sozinho' — vocabulário ANTIGO) => 400 dados_invalidos, nada provisionado", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/signup',
+        payload: { ...PAYLOAD, tipo_atendimento: 'sozinho' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: 'dados_invalidos' });
+      expect(mocks.provisionCloneWithWaha).not.toHaveBeenCalled();
       await app.close();
     });
 

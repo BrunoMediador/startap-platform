@@ -32,6 +32,7 @@ import { timezoneSchema } from '@startap/core/timezones';
 import { isTrialPepperConfigured, trialPhoneHmac } from '@startap/core/trial';
 import {
   clientBilling,
+  flowClones,
   pool,
   portalUsers,
   tenant,
@@ -89,10 +90,13 @@ export const signupSchema = z
     // ── Formato do produto (ADR 0030 D2, signup dos 4 combos) ──────────────────────
     // Pergunta 1 "Você atende sozinho ou tem uma equipe?" → product_type.
     // Pergunta 2 "A IA marca sozinha na sua agenda, ou só atende e encaminha?" → agenda.
-    // DEFAULTS = sozinho+agenda: reproduzem o signup ATUAL byte-a-byte quando o front
-    // NÃO envia os campos (funil vivo / front antigo). Valor fora do enum => 400 (.strict).
-    tipo_atendimento: z.enum(['sozinho', 'equipe']).default('sozinho'),
-    modo_ia: z.enum(['agenda', 'atende']).default('agenda'),
+    // VOCABULÁRIO do front (SCRUM-68 Onda 3): tipo_atendimento ∈ {individual,estabelecimento};
+    // modo_ia ∈ {agenda,atendente}. Aceitamos 'atende' como SINÔNIMO de 'atendente' (a spec do
+    // PM cita 'atende'; o front manda 'atendente') — mapSignupFormat trata ambos como atendente.
+    // DEFAULTS = individual+agenda: reproduzem o PROVISIONAMENTO do signup ATUAL byte-a-byte
+    // quando o front NÃO envia os campos (funil vivo / front antigo). Fora do enum => 400 (.strict).
+    tipo_atendimento: z.enum(['individual', 'estabelecimento']).default('individual'),
+    modo_ia: z.enum(['agenda', 'atende', 'atendente']).default('agenda'),
   })
   .strict();
 
@@ -132,9 +136,9 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
       modo_ia,
     } = parsed.data;
 
-    // Mapa formato → provisioning (ADR 0030 D2). PURO/testável. amountCents do combo
-    // individual+agenda = PORTAL_SIGNUP_AMOUNT_CENTS (byte-identidade do funil vivo).
-    const formato = mapSignupFormat(tipo_atendimento, modo_ia, config.PORTAL_SIGNUP_AMOUNT_CENTS);
+    // Mapa formato → provisioning (ADR 0030 D2). PURO/testável. amountCents SEMPRE server-
+    // authoritative (grade fixa por formato — R$147 pro individual+agenda; nunca vem do body).
+    const formato = mapSignupFormat(tipo_atendimento, modo_ia);
 
     // ── Gate de aceite (SCRUM-1 / LGPD): EXIGE o aceite ANTES de qualquer escrita.
     // Sem aceite -> 422, nada é provisionado (nem clone, nem sessão WAHA). É a regra
@@ -292,8 +296,8 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
 
       // Preço de tabela nasce aqui; next_due_date = NULL (trial AINDA não começou
       // — sem data o gate ADR-0016 não silencia e o clone fica em rascunho).
-      // amount_cents = placeholder POR FORMATO (ADR 0030 D2). individual+agenda =
-      // PORTAL_SIGNUP_AMOUNT_CENTS (byte-idêntico ao funil vivo); editável no gestão.
+      // amount_cents = placeholder POR FORMATO da grade oficial (ADR 0030 D2): individual+agenda
+      // = R$147, server-authoritative (nunca do body); editável no gestão depois.
       await clientBilling.upsertBilling({
         slot,
         amountCents: formato.amountCents,
@@ -363,11 +367,17 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
         );
       });
 
-    // Alerta interno (ADR 0030 D3 / fila "aguardando agenda"): clone que escolheu
-    // AGENDA precisa que o time conecte a Service Account do Google (etapa manual,
-    // ADR 0024). Só dispara pro formato AGENDA (atendente não usa agenda). Aditivo,
-    // fire-and-forget SEGURO — não toca o clone nem o 201 do cliente.
-    if (formato.agendaAutomatica) {
+    // Alerta interno (ADR 0030 D3 / fila "aguardando agenda"): clone que escolheu AGENDA
+    // precisa que o time conecte a Service Account do Google (etapa manual, ADR 0024).
+    // Dispara SÓ quando de fato AGUARDA (agenda automática E gcal ainda NÃO conectado) —
+    // reusa o MESMO predicado do card `aguardando_agenda` (isAwaitingAgendaConnection),
+    // sem DUPLICAR o alerta de "novo cadastro" e sem spammar (atendente nunca aguarda; se um
+    // dia o clone nascesse com gcal já ligado, também não alertaria). O gate por formato evita
+    // a query desnecessária no atendente. A query é local/rápida; o envio (WAHA, lento) fica
+    // fire-and-forget e NUNCA atrasa/quebra o 201.
+    const aguardaAgenda =
+      formato.agendaAutomatica && (await flowClones.isAwaitingAgendaConnection(slot));
+    if (aguardaAgenda) {
       void internalAlert
         .sendInternalAlert(
           internalAlert.msgAguardandoAgenda({

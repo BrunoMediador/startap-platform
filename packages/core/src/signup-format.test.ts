@@ -5,25 +5,23 @@ import {
   mapSignupFormat,
 } from './signup-format.js';
 
-// PORTAL_SIGNUP_AMOUNT_CENTS de produção hoje (R$99,99). O combo individual+agenda
-// tem que usar EXATAMENTE este valor (byte-identidade do funil vivo).
-const BASE = 9999;
-
-describe('mapSignupFormat (ADR 0030 D2) — 4 combos', () => {
-  it('sozinho + agenda = FUNIL VIVO: individual, sem gate novo, preço = base (byte-idêntico)', () => {
-    const r = mapSignupFormat('sozinho', 'agenda', BASE);
+describe('mapSignupFormat (ADR 0030 D2 / SCRUM-68 Onda 3) — 4 combos', () => {
+  it('individual + agenda = FUNIL VIVO: individual, sem gate atendente, billing-da-agenda ON, R$147', () => {
+    const r = mapSignupFormat('individual', 'agenda');
     expect(r).toEqual({
       productType: 'individual',
       seatCap: null,
       agendaAutomatica: true,
       modoAtendenteEnabled: false,
-      billingFromAgendaEnabled: false,
-      amountCents: BASE,
+      // ADR 0027: agenda ⇒ billing-da-agenda também no individual (formato novo ganha o /billing).
+      billingFromAgendaEnabled: true,
+      amountCents: 14700,
     });
+    expect(r.amountCents).toBe(SIGNUP_AMOUNT_CENTS_BY_FORMAT.individual_agenda);
   });
 
-  it('sozinho + atende: individual + modo_atendente_enabled + preço R$97', () => {
-    const r = mapSignupFormat('sozinho', 'atende', BASE);
+  it('individual + atende: individual + modo_atendente_enabled + billing OFF + R$97', () => {
+    const r = mapSignupFormat('individual', 'atende');
     expect(r.productType).toBe('individual');
     expect(r.seatCap).toBeNull();
     expect(r.agendaAutomatica).toBe(false);
@@ -33,8 +31,16 @@ describe('mapSignupFormat (ADR 0030 D2) — 4 combos', () => {
     expect(r.amountCents).toBe(9700);
   });
 
-  it('equipe + agenda: estabelecimento + seat_cap + billing_from_agenda + preço R$297', () => {
-    const r = mapSignupFormat('equipe', 'agenda', BASE);
+  it("'atendente' (valor REAL do front) === 'atende' — sinônimos do modo atendente", () => {
+    const a = mapSignupFormat('individual', 'atendente');
+    const b = mapSignupFormat('individual', 'atende');
+    expect(a).toEqual(b);
+    expect(a.agendaAutomatica).toBe(false);
+    expect(a.modoAtendenteEnabled).toBe(true);
+  });
+
+  it('estabelecimento + agenda: estabelecimento + seat_cap + billing_from_agenda + R$297', () => {
+    const r = mapSignupFormat('estabelecimento', 'agenda');
     expect(r.productType).toBe('estabelecimento');
     expect(r.seatCap).toBe(DEFAULT_ESTABELECIMENTO_SEAT_CAP);
     expect(r.agendaAutomatica).toBe(true);
@@ -44,8 +50,8 @@ describe('mapSignupFormat (ADR 0030 D2) — 4 combos', () => {
     expect(r.amountCents).toBe(29700);
   });
 
-  it('equipe + atende: estabelecimento + seat_cap + modo_atendente + preço R$197', () => {
-    const r = mapSignupFormat('equipe', 'atende', BASE);
+  it('estabelecimento + atende: estabelecimento + seat_cap + modo_atendente + R$197', () => {
+    const r = mapSignupFormat('estabelecimento', 'atende');
     expect(r.productType).toBe('estabelecimento');
     expect(r.seatCap).toBe(DEFAULT_ESTABELECIMENTO_SEAT_CAP);
     expect(r.agendaAutomatica).toBe(false);
@@ -55,8 +61,9 @@ describe('mapSignupFormat (ADR 0030 D2) — 4 combos', () => {
     expect(r.amountCents).toBe(19700);
   });
 
-  it('individual+agenda acompanha o base env (não é hardcoded)', () => {
-    expect(mapSignupFormat('sozinho', 'agenda', 14700).amountCents).toBe(14700);
-    expect(mapSignupFormat('sozinho', 'agenda', 5000).amountCents).toBe(5000);
+  it('preço vem SÓ da grade — individual+agenda é 14700 fixo (não amarrado a env)', () => {
+    // Chamado N vezes: sempre 14700 (sem parâmetro de base env; grade oficial do PM).
+    expect(mapSignupFormat('individual', 'agenda').amountCents).toBe(14700);
+    expect(mapSignupFormat('estabelecimento', 'atendente').amountCents).toBe(19700);
   });
 });
