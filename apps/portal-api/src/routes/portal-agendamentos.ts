@@ -409,6 +409,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const timeMin = new Date(now.getTime() - pastDays * 86_400_000).toISOString();
     const timeMax = new Date(now.getTime() + aheadDays * 86_400_000).toISOString();
 
+    // aguardando_agenda (ADR 0030 D3 / SCRUM-68 Onda 3): o clone ESCOLHEU agenda no signup
+    // mas a Service Account do Google ainda NÃO foi conectada pela equipe (etapa manual, ADR
+    // 0024). É o predicado que RENDERIZA o card "estamos conectando sua agenda" no portal — o
+    // /perfil já expõe, mas é ESTE endpoint (/agendamentos → AgendamentosResponse) que o front
+    // consome pro card. Cobre individual E estabelecimento; escopado pelo slot da SESSÃO
+    // (withTenant), nunca do input; fail-safe (false em erro). false = byte-idêntico a hoje.
+    const aguardandoAgenda = await flowClones.isAwaitingAgendaConnection(slot);
+
     // ── ESTABELECIMENTO (multi-profissional) ──────────────────────────────────
     // No estabelecimento o clone NÃO tem agenda própria: os eventos vivem nas
     // agendas de CADA colaborador (clone_colaboradores.gcal_calendar_id). Por isso
@@ -420,14 +428,19 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     // sendo product_type='estabelecimento'. Qualquer outro caso cai no caminho
     // INDIVIDUAL abaixo — byte-a-byte como hoje (Cirilo/Samuel inalterados).
     if (await isEstabelecimentoSlot(slot)) {
-      return handleEstabelecimento(slot, timeMin, timeMax, reply);
+      return handleEstabelecimento(slot, timeMin, timeMax, aguardandoAgenda, reply);
     }
 
     // ── INDIVIDUAL (single-agenda) — inalterado ───────────────────────────────
     const client = await gcal.getGcalForSlot(slot);
     if (!client) {
       // Clone sem GCal proprio (pre-setup ou nao configurado) — vazio, sem erro.
-      return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+      return reply.code(200).send({
+        gcal_configured: false,
+        count: 0,
+        agendamentos: [],
+        aguardando_agenda: aguardandoAgenda,
+      });
     }
 
     try {
@@ -443,9 +456,12 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         .sort((a, b) => (a.inicio ?? '￿').localeCompare(b.inicio ?? '￿'))
         // Cap defensivo: janela e pequena, mas evita resposta gigante.
         .slice(0, MAX_EVENTS);
-      return reply
-        .code(200)
-        .send({ gcal_configured: true, count: agendamentos.length, agendamentos });
+      return reply.code(200).send({
+        gcal_configured: true,
+        count: agendamentos.length,
+        agendamentos,
+        aguardando_agenda: aguardandoAgenda,
+      });
     } catch (err) {
       log.error({ slot, err: err instanceof Error ? err.message : 'erro' }, 'falha ao listar GCal');
       return reply.code(502).send({ error: 'nao foi possivel buscar agendamentos agora' });
@@ -1070,12 +1086,18 @@ async function handleEstabelecimento(
   slot: string,
   timeMin: string,
   timeMax: string,
+  aguardandoAgenda: boolean,
   reply: FastifyReply,
 ): Promise<FastifyReply> {
   const colaboradores = await gcal.getGcalsForSlot(slot);
   if (colaboradores.length === 0) {
     // Nenhum colaborador com agenda ativa (pré-setup do estabelecimento) — vazio.
-    return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+    return reply.code(200).send({
+      gcal_configured: false,
+      count: 0,
+      agendamentos: [],
+      aguardando_agenda: aguardandoAgenda,
+    });
   }
 
   // Lista as agendas em paralelo; uma falha não invalida as demais.
@@ -1124,9 +1146,12 @@ async function handleEstabelecimento(
     .sort((a, b) => (a.inicio ?? '￿').localeCompare(b.inicio ?? '￿'))
     .slice(0, MAX_EVENTS);
 
-  return reply
-    .code(200)
-    .send({ gcal_configured: true, count: limitadas.length, agendamentos: limitadas });
+  return reply.code(200).send({
+    gcal_configured: true,
+    count: limitadas.length,
+    agendamentos: limitadas,
+    aguardando_agenda: aguardandoAgenda,
+  });
 }
 
 /**
