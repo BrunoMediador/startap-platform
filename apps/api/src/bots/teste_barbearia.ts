@@ -165,6 +165,54 @@ export class TesteBarbeariaBot extends BotBase {
   }
 
   /**
+   * Tool `consultar_pacote` (ADR 0025 BLOCO 2a — DORMENTE por flag). READ-ONLY: só LÊ os
+   * pacotes do cliente já calculados server-side (saldo/validade/cobertura/escopo, com
+   * EXPIRADO/ESGOTADO explícitos). NÃO toca saldo/ledger/GCal — a DEDUÇÃO é o bloco 2b
+   * (maybeDeduzirPacote), INTOCADA. O caller expõe ou não pela flag PACOTES_ENABLED.
+   *
+   * Compartilhada por individual E estabelecimento (SCRUM-68 — fecha o "pacote cego ao saldo"
+   * no estab): a identidade é SEMPRE o número da CONVERSA (telefone), NUNCA o do LLM
+   * (anti-IDOR/PII cross-cliente). O pacote é por cliente-final, então resolveClientPackages
+   * isola por slot+telefone idêntico nos dois caminhos.
+   */
+  private buildConsultarPacoteTool(telefone: string): ToolDefinition {
+    return {
+      name: 'consultar_pacote',
+      description:
+        'Use quando o cliente perguntar sobre o PACOTE pré-pago dele (quantas sessões ' +
+        'restam, validade, o que cobre). Esta ferramenta apenas CONSULTA o saldo — ela ' +
+        'NÃO desconta, NÃO agenda e NÃO altera nada. Devolve os pacotes do cliente já ' +
+        'calculados (ativos, expirados e esgotados).',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      run: async () => {
+        // SEGURANÇA (IDOR/PII cross-cliente): NUNCA aceita telefone do LLM. O saldo é
+        // SEMPRE o do número da CONVERSA (o remetente).
+        const credits = await resolveClientPackages({
+          slot: this.slot,
+          telefone,
+          apenasAtivos: false,
+        });
+        // Devolve já calculado; NUNCA o número cru, NUNCA o HMAC (resolvido internamente).
+        return {
+          pacotes: credits.map((c) => ({
+            nome: c.nome,
+            estado: c.estado, // ATIVO | EXPIRADO | ESGOTADO | CANCELADO
+            sessoes_restantes: c.sessoes_restantes,
+            sessoes_total: c.sessoes_total,
+            valido_ate: c.data_expiracao,
+            cobre: c.servicos_cobertos,
+            escopo: c.colaborador_id === null ? 'casa' : 'colaborador',
+          })),
+        };
+      },
+    };
+  }
+
+  /**
    * Tool `escalar_para_humano` (MODO ATENDENTE — SCRUM-59). Passa a bola pro humano quando
    * o bot NÃO deve/consegue resolver: reclamação, negociação de preço, pedido fora do padrão
    * ou pedido explícito de falar com uma pessoa. Espelha `escalar_cancelamento`:
@@ -868,44 +916,10 @@ export class TesteBarbeariaBot extends BotBase {
     // ── consultar_pacote (ADR 0025 BLOCO 2a — DORMENTE por flag) ─────────────────
     // Tool READ-ONLY: SÓ é exposta com PACOTES_ENABLED=ON. Com a flag OFF a lista de
     // tools é IDÊNTICA à de hoje (bot 100% inalterado). NÃO toca saldo/ledger/GCal —
-    // só LÊ os pacotes do cliente já calculados server-side (saldo/validade/cobertura/
-    // escopo, com EXPIRADO/ESGOTADO explícitos). A DEDUÇÃO é o bloco 2b.
+    // só LÊ os pacotes do cliente já calculados server-side. A DEDUÇÃO é o bloco 2b.
+    // Helper compartilhado com o estabelecimento (SCRUM-68) — MESMA tool, mesma identidade.
     if (config.PACOTES_ENABLED) {
-      tools.push({
-        name: 'consultar_pacote',
-        description:
-          'Use quando o cliente perguntar sobre o PACOTE pré-pago dele (quantas sessões ' +
-          'restam, validade, o que cobre). Esta ferramenta apenas CONSULTA o saldo — ela ' +
-          'NÃO desconta, NÃO agenda e NÃO altera nada. Devolve os pacotes do cliente já ' +
-          'calculados (ativos, expirados e esgotados).',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-        run: async () => {
-          // SEGURANÇA (IDOR/PII cross-cliente): NUNCA aceita telefone do LLM. O saldo é
-          // SEMPRE o do número da CONVERSA (o remetente). Antes a tool usava o telefone
-          // passado pelo modelo quando presente → vazava o pacote/saldo de OUTRO cliente.
-          const credits = await resolveClientPackages({
-            slot: this.slot,
-            telefone,
-            apenasAtivos: false,
-          });
-          // Devolve já calculado; NUNCA o número cru, NUNCA o HMAC (resolvido internamente).
-          return {
-            pacotes: credits.map((c) => ({
-              nome: c.nome,
-              estado: c.estado, // ATIVO | EXPIRADO | ESGOTADO | CANCELADO
-              sessoes_restantes: c.sessoes_restantes,
-              sessoes_total: c.sessoes_total,
-              valido_ate: c.data_expiracao,
-              cobre: c.servicos_cobertos,
-              escopo: c.colaborador_id === null ? 'casa' : 'colaborador',
-            })),
-          };
-        },
-      });
+      tools.push(this.buildConsultarPacoteTool(telefone));
     }
 
     const result = await runAgentConfigured({
@@ -1423,6 +1437,23 @@ export class TesteBarbeariaBot extends BotBase {
     const area = await cloneColaboradores.getArea(this.slot);
     const cartaoEstabelecimentoBlock = buildCartaoEstabelecimentoBlock(area);
 
+    // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
+    // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,
+    // INTOCADO) mas não informava o saldo na conversa. Mesma lógica/identidade do individual:
+    // SÓ com PACOTES_ENABLED=ON E o cliente (número da CONVERSA) tendo algum pacote. Pacote é
+    // por cliente-final (telefone) — resolveClientPackages isola por slot+telefone idêntico ao
+    // individual. Read-only: nenhuma escrita/dedução. Com a flag OFF ou sem pacote, pacoteBlock
+    // fica '' e o systemPrompt do estab é BYTE-A-BYTE o de hoje (append condicional abaixo).
+    let pacoteBlock = '';
+    if (config.PACOTES_ENABLED) {
+      const credits = await resolveClientPackages({
+        slot: this.slot,
+        telefone,
+        apenasAtivos: false, // inclui EXPIRADO/ESGOTADO para informar o cliente
+      });
+      pacoteBlock = buildSeuPacoteBlock(credits);
+    }
+
     const systemPrompt = [
       promptPersona,
       '',
@@ -1435,6 +1466,9 @@ export class TesteBarbeariaBot extends BotBase {
       estab.horariosBlock,
       '',
       cartaoEstabelecimentoBlock,
+      // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
+      // systemPrompt byte-a-byte o de hoje. Com pacote: '' (separador) + o bloco.
+      ...(pacoteBlock ? ['', pacoteBlock] : []),
     ].join('\n');
 
     const fullHistory = await this.loadHistory(ctx);
@@ -1771,6 +1805,16 @@ export class TesteBarbeariaBot extends BotBase {
     // podia afirmar que cancelou sem avisar o dono.
     if (config.CANCELAMENTO_ESCALADO_ENABLED) {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
+    }
+
+    // ── consultar_pacote no ESTABELECIMENTO (ADR 0025 BLOCO 2a — DORMENTE por flag; SCRUM-68) ──
+    // MESMA tool read-only do individual (buildConsultarPacoteTool): SÓ exposta com
+    // PACOTES_ENABLED=ON. Fecha o "pacote cego ao saldo" no estab — o bot já DEDUZ pacote
+    // (maybeDeduzirPacote, INTOCADO) mas não sabia CONSULTAR/informar o saldo na conversa.
+    // NÃO toca saldo/ledger/GCal; identidade = número da CONVERSA (anti-IDOR). Flag OFF ->
+    // lista de tools do estab BYTE-A-BYTE a de hoje.
+    if (config.PACOTES_ENABLED) {
+      tools.push(this.buildConsultarPacoteTool(telefone));
     }
 
     const result = await runAgentConfigured({
