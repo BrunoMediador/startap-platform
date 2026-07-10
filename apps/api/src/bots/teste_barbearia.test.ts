@@ -805,6 +805,149 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
+// Pacotes no ESTABELECIMENTO (SCRUM-68 — fecha "pacote cego ao saldo")
+// O estab JÁ deduz pacote (BLOCO 2b, intocado). Aqui plugamos a CONSULTA read-only:
+// a tool consultar_pacote + o bloco [SEU PACOTE], MESMA lógica/identidade do individual.
+// ════════════════════════════════════════════════════════════════════════════════
+
+describe('TesteBarbeariaBot — pacotes no estabelecimento (BLOCO 2a, SCRUM-68)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  const oneColab = () => [
+    { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
+  ];
+
+  it('flag OFF: consultar_pacote NÃO é exposta e a camada de pacote não é tocada (byte-a-byte)', async () => {
+    cfg.PACOTES_ENABLED = false;
+    const tools = await estabToolsFor('meu pacote?', oneColab());
+    expect(tools.map((t) => t.name)).not.toContain('consultar_pacote');
+    // Estab sem a flag NÃO consulta pacote em ponto algum (nem bloco, nem tool).
+    expect(mocks.resolveClientPackages).not.toHaveBeenCalled();
+    expect(mocks.buildSeuPacoteBlock).not.toHaveBeenCalled();
+  });
+
+  it('flag ON, cliente SEM pacote: systemPrompt do estab IDÊNTICO ao da flag OFF (bloco vazio não adiciona nada)', async () => {
+    const colab = oneColab();
+
+    // Baseline: flag OFF.
+    cfg.PACOTES_ENABLED = false;
+    const promptOff = await estabSystemPromptFor('quero um corte', colab);
+    expect(promptOff).not.toContain('[SEU PACOTE]');
+
+    // Flag ON mas cliente sem pacote (buildSeuPacoteBlock -> '') => byte-a-byte o de OFF.
+    vi.clearAllMocks();
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+    const promptOnSemPacote = await estabSystemPromptFor('quero um corte', colab);
+
+    expect(promptOnSemPacote).toBe(promptOff); // append condicional não injeta linha vazia
+    expect(promptOnSemPacote).not.toContain('[SEU PACOTE]');
+  });
+
+  it('flag ON, cliente COM pacote: injeta [SEU PACOTE] SEM perder os blocos do estabelecimento', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([{ estado: 'ATIVO' }]);
+    mocks.buildSeuPacoteBlock.mockReturnValue(
+      '[SEU PACOTE]\n- Pacote 5 Cortes: 2 de 5 (vence 31/12)',
+    );
+    const systemPrompt = await estabSystemPromptFor('meu pacote?', oneColab());
+    expect(systemPrompt).toContain('[SEU PACOTE]');
+    expect(systemPrompt).toContain('Pacote 5 Cortes');
+    // Não regride os blocos do estab (agenda por profissional + cartão).
+    expect(systemPrompt).toContain('[PROFISSIONAIS]');
+    expect(systemPrompt).toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO');
+  });
+
+  it('flag ON: consultar_pacote exposta, READ-ONLY (nenhum nome de tool sugere dedução/baixa)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    const tools = await estabToolsFor('quanto saldo eu tenho?', oneColab());
+    expect(tools.map((t) => t.name)).toContain('consultar_pacote');
+    for (const t of tools) {
+      expect(t.name).not.toMatch(/deduz|descontar|baixar_pacote|consumir_pacote|usar_pacote/i);
+    }
+  });
+
+  it('consultar_pacote (estab) IGNORA telefone do LLM e consulta o saldo do número da CONVERSA (anti-IDOR)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.resolveClientPackages.mockResolvedValue([
+      {
+        nome: 'Pacote 5 Cortes',
+        estado: 'ATIVO',
+        sessoes_restantes: 2,
+        sessoes_total: 5,
+        data_expiracao: '2026-12-31',
+        servicos_cobertos: ['Corte'],
+        colaborador_id: null,
+      },
+    ]);
+    const tools = await estabToolsFor('quantas sessões me restam?', oneColab());
+    const consultar = tools.find((t) => t.name === 'consultar_pacote') as {
+      run: (a: unknown) => Promise<{ pacotes: Array<Record<string, unknown>> }>;
+    };
+    expect(consultar).toBeDefined();
+    // Telefone FORJADO pelo LLM tem que ser IGNORADO — usa sempre o da conversa (makeCtx).
+    const res = await consultar.run({ telefone: '5511000000000' });
+    expect(mocks.resolveClientPackages).toHaveBeenCalledWith({
+      slot: 'clone_estab_x',
+      telefone: '5511988887777',
+      apenasAtivos: false,
+    });
+    expect(res.pacotes[0]).toMatchObject({
+      nome: 'Pacote 5 Cortes',
+      sessoes_restantes: 2,
+      escopo: 'casa',
+    });
+  });
+
+  it('dedução intocada: com pacote+consulta ligados, inserir_agendamento segue chamando a dedução (BLOCO 2b)', async () => {
+    cfg.PACOTES_ENABLED = true;
+    mocks.getCloneBySlot.mockResolvedValue({ slot: 'clone_estab_x', tenant_id: 't-uuid' });
+    mocks.servicoFromSummary.mockReturnValue('Corte');
+    mocks.deduzirPacoteNoAgendamento.mockResolvedValue({
+      descontou_do_pacote: true,
+      avulso: false,
+      motivo: 'ok',
+      sessoes_restantes: 1,
+      colaborador_id: null,
+    });
+    const c1 = colabClientStub('cal-joao');
+    // Colaborador faz 'Corte' + serviço existe nos globais -> passa o gate serviço×profissional
+    // (senão inserir_agendamento retorna SERVICO_NAO_OFERECIDO antes de criar/deduzir).
+    const tools = await estabToolsFor(
+      'quero um corte com C1',
+      [{ colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: c1, servicos: ['Corte'] }],
+      { services: [{ name: 'Corte', min: 30 }] },
+    );
+    const inserir = tools.find((t) => t.name === 'inserir_agendamento') as {
+      run: (a: unknown) => Promise<{ ok: boolean; pacote?: { sessoes_restantes: number } }>;
+    };
+    const res = await inserir.run({
+      colaborador_id: 'C1',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: '2026-07-10T10:00:00-03:00',
+      end: '2026-07-10T10:30:00-03:00',
+      servico: 'Corte',
+      usa_pacote: true,
+    });
+    // A CONSULTA (2a) não removeu/alterou a DEDUÇÃO (2b): ela roda e desconta.
+    expect(mocks.deduzirPacoteNoAgendamento).toHaveBeenCalledTimes(1);
+    expect(res.ok).toBe(true);
+    expect(res.pacote?.sessoes_restantes).toBe(1);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════
 // Dedução de pacote no agendamento (ADR 0025, BLOCO 2b — gated por PACOTES_ENABLED)
 // ════════════════════════════════════════════════════════════════════════════════
 
