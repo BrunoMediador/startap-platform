@@ -36,10 +36,12 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-// config MUTÁVEL (hoisted) pra ligar/desligar o gate do modo atendente por teste (SCRUM-62).
+// config MUTÁVEL (hoisted) pra ligar/desligar os gates de eco por teste: modo atendente (SCRUM-62)
+// e human-reply-agenda (SCRUM-68 Onda 4). A união dos dois decide se marca o eco do alerta.
 const cfgMock = vi.hoisted(() => ({
   CANCELAMENTO_ESCALADO_COOLDOWN_MIN: 30,
   MODO_ATENDENTE_SLOTS: '',
+  HUMAN_REPLY_AGENDA_SLOTS: '',
 }));
 
 // Logger mockado que grava os args de cada log em mocks.logCalls.
@@ -481,11 +483,12 @@ describe('sendOwnerAlert — rollback de cooldown (stateful)', () => {
 // Eco do alerta (SCRUM-62): cinto+suspensório contra pausar o contato do DONO
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe('sendOwnerAlert — eco do alerta (clone_session + modo atendente)', () => {
+describe('sendOwnerAlert — eco do alerta (clone_session + modo atendente / human-reply-agenda)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.logCalls.length = 0;
     cfgMock.MODO_ATENDENTE_SLOTS = '';
+    cfgMock.HUMAN_REPLY_AGENDA_SLOTS = '';
     mocks.getCloneAlertOwner.mockResolvedValue({
       phone: '5535998877248',
       enabled: true,
@@ -521,8 +524,25 @@ describe('sendOwnerAlert — eco do alerta (clone_session + modo atendente)', ()
     expect(mocks.sendText).toHaveBeenCalledTimes(1);
   });
 
-  it('modo OFF: NÃO marca eco mesmo em clone_session (byte-idêntico)', async () => {
+  // SCRUM-68 (Onda 4, MESMA classe do SCRUM-63): o gate HUMAN_REPLY_AGENDA sozinho (modo atendente
+  // OFF) também precisa marcar o eco — senão o eco fromMe do alerta ao dono viraria 'resposta
+  // humana' e auto-pausaria o contato do dono por 60min num clone de agenda. Espelha base.test.ts.
+  it('HUMAN_REPLY_AGENDA ON (modo atendente OFF) + clone_session: marca o eco', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = '';
+    cfgMock.HUMAN_REPLY_AGENDA_SLOTS = 'clone_meduzza_barbearia_q23psc';
+    const r = await sendOwnerAlert(leadInput);
+    expect(r).toEqual({ ok: true, escalado: true });
+    expect(mocks.registerBotReplyEcho).toHaveBeenCalledTimes(1);
+    const [sess, phone, texto] = mocks.registerBotReplyEcho.mock.calls[0];
+    expect(sess).toBe('MEDUZZA_SESS');
+    expect(phone).toBe('5535998877248');
+    expect(String(texto)).toContain('Meduzza Barbearia');
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('AMBOS os gates OFF: NÃO marca eco mesmo em clone_session (byte-idêntico ao de hoje)', async () => {
+    cfgMock.MODO_ATENDENTE_SLOTS = '';
+    cfgMock.HUMAN_REPLY_AGENDA_SLOTS = '';
     await sendOwnerAlert(leadInput);
     expect(mocks.registerBotReplyEcho).not.toHaveBeenCalled();
     expect(mocks.sendText).toHaveBeenCalledTimes(1);

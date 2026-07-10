@@ -4,6 +4,7 @@
  * Centraliza preocupações comuns: pausa por projeto, log de mensagem na memória,
  * envio de resposta com typing humanizado.
  */
+import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
 import type { Bot, BotContext } from '@startap/core/types';
 import { chatMemory, flowClones, flowExecutionLog, pausa as pausaQueries } from '@startap/db';
@@ -128,13 +129,17 @@ export abstract class BotBase implements Bot {
         // sendText retornar; se a marca só existisse DEPOIS, o router veria o eco como
         // 'human' e auto-pausaria o cliente por 60min (SCRUM-62). Marcar antes é
         // estritamente mais seguro: se o envio falhar, a marca só expira em 5min sem efeito.
-        // SÓ p/ clones em modo atendente (gate barato = string compare); best-effort, nunca
-        // lança. Clones fora do gate: byte-idêntico (o if é false, nem toca no Redis).
+        // SÓ p/ clones em modo atendente OU com a pausa por resposta humana no ramo AGENDA
+        // ligada (SCRUM-68 Onda 4): sem a marca de eco, o próprio eco fromMe do bot seria lido
+        // como "resposta humana" e o bot se auto-pausaria por 60min. Gate barato (string
+        // compare + cache do clone); best-effort, nunca lança. Fora de AMBOS os gates:
+        // byte-idêntico (o if é false, nem toca no Redis).
         if (
-          await flowClones.resolveModoAtendenteEnabledForSlot(
+          (await flowClones.resolveModoAtendenteEnabledForSlot(
             this.slot,
             process.env.MODO_ATENDENTE_SLOTS,
-          )
+          )) ||
+          isHumanReplyAgendaEnabled(this.slot, process.env.HUMAN_REPLY_AGENDA_SLOTS)
         ) {
           await registerBotReplyEcho(sessao, telefone, reply);
         }

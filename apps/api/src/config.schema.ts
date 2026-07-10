@@ -291,6 +291,21 @@ export const ConfigSchema = z.object({
   // NUNCA hardcoded.
   MODO_ATENDENTE_SLOTS: z.string().optional().default(''),
 
+  // ── PAUSA POR RESPOSTA HUMANA no ramo AGENDA — gate POR-CLONE (SCRUM-68 Onda 4) ──
+  // Lista de slots (CSV) em que o dono, ao responder À MÃO pelo MESMO número (fromMe, texto
+  // livre NÃO-keyword), pausa AQUELE contato por 60min com volta automática — mesma pausa
+  // human_reply que já existe no modo atendente, agora nos formatos de AGENDA (Cirilo/Samuel/
+  // dragon). Avaliado com isHumanReplyAgendaEnabled(slot, ...). OPCIONAL no boot (ausente = OFF,
+  // lição #247: feature dormente NUNCA derruba a api do bot).
+  //   vazio/ausente   -> OFF pra TODOS (produção BYTE-A-BYTE: ramo agenda segue 'ignored:fromMe'
+  //                      sem pausa e sem registrar eco — estado de hoje).
+  //   'slot_a,slot_b'  -> ON só nos slots listados (rollout: dragon primeiro, depois pagante
+  //                      com go do Bruno).
+  //   '*'              -> ON pra TODOS (enable global futuro).
+  // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy de código.
+  // NÃO ligar em ninguém nesta PR (env não setado). NUNCA hardcoded.
+  HUMAN_REPLY_AGENDA_SLOTS: z.string().optional().default(''),
+
   // ── FAQ PERSONALIZADO — gate POR-CLONE (SCRUM-65) ─────────────────────────────
   // Lista de slots (CSV) em que o bloco [PERGUNTAS FREQUENTES DO NEGOCIO] (pares P/R que o
   // dono cadastra no portal) e injetado no contexto do bot em runtime. Avaliado com

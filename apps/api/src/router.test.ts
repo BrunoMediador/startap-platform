@@ -1098,3 +1098,218 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRUM-68 Onda 4 — pausa por RESPOSTA HUMANA à mão nos formatos de AGENDA (dragon/
+// Cirilo/Samuel), gated por HUMAN_REPLY_AGENDA_SLOTS. Clone FORA do modo atendente
+// (MODO_ATENDENTE_SLOTS não o cobre) → cai no ramo AGENDA byte-idêntico; só o novo gate
+// adiciona a human_reply de 60min.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('handleWebhook — fromMe ramo AGENDA / human-reply (SCRUM-68 Onda 4)', () => {
+  const DRAGON = 'clone_barber_dragon_caly8b';
+  const HR_ENV_KEY = 'HUMAN_REPLY_AGENDA_SLOTS';
+
+  function fromMeBody(text: string): WahaWebhookBody {
+    const body = makeBody('TESTE_STARTAP');
+    body.payload!.fromMe = true;
+    body.payload!.body = text;
+    return body;
+  }
+
+  function dragonRoute() {
+    return {
+      id: 7,
+      telefone: '553598877248',
+      workflow_id: DRAGON,
+      workflow_name: 'dragon',
+      webhook_url: 'http://api/webhooks/waha',
+      nome_cliente: 'Cliente',
+      ativo: true,
+      criado_em: new Date(),
+      atualizado_em: new Date(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logFlowEvent.mockResolvedValue(null);
+    mocks.logMessage.mockResolvedValue(undefined);
+    mocks.addFlowPause.mockResolvedValue(undefined);
+    mocks.addHumanReplyPause.mockResolvedValue(undefined);
+    mocks.removeFlowPause.mockResolvedValue(undefined);
+    mocks.extractPhone.mockReturnValue('553598877248');
+    mocks.isGroupChat.mockReturnValue(false);
+    mocks.getCloneBySession.mockResolvedValue(null);
+    mocks.getCloneBySlot.mockResolvedValue({ cliente_telefone: '5511977776666' });
+    mocks.findRouting.mockResolvedValue(dragonRoute());
+    // Nenhuma frase casa por padrão (frase que não aparece na mensagem de teste).
+    mocks.listFlowPauseKeywords.mockResolvedValue([
+      {
+        flow_id: DRAGON,
+        command: 'pause',
+        keyword: 'atendente aqui!!',
+        keyword_norm: 'atendenteaqui!!',
+        enabled: true,
+        updated_at: new Date(),
+      },
+    ]);
+    mocks.isBotEcho.mockResolvedValue('human');
+    mocks.isSelfChat.mockReturnValue(false);
+    mocks.resolveFromMeIdentity.mockImplementation(
+      (_session: string, _body: unknown, phone: string) =>
+        Promise.resolve({ phone, wasLid: false, via: 'not-lid' }),
+    );
+    delete process.env[DEDUP_ENV_KEY];
+    // MODO atendente OFF (dragon não está no gate de modo) -> entra no ramo AGENDA.
+    delete process.env[MODO_ENV_KEY];
+    // Gate da Onda 4 ON pro dragon (piloto).
+    process.env[HR_ENV_KEY] = DRAGON;
+  });
+
+  afterEach(() => {
+    delete process.env[HR_ENV_KEY];
+  });
+
+  it('gate OFF → BYTE-IDÊNTICO: fromMe não-keyword vira ignored:fromMe, sem pausa nem eco', async () => {
+    delete process.env[HR_ENV_KEY]; // gate vazio/não-setado
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-agenda-off',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    // Caminho legado intacto: NENHUMA leitura de identidade/eco/self-chat, NENHUMA pausa.
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.resolveFromMeIdentity).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
+  });
+
+  it('gate OFF (env vazia "") → BYTE-IDÊNTICO igual ao não-setado', async () => {
+    process.env[HR_ENV_KEY] = '';
+    const result = await handleWebhook(fromMeBody('resposta humana num clone normal'), {
+      executionId: 'exec-agenda-empty',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → resposta HUMANA à mão (não-keyword, não-eco) cria human_reply de 60min', async () => {
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-agenda-human',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    // human_reply usa addHumanReplyPause (guarda: nunca rebaixa permanente) — NÃO addFlowPause.
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as {
+      flowId: string;
+      telefone: string;
+      expiresAt: Date;
+    };
+    expect(arg.flowId).toBe(DRAGON);
+    expect(arg.telefone).toBe('553598877248');
+    expect(arg.expiresAt).toBeInstanceOf(Date);
+    const deltaMs = arg.expiresAt.getTime() - Date.now();
+    expect(deltaMs).toBeGreaterThan(59 * 60 * 1000);
+    expect(deltaMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
+  });
+
+  it('gate ON → KEYWORD segue criando pausa INDETERMINADA (source=fromMe, sem TTL) — não muda', async () => {
+    const result = await handleWebhook(fromMeBody('atendente aqui!!'), {
+      executionId: 'exec-agenda-keyword',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:manual-pause' });
+    // Keyword usa applyFlowManualCommand -> addFlowPause (permanente); NUNCA human_reply.
+    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    const arg = mocks.addFlowPause.mock.calls[0]![0] as { source: string; expiresAt?: Date };
+    expect(arg.source).toBe('fromMe');
+    expect(arg.expiresAt ?? null).toBeNull();
+    // Keyword casou ANTES de qualquer decisão de eco (byte-idêntico ao ramo agenda de hoje).
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → ECO do próprio bot (isBotEcho=echo) NÃO pausa (ignored:fromMe)', async () => {
+    mocks.isBotEcho.mockResolvedValue('echo');
+    const result = await handleWebhook(fromMeBody('mensagem que o bot mesmo enviou'), {
+      executionId: 'exec-agenda-echo',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → Redis DEGRADED → fail-safe: NÃO auto-pausa (ignored:fromMe)', async () => {
+    mocks.isBotEcho.mockResolvedValue('degraded');
+    const result = await handleWebhook(fromMeBody('resposta qualquer nao-keyword'), {
+      executionId: 'exec-agenda-degraded',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → SELF-CHAT (msg pro próprio número) → ignored:fromMe:self-chat, não pausa', async () => {
+    mocks.isSelfChat.mockReturnValue(true);
+    const result = await handleWebhook(fromMeBody('eco do alerta de lead'), {
+      executionId: 'exec-agenda-self',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe:self-chat' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    // Self-chat avaliado ANTES do eco (não chega a consultar isBotEcho).
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → @lid NÃO resolvido → ignored:fromMe:lid-unresolved, fail-safe sem pausa', async () => {
+    mocks.extractPhone.mockReturnValue('100206033039600'); // pseudo-lid
+    mocks.resolveFromMeIdentity.mockResolvedValue({ phone: null, wasLid: true, via: 'none' });
+    const result = await handleWebhook(fromMeBody('resposta manual num contato migrado'), {
+      executionId: 'exec-agenda-lid-unresolved',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe:lid-unresolved' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    // Fail-safe: retorna ANTES de self-chat/eco.
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+  });
+
+  it('gate ON → resposta MANUAL por @lid resolvido → pausa sob o PN E.164 (não o pseudo-lid)', async () => {
+    const REAL_PN = '5519981018908';
+    mocks.extractPhone.mockReturnValue('100206033039600'); // pseudo-lid
+    mocks.resolveFromMeIdentity.mockResolvedValue({ phone: REAL_PN, wasLid: true, via: 'rest' });
+    mocks.isBotEcho.mockResolvedValue('human');
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-agenda-lid-human',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as { telefone: string };
+    expect(arg.telefone).toBe(REAL_PN);
+    // A decisão de eco roda sob o PN resolvido, não o pseudo-lid.
+    expect(mocks.isBotEcho).toHaveBeenCalledWith('TESTE_STARTAP', REAL_PN, expect.any(String));
+  });
+
+  it('gate ON pra OUTRO slot → dragon fora do gate = byte-idêntico (ignored:fromMe, sem pausa)', async () => {
+    process.env[HR_ENV_KEY] = 'clone_outro_qualquer'; // dragon NÃO está no gate
+    const result = await handleWebhook(fromMeBody('resposta humana fora do gate'), {
+      executionId: 'exec-agenda-other-slot',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.resolveFromMeIdentity).not.toHaveBeenCalled();
+  });
+});
