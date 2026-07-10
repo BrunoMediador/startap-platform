@@ -34,15 +34,20 @@ interface WahaChat {
 
 /** Fallback: telefones distintos que conversaram com a session em message_log. */
 async function fallbackFromDB(session: string, days: number): Promise<RecentContact[]> {
+  // Numero do PROPRIO bot (session), pra excluir da lista de contatos recentes.
+  // Fonte correta: flow_clones.alert_owner_phone — autofilled com o me.id da sessao
+  // ao conectar (alert-owner-autofill.ts), MESMO formato de digitos que message_log.phone
+  // (extractPhone / meIdToDigits, com o 9). bot_config NAO tem coluna de numero (SCRUM-43:
+  // 'SELECT waha_number FROM bot_config' era drift de schema e falhava ~26x/dia).
   let botPhone: string | null = null;
   try {
-    const botRow = await query<{ waha_number: string | null }>(
-      'SELECT waha_number FROM bot_config WHERE waha_sessao = $1 LIMIT 1',
+    const botRow = await query<{ alert_owner_phone: string | null }>(
+      'SELECT alert_owner_phone FROM flow_clones WHERE waha_sessao = $1 LIMIT 1',
       [session],
     );
-    botPhone = botRow.rows[0]?.waha_number ?? null;
+    botPhone = botRow.rows[0]?.alert_owner_phone ?? null;
   } catch {
-    // coluna waha_number pode nao existir — ignora filtro do numero do bot
+    // fail-safe: sem o numero do bot, o filtro e ignorado (nao quebra recent-contacts)
   }
 
   const dbRows = await query<{ phone: string; last_at: Date }>(
