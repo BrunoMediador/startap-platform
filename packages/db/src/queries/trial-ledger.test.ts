@@ -95,6 +95,11 @@ describe('countActiveTrials — teto anti-DoS (guardas no SQL)', () => {
     // do negócio), fora do teto — vale pra qualquer trial_status. É a 1ª guarda,
     // ANDada com o resto (não pode virar OR — senão pagante voltaria a contar).
     expect(sql).toContain('cb.last_payment_at IS NULL');
+    // ESTRUTURAL (não só substring): a guarda do pagante precisa estar ANDada
+    // com o grupo de trial_status, nunca ORada. Um `... IS NULL OR (...)`
+    // reintroduziria EXATAMENTE o bug P1 (pagante voltando a contar) e passaria
+    // nos toContain acima — este toMatch ancora o `AND (` logo após a guarda.
+    expect(sql).toMatch(/cb\.last_payment_at IS NULL\s+AND\s*\(/);
     // awaiting (e blocked) CONTAM: sessão viva sem pagamento.
     expect(sql).toContain(`fc.trial_status IN ('awaiting', 'blocked')`);
     // active CONTA só dentro da janela (next_due_date NULL ou >= hoje UTC):
