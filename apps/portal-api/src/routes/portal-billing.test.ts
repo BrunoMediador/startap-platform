@@ -149,7 +149,7 @@ function makeCharge(over: Partial<Record<string, unknown>> = {}) {
     status: 'pending',
     br_code: '00020126...PIX',
     br_code_base64: 'data:image/png;base64,AAAA',
-    expires_at: new Date('2026-07-13T10:00:00.000Z'),
+    expires_at: expiresInDays(30), // validade viva (relativa ao relogio, nao data fixa)
     paid_at: null,
     created_at: new Date(),
     updated_at: new Date(),
@@ -171,6 +171,11 @@ function dueInDays(n: number): string {
   return due.toISOString().slice(0, 10);
 }
 
+/** expires_at N dias no futuro (Date) — validade viva relativa ao relogio, sem data fixa. */
+function expiresInDays(n: number): Date {
+  return new Date(Date.now() + n * 24 * 60 * 60 * 1000);
+}
+
 // ── cicloAtual (helper puro) ──────────────────────────────────────────────────
 describe('cicloAtual', () => {
   it('formata YYYY-MM no fuso America/Sao_Paulo', () => {
@@ -184,9 +189,10 @@ describe('cicloAtual', () => {
 // ── GET /portal/mensalidade ───────────────────────────────────────────────────
 describe('GET /portal/mensalidade', () => {
   it('200 com o shape completo (billing + charge do ciclo + dev_mode)', async () => {
+    const expiresAt = expiresInDays(5); // validade no futuro, relativa ao relogio
     getBillingMock.mockResolvedValue(makeBilling());
     daysUntilDueMock.mockReturnValue(12);
-    getChargeMock.mockResolvedValue(makeCharge());
+    getChargeMock.mockResolvedValue(makeCharge({ expires_at: expiresAt }));
 
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
@@ -202,7 +208,7 @@ describe('GET /portal/mensalidade', () => {
         status: 'pending',
         br_code: '00020126...PIX',
         br_code_base64: 'data:image/png;base64,AAAA',
-        expires_at: '2026-07-13T10:00:00.000Z',
+        expires_at: expiresAt.toISOString(),
         paid_at: null,
         is_expired: false, // validade no futuro
       },
