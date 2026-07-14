@@ -116,7 +116,7 @@ export async function handleWebhook(
 
   // 0. Eventos de status de sessão alimentam o hook de trial do pareamento
   // (Missão 020 F1): 1º WORKING de clone em trial consome o trial_ledger e
-  // inicia os 10 dias. Clones com trial_status='none' (Cirilo, matrizes,
+  // inicia os 7 dias. Clones com trial_status='none' (Cirilo, matrizes,
   // clones manuais) são no-op absoluto — comportamento atual intacto.
   if (body.event === 'session.status') {
     return handleSessionStatusEvent(body, { executionId: opts.executionId, startedAt });

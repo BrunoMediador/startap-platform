@@ -5,7 +5,7 @@ import { CadastroForm } from './cadastro-form';
 
 export const metadata: Metadata = {
   title: 'Criar conta · Startap',
-  description: 'Teste grátis por 10 dias. Sem cartão.',
+  description: 'Teste grátis por 7 dias. Sem cartão.',
 };
 
 /**

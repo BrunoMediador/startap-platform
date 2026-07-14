@@ -238,9 +238,9 @@ function Hero() {
         </a>
       </div>
 
-      {/* Destaque da promoção (brief PM): 10 dias grátis, sem cartão. */}
+      {/* Destaque da promoção (brief PM): 7 dias grátis, sem cartão. */}
       <p className="mt-8 inline-flex max-w-[46ch] items-center justify-center rounded-pill border border-amber/30 bg-amber-soft px-5 py-2.5 text-[13.5px] leading-normal text-amber">
-        <strong className="mr-1 font-semibold">10 dias grátis</strong> pra testar com clientes de
+        <strong className="mr-1 font-semibold">7 dias grátis</strong> pra testar com clientes de
         verdade — sem cartão, sem compromisso.
       </p>
     </section>
@@ -388,7 +388,7 @@ function CtaFinal() {
         </h2>
         <p className="mx-auto mt-3 max-w-[40ch] text-[15px] leading-[1.65] text-ink-soft">
           Crie sua conta em um minuto e teste{' '}
-          <strong className="font-semibold text-ink">10 dias grátis</strong> — sem cartão, sem
+          <strong className="font-semibold text-ink">7 dias grátis</strong> — sem cartão, sem
           compromisso. Prefere conversar antes? Chama a gente no WhatsApp.
         </p>
         <div className="mt-7 flex w-full flex-col items-center justify-center gap-3 sm:flex-row">
