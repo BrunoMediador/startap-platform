@@ -364,6 +364,47 @@ export function sanitizeOrphanPlaceholders(prompt: string): string {
 }
 
 /**
+ * SEED do MODO ATENDENTE (bug 2026-07-13: clone atendente self-service nascia com
+ * a persona de AGENDA da matriz teste_barbearia — "DEVE chamar inserir_agendamento"
+ * / "Ta na agenda" — enquanto o guardrail de runtime (buildModoAtendenteBlock) diz o
+ * oposto → bot esquizofrênico). Este template dá a PERSONA de pré-venda a todo clone
+ * provisionado com modo_atendente_enabled, em vez de renderizar a matriz de agenda.
+ *
+ * SÓ persona + tom + enquadramento de pré-venda. As REGRAS DURAS (nunca "agendei",
+ * não invente, registrar_interesse/escalar_para_humano, link-vs-equipe, fora-do-
+ * expediente, não-invasivo) já são injetadas em RUNTIME por buildModoAtendenteBlock
+ * (modoBlock em processAtendente) — duplicar aqui só criaria risco de contradição
+ * futura e desperdício de token. Os dados do negócio (serviços, preços, horários,
+ * endereço, FAQ) também são injetados em runtime por buildContextBlock — por isso o
+ * template NÃO inclui {{servicos_precos_render}}/{{horarios_funcionamento_render}}
+ * (inline duplicaria no system prompt e arrisca drift).
+ *
+ * Placeholders: SÓ {{double_brace}} de identidade ({{nome_negocio}}, {{area_artigo}}),
+ * resolvidos no PROVISIONING por renderClonePrompt. ZERO token single-brace {x}:
+ * em runtime o atendente chama renderPrompt({ vars: {} }) — qualquer {x} ficaria
+ * literal. Molde ASCII-sem-acento do DEFAULT_PROMPT_TPL (teste_barbearia).
+ */
+const ATENDENTE_PROMPT_TPL = [
+  'Voce e o atendente virtual de {{nome_negocio}} e conversa com os clientes pelo WhatsApp.',
+  'Aqui e {{area_artigo}}: voce recebe quem chega, apresenta o negocio com simpatia e ajuda a pessoa a dar o proximo passo.',
+  '',
+  '[QUEM VOCE E]',
+  '- Uma recepcao boa gente de {{nome_negocio}}: acolhedora, prestativa e direta.',
+  '- Fala como uma pessoa de verdade, no calor humano, sem parecer robo e sem formalidade dura.',
+  '- Conhece o negocio e tem orgulho do trabalho da equipe; passa confianca sem exagerar.',
+  '',
+  '[COMO VOCE FALA]',
+  '- Mensagens curtas de WhatsApp, tom leve e caloroso. Uma ideia por mensagem.',
+  '- Chama a pessoa pelo nome quando souber. No maximo um emoji, so quando combinar com a conversa.',
+  '- Escuta o que a pessoa precisa antes de sair falando: conversa, nao empurra, nao faz textao.',
+  '',
+  '[SEU PAPEL AQUI]',
+  '- Da as boas-vindas, explica o que {{nome_negocio}} oferece e tira as duvidas da pessoa com o que voce sabe do negocio (servicos, valores, horarios, endereco, formas de pagamento e o que estiver no contexto).',
+  '- Quando percebe interesse, acolhe, entende o que a pessoa quer e cuida de encaminhar pra equipe dar sequencia.',
+  '- Seu objetivo e ser a primeira boa impressao de {{nome_negocio}}: a pessoa tem que sair da conversa bem atendida e com vontade de ir.',
+].join('\n');
+
+/**
  * Aplica os 3 grupos de placeholders {{double_brace}} sobre o template da matriz.
  * Placeholders não resolvidos são preservados ({{key}}), EXCETO {{nome_negocio}}
  * que é garantido pelo passe final de sanitização (nunca literal no persistido).
@@ -426,21 +467,44 @@ export interface CloneRowLike {
   personalizacao: unknown;
   horarios_funcionamento: unknown;
   servicos: unknown;
+  /**
+   * Gate por-clone do MODO ATENDENTE (coluna flow_clones.modo_atendente_enabled,
+   * migration 072). Quando true, regerarPromptClone semeia a persona de pré-venda
+   * (ATENDENTE_PROMPT_TPL) em vez do template de AGENDA da matriz — ver bug
+   * 2026-07-13. Ausente/false = comportamento histórico (persona da matriz).
+   * A row de flow_clones (RETURNING * / SELECT *) já traz a coluna nos dois callers.
+   */
+  modo_atendente_enabled?: boolean | null;
 }
 
 /**
- * Re-renderiza o prompt do clone a partir do template da MATRIZ e sobrescreve
- * bot_prompt do slot do clone. Idempotente (UPSERT).
+ * Re-renderiza o prompt do clone e sobrescreve bot_prompt do slot do clone.
+ * Idempotente (UPSERT).
+ *
+ * FONTE do template por MODO (bug 2026-07-13):
+ *  - modo_atendente_enabled = true  -> ATENDENTE_PROMPT_TPL (persona de pré-venda,
+ *    em código; NÃO lê a matriz de AGENDA). Corrige o clone atendente self-service
+ *    que nascia com a persona "DEVE chamar inserir_agendamento" da matriz.
+ *  - senão                          -> template da MATRIZ (bot_prompt do matriz_slot),
+ *    comportamento histórico intocado.
+ * Nos dois casos o render (renderClonePrompt) e o UPSERT com dual-write de tenant_id
+ * são os MESMOS — só a origem do template muda.
  */
 export async function regerarPromptClone(
   db: SqlPool,
   cloneRow: CloneRowLike,
 ): Promise<{ ok: true; prompt: string } | { ok: false; error: string }> {
   try {
-    const matrizPrompt = await db.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
-      cloneRow.matriz_slot,
-    ]);
-    const tpl = matrizPrompt.rows[0]?.prompt;
+    let tpl: unknown;
+    if (cloneRow.modo_atendente_enabled === true) {
+      // Modo atendente: persona vem do SEED em código, não da matriz de agenda.
+      tpl = ATENDENTE_PROMPT_TPL;
+    } else {
+      const matrizPrompt = await db.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
+        cloneRow.matriz_slot,
+      ]);
+      tpl = matrizPrompt.rows[0]?.prompt;
+    }
     if (typeof tpl !== 'string') {
       return { ok: false, error: `Matriz ${cloneRow.matriz_slot} sem prompt em bot_prompt` };
     }
@@ -874,10 +938,21 @@ export async function createCloneRecords(
       [input.novoSlot, input.displayName, finalProvider, finalModel, finalTemperature],
     );
 
-    const promptR = await client.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
-      input.matrizSlot,
-    ]);
-    const tpl = promptR.rows[0]?.prompt;
+    // FONTE do template de bootstrap por MODO (bug 2026-07-13): clone atendente
+    // semeia a persona de pré-venda (ATENDENTE_PROMPT_TPL, em código), não a matriz
+    // de AGENDA. Casa com o branch de regerarPromptClone (que sobrescreve logo após o
+    // COMMIT): se aquele FALHA (warn-and-continue), o que fica persistido aqui já é a
+    // persona certa — nunca a de agenda num clone atendente.
+    const isAtendente = input.modoAtendenteEnabled === true;
+    let tpl: unknown;
+    if (isAtendente) {
+      tpl = ATENDENTE_PROMPT_TPL;
+    } else {
+      const promptR = await client.query('SELECT prompt FROM bot_prompt WHERE slot = $1', [
+        input.matrizSlot,
+      ]);
+      tpl = promptR.rows[0]?.prompt;
+    }
     if (typeof tpl === 'string') {
       // Render inline "de bootstrap": no caminho feliz é SOBRESCRITO logo após o
       // COMMIT por regerarPromptClone (que aplica nome_negocio/horarios/servicos

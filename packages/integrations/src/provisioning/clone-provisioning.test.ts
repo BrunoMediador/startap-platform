@@ -881,6 +881,179 @@ describe('regerarPromptClone — dual-write tenant_id NÃO reusa $1 (hotfix #309
   });
 });
 
+// ---------------------------------------------------------------------------
+// MODO ATENDENTE — SEED de persona de pré-venda (bug 2026-07-13). Clone atendente
+// self-service nascia com a persona de AGENDA da matriz teste_barbearia ("DEVE
+// chamar inserir_agendamento" / "Ta na agenda") enquanto o guardrail de runtime diz
+// o oposto. O fix: regerarPromptClone (e o bootstrap de createCloneRecords) semeiam
+// ATENDENTE_PROMPT_TPL quando modo_atendente_enabled=true, SEM ler a matriz de agenda.
+// ---------------------------------------------------------------------------
+describe('regerarPromptClone — SEED do modo atendente (bug 2026-07-13)', () => {
+  // Pool que registra as queries e, se alguém pedir o prompt da matriz, devolve a
+  // persona de AGENDA — pra PROVAR que o caminho atendente NÃO a usa.
+  function fakePool(): {
+    pool: SqlPool;
+    queries: Array<{ text: string; values?: unknown[] }>;
+    promptInsert: () => { text: string; values?: unknown[] } | undefined;
+  } {
+    const AGENDA_TPL =
+      'Voce e o assistente. Para gravar DEVE chamar inserir_agendamento. Ta na agenda.';
+    const queries: Array<{ text: string; values?: unknown[] }> = [];
+    const pool: SqlPool = {
+      query: async (text: string, values?: unknown[]): Promise<SqlResult> => {
+        queries.push({ text, values });
+        if (text.includes('SELECT prompt FROM bot_prompt')) {
+          return { rows: [{ prompt: AGENDA_TPL }] };
+        }
+        return { rows: [] };
+      },
+      connect: async () => {
+        throw new Error('regerarPromptClone não deveria abrir transação');
+      },
+    };
+    return {
+      pool,
+      queries,
+      promptInsert: () => queries.find((q) => q.text.includes('INSERT INTO bot_prompt')),
+    };
+  }
+
+  const CLONE_ATENDENTE = {
+    id: 42,
+    slot: 'clone_meduzza_novo_ab12cd',
+    matriz_slot: 'teste_barbearia',
+    display_name: 'Meduzza',
+    personalizacao: { nome_negocio: 'Meduzza' },
+    horarios_funcionamento: null,
+    servicos: null,
+    modo_atendente_enabled: true,
+  };
+
+  it('modo_atendente_enabled=true => persona de pré-venda, NUNCA a de agenda da matriz', async () => {
+    const { pool, promptInsert } = fakePool();
+    const r = await regerarPromptClone(pool, CLONE_ATENDENTE);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    // Persona de atendente com nome_negocio resolvido.
+    expect(r.prompt).toContain('atendente virtual de Meduzza');
+    // ZERO herança da matriz de agenda.
+    expect(r.prompt).not.toContain('inserir_agendamento');
+    expect(r.prompt).not.toMatch(/na agenda/i);
+    // Placeholder de identidade resolvido (nada cru no persistido).
+    expect(r.prompt).not.toContain('{{nome_negocio}}');
+    expect(r.prompt).not.toContain('{{area_artigo}}');
+
+    // O prompt persistido (UPSERT) é o mesmo do retorno.
+    expect(String(promptInsert()?.values?.[1])).toBe(r.prompt);
+  });
+
+  it('modo atendente NÃO lê a matriz (SELECT prompt FROM bot_prompt não é emitido)', async () => {
+    const { pool, queries } = fakePool();
+    await regerarPromptClone(pool, CLONE_ATENDENTE);
+    expect(queries.some((q) => q.text.includes('SELECT prompt FROM bot_prompt'))).toBe(false);
+  });
+
+  it('{{area_artigo}} resolve pela area do clone (personalizacao.area)', async () => {
+    const { pool } = fakePool();
+    const r = await regerarPromptClone(pool, {
+      ...CLONE_ATENDENTE,
+      personalizacao: { nome_negocio: 'Meduzza', area: 'cabeleireiro' },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.prompt).toContain('o salao');
+  });
+
+  it('modo_atendente_enabled ausente/false => caminho histórico (lê a matriz)', async () => {
+    const { pool, queries } = fakePool();
+    // Sem a flag: comportamento intocado — usa o template da matriz.
+    const r = await regerarPromptClone(pool, {
+      ...CLONE_ATENDENTE,
+      modo_atendente_enabled: false,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Leu a matriz e persistiu a persona de agenda (comportamento de hoje).
+    expect(queries.some((q) => q.text.includes('SELECT prompt FROM bot_prompt'))).toBe(true);
+    expect(r.prompt).toContain('inserir_agendamento');
+  });
+});
+
+describe('createCloneRecords — bootstrap do modo atendente (failure-edge do regerar)', () => {
+  // Se regerarPromptClone falha pós-COMMIT, o bootstrap é o que fica persistido:
+  // ele TAMBÉM precisa semear a persona de atendente (nunca a de agenda) quando
+  // modoAtendenteEnabled=true. Captura o INSERT de bootstrap em bot_prompt.
+  function fakePool(): {
+    pool: SqlPool;
+    persisted: Array<{ slot: string; prompt: string }>;
+    sawMatrizPromptSelect: () => boolean;
+  } {
+    const AGENDA_TPL = 'Assistente de barbearia. Chame inserir_agendamento. Ta na agenda.';
+    const persisted: Array<{ slot: string; prompt: string }> = [];
+    let matrizPromptSelect = false;
+    const client: SqlClient = {
+      query: async (text: string, values?: unknown[]): Promise<SqlResult> => {
+        if (text.includes('SELECT prompt FROM bot_prompt')) {
+          matrizPromptSelect = true;
+          return { rows: [{ prompt: AGENDA_TPL }] };
+        }
+        if (text.includes('SELECT provider, model, temperature FROM bot_config')) {
+          return { rows: [{ provider: 'openai', model: 'gpt-5.4', temperature: '0.7' }] };
+        }
+        if (text.includes('INSERT INTO bot_prompt')) {
+          persisted.push({ slot: String(values?.[0]), prompt: String(values?.[1]) });
+        }
+        if (text.includes('RETURNING *')) {
+          return { rows: [{ id: 1, slot: String(values?.[0]) }] };
+        }
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const pool: SqlPool = {
+      query: async (text: string): Promise<SqlResult> => {
+        if (text.includes('SELECT 1 FROM')) return { rows: [] };
+        if (text.includes('horarios_funcionamento, servicos FROM bot_config')) return { rows: [] };
+        return { rows: [] };
+      },
+      connect: async () => client,
+    };
+    return { pool, persisted, sawMatrizPromptSelect: () => matrizPromptSelect };
+  }
+
+  it('modoAtendenteEnabled=true => bootstrap persiste persona de atendente, sem ler a matriz', async () => {
+    const { pool, persisted, sawMatrizPromptSelect } = fakePool();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_atend_ab12cd',
+      displayName: 'Salao Novo',
+      personalizacao: { nome_negocio: 'Salao Novo' },
+      modoAtendenteEnabled: true,
+    });
+    const boot = persisted.find((p) => p.slot === 'clone_atend_ab12cd');
+    expect(boot).toBeDefined();
+    expect(boot?.prompt).toContain('atendente virtual de Salao Novo');
+    expect(boot?.prompt).not.toContain('inserir_agendamento');
+    expect(boot?.prompt).not.toContain('{{nome_negocio}}');
+    // Não leu o prompt da matriz de agenda.
+    expect(sawMatrizPromptSelect()).toBe(false);
+  });
+
+  it('modoAtendenteEnabled ausente => bootstrap usa a matriz (comportamento de hoje)', async () => {
+    const { pool, persisted, sawMatrizPromptSelect } = fakePool();
+    await createCloneRecords(pool, {
+      matrizSlot: 'teste_barbearia',
+      novoSlot: 'clone_agenda_ab12cd',
+      displayName: 'Barbearia X',
+      personalizacao: { nome_negocio: 'Barbearia X' },
+    });
+    const boot = persisted.find((p) => p.slot === 'clone_agenda_ab12cd');
+    expect(boot?.prompt).toContain('inserir_agendamento');
+    expect(sawMatrizPromptSelect()).toBe(true);
+  });
+});
+
 describe('teardownProvisionedClone — clone órfão de falha parcial do signup (security #268)', () => {
   const fetchMock = vi.fn();
 
