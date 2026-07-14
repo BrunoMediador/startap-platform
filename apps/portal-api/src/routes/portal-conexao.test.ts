@@ -35,6 +35,8 @@ vi.mock('@startap/db', () => ({
     getCloneBySlot: vi.fn(),
     pauseBotByOwner: vi.fn(),
     resumeBotByOwner: vi.fn(),
+    // Reparo on-demand do beco sem saída do signup (waha_sessao NULL).
+    bindSessionIfUnset: vi.fn(),
     // Constante real reusada pela derivação de pause_self/pause_locked nas rotas.
     OWNER_PAUSE_KIND: 'owner_request',
   },
@@ -50,6 +52,7 @@ const { wahaMocks, provisioningMocks } = vi.hoisted(() => ({
   },
   provisioningMocks: {
     createWahaSession: vi.fn(),
+    wahaSessionName: vi.fn(),
   },
 }));
 vi.mock('@startap/integrations', () => {
@@ -82,6 +85,7 @@ vi.mock('@startap/integrations', () => {
     },
     provisioning: {
       createWahaSession: (...a: unknown[]) => provisioningMocks.createWahaSession(...a),
+      wahaSessionName: (...a: unknown[]) => provisioningMocks.wahaSessionName(...a),
     },
   };
 });
@@ -113,6 +117,7 @@ import { portalConexaoRoutes } from './portal-conexao.js';
 const getCloneMock = vi.mocked(flowClones.getCloneBySlot);
 const pauseMock = vi.mocked(flowClones.pauseBotByOwner);
 const resumeMock = vi.mocked(flowClones.resumeBotByOwner);
+const bindSessionMock = vi.mocked(flowClones.bindSessionIfUnset);
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -143,6 +148,13 @@ beforeEach(() => {
   redisMock.ttl.mockResolvedValue(0);
   // Default: recriação OK (testes de falha sobrescrevem).
   provisioningMocks.createWahaSession.mockResolvedValue({ ok: true, status: 'STARTING' });
+  // wahaSessionName só é chamado no reparo de slot SEM prefixo clone_ (gestão);
+  // devolve o nome namespaced (troca hífen por _). Slots do signup (clone_*) nem chamam.
+  provisioningMocks.wahaSessionName.mockImplementation(
+    (slot: string) => `clone_${slot.replace(/-/g, '_')}`,
+  );
+  // Default do reparo: vinculação vence a corrida.
+  bindSessionMock.mockResolvedValue(true);
 });
 
 // ── Flag OFF ──────────────────────────────────────────────────────────────────
@@ -369,6 +381,118 @@ describe('POST /portal/conexao/reconectar', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'waha_indisponivel' });
     expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+// ── POST /portal/conexao/reconectar — REPARO on-demand (beco sem saída do signup) ──
+// waha_sessao NULL + status 'rascunho' = signup cujo createWahaSession falhou. Antes
+// TODA ação respondia 503 pra sempre; agora a 1ª reconexão CRIA a sessão e vincula.
+describe('POST /portal/conexao/reconectar — reparo de waha_sessao NULL (signup falho)', () => {
+  it('rascunho + NULL -> CRIA a sessão (nome=slot), vincula e 202 restarting', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'rascunho' }));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(202);
+    // Nome da sessão = o próprio slot (signup usa sessionName=slot; slot já é clone_*).
+    expect(res.json()).toEqual({ session: 'clone_x', state: 'restarting', poll_after_ms: 2000 });
+    // Lock adquirido ANTES de criar (anti-corrida = anti-2-sessões).
+    expect(redisMock.set).toHaveBeenCalledWith(
+      'portal:waha:reconnect:clone_x',
+      '1',
+      'EX',
+      35,
+      'NX',
+    );
+    // Criou pela config-ouro do provisionamento, nome = slot (clone_* não re-prefixa).
+    expect(provisioningMocks.createWahaSession).toHaveBeenCalledTimes(1);
+    const [wahaCfg, name] = provisioningMocks.createWahaSession.mock.calls[0];
+    expect(name).toBe('clone_x');
+    expect(wahaCfg).toMatchObject({
+      url: 'http://waha:3000',
+      webhookUrl: 'http://api:3040/webhooks/waha',
+    });
+    // Persistência CONDICIONAL só DEPOIS do WAHA aceitar (id do clone, nome derivado).
+    expect(bindSessionMock).toHaveBeenCalledWith(1, 'clone_x');
+    // Slot sem prefixo NUNCA aconteceu aqui -> wahaSessionName não é chamado.
+    expect(provisioningMocks.wahaSessionName).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('reparo com falha do WAHA -> 503 retentável e NÃO persiste (nada de estado permanente)', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'rascunho' }));
+    provisioningMocks.createWahaSession.mockResolvedValue({
+      ok: false,
+      status: 'failed',
+      error: 'WAHA: boom',
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'waha_indisponivel' });
+    expect(provisioningMocks.createWahaSession).toHaveBeenCalledTimes(1);
+    // Falhou o WAHA -> NÃO grava waha_sessao (clone segue rascunho; cliente retenta).
+    expect(bindSessionMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('corrida: lock ocupado -> 429 SEM criar 2ª sessão (2 requests não criam 2)', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'rascunho' }));
+    redisMock.set.mockResolvedValue(null); // SET NX falhou -> outra reparação em voo
+    redisMock.ttl.mockResolvedValue(30);
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ error: 'aguarde', retry_after_seconds: 30 });
+    expect(res.headers['retry-after']).toBe('30');
+    expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
+    expect(bindSessionMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('vinculação perde a corrida (bind=false) mas ainda 202 (nome determinístico converge)', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'rascunho' }));
+    bindSessionMock.mockResolvedValue(false); // outra request já vinculou a MESMA sessão
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ session: 'clone_x', state: 'restarting', poll_after_ms: 2000 });
+    await app.close();
+  });
+
+  it('NULL mas clone JÁ progrediu (status != rascunho) -> 503 e NÃO fabrica sessão', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'conectado' }));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'waha_indisponivel' });
+    expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
+    expect(redisMock.set).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('rascunho + NULL mas TS_WEBHOOK_URL ausente -> 503 sem criar (env lazy, boot intacto)', async () => {
+    mockConfig.TS_WEBHOOK_URL = undefined as unknown as string;
+    getCloneMock.mockResolvedValue(makeClone({ waha_sessao: null, status: 'rascunho' }));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/conexao/reconectar' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'waha_indisponivel' });
+    expect(provisioningMocks.createWahaSession).not.toHaveBeenCalled();
+    // Nem sequer adquire lock (config-ouro indisponível é checado antes).
+    expect(redisMock.set).not.toHaveBeenCalled();
     await app.close();
   });
 });
