@@ -69,6 +69,8 @@ vi.mock('@startap/integrations', () => ({
       `cadastro ${i.nomeNegocio} ${i.slot}`,
     msgAguardandoAgenda: (i: { nomeNegocio: string; slot: string; formato: string }) =>
       `aguardando-agenda ${i.nomeNegocio} ${i.slot} ${i.formato}`,
+    msgSignupWahaFalha: (i: { nomeNegocio: string; slot: string }) =>
+      `waha-falho ${i.nomeNegocio} ${i.slot}`,
   },
 }));
 vi.mock('bcryptjs', () => ({ default: { hash: mocks.hash, compare: vi.fn() } }));
@@ -548,6 +550,62 @@ describe('POST /auth/signup', () => {
     // O cadastro foi de fato persistido (não dependeu do alerta).
     expect(mocks.createPortalUser).toHaveBeenCalled();
     expect(mocks.upsertBilling).toHaveBeenCalled();
+    await app.close();
+  });
+
+  // ── Alerta interno "WAHA falho / aguardando reparo" (auditoria 13/07) ───────
+  it('WAHA falho no signup => 201 (não bloqueia) + alerta INTERNO de reparo (só time, nunca cliente)', async () => {
+    mocks.provisionCloneWithWaha.mockResolvedValue({
+      cloneId: 42,
+      slot: SLOT,
+      sessionName: SLOT,
+      wahaStatus: 'failed', // createWahaSession falhou no cadastro
+      wahaError: 'WAHA: boom',
+      cloneStatus: 'rascunho',
+    });
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+
+    // Cadastro NÃO é bloqueado — o cliente destrava ao reconectar no portal (reparo on-demand).
+    expect(res.statusCode).toBe(201);
+    // Conta + billing persistidos normalmente.
+    expect(mocks.createPortalUser).toHaveBeenCalled();
+    expect(mocks.upsertBilling).toHaveBeenCalled();
+    // Saiu o alerta interno específico de WAHA-falho (além do "novo cadastro").
+    const alertTexts = mocks.sendInternalAlert.mock.calls.map((c) => String(c[0]));
+    expect(alertTexts.some((t) => t.startsWith('waha-falho'))).toBe(true);
+    expect(alertTexts.some((t) => t.startsWith('cadastro'))).toBe(true);
+    await app.close();
+  });
+
+  it('WAHA OK no signup => NÃO dispara o alerta de WAHA-falho', async () => {
+    // default do beforeEach já é wahaStatus:'STARTING'
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+    expect(res.statusCode).toBe(201);
+    const alertTexts = mocks.sendInternalAlert.mock.calls.map((c) => String(c[0]));
+    expect(alertTexts.some((t) => t.startsWith('waha-falho'))).toBe(false);
+    await app.close();
+  });
+
+  it('WAHA falho + conta falha (teardown) => 500 e NENHUM alerta de WAHA-falho (clone removido, sem alerta falso)', async () => {
+    mocks.provisionCloneWithWaha.mockResolvedValue({
+      cloneId: 42,
+      slot: SLOT,
+      sessionName: SLOT,
+      wahaStatus: 'failed',
+      wahaError: 'WAHA: boom',
+      cloneStatus: 'rascunho',
+    });
+    mocks.upsertBilling.mockRejectedValue(new Error('pg timeout'));
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/auth/signup', payload: PAYLOAD });
+
+    expect(res.statusCode).toBe(500);
+    // Teardown removeu o clone órfão -> o alerta de "aguardando reparo" NÃO pode ter saído.
+    expect(mocks.teardownProvisionedClone).toHaveBeenCalled();
+    const alertTexts = mocks.sendInternalAlert.mock.calls.map((c) => String(c[0]));
+    expect(alertTexts.some((t) => t.startsWith('waha-falho'))).toBe(false);
     await app.close();
   });
 

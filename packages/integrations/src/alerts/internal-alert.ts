@@ -218,6 +218,17 @@ export function msgNovoCadastro(input: {
   );
 }
 
+/**
+ * G — signup provisionou o clone mas a sessão WAHA NÃO subiu (auditoria 13/07): o
+ * createWahaSession falhou e o clone ficou em 'rascunho' com waha_sessao NULL
+ * ("aguardando reparo"). O cliente destrava sozinho ao clicar reconectar no portal
+ * (reparo on-demand cria a sessão na hora) — este alerta é só visibilidade pro
+ * time acompanhar/agir se o reparo também falhar. LGPD-safe (sem telefone/CPF).
+ */
+export function msgSignupWahaFalha(input: { nomeNegocio: string; slot: string }): string {
+  return `🟠 Signup com WAHA falho: "${input.nomeNegocio}" — clone ${input.slot} provisionado, mas a sessão WAHA NÃO subiu (aguardando reparo). O cliente destrava ao reconectar no portal.`;
+}
+
 /** B — cliente pareou o WhatsApp e iniciou o trial. */
 export function msgClienteAtivou(input: { displayName: string; slot: string }): string {
   return (

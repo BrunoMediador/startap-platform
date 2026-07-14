@@ -115,6 +115,85 @@ async function recreateSession(
   return res;
 }
 
+/**
+ * Nome da sessão WAHA a criar quando o clone tem waha_sessao NULL (beco sem saída
+ * do signup — auditoria 13/07: createWahaSession falhou no cadastro e a sessão
+ * nunca foi vinculada). Deriva DETERMINISTICAMENTE do slot, do MESMO jeito que o
+ * provisionamento gravaria: slot já-prefixado clone_ usa o próprio slot (o que o
+ * signup passa como sessionName — evita duplo prefixo), caso contrário
+ * wahaSessionName(slot) (caminho do gestão). Assim o nome reparado é idêntico ao
+ * que o signup teria criado, sem depender de estado perdido.
+ */
+function repairSessionName(slot: string): string {
+  return slot.startsWith('clone_') ? slot : provisioning.wahaSessionName(slot);
+}
+
+/**
+ * Reparo ON-DEMAND do beco sem saída do signup (auditoria 13/07, 3/3): quando o
+ * createWahaSession falha no cadastro, o clone fica em 'rascunho' com waha_sessao
+ * NULL e ANTES disso TODA ação de conexão respondia 503 pra sempre (cliente sem
+ * trial e sem bot). Aqui, na 1ª tentativa de reconectar, criamos a sessão WAHA na
+ * hora (config-ouro do provisionamento, mesma do 404-recreate) e vinculamos
+ * waha_sessao + status 'aguardando_qr' — igual ao ramo de sucesso do signup. O
+ * cliente sai do beco na PRÓPRIA request e segue pro pareamento (poll/QR/código).
+ *
+ * Guardas:
+ *  - só clone em 'rascunho' (sessão nunca vinculada). Qualquer outro estado com
+ *    waha_sessao NULL é inesperado -> 503 (NÃO fabrica sessão pra clone que
+ *    progrediu; nunca "religa" nada);
+ *  - lock Redis por slot (mesma âncora anti-duplo-clique do reconectar): 2 requests
+ *    simultâneas NÃO criam 2 sessões — a 2ª cai em 429;
+ *  - WAHA criado ANTES de qualquer escrita no banco: falha => NADA de estado
+ *    permanente (503 retentável; clone segue rascunho, o cliente tenta de novo);
+ *  - persistência CONDICIONAL (bindSessionIfUnset: WHERE waha_sessao IS NULL) como
+ *    defesa extra à corrida entre processos/expiração de lock.
+ */
+async function repairMissingSession(
+  clone: flowClones.CloneRow | null,
+  tenant: TenantContext,
+  reply: FastifyReply,
+): Promise<FastifyReply> {
+  // Só o estado pós-signup incompleto ('rascunho') é reparável. Clone ausente ou já
+  // progredido sem sessão = estado inesperado; não inventa sessão -> 503 retentável.
+  if (!clone || clone.status !== 'rascunho') {
+    return reply.code(503).send({ error: 'waha_indisponivel' });
+  }
+  const wahaCfg = recreateWahaConfig();
+  if (!wahaCfg) {
+    log.error({ slot: tenant.slot }, 'reparo indisponível: TS_WEBHOOK_URL não provisionada');
+    return reply.code(503).send({ error: 'waha_indisponivel' });
+  }
+
+  // Lock ANTES de criar (uma só criação por janela; anti-corrida = anti-2-sessões).
+  const got = await acquireReconnectLock(tenant.slot);
+  if (!got) {
+    const retry = await reconnectCooldownSeconds(tenant.slot);
+    reply.header('Retry-After', String(retry));
+    return reply.code(429).send({ error: 'aguarde', retry_after_seconds: retry });
+  }
+
+  const sessionName = repairSessionName(tenant.slot);
+  const created = await provisioning.createWahaSession(wahaCfg, sessionName);
+  if (!created.ok) {
+    log.warn(
+      { slot: tenant.slot, error: created.error },
+      'reparo: falha ao criar sessão WAHA (retentável — clone segue rascunho)',
+    );
+    return reply.code(503).send({ error: 'waha_indisponivel' });
+  }
+
+  // Persiste SÓ após o WAHA aceitar (nada de estado permanente em falha). Condicional
+  // (waha_sessao IS NULL): se outra request venceu a corrida, seguimos mesmo assim —
+  // o nome é o mesmo (determinístico), então o pareamento converge.
+  const bound = await flowClones.bindSessionIfUnset(clone.id, sessionName);
+  log.info(
+    { slot: tenant.slot, sessionName, bound },
+    'sessão WAHA reparada (era NULL pós-signup) — cliente segue pro pareamento',
+  );
+  // Sessão nasce com start:true rumo a SCAN_QR_CODE — poll/QR/código cobrem a transição.
+  return reply.code(202).send({ session: sessionName, state: 'restarting', poll_after_ms: 2000 });
+}
+
 // ── Lock Redis (anti-duplo-clique no reconectar) ────────────────────────────────
 // SET NX EX por slot. O TTL é a "janela" em que um 2º restart é proibido (invalida o
 // código — ADR 0015). O cooldown exposto no GET /conexao vem deste mesmo TTL.
@@ -269,9 +348,13 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       if (!config.PORTAL_RECONEXAO_WAHA) return featureDisabled(reply);
       const tenant = requireTenant(req);
-      const { session } = await resolveClone(tenant);
+      const { clone, session } = await resolveClone(tenant);
       if (!session) {
-        return reply.code(503).send({ error: 'waha_indisponivel' });
+        // waha_sessao NULL = beco sem saída do signup (createWahaSession falhou no
+        // cadastro; a sessão nunca foi vinculada). Repara ON-DEMAND: cria a sessão
+        // agora e vincula — tira o cliente do beco na própria request (ou 503/429
+        // retentável). Só age em clone 'rascunho'.
+        return repairMissingSession(clone, tenant, reply);
       }
 
       // Guard: NUNCA reinicia uma sessão WORKING (protege a sessão pagante — ADR 0015).

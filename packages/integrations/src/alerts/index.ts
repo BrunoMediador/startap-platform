@@ -3,6 +3,7 @@ export {
   displayNameForSlot,
   formatBRLFromCents,
   msgNovoCadastro,
+  msgSignupWahaFalha,
   msgClienteAtivou,
   msgClientePagou,
   msgAguardandoAgenda,

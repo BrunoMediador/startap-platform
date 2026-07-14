@@ -254,11 +254,15 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
     }
 
     if (provisioned.wahaStatus === 'failed') {
-      // Clone criado, sessão WAHA pendente — NÃO bloqueia o cadastro (o wizard/
-      // gestão retenta). Trial não começa sem pareamento de qualquer forma.
+      // Clone criado, sessão WAHA pendente — NÃO bloqueia o cadastro. O cliente
+      // destrava sozinho ao clicar reconectar no portal (reparo on-demand cria a
+      // sessão na hora — PR fix/signup-waha-retry). Trial não começa sem pareamento
+      // de qualquer forma. O ALERTA interno "aguardando reparo" sai só DEPOIS da
+      // conta ficar durável (abaixo, junto do msgNovoCadastro) — se a criação de
+      // conta/billing falhar, o teardown remove o clone e nenhum alerta falso sai.
       log.warn(
         { wahaError: provisioned.wahaError },
-        'signup: clone criado mas sessão WAHA falhou (retry posterior)',
+        'signup: clone criado mas sessão WAHA falhou (reparo on-demand no portal)',
       );
     }
 
@@ -366,6 +370,22 @@ export const portalSignupRoutes: FastifyPluginAsync = async (app) => {
           'signup: alerta de novo cadastro falhou (não afeta o cadastro)',
         );
       });
+
+    // Alerta interno (auditoria 13/07): clone provisionado MAS sessão WAHA falhou —
+    // fica "aguardando reparo" (waha_sessao NULL). Só sai aqui (conta já durável): se
+    // a criação de conta/billing tivesse falhado, o teardown acima removeria o clone e
+    // este alerta não rodaria (nada de alerta falso). Fire-and-forget SEGURO
+    // (sendInternalAlert nunca lança) — JAMAIS avisa o cliente final, só o time.
+    if (provisioned.wahaStatus === 'failed') {
+      void internalAlert
+        .sendInternalAlert(internalAlert.msgSignupWahaFalha({ nomeNegocio: nome_negocio, slot }))
+        .catch((e: unknown) => {
+          log.error(
+            { err: e instanceof Error ? e.message : String(e) },
+            'signup: alerta de WAHA-falho falhou (não afeta o cadastro)',
+          );
+        });
+    }
 
     // Alerta interno (ADR 0030 D3 / fila "aguardando agenda"): clone que escolheu AGENDA
     // precisa que o time conecte a Service Account do Google (etapa manual, ADR 0024).
