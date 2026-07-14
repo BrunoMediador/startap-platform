@@ -525,6 +525,35 @@ export async function setCloneSession(id: number, sessaoName: string): Promise<C
   return row;
 }
 
+/**
+ * Vincula waha_sessao + status 'aguardando_qr' SOMENTE quando a sessão ainda não
+ * foi vinculada (waha_sessao IS NULL). É a guarda de concorrência do reparo
+ * on-demand do portal (auditoria 13/07): um signup cujo createWahaSession falhou
+ * deixa o clone em 'rascunho' com waha_sessao NULL, e a 1ª tentativa de reconectar
+ * cria a sessão e a vincula aqui. Como o WHERE casa só a linha ainda-NULL, duas
+ * requests simultâneas NUNCA vinculam duas vezes: a 1ª ganha (rowCount 1), a 2ª
+ * casa 0 linhas — sem sobrescrever nem "religar" um clone que já progrediu.
+ *
+ * DISTINTA de setCloneSession (gestão), que é incondicional: aqui o predicado
+ * IS NULL é o núcleo da idempotência. Só toca flow_clones (mesmo escopo do
+ * setCloneSession do gestão) — NÃO espelha bot_config.
+ *
+ * @returns true se ESTA chamada vinculou (linha estava NULL); false se já estava
+ *          vinculada (corrida perdida) ou o clone não existe.
+ */
+export async function bindSessionIfUnset(id: number, sessaoName: string): Promise<boolean> {
+  const r = await query<CloneRow & { id: string }>(
+    `UPDATE flow_clones
+     SET waha_sessao = $1, status = 'aguardando_qr', updated_at = NOW()
+     WHERE id = $2 AND waha_sessao IS NULL RETURNING *`,
+    [sessaoName, id],
+  );
+  if (!r.rows[0]) return false;
+  const row = normalizeCloneRow(r.rows[0]);
+  invalidateCloneCache({ sessao: sessaoName, slot: row.slot });
+  return true;
+}
+
 export async function setCloneStatus(id: number, status: CloneStatus): Promise<CloneRow | null> {
   const r = await query<CloneRow & { id: string }>(
     'UPDATE flow_clones SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
