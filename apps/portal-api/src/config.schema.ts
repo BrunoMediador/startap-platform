@@ -84,7 +84,7 @@ export const ConfigSchema = z.object({
   // WAHA tem timeout). Opcional; ausente = 8000.
   PORTAL_WAHA_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
 
-  // ── Signup self-service + trial 10 dias (Missão 020 F1) ────────────────────
+  // ── Signup self-service + trial 7 dias (Missão 020 F1; 7d desde 2026-07-14) ─
   // Flag da feature. OPCIONAL no boot (ausente = OFF) — NUNCA crasha o boot (lição
   // do postmortem P0 2026-06-09). OFF -> POST /auth/signup responde 404. Pré-requisito
   // pra ligar: TRIAL_PHONE_PEPPER e TS_WEBHOOK_URL provisionados (validados LAZY no

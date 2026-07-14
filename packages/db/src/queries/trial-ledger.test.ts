@@ -17,9 +17,13 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { findOrphanTrialClone, listOrphanTrialCandidates, withTrialSlotLock } = await import(
-  './trial-ledger.js'
-);
+const {
+  countActiveTrials,
+  findOrphanTrialClone,
+  listOrphanTrialCandidates,
+  TRIAL_DAYS,
+  withTrialSlotLock,
+} = await import('./trial-ledger.js');
 
 beforeEach(() => {
   mockQuery.mockReset().mockResolvedValue({ rows: [] });
@@ -67,6 +71,52 @@ describe('listOrphanTrialCandidates — seleção de candidatos (guardas no SQL)
     const rows = await listOrphanTrialCandidates(72, 20);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.age_hours).toBeCloseTo(80.51);
+  });
+});
+
+describe('TRIAL_DAYS — janela de teste grátis', () => {
+  // Decisão Bruno 2026-07-14: 7 dias (era 10). Trava a constante contra regressão
+  // e mantém a copy do portal (7 dias grátis) alinhada ao backend.
+  it('é 7 dias', () => {
+    expect(TRIAL_DAYS).toBe(7);
+  });
+});
+
+describe('countActiveTrials — teto anti-DoS (guardas no SQL)', () => {
+  // `../client.js` é mockado: o SQL É o contrato. Cada predicado abaixo é uma
+  // guarda de negócio; removê-lo quebra o teto ou volta o bug do pagante contado.
+  it('exclui PAGANTE convertido, conta awaiting e conta active dentro da janela', async () => {
+    await countActiveTrials();
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+
+    // Pagante NÃO conta: last_payment_at preenchido = pagante (critério canônico
+    // do negócio), fora do teto — vale pra qualquer trial_status. É a 1ª guarda,
+    // ANDada com o resto (não pode virar OR — senão pagante voltaria a contar).
+    expect(sql).toContain('cb.last_payment_at IS NULL');
+    // ESTRUTURAL (não só substring): a guarda do pagante precisa estar ANDada
+    // com o grupo de trial_status, nunca ORada. Um `... IS NULL OR (...)`
+    // reintroduziria EXATAMENTE o bug P1 (pagante voltando a contar) e passaria
+    // nos toContain acima — este toMatch ancora o `AND (` logo após a guarda.
+    expect(sql).toMatch(/cb\.last_payment_at IS NULL\s+AND\s*\(/);
+    // awaiting (e blocked) CONTAM: sessão viva sem pagamento.
+    expect(sql).toContain(`fc.trial_status IN ('awaiting', 'blocked')`);
+    // active CONTA só dentro da janela (next_due_date NULL ou >= hoje UTC):
+    // active vencido já saiu do trial pendente.
+    expect(sql).toContain(`fc.trial_status = 'active'`);
+    expect(sql).toContain('cb.next_due_date IS NULL');
+    expect(sql).toContain(`cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date`);
+  });
+
+  it('normaliza o COUNT (pg devolve string) para número', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ count: '3' }] });
+    expect(await countActiveTrials()).toBe(3);
+  });
+
+  it('sem linhas => 0 (defensivo)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    expect(await countActiveTrials()).toBe(0);
   });
 });
 

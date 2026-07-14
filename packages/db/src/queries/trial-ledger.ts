@@ -28,8 +28,8 @@ export interface TrialLedgerRow {
   notes: string | null;
 }
 
-/** Dias de teste grátis (decisão Bruno, Missão 020). */
-export const TRIAL_DAYS = 10;
+/** Dias de teste grátis (decisão Bruno 2026-07-14: 7 dias; era 10 na Missão 020). */
+export const TRIAL_DAYS = 7;
 
 const LEDGER_COLS = 'id, phone_hmac, phone_hint, status, slot, consumed_at, created_at, notes';
 
@@ -64,18 +64,25 @@ export async function countConsumedBySlot(slot: string): Promise<number> {
  *  - awaiting => clone provisionado aguardando QR (sessão pendurada — pior caso);
  *  - blocked  => sessão pareada e viva, bot mudo (até PIX ou cleanup — card próprio);
  *  - active NÃO expirado => trial corrente (next_due_date NULL ou >= hoje UTC).
- * NÃO conta: none/exempt (não são trials) e active vencido (já convertido em
- * pagante ou silenciado pelo gate ADR-0016 — deixou de ser "trial pendente").
+ * NÃO conta: none/exempt (não são trials) e active vencido (silenciado pelo gate
+ * ADR-0016 — deixou de ser "trial pendente").
+ *
+ * PAGANTE convertido nunca conta (fix P1 auditoria 2026-07-13): o clone que já
+ * pagou fica trial_status='active' pra sempre, então sem esta guarda ~10 pagantes
+ * lotavam o teto e travavam o signup em 503 trial_lotado. Critério canônico do
+ * negócio: quem tem client_billing.last_payment_at preenchido é PAGANTE, não trial
+ * — vale pra QUALQUER trial_status (inclui um blocked que depois pagou o PIX).
  */
 export async function countActiveTrials(): Promise<number> {
   const r = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count
      FROM flow_clones fc
      LEFT JOIN client_billing cb ON cb.slot = fc.slot
-     WHERE fc.trial_status IN ('awaiting', 'blocked')
-        OR (fc.trial_status = 'active'
-            AND (cb.next_due_date IS NULL
-                 OR cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date))`,
+     WHERE cb.last_payment_at IS NULL
+       AND (fc.trial_status IN ('awaiting', 'blocked')
+            OR (fc.trial_status = 'active'
+                AND (cb.next_due_date IS NULL
+                     OR cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date)))`,
   );
   return Number(r.rows[0]?.count ?? 0);
 }

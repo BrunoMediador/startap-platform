@@ -112,7 +112,7 @@ export function CadastroForm() {
     try {
       await apiFetch<SignupResponse>('/auth/signup', { method: 'POST', body: res.value });
       // 201 ja veio com o cookie de sessao (auto-login do backend).
-      toast.success('Conta criada! Agora conecte seu WhatsApp pra começar seus 10 dias grátis.');
+      toast.success('Conta criada! Agora conecte seu WhatsApp pra começar seus 7 dias grátis.');
       router.replace('/conectar');
       router.refresh();
     } catch (err) {
@@ -147,7 +147,7 @@ export function CadastroForm() {
 
           <div className="max-w-[30ch]">
             <span className="mb-4 inline-flex items-center gap-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint before:inline-block before:h-px before:w-[26px] before:bg-brand">
-              Teste grátis · 10 dias
+              Teste grátis · 7 dias
             </span>
             <h1 className="font-display text-[clamp(30px,3.4vw,44px)] font-bold leading-[1.1] tracking-[-0.025em] text-ink">
               Seu WhatsApp
@@ -155,7 +155,7 @@ export function CadastroForm() {
               atendendo <span className="text-brand">sozinho.</span>
             </h1>
             <p className="mt-[18px] max-w-[34ch] text-[clamp(14px,1.1vw,16px)] leading-[1.6] text-ink-soft">
-              Crie sua conta em um minuto. Sem cartão, sem compromisso — seus 10 dias só começam
+              Crie sua conta em um minuto. Sem cartão, sem compromisso — seus 7 dias só começam
               quando o WhatsApp conectar.
             </p>
           </div>
@@ -173,7 +173,7 @@ export function CadastroForm() {
             <div className="mb-6 flex flex-col items-center gap-4 text-center min-[880px]:hidden">
               <Wordmark />
               <p className="max-w-[30ch] text-[13.5px] leading-normal text-ink-soft">
-                <b className="font-semibold text-ink">10 dias grátis pra testar.</b> Sem cartão, sem
+                <b className="font-semibold text-ink">7 dias grátis pra testar.</b> Sem cartão, sem
                 compromisso.
               </p>
             </div>
@@ -189,7 +189,7 @@ export function CadastroForm() {
                     Crie sua conta
                   </h2>
                   <p className="mt-1.5 text-[13.5px] leading-normal text-ink-soft">
-                    10 dias grátis. Sem cartão.
+                    7 dias grátis. Sem cartão.
                   </p>
                 </div>
 
@@ -305,7 +305,7 @@ export function CadastroForm() {
                 </Button>
 
                 <p className="mt-[18px] text-center text-[12.5px] leading-normal text-ink-faint">
-                  Seus 10 dias só começam quando o WhatsApp conectar. Sem pressa.
+                  Seus 7 dias só começam quando o WhatsApp conectar. Sem pressa.
                 </p>
               </form>
             )}
@@ -472,7 +472,7 @@ function TrialJaUsadoCard({ onVoltar }: { onVoltar: () => void }) {
         Esse WhatsApp já aproveitou o teste grátis 😉
       </h2>
       <p className="mt-2.5 text-[14px] leading-[1.6] text-ink-soft">
-        O período de 10 dias vale uma vez por número. Mas a gente ativa seu plano rapidinho:
+        O período de 7 dias vale uma vez por número. Mas a gente ativa seu plano rapidinho:
       </p>
       <div className="mt-5">
         <CtaWhatsApp>Falar com a gente no WhatsApp</CtaWhatsApp>
