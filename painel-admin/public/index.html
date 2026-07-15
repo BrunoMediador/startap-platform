@@ -4572,6 +4572,24 @@ async function renderBotOverview(slot, el, bot) {
   });
 }
 
+// Badge do estado da persona (prompt_custom). Custom=true => edicao manual
+// "presa" (o save de perfil nao sobrescreve); false => renderizado do template
+// da matriz (edicoes de personalizacao re-renderizam). Reusado nos dois editores
+// (bot e clone). Recebe o id do span pra permitir atualizacao pos-save.
+function personaCustomBadgeHtml(isCustom, id) {
+  if (isCustom) {
+    return `<span id="${id}" class="badge badge--success" title="Edicoes de perfil nao sobrescrevem este prompt">${icon('check-circle-2', 12)} Persona personalizada</span>`;
+  }
+  return `<span id="${id}" class="badge badge--muted" title="Este prompt vem do template da matriz; editar Personalizacao re-renderiza e apaga edicoes manuais">${icon('file-text', 12)} Prompt do template — perfil re-renderiza</span>`;
+}
+
+// Troca o badge existente pra "personalizada" (usado apos salvar/rollback, que
+// passam a marcar prompt_custom=true no backend).
+function markPersonaCustomBadge(id) {
+  const cur = document.getElementById(id);
+  if (cur) cur.outerHTML = personaCustomBadgeHtml(true, id);
+}
+
 async function renderBotPrompt(slot, el) {
   _promptDirty = false; // reset ao (re)renderizar a aba
   try {
@@ -4579,7 +4597,10 @@ async function renderBotPrompt(slot, el) {
     const promptText = data?.prompt || data?.content || data?.system_prompt || '';
     el.innerHTML = `
       <div class="field">
-        <label for="prompt-ta">Prompt do sistema</label>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.25rem">
+          <label for="prompt-ta" style="margin:0">Prompt do sistema</label>
+          ${personaCustomBadgeHtml(!!data?.prompt_custom, 'prompt-custom-badge')}
+        </div>
         <textarea id="prompt-ta" rows="16" placeholder="Escreva o prompt de sistema do bot aqui...">${escapeHtml(promptText)}</textarea>
         <div class="char-count"><span id="prompt-count">${promptText.length}</span> caracteres</div>
       </div>
@@ -4601,6 +4622,7 @@ async function renderBotPrompt(slot, el) {
       try {
         await api(`/api/bots/${slot}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: ta.value }) });
         _promptDirty = false;
+        markPersonaCustomBadge('prompt-custom-badge'); // salvar torna a persona custom
         toast('Prompt salvo com sucesso!', 'success');
       } catch (err) {
         toast('Erro ao salvar prompt: ' + err.message, 'danger');
@@ -10409,7 +10431,10 @@ function loadCloneConfigTab(tab, clone) {
               ${icon('info', 14)} Você pode editar o prompt do clone diretamente — suas edições ficam salvas. Horários, serviços e personalização são lidos do clone em runtime e <em>não</em> precisam estar no prompt. Para resetar pro template da matriz, use o botão <strong>Regerar Prompt</strong>.
             </p>
             <div class="field">
-              <label for="clone-prompt-ta">Prompt do sistema</label>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.25rem">
+                <label for="clone-prompt-ta" style="margin:0">Prompt do sistema</label>
+                ${personaCustomBadgeHtml(!!data?.prompt_custom, 'clone-prompt-custom-badge')}
+              </div>
               <textarea id="clone-prompt-ta" rows="16" placeholder="Prompt do clone...">${escapeHtml(promptText)}</textarea>
               <div class="char-count"><span id="clone-prompt-count">${promptText.length}</span> caracteres</div>
             </div>
@@ -10433,6 +10458,7 @@ function loadCloneConfigTab(tab, clone) {
               body: JSON.stringify({ prompt: ta.value }),
             });
             _clonePromptDirty = false;
+            markPersonaCustomBadge('clone-prompt-custom-badge'); // salvar torna a persona custom
             toast('Prompt do clone salvo!', 'success');
           } catch (err) {
             toast('Erro ao salvar prompt: ' + err.message, 'danger');
