@@ -1246,9 +1246,17 @@ app.put('/api/bots/:slot/model', async (req, res) => {
 // ---------- PROMPT ----------
 app.get('/api/bots/:slot/prompt', async (req, res) => {
   try {
-    const r = await pool.query('SELECT slot, prompt, updated_at FROM bot_prompt WHERE slot = $1', [
-      req.params.slot,
-    ]);
+    // LEFT JOIN em flow_clones: expoe prompt_custom pro frontend saber se a
+    // persona esta "presa" (edicao manual) ou re-renderizada da matriz.
+    // Slots de MATRIZ nao tem linha em flow_clones -> COALESCE => false.
+    const r = await pool.query(
+      `SELECT bp.slot, bp.prompt, bp.updated_at,
+              COALESCE(fc.prompt_custom, false) AS prompt_custom
+       FROM bot_prompt bp
+       LEFT JOIN flow_clones fc ON fc.slot = bp.slot
+       WHERE bp.slot = $1`,
+      [req.params.slot],
+    );
     if (!r.rows.length) return res.status(404).json({ error: 'prompt nao definido' });
     res.json(r.rows[0]);
   } catch (e) {
@@ -1312,6 +1320,15 @@ app.put('/api/bots/:slot/prompt', async (req, res) => {
        RETURNING slot, prompt, updated_at`,
       [slot, newPrompt],
     );
+
+    // Edicao manual de prompt = persona CUSTOM sticky (migration 070, SCRUM-59).
+    // Sem isso, o guard de updateClone (packages/db flow-clones.ts) re-renderiza
+    // bot_prompt a partir da matriz no proximo save de personalizacao, apagando
+    // a edicao do operador (bug do clone da Ingrid, 15/07). Mesma semantica que
+    // ja protege a Meduzza (prompt_custom=true). Slots de MATRIZ nao tem linha
+    // em flow_clones -> UPDATE afeta 0 linhas = no-op silencioso, nao e erro.
+    await client.query('UPDATE flow_clones SET prompt_custom = true WHERE slot = $1', [slot]);
+
     await client.query('COMMIT');
     // Inclui version_saved na resposta para que o frontend possa confirmar que o snapshot foi criado.
     res.json({ ...r.rows[0], version_saved: versionSaved });
@@ -1394,6 +1411,10 @@ app.post('/api/bots/:slot/prompt/rollback/:version', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5) ON CONFLICT (slot, version) DO NOTHING`,
       [slot, nextVersion + 1, v.rows[0].prompt, 'rollback', 'rollback de v' + version],
     );
+
+    // Restaurar uma versao e edicao manual -> persona custom sticky (mesma
+    // protecao do PUT). No-op para slots de MATRIZ (sem linha em flow_clones).
+    await client.query('UPDATE flow_clones SET prompt_custom = true WHERE slot = $1', [slot]);
 
     await client.query('COMMIT');
     res.json({ ok: true, restored_version: version, new_version: nextVersion + 1 });
@@ -3893,6 +3914,12 @@ app.post('/api/clones/:id/regerar-prompt', async (req, res) => {
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
     const result = await regerarPromptClone(r.rows[0]);
     if (!result.ok) return res.status(500).json({ error: result.error });
+    // Este e o caminho EXPLICITO de voltar ao template da matriz -> desarma o
+    // prompt_custom (SCRUM-59). Contraparte do PUT/rollback, que ARMAM a flag.
+    // Reset feito AQUI (nao dentro de regerarPromptClone) porque a funcao e
+    // compartilhada com criacao de clone e signup self-service, onde a flag ja
+    // nasce false por default — mexer la mudaria semantica desses caminhos.
+    await pool.query('UPDATE flow_clones SET prompt_custom = false WHERE id = $1', [id]);
     res.json({ ok: true, slot: r.rows[0].slot, length: result.prompt.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
