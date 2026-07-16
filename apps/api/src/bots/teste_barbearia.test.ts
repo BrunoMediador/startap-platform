@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   getProductType: vi.fn(),
   listColaboradores: vi.fn(),
   getArea: vi.fn(),
+  getAreaAndPromptCustom: vi.fn(),
   renderPrompt: vi.fn(),
   loadHistory: vi.fn(),
   logFlowEvent: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('@startap/db', () => ({
     getProductType: mocks.getProductType,
     listBySlot: mocks.listColaboradores,
     getArea: mocks.getArea,
+    getAreaAndPromptCustom: mocks.getAreaAndPromptCustom,
     getScopeBySlot: mocks.getScopeBySlot,
   },
   flowClones: {
@@ -168,6 +170,9 @@ function setupSchedule() {
   // Default: área barbearia (Cirilo/Samuel) → buildCartaoEmojiOverrideBlock devolve
   // '' → systemPrompt byte-a-byte o de hoje. Testes de outras áreas sobrescrevem.
   mocks.getArea.mockResolvedValue('barbearia');
+  // Individual (SCRUM-84): mesma área + persona NÃO-custom (default) = override segue
+  // a área normalmente. Testes de persona custom sobrescrevem promptCustom.
+  mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   return calClient;
 }
 
@@ -315,6 +320,9 @@ function setupEstabelecimento(
   mocks.getProductType.mockResolvedValue('estabelecimento');
   // Default barbearia → cartão de estabelecimento byte-a-byte o do #325.
   mocks.getArea.mockResolvedValue('barbearia');
+  // Se algum cenário degradar pro caminho individual, o reader combinado (SCRUM-84)
+  // responde barbearia + persona não-custom.
+  mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
     services: opts?.services ?? [],
@@ -437,6 +445,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
       personalizacao: { agenda_automatica: true },
     });
     mocks.getArea.mockResolvedValue('barbearia');
+    mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
     mocks.listColaboradores.mockResolvedValue([]);
     mocks.renderPrompt.mockResolvedValue('PERSONA');
     mocks.buildContextBlock.mockResolvedValue('CONTEXT');
@@ -745,6 +754,51 @@ async function runIndividual(texto: string): Promise<{
   const call = mocks.runAgentConfigured.mock.calls[0][0];
   return { tools: call.tools, systemPrompt: call.systemPrompt };
 }
+
+describe('TesteBarbeariaBot — override de emoji respeita prompt_custom (SCRUM-84)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.ATEND_FROM_AGENDA_SLOTS = '';
+    cfg.MODO_ATENDENTE_SLOTS = '';
+    mocks.resolveClientPackages.mockResolvedValue([]);
+    mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  // buildCartaoEmojiOverrideBlock é a função REAL (não mockada) — o teste exercita o
+  // systemPrompt de ponta a ponta. PERSONA/CONTEXT vêm dos mocks de setupSchedule.
+  async function systemPromptForArea(area: string | null, promptCustom: boolean): Promise<string> {
+    setupSchedule();
+    mocks.getAreaAndPromptCustom.mockResolvedValue({ area, promptCustom });
+    const bot = new TesteBarbeariaBot();
+    await (bot as unknown as { process: (c: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero marcar um corte'),
+    );
+    const calls = mocks.runAgentConfigured.mock.calls;
+    return calls[calls.length - 1][0].systemPrompt as string;
+  }
+
+  it('persona custom + área não-barbearia → SEM bloco de override (persona é autoridade)', async () => {
+    const sp = await systemPromptForArea('outro', true);
+    // Ingrid: prompt_custom=true → cartão 🌻 do dono intocado, systemPrompt byte-a-byte
+    // persona+contexto.
+    expect(sp).toBe('PERSONA\n\nCONTEXT');
+    expect(sp).not.toContain('EMOJIS DESTE NEGOCIO');
+  });
+
+  it('persona NÃO-custom + área "outro" → bloco de override injetado (comportamento atual)', async () => {
+    const sp = await systemPromptForArea('outro', false);
+    expect(sp).toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
+  });
+
+  it('barbearia (Cirilo/Samuel) → nunca recebe bloco, independe de prompt_custom', async () => {
+    expect(await systemPromptForArea('barbearia', false)).toBe('PERSONA\n\nCONTEXT');
+    expect(await systemPromptForArea('barbearia', true)).toBe('PERSONA\n\nCONTEXT');
+  });
+});
 
 describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
   beforeEach(() => {
@@ -1689,6 +1743,7 @@ function setupScheduleComPatch(existingEvents: unknown[]) {
   mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
   mocks.getProductType.mockResolvedValue('individual');
   mocks.getArea.mockResolvedValue('barbearia');
+  mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   return calClient;
 }
 
@@ -2280,6 +2335,7 @@ describe('TesteBarbeariaBot — DEGRADE ELEGANTE agenda→atendente (ADR 0030 D3
     mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
     mocks.listColaboradores.mockResolvedValue([]);
     mocks.getArea.mockResolvedValue('barbearia');
+    mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   }
 
   it('clone agenda SEM gcal => degrada pra atendente: SÓ as 2 tools de atendente, NENHUMA de agenda', async () => {

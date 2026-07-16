@@ -671,9 +671,14 @@ export class TesteBarbeariaBot extends BotBase {
     // que manda o modelo trocar os ícones — assim clones JÁ existentes (Bruna/salão)
     // pegam o emoji certo SEM re-renderizar o prompt. Para barbearia (Cirilo/Samuel)
     // e para área NULL/desconhecida o builder devolve '' → systemPrompt byte-a-byte
-    // o de hoje. getArea degrada pra null em erro/coluna ausente (fallback seguro).
-    const area = await cloneColaboradores.getArea(this.slot);
-    const cartaoEmojiBlock = buildCartaoEmojiOverrideBlock(area);
+    // o de hoje. getAreaAndPromptCustom degrada pra { null, false } em erro/coluna
+    // ausente (fallback seguro).
+    //
+    // SCRUM-84: se a persona é custom (prompt_custom=true, dono estilizou o cartão à
+    // mão — ex. Ingrid com 🌻), ela é autoridade final e o override de emojis NÃO é
+    // injetado. Mesma leitura por slot de antes, só com a coluna prompt_custom junto.
+    const { area, promptCustom } = await cloneColaboradores.getAreaAndPromptCustom(this.slot);
+    const cartaoEmojiBlock = buildCartaoEmojiOverrideBlock(area, promptCustom);
 
     const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoEmojiBlock]
       .filter((b) => b !== '')

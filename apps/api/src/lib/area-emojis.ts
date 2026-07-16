@@ -145,8 +145,20 @@ export function isBarbearia(area: string | null | undefined): boolean {
  * Para áreas não-barbearia conhecidas (salão/manicure/estética) injeta uma
  * instrução curta que MANDA o modelo trocar os emojis do cartão pelos da área.
  * Não reescreve a estrutura do cartão (DIA/HORARIO/SERVICO/VALOR) — só os ícones.
+ *
+ * PROMPT_CUSTOM (SCRUM-84): quando o dono estilizou a persona à mão (flow_clones
+ * .prompt_custom=true, migration 070), a PERSONA É A AUTORIDADE FINAL do cartão —
+ * NÃO injetamos override nenhum, senão sobrescrevemos os emojis que ele escolheu de
+ * propósito (caso Ingrid: 🌻 no cabeçalho virava 📅 do genérico). O override existe
+ * só pra clones de TEMPLATE, que herdaram 💈/✂️ da matriz sem querer. Default false
+ * = comportamento byte-a-byte de antes (protege Cirilo/Samuel e chamadas legadas).
  */
-export function buildCartaoEmojiOverrideBlock(area: string | null | undefined): string {
+export function buildCartaoEmojiOverrideBlock(
+  area: string | null | undefined,
+  promptCustom = false,
+): string {
+  // Persona custom manda no cartão — não sobrepõe emoji nenhum (SCRUM-84).
+  if (promptCustom) return '';
   // barbearia → conjunto atual já está no prompt; null/desconhecido → não arrisca
   // mudar o visual de um clone antigo. Em ambos: nenhum bloco.
   if (!area || area === 'barbearia') return '';
