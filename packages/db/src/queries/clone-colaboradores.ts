@@ -500,3 +500,37 @@ export async function getArea(slot: string): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Lê área (migration 051) + prompt_custom (migration 070) do slot numa ÚNICA query
+ * (SCRUM-84). Serve o caminho INDIVIDUAL do bot, que precisa da área pra escolher o
+ * emoji do cartão E do prompt_custom pra saber se a persona é autoridade final (nesse
+ * caso NÃO injeta o override de emojis — ver buildCartaoEmojiOverrideBlock). É a MESMA
+ * leitura por slot (PK) que getArea já fazia, só com uma coluna a mais — NÃO adiciona
+ * query nova ao hot path.
+ *
+ * Fallbacks DELIBERADOS e seguros (byte-idênticos ao comportamento pré-fix):
+ *   - área null (coluna/linha ausente ou valor nulo) → área desconhecida;
+ *   - promptCustom false só é true com prompt_custom === true no banco (migration 070);
+ *   - erro de query (ex.: coluna prompt_custom ausente em dev pré-070) → { null, false },
+ *     o que mantém o override no comportamento atual (não custom).
+ */
+export async function getAreaAndPromptCustom(
+  slot: string,
+): Promise<{ area: string | null; promptCustom: boolean }> {
+  try {
+    const r = await query<{ area: string | null; prompt_custom: boolean | null }>(
+      'SELECT area, prompt_custom FROM flow_clones WHERE slot = $1 LIMIT 1',
+      [slot],
+    );
+    const row = r.rows[0];
+    return {
+      area: row?.area ? row.area.trim().toLowerCase() : null,
+      promptCustom: row?.prompt_custom === true,
+    };
+  } catch {
+    // Coluna ausente (pré-051/070) ou erro de query → área desconhecida + não custom
+    // (= caminho atual: override segue a regra de área, sem exceção de persona).
+    return { area: null, promptCustom: false };
+  }
+}

@@ -114,6 +114,27 @@ describe('buildCartaoEmojiOverrideBlock — caminho INDIVIDUAL', () => {
     expect(block).not.toBe('');
     expect(block).toContain('NAO use 💈');
   });
+
+  // SCRUM-84: persona custom (dono estilizou o cartão à mão — ex. Ingrid com 🌻) é
+  // AUTORIDADE FINAL. Mesmo em área não-barbearia, o override NÃO entra — senão
+  // sobrescreve os emojis escolhidos de propósito.
+  it('prompt_custom=true + área "outro" → string vazia (persona manda, sem override)', () => {
+    expect(buildCartaoEmojiOverrideBlock('outro', true)).toBe('');
+  });
+
+  it('prompt_custom=true + salão/manicure → string vazia (não sobrepõe persona estilizada)', () => {
+    expect(buildCartaoEmojiOverrideBlock('salao', true)).toBe('');
+    expect(buildCartaoEmojiOverrideBlock('manicure', true)).toBe('');
+  });
+
+  it('prompt_custom=false (default) → comportamento byte-a-byte de antes', () => {
+    // Passar false explicitamente ou omitir dá o MESMO resultado das asserções acima.
+    expect(buildCartaoEmojiOverrideBlock('outro', false)).toBe(
+      buildCartaoEmojiOverrideBlock('outro'),
+    );
+    expect(buildCartaoEmojiOverrideBlock('outro', false)).not.toBe('');
+    expect(buildCartaoEmojiOverrideBlock('barbearia', false)).toBe('');
+  });
 });
 
 describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
