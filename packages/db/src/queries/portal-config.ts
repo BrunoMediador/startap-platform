@@ -278,6 +278,13 @@ export async function listBotDetectPausasBySlot(slot: string): Promise<PortalPau
  * Cria (ou reativa) a pausa de um numero no fluxo do cliente, via portal.
  * source = 'portal' para rastreabilidade. `session` resolvido a partir do clone.
  * `telefone` deve ser apenas digitos (10-15) — validado pelo chamador.
+ *
+ * Semantica de produto (regra canonica de pausa): pausa via portal/app e INDETERMINADA
+ * — expires_at NULL, so o cliente remove. O INSERT nao lista expires_at (default NULL);
+ * o ON CONFLICT DO UPDATE FORCA `expires_at = NULL` pra PROMOVER a permanente qualquer
+ * linha pre-existente (ex.: uma pausa human_reply com TTL de 60min vencido — SCRUM-86).
+ * Sem isso a linha herdava o TTL vencido e sumia do painel/soltava o bot em <1h, mesmo
+ * o dono tendo pausado de proposito pelo portal.
  */
 export async function addPausaBySlot(input: {
   slot: string;
@@ -302,6 +309,7 @@ export async function addPausaBySlot(input: {
            flow_name  = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
            session    = COALESCE(EXCLUDED.session, flow_pauses.session),
            source     = 'portal',
+           expires_at = NULL,
            reason     = CASE
              WHEN flow_pauses.reason IS NULL OR flow_pauses.reason = ''
              THEN 'Pausado via portal'
