@@ -29,6 +29,7 @@
  * GATE MACRO: só é registrado com GCAL_ATEND_SYNC_ENABLED=true (worker.ts). Default OFF.
  * ISOLAMENTO: falha de 1 clone loga e segue — nunca derruba o ciclo dos outros (regra 7).
  */
+import { createHash } from 'node:crypto';
 import { logger } from '@startap/core/logger';
 import { atendimentos, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -37,6 +38,22 @@ import { config } from '../config.js';
 const log = logger.child({ job: 'gcal-atend-sync' });
 
 const MS_PER_DAY = 86_400_000;
+
+/** Motivo/ator carimbados na linha soft-deletada pelo reconciler (SCRUM-90 / migration 074). */
+const SYNC_DELETE_AUDIT: atendimentos.SoftDeleteAudit = {
+  reason: 'gcal_sync_absent',
+  by: 'gcal-atend-sync',
+};
+
+/**
+ * Hash one-way do gcal_event_id para o LOG de auditoria (SCRUM-90, jurídico): o log é durável e
+ * exportável, então não carrega o id cru. sha256 hex truncado a 16 chars, prefixo `sha256:`. O
+ * BANCO mantém o id CRU na linha soft-deletada (deleted_at IS NOT NULL) — a investigação continua
+ * possível cruzando pelo valor/forma/data + este hash. Determinístico (mesmo id → mesmo hash).
+ */
+export function hashEventIdForLog(gcalEventId: string): string {
+  return `sha256:${createHash('sha256').update(gcalEventId).digest('hex').slice(0, 16)}`;
+}
 
 export interface GcalAtendSyncResult extends Record<string, unknown> {
   /** clones enumerados e efetivamente processados neste ciclo (sob o teto por ciclo). */
@@ -295,13 +312,15 @@ async function reconcileSlot(
   );
   for (const r of dbRows) {
     if (presentIds.has(r.gcal_event_id)) continue; // ainda na agenda → mantém.
-    await atendimentos.softDeleteAtendimentoByEvent(scope.slot, r.gcal_event_id);
+    // SCRUM-90: carimba deleted_reason/deleted_by na MESMA linha (trilha durável no banco).
+    await atendimentos.softDeleteAtendimentoByEvent(scope.slot, r.gcal_event_id, SYNC_DELETE_AUDIT);
     result.deleted++;
     // AUDITORIA obrigatória (Bruno derrubou "nunca deletar pago"): valor/forma/data, NUNCA telefone.
+    // gcalEventId vai HASHEADO no log (jurídico, SCRUM-90); o id cru fica na linha soft-deletada.
     log.warn(
       {
         slot: scope.slot,
-        gcalEventId: r.gcal_event_id,
+        gcalEventId: hashEventIdForLog(r.gcal_event_id),
         valorCents: r.valor_cents,
         descontoCents: r.desconto_cents,
         formaPagamento: r.forma_pagamento,

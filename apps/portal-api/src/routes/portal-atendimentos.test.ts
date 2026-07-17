@@ -641,7 +641,10 @@ describe('DELETE /portal/atendimentos/:id — soft-delete', () => {
     const res = await app.inject({ method: 'DELETE', url: '/portal/atendimentos/9' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(softDeleteByIdMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 9);
+    expect(softDeleteByIdMock).toHaveBeenCalledWith(injectedSlot, injectedTenant, 9, {
+      reason: 'portal_delete',
+      by: 'portal',
+    });
     await app.close();
   });
 

@@ -194,7 +194,11 @@ describe('DELEÇÃO — só sobre listagem completa + auditoria', () => {
     const res = await runGcalAtendSync();
 
     expect(res.deleted).toBe(1);
-    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'sumiu');
+    // SCRUM-90: carimba deleted_reason/deleted_by na linha (trilha durável no banco).
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'sumiu', {
+      reason: 'gcal_sync_absent',
+      by: 'gcal-atend-sync',
+    });
     // Warn de auditoria com valor/forma/data + paga=true; NUNCA telefone/nome.
     const auditCall = logWarn.mock.calls.find((c) =>
       String(c[1]).includes('agenda é fonte da verdade'),
@@ -207,6 +211,9 @@ describe('DELEÇÃO — só sobre listagem completa + auditoria', () => {
     expect(payload).not.toHaveProperty('cliente_contato');
     expect(payload).not.toHaveProperty('telefone');
     expect(payload).not.toHaveProperty('clienteNome');
+    // SCRUM-90 (jurídico): o LOG carrega o gcalEventId HASHEADO, nunca o id cru.
+    expect(payload.gcalEventId).not.toBe('sumiu');
+    expect(payload.gcalEventId).toMatch(/^sha256:[0-9a-f]{16}$/);
   });
 
   it('evento AINDA presente não é deletado', async () => {
@@ -293,7 +300,10 @@ describe('conjunto PRESENTE — filtros', () => {
     expect(upsertAtendimentoFromEvent.mock.calls[0][0].gcalEventId).toBe('ok');
     // 'cancel' está no banco mas ausente da agenda → deletado; 'ok' presente → mantido.
     expect(softDeleteAtendimentoByEvent).toHaveBeenCalledTimes(1);
-    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'cancel');
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'cancel', {
+      reason: 'gcal_sync_absent',
+      by: 'gcal-atend-sync',
+    });
   });
 });
 
@@ -315,6 +325,50 @@ describe('grace / corrida com hook', () => {
     expect(ub).toBeGreaterThanOrEqual(before - 120_000 - 5_000);
     // Janela de deleção coerente: from < to.
     expect(new Date(fromIso).getTime()).toBeLessThan(new Date(toIso).getTime());
+  });
+});
+
+describe('janela de LISTAGEM — pad aplicado (SCRUM-90; mutante padMs=0 morre)', () => {
+  it('timeMin = delFrom − LIST_PAD_DAYS e timeMax = delTo + LIST_PAD_DAYS', async () => {
+    // Client com listEventsPaged CAPTURADO pra inspecionar os args da listagem.
+    const listEventsPaged = vi.fn().mockResolvedValue({ pages: 1, events: [], complete: true });
+    getGcalForSlot.mockResolvedValue({ listEventsPaged });
+
+    const before = Date.now();
+    const { runGcalAtendSync } = await loadJob();
+    await runGcalAtendSync();
+    const after = Date.now();
+
+    expect(listEventsPaged).toHaveBeenCalledTimes(1);
+    const arg = listEventsPaged.mock.calls[0][0] as { timeMin: string; timeMax: string };
+    const timeMin = new Date(arg.timeMin).getTime();
+    const timeMax = new Date(arg.timeMax).getTime();
+
+    const DAY = 86_400_000;
+    const LOOKBACK = 62; // GCAL_ATEND_SYNC_LOOKBACK_DAYS (config do loadJob)
+    const LOOKAHEAD = 60; // GCAL_ATEND_SYNC_LOOKAHEAD_DAYS
+    const PAD = 7; // GCAL_ATEND_SYNC_LIST_PAD_DAYS
+    const TOL = 5_000; // margem do tempo de execução
+
+    // listFrom = (nowMs − LOOKBACK·DAY) − PAD·DAY, nowMs ∈ [before, after]. Com PAD=0 (mutante) o
+    // timeMin sobe 7 dias (>> TOL) e ESTOURA o teto abaixo → teste VERMELHO.
+    expect(timeMin).toBeGreaterThanOrEqual(before - (LOOKBACK + PAD) * DAY - TOL);
+    expect(timeMin).toBeLessThanOrEqual(after - (LOOKBACK + PAD) * DAY + TOL);
+    // listTo = (nowMs + LOOKAHEAD·DAY) + PAD·DAY. Com PAD=0 o timeMax cai 7 dias → VERMELHO.
+    expect(timeMax).toBeGreaterThanOrEqual(before + (LOOKAHEAD + PAD) * DAY - TOL);
+    expect(timeMax).toBeLessThanOrEqual(after + (LOOKAHEAD + PAD) * DAY + TOL);
+  });
+});
+
+describe('hashEventIdForLog (SCRUM-90 — id do log nunca é cru)', () => {
+  it('devolve sha256:<16 hex>, determinístico, e NUNCA contém o id cru', async () => {
+    const { hashEventIdForLog } = await loadJob();
+    const raw = 'abc123EventoDaAgenda_xyz';
+    const h = hashEventIdForLog(raw);
+    expect(h).toMatch(/^sha256:[0-9a-f]{16}$/);
+    expect(h).not.toContain(raw);
+    expect(hashEventIdForLog(raw)).toBe(h); // determinístico
+    expect(hashEventIdForLog('outro_evento')).not.toBe(h); // ids distintos → hashes distintos
   });
 });
 

@@ -382,7 +382,11 @@ async function hookSoftDeleteAtendimento(slot: string, eventId: string): Promise
   )
     return;
   try {
-    const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId);
+    // SCRUM-90: carimba a origem da deleção (cancelamento pelo portal) na trilha durável.
+    const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId, {
+      reason: 'portal_cancel',
+      by: 'portal',
+    });
     log.info(
       { slot, eventId, removido: row != null },
       'atend-from-agenda: previsão removida no cancelamento',
