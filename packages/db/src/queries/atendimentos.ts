@@ -1119,6 +1119,141 @@ export async function softDeleteAtendimentoById(
   return (r.rowCount ?? 0) > 0;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────
+// SCRUM-89 — Reconciliação periódica GCal→atendimentos (ADR 0031). A agenda é a fonte da
+// verdade do Faturamento: o cron `gcal-atend-sync` do worker faz UPSERT de todo evento
+// presente e DELETA (soft) as linhas origem='agenda' cujo evento SUMIU — SÓ quando a
+// listagem da agenda é COMPLETA (fail-safe). As duas queries abaixo alimentam esse job.
+// ─────────────────────────────────────────────────────────────────────────────────────
+
+/** Linha CANDIDATA a deleção pelo reconciler (payload mínimo p/ decidir + auditar). */
+export interface AgendaAtendimentoWindowRow {
+  gcal_event_id: string;
+  valor_cents: number;
+  desconto_cents: number;
+  forma_pagamento: string | null;
+  data: string;
+}
+
+/**
+ * Lista as linhas de atendimento ATIVAS derivadas da AGENDA (origem='agenda') numa janela de
+ * deleção [fromIso, toIso) por `inicio_at`, cujo `updated_at` é ANTERIOR a `updatedBeforeIso`.
+ * São os CANDIDATOS a "sumiu da agenda → deletar" do reconciler (SCRUM-89).
+ *
+ * DEFESAS embutidas no WHERE (ADR 0031):
+ *  - origem='agenda' AND gcal_event_id IS NOT NULL: `origem='manual'` (walk-in) é INTOCÁVEL —
+ *    não é evento de agenda, nunca entra aqui (decisão do Bruno).
+ *  - deleted_at IS NULL: só linhas vivas.
+ *  - inicio_at ∈ [fromIso, toIso): janela de deleção (half-open, evita duplicar borda).
+ *  - updated_at < updatedBeforeIso: GRACE contra a corrida com o hook do bot/portal — linha
+ *    criada/sincronizada DEPOIS do snapshot da agenda (durante o próprio ciclo) NÃO é candidata.
+ *
+ * ISOLAMENTO (regra de ouro 5): escopado por slot (vindo da origem correta no job, nunca de
+ * input). NÃO retorna cliente_contato (o job audita valor/forma/data — telefone é PII, LGPD).
+ */
+export async function listAgendaAtendimentosInWindow(
+  slot: string,
+  fromIso: string,
+  toIso: string,
+  updatedBeforeIso: string,
+): Promise<AgendaAtendimentoWindowRow[]> {
+  const r = await query<{
+    gcal_event_id: string;
+    valor_cents: number;
+    desconto_cents: number;
+    forma_pagamento: string | null;
+    data: string;
+  }>(
+    `SELECT gcal_event_id, valor_cents, desconto_cents, forma_pagamento, data
+       FROM atendimentos
+      WHERE slot = $1
+        AND origem = 'agenda'
+        AND gcal_event_id IS NOT NULL
+        AND deleted_at IS NULL
+        AND inicio_at >= $2::timestamptz
+        AND inicio_at <  $3::timestamptz
+        AND updated_at < $4::timestamptz`,
+    [slot, fromIso, toIso, updatedBeforeIso],
+  );
+  return r.rows.map((x) => ({
+    gcal_event_id: x.gcal_event_id,
+    valor_cents: Number(x.valor_cents),
+    desconto_cents: Number(x.desconto_cents),
+    forma_pagamento: x.forma_pagamento,
+    data: x.data,
+  }));
+}
+
+/** Catálogo de preços de um slot pré-carregado 1× por ciclo (evita N leituras no upsert). */
+export interface SlotPricing {
+  /** nome do serviço (lower-case, trim) → preço em centavos (>0). */
+  byNameLower: Map<string, number>;
+  /**
+   * Preço COMUM quando TODOS os serviços do catálogo têm o MESMO preco_cents (>0); senão null.
+   * Fallback do reconciler quando o summary do evento não casa nenhum serviço (caso Ingrid
+   * "Fulano Atendimento" com catálogo uniforme a R$110) — ADR 0031.
+   */
+  uniformPriceCents: number | null;
+}
+
+/** Extrai preço (centavos, >0) de um valor cru do catálogo; null se ausente/invalido/≤0. */
+function toPrecoCents(raw: unknown): number | null {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
+/**
+ * Carrega o catálogo de preços de um slot (flow_clones.servicos) UMA vez, no formato que o
+ * reconciler (SCRUM-89) consome: mapa nome→preço + o preço uniforme (se houver). Mesma fonte de
+ * preço que o bot/`resolvePrecoCents` (case-insensitive, trim), sem N leituras por evento.
+ *
+ * `uniformPriceCents`: só é setado quando o catálogo tem ≥1 serviço E TODOS têm um preco_cents
+ * válido (>0) e IGUAL entre si. Qualquer serviço sem preço/≤0/divergente → null (conservador:
+ * cai no fallback 0 no reconciler).
+ */
+export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
+  const byNameLower = new Map<string, number>();
+  const r = await query<{ servicos: unknown }>(
+    'SELECT servicos FROM flow_clones WHERE slot = $1 LIMIT 1',
+    [slot],
+  );
+  const raw = r.rows[0]?.servicos;
+  let list: Array<{ nome?: unknown; preco_cents?: unknown }> = [];
+  if (Array.isArray(raw)) list = raw as Array<{ nome?: unknown; preco_cents?: unknown }>;
+  else if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) list = p;
+    } catch {
+      list = [];
+    }
+  }
+
+  let uniform: number | null = null;
+  let uniformBroken = false;
+  let seenAny = false;
+  for (const s of list) {
+    const preco = toPrecoCents(s?.preco_cents);
+    const nome = typeof s?.nome === 'string' ? s.nome.trim().toLowerCase() : '';
+    if (nome && preco != null) byNameLower.set(nome, preco);
+
+    // Uniformidade: precisa de preço válido em CADA serviço, todos iguais.
+    if (preco == null) {
+      uniformBroken = true;
+    } else if (!seenAny) {
+      uniform = preco;
+      seenAny = true;
+    } else if (preco !== uniform) {
+      uniformBroken = true;
+    }
+  }
+
+  return {
+    byNameLower,
+    uniformPriceCents: seenAny && !uniformBroken ? uniform : null,
+  };
+}
+
 // Garante uso do pool importado mesmo se nenhuma transação for aberta aqui (mantém o
 // import alinhado ao padrão dos outros módulos e disponível p/ evolução transacional).
 export { pool };

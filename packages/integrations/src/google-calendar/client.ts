@@ -8,6 +8,11 @@ import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'google-calendar' });
 
+/** Mensagem de um erro `unknown` (sem vazar stack/objeto cru em log). */
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 export interface CalendarEvent {
@@ -46,6 +51,31 @@ export interface FreeBusyInterval {
 export type FreeBusyResult = Record<string, FreeBusyInterval[]>;
 
 export type TestConnectionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Resultado da listagem PAGINADA de eventos (SCRUM-89, reconciliação GCal→atendimentos).
+ *
+ * `complete=true` SÓ quando a paginação esgotou NATURALMENTE (sem `nextPageToken` pendente)
+ * dentro do teto de páginas, sem erro HTTP e sem timeout — ou seja, o conjunto devolvido é o
+ * conhecimento COMPLETO da agenda naquela janela. Qualquer erro de página, timeout, ou teto de
+ * páginas atingido COM token pendente → `complete=false` (conjunto PARCIAL). O reconciler NUNCA
+ * deleta sobre `complete=false` (fail-safe: deletar exige conhecimento total).
+ */
+export interface ListEventsPagedResult {
+  events: CalendarEvent[];
+  complete: boolean;
+  /** Quantas páginas foram efetivamente buscadas (HTTP round-trips bem-sucedidos). */
+  pages: number;
+  /**
+   * Motivo da incompletude (só quando `complete=false`), pra log/observabilidade do caller:
+   *   'truncated_max_pages' | GCAL_LIST_TIMEOUT_SENTINEL | mensagem de erro HTTP/rede.
+   * O caller classifica (403 rate-limit vs forbidden etc.) reusando a taxonomia do gcal-healthcheck.
+   */
+  incompleteReason?: string;
+}
+
+/** Sentinela de timeout de PÁGINA do listEventsPaged (não é mensagem do Google) — o caller o trata como incompleto. */
+export const GCAL_LIST_TIMEOUT_SENTINEL = '__gcal_list_timeout__';
 
 // ─── Per-clone (Service Account) ─────────────────────────────────────────────
 
@@ -189,6 +219,104 @@ export class GoogleCalendarClient {
       () => this.getAccessToken(),
     );
     return json.items ?? [];
+  }
+
+  /**
+   * Lista TODOS os eventos de uma janela seguindo `nextPageToken` (SCRUM-89). Diferente do
+   * `listEvents` (acima, byte-idêntico e capado em 100 resultados), este pagina até esgotar e
+   * devolve um SINAL DE COMPLETUDE — a agenda gigante da Ingrid (~1000 instâncias de recorrência
+   * semanal em ±60d) trunca em 1 página no `listEvents`. O reconciler PRECISA saber se viu tudo:
+   * só deleta linha "sumida da agenda" quando a listagem é COMPLETA (regra de segurança do ADR 0031).
+   *
+   * COMPLETUDE (`complete=true`) SÓ se: a paginação chegou a uma página SEM `nextPageToken`
+   * (esgotou naturalmente), dentro de `maxPages`, sem erro HTTP e sem timeout. Do contrário,
+   * `complete=false` + `incompleteReason` — o conjunto devolvido é PARCIAL (o caller ainda pode
+   * fazer upsert do que veio, mas NUNCA deletar).
+   *
+   * TIMEOUT DURO POR PÁGINA (regra de ouro 7): cada `fetch` corre contra `timeoutMs` via
+   * AbortController — nunca aguardar o Google infinito. Timeout = página incompleta = não deleta.
+   *
+   * NÃO reusa `gcalFetch` (que não expõe AbortController nem o corpo de erro/nextPageToken de
+   * forma paginável) — faz o fetch localmente. `listEvents` fica intocado.
+   */
+  async listEventsPaged(opts: {
+    timeMin: string;
+    timeMax: string;
+    maxPages?: number;
+    timeoutMs?: number;
+  }): Promise<ListEventsPagedResult> {
+    const maxPages = Math.max(1, Math.trunc(opts.maxPages ?? 20));
+    const timeoutMs = Math.max(1, Math.trunc(opts.timeoutMs ?? 15_000));
+    const events: CalendarEvent[] = [];
+    let pageToken: string | undefined;
+    let pages = 0;
+
+    while (pages < maxPages) {
+      // Token da SA por página (cacheado internamente); falha ao obter token = incompleto.
+      let token: string;
+      try {
+        token = await this.getAccessToken();
+      } catch (err: unknown) {
+        return { events, complete: false, pages, incompleteReason: errMessage(err) };
+      }
+
+      const qs = new URLSearchParams({
+        timeMin: opts.timeMin,
+        timeMax: opts.timeMax,
+        singleEvents: 'true',
+        orderBy: 'startTime',
+        maxResults: '100',
+      });
+      if (pageToken) qs.set('pageToken', pageToken);
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+        this.calendarId,
+      )}/events?${qs}`;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          signal: controller.signal,
+        });
+      } catch (err: unknown) {
+        // AbortController.abort() → fetch rejeita: timeout se foi o nosso timer; senão erro de rede.
+        const reason = controller.signal.aborted ? GCAL_LIST_TIMEOUT_SENTINEL : errMessage(err);
+        return { events, complete: false, pages, incompleteReason: reason };
+      } finally {
+        clearTimeout(timer);
+      }
+
+      pages++;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        log.warn({ status: res.status }, 'GCal listEventsPaged: página com erro HTTP');
+        return {
+          events,
+          complete: false,
+          pages,
+          incompleteReason: `GCal listEventsPaged -> HTTP ${res.status}: ${text}`,
+        };
+      }
+
+      let json: { items?: CalendarEvent[]; nextPageToken?: string };
+      try {
+        json = (await res.json()) as { items?: CalendarEvent[]; nextPageToken?: string };
+      } catch (err: unknown) {
+        return { events, complete: false, pages, incompleteReason: errMessage(err) };
+      }
+      for (const item of json.items ?? []) events.push(item);
+
+      if (!json.nextPageToken) {
+        // Esgotou naturalmente: conhecimento COMPLETO da janela.
+        return { events, complete: true, pages };
+      }
+      pageToken = json.nextPageToken;
+    }
+
+    // Saiu do while porque bateu no teto de páginas COM token ainda pendente → PARCIAL.
+    return { events, complete: false, pages, incompleteReason: 'truncated_max_pages' };
   }
 
   /**

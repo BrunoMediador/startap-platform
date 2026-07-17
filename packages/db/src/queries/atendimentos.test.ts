@@ -26,6 +26,8 @@ const {
   getFaturamento,
   getComissao,
   upsertAtendimentoFromEvent,
+  listAgendaAtendimentosInWindow,
+  loadSlotPricing,
 } = await import('./atendimentos.js');
 
 beforeEach(() => {
@@ -739,5 +741,131 @@ describe('getComissao — lista TODOS os colaboradores ATIVOS (com e sem atendim
     const r = await getComissao('clone_cirilo', 'tid-1', '2026-06-01', '2026-06-30', 'faturado');
     expect(r.por_profissional).toEqual([]);
     expect(r.total_cents).toBe(0);
+  });
+});
+
+// ── SCRUM-89: candidatos a deleção + catálogo de preços do reconciler ──────────────────
+describe('listAgendaAtendimentosInWindow (candidatos do reconciler — SQL)', () => {
+  it('WHERE tem origem=agenda, gcal_event_id NOT NULL, deleted_at NULL, range de inicio_at, updated_at < $', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await listAgendaAtendimentosInWindow(
+      'clone_x',
+      '2026-05-01T00:00:00.000Z',
+      '2026-09-01T00:00:00.000Z',
+      '2026-07-17T12:00:00.000Z',
+    );
+    const [sql, params] = lastCall();
+    expect(sql).toContain("origem = 'agenda'");
+    expect(sql).toContain('gcal_event_id IS NOT NULL');
+    expect(sql).toContain('deleted_at IS NULL');
+    expect(sql).toContain('inicio_at >= $2::timestamptz');
+    expect(sql).toContain('inicio_at <  $3::timestamptz');
+    expect(sql).toContain('updated_at < $4::timestamptz');
+    // slot é $1 (escopo por slot; nunca reusa placeholder — sem bug do $1).
+    expect(sql).toContain('slot = $1');
+    // origem='manual' NUNCA entra (walk-in intocável): não há referência a 'manual' no WHERE.
+    expect(sql).not.toContain("origem = 'manual'");
+    expect(params).toEqual([
+      'clone_x',
+      '2026-05-01T00:00:00.000Z',
+      '2026-09-01T00:00:00.000Z',
+      '2026-07-17T12:00:00.000Z',
+    ]);
+  });
+
+  it('mapeia números coeridos (valor/desconto) e preserva forma/data', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          gcal_event_id: 'evt1',
+          valor_cents: '11000',
+          desconto_cents: '0',
+          forma_pagamento: 'pix',
+          data: '2026-07-10',
+        },
+      ],
+      rowCount: 1,
+    });
+    const rows = await listAgendaAtendimentosInWindow('clone_x', 'a', 'b', 'c');
+    expect(rows).toEqual([
+      {
+        gcal_event_id: 'evt1',
+        valor_cents: 11000,
+        desconto_cents: 0,
+        forma_pagamento: 'pix',
+        data: '2026-07-10',
+      },
+    ]);
+  });
+});
+
+describe('loadSlotPricing (catálogo + uniforme)', () => {
+  it('catálogo uniforme (todos com o mesmo preço) → uniformPriceCents setado', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'Sessão', preco_cents: 11000 },
+            { nome: 'Retorno', preco_cents: 11000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_ingrid');
+    expect(p.uniformPriceCents).toBe(11000);
+    expect(p.byNameLower.get('sessão')).toBe(11000);
+    expect(p.byNameLower.get('retorno')).toBe(11000);
+  });
+
+  it('catálogo divergente → uniformPriceCents null, mas byNameLower populado', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'Corte', preco_cents: 5000 },
+            { nome: 'Barba', preco_cents: 3000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    expect(p.uniformPriceCents).toBeNull();
+    expect(p.byNameLower.get('corte')).toBe(5000);
+    expect(p.byNameLower.get('barba')).toBe(3000);
+  });
+
+  it('serviço sem preço válido quebra a uniformidade (conservador → null)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'A', preco_cents: 11000 },
+            { nome: 'B', preco_cents: 0 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    expect(p.uniformPriceCents).toBeNull();
+    expect(p.byNameLower.get('a')).toBe(11000);
+    expect(p.byNameLower.has('b')).toBe(false); // preço ≤0 não entra no mapa
+  });
+
+  it('servicos ausente/JSON string → catálogo vazio, uniforme null', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ servicos: null }], rowCount: 1 });
+    const p1 = await loadSlotPricing('clone_x');
+    expect(p1.uniformPriceCents).toBeNull();
+    expect(p1.byNameLower.size).toBe(0);
+
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ servicos: JSON.stringify([{ nome: 'X', preco_cents: 4000 }]) }],
+      rowCount: 1,
+    });
+    const p2 = await loadSlotPricing('clone_x');
+    expect(p2.uniformPriceCents).toBe(4000);
+    expect(p2.byNameLower.get('x')).toBe(4000);
   });
 });

@@ -889,6 +889,51 @@ export async function resolveFaqPersonalizadoEnabledForSlot(
   return resolveFaqPersonalizadoEnabled(slot, envCsv, clone?.faq_personalizado_enabled);
 }
 
+/** Escopo mínimo de um clone com o gate billing-da-agenda ligado (SCRUM-89). */
+export interface AtendSyncSlotRow {
+  slot: string;
+  tenant_id: string | null;
+  timezone: string;
+  product_type: string;
+}
+
+/**
+ * Lista os clones onde o billing DERIVADO da agenda está ligado (SCRUM-89 / ADR 0031), pra o
+ * reconciler `gcal-atend-sync` iterar. É a MESMA UNIÃO env→coluna do gate do hook (ADR 0030 D1):
+ *
+ *     billing_from_agenda_enabled = TRUE   (gate por-clone; ex.: Ingrid)
+ *   OR slot = ANY(explicitSlots)           (gate por ENV ATEND_FROM_AGENDA_SLOTS; ex.: dragon/cirilo/samuel)
+ *
+ * `explicitSlots` = CSV da env já parseado pelo caller (worker). Vazio = só a coluna decide. Um
+ * '*' NÃO expande aqui (a query não lista o universo inteiro por wildcard — seria custo ilimitado
+ * e fora do contrato do reconciler); wildcard global de billing-da-agenda não é caso de hoje e, se
+ * um dia for, entra por-clone via coluna. O caller reconfirma o gate por slot antes de agir.
+ *
+ * Retorna slot + tenant_id + timezone (migration 068) + product_type — o job pula slot sem
+ * tenant_id (regra 5) e escolhe o caminho individual/estabelecimento por product_type.
+ */
+export async function listAtendSyncSlots(explicitSlots: string[]): Promise<AtendSyncSlotRow[]> {
+  const r = await query<{
+    slot: string;
+    tenant_id: string | null;
+    timezone: string | null;
+    product_type: string | null;
+  }>(
+    `SELECT slot, tenant_id, timezone, product_type
+       FROM flow_clones
+      WHERE billing_from_agenda_enabled = TRUE
+         OR slot = ANY($1::text[])
+      ORDER BY slot ASC`,
+    [explicitSlots],
+  );
+  return r.rows.map((x) => ({
+    slot: x.slot,
+    tenant_id: x.tenant_id,
+    timezone: x.timezone ?? 'America/Sao_Paulo',
+    product_type: x.product_type === 'estabelecimento' ? 'estabelecimento' : 'individual',
+  }));
+}
+
 /**
  * Estado "aguardando conexão da agenda" (ADR 0030 D3, Onda 3): clone que escolheu
  * AGENDA (personalizacao.agenda_automatica != false) mas cuja agenda Google AINDA NÃO
