@@ -399,12 +399,14 @@ describe('billingSubtitle (copy honesta por modo de billing — SCRUM-88)', () =
     expect(s).toContain('faturado');
   });
 
-  it('sem agenda: fala só do FATURADO, NUNCA promete previsão', () => {
+  it('sem agenda: rótulo estável só do FATURADO, NUNCA promete previsão', () => {
     // O ramo legado (ResumoFaturamento) só exibe o realizado; a copy não pode
     // prometer previsão que a tela não mostra — era o que confundia o cliente.
+    // Rótulo estático: sem "este mês" (há PeriodSelector) e sem instrução de
+    // preencher (isso mora só no empty state — evita eco redundante).
     const s = billingSubtitle(false);
     expect(s.toLowerCase()).not.toContain('previs');
-    expect(s).toBe('O que você já faturou. Registre seus atendimentos pra acompanhar aqui.');
+    expect(s).toBe('O que você já faturou.');
   });
 
   it('o ramo com agenda mantém a copy de sempre (byte-idêntica)', () => {

@@ -58,13 +58,15 @@ export function clienteLabel(nome: string | null): string {
  *   - atend_from_agenda=false -> fluxo manual (clone fora do gate de agenda, ex.:
  *     modo atendente): a tela só exibe o FATURADO (ResumoFaturamento ignora previsão).
  *     A copy antiga prometia "previsto" pros dois ramos e o cliente procurava uma
- *     previsão que nunca aparecia; aqui a copy fala só do realizado.
+ *     previsão que nunca aparecia; aqui é rótulo estável só do realizado. Sem "este
+ *     mês" (a tela tem PeriodSelector) e sem instrução de preencher (isso mora só no
+ *     empty state — evita eco redundante).
  * Pura/testável (convenção do portal: copy que decide vive em lib/*).
  */
 export function billingSubtitle(atendFromAgenda: boolean): string {
   return atendFromAgenda
     ? 'O dinheiro do seu negócio: o que está previsto e o que já foi faturado.'
-    : 'O que você já faturou. Registre seus atendimentos pra acompanhar aqui.';
+    : 'O que você já faturou.';
 }
 
 /**
