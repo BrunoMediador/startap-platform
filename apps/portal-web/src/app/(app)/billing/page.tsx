@@ -118,7 +118,7 @@ function Indisponivel() {
       <EmptyState
         icon={<IconWallet size={26} />}
         title="Recurso indisponível"
-        description="O Billing ainda não está liberado pra sua conta. Fale com o suporte pra ativar."
+        description="O Faturamento ainda não está liberado pra sua conta. Fale com o suporte pra ativar."
       />
     </>
   );
