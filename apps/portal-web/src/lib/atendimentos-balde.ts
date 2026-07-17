@@ -51,6 +51,23 @@ export function clienteLabel(nome: string | null): string {
 }
 
 /**
+ * Subtítulo do cabeçalho da tela Billing. A copy depende do MODO de billing do
+ * clone pra NÃO prometer o que a tela não mostra (SCRUM-88):
+ *   - atend_from_agenda=true  -> a agenda liga as abas Previsão|Faturado, então o
+ *     header promete os dois (string inalterada — mesma copy de sempre).
+ *   - atend_from_agenda=false -> fluxo manual (clone fora do gate de agenda, ex.:
+ *     modo atendente): a tela só exibe o FATURADO (ResumoFaturamento ignora previsão).
+ *     A copy antiga prometia "previsto" pros dois ramos e o cliente procurava uma
+ *     previsão que nunca aparecia; aqui a copy fala só do realizado.
+ * Pura/testável (convenção do portal: copy que decide vive em lib/*).
+ */
+export function billingSubtitle(atendFromAgenda: boolean): string {
+  return atendFromAgenda
+    ? 'O dinheiro do seu negócio: o que está previsto e o que já foi faturado.'
+    : 'O que você já faturou. Registre seus atendimentos pra acompanhar aqui.';
+}
+
+/**
  * Título proeminente de uma linha do billing. No ESTABELECIMENTO o destaque é o
  * VENDEDOR (profissional que atendeu — pedido do Bruno); no individual/SOLO
  * (profissional_nome=null) o destaque continua o cliente, senão toda linha viraria

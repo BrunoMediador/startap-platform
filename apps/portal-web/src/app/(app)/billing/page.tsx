@@ -24,8 +24,10 @@
  *
  * Gating: a página é gated por atendimentos_enabled (flag do backend). Com a flag
  * OFF (link direto), mostra "recurso indisponível". O billing-da-agenda
- * (atend_from_agenda) liga as abas + a lista editável; sem ele, mostra o relatório
- * agregado legado (idêntico ao de hoje pro SOLO Cirilo/Samuel — sem regressão).
+ * (atend_from_agenda) liga as abas + a lista editável; sem ele (clones FORA do gate
+ * de agenda — ex.: modo atendente/Ingrid/Meduzza), mostra o relatório agregado
+ * legado, que só exibe o FATURADO — por isso o subtítulo desse ramo NÃO promete
+ * previsão (billingSubtitle, SCRUM-88).
  */
 import { BillingAgendaSection } from '@/components/atendimentos/billing-agenda-section';
 import { BillingTabs } from '@/components/atendimentos/billing-tabs';
@@ -36,6 +38,7 @@ import { useTenant } from '@/components/shell/session-context';
 import { PageHead } from '@/components/ui/page-head';
 import { EmptyState } from '@/components/ui/states';
 import type { AtendimentoBalde } from '@/lib/api-types';
+import { billingSubtitle } from '@/lib/atendimentos-balde';
 import { periodoLimites, periodoPadrao, periodoPresets } from '@/lib/billing-periodo';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
@@ -67,10 +70,7 @@ export default function BillingPage() {
       {/* Mobile: título empilha sobre o botão (que vira full-width tappable);
           >=sm volta a ficar lado a lado (subtítulo não espreme contra o botão). */}
       <div className="mb-[18px] flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <PageHead
-          title="Billing"
-          subtitle="O dinheiro do seu negócio: o que está previsto e o que já foi faturado."
-        />
+        <PageHead title="Billing" subtitle={billingSubtitle(atendFromAgenda)} />
         <Link
           href="/atendimentos/novo"
           className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-pill border border-brand bg-brand px-4 font-display text-[13.5px] font-semibold text-bg outline-none transition-colors hover:bg-brand-600 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:mt-1 sm:h-10"
@@ -93,8 +93,9 @@ export default function BillingPage() {
           <BillingAgendaSection balde={balde} de={periodo.de} ate={periodo.ate} />
         </>
       ) : (
-        // Billing-da-agenda OFF (SOLO Cirilo/Samuel): relatório agregado legado.
-        // Sem abas — só Faturado faz sentido (não há eventos futuros derivados).
+        // Billing-da-agenda OFF (clones fora do gate de agenda — ex.: modo
+        // atendente/Ingrid/Meduzza): relatório agregado legado. Sem abas — só
+        // Faturado faz sentido (não há eventos futuros derivados da agenda).
         <>
           <PeriodSelector
             value={periodo}
