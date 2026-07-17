@@ -16,6 +16,7 @@ import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
 import { runCloseStaleRunning } from './jobs/close-stale-running.js';
+import { runGcalAtendSync } from './jobs/gcal-atend-sync.js';
 import { runGcalHealthcheck } from './jobs/gcal-healthcheck.js';
 import { runGenerateBillingCharges } from './jobs/generate-billing-charges.js';
 import { runMessageAckAlert } from './jobs/message-ack-alert.js';
@@ -707,6 +708,72 @@ async function main() {
     );
   } else {
     log.info('message-ack-alert: MESSAGE_ACK_TRACKING_ENABLED ausente/false — cron NÃO registrado');
+  }
+
+  // Sync periódico GCal→atendimentos (SCRUM-89 / ADR 0031 — Faturamento espelha a agenda). Reconcilia
+  // por clone com o gate billing-da-agenda ON: UPSERT de todo evento presente (inclusive os criados à
+  // mão no GCal) + DELETE (soft) das linhas origem='agenda' cujo evento sumiu — SÓ sobre listagem
+  // COMPLETA (fail-safe). GATE: SÓ registra o cron com GCAL_ATEND_SYNC_ENABLED=true (default OFF —
+  // lição #247). Com a env ausente o worker sobe normal e este cron NÃO existe (zero query, zero GCal).
+  // { protect:true } impede overlap de ciclos. De hora em hora no :37 (GCAL_ATEND_SYNC_CRON). Padrão
+  // inválido cai no fallback via scheduleCronSafe. ⚠️ Ligar ON/OFF em prod = decisão do Bruno (ver PR).
+  // ⚠️ Deploy: ATEND_FROM_AGENDA_SLOTS precisa estar no container do worker (hoje só no api/portal-api),
+  // senão só os clones gated por COLUNA (Ingrid) seriam reconciliados.
+  if (config.GCAL_ATEND_SYNC_ENABLED) {
+    log.info(
+      { cron: config.GCAL_ATEND_SYNC_CRON },
+      'gcal-atend-sync: cron registrado (GCAL_ATEND_SYNC_ENABLED=true)',
+    );
+    scheduleCronSafe(
+      config.GCAL_ATEND_SYNC_CRON,
+      '37 * * * *',
+      { name: 'gcal-atend-sync', timezone: 'America/Sao_Paulo', protect: true },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let syncResult: Awaited<ReturnType<typeof runGcalAtendSync>> | null = null;
+        let syncError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:gcal-atend-sync',
+          flowName: 'gcal-atend-sync',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job gcal-atend-sync iniciado',
+        });
+        try {
+          syncResult = await runGcalAtendSync();
+          // Só loga ciclo com atividade relevante — sem upsert/delete/erro fica mudo.
+          if (
+            syncResult.upserted > 0 ||
+            syncResult.deleted > 0 ||
+            syncResult.skippedIncomplete > 0 ||
+            syncResult.slotsWithError > 0
+          ) {
+            log.info({ ...syncResult }, 'gcal-atend-sync: atividade neste ciclo');
+          }
+        } catch (e) {
+          syncError = e;
+          log.error({ err: e }, 'gcal-atend-sync crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:gcal-atend-sync',
+            flowName: 'gcal-atend-sync',
+            bot: 'worker',
+            eventType: syncError ? 'worker.job-failed' : 'worker.job-finished',
+            status: syncError ? 'error' : 'success',
+            message: syncError ? 'Job gcal-atend-sync falhou' : 'Job gcal-atend-sync concluído',
+            ...(syncResult ? { metadata: syncResult } : {}),
+            ...(syncError ? { error: syncError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info('gcal-atend-sync: GCAL_ATEND_SYNC_ENABLED ausente/false — cron NÃO registrado');
   }
 
   for (const sig of ['SIGINT', 'SIGTERM']) {

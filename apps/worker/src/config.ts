@@ -342,6 +342,56 @@ export const WorkerConfigSchema = z.object({
   // Retenção (dias) das linhas de tracking (efêmeras, não fonte de verdade). O cron poda as antigas
   // (mesmo padrão de pruneOldFlowEvents). Default 7.
   MESSAGE_ACK_RETENTION_DAYS: z.coerce.number().int().positive().default(7),
+
+  // ── Gate por-clone do billing DERIVADO da agenda (ADR 0027/0030 D1) — reusado pelo reconciler ──
+  // MESMA env que os apps api/portal-api usam pra decidir se o hook de billing-da-agenda roda num
+  // slot (CSV; '*' = todos). NO WORKER ela é OBRIGATÓRIA pro reconciler (SCRUM-89) enxergar os
+  // clones gated por ENV (dragon/cirilo/samuel) — os gated por COLUNA (Ingrid) já entram pela query.
+  // Sem esta env, o worker só reconciliaria os por-coluna. Default '' = só a coluna decide (seguro).
+  // ⚠️ Passo de deploy: devops garante ATEND_FROM_AGENDA_SLOTS no container startap-worker (hoje só
+  // existe no api/portal-api). OPCIONAL no boot (lição #247: ausente = ''  = nenhum slot por-env).
+  ATEND_FROM_AGENDA_SLOTS: z.string().default(''),
+
+  // ── Sync periódico GCal→atendimentos (SCRUM-89 / ADR 0031 — Faturamento espelha a agenda) ─────
+  // Reconcilia, por clone com o gate billing-da-agenda ON e agenda 'active', uma janela [-LOOKBACK,
+  // +LOOKAHEAD]: UPSERT de todo evento presente (inclusive os criados À MÃO no GCal, que não passam
+  // por hook) + DELETE (soft) das linhas origem='agenda' cujo evento SUMIU — INCLUSIVE passado e
+  // linha já paga (decisão do Bruno: a agenda é a fonte da verdade; deleção de linha paga é auditada
+  // em warn). origem='manual' é INTOCÁVEL. DELETAR só sobre listagem COMPLETA (fail-safe): qualquer
+  // truncamento/erro/timeout na paginação do GCal → NÃO deleta nada naquele ciclo (upsert segue).
+  //
+  // GATE MACRO: SÓ registra o cron com GCAL_ATEND_SYNC_ENABLED=true (default OFF — lição #247: nada
+  // aqui é obrigatório no boot; ausente = OFF = cron nem existe = zero query, zero GCal). ⚠️ Decisão
+  // ON/OFF em prod é do Bruno (ver corpo do PR). NUNCA hardcoded.
+  GCAL_ATEND_SYNC_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Padrão cron (croner). Default de hora em hora no minuto :37 (LIVRE — os ocupados: * antibot,
+  // */2 monitor, */5 reminders, 2-59/5 msgack, :00 cleanup, :08 billing, :09 reconcile, :15
+  // close-stale, :17 bot-detect, :23 gcal-health, :30 trial, :43 billsilence). Padrão inválido
+  // NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
+  GCAL_ATEND_SYNC_CRON: z.string().default('37 * * * *'),
+  // Janela de DELEÇÃO pra trás (dias): cobre a aba "Mês passado" do portal com folga. Default 62.
+  GCAL_ATEND_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().default(62),
+  // Janela de DELEÇÃO pra frente (dias): cobre a Previsão. Default 60.
+  GCAL_ATEND_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().positive().default(60),
+  // Pad (dias) da janela de LISTAGEM sobre a de deleção (listagem = deleção ± pad). Evita
+  // falso-delete de evento arrastado pra borda da janela de deleção. Default 7.
+  GCAL_ATEND_SYNC_LIST_PAD_DAYS: z.coerce.number().int().positive().default(7),
+  // Teto de páginas do listEventsPaged por calendário (100 eventos/página → 20 = até 2000). É o
+  // LIMITE DE COMPLETUDE: teto atingido com token pendente → ciclo "incompleto" → NÃO deleta. Default 20.
+  GCAL_ATEND_SYNC_MAX_PAGES: z.coerce.number().int().positive().default(20),
+  // Timeout duro (ms) por PÁGINA do listEventsPaged — nunca aguardar o Google infinito (regra 7).
+  // Timeout = página incompleta = não deleta. Default 15000.
+  GCAL_ATEND_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),
+  // Grace (segundos) no filtro por updated_at: candidato a deleção precisa ter updated_at <
+  // (inicio_do_ciclo - grace). Mata a corrida com o hook do bot/portal (linha nascida durante o
+  // ciclo não é deletada). Default 120.
+  GCAL_ATEND_SYNC_DELETE_GRACE_SEC: z.coerce.number().int().positive().default(120),
+  // Teto de clones reconciliados por ciclo (previsibilidade de custo). Folgado pros ~4 de hoje.
+  // Default 50.
+  GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN: z.coerce.number().int().positive().default(50),
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;

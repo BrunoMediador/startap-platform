@@ -69,4 +69,30 @@ describe('WorkerConfigSchema', () => {
     expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(true);
     expect(result.BILLING_SILENCE_ALERT_COOLDOWN_MIN).toBe(720);
   });
+
+  it('gcal-atend-sync (SCRUM-89) nasce OFF com defaults seguros (lição #247)', () => {
+    const result = WorkerConfigSchema.parse({});
+    expect(result.GCAL_ATEND_SYNC_ENABLED).toBe(false); // ausente = OFF (cron nem registra)
+    expect(result.GCAL_ATEND_SYNC_CRON).toBe('37 * * * *');
+    expect(result.GCAL_ATEND_SYNC_LOOKBACK_DAYS).toBe(62);
+    expect(result.GCAL_ATEND_SYNC_LOOKAHEAD_DAYS).toBe(60);
+    expect(result.GCAL_ATEND_SYNC_LIST_PAD_DAYS).toBe(7);
+    expect(result.GCAL_ATEND_SYNC_MAX_PAGES).toBe(20);
+    expect(result.GCAL_ATEND_SYNC_TIMEOUT_MS).toBe(15_000);
+    expect(result.GCAL_ATEND_SYNC_DELETE_GRACE_SEC).toBe(120);
+    expect(result.GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN).toBe(50);
+    // ATEND_FROM_AGENDA_SLOTS reusado no worker: ausente = '' (só a coluna decide).
+    expect(result.ATEND_FROM_AGENDA_SLOTS).toBe('');
+  });
+
+  it('gcal-atend-sync ON + ATEND_FROM_AGENDA_SLOTS explícito (reuso do gate por-env)', () => {
+    const result = WorkerConfigSchema.parse({
+      GCAL_ATEND_SYNC_ENABLED: 'true',
+      ATEND_FROM_AGENDA_SLOTS: 'clone_a,clone_b',
+      GCAL_ATEND_SYNC_MAX_PAGES: '5',
+    });
+    expect(result.GCAL_ATEND_SYNC_ENABLED).toBe(true);
+    expect(result.ATEND_FROM_AGENDA_SLOTS).toBe('clone_a,clone_b');
+    expect(result.GCAL_ATEND_SYNC_MAX_PAGES).toBe(5);
+  });
 });
