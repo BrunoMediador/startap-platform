@@ -9,6 +9,7 @@ import {
   agruparPorDia,
   agruparPorForma,
   agruparPorProfissional,
+  billingSubtitle,
   centsToInput,
   clienteLabel,
   computeComissaoFromRows,
@@ -388,5 +389,29 @@ describe('computeLucroCents (faturamento − comissão)', () => {
 
   it('pode ficar negativo se a comissão superar o faturado (não clampa)', () => {
     expect(computeLucroCents(1000, 1500)).toBe(-500);
+  });
+});
+
+describe('billingSubtitle (copy honesta por modo de billing — SCRUM-88)', () => {
+  it('com agenda: promete previsto E faturado (abas Previsão|Faturado)', () => {
+    const s = billingSubtitle(true);
+    expect(s).toContain('previsto');
+    expect(s).toContain('faturado');
+  });
+
+  it('sem agenda: rótulo estável só do FATURADO, NUNCA promete previsão', () => {
+    // O ramo legado (ResumoFaturamento) só exibe o realizado; a copy não pode
+    // prometer previsão que a tela não mostra — era o que confundia o cliente.
+    // Rótulo estático: sem "este mês" (há PeriodSelector) e sem instrução de
+    // preencher (isso mora só no empty state — evita eco redundante).
+    const s = billingSubtitle(false);
+    expect(s.toLowerCase()).not.toContain('previs');
+    expect(s).toBe('O que você já faturou.');
+  });
+
+  it('o ramo com agenda mantém a copy de sempre (byte-idêntica)', () => {
+    expect(billingSubtitle(true)).toBe(
+      'O dinheiro do seu negócio: o que está previsto e o que já foi faturado.',
+    );
   });
 });

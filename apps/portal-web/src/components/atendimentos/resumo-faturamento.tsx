@@ -3,9 +3,10 @@
 /**
  * Relatório agregado de faturamento (comportamento legado, inalterado). Total, nº de
  * atendimentos, ticket médio + quebra por forma e por profissional, do GET
- * /portal/relatorios/faturamento. Usado na tela Billing quando o billing-da-agenda
- * está OFF (SOLO Cirilo/Samuel) — mantém a experiência idêntica à de hoje, sem
- * regressão. Extraído da antiga página /relatorios/faturamento na consolidação.
+ * /portal/relatorios/faturamento. Usado na tela Billing pelos clones FORA do gate
+ * de agenda (billing-da-agenda OFF — ex.: modo atendente/Ingrid/Meduzza): só
+ * FATURADO, sem previsão. Extraído da antiga página /relatorios/faturamento na
+ * consolidação; mantém a experiência idêntica à de hoje, sem regressão.
  *
  * Estados: loading / 404 flag-off (indisponível) / erro (retry) / vazio.
  */
@@ -95,7 +96,7 @@ export function ResumoFaturamento({ de, ate }: { de: string; ate: string }) {
         </section>
       )}
 
-      {/* Por profissional (vazio no SOLO) */}
+      {/* Por profissional (vazio em clone individual, sem colaboradores) */}
       {q.data.por_profissional.length > 0 && (
         <section aria-labelledby="sec-prof">
           <h2
