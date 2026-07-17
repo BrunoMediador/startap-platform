@@ -40,7 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
   // App de gestão (Fase 1): tela ÚNICA Billing (faturamento + comissão consolidados,
   // Previsão|Faturado). Substitui os itens separados Faturamento/Comissão/Registrar
   // — "Registrar" virou um botão DENTRO da tela Billing. Gated pela flag.
-  { href: '/billing', label: 'Billing', Icon: IconWallet, gated: ['atendimentos'] },
+  { href: '/billing', label: 'Faturamento', Icon: IconWallet, gated: ['atendimentos'] },
   { href: '/servicos', label: 'Serviços', Icon: IconServices },
   { href: '/horarios', label: 'Horários', Icon: IconCalendar },
   { href: '/perfil', label: 'Meu negócio', Icon: IconUser },

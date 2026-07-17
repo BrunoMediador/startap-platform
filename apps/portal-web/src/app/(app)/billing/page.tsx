@@ -70,7 +70,7 @@ export default function BillingPage() {
       {/* Mobile: título empilha sobre o botão (que vira full-width tappable);
           >=sm volta a ficar lado a lado (subtítulo não espreme contra o botão). */}
       <div className="mb-[18px] flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <PageHead title="Billing" subtitle={billingSubtitle(atendFromAgenda)} />
+        <PageHead title="Faturamento" subtitle={billingSubtitle(atendFromAgenda)} />
         <Link
           href="/atendimentos/novo"
           className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-pill border border-brand bg-brand px-4 font-display text-[13.5px] font-semibold text-bg outline-none transition-colors hover:bg-brand-600 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:mt-1 sm:h-10"
@@ -114,7 +114,7 @@ export default function BillingPage() {
 function Indisponivel() {
   return (
     <>
-      <PageHead title="Billing" subtitle="O dinheiro do seu negócio: previsto e faturado." />
+      <PageHead title="Faturamento" subtitle="O dinheiro do seu negócio: previsto e faturado." />
       <EmptyState
         icon={<IconWallet size={26} />}
         title="Recurso indisponível"
