@@ -44,6 +44,10 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
   let pkg: any;
 
   const SLOT = 'itest_slot_pacotes';
+  // SCRUM-90: schema PRÓPRIO — o comentário do topo prometia "schema dedicado" mas as tabelas
+  // caíam em public e colidiam com as outras integrações (flow_clones global). Agora é de fato
+  // isolado; teardown = DROP SCHEMA CASCADE.
+  const SCHEMA = 'itest_pacotes';
   const TENANT = '00000000-0000-0000-0000-0000000000aa';
   const HMAC = 'itest-hmac-cliente-1';
 
@@ -93,10 +97,8 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
   }
 
   async function dropSchema() {
-    await exec('DROP TABLE IF EXISTS package_redemptions');
-    await exec('DROP TABLE IF EXISTS client_package_credits');
-    await exec('DROP TABLE IF EXISTS service_packages');
-    await exec('DROP TABLE IF EXISTS flow_clones');
+    // Dropa só o schema DESTA suíte (CASCADE derruba as 4 tabelas locais). Nunca tabela global.
+    await exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   }
 
   /** Insere um template + um crédito do cliente com `total`/`restantes` sessões. Retorna creditId. */
@@ -164,6 +166,8 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
     process.env.PG_USER = decodeURIComponent(url.username);
     process.env.PG_PASS = decodeURIComponent(url.password);
     process.env.PG_DB = url.pathname.replace(/^\//, '');
+    // Liga o pool do módulo sob teste (client.ts) ao MESMO schema — antes de importá-lo.
+    process.env.PG_SEARCH_PATH = SCHEMA;
     const pg = await import('pg');
     pgPool = new pg.default.Pool({
       host: process.env.PG_HOST,
@@ -172,7 +176,9 @@ describeIf('redeem/refund de pacote contra Postgres REAL', () => {
       password: process.env.PG_PASS,
       database: process.env.PG_DB,
       max: 6,
+      options: `-c search_path=${SCHEMA}`,
     });
+    await exec(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
     pkg = await import('./packages.js');
     await createSchema();
   }, 30_000);

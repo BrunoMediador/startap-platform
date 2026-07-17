@@ -831,21 +831,36 @@ export async function syncAtendimentoFromEvent(
 }
 
 /**
+ * Trilha durável do soft-delete (SCRUM-90 / migration 074). Carimbada no MESMO UPDATE do
+ * deleted_at (atomicidade real). Opcional: sem ela as colunas ficam NULL (deleção legada /
+ * caminho não instrumentado). NUNCA carrega PII — só rótulos fixos do sistema.
+ *   reason: por quê ('gcal_sync_absent' | 'portal_cancel' | 'portal_delete' | ...)
+ *   by:     quem   ('gcal-atend-sync' | 'portal' | ...)
+ */
+export interface SoftDeleteAudit {
+  reason: string;
+  by: string;
+}
+
+/**
  * Soft-delete do atendimento ATIVO de um evento (cancelar no GCal -> some do faturamento).
  * Escopado por slot — nunca cross-cliente. Idempotente: re-rodar é no-op (já deletado não
- * casa o WHERE). Retorna a linha deletada (ou null se não havia ativa). Para a Fase B2. Sem
- * wire. Não há estorno/trilha (decisão do Bruno: remover = some).
+ * casa o WHERE). Retorna a linha deletada (ou null se não havia ativa). Para a Fase B2 e o
+ * reconciler (SCRUM-89). `audit` (SCRUM-90) carimba deleted_reason/deleted_by no mesmo UPDATE
+ * — a LINHA guarda o gcal_event_id CRU (investigação intacta); ausente = colunas NULL.
  */
 export async function softDeleteAtendimentoByEvent(
   slot: string,
   gcalEventId: string,
+  audit?: SoftDeleteAudit,
 ): Promise<AtendimentoRow | null> {
   const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
     `UPDATE atendimentos
-        SET deleted_at = now(), updated_at = now()
+        SET deleted_at = now(), updated_at = now(),
+            deleted_reason = $3, deleted_by = $4
       WHERE slot = $1 AND gcal_event_id = $2 AND deleted_at IS NULL
       RETURNING ${_RETURNING_COLS}`,
-    [slot, gcalEventId],
+    [slot, gcalEventId, audit?.reason ?? null, audit?.by ?? null],
   );
   const row = r.rows[0];
   return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
@@ -1102,19 +1117,22 @@ export async function patchAtendimento(
 
 /**
  * Soft-delete de um atendimento por id (DELETE da rota — "some de tudo"). Escopado por
- * slot + tenant_id. Idempotente (já deletado não casa o WHERE -> retorna false). Sem
- * estorno/trilha (decisão do Bruno). Retorna true se deletou agora, false se não existia/já deletado.
+ * slot + tenant_id. Idempotente (já deletado não casa o WHERE -> retorna false). `audit`
+ * (SCRUM-90) carimba deleted_reason/deleted_by no mesmo UPDATE; ausente = colunas NULL.
+ * Retorna true se deletou agora, false se não existia/já deletado.
  */
 export async function softDeleteAtendimentoById(
   slot: string,
   tenantId: string,
   id: number,
+  audit?: SoftDeleteAudit,
 ): Promise<boolean> {
   const r = await query(
     `UPDATE atendimentos
-        SET deleted_at = now(), updated_at = now()
+        SET deleted_at = now(), updated_at = now(),
+            deleted_reason = $4, deleted_by = $5
       WHERE slot = $1 AND tenant_id = $2 AND id = $3 AND deleted_at IS NULL`,
-    [slot, tenantId, id],
+    [slot, tenantId, id, audit?.reason ?? null, audit?.by ?? null],
   );
   return (r.rowCount ?? 0) > 0;
 }

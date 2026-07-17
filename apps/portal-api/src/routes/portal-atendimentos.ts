@@ -296,10 +296,12 @@ export const portalAtendimentosRoutes: FastifyPluginAsync = async (app) => {
     if (!idParsed.success) {
       return reply.code(400).send({ error: 'id invalido' });
     }
+    // SCRUM-90: carimba a origem da deleção (DELETE do operador no portal) na trilha durável.
     const ok = await atendimentos.softDeleteAtendimentoById(
       gate.slot,
       gate.tenantId,
       idParsed.data.id,
+      { reason: 'portal_delete', by: 'portal' },
     );
     if (!ok) {
       return reply.code(404).send({ error: 'atendimento nao encontrado' });

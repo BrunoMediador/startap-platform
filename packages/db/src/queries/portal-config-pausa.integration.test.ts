@@ -33,6 +33,9 @@ describeIf('pausas do portal contra Postgres REAL (SCRUM-86)', () => {
   let pausa: any;
 
   const SLOT = 'itest_slot_pausa_portal';
+  // SCRUM-90: schema PRÓPRIO — isola das demais integrações no mesmo banco efêmero (esta suíte
+  // dropava flow_clones/flow_pauses GLOBAIS no afterAll = a corrida que deixava o CI vermelho).
+  const SCHEMA = 'itest_pausa';
   const TEL = '5535999998888';
 
   async function exec(sql: string, params?: unknown[]) {
@@ -65,8 +68,8 @@ describeIf('pausas do portal contra Postgres REAL (SCRUM-86)', () => {
   }
 
   async function dropSchema() {
-    await exec('DROP TABLE IF EXISTS flow_pauses');
-    await exec('DROP TABLE IF EXISTS flow_clones');
+    // Dropa só o schema DESTA suíte (CASCADE derruba flow_clones + flow_pauses locais).
+    await exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   }
 
   /** Lê a linha de pausa (flow_id=SLOT, telefone=TEL) direto do banco pra asserir estado. */
@@ -94,6 +97,8 @@ describeIf('pausas do portal contra Postgres REAL (SCRUM-86)', () => {
     process.env.PG_USER = decodeURIComponent(url.username);
     process.env.PG_PASS = decodeURIComponent(url.password);
     process.env.PG_DB = url.pathname.replace(/^\//, '');
+    // Liga o pool do módulo sob teste (client.ts) ao MESMO schema — antes de importá-lo.
+    process.env.PG_SEARCH_PATH = SCHEMA;
     const pg = await import('pg');
     pgPool = new pg.default.Pool({
       host: process.env.PG_HOST,
@@ -102,7 +107,9 @@ describeIf('pausas do portal contra Postgres REAL (SCRUM-86)', () => {
       password: process.env.PG_PASS,
       database: process.env.PG_DB,
       max: 6,
+      options: `-c search_path=${SCHEMA}`,
     });
+    await exec(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
     portal = await import('./portal-config.js');
     pausa = await import('./pausa.js');
     await createSchema();

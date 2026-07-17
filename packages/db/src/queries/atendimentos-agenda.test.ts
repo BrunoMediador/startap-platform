@@ -327,13 +327,25 @@ describe('getAtendimentoByEvent — escopa slot+tenant pelo gcal_event_id (anti-
 });
 
 describe('softDeleteAtendimentoByEvent (B2) — escopo + idempotência', () => {
-  it('UPDATE deleted_at escopado por slot+event, só ativo (deleted_at IS NULL)', async () => {
+  it('UPDATE deleted_at escopado por slot+event, só ativo (deleted_at IS NULL); sem audit → reason/by NULL', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, deleted_at: '2026-06-23T01:00:00Z' }] });
     await softDeleteAtendimentoByEvent('clone_dragon', 'evt_1');
     const [sql, params] = lastCall();
     expect(sql).toContain('SET deleted_at = now()');
+    // SCRUM-90: carimbo no MESMO UPDATE (colunas 074).
+    expect(sql).toContain('deleted_reason = $3, deleted_by = $4');
     expect(sql).toContain('WHERE slot = $1 AND gcal_event_id = $2 AND deleted_at IS NULL');
-    expect(params).toEqual(['clone_dragon', 'evt_1']);
+    expect(params).toEqual(['clone_dragon', 'evt_1', null, null]);
+  });
+
+  it('SCRUM-90: com audit → carimba deleted_reason/deleted_by nos params', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, deleted_at: '2026-06-23T01:00:00Z' }] });
+    await softDeleteAtendimentoByEvent('clone_dragon', 'evt_1', {
+      reason: 'gcal_sync_absent',
+      by: 'gcal-atend-sync',
+    });
+    const [, params] = lastCall();
+    expect(params).toEqual(['clone_dragon', 'evt_1', 'gcal_sync_absent', 'gcal-atend-sync']);
   });
 
   it('idempotente: nada ativo -> retorna null', async () => {
@@ -482,14 +494,26 @@ describe('patchAtendimento — pina colunas enviadas em dirty_fields (sticky)', 
 });
 
 describe('softDeleteAtendimentoById — escopo slot+tenant', () => {
-  it('UPDATE escopado por slot+tenant+id; true quando deletou', async () => {
+  it('UPDATE escopado por slot+tenant+id; true quando deletou; sem audit → reason/by NULL', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
     const ok = await softDeleteAtendimentoById('clone_cirilo', 'tid-1', 1);
     expect(ok).toBe(true);
     const [sql, params] = lastCall();
     expect(sql).toContain('SET deleted_at = now()');
+    // SCRUM-90: carimbo no MESMO UPDATE (colunas 074).
+    expect(sql).toContain('deleted_reason = $4, deleted_by = $5');
     expect(sql).toContain('WHERE slot = $1 AND tenant_id = $2 AND id = $3 AND deleted_at IS NULL');
-    expect(params).toEqual(['clone_cirilo', 'tid-1', 1]);
+    expect(params).toEqual(['clone_cirilo', 'tid-1', 1, null, null]);
+  });
+
+  it('SCRUM-90: com audit → carimba deleted_reason/deleted_by nos params', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    await softDeleteAtendimentoById('clone_cirilo', 'tid-1', 1, {
+      reason: 'portal_delete',
+      by: 'portal',
+    });
+    const [, params] = lastCall();
+    expect(params).toEqual(['clone_cirilo', 'tid-1', 1, 'portal_delete', 'portal']);
   });
 
   it('idempotente: já deletado / inexistente -> false', async () => {

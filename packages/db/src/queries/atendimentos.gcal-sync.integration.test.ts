@@ -39,6 +39,10 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
   let atend: any;
 
   const SLOT = 'itest_slot_gcal_sync';
+  // SCRUM-90: schema PRÓPRIO desta suíte — isola das outras integrações que rodam em paralelo no
+  // MESMO banco efêmero (flow_clones/atendimentos são globais e cada suíte as cria/dropa). O
+  // teardown dropa só ESTE schema (CASCADE), nunca tabela global.
+  const SCHEMA = 'itest_gcal_sync';
   const TENANT = '00000000-0000-0000-0000-0000000000bb';
   const now = Date.now();
   const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString();
@@ -80,7 +84,9 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       dirty_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
       inicio_at TIMESTAMPTZ,
       fim_at TIMESTAMPTZ,
-      deleted_at TIMESTAMPTZ)`);
+      deleted_at TIMESTAMPTZ,
+      deleted_reason TEXT,
+      deleted_by TEXT)`);
     await exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_atend_event_ativo
       ON atendimentos (slot, gcal_event_id)
       WHERE gcal_event_id IS NOT NULL AND deleted_at IS NULL`);
@@ -100,8 +106,9 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
   }
 
   async function dropSchema() {
-    await exec('DROP TABLE IF EXISTS atendimentos');
-    await exec('DELETE FROM flow_clones WHERE slot = $1', [SLOT]);
+    // Dropa só o schema DESTA suíte (CASCADE derruba flow_clones + atendimentos locais). Nunca
+    // toca tabela de outra suíte — fim da corrida de teardown (SCRUM-90).
+    await exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
   }
 
   /** Insere uma linha de atendimento crua, controlando origem/updated_at/inicio_at. */
@@ -142,6 +149,8 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
     process.env.PG_USER = decodeURIComponent(url.username);
     process.env.PG_PASS = decodeURIComponent(url.password);
     process.env.PG_DB = url.pathname.replace(/^\//, '');
+    // Liga o pool do módulo sob teste (client.ts) ao MESMO schema — antes de importá-lo.
+    process.env.PG_SEARCH_PATH = SCHEMA;
     const pg = await import('pg');
     pgPool = new pg.default.Pool({
       host: process.env.PG_HOST,
@@ -150,7 +159,9 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       password: process.env.PG_PASS,
       database: process.env.PG_DB,
       max: 6,
+      options: `-c search_path=${SCHEMA}`,
     });
+    await exec(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
     atend = await import('./atendimentos.js');
     await createSchema();
   }, 30_000);
@@ -256,6 +267,51 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       [SLOT],
     );
     expect(active.rows[0].n).toBe(1); // a manual permanece ativa.
+  });
+
+  it('SCRUM-90: audit carimba deleted_reason/deleted_by na MESMA linha; sem audit → NULL', async () => {
+    await seed({
+      eventId: 'ev_audit',
+      origem: 'agenda',
+      inicioOffsetMs: -1 * DAY,
+      updatedOffsetMs: -3600_000,
+      forma: 'pix',
+      valor: 11000,
+    });
+    await seed({
+      eventId: 'ev_plain',
+      origem: 'agenda',
+      inicioOffsetMs: -1 * DAY,
+      updatedOffsetMs: -3600_000,
+    });
+
+    // Com audit (variante do reconciler): carimba reason/by no mesmo UPDATE do deleted_at.
+    await atend.softDeleteAtendimentoByEvent(SLOT, 'ev_audit', {
+      reason: 'gcal_sync_absent',
+      by: 'gcal-atend-sync',
+    });
+    const stamped = await exec(
+      'SELECT deleted_at, deleted_reason, deleted_by FROM atendimentos WHERE slot = $1 AND gcal_event_id = $2',
+      [SLOT, 'ev_audit'],
+    );
+    expect(stamped.rows[0].deleted_at).not.toBeNull();
+    expect(stamped.rows[0].deleted_reason).toBe('gcal_sync_absent');
+    expect(stamped.rows[0].deleted_by).toBe('gcal-atend-sync');
+    // O id CRU segue na linha (investigação intacta — o hash fica só no LOG).
+    const raw = await exec(
+      'SELECT gcal_event_id FROM atendimentos WHERE slot = $1 AND deleted_reason = $2',
+      [SLOT, 'gcal_sync_absent'],
+    );
+    expect(raw.rows[0].gcal_event_id).toBe('ev_audit');
+
+    // Sem audit: colunas ficam NULL (deleção legada / caminho não instrumentado).
+    await atend.softDeleteAtendimentoByEvent(SLOT, 'ev_plain');
+    const plain = await exec(
+      'SELECT deleted_reason, deleted_by FROM atendimentos WHERE slot = $1 AND gcal_event_id = $2',
+      [SLOT, 'ev_plain'],
+    );
+    expect(plain.rows[0].deleted_reason).toBeNull();
+    expect(plain.rows[0].deleted_by).toBeNull();
   });
 
   it('upsert: INSERT aplica valor; 2º call sem forma PRESERVA; soft-deletada + novo upsert = NOVA linha', async () => {

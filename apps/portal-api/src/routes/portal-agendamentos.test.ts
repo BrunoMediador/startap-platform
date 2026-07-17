@@ -1535,7 +1535,10 @@ describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA_SLOTS, gate por-c
     });
 
     expect(res.statusCode).toBe(200);
-    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id);
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id, {
+      reason: 'portal_cancel',
+      by: 'portal',
+    });
     await app.close();
   });
 
@@ -1571,7 +1574,10 @@ describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA_SLOTS, gate por-c
 
     // Estado final = evento ausente → a previsão derivada também deve sumir.
     expect(res.statusCode).toBe(200);
-    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id);
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id, {
+      reason: 'portal_cancel',
+      by: 'portal',
+    });
     await app.close();
   });
 
