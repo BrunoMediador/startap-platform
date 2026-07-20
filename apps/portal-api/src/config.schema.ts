@@ -310,6 +310,46 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Builder conversacional de persona (SCRUM-92, ADR 0032) ─────────────────
+  // Kill-switch das rotas /portal/prompt-builder/*. OPCIONAL no boot (ausente = OFF,
+  // lição #247: feature dormente nunca derruba o portal-api). OFF -> as rotas respondem
+  // 404 (front esconde a seção "Monte seu atendente"). Decisão do Bruno: subir ON pra
+  // TODOS -> o PM seta PROMPT_BUILDER_ENABLED=true no deploy (a flag é o kill-switch, não
+  // um rollout dormente). Provisionar DEEPSEEK_API_KEY antes de ligar (validado LAZY: rota
+  // responde 503 se faltar, sem derrubar o boot). NUNCA hardcoded.
+  PROMPT_BUILDER_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
+  // O meta-agente entrevistador roda SEMPRE no DeepSeek (deepseek-chat) por custo — NÃO herda
+  // o bot_config do clone (é meta-agente, não o bot do cliente). Reusa DEEPSEEK_API_KEY (já
+  // declarada acima). Modelo ajustável sem deploy; default = decisão do Bruno.
+  PROMPT_BUILDER_MODEL: z.string().default('deepseek-chat'),
+  PROMPT_BUILDER_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.5),
+  // Timeout (ms) por chamada ao DeepSeek — nunca aguardar infinito (regra 7).
+  PROMPT_BUILDER_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // maxTurns do runAgent por mensagem (1 tool-call + 1 mensagem final = 2; folga p/ 3).
+  PROMPT_BUILDER_MAX_AGENT_TURNS: z.coerce.number().int().positive().default(3),
+
+  // ── Caps anti-abuso/custo (todos com default seguro) ───────────────────────
+  // Teto de turns (mensagens do dono) por ENTREVISTA — corta loop de refino infinito.
+  PROMPT_BUILDER_MAX_TURNS: z.coerce.number().int().positive().default(30),
+  // Teto de mensagens/dia por TENANT (slot).
+  PROMPT_BUILDER_MAX_MSGS_DAY: z.coerce.number().int().positive().default(60),
+  // Hard cap GLOBAL diário de chamadas ao LLM (kill-switch de custo, somando tenants).
+  PROMPT_BUILDER_DAILY_CALL_CAP: z.coerce.number().int().positive().default(2_000),
+  // Truncagem do texto do dono por mensagem (input bounded = custo bounded).
+  PROMPT_BUILDER_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(4_000),
+  // Quantos turns de histórico reenviamos ao modelo (corta custo de input crescente).
+  PROMPT_BUILDER_HISTORY_TURNS: z.coerce.number().int().positive().default(24),
+  // TTL (segundos) do estado da entrevista no Redis (sliding). Default 2h (janela de onboarding).
+  PROMPT_BUILDER_STATE_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(2 * 60 * 60),
+
   SERVICE_NAME: z.string().optional(),
 });
 

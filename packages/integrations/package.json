@@ -14,7 +14,8 @@
     "./abacatepay": "./dist/abacatepay/index.js",
     "./provisioning": "./dist/provisioning/index.js",
     "./scheduling": "./dist/scheduling/index.js",
-    "./alerts": "./dist/alerts/index.js"
+    "./alerts": "./dist/alerts/index.js",
+    "./prompt-builder": "./dist/prompt-builder/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
