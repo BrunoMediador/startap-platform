@@ -1,9 +1,9 @@
 /**
  * Testes do validador anti-redundância/anti-injeção da persona (SCRUM-92).
  *
- * Prova que dados operacionais (endereço/preço/horário/telefone), PII (e-mail/CPF), tokens
- * estruturais do fluxo e nomes de serviço do catálogo são REMOVIDOS da persona; e que uma
- * persona limpa passa intacta. É a camada 2 do belt-and-suspenders.
+ * Prova que dados operacionais (endereço/preço/horário/telefone), PII (e-mail/CPF) e tokens
+ * estruturais do fluxo são REMOVIDOS da persona; que citar o NOME de um serviço do catálogo NÃO
+ * corta a linha (SCRUM-92); e que uma persona limpa passa intacta. Camada 2 do belt-and-suspenders.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -49,11 +49,36 @@ describe('validatePersona — remove dados operacionais', () => {
     expect(r.removedTags).toContain('telefone');
   });
 
-  it('remove linha que cita serviço do catálogo do clone', () => {
-    const p = `${PERSONA_LIMPA}\nNossa especialidade é o Corte Degradê caprichado.`;
-    const r = validatePersona(p, { servicos: ['Corte Degradê', 'Barba'] });
-    expect(r.cleaned.toLowerCase()).not.toContain('corte degradê');
-    expect(r.removedTags).toContain('servico_catalogo');
+  it('remove "Corte R$40" pelo padrão moeda (não pelo nome do serviço)', () => {
+    // A duplicação nociva é o PREÇO junto do serviço — cai no REJECT_LINE `moeda`, não numa
+    // regra de nome de serviço. Prova que apagar dado operacional segue intacto (SCRUM-92).
+    const p = `${PERSONA_LIMPA}\nO Corte sai R$40 e a Barba R$30.`;
+    const r = validatePersona(p, { servicos: ['Corte', 'Barba'] });
+    expect(r.cleaned).not.toContain('R$40');
+    expect(r.removedTags).toContain('moeda');
+    expect(r.removedTags).not.toContain('servico_catalogo');
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe('validatePersona — barbearia (SCRUM-92: não gruta persona por nome de serviço)', () => {
+  it('mantém persona de barbearia que cita "corte"/"barba"/"sobrancelha" e ok=true', () => {
+    // Regressão do bug do Cirilo: catálogo genérico de barbearia apagava quase toda linha ->
+    // persona vazia -> loop infinito no builder. Agora o nome do serviço, sozinho, NÃO corta.
+    const p = [
+      'Você é o atendente da Barbearia do Cirilo.',
+      'Atende clientes que querem corte e barba com capricho e agilidade.',
+      'Se perguntarem de sobrancelha ou luzes, seja acolhedor e explique com calma.',
+      'Fale de forma descontraída, tratando cada cliente pelo nome.',
+    ].join('\n');
+    const r = validatePersona(p, {
+      servicos: ['Corte', 'Barba', 'Sobrancelha', 'Pacote completo', 'Alisamento', 'Luzes'],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.cleaned.toLowerCase()).toContain('corte');
+    expect(r.cleaned.toLowerCase()).toContain('barba');
+    expect(r.cleaned.toLowerCase()).toContain('sobrancelha');
+    expect(r.removedTags).toHaveLength(0);
   });
 });
 

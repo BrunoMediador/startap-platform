@@ -287,6 +287,12 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
             draftReady = true;
           } else {
             // Sobrou pouco após limpar dados operacionais -> pede mais detalhes (sem quebrar).
+            // Observabilidade: sem esse log o loop "pede sempre" era mudo (SCRUM-92). Só tags
+            // (ex.: 'moeda'/'horario') + tamanho — NUNCA o texto da persona (PII/durável).
+            log.warn(
+              { slot, removedTags: v.removedTags, cleanedLen: v.cleaned.length },
+              'prompt-builder: persona rejeitada pelo validador',
+            );
             state.draft = null;
             draftReady = false;
             replyText =
