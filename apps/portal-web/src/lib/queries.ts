@@ -77,6 +77,7 @@ import type {
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { pausaFromResposta } from './bot-pausa';
 import { mapColaboradorRow } from './equipe';
+import { type BuilderDraft, fetchBuilderDraft } from './prompt-builder';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
 
@@ -127,6 +128,8 @@ export const qk = {
     ['colaborador-comissao', slot, colaboradorId, de, ate] as const,
   /** Frases de comando (modo atendente) — GET/PUT /portal/frases-pausa. */
   frasesPausa: (slot: string) => ['frases-pausa', slot] as const,
+  /** Builder de persona (SCRUM-92) — prévia do rascunho (GET /portal/prompt-builder/draft). */
+  promptBuilder: (slot: string) => ['prompt-builder', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1261,5 +1264,25 @@ export function useSaveFrasesPausa(
     onSuccess: (res) => {
       client.setQueryData(qk.frasesPausa(slot), res);
     },
+  });
+}
+
+// ── Builder de persona (SCRUM-92 — GET /portal/prompt-builder/draft) ──────────
+//
+// Prévia read-only do rascunho da persona (status + preview_final). É o PROBE de
+// gating da seção "Monte seu atendente": 404 (flag PROMPT_BUILDER_ENABLED OFF) é
+// normalizado por fetchBuilderDraft pra { status:'indisponivel' } -> a seção some
+// (mesmo critério de lembretes/atendimentos/google-conta). Erro REAL (rede/500)
+// propaga (isError) -> a seção mostra ErrorState com retry. retry:false porque um
+// 404 não se resolve sozinho; staleTime curto pra refletir approve/reset logo após.
+// A conversa em si é estado local do componente (efêmera); o Redis é a fonte no back.
+
+export function useBuilderDraft(slot: string): UseQueryResult<BuilderDraft> {
+  return useQuery({
+    queryKey: qk.promptBuilder(slot),
+    queryFn: ({ signal }) => fetchBuilderDraft(signal),
+    retry: false,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
   });
 }
