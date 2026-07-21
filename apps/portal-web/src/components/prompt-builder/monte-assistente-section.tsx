@@ -11,10 +11,10 @@ import {
  * Seção "Monte seu atendente" (SCRUM-92) dentro de "Meu negócio".
  *
  * O dono conversa com um assistente de configuração (meta-agente no DeepSeek) que faz
- * 4-5 perguntinhas e PROPÕE a personalidade do robô de WhatsApp dele. Ao aprovar, a
+ * 4-5 perguntas simples e PROPÕE a personalidade do assistente de WhatsApp dele. Ao aprovar, a
  * persona vira o prompt de produção do clone — a mecânica de agendamento (confirmação)
  * é garantida por CÓDIGO no servidor e NUNCA depende do que a IA gerar (o dono só cuida
- * do jeitão/tom/nome/regras). Ver design SCRUM-92.
+ * da personalidade/tom/nome/regras). Ver design SCRUM-92.
  *
  * Gating (byte-idêntico pros demais clientes): a seção PROBA o GET /portal/prompt-builder/
  * draft (useBuilderDraft). 404 (flag PROMPT_BUILDER_ENABLED OFF) -> {status:'indisponivel'}
@@ -36,6 +36,7 @@ import {
   PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
+  generateNowContent,
   isPersonaSavable,
   isSendable,
   personaCharsLeft,
@@ -49,7 +50,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
 const GARANTIA =
-  'A parte técnica (a confirmação antes de marcar um horário) é garantida automaticamente. Você só cuida do jeitão dele.';
+  'A parte técnica (a confirmação antes de marcar um horário) é garantida automaticamente. Você só cuida da personalidade dele.';
 
 export function MonteAssistenteSection() {
   const { slot } = useTenant();
@@ -60,7 +61,7 @@ export function MonteAssistenteSection() {
   const [messages, setMessages] = useState<BuilderMessage[]>([]);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
-  // Texto da última mensagem que falhou por soluço transitório -> botão "tentar de novo".
+  // Texto da última mensagem que falhou por erro transitório -> botão "tentar de novo".
   const [erroRetry, setErroRetry] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -133,16 +134,28 @@ export function MonteAssistenteSection() {
     toast.error('Não foi possível começar agora. Tente de novo.');
   }
 
-  async function enviar(texto: string) {
-    const limpo = texto.trim();
-    if (!isSendable(texto, pending)) return;
+  /**
+   * Envia 1 turno. `generateNow` (botão "Gerar agora") pode ser disparado a QUALQUER momento —
+   * inclusive sem o dono ter digitado nada: manda um texto curto padrão e o backend FORÇA a
+   * geração da persona neste turno. No fluxo normal, exige texto enviável (isSendable).
+   */
+  async function enviar(texto: string, opts?: { generateNow?: boolean }) {
+    const generateNow = opts?.generateNow === true;
+    const digitado = texto.trim();
+    if (generateNow) {
+      if (pending) return; // "Gerar agora" só barra se já há um envio em andamento.
+    } else if (!isSendable(texto, pending)) {
+      return;
+    }
+    const conteudo = generateNow ? generateNowContent(texto) : digitado;
     setErroRetry(null);
     setInput('');
-    setMessages((m) => appendMessage(m, 'user', limpo));
+    // Bolha do dono só quando ele REALMENTE escreveu algo (evita bolha fantasma do texto padrão).
+    if (digitado.length > 0) setMessages((m) => appendMessage(m, 'user', digitado));
     setPending(true);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const out = await sendBuilderMessage(limpo, ctrl.signal);
+    const out = await sendBuilderMessage(conteudo, { signal: ctrl.signal, generateNow });
     setPending(false);
 
     if (out.kind === 'ok') {
@@ -169,8 +182,8 @@ export function MonteAssistenteSection() {
       toast.error('O assistente de configuração está indisponível agora. Tente mais tarde.');
       return;
     }
-    // soluço transitório -> guarda pra reenviar
-    setErroRetry(limpo);
+    // erro transitório -> guarda pra reenviar
+    setErroRetry(conteudo);
   }
 
   /** "Pedir ajuste": sem conversa aberta abre um bubble-guia; em conversa, foca o campo. */
@@ -180,7 +193,7 @@ export function MonteAssistenteSection() {
         {
           id: 1,
           role: 'assistant',
-          text: 'Beleza! O que você quer mudar? Escreve do seu jeito — ex.: "mais formal", "chama de Léo", "tira a piada".',
+          text: 'Combinado! O que você quer mudar? Escreva com suas palavras — ex.: "mais formal", "chama de Léo", "tira a piada".',
         },
       ]);
     }
@@ -323,6 +336,7 @@ export function MonteAssistenteSection() {
               onSubmit={onSubmit}
               onKeyDown={onKeyDown}
               onRetry={() => erroRetry && void enviar(erroRetry)}
+              onGerarAgora={() => void enviar(input, { generateNow: true })}
             />
           )}
 
@@ -367,7 +381,7 @@ export function MonteAssistenteSection() {
       <ConfirmDialog
         open={confirmReset}
         title="Recomeçar do zero?"
-        description="A conversa atual será descartada e o assistente de configuração começa uma entrevista nova. Isto não altera o robô que já está no ar."
+        description="A conversa atual será descartada e o assistente de configuração começa uma entrevista nova. Isto não altera o assistente que já está no ar."
         confirmLabel="Recomeçar"
         cancelLabel="Voltar"
         onConfirm={() => void recomecar()}
@@ -396,7 +410,8 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           Monte seu atendente
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Converse com nosso assistente e defina o jeitão do seu robô — nome, tom e regras.
+          Converse com nosso assistente e defina a personalidade do seu atendente — nome, tom e
+          regras.
         </p>
       </div>
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">
@@ -411,7 +426,7 @@ function IntroCard({ onStart, pending }: { onStart: () => void; pending: boolean
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13.5px] leading-normal text-ink-soft">
-        Em 4 ou 5 perguntinhas rápidas, a gente deixa o seu robô com a cara do seu negócio: como ele
+        Em 4 ou 5 perguntas rápidas, deixamos o seu atendente com a cara do seu negócio: como ele
         fala, se tem nome, e o que ele nunca deve fazer. Sem termos técnicos — é só conversar.
       </p>
       <GarantiaNota />
@@ -471,7 +486,8 @@ function AplicadaCard({
             Personalidade ativada!
           </p>
           <p className="mt-0.5 text-[12.5px] leading-normal text-ink-soft">
-            Seu robô já responde com o novo jeitão. Você pode reconfigurar quando quiser.
+            Seu assistente já responde com a nova personalidade. Você pode reconfigurar quando
+            quiser.
           </p>
         </div>
       </div>
@@ -508,6 +524,7 @@ function ChatView({
   onSubmit,
   onKeyDown,
   onRetry,
+  onGerarAgora,
 }: {
   messages: BuilderMessage[];
   pending: boolean;
@@ -519,6 +536,7 @@ function ChatView({
   onSubmit: (e: React.FormEvent) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onRetry: () => void;
+  onGerarAgora: () => void;
 }) {
   const over = remainingChars(input) < 0;
   return (
@@ -537,7 +555,7 @@ function ChatView({
         {pending && <TypingBubble />}
         {erroRetry && (
           <div className="flex flex-col items-center gap-2 py-1 text-center">
-            <p className="text-[12.5px] text-ink-faint">Tive um soluço aqui. Tenta de novo?</p>
+            <p className="text-[12.5px] text-ink-faint">Tive um probleminha aqui. Tente de novo?</p>
             <button
               type="button"
               onClick={onRetry}
@@ -588,6 +606,30 @@ function ChatView({
           </span>
         </div>
       </form>
+
+      {/*
+       * "Gerar agora" (SCRUM-92 v3): o dono pode gerar a persona A QUALQUER MOMENTO, sem
+       * responder tudo. O backend força a geração neste turno (não depende de o modelo
+       * decidir). Fica sempre visível abaixo do composer; depois de gerar, a conversa
+       * continua ajustando o rascunho.
+       */}
+      <div className="border-t border-line bg-surface px-2.5 pb-2.5 pt-2">
+        <Button
+          size="inline"
+          variant="secondary"
+          className="w-full"
+          onClick={onGerarAgora}
+          disabled={pending}
+          aria-label="Gerar a personalidade agora com o que você já contou"
+        >
+          <IconSparkle size={16} />
+          Gerar agora
+        </Button>
+        <p className="mt-1.5 px-1 text-center text-[11.5px] leading-snug text-ink-faint">
+          Pode gerar quando quiser — monto com o que você já contou e você continua ajustando
+          depois.
+        </p>
+      </div>
     </div>
   );
 }
@@ -751,15 +793,23 @@ function PreviewPanel({
         </Button>
       </div>
 
-      {/* Caminho "continuar ajustando" (refino por conversa) — baixa ênfase, não some. */}
-      <button
-        type="button"
-        onClick={onAjustarConversa}
-        disabled={approving}
-        className="self-start text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
-      >
-        Prefiro ajustar conversando
-      </button>
+      {/*
+       * Dica de refino pós-geração (SCRUM-92 v3): a conversa MELHORA o rascunho que já existe —
+       * o dono não precisa recomeçar do zero pra incluir algo. Baixa ênfase, não some.
+       */}
+      <div className="mt-1 flex flex-col gap-1.5 border-t border-brand/20 pt-3">
+        <p className="text-[12.5px] leading-normal text-ink-soft">
+          Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu atendente.
+        </p>
+        <button
+          type="button"
+          onClick={onAjustarConversa}
+          disabled={approving}
+          className="self-start text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
+        >
+          Continuar a conversa
+        </button>
+      </div>
     </div>
   );
 }
@@ -767,7 +817,7 @@ function PreviewPanel({
 /**
  * Editor da persona (caminho "Editar", melhoria 5): textarea SEMEADA com o rascunho (persona
  * pura, sem o bloco estrutural). Ao salvar => approve com { persona_editada }; o backend re-valida
- * e re-cola a mecânica de confirmação — o dono edita só o jeitão, nunca remove a garantia.
+ * e re-cola a mecânica de confirmação — o dono edita só a personalidade, nunca remove a garantia.
  */
 function EditPersonaPanel({
   value,
@@ -798,7 +848,7 @@ function EditPersonaPanel({
         </h3>
       </div>
       <p className="text-[12.5px] leading-normal text-ink-soft">
-        Ajuste o texto do jeito que quiser. A parte técnica (a confirmação antes de marcar) continua
+        Ajuste o texto como preferir. A parte técnica (a confirmação antes de marcar) continua
         garantida automaticamente — não precisa escrevê-la aqui.
       </p>
       <label htmlFor="monte-assistente-editor" className="sr-only">

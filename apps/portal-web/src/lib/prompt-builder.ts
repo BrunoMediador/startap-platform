@@ -11,7 +11,7 @@
  * Contrato (portal-api, plugin prompt-builder.ts — TODAS autenticadas por sessão,
  * slot SÓ da sessão via withTenant; base /portal/prompt-builder):
  *   POST /start    -> { session_id, pergunta, draft_ready, retomada }
- *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot? }   (body { content })
+ *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot? }   (body { content, generate_now? })
  *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo? }
  *   POST /approve  -> { ok, persona_aplicada, version_saved }
  *   POST /reset    -> { ok }
@@ -30,6 +30,13 @@ export const BUILDER_MAX_INPUT = 4000;
 
 /** Espelha MAX_PERSONA_CHARS do prompt-builder-validator (persona editada 1..4000). */
 export const PERSONA_MAX_CHARS = 4000;
+
+/**
+ * Texto enviado quando o dono clica "Gerar agora" SEM ter digitado nada — o backend exige
+ * content >= 1 char, e com generate_now:true a geração é forçada de qualquer forma. A frase
+ * também casa com o matchesGenerateIntent do servidor (defesa dupla).
+ */
+export const GENERATE_NOW_FALLBACK_CONTENT = 'Pode gerar a persona agora.';
 
 export type BuilderRole = 'assistant' | 'user';
 
@@ -141,16 +148,32 @@ export async function startBuilder(signal?: AbortSignal): Promise<StartOutcome> 
   }
 }
 
-/** 1 turno de conversa. Rate-limit vem como 200 com copy canned (tratado como ok). */
+/** Opções de um turno de conversa. `generateNow` = botão "Gerar agora" (força a geração). */
+export interface SendBuilderMessageOpts {
+  /** Botão "Gerar agora": manda generate_now:true -> o backend força a tool propor_prompt. */
+  generateNow?: boolean;
+  signal?: AbortSignal;
+}
+
+/**
+ * 1 turno de conversa. Rate-limit vem como 200 com copy canned (tratado como ok).
+ * Com `generateNow`, envia `generate_now:true` -> o backend GARANTE draft_ready NESTE turno
+ * (não depende do gpt-4o chamar a tool sozinho). Sem a flag, o body fica `{ content }`
+ * byte-idêntico ao fluxo original (o modelo decide quando gerar) — a entrevista normal não muda.
+ */
 export async function sendBuilderMessage(
   content: string,
-  signal?: AbortSignal,
+  opts: SendBuilderMessageOpts = {},
 ): Promise<MessageOutcome> {
+  // generate_now só entra no body quando true: fluxo normal = { content } byte-a-byte (o schema
+  // .strict() do backend rejeita chave desconhecida, e enviar false seria ruído inútil).
+  const body: { content: string; generate_now?: boolean } = { content };
+  if (opts.generateNow) body.generate_now = true;
   try {
     const r = await apiFetch<MessageResponse>(`${BASE}/message`, {
       method: 'POST',
-      body: { content },
-      signal,
+      body,
+      signal: opts.signal,
     });
     return {
       kind: 'ok',
@@ -241,6 +264,15 @@ export function buildApproveBody(
 ): { persona_editada: string } | undefined {
   const t = (personaEditada ?? '').trim();
   return t.length > 0 ? { persona_editada: t } : undefined;
+}
+
+/**
+ * Content do clique em "Gerar agora": aproveita o que o dono já digitou (se houver algo) ou
+ * cai no texto padrão — o backend precisa de content >= 1 char. Puro/testável sem DOM.
+ */
+export function generateNowContent(input: string): string {
+  const t = input.trim();
+  return t.length > 0 ? t : GENERATE_NOW_FALLBACK_CONTENT;
 }
 
 /** O texto editado pode ser salvo? Não-vazio (após trim) e dentro do teto de 4000. */
