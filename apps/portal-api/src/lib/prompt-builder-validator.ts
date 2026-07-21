@@ -27,8 +27,12 @@
 /** Placeholders que o renderPrompt (apps/api/src/lib/render-prompt.ts) sabe substituir. */
 const PLACEHOLDER_WHITELIST = new Set(['nome', 'telefone', 'data_atual']);
 
-/** Persona precisa sobrar com o mínimo de substância após a limpeza pra ser aprovável. */
-export const MIN_PERSONA_CHARS = 40;
+/**
+ * Persona precisa sobrar com o mínimo de substância após a limpeza pra ser aprovável.
+ * Critério é SÓ por tamanho: uma persona de parágrafo único (1 linha) é perfeitamente válida —
+ * o gpt-4o costuma gerar a persona num único parágrafo. NÃO exigir contagem de linhas (SCRUM-92).
+ */
+export const MIN_PERSONA_CHARS = 60;
 export const MAX_PERSONA_CHARS = 4000;
 /** Teto do prompt FINAL (persona + bloco estrutural) — proteção do renderPrompt/custo. */
 export const MAX_FINAL_PROMPT_CHARS = 12_000;
@@ -132,8 +136,9 @@ export function validatePersona(
       .trim(),
   );
 
-  const nonEmpty = cleaned.split('\n').filter((l) => l.trim() !== '').length;
-  const ok = cleaned.length >= MIN_PERSONA_CHARS && nonEmpty >= 2;
+  // Substância = SÓ tamanho. Persona de parágrafo único (1 linha) é válida — NÃO exigir 2+ linhas
+  // (o gpt-4o gera a persona num único parágrafo; a exigência antiga rejeitava persona boa). SCRUM-92.
+  const ok = cleaned.length >= MIN_PERSONA_CHARS;
 
   return { cleaned, removedTags: [...removedTags], ok };
 }
