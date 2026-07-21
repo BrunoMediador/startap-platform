@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   getCloneBySlot: vi.fn(),
   getAreaAndPromptCustom: vi.fn(),
   resolveModoAtendenteEnabledForSlot: vi.fn(),
+  matchesGenerateIntent: vi.fn(),
 }));
 
 const BLOCO_MARKER = '===BLOCO_ESTRUTURAL_TEST=== cartao + SIM antes de inserir_agendamento';
@@ -67,6 +68,7 @@ vi.mock('@startap/integrations', () => ({
     PROPOR_PROMPT_PARAMETERS: { type: 'object' },
     buildEntrevistadorSystemPrompt: () => 'SYSTEM_ENTREVISTADOR_FIXO_SECRETO',
     primeiraPergunta: () => 'Como você quer que ele fale com o cliente?',
+    matchesGenerateIntent: (...a: unknown[]) => mocks.matchesGenerateIntent(...a),
   },
   promptBuilder: {
     buildBlocoEstrutural: ({ modo }: { modo: string }) =>
@@ -154,6 +156,8 @@ beforeEach(() => {
   });
   mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
+  // Default: sem intenção textual de gerar (cada teste liga quando precisa).
+  mocks.matchesGenerateIntent.mockReturnValue(false);
   mocks.applyGeneratedPrompt.mockResolvedValue({
     slot: 'clone_x',
     prompt: 'x',
@@ -242,6 +246,73 @@ describe('message', () => {
     // system FIXO do servidor + input do dono como role:user (userMessage), nunca no system.
     expect(call.systemPrompt).toBe('SYSTEM_ENTREVISTADOR_FIXO_SECRETO');
     expect(call.userMessage).toContain('descontraído');
+  });
+
+  // ── caminho DETERMINÍSTICO "gerar agora" (fix do bug 9-turnos-sem-gerar) ──────
+  it('generate_now=true FORÇA a tool propor_prompt e entrega draft NUM turno', async () => {
+    mocks.matchesGenerateIntent.mockReturnValue(false); // prova que o FLAG sozinho força
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+    const app = await buildApp();
+    await startInterview(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'oi', generate_now: true },
+    });
+    expect(res.statusCode).toBe(200);
+    // draftReady garantido neste turno (não depende da vontade do modelo).
+    expect(res.json().draft_ready).toBe(true);
+    // runAgent recebeu toolChoice forçando propor_prompt.
+    const call = mocks.runAgent.mock.calls[0][0];
+    expect(call.toolChoice).toEqual({ forceFunction: 'propor_prompt' });
+    expect(call.model).toBe('gpt-4o');
+  });
+
+  it('intenção textual ("pode gerar") também FORÇA a tool, sem o flag', async () => {
+    mocks.matchesGenerateIntent.mockReturnValue(true); // texto casou intenção
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+    const app = await buildApp();
+    await startInterview(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'pode gerar' }, // sem generate_now
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draft_ready).toBe(true);
+    expect(mocks.runAgent.mock.calls[0][0].toolChoice).toEqual({ forceFunction: 'propor_prompt' });
+  });
+
+  it('fluxo normal (sem flag, sem intenção): NÃO força a tool (toolChoice ausente)', async () => {
+    mocks.matchesGenerateIntent.mockReturnValue(false);
+    mocks.runAgent.mockResolvedValue({
+      reply: 'E qual regra da casa você quer destacar?',
+      toolCalls: [],
+      usage: { prompt: 8, completion: 5, total: 13, cached: 0 },
+    });
+    const app = await buildApp();
+    await startInterview(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'quero ele mais formal' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draft_ready).toBe(false);
+    // caminho de entrevista comum = byte-a-byte: sem tool_choice forçado.
+    expect(mocks.runAgent.mock.calls[0][0].toolChoice).toBeUndefined();
+  });
+
+  it('generate_now com tipo inválido -> 400 (schema .strict boolean)', async () => {
+    const app = await buildApp();
+    await startInterview(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'oi', generate_now: 'sim' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mocks.runAgent).not.toHaveBeenCalled();
   });
 
   it('sem OPENAI_API_KEY -> 503 (validação lazy)', async () => {

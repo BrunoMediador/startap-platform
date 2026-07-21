@@ -1,14 +1,16 @@
 /**
- * Testes do meta-entrevistador (SCRUM-92 + melhorias 20/07).
+ * Testes do meta-entrevistador (SCRUM-92 + v3 20/07).
  *
  * 1. DRIFT-GUARD: cada const executável tem que bater byte-a-byte com o corpo do `.md`
  *    versionado (fonte canônica) — impede que a persona do entrevistador divirja
- *    silenciosamente do que está documentado/aprovado. V1 é imutável (histórico);
- *    V2 é a versão EXECUTADA em runtime.
+ *    silenciosamente do que está documentado/aprovado. V1/V2 são imutáveis (histórico);
+ *    V3 é a versão EXECUTADA em runtime.
  * 2. O builder preenche o contexto do clone (nome/área/modo) e o input do cliente NUNCA
  *    entra no system prompt.
- * 3. As melhorias de 20/07 estão no prompt executado: tom de consultor, redirecionamento
- *    de dados operacionais e aviso final (rolar a tela + Aprovar/Rejeitar/Editar).
+ * 3. A v3 (20/07) está no prompt executado: humanizado (poucas perguntas, não obriga),
+ *    GERAR SOB DEMANDA, redirecionamento de dados operacionais e aviso final (rolar a tela +
+ *    Aprovar/Rejeitar/Editar).
+ * 4. matchesGenerateIntent: casa "pode gerar/terminei/pronto..." sem falso positivo por substring.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,11 +18,13 @@ import { describe, expect, it } from 'vitest';
 import {
   META_ENTREVISTADOR_PROMPT_V1,
   META_ENTREVISTADOR_PROMPT_V2,
+  META_ENTREVISTADOR_PROMPT_V3,
   buildEntrevistadorSystemPrompt,
+  matchesGenerateIntent,
   primeiraPergunta,
 } from './meta-entrevistador.js';
 
-function readMdBody(version: 'v1' | 'v2'): string {
+function readMdBody(version: 'v1' | 'v2' | 'v3'): string {
   const path = fileURLToPath(
     new URL(`../../ai/prompts/meta-entrevistador/${version}.md`, import.meta.url),
   );
@@ -35,28 +39,80 @@ describe('meta-entrevistador — drift guard', () => {
     expect(META_ENTREVISTADOR_PROMPT_V1.trim()).toBe(readMdBody('v1'));
   });
 
-  it('const V2 (runtime) == corpo do v2.md (fonte canônica)', () => {
+  it('const V2 == corpo do v2.md (fonte canônica imutável)', () => {
     expect(META_ENTREVISTADOR_PROMPT_V2.trim()).toBe(readMdBody('v2'));
+  });
+
+  it('const V3 (runtime) == corpo do v3.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V3.trim()).toBe(readMdBody('v3'));
   });
 });
 
-describe('meta-entrevistador — melhorias 20/07 (V2 é o runtime)', () => {
-  it('o system prompt executado carrega o tom de consultor, o redirecionamento e o aviso final', () => {
+describe('meta-entrevistador — v3 20/07 (V3 é o runtime)', () => {
+  it('o system prompt executado carrega tom de consultor, gerar sob demanda, redirecionamento e aviso final', () => {
     const sp = buildEntrevistadorSystemPrompt({
       nomeNegocio: 'Barbearia do Zé',
       area: 'barbearia',
       modo: 'agenda',
     });
-    // Melhoria 1 (tom profissional) + 4 (conhece a ferramenta).
-    expect(sp).toContain('CONSULTOR DE CONFIGURAÇÃO');
+    // Tom profissional (v3 mantém: sem gírias/emojis) + consultor de configuração.
+    expect(sp).toContain('consultor de configuração');
     expect(sp).toContain('Sem gírias, sem emojis');
-    // Melhoria 3 (redirecionar dados operacionais para a tela certa).
+    // v3: GERAR SOB DEMANDA (o fix central) — o dono pode pedir pra gerar quando quiser.
+    expect(sp).toContain('GERAR SOB DEMANDA');
+    expect(sp).toContain('pode pedir para gerar a qualquer momento');
+    // Redirecionar dados operacionais para a tela certa.
     expect(sp).toContain('Horário de atendimento');
     expect(sp).toContain('Meu negócio');
     expect(sp).toContain('catálogo de serviços');
-    // Melhoria 5 (aviso final: rolar a tela + Aprovar/Rejeitar/Editar).
+    // Aviso final: rolar a tela + Aprovar/Rejeitar/Editar.
     expect(sp).toContain('ROLAR A TELA PARA BAIXO');
     expect(sp).toMatch(/Aprovar, Rejeitar ou Editar/);
+    // Placeholders todos resolvidos.
+    expect(sp).not.toContain('{area}');
+    expect(sp).not.toContain('{modo}');
+  });
+});
+
+describe('matchesGenerateIntent', () => {
+  it('casa intenção clara de gerar (lista do v3)', () => {
+    for (const t of [
+      'pode gerar',
+      'Pode gerar!',
+      'pode gerar a persona agora',
+      'gera',
+      'gerar',
+      'gere isso',
+      'terminei',
+      'acho que é isso, pode gerar',
+      'pronto',
+      'chega',
+      'é isso',
+      'só isso',
+      'manda',
+      'pode montar',
+      'finaliza',
+    ]) {
+      expect(matchesGenerateIntent(t), t).toBe(true);
+    }
+  });
+
+  it('NÃO casa por substring nem em conversa normal (sem falso positivo)', () => {
+    for (const t of [
+      'quero que ele fale de forma descontraída',
+      'geralmente meus clientes marcam de manhã',
+      'atendo prontamente toda semana',
+      'ele deve ser acolhedor e calmo',
+      'não sei, você decide',
+      'ele não passa orçamento por foto',
+    ]) {
+      expect(matchesGenerateIntent(t), t).toBe(false);
+    }
+  });
+
+  it('string vazia -> false', () => {
+    expect(matchesGenerateIntent('')).toBe(false);
+    expect(matchesGenerateIntent('   ')).toBe(false);
   });
 });
 

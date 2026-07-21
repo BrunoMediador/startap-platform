@@ -3,7 +3,7 @@
  *
  * Não conecta na OpenAI — usa mock do SDK.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockCreate } = vi.hoisted(() => ({ mockCreate: vi.fn() }));
 
@@ -78,5 +78,100 @@ describe('runAgent — V4: model obrigatório', () => {
 
     expect(result.usage.prompt).toBe(5000);
     expect(result.usage.cached).toBe(4096);
+  });
+});
+
+describe('runAgent — toolChoice (fix determinístico SCRUM-92)', () => {
+  // mock_create acumula calls entre testes do arquivo; limpamos pra indexar calls[0] deste teste.
+  beforeEach(() => mockCreate.mockClear());
+
+  function makeTool() {
+    return {
+      name: 'propor_prompt',
+      description: 'propoe a persona',
+      parameters: { type: 'object' as const },
+      run: vi.fn(async () => ({ ok: true })),
+    };
+  }
+
+  it('ausente: NÃO passa tool_choice (byte-a-byte pro caminho atual)', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'oi', tool_calls: undefined } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    await runAgent({ ...baseOpts, model: 'gpt-4o', tools: [makeTool()] });
+    const call = mockCreate.mock.calls[0][0];
+    expect(call.tool_choice).toBeUndefined();
+    expect('tool_choice' in call).toBe(false);
+  });
+
+  it("'auto' explícito: passa tool_choice 'auto'", async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'oi', tool_calls: undefined } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    await runAgent({ ...baseOpts, model: 'gpt-4o', tools: [makeTool()], toolChoice: 'auto' });
+    expect(mockCreate.mock.calls[0][0].tool_choice).toBe('auto');
+  });
+
+  it('forceFunction: OBRIGA a função no 1º turno e captura a tool call', async () => {
+    // Turno 0 (forçado): modelo chama a tool. Turno 1: escreve a mensagem final.
+    mockCreate
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: 'c1',
+                  type: 'function',
+                  function: { name: 'propor_prompt', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+      })
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: 'Prévia pronta! Role a tela.', tool_calls: undefined } }],
+        usage: { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 },
+      });
+
+    const tool = makeTool();
+    const result = await runAgent({
+      ...baseOpts,
+      model: 'gpt-4o',
+      tools: [tool],
+      toolChoice: { forceFunction: 'propor_prompt' },
+    });
+
+    // 1º turno: tool_choice forçado na função.
+    expect(mockCreate.mock.calls[0][0].tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'propor_prompt' },
+    });
+    // 2º turno: NÃO força mais (senão chamaria a tool em loop) — libera resposta final.
+    expect(mockCreate.mock.calls[1][0].tool_choice).toBeUndefined();
+
+    expect(tool.run).toHaveBeenCalledTimes(1);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0].name).toBe('propor_prompt');
+    expect(result.reply).toBe('Prévia pronta! Role a tela.');
+  });
+
+  it('forceFunction SEM tools ofertadas: não passa tool_choice (guarda)', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [{ message: { content: 'oi', tool_calls: undefined } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    await runAgent({
+      ...baseOpts,
+      model: 'gpt-4o',
+      tools: [],
+      toolChoice: { forceFunction: 'propor_prompt' },
+    });
+    expect(mockCreate.mock.calls[0][0].tool_choice).toBeUndefined();
   });
 });
