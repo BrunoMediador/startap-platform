@@ -5,10 +5,16 @@
  * onde o dado canônico é sempre o do contextBlock). Roda sobre `persona_prompt` ANTES de virar
  * preview OU de ser persistido no approve. Heurística por regex — remove linhas com:
  *  - dados operacionais que NÃO podem entrar na persona (vêm de campos estruturados em runtime):
- *    CEP, telefone, moeda, faixa de horário, logradouro, e nomes de serviço do catálogo do clone;
+ *    CEP, telefone, moeda, faixa de horário, logradouro;
  *  - tokens ESTRUTURAIS do fluxo (cartão/SIM/nomes de ferramenta/marcadores) — o bloco estrutural
  *    é colado por CÓDIGO no approve; a persona nunca deve carregar (nem tentar remover) a mecânica;
  *  - PII do cliente final (e-mail, CPF) — a persona é durável (bot_prompt_versions), não pode vazar.
+ *
+ * NÃO removemos linha só por citar o NOME de um serviço do catálogo (ex.: "corte", "barba"): dizer
+ * QUE TIPO de serviço o negócio atende é natural e desejável na persona, não é duplicação nociva. A
+ * duplicação que importa (preço/horário/endereço/telefone junto do serviço) já cai nos REJECT_LINE
+ * abaixo — "Corte R$40" morre pelo padrão `moeda`. Cortar a linha só pelo nome do serviço quebrava
+ * barbearia (catálogo = corte/barba/sobrancelha → quase toda linha sumia → persona vazia). SCRUM-92.
  *
  * Além disso: `sanitizeOrphanPlaceholders` limpa `{var}` fora da whitelist (evita placeholder órfão
  * que o renderPrompt entregaria cru ao modelo).
@@ -62,11 +68,6 @@ export interface PersonaValidationResult {
   ok: boolean;
 }
 
-/** Escapa uma string pra uso literal em RegExp. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
  * Limpa placeholders `{var}` fora da whitelist: remove as chaves (`{promo}` -> `promo`),
  * evitando que o renderPrompt entregue `{promo}` cru ao modelo. Whitelist preservada intacta.
@@ -88,21 +89,18 @@ export function stripPII(text: string): string {
 }
 
 /**
- * Valida e LIMPA a persona. `servicos` = nomes do catálogo do clone (flow_clones.servicos):
- * uma linha que cite um serviço do catálogo é removida (o dado vem do contextBlock em runtime).
+ * Valida e LIMPA a persona. Remove APENAS linhas com dados operacionais/PII/estruturais
+ * (REJECT_LINE_PATTERNS): endereço, preço, horário, telefone, e-mail, CPF e mecânica do fluxo.
+ *
+ * `opts.servicos` (nomes do catálogo do clone) é aceito por compat com os call-sites e IGNORADO:
+ * citar o nome de um serviço na persona é natural (ver JSDoc do módulo). A linha só some se vier
+ * junto de um dado operacional (ex.: "Corte R$40" cai no padrão `moeda`). Isso conserta o loop
+ * infinito do builder em barbearia (catálogo genérico apagava quase toda linha). SCRUM-92.
  */
 export function validatePersona(
   persona: string,
-  opts: { servicos?: string[] } = {},
+  _opts: { servicos?: string[] } = {},
 ): PersonaValidationResult {
-  // Boundary unicode-aware (não ASCII `\b`): nomes de serviço acentuados ("Corte Degradê")
-  // terminam em letra fora de [A-Za-z0-9_], onde `\b` NÃO casa. Lookbehind/lookahead por
-  // letra/número (flag `u`) resolve sem over-match tipo "corte" em "cortesia".
-  const servicoPatterns = (opts.servicos ?? [])
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 3)
-    .map((s) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(s)}(?![\\p{L}\\p{N}])`, 'iu'));
-
   const removedTags = new Set<string>();
   const kept: string[] = [];
 
@@ -117,14 +115,6 @@ export function validatePersona(
       if (re.test(line)) {
         hit = tag;
         break;
-      }
-    }
-    if (!hit) {
-      for (const re of servicoPatterns) {
-        if (re.test(line)) {
-          hit = 'servico_catalogo';
-          break;
-        }
       }
     }
     if (hit) {
