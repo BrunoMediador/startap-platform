@@ -36,6 +36,7 @@ import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalPerfilRoutes } from './routes/portal-perfil.js';
 import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
+import { promptBuilderRoutes } from './routes/prompt-builder.js';
 
 const log = logger.child({ service: 'portal-api' });
 
@@ -146,6 +147,11 @@ async function main() {
   // Gated por GOOGLE_ACCOUNT_PORTAL_ENABLED (404 se OFF) — feature dormente, não toca
   // fluxo atual. Senha decifrada server-side + cache-control: no-store; nunca em log.
   await app.register(portalGoogleContaRoutes);
+  // Builder conversacional de persona (SCRUM-92, ADR 0032). Gated por PROMPT_BUILDER_ENABLED
+  // (404 se OFF) — feature dormente, não toca fluxo atual. As rotas usam withTenant (slot só da
+  // sessão) + estado efêmero no Redis; o meta-agente roda no DeepSeek e NUNCA escreve em prod
+  // sozinho — quem grava é o approve (clique humano), colando o BLOCO_ESTRUTURAL server-side.
+  await app.register(promptBuilderRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);

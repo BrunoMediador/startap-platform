@@ -6,6 +6,7 @@ import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-se
 import { IconCheck } from '@/components/icons';
 import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { PlanosSection } from '@/components/planos/planos-section';
+import { MonteAssistenteSection } from '@/components/prompt-builder/monte-assistente-section';
 import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
@@ -254,6 +255,12 @@ export default function PerfilPage() {
           </p>
         </form>
       )}
+
+      {/* Monte seu atendente (SCRUM-92): chat de configuração que PROPÕE a persona do
+          robô (meta-agente DeepSeek) + prévia + Aprovar/Ajustar. A seção SE AUTO-GATEIA
+          pelo GET /portal/prompt-builder/draft — 404 (PROMPT_BUILDER_ENABLED OFF) some
+          INTEIRA (byte-idêntico pros clientes atuais). Traz o próprio divisor. */}
+      <MonteAssistenteSection />
 
       {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
           link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
