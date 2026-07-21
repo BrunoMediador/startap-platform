@@ -332,6 +332,20 @@ describe('approve', () => {
     expect(draft.json().status).toBe('nao_iniciado');
   });
 
+  it('modo mudou entre start e approve -> bloco reflete o modo ATUAL (F1, security)', async () => {
+    const app = await buildApp();
+    // Entrevista NASCE em agenda (resolveModoAtendente=false no beforeEach).
+    await startAndDraft(app);
+    // Clone VIRA atendente ENTRE iniciar e aprovar (troca de modo no gestão/portal).
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    // O bloco é re-derivado do contexto FRESCO (atendente), NÃO do state cacheado (agenda).
+    expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+    expect(finalPrompt).not.toContain(BLOCO_MARKER);
+  });
+
   it('injeção não remove a garantia: approve ainda cola o BLOCO mesmo com persona maliciosa', async () => {
     const app = await buildApp();
     await startAndDraft(

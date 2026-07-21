@@ -337,13 +337,21 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const state = await getState(redis, slot);
     if (!state || !state.draft) return reply.code(409).send({ error: 'sem_rascunho' });
 
+    // Contexto FRESCO do clone (NÃO o cacheado no /start): serviços + modo/área ATUAIS.
+    // Se o clone trocou de modo (atendente↔agenda) entre iniciar e aprovar, o bloco tem que
+    // refletir o modo de AGORA — senão colaria a variante errada (ex.: bloco de atendente, sem
+    // cartão/SIM, num clone que virou agenda), enfraquecendo a garantia (F1, security).
+    const ctx = await loadCloneContext(slot);
+    const servicos = ctx?.servicos ?? [];
+    const modo = ctx?.modo ?? state.modo; // fallback ao state só se o clone sumiu no meio.
+    const area = ctx?.area ?? state.area;
+
     // Re-valida a persona server-side (defesa em profundidade — nunca confia no draft do Redis).
-    const servicos = (await loadCloneContext(slot))?.servicos ?? [];
     const v = validatePersona(stripPII(state.draft.persona), { servicos });
     if (!v.ok) return reply.code(422).send({ error: 'rascunho_insuficiente' });
 
     // GARANTIA: cola o BLOCO_ESTRUTURAL (cartão + SIM) DEPOIS da persona, no SERVIDOR.
-    const bloco = promptBuilder.buildBlocoEstrutural({ modo: state.modo, area: state.area });
+    const bloco = promptBuilder.buildBlocoEstrutural({ modo, area });
     const finalPrompt = sanitizeOrphanPlaceholders(`${v.cleaned}\n\n${bloco}`);
     if (finalPrompt.length > MAX_FINAL_PROMPT_CHARS) {
       return reply.code(422).send({ error: 'prompt_muito_longo' });
@@ -357,7 +365,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       );
       await deleteState(redis, slot);
       log.info(
-        { slot, versionSaved: result.version_saved, modo: state.modo },
+        { slot, versionSaved: result.version_saved, modo },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );
       return reply
