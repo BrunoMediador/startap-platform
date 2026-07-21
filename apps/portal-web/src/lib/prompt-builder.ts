@@ -28,6 +28,9 @@ const BASE = '/portal/prompt-builder';
 /** Espelha PROMPT_BUILDER_MAX_INPUT_CHARS do portal-api (content 1..4000). */
 export const BUILDER_MAX_INPUT = 4000;
 
+/** Espelha MAX_PERSONA_CHARS do prompt-builder-validator (persona editada 1..4000). */
+export const PERSONA_MAX_CHARS = 4000;
+
 export type BuilderRole = 'assistant' | 'user';
 
 /** Uma bolha da conversa visível (id local incremental, texto cru do turno). */
@@ -93,7 +96,7 @@ export type MessageOutcome =
 export type ApproveOutcome =
   | { kind: 'ok'; versionSaved: number | null }
   | { kind: 'no_draft' } // 409 sem_rascunho (rascunho expirou)
-  | { kind: 'invalid' } // 422 rascunho_insuficiente / prompt_muito_longo
+  | { kind: 'invalid' } // 422 rascunho_insuficiente/prompt_muito_longo | 400 persona_editada fora de 1..4000
   | { kind: 'unavailable' } // 404 feature off
   | { kind: 'error' }; // 500 falha_ao_salvar / rede
 
@@ -185,15 +188,29 @@ export async function fetchBuilderDraft(signal?: AbortSignal): Promise<BuilderDr
   }
 }
 
-/** Persiste a persona (ação NÃO-LLM). Efeito: bot_prompt + prompt_custom=true + versão. */
-export async function approveBuilder(): Promise<ApproveOutcome> {
+/**
+ * Persiste a persona (ação NÃO-LLM). Efeito: bot_prompt + prompt_custom=true + versão.
+ *
+ * `personaEditada` (caminho "Editar"): quando o dono ajustou o TEXTO da persona antes de
+ * aprovar, envia { persona_editada }. Vazio/só-espaço/ausente => aprova o RASCUNHO do Redis
+ * (caminho "Aprovar", request byte-idêntico ao original SEM body). Em AMBOS os casos o backend
+ * re-valida (stripPII + validatePersona) e SEMPRE cola o BLOCO_ESTRUTURAL por código — editar a
+ * persona NÃO remove a mecânica de confirmação.
+ */
+export async function approveBuilder(personaEditada?: string): Promise<ApproveOutcome> {
+  const body = buildApproveBody(personaEditada);
   try {
-    const r = await apiFetch<ApproveResponse>(`${BASE}/approve`, { method: 'POST' });
+    const r = await apiFetch<ApproveResponse>(
+      `${BASE}/approve`,
+      body ? { method: 'POST', body } : { method: 'POST' },
+    );
     return { kind: 'ok', versionSaved: r.version_saved ?? null };
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 409) return { kind: 'no_draft' };
       if (err.status === 422) return { kind: 'invalid' };
+      // 400 = persona_editada fora de 1..4000 ou campo extra (schema .strict()).
+      if (err.status === 400) return { kind: 'invalid' };
       if (err.status === 404) return { kind: 'unavailable' };
     }
     return { kind: 'error' };
@@ -211,6 +228,31 @@ export async function resetBuilder(): Promise<boolean> {
 }
 
 // ── Lógica pura de estado do chat (testável) ─────────────────────────────────────
+
+/**
+ * Monta o body do POST /approve a partir do que o dono digitou no editor de persona.
+ * - undefined/vazio/só-espaço => `undefined` (aprova o RASCUNHO do Redis; caminho "Aprovar",
+ *   request SEM body, byte-idêntico ao comportamento original).
+ * - texto não-vazio => `{ persona_editada: <trim> }` (caminho "Editar").
+ * Nunca envia campo extra (o schema .strict() do backend rejeita com 400).
+ */
+export function buildApproveBody(
+  personaEditada?: string | null,
+): { persona_editada: string } | undefined {
+  const t = (personaEditada ?? '').trim();
+  return t.length > 0 ? { persona_editada: t } : undefined;
+}
+
+/** O texto editado pode ser salvo? Não-vazio (após trim) e dentro do teto de 4000. */
+export function isPersonaSavable(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && t.length <= PERSONA_MAX_CHARS;
+}
+
+/** Caracteres restantes no editor de persona (negativo se colar texto acima do teto). */
+export function personaCharsLeft(text: string): number {
+  return PERSONA_MAX_CHARS - text.length;
+}
 
 /** Caracteres restantes no composer (pode ficar negativo se colar texto gigante). */
 export function remainingChars(text: string): number {
