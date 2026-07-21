@@ -1,23 +1,29 @@
 /**
- * Testes do meta-entrevistador (SCRUM-92).
+ * Testes do meta-entrevistador (SCRUM-92 + melhorias 20/07).
  *
- * 1. DRIFT-GUARD: o const executado em runtime tem que bater byte-a-byte com o corpo do
- *    arquivo versionado v1.md (fonte canônica) — impede que a persona do entrevistador
- *    divirja silenciosamente do que está documentado/aprovado.
+ * 1. DRIFT-GUARD: cada const executável tem que bater byte-a-byte com o corpo do `.md`
+ *    versionado (fonte canônica) — impede que a persona do entrevistador divirja
+ *    silenciosamente do que está documentado/aprovado. V1 é imutável (histórico);
+ *    V2 é a versão EXECUTADA em runtime.
  * 2. O builder preenche o contexto do clone (nome/área/modo) e o input do cliente NUNCA
  *    entra no system prompt.
+ * 3. As melhorias de 20/07 estão no prompt executado: tom de consultor, redirecionamento
+ *    de dados operacionais e aviso final (rolar a tela + Aprovar/Rejeitar/Editar).
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   META_ENTREVISTADOR_PROMPT_V1,
+  META_ENTREVISTADOR_PROMPT_V2,
   buildEntrevistadorSystemPrompt,
   primeiraPergunta,
 } from './meta-entrevistador.js';
 
-function readV1Body(): string {
-  const path = fileURLToPath(new URL('../../ai/prompts/meta-entrevistador/v1.md', import.meta.url));
+function readMdBody(version: 'v1' | 'v2'): string {
+  const path = fileURLToPath(
+    new URL(`../../ai/prompts/meta-entrevistador/${version}.md`, import.meta.url),
+  );
   const md = readFileSync(path, 'utf8');
   // O corpo é tudo depois da primeira linha separadora `---` isolada.
   const parts = md.split(/\n---\n/);
@@ -25,8 +31,32 @@ function readV1Body(): string {
 }
 
 describe('meta-entrevistador — drift guard', () => {
-  it('const runtime == corpo do v1.md (fonte canônica)', () => {
-    expect(META_ENTREVISTADOR_PROMPT_V1.trim()).toBe(readV1Body());
+  it('const V1 == corpo do v1.md (fonte canônica imutável)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V1.trim()).toBe(readMdBody('v1'));
+  });
+
+  it('const V2 (runtime) == corpo do v2.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V2.trim()).toBe(readMdBody('v2'));
+  });
+});
+
+describe('meta-entrevistador — melhorias 20/07 (V2 é o runtime)', () => {
+  it('o system prompt executado carrega o tom de consultor, o redirecionamento e o aviso final', () => {
+    const sp = buildEntrevistadorSystemPrompt({
+      nomeNegocio: 'Barbearia do Zé',
+      area: 'barbearia',
+      modo: 'agenda',
+    });
+    // Melhoria 1 (tom profissional) + 4 (conhece a ferramenta).
+    expect(sp).toContain('CONSULTOR DE CONFIGURAÇÃO');
+    expect(sp).toContain('Sem gírias, sem emojis');
+    // Melhoria 3 (redirecionar dados operacionais para a tela certa).
+    expect(sp).toContain('Horário de atendimento');
+    expect(sp).toContain('Meu negócio');
+    expect(sp).toContain('catálogo de serviços');
+    // Melhoria 5 (aviso final: rolar a tela + Aprovar/Rejeitar/Editar).
+    expect(sp).toContain('ROLAR A TELA PARA BAIXO');
+    expect(sp).toMatch(/Aprovar, Rejeitar ou Editar/);
   });
 });
 
@@ -50,7 +80,7 @@ describe('buildEntrevistadorSystemPrompt', () => {
       area: 'estetica',
       modo: 'atendente',
     });
-    expect(sp).toContain('chamar o dono / um humano');
+    expect(sp).toContain('chamar o dono ou outro atendente humano');
     expect(sp).not.toContain('{postura_modo}');
   });
 
@@ -64,9 +94,12 @@ describe('buildEntrevistadorSystemPrompt', () => {
     expect(sp).not.toContain('{ignore}');
   });
 
-  it('primeiraPergunta é determinística e cita o negócio', () => {
+  it('primeiraPergunta é determinística, cita o negócio e tem tom profissional', () => {
     const q = primeiraPergunta({ nomeNegocio: 'Salão Lua', area: 'salao', modo: 'agenda' });
     expect(q).toContain('Salão Lua');
     expect(q).toMatch(/como você quer que ele fale/i);
+    // Sem a gíria da v1 ("com a cara de vocês" / "perguntinhas").
+    expect(q).not.toContain('com a cara de vocês');
+    expect(q).not.toContain('perguntinhas');
   });
 });

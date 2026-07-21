@@ -2,11 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
 import {
   BUILDER_MAX_INPUT,
+  PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
+  buildApproveBody,
   fetchBuilderDraft,
   isBuilderUnavailable,
+  isPersonaSavable,
   isSendable,
+  personaCharsLeft,
   remainingChars,
   sendBuilderMessage,
   startBuilder,
@@ -138,15 +142,80 @@ describe('approveBuilder — mapa de outcome', () => {
     expect(await approveBuilder()).toEqual({ kind: 'ok', versionSaved: null });
   });
 
-  it('409 -> no_draft; 422 -> invalid; 404 -> unavailable; 500 -> error', async () => {
+  it('409 -> no_draft; 422 -> invalid; 400 -> invalid; 404 -> unavailable; 500 -> error', async () => {
     apiFetchMock.mockRejectedValueOnce(new ApiError(409, 'sem_rascunho', null));
     expect(await approveBuilder()).toEqual({ kind: 'no_draft' });
     apiFetchMock.mockRejectedValueOnce(new ApiError(422, 'rascunho_insuficiente', null));
     expect(await approveBuilder()).toEqual({ kind: 'invalid' });
+    // 400 = persona_editada fora de 1..4000 ou campo extra (schema .strict()).
+    apiFetchMock.mockRejectedValueOnce(new ApiError(400, 'dados_invalidos', null));
+    expect(await approveBuilder('x')).toEqual({ kind: 'invalid' });
     apiFetchMock.mockRejectedValueOnce(new ApiError(404, 'recurso_indisponivel', null));
     expect(await approveBuilder()).toEqual({ kind: 'unavailable' });
     apiFetchMock.mockRejectedValueOnce(new ApiError(500, 'falha_ao_salvar', null));
     expect(await approveBuilder()).toEqual({ kind: 'error' });
+  });
+
+  it('sem persona editada -> POST SEM body (aprova o rascunho, request byte-idêntico)', async () => {
+    apiFetchMock.mockResolvedValue({ ok: true, persona_aplicada: true, version_saved: 3 });
+    await approveBuilder();
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/approve', { method: 'POST' });
+  });
+
+  it('persona editada não-vazia -> POST com body { persona_editada } (trim aplicado)', async () => {
+    apiFetchMock.mockResolvedValue({ ok: true, persona_aplicada: true, version_saved: 4 });
+    await approveBuilder('  Você é o Léo, descontraído  ');
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/approve', {
+      method: 'POST',
+      body: { persona_editada: 'Você é o Léo, descontraído' },
+    });
+  });
+
+  it('persona só-espaço -> POST SEM body (cai no caminho "aprovar rascunho")', async () => {
+    apiFetchMock.mockResolvedValue({ ok: true, persona_aplicada: true, version_saved: 5 });
+    await approveBuilder('   ');
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/approve', { method: 'POST' });
+  });
+});
+
+describe('buildApproveBody — montagem do body persona_editada', () => {
+  it('ausente/vazio/só-espaço -> undefined (aprova rascunho, sem body)', () => {
+    expect(buildApproveBody()).toBeUndefined();
+    expect(buildApproveBody(undefined)).toBeUndefined();
+    expect(buildApproveBody(null)).toBeUndefined();
+    expect(buildApproveBody('')).toBeUndefined();
+    expect(buildApproveBody('   \n  ')).toBeUndefined();
+  });
+
+  it('texto não-vazio -> { persona_editada: <trim> }', () => {
+    expect(buildApproveBody('Léo brincalhão')).toEqual({ persona_editada: 'Léo brincalhão' });
+    expect(buildApproveBody('  espaços nas bordas  ')).toEqual({
+      persona_editada: 'espaços nas bordas',
+    });
+  });
+});
+
+describe('isPersonaSavable / personaCharsLeft — estado do botão "Salvar e ativar"', () => {
+  it('vazio/só-espaço = não salvável', () => {
+    expect(isPersonaSavable('')).toBe(false);
+    expect(isPersonaSavable('    ')).toBe(false);
+  });
+
+  it('texto válido = salvável; no limite ainda salvável; acima do limite não', () => {
+    expect(isPersonaSavable('Você é o assistente da barbearia.')).toBe(true);
+    expect(isPersonaSavable('x'.repeat(PERSONA_MAX_CHARS))).toBe(true);
+    expect(isPersonaSavable('x'.repeat(PERSONA_MAX_CHARS + 1))).toBe(false);
+  });
+
+  it('trim conta pro limite (espaços nas bordas não estouram)', () => {
+    const dentro = `  ${'x'.repeat(PERSONA_MAX_CHARS)}  `;
+    expect(isPersonaSavable(dentro)).toBe(true);
+  });
+
+  it('personaCharsLeft conta a partir do teto (negativo se passar)', () => {
+    expect(personaCharsLeft('')).toBe(PERSONA_MAX_CHARS);
+    expect(personaCharsLeft('abc')).toBe(PERSONA_MAX_CHARS - 3);
+    expect(personaCharsLeft('x'.repeat(PERSONA_MAX_CHARS + 7))).toBe(-7);
   });
 });
 

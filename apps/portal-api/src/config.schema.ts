@@ -174,6 +174,12 @@ export const ConfigSchema = z.object({
   // rota /demo/chat responde 503 (validação LAZY no ponto de uso). NUNCA logada
   // nem hardcoded.
   DEEPSEEK_API_KEY: z.string().min(1).optional(),
+  // Chave do provider OpenAI (mesma da stack do apps/api). Usada pelo builder conversacional
+  // (SCRUM-92): o meta-entrevistador roda no OpenAI (gpt-4o) desde 20/07 — DeepSeek deu tom
+  // ruim no teste ao vivo do Bruno. OPCIONAL no boot; validada LAZY no ponto de uso (a rota
+  // /portal/prompt-builder/message responde 503 se faltar, sem derrubar o boot). NUNCA logada
+  // nem hardcoded. NÃO muda o bot real do cliente (esse segue no bot_config.model do clone).
+  OPENAI_API_KEY: z.string().min(1).optional(),
   // Modelo do provider DeepSeek. Default deepseek-chat (design W6). Ajustável sem deploy.
   DEMO_MODEL: z.string().default('deepseek-chat'),
   // Teto de tokens de SAÍDA por turn (custo duro por resposta). Default 180 (W6:
@@ -315,19 +321,22 @@ export const ConfigSchema = z.object({
   // lição #247: feature dormente nunca derruba o portal-api). OFF -> as rotas respondem
   // 404 (front esconde a seção "Monte seu atendente"). Decisão do Bruno: subir ON pra
   // TODOS -> o PM seta PROMPT_BUILDER_ENABLED=true no deploy (a flag é o kill-switch, não
-  // um rollout dormente). Provisionar DEEPSEEK_API_KEY antes de ligar (validado LAZY: rota
+  // um rollout dormente). Provisionar OPENAI_API_KEY antes de ligar (validado LAZY: rota
   // responde 503 se faltar, sem derrubar o boot). NUNCA hardcoded.
   PROMPT_BUILDER_ENABLED: z
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
 
-  // O meta-agente entrevistador roda SEMPRE no DeepSeek (deepseek-chat) por custo — NÃO herda
-  // o bot_config do clone (é meta-agente, não o bot do cliente). Reusa DEEPSEEK_API_KEY (já
-  // declarada acima). Modelo ajustável sem deploy; default = decisão do Bruno.
-  PROMPT_BUILDER_MODEL: z.string().default('deepseek-chat'),
-  PROMPT_BUILDER_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.5),
-  // Timeout (ms) por chamada ao DeepSeek — nunca aguardar infinito (regra 7).
+  // O meta-agente entrevistador roda SEMPRE no OpenAI (gpt-4o) — NÃO herda o bot_config do
+  // clone (é meta-agente, não o bot do cliente) e NÃO muda o bot real do cliente. Desde 20/07
+  // usa OPENAI_API_KEY (endpoint default OpenAI, sem baseURL); o DeepSeek foi trocado por dar
+  // tom ruim no teste ao vivo do Bruno. Modelo ajustável sem deploy; default = decisão 20/07.
+  PROMPT_BUILDER_MODEL: z.string().default('gpt-4o'),
+  // Temperature baixa (0.4): tom profissional consistente + aderência às regras duras +
+  // tool-calling confiável (propor_prompt), sem virar robótico. Ajustável sem deploy.
+  PROMPT_BUILDER_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.4),
+  // Timeout (ms) por chamada ao OpenAI — nunca aguardar infinito (regra 7).
   PROMPT_BUILDER_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
   // maxTurns do runAgent por mensagem (1 tool-call + 1 mensagem final = 2; folga p/ 3).
   PROMPT_BUILDER_MAX_AGENT_TURNS: z.coerce.number().int().positive().default(3),

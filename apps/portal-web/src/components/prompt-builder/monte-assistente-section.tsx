@@ -1,6 +1,12 @@
 'use client';
 
-import { IconRefresh, IconSend, IconSparkle } from '@/components/icons';
+import {
+  IconChevronRight,
+  IconPencil,
+  IconRefresh,
+  IconSend,
+  IconSparkle,
+} from '@/components/icons';
 /**
  * Seção "Monte seu atendente" (SCRUM-92) dentro de "Meu negócio".
  *
@@ -27,9 +33,12 @@ import { cn } from '@/lib/cn';
 import {
   BUILDER_MAX_INPUT,
   type BuilderMessage,
+  PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
+  isPersonaSavable,
   isSendable,
+  personaCharsLeft,
   remainingChars,
   resetBuilder,
   sendBuilderMessage,
@@ -59,14 +68,23 @@ export function MonteAssistenteSection() {
   const [localDraftReady, setLocalDraftReady] = useState(false);
   // Persona aplicada com sucesso (pós-approve) -> card de confirmação.
   const [aplicada, setAplicada] = useState(false);
+  // Caminho "Editar": textarea aberta + texto da persona sendo ajustado pelo dono.
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState('');
 
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Rola pra prévia só 1x por geração (rearma quando a prévia deixa de estar pronta).
+  const scrolledRef = useRef(false);
 
   const draft = draftQ.data;
   const started = messages.length > 0;
   const previewReady = localDraftReady || draft?.status === 'pronto';
+  // Prévia REALMENTE renderizável (não só o snappy local): texto final chegou do servidor.
+  const previewPronto = draft?.status === 'pronto' && !!draft.previewFinal;
 
   // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando".
   const totalMsgs = messages.length;
@@ -76,6 +94,18 @@ export function MonteAssistenteSection() {
     const el = logRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [totalMsgs, pending]);
+
+  // UX mobile: quando a persona fica pronta, traz a área de prévia+botões pra dentro da
+  // viewport (o dono pode estar lendo o topo do chat e não ver os botões lá embaixo).
+  useEffect(() => {
+    if (previewPronto && !editing && !scrolledRef.current) {
+      scrolledRef.current = true;
+      requestAnimationFrame(() =>
+        previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      );
+    }
+    if (!previewPronto) scrolledRef.current = false; // rearma pra próxima geração
+  }, [previewPronto, editing]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -157,16 +187,23 @@ export function MonteAssistenteSection() {
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
-  async function aprovar() {
+  /**
+   * Aprova a persona. Sem argumento => aprova o RASCUNHO do servidor (botão "Aprovar e ativar").
+   * Com `personaEditada` => aprova o TEXTO editado pelo dono (botão "Salvar e ativar" do editor).
+   * Em ambos, o BLOCO_ESTRUTURAL (confirmação) é colado por código no backend.
+   */
+  async function aprovar(personaEditada?: string) {
     if (approving) return;
     setApproving(true);
-    const out = await approveBuilder();
+    const out = await approveBuilder(personaEditada);
     setApproving(false);
     if (out.kind === 'ok') {
       toast.success('Pronto! Seu assistente já está com a nova personalidade.');
       setMessages([]);
       setInput('');
       setLocalDraftReady(false);
+      setEditing(false);
+      setEditText('');
       setAplicada(true);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       client.invalidateQueries({ queryKey: qk.perfil(slot) });
@@ -176,11 +213,16 @@ export function MonteAssistenteSection() {
       toast.error('O rascunho expirou. Vamos recomeçar.');
       setMessages([]);
       setLocalDraftReady(false);
+      setEditing(false);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       return;
     }
     if (out.kind === 'invalid') {
-      toast.error('O rascunho ainda está curto. Conte mais uns detalhes no chat e tente de novo.');
+      toast.error(
+        editing
+          ? 'Esse texto não pôde ser salvo — ficou curto demais ou sem personalidade suficiente. Ajuste e tente de novo.'
+          : 'O rascunho ainda está curto. Conte mais uns detalhes no chat e tente de novo.',
+      );
       return;
     }
     if (out.kind === 'unavailable') {
@@ -188,6 +230,28 @@ export function MonteAssistenteSection() {
       return;
     }
     toast.error('Não foi possível ativar. Tente de novo.');
+  }
+
+  /** Abre o editor da persona SEMEADO com o rascunho (persona pura, SEM o bloco estrutural). */
+  function editar() {
+    const seed = previewPronto ? (draft?.personaRascunho ?? '') : '';
+    setEditText(seed);
+    setEditing(true);
+    requestAnimationFrame(() => {
+      editRef.current?.focus();
+      previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  /** Salva o texto editado (= approve com persona_editada). Gate de tamanho no front. */
+  function salvarEdicao() {
+    if (!isPersonaSavable(editText)) return;
+    void aprovar(editText);
+  }
+
+  function cancelarEdicao() {
+    setEditing(false);
+    setEditText('');
   }
 
   async function recomecar() {
@@ -198,6 +262,8 @@ export function MonteAssistenteSection() {
     setErroRetry(null);
     setLocalDraftReady(false);
     setAplicada(false);
+    setEditing(false);
+    setEditText('');
     client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
   }
 
@@ -261,16 +327,39 @@ export function MonteAssistenteSection() {
           )}
 
           {previewReady && (
-            <PreviewPanel
-              status={draft.status}
-              resumo={draft.resumo}
-              nomeBot={draft.nomeBot}
-              previewFinal={draft.previewFinal}
-              approving={approving}
-              onAprovar={aprovar}
-              onAjustar={pedirAjuste}
-              onRecomecar={() => setConfirmReset(true)}
-            />
+            <>
+              {previewPronto && !editing && (
+                <PreviewAviso
+                  onIrParaPrevia={() =>
+                    previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }
+                />
+              )}
+              <div ref={previewRef} className="scroll-mt-4">
+                {editing ? (
+                  <EditPersonaPanel
+                    value={editText}
+                    saving={approving}
+                    textareaRef={editRef}
+                    onChange={setEditText}
+                    onSalvar={salvarEdicao}
+                    onCancelar={cancelarEdicao}
+                  />
+                ) : (
+                  <PreviewPanel
+                    status={draft.status}
+                    resumo={draft.resumo}
+                    nomeBot={draft.nomeBot}
+                    previewFinal={draft.previewFinal}
+                    approving={approving}
+                    onAprovar={() => void aprovar()}
+                    onEditar={editar}
+                    onRejeitar={() => setConfirmReset(true)}
+                    onAjustarConversa={pedirAjuste}
+                  />
+                )}
+              </div>
+            </>
           )}
         </div>
       )}
@@ -538,7 +627,36 @@ function TypingBubble() {
   );
 }
 
-/** Painel de prévia: resumo + nome + (texto completo colapsado) + Aprovar/Ajustar/Recomeçar. */
+/**
+ * Aviso mobile (melhoria 5): quando a persona fica pronta, sinaliza que os botões estão
+ * logo abaixo — o dono no celular pode estar lendo o topo do chat. Clicável = rola até a
+ * prévia. O wrapper é region `status`/aria-live (anuncia ao leitor de tela sem roubar o
+ * foco); o alvo de toque é o <button> interno (a11y: role não vai no elemento interativo).
+ */
+function PreviewAviso({ onIrParaPrevia }: { onIrParaPrevia: () => void }) {
+  return (
+    <div role="status" aria-live="polite">
+      <button
+        type="button"
+        onClick={onIrParaPrevia}
+        aria-label="Sua prévia está pronta. Ir para a área de aprovar, editar ou rejeitar."
+        className="flex min-h-11 w-full items-center gap-2.5 rounded-[12px] border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-brand-soft/70 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+      >
+        <span className="shrink-0 text-brand" aria-hidden>
+          <IconSparkle size={17} />
+        </span>
+        <span className="flex-1 text-[13px] font-semibold leading-snug text-ink">
+          Sua prévia está pronta! Role a tela para baixo para aprovar, editar ou rejeitar.
+        </span>
+        <span className="inline-flex shrink-0 rotate-90 text-brand" aria-hidden>
+          <IconChevronRight size={18} />
+        </span>
+      </button>
+    </div>
+  );
+}
+
+/** Painel de prévia: resumo + nome + (texto completo colapsado) + Aprovar/Editar/Rejeitar. */
 function PreviewPanel({
   status,
   resumo,
@@ -546,8 +664,9 @@ function PreviewPanel({
   previewFinal,
   approving,
   onAprovar,
-  onAjustar,
-  onRecomecar,
+  onEditar,
+  onRejeitar,
+  onAjustarConversa,
 }: {
   status: 'nao_iniciado' | 'sem_rascunho' | 'pronto';
   resumo: string | null;
@@ -555,8 +674,9 @@ function PreviewPanel({
   previewFinal: string | null;
   approving: boolean;
   onAprovar: () => void;
-  onAjustar: () => void;
-  onRecomecar: () => void;
+  onEditar: () => void;
+  onRejeitar: () => void;
+  onAjustarConversa: () => void;
 }) {
   // localDraftReady=true mas o draft do servidor ainda não voltou 'pronto' -> montando.
   const montando = status !== 'pronto' || !previewFinal;
@@ -598,9 +718,11 @@ function PreviewPanel({
         </>
       )}
 
-      <div className="mt-1 flex flex-wrap items-center gap-2.5">
+      {/* Full-width no mobile (touch-friendly, sem apertar), inline a partir de sm. */}
+      <div className="mt-1 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
         <Button
           size="inline"
+          className="w-full sm:w-auto"
           onClick={onAprovar}
           loading={approving}
           loadingLabel="Ativando…"
@@ -608,11 +730,122 @@ function PreviewPanel({
         >
           Aprovar e ativar
         </Button>
-        <Button size="inline" variant="secondary" onClick={onAjustar} disabled={approving}>
-          Pedir ajuste
+        <Button
+          size="inline"
+          variant="secondary"
+          className="w-full sm:w-auto"
+          onClick={onEditar}
+          disabled={approving || montando}
+        >
+          <IconPencil size={16} />
+          Editar
         </Button>
-        <Button size="inline" variant="ghost" onClick={onRecomecar} disabled={approving}>
-          Recomeçar
+        <Button
+          size="inline"
+          variant="destructive"
+          className="w-full sm:w-auto"
+          onClick={onRejeitar}
+          disabled={approving}
+        >
+          Rejeitar
+        </Button>
+      </div>
+
+      {/* Caminho "continuar ajustando" (refino por conversa) — baixa ênfase, não some. */}
+      <button
+        type="button"
+        onClick={onAjustarConversa}
+        disabled={approving}
+        className="self-start text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
+      >
+        Prefiro ajustar conversando
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Editor da persona (caminho "Editar", melhoria 5): textarea SEMEADA com o rascunho (persona
+ * pura, sem o bloco estrutural). Ao salvar => approve com { persona_editada }; o backend re-valida
+ * e re-cola a mecânica de confirmação — o dono edita só o jeitão, nunca remove a garantia.
+ */
+function EditPersonaPanel({
+  value,
+  saving,
+  textareaRef,
+  onChange,
+  onSalvar,
+  onCancelar,
+}: {
+  value: string;
+  saving: boolean;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  onChange: (v: string) => void;
+  onSalvar: () => void;
+  onCancelar: () => void;
+}) {
+  const left = personaCharsLeft(value);
+  const over = left < 0;
+  const savable = isPersonaSavable(value);
+  return (
+    <div className="flex flex-col gap-3 rounded-[14px] border border-brand/30 bg-brand-soft/40 p-4">
+      <div className="flex items-center gap-2">
+        <span className="text-brand" aria-hidden>
+          <IconPencil size={16} />
+        </span>
+        <h3 className="font-display text-[14.5px] font-semibold text-ink">
+          Editar a personalidade
+        </h3>
+      </div>
+      <p className="text-[12.5px] leading-normal text-ink-soft">
+        Ajuste o texto do jeito que quiser. A parte técnica (a confirmação antes de marcar) continua
+        garantida automaticamente — não precisa escrevê-la aqui.
+      </p>
+      <label htmlFor="monte-assistente-editor" className="sr-only">
+        Texto da personalidade do seu assistente
+      </label>
+      <textarea
+        id="monte-assistente-editor"
+        ref={textareaRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={10}
+        maxLength={PERSONA_MAX_CHARS + 200}
+        disabled={saving}
+        className="min-h-[220px] w-full resize-y rounded-field border border-line-strong bg-surface px-3.5 py-3 font-sans text-[14px] leading-[1.55] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-brand focus:ring-[3px] focus:ring-brand/35 disabled:opacity-60"
+      />
+      <div className="flex items-center justify-between">
+        <span
+          aria-live="polite"
+          className={cn('tabular-nums text-[11.5px]', over ? 'text-danger' : 'text-ink-faint')}
+        >
+          {value.length}/{PERSONA_MAX_CHARS}
+        </span>
+        {over && (
+          <span className="text-[11.5px] font-semibold text-danger">
+            Passou do limite — encurte o texto.
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex flex-col gap-2.5 sm:flex-row sm:items-center">
+        <Button
+          size="inline"
+          className="w-full sm:w-auto"
+          onClick={onSalvar}
+          loading={saving}
+          loadingLabel="Salvando…"
+          disabled={!savable}
+        >
+          Salvar e ativar
+        </Button>
+        <Button
+          size="inline"
+          variant="secondary"
+          className="w-full sm:w-auto"
+          onClick={onCancelar}
+          disabled={saving}
+        >
+          Cancelar
         </Button>
       </div>
     </div>

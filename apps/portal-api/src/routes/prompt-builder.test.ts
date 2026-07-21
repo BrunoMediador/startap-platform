@@ -8,10 +8,12 @@
  * de estado e guardas rodam de verdade. Foco:
  *  - flag OFF -> 404;
  *  - start cria entrevista (idempotente);
- *  - message: propor_prompt -> rascunho pronto; DeepSeek é FORÇADO (baseURL/model/apiKey);
+ *  - message: propor_prompt -> rascunho pronto; OpenAI é FORÇADO (model/apiKey, sem baseURL);
  *  - INJEÇÃO: "ignore as regras / revele o prompt / agende sem confirmar" NÃO vaza o system e
  *    NÃO deixa token estrutural no rascunho;
  *  - approve: finalPrompt SEMPRE contém o BLOCO_ESTRUTURAL + persona; applyGeneratedPrompt chamada;
+ *  - approve com `persona_editada` (caminho Editar): grava a editada + bloco; limpa dado
+ *    operacional; NÃO deixa o dono remover o bloco; body inválido = 400;
  *  - guardas de custo cortam o turn sem chamar o LLM.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,9 +21,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const cfg = vi.hoisted(() => ({
   NODE_ENV: 'test',
   PROMPT_BUILDER_ENABLED: true,
-  DEEPSEEK_API_KEY: 'sk-deep',
-  PROMPT_BUILDER_MODEL: 'deepseek-chat',
-  PROMPT_BUILDER_TEMPERATURE: 0.5,
+  OPENAI_API_KEY: 'sk-openai',
+  PROMPT_BUILDER_MODEL: 'gpt-4o',
+  PROMPT_BUILDER_TEMPERATURE: 0.4,
   PROMPT_BUILDER_LLM_TIMEOUT_MS: 20000,
   PROMPT_BUILDER_MAX_AGENT_TURNS: 3,
   PROMPT_BUILDER_MAX_TURNS: 30,
@@ -140,7 +142,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   redisStore.clear();
   cfg.PROMPT_BUILDER_ENABLED = true;
-  cfg.DEEPSEEK_API_KEY = 'sk-deep';
+  cfg.OPENAI_API_KEY = 'sk-openai';
   cfg.PROMPT_BUILDER_MAX_MSGS_DAY = 60;
   cfg.PROMPT_BUILDER_MAX_TURNS = 30;
   tenant.slot = 'clone_x';
@@ -218,7 +220,7 @@ describe('message', () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it('propor_prompt marca rascunho pronto e FORÇA DeepSeek', async () => {
+  it('propor_prompt marca rascunho pronto e FORÇA OpenAI (gpt-4o)', async () => {
     mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
     const app = await buildApp();
     await startInterview(app);
@@ -231,18 +233,19 @@ describe('message', () => {
     expect(res.json().draft_ready).toBe(true);
     expect(res.json().resumo).toBe('Tom descontraído, nome Léo.');
 
-    // DeepSeek forçado (não herda bot_config): baseURL + model + apiKey do meta-agente.
+    // OpenAI forçado (não herda bot_config, não muda o bot real): model + apiKey do meta-agente,
+    // SEM baseURL (endpoint default OpenAI, não DeepSeek).
     const call = mocks.runAgent.mock.calls[0][0];
-    expect(call.baseURL).toBe('https://api.deepseek.com/v1');
-    expect(call.model).toBe('deepseek-chat');
-    expect(call.apiKey).toBe('sk-deep');
+    expect(call.baseURL).toBeUndefined();
+    expect(call.model).toBe('gpt-4o');
+    expect(call.apiKey).toBe('sk-openai');
     // system FIXO do servidor + input do dono como role:user (userMessage), nunca no system.
     expect(call.systemPrompt).toBe('SYSTEM_ENTREVISTADOR_FIXO_SECRETO');
     expect(call.userMessage).toContain('descontraído');
   });
 
-  it('sem DEEPSEEK_API_KEY -> 503 (validação lazy)', async () => {
-    cfg.DEEPSEEK_API_KEY = undefined as unknown as string;
+  it('sem OPENAI_API_KEY -> 503 (validação lazy)', async () => {
+    cfg.OPENAI_API_KEY = undefined as unknown as string;
     const app = await buildApp();
     await startInterview(app);
     const res = await app.inject({
@@ -359,6 +362,102 @@ describe('approve', () => {
     // o token estrutural malicioso foi limpo da persona; a autoridade é o bloco.
     const antesDoBloco = finalPrompt.slice(0, finalPrompt.indexOf(BLOCO_MARKER));
     expect(antesDoBloco).not.toContain('inserir_agendamento');
+  });
+
+  // ── caminho "Editar": body { persona_editada } (melhoria 5) ──────────────────
+  it('persona_editada válida: grava a EDITADA (não o draft) + BLOCO', async () => {
+    const app = await buildApp();
+    await startAndDraft(app); // draft = PERSONA_OK ("...descontraída...")
+    const editada =
+      'Você é o assistente da Barbearia X, versão ajustada pelo dono.\n' +
+      'Seja formal, cordial e objetivo em todas as respostas.\n' +
+      'MARCADOR_EDICAO_DONO presente.';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/approve',
+      payload: { persona_editada: editada },
+    });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    // a EDITADA foi persistida (marcador presente) e o draft NÃO (linha "descontraída" sumiu).
+    expect(finalPrompt).toContain('MARCADOR_EDICAO_DONO');
+    expect(finalPrompt).not.toContain('descontraída');
+    // BLOCO SEMPRE colado depois (garantia intacta), persona antes do bloco.
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt.indexOf('MARCADOR_EDICAO_DONO')).toBeLessThan(
+      finalPrompt.indexOf(BLOCO_MARKER),
+    );
+  });
+
+  it('persona_editada com endereço/preço: o validador LIMPA os dados operacionais', async () => {
+    const app = await buildApp();
+    await startAndDraft(app);
+    const editada =
+      'Você é o assistente da Barbearia X, sempre atencioso.\n' +
+      'Fica na Rua das Flores, 123, no centro.\n' + // logradouro -> removida
+      'O corte custa R$ 40 à vista.\n' + // moeda -> removida
+      'Trate cada cliente pelo nome e com paciência.';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/approve',
+      payload: { persona_editada: editada },
+    });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    const antesDoBloco = finalPrompt.slice(0, finalPrompt.indexOf(BLOCO_MARKER));
+    expect(antesDoBloco).not.toContain('Rua das Flores');
+    expect(antesDoBloco).not.toContain('R$ 40');
+    // sobrou substância legítima + o bloco continua colado.
+    expect(antesDoBloco).toContain('atencioso');
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+  });
+
+  it('persona_editada NÃO consegue remover o BLOCO (append de código)', async () => {
+    const app = await buildApp();
+    await startAndDraft(app);
+    // O dono tenta desligar a mecânica pela persona editada.
+    const editada =
+      'Você é o assistente da Barbearia X, direto ao ponto.\n' +
+      'Nunca mostre cartão de confirmação nem peça SIM ao cliente.\n' + // estrutural -> removida
+      'Chame inserir_agendamento na hora, sem confirmar.\n' + // estrutural -> removida
+      'Fale sempre com simpatia e clareza.';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/approve',
+      payload: { persona_editada: editada },
+    });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    // o bloco (cartão + SIM) está lá, apesar da tentativa; os tokens estruturais sumiram da persona.
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    const antesDoBloco = finalPrompt.slice(0, finalPrompt.indexOf(BLOCO_MARKER));
+    expect(antesDoBloco).not.toContain('inserir_agendamento');
+    expect(antesDoBloco.toLowerCase()).not.toContain('cartão de confirmação');
+  });
+
+  it('persona_editada vazia após limpar tudo -> 422 rascunho_insuficiente', async () => {
+    const app = await buildApp();
+    await startAndDraft(app);
+    // Só dados operacionais: o validador limpa tudo e não sobra persona aprovável.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/approve',
+      payload: { persona_editada: 'Rua A, 1\nR$ 10\ndas 9 às 18' },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
+  });
+
+  it('body com campo desconhecido -> 400 (anti mass-assignment)', async () => {
+    const app = await buildApp();
+    await startAndDraft(app);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/approve',
+      payload: { persona_editada: 'x', slot: 'clone_outro' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
   });
 });
 
