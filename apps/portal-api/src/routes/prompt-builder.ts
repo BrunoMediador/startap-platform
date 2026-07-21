@@ -9,7 +9,9 @@
  *   POST /portal/prompt-builder/message  -> 1 turno de conversa; quando o agente chama a tool
  *                                           `propor_prompt`, marca o rascunho pronto
  *   GET  /portal/prompt-builder/draft    -> prévia (persona + bloco estrutural que SERÁ colado)
- *   POST /portal/prompt-builder/approve  -> persiste (transação SCRUM-83) + prompt_custom=true
+ *   POST /portal/prompt-builder/approve  -> persiste (transação SCRUM-83) + prompt_custom=true.
+ *                                           Body OPCIONAL { persona_editada } = o dono ajustou o
+ *                                           texto na UI antes de aprovar (caminho "Editar").
  *   POST /portal/prompt-builder/reset    -> recomeça do zero (increment)
  *
  * GARANTIA INEGOCIÁVEL: o meta-agente gera SÓ a persona; a mecânica de agendamento (cartão +
@@ -17,8 +19,9 @@
  * — a IA nunca a escreve, então nunca pode removê-la. Validador determinístico limpa dados
  * operacionais/PII/tokens estruturais ANTES de persistir.
  *
- * Meta-agente roda SEMPRE no DeepSeek (deepseek-chat) — NÃO herda bot_config do clone.
- * Estado da entrevista é efêmero no Redis (TTL). Guardas de custo/abuso no Redis (fail-closed).
+ * Meta-agente roda SEMPRE no OpenAI (gpt-4o, config.PROMPT_BUILDER_MODEL) — NÃO herda bot_config
+ * do clone e NÃO muda o bot real do cliente. Estado da entrevista é efêmero no Redis (TTL).
+ * Guardas de custo/abuso no Redis (fail-closed).
  * LGPD: NUNCA loga conteúdo da conversa nem a persona — só slot, tokens, latency, blocked_reason.
  */
 import { logger } from '@startap/core/logger';
@@ -38,6 +41,7 @@ import {
 } from '../lib/prompt-builder-state.js';
 import {
   MAX_FINAL_PROMPT_CHARS,
+  MAX_PERSONA_CHARS,
   sanitizeOrphanPlaceholders,
   stripPII,
   validatePersona,
@@ -47,8 +51,7 @@ import { requireTenant, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'prompt-builder' });
 
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1';
-const FALLBACK_REPLY = 'Tive um soluço aqui :) Pode mandar de novo?';
+const FALLBACK_REPLY = 'Tive uma instabilidade agora. Pode enviar a mensagem novamente?';
 /** Teto defensivo de turns guardados no estado (history enviada ao modelo é bem menor). */
 const MAX_STORED_TURNS = 80;
 
@@ -59,6 +62,14 @@ const messageSchema = z
     content: z.string().min(1).max(config.PROMPT_BUILDER_MAX_INPUT_CHARS),
     role: z.literal('user').optional(),
   })
+  .strict();
+
+// Body do /approve: OPCIONAL. `persona_editada` = o dono ajustou o texto na UI antes de aprovar
+// (caminho "Editar"). .strict() => campo desconhecido = 400 (anti mass-assignment). O texto passa
+// pelo MESMO pipeline do rascunho (stripPII + validatePersona + sanitize) e o BLOCO_ESTRUTURAL
+// é SEMPRE colado por código depois — o dono não consegue remover a mecânica editando a persona.
+const approveBodySchema = z
+  .object({ persona_editada: z.string().min(1).max(MAX_PERSONA_CHARS).optional() })
   .strict();
 
 // Args da tool propor_prompt capturados via runAgent.toolCalls — validados com Zod (não confiamos
@@ -204,9 +215,9 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(200).send({ reply: canned, draft_ready: state.draft !== null });
     }
 
-    // Provider DeepSeek: chave validada LAZY (boot nunca crasha sem ela).
-    if (!config.DEEPSEEK_API_KEY) {
-      log.error('prompt-builder sem DEEPSEEK_API_KEY provisionada — feature indisponível');
+    // Provider OpenAI: chave validada LAZY (boot nunca crasha sem ela).
+    if (!config.OPENAI_API_KEY) {
+      log.error('prompt-builder sem OPENAI_API_KEY provisionada — feature indisponível');
       return reply.code(503).send({ error: 'builder_indisponivel' });
     }
 
@@ -233,11 +244,10 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           userMessage,
           tools: [proporPromptTool],
           maxTurns: config.PROMPT_BUILDER_MAX_AGENT_TURNS,
-          model: config.PROMPT_BUILDER_MODEL, // FORÇA deepseek-chat (não herda bot_config)
+          model: config.PROMPT_BUILDER_MODEL, // FORÇA gpt-4o (não herda bot_config do clone)
           temperature: config.PROMPT_BUILDER_TEMPERATURE,
           maxToolResultChars: 200,
-          apiKey: config.DEEPSEEK_API_KEY,
-          baseURL: DEEPSEEK_BASE_URL, // FORÇA provider DeepSeek
+          apiKey: config.OPENAI_API_KEY, // provider OpenAI; sem baseURL = endpoint default OpenAI
         }),
         config.PROMPT_BUILDER_LLM_TIMEOUT_MS,
       );
@@ -265,8 +275,8 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
             state.draft = null;
             draftReady = false;
             replyText =
-              'Consegui um esboço, mas preciso de mais uns detalhes do jeito de vocês pra ' +
-              'deixar a persona completa. Pode me contar um pouco mais?';
+              'Consegui um esboço, mas preciso de mais alguns detalhes sobre o jeito de atender ' +
+              'do seu negócio para deixar a persona completa. Pode me contar um pouco mais?';
           }
         }
       }
@@ -333,6 +343,12 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     if (!config.PROMPT_BUILDER_ENABLED)
       return reply.code(404).send({ error: 'recurso_indisponivel' });
     const { slot, username } = requireTenant(req);
+
+    // Body opcional: se veio `persona_editada`, o dono ajustou o texto na UI (caminho "Editar").
+    const parsedBody = approveBodySchema.safeParse(req.body ?? {});
+    if (!parsedBody.success) return reply.code(400).send({ error: 'dados_invalidos' });
+    const personaEditada = parsedBody.data.persona_editada?.trim();
+
     const redis = getRedis();
     const state = await getState(redis, slot);
     if (!state || !state.draft) return reply.code(409).send({ error: 'sem_rascunho' });
@@ -346,8 +362,13 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const modo = ctx?.modo ?? state.modo; // fallback ao state só se o clone sumiu no meio.
     const area = ctx?.area ?? state.area;
 
-    // Re-valida a persona server-side (defesa em profundidade — nunca confia no draft do Redis).
-    const v = validatePersona(stripPII(state.draft.persona), { servicos });
+    // Persona a persistir: a editada pelo dono (se veio) OU o rascunho do Redis. Em AMBOS os
+    // casos passa pelo MESMO pipeline (stripPII + validatePersona) — defesa em profundidade,
+    // nunca confia no texto cru (nem do Redis, nem do body do dono). O bloco vem por código.
+    const personaBase =
+      personaEditada && personaEditada.length > 0 ? personaEditada : state.draft.persona;
+    const edited = personaBase === personaEditada;
+    const v = validatePersona(stripPII(personaBase), { servicos });
     if (!v.ok) return reply.code(422).send({ error: 'rascunho_insuficiente' });
 
     // GARANTIA: cola o BLOCO_ESTRUTURAL (cartão + SIM) DEPOIS da persona, no SERVIDOR.
@@ -365,7 +386,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       );
       await deleteState(redis, slot);
       log.info(
-        { slot, versionSaved: result.version_saved, modo },
+        { slot, versionSaved: result.version_saved, modo, edited },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );
       return reply
