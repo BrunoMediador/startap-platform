@@ -118,6 +118,38 @@ describe('validatePersona — persona limpa passa', () => {
   });
 });
 
+describe('validatePersona — SCRUM-92: aceita persona de parágrafo único (1 linha)', () => {
+  // Regressão do bug do builder: o gpt-4o gera a persona num único parágrafo (1 linha, sem \n).
+  // O validador antigo exigia `nonEmpty >= 2` e rejeitava persona VÁLIDA de 500+ chars
+  // (log real: cleanedLen:559, removedTags:[], "persona rejeitada" -> draftReady:false). Agora
+  // o critério de substância é SÓ por tamanho. Este teste FALHA antes do fix (nonEmpty=1 < 2).
+  it('parágrafo único de ~260 chars, sem quebra de linha -> ok=true', () => {
+    const p =
+      'Você é o assistente virtual da Barbearia do Zé, um atendente atencioso, ' +
+      'descontraído e sempre educado, que trata cada cliente pelo primeiro nome, ' +
+      'responde com agilidade, tira dúvidas com paciência e conduz a conversa de ' +
+      'forma leve e acolhedora do começo ao fim.';
+    expect(p).not.toContain('\n');
+    const r = validatePersona(p);
+    expect(r.ok).toBe(true);
+    expect(r.removedTags).toHaveLength(0);
+    expect(r.cleaned).toContain('Barbearia do Zé');
+  });
+
+  it('persona multi-linha limpa continua ok=true', () => {
+    const r = validatePersona(PERSONA_LIMPA);
+    expect(r.ok).toBe(true);
+    expect(r.removedTags).toHaveLength(0);
+  });
+
+  it('parágrafo único curto (< MIN_PERSONA_CHARS) -> ok=false', () => {
+    const p = 'Assistente simpático da barbearia.';
+    expect(p.length).toBeLessThan(60);
+    const r = validatePersona(p);
+    expect(r.ok).toBe(false);
+  });
+});
+
 describe('sanitizeOrphanPlaceholders / stripPII', () => {
   it('mantém whitelist e limpa placeholder órfão', () => {
     const out = sanitizeOrphanPlaceholders('Olá {nome}, veja {promo} e {telefone}.');
