@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
 import {
   BUILDER_MAX_INPUT,
+  GENERATE_NOW_FALLBACK_CONTENT,
   PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
   buildApproveBody,
   fetchBuilderDraft,
+  generateNowContent,
   isBuilderUnavailable,
   isPersonaSavable,
   isSendable,
@@ -128,6 +130,65 @@ describe('sendBuilderMessage — mapa de outcome', () => {
     expect(await sendBuilderMessage('x')).toEqual({ kind: 'error' });
     apiFetchMock.mockRejectedValueOnce(new ApiError(0, 'sem conexao', null));
     expect(await sendBuilderMessage('x')).toEqual({ kind: 'error' });
+  });
+});
+
+describe('sendBuilderMessage — body do POST /message (generate_now)', () => {
+  it('fluxo normal (sem opts) -> body { content } byte-idêntico (SEM generate_now)', async () => {
+    apiFetchMock.mockResolvedValue({ reply: 'ok', draft_ready: false });
+    await sendBuilderMessage('quero mais formal');
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/message', {
+      method: 'POST',
+      body: { content: 'quero mais formal' },
+      signal: undefined,
+    });
+  });
+
+  it('generateNow:true -> body inclui generate_now:true (botão "Gerar agora")', async () => {
+    apiFetchMock.mockResolvedValue({ reply: 'Pronto!', draft_ready: true, resumo: 'r' });
+    await sendBuilderMessage('Pode gerar a persona agora.', { generateNow: true });
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/message', {
+      method: 'POST',
+      body: { content: 'Pode gerar a persona agora.', generate_now: true },
+      signal: undefined,
+    });
+  });
+
+  it('generateNow:false -> NÃO manda a chave (mantém fluxo normal byte-a-byte)', async () => {
+    apiFetchMock.mockResolvedValue({ reply: 'ok', draft_ready: false });
+    await sendBuilderMessage('oi', { generateNow: false });
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/message', {
+      method: 'POST',
+      body: { content: 'oi' },
+      signal: undefined,
+    });
+  });
+
+  it('repassa o AbortSignal recebido em opts', async () => {
+    apiFetchMock.mockResolvedValue({ reply: 'ok', draft_ready: false });
+    const ctrl = new AbortController();
+    await sendBuilderMessage('x', { signal: ctrl.signal, generateNow: true });
+    expect(apiFetchMock).toHaveBeenCalledWith('/portal/prompt-builder/message', {
+      method: 'POST',
+      body: { content: 'x', generate_now: true },
+      signal: ctrl.signal,
+    });
+  });
+});
+
+describe('generateNowContent — texto do clique em "Gerar agora"', () => {
+  it('vazio/só-espaço -> texto padrão (backend exige content >= 1 char)', () => {
+    expect(generateNowContent('')).toBe(GENERATE_NOW_FALLBACK_CONTENT);
+    expect(generateNowContent('   \n ')).toBe(GENERATE_NOW_FALLBACK_CONTENT);
+  });
+
+  it('com texto digitado -> aproveita o que o dono escreveu (trim aplicado)', () => {
+    expect(generateNowContent('chama de Léo')).toBe('chama de Léo');
+    expect(generateNowContent('  descontraído  ')).toBe('descontraído');
+  });
+
+  it('o texto padrão casa com a intenção de gerar (defesa dupla com o backend)', () => {
+    expect(GENERATE_NOW_FALLBACK_CONTENT.toLowerCase()).toContain('gerar');
   });
 });
 

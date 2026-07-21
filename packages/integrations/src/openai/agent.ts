@@ -49,6 +49,18 @@ export interface ToolDefinition<TArgs = unknown, TResult = unknown> {
   run: (args: TArgs) => Promise<TResult>;
 }
 
+/**
+ * Controle de `tool_choice` na chamada OpenAI.
+ * - AUSENTE (undefined): não passa `tool_choice` — comportamento atual, byte-a-byte
+ *   inalterado (o modelo decide se e quando chama uma tool).
+ * - `'auto'`: idem, porém explícito (o modelo decide).
+ * - `{ forceFunction: '<nome>' }`: OBRIGA o modelo a chamar aquela função NESTE turno
+ *   (mapeado para `{ type:'function', function:{ name } }`). Usado pelo caminho
+ *   determinístico "gerar agora" do builder — a geração não depende mais da vontade do
+ *   modelo. A força vale só até a tool ser chamada uma vez; depois libera pra resposta final.
+ */
+export type ToolChoice = 'auto' | { forceFunction: string };
+
 export interface RunAgentOpts {
   systemPrompt: string;
   history: ChatTurn[];
@@ -59,6 +71,8 @@ export interface RunAgentOpts {
   maxHistoryChars?: number;
   maxToolResultChars?: number;
   temperature?: number;
+  /** Ver {@link ToolChoice}. Ausente = comportamento atual (sem `tool_choice`). */
+  toolChoice?: ToolChoice;
   /** Provider compatível com OpenAI (DeepSeek etc). */
   apiKey?: string;
   baseURL?: string;
@@ -116,15 +130,23 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
     function: { name: t.name, description: t.description, parameters: t.parameters as never },
   }));
 
+  // `tool_choice` só faz sentido se há tools ofertadas. Ausente/undefined = não passamos o
+  // campo (byte-a-byte pro caminho atual). Forçar uma função é resolvido 1x aqui.
+  const forcedToolChoice = openAiTools.length > 0 ? resolveToolChoice(opts.toolChoice) : undefined;
+
   const trace: RunAgentResult['toolCalls'] = [];
   const usage = { prompt: 0, completion: 0, total: 0, cached: 0 };
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    // Força a tool APENAS até ela ser chamada uma vez (trace vazio). Depois libera pra o
+    // modelo escrever a mensagem final — senão forçaríamos a tool em loop até esgotar turns.
+    const toolChoice = trace.length === 0 ? forcedToolChoice : undefined;
     const completion = await client.chat.completions.create({
       model,
       temperature,
       messages,
       tools: openAiTools.length > 0 ? openAiTools : undefined,
+      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
     });
 
     if (completion.usage) {
@@ -188,6 +210,19 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
 
   log.warn({ turns: maxTurns }, 'Agent atingiu max_turns sem resposta final');
   return { reply: 'Desculpe, tive uma falha. Pode repetir?', toolCalls: trace, usage };
+}
+
+/**
+ * Traduz {@link ToolChoice} para o parâmetro `tool_choice` do OpenAI SDK.
+ * undefined -> undefined (não enviar o campo); 'auto' -> 'auto'; forçar função ->
+ * `{ type:'function', function:{ name } }`.
+ */
+function resolveToolChoice(
+  tc: ToolChoice | undefined,
+): OpenAI.Chat.ChatCompletionToolChoiceOption | undefined {
+  if (!tc) return undefined;
+  if (tc === 'auto') return 'auto';
+  return { type: 'function', function: { name: tc.forceFunction } };
 }
 
 function limitHistoryByChars(history: ChatTurn[], maxChars: number): ChatTurn[] {

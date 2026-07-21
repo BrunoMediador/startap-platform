@@ -57,10 +57,13 @@ const MAX_STORED_TURNS = 80;
 
 // Body do /message: .strict() => campo desconhecido = 400 (anti mass-assignment). `role` só pode
 // ser 'user' (o system prompt é FIXO no servidor; o cliente NUNCA injeta system/assistant).
+// `generate_now` (botão "gerar agora" do front): quando true, o servidor FORÇA a tool
+// propor_prompt neste turno (caminho determinístico) — o rascunho sai mesmo com pouca info.
 const messageSchema = z
   .object({
     content: z.string().min(1).max(config.PROMPT_BUILDER_MAX_INPUT_CHARS),
     role: z.literal('user').optional(),
+    generate_now: z.boolean().optional(),
   })
   .strict();
 
@@ -224,6 +227,13 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const userMessage = sanitizeInput(parsed.data.content);
     if (!userMessage) return reply.code(400).send({ error: 'mensagem_vazia' });
 
+    // CAMINHO DETERMINÍSTICO "gerar agora" (fix do bug 9-turnos-sem-gerar): quando o dono clica
+    // o botão (generate_now=true) OU o texto sinaliza intenção clara de gerar ("pode gerar",
+    // "terminei"...), FORÇAMOS a tool propor_prompt via tool_choice no runAgent — o rascunho sai
+    // NESTE turno, sem depender da vontade do modelo (v3 preenche padrões p/ persona completa).
+    const forceGenerate =
+      parsed.data.generate_now === true || metaEntrevistador.matchesGenerateIntent(userMessage);
+
     const systemPrompt = metaEntrevistador.buildEntrevistadorSystemPrompt({
       nomeNegocio: state.nomeNegocio,
       area: state.area || 'atendimento',
@@ -248,6 +258,11 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           temperature: config.PROMPT_BUILDER_TEMPERATURE,
           maxToolResultChars: 200,
           apiKey: config.OPENAI_API_KEY, // provider OpenAI; sem baseURL = endpoint default OpenAI
+          // "gerar agora": obriga o modelo a chamar propor_prompt neste turno. Ausente no fluxo
+          // normal (o modelo decide) — byte-a-byte pro caminho de entrevista comum.
+          ...(forceGenerate
+            ? { toolChoice: { forceFunction: metaEntrevistador.PROPOR_PROMPT_TOOL_NAME } }
+            : {}),
         }),
         config.PROMPT_BUILDER_LLM_TIMEOUT_MS,
       );
@@ -286,6 +301,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           slot,
           turns: userTurns + 1,
           draftReady,
+          forceGenerate,
           tokens: result.usage.total,
           latencyMs: Date.now() - startedAt,
         },
