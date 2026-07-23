@@ -41,11 +41,13 @@ const mocks = vi.hoisted(() => ({
   getCloneBySlot: vi.fn(),
   updateClone: vi.fn(),
   getAreaAndPromptCustom: vi.fn(),
+  getProductType: vi.fn(),
   resolveModoAtendenteEnabledForSlot: vi.fn(),
   matchesGenerateIntent: vi.fn(),
 }));
 
 const BLOCO_MARKER = '===BLOCO_ESTRUTURAL_TEST=== cartao + SIM antes de inserir_agendamento';
+const BLOCO_ESTAB_MARKER = '===BLOCO_ESTAB_TEST=== cartao com 👤 PROFISSIONAL + SIM';
 
 vi.mock('../config.js', () => ({ config: cfg }));
 vi.mock('@startap/core/logger', () => ({
@@ -55,6 +57,7 @@ vi.mock('@startap/db', () => ({
   botPrompt: { applyGeneratedPrompt: (...a: unknown[]) => mocks.applyGeneratedPrompt(...a) },
   cloneColaboradores: {
     getAreaAndPromptCustom: (...a: unknown[]) => mocks.getAreaAndPromptCustom(...a),
+    getProductType: (...a: unknown[]) => mocks.getProductType(...a),
   },
   flowClones: {
     getCloneBySlot: (...a: unknown[]) => mocks.getCloneBySlot(...a),
@@ -73,8 +76,11 @@ vi.mock('@startap/integrations', () => ({
     matchesGenerateIntent: (...a: unknown[]) => mocks.matchesGenerateIntent(...a),
   },
   promptBuilder: {
-    buildBlocoEstrutural: ({ modo }: { modo: string }) =>
-      modo === 'atendente' ? 'BLOCO_ATENDENTE' : BLOCO_MARKER,
+    buildBlocoEstrutural: ({ modo }: { modo: string }) => {
+      if (modo === 'atendente') return 'BLOCO_ATENDENTE';
+      if (modo === 'estabelecimento') return BLOCO_ESTAB_MARKER;
+      return BLOCO_MARKER;
+    },
   },
 }));
 
@@ -160,6 +166,8 @@ beforeEach(() => {
   });
   mocks.updateClone.mockResolvedValue({ id: 42, slot: 'clone_x' });
   mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
+  // Default: clone INDIVIDUAL (cada teste liga estabelecimento quando precisa).
+  mocks.getProductType.mockResolvedValue('individual');
   mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
   // Default: sem intenção textual de gerar (cada teste liga quando precisa).
   mocks.matchesGenerateIntent.mockReturnValue(false);
@@ -717,6 +725,65 @@ describe('approve', () => {
     const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
     expect(res.statusCode).toBe(200);
     expect(res.json().persona_aplicada).toBe(true);
+  });
+});
+
+describe('estabelecimento (MVP SCRUM-92): variante do BLOCO por product_type', () => {
+  async function startAndDraft(app: FastifyInstance, persona = PERSONA_OK) {
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    mocks.runAgent.mockResolvedValue(proporToolResult(persona));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'pode gerar' },
+    });
+  }
+
+  it('clone estabelecimento -> approve cola a variante ESTABELECIMENTO (não a individual)', async () => {
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    const app = await buildApp();
+    await startAndDraft(app);
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    expect(finalPrompt).toContain(BLOCO_ESTAB_MARKER);
+    expect(finalPrompt).not.toContain(BLOCO_MARKER); // NÃO cola o cartão individual.
+    expect(finalPrompt).toContain('Barbearia X'); // persona antes do bloco.
+  });
+
+  it('clone estabelecimento -> preview (GET /draft) reflete a variante estabelecimento', async () => {
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    const app = await buildApp();
+    await startAndDraft(app);
+    const res = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+    expect(res.json().status).toBe('pronto');
+    expect(res.json().preview_final).toContain(BLOCO_ESTAB_MARKER);
+    expect(res.json().preview_final).not.toContain(BLOCO_MARKER);
+  });
+
+  it('clone INDIVIDUAL segue com a variante individual (regressão)', async () => {
+    mocks.getProductType.mockResolvedValue('individual');
+    const app = await buildApp();
+    await startAndDraft(app);
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
+  });
+
+  it('estabelecimento em modo ATENDENTE ignora a variante estab (atendente manda)', async () => {
+    // Estabelecimento só troca a variante quando o modo é agenda; se o clone virou
+    // atendente, o BLOCO é o de atendente (sem cartão) — deriveBlocoModo respeita isso.
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    const app = await buildApp();
+    await startAndDraft(app);
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
+    expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+    expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
   });
 });
 

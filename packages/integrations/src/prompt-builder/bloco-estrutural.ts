@@ -21,8 +21,13 @@
  * `servicos`) via buildContextBlock em runtime. Este bloco é só a REGRA do fluxo.
  */
 
-/** Modo do clone — decide a variante do bloco estrutural. */
-export type BlocoEstruturalModo = 'agenda' | 'atendente';
+/** Modo do clone — decide a variante do bloco estrutural.
+ *  - agenda: individual, cartão sem profissional.
+ *  - atendente: pré-venda, sem cartão de agendamento.
+ *  - estabelecimento: agenda multi-profissional, cartão COM 👤 PROFISSIONAL
+ *    (o cliente escolhe com quem). Espelha buildCartaoEstabelecimentoBlock do
+ *    runtime (apps/api/src/lib/area-emojis.ts) em espírito/campos. */
+export type BlocoEstruturalModo = 'agenda' | 'atendente' | 'estabelecimento';
 
 /**
  * Conjunto mínimo de emojis do cartão por área. Espelha os VALORES de
@@ -38,6 +43,9 @@ interface CartaoEmojis {
   servico: string;
   valor: string;
   confirma: string;
+  /** Profissional — só usado no cartão de ESTABELECIMENTO (👤 em todas as áreas,
+   *  igual ao runtime). */
+  profissional: string;
 }
 
 const BARBEARIA: CartaoEmojis = {
@@ -47,6 +55,7 @@ const BARBEARIA: CartaoEmojis = {
   servico: '✂️',
   valor: '💰',
   confirma: '✅',
+  profissional: '👤',
 };
 const SALAO: CartaoEmojis = { ...BARBEARIA, marca: '💇' };
 const MANICURE: CartaoEmojis = { ...BARBEARIA, marca: '💅', servico: '💅' };
@@ -107,6 +116,45 @@ function blocoAgenda(area: string | null | undefined): string {
 }
 
 /**
+ * Variante ESTABELECIMENTO (agenda multi-profissional — MVP interino SCRUM-92 /
+ * ADR 0032 Fase 0): igual à AGENDA (mesmo HEADER, mesma exigência de SIM antes de
+ * inserir_agendamento, mesma regra crítica) MAIS o campo do PROFISSIONAL — neste
+ * clone o cliente escolhe COM QUEM quer ser atendido. Espelha, em espírito e campos,
+ * o buildCartaoEstabelecimentoBlock do runtime (apps/api/src/lib/area-emojis.ts):
+ * inclui `👤 PROFISSIONAL: <nome>` e o horário usa 🕐 (não ⏰), casando o runtime.
+ * O nome vem de [PROFISSIONAIS] do contexto — nunca o id curto (C1/C2), nunca inventado.
+ */
+function blocoEstabelecimento(area: string | null | undefined): string {
+  const e = emojisForArea(area);
+  // Horário no estabelecimento usa 🕐 (igual ao runtime #325), não ⏰ — força o
+  // literal aqui independentemente de e.horario pra casar byte-a-byte com o cartão
+  // que o runtime já injeta neste tipo de clone.
+  const horarioEstab = '🕐';
+  return [
+    HEADER,
+    '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO — REGRA CRITICA, VIOLACAO = ERRO GRAVE]',
+    'Antes de CADA agendamento você DEVE, OBRIGATORIAMENTE e SEM EXCEÇÃO:',
+    '1. Mostrar o CARTAO DE CONFIRMACAO completo (PROFISSIONAL / DIA / HORARIO / SERVICO / VALOR).',
+    '2. Esperar o cliente responder SIM (ou equivalente claro: "isso", "pode marcar").',
+    '3. SÓ DEPOIS do SIM, chamar a ferramenta inserir_agendamento.',
+    'Isso vale para TODO agendamento, INCLUSIVE o 2º, 3º… na MESMA conversa (back-to-back):',
+    'cada novo horário recomeça o fluxo — mostra o cartão e pede SIM de novo. NUNCA agende',
+    'direto, NUNCA pule o cartão, NUNCA assuma o SIM porque o cliente já confirmou antes.',
+    'Neste estabelecimento o cliente escolhe COM QUAL PROFISSIONAL quer ser atendido: use SEMPRE',
+    'o NOME do profissional disponível (o que está em [PROFISSIONAIS] do contexto do sistema),',
+    'NUNCA invente um nome nem use o id curto (C1/C2). Se o cliente ainda não escolheu, pergunte',
+    'com qual profissional ele prefere ANTES de montar o cartão.',
+    'Formato do cartão:',
+    `${e.profissional} PROFISSIONAL: <nome do profissional escolhido>`,
+    `${e.dia} DIA: <dia> / ${horarioEstab} HORARIO: <horario> / ${e.servico} SERVICO: <servico> / ${e.valor} VALOR: <valor>`,
+    `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
+    'Use APENAS os profissionais, horários e serviços do contexto do sistema — nunca invente',
+    'profissional, disponibilidade, preço ou endereço; esses dados vêm sempre do sistema, não da persona.',
+    '=================================================================',
+  ].join('\n');
+}
+
+/**
  * Variante ATENDENTE (pré-venda que escala pra humano — SCRUM-59): NÃO tem cartão
  * de agendamento (o clone não marca horário). A garantia aqui é: nunca inventar
  * confirmação/preço/agenda e escalar pro dono quando fugir do escopo.
@@ -127,13 +175,15 @@ function blocoAtendente(): string {
 
 /**
  * Constrói o bloco estrutural que o approve cola DEPOIS da persona gerada.
- * `modo` decide a variante; `area` só troca os emojis do cartão (agenda).
+ * `modo` decide a variante; `area` só troca os emojis do cartão (agenda/estabelecimento).
  */
 export function buildBlocoEstrutural(opts: {
   modo: BlocoEstruturalModo;
   area?: string | null;
 }): string {
-  return opts.modo === 'atendente' ? blocoAtendente() : blocoAgenda(opts.area);
+  if (opts.modo === 'atendente') return blocoAtendente();
+  if (opts.modo === 'estabelecimento') return blocoEstabelecimento(opts.area);
+  return blocoAgenda(opts.area);
 }
 
 /**
