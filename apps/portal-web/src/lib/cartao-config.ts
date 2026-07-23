@@ -63,10 +63,12 @@ export type CartaoLockedReason = 'prompt_custom' | 'requer_revisao';
  * `sanitizeEmojis` derruba o que sair daqui, e o PUT rejeita (2ª trava server-side).
  */
 export const EMOJI_CATALOG: Record<CartaoSlot, readonly string[]> = {
-  marca: ['💈', '💇', '💅', '💆', '✂️', '📅'],
+  // 🌻 (marca) e 📝 (servico) = emojis da Ingrid (clone migrado); na allowlist do backend
+  // (cartao-catalog.ts EXTRA) para o PUT aceitar e o picker oferecer os mesmos ícones (SCRUM-92).
+  marca: ['💈', '💇', '💅', '💆', '✂️', '📅', '🌻'],
   dia: ['📅', '🗓️', '📆'],
   horario: ['⏰', '🕐', '⌚'],
-  servico: ['✂️', '💇', '💅', '✨', '📋'],
+  servico: ['✂️', '💇', '💅', '✨', '📋', '📝'],
   valor: ['💰', '💵', '💲', '🪙'],
   confirma: ['✅', '☑️', '👍'],
   profissional: ['👤', '🧑‍🔧', '💇‍♂️'],

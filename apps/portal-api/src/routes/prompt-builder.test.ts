@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   getCloneBySlot: vi.fn(),
   updateClone: vi.fn(),
   getAreaAndPromptCustom: vi.fn(),
+  getAreaPromptCustomCartao: vi.fn(),
   getProductType: vi.fn(),
   resolveModoAtendenteEnabledForSlot: vi.fn(),
   matchesGenerateIntent: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock('@startap/db', () => ({
   botPrompt: { applyGeneratedPrompt: (...a: unknown[]) => mocks.applyGeneratedPrompt(...a) },
   cloneColaboradores: {
     getAreaAndPromptCustom: (...a: unknown[]) => mocks.getAreaAndPromptCustom(...a),
+    getAreaPromptCustomCartao: (...a: unknown[]) => mocks.getAreaPromptCustomCartao(...a),
     getProductType: (...a: unknown[]) => mocks.getProductType(...a),
   },
   flowClones: {
@@ -174,6 +176,15 @@ beforeEach(() => {
   });
   mocks.updateClone.mockResolvedValue({ id: 42, slot: 'clone_x' });
   mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
+  // loadCloneContext lê área + cartao_mode ATUAL daqui (getAreaPromptCustomCartao). Default:
+  // clone BAKED (cartão vem do bot_prompt) — cada teste liga cartaoMode='runtime' quando precisa.
+  mocks.getAreaPromptCustomCartao.mockResolvedValue({
+    area: 'barbearia',
+    promptCustom: false,
+    cartaoMode: 'baked',
+    cartaoConfig: null,
+    nomeNegocio: 'Barbearia X',
+  });
   // Default: clone INDIVIDUAL (cada teste liga estabelecimento quando precisa).
   mocks.getProductType.mockResolvedValue('individual');
   mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
@@ -566,8 +577,16 @@ describe('approve', () => {
     const app = await buildApp();
     // Entrevista NASCE em agenda (resolveModoAtendente=false no beforeEach).
     await startAndDraft(app);
-    // Clone VIRA atendente ENTRE iniciar e aprovar (troca de modo no gestão/portal).
+    // Clone VIRA atendente REAL ENTRE iniciar e aprovar: o runtime exige a flag ON **E**
+    // agenda_automatica=false (senão roda agenda). Simulamos as DUAS condições.
     mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getCloneBySlot.mockResolvedValue({
+      id: 42,
+      display_name: 'Barbearia X',
+      cliente_nome: null,
+      personalizacao: { nome_negocio: 'Barbearia X', agenda_automatica: false },
+      servicos: [{ nome: 'Corte', preco_cents: 4500, duracao_min: 30 }],
+    });
     const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
     expect(res.statusCode).toBe(200);
     const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
@@ -762,6 +781,35 @@ describe('approve', () => {
       // 5º arg = {} (sem cartaoMode).
       expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined();
     });
+
+    // ── RAIZ #2 (incidente Ingrid): clone JÁ runtime NUNCA volta a baked (sem cartão-duplo) ──
+    it('flag OFF mas clone JÁ cartao_mode=runtime -> persona-only, PRESERVA runtime, ZERO bloco baked', async () => {
+      // Ingrid migrada à mão: flag GLOBAL OFF, mas o clone já injeta o cartão em runtime. Se o
+      // approve assar o bloco no bot_prompt, o runtime injeta um 2º -> cartão-duplo. O fix honra
+      // o cartao_mode ATUAL: persona-only + preserva runtime, independente da flag.
+      expect(cfg.CARTAO_RUNTIME_ENABLED).toBe(false); // flag global OFF (default prod)
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'estetica',
+        promptCustom: true,
+        cartaoMode: 'runtime', // clone já migrado
+        cartaoConfig: { emojis: { marca: '🌻', servico: '📝' } },
+        nomeNegocio: 'Consultório Ingrid',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(200);
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      const finalPrompt = call[1] as string;
+      const opts = call[4] as { cartaoMode?: string; bakedMarker?: string };
+      // persona presente, cartão baked AUSENTE (vai por runtime) -> zero cartão-duplo.
+      expect(finalPrompt).toContain('Barbearia X');
+      expect(finalPrompt).not.toContain(BLOCO_MARKER);
+      expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
+      // preserva runtime na transação (applyGeneratedPrompt seta cartao_mode='runtime', não regride).
+      expect(opts.cartaoMode).toBe('runtime');
+      expect(opts.bakedMarker).toBe(BLOCO_MARKER);
+    });
   });
 });
 
@@ -810,10 +858,18 @@ describe('estabelecimento (MVP SCRUM-92): variante do BLOCO por product_type', (
   });
 
   it('estabelecimento em modo ATENDENTE ignora a variante estab (atendente manda)', async () => {
-    // Estabelecimento só troca a variante quando o modo é agenda; se o clone virou
-    // atendente, o BLOCO é o de atendente (sem cartão) — deriveBlocoModo respeita isso.
+    // Estabelecimento só troca a variante quando o modo é agenda; se o clone é atendente REAL
+    // (flag ON + agenda_automatica=false), o BLOCO é o de atendente (sem cartão) — deriveBlocoModo
+    // respeita isso. As DUAS condições do runtime têm que valer (não só a flag).
     mocks.getProductType.mockResolvedValue('estabelecimento');
     mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getCloneBySlot.mockResolvedValue({
+      id: 42,
+      display_name: 'Barbearia X',
+      cliente_nome: null,
+      personalizacao: { nome_negocio: 'Barbearia X', agenda_automatica: false },
+      servicos: [{ nome: 'Corte', preco_cents: 4500, duracao_min: 30 }],
+    });
     const app = await buildApp();
     await startAndDraft(app);
     const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
@@ -821,6 +877,108 @@ describe('estabelecimento (MVP SCRUM-92): variante do BLOCO por product_type', (
     const [, finalPrompt] = mocks.applyGeneratedPrompt.mock.calls[0];
     expect(finalPrompt).toContain('BLOCO_ATENDENTE');
     expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
+  });
+});
+
+// ── SCRUM-92 (raiz do incidente Ingrid): o modo do builder = modo REAL do runtime ──────────
+// O runtime (teste_barbearia.ts) só roda ATENDENTE com a flag/config ON **E** agenda_automatica
+// OFF (false/'false'). Um clone com agenda_automatica != false roda AGENDA mesmo com a flag
+// atendente setada (Ingrid). loadCloneContext espelha isso: o bloco BAKED no approve revela o
+// modo escolhido (BLOCO_MARKER=agenda individual, BLOCO_ESTAB=estab, BLOCO_ATENDENTE=atendente).
+describe('modo REAL do runtime (regressão dos 5 clones)', () => {
+  function setClone(agendaAutomatica: unknown): void {
+    mocks.getCloneBySlot.mockResolvedValue({
+      id: 42,
+      display_name: 'Barbearia X',
+      cliente_nome: null,
+      personalizacao:
+        agendaAutomatica === undefined
+          ? { nome_negocio: 'Barbearia X' } // ausente = default AGENDA
+          : { nome_negocio: 'Barbearia X', agenda_automatica: agendaAutomatica },
+      servicos: [{ nome: 'Corte', preco_cents: 4500, duracao_min: 30 }],
+    });
+  }
+
+  async function approveAndGetPrompt(): Promise<string> {
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'pode gerar' },
+    });
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    return mocks.applyGeneratedPrompt.mock.calls[0][1] as string;
+  }
+
+  it('Meduzza (atendente REAL: flag ON + agenda OFF) -> bloco ATENDENTE', async () => {
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone(false);
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+    expect(finalPrompt).not.toContain(BLOCO_MARKER);
+  });
+
+  it('Cirilo/Samuel (agenda individual: flag OFF, agenda default) -> bloco individual', async () => {
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone(undefined);
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt).not.toContain('BLOCO_ATENDENTE');
+  });
+
+  it('dragon (estabelecimento AGENDA: flag OFF) -> bloco ESTABELECIMENTO', async () => {
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
+    mocks.getProductType.mockResolvedValue('estabelecimento');
+    setClone(true);
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain(BLOCO_ESTAB_MARKER);
+    expect(finalPrompt).not.toContain('BLOCO_ATENDENTE');
+  });
+
+  it('INGRID (flag atendente ON MAS agenda_automatica=true) -> roda AGENDA, NÃO atendente', async () => {
+    // A raiz do incidente: a flag dizia atendente, mas o runtime roda AGENDA (agenda_automatica=
+    // true). O builder tem que assar o cartão de AGENDA (guard de agendamento intacto), nunca o
+    // bloco atendente (que quebraria a marcação).
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone(true);
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt).not.toContain('BLOCO_ATENDENTE');
+  });
+
+  it('agenda_automatica="true" (STRING) + flag ON -> ainda AGENDA', async () => {
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone('true');
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt).not.toContain('BLOCO_ATENDENTE');
+  });
+
+  it('agenda_automatica="false" (STRING) + flag ON -> atendente REAL', async () => {
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone('false');
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+    expect(finalPrompt).not.toContain(BLOCO_MARKER);
+  });
+
+  it('flag atendente OFF + agenda_automatica=false -> AGENDA (flag manda, não a config)', async () => {
+    // sem a flag/config de atendente, agenda_automatica sozinha NÃO liga atendente (espelha o
+    // gate DUPLO do runtime): o clone roda agenda.
+    mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
+    mocks.getProductType.mockResolvedValue('individual');
+    setClone(false);
+    const finalPrompt = await approveAndGetPrompt();
+    expect(finalPrompt).toContain(BLOCO_MARKER);
+    expect(finalPrompt).not.toContain('BLOCO_ATENDENTE');
   });
 });
 

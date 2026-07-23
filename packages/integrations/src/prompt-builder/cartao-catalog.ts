@@ -37,10 +37,12 @@ const NFC = (s: string): string => s.normalize('NFC');
  * este set muda junto (contrato compartilhado; teste trava a paridade).
  */
 const EXTRA: Record<CartaoEmojiKey, string[]> = {
-  marca: ['✂️'],
+  // 🌻 (marca) e 📝 (servico) = emojis da Ingrid (clone migrado à mão). Entram na allowlist
+  // para o PUT do portal aceitar a config dela e o picker oferecer os mesmos ícones (SCRUM-92).
+  marca: ['✂️', '🌻'],
   dia: ['🗓️', '📆'],
   horario: ['⌚'],
-  servico: ['💇'],
+  servico: ['💇', '📝'],
   valor: ['💵', '💲', '🪙'],
   confirma: ['☑️', '👍'],
   profissional: ['🧑‍🔧', '💇‍♂️'],

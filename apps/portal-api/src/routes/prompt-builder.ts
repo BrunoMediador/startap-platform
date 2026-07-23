@@ -24,7 +24,7 @@
  * Guardas de custo/abuso no Redis (fail-closed).
  * LGPD: NUNCA loga conteúdo da conversa nem a persona — só slot, tokens, latency, blocked_reason.
  */
-import { resolveNomeNegocio } from '@startap/core';
+import { isAgendaAutomaticaIntent, resolveNomeNegocio } from '@startap/core';
 import { logger } from '@startap/core/logger';
 import type { ChatTurn } from '@startap/db';
 import { botPrompt, cloneColaboradores, flowClones } from '@startap/db';
@@ -109,21 +109,36 @@ function sanitizeInput(raw: string): string {
 // testes/callers que o importam deste módulo.
 export { resolveNomeNegocio };
 
-/** Resolve o contexto do clone (nome/área/modo/tipo) da sessão — NUNCA de input. */
+/** Resolve o contexto do clone (nome/área/modo/tipo/cartão) da sessão — NUNCA de input. */
 async function loadCloneContext(slot: string): Promise<{
   nomeNegocio: string;
   area: string;
   modo: 'agenda' | 'atendente';
   productType: 'individual' | 'estabelecimento';
   servicos: string[];
+  cartaoMode: 'baked' | 'runtime';
 } | null> {
   const clone = await flowClones.getCloneBySlot(slot);
   if (!clone) return null;
-  const { area } = await cloneColaboradores.getAreaAndPromptCustom(slot);
-  const modoAtendente = await flowClones.resolveModoAtendenteEnabledForSlot(
+  // área + cartao_mode ATUAL do clone numa única leitura (getAreaPromptCustomCartao, SCRUM-92 inc.2).
+  const { area, cartaoMode } = await cloneColaboradores.getAreaPromptCustomCartao(slot);
+
+  // ── MODO REAL DO RUNTIME (SCRUM-92, raiz do incidente Ingrid) ──────────────────────
+  // O runtime (apps/api/src/bots/teste_barbearia.ts, process()) só entra no ramo ATENDENTE
+  // quando a flag/config de atendente está ON **E** agenda_automatica está explicitamente OFF
+  // (false/'false'). Um clone com agenda_automatica != false roda AGENDA mesmo com a flag
+  // atendente setada (exatamente o caso da Ingrid). Espelhamos EXATAMENTE essa decisão aqui
+  // para: (a) o entrevistador usar a postura certa; (b) o approve assar a variante certa do
+  // bloco/cartão (individual/estabelecimento vs. atendente). A intenção `agenda_automatica`
+  // é a fonte estável (o degrade-elegante por gcal não-conectado é transitório e NÃO deve
+  // congelar a persona no bloco de atendente — quando a agenda conecta o clone volta a agenda).
+  const modoAtendenteFlag = await flowClones.resolveModoAtendenteEnabledForSlot(
     slot,
     config.MODO_ATENDENTE_SLOTS,
   );
+  const agendaIntent = isAgendaAutomaticaIntent(clone.personalizacao?.agenda_automatica);
+  const reallyAtendente = modoAtendenteFlag && !agendaIntent;
+
   // product_type do clone (individual|estabelecimento) — decide se o BLOCO estrutural
   // ganha o campo do profissional. getProductType tem fallback seguro 'individual'.
   const productType = await cloneColaboradores.getProductType(slot);
@@ -132,9 +147,10 @@ async function loadCloneContext(slot: string): Promise<{
   return {
     nomeNegocio,
     area: area ?? '',
-    modo: modoAtendente ? 'atendente' : 'agenda',
+    modo: reallyAtendente ? 'atendente' : 'agenda',
     productType,
     servicos,
+    cartaoMode,
   };
 }
 
@@ -469,7 +485,12 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     //   transação (applyGeneratedPrompt). O cartão passa a ser injetado por código em runtime
     //   (buildCartaoRuntimeBlock). Como a persona é FRESCA (nunca teve cartão), não há cartão duplo;
     //   o guard bakedMarker no data layer prova isso (aborta se o cartão vazar pro finalPrompt).
-    const cartaoRuntime = config.CARTAO_RUNTIME_ENABLED;
+    //
+    // RAIZ #2 (SCRUM-92, incidente Ingrid): mesmo com a flag GLOBAL OFF, se o clone JÁ é
+    // cartao_mode='runtime' (ex.: migrado à mão), o approve NUNCA pode assar o bloco no bot_prompt
+    // — o runtime injeta o cartão e teríamos CARTÃO-DUPLO. Runtime quando a flag global liga (clones
+    // novos) OU o clone já está em runtime (preserva o modo, nunca REGRIDE pra baked).
+    const cartaoRuntime = config.CARTAO_RUNTIME_ENABLED || ctx?.cartaoMode === 'runtime';
     const bloco = cartaoRuntime
       ? ''
       : promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area });
@@ -514,7 +535,15 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
 
       await deleteState(redis, slot);
       log.info(
-        { slot, versionSaved: result.version_saved, modo, blocoModo, edited, cartaoRuntime },
+        {
+          slot,
+          versionSaved: result.version_saved,
+          modo,
+          blocoModo,
+          edited,
+          cartaoRuntime,
+          cartaoModeAtual: ctx?.cartaoMode,
+        },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );
       return reply
