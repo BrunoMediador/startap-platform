@@ -82,8 +82,18 @@ export function extractBakedCartao(botPrompt: string): CartaoExtract {
     }
   }
 
-  // ── Estratégia 'template': seção [CARTAO DE CONFIRMACAO ...] até a PRÓXIMA seção/EOF ───────
-  const cartaoHeaderIdx = lines.findIndex((l) => /^\[CARTAO DE CONFIRMACAO/i.test(l));
+  // ── Estratégia 'template': seção do cartão até a PRÓXIMA seção/EOF ─────────────────────────
+  // Âncora = cabeçalho de seção `[...]` do cartão. Reconhece os formatos LEGADOS reais em prod
+  // (verificados por SSH read-only 23/07 nos bot_prompt de Cirilo/Samuel/mvs): todos usam a
+  // seção `[CARTAO DE CONFIRMACAO]` com a arte 💈CARTAO DE CONFIRMACAO💈 / DIA/HORARIO/SERVICO/
+  // VALOR / "Responda SIM" logo abaixo (TRAILING). O `[MODELO UNICO...]` também é aceito como
+  // âncora defensiva (variante histórica citada no design) — NENHUM clone do roster atual o usa,
+  // mas custa nada reconhecê-lo se um dia aparecer. A âncora é sempre um cabeçalho `[...]` no
+  // início da linha: nunca casa a MENÇÃO textual "apresente o CARTAO DE CONFIRMACAO" do [FLUXO]
+  // (essa não começa com `[`), então a persona-only preserva as refs e o cartão sai limpo.
+  const cartaoHeaderIdx = lines.findIndex((l) =>
+    /^\[(CARTAO DE CONFIRMACAO|MODELO [UÚ]NICO)/i.test(l),
+  );
   if (cartaoHeaderIdx >= 0) {
     let sectionEnd = lines.length;
     for (let i = cartaoHeaderIdx + 1; i < lines.length; i++) {
@@ -102,4 +112,30 @@ export function extractBakedCartao(botPrompt: string): CartaoExtract {
   }
 
   return { found: false, reason: 'sem_cartao' };
+}
+
+/**
+ * A extração separou persona↔cartão com CONFIANÇA suficiente pra um FLIP automático SEGURO
+ * (endpoint /portal/cartao-config flip-on-customize — SCRUM-92 fix "editável pra todos", 23/07)?
+ * É o guard ÚNICO que decide "flipa" vs "mantém locked/fale-com-suporte" — nunca muta um prompt
+ * com separação duvidosa. Exige TUDO:
+ *   - found + estratégia conhecida ('bloco' = persona gerada pelo builder | 'template' = seção
+ *     [CARTAO DE CONFIRMACAO] dos legados Cirilo/Samuel/mvs). Ambas têm fronteira clara + trailing;
+ *   - persona-only NÃO-vazia (um flip nunca pode deixar o clone sem persona);
+ *   - cartão NÃO-vazio (há de fato um cartão a preservar em runtime);
+ *   - GUARD anti-cartão-duplo: a persona-only NÃO contém mais o cartão capturado — a remoção foi
+ *     COMPLETA. Senão o runtime injetaria um 2º cartão por cima do que sobrou no bot_prompt.
+ * Qualquer 'não' → NÃO flip-safe → o clone fica LOCKED (fallback seguro > mutilar persona de
+ * pagante). Retorna boolean puro (NÃO type guard: flip-safe é MAIS estrito que found:true — um
+ * found:true não-safe existe em runtime, então narrow pra found:true seria unsound; o caller
+ * estreita com um `ex.found` explícito). Puro/determinístico.
+ */
+export function isCartaoFlipSafe(ex: CartaoExtract): boolean {
+  return (
+    ex.found &&
+    (ex.strategy === 'bloco' || ex.strategy === 'template') &&
+    ex.personaOnly.trim() !== '' &&
+    ex.cartao.trim() !== '' &&
+    !ex.personaOnly.includes(ex.cartao)
+  );
 }

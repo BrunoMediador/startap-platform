@@ -205,6 +205,21 @@ export async function migrateCloneToCartaoRuntime(
   if (typeof personaOnlyPrompt !== 'string' || personaOnlyPrompt.trim().length === 0) {
     throw new Error('migrateCloneToCartaoRuntime: personaOnlyPrompt vazio');
   }
+  // GUARD anti-cartão-duplo (defesa em profundidade — espelha o bakedMarker de applyGeneratedPrompt).
+  // Se o cartão capturado (verbatim) AINDA está na persona-only, a separação persona↔cartão falhou:
+  // em runtime o clone teria o cartão baked no bot_prompt E o injetado por cima = DOIS cartões.
+  // Aborta ANTES de tocar o banco (input inválido), nunca grava um estado inconsistente. O caller
+  // confiável (endpoint via isCartaoFlipSafe, script via classify) nunca chega aqui com isso.
+  const verbatim = (cartaoConfig as { verbatim?: unknown } | null | undefined)?.verbatim;
+  if (
+    typeof verbatim === 'string' &&
+    verbatim.trim() !== '' &&
+    personaOnlyPrompt.includes(verbatim)
+  ) {
+    throw new Error(
+      'migrateCloneToCartaoRuntime: persona-only ainda contém o cartão (verbatim) — separação inválida, aborta',
+    );
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

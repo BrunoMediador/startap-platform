@@ -251,6 +251,21 @@ describe('migrateCloneToCartaoRuntime', () => {
     });
     expect(res).toEqual({ migrated: false, skipped: 'sem_clone' });
   });
+
+  it('GUARD anti-cartão-duplo: persona-only que AINDA contém o verbatim → throw, NÃO abre transação', async () => {
+    const client = makeMigrateClient({ promptCustom: false, currentPrompt: 'x' });
+    connectMock.mockResolvedValue(client);
+    await expect(
+      migrateCloneToCartaoRuntime({
+        slot: 'clone_x',
+        // separação inválida: o cartão ainda está dentro da persona-only.
+        personaOnlyPrompt: 'persona\n\n[CARTAO DE CONFIRMACAO]\n💈 ...',
+        cartaoConfig: { verbatim: '[CARTAO DE CONFIRMACAO]\n💈 ...' },
+        editedBy: 'script',
+      }),
+    ).rejects.toThrow(/persona-only ainda contém o cartão/);
+    expect(connectMock).not.toHaveBeenCalled(); // nem tocou o banco
+  });
 });
 
 describe('revertCloneCartaoRuntime', () => {

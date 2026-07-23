@@ -5,7 +5,30 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildBlocoEstrutural } from './bloco-estrutural.js';
-import { extractBakedCartao } from './cartao-extract.js';
+import { extractBakedCartao, isCartaoFlipSafe } from './cartao-extract.js';
+
+/** Formato REAL do cartão legado de Cirilo/Samuel/mvs (dump SSH read-only 23/07): seção
+ *  [CARTAO DE CONFIRMACAO] SEM o marcador novo ===== REGRAS, arte 💈 + DIA/HORARIO/SERVICO/
+ *  VALOR + "Responda SIM", TRAILING no bot_prompt. Byte-fiel ao que roda em produção. */
+const PERSONA_LEGADO = [
+  'Voce e o assistente virtual da Barbearia Samuel.',
+  'Atenda pelo WhatsApp com simpatia e objetividade. Maximo 3 linhas por resposta.',
+  '',
+  '[FLUXO OBRIGATORIO]',
+  '4. Se estiver -> apresente o CARTAO DE CONFIRMACAO e peca SIM.',
+].join('\n');
+const CARTAO_LEGADO = [
+  '[CARTAO DE CONFIRMACAO]',
+  '💈CARTAO DE CONFIRMACAO💈',
+  '──────────────────────',
+  '📅 DIA:',
+  '⏰ HORARIO:',
+  '✂️ SERVICO:',
+  '💰 VALOR:',
+  '──────────────────────',
+  '✅ Responda SIM para confirmar.',
+].join('\n');
+const BAKED_LEGADO = `${PERSONA_LEGADO}\n\n${CARTAO_LEGADO}`;
 
 describe('extractBakedCartao — estratégia bloco (persona gerada)', () => {
   it('extrai o BLOCO estrutural trailing verbatim; persona-only fica sem ele', () => {
@@ -74,6 +97,54 @@ describe('extractBakedCartao — estratégia template (Cirilo/Samuel)', () => {
     const ex = extractBakedCartao(interwoven);
     expect(ex.found).toBe(false);
     if (!ex.found) expect(ex.reason).toBe('cartao_nao_trailing');
+  });
+});
+
+describe('extractBakedCartao — formato REAL legado (Cirilo/Samuel/mvs em prod)', () => {
+  it('separa persona↔cartão byte-a-byte; recombina no original', () => {
+    const ex = extractBakedCartao(BAKED_LEGADO);
+    expect(ex.found).toBe(true);
+    if (ex.found) {
+      expect(ex.strategy).toBe('template');
+      expect(ex.cartao).toBe(CARTAO_LEGADO); // cartão verbatim (com a seção-cabeçalho)
+      expect(ex.personaOnly).toBe(PERSONA_LEGADO); // persona limpa (sem o cartão)
+      // A ref textual "apresente o CARTAO DE CONFIRMACAO" do [FLUXO] permanece; a arte some.
+      expect(ex.personaOnly).toContain('apresente o CARTAO DE CONFIRMACAO');
+      expect(ex.personaOnly).not.toContain('💈CARTAO DE CONFIRMACAO💈');
+      expect(`${ex.personaOnly}\n\n${ex.cartao}`).toBe(BAKED_LEGADO);
+    }
+  });
+
+  it('âncora [MODELO UNICO] (variante histórica) também é reconhecida quando trailing', () => {
+    const p = 'persona real\n\n[MODELO UNICO DE CONFIRMACAO]\n💈 <nome> / DIA / pede SIM';
+    const ex = extractBakedCartao(p);
+    expect(ex.found).toBe(true);
+    if (ex.found) expect(ex.strategy).toBe('template');
+  });
+});
+
+describe('isCartaoFlipSafe — guard único do flip automático', () => {
+  it('template REAL legado → flip-safe (fim do fale-com-suporte)', () => {
+    expect(isCartaoFlipSafe(extractBakedCartao(BAKED_LEGADO))).toBe(true);
+  });
+
+  it('bloco gerado pelo builder → flip-safe', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
+    expect(isCartaoFlipSafe(extractBakedCartao(`persona real\n\n${bloco}`))).toBe(true);
+  });
+
+  it('sem cartão → NÃO flip-safe (fica locked, nunca muta)', () => {
+    expect(isCartaoFlipSafe(extractBakedCartao('só persona, nenhum cartão'))).toBe(false);
+  });
+
+  it('cartão sem persona (persona-only vazia) → NÃO flip-safe', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
+    expect(isCartaoFlipSafe(extractBakedCartao(bloco))).toBe(false);
+  });
+
+  it('cartão NÃO-trailing → found:false → NÃO flip-safe', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
+    expect(isCartaoFlipSafe(extractBakedCartao(`p\n\n${bloco}\n\n[X]\ny`))).toBe(false);
   });
 });
 

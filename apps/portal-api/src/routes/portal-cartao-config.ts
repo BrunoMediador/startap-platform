@@ -12,19 +12,24 @@
  * ANTES de qualquer leitura (feature dormente, nada muda). ON → o endpoint serve a UI pra todos.
  *
  * ESTADOS por clone (GET decide editable/locked; PUT aplica a mesma regra):
- *   1. cartao_mode='runtime' (já migrado / builder-runtime): editable, o dono ajusta a config
- *      livremente (setCartaoConfigBySlot) — NÃO re-flipa.
- *   2. baked + prompt_custom=true (Ingrid 🌻, cartão à mão): LOCKED — editable:false +
+ *   1. cartao_mode='runtime' (já migrado / builder-runtime — ex.: dragon, Ingrid): editable, o
+ *      dono ajusta a config livremente (setCartaoConfigBySlot) — NÃO re-flipa.
+ *   2. baked + prompt_custom=true (persona gerenciada à mão): LOCKED — editable:false +
  *      locked_reason='prompt_custom'. GET mostra read-only; PUT → 409 (nunca flipa uma persona
- *      gerenciada à mão; invariante do arquiteto).
- *   3. baked + prompt_custom=false + cartão extraível LIMPO ('bloco', trailing, persona não-vazia):
- *      editable. PUT FLIPA aquele clone pra runtime (migrateCloneToCartaoRuntime — snapshot do
- *      bot_prompt pra reversão + persona-only + cartao_mode='runtime') aplicando a config do dono.
- *   4. baked + prompt_custom=false + extração NÃO-limpa (template Cirilo/Samuel, não-trailing,
+ *      editada à mão sem revisão; invariante do arquiteto — a extração de um cartão feito à mão
+ *      não é confiável o bastante pra mutar sem supervisão).
+ *   3. baked + prompt_custom=false + cartão flip-SAFE (isCartaoFlipSafe: 'bloco' OU 'template',
+ *      trailing, persona não-vazia, cartão removido por completo): editable. PUT FLIPA aquele clone
+ *      pra runtime (migrateCloneToCartaoRuntime — snapshot do bot_prompt pra reversão + persona-only
+ *      + cartao_mode='runtime') aplicando a config do dono. Cobre TAMBÉM o formato LEGADO
+ *      [CARTAO DE CONFIRMACAO] dos template Cirilo/Samuel/mvs (fix "editável pra todos" 23/07):
+ *      antes travavam em requer_revisao; agora, como a extração separa persona↔cartão byte-a-byte
+ *      (verificado nos bot_prompt reais), o dono edita direto — fim do "fale com o suporte".
+ *   4. baked + prompt_custom=false + extração NÃO-confiável (sem cartão reconhecível, não-trailing,
  *      estabelecimento code-injected): editable:false + locked_reason='requer_revisao'. GET mostra
  *      read-only (preview verbatim quando dá); PUT → 422 requer_revisao + log (NÃO flipa com
- *      resultado duvidoso). O #475 exige --allow-template + revisão do arquiteto pra esses — o
- *      caminho supervisionado é o script migrate-cartao-runtime, não o portal.
+ *      resultado duvidoso — mantém baked em vez de mutilar o prompt). Caminho supervisionado =
+ *      script migrate-cartao-runtime (--allow-template / revisão do arquiteto).
  *
  * REVERSÃO: o flip via PUT usa migrateCloneToCartaoRuntime, que grava o snapshot do bot_prompt
  * baked em bot_prompt_versions (comment=CARTAO_MIGRATION_SNAPSHOT_COMMENT). Logo o flip do portal
@@ -195,9 +200,11 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
       );
     }
 
-    // 3/4. Baked + template-tracking (prompt_custom=false): extrai o cartão atual.
+    // 3/4. Baked + template-tracking (prompt_custom=false): extrai o cartão atual. Flip-safe
+    // (isCartaoFlipSafe: 'bloco' OU 'template' legado, trailing, persona não-vazia, cartão
+    // 100% removido) → editable; senão → requer_revisao (fallback seguro, não muta).
     const ex = await extractCurrentCartao(slot);
-    const cleanFlip = ex.found && ex.strategy === 'bloco' && ex.personaOnly.trim() !== '';
+    const cleanFlip = promptBuilder.isCartaoFlipSafe(ex);
     return reply.code(200).send(
       buildResponse({
         effectiveMode: 'baked',
@@ -254,12 +261,15 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ error: 'cartao_bloqueado', reason: 'prompt_custom' });
     }
 
-    // C. Baked + template-tracking → tenta flip-on-customize. Só flipa com extração LIMPA.
+    // C. Baked + template-tracking → tenta flip-on-customize. Só flipa se a extração é FLIP-SAFE
+    // (isCartaoFlipSafe: 'bloco' OU 'template' legado, trailing, persona não-vazia, cartão 100%
+    // removido — guard anti-cartão-duplo). Não-confiável → 422, mantém baked (não muta o prompt).
+    // O `!ex.found ||` é redundante em runtime (isCartaoFlipSafe já exige found) mas ESTREITA o
+    // tipo pra found:true no resto do handler (ex.cartao/ex.personaOnly abaixo) sem cast.
     const ex = await extractCurrentCartao(slot);
-    const cleanFlip = ex.found && ex.strategy === 'bloco' && ex.personaOnly.trim() !== '';
-    if (!cleanFlip) {
+    if (!ex.found || !promptBuilder.isCartaoFlipSafe(ex)) {
       const reason = ex.found ? `cartao_${ex.strategy}` : ex.reason;
-      log.warn({ slot, reason }, 'PUT cartao-config: flip requer revisão (extração não-limpa)');
+      log.warn({ slot, reason }, 'PUT cartao-config: flip requer revisão (extração não-confiável)');
       return reply.code(422).send({ error: 'requer_revisao', reason });
     }
 
