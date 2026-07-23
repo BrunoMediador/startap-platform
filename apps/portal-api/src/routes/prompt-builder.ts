@@ -24,6 +24,7 @@
  * Guardas de custo/abuso no Redis (fail-closed).
  * LGPD: NUNCA loga conteúdo da conversa nem a persona — só slot, tokens, latency, blocked_reason.
  */
+import { resolveNomeNegocio } from '@startap/core';
 import { logger } from '@startap/core/logger';
 import type { ChatTurn } from '@startap/db';
 import { botPrompt, cloneColaboradores, flowClones } from '@startap/db';
@@ -103,35 +104,10 @@ function sanitizeInput(raw: string): string {
   return stripped.length > max ? stripped.slice(0, max) : stripped;
 }
 
-/** "slug-like" = sem espaço e só [a-z0-9._-] (ex.: "cirilobarbearia", "barber_dragon" — nome
- * TÉCNICO do clone), não um nome amigável de negócio. */
-function looksSlugLike(s: string): boolean {
-  return !/\s/.test(s) && /^[a-z0-9._-]+$/.test(s);
-}
-
-/**
- * Nome do NEGÓCIO pra abertura/persona. Preferência: o que o DONO digitou em "Meu negócio"
- * (personalizacao.nome_negocio) > display_name > cliente_nome > genérico. Evita valor "slug-like":
- * na 1ª passada só aceita candidato com cara de nome de verdade; se todos forem slug, cai pro de
- * maior prioridade não-vazio antes do fallback genérico. Sem isso a persona abria com o SLUG do
- * clone ("cirilobarbearia") em vez do nome real. SCRUM-92 (bug 4).
- */
-export function resolveNomeNegocio(clone: {
-  display_name?: string | null;
-  cliente_nome?: string | null;
-  personalizacao?: Record<string, string> | null;
-}): string {
-  const candidates = [clone.personalizacao?.nome_negocio, clone.display_name, clone.cliente_nome];
-  for (const c of candidates) {
-    const v = c?.trim();
-    if (v && !looksSlugLike(v)) return v;
-  }
-  for (const c of candidates) {
-    const v = c?.trim();
-    if (v) return v;
-  }
-  return 'seu negócio';
-}
+// resolveNomeNegocio vive em @startap/core (fonte única, também consumida pelo caminho do bot
+// via db.getAreaPromptCustomCartao — SCRUM-92 inc.2). Re-exportado aqui pra não quebrar os
+// testes/callers que o importam deste módulo.
+export { resolveNomeNegocio };
 
 /** Resolve o contexto do clone (nome/área/modo/tipo) da sessão — NUNCA de input. */
 async function loadCloneContext(slot: string): Promise<{
@@ -482,11 +458,24 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // (era dead-end: exibido e nunca salvo). Consumo pelo runtime = increment 2/ADR 0032. SCRUM-92 (bug 5).
     const nomeAssistente = state.draft.nome_do_bot?.trim() || null;
 
-    // GARANTIA: cola o BLOCO_ESTRUTURAL (cartão + SIM) DEPOIS da persona, no SERVIDOR.
+    // GARANTIA: a mecânica de agendamento (cartão + SIM) NUNCA vem da IA — entra por CÓDIGO.
     // Estabelecimento (agenda multi-profissional) usa a variante com 👤 PROFISSIONAL.
     const blocoModo = deriveBlocoModo(productType, modo);
-    const bloco = promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area });
-    const finalPrompt = sanitizeOrphanPlaceholders(`${v.cleaned}\n\n${bloco}`);
+
+    // ── Cartão BAKED vs RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate CARTAO_RUNTIME_ENABLED ──
+    // OFF (default): cola o BLOCO_ESTRUTURAL na persona (cartão baked no bot_prompt) — comportamento
+    //   atual byte-a-byte. cartao_mode fica 'baked'.
+    // ON: a persona nasce PERSONA-ONLY (SEM o bloco) e o clone vira cartao_mode='runtime' na MESMA
+    //   transação (applyGeneratedPrompt). O cartão passa a ser injetado por código em runtime
+    //   (buildCartaoRuntimeBlock). Como a persona é FRESCA (nunca teve cartão), não há cartão duplo;
+    //   o guard bakedMarker no data layer prova isso (aborta se o cartão vazar pro finalPrompt).
+    const cartaoRuntime = config.CARTAO_RUNTIME_ENABLED;
+    const bloco = cartaoRuntime
+      ? ''
+      : promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area });
+    const finalPrompt = sanitizeOrphanPlaceholders(
+      cartaoRuntime ? v.cleaned : `${v.cleaned}\n\n${bloco}`,
+    );
     if (finalPrompt.length > MAX_FINAL_PROMPT_CHARS) {
       return reply.code(422).send({ error: 'prompt_muito_longo' });
     }
@@ -496,6 +485,10 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
         slot,
         finalPrompt,
         `portal:builder:${username}`,
+        'prompt-builder',
+        cartaoRuntime
+          ? { cartaoMode: 'runtime', bakedMarker: promptBuilder.BLOCO_ESTRUTURAL_MARKER }
+          : {},
       );
 
       // Best-effort: persistir o nome do assistente NÃO pode derrubar o approve (o prompt já foi
@@ -521,7 +514,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
 
       await deleteState(redis, slot);
       log.info(
-        { slot, versionSaved: result.version_saved, modo, blocoModo, edited },
+        { slot, versionSaved: result.version_saved, modo, blocoModo, edited, cartaoRuntime },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );
       return reply

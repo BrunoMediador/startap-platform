@@ -359,6 +359,18 @@ export const ConfigSchema = z.object({
     .positive()
     .default(2 * 60 * 60),
 
+  // ── Cartão de confirmação em RUNTIME — kill-switch GLOBAL (SCRUM-92 inc.2 / ADR 0032) ──
+  // MESMA flag do apps/api (kill-switch macro do cartão montado em runtime). No portal-api ela
+  // gate 2 caminhos: (1) o approve do builder nasce em runtime (persona SEM cartão baked +
+  // cartao_mode='runtime') quando ON; (2) o endpoint /portal/cartao-config só expõe mode='runtime'
+  // (a UI parada só aparece então). OFF (ausente/false) = comportamento atual byte-a-byte: approve
+  // cola o cartão baked; endpoint reporta o mode real (baked). OPCIONAL no boot (env nova NUNCA
+  // derruba o serviço — lição #247). NUNCA hardcoded.
+  CARTAO_RUNTIME_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 

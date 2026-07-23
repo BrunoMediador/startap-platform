@@ -9,6 +9,7 @@
  * `getGcalsForSlot` em @startap/integrations — aqui ficam só leituras de metadado
  * que o caller (apps/api) precisa pra decidir o caminho e validar.
  */
+import { resolveNomeNegocio } from '@startap/core';
 import type pg from 'pg';
 import { pool, query } from '../client.js';
 
@@ -518,19 +519,154 @@ export async function getArea(slot: string): Promise<string | null> {
 export async function getAreaAndPromptCustom(
   slot: string,
 ): Promise<{ area: string | null; promptCustom: boolean }> {
+  // Wrapper fino sobre o reader unificado (SCRUM-92 inc.2): mesma query, mesmos
+  // fallbacks — só descarta as colunas do cartão. Mantido pra NÃO tocar call-sites.
+  const { area, promptCustom } = await getAreaPromptCustomCartao(slot);
+  return { area, promptCustom };
+}
+
+/** Fonte do cartão de confirmação deste clone (flow_clones.cartao_mode, migration 075).
+ *  'baked' = vem do bot_prompt (comportamento de hoje); 'runtime' = montado por código. */
+export type CartaoMode = 'baked' | 'runtime';
+
+/**
+ * Config JSONB do cartão em runtime (flow_clones.cartao_config, migration 075). Espelha
+ * (estruturalmente) a CartaoConfig de @startap/integrations — definida LOCAL de propósito:
+ * @startap/db NÃO depende de @startap/integrations (a dependência é o contrário; importar
+ * de lá criaria ciclo). O caller (apps/api) passa este objeto direto pro buildCartaoRuntimeBlock
+ * (tipo estruturalmente compatível). Só campos VALIDADOS entram — o resto é descartado.
+ */
+export interface CloneCartaoConfig {
+  template?: 'padrao' | 'compacto' | 'detalhado';
+  emojis?: Partial<
+    Record<'marca' | 'dia' | 'horario' | 'servico' | 'valor' | 'confirma' | 'profissional', string>
+  >;
+  /** Cartão LEGADO capturado verbatim do bot_prompt de um clone MIGRADO (refinamento Bruno
+   *  23/07). Presente → o runtime EMITE esse texto exato (zero mudança visível). Ver
+   *  buildCartaoRuntimeBlock e o script migrate-cartao-runtime. */
+  verbatim?: string;
+}
+
+const CARTAO_EMOJI_KEYS = [
+  'marca',
+  'dia',
+  'horario',
+  'servico',
+  'valor',
+  'confirma',
+  'profissional',
+] as const;
+
+/**
+ * Valida DEFENSIVAMENTE o JSONB cru de cartao_config numa CloneCartaoConfig. Nunca lança:
+ * shape inesperado (não-objeto, template fora do domínio, emoji não-string) é descartado
+ * silenciosamente → null ou objeto parcial. O buildCartaoRuntimeBlock é puro/tolerante, mas
+ * validar aqui garante que o tipo forte (`template` union) não é uma mentira sobre o dado.
+ */
+function parseCartaoConfig(raw: unknown): CloneCartaoConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const out: CloneCartaoConfig = {};
+  if (obj.template === 'padrao' || obj.template === 'compacto' || obj.template === 'detalhado') {
+    out.template = obj.template;
+  }
+  if (obj.emojis && typeof obj.emojis === 'object') {
+    const src = obj.emojis as Record<string, unknown>;
+    const emojis: Partial<Record<(typeof CARTAO_EMOJI_KEYS)[number], string>> = {};
+    for (const k of CARTAO_EMOJI_KEYS) {
+      const v = src[k];
+      if (typeof v === 'string' && v !== '') emojis[k] = v;
+    }
+    if (Object.keys(emojis).length > 0) out.emojis = emojis;
+  }
+  // Cartão legado capturado (refinamento Bruno 23/07): string não-vazia só. Preservado cru.
+  if (typeof obj.verbatim === 'string' && obj.verbatim.trim() !== '') out.verbatim = obj.verbatim;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * Reader UNIFICADO do caminho do bot (SCRUM-92 inc.2 / ADR 0032 §2.3): lê área (051) +
+ * prompt_custom (070) + cartao_mode/cartao_config (075) do slot numa ÚNICA query por PK —
+ * NÃO adiciona read novo ao hot path (é a mesma leitura por slot que getArea/
+ * getAreaAndPromptCustom já faziam, com 2 colunas a mais).
+ *
+ * Fallbacks DELIBERADOS e byte-seguros (coluna ausente / linha ausente / valor nulo / erro
+ * de query → NUNCA lança): cartaoMode='baked' (comportamento de HOJE — cartão vem do
+ * bot_prompt) e cartaoConfig=null. Assim, mesmo se a migration 075 não tiver rodado neste
+ * ambiente, o bot cai no caminho baked e nada muda.
+ */
+export async function getAreaPromptCustomCartao(slot: string): Promise<{
+  area: string | null;
+  promptCustom: boolean;
+  cartaoMode: CartaoMode;
+  cartaoConfig: CloneCartaoConfig | null;
+  /** Nome AMIGÁVEL do negócio (SCRUM-92 inc.2): cabeado no `<nome do negócio>` do cartão
+   *  montado em RUNTIME. Resolvido na MESMA leitura por slot (zero read extra no hot path);
+   *  null quando não há linha/erro (o builder cai no placeholder). */
+  nomeNegocio: string | null;
+}> {
   try {
-    const r = await query<{ area: string | null; prompt_custom: boolean | null }>(
-      'SELECT area, prompt_custom FROM flow_clones WHERE slot = $1 LIMIT 1',
+    const r = await query<{
+      area: string | null;
+      prompt_custom: boolean | null;
+      cartao_mode: string | null;
+      cartao_config: unknown;
+      display_name: string | null;
+      cliente_nome: string | null;
+      personalizacao: unknown;
+    }>(
+      `SELECT area, prompt_custom, cartao_mode, cartao_config, display_name, cliente_nome, personalizacao
+         FROM flow_clones WHERE slot = $1 LIMIT 1`,
       [slot],
     );
     const row = r.rows[0];
+    // nomeNegocio só é resolvido quando há linha (fonte única: @startap/core, sem drift com o
+    // builder do portal). Sem linha → null (o caller usa o placeholder <nome do negócio>).
+    const nomeNegocio = row
+      ? resolveNomeNegocio({
+          display_name: row.display_name,
+          cliente_nome: row.cliente_nome,
+          personalizacao:
+            row.personalizacao && typeof row.personalizacao === 'object'
+              ? (row.personalizacao as Record<string, string>)
+              : null,
+        })
+      : null;
     return {
       area: row?.area ? row.area.trim().toLowerCase() : null,
       promptCustom: row?.prompt_custom === true,
+      // Só 'runtime' explícito liga o caminho novo; qualquer outra coisa → 'baked' (seguro).
+      cartaoMode: row?.cartao_mode === 'runtime' ? 'runtime' : 'baked',
+      cartaoConfig: parseCartaoConfig(row?.cartao_config),
+      nomeNegocio,
     };
   } catch {
-    // Coluna ausente (pré-051/070) ou erro de query → área desconhecida + não custom
-    // (= caminho atual: override segue a regra de área, sem exceção de persona).
-    return { area: null, promptCustom: false };
+    // Coluna ausente (pré-051/070/075) ou erro → caminho atual: área desconhecida, não
+    // custom, cartão BAKED, sem config. Nunca lança (não derruba o bot).
+    return {
+      area: null,
+      promptCustom: false,
+      cartaoMode: 'baked',
+      cartaoConfig: null,
+      nomeNegocio: null,
+    };
   }
+}
+
+/**
+ * Grava flow_clones.cartao_config (JSONB) escopado por SLOT (o caller injeta o slot da SESSÃO —
+ * nunca de input; anti-IDOR, regra de ouro 5). SCRUM-92 inc.2 / ADR 0032. NÃO toca cartao_mode:
+ * a config é inerte enquanto o clone é 'baked' (ativação de modo é decisão SEPARADA — approve
+ * runtime ou o script de migração). `config=null` LIMPA a coluna (volta aos defaults por área).
+ * Retorna false se não havia linha NESTE slot (caller → 404).
+ */
+export async function setCartaoConfigBySlot(
+  slot: string,
+  config: CloneCartaoConfig | null,
+): Promise<boolean> {
+  const r = await query(
+    'UPDATE flow_clones SET cartao_config = $2::jsonb, updated_at = NOW() WHERE slot = $1',
+    [slot, config === null ? null : JSON.stringify(config)],
+  );
+  return (r.rowCount ?? 0) > 0;
 }

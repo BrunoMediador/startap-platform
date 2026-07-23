@@ -20,6 +20,7 @@ export {
   resolveFaqPersonalizadoEnabled,
 } from './faq-personalizado-gate.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
+export { resolveNomeNegocio } from './nome-negocio.js';
 export { isDefinitiveNonDelivery } from './waha-send-failure.js';
 export {
   ackStatusRank,

@@ -55,6 +55,22 @@ export interface ApplyGeneratedPromptResult {
   version_saved: number | null;
 }
 
+/** Comentário-marcador do snapshot que o script de migração grava — usado no --revert pra
+ *  localizar o bot_prompt baked ANTES da migração (SCRUM-92 inc.2 / ADR 0032). */
+export const CARTAO_MIGRATION_SNAPSHOT_COMMENT = 'cartao-runtime-migration';
+
+export interface ApplyGeneratedPromptOptions {
+  /** Quando 'runtime', seta flow_clones.cartao_mode='runtime' na MESMA transação (approve do
+   *  builder com CARTAO_RUNTIME_ENABLED ON — a persona nasce SEM cartão baked). 'baked'/ausente
+   *  = comportamento atual (não toca cartao_mode). */
+  cartaoMode?: 'baked' | 'runtime';
+  /** INVARIANTE anti-cartão-duplo (arquiteto): quando cartaoMode='runtime', o finalPrompt NÃO
+   *  pode conter este marcador (o cartão baked). Se contiver, a transação aborta (throw) — um
+   *  clone runtime jamais carrega o cartão nos dois lugares. O caller passa o
+   *  BLOCO_ESTRUTURAL_MARKER (packages/db não importa de integrations → evita ciclo). */
+  bakedMarker?: string;
+}
+
 /**
  * applyGeneratedPrompt — persiste o prompt FINAL (persona gerada + bloco estrutural já
  * colado pelo caller) numa transação idêntica à receita SCRUM-83 do gestão (antes inline
@@ -78,9 +94,17 @@ export async function applyGeneratedPrompt(
   finalPrompt: string,
   editedBy: string,
   comment = 'prompt-builder',
+  opts: ApplyGeneratedPromptOptions = {},
 ): Promise<ApplyGeneratedPromptResult> {
   if (typeof finalPrompt !== 'string' || finalPrompt.trim().length === 0) {
     throw new Error('applyGeneratedPrompt: finalPrompt vazio');
+  }
+  // INVARIANTE anti-cartão-duplo (arquiteto): um clone que vira 'runtime' NÃO pode ter o cartão
+  // baked no bot_prompt (senão o runtime injeta um 2º). Falha ANTES de abrir a transação.
+  if (opts.cartaoMode === 'runtime' && opts.bakedMarker && finalPrompt.includes(opts.bakedMarker)) {
+    throw new Error(
+      'applyGeneratedPrompt: cartaoMode=runtime exige finalPrompt SEM cartão baked (bakedMarker presente)',
+    );
   }
   const client = await pool.connect();
   try {
@@ -122,11 +146,171 @@ export async function applyGeneratedPrompt(
     );
 
     // Persona custom sticky (migration 070, SCRUM-59/83): protege do re-render.
-    await client.query('UPDATE flow_clones SET prompt_custom = true WHERE slot = $1', [slot]);
+    // Cartão em runtime (SCRUM-92 inc.2): seta cartao_mode='runtime' na MESMA transação quando
+    // pedido (approve com a flag ON). NÃO mexe em cartao_config aqui (persona do builder é fresca
+    // → o cartão é montado por template/emojis default; sem verbatim). Um único UPDATE.
+    if (opts.cartaoMode === 'runtime') {
+      await client.query(
+        "UPDATE flow_clones SET prompt_custom = true, cartao_mode = 'runtime' WHERE slot = $1",
+        [slot],
+      );
+    } else {
+      await client.query('UPDATE flow_clones SET prompt_custom = true WHERE slot = $1', [slot]);
+    }
 
     await client.query('COMMIT');
     cache.delete(slot);
     return { ...r.rows[0], version_saved: versionSaved };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export interface MigrateCartaoRuntimeInput {
+  slot: string;
+  /** bot_prompt SEM o cartão (persona-only) — o cartão sai daqui e passa a ser injetado. */
+  personaOnlyPrompt: string;
+  /** JSONB do cartao_config a gravar (tipicamente { verbatim, emojis } capturados). */
+  cartaoConfig: unknown;
+  editedBy: string;
+}
+
+export type MigrateCartaoRuntimeResult =
+  | { migrated: true; versionSaved: number | null }
+  | { migrated: false; skipped: 'prompt_custom' | 'sem_clone' | 'sem_prompt' };
+
+/**
+ * Migra UM clone pra cartao_mode='runtime' preservando o cartão VERBATIM (script
+ * migrate-cartao-runtime E flip-on-customize do portal — SCRUM-92 inc.2 / ADR 0032, refinamento
+ * Bruno 23/07). Transacional:
+ *   1. GUARD prompt_custom: clone com persona custom à mão (ex.: Ingrid 🌻) NUNCA vira runtime →
+ *      { migrated:false, skipped:'prompt_custom' } (fica baked; invariante do arquiteto);
+ *   2. snapshot do bot_prompt ATUAL em bot_prompt_versions (comment marcador → base do --revert);
+ *   3. bot_prompt = persona-only (cartão removido);
+ *   4. flow_clones.cartao_mode='runtime' + cartao_config = capturado + prompt_custom=TRUE.
+ * ARMA prompt_custom=true (decisão do arquiteto 23/07): um clone runtime é persona-only + cartão
+ * escolhido = semanticamente um prompt CUSTOM. Sem a flag, o guard de updateClone (flow-clones
+ * SCRUM-59, re-renderiza da matriz quando !prompt_custom) reintroduziria o cartão baked no
+ * bot_prompt → CARTÃO-DUPLO com o injetado em runtime. O --revert restaura prompt_custom=false
+ * (valor pré-flip dos baked/template). Idempotente por natureza do dado (re-rodar num clone já
+ * runtime só re-snapshota/re-grava o mesmo estado).
+ */
+export async function migrateCloneToCartaoRuntime(
+  input: MigrateCartaoRuntimeInput,
+): Promise<MigrateCartaoRuntimeResult> {
+  const { slot, personaOnlyPrompt, cartaoConfig, editedBy } = input;
+  if (typeof personaOnlyPrompt !== 'string' || personaOnlyPrompt.trim().length === 0) {
+    throw new Error('migrateCloneToCartaoRuntime: personaOnlyPrompt vazio');
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const clone = await client.query<{ prompt_custom: boolean | null }>(
+      'SELECT prompt_custom FROM flow_clones WHERE slot = $1 FOR UPDATE',
+      [slot],
+    );
+    if (clone.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'sem_clone' };
+    }
+    if (clone.rows[0].prompt_custom === true) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'prompt_custom' };
+    }
+    const cur = await client.query<{ prompt: string }>(
+      'SELECT prompt FROM bot_prompt WHERE slot = $1',
+      [slot],
+    );
+    if (cur.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'sem_prompt' };
+    }
+    // Snapshot do baked ATUAL (base do --revert). ON CONFLICT trata corrida de version.
+    let versionSaved: number | null = null;
+    const maxRes = await client.query<{ m: string }>(
+      'SELECT COALESCE(MAX(version), 0) AS m FROM bot_prompt_versions WHERE slot = $1',
+      [slot],
+    );
+    const nextVersion = Number(maxRes.rows[0].m) + 1;
+    const insRes = await client.query<{ version: number }>(
+      `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (slot, version) DO NOTHING
+       RETURNING version`,
+      [slot, nextVersion, cur.rows[0].prompt, editedBy, CARTAO_MIGRATION_SNAPSHOT_COMMENT],
+    );
+    if (insRes.rowCount && insRes.rowCount > 0) versionSaved = insRes.rows[0].version;
+
+    await client.query('UPDATE bot_prompt SET prompt = $2, updated_at = NOW() WHERE slot = $1', [
+      slot,
+      personaOnlyPrompt,
+    ]);
+    // prompt_custom=TRUE junto (arquiteto 23/07): protege a persona-only do clobber do re-render
+    // da matriz (updateClone), que reintroduziria o cartão baked → cartão-duplo. O --revert desarma.
+    await client.query(
+      "UPDATE flow_clones SET cartao_mode = 'runtime', cartao_config = $2::jsonb, prompt_custom = true, updated_at = NOW() WHERE slot = $1",
+      [slot, cartaoConfig === null ? null : JSON.stringify(cartaoConfig)],
+    );
+    await client.query('COMMIT');
+    cache.delete(slot);
+    return { migrated: true, versionSaved };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export type RevertCartaoRuntimeResult =
+  | { reverted: true; restoredVersion: number }
+  | { reverted: false; skipped: 'sem_snapshot' | 'sem_clone' };
+
+/**
+ * Reverte a migração de UM clone (script --revert): restaura o bot_prompt baked do snapshot
+ * mais recente marcado como migração + volta cartao_mode='baked' + limpa cartao_config +
+ * desarma prompt_custom=FALSE (valor pré-flip dos clones baked/template — o flip armou true).
+ * Revert LIMPO: o clone volta ao estado EXATO de antes (baked + cartão original + template-tracking).
+ * Transacional. Sem snapshot marcado → { reverted:false } (nada a fazer, seguro). SCRUM-92 inc.2.
+ */
+export async function revertCloneCartaoRuntime(slot: string): Promise<RevertCartaoRuntimeResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const clone = await client.query<{ slot: string }>(
+      'SELECT slot FROM flow_clones WHERE slot = $1 FOR UPDATE',
+      [slot],
+    );
+    if (clone.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { reverted: false, skipped: 'sem_clone' };
+    }
+    const snap = await client.query<{ version: number; prompt: string }>(
+      `SELECT version, prompt FROM bot_prompt_versions
+        WHERE slot = $1 AND comment = $2
+        ORDER BY version DESC LIMIT 1`,
+      [slot, CARTAO_MIGRATION_SNAPSHOT_COMMENT],
+    );
+    if (snap.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { reverted: false, skipped: 'sem_snapshot' };
+    }
+    await client.query('UPDATE bot_prompt SET prompt = $2, updated_at = NOW() WHERE slot = $1', [
+      slot,
+      snap.rows[0].prompt,
+    ]);
+    // Desarma prompt_custom=false junto (arquiteto 23/07): o flip armou true; o revert volta ao
+    // valor pré-flip (baked/template = false) pra o clone ficar idêntico ao estado de antes.
+    await client.query(
+      "UPDATE flow_clones SET cartao_mode = 'baked', cartao_config = NULL, prompt_custom = false, updated_at = NOW() WHERE slot = $1",
+      [slot],
+    );
+    await client.query('COMMIT');
+    cache.delete(slot);
+    return { reverted: true, restoredVersion: snap.rows[0].version };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
