@@ -1,7 +1,9 @@
 # ADR 0031 — Sync periódico GCal→atendimentos (Faturamento espelha a agenda)
 
 ## Status
-Proposto (aguarda validação PM/Bruno). Depende de: ADR 0027 (billing derivado da agenda), 0026
+**Aceito** — em PRODUÇÃO desde 2026-07-17 23:59 (`GCAL_ATEND_SYNC_ENABLED=true`, GO do Bruno; PRs
+#462/#463, migration 074). Status corrigido em 23/07 (SCRUM-119): o ADR seguia "Proposto" com o job
+já rodando havia 6 dias (142+ ciclos horários limpos). Depende de: ADR 0027 (billing derivado da agenda), 0026
 (atendimentos), 0024 (Service Account por clone), 0030 (gates env→coluna).
 
 ## Contexto

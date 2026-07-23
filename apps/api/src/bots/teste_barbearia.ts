@@ -682,10 +682,13 @@ export class TesteBarbeariaBot extends BotBase {
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ────────────────
-    // runtimeCartao só é NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (kill-switch global, OFF em
-    // prod hoje) **E** cartao_mode='runtime' (coluna por-clone; default 'baked' em TODO
-    // clone). Hoje ambos falham → runtimeCartao='' → cartaoBlock = buildCartaoEmojiOverrideBlock
-    // EXATAMENTE como antes (barbearia baked → '' → array colapsa igual; golden byte-a-byte).
+    // runtimeCartao só é NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026)
+    // **E** cartao_mode='runtime' (coluna por-clone; default 'baked'). Clone 'baked' →
+    // runtimeCartao='' → cartaoBlock = buildCartaoEmojiOverrideBlock EXATAMENTE como antes
+    // (barbearia baked → '' → array colapsa igual; golden byte-a-byte).
+    // ⚠️ A FLAG É LOAD-BEARING (ADR 0033): desligá-la com clones em cartao_mode='runtime' os deixa
+    // SEM cartão (o baked já foi removido do bot_prompt deles). Rollback = migrate-cartao-runtime
+    // --revert <slot>, NÃO a flag.
     // Quando ativo, o cartão montado por código SUBSTITUI o override de emojis (não soma):
     // o clone runtime NÃO tem o cartão baked no bot_prompt, então há 1 cartão só. `nomeNegocio`
     // vem do MESMO read (zero query extra) → cabeia o `<nome do negócio>` do cartão (antes
@@ -1496,9 +1499,10 @@ export class TesteBarbeariaBot extends BotBase {
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
-    // Igual ao individual: só NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (OFF em prod) **E**
-    // cartao_mode='runtime' (default 'baked'). Hoje → runtimeCartao='' → cai no
-    // buildCartaoEstabelecimentoBlock EXATAMENTE como hoje (dragon/Meduzza baked byte-a-byte).
+    // Igual ao individual: só NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026)
+    // **E** cartao_mode='runtime' (default 'baked'). Clone 'baked' → runtimeCartao='' → cai no
+    // buildCartaoEstabelecimentoBlock EXATAMENTE como antes (byte-a-byte). Flag LOAD-BEARING: ver
+    // ADR 0033 e a nota no caminho individual.
     // Quando ativo, o cartão de estabelecimento montado por código (com 👤 PROFISSIONAL)
     // SUBSTITUI o bloco baked na MESMA posição do array — nunca soma, sem duplicar cartão.
     const runtimeCartao =
