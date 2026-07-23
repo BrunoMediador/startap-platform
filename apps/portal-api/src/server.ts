@@ -153,10 +153,11 @@ async function main() {
   // sessão) + estado efêmero no Redis; o meta-agente roda no DeepSeek e NUNCA escreve em prod
   // sozinho — quem grava é o approve (clique humano), colando o BLOCO_ESTRUTURAL server-side.
   await app.register(promptBuilderRoutes);
-  // Customização do cartão de confirmação em RUNTIME (SCRUM-92 inc.2, ADR 0032). SEM gate próprio
-  // no register: o GATE é interno (gate DUPLO CARTAO_RUNTIME_ENABLED + coluna cartao_mode) — GET
-  // sempre responde (mode='baked' esconde a seção na UI); PUT só grava em runtime efetivo (409
-  // baked). withTenant (slot da sessão) + allowlist FECHADA de emoji server-side.
+  // Customização do cartão de confirmação em RUNTIME (SCRUM-92 inc.2, ADR 0032 — "UI para todos").
+  // Gate GLOBAL interno: CARTAO_RUNTIME_ENABLED OFF → 404 (dormente). ON → a tela aparece pra
+  // TODOS já semeada com o cartão atual; quem não salva segue baked; quem SALVA uma mudança tem SÓ
+  // o clone dele flipado pra runtime (flip-on-customize, revertível pelo snapshot do migrate).
+  // withTenant (slot da sessão) + allowlist FECHADA de emoji server-side.
   await app.register(portalCartaoConfigRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {

@@ -1,24 +1,32 @@
 /**
- * Testes de GET/PUT /portal/cartao-config (SCRUM-92 inc.2 / ADR 0032).
+ * Testes de GET/PUT /portal/cartao-config (SCRUM-92 inc.2 / ADR 0032 — "UI para todos", 23/07).
  *
  * Invariantes provados:
- *  - gate DUPLO: mode='runtime' só com CARTAO_RUNTIME_ENABLED ON E cartao_mode='runtime';
- *  - allowlist FECHADA de emoji server-side: tag chars / fora-do-catálogo / chave desconhecida = 400;
- *  - anti-IDOR: setCartaoConfigBySlot escopado ao slot da SESSÃO (nunca do body);
- *  - PUT em clone baked → 409; edição dropa `verbatim` (vira cartão montado com a escolha do dono);
- *  - GET de clone MIGRADO (verbatim) SEED o picker com os emojis do cartão legado + preview verbatim.
+ *  - gate GLOBAL: CARTAO_RUNTIME_ENABLED OFF → 404 (feature dormente, nem lê o banco);
+ *  - GET seed pra BAKED elegível: extrai o cartão atual (bloco) → editable + preview verbatim +
+ *    emojis do cartão no picker;
+ *  - GET LOCKED pra prompt_custom (Ingrid): editable:false + locked_reason='prompt_custom';
+ *  - GET requer_revisao pra extração NÃO-limpa (sem cartão / template): editable:false;
+ *  - PUT flipa BAKED→runtime elegível via migrateCloneToCartaoRuntime (snapshot revertível pelo
+ *    MESMO --revert), mantém byte-a-byte quando o dono não muda nada (grava verbatim), e grava
+ *    { template, emojis } quando muda (dropa o legado);
+ *  - PUT bloqueia prompt_custom (409) e não-limpo (422 requer_revisao) — NÃO flipa;
+ *  - allowlist FECHADA de emoji server-side intacta; anti-IDOR (slot da SESSÃO, nunca do body).
  *
- * @startap/integrations é REAL (funções puras — fidelidade do preview/allowlist); db/config/tenant
- * mockados (padrão de portal-frases-pausa.test.ts).
+ * @startap/integrations é REAL (funções puras — fidelidade do preview/allowlist/extração);
+ * db/config/tenant mockados (padrão de portal-frases-pausa.test.ts).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { configMock, getCartaoMock, getProductTypeMock, setConfigMock } = vi.hoisted(() => ({
-  configMock: { CARTAO_RUNTIME_ENABLED: true } as { CARTAO_RUNTIME_ENABLED: boolean },
-  getCartaoMock: vi.fn(),
-  getProductTypeMock: vi.fn(),
-  setConfigMock: vi.fn(),
-}));
+const { configMock, getCartaoMock, getProductTypeMock, setConfigMock, getPromptMock, migrateMock } =
+  vi.hoisted(() => ({
+    configMock: { CARTAO_RUNTIME_ENABLED: true } as { CARTAO_RUNTIME_ENABLED: boolean },
+    getCartaoMock: vi.fn(),
+    getProductTypeMock: vi.fn(),
+    setConfigMock: vi.fn(),
+    getPromptMock: vi.fn(),
+    migrateMock: vi.fn(),
+  }));
 
 vi.mock('../config.js', () => ({ config: configMock }));
 vi.mock('@startap/core/logger', () => ({
@@ -29,6 +37,10 @@ vi.mock('@startap/db', () => ({
     getAreaPromptCustomCartao: (...a: unknown[]) => getCartaoMock(...a),
     getProductType: (...a: unknown[]) => getProductTypeMock(...a),
     setCartaoConfigBySlot: (...a: unknown[]) => setConfigMock(...a),
+  },
+  botPrompt: {
+    getPrompt: (...a: unknown[]) => getPromptMock(...a),
+    migrateCloneToCartaoRuntime: (...a: unknown[]) => migrateMock(...a),
   },
 }));
 
@@ -43,8 +55,14 @@ vi.mock('../lib/tenant.js', async () => {
   };
 });
 
+import * as promptBuilder from '@startap/integrations/prompt-builder';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { portalCartaoConfigRoutes } from './portal-cartao-config.js';
+
+// Cartão BAKED "limpo" (bloco estrutural do builder): fronteira clara + trailing → extraível.
+const CARTAO_BLOCO = promptBuilder.buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
+const PERSONA = 'Você é o Cirilo, atendente da Barbearia do Cirilo. Seja simpático e objetivo.';
+const BAKED_PROMPT = `${PERSONA}\n\n${CARTAO_BLOCO}`;
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -71,41 +89,35 @@ describe('GET /portal/cartao-config', () => {
     getProductTypeMock.mockResolvedValue('individual');
   });
 
-  it('runtime (flag ON + cartao_mode runtime) → mode=runtime, defaults + preview', async () => {
+  it('flag GLOBAL OFF → 404 (feature dormente, nem lê o banco)', async () => {
+    configMock.CARTAO_RUNTIME_ENABLED = false;
+    mockClone({ cartaoMode: 'runtime' });
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    expect(res.statusCode).toBe(404);
+    expect(getCartaoMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('runtime (cartao_mode runtime) → mode=runtime, editable, defaults + preview', async () => {
     mockClone();
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.mode).toBe('runtime');
+    expect(body.editable).toBe(true);
+    expect(body.locked_reason).toBeNull();
     expect(body.canDisable).toBe(false);
     expect(body.config).toBeNull();
     expect(body.defaults.template).toBe('padrao');
     expect(body.defaults.emojis.marca).toBe('💈');
     expect(body.preview).toContain('inserir_agendamento');
-    // Anti-IDOR: leu pelo slot da sessão.
-    expect(getCartaoMock).toHaveBeenCalledWith(injectedSlot);
+    expect(getCartaoMock).toHaveBeenCalledWith(injectedSlot); // anti-IDOR
     await app.close();
   });
 
-  it('gate DUPLO: flag ON mas cartao_mode=baked → mode=baked (UI some a seção)', async () => {
-    mockClone({ cartaoMode: 'baked' });
-    const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
-    expect(res.json().mode).toBe('baked');
-    await app.close();
-  });
-
-  it('gate DUPLO: flag GLOBAL OFF → mode=baked mesmo com coluna runtime', async () => {
-    configMock.CARTAO_RUNTIME_ENABLED = false;
-    mockClone({ cartaoMode: 'runtime' });
-    const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
-    expect(res.json().mode).toBe('baked');
-    await app.close();
-  });
-
-  it('clone MIGRADO (verbatim): SEED do picker + preview = cartão legado literal', async () => {
+  it('runtime MIGRADO (verbatim): SEED do picker + preview = cartão legado literal', async () => {
     const legado = [
       '[CARTAO DE CONFIRMACAO]',
       '💈 Barbearia do Cirilo',
@@ -116,11 +128,54 @@ describe('GET /portal/cartao-config', () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
     const body = res.json();
-    // preview = o cartão legado exato (verbatim vence o montado).
     expect(body.preview).toBe(legado);
-    // config.emojis pré-preenchido com os emojis do cartão legado.
     expect(body.config.emojis.marca).toBe('💈');
     expect(body.config.emojis.servico).toBe('✂️');
+    await app.close();
+  });
+
+  it('BAKED elegível (bloco, prompt_custom=false): editable + seed do cartão atual + preview verbatim', async () => {
+    mockClone({ cartaoMode: 'baked', cartaoConfig: null });
+    getPromptMock.mockResolvedValue(BAKED_PROMPT);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    expect(body.mode).toBe('baked');
+    expect(body.editable).toBe(true);
+    expect(body.locked_reason).toBeNull();
+    // preview = o cartão baked atual (verbatim), byte-a-byte.
+    expect(body.preview).toBe(CARTAO_BLOCO);
+    // picker semeado com os emojis do cartão atual.
+    expect(body.config.emojis.marca).toBe('💈');
+    expect(body.config.emojis.servico).toBe('✂️');
+    expect(getPromptMock).toHaveBeenCalledWith(injectedSlot);
+    await app.close();
+  });
+
+  it('BAKED prompt_custom=true (Ingrid) → LOCKED: editable:false, locked_reason=prompt_custom', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: true });
+    getPromptMock.mockResolvedValue(BAKED_PROMPT);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    expect(body.mode).toBe('baked');
+    expect(body.editable).toBe(false);
+    expect(body.locked_reason).toBe('prompt_custom');
+    expect(body.config).toBeNull(); // read-only, sem picker
+    await app.close();
+  });
+
+  it('BAKED sem cartão extraível (template/estab) → requer_revisao: editable:false, preview null', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue('Só a persona, sem cartão baked reconhecível.');
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    expect(body.mode).toBe('baked');
+    expect(body.editable).toBe(false);
+    expect(body.locked_reason).toBe('requer_revisao');
+    expect(body.config).toBeNull();
+    expect(body.preview).toBeNull();
     await app.close();
   });
 });
@@ -131,10 +186,26 @@ describe('PUT /portal/cartao-config', () => {
     configMock.CARTAO_RUNTIME_ENABLED = true;
     getProductTypeMock.mockResolvedValue('individual');
     setConfigMock.mockResolvedValue(true);
+    migrateMock.mockResolvedValue({ migrated: true, versionSaved: 3 });
   });
 
-  it('emojis válidos + template → 200, grava { template, emojis } SEM verbatim, no slot da sessão', async () => {
+  it('flag GLOBAL OFF → 404 (não grava nada)', async () => {
+    configMock.CARTAO_RUNTIME_ENABLED = false;
     mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: {} },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(setConfigMock).not.toHaveBeenCalled();
+    expect(migrateMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('runtime: só atualiza config, grava { template, emojis } SEM verbatim, no slot da sessão', async () => {
+    mockClone(); // cartaoMode runtime
     const app = await buildApp();
     const res = await app.inject({
       method: 'PUT',
@@ -143,11 +214,111 @@ describe('PUT /portal/cartao-config', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().mode).toBe('runtime');
+    expect(migrateMock).not.toHaveBeenCalled(); // já runtime → não re-flipa
     expect(setConfigMock).toHaveBeenCalledTimes(1);
     const [slotArg, cfgArg] = setConfigMock.mock.calls[0] as [string, Record<string, unknown>];
     expect(slotArg).toBe(injectedSlot); // nunca do body
     expect(cfgArg).toEqual({ template: 'compacto', emojis: { marca: '💇', valor: '💵' } });
-    expect(cfgArg).not.toHaveProperty('verbatim'); // edição dropa o legado
+    expect(cfgArg).not.toHaveProperty('verbatim');
+    await app.close();
+  });
+
+  it('flip-on-customize SEM mudança → grava VERBATIM (byte-a-byte), preview idêntico ao baked', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_PROMPT);
+    const app = await buildApp();
+    // Dono salva os valores JÁ semeados (barbearia = defaults) → nada mudou.
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: {} },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.mode).toBe('runtime');
+    expect(body.editable).toBe(true);
+    // flip via migrate (snapshot revertível pelo MESMO --revert). setConfig NÃO é usado no flip.
+    expect(setConfigMock).not.toHaveBeenCalled();
+    expect(migrateMock).toHaveBeenCalledTimes(1);
+    const arg = migrateMock.mock.calls[0][0] as {
+      slot: string;
+      personaOnlyPrompt: string;
+      cartaoConfig: { verbatim?: string; template?: string };
+      editedBy: string;
+    };
+    expect(arg.slot).toBe(injectedSlot);
+    expect(arg.personaOnlyPrompt).toBe(PERSONA);
+    expect(arg.editedBy).toBe('portal:cartao-config'); // snapshot achável pelo --revert
+    expect(arg.cartaoConfig.verbatim).toBe(CARTAO_BLOCO); // byte-a-byte
+    expect(arg.cartaoConfig.template).toBeUndefined();
+    // preview do runtime = o cartão legado literal.
+    expect(body.preview).toBe(CARTAO_BLOCO);
+    await app.close();
+  });
+
+  it('flip-on-customize COM mudança → grava { template, emojis } (dropa o legado), flipa', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_PROMPT);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: { marca: '💇' } }, // trocou 💈→💇
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mode).toBe('runtime');
+    expect(migrateMock).toHaveBeenCalledTimes(1);
+    const arg = migrateMock.mock.calls[0][0] as {
+      cartaoConfig: { verbatim?: string; emojis?: Record<string, string> };
+    };
+    expect(arg.cartaoConfig.verbatim).toBeUndefined(); // legado dropado
+    expect(arg.cartaoConfig.emojis).toEqual({ marca: '💇' });
+    await app.close();
+  });
+
+  it('flip bloqueado por prompt_custom=true → 409 cartao_bloqueado (não flipa)', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: true });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: { marca: '💈' } },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('cartao_bloqueado');
+    expect(res.json().reason).toBe('prompt_custom');
+    expect(migrateMock).not.toHaveBeenCalled();
+    expect(getPromptMock).not.toHaveBeenCalled(); // nem lê o prompt
+    await app.close();
+  });
+
+  it('flip com extração NÃO-limpa (sem cartão) → 422 requer_revisao (não flipa silencioso)', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue('Persona sem cartão baked reconhecível.');
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: {} },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe('requer_revisao');
+    expect(migrateMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('corrida: migrate reporta prompt_custom → 409 cartao_bloqueado', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_PROMPT);
+    migrateMock.mockResolvedValue({ migrated: false, skipped: 'prompt_custom' });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: {} },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe('prompt_custom');
     await app.close();
   });
 
@@ -164,6 +335,7 @@ describe('PUT /portal/cartao-config', () => {
     expect(res.json().error).toBe('emoji_invalido');
     expect(res.json().campo).toBe('marca');
     expect(setConfigMock).not.toHaveBeenCalled();
+    expect(migrateMock).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -214,20 +386,6 @@ describe('PUT /portal/cartao-config', () => {
       payload: { template: 'padrao', emojis: {}, slot: 'outro' },
     });
     expect(res.statusCode).toBe(400);
-    await app.close();
-  });
-
-  it('clone baked (não-runtime efetivo) → 409 cartao_baked (não grava)', async () => {
-    mockClone({ cartaoMode: 'baked' });
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/cartao-config',
-      payload: { template: 'padrao', emojis: { marca: '💈' } },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toBe('cartao_baked');
-    expect(setConfigMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
