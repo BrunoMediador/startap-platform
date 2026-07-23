@@ -65,6 +65,8 @@ export type {
   CloneScope,
   CreateColaboradorInput,
   UpdateColaboradorInput,
+  CartaoMode,
+  CloneCartaoConfig,
 } from './queries/clone-colaboradores.js';
 // Classe de erro de regra (seat_cap/homônimo) — re-export de VALOR para o caller
 // (portal/gestão) usar `instanceof` no tratamento de 409.

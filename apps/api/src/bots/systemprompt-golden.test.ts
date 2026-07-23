@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
   listColaboradores: vi.fn(),
   getArea: vi.fn(),
   getAreaAndPromptCustom: vi.fn(),
+  getAreaPromptCustomCartao: vi.fn(),
   getScopeBySlot: vi.fn(),
   renderPrompt: vi.fn(),
   loadHistory: vi.fn(),
@@ -132,6 +133,7 @@ vi.mock('@startap/db', () => ({
     listBySlot: mocks.listColaboradores,
     getArea: mocks.getArea,
     getAreaAndPromptCustom: mocks.getAreaAndPromptCustom,
+    getAreaPromptCustomCartao: mocks.getAreaPromptCustomCartao,
     getScopeBySlot: mocks.getScopeBySlot,
   },
   flowClones: {
@@ -238,6 +240,15 @@ function setupBakedIndividual(): void {
   mocks.getArea.mockResolvedValue('barbearia');
   // barbearia + persona NÃO-custom = exatamente Cirilo/Samuel (prompt_custom=false).
   mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
+  // Reader unificado (SCRUM-92 inc.2) que o caminho individual passou a usar. cartao_mode='baked'
+  // (default de TODO clone) + config null = estado de HOJE: nada injetado em runtime → o cartão
+  // segue vindo do bot_prompt (baked). É o que congela o byte-a-byte do golden.
+  mocks.getAreaPromptCustomCartao.mockResolvedValue({
+    area: 'barbearia',
+    promptCustom: false,
+    cartaoMode: 'baked',
+    cartaoConfig: null,
+  });
   mocks.resolveClientPackages.mockResolvedValue([]);
   mocks.buildSeuPacoteBlock.mockReturnValue('');
 }
