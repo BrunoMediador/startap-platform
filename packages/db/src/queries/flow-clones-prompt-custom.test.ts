@@ -94,4 +94,16 @@ describe('updateClone — guard prompt_custom (SCRUM-59)', () => {
     await updateClone(42, { displayName: 'Novo Nome' });
     expect(seen.renderInsert).toBe(0);
   });
+
+  it('clone flipado pra cartão-runtime (prompt_custom=true) não reintroduz cartão baked no save de perfil', async () => {
+    // SCRUM-92 inc.2 (arquiteto 23/07): o flip-on-customize arma prompt_custom=true justamente
+    // pra que este guard segure — se re-renderizasse da matriz, o cartão baked voltaria ao
+    // bot_prompt e somaria com o cartão injetado em runtime (CARTÃO-DUPLO). Aqui provamos que o
+    // save de perfil NÃO reintroduz o cartão baked (nem toca o bot_prompt) num clone flipado.
+    const seen = arm(true);
+    const row = await updateClone(42, { personalizacao: { agenda_automatica: 'false' } });
+    expect(row).not.toBeNull();
+    expect(seen.matrizSelect).toBe(0);
+    expect(seen.renderInsert).toBe(0); // cartão baked NÃO volta → sem cartão-duplo
+  });
 });

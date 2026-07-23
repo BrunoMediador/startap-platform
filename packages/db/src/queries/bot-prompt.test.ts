@@ -216,7 +216,7 @@ describe('migrateCloneToCartaoRuntime', () => {
     expect(client.calls.some((c) => c.sql.startsWith('UPDATE bot_prompt'))).toBe(false);
   });
 
-  it('migra: snapshot + persona-only + cartao_mode=runtime + cartao_config', async () => {
+  it('migra: snapshot + persona-only + cartao_mode=runtime + cartao_config + prompt_custom=true', async () => {
     const client = makeMigrateClient({
       promptCustom: false,
       currentPrompt: 'persona\n\n[CARTAO DE CONFIRMACAO]\nx',
@@ -234,6 +234,9 @@ describe('migrateCloneToCartaoRuntime', () => {
     expect(setPrompt?.params?.[1]).toBe('persona');
     const setMode = client.calls.find((c) => c.sql.includes("cartao_mode = 'runtime'"));
     expect(setMode?.params?.[1]).toContain('[CARTAO DE CONFIRMACAO]');
+    // ARMA prompt_custom=true na MESMA transação (arquiteto 23/07): protege do clobber do
+    // re-render da matriz (updateClone) que reintroduziria o cartão baked → cartão-duplo.
+    expect(setMode?.sql).toContain('prompt_custom = true');
     expect(client.calls[client.calls.length - 1].sql).toBe('COMMIT');
   });
 
@@ -270,14 +273,17 @@ describe('revertCloneCartaoRuntime', () => {
     return { query: q as unknown as PoolClient['query'], release: vi.fn(), calls };
   }
 
-  it('restaura o baked do snapshot + cartao_mode=baked + limpa config', async () => {
+  it('restaura o baked do snapshot + cartao_mode=baked + limpa config + prompt_custom=false', async () => {
     const client = makeRevertClient({ snapshot: { version: 7, prompt: 'baked antigo' } });
     connectMock.mockResolvedValue(client);
     const res = await revertCloneCartaoRuntime('clone_cirilo');
     expect(res).toEqual({ reverted: true, restoredVersion: 7 });
     const setPrompt = client.calls.find((c) => c.sql.startsWith('UPDATE bot_prompt SET prompt'));
     expect(setPrompt?.params?.[1]).toBe('baked antigo');
-    expect(client.calls.some((c) => c.sql.includes("cartao_mode = 'baked'"))).toBe(true);
+    const setMode = client.calls.find((c) => c.sql.includes("cartao_mode = 'baked'"));
+    expect(setMode).toBeDefined();
+    // Revert LIMPO: desarma prompt_custom=false (valor pré-flip) junto com o restore do baked.
+    expect(setMode?.sql).toContain('prompt_custom = false');
   });
 
   it('sem snapshot marcado → reverted:false (nada a fazer)', async () => {
