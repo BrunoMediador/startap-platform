@@ -1,16 +1,19 @@
 /**
  * Itens de navegacao do portal (spec 6.13). Mesmos itens na bottom nav (mobile)
- * e na sidebar (>=md): Inicio, Conectar, Servicos, Horarios, Pausas, Mensalidade.
+ * e na sidebar (>=md). A ORDEM, os GATES e a chave de ícone vivem na spec PURA
+ * `@/lib/nav` (testável no harness pure-fn); aqui só mapeamos a chave de ícone
+ * -> componente SVG e derivamos os NavItem com o componente pronto.
  *
- * "Conectar" (2a posicao) e GATED pela feature de reconexao: so aparece quando
- * GET /portal/conexao responde `enabled:true` (gate `'conexao'` no array `gated`).
- * Quando visivel, ganha um badge-dot vermelho enquanto a sessao nao esta WORKING
- * — a regra de exibicao do dot vive no shell (sidebar/bottom-nav), que ja
- * consulta o estado da conexao. Itens com `gated` so aparecem quando TODOS os
- * gates do array passam (ver use-conexao-nav).
+ * "Agenda" (2a posicao) e uma entrada FIXA da agenda de compromissos (antes so
+ * alcancavel rolando a Home). "Conectar" e GATED pela feature de reconexao: so
+ * aparece quando GET /portal/conexao responde `enabled:true`. Quando visivel,
+ * ganha um badge-dot vermelho enquanto a sessao nao esta WORKING — a regra do
+ * dot vive no shell (sidebar/bottom-nav). Itens com `gated` so aparecem quando
+ * TODOS os gates passam (ver use-conexao-nav).
  */
 import {
   IconCalendar,
+  IconClock,
   IconHome,
   IconPause,
   IconServices,
@@ -19,31 +22,30 @@ import {
   IconWallet,
   IconWhatsapp,
 } from '@/components/icons';
+import { NAV_SPEC, type NavGate, type NavIconKey } from '@/lib/nav';
+
+const ICONS: Record<NavIconKey, typeof IconHome> = {
+  home: IconHome,
+  calendar: IconCalendar,
+  whatsapp: IconWhatsapp,
+  users: IconUsers,
+  wallet: IconWallet,
+  services: IconServices,
+  clock: IconClock,
+  user: IconUser,
+  pause: IconPause,
+};
 
 export interface NavItem {
   href: string;
   label: string;
   Icon: typeof IconHome;
-  /** Item GATED (pode combinar mais de um — TODOS precisam passar):
-   *  - 'conexao'         -> só aparece com GET /portal/conexao.enabled true.
-   *  - 'estabelecimento' -> só aparece quando product_type === 'estabelecimento'
-   *    (vem da sessão /auth/me). Individual (Cirilo/Samuel) nunca vê.
-   *  - 'atendimentos'    -> só aparece quando atendimentos_enabled (flag do backend).
-   */
-  gated?: ('conexao' | 'estabelecimento' | 'atendimentos')[];
+  gated?: NavGate[];
 }
 
-export const NAV_ITEMS: NavItem[] = [
-  { href: '/inicio', label: 'Início', Icon: IconHome },
-  { href: '/conectar', label: 'Conectar', Icon: IconWhatsapp, gated: ['conexao'] },
-  { href: '/equipe', label: 'Equipe', Icon: IconUsers, gated: ['estabelecimento'] },
-  // App de gestão (Fase 1): tela ÚNICA Billing (faturamento + comissão consolidados,
-  // Previsão|Faturado). Substitui os itens separados Faturamento/Comissão/Registrar
-  // — "Registrar" virou um botão DENTRO da tela Billing. Gated pela flag.
-  { href: '/billing', label: 'Faturamento', Icon: IconWallet, gated: ['atendimentos'] },
-  { href: '/servicos', label: 'Serviços', Icon: IconServices },
-  { href: '/horarios', label: 'Horários', Icon: IconCalendar },
-  { href: '/perfil', label: 'Meu negócio', Icon: IconUser },
-  { href: '/pausas', label: 'Pausas', Icon: IconPause },
-  { href: '/mensalidade', label: 'Mensalidade', Icon: IconWallet },
-];
+export const NAV_ITEMS: NavItem[] = NAV_SPEC.map((spec) => ({
+  href: spec.href,
+  label: spec.label,
+  Icon: ICONS[spec.icon],
+  gated: spec.gated,
+}));

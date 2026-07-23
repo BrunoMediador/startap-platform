@@ -18,6 +18,7 @@
  * sessao (server-fetched no guard, sem fetch extra). O nome do hook permanece
  * `useConexaoNav` por compat com sidebar/bottom-nav (que ja o consomem).
  */
+import { filterByGates } from '@/lib/nav';
 import { useConexao } from '@/lib/queries';
 import { NAV_ITEMS, type NavItem } from './nav-items';
 import { useTenant } from './session-context';
@@ -32,14 +33,12 @@ export function useConexaoNav(): {
   const needsAction = conexao.data?.needs_action === true;
   const isEstabelecimento = productType === 'estabelecimento';
 
-  const passes = (gate: NonNullable<NavItem['gated']>[number]): boolean => {
-    if (gate === 'conexao') return enabled;
-    if (gate === 'estabelecimento') return isEstabelecimento;
-    if (gate === 'atendimentos') return atendimentosEnabled;
-    return true;
-  };
-
-  const visibleItems = NAV_ITEMS.filter((item) => !item.gated || item.gated.every(passes));
+  // Fonte única da regra de gate vive em @/lib/nav (mesma usada no teste puro).
+  const visibleItems = filterByGates(NAV_ITEMS, {
+    conexaoEnabled: enabled,
+    isEstabelecimento,
+    atendimentosEnabled,
+  });
 
   const showDot = (item: NavItem) =>
     item.gated?.includes('conexao') === true && enabled && needsAction;
