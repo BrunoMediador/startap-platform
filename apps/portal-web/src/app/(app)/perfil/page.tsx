@@ -264,10 +264,10 @@ export default function PerfilPage() {
       <MonteAssistenteSection />
 
       {/* Cartão de confirmação (SCRUM-92 inc.2): template + emojis do cartão que o robô
-          manda antes de marcar. A seção SE AUTO-GATEIA pelo GET /portal/cartao-config —
-          endpoint inexistente/404/mode!=='runtime' -> some INTEIRA (dormência: byte-idêntico
-          pros clientes atuais até o backend existir). Some também no modo atendente. Traz
-          o próprio divisor. */}
+          manda antes de marcar. Aparece pra TODO cliente elegível, seedada com o cartão
+          atual — o GET /portal/cartao-config decide editável (form) ou travado (read-only +
+          suporte). Flag global OFF / 404 / erro -> some INTEIRA (byte-idêntico pros clientes
+          atuais). Some também no modo atendente. Traz o próprio divisor. */}
       <CartaoConfigSection />
 
       {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +

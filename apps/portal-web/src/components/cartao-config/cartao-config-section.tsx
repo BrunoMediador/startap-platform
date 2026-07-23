@@ -1,38 +1,44 @@
 'use client';
 
-import { IconAlert, IconBrush, IconCheck } from '@/components/icons';
 /**
- * Seção "Customização do cartão de confirmação" (SCRUM-92, increment 2 / ADR 0032)
- * dentro de "Meu negócio", irmã de "Monte seu atendente".
+ * Seção "Cartão de confirmação" (SCRUM-92, increment 2 / ADR 0032) dentro de "Meu
+ * negócio", irmã de "Monte seu atendente".
  *
  * O dono escolhe o TEMPLATE e os EMOJIS do cartão que o bot manda ANTES de marcar um
  * horário, com preview ao vivo. A etapa de confirmação em si NÃO pode ser desativada
  * (aviso fixo) — ela protege a agenda.
  *
- * DORMÊNCIA (a PR mergeia sem UI morta): o GET /portal/cartao-config ainda não existe
- * no backend. `fetchCartaoConfig` nunca lança e normaliza 404/erro/`mode!=='runtime'`
- * em `indisponivel` -> a seção RETORNA NULL (some inteira, com o próprio divisor). Só
- * aparece quando o backend responder `mode:'runtime'`. No modo atendente (clone que
- * não marca horário) também some — o cartão não se aplica ali.
+ * ── UI PARA TODOS (contrato novo #475/#476) ─────────────────────────────────────────
+ * A seção aparece pra TODO cliente elegível, já seedada com o cartão ATUAL. O GET decide:
+ *   - editable -> formulário completo (picker seedado da config); salvar flipa SÓ este clone
+ *   - locked   -> read-only + nota gentil + "Falar com o suporte" (migração supervisionada)
+ *   - hidden   -> a seção SOME inteira (flag global OFF / 404 / erro): degradação graciosa,
+ *                 byte-idêntico pros clientes atuais. Também some no modo atendente (sem cartão).
  *
- * O emoji sai de um catálogo FECHADO por slot (picker, nunca campo aberto) — espelha
- * a allowlist que o backend vai enforçar. Sem PII no client.
+ * O emoji sai de um catálogo FECHADO por slot (picker, nunca campo aberto) — espelha a
+ * allowlist do backend. O `preview` do endpoint é o bloco INTERNO do runtime e nunca é
+ * exibido: a prévia amigável é montada aqui (buildCartaoPreview). Sem PII no client.
+ *
+ * Copy: TODA string que o cliente vê vem de CARTAO_COPY (lib/cartao-config) — DRAFT, o PM
+ * confirma com o Bruno antes do ar.
  */
+import { IconAlert, IconBrush, IconCheck, IconHeadset, IconLock } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import {
+  CARTAO_COPY,
   CARTAO_SLOTS,
   type CartaoDraft,
-  type CartaoRuntimeState,
+  type CartaoEditableState,
+  type CartaoLockedState,
   type CartaoSlot,
   type CartaoTemplate,
   EMOJI_CATALOG,
-  SLOT_LABELS,
-  TEMPLATE_OPCOES,
   buildCartaoPreview,
   isCartaoDirty,
-  isCartaoVisible,
+  isCartaoEditable,
+  isCartaoLocked,
   previewLines,
   setEmoji,
   setTemplate,
@@ -41,6 +47,7 @@ import {
 } from '@/lib/cartao-config';
 import { cn } from '@/lib/cn';
 import { useAgendaConfig, useCartaoConfig, useSaveCartaoConfig } from '@/lib/queries';
+import { SUPORTE_CARTAO_URL } from '@/lib/suporte';
 import { useEffect, useRef, useState } from 'react';
 
 export function CartaoConfigSection() {
@@ -48,30 +55,26 @@ export function CartaoConfigSection() {
   const q = useCartaoConfig(slot);
   // Modo do clone: reusa o GET /portal/perfil já lido pela página (dedup por key). O
   // cartão só existe onde o bot MARCA horário — atendente puro (pré-venda que escala)
-  // não tem cartão de confirmação. Esconde por robustez, mesmo que o backend não mande
-  // runtime pra esses clones.
+  // não tem cartão de confirmação. Esconde por robustez, mesmo que o backend não trave.
   const agendaCfg = useAgendaConfig(slot).data;
   const isAtendente = agendaCfg?.modo_atendente === true && agendaCfg?.agenda_automatica !== true;
 
-  // Load inicial / dormência: nada renderiza (sem flash pra quem não tem a feature).
+  // Load inicial / hidden / atendente: nada renderiza (sem flash pra quem não tem a feature).
   if (q.isPending) return null;
   if (isAtendente) return null;
-  if (!isCartaoVisible(q.data)) return null;
-
-  // Estado runtime confirmado -> monta o formulário (hooks de rascunho vivem no filho,
-  // seedados a partir do estado do servidor).
-  return <CartaoConfigForm slot={slot} state={q.data} />;
+  if (isCartaoLocked(q.data)) return <CartaoLocked state={q.data} />;
+  if (isCartaoEditable(q.data)) return <CartaoConfigForm slot={slot} state={q.data} />;
+  return null; // status: 'hidden'
 }
 
-function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoRuntimeState }) {
+// ── Estado 1: editável (formulário completo) ─────────────────────────────────────
+
+function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditableState }) {
   const toast = useToast();
   const save = useSaveCartaoConfig(slot);
 
   const [saved, setSaved] = useState<CartaoDraft>(() => toCartaoDraft(state));
   const [draft, setDraft] = useState<CartaoDraft>(() => toCartaoDraft(state));
-  // Preview renderizado pelo servidor (PUT); preferido sobre o local ENQUANTO o dono
-  // não editar de novo. Editar limpa -> volta pro preview montado no client.
-  const [serverPreview, setServerPreview] = useState<string | null>(null);
   const touched = useRef(false);
 
   // Re-hidrata do servidor só enquanto o dono não tocou (não estoura edição em refetch).
@@ -83,18 +86,16 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoRuntimeS
   }, [state]);
 
   const dirty = isCartaoDirty(draft, saved);
-  const localPreview = buildCartaoPreview(draft.template, draft.emojis);
-  const preview = serverPreview ?? localPreview;
+  // Prévia amigável montada no client (NUNCA o bloco interno do servidor).
+  const preview = buildCartaoPreview(draft.template, draft.emojis);
 
   function onTemplate(template: CartaoTemplate) {
     touched.current = true;
-    setServerPreview(null);
     setDraft((d) => setTemplate(d, template));
   }
 
   function onEmoji(s: CartaoSlot, emoji: string) {
     touched.current = true;
-    setServerPreview(null);
     setDraft((d) => setEmoji(d, s, emoji));
   }
 
@@ -107,13 +108,12 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoRuntimeS
     touched.current = false;
 
     save.mutate(toCartaoPayload(draft), {
-      onSuccess: ({ preview: srv }) => {
-        setServerPreview(srv);
-        toast.success('Cartão atualizado');
+      onSuccess: () => {
+        toast.success(CARTAO_COPY.toastSucesso);
       },
       onError: () => {
         setSaved(prev);
-        toast.error('Não foi possível salvar. Tente de novo.');
+        toast.error(CARTAO_COPY.toastErro);
       },
     });
   }
@@ -134,23 +134,65 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoRuntimeS
             type="submit"
             className="w-full sm:w-auto"
             loading={save.isPending}
-            loadingLabel="Salvando…"
+            loadingLabel={CARTAO_COPY.salvando}
             disabled={!dirty}
           >
-            Salvar cartão
+            {CARTAO_COPY.salvar}
           </Button>
           <p aria-live="polite" className="text-[12.5px] leading-normal text-ink-soft">
             {save.isPending
-              ? 'Salvando…'
+              ? CARTAO_COPY.salvando
               : dirty
-                ? 'Você tem alterações não salvas.'
-                : 'Tudo salvo. É só a aparência do cartão — você pode mudar quando quiser.'}
+                ? CARTAO_COPY.statusSujo
+                : CARTAO_COPY.statusSalvo}
           </p>
         </div>
       </form>
     </SectionShell>
   );
 }
+
+// ── Estados 2/3: travado (read-only) ─────────────────────────────────────────────
+
+/**
+ * Cartão gerenciado pela equipe (persona à mão / template que exige revisão supervisionada).
+ * Sem controles: prévia ILUSTRATIVA (defaults da área — o bloco real do backend é interno e
+ * não se exibe) + nota gentil por motivo + CTA de suporte.
+ */
+function CartaoLocked({ state }: { state: CartaoLockedState }) {
+  const preview = buildCartaoPreview(state.template, state.emojis);
+  return (
+    <SectionShell>
+      <div className="flex flex-col gap-4">
+        <div className="flex items-start gap-2.5 rounded-[12px] border border-line bg-surface-sunken px-3.5 py-3">
+          <span className="mt-0.5 shrink-0 text-brand" aria-hidden>
+            <IconLock size={16} />
+          </span>
+          <p className="text-[12.5px] leading-normal text-ink-soft">
+            {CARTAO_COPY.lockNota[state.reason]}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.lockPreviaLabel}</span>
+          <PreviewBubble text={preview} />
+        </div>
+
+        <a
+          href={SUPORTE_CARTAO_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex h-10 items-center justify-center gap-2 self-start rounded-btn border border-line-strong bg-surface px-4 font-display text-[13.5px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        >
+          <IconHeadset size={16} aria-hidden />
+          {CARTAO_COPY.lockCta}
+        </a>
+      </div>
+    </SectionShell>
+  );
+}
+
+// ── Chrome compartilhado ─────────────────────────────────────────────────────────
 
 /** Cabeçalho + card da seção (traz o próprio divisor mt-8/border-t). */
 function SectionShell({ children }: { children: React.ReactNode }) {
@@ -167,11 +209,9 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           <span className="text-brand" aria-hidden>
             <IconBrush size={18} />
           </span>
-          Cartão de confirmação
+          {CARTAO_COPY.titulo}
         </h2>
-        <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Escolha o formato e os emojis do cartão que o robô manda antes de marcar um horário.
-        </p>
+        <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">{CARTAO_COPY.subtitulo}</p>
       </div>
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">
         {children}
@@ -187,10 +227,7 @@ function FixedWarning() {
       <span className="mt-0.5 shrink-0 text-brand" aria-hidden>
         <IconAlert size={16} />
       </span>
-      <p className="text-[12.5px] leading-normal text-ink-soft">
-        A confirmação antes de agendar é obrigatória e não pode ser desativada — ela protege sua
-        agenda. Aqui você muda só a aparência do cartão.
-      </p>
+      <p className="text-[12.5px] leading-normal text-ink-soft">{CARTAO_COPY.avisoFixo}</p>
     </div>
   );
 }
@@ -207,9 +244,13 @@ function TemplateSelector({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-[13px] font-semibold text-ink">Formato do cartão</span>
-      <div role="radiogroup" aria-label="Formato do cartão" className="flex flex-col gap-2.5">
-        {TEMPLATE_OPCOES.map((opt) => {
+      <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.formatoLabel}</span>
+      <div
+        role="radiogroup"
+        aria-label={CARTAO_COPY.formatoLabel}
+        className="flex flex-col gap-2.5"
+      >
+        {CARTAO_COPY.templates.map((opt) => {
           const selected = value === opt.value;
           const mini = previewLines(buildCartaoPreview(opt.value, emojis)).slice(0, 2);
           return (
@@ -264,10 +305,8 @@ function EmojiEditor({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-[13px] font-semibold text-ink">Emojis de cada campo</span>
-      <p className="text-[12px] text-ink-soft">
-        Toque para escolher. Você seleciona de uma lista pronta — é só marcar.
-      </p>
+      <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.emojisLabel}</span>
+      <p className="text-[12px] text-ink-soft">{CARTAO_COPY.emojisAjuda}</p>
       <div className="flex flex-col gap-3">
         {CARTAO_SLOTS.map((slot) => (
           <EmojiRow
@@ -292,7 +331,7 @@ function EmojiRow({
   selected: string;
   onPick: (emoji: string) => void;
 }) {
-  const label = SLOT_LABELS[slot];
+  const label = CARTAO_COPY.slotLabels[slot];
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-[12.5px] font-medium text-ink-soft">{label}</span>
@@ -327,19 +366,24 @@ function EmojiRow({
   );
 }
 
-/** Preview ao vivo do cartão (texto renderizado — do servidor quando houver, senão local). */
+/** Prévia ao vivo do cartão, com rótulo + rodapé (usada no formulário editável). */
 function PreviewCard({ text }: { text: string }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-[13px] font-semibold text-ink">Prévia do cartão</span>
-      <div className="rounded-[14px] border border-line bg-surface-sunken p-3">
-        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px] rounded-bl-[5px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5] text-ink">
-          {text}
-        </div>
+      <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.previaLabel}</span>
+      <PreviewBubble text={text} />
+      <p className="text-[12px] text-ink-soft">{CARTAO_COPY.previaRodape}</p>
+    </div>
+  );
+}
+
+/** Bolha estilo WhatsApp com o texto do cartão renderizado (amigável, não o bloco interno). */
+function PreviewBubble({ text }: { text: string }) {
+  return (
+    <div className="rounded-[14px] border border-line bg-surface-sunken p-3">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px] rounded-bl-[5px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5] text-ink">
+        {text}
       </div>
-      <p className="text-[12px] text-ink-soft">
-        É um exemplo. O robô troca os dados pelo agendamento real do cliente.
-      </p>
     </div>
   );
 }

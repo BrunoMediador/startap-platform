@@ -1297,10 +1297,10 @@ export function useBuilderDraft(slot: string): UseQueryResult<BuilderDraft> {
 
 // ── Cartão de confirmação (SCRUM-92 inc.2 — GET/PUT /portal/cartao-config) ─────
 //
-// DORMENTE até o backend existir: fetchCartaoConfig NUNCA lança (404/rede/5xx ->
-// { status:'indisponivel' }) e `mode!=='runtime'` também vira indisponivel — a seção
-// SE ESCONDE INTEIRA nesses casos (byte-idêntico pros clientes atuais). Sem retry
-// (404 do endpoint inexistente não se resolve sozinho). Escopado por slot da sessão.
+// GATEADO pela flag global (CARTAO_RUNTIME_ENABLED): fetchCartaoConfig NUNCA lança
+// (404/flag OFF/rede/5xx -> { status:'hidden' }) — a seção SOME inteira (degradação
+// graciosa). O contrato traz editable/locked_reason: editável (form) ou travado
+// (read-only). Sem retry (404 do flag OFF não se resolve sozinho). Escopado por slot.
 
 export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState> {
   return useQuery({
@@ -1313,9 +1313,10 @@ export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState>
 }
 
 /**
- * PUT /portal/cartao-config — salva template + emojis. onSuccess grava o estado
- * runtime devolvido no cache (o preview do servidor viaja à parte no resultado, pra
- * a seção exibir o cartão renderizado pelo backend).
+ * PUT /portal/cartao-config — salva template + emojis (flip-on-customize). onSuccess grava
+ * o estado editável devolvido (clone já em runtime). onError invalida a query pra
+ * RE-SINCRONIZAR: se o clone virou travado por corrida (409 prompt_custom / 422
+ * requer_revisao), o próximo GET reflete o read-only. O revert otimista vive na seção.
  */
 export function useSaveCartaoConfig(
   slot: string,
@@ -1325,6 +1326,9 @@ export function useSaveCartaoConfig(
     mutationFn: (payload) => putCartaoConfig(payload),
     onSuccess: ({ state }) => {
       client.setQueryData(qk.cartaoConfig(slot), state);
+    },
+    onError: () => {
+      client.invalidateQueries({ queryKey: qk.cartaoConfig(slot) });
     },
   });
 }

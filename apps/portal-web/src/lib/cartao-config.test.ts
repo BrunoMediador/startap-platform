@@ -4,13 +4,14 @@ import {
   type CartaoDraft,
   type CartaoEmojis,
   FALLBACK_EMOJIS,
-  FALLBACK_TEMPLATE,
   PREVIEW_SAMPLE,
   buildCartaoPreview,
   isCartaoDirty,
-  isCartaoVisible,
+  isCartaoEditable,
+  isCartaoLocked,
   isEmojiAllowed,
   normalizeCartaoResponse,
+  normalizeLockedReason,
   normalizeTemplate,
   parsePreview,
   previewLines,
@@ -21,10 +22,12 @@ import {
   toCartaoPayload,
 } from './cartao-config';
 
-// Config runtime completa e válida (todos os emojis do catálogo).
-function runtimeRaw(over?: Record<string, unknown>) {
+// GET editável completo (o cartão ATUAL do cliente vem em `config`).
+function editableRaw(over?: Record<string, unknown>) {
   return {
     mode: 'runtime',
+    editable: true,
+    locked_reason: null,
     config: {
       template: 'compacto',
       emojis: {
@@ -39,6 +42,21 @@ function runtimeRaw(over?: Record<string, unknown>) {
     },
     defaults: { template: 'padrao', emojis: FALLBACK_EMOJIS },
     canDisable: false,
+    preview: '===== REGRAS DO SISTEMA =====\n[CARTAO ...]', // bloco interno; nunca exibido
+    ...over,
+  };
+}
+
+// GET travado (read-only) — só defaults; config sempre null.
+function lockedRaw(reason: 'prompt_custom' | 'requer_revisao', over?: Record<string, unknown>) {
+  return {
+    mode: 'baked',
+    editable: false,
+    locked_reason: reason,
+    config: null,
+    defaults: { template: 'padrao', emojis: FALLBACK_EMOJIS },
+    canDisable: false,
+    preview: '===== REGRAS DO SISTEMA =====',
     ...over,
   };
 }
@@ -54,6 +72,15 @@ describe('normalizeTemplate', () => {
     expect(normalizeTemplate(null)).toBeNull();
     expect(normalizeTemplate(42)).toBeNull();
     expect(normalizeTemplate(undefined)).toBeNull();
+  });
+});
+
+describe('normalizeLockedReason', () => {
+  it('aceita só os 2 motivos conhecidos', () => {
+    expect(normalizeLockedReason('prompt_custom')).toBe('prompt_custom');
+    expect(normalizeLockedReason('requer_revisao')).toBe('requer_revisao');
+    expect(normalizeLockedReason(null)).toBeNull();
+    expect(normalizeLockedReason('outro')).toBeNull();
   });
 });
 
@@ -87,59 +114,87 @@ describe('sanitizeEmojis', () => {
   });
 });
 
-describe('normalizeCartaoResponse — DORMÊNCIA', () => {
-  it('mode !== runtime -> indisponivel (esconde)', () => {
-    expect(normalizeCartaoResponse({ mode: 'baked', config: null })).toEqual({
-      status: 'indisponivel',
-    });
-  });
-  it('mode ausente / resposta inválida -> indisponivel', () => {
-    expect(normalizeCartaoResponse(null)).toEqual({ status: 'indisponivel' });
-    expect(normalizeCartaoResponse('boom')).toEqual({ status: 'indisponivel' });
-    expect(normalizeCartaoResponse({})).toEqual({ status: 'indisponivel' });
-  });
-  it('runtime com config -> estado com a config efetiva', () => {
-    const st = normalizeCartaoResponse(runtimeRaw());
-    expect(st.status).toBe('runtime');
-    if (st.status !== 'runtime') throw new Error('esperado runtime');
-    expect(st.template).toBe('compacto');
-    expect(st.emojis.dia).toBe('🗓️');
+// ── Mapeamento dos 4 estados (a função pura: dado o GET -> o que renderiza) ──────────
+
+describe('normalizeCartaoResponse — 4 estados', () => {
+  it('ESTADO 1 (editable): seed do picker vem de `config`', () => {
+    const st = normalizeCartaoResponse(editableRaw());
+    expect(st.status).toBe('editable');
+    if (st.status !== 'editable') throw new Error('esperado editable');
+    expect(st.template).toBe('compacto'); // config.template
+    expect(st.emojis.dia).toBe('🗓️'); // config.emojis (o cartão ATUAL do cliente)
+    expect(st.emojis.confirma).toBe('👍');
     expect(st.defaults.template).toBe('padrao');
-    expect(st.canDisable).toBe(false);
   });
-  it('runtime com config:null -> cai nos defaults', () => {
-    const st = normalizeCartaoResponse(runtimeRaw({ config: null }));
-    if (st.status !== 'runtime') throw new Error('esperado runtime');
+
+  it('ESTADO 1 (editable) com config:null -> seed cai nos defaults', () => {
+    const st = normalizeCartaoResponse(editableRaw({ config: null }));
+    if (st.status !== 'editable') throw new Error('esperado editable');
     expect(st.template).toBe(st.defaults.template);
     expect(st.emojis).toEqual(st.defaults.emojis);
   });
-  it('config parcial -> merge sobre defaults (slot não-tocado = default)', () => {
+
+  it('ESTADO 1 (editable) com config parcial -> merge sobre defaults', () => {
     const st = normalizeCartaoResponse(
-      runtimeRaw({ config: { template: 'detalhado', emojis: { marca: '💅' } } }),
+      editableRaw({ config: { template: 'detalhado', emojis: { marca: '💅' } } }),
     );
-    if (st.status !== 'runtime') throw new Error('esperado runtime');
+    if (st.status !== 'editable') throw new Error('esperado editable');
     expect(st.template).toBe('detalhado');
-    expect(st.emojis.marca).toBe('💅'); // override
-    expect(st.emojis.dia).toBe(st.defaults.emojis.dia); // herdado do default
+    expect(st.emojis.marca).toBe('💅'); // override do cliente
+    expect(st.emojis.dia).toBe(st.defaults.emojis.dia); // herda o default
   });
-  it('defaults ausentes -> usa o fallback do catálogo', () => {
-    const st = normalizeCartaoResponse({ mode: 'runtime', config: null });
-    if (st.status !== 'runtime') throw new Error('esperado runtime');
-    expect(st.defaults.template).toBe(FALLBACK_TEMPLATE);
-    expect(st.defaults.emojis).toEqual(FALLBACK_EMOJIS);
+
+  it('ESTADO 2 (locked: prompt_custom) -> read-only, sem picker', () => {
+    const st = normalizeCartaoResponse(lockedRaw('prompt_custom'));
+    expect(st.status).toBe('locked');
+    if (st.status !== 'locked') throw new Error('esperado locked');
+    expect(st.reason).toBe('prompt_custom');
+    // carrega defaults só pra prévia ilustrativa
+    expect(st.template).toBe('padrao');
+    expect(st.emojis).toEqual(FALLBACK_EMOJIS);
+  });
+
+  it('ESTADO 3 (locked: requer_revisao) -> read-only', () => {
+    const st = normalizeCartaoResponse(lockedRaw('requer_revisao'));
+    if (st.status !== 'locked') throw new Error('esperado locked');
+    expect(st.reason).toBe('requer_revisao');
+  });
+
+  it('ESTADO 4 (hidden): resposta inválida / vazia some', () => {
+    expect(normalizeCartaoResponse(null)).toEqual({ status: 'hidden' });
+    expect(normalizeCartaoResponse('boom')).toEqual({ status: 'hidden' });
+    expect(normalizeCartaoResponse({})).toEqual({ status: 'hidden' });
+  });
+
+  it('ESTADO 4 (hidden): editable:false SEM motivo conhecido some (defensivo)', () => {
+    expect(normalizeCartaoResponse({ editable: false, locked_reason: null })).toEqual({
+      status: 'hidden',
+    });
+    expect(normalizeCartaoResponse({ editable: false, locked_reason: 'xpto' })).toEqual({
+      status: 'hidden',
+    });
+  });
+
+  it('editable ganha de um locked_reason contraditório (contrato: exclusivos)', () => {
+    const st = normalizeCartaoResponse(editableRaw({ locked_reason: 'prompt_custom' }));
+    expect(st.status).toBe('editable');
   });
 });
 
-describe('isCartaoVisible', () => {
-  it('só é visível quando runtime', () => {
-    expect(isCartaoVisible({ status: 'indisponivel' })).toBe(false);
-    expect(isCartaoVisible(undefined)).toBe(false);
-    const st = normalizeCartaoResponse(runtimeRaw());
-    expect(isCartaoVisible(st)).toBe(true);
+describe('type guards isCartaoEditable / isCartaoLocked', () => {
+  it('discriminam os estados', () => {
+    const ed = normalizeCartaoResponse(editableRaw());
+    const lk = normalizeCartaoResponse(lockedRaw('prompt_custom'));
+    expect(isCartaoEditable(ed)).toBe(true);
+    expect(isCartaoLocked(ed)).toBe(false);
+    expect(isCartaoLocked(lk)).toBe(true);
+    expect(isCartaoEditable(lk)).toBe(false);
+    expect(isCartaoEditable(undefined)).toBe(false);
+    expect(isCartaoLocked({ status: 'hidden' })).toBe(false);
   });
 });
 
-describe('parsePreview', () => {
+describe('parsePreview (sinal cru — nunca renderizado)', () => {
   it('extrai string não-vazia', () => {
     expect(parsePreview({ preview: 'oi' })).toBe('oi');
   });
@@ -176,7 +231,7 @@ describe('rascunho: setTemplate / setEmoji (picker fechado)', () => {
 
 describe('isCartaoDirty', () => {
   const a: CartaoDraft = { template: 'padrao', emojis: { ...FALLBACK_EMOJIS } };
-  it('igual = não-dirty', () => {
+  it('igual = não-dirty (cliente que não mexeu -> PUT mantém idêntico)', () => {
     expect(isCartaoDirty(a, { template: 'padrao', emojis: { ...FALLBACK_EMOJIS } })).toBe(false);
   });
   it('template diferente = dirty', () => {
@@ -188,31 +243,33 @@ describe('isCartaoDirty', () => {
   });
 });
 
-describe('toCartaoPayload / toCartaoDraft (sem vazar referência)', () => {
-  it('payload copia os emojis', () => {
+describe('seed do picker -> rascunho (sem vazar referência)', () => {
+  it('toCartaoDraft copia os emojis do estado editável', () => {
+    const st = normalizeCartaoResponse(editableRaw());
+    if (st.status !== 'editable') throw new Error('esperado editable');
+    const d = toCartaoDraft(st);
+    // o rascunho nasce IGUAL ao cartão atual do cliente (seed)
+    expect(d.template).toBe('compacto');
+    expect(d.emojis.dia).toBe('🗓️');
+    d.emojis.marca = '💅';
+    expect(st.emojis.marca).toBe('✂️'); // não vazou a ref
+  });
+  it('toCartaoPayload copia os emojis', () => {
     const d: CartaoDraft = { template: 'padrao', emojis: { ...FALLBACK_EMOJIS } };
     const p = toCartaoPayload(d);
     p.emojis.marca = '✂️';
     expect(d.emojis.marca).toBe('💈');
   });
-  it('draft do estado copia os emojis', () => {
-    const st = normalizeCartaoResponse(runtimeRaw());
-    if (st.status !== 'runtime') throw new Error('esperado runtime');
-    const d = toCartaoDraft(st);
-    d.emojis.marca = '💅';
-    expect(st.emojis.marca).toBe('✂️');
-  });
 });
 
-describe('buildCartaoPreview — montagem do cartão a partir da config', () => {
+describe('buildCartaoPreview — prévia amigável (não o bloco interno do servidor)', () => {
   const emojis: CartaoEmojis = { ...FALLBACK_EMOJIS };
 
-  it('padrao: uma linha por informação, com o valor da amostra e o nome em negrito', () => {
+  it('padrao: uma linha por informação, com a amostra e o nome em negrito', () => {
     const out = buildCartaoPreview('padrao', emojis);
     expect(out).toContain(`💈 *${PREVIEW_SAMPLE.marca}*`);
     expect(out).toContain(`📅 Dia: ${PREVIEW_SAMPLE.dia}`);
     expect(out).toContain(`✅ ${PREVIEW_SAMPLE.confirma}`);
-    // 7 linhas de conteúdo (marca + 5 campos + confirma)
     expect(previewLines(out)).toHaveLength(7);
   });
 
@@ -232,6 +289,14 @@ describe('buildCartaoPreview — montagem do cartão a partir da config', () => 
     const out = buildCartaoPreview(custom.template, custom.emojis);
     expect(out).toContain(`👍 ${PREVIEW_SAMPLE.confirma}`);
     expect(out).not.toContain('✅');
+  });
+
+  it('NÃO é o bloco interno do runtime (sem "REGRAS DO SISTEMA")', () => {
+    const st = normalizeCartaoResponse(editableRaw());
+    if (st.status !== 'editable') throw new Error('esperado editable');
+    const out = buildCartaoPreview(st.template, st.emojis);
+    expect(out).not.toContain('REGRAS DO SISTEMA');
+    expect(out).not.toContain('REGRA CRITICA');
   });
 
   it('aceita amostra customizada', () => {
