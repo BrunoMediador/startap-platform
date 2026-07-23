@@ -103,6 +103,36 @@ function sanitizeInput(raw: string): string {
   return stripped.length > max ? stripped.slice(0, max) : stripped;
 }
 
+/** "slug-like" = sem espaço e só [a-z0-9._-] (ex.: "cirilobarbearia", "barber_dragon" — nome
+ * TÉCNICO do clone), não um nome amigável de negócio. */
+function looksSlugLike(s: string): boolean {
+  return !/\s/.test(s) && /^[a-z0-9._-]+$/.test(s);
+}
+
+/**
+ * Nome do NEGÓCIO pra abertura/persona. Preferência: o que o DONO digitou em "Meu negócio"
+ * (personalizacao.nome_negocio) > display_name > cliente_nome > genérico. Evita valor "slug-like":
+ * na 1ª passada só aceita candidato com cara de nome de verdade; se todos forem slug, cai pro de
+ * maior prioridade não-vazio antes do fallback genérico. Sem isso a persona abria com o SLUG do
+ * clone ("cirilobarbearia") em vez do nome real. SCRUM-92 (bug 4).
+ */
+export function resolveNomeNegocio(clone: {
+  display_name?: string | null;
+  cliente_nome?: string | null;
+  personalizacao?: Record<string, string> | null;
+}): string {
+  const candidates = [clone.personalizacao?.nome_negocio, clone.display_name, clone.cliente_nome];
+  for (const c of candidates) {
+    const v = c?.trim();
+    if (v && !looksSlugLike(v)) return v;
+  }
+  for (const c of candidates) {
+    const v = c?.trim();
+    if (v) return v;
+  }
+  return 'seu negócio';
+}
+
 /** Resolve o contexto do clone (nome/área/modo) da sessão — NUNCA de input. */
 async function loadCloneContext(slot: string): Promise<{
   nomeNegocio: string;
@@ -117,7 +147,7 @@ async function loadCloneContext(slot: string): Promise<{
     slot,
     config.MODO_ATENDENTE_SLOTS,
   );
-  const nomeNegocio = clone.display_name?.trim() || clone.cliente_nome?.trim() || 'seu negócio';
+  const nomeNegocio = resolveNomeNegocio(clone);
   const servicos = (clone.servicos ?? []).map((s) => s.nome).filter((n) => typeof n === 'string');
   return { nomeNegocio, area: area ?? '', modo: modoAtendente ? 'atendente' : 'agenda', servicos };
 }
@@ -155,12 +185,18 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
 
     const existing = await getState(redis, slot);
     if (existing) {
-      // Idempotente: entrevista viva -> devolve a corrente (não recomeça sem reset).
+      // Idempotente: entrevista viva -> devolve a corrente (não recomeça sem reset). Retorna os
+      // `turns` (aditivo, não quebra a UI) pra reidratar o chat de onde parou — antes só voltava a
+      // 1ª pergunta e a conversa sumia. `pergunta` mantém compat. SCRUM-92 (bug 7). LGPD: são os
+      // turns do PRÓPRIO dono (withTenant), não vão pra log.
       const abertura = existing.turns.find((t) => t.role === 'assistant')?.content ?? '';
       return reply.code(200).send({
         session_id: slot,
         pergunta: abertura,
+        turns: existing.turns.map((t) => ({ role: t.role, content: t.content })),
         draft_ready: existing.draft !== null,
+        resumo: existing.draft?.resumo,
+        nome_do_bot: existing.draft?.nome_do_bot,
         retomada: true,
       });
     }
@@ -202,15 +238,31 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const state = await getState(redis, slot);
     if (!state) return reply.code(409).send({ error: 'entrevista_nao_iniciada' });
 
-    // 1. teto de turns por entrevista (corta loop de refino infinito) — sem chamar o LLM.
+    // Sanitiza o input do dono ANTES dos gates: é preciso pra detectar a intenção de "gerar agora"
+    // (que fura o teto de turns, ver abaixo) e pra rejeitar mensagem vazia cedo (sem gastar budget).
+    const userMessage = sanitizeInput(parsed.data.content);
+    if (!userMessage) return reply.code(400).send({ error: 'mensagem_vazia' });
+
+    // CAMINHO DETERMINÍSTICO "gerar agora": quando o dono clica o botão (generate_now=true) OU o
+    // texto sinaliza intenção clara ("pode gerar", "terminei"...), FORÇAMOS a tool propor_prompt via
+    // tool_choice no runAgent — o rascunho sai NESTE turno, sem depender da vontade do modelo (v3
+    // preenche padrões p/ persona completa). Avaliado ANTES do teto: quem bateu o teto sem fechar o
+    // draft precisa conseguir clicar "Gerar" — senão era beco sem saída (a própria copy do teto manda
+    // "clicar em Gerar"). SCRUM-92 (bug 2).
+    const forceGenerate =
+      parsed.data.generate_now === true || metaEntrevistador.matchesGenerateIntent(userMessage);
+
+    // 1. teto de turns por entrevista (corta loop de refino infinito) — sem chamar o LLM. NÃO se
+    // aplica ao caminho determinístico de geração forçada: esse é 1 turno terminal que fecha o draft.
     const userTurns = state.turns.filter((t) => t.role === 'user').length;
-    if (userTurns >= config.PROMPT_BUILDER_MAX_TURNS) {
+    if (!forceGenerate && userTurns >= config.PROMPT_BUILDER_MAX_TURNS) {
       return reply
         .code(200)
         .send({ reply: PROMPT_BUILDER_CANNED.turns_entrevista, draft_ready: state.draft !== null });
     }
 
-    // 2+3. orçamento por tenant/dia + cap global (kill-switch), ANTES do custo de LLM.
+    // 2+3. orçamento por tenant/dia + cap global (kill-switch), ANTES do custo de LLM. Vale MESMO
+    // no "gerar agora" (guarda de custo é independente do teto de turns).
     const budget = await reserveMessageBudget(redis, slot);
     if (!budget.ok) {
       log.info({ slot, blocked: budget.reason }, 'prompt-builder bloqueado (guarda de custo)');
@@ -223,16 +275,6 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       log.error('prompt-builder sem OPENAI_API_KEY provisionada — feature indisponível');
       return reply.code(503).send({ error: 'builder_indisponivel' });
     }
-
-    const userMessage = sanitizeInput(parsed.data.content);
-    if (!userMessage) return reply.code(400).send({ error: 'mensagem_vazia' });
-
-    // CAMINHO DETERMINÍSTICO "gerar agora" (fix do bug 9-turnos-sem-gerar): quando o dono clica
-    // o botão (generate_now=true) OU o texto sinaliza intenção clara de gerar ("pode gerar",
-    // "terminei"...), FORÇAMOS a tool propor_prompt via tool_choice no runAgent — o rascunho sai
-    // NESTE turno, sem depender da vontade do modelo (v3 preenche padrões p/ persona completa).
-    const forceGenerate =
-      parsed.data.generate_now === true || metaEntrevistador.matchesGenerateIntent(userMessage);
 
     const systemPrompt = metaEntrevistador.buildEntrevistadorSystemPrompt({
       nomeNegocio: state.nomeNegocio,
@@ -286,19 +328,33 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
             };
             draftReady = true;
           } else {
-            // Sobrou pouco após limpar dados operacionais -> pede mais detalhes (sem quebrar).
-            // Observabilidade: sem esse log o loop "pede sempre" era mudo (SCRUM-92). Só tags
+            // Refino que não passou na validação NÃO destrói um draft anterior já aprovável:
+            // preserva o corrente e sinaliza draft_ready pelo que REALMENTE existe. Antes zerava
+            // state.draft e o dono perdia o esboço bom (SCRUM-92 bug 1). Observabilidade: só tags
             // (ex.: 'moeda'/'horario') + tamanho — NUNCA o texto da persona (PII/durável).
             log.warn(
               { slot, removedTags: v.removedTags, cleanedLen: v.cleaned.length },
               'prompt-builder: persona rejeitada pelo validador',
             );
-            state.draft = null;
-            draftReady = false;
-            replyText =
-              'Consegui um esboço, mas preciso de mais alguns detalhes sobre o jeito de atender ' +
-              'do seu negócio para deixar a persona completa. Pode me contar um pouco mais?';
+            draftReady = state.draft !== null;
+            replyText = draftReady
+              ? 'Não consegui aplicar esse ajuste, mas o texto anterior segue disponível pra você ' +
+                'aprovar. Quer descrever a mudança de outro jeito?'
+              : 'Consegui um esboço, mas preciso de mais alguns detalhes sobre o jeito de atender ' +
+                'do seu negócio para deixar a persona completa. Pode me contar um pouco mais?';
           }
+        } else {
+          // A tool foi chamada mas os args não passaram no NOSSO Zod (o schema declarado ao modelo
+          // não é confiável). Sem draft novo persistido -> NUNCA sinalizar prévia pronta; pede mais
+          // um detalhe. Preserva um draft anterior, se houver (SCRUM-92 bug 3).
+          log.warn(
+            { slot, issues: argsParsed.error.issues.length },
+            'prompt-builder: args da tool propor_prompt inválidos',
+          );
+          draftReady = state.draft !== null;
+          replyText =
+            'Quase lá! Me dá mais um detalhe sobre o jeito de atender do seu negócio pra eu ' +
+            'finalizar a persona?';
         }
       }
 
@@ -393,6 +449,11 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const v = validatePersona(stripPII(personaBase), { servicos });
     if (!v.ok) return reply.code(422).send({ error: 'rascunho_insuficiente' });
 
+    // Nome do ASSISTENTE = campo de 1ª classe, SEPARADO do nome do negócio (decisão de produto).
+    // Capturado na entrevista; persistido em personalizacao.nome_assistente pra não ser jogado fora
+    // (era dead-end: exibido e nunca salvo). Consumo pelo runtime = increment 2/ADR 0032. SCRUM-92 (bug 5).
+    const nomeAssistente = state.draft.nome_do_bot?.trim() || null;
+
     // GARANTIA: cola o BLOCO_ESTRUTURAL (cartão + SIM) DEPOIS da persona, no SERVIDOR.
     const bloco = promptBuilder.buildBlocoEstrutural({ modo, area });
     const finalPrompt = sanitizeOrphanPlaceholders(`${v.cleaned}\n\n${bloco}`);
@@ -406,6 +467,28 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
         finalPrompt,
         `portal:builder:${username}`,
       );
+
+      // Best-effort: persistir o nome do assistente NÃO pode derrubar o approve (o prompt já foi
+      // aplicado na transação acima). applyGeneratedPrompt já setou prompt_custom=true, então o
+      // updateClone abaixo NÃO re-renderiza o bot_prompt (guard SCRUM-59/83) — só faz merge da chave
+      // no personalizacao (sem clobber das outras chaves). SCRUM-92 (bug 5).
+      if (nomeAssistente) {
+        try {
+          const cloneFull = await flowClones.getCloneBySlot(slot);
+          if (cloneFull) {
+            await flowClones.updateClone(cloneFull.id, {
+              personalizacao: { ...cloneFull.personalizacao, nome_assistente: nomeAssistente },
+            });
+          }
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e);
+          log.warn(
+            { slot, err },
+            'prompt-builder: falha ao persistir nome_assistente (approve seguiu)',
+          );
+        }
+      }
+
       await deleteState(redis, slot);
       log.info(
         { slot, versionSaved: result.version_saved, modo, edited },
