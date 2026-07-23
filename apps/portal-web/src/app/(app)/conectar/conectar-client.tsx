@@ -59,6 +59,7 @@ import {
   resolvePausaEstado,
 } from '@/lib/bot-pausa';
 import { cn } from '@/lib/cn';
+import { isPrimeiraConexao, resolveConexaoCardCopy } from '@/lib/conexao-copy';
 import {
   useCodigoConexao,
   useConexao,
@@ -428,6 +429,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
             onReconectar={dispararReconexao}
             cooldown={cooldown}
             pending={reconectar.isPending}
+            everConnected={initial.ever_connected}
           />
         )}
 
@@ -676,27 +678,46 @@ function ConectadoCard({
   );
 }
 
-/** (c) Desconectado: CTA primario full + microcopy. */
+/**
+ * (c) Desconectado: CTA primario full + microcopy.
+ *
+ * Duas molduras conforme a historia de pareamento do clone (SCRUM-95), decididas
+ * pelo modulo puro @/lib/conexao-copy a partir de `everConnected`:
+ *   - RECONEXAO (ja pareou e caiu, ou sinal AUSENTE = default seguro): copy e tom
+ *     vermelho VIGENTES, byte-identicos (tem cliente pagante em producao).
+ *   - PRIMEIRA conexao (nunca pareou): copy positiva de onboarding + tom de marca
+ *     (nada quebrou). So a moldura muda — a acao (restart -> pareamento) e a mesma.
+ */
 function DesconectadoCard({
   phoneMasked,
   onReconectar,
   cooldown,
   pending,
+  everConnected,
 }: {
   phoneMasked: string | null;
   onReconectar: () => void;
   cooldown: number;
   pending: boolean;
+  everConnected: boolean | undefined;
 }) {
+  const copy = resolveConexaoCardCopy(everConnected);
+  const primeira = isPrimeiraConexao(everConnected);
+  // Literais completos por ramo (nao cn/twMerge) pra garantir o byte-identico da
+  // reconexao. Primeira conexao troca o vermelho de "desconectou" por tom de marca.
+  const sectionCls = primeira
+    ? 'rounded-card border border-brand/40 bg-surface p-5 shadow-card'
+    : 'rounded-card border border-danger/40 bg-surface p-5 shadow-card';
+  const iconCls = primeira
+    ? 'flex size-7 items-center justify-center rounded-full bg-brand-soft text-brand'
+    : 'flex size-7 items-center justify-center rounded-full bg-danger/15 text-danger';
   return (
-    <section className="rounded-card border border-danger/40 bg-surface p-5 shadow-card">
+    <section className={sectionCls}>
       <div className="flex items-center gap-2.5">
-        <span className="flex size-7 items-center justify-center rounded-full bg-danger/15 text-danger">
+        <span className={iconCls}>
           <IconWhatsapp size={17} />
         </span>
-        <h2 className="font-display text-[17px] font-semibold text-ink">
-          Seu WhatsApp se desconectou. Vamos reconectar.
-        </h2>
+        <h2 className="font-display text-[17px] font-semibold text-ink">{copy.title}</h2>
       </div>
       <MaskedPhone phoneMasked={phoneMasked} className="mt-3" />
       <div className="mt-4">
@@ -704,14 +725,12 @@ function DesconectadoCard({
           onClick={onReconectar}
           disabled={cooldown > 0}
           loading={pending}
-          loadingLabel="Reconectando…"
+          loadingLabel={copy.ctaLoading}
         >
-          {cooldown > 0 ? `Aguarde ${cooldown}s` : 'Reconectar WhatsApp'}
+          {cooldown > 0 ? `Aguarde ${cooldown}s` : copy.cta}
         </Button>
       </div>
-      <p className="mt-3 text-center text-[12.5px] text-ink-faint">
-        Vai levar alguns segundos. Deixe essa tela aberta.
-      </p>
+      <p className="mt-3 text-center text-[12.5px] text-ink-faint">{copy.hint}</p>
     </section>
   );
 }
