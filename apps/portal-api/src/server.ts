@@ -37,6 +37,7 @@ import { portalPausasRoutes } from './routes/portal-pausas.js';
 import { portalPerfilRoutes } from './routes/portal-perfil.js';
 import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
+import { portalTomRoutes } from './routes/portal-tom.js';
 import { promptBuilderRoutes } from './routes/prompt-builder.js';
 
 const log = logger.child({ service: 'portal-api' });
@@ -117,6 +118,10 @@ async function main() {
   // Sem flag própria: vem vazio enquanto a auto-pausa (worker BOT_DETECT_AUTOPAUSE) estiver OFF.
   await app.register(portalBotDetectRoutes);
   await app.register(portalStatusRoutes);
+  // Tom da conversa do assistente (SCRUM-92): o dono escolhe um NÍVEL nomeado (direto/equilibrado/
+  // caloroso/bem descontraído) que mapeia pra bot_config.temperature dentro de uma FAIXA SEGURA
+  // [0.2, 0.85] com clamp duro server-side. withTenant (slot só da sessão). Só mexe em temperature.
+  await app.register(portalTomRoutes);
   // Gate de aceite dos Termos/Privacidade pós-login (SCRUM-1, fluxo 2). Authed
   // (withTenant nas rotas). status + registro do aceite versionado; sem flag —
   // o gate é exigência LGPD pra TODO cliente logado.
