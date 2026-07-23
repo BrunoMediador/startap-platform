@@ -33,6 +33,8 @@ const cfg = vi.hoisted(() => ({
   PROMPT_BUILDER_HISTORY_TURNS: 24,
   PROMPT_BUILDER_STATE_TTL_SECONDS: 7200,
   MODO_ATENDENTE_SLOTS: '',
+  // SCRUM-92 inc.2: OFF por default (approve cola o bloco baked). Um describe liga pra runtime.
+  CARTAO_RUNTIME_ENABLED: false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -46,8 +48,12 @@ const mocks = vi.hoisted(() => ({
   matchesGenerateIntent: vi.fn(),
 }));
 
-const BLOCO_MARKER = '===BLOCO_ESTRUTURAL_TEST=== cartao + SIM antes de inserir_agendamento';
-const BLOCO_ESTAB_MARKER = '===BLOCO_ESTAB_TEST=== cartao com 👤 PROFISSIONAL + SIM';
+// Hoisted (não const simples): a factory do vi.mock — hoistada — referencia BLOCO_MARKER como
+// VALOR (BLOCO_ESTRUTURAL_MARKER), então precisa estar inicializado antes do mock.
+const { BLOCO_MARKER, BLOCO_ESTAB_MARKER } = vi.hoisted(() => ({
+  BLOCO_MARKER: '===BLOCO_ESTRUTURAL_TEST=== cartao + SIM antes de inserir_agendamento',
+  BLOCO_ESTAB_MARKER: '===BLOCO_ESTAB_TEST=== cartao com 👤 PROFISSIONAL + SIM',
+}));
 
 vi.mock('../config.js', () => ({ config: cfg }));
 vi.mock('@startap/core/logger', () => ({
@@ -81,6 +87,7 @@ vi.mock('@startap/integrations', () => ({
       if (modo === 'estabelecimento') return BLOCO_ESTAB_MARKER;
       return BLOCO_MARKER;
     },
+    BLOCO_ESTRUTURAL_MARKER: BLOCO_MARKER,
   },
 }));
 
@@ -155,6 +162,7 @@ beforeEach(() => {
   cfg.OPENAI_API_KEY = 'sk-openai';
   cfg.PROMPT_BUILDER_MAX_MSGS_DAY = 60;
   cfg.PROMPT_BUILDER_MAX_TURNS = 30;
+  cfg.CARTAO_RUNTIME_ENABLED = false;
   tenant.slot = 'clone_x';
   tenant.username = 'cirilo';
   mocks.getCloneBySlot.mockResolvedValue({
@@ -725,6 +733,35 @@ describe('approve', () => {
     const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
     expect(res.statusCode).toBe(200);
     expect(res.json().persona_aplicada).toBe(true);
+  });
+
+  // ── SCRUM-92 inc.2: approve nasce em RUNTIME quando CARTAO_RUNTIME_ENABLED ON ─────
+  describe('cartão em runtime (gate CARTAO_RUNTIME_ENABLED)', () => {
+    it('ON: persona-only (SEM bloco baked) + opts { cartaoMode:runtime, bakedMarker }', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(200);
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      const finalPrompt = call[1] as string;
+      const opts = call[4] as { cartaoMode?: string; bakedMarker?: string };
+      // persona presente, cartão baked AUSENTE (vai por runtime).
+      expect(finalPrompt).toContain('Barbearia X');
+      expect(finalPrompt).not.toContain(BLOCO_MARKER);
+      expect(opts.cartaoMode).toBe('runtime');
+      expect(opts.bakedMarker).toBe(BLOCO_MARKER);
+    });
+
+    it('OFF (default): cola o bloco baked e NÃO passa opts de runtime', async () => {
+      const app = await buildApp();
+      await startAndDraft(app);
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      expect(call[1]).toContain(BLOCO_MARKER);
+      // 5º arg = {} (sem cartaoMode).
+      expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined();
+    });
   });
 });
 

@@ -25,6 +25,7 @@ import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalBotDetectRoutes } from './routes/portal-bot-detect.js';
+import { portalCartaoConfigRoutes } from './routes/portal-cartao-config.js';
 import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
@@ -152,6 +153,11 @@ async function main() {
   // sessão) + estado efêmero no Redis; o meta-agente roda no DeepSeek e NUNCA escreve em prod
   // sozinho — quem grava é o approve (clique humano), colando o BLOCO_ESTRUTURAL server-side.
   await app.register(promptBuilderRoutes);
+  // Customização do cartão de confirmação em RUNTIME (SCRUM-92 inc.2, ADR 0032). SEM gate próprio
+  // no register: o GATE é interno (gate DUPLO CARTAO_RUNTIME_ENABLED + coluna cartao_mode) — GET
+  // sempre responde (mode='baked' esconde a seção na UI); PUT só grava em runtime efetivo (409
+  // baked). withTenant (slot da sessão) + allowlist FECHADA de emoji server-side.
+  await app.register(portalCartaoConfigRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);

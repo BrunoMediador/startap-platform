@@ -48,10 +48,19 @@ export type CartaoTemplate = 'padrao' | 'compacto' | 'detalhado';
  * 075 — SCRUM-92 inc.2 / ADR 0032). Tudo opcional: ausência → defaults por área +
  * layout 'padrao'. `emojis` é override PARCIAL do dono (só as chaves informadas vencem;
  * o resto herda a área). Shape validado no app/reader (o banco guarda JSONB cru).
+ *
+ * `verbatim` (refinamento Bruno 23/07): cartão LEGADO capturado LITERALMENTE do bot_prompt
+ * de um clone MIGRADO (script migrate-cartao-runtime). Quando presente e não-vazio, o
+ * `buildCartaoRuntimeBlock` EMITE esse texto exato — o cartão só SAI do bot_prompt (baked) e
+ * ENTRA injetado, IDÊNTICO ao que o clone já tinha (zero mudança visível pro cliente). O
+ * caminho "montado por template/emojis" só vale pra clones NOVOS ou quando o DONO edita
+ * (aí vira o cartão-built com a escolha dele). template/emojis convivem: servem de SEED do
+ * picker mesmo com verbatim presente (a UI pré-preenche com o que o clone já usa).
  */
 export interface CartaoConfig {
   template?: CartaoTemplate;
   emojis?: Partial<Record<CartaoEmojiKey, string>>;
+  verbatim?: string;
 }
 
 /**
@@ -332,6 +341,13 @@ export function buildCartaoRuntimeBlock(opts: {
   nomeNegocio?: string;
 }): string {
   if (opts.modo === 'atendente') return '';
+  // ── Caminho VERBATIM (clone MIGRADO — refinamento Bruno 23/07) ────────────────────
+  // Quando o clone traz um cartão legado capturado do bot_prompt, EMITE ele LITERALMENTE
+  // (o cartão só troca de "baked" pra "injetado", byte-idêntico ao que o cliente já tinha).
+  // Precede o caminho montado: um clone migrado NUNCA recebe o cartão novo por baixo dos
+  // panos — só se o dono editar (aí o app grava um config sem `verbatim` e cai no montado).
+  const verbatim = opts.config?.verbatim;
+  if (typeof verbatim === 'string' && verbatim.trim() !== '') return verbatim;
   const template = opts.config?.template ?? 'padrao';
   const e = resolveEmojis(opts.modo, opts.area, opts.config?.emojis);
   if (opts.modo === 'estabelecimento') return blocoEstabelecimento(e, template);
@@ -345,3 +361,45 @@ export function buildCartaoRuntimeBlock(opts: {
  * pra provar (defesa + teste) que o finalPrompt SEMPRE carrega a garantia.
  */
 export const BLOCO_ESTRUTURAL_MARKER = HEADER;
+
+/** Ordem canônica das chaves de emoji do cartão. Fonte única do domínio (usada pelo
+ *  catálogo/allowlist e pelo endpoint de config). */
+export const CARTAO_EMOJI_KEYS: readonly CartaoEmojiKey[] = [
+  'marca',
+  'dia',
+  'horario',
+  'servico',
+  'valor',
+  'confirma',
+  'profissional',
+] as const;
+
+/**
+ * Emojis DEFAULT do cartão pra uma área + modo. Wrapper público de `resolveEmojis` (sem
+ * override): o endpoint `/portal/cartao-config` usa como `defaults` do GET e o catálogo/
+ * allowlist usa como uma das bases. `estabelecimento` força 🕐 no horário (casa o runtime
+ * #325); `agenda` mantém ⏰. Devolve um Record puro (cópia), nunca a referência interna.
+ */
+export function resolveDefaultCartaoEmojis(
+  modo: 'agenda' | 'estabelecimento',
+  area?: string | null,
+): Record<CartaoEmojiKey, string> {
+  return { ...resolveEmojis(modo, area) };
+}
+
+/**
+ * TODOS os conjuntos de emoji default conhecidos (todas as áreas + a variante de horário
+ * do estabelecimento 🕐). Base pra construir a allowlist FECHADA do endpoint (o catálogo
+ * garante que TODO default por área é sempre um valor válido — o picker nunca oferece um
+ * emoji que o backend rejeitaria). NÃO é o catálogo completo (o catálogo estende com um
+ * conjunto curado por chave — ver cartao-catalog.ts).
+ */
+export function allAreaDefaultEmojiSets(): Record<CartaoEmojiKey, string>[] {
+  const areas = ['barbearia', 'salao', 'manicure', 'estetica', 'generico'];
+  const sets: Record<CartaoEmojiKey, string>[] = [];
+  for (const a of areas) {
+    sets.push({ ...resolveEmojis('agenda', a) });
+    sets.push({ ...resolveEmojis('estabelecimento', a) });
+  }
+  return sets;
+}

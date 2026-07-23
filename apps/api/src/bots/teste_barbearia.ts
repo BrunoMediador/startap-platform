@@ -678,7 +678,7 @@ export class TesteBarbeariaBot extends BotBase {
     // SCRUM-84: se a persona é custom (prompt_custom=true, dono estilizou o cartão à
     // mão — ex. Ingrid com 🌻), ela é autoridade final e o override de emojis NÃO é
     // injetado. Mesma leitura por slot de antes, só com a coluna prompt_custom junto.
-    const { area, promptCustom, cartaoMode, cartaoConfig } =
+    const { area, promptCustom, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ────────────────
@@ -687,10 +687,17 @@ export class TesteBarbeariaBot extends BotBase {
     // clone). Hoje ambos falham → runtimeCartao='' → cartaoBlock = buildCartaoEmojiOverrideBlock
     // EXATAMENTE como antes (barbearia baked → '' → array colapsa igual; golden byte-a-byte).
     // Quando ativo, o cartão montado por código SUBSTITUI o override de emojis (não soma):
-    // o clone runtime NÃO tem o cartão baked no bot_prompt, então há 1 cartão só.
+    // o clone runtime NÃO tem o cartão baked no bot_prompt, então há 1 cartão só. `nomeNegocio`
+    // vem do MESMO read (zero query extra) → cabeia o `<nome do negócio>` do cartão (antes
+    // placeholder); clone migrado com `verbatim` ignora tudo isso e emite o cartão legado exato.
     const runtimeCartao =
       config.CARTAO_RUNTIME_ENABLED && cartaoMode === 'runtime'
-        ? buildCartaoRuntimeBlock({ modo: 'agenda', area, config: cartaoConfig })
+        ? buildCartaoRuntimeBlock({
+            modo: 'agenda',
+            area,
+            config: cartaoConfig,
+            nomeNegocio: nomeNegocio ?? undefined,
+          })
         : '';
     const cartaoBlock =
       runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, promptCustom);
@@ -1485,9 +1492,8 @@ export class TesteBarbeariaBot extends BotBase {
     // Os EMOJIS do cartão seguem a ÁREA do clone (migration 051): barbearia mantém
     // 📅 🕐 ✂️ 💰 👤 (idêntico ao bloco original); salão/manicure/estética trocam
     // marca+serviço. getArea degrada pra null (→ genérico) em erro/coluna ausente.
-    const { area, cartaoMode, cartaoConfig } = await cloneColaboradores.getAreaPromptCustomCartao(
-      this.slot,
-    );
+    const { area, cartaoMode, cartaoConfig, nomeNegocio } =
+      await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
     // Igual ao individual: só NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (OFF em prod) **E**
@@ -1497,7 +1503,12 @@ export class TesteBarbeariaBot extends BotBase {
     // SUBSTITUI o bloco baked na MESMA posição do array — nunca soma, sem duplicar cartão.
     const runtimeCartao =
       config.CARTAO_RUNTIME_ENABLED && cartaoMode === 'runtime'
-        ? buildCartaoRuntimeBlock({ modo: 'estabelecimento', area, config: cartaoConfig })
+        ? buildCartaoRuntimeBlock({
+            modo: 'estabelecimento',
+            area,
+            config: cartaoConfig,
+            nomeNegocio: nomeNegocio ?? undefined,
+          })
         : '';
     const cartaoEstabelecimentoBlock =
       runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area);

@@ -131,6 +131,43 @@ describe('buildCartaoRuntimeBlock — variante estabelecimento', () => {
   });
 });
 
+describe('buildCartaoRuntimeBlock — caminho VERBATIM (clone migrado)', () => {
+  const CARTAO_LEGADO = [
+    '[CARTAO DE CONFIRMACAO]',
+    '💈 Barbearia do Zé',
+    '📅 DIA: <dia> / ⏰ HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
+    'Responda SIM para confirmar. ✅',
+  ].join('\n');
+
+  it('config.verbatim EMITE o cartão legado LITERALMENTE (ignora template/emojis/área)', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'salao', // seria 💇 no montado — mas o verbatim vence
+      config: { verbatim: CARTAO_LEGADO, template: 'detalhado', emojis: { marca: '🌻' } },
+      nomeNegocio: 'Outro Nome',
+    });
+    expect(bloco).toBe(CARTAO_LEGADO);
+    expect(bloco).not.toContain('🌻');
+    expect(bloco).not.toContain('💇');
+    expect(bloco).not.toContain('Outro Nome');
+  });
+
+  it('verbatim vazio/branco NÃO ativa o caminho legado (cai no montado)', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'barbearia',
+      config: { verbatim: '   ' },
+    });
+    expect(bloco).toContain(BLOCO_ESTRUTURAL_MARKER);
+  });
+
+  it('atendente com verbatim segue vazio (pré-venda nunca tem cartão)', () => {
+    expect(
+      buildCartaoRuntimeBlock({ modo: 'atendente', config: { verbatim: CARTAO_LEGADO } }),
+    ).toBe('');
+  });
+});
+
 describe('buildCartaoRuntimeBlock — atendente + determinismo', () => {
   it('atendente NÃO tem cartão (string vazia) em qualquer template', () => {
     expect(buildCartaoRuntimeBlock({ modo: 'atendente' })).toBe('');
