@@ -18,15 +18,25 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { configMock, getCartaoMock, getProductTypeMock, setConfigMock, getPromptMock, migrateMock } =
-  vi.hoisted(() => ({
-    configMock: { CARTAO_RUNTIME_ENABLED: true } as { CARTAO_RUNTIME_ENABLED: boolean },
-    getCartaoMock: vi.fn(),
-    getProductTypeMock: vi.fn(),
-    setConfigMock: vi.fn(),
-    getPromptMock: vi.fn(),
-    migrateMock: vi.fn(),
-  }));
+const {
+  configMock,
+  getCartaoMock,
+  getProductTypeMock,
+  setConfigMock,
+  getPromptMock,
+  migrateMock,
+  getServicosMock,
+  listColabsMock,
+} = vi.hoisted(() => ({
+  configMock: { CARTAO_RUNTIME_ENABLED: true } as { CARTAO_RUNTIME_ENABLED: boolean },
+  getCartaoMock: vi.fn(),
+  getProductTypeMock: vi.fn(),
+  setConfigMock: vi.fn(),
+  getPromptMock: vi.fn(),
+  migrateMock: vi.fn(),
+  getServicosMock: vi.fn(),
+  listColabsMock: vi.fn(),
+}));
 
 vi.mock('../config.js', () => ({ config: configMock }));
 vi.mock('@startap/core/logger', () => ({
@@ -37,10 +47,14 @@ vi.mock('@startap/db', () => ({
     getAreaPromptCustomCartao: (...a: unknown[]) => getCartaoMock(...a),
     getProductType: (...a: unknown[]) => getProductTypeMock(...a),
     setCartaoConfigBySlot: (...a: unknown[]) => setConfigMock(...a),
+    listBySlot: (...a: unknown[]) => listColabsMock(...a),
   },
   botPrompt: {
     getPrompt: (...a: unknown[]) => getPromptMock(...a),
     migrateCloneToCartaoRuntime: (...a: unknown[]) => migrateMock(...a),
+  },
+  portalConfig: {
+    getServicosBySlot: (...a: unknown[]) => getServicosMock(...a),
   },
 }));
 
@@ -111,6 +125,8 @@ describe('GET /portal/cartao-config', () => {
     vi.clearAllMocks();
     configMock.CARTAO_RUNTIME_ENABLED = true;
     getProductTypeMock.mockResolvedValue('individual');
+    getServicosMock.mockResolvedValue([{ nome: 'Corte', preco_cents: 6500, duracao_min: 30 }]);
+    listColabsMock.mockResolvedValue([]);
   });
 
   it('flag GLOBAL OFF → 404 (feature dormente, nem lê o banco)', async () => {
@@ -138,6 +154,46 @@ describe('GET /portal/cartao-config', () => {
     expect(body.defaults.emojis.marca).toBe('💈');
     expect(body.preview).toContain('inserir_agendamento');
     expect(getCartaoMock).toHaveBeenCalledWith(injectedSlot); // anti-IDOR
+    await app.close();
+  });
+
+  it('SCRUM-99: previews = EXEMPLO fiel do cartão (CAIXA ALTA + "Responda SIM") com nome/serviço reais', async () => {
+    mockClone(); // individual, nomeNegocio='Barbearia do Cirilo'
+    getServicosMock.mockResolvedValue([{ nome: 'Barba', preco_cents: 5500, duracao_min: 20 }]);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    // 3 templates renderizados.
+    expect(Object.keys(body.previews).sort()).toEqual(['compacto', 'detalhado', 'padrao']);
+    const padrao = body.previews.padrao as string;
+    // É o cartão que o cliente RECEBE: nome real + CAIXA ALTA + barras + "Responda SIM para confirmar."
+    expect(padrao).toContain('💈 Barbearia do Cirilo');
+    expect(padrao).toContain('DIA:');
+    expect(padrao).toContain('SERVICO: Barba');
+    expect(padrao).toContain('VALOR: R$ 55,00');
+    expect(padrao).toContain('Responda SIM para confirmar.');
+    // NÃO é a prévia "elegante" antiga.
+    expect(padrao).not.toContain('Posso confirmar');
+    expect(padrao).not.toContain('*');
+    // Individual: sem profissional (bônus SCRUM-100).
+    expect(padrao).not.toContain('PROFISSIONAL');
+    // sample carrega os dados reais que semearam o exemplo.
+    expect(body.sample.nomeNegocio).toBe('Barbearia do Cirilo');
+    expect(body.sample.servico).toBe('Barba');
+    expect(body.sample.valor).toBe('R$ 55,00');
+    await app.close();
+  });
+
+  it('SCRUM-99: estabelecimento inclui a linha do profissional (nome de colaborador real)', async () => {
+    mockClone({ cartaoMode: 'runtime' });
+    getProductTypeMock.mockResolvedValue('estabelecimento');
+    listColabsMock.mockResolvedValue([{ nome: 'Léo', ativo: true }]);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    expect(body.previews.padrao).toContain('👤 PROFISSIONAL: Léo');
+    expect(body.previews.padrao).toContain('🕐 HORARIO:'); // estabelecimento usa 🕐
+    expect(body.sample.profissional).toBe('Léo');
     await app.close();
   });
 
@@ -228,6 +284,8 @@ describe('PUT /portal/cartao-config', () => {
     getProductTypeMock.mockResolvedValue('individual');
     setConfigMock.mockResolvedValue(true);
     migrateMock.mockResolvedValue({ migrated: true, versionSaved: 3 });
+    getServicosMock.mockResolvedValue([{ nome: 'Corte', preco_cents: 6500, duracao_min: 30 }]);
+    listColabsMock.mockResolvedValue([]);
   });
 
   it('flag GLOBAL OFF → 404 (não grava nada)', async () => {
@@ -478,6 +536,66 @@ describe('PUT /portal/cartao-config', () => {
       payload: { template: 'padrao', emojis: {}, slot: 'outro' },
     });
     expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-only)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configMock.CARTAO_RUNTIME_ENABLED = true;
+    getProductTypeMock.mockResolvedValue('individual');
+    getServicosMock.mockResolvedValue([{ nome: 'Corte', preco_cents: 6500, duracao_min: 30 }]);
+    listColabsMock.mockResolvedValue([]);
+  });
+
+  it('flag GLOBAL OFF → 404 (feature dormente)', async () => {
+    configMock.CARTAO_RUNTIME_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config/preview' });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('renderiza os 3 templates com o emoji escolhido (override da query) + serviço real', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/cartao-config/preview?marca=${encodeURIComponent('🌻')}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Object.keys(body.previews).sort()).toEqual(['compacto', 'detalhado', 'padrao']);
+    // O emoji escolhido pelo dono aparece na prévia (o que ele vê = o que o cliente recebe).
+    expect(body.previews.padrao).toContain('🌻 Barbearia do Cirilo');
+    expect(body.previews.padrao).not.toContain('💈');
+    expect(body.previews.padrao).toContain('SERVICO: Corte');
+    expect(body.previews.padrao).toContain('Responda SIM para confirmar.');
+    await app.close();
+  });
+
+  it('emoji fora da allowlist na query → IGNORADO (default da área, prévia não quebra)', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/cartao-config/preview?marca=${encodeURIComponent('🎩')}`,
+    });
+    expect(res.statusCode).toBe(200);
+    // 🎩 não está no catálogo → cai no default da área (💈), nunca renderiza o emoji arbitrário.
+    expect(res.json().previews.padrao).toContain('💈');
+    expect(res.json().previews.padrao).not.toContain('🎩');
+    await app.close();
+  });
+
+  it('slot vem SEMPRE da sessão (anti-IDOR): a query não nomeia outro clone', async () => {
+    mockClone();
+    const app = await buildApp();
+    await app.inject({ method: 'GET', url: '/portal/cartao-config/preview?slot=clone_alheio' });
+    // Todo reader foi chamado com o slot da SESSÃO, nunca com o da query.
+    expect(getCartaoMock).toHaveBeenCalledWith(injectedSlot);
+    expect(getServicosMock).toHaveBeenCalledWith(injectedSlot);
     await app.close();
   });
 });

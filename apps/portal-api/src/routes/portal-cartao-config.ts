@@ -46,7 +46,7 @@
  *            (prompt_custom), 422 (requer_revisao), 404 (flag OFF / sem clone).
  */
 import { logger } from '@startap/core/logger';
-import { botPrompt, cloneColaboradores } from '@startap/db';
+import { botPrompt, cloneColaboradores, portalConfig } from '@startap/db';
 // Subpath (não o barrel @startap/integrations): puxa SÓ o módulo puro do cartão, sem instanciar
 // o cliente OpenAI (que o barrel carrega no import). Mesmo padrão do apps/api/bots/teste_barbearia.
 import * as promptBuilder from '@startap/integrations/prompt-builder';
@@ -85,6 +85,95 @@ async function resolveModo(slot: string): Promise<Modo> {
   return productType === 'estabelecimento' ? 'estabelecimento' : 'agenda';
 }
 
+// ── Prévia FIEL do cartão (SCRUM-99) ──────────────────────────────────────────────────────
+// A seção mostra o EXEMPLO do cartão que o cliente RECEBE, renderizado pela MESMA função do
+// runtime (promptBuilder.buildCartaoExemplo) — fonte única, sem a "prévia que mente". A amostra
+// é semeada com o NOME real do negócio + um SERVIÇO/PREÇO real do catálogo do clone; dia/horário
+// são neutros (não são dado do clone). Individual → sem linha de profissional (a função já cuida).
+
+const PREVIEW_TEMPLATES = ['padrao', 'compacto', 'detalhado'] as const;
+type PreviewTemplate = (typeof PREVIEW_TEMPLATES)[number];
+
+// Amostra neutra e evergreen (sem data absoluta que envelhece). Fallbacks usados só quando o
+// clone não tem catálogo/colaborador — o caminho comum usa os dados reais do clone.
+const SAMPLE_DIA = 'quinta-feira';
+const SAMPLE_HORARIO = '15:00';
+const FALLBACK_SERVICO = 'Serviço';
+const FALLBACK_VALOR = 'R$ 50,00';
+const FALLBACK_PROFISSIONAL = 'profissional';
+
+/** Formata centavos em 'R$ X,XX' pt-BR sem libs (Intl varia por runtime) — espelha o
+ *  precoLabel do bot (apps/api/src/lib/package-context.ts), pra prévia bater com o que o bot diz. */
+function formatPrecoBRL(cents: number): string {
+  const reais = Math.trunc(cents / 100);
+  const centavos = String(Math.abs(cents % 100)).padStart(2, '0');
+  return `R$ ${reais},${centavos}`;
+}
+
+/**
+ * Semeia a amostra do exemplo com dados REAIS do clone: nome do negócio (já lido), 1º serviço do
+ * catálogo (nome + preço formatado) e, no estabelecimento, o nome de um profissional. Nunca lança
+ * (readers com catch → fallback neutro); escopado por slot da sessão (sem vazar outro tenant).
+ */
+async function buildSample(
+  slot: string,
+  modo: Modo,
+  nomeNegocio: string | null,
+): Promise<promptBuilder.CartaoExemploSample> {
+  const servicos = await portalConfig.getServicosBySlot(slot).catch(() => null);
+  let servico = FALLBACK_SERVICO;
+  let valor = FALLBACK_VALOR;
+  const primeiro = servicos?.find((s) => typeof s?.nome === 'string' && s.nome.trim() !== '');
+  if (primeiro) {
+    servico = primeiro.nome.trim();
+    valor = Number.isFinite(primeiro.preco_cents)
+      ? formatPrecoBRL(primeiro.preco_cents)
+      : FALLBACK_VALOR;
+  }
+
+  let profissional = FALLBACK_PROFISSIONAL;
+  if (modo === 'estabelecimento') {
+    const colabs = await cloneColaboradores.listBySlot(slot).catch(() => []);
+    const escolhido =
+      colabs.find((c) => c.ativo && c.nome.trim() !== '') ??
+      colabs.find((c) => c.nome.trim() !== '');
+    if (escolhido) profissional = escolhido.nome.trim();
+  }
+
+  return {
+    nomeNegocio: nomeNegocio ?? undefined,
+    dia: SAMPLE_DIA,
+    horario: SAMPLE_HORARIO,
+    servico,
+    valor,
+    profissional,
+  };
+}
+
+/**
+ * Renderiza o EXEMPLO do cartão pros 3 templates com um dado conjunto de emojis (override
+ * PARCIAL do dono — a função resolve os defaults da área por baixo, igual ao runtime). Uma
+ * chamada cobre a prévia principal + as mini-prévias do seletor + a troca de template sem novo
+ * fetch. Puro sobre a amostra; sem I/O.
+ */
+function renderPreviews(
+  modo: Modo,
+  area: string | null,
+  emojisOverride: Partial<Record<EmojiKey, string>> | undefined,
+  sample: promptBuilder.CartaoExemploSample,
+): Record<PreviewTemplate, string> {
+  const out = {} as Record<PreviewTemplate, string>;
+  for (const template of PREVIEW_TEMPLATES) {
+    out[template] = promptBuilder.buildCartaoExemplo({
+      modo,
+      area,
+      config: { template, emojis: emojisOverride },
+      sample,
+    });
+  }
+  return out;
+}
+
 /** Extrai o cartão BAKED atual do clone (via bot_prompt). Puro sobre o texto; nunca lança. */
 async function extractCurrentCartao(slot: string) {
   const prompt = await botPrompt.getPrompt(slot);
@@ -109,6 +198,8 @@ interface ResponseArgs {
   /** Config que semeia o picker (config) E renderiza o preview. `verbatim` presente → o preview é
    *  o cartão legado literal e o picker é semeado com os emojis extraídos dele. */
   seedConfig: CartaoConfigLike | null;
+  /** Amostra (nome+serviço+preço reais) que semeia o EXEMPLO fiel do cartão (SCRUM-99). */
+  sample: promptBuilder.CartaoExemploSample;
 }
 
 /**
@@ -118,25 +209,28 @@ interface ResponseArgs {
  * cartão real com segurança (locked sem cartão extraível).
  */
 function buildResponse(args: ResponseArgs): Record<string, unknown> {
-  const { effectiveMode, editable, lockedReason, modo, area, nomeNegocio, seedConfig } = args;
+  const { effectiveMode, editable, lockedReason, modo, area, nomeNegocio, seedConfig, sample } =
+    args;
   const defaultsEmojis = promptBuilder.resolveDefaultCartaoEmojis(modo, area);
   const defaults = { template: 'padrao' as const, emojis: defaultsEmojis };
 
-  // config (seed do picker): só quando editable e há uma base. Clone migrado (verbatim) → SEED os
-  // emojis do cartão legado; senão os emojis do config. Locked/requer_revisao → null (sem picker).
+  // Emojis-semente do picker (override PARCIAL do dono): do cartão legado (verbatim) ou do config.
+  // Sem seedConfig → vazio (a prévia cai nos defaults da área, resolvidos pela função do runtime).
+  const seedOverride: Partial<Record<EmojiKey, string>> = seedConfig
+    ? typeof seedConfig.verbatim === 'string' && seedConfig.verbatim.trim() !== ''
+      ? promptBuilder.extractSeedEmojis(seedConfig.verbatim)
+      : ((seedConfig.emojis ?? {}) as Partial<Record<EmojiKey, string>>)
+    : {};
+
+  // config (seed do picker): só quando editable e há uma base. Locked/requer_revisao → null.
   let configOut: { template: string; emojis: Record<string, string> } | null = null;
   if (editable && seedConfig) {
     const template = seedConfig.template ?? 'padrao';
-    const seed =
-      typeof seedConfig.verbatim === 'string' && seedConfig.verbatim.trim() !== ''
-        ? promptBuilder.extractSeedEmojis(seedConfig.verbatim)
-        : (seedConfig.emojis ?? {});
-    configOut = { template, emojis: { ...defaultsEmojis, ...seed } };
+    configOut = { template, emojis: { ...defaultsEmojis, ...seedOverride } };
   }
 
-  // preview = o cartão que este clone emite/emitiria (verbatim vence; senão montado; sem seed mas
-  // editable → defaults). Locked SEM cartão extraível → null (honesto: não fabrica um cartão que
-  // não é o do cliente).
+  // preview = bloco INTERNO do runtime (system-prompt cru; NÃO exibido ao dono) — mantido pra
+  // compat/telemetria. verbatim vence; senão montado; locked sem cartão extraível → null.
   const preview =
     seedConfig || editable
       ? promptBuilder.buildCartaoRuntimeBlock({
@@ -147,6 +241,10 @@ function buildResponse(args: ResponseArgs): Record<string, unknown> {
         })
       : null;
 
+  // previews (SCRUM-99) = EXEMPLO fiel do cartão que o cliente RECEBE, pros 3 templates, com os
+  // emojis-semente + nome/serviço reais. É o que a seção mostra (o `preview` acima nunca aparece).
+  const previews = renderPreviews(modo, area, seedOverride, sample);
+
   return {
     mode: effectiveMode,
     editable,
@@ -155,6 +253,8 @@ function buildResponse(args: ResponseArgs): Record<string, unknown> {
     defaults,
     canDisable: false,
     preview,
+    previews,
+    sample,
   };
 }
 
@@ -168,6 +268,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
     const { area, promptCustom, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(slot);
     const modo = await resolveModo(slot);
+    const sample = await buildSample(slot, modo, nomeNegocio);
 
     // 1. Já runtime → editable (o dono ajusta a config livremente; não re-flipa).
     if (cartaoMode === 'runtime') {
@@ -180,6 +281,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
           area,
           nomeNegocio,
           seedConfig: cartaoConfig,
+          sample,
         }),
       );
     }
@@ -196,6 +298,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
           area,
           nomeNegocio,
           seedConfig: ex.found ? { verbatim: ex.cartao } : null,
+          sample,
         }),
       );
     }
@@ -214,6 +317,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
         area,
         nomeNegocio,
         seedConfig: ex.found ? { verbatim: ex.cartao } : null,
+        sample,
       }),
     );
   });
@@ -236,6 +340,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
     const { area, promptCustom, cartaoMode, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(slot);
     const modo = await resolveModo(slot);
+    const sample = await buildSample(slot, modo, nomeNegocio);
 
     // A. Já runtime → só atualiza a config (comportamento atual; não re-flipa).
     if (cartaoMode === 'runtime') {
@@ -251,6 +356,7 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
           area,
           nomeNegocio,
           seedConfig: novaConfig,
+          sample,
         }),
       );
     }
@@ -318,7 +424,35 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
         area,
         nomeNegocio,
         seedConfig: cartaoConfig,
+        sample,
       }),
     );
+  });
+
+  // GET /portal/cartao-config/preview — prévia AO VIVO (SCRUM-99). Read-only, sem efeito
+  // colateral: renderiza o EXEMPLO fiel do cartão (a MESMA função do runtime) pros 3 templates
+  // com os emojis que o dono está escolhendo, semeado com nome/serviço reais do clone. Serve a
+  // edição sem gravar nada — o dono vê o que o cliente recebe ANTES de salvar. Slot da SESSÃO
+  // (nunca do cliente): sem vazamento cross-tenant. Emoji fora da allowlist → cai no default da
+  // área (graceful; a prévia nunca quebra).
+  app.get('/portal/cartao-config/preview', { preHandler: withTenant }, async (req, reply) => {
+    if (!config.CARTAO_RUNTIME_ENABLED) {
+      return reply.code(404).send({ error: 'recurso indisponivel' });
+    }
+    const { slot } = requireTenant(req);
+    const { area, nomeNegocio } = await cloneColaboradores.getAreaPromptCustomCartao(slot);
+    const modo = await resolveModo(slot);
+    const sample = await buildSample(slot, modo, nomeNegocio);
+
+    // Emojis vêm da query (?marca=&dia=&...): mantém só os que passam na allowlist FECHADA por
+    // chave — inválido/desconhecido é IGNORADO (default da área vence), nunca renderiza lixo.
+    const q = (req.query ?? {}) as Record<string, unknown>;
+    const override: Partial<Record<EmojiKey, string>> = {};
+    for (const key of promptBuilder.CARTAO_EMOJI_KEYS) {
+      const v = q[key];
+      if (typeof v === 'string' && promptBuilder.isEmojiAllowed(key, v)) override[key] = v;
+    }
+
+    return reply.code(200).send({ previews: renderPreviews(modo, area, override, sample) });
   });
 };
