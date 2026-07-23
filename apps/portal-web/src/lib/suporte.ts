@@ -28,6 +28,16 @@ export const SUPORTE_AGENDA_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURICompo
 )}`;
 
 /**
+ * "Falar com o suporte" da seção Cartão de confirmação (SCRUM-92 inc.2) quando o cartão
+ * do clone está TRAVADO (persona à mão / template que exige revisão supervisionada). A
+ * migração é feita pela equipe, não é self-service. Mesmo número, texto pré-preenchido.
+ * NÃO é número novo — reusa SUPORTE_WHATSAPP_URL (regra de ouro: número único).
+ */
+export const SUPORTE_CARTAO_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
+  'Olá! Quero personalizar o cartão de confirmação do meu robô da Startap.',
+)}`;
+
+/**
  * Instagram público da Startap (W12) — handle @startap.ia. Centralizado aqui
  * junto dos canais públicos pra não espalhar o link.
  */

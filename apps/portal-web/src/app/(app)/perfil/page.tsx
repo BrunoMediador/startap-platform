@@ -1,6 +1,7 @@
 'use client';
 
 import { AgendamentoSection } from '@/components/agendamento/agendamento-section';
+import { CartaoConfigSection } from '@/components/cartao-config/cartao-config-section';
 import { FaqSection } from '@/components/faq/faq-section';
 import { GoogleAgendaSection } from '@/components/google-agenda/google-agenda-section';
 import { IconCheck } from '@/components/icons';
@@ -261,6 +262,13 @@ export default function PerfilPage() {
           pelo GET /portal/prompt-builder/draft — 404 (PROMPT_BUILDER_ENABLED OFF) some
           INTEIRA (byte-idêntico pros clientes atuais). Traz o próprio divisor. */}
       <MonteAssistenteSection />
+
+      {/* Cartão de confirmação (SCRUM-92 inc.2): template + emojis do cartão que o robô
+          manda antes de marcar. Aparece pra TODO cliente elegível, seedada com o cartão
+          atual — o GET /portal/cartao-config decide editável (form) ou travado (read-only +
+          suporte). Flag global OFF / 404 / erro -> some INTEIRA (byte-idêntico pros clientes
+          atuais). Some também no modo atendente. Traz o próprio divisor. */}
+      <CartaoConfigSection />
 
       {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
           link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,

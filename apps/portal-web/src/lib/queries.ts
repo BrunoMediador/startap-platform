@@ -76,6 +76,12 @@ import type {
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { pausaFromResposta } from './bot-pausa';
+import {
+  type CartaoConfigState,
+  type SaveCartaoResult,
+  fetchCartaoConfig,
+  putCartaoConfig,
+} from './cartao-config';
 import { mapColaboradorRow } from './equipe';
 import { type BuilderDraft, fetchBuilderDraft } from './prompt-builder';
 
@@ -130,6 +136,8 @@ export const qk = {
   frasesPausa: (slot: string) => ['frases-pausa', slot] as const,
   /** Builder de persona (SCRUM-92) — prévia do rascunho (GET /portal/prompt-builder/draft). */
   promptBuilder: (slot: string) => ['prompt-builder', slot] as const,
+  /** Cartão de confirmação (SCRUM-92 inc.2) — GET/PUT /portal/cartao-config. */
+  cartaoConfig: (slot: string) => ['cartao-config', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1284,5 +1292,43 @@ export function useBuilderDraft(slot: string): UseQueryResult<BuilderDraft> {
     retry: false,
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+  });
+}
+
+// ── Cartão de confirmação (SCRUM-92 inc.2 — GET/PUT /portal/cartao-config) ─────
+//
+// GATEADO pela flag global (CARTAO_RUNTIME_ENABLED): fetchCartaoConfig NUNCA lança
+// (404/flag OFF/rede/5xx -> { status:'hidden' }) — a seção SOME inteira (degradação
+// graciosa). O contrato traz editable/locked_reason: editável (form) ou travado
+// (read-only). Sem retry (404 do flag OFF não se resolve sozinho). Escopado por slot.
+
+export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState> {
+  return useQuery({
+    queryKey: qk.cartaoConfig(slot),
+    queryFn: ({ signal }) => fetchCartaoConfig(signal),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * PUT /portal/cartao-config — salva template + emojis (flip-on-customize). onSuccess grava
+ * o estado editável devolvido (clone já em runtime). onError invalida a query pra
+ * RE-SINCRONIZAR: se o clone virou travado por corrida (409 prompt_custom / 422
+ * requer_revisao), o próximo GET reflete o read-only. O revert otimista vive na seção.
+ */
+export function useSaveCartaoConfig(
+  slot: string,
+): UseMutationResult<SaveCartaoResult, Error, Parameters<typeof putCartaoConfig>[0]> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) => putCartaoConfig(payload),
+    onSuccess: ({ state }) => {
+      client.setQueryData(qk.cartaoConfig(slot), state);
+    },
+    onError: () => {
+      client.invalidateQueries({ queryKey: qk.cartaoConfig(slot) });
+    },
   });
 }
