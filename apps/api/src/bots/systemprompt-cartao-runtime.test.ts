@@ -10,6 +10,8 @@
  *
  * Reusa o mesmo scaffolding de mocks do golden (process() end-to-end até o runAgent).
  */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { BotContext } from '@startap/core/types';
 import { BLOCO_ESTRUTURAL_MARKER } from '@startap/integrations/prompt-builder';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -195,6 +197,7 @@ function setupIndividual(cartao: {
     promptCustom: false,
     cartaoMode: cartao.cartaoMode,
     cartaoConfig: cartao.cartaoConfig ?? null,
+    nomeNegocio: 'Barbearia Runtime',
   });
 }
 
@@ -223,6 +226,7 @@ function setupEstabelecimento(cartao: {
     promptCustom: false,
     cartaoMode: cartao.cartaoMode,
     cartaoConfig: cartao.cartaoConfig ?? null,
+    nomeNegocio: 'Estabelecimento Runtime',
   });
 }
 
@@ -271,6 +275,32 @@ describe('cartão em runtime — caminho INDIVIDUAL (gate ON + cartao_mode=runti
     expect(sp).not.toContain(BLOCO_ESTRUTURAL_MARKER);
     // Barbearia baked → override legado devolve '' → systemPrompt = persona + contexto (byte-a-byte).
     expect(sp).toBe(`${PERSONA_RUNTIME}\n\n${CONTEXT_FIXTURE}`);
+  });
+});
+
+// ── GOLDEN byte-a-byte do 1º clone RUNTIME (arquiteto: prova de estabilidade) ─────────
+// Complementa o golden do BAKED (systemprompt-golden.test.ts): congela o systemPrompt montado no
+// caminho INDIVIDUAL de um clone cartao_mode='runtime' barbearia (persona-only + contexto + cartão
+// injetado por código). Se a montagem/cartão-runtime mudar 1 byte sem querer, este teste quebra
+// ANTES de prod. Regenerar de propósito: UPDATE_GOLDEN=1 npx vitest run <este arquivo>.
+function assertGolden(fixtureName: string, actual: string): void {
+  const goldenPath = fileURLToPath(new URL(`./__fixtures__/${fixtureName}`, import.meta.url));
+  if (process.env.UPDATE_GOLDEN === '1') writeFileSync(goldenPath, actual, 'utf8');
+  expect(actual).toBe(readFileSync(goldenPath, 'utf8'));
+}
+
+describe('systemPrompt golden — clone RUNTIME de barbearia (SCRUM-92 inc.2, T5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.PACOTES_ENABLED = false;
+    cfg.CARTAO_RUNTIME_ENABLED = true;
+  });
+
+  it('runtime barbearia → systemPrompt byte-a-byte o golden congelado', async () => {
+    setupIndividual({ area: 'barbearia', cartaoMode: 'runtime' });
+    const sp = await systemPromptFor('clone_runtime_barbearia');
+    assertGolden('systemprompt-runtime-barbearia.golden.txt', sp);
   });
 });
 
