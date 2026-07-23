@@ -36,7 +36,7 @@ export function ReconnectBanner() {
             Seu WhatsApp se desconectou
           </p>
           <p className="mt-0.5 text-[12.5px] leading-tight text-ink-soft">
-            O robô parou de atender. Reconecte pra voltar ao ar.
+            O assistente parou de atender. Reconecte pra voltar ao ar.
           </p>
         </div>
         <Link

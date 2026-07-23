@@ -33,7 +33,7 @@ function resolveState(status: StatusResponse): BotState {
  *  não dizer "regularize" quando foi o próprio dono que pausou / está em dia. */
 const CONTEXTO_BASE: Record<'ativo' | 'desconectado', string> = {
   ativo: 'tudo rodando por aqui.',
-  desconectado: 'seu robô precisa de você — toque no status.',
+  desconectado: 'seu assistente precisa de você — toque no status.',
 };
 const CONTEXTO_PAUSADO = {
   owner: 'você pausou o atendimento — retome quando quiser.',

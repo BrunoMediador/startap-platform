@@ -29,7 +29,7 @@ const inter = localFont({
 
 export const metadata: Metadata = {
   title: 'Startap · Portal do Cliente',
-  description: 'Gerencie serviços, horários e o atendimento do seu robô.',
+  description: 'Gerencie serviços, horários e o atendimento do seu assistente.',
 };
 
 export const viewport: Viewport = {

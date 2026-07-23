@@ -30,9 +30,9 @@ function resolveState(status: StatusResponse): BotState {
 }
 
 const COPY: Record<'ativo' | 'desconectado', { title: string; sub: string }> = {
-  ativo: { title: 'Bot ativo', sub: 'Atendendo no WhatsApp agora' },
+  ativo: { title: 'Assistente ativo', sub: 'Atendendo no WhatsApp agora' },
   desconectado: {
-    title: 'Bot desconectado',
+    title: 'Assistente desconectado',
     // Fallback quando a reconexao self-service esta OFF (sem rota /conectar).
     sub: 'Fale com o suporte para reconectar',
   },
@@ -86,7 +86,7 @@ export function StatusHero({ status }: { status: StatusResponse }) {
   const motivo = state === 'pausado' ? resolveMotivoPausa(status) : null;
   const linkavel = reconectavel || motivo === 'owner';
   const copy = reconectavel
-    ? { title: 'Bot desconectado', sub: 'Toque pra reconectar' }
+    ? { title: 'Assistente desconectado', sub: 'Toque pra reconectar' }
     : state === 'pausado'
       ? COPY_PAUSADO[motivo ?? 'startap_outro']
       : COPY[state];
@@ -119,7 +119,7 @@ export function StatusHero({ status }: { status: StatusResponse }) {
         href="/conectar"
         aria-label={
           reconectavel
-            ? 'Robô desconectado — toque pra reconectar'
+            ? 'Assistente desconectado — toque pra reconectar'
             : 'Atendimento pausado por você — toque pra retomar'
         }
         className={cn(

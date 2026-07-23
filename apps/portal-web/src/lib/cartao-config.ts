@@ -35,6 +35,7 @@
  * Só transporte tipado + funções puras (sem React/DOM), testáveis em node.
  */
 import { ApiError, apiFetch } from './api';
+import { O_ASSISTENTE } from './termos';
 
 // ── Slots, templates e catálogo fechado ─────────────────────────────────────────
 
@@ -94,7 +95,7 @@ export const FALLBACK_TEMPLATE: CartaoTemplate = 'padrao';
 export const CARTAO_COPY = {
   /** Cabeçalho da seção. */
   titulo: 'Cartão de confirmação',
-  subtitulo: 'Escolha o formato e os emojis do cartão que o robô manda antes de marcar um horário.',
+  subtitulo: `Escolha o formato e os emojis do cartão que ${O_ASSISTENTE} manda antes de marcar um horário.`,
 
   /** Aviso fixo (só nos estados editáveis) — a confirmação em si não pode ser desativada. */
   avisoFixo:
@@ -123,7 +124,7 @@ export const CARTAO_COPY = {
 
   /** Prévia. */
   previaLabel: 'Prévia do cartão',
-  previaRodape: 'É um exemplo. O robô troca os dados pelo agendamento real do cliente.',
+  previaRodape: 'É um exemplo. O assistente troca os dados pelo agendamento real do cliente.',
 
   /** Botão salvar + status. */
   salvar: 'Salvar cartão',

@@ -76,7 +76,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 const PAGE_SUBTITLE =
-  'Reconecte o WhatsApp do seu robô sem precisar do suporte. Deixe esta tela aberta durante o processo.';
+  'Reconecte o WhatsApp do seu assistente sem precisar do suporte. Deixe esta tela aberta durante o processo.';
 
 /** Estados da maquina (a partir do GET inicial + acoes do usuario). */
 type Phase =
@@ -135,7 +135,7 @@ export function ConectarClient() {
         <EmptyState
           icon={<IconWhatsapp size={26} />}
           title="Reconexão indisponível"
-          description="A reconexão pelo portal ainda não está liberada para sua conta. Fale com o suporte se o WhatsApp do seu robô caiu."
+          description="A reconexão pelo portal ainda não está liberada para sua conta. Fale com o suporte se o WhatsApp do seu assistente caiu."
           action={{
             label: 'Voltar pro início',
             onClick: () => {
@@ -607,9 +607,9 @@ function PausaCardView({
       </div>
 
       <p className="mt-2.5 text-[14px] leading-normal text-ink-soft">
-        {estado === 'ativo' && 'O robô está respondendo no WhatsApp.'}
+        {estado === 'ativo' && 'O assistente está respondendo no WhatsApp.'}
         {estado === 'pausado_self' &&
-          'O robô não responde até você retomar. O WhatsApp continua conectado.'}
+          'O assistente não responde até você retomar. O WhatsApp continua conectado.'}
         {estado === 'pausado_startap' &&
           'O atendimento está pausado pela Startap. Fale com o suporte pra reativar.'}
       </p>
@@ -633,7 +633,7 @@ function PausaCardView({
       <ConfirmDialog
         open={confirmOpen}
         title="Pausar o atendimento?"
-        description="O robô vai parar de responder até você retomar. O WhatsApp continua conectado."
+        description="O assistente vai parar de responder até você retomar. O WhatsApp continua conectado."
         confirmLabel="Pausar atendimento"
         confirmVariant="destructive"
         loading={confirmando}
@@ -666,7 +666,7 @@ function ConectadoCard({
         <h2 className="font-display text-[17px] font-semibold text-ink">WhatsApp</h2>
       </div>
       <p className="mt-1.5 text-[14px] leading-normal text-ink-soft">
-        O robô está conectado e atendendo.
+        O assistente está conectado e atendendo.
       </p>
       <MaskedPhone phoneMasked={phoneMasked} className="mt-3" />
       <div className="mt-4">
@@ -865,7 +865,7 @@ function QrCard({
           // tratamento do QR PIX) — QR nao e legivel sobre fundo escuro.
           <Image
             src={src}
-            alt="QR Code para conectar o WhatsApp do robô"
+            alt="QR Code para conectar o WhatsApp do assistente"
             width={224}
             height={224}
             unoptimized
@@ -912,7 +912,7 @@ function SucessoCard() {
       </span>
       <h2 className="mt-4 font-display text-[19px] font-semibold text-ink">Conectado! 🎉</h2>
       <p className="mx-auto mt-1.5 max-w-[34ch] text-[14px] leading-normal text-ink-soft">
-        Seu robô já está atendendo no WhatsApp.
+        Seu assistente já está atendendo no WhatsApp.
       </p>
 
       {/* Próximo passo: a agenda (Google Calendar) é configurada pela equipe,
@@ -1018,7 +1018,7 @@ function MaskedPhone({
   if (!phoneMasked) return null;
   return (
     <p className={cn('text-[13.5px] text-ink-soft', className)}>
-      Número do robô:{' '}
+      Número do assistente:{' '}
       <span className="font-semibold tabular-nums tracking-wide text-ink">{phoneMasked}</span>
     </p>
   );
@@ -1253,7 +1253,7 @@ function PassoAPasso() {
       </div>
 
       <p className="mt-4 rounded-card-sm border border-line bg-bg px-3 py-2.5 text-[13px] leading-snug text-ink-soft">
-        Depois de colar o código, volte pra esta tela — ela avisa quando o robô conectar.
+        Depois de colar o código, volte pra esta tela — ela avisa quando o assistente conectar.
       </p>
     </section>
   );

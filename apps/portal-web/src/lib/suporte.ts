@@ -3,6 +3,8 @@
  * Centralizado aqui pra não espalhar o número — todo link "Falar com o suporte"
  * deve usar SUPORTE_WHATSAPP_URL.
  */
+import { O_ASSISTENTE, TERMO_ASSISTENTE } from './termos';
+
 export const SUPORTE_WHATSAPP_NUMERO = '553599115327';
 
 export const SUPORTE_WHATSAPP_URL = `https://wa.me/${SUPORTE_WHATSAPP_NUMERO}`;
@@ -13,7 +15,7 @@ export const SUPORTE_WHATSAPP_URL = `https://wa.me/${SUPORTE_WHATSAPP_NUMERO}`;
  * reusa SUPORTE_WHATSAPP_URL pra centralizar (regra de ouro: número único).
  */
 export const AJUDA_WHATSAPP_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
-  'Olá! Vim pelo site da Startap e queria tirar uma dúvida sobre o robô de atendimento.',
+  `Olá! Vim pelo site da Startap e queria tirar uma dúvida sobre ${O_ASSISTENTE}.`,
 )}`;
 
 /**
@@ -34,7 +36,7 @@ export const SUPORTE_AGENDA_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURICompo
  * NÃO é número novo — reusa SUPORTE_WHATSAPP_URL (regra de ouro: número único).
  */
 export const SUPORTE_CARTAO_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
-  'Olá! Quero personalizar o cartão de confirmação do meu robô da Startap.',
+  `Olá! Quero personalizar o cartão de confirmação do meu ${TERMO_ASSISTENTE} da Startap.`,
 )}`;
 
 /**

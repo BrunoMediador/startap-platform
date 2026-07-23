@@ -164,7 +164,7 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
   return (
     <SectionShell>
       <p className="text-[13px] leading-normal text-ink-soft">
-        As frases são suas: você escolhe quais palavras pausam e retomam a assistente. Quando alguém
+        As frases são suas: você escolhe quais palavras pausam e retomam o assistente. Quando alguém
         da equipe quiser responder um cliente à mão, é só digitar sua frase de pausa na conversa do
         WhatsApp — o assistente para de responder aquela pessoa. Quando terminar, digite a frase de
         retomada e o assistente volta a atender. Vale só para aquela conversa; os outros clientes

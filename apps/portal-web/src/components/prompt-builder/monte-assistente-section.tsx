@@ -523,10 +523,10 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           <span className="text-brand" aria-hidden>
             <IconSparkle size={18} />
           </span>
-          Monte seu atendente
+          Monte seu assistente
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Converse com nosso assistente e defina a personalidade do seu atendente — nome, tom e
+          Converse com nosso assistente e defina a personalidade do seu assistente — nome, tom e
           regras.
         </p>
       </div>
@@ -550,7 +550,7 @@ function IntroCard({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13.5px] leading-normal text-ink-soft">
-        Em 4 ou 5 perguntas rápidas, deixamos o seu atendente com a cara do seu negócio: como ele
+        Em 4 ou 5 perguntas rápidas, deixamos o seu assistente com a cara do seu negócio: como ele
         fala, se tem nome, e o que ele nunca deve fazer. Sem termos técnicos — é só conversar.
       </p>
       <GarantiaNota texto={garantia} />
@@ -902,7 +902,7 @@ function PreviewPanel({
                 <span className="font-semibold">{nomeBot}</span>
               </p>
               <p className="mt-1 text-[11.5px] leading-snug text-ink-faint">
-                É o nome do atendente virtual — diferente do nome do seu negócio.
+                É o nome do assistente — diferente do nome do seu negócio.
               </p>
             </div>
           )}
@@ -962,7 +962,7 @@ function PreviewPanel({
        */}
       <div className="mt-1 flex flex-col gap-2 border-t border-brand/20 pt-3">
         <p className="text-[12.5px] leading-normal text-ink-soft">
-          Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu atendente.
+          Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu assistente.
         </p>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
           <button

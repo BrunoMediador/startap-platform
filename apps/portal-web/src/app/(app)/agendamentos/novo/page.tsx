@@ -242,7 +242,7 @@ export default function NovoAgendamentoPage() {
             Novo agendamento
           </h1>
           <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
-            Marque um horário pra um cliente, sem passar pelo robô.
+            Marque um horário pra um cliente, sem passar pelo assistente.
           </p>
         </div>
       </div>
@@ -446,7 +446,7 @@ export default function NovoAgendamentoPage() {
                 onChange={(e) => setTelefone(formatPhoneBR(e.target.value))}
               />
               <p className="mt-1.5 text-[12.5px] leading-snug text-ink-faint">
-                Com o WhatsApp do cliente, o robô reconhece ele na próxima conversa.
+                Com o WhatsApp do cliente, o assistente reconhece ele na próxima conversa.
               </p>
             </div>
           </section>
@@ -678,7 +678,8 @@ function GcalPendente() {
         Conecte sua agenda Google pra marcar horários
       </h3>
       <p className="relative z-10 mx-auto mt-1.5 max-w-[36ch] text-[14px] leading-normal text-ink-soft">
-        O robô e o painel marcam na mesma agenda. Fale com a gente que conectamos a sua rapidinho.
+        O assistente e o painel marcam na mesma agenda. Fale com a gente que conectamos a sua
+        rapidinho.
       </p>
       <a
         href={SUPORTE_WHATSAPP_URL}

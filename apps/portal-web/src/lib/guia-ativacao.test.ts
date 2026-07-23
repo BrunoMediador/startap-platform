@@ -136,7 +136,7 @@ describe('deriveConectado', () => {
 
 describe('copy (draft)', () => {
   it('progressoLabel injeta feitos/total', () => {
-    expect(GUIA_HEADER.progressoLabel(2, 3)).toBe('Seu atendente está 2 de 3 pronto');
+    expect(GUIA_HEADER.progressoLabel(2, 3)).toBe('Seu assistente está 2 de 3 pronto');
   });
 
   it('todo passo tem copy com href/cta', () => {

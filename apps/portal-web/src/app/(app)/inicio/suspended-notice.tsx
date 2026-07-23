@@ -13,15 +13,15 @@ import Link from 'next/link';
 const COPY: Record<MotivoPausa, { title: string; body: string }> = {
   owner: {
     title: 'Você pausou o atendimento',
-    body: 'O robô não responde no WhatsApp até você retomar. Pode retomar quando quiser — o WhatsApp segue conectado.',
+    body: 'O assistente não responde no WhatsApp até você retomar. Pode retomar quando quiser — o WhatsApp segue conectado.',
   },
   inadimplencia: {
     title: 'Atendimento pausado',
-    body: 'Para reativar o robô, regularize a mensalidade. Assim que o pagamento for confirmado, o atendimento volta automaticamente.',
+    body: 'Para reativar o assistente, regularize a mensalidade. Assim que o pagamento for confirmado, o atendimento volta automaticamente.',
   },
   startap_outro: {
     title: 'Atendimento pausado pela administração',
-    body: 'Para reativar o robô, fale com o suporte. A reativação é feita pela nossa equipe.',
+    body: 'Para reativar o assistente, fale com o suporte. A reativação é feita pela nossa equipe.',
   },
 };
 

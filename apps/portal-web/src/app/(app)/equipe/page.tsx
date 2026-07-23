@@ -152,7 +152,7 @@ export default function EquipePage() {
     <>
       <PageHead
         title="Equipe"
-        subtitle="Os profissionais do seu estabelecimento. O robô usa essa lista pra agendar com cada um."
+        subtitle="Os profissionais do seu estabelecimento. O assistente usa essa lista pra agendar com cada um."
       />
 
       {/* Card de vagas (read-only): X de Y vagas em uso. Sem upsell self-service

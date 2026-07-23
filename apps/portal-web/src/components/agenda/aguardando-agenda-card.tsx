@@ -40,7 +40,7 @@ export function AguardandoAgendaCard() {
       </h3>
       <p className="relative z-10 mx-auto mt-1.5 max-w-[38ch] text-[14px] leading-normal text-ink-soft">
         Nossa equipe está configurando sua agenda — em até <b className="text-ink">24h úteis</b>.
-        Enquanto isso, a assistente já atende no WhatsApp e coleta os pedidos dos seus clientes.
+        Enquanto isso, o assistente já atende no WhatsApp e coleta os pedidos dos seus clientes.
       </p>
     </div>
   );

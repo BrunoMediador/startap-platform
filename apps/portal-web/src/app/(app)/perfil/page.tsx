@@ -167,7 +167,7 @@ export default function PerfilPage() {
     <>
       <PageHead
         title="Meu negócio"
-        subtitle="Os dados do seu negócio. O robô usa essas informações ao falar com seus clientes."
+        subtitle="Os dados do seu negócio. O assistente usa essas informações ao falar com seus clientes."
       />
 
       {perfilQ.isPending ? (
@@ -232,7 +232,7 @@ export default function PerfilPage() {
             <TimezoneCombobox
               id="perfil-tz"
               label="Fuso horário"
-              hint="O robô usa esse fuso pra agendar no horário certo da sua cidade."
+              hint="O assistente usa esse fuso pra agendar no horário certo da sua cidade."
               value={timezone || tenantTz}
               onChange={onTimezoneChange}
             />
@@ -356,7 +356,7 @@ function FormasPagamentoChecklist({
         ))}
       </div>
       <p className="text-[12px] text-ink-soft">
-        Marque as que você aceita. O robô avisa o cliente quando ele pergunta.
+        Marque as que você aceita. O assistente avisa o cliente quando ele pergunta.
       </p>
     </div>
   );

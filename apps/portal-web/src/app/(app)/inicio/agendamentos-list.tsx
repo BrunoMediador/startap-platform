@@ -110,7 +110,7 @@ export function AgendamentosList({ data }: { data: AgendamentosResponse }) {
     return (
       <EmptyBox
         title="Nenhum agendamento ainda"
-        description="Assim que o robô marcar um atendimento no WhatsApp, ele aparece aqui pra você acompanhar."
+        description="Assim que o assistente marcar um atendimento no WhatsApp, ele aparece aqui pra você acompanhar."
         action={{ label: 'Marcar um horário', onClick: () => router.push('/agendamentos/novo') }}
       />
     );

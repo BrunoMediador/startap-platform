@@ -143,7 +143,7 @@ export function FaqSection() {
     <SectionShell>
       <p className="text-[13px] leading-normal text-ink-soft">
         Cadastre respostas prontas pras dúvidas mais comuns do seu negócio. Quando um cliente
-        perguntar sobre um desses assuntos no WhatsApp, a assistente responde com o que você
+        perguntar sobre um desses assuntos no WhatsApp, o assistente responde com o que você
         escreveu aqui — do seu jeito, sem inventar.
       </p>
 
@@ -170,7 +170,7 @@ export function FaqSection() {
       <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-3" noValidate>
         {draft.length === 0 ? (
           <p className="rounded-[12px] border border-dashed border-line-strong bg-surface-sunken px-4 py-6 text-center text-[13px] leading-normal text-ink-soft">
-            Nenhuma pergunta cadastrada ainda. Adicione a primeira e a assistente já passa a usá-la
+            Nenhuma pergunta cadastrada ainda. Adicione a primeira e o assistente já passa a usá-la
             quando o cliente perguntar.
           </p>
         ) : (
@@ -224,8 +224,8 @@ export function FaqSection() {
                 ? 'Revise os itens destacados pra poder salvar.'
                 : 'Você tem alterações não salvas.'
               : usados === 0
-                ? 'Nenhuma pergunta cadastrada — a assistente segue respondendo pelo restante do seu perfil.'
-                : 'Tudo salvo. A assistente já responde essas perguntas.'}
+                ? 'Nenhuma pergunta cadastrada — o assistente segue respondendo pelo restante do seu perfil.'
+                : 'Tudo salvo. O assistente já responde essas perguntas.'}
         </p>
       </form>
     </SectionShell>
@@ -244,7 +244,7 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           Perguntas frequentes
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Respostas prontas que a assistente usa quando o cliente pergunta.
+          Respostas prontas que o assistente usa quando o cliente pergunta.
         </p>
       </div>
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">

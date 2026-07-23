@@ -87,14 +87,14 @@ export function LoginForm() {
               no <span className="text-brand">piloto automático.</span>
             </h1>
             <p className="mt-[18px] max-w-[34ch] text-[clamp(14px,1.1vw,16px)] leading-[1.6] text-ink-soft">
-              Gerencie serviços, horários e o atendimento do seu robô no WhatsApp. Tudo num lugar
-              só.
+              Gerencie serviços, horários e o atendimento do seu assistente no WhatsApp. Tudo num
+              lugar só.
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 text-[12.5px] text-ink-faint">
             <span className="login-live-dot size-2 shrink-0 rounded-full bg-ok" aria-hidden />
-            Robôs atendendo agora, sem parar.
+            Assistentes atendendo agora, sem parar.
           </div>
         </section>
 
@@ -106,7 +106,7 @@ export function LoginForm() {
               <Wordmark />
               <p className="max-w-[30ch] text-[13.5px] leading-normal text-ink-soft">
                 <b className="font-semibold text-ink">Seu negócio no piloto automático.</b>{' '}
-                Serviços, horários e o robô do WhatsApp, num lugar só.
+                Serviços, horários e o assistente do WhatsApp, num lugar só.
               </p>
             </div>
 
