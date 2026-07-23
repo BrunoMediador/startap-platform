@@ -12,6 +12,7 @@ import {
   isBuilderUnavailable,
   isPersonaSavable,
   isSendable,
+  parseTurns,
   personaCharsLeft,
   remainingChars,
   sendBuilderMessage,
@@ -29,7 +30,7 @@ vi.mock('./api', async (importOriginal) => {
 afterEach(() => apiFetchMock.mockReset());
 
 describe('startBuilder — mapa de outcome', () => {
-  it('200 mapeia pergunta/draftReady/retomada', async () => {
+  it('200 mapeia pergunta/draftReady/retomada (turns ausente -> [])', async () => {
     apiFetchMock.mockResolvedValue({
       session_id: 's',
       pergunta: 'Como ele deve falar?',
@@ -41,6 +42,7 @@ describe('startBuilder — mapa de outcome', () => {
       pergunta: 'Como ele deve falar?',
       draftReady: false,
       retomada: true,
+      turns: [],
     });
   });
 
@@ -51,6 +53,30 @@ describe('startBuilder — mapa de outcome', () => {
       pergunta: '',
       draftReady: true,
       retomada: false,
+      turns: [],
+    });
+  });
+
+  it('retomada com turns -> histórico normalizado em bolhas (item 6)', async () => {
+    apiFetchMock.mockResolvedValue({
+      session_id: 's',
+      pergunta: 'E o que ele nunca deve fazer?',
+      draft_ready: false,
+      retomada: true,
+      turns: [
+        { role: 'assistant', content: 'Como ele deve falar?' },
+        { role: 'user', content: 'Descontraído' },
+      ],
+    });
+    expect(await startBuilder()).toEqual({
+      kind: 'ok',
+      pergunta: 'E o que ele nunca deve fazer?',
+      draftReady: false,
+      retomada: true,
+      turns: [
+        { id: 1, role: 'assistant', text: 'Como ele deve falar?' },
+        { id: 2, role: 'user', text: 'Descontraído' },
+      ],
     });
   });
 
@@ -355,5 +381,47 @@ describe('helpers puros de estado do chat', () => {
     expect(isBuilderUnavailable(new ApiError(404, 'x', null))).toBe(true);
     expect(isBuilderUnavailable(new ApiError(500, 'x', null))).toBe(false);
     expect(isBuilderUnavailable(new Error('x'))).toBe(false);
+  });
+});
+
+describe('parseTurns — reidratação do chat na retomada (item 6)', () => {
+  it('ausente/não-array -> [] (backend sem o campo turns)', () => {
+    expect(parseTurns(undefined)).toEqual([]);
+    expect(parseTurns(null)).toEqual([]);
+    expect(parseTurns('x')).toEqual([]);
+    expect(parseTurns({})).toEqual([]);
+  });
+
+  it('mapeia role+content pra bolhas com id sequencial', () => {
+    expect(
+      parseTurns([
+        { role: 'assistant', content: 'Oi! Como ele deve falar?' },
+        { role: 'user', content: 'Bem informal' },
+        { role: 'assistant', content: 'Anotado!' },
+      ]),
+    ).toEqual([
+      { id: 1, role: 'assistant', text: 'Oi! Como ele deve falar?' },
+      { id: 2, role: 'user', text: 'Bem informal' },
+      { id: 3, role: 'assistant', text: 'Anotado!' },
+    ]);
+  });
+
+  it('aceita `text` como corpo alternativo (defensivo com o contrato do backend)', () => {
+    expect(parseTurns([{ role: 'user', text: 'olá' }])).toEqual([
+      { id: 1, role: 'user', text: 'olá' },
+    ]);
+  });
+
+  it('descarta itens sem papel válido, sem corpo ou vazios (id não pula)', () => {
+    expect(
+      parseTurns([
+        { role: 'system', content: 'ignora papel desconhecido' },
+        { role: 'assistant', content: '   ' },
+        { role: 'assistant' },
+        null,
+        'lixo',
+        { role: 'user', content: 'válido' },
+      ]),
+    ).toEqual([{ id: 1, role: 'user', text: 'válido' }]);
   });
 });
