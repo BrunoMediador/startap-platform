@@ -70,7 +70,14 @@ const REJECT_LINE_PATTERNS: Array<{ tag: string; re: RegExp }> = [
   // direto"). Sem o cartão+SIM na persona o modelo pode obedecer parcial e furar a garantia. A
   // autoridade final é o BLOCO_ESTRUTURAL (colado por código, recência), mas removemos a linha
   // subversiva na origem — defesa em profundidade, vale pro rascunho E pro persona_editada.
-  { tag: 'subversao', re: /\b(ignor[ae]|esque[çc][ae]|desconsider[ae]|desobede[çc][ae])\b/i },
+  // verbo de override (ignore/esqueça/desconsidere/desobedeça) SÓ é subversão quando aponta pra
+  // um objeto da MECÂNICA por perto (regra/confirmação/SIM/sistema/instrução/agendamento). O verbo
+  // PELADO é persona legítima e comum ("nunca ignore um pedido", "esqueça a formalidade") — flagá-lo
+  // apagava a linha em silêncio e degradava a persona. Mesmo espírito das demais regras 'subversao'.
+  {
+    tag: 'subversao',
+    re: /\b(ignor[ae]|esque[çc][ae]|desconsider[ae]|desobede[çc][ae])\b[^.\n]{0,30}\b(?:regras?|confirma(?:r|[çc][ãa]o)?|sim|sistema|instru[çc](?:[ãa]o|[õo]es)|agendamento)\b/i,
+  },
   // "sem confirmar" / "sem (pedir) confirmação"
   { tag: 'subversao', re: /\bsem\s+(pedir\s+)?confirma(?:r|[çc][ãa]o)\b/i },
   // "não peça/precisa/pedir (a) confirmação|SIM"
