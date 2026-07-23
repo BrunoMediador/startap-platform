@@ -1,6 +1,6 @@
 # ADR 0032 — Builder conversacional de persona (meta-agente que monta o bot_prompt)
 
-- **Status:** Proposto (MVP implementado em `feat/scrum-92-prompt-builder`; aguarda review qa+security + GO do PM/Bruno pro deploy)
+- **Status:** **Aceito** — em PRODUÇÃO desde 2026-07-20 (`PROMPT_BUILDER_ENABLED=true`, GO do Bruno). Increment 2 entregue em 23/07: [ADR 0033](0033-cartao-confirmacao-em-runtime.md).
 - **Data:** 2026-07-20
 - **Autor:** 02-backend-senior
 - **SCRUM:** SCRUM-92
@@ -26,7 +26,7 @@ finalPrompt = persona_validada + "\n\n" + buildBlocoEstrutural({ modo, area })
 
 A IA nunca escreve a mecânica → nunca pode removê-la. Variante `agenda` (cartão + SIM, area-aware nos emojis) vs `atendente` (sem cartão; escala pra humano). Retrocompat: Cirilo/Samuel são `prompt_custom=false` e não rodam o builder → intocados byte-a-byte.
 
-**Increment 2 (ADR-gated, fora deste MVP):** mover o cartão+SIM do `bot_prompt` (persona) pra bloco de código no `systemPrompt` de `teste_barbearia.ts` pra TODOS os clones = trava belt-and-suspenders real. Mexe no byte-a-byte de Cirilo/Samuel → refactor >300 linhas + regressão qa completa. O MVP NÃO toca aquele assembly.
+**Increment 2 — ENTREGUE, ver [ADR 0033](0033-cartao-confirmacao-em-runtime.md)** (em produção desde 23/07/2026): mover o cartão+SIM do `bot_prompt` (persona) pra bloco de código no `systemPrompt` de `teste_barbearia.ts`. O byte-a-byte de Cirilo/Samuel foi preservado por `flow_clones.cartao_mode='baked'` (default) + gate `CARTAO_RUNTIME_ENABLED`; a migração é opt-in por clone (flip-on-customize). O MVP descrito NESTE ADR não tocou aquele assembly — o 0033 tocou.
 
 ### 2. Estado efêmero no Redis (NÃO banco)
 
@@ -54,7 +54,7 @@ Atrás da flag `PROMPT_BUILDER_ENABLED` (kill-switch de env; ausente = OFF → r
 ## Consequências
 
 - **Positivo:** self-service de persona sem operador; garantia da mecânica à prova da IA; custo trivial; zero migration; transação de prompt unificada (portal + gestão consistentes).
-- **Negativo / dívida aceita:** a trava REAL de execução (bloquear `inserir_agendamento` sem SIM no runtime) continua dívida separada (hoje é só instrução no prompt) — increment 2. Draft perdido em evict do Redis = re-roda (documentado). `bot_prompt_versions` é durável → persona não pode conter PII (strip no approve mitiga; documentado). Duplicação pequena e estável do mapa de emojis por área entre `apps/api/src/lib/area-emojis.ts` e o `bloco-estrutural.ts` (packages não importa de apps) — o increment 2 unifica; efeito de divergência é só cosmético.
+- **Negativo / dívida aceita:** a trava REAL de execução (bloquear `inserir_agendamento` sem SIM no runtime) continua dívida separada (hoje é só instrução no prompt); o increment 2 (ADR 0033) tornou a INSTRUÇÃO à prova de perda (injetada por código a cada turno), mas não implementou a trava de execução. Draft perdido em evict do Redis = re-roda (documentado). `bot_prompt_versions` é durável → persona não pode conter PII (strip no approve mitiga; documentado). Duplicação pequena e estável do mapa de emojis por área entre `apps/api/src/lib/area-emojis.ts` e o `bloco-estrutural.ts` (packages não importa de apps) — efeito de divergência é só cosmético.
 
 ## Alternativas descartadas
 

@@ -27,7 +27,8 @@
  *   O GET /portal/perfil devolve features={modo_atendente,faq_personalizado,
  *   agenda_configurada} mas NÃO `prompt_custom`. O único vazamento indireto
  *   (locked_reason='prompt_custom' do GET /portal/cartao-config) é gated por
- *   CARTAO_RUNTIME_ENABLED (OFF em prod) e semanticamente não confiável. Sem um
+ *   CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026) e semanticamente não
+ *   confiável (só aparece no ramo baked+prompt_custom). Sem um
  *   boolean durável no front, o passo "persona" é OMITIDO (personaCustom=undefined)
  *   pra NÃO inventar sinal nem quebrar o byte-idêntico. Mínimo que o backend precisa
  *   expor: `persona_custom: boolean` (= flow_clones.prompt_custom) no
