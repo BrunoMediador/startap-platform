@@ -7,6 +7,7 @@
  * atras de um icone-chip 56px (brand-soft + borda line-strong). E o lugar onde o
  * vazio "respira". O `icon` deve vir em ~26px (cabe no chip).
  */
+import Link from 'next/link';
 import { Button } from './button';
 
 export function EmptyState({
@@ -48,22 +49,54 @@ export function EmptyState({
   );
 }
 
+/**
+ * ErrorState reusavel (spec 3.7 / 6.15) — tambem alimenta as telas de erro de
+ * ROTA do App Router (SCRUM-93: error.tsx / not-found.tsx / global-error.tsx),
+ * pra que crash de render e URL errada usem a MESMA marca/foco/a11y que o erro
+ * inline de carga.
+ *
+ * Props aditivas (nao quebram os callers existentes, que passam so title+onRetry):
+ *   - description: sobrescreve o texto de apoio (default = dica de conexao).
+ *   - retryLabel: rotulo do botao de acao primaria (default "Tente de novo").
+ *   - onRetry: OPCIONAL agora — sem ele, o botao de acao nao aparece (ex.: 404,
+ *     onde "tentar de novo" nao faz sentido).
+ *   - secondaryAction: rota de fuga como LINK (ex.: "Voltar ao inicio" -> /inicio),
+ *     estilizada como o botao ghost. E um <Link> (navegacao real, server-safe).
+ */
 export function ErrorState({
   title = 'Não foi possível carregar',
+  description = 'Verifique sua conexão e tente novamente.',
   onRetry,
+  retryLabel = 'Tente de novo',
+  secondaryAction,
 }: {
   title?: string;
-  onRetry: () => void;
+  description?: string;
+  onRetry?: () => void;
+  retryLabel?: string;
+  secondaryAction?: { label: string; href: string };
 }) {
   return (
     <div className="flex flex-col items-center px-6 py-12 text-center" role="alert">
       <h3 className="font-display text-[17px] font-semibold text-ink">{title}</h3>
-      <p className="mt-1.5 text-[14px] text-ink-soft">Verifique sua conexão e tente novamente.</p>
-      <div className="mt-5 w-full max-w-[200px]">
-        <Button variant="secondary" onClick={onRetry}>
-          Tente de novo
-        </Button>
-      </div>
+      <p className="mt-1.5 max-w-[34ch] text-[14px] leading-normal text-ink-soft">{description}</p>
+      {(onRetry || secondaryAction) && (
+        <div className="mt-5 flex w-full max-w-[220px] flex-col gap-2.5">
+          {onRetry && (
+            <Button variant="secondary" onClick={onRetry}>
+              {retryLabel}
+            </Button>
+          )}
+          {secondaryAction && (
+            <Link
+              href={secondaryAction.href}
+              className="inline-flex h-11 w-full items-center justify-center rounded-btn px-5 font-display text-[15px] font-semibold text-brand outline-none transition-colors hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            >
+              {secondaryAction.label}
+            </Link>
+          )}
+        </div>
+      )}
     </div>
   );
 }
