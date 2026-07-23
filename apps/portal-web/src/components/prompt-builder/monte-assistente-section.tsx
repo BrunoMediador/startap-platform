@@ -12,9 +12,14 @@ import {
  *
  * O dono conversa com um assistente de configuração (meta-agente no DeepSeek) que faz
  * 4-5 perguntas simples e PROPÕE a personalidade do assistente de WhatsApp dele. Ao aprovar, a
- * persona vira o prompt de produção do clone — a mecânica de agendamento (confirmação)
- * é garantida por CÓDIGO no servidor e NUNCA depende do que a IA gerar (o dono só cuida
- * da personalidade/tom/nome/regras). Ver design SCRUM-92.
+ * persona vira o prompt de produção do clone — a mecânica de agendamento (confirmação) OU o
+ * encaminhamento pra humano (modo atendente) é garantido por CÓDIGO no servidor e NUNCA depende
+ * do que a IA gerar (o dono só cuida da personalidade/tom/nome/regras). Ver design SCRUM-92.
+ *
+ * Copy sensível ao MODO do clone: agenda (marca horário -> "confirmação antes de marcar") vs
+ * atendente (pré-venda que escala -> "encaminhar pra um atendente humano"). O modo vem do
+ * MESMO GET /portal/perfil já lido pela página (features.modo_atendente + perfil.agenda_automatica),
+ * via useAgendaConfig — sem fetch novo (React Query dedup com a AgendamentoSection irmã).
  *
  * Gating (byte-idêntico pros demais clientes): a seção PROBA o GET /portal/prompt-builder/
  * draft (useBuilderDraft). 404 (flag PROMPT_BUILDER_ENABLED OFF) -> {status:'indisponivel'}
@@ -45,18 +50,50 @@ import {
   sendBuilderMessage,
   startBuilder,
 } from '@/lib/prompt-builder';
-import { qk, useBuilderDraft } from '@/lib/queries';
+import { qk, useAgendaConfig, useBuilderDraft } from '@/lib/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 
-const GARANTIA =
-  'A parte técnica (a confirmação antes de marcar um horário) é garantida automaticamente. Você só cuida da personalidade dele.';
+/**
+ * Copy da garantia da mecânica, condicional ao modo do clone (item 2). No modo atendente o
+ * bot NÃO marca horário — ele encaminha pra um humano; falar de "confirmação antes de marcar"
+ * confunde o dono. `full` = nota do IntroCard; `nota` = tranquilizador na prévia (no lugar do
+ * bloco técnico, item 3); `editor` = nota do editor de persona.
+ */
+interface GarantiaCopy {
+  full: string;
+  nota: string;
+  editor: string;
+}
+
+function garantiaCopy(atendente: boolean): GarantiaCopy {
+  if (atendente) {
+    return {
+      full: 'A parte técnica (encaminhar pra um atendente humano na hora certa) já é garantida automaticamente. Você só cuida da personalidade dele.',
+      nota: 'Encaminhar pra um atendente humano quando precisar já é garantido automaticamente pelo sistema — você não precisa escrever isso.',
+      editor:
+        'Ajuste o texto como preferir. O encaminhamento pra um atendente humano continua garantido automaticamente — não precisa escrevê-lo aqui.',
+    };
+  }
+  return {
+    full: 'A parte técnica (a confirmação antes de marcar um horário) já é garantida automaticamente. Você só cuida da personalidade dele.',
+    nota: 'A confirmação antes de marcar um horário já é garantida automaticamente pelo sistema — você não precisa escrever isso.',
+    editor:
+      'Ajuste o texto como preferir. A confirmação antes de marcar um horário continua garantida automaticamente — não precisa escrevê-la aqui.',
+  };
+}
 
 export function MonteAssistenteSection() {
   const { slot } = useTenant();
   const toast = useToast();
   const client = useQueryClient();
   const draftQ = useBuilderDraft(slot);
+  // Modo do clone (item 2): reusa o GET /portal/perfil já lido pela página (dedup por key).
+  // Atendente PURO = pré-venda que escala pra humano (modo_atendente ON e agenda automática
+  // OFF); se a agenda estiver ligada, o clone marca horário -> copy de agendamento.
+  const agendaCfg = useAgendaConfig(slot).data;
+  const isAtendente = agendaCfg?.modo_atendente === true && agendaCfg?.agenda_automatica !== true;
+  const copy = garantiaCopy(isAtendente);
 
   const [messages, setMessages] = useState<BuilderMessage[]>([]);
   const [input, setInput] = useState('');
@@ -64,9 +101,17 @@ export function MonteAssistenteSection() {
   // Texto da última mensagem que falhou por erro transitório -> botão "tentar de novo".
   const [erroRetry, setErroRetry] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
+  // Diálogos SEPARADOS (item 1 e 5): aprovar (substitui a persona de PRODUÇÃO), rejeitar
+  // (descarta só a prévia, mantém a entrevista) e recomeçar (apaga a entrevista). Estados
+  // independentes — nunca compartilham o do reset.
+  const [confirmApprove, setConfirmApprove] = useState<{ persona?: string } | null>(null);
+  const [confirmReject, setConfirmReject] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   // Rascunho ficou pronto NESTE turno (antes do refetch do draft confirmar) — snappy.
   const [localDraftReady, setLocalDraftReady] = useState(false);
+  // "Rejeitar" (item 5): esconde a prévia localmente pra continuar ajustando no chat, sem
+  // apagar a entrevista. Rearmado quando uma prévia NOVA é gerada (enviar/gerar agora).
+  const [previewDismissed, setPreviewDismissed] = useState(false);
   // Persona aplicada com sucesso (pós-approve) -> card de confirmação.
   const [aplicada, setAplicada] = useState(false);
   // Caminho "Editar": textarea aberta + texto da persona sendo ajustado pelo dono.
@@ -86,6 +131,8 @@ export function MonteAssistenteSection() {
   const previewReady = localDraftReady || draft?.status === 'pronto';
   // Prévia REALMENTE renderizável (não só o snappy local): texto final chegou do servidor.
   const previewPronto = draft?.status === 'pronto' && !!draft.previewFinal;
+  // Prévia visível: pronta E não descartada pelo dono ("Rejeitar").
+  const showPreview = previewReady && !previewDismissed;
 
   // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando".
   const totalMsgs = messages.length;
@@ -99,14 +146,14 @@ export function MonteAssistenteSection() {
   // UX mobile: quando a persona fica pronta, traz a área de prévia+botões pra dentro da
   // viewport (o dono pode estar lendo o topo do chat e não ver os botões lá embaixo).
   useEffect(() => {
-    if (previewPronto && !editing && !scrolledRef.current) {
+    if (previewPronto && !editing && !previewDismissed && !scrolledRef.current) {
       scrolledRef.current = true;
       requestAnimationFrame(() =>
         previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       );
     }
     if (!previewPronto) scrolledRef.current = false; // rearma pra próxima geração
-  }, [previewPronto, editing]);
+  }, [previewPronto, editing, previewDismissed]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -122,7 +169,18 @@ export function MonteAssistenteSection() {
     const out = await startBuilder(ctrl.signal);
     setPending(false);
     if (out.kind === 'ok') {
-      setMessages([{ id: 1, role: 'assistant', text: out.pergunta }]);
+      // Retomada (item 6): reidrata o histórico completo em vez de reiniciar na 1ª pergunta.
+      // Garante que a última pergunta apareça (append só se o backend não a trouxe no fim).
+      const hist = out.turns;
+      if (hist.length > 0) {
+        const last = hist[hist.length - 1];
+        const jaTemPergunta = last.role === 'assistant' && last.text === out.pergunta;
+        setMessages(
+          !jaTemPergunta && out.pergunta ? appendMessage(hist, 'assistant', out.pergunta) : hist,
+        );
+      } else {
+        setMessages([{ id: 1, role: 'assistant', text: out.pergunta }]);
+      }
       setLocalDraftReady(out.draftReady);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
@@ -162,6 +220,7 @@ export function MonteAssistenteSection() {
       setMessages((m) => appendMessage(m, 'assistant', out.reply));
       if (out.draftReady) {
         setLocalDraftReady(true);
+        setPreviewDismissed(false); // prévia NOVA volta a aparecer mesmo após um "Rejeitar"
         // Busca o preview_final (não volta no /message) pro painel de prévia.
         client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       }
@@ -203,7 +262,8 @@ export function MonteAssistenteSection() {
   /**
    * Aprova a persona. Sem argumento => aprova o RASCUNHO do servidor (botão "Aprovar e ativar").
    * Com `personaEditada` => aprova o TEXTO editado pelo dono (botão "Salvar e ativar" do editor).
-   * Em ambos, o BLOCO_ESTRUTURAL (confirmação) é colado por código no backend.
+   * Em ambos, o BLOCO_ESTRUTURAL (confirmação/encaminhamento) é colado por código no backend.
+   * Chamado sempre DEPOIS do ConfirmDialog (item 1) — a ação escreve na PRODUÇÃO.
    */
   async function aprovar(personaEditada?: string) {
     if (approving) return;
@@ -215,6 +275,7 @@ export function MonteAssistenteSection() {
       setMessages([]);
       setInput('');
       setLocalDraftReady(false);
+      setPreviewDismissed(false);
       setEditing(false);
       setEditText('');
       setAplicada(true);
@@ -256,10 +317,13 @@ export function MonteAssistenteSection() {
     });
   }
 
-  /** Salva o texto editado (= approve com persona_editada). Gate de tamanho no front. */
+  /**
+   * Salva o texto editado (= approve com persona_editada). Gate de tamanho no front + confirma
+   * antes de escrever na PRODUÇÃO (item 1) — mesmo caminho do "Aprovar e ativar".
+   */
   function salvarEdicao() {
     if (!isPersonaSavable(editText)) return;
-    void aprovar(editText);
+    setConfirmApprove({ persona: editText });
   }
 
   function cancelarEdicao() {
@@ -267,6 +331,23 @@ export function MonteAssistenteSection() {
     setEditText('');
   }
 
+  /**
+   * "Rejeitar" (item 5): descarta SÓ a prévia e leva o dono de volta ao chat pra continuar
+   * ajustando. NÃO apaga a entrevista (diferente de "Recomeçar do zero"). Se o chat ainda não
+   * estava aberto (carregou com um rascunho pronto), retoma a conversa pra ele poder ajustar.
+   */
+  function descartarPrevia() {
+    setConfirmReject(false);
+    setPreviewDismissed(true);
+    scrolledRef.current = false;
+    if (!started) {
+      void iniciar();
+    } else {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }
+
+  /** "Recomeçar do zero" (item 5): apaga o estado Redis da entrevista e volta ao início. */
   async function recomecar() {
     setConfirmReset(false);
     await resetBuilder();
@@ -274,6 +355,7 @@ export function MonteAssistenteSection() {
     setInput('');
     setErroRetry(null);
     setLocalDraftReady(false);
+    setPreviewDismissed(false);
     setAplicada(false);
     setEditing(false);
     setEditText('');
@@ -310,7 +392,7 @@ export function MonteAssistenteSection() {
   return (
     <SectionShell>
       {aplicada ? (
-        <AplicadaCard onReconfigurar={iniciar} pending={pending} />
+        <AplicadaCard onReconfigurar={iniciar} pending={pending} atendente={isAtendente} />
       ) : (
         <div className="flex flex-col gap-4">
           {!started && !previewReady && draft.status === 'sem_rascunho' && (
@@ -321,7 +403,7 @@ export function MonteAssistenteSection() {
             />
           )}
           {!started && !previewReady && draft.status !== 'sem_rascunho' && (
-            <IntroCard onStart={iniciar} pending={pending} />
+            <IntroCard onStart={iniciar} pending={pending} garantia={copy.full} />
           )}
 
           {started && (
@@ -340,7 +422,7 @@ export function MonteAssistenteSection() {
             />
           )}
 
-          {previewReady && (
+          {showPreview && (
             <>
               {previewPronto && !editing && (
                 <PreviewAviso
@@ -354,6 +436,7 @@ export function MonteAssistenteSection() {
                   <EditPersonaPanel
                     value={editText}
                     saving={approving}
+                    nota={copy.editor}
                     textareaRef={editRef}
                     onChange={setEditText}
                     onSalvar={salvarEdicao}
@@ -361,14 +444,16 @@ export function MonteAssistenteSection() {
                   />
                 ) : (
                   <PreviewPanel
-                    status={draft.status}
+                    ready={previewPronto}
                     resumo={draft.resumo}
                     nomeBot={draft.nomeBot}
-                    previewFinal={draft.previewFinal}
+                    personaRascunho={draft.personaRascunho}
+                    nota={copy.nota}
                     approving={approving}
-                    onAprovar={() => void aprovar()}
+                    onAprovar={() => setConfirmApprove({})}
                     onEditar={editar}
-                    onRejeitar={() => setConfirmReset(true)}
+                    onRejeitar={() => setConfirmReject(true)}
+                    onRecomecar={() => setConfirmReset(true)}
                     onAjustarConversa={pedirAjuste}
                   />
                 )}
@@ -378,12 +463,43 @@ export function MonteAssistenteSection() {
         </div>
       )}
 
+      {/* Item 1: confirma antes de ATIVAR (substitui a persona de produção no WhatsApp). */}
+      <ConfirmDialog
+        open={confirmApprove !== null}
+        title="Ativar esta personalidade?"
+        description="Isso substitui a personalidade atual do seu assistente e passa a valer no WhatsApp. Deseja ativar?"
+        confirmLabel="Ativar"
+        cancelLabel="Cancelar"
+        loading={approving}
+        onConfirm={() => {
+          const p = confirmApprove?.persona;
+          setConfirmApprove(null);
+          void aprovar(p);
+        }}
+        onCancel={() => setConfirmApprove(null)}
+        icon={<IconSparkle size={22} />}
+      />
+
+      {/* Item 5: "Rejeitar" = descarta SÓ a prévia (não apaga a entrevista). */}
+      <ConfirmDialog
+        open={confirmReject}
+        title="Descartar esta prévia?"
+        description="Você volta pra conversa e pode continuar ajustando. Isto não apaga a sua entrevista nem altera o assistente que já está no ar."
+        confirmLabel="Descartar"
+        cancelLabel="Voltar"
+        onConfirm={descartarPrevia}
+        onCancel={() => setConfirmReject(false)}
+        icon={<IconRefresh size={22} />}
+      />
+
+      {/* Item 5: "Recomeçar do zero" = apaga a entrevista inteira (diálogo distinto). */}
       <ConfirmDialog
         open={confirmReset}
         title="Recomeçar do zero?"
-        description="A conversa atual será descartada e o assistente de configuração começa uma entrevista nova. Isto não altera o assistente que já está no ar."
+        description="Isto APAGA a conversa e as respostas que você já deu, e o assistente de configuração começa uma entrevista nova. Não altera o assistente que já está no ar."
         confirmLabel="Recomeçar"
         cancelLabel="Voltar"
+        confirmVariant="destructive"
         onConfirm={() => void recomecar()}
         onCancel={() => setConfirmReset(false)}
         icon={<IconRefresh size={22} />}
@@ -422,14 +538,22 @@ function SectionShell({ children }: { children: React.ReactNode }) {
 }
 
 /** Estado inicial: explica o que é + botão "Começar". */
-function IntroCard({ onStart, pending }: { onStart: () => void; pending: boolean }) {
+function IntroCard({
+  onStart,
+  pending,
+  garantia,
+}: {
+  onStart: () => void;
+  pending: boolean;
+  garantia: string;
+}) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13.5px] leading-normal text-ink-soft">
         Em 4 ou 5 perguntas rápidas, deixamos o seu atendente com a cara do seu negócio: como ele
         fala, se tem nome, e o que ele nunca deve fazer. Sem termos técnicos — é só conversar.
       </p>
-      <GarantiaNota />
+      <GarantiaNota texto={garantia} />
       <div>
         <Button size="inline" onClick={onStart} loading={pending} loadingLabel="Abrindo…">
           <IconSparkle size={17} />
@@ -467,13 +591,15 @@ function RetomarCard({
   );
 }
 
-/** Confirmação pós-approve. */
+/** Confirmação pós-approve + próximo passo pra TESTAR (item 7). */
 function AplicadaCard({
   onReconfigurar,
   pending,
+  atendente,
 }: {
   onReconfigurar: () => void;
   pending: boolean;
+  atendente: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4">
@@ -491,6 +617,24 @@ function AplicadaCard({
           </p>
         </div>
       </div>
+
+      {/* Item 7: próximo passo claro pra o dono validar o bot AGORA. */}
+      <div className="rounded-[12px] border border-line bg-surface-sunken px-3.5 py-3">
+        <p className="font-display text-[13px] font-semibold text-ink">Como testar agora</p>
+        <ol className="mt-1.5 flex list-none flex-col gap-1.5 text-[12.5px] leading-normal text-ink-soft">
+          <li>
+            <span className="font-semibold text-ink">1.</span> Pegue outro celular (ou peça a
+            alguém) e mande um “oi” no WhatsApp do seu negócio.
+          </li>
+          <li>
+            <span className="font-semibold text-ink">2.</span>{' '}
+            {atendente
+              ? 'Veja se ele responde com o novo jeito e encaminha pra um atendente quando precisar.'
+              : 'Veja se ele responde com o novo jeito e confirma antes de marcar um horário.'}
+          </li>
+        </ol>
+      </div>
+
       <div>
         <Button size="inline" variant="secondary" onClick={onReconfigurar} disabled={pending}>
           Reconfigurar
@@ -500,14 +644,14 @@ function AplicadaCard({
   );
 }
 
-/** Nota que reforça a garantia da mecânica de agendamento (não vira responsabilidade do dono). */
-function GarantiaNota() {
+/** Nota que reforça a garantia da mecânica (não vira responsabilidade do dono). */
+function GarantiaNota({ texto }: { texto: string }) {
   return (
     <div className="flex items-start gap-2.5 rounded-[12px] border border-line bg-surface-sunken px-3.5 py-3 text-ink-soft">
       <span className="mt-0.5 shrink-0 text-brand" aria-hidden>
         <IconSparkle size={15} />
       </span>
-      <p className="text-[12.5px] leading-normal">{GARANTIA}</p>
+      <p className="text-[12.5px] leading-normal">{texto}</p>
     </div>
   );
 }
@@ -698,30 +842,40 @@ function PreviewAviso({ onIrParaPrevia }: { onIrParaPrevia: () => void }) {
   );
 }
 
-/** Painel de prévia: resumo + nome + (texto completo colapsado) + Aprovar/Editar/Rejeitar. */
+/**
+ * Painel de prévia: nome + resumo + (persona PURA colapsada) + Aprovar/Editar/Rejeitar.
+ *
+ * Item 3: a prévia mostra SÓ a persona pura (`personaRascunho`), NÃO o preview_final — este
+ * inclui o BLOCO_ESTRUTURAL técnico (regras do sistema, nomes de ferramenta) que contradiz a
+ * promessa "você só cuida da personalidade" e assusta. A `nota` tranquiliza no lugar do bloco.
+ */
 function PreviewPanel({
-  status,
+  ready,
   resumo,
   nomeBot,
-  previewFinal,
+  personaRascunho,
+  nota,
   approving,
   onAprovar,
   onEditar,
   onRejeitar,
+  onRecomecar,
   onAjustarConversa,
 }: {
-  status: 'nao_iniciado' | 'sem_rascunho' | 'pronto';
+  ready: boolean;
   resumo: string | null;
   nomeBot: string | null;
-  previewFinal: string | null;
+  personaRascunho: string | null;
+  nota: string;
   approving: boolean;
   onAprovar: () => void;
   onEditar: () => void;
   onRejeitar: () => void;
+  onRecomecar: () => void;
   onAjustarConversa: () => void;
 }) {
   // localDraftReady=true mas o draft do servidor ainda não voltou 'pronto' -> montando.
-  const montando = status !== 'pronto' || !previewFinal;
+  const montando = !ready;
   return (
     <div className="flex flex-col gap-3 rounded-[14px] border border-brand/30 bg-brand-soft/40 p-4">
       <div className="flex items-center gap-2">
@@ -739,24 +893,33 @@ function PreviewPanel({
         </p>
       ) : (
         <>
+          {/* Item 4: deixa claro que é o nome pelo qual o ASSISTENTE se apresenta, distinto
+              do nome do NEGÓCIO (cadastrado em "Meu negócio", logo acima). */}
           {nomeBot && (
-            <p className="text-[13px] text-ink">
-              <span className="text-ink-soft">Nome: </span>
-              <span className="font-semibold">{nomeBot}</span>
-            </p>
+            <div className="rounded-[10px] border border-line bg-surface px-3 py-2.5">
+              <p className="text-[13px] leading-snug text-ink">
+                <span className="text-ink-soft">Seu assistente vai se apresentar como: </span>
+                <span className="font-semibold">{nomeBot}</span>
+              </p>
+              <p className="mt-1 text-[11.5px] leading-snug text-ink-faint">
+                É o nome do atendente virtual — diferente do nome do seu negócio.
+              </p>
+            </div>
           )}
           {resumo && (
             <p className="whitespace-pre-wrap text-[13.5px] leading-normal text-ink">{resumo}</p>
           )}
-          <details className="group">
-            <summary className="cursor-pointer list-none text-[12.5px] font-semibold text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft">
-              Ver o texto completo
-            </summary>
-            <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] border border-line bg-surface px-3 py-2.5 font-sans text-[12.5px] leading-normal text-ink-soft">
-              {previewFinal}
-            </pre>
-          </details>
-          <p className="text-[12px] leading-normal text-ink-faint">{GARANTIA}</p>
+          {personaRascunho && (
+            <details className="group">
+              <summary className="cursor-pointer list-none text-[12.5px] font-semibold text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft">
+                Ver o texto completo
+              </summary>
+              <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] border border-line bg-surface px-3 py-2.5 font-sans text-[12.5px] leading-normal text-ink-soft">
+                {personaRascunho}
+              </pre>
+            </details>
+          )}
+          <p className="text-[12px] leading-normal text-ink-faint">{nota}</p>
         </>
       )}
 
@@ -784,7 +947,7 @@ function PreviewPanel({
         </Button>
         <Button
           size="inline"
-          variant="destructive"
+          variant="ghost"
           className="w-full sm:w-auto"
           onClick={onRejeitar}
           disabled={approving}
@@ -794,21 +957,31 @@ function PreviewPanel({
       </div>
 
       {/*
-       * Dica de refino pós-geração (SCRUM-92 v3): a conversa MELHORA o rascunho que já existe —
-       * o dono não precisa recomeçar do zero pra incluir algo. Baixa ênfase, não some.
+       * Rodapé (SCRUM-92 v3 + item 5): refinar sem recomeçar (a conversa MELHORA o rascunho) e,
+       * separado, "Recomeçar do zero" (apaga a entrevista) — cada ação com o seu diálogo próprio.
        */}
-      <div className="mt-1 flex flex-col gap-1.5 border-t border-brand/20 pt-3">
+      <div className="mt-1 flex flex-col gap-2 border-t border-brand/20 pt-3">
         <p className="text-[12.5px] leading-normal text-ink-soft">
           Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu atendente.
         </p>
-        <button
-          type="button"
-          onClick={onAjustarConversa}
-          disabled={approving}
-          className="self-start text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
-        >
-          Continuar a conversa
-        </button>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <button
+            type="button"
+            onClick={onAjustarConversa}
+            disabled={approving}
+            className="text-[12.5px] font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
+          >
+            Continuar a conversa
+          </button>
+          <button
+            type="button"
+            onClick={onRecomecar}
+            disabled={approving}
+            className="text-[12.5px] font-medium text-ink-faint underline-offset-2 outline-none hover:text-danger hover:underline focus-visible:ring-2 focus-visible:ring-danger focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft disabled:opacity-50"
+          >
+            Recomeçar do zero
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -817,11 +990,13 @@ function PreviewPanel({
 /**
  * Editor da persona (caminho "Editar", melhoria 5): textarea SEMEADA com o rascunho (persona
  * pura, sem o bloco estrutural). Ao salvar => approve com { persona_editada }; o backend re-valida
- * e re-cola a mecânica de confirmação — o dono edita só a personalidade, nunca remove a garantia.
+ * e re-cola a mecânica (confirmação/encaminhamento) — o dono edita só a personalidade, nunca
+ * remove a garantia. A `nota` explica isso de forma condicional ao modo do clone.
  */
 function EditPersonaPanel({
   value,
   saving,
+  nota,
   textareaRef,
   onChange,
   onSalvar,
@@ -829,6 +1004,7 @@ function EditPersonaPanel({
 }: {
   value: string;
   saving: boolean;
+  nota: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   onChange: (v: string) => void;
   onSalvar: () => void;
@@ -847,10 +1023,7 @@ function EditPersonaPanel({
           Editar a personalidade
         </h3>
       </div>
-      <p className="text-[12.5px] leading-normal text-ink-soft">
-        Ajuste o texto como preferir. A parte técnica (a confirmação antes de marcar) continua
-        garantida automaticamente — não precisa escrevê-la aqui.
-      </p>
+      <p className="text-[12.5px] leading-normal text-ink-soft">{nota}</p>
       <label htmlFor="monte-assistente-editor" className="sr-only">
         Texto da personalidade do seu assistente
       </label>

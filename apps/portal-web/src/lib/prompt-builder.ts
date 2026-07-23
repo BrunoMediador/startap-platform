@@ -10,7 +10,7 @@
  *
  * Contrato (portal-api, plugin prompt-builder.ts — TODAS autenticadas por sessão,
  * slot SÓ da sessão via withTenant; base /portal/prompt-builder):
- *   POST /start    -> { session_id, pergunta, draft_ready, retomada }
+ *   POST /start    -> { session_id, pergunta, draft_ready, retomada, turns? }
  *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot? }   (body { content, generate_now? })
  *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo? }
  *   POST /approve  -> { ok, persona_aplicada, version_saved }
@@ -52,11 +52,24 @@ export type DraftStatus = 'nao_iniciado' | 'sem_rascunho' | 'pronto';
 
 // ── Contratos crus (não exportados; a UI consome os outcomes normalizados) ──────
 
+/** Um turno cru da entrevista viva devolvido no /start (retomada). Shape defensivo. */
+interface RawTurn {
+  role?: string;
+  content?: string;
+  text?: string;
+}
+
 interface StartResponse {
   session_id: string;
   pergunta: string;
   draft_ready: boolean;
   retomada: boolean;
+  /**
+   * SCRUM-92 (retomada, campo ADITIVO): histórico ordenado da entrevista viva pra
+   * reidratar o chat "de onde parou". Ausente nos backends que ainda não expõem —
+   * o front cai no `pergunta` (abertura) sozinho, sem quebrar (parseTurns([]) -> []).
+   */
+  turns?: RawTurn[];
 }
 
 interface MessageResponse {
@@ -83,7 +96,14 @@ interface ApproveResponse {
 // ── Outcomes normalizados (a UI decide o caminho sem ler status HTTP cru) ────────
 
 export type StartOutcome =
-  | { kind: 'ok'; pergunta: string; draftReady: boolean; retomada: boolean }
+  | {
+      kind: 'ok';
+      pergunta: string;
+      draftReady: boolean;
+      retomada: boolean;
+      /** Histórico já normalizado em bolhas (retomada). Vazio numa entrevista nova. */
+      turns: BuilderMessage[];
+    }
   | { kind: 'unavailable' } // 404 (feature off / clone não encontrado) ou upstream fora
   | { kind: 'error' }; // soluço transitório -> "tentar de novo"
 
@@ -141,6 +161,7 @@ export async function startBuilder(signal?: AbortSignal): Promise<StartOutcome> 
       pergunta: typeof r.pergunta === 'string' ? r.pergunta : '',
       draftReady: r.draft_ready === true,
       retomada: r.retomada === true,
+      turns: parseTurns(r.turns),
     };
   } catch (err) {
     if (isDegrade(err)) return { kind: 'unavailable' };
@@ -296,6 +317,27 @@ export function isSendable(text: string, pending: boolean): boolean {
   if (pending) return false;
   const t = text.trim();
   return t.length > 0 && t.length <= BUILDER_MAX_INPUT;
+}
+
+/**
+ * Normaliza os `turns` crus do /start (retomada) em bolhas renderizáveis, pra reidratar o
+ * chat "de onde parou" em vez de reiniciar na 1ª pergunta. Aceita `content` ou `text` como
+ * corpo; descarta item sem papel válido ('assistant'|'user') ou sem texto. IDs sequenciais
+ * (1..n) batendo com appendMessage. Entrada não-array/ausente -> [] (backend sem o campo).
+ * Puro/testável sem DOM.
+ */
+export function parseTurns(raw: unknown): BuilderMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BuilderMessage[] = [];
+  for (const t of raw) {
+    if (!t || typeof t !== 'object') continue;
+    const role = (t as RawTurn).role;
+    if (role !== 'assistant' && role !== 'user') continue;
+    const body = (t as RawTurn).content ?? (t as RawTurn).text;
+    if (typeof body !== 'string' || body.trim().length === 0) continue;
+    out.push({ id: out.length + 1, role, text: body });
+  }
+  return out;
 }
 
 /** Append imutável de uma bolha (id = último+1; começa em 1). */
