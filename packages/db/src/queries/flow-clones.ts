@@ -123,6 +123,14 @@ export interface CloneRow {
    * configurada -> o gate de silencio por cobranca NUNCA cala (ADR 0016, guard).
    */
   billing_amount_cents: number | null;
+  /**
+   * Carimbo da 1ª conexão bem-sucedida da sessão WAHA (migration 062). NUNCA
+   * sobrescrito (COALESCE no markCloneConnected). NULL = clone que ainda não conectou
+   * nenhuma vez. Só vem de SELECTs que pedem a coluna (getCloneBySlot); demais origens
+   * (getCloneBySession, RETURNING *) -> null via normalizeCloneRow. Exposto ao portal
+   * SÓ como booleano `ever_connected` (a DATA nunca sai da API — LGPD).
+   */
+  first_connected_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -833,6 +841,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
             fc.modo_atendente_enabled, fc.faq_personalizado_enabled, fc.billing_from_agenda_enabled,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
             cb.amount_cents AS billing_amount_cents,
+            fc.first_connected_at,
             fc.created_at, fc.updated_at
      FROM flow_clones fc
      LEFT JOIN client_billing cb ON cb.slot = fc.slot
@@ -1547,5 +1556,11 @@ function normalizeCloneRow(row: CloneRow & { id: string | number }): CloneRow {
       ((row as unknown as { billing_amount_cents?: unknown }).billing_amount_cents as
         | number
         | null) ?? null,
+    // first_connected_at (migration 062): só vem de SELECTs que pedem a coluna
+    // (getCloneBySlot). Demais origens (getCloneBySession, RETURNING *) -> null (byte-
+    // idêntico: quem não projeta a coluna segue sem o campo). pg devolve Date | null.
+    first_connected_at:
+      ((row as unknown as { first_connected_at?: unknown }).first_connected_at as Date | null) ??
+      null,
   };
 }

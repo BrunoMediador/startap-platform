@@ -526,6 +526,11 @@ export interface SimularResponse {
  *   registered_phone_masked -> "55 11 9••••-1234" (so leitura, nunca editavel).
  *   can_reconnect           -> botao de reconectar habilitado (anti-abuso no back).
  *   reconnect_cooldown_seconds -> cooldown sugerido pro botao apos reconectar.
+ *   ever_connected          -> OPCIONAL. Clone JA pareou alguma vez? Deriva de
+ *     flow_clones.first_connected_at (migration 062: NULL = nunca pareou). Distingue
+ *     a PRIMEIRA conexao (onboarding, copy positiva) da RECONEXAO ("desconectou").
+ *     AUSENTE enquanto o backend nao expoe -> o front assume reconexao (byte-identico,
+ *     ver lib/conexao-copy.ts). Contrato: `ever_connected = first_connected_at != null`.
  *
  * PAUSA (eixo SEPARADO da conexao WAHA — flow_enabled, gated por PORTAL_BOT_PAUSE):
  * a conexao WAHA e a pausa do atendimento sao independentes (um robo pode estar
@@ -547,6 +552,9 @@ export interface ConexaoResponse {
   registered_phone_masked: string | null;
   can_reconnect: boolean;
   reconnect_cooldown_seconds: number;
+  /** Clone ja pareou alguma vez (first_connected_at != null). Ausente = backend
+   *  ainda nao expoe -> front assume reconexao (default seguro, byte-identico). */
+  ever_connected?: boolean;
   bot_paused?: boolean;
   pause_self?: boolean;
   pause_locked?: boolean;
