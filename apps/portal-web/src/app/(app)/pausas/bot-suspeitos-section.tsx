@@ -122,7 +122,7 @@ export function BotSuspeitosSection({ slot, resolveName }: BotSuspeitosSectionPr
           despausandoNome ??
           (despausando ? formatPhoneDisplay(despausando.telefone) : 'esse contato')
         }?`}
-        description="O robô vai responder esse contato normalmente de novo."
+        description="O assistente vai responder esse contato normalmente de novo."
         confirmLabel="Despausar"
         loading={removePausa.isPending}
         onConfirm={confirmDespausar}

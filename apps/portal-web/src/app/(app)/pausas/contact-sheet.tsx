@@ -48,7 +48,7 @@ export function ContactSheet({ open, slot, pausadosSet, onClose, onSelect }: Con
           Escolha um contato recente
         </h2>
         <p className="mt-0.5 text-[12.5px] text-ink-soft">
-          Quem falou com o robô nos últimos dias.
+          Quem falou com o assistente nos últimos dias.
         </p>
       </div>
 
@@ -110,14 +110,14 @@ export function ContactSheet({ open, slot, pausadosSet, onClose, onSelect }: Con
               Nenhum contato recente
             </h3>
             <p className="mt-1 text-[13px] text-ink-soft">
-              Assim que alguém falar com o robô, aparece aqui.
+              Assim que alguém falar com o assistente, aparece aqui.
             </p>
           </div>
         )}
       </div>
 
       <p className="px-5 pt-2 text-center text-[12px] leading-normal text-ink-faint">
-        Só aparecem contatos que já conversaram com o robô. Sem digitar número.
+        Só aparecem contatos que já conversaram com o assistente. Sem digitar número.
       </p>
     </Overlay>
   );

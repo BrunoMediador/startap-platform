@@ -62,7 +62,7 @@ export default function AgendaPage() {
         <EmptyState
           icon={<IconCalendar size={26} />}
           title="Nenhum agendamento ainda"
-          description="Assim que o robô marcar um atendimento no WhatsApp, ele aparece aqui. Você também pode marcar um na mão."
+          description="Assim que o assistente marcar um atendimento no WhatsApp, ele aparece aqui. Você também pode marcar um na mão."
           action={{ label: 'Marcar um horário', onClick: () => router.push('/agendamentos/novo') }}
         />
       ) : isEstabelecimento ? (

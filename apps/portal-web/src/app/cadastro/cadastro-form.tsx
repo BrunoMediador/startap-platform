@@ -162,7 +162,7 @@ export function CadastroForm() {
 
           <div className="flex items-center gap-2.5 text-[12.5px] text-ink-faint">
             <span className="login-live-dot size-2 shrink-0 rounded-full bg-ok" aria-hidden />
-            Robôs atendendo agora, sem parar.
+            Assistentes atendendo agora, sem parar.
           </div>
         </section>
 
@@ -260,8 +260,8 @@ export function CadastroForm() {
                     >
                       <IconInfo size={14} className="mt-px shrink-0" />
                       <span>
-                        É esse número que o robô vai usar pra atender. O teste grátis vale 1 vez por
-                        número.
+                        É esse número que o assistente vai usar pra atender. O teste grátis vale 1
+                        vez por número.
                       </span>
                     </p>
                   </div>
@@ -298,7 +298,7 @@ export function CadastroForm() {
                 <Button
                   type="submit"
                   loading={pending}
-                  loadingLabel={slowHint ? 'Preparando seu robô…' : 'Criando sua conta…'}
+                  loadingLabel={slowHint ? 'Preparando seu assistente…' : 'Criando sua conta…'}
                   className="login-btn-glow mt-3"
                 >
                   Começar meu teste grátis
@@ -536,8 +536,8 @@ function LotadoCard({ onVoltar }: { onVoltar: () => void }) {
         Estamos lotados no momento 🎉
       </h2>
       <p className="mt-2.5 text-[14px] leading-[1.6] text-ink-soft">
-        Muita gente testando o robô ao mesmo tempo! A gente abre novas vagas aos poucos pra manter o
-        atendimento redondo. Chama no WhatsApp que avisamos assim que abrir a sua:
+        Muita gente testando o assistente ao mesmo tempo! A gente abre novas vagas aos poucos pra
+        manter o atendimento redondo. Chama no WhatsApp que avisamos assim que abrir a sua:
       </p>
       <div className="mt-5">
         <CtaWhatsApp>Falar com a gente no WhatsApp</CtaWhatsApp>
@@ -561,8 +561,8 @@ function IndisponivelCard() {
         O cadastro ainda não está disponível
       </h2>
       <p className="mt-2.5 text-[14px] leading-[1.6] text-ink-soft">
-        Estamos abrindo as portas aos poucos. Chama a gente no WhatsApp que colocamos seu robô pra
-        funcionar rapidinho.
+        Estamos abrindo as portas aos poucos. Chama a gente no WhatsApp que colocamos seu assistente
+        pra funcionar rapidinho.
       </p>
       <div className="mt-5">
         <CtaWhatsApp>Chamar no WhatsApp</CtaWhatsApp>

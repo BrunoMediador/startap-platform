@@ -10,7 +10,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'Startap · Portal do Cliente',
     short_name: 'Startap',
-    description: 'Gerencie serviços, horários e o atendimento do seu robô.',
+    description: 'Gerencie serviços, horários e o atendimento do seu assistente.',
     start_url: '/inicio',
     display: 'standalone',
     background_color: '#14121c',

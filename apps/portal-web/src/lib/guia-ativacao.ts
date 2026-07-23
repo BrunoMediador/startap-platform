@@ -35,6 +35,7 @@
  *   personaCustom e o passo entra sozinho (lib e componente já suportam).
  */
 import type { Horarios } from './api-types';
+import { SEU_ASSISTENTE, TERMO_ASSISTENTE } from './termos';
 
 export type GuiaPassoKey = 'conectar' | 'persona' | 'servicos' | 'horarios';
 
@@ -131,11 +132,11 @@ export function computeGuiaAtivacao(sinais: GuiaSinais): GuiaEstado {
 
 export const GUIA_HEADER = {
   kicker: 'Primeiros passos',
-  titulo: 'Configure seu atendente',
+  titulo: `Configure ${SEU_ASSISTENTE}`,
   subtitulo: 'Complete pra ele atender com a sua cara — e não no automático genérico.',
-  /** "Seu atendente está X de N pronto" (frase do card). */
+  /** "Seu assistente está X de N pronto" (frase do card). */
   progressoLabel: (feitos: number, total: number): string =>
-    `Seu atendente está ${feitos} de ${total} pronto`,
+    `Seu ${TERMO_ASSISTENTE} está ${feitos} de ${total} pronto`,
 } as const;
 
 export interface GuiaPassoCopy {
@@ -155,7 +156,7 @@ export const GUIA_PASSOS_COPY: Record<GuiaPassoKey, GuiaPassoCopy> = {
     cta: 'Conectar',
   },
   persona: {
-    titulo: 'Dê personalidade ao atendente',
+    titulo: `Dê personalidade ao ${TERMO_ASSISTENTE}`,
     descricao: 'Nome, tom e jeito de falar — pra não soar robô.',
     // Âncora da seção "Monte seu atendente" na tela Meu negócio (/perfil).
     href: '/perfil#monte-assistente-title',

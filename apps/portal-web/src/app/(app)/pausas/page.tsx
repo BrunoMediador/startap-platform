@@ -167,7 +167,7 @@ export default function PausasPage() {
     <>
       <PageHead
         title="Pausas"
-        subtitle="Números que o robô não vai responder. Útil pra atender alguém na mão."
+        subtitle="Números que o assistente não vai responder. Útil pra atender alguém na mão."
       />
 
       {/* Suspeita de bot (SCRUM-4 PR-E): some sozinha enquanto a auto-pausa estiver OFF. */}
@@ -184,7 +184,7 @@ export default function PausasPage() {
         <EmptyState
           icon={<IconPause size={26} />}
           title="Nenhum número pausado"
-          description="Quando precisar atender alguém manualmente, pause o robô para esse contato aqui."
+          description="Quando precisar atender alguém manualmente, pause o assistente para esse contato aqui."
           action={{ label: 'Pausar um número', onClick: () => setSheetOpen(true) }}
         />
       ) : (
@@ -323,7 +323,7 @@ export default function PausasPage() {
         open={pausando !== null}
         icon={<IconPause size={24} />}
         title={`Pausar atendimento de ${pausando ? displayName(pausando.name) : 'esse contato'}?`}
-        description="O robô vai parar de responder esse contato até você despausar."
+        description="O assistente vai parar de responder esse contato até você despausar."
         confirmLabel="Pausar"
         loading={addPausa.isPending}
         onConfirm={confirmPausar}
@@ -337,7 +337,7 @@ export default function PausasPage() {
           despausandoNome ??
           (despausando ? formatPhoneDisplay(despausando.telefone) : 'esse contato')
         }?`}
-        description="O robô vai responder esse contato normalmente de novo."
+        description="O assistente vai responder esse contato normalmente de novo."
         confirmLabel="Despausar"
         loading={removePausa.isPending}
         onConfirm={confirmDespausar}

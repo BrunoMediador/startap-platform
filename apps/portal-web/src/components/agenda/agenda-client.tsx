@@ -316,7 +316,7 @@ function VazioFiltro({
           Nenhum agendamento por aqui
         </h3>
         <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
-          Quando o robô marcar um horário no WhatsApp, ele aparece aqui.
+          Quando o assistente marcar um horário no WhatsApp, ele aparece aqui.
         </p>
       </div>
     );

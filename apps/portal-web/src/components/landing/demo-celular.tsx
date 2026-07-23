@@ -127,7 +127,7 @@ export function DemoCelular() {
             id={tituloId}
             className="font-display text-[clamp(24px,3.4vw,34px)] font-bold tracking-[-0.02em] text-ink"
           >
-            Veja o robô atendendo ao vivo
+            Veja o assistente atendendo ao vivo
           </h2>
           <p className="mx-auto mt-3 max-w-[42ch] text-[15px] leading-[1.6] text-ink-soft md:mx-0">
             Mande uma mensagem como se você fosse um cliente. Ele entende e responde na hora — igual
@@ -181,12 +181,12 @@ export function DemoCelular() {
             {encerrada === 'booking' && (
               <AvisoConversao
                 titulo="Isto é uma demonstração"
-                texto="Nada foi agendado de verdade aqui. No seu robô, esse horário cairia direto na sua agenda."
+                texto="Nada foi agendado de verdade aqui. No seu assistente, esse horário cairia direto na sua agenda."
               />
             )}
             {encerrada === 'rate_limit' && (
               <AvisoConversao
-                titulo="Por hoje já deu pra sentir o robô 😄"
+                titulo="Por hoje já deu pra sentir o assistente 😄"
                 texto="Quer ele atendendo de verdade, com seus clientes? Crie sua conta grátis."
               />
             )}

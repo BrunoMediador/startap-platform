@@ -34,7 +34,7 @@ import Link from 'next/link';
  */
 
 const CONTATO_WHATSAPP_URL = `${SUPORTE_WHATSAPP_URL}?text=${encodeURIComponent(
-  'Olá! Vi o site da Startap e quero testar o robô de atendimento grátis.',
+  'Olá! Vi o site da Startap e quero testar o assistente de atendimento grátis.',
 )}`;
 
 // Verticais cobertas (W7) — chips "Funciona pro seu negócio". O catch-all
@@ -54,33 +54,33 @@ const EXEMPLOS = [
   {
     vertical: 'Barbearia',
     texto:
-      '"Quero cortar o cabelo sábado de manhã" → o robô mostra os horários livres, marca o corte e já cai na sua agenda.',
+      '"Quero cortar o cabelo sábado de manhã" → o assistente mostra os horários livres, marca o corte e já cai na sua agenda.',
   },
   {
     vertical: 'Cabeleireiro & Salão',
     texto:
-      '"Dá pra fazer escova e luzes na sexta?" → o robô confere o tempo de cada serviço, oferece o horário e confirma.',
+      '"Dá pra fazer escova e luzes na sexta?" → o assistente confere o tempo de cada serviço, oferece o horário e confirma.',
   },
   {
     vertical: 'Manicure & Nail',
     texto:
-      '"Tem horário pra alongamento amanhã à tarde?" → o robô responde na hora, agenda e avisa você.',
+      '"Tem horário pra alongamento amanhã à tarde?" → o assistente responde na hora, agenda e avisa você.',
   },
   {
     vertical: 'Estética',
     texto:
-      '"Queria marcar design de sobrancelha essa semana" → o robô mostra os dias, encaixa e confirma sozinho.',
+      '"Queria marcar design de sobrancelha essa semana" → o assistente mostra os dias, encaixa e confirma sozinho.',
   },
   {
     vertical: 'Outros serviços',
     texto:
-      'Atende com hora marcada? O robô se adapta aos seus serviços e à sua agenda — é só dizer o que você faz.',
+      'Atende com hora marcada? O assistente se adapta aos seus serviços e à sua agenda — é só dizer o que você faz.',
   },
 ] as const;
 
 const PASSOS = [
   {
-    titulo: 'A gente conecta o robô no seu WhatsApp',
+    titulo: 'A gente conecta o assistente no seu WhatsApp',
     texto: 'Sem trocar de número e sem instalar nada. Você só escaneia um código e pronto.',
   },
   {
@@ -89,7 +89,7 @@ const PASSOS = [
       'Diz o que você faz (corte, escova, manicure, sobrancelha…) e quando atende, num painel simples.',
   },
   {
-    titulo: 'O robô atende, agenda e te avisa',
+    titulo: 'O assistente atende, agenda e te avisa',
     texto: 'Cada horário marcado cai direto na sua agenda. Você só confere e trabalha.',
   },
 ] as const;
@@ -111,12 +111,13 @@ const RECURSOS = [
     icon: IconHeadset,
     titulo: 'Entende áudio',
     texto:
-      'Cliente mandou áudio? O robô escuta, entende e responde do mesmo jeito que faria com texto.',
+      'Cliente mandou áudio? O assistente escuta, entende e responde do mesmo jeito que faria com texto.',
   },
   {
     icon: IconPause,
     titulo: 'Você no controle',
-    texto: 'Pause o robô quando quiser assumir a conversa — e libere de novo quando terminar.',
+    texto:
+      'Pause o assistente quando quiser assumir a conversa — e libere de novo quando terminar.',
   },
   {
     icon: IconHome,
@@ -218,8 +219,8 @@ function Hero() {
       </h1>
 
       <p className="mt-5 max-w-[52ch] text-[clamp(15px,1.6vw,18px)] leading-[1.65] text-ink-soft">
-        O robô da Startap responde seus clientes, marca horários direto na sua agenda e nunca tira
-        folga. <span className="text-ink">Barbearia, salão, manicure, estética</span> — se você
+        O assistente da Startap responde seus clientes, marca horários direto na sua agenda e nunca
+        tira folga. <span className="text-ink">Barbearia, salão, manicure, estética</span> — se você
         atende com hora marcada, é pra você.
       </p>
 
@@ -350,7 +351,7 @@ function Recursos() {
         id="recursos-titulo"
         className="text-center font-display text-[clamp(24px,3.4vw,34px)] font-bold tracking-[-0.02em] text-ink"
       >
-        O que o robô faz por você
+        O que o assistente faz por você
       </h2>
       <p className="mx-auto mt-3 max-w-[46ch] text-center text-[15px] leading-[1.6] text-ink-soft">
         Tudo que um bom atendente faria — só que sem fila, sem espera e sem folga.

@@ -58,7 +58,7 @@ export function ColaboradorAgendaClient({
           <div className="rounded-card-sm border border-line bg-surface px-6 py-9 text-center">
             <h3 className="font-display text-[15px] font-semibold text-ink">Nada nesse período</h3>
             <p className="mx-auto mt-1.5 max-w-[34ch] text-[13.5px] text-ink-soft">
-              Escolha outras datas acima ou aguarde — os horários que o robô marcar pra você
+              Escolha outras datas acima ou aguarde — os horários que o assistente marcar pra você
               aparecem aqui.
             </p>
           </div>

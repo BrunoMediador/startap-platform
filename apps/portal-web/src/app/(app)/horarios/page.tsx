@@ -44,7 +44,7 @@ export default function HorariosPage() {
   if (horariosQ.isPending) {
     return (
       <>
-        <PageHead title="Horários" subtitle="Quando o robô pode marcar atendimentos." />
+        <PageHead title="Horários" subtitle="Quando o assistente pode marcar atendimentos." />
         <span className="sr-only">Carregando seus horários…</span>
         <div className="overflow-hidden rounded-card border border-line bg-surface">
           {DIAS_SEMANA.map((dia) => (
@@ -64,7 +64,7 @@ export default function HorariosPage() {
   if (horariosQ.isError || !horariosQ.data) {
     return (
       <>
-        <PageHead title="Horários" subtitle="Quando o robô pode marcar atendimentos." />
+        <PageHead title="Horários" subtitle="Quando o assistente pode marcar atendimentos." />
         <ErrorState onRetry={() => horariosQ.refetch()} />
       </>
     );
@@ -136,7 +136,7 @@ export default function HorariosPage() {
     <>
       <PageHead
         title="Horários"
-        subtitle="Quando o robô pode marcar atendimentos. Toque no dia pra abrir ou fechar."
+        subtitle="Quando o assistente pode marcar atendimentos. Toque no dia pra abrir ou fechar."
       />
 
       <button
@@ -205,7 +205,7 @@ export default function HorariosPage() {
       </div>
 
       <p className="mt-3.5 px-0.5 text-[12.5px] leading-normal text-ink-soft">
-        As alterações são salvas automaticamente. O robô só agenda dentro desses horários.
+        As alterações são salvas automaticamente. O assistente só agenda dentro desses horários.
       </p>
     </>
   );

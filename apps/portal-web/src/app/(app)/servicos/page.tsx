@@ -102,7 +102,7 @@ export default function ServicosPage() {
     <>
       <PageHead
         title="Serviços"
-        subtitle="O que sua barbearia oferece e por quanto. O robô usa essa lista pra agendar."
+        subtitle="O que sua barbearia oferece e por quanto. O assistente usa essa lista pra agendar."
       />
 
       {servicosQ.isPending ? (
@@ -116,7 +116,7 @@ export default function ServicosPage() {
         <EmptyState
           icon={<IconScissors size={26} />}
           title="Nenhum serviço cadastrado"
-          description="Adicione os serviços que o robô pode agendar. O robô usa essa lista pra marcar atendimentos no WhatsApp."
+          description="Adicione os serviços que o assistente pode agendar. O assistente usa essa lista pra marcar atendimentos no WhatsApp."
           action={{ label: 'Adicionar serviço', onClick: startAdd }}
         />
       ) : (
@@ -171,7 +171,7 @@ export default function ServicosPage() {
       <ConfirmDialog
         open={removeIdx !== null}
         title={removeIdx !== null ? `Remover "${servicos[removeIdx]?.nome}"?` : 'Remover serviço?'}
-        description="O robô deixa de oferecer esse serviço. Você pode adicioná-lo de novo depois."
+        description="O assistente deixa de oferecer esse serviço. Você pode adicioná-lo de novo depois."
         confirmLabel="Remover"
         confirmVariant="destructive"
         loading={save.isPending}

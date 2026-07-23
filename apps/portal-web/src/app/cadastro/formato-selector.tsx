@@ -41,13 +41,13 @@ const MODO_OPTIONS: Choice<ModoIa>[] = [
   {
     value: 'agenda',
     label: 'Marca na agenda',
-    hint: 'A assistente agenda os horários sozinha',
+    hint: 'O assistente agenda os horários sozinho',
     Icon: IconCalendar,
   },
   {
     value: 'atendente',
     label: 'Só atende',
-    hint: 'Ela responde e encaminha pra você fechar',
+    hint: 'Ele responde e encaminha pra você fechar',
     Icon: IconHeadset,
   },
 ];
@@ -197,7 +197,7 @@ export function FormatoSelector({
         onChange={onChangeTipo}
       />
       <ChoiceGroup
-        question="A assistente marca sozinha na sua agenda, ou só atende e encaminha?"
+        question="O assistente marca sozinho na sua agenda, ou só atende e encaminha?"
         options={MODO_OPTIONS}
         value={modoIa}
         onChange={onChangeModo}
