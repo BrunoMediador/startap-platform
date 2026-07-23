@@ -78,6 +78,13 @@ import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { pausaFromResposta } from './bot-pausa';
 import { mapColaboradorRow } from './equipe';
 import { type BuilderDraft, fetchBuilderDraft } from './prompt-builder';
+import {
+  type TomNivel,
+  type TomNivelOpcao,
+  type TomState,
+  fetchTomAssistente,
+  putTomAssistente,
+} from './tom-assistente';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
 
@@ -130,6 +137,8 @@ export const qk = {
   frasesPausa: (slot: string) => ['frases-pausa', slot] as const,
   /** Builder de persona (SCRUM-92) — prévia do rascunho (GET /portal/prompt-builder/draft). */
   promptBuilder: (slot: string) => ['prompt-builder', slot] as const,
+  /** Tom da conversa do assistente (SCRUM-92) — nível + catálogo (GET /portal/tom-assistente). */
+  tomAssistente: (slot: string) => ['tom-assistente', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1284,5 +1293,44 @@ export function useBuilderDraft(slot: string): UseQueryResult<BuilderDraft> {
     retry: false,
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+  });
+}
+
+// ── Tom da conversa do assistente (SCRUM-92 — GET/PUT /portal/tom-assistente) ─
+//
+// Slider amigável que mapeia (no backend) pra temperatura do modelo — o dono nunca vê
+// número. fetchTomAssistente normaliza 404 -> { status:'indisponivel' } (a seção some,
+// mesmo critério do prompt-builder) e PROPAGA erro real (rede/500) -> ErrorState com retry.
+// retry:false porque 404 não se resolve sozinho. Escopado por slot da sessão (withTenant) —
+// o front nunca envia slot; a query key carrega o slot pra isolar o cache por tenant.
+
+export function useTomAssistente(slot: string): UseQueryResult<TomState> {
+  return useQuery({
+    queryKey: qk.tomAssistente(slot),
+    queryFn: ({ signal }) => fetchTomAssistente(signal),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * PUT /portal/tom-assistente — salva o novo nível (replace). No sucesso, fixa o estado OK no
+ * cache; o backend pode reenviar o catálogo (`niveis`) — se não, preservamos o que já está em
+ * cache (o catálogo não muda a cada save). Lança ApiError em falha -> o componente ramifica
+ * 400 (nível inválido) / genérico no onError.
+ */
+export function useSaveTomAssistente(
+  slot: string,
+): UseMutationResult<{ nivel: TomNivel; niveis: TomNivelOpcao[] | null }, Error, TomNivel> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (nivel) => putTomAssistente(nivel),
+    onSuccess: ({ nivel, niveis }) => {
+      client.setQueryData<TomState>(qk.tomAssistente(slot), (prev) => {
+        const catalogo = niveis ?? (prev?.status === 'ok' ? prev.niveis : []);
+        return { status: 'ok', nivel, niveis: catalogo };
+      });
+    },
   });
 }
