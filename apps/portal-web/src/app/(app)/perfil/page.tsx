@@ -11,6 +11,7 @@ import { MonteAssistenteSection } from '@/components/prompt-builder/monte-assist
 import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
+import { TomAssistenteSection } from '@/components/tom-assistente/tom-assistente-section';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHead } from '@/components/ui/page-head';
@@ -269,6 +270,13 @@ export default function PerfilPage() {
           suporte). Flag global OFF / 404 / erro -> some INTEIRA (byte-idêntico pros clientes
           atuais). Some também no modo atendente. Traz o próprio divisor. */}
       <CartaoConfigSection />
+
+      {/* Tom da conversa (SCRUM-92): slider de 4 paradas (do mais direto ao mais caloroso)
+          que mapeia, no backend, pra temperatura do modelo — o dono nunca vê número. A seção
+          SE AUTO-GATEIA pelo GET /portal/tom-assistente — 404 (feature off / sem config) some
+          INTEIRA (byte-idêntico pros clientes atuais); erro real vira ErrorState com retry.
+          Traz o próprio divisor. */}
+      <TomAssistenteSection />
 
       {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
           link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
