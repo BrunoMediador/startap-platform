@@ -68,6 +68,26 @@ vi.mock('@startap/db', () => ({
     listBySlot: mocks.listColaboradores,
     getArea: mocks.getArea,
     getAreaAndPromptCustom: mocks.getAreaAndPromptCustom,
+    // Reader unificado (SCRUM-92 inc.2): DERIVA da mesma fonte que getAreaAndPromptCustom já
+    // mocka em cada teste, adicionando os defaults BAKED (cartao_mode='baked', config null) =
+    // estado de HOJE. Assim todos os testes deste arquivo exercitam o caminho baked byte-a-byte
+    // sem tocar cada setup; o gate runtime (flag ON + 'runtime') tem cobertura própria em
+    // systemprompt-cartao-runtime.test.ts.
+    getAreaPromptCustomCartao: async (slot: string) => {
+      const base = ((await mocks.getAreaAndPromptCustom(slot)) ?? {}) as {
+        area?: string | null;
+        promptCustom?: boolean;
+      };
+      // Estab historicamente mockava só getArea; individual mockava getAreaAndPromptCustom.
+      // Cobre ambos: usa a área do reader unificado quando presente, senão cai no getArea.
+      const area = base.area !== undefined ? base.area : ((await mocks.getArea(slot)) ?? null);
+      return {
+        area: area ?? null,
+        promptCustom: base.promptCustom ?? false,
+        cartaoMode: 'baked' as const,
+        cartaoConfig: null,
+      };
+    },
     getScopeBySlot: mocks.getScopeBySlot,
   },
   flowClones: {

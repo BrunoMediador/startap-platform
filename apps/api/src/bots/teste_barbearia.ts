@@ -2,6 +2,7 @@ import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
+import { buildCartaoRuntimeBlock } from '@startap/integrations/prompt-builder';
 import {
   type ColaboradorAgenda,
   buildContextBlock,
@@ -677,10 +678,24 @@ export class TesteBarbeariaBot extends BotBase {
     // SCRUM-84: se a persona é custom (prompt_custom=true, dono estilizou o cartão à
     // mão — ex. Ingrid com 🌻), ela é autoridade final e o override de emojis NÃO é
     // injetado. Mesma leitura por slot de antes, só com a coluna prompt_custom junto.
-    const { area, promptCustom } = await cloneColaboradores.getAreaAndPromptCustom(this.slot);
-    const cartaoEmojiBlock = buildCartaoEmojiOverrideBlock(area, promptCustom);
+    const { area, promptCustom, cartaoMode, cartaoConfig } =
+      await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
-    const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoEmojiBlock]
+    // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ────────────────
+    // runtimeCartao só é NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (kill-switch global, OFF em
+    // prod hoje) **E** cartao_mode='runtime' (coluna por-clone; default 'baked' em TODO
+    // clone). Hoje ambos falham → runtimeCartao='' → cartaoBlock = buildCartaoEmojiOverrideBlock
+    // EXATAMENTE como antes (barbearia baked → '' → array colapsa igual; golden byte-a-byte).
+    // Quando ativo, o cartão montado por código SUBSTITUI o override de emojis (não soma):
+    // o clone runtime NÃO tem o cartão baked no bot_prompt, então há 1 cartão só.
+    const runtimeCartao =
+      config.CARTAO_RUNTIME_ENABLED && cartaoMode === 'runtime'
+        ? buildCartaoRuntimeBlock({ modo: 'agenda', area, config: cartaoConfig })
+        : '';
+    const cartaoBlock =
+      runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, promptCustom);
+
+    const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoBlock]
       .filter((b) => b !== '')
       .join('\n\n');
 
@@ -1039,7 +1054,17 @@ export class TesteBarbeariaBot extends BotBase {
 
     const modoBlock = buildModoAtendenteBlock({ hasLink, hasEquipe: equipeBlock !== '' });
 
-    const systemPrompt = [promptPersona, contextBlock, equipeBlock, modoBlock]
+    // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — ATENDENTE não tem cartão ─────
+    // 3º ponto de injeção, mesmo padrão gated dos outros 2 — mas o modo atendente é
+    // PRÉ-VENDA: não marca horário, logo NÃO há cartão de confirmação em NENHUM modo
+    // (baked ou runtime). buildCartaoRuntimeBlock({modo:'atendente'}) devolve '' por
+    // CONSTRUÇÃO → runtimeCartao é sempre '' → o array colapsa byte-a-byte o de hoje.
+    // Não lemos cartao_mode aqui de propósito: zero read novo no hot path do atendente.
+    const runtimeCartao = config.CARTAO_RUNTIME_ENABLED
+      ? buildCartaoRuntimeBlock({ modo: 'atendente' })
+      : '';
+
+    const systemPrompt = [promptPersona, contextBlock, equipeBlock, modoBlock, runtimeCartao]
       .filter((b) => b !== '')
       .join('\n\n');
 
@@ -1460,8 +1485,22 @@ export class TesteBarbeariaBot extends BotBase {
     // Os EMOJIS do cartão seguem a ÁREA do clone (migration 051): barbearia mantém
     // 📅 🕐 ✂️ 💰 👤 (idêntico ao bloco original); salão/manicure/estética trocam
     // marca+serviço. getArea degrada pra null (→ genérico) em erro/coluna ausente.
-    const area = await cloneColaboradores.getArea(this.slot);
-    const cartaoEstabelecimentoBlock = buildCartaoEstabelecimentoBlock(area);
+    const { area, cartaoMode, cartaoConfig } = await cloneColaboradores.getAreaPromptCustomCartao(
+      this.slot,
+    );
+
+    // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
+    // Igual ao individual: só NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (OFF em prod) **E**
+    // cartao_mode='runtime' (default 'baked'). Hoje → runtimeCartao='' → cai no
+    // buildCartaoEstabelecimentoBlock EXATAMENTE como hoje (dragon/Meduzza baked byte-a-byte).
+    // Quando ativo, o cartão de estabelecimento montado por código (com 👤 PROFISSIONAL)
+    // SUBSTITUI o bloco baked na MESMA posição do array — nunca soma, sem duplicar cartão.
+    const runtimeCartao =
+      config.CARTAO_RUNTIME_ENABLED && cartaoMode === 'runtime'
+        ? buildCartaoRuntimeBlock({ modo: 'estabelecimento', area, config: cartaoConfig })
+        : '';
+    const cartaoEstabelecimentoBlock =
+      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area);
 
     // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
     // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,
