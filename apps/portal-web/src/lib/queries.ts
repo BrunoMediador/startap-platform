@@ -76,6 +76,12 @@ import type {
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { pausaFromResposta } from './bot-pausa';
+import {
+  type CartaoConfigState,
+  type SaveCartaoResult,
+  fetchCartaoConfig,
+  putCartaoConfig,
+} from './cartao-config';
 import { mapColaboradorRow } from './equipe';
 import { type BuilderDraft, fetchBuilderDraft } from './prompt-builder';
 
@@ -130,6 +136,8 @@ export const qk = {
   frasesPausa: (slot: string) => ['frases-pausa', slot] as const,
   /** Builder de persona (SCRUM-92) — prévia do rascunho (GET /portal/prompt-builder/draft). */
   promptBuilder: (slot: string) => ['prompt-builder', slot] as const,
+  /** Cartão de confirmação (SCRUM-92 inc.2) — GET/PUT /portal/cartao-config. */
+  cartaoConfig: (slot: string) => ['cartao-config', slot] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1284,5 +1292,39 @@ export function useBuilderDraft(slot: string): UseQueryResult<BuilderDraft> {
     retry: false,
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+  });
+}
+
+// ── Cartão de confirmação (SCRUM-92 inc.2 — GET/PUT /portal/cartao-config) ─────
+//
+// DORMENTE até o backend existir: fetchCartaoConfig NUNCA lança (404/rede/5xx ->
+// { status:'indisponivel' }) e `mode!=='runtime'` também vira indisponivel — a seção
+// SE ESCONDE INTEIRA nesses casos (byte-idêntico pros clientes atuais). Sem retry
+// (404 do endpoint inexistente não se resolve sozinho). Escopado por slot da sessão.
+
+export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState> {
+  return useQuery({
+    queryKey: qk.cartaoConfig(slot),
+    queryFn: ({ signal }) => fetchCartaoConfig(signal),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * PUT /portal/cartao-config — salva template + emojis. onSuccess grava o estado
+ * runtime devolvido no cache (o preview do servidor viaja à parte no resultado, pra
+ * a seção exibir o cartão renderizado pelo backend).
+ */
+export function useSaveCartaoConfig(
+  slot: string,
+): UseMutationResult<SaveCartaoResult, Error, Parameters<typeof putCartaoConfig>[0]> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) => putCartaoConfig(payload),
+    onSuccess: ({ state }) => {
+      client.setQueryData(qk.cartaoConfig(slot), state);
+    },
   });
 }
