@@ -17,6 +17,7 @@ import { useAgendamentos, useStatus } from '@/lib/queries';
 import { resolveMotivoPausa } from '@/lib/suspensao';
 import Link from 'next/link';
 import { AgendamentosList } from './agendamentos-list';
+import { GuiaAtivacao } from './guia-ativacao';
 import { HeroZone } from './hero-zone';
 import { SuspendedNotice } from './suspended-notice';
 
@@ -75,6 +76,12 @@ export default function InicioPage() {
           com aurora de topo + fade. Stagger interno nos cards-heroi. O fundo
           vivo (constelacao) vem do shell (app)/layout, nao daqui. */}
       <HeroZone status={data} businessName={nome} />
+
+      {/* Guia de primeiros passos (SCRUM-96): ADITIVO. Só renderiza com passo
+          pendente; some (null) quando tudo pronto — Home byte-idêntica pra quem já
+          configurou. O próprio componente carrega seu espaçamento (mb) e fail-close
+          em loading/erro, então null aqui não deixa spacer órfão. */}
+      <GuiaAtivacao />
 
       {/* Metricas (E0) — stagger 3 no mount. */}
       <div className="stagger stagger-3 mb-[18px] grid grid-cols-2 gap-3">
