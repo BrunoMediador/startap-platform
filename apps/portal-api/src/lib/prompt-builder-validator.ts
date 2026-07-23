@@ -8,6 +8,9 @@
  *    CEP, telefone, moeda, faixa de horário, logradouro;
  *  - tokens ESTRUTURAIS do fluxo (cartão/SIM/nomes de ferramenta/marcadores) — o bloco estrutural
  *    é colado por CÓDIGO no approve; a persona nunca deve carregar (nem tentar remover) a mecânica;
+ *  - SUBVERSÃO da mecânica (tag 'subversao', SCRUM-92): a persona mandando IGNORAR/PULAR a
+ *    confirmação ("agende sem pedir SIM", "ignore as regras", "marque direto") — o oposto do que
+ *    o 'estrutural' pega; blinda a garantia cartão+SIM na origem (vale pro rascunho e o editado);
  *  - PII do cliente final (e-mail, CPF) — a persona é durável (bot_prompt_versions), não pode vazar.
  *
  * NÃO removemos linha só por citar o NOME de um serviço do catálogo (ex.: "corte", "barba"): dizer
@@ -61,6 +64,34 @@ const REJECT_LINE_PATTERNS: Array<{ tag: string; re: RegExp }> = [
     tag: 'estrutural',
     re: /(inserir_agendamento|remarcar_agendamento|cancelar_agendamento|cart[ãa]o\s+de\s+confirma|\[horarios|\[servicos|\bpe[çc]a?\s+["']?sim|responda\s+sim\b|marcador(?:es)?\b)/i,
   },
+  // SUBVERSÃO da mecânica (SCRUM-92 bug 6): o 'estrutural' acima pega quem CITA a mecânica
+  // (nomes de tool, "peça SIM"); ESTES pegam o OPOSTO — a persona (sobretudo via "Editar")
+  // mandando IGNORAR/PULAR a confirmação ("agende sem pedir SIM", "ignore as regras", "marque
+  // direto"). Sem o cartão+SIM na persona o modelo pode obedecer parcial e furar a garantia. A
+  // autoridade final é o BLOCO_ESTRUTURAL (colado por código, recência), mas removemos a linha
+  // subversiva na origem — defesa em profundidade, vale pro rascunho E pro persona_editada.
+  { tag: 'subversao', re: /\b(ignor[ae]|esque[çc][ae]|desconsider[ae]|desobede[çc][ae])\b/i },
+  // "sem confirmar" / "sem (pedir) confirmação"
+  { tag: 'subversao', re: /\bsem\s+(pedir\s+)?confirma(?:r|[çc][ãa]o)\b/i },
+  // "não peça/precisa/pedir (a) confirmação|SIM"
+  {
+    tag: 'subversao',
+    re: /\bn[ãa]o\s+(pe[çc]a|pe[çc]as|precisa|precise|pedir|solicite)\b[^.\n]{0,20}\b(confirma|sim)\b/i,
+  },
+  // "agende/marque direto|imediatamente|na hora" — mandar marcar sem a etapa de confirmação
+  {
+    tag: 'subversao',
+    re: /\b(agend[ae]|agendar|marque|marcar)\s+(?:o\s+\w+\s+)?(direto|imediatamente|na\s+hora)\b/i,
+  },
+  // "agende/marque ... sem pedir/confirmar" (gap curto pra evitar falso-positivo em linha longa)
+  {
+    tag: 'subversao',
+    re: /\b(agend[ae]|agendar|marque|marcar)\b[^.\n]{0,30}\bsem\s+(pedir|confirmar|confirma)/i,
+  },
+  // "pule/pular a (etapa de) confirmação"
+  { tag: 'subversao', re: /\bpul[ae]r?\s+(a\s+)?(etapa\s+d[ae]\s+)?confirma/i },
+  // tentativa de override do system ("ignore as regras do sistema")
+  { tag: 'subversao', re: /\bregras?\s+do\s+sistema\b/i },
 ];
 
 export interface PersonaValidationResult {
