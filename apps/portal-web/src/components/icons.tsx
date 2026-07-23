@@ -399,6 +399,22 @@ export function IconWallet(props: IconProps) {
 }
 
 /**
+ * Cartao de credito — icone da MENSALIDADE (o que o dono PAGA pra gente). Distinto
+ * da carteira (IconWallet, usada no FATURAMENTO = o que ele RECEBE dos clientes):
+ * tarja magnetica no topo + tracinho do numero embaixo desambiguam os dois na nav
+ * e na Home (SCRUM-100 item-3).
+ */
+export function IconCreditCard(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" stroke="currentColor" strokeWidth={2} />
+      <path d="M2.5 9.5h19" stroke="currentColor" strokeWidth={2} />
+      <path d="M6 15h4" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/**
  * Instagram — link social no footer da landing (W12). Tracado (herda
  * currentColor, padrao base()): quadrado arredondado + lente + ponto da camera.
  * Decorativo (aria-hidden via base) — o rotulo vive no link-pai.

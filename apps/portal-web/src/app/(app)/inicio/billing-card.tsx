@@ -8,7 +8,7 @@
  * escura (amber-ink #1A1208) — branco sobre ambar reprova AA. Roxo/vermelho
  * solidos usam texto branco (AA). Barra de progresso com aria-label textual.
  */
-import { IconChevronRight, IconWallet } from '@/components/icons';
+import { IconChevronRight, IconCreditCard } from '@/components/icons';
 import type { StatusBilling } from '@/lib/api-types';
 import {
   type BillingTone,
@@ -107,8 +107,13 @@ export function BillingCard({ billing }: BillingCardProps) {
   const big = view.vencido ? null : dias;
   const titleVencido = 'Mensalidade vencida';
 
+  // "Em dia" (fora da janela, não vencido) não tem CTA interno -> o card INTEIRO vira
+  // link pra /mensalidade (item-8). Nos estados com CTA (a_vencer/vencido) o PagarLink
+  // já é o alvo — NÃO envolver em outro <a> (aninhar âncora é inválido).
+  const cardHref = naJanela ? undefined : '/mensalidade';
+
   return (
-    <BillingShell tone={tone}>
+    <BillingShell tone={tone} href={cardHref}>
       <BillingHeader label={LABEL[tone]} tone={tone} />
 
       {view.vencido ? (
@@ -186,6 +191,21 @@ export function BillingCard({ billing }: BillingCardProps) {
       {/* CTA so na JANELA (a_vencer/vencido). Em dia (d>7) nao mostra "Pagar" —
           nao faz sentido cobrar quem esta em dia (ADR 0014). */}
       {naJanela && <PagarLink tone={tone} label="Pagar agora" />}
+
+      {/* Em dia: sem CTA de pagar, mas o card inteiro é clicável (item-8). Afordância
+          visual discreta; o link + aria-label acionável vivem no BillingShell. */}
+      {!naJanela && (
+        <span
+          aria-hidden
+          className={cn(
+            'relative z-10 mt-3.5 inline-flex items-center gap-1 text-[13px] font-semibold',
+            META[tone],
+          )}
+        >
+          Ver mensalidade
+          <IconChevronRight size={15} />
+        </span>
+      )}
     </BillingShell>
   );
 }
@@ -195,15 +215,40 @@ export function BillingCard({ billing }: BillingCardProps) {
  * contido (hero-e2) + filete de marca branco no topo (billing-filete) + circulo
  * decorativo. h-full pra esticar junto do status no grid de 2 colunas (lg).
  */
-function BillingShell({ tone, children }: { tone: BillingTone; children: React.ReactNode }) {
+function BillingShell({
+  tone,
+  href,
+  children,
+}: {
+  tone: BillingTone;
+  /** Quando setado, o card inteiro vira link pra essa rota (SÓ nos estados SEM CTA
+   *  interno, pra não aninhar <a> dentro de <a>). Ausente = card estático (section). */
+  href?: string;
+  children: React.ReactNode;
+}) {
+  const cls = cn(
+    'hero-e2 billing-filete relative block h-full overflow-hidden rounded-card p-5',
+    SURFACE[tone],
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        aria-label="Sua mensalidade — abrir tela de pagamento"
+        className={cn(
+          cls,
+          'outline-none transition-[transform,filter] duration-[120ms] hover:brightness-[1.05] active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+        )}
+      >
+        <Decor />
+        {children}
+      </Link>
+    );
+  }
+
   return (
-    <section
-      aria-label="Sua mensalidade"
-      className={cn(
-        'hero-e2 billing-filete relative h-full overflow-hidden rounded-card p-5',
-        SURFACE[tone],
-      )}
-    >
+    <section aria-label="Sua mensalidade" className={cls}>
       <Decor />
       {children}
     </section>
@@ -224,7 +269,7 @@ function BillingHeader({ label, tone }: { label: string; tone: BillingTone }) {
           tone === 'amber' ? 'bg-amber-ink/12 text-amber-ink' : 'bg-white/[0.14] text-white',
         )}
       >
-        <IconWallet size={18} />
+        <IconCreditCard size={18} />
       </span>
     </div>
   );

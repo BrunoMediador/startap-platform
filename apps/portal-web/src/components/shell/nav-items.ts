@@ -14,6 +14,7 @@
 import {
   IconCalendar,
   IconClock,
+  IconCreditCard,
   IconHome,
   IconPause,
   IconServices,
@@ -30,6 +31,7 @@ const ICONS: Record<NavIconKey, typeof IconHome> = {
   whatsapp: IconWhatsapp,
   users: IconUsers,
   wallet: IconWallet,
+  card: IconCreditCard,
   services: IconServices,
   clock: IconClock,
   user: IconUser,

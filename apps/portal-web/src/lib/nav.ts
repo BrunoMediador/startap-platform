@@ -18,6 +18,7 @@ export type NavIconKey =
   | 'whatsapp'
   | 'users'
   | 'wallet'
+  | 'card'
   | 'services'
   | 'clock'
   | 'user'
@@ -51,7 +52,9 @@ export const NAV_SPEC: NavItemSpec[] = [
   { href: '/horarios', label: 'Horários', icon: 'clock' },
   { href: '/perfil', label: 'Meu negócio', icon: 'user' },
   { href: '/pausas', label: 'Pausas', icon: 'pause' },
-  { href: '/mensalidade', label: 'Mensalidade', icon: 'wallet' },
+  // Faturamento (o que o dono RECEBE) usa 'wallet'; Mensalidade (o que ele PAGA
+  // pra gente) usa 'card' — ícones distintos pra não confundir os dois (item-3).
+  { href: '/mensalidade', label: 'Mensalidade', icon: 'card' },
 ];
 
 export interface NavGateContext {

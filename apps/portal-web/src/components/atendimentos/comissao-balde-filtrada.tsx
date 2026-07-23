@@ -50,10 +50,8 @@ export function ComissaoBaldeFiltrada({
   );
 
   const captionTotal = balde === 'previsao' ? 'Comissão prevista' : 'Comissão a pagar';
-  const captionLucro =
-    balde === 'previsao'
-      ? 'Lucro previsto · faturamento − comissão'
-      : 'Lucro · faturamento − comissão';
+  // NÃO é "lucro" (há outros custos): é o faturamento MENOS as comissões (item-4).
+  const captionLucro = 'Após comissões · faturamento − comissão';
 
   return (
     <section aria-labelledby="bill-comissao" className="space-y-4">
