@@ -67,7 +67,6 @@ export const TOM_COPY = {
   ajuda: 'Ajuste o jeito do assistente conversar — do mais direto ao mais caloroso.',
   ariaSlider: 'Tom da conversa do assistente',
   pontaEsquerda: 'Mais direto e objetivo',
-  centro: 'Equilibrado',
   pontaDireita: 'Mais caloroso e conversador',
   atual: 'Tom atual:',
   salvar: 'Salvar',
