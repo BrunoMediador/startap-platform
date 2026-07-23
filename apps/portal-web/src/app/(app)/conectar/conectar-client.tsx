@@ -61,6 +61,12 @@ import {
 import { cn } from '@/lib/cn';
 import { isPrimeiraConexao, resolveConexaoCardCopy } from '@/lib/conexao-copy';
 import {
+  type SucessoConexaoCopy,
+  resolveConexaoFormato,
+  sucessoConexaoCopy,
+} from '@/lib/conexao-sucesso';
+import {
+  useAgendaConfig,
   useCodigoConexao,
   useConexao,
   usePausarBot,
@@ -162,6 +168,11 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
   const router = useRouter();
   const searchParams = useSearchParams();
   const conexaoQ = useConexao(slot);
+  // Formato do clone (agenda vs modo atendente) — decide a copy do card de sucesso
+  // (item-6). Leitura leve/cacheada do perfil; enquanto não resolve, o resolvedor
+  // degrada pra 'agenda' (comportamento atual, byte-idêntico).
+  const agendaCfgQ = useAgendaConfig(slot);
+  const sucessoCopy = sucessoConexaoCopy(resolveConexaoFormato(agendaCfgQ.data));
 
   const [phase, setPhase] = useState<Phase>(() => resolveInitialPhase(initial));
   const [pairingCode, setPairingCode] = useState<string | null>(null);
@@ -457,7 +468,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
           />
         )}
 
-        {phase === 'sucesso' && <SucessoCard />}
+        {phase === 'sucesso' && <SucessoCard copy={sucessoCopy} />}
 
         {phase === 'erro' && (
           <ErroCard mensagem={erroMsg} onTentar={dispararReconexao} cooldown={cooldown} />
@@ -885,10 +896,10 @@ function QrCard({
           size="inline"
           onClick={onAtualizar}
           loading={loading}
-          loadingLabel="Atualizando…"
+          loadingLabel="Gerando…"
         >
           <IconRefresh size={18} />
-          Atualizar QR
+          Gerar um novo código
         </Button>
         {!semNumero && (
           <Button variant="ghost" size="inline" onClick={onVoltarCodigo}>
@@ -900,8 +911,13 @@ function QrCard({
   );
 }
 
-/** (g) Sucesso: circulo ok + voltar pro inicio. role=status anuncia. */
-function SucessoCard() {
+/**
+ * (g) Sucesso: circulo ok + voltar pro inicio. role=status anuncia. A copy vem do
+ * FORMATO do clone (item-6): clone COM agenda vê "Falta só a sua agenda"; modo
+ * atendente (sem agenda) não vê esse bloco — já está tudo no ar. `copy.agenda` null
+ * = esconde o bloco. Default seguro = 'agenda' (ver lib/conexao-sucesso).
+ */
+function SucessoCard({ copy }: { copy: SucessoConexaoCopy }) {
   return (
     <section
       className="rounded-card border border-ok/40 bg-ok-soft p-6 text-center shadow-card"
@@ -912,23 +928,22 @@ function SucessoCard() {
       </span>
       <h2 className="mt-4 font-display text-[19px] font-semibold text-ink">Conectado! 🎉</h2>
       <p className="mx-auto mt-1.5 max-w-[34ch] text-[14px] leading-normal text-ink-soft">
-        Seu assistente já está atendendo no WhatsApp.
+        {copy.subtitulo}
       </p>
 
-      {/* Próximo passo: a agenda (Google Calendar) é configurada pela equipe,
-          não é self-service. Aviso acolhedor, sem prometer prazo exato. */}
-      <div className="mx-auto mt-5 flex max-w-[420px] items-start gap-3 rounded-card-sm border border-brand/30 bg-brand-soft p-4 text-left">
-        <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-full bg-brand text-bg">
-          <IconCalendar size={16} />
-        </span>
-        <div>
-          <p className="font-display text-[14px] font-semibold text-ink">Falta só a sua agenda</p>
-          <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">
-            Nossa equipe vai entrar em contato em breve pra configurar a sua agenda do Google
-            Calendar — assim os horários marcados caem direto no seu calendário.
-          </p>
+      {/* Próximo passo (SÓ clone com agenda): a agenda (Google Calendar) é configurada
+          pela equipe, não é self-service. Modo atendente não usa agenda -> some. */}
+      {copy.agenda && (
+        <div className="mx-auto mt-5 flex max-w-[420px] items-start gap-3 rounded-card-sm border border-brand/30 bg-brand-soft p-4 text-left">
+          <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-full bg-brand text-bg">
+            <IconCalendar size={16} />
+          </span>
+          <div>
+            <p className="font-display text-[14px] font-semibold text-ink">{copy.agenda.titulo}</p>
+            <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">{copy.agenda.texto}</p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="mx-auto mt-5 max-w-[260px]">
         <Button

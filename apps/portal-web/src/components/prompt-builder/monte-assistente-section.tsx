@@ -525,9 +525,12 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           </span>
           Monte seu atendente
         </h2>
+        {/* "tom" foi tirado daqui de propósito: o "tom da conversa" tem controle
+            próprio (o slider abaixo, nesta mesma página). Aqui é a personalidade —
+            comportamento e regras — pra não confundir os dois (item-9). */}
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
-          Converse com nosso assistente e defina a personalidade do seu assistente — nome, tom e
-          regras.
+          Converse com nosso assistente e defina a personalidade do seu assistente — nome,
+          comportamento e regras.
         </p>
       </div>
       <div className="rounded-card border border-line bg-surface p-[18px] shadow-card">

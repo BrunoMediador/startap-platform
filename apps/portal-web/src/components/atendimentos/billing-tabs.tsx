@@ -36,34 +36,43 @@ export function BillingTabs({
   }
 
   return (
-    <div
-      role="tablist"
-      aria-label="Visão do billing"
-      className="mb-5 flex gap-1 rounded-pill border border-line bg-surface p-1 shadow-card"
-    >
-      {TABS.map((t, idx) => {
-        const sel = t.id === value;
-        return (
-          <button
-            key={t.id}
-            ref={(el) => {
-              refs.current[idx] = el;
-            }}
-            type="button"
-            role="tab"
-            aria-selected={sel}
-            tabIndex={sel ? 0 : -1}
-            onClick={() => onChange(t.id)}
-            onKeyDown={(e) => onKeyDown(e, idx)}
-            className={cn(
-              'h-9 flex-1 rounded-pill font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
-              sel ? 'bg-brand text-bg' : 'text-ink-soft hover:bg-surface-hover hover:text-ink',
-            )}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+    <div className="mb-5">
+      <div
+        role="tablist"
+        aria-label="Visão do billing"
+        className="flex gap-1 rounded-pill border border-line bg-surface p-1 shadow-card"
+      >
+        {TABS.map((t, idx) => {
+          const sel = t.id === value;
+          return (
+            <button
+              key={t.id}
+              ref={(el) => {
+                refs.current[idx] = el;
+              }}
+              type="button"
+              role="tab"
+              aria-selected={sel}
+              tabIndex={sel ? 0 : -1}
+              onClick={() => onChange(t.id)}
+              onKeyDown={(e) => onKeyDown(e, idx)}
+              className={cn(
+                'h-9 flex-1 rounded-pill font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+                sel ? 'bg-brand text-bg' : 'text-ink-soft hover:bg-surface-hover hover:text-ink',
+              )}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Desambigua as duas abas + avisa que Previsão é estimativa (item-5). */}
+      <p className="mt-2 px-1 text-[12px] leading-snug text-ink-soft">
+        <b className="font-semibold text-ink">Previsão</b> é o que está agendado — uma estimativa
+        que pode mudar com cancelamentos. <b className="font-semibold text-ink">Faturado</b> é o que
+        já aconteceu.
+      </p>
     </div>
   );
 }
