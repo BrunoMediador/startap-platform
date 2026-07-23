@@ -243,6 +243,31 @@ describe('GET /portal/conexao', () => {
     expect(getCloneMock).toHaveBeenCalledWith('clone_outro');
     await app.close();
   });
+
+  it('first_connected_at NULL -> ever_connected:false (nunca conectou; copy 1ª conexão)', async () => {
+    getCloneMock.mockResolvedValue(makeClone({ first_connected_at: null }));
+    wahaMocks.getSessionStatus.mockResolvedValue({ status: 'SCAN_QR_CODE' });
+
+    const app = await buildApp();
+    const body = (await app.inject({ method: 'GET', url: '/portal/conexao' })).json();
+    expect(body.ever_connected).toBe(false);
+    // A DATA nunca vaza — só o booleano (LGPD).
+    expect(JSON.stringify(body)).not.toContain('first_connected_at');
+    await app.close();
+  });
+
+  it('first_connected_at preenchido -> ever_connected:true (reconexão), sem vazar a data', async () => {
+    getCloneMock.mockResolvedValue(
+      makeClone({ first_connected_at: new Date('2026-07-20T12:00:00Z') }),
+    );
+    wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
+
+    const app = await buildApp();
+    const body = (await app.inject({ method: 'GET', url: '/portal/conexao' })).json();
+    expect(body.ever_connected).toBe(true);
+    expect(JSON.stringify(body)).not.toContain('2026-07-20');
+    await app.close();
+  });
 });
 
 // ── POST /portal/conexao/reconectar ──────────────────────────────────────────────

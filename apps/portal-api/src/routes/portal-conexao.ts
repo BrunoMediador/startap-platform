@@ -333,6 +333,11 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         needs_action: !connected,
         has_registered_phone: phoneDigits != null,
         registered_phone_masked: phoneMasked,
+        // true = a sessão já conectou ao menos 1 vez (first_connected_at carimbado,
+        // migration 062). Ativa a copy de "1ª conexão" no front (SCRUM-95); ausente/
+        // undefined -> o front cai na copy de reconexão (byte-idêntico). A DATA nunca
+        // sai da API — só o booleano (LGPD).
+        ever_connected: clone?.first_connected_at != null,
         // Só pode reconectar se não está conectado e não há lock vigente.
         can_reconnect: !connected && cooldown === 0,
         reconnect_cooldown_seconds: cooldown,
