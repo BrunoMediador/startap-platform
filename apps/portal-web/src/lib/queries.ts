@@ -78,8 +78,11 @@ import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { pausaFromResposta } from './bot-pausa';
 import {
   type CartaoConfigState,
+  type CartaoEmojis,
+  type CartaoPreviews,
   type SaveCartaoResult,
   fetchCartaoConfig,
+  fetchCartaoPreview,
   putCartaoConfig,
 } from './cartao-config';
 import { mapColaboradorRow } from './equipe';
@@ -147,6 +150,8 @@ export const qk = {
   tomAssistente: (slot: string) => ['tom-assistente', slot] as const,
   /** Cartão de confirmação (SCRUM-92 inc.2) — GET/PUT /portal/cartao-config. */
   cartaoConfig: (slot: string) => ['cartao-config', slot] as const,
+  /** Prévia FIEL ao vivo do cartão (SCRUM-99) — GET /portal/cartao-config/preview, por emojis. */
+  cartaoPreview: (slot: string, emojis: CartaoEmojis) => ['cartao-preview', slot, emojis] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -1356,6 +1361,26 @@ export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState>
     queryFn: ({ signal }) => fetchCartaoConfig(signal),
     retry: false,
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Prévia FIEL ao vivo (SCRUM-99): renderiza o cartão pros 3 templates com os emojis do rascunho,
+ * pela MESMA função do runtime (backend). Keyed pelos emojis → cada combinação = 1 fetch cacheado
+ * (troca de template NÃO refaz fetch: os 3 já vêm juntos). keepPreviousData evita flicker enquanto
+ * o dono mexe. NUNCA lança (fetchCartaoPreview → null em falha); a seção cai no fallback client.
+ */
+export function useCartaoPreview(
+  slot: string,
+  emojis: CartaoEmojis,
+): UseQueryResult<CartaoPreviews | null> {
+  return useQuery({
+    queryKey: qk.cartaoPreview(slot, emojis),
+    queryFn: ({ signal }) => fetchCartaoPreview(emojis, signal),
+    retry: false,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
   });
 }

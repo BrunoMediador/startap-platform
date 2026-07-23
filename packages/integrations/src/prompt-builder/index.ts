@@ -1,6 +1,7 @@
 export {
   buildBlocoEstrutural,
   buildCartaoRuntimeBlock,
+  buildCartaoExemplo,
   mergeEmojis,
   resolveDefaultCartaoEmojis,
   allAreaDefaultEmojiSets,
@@ -9,6 +10,7 @@ export {
   type BlocoEstruturalModo,
   type CartaoConfig,
   type CartaoEmojiKey,
+  type CartaoExemploSample,
   type CartaoTemplate,
 } from './bloco-estrutural.js';
 export {

@@ -170,6 +170,31 @@ interface RawCartaoResponse {
   defaults?: RawCartaoConfig;
   canDisable?: unknown;
   preview?: unknown;
+  previews?: unknown;
+  sample?: unknown;
+}
+
+/**
+ * Prévia FIEL do cartão (SCRUM-99): a STRING do cartão que o cliente RECEBE, renderizada pela
+ * MESMA função do runtime no backend, pros 3 templates. É o que a seção EXIBE — o dono vê o que
+ * o cliente recebe (fonte única). O antigo `buildCartaoPreview` client-side vira só FALLBACK
+ * gracioso (erro/404), pra seção nunca quebrar.
+ */
+export interface CartaoPreviews {
+  padrao: string;
+  compacto: string;
+  detalhado: string;
+}
+
+/** Coage o `previews` cru em CartaoPreviews (3 strings não-vazias) ou null (fallback). */
+export function normalizePreviews(raw: unknown): CartaoPreviews | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const ok = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+  if (ok(r.padrao) && ok(r.compacto) && ok(r.detalhado)) {
+    return { padrao: r.padrao, compacto: r.compacto, detalhado: r.detalhado };
+  }
+  return null;
 }
 
 /** Seção editável: formulário completo, picker seedado da config do cliente. */
@@ -180,6 +205,8 @@ export interface CartaoEditableState {
   /** Emojis efetivos (config.emojis mergeado sobre defaults.emojis). Seed do picker. */
   emojis: CartaoEmojis;
   defaults: { template: CartaoTemplate; emojis: CartaoEmojis };
+  /** Prévia FIEL renderizada pelo backend (config salva). null → fallback client (SCRUM-99). */
+  previews: CartaoPreviews | null;
 }
 
 /** Seção travada (read-only): cartão gerenciado pela equipe. `template/emojis` = defaults
@@ -189,6 +216,8 @@ export interface CartaoLockedState {
   reason: CartaoLockedReason;
   template: CartaoTemplate;
   emojis: CartaoEmojis;
+  /** Prévia FIEL do cartão atual renderizada pelo backend. null → fallback client (SCRUM-99). */
+  previews: CartaoPreviews | null;
 }
 
 /**
@@ -252,6 +281,7 @@ export function normalizeCartaoResponse(raw: unknown): CartaoConfigState {
 
   const defTemplate = normalizeTemplate(r.defaults?.template) ?? FALLBACK_TEMPLATE;
   const defEmojis = sanitizeEmojis(r.defaults?.emojis, FALLBACK_EMOJIS);
+  const previews = normalizePreviews(r.previews);
 
   if (r.editable === true) {
     // Seed do picker a partir de `config` (o cartão atual do cliente); config ausente/null
@@ -263,13 +293,14 @@ export function normalizeCartaoResponse(raw: unknown): CartaoConfigState {
       template,
       emojis,
       defaults: { template: defTemplate, emojis: defEmojis },
+      previews,
     };
   }
 
   // Não-editável: só é seção se houver um motivo de trava conhecido; senão some.
   const reason = normalizeLockedReason(r.locked_reason);
   if (reason) {
-    return { status: 'locked', reason, template: defTemplate, emojis: defEmojis };
+    return { status: 'locked', reason, template: defTemplate, emojis: defEmojis, previews };
   }
   return { status: 'hidden' };
 }
@@ -395,6 +426,31 @@ export async function fetchCartaoConfig(signal?: AbortSignal): Promise<CartaoCon
     return normalizeCartaoResponse(raw);
   } catch {
     return { status: 'hidden' };
+  }
+}
+
+/**
+ * GET /portal/cartao-config/preview — prévia AO VIVO (SCRUM-99): renderiza o EXEMPLO fiel do
+ * cartão (a MESMA função do runtime, no backend) pros 3 templates com os emojis que o dono está
+ * escolhendo. Read-only, sem gravar nada. DEGRADAÇÃO GRACIOSA: NUNCA lança — qualquer falha
+ * (404/rede/resposta estranha) → null, e a UI cai no fallback client (buildCartaoPreview). Os
+ * emojis vão como query params por chave; o backend ignora o que estiver fora da allowlist.
+ */
+export async function fetchCartaoPreview(
+  emojis: CartaoEmojis,
+  signal?: AbortSignal,
+): Promise<CartaoPreviews | null> {
+  const qs = new URLSearchParams();
+  for (const slot of CARTAO_SLOTS) {
+    if (emojis[slot]) qs.set(slot, emojis[slot]);
+  }
+  try {
+    const raw = await apiFetch<unknown>(`/portal/cartao-config/preview?${qs.toString()}`, {
+      signal,
+    });
+    return normalizePreviews((raw as { previews?: unknown } | null)?.previews);
+  } catch {
+    return null;
   }
 }
 

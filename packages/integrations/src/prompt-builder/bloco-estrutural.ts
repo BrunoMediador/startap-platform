@@ -152,33 +152,88 @@ const PLACEHOLDER_NOME = '<nome do negócio>';
 const HEADER = '===== REGRAS DO SISTEMA (NAO PODEM SER ALTERADAS PELA PERSONA) =====';
 
 /**
+ * Valores que preenchem os campos do cartão. Na INSTRUÇÃO da persona (formato*) entram os
+ * PLACEHOLDERS (`<dia>` etc.) que o modelo substitui em runtime; na PRÉVIA do portal
+ * (buildCartaoExemplo) entram valores REAIS de exemplo (dia/serviço/preço do clone). Fonte
+ * ÚNICA: as linhas do cartão (cartaoLinhas*) são as MESMAS pros dois caminhos — só os `v`
+ * mudam. Assim o que o dono vê na prévia = layout/CAIXA-ALTA/barras que o runtime dita.
+ */
+interface CartaoValores {
+  dia: string;
+  horario: string;
+  servico: string;
+  valor: string;
+  /** Só usado no cartão de ESTABELECIMENTO. Ignorado na agenda (individual). */
+  profissional: string;
+}
+
+/** Placeholders da INSTRUÇÃO (byte-a-byte os de hoje — regressão dos pagantes). O do
+ *  profissional varia por template no estabelecimento e é passado pelo caller. */
+const PLACEHOLDERS_AGENDA: CartaoValores = {
+  dia: '<dia>',
+  horario: '<horario>',
+  servico: '<servico>',
+  valor: '<valor>',
+  profissional: '',
+};
+
+/**
+ * Linhas do CARTÃO (agenda) que o assistente EMITE — a FONTE ÚNICA do layout. Tanto a
+ * instrução da persona (formatoAgenda) quanto a prévia do portal (buildCartaoExemplo)
+ * consomem estas MESMAS linhas; só os `v` (placeholders vs valores reais) trocam. NÃO inclui
+ * o rótulo "Formato do cartão:" nem a linha de "Responda SIM" — quem chama adiciona conforme
+ * o contexto (instrução com prosa; exemplo com o fechamento "Responda SIM para confirmar.").
+ */
+function cartaoLinhasAgenda(
+  e: CartaoEmojis,
+  template: CartaoTemplate,
+  nome: string,
+  v: CartaoValores,
+): string[] {
+  if (template === 'compacto') {
+    return [
+      `${e.marca} ${nome} — ${e.dia} ${v.dia} ${e.horario} ${v.horario} ${e.servico} ${v.servico} ${e.valor} ${v.valor}`,
+    ];
+  }
+  if (template === 'detalhado') {
+    return [
+      `${e.marca} ${nome}`,
+      `${e.dia} DIA: ${v.dia}`,
+      `${e.horario} HORARIO: ${v.horario}`,
+      `${e.servico} SERVICO: ${v.servico}`,
+      `${e.valor} VALOR: ${v.valor}`,
+    ];
+  }
+  return [
+    `${e.marca} ${nome}`,
+    `${e.dia} DIA: ${v.dia} / ${e.horario} HORARIO: ${v.horario} / ${e.servico} SERVICO: ${v.servico} / ${e.valor} VALOR: ${v.valor}`,
+  ];
+}
+
+/**
  * Linhas do FORMATO do cartão (agenda) por template. Só o LAYOUT varia — 'padrao' é
  * byte-a-byte o de hoje; 'compacto'/'detalhado' redispõem os MESMOS campos/emojis. A
  * REGRA (cabeçalho, exigir SIM antes de inserir_agendamento) vive fora daqui e NÃO muda.
  */
 function formatoAgenda(e: CartaoEmojis, template: CartaoTemplate, nome: string): string[] {
+  const linhas = cartaoLinhasAgenda(e, template, nome, PLACEHOLDERS_AGENDA);
   if (template === 'compacto') {
     return [
       'Formato do cartão (uma linha só):',
-      `${e.marca} ${nome} — ${e.dia} <dia> ${e.horario} <horario> ${e.servico} <servico> ${e.valor} <valor>`,
+      ...linhas,
       `Depois peça: "Responda SIM para confirmar." ${e.confirma}`,
     ];
   }
   if (template === 'detalhado') {
     return [
       'Formato do cartão (um campo por linha):',
-      `${e.marca} ${nome}`,
-      `${e.dia} DIA: <dia>`,
-      `${e.horario} HORARIO: <horario>`,
-      `${e.servico} SERVICO: <servico>`,
-      `${e.valor} VALOR: <valor>`,
+      ...linhas,
       `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
     ];
   }
   return [
     'Formato do cartão:',
-    `${e.marca} ${nome}`,
-    `${e.dia} DIA: <dia> / ${e.horario} HORARIO: <horario> / ${e.servico} SERVICO: <servico> / ${e.valor} VALOR: <valor>`,
+    ...linhas,
     `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
   ];
 }
@@ -217,29 +272,63 @@ function blocoAgenda(e: CartaoEmojis, template: CartaoTemplate, nome: string): s
  * inclui `👤 PROFISSIONAL: <nome>` e o horário usa 🕐 (não ⏰), casando o runtime.
  * O nome vem de [PROFISSIONAIS] do contexto — nunca o id curto (C1/C2), nunca inventado.
  */
+/**
+ * Linhas do CARTÃO (estabelecimento) que o assistente EMITE — FONTE ÚNICA compartilhada por
+ * formatoEstabelecimento (instrução) e buildCartaoExemplo (prévia). Inclui a linha do
+ * PROFISSIONAL (👤). O horário usa o `e.horario` já resolvido a 🕐 (resolveEmojis força no
+ * estabelecimento, casando o runtime #325). Só os `v` mudam entre instrução e exemplo.
+ */
+function cartaoLinhasEstabelecimento(
+  e: CartaoEmojis,
+  template: CartaoTemplate,
+  v: CartaoValores,
+): string[] {
+  if (template === 'compacto') {
+    return [
+      `${e.profissional} ${v.profissional} — ${e.dia} ${v.dia} ${e.horario} ${v.horario} ${e.servico} ${v.servico} ${e.valor} ${v.valor}`,
+    ];
+  }
+  if (template === 'detalhado') {
+    return [
+      `${e.profissional} PROFISSIONAL: ${v.profissional}`,
+      `${e.dia} DIA: ${v.dia}`,
+      `${e.horario} HORARIO: ${v.horario}`,
+      `${e.servico} SERVICO: ${v.servico}`,
+      `${e.valor} VALOR: ${v.valor}`,
+    ];
+  }
+  return [
+    `${e.profissional} PROFISSIONAL: ${v.profissional}`,
+    `${e.dia} DIA: ${v.dia} / ${e.horario} HORARIO: ${v.horario} / ${e.servico} SERVICO: ${v.servico} / ${e.valor} VALOR: ${v.valor}`,
+  ];
+}
+
 function formatoEstabelecimento(e: CartaoEmojis, template: CartaoTemplate): string[] {
+  // O placeholder do profissional difere por template (byte-a-byte o de hoje): compacto usa a
+  // forma curta "<profissional>"; padrao/detalhado usam o guia "<nome do profissional escolhido>".
+  const profPlaceholder =
+    template === 'compacto' ? '<profissional>' : '<nome do profissional escolhido>';
+  const linhas = cartaoLinhasEstabelecimento(e, template, {
+    ...PLACEHOLDERS_AGENDA,
+    profissional: profPlaceholder,
+  });
   if (template === 'compacto') {
     return [
       'Formato do cartão (uma linha só):',
-      `${e.profissional} <profissional> — ${e.dia} <dia> ${e.horario} <horario> ${e.servico} <servico> ${e.valor} <valor>`,
+      ...linhas,
       `Depois peça: "Responda SIM para confirmar." ${e.confirma}`,
     ];
   }
   if (template === 'detalhado') {
     return [
       'Formato do cartão (um campo por linha):',
-      `${e.profissional} PROFISSIONAL: <nome do profissional escolhido>`,
-      `${e.dia} DIA: <dia>`,
-      `${e.horario} HORARIO: <horario>`,
-      `${e.servico} SERVICO: <servico>`,
-      `${e.valor} VALOR: <valor>`,
+      ...linhas,
       `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
     ];
   }
   return [
     'Formato do cartão:',
-    `${e.profissional} PROFISSIONAL: <nome do profissional escolhido>`,
-    `${e.dia} DIA: <dia> / ${e.horario} HORARIO: <horario> / ${e.servico} SERVICO: <servico> / ${e.valor} VALOR: <valor>`,
+    ...linhas,
     `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
   ];
 }
@@ -354,6 +443,77 @@ export function buildCartaoRuntimeBlock(opts: {
   const nome =
     opts.nomeNegocio && opts.nomeNegocio.trim() !== '' ? opts.nomeNegocio.trim() : PLACEHOLDER_NOME;
   return blocoAgenda(e, template, nome);
+}
+
+/** Fechamento canônico do cartão EMITIDO (o que o cliente vê no fim do cartão), com o emoji
+ *  de confirmação resolvido. Espelha o "Responda SIM para confirmar." que a instrução manda o
+ *  modelo escrever — usado só pelo exemplo (a instrução carrega a versão em prosa). */
+function fechamentoExemplo(e: CartaoEmojis): string {
+  return `Responda SIM para confirmar. ${e.confirma}`;
+}
+
+/** Valores de amostra do cartão de EXEMPLO. `nomeNegocio` só é usado na agenda (o header do
+ *  cartão individual); estabelecimento usa a linha do profissional. Todos já formatados pt-BR
+ *  pelo caller (ex.: valor = 'R$ 65,00', dia = 'quinta, 24/07'). */
+export interface CartaoExemploSample {
+  /** Nome do negócio no header do cartão individual. Vazio/ausente → placeholder. */
+  nomeNegocio?: string;
+  dia: string;
+  horario: string;
+  /** Nome de um serviço REAL do catálogo do clone (ou fallback neutro). */
+  servico: string;
+  /** Preço do serviço já formatado (ex.: 'R$ 65,00'). */
+  valor: string;
+  /** Nome de um profissional (só entra no cartão de estabelecimento). */
+  profissional: string;
+}
+
+/**
+ * Renderiza um EXEMPLO do CARTÃO DE CONFIRMAÇÃO — o texto que o cliente RECEBE no WhatsApp,
+ * com valores de amostra no lugar dos placeholders. É a prévia FIEL do portal (SCRUM-99): usa
+ * as MESMAS linhas (cartaoLinhas*) que a instrução da persona/runtime dita, então o dono vê
+ * exatamente o layout/emojis/CAIXA-ALTA/barras/"Responda SIM" que o cliente recebe — fonte
+ * ÚNICA, sem divergência com o runtime. PURO/DETERMINÍSTICO.
+ *
+ * - `atendente` NÃO tem cartão → devolve '' (a UI esconde a seção).
+ * - `agenda` (individual) NÃO tem linha de profissional; só `estabelecimento` tem.
+ * - Emojis = área + override do dono (mesma resolução do runtime); `template` só muda o layout.
+ * - `nomeNegocio` vazio → placeholder `<nome do negócio>` (defensivo; o caller semeia o real).
+ *
+ * NÃO renderiza o bloco de REGRA/HEADER (isso é instrução interna pro modelo, nunca vira card):
+ * devolve só o cartão amigável. NÃO usa o caminho `verbatim` — o exemplo é sempre montado dos
+ * template/emojis (o portal só chama isto no fluxo editável, onde a config é template+emojis).
+ */
+export function buildCartaoExemplo(opts: {
+  modo: 'agenda' | 'estabelecimento' | 'atendente';
+  area?: string | null;
+  config?: Pick<CartaoConfig, 'template' | 'emojis'> | null;
+  sample: CartaoExemploSample;
+}): string {
+  if (opts.modo === 'atendente') return '';
+  const template = opts.config?.template ?? 'padrao';
+  const e = resolveEmojis(opts.modo, opts.area, opts.config?.emojis);
+  const s = opts.sample;
+  if (opts.modo === 'estabelecimento') {
+    const linhas = cartaoLinhasEstabelecimento(e, template, {
+      dia: s.dia,
+      horario: s.horario,
+      servico: s.servico,
+      valor: s.valor,
+      profissional: s.profissional,
+    });
+    return [...linhas, fechamentoExemplo(e)].join('\n');
+  }
+  const nome =
+    s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;
+  const linhas = cartaoLinhasAgenda(e, template, nome, {
+    dia: s.dia,
+    horario: s.horario,
+    servico: s.servico,
+    valor: s.valor,
+    profissional: '',
+  });
+  return [...linhas, fechamentoExemplo(e)].join('\n');
 }
 
 /**

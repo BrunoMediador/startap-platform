@@ -12,6 +12,7 @@ import {
   isEmojiAllowed,
   normalizeCartaoResponse,
   normalizeLockedReason,
+  normalizePreviews,
   normalizeTemplate,
   parsePreview,
   previewLines,
@@ -302,5 +303,51 @@ describe('buildCartaoPreview — prévia amigável (não o bloco interno do serv
   it('aceita amostra customizada', () => {
     const out = buildCartaoPreview('padrao', emojis, { ...PREVIEW_SAMPLE, servico: 'Barba' });
     expect(out).toContain('Serviço: Barba');
+  });
+});
+
+describe('normalizePreviews (prévia FIEL do backend — SCRUM-99)', () => {
+  const good = {
+    padrao: '💈 Zé\n📅 DIA: ...',
+    compacto: '💈 Zé — ...',
+    detalhado: '💈 Zé\n📅 DIA: ...',
+  };
+
+  it('aceita as 3 strings não-vazias', () => {
+    expect(normalizePreviews(good)).toEqual(good);
+  });
+
+  it('descarta objeto incompleto / não-string / vazio → null (fallback)', () => {
+    expect(normalizePreviews({ padrao: 'x', compacto: 'y' })).toBeNull();
+    expect(normalizePreviews({ ...good, detalhado: '' })).toBeNull();
+    expect(normalizePreviews({ ...good, padrao: 42 })).toBeNull();
+    expect(normalizePreviews(null)).toBeNull();
+    expect(normalizePreviews('boom')).toBeNull();
+  });
+});
+
+describe('normalizeCartaoResponse expõe previews (SCRUM-99)', () => {
+  const previews = {
+    padrao: '💈 Zé\n📅 DIA: quinta-feira / ⏰ HORARIO: 15:00\nResponda SIM para confirmar. ✅',
+    compacto: '💈 Zé — 📅 quinta-feira',
+    detalhado: '💈 Zé\n📅 DIA: quinta-feira',
+  };
+
+  it('editável carrega previews do backend', () => {
+    const st = normalizeCartaoResponse(editableRaw({ previews }));
+    if (st.status !== 'editable') throw new Error('esperado editable');
+    expect(st.previews).toEqual(previews);
+  });
+
+  it('travado carrega previews do backend', () => {
+    const st = normalizeCartaoResponse(lockedRaw('prompt_custom', { previews }));
+    if (st.status !== 'locked') throw new Error('esperado locked');
+    expect(st.previews).toEqual(previews);
+  });
+
+  it('sem previews (contrato antigo/estranho) → null (a UI cai no fallback client)', () => {
+    const st = normalizeCartaoResponse(editableRaw());
+    if (st.status !== 'editable') throw new Error('esperado editable');
+    expect(st.previews).toBeNull();
   });
 });

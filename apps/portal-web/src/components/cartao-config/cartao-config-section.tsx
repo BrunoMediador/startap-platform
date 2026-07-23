@@ -31,7 +31,9 @@ import {
   CARTAO_SLOTS,
   type CartaoDraft,
   type CartaoEditableState,
+  type CartaoEmojis,
   type CartaoLockedState,
+  type CartaoPreviews,
   type CartaoSlot,
   type CartaoTemplate,
   EMOJI_CATALOG,
@@ -46,7 +48,12 @@ import {
   toCartaoPayload,
 } from '@/lib/cartao-config';
 import { cn } from '@/lib/cn';
-import { useAgendaConfig, useCartaoConfig, useSaveCartaoConfig } from '@/lib/queries';
+import {
+  useAgendaConfig,
+  useCartaoConfig,
+  useCartaoPreview,
+  useSaveCartaoConfig,
+} from '@/lib/queries';
 import { SUPORTE_CARTAO_URL } from '@/lib/suporte';
 import { useEffect, useRef, useState } from 'react';
 
@@ -86,8 +93,13 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
   }, [state]);
 
   const dirty = isCartaoDirty(draft, saved);
-  // Prévia amigável montada no client (NUNCA o bloco interno do servidor).
-  const preview = buildCartaoPreview(draft.template, draft.emojis);
+
+  // Prévia FIEL (SCRUM-99): a MESMA função do runtime renderiza o cartão no backend (o dono vê o
+  // que o cliente recebe). Ao vivo pelos emojis do rascunho; enquanto carrega usa a prévia da
+  // config salva (state.previews). DEGRADAÇÃO GRACIOSA: sem prévia do servidor → fallback client.
+  const live = useCartaoPreview(slot, draft.emojis).data;
+  const previews = live ?? state.previews;
+  const preview = previewFor(previews, draft.template, draft.emojis);
 
   function onTemplate(template: CartaoTemplate) {
     touched.current = true;
@@ -123,7 +135,12 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <FixedWarning />
 
-        <TemplateSelector value={draft.template} emojis={draft.emojis} onChange={onTemplate} />
+        <TemplateSelector
+          value={draft.template}
+          emojis={draft.emojis}
+          previews={previews}
+          onChange={onTemplate}
+        />
 
         <EmojiEditor emojis={draft.emojis} onPick={onEmoji} />
 
@@ -160,7 +177,8 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
  * não se exibe) + nota gentil por motivo + CTA de suporte.
  */
 function CartaoLocked({ state }: { state: CartaoLockedState }) {
-  const preview = buildCartaoPreview(state.template, state.emojis);
+  // Prévia FIEL do cartão atual vinda do backend (SCRUM-99); fallback client se não veio.
+  const preview = previewFor(state.previews, state.template, state.emojis);
   return (
     <SectionShell>
       <div className="flex flex-col gap-4">
@@ -232,14 +250,29 @@ function FixedWarning() {
   );
 }
 
+/**
+ * Prévia FIEL do cartão pro template pedido (SCRUM-99): usa a STRING renderizada pelo backend
+ * (mesma função do runtime) quando disponível; senão cai no fallback client `buildCartaoPreview`
+ * (degradação graciosa — a seção nunca fica sem prévia). `emojis` só alimenta o fallback.
+ */
+function previewFor(
+  previews: CartaoPreviews | null | undefined,
+  template: CartaoTemplate,
+  emojis: CartaoEmojis,
+): string {
+  return previews?.[template] ?? buildCartaoPreview(template, emojis);
+}
+
 /** Seletor de template (3 opções em radiogroup, cada uma com mini-preview). */
 function TemplateSelector({
   value,
   emojis,
+  previews,
   onChange,
 }: {
   value: CartaoTemplate;
   emojis: CartaoDraft['emojis'];
+  previews: CartaoPreviews | null | undefined;
   onChange: (t: CartaoTemplate) => void;
 }) {
   return (
@@ -252,7 +285,7 @@ function TemplateSelector({
       >
         {CARTAO_COPY.templates.map((opt) => {
           const selected = value === opt.value;
-          const mini = previewLines(buildCartaoPreview(opt.value, emojis)).slice(0, 2);
+          const mini = previewLines(previewFor(previews, opt.value, emojis)).slice(0, 2);
           return (
             <button
               key={opt.value}
