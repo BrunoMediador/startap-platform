@@ -31,6 +31,12 @@ export interface PromptBuilderState {
   nomeNegocio: string;
   area: string;
   modo: 'agenda' | 'atendente';
+  /** Tipo do clone (flow_clones.product_type). Estabelecimento entrevista COMO agenda
+   *  (modo='agenda'), mas o BLOCO estrutural colado no preview/approve vira a variante
+   *  'estabelecimento' (cartão com 👤 PROFISSIONAL). Guardado aqui pra a retomada e o
+   *  preview refletirem a variante certa. Ausente em estados antigos (pré-deploy) →
+   *  fallback 'individual' no consumidor. SCRUM-92 / ADR 0032 Fase 0. */
+  productType: 'individual' | 'estabelecimento';
   turns: PbTurn[];
   draft: PbDraft | null;
   updatedAt: number;

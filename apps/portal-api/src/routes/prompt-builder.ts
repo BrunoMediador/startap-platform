@@ -133,11 +133,12 @@ export function resolveNomeNegocio(clone: {
   return 'seu negócio';
 }
 
-/** Resolve o contexto do clone (nome/área/modo) da sessão — NUNCA de input. */
+/** Resolve o contexto do clone (nome/área/modo/tipo) da sessão — NUNCA de input. */
 async function loadCloneContext(slot: string): Promise<{
   nomeNegocio: string;
   area: string;
   modo: 'agenda' | 'atendente';
+  productType: 'individual' | 'estabelecimento';
   servicos: string[];
 } | null> {
   const clone = await flowClones.getCloneBySlot(slot);
@@ -147,9 +148,31 @@ async function loadCloneContext(slot: string): Promise<{
     slot,
     config.MODO_ATENDENTE_SLOTS,
   );
+  // product_type do clone (individual|estabelecimento) — decide se o BLOCO estrutural
+  // ganha o campo do profissional. getProductType tem fallback seguro 'individual'.
+  const productType = await cloneColaboradores.getProductType(slot);
   const nomeNegocio = resolveNomeNegocio(clone);
   const servicos = (clone.servicos ?? []).map((s) => s.nome).filter((n) => typeof n === 'string');
-  return { nomeNegocio, area: area ?? '', modo: modoAtendente ? 'atendente' : 'agenda', servicos };
+  return {
+    nomeNegocio,
+    area: area ?? '',
+    modo: modoAtendente ? 'atendente' : 'agenda',
+    productType,
+    servicos,
+  };
+}
+
+/**
+ * Deriva a variante do BLOCO estrutural a partir do tipo do clone + modo da entrevista.
+ * Estabelecimento entrevista COMO agenda (o meta-entrevistador não muda), mas o cartão
+ * BAKED precisa da variante 'estabelecimento' (com 👤 PROFISSIONAL) — senão colaria o
+ * cartão individual, que conflita com o que o runtime já injeta. Atendente é intocado.
+ */
+function deriveBlocoModo(
+  productType: 'individual' | 'estabelecimento',
+  modo: 'agenda' | 'atendente',
+): promptBuilder.BlocoEstruturalModo {
+  return productType === 'estabelecimento' && modo === 'agenda' ? 'estabelecimento' : modo;
 }
 
 /** ChatTurn do agente a partir do turno guardado (user->human, assistant->ai). */
@@ -160,7 +183,10 @@ function toChatTurn(t: { role: 'user' | 'assistant'; content: string }): ChatTur
 /** Prévia read-only do que SERÁ persistido: persona + bloco estrutural colado por código. */
 function buildPreviewFinal(state: PromptBuilderState): string | null {
   if (!state.draft) return null;
-  const bloco = promptBuilder.buildBlocoEstrutural({ modo: state.modo, area: state.area });
+  // Estabelecimento usa a variante com profissional; estados antigos (pré-deploy) sem
+  // productType caem no fallback 'individual' (deriveBlocoModo trata undefined como não-estab).
+  const blocoModo = deriveBlocoModo(state.productType ?? 'individual', state.modo);
+  const bloco = promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area: state.area });
   return sanitizeOrphanPlaceholders(`${state.draft.persona}\n\n${bloco}`);
 }
 
@@ -214,6 +240,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       nomeNegocio: ctx.nomeNegocio,
       area: ctx.area,
       modo: ctx.modo,
+      productType: ctx.productType,
       turns: [{ role: 'assistant', content: pergunta }],
       draft: null,
       updatedAt: Date.now(),
@@ -439,6 +466,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const servicos = ctx?.servicos ?? [];
     const modo = ctx?.modo ?? state.modo; // fallback ao state só se o clone sumiu no meio.
     const area = ctx?.area ?? state.area;
+    const productType = ctx?.productType ?? state.productType ?? 'individual';
 
     // Persona a persistir: a editada pelo dono (se veio) OU o rascunho do Redis. Em AMBOS os
     // casos passa pelo MESMO pipeline (stripPII + validatePersona) — defesa em profundidade,
@@ -455,7 +483,9 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const nomeAssistente = state.draft.nome_do_bot?.trim() || null;
 
     // GARANTIA: cola o BLOCO_ESTRUTURAL (cartão + SIM) DEPOIS da persona, no SERVIDOR.
-    const bloco = promptBuilder.buildBlocoEstrutural({ modo, area });
+    // Estabelecimento (agenda multi-profissional) usa a variante com 👤 PROFISSIONAL.
+    const blocoModo = deriveBlocoModo(productType, modo);
+    const bloco = promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area });
     const finalPrompt = sanitizeOrphanPlaceholders(`${v.cleaned}\n\n${bloco}`);
     if (finalPrompt.length > MAX_FINAL_PROMPT_CHARS) {
       return reply.code(422).send({ error: 'prompt_muito_longo' });
@@ -491,7 +521,7 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
 
       await deleteState(redis, slot);
       log.info(
-        { slot, versionSaved: result.version_saved, modo, edited },
+        { slot, versionSaved: result.version_saved, modo, blocoModo, edited },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );
       return reply

@@ -46,3 +46,55 @@ describe('buildBlocoEstrutural — variante atendente', () => {
     expect(bloco).toMatch(/atendente humano/);
   });
 });
+
+describe('buildBlocoEstrutural — variante estabelecimento (MVP SCRUM-92)', () => {
+  it('inclui o campo PROFISSIONAL + a instrução de escolher pelo NOME', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'barbearia' });
+    expect(bloco).toContain(BLOCO_ESTRUTURAL_MARKER);
+    expect(bloco).toContain('CARTAO DE CONFIRMACAO');
+    // campo do profissional no cartão (casando o runtime: 👤 PROFISSIONAL).
+    expect(bloco).toContain('👤 PROFISSIONAL:');
+    // cliente escolhe pelo NOME, nunca id curto (C1/C2).
+    expect(bloco).toMatch(/NOME do profissional/);
+    expect(bloco).toContain('C1/C2');
+  });
+
+  it('mantém a garantia: mostra cartão + exige SIM antes de inserir_agendamento', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'barbearia' });
+    expect(bloco).toMatch(/SIM/);
+    expect(bloco).toContain('inserir_agendamento');
+    expect(bloco).toMatch(/SÓ DEPOIS do SIM, chamar a ferramenta inserir_agendamento/);
+  });
+
+  it('horário usa 🕐 (casa o runtime buildCartaoEstabelecimentoBlock), não ⏰', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'barbearia' });
+    expect(bloco).toContain('🕐');
+    // linha do cartão não usa o ⏰ do individual.
+    expect(bloco).not.toMatch(/⏰ HORARIO/);
+  });
+
+  it('barbearia mantém os emojis da área (💈 marca / ✂️ serviço)', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'barbearia' });
+    expect(bloco).toContain('✂️');
+  });
+
+  it('área não-barbearia troca o serviço (manicure → 💅) e mantém 👤', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'manicure' });
+    expect(bloco).toContain('💅');
+    expect(bloco).toContain('👤 PROFISSIONAL:');
+  });
+});
+
+describe('buildBlocoEstrutural — regressão das variantes existentes', () => {
+  it('agenda (individual) NÃO ganha campo de profissional', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
+    expect(bloco).not.toContain('PROFISSIONAL');
+    expect(bloco).toContain('⏰'); // individual segue com ⏰ no horário.
+  });
+
+  it('atendente segue sem cartão nem profissional', () => {
+    const bloco = buildBlocoEstrutural({ modo: 'atendente' });
+    expect(bloco).not.toContain('PROFISSIONAL');
+    expect(bloco).not.toContain('CARTAO DE CONFIRMACAO');
+  });
+});
