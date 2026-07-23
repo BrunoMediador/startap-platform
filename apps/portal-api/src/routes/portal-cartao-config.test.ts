@@ -64,6 +64,30 @@ const CARTAO_BLOCO = promptBuilder.buildBlocoEstrutural({ modo: 'agenda', area: 
 const PERSONA = 'Você é o Cirilo, atendente da Barbearia do Cirilo. Seja simpático e objetivo.';
 const BAKED_PROMPT = `${PERSONA}\n\n${CARTAO_BLOCO}`;
 
+// Formato REAL LEGADO de Cirilo/Samuel/mvs (dump SSH read-only 23/07): seção [CARTAO DE
+// CONFIRMACAO] SEM o marcador novo ===== REGRAS. Antes travava em requer_revisao; o fix 23/07
+// ("editável pra todos") extrai persona↔cartão byte-a-byte e libera o flip. Emojis do cartão =
+// defaults barbearia → seed do picker == defaults → "salvar sem mexer" grava verbatim byte-a-byte.
+const PERSONA_TPL = [
+  'Voce e o assistente virtual da Barbearia Samuel.',
+  'Atenda pelo WhatsApp com simpatia e objetividade. Maximo 3 linhas por resposta.',
+  '',
+  '[FLUXO OBRIGATORIO]',
+  '4. Se estiver -> apresente o CARTAO DE CONFIRMACAO e peca SIM.',
+].join('\n');
+const CARTAO_TPL = [
+  '[CARTAO DE CONFIRMACAO]',
+  '💈CARTAO DE CONFIRMACAO💈',
+  '──────────────────────',
+  '📅 DIA:',
+  '⏰ HORARIO:',
+  '✂️ SERVICO:',
+  '💰 VALOR:',
+  '──────────────────────',
+  '✅ Responda SIM para confirmar.',
+].join('\n');
+const BAKED_TEMPLATE_PROMPT = `${PERSONA_TPL}\n\n${CARTAO_TPL}`;
+
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   await app.register(portalCartaoConfigRoutes);
@@ -152,6 +176,23 @@ describe('GET /portal/cartao-config', () => {
     await app.close();
   });
 
+  it('BAKED template LEGADO (Cirilo/Samuel/mvs): editable + seed + preview verbatim (fim do fale-com-suporte)', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_TEMPLATE_PROMPT);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
+    const body = res.json();
+    expect(body.mode).toBe('baked');
+    expect(body.editable).toBe(true); // ANTES: requer_revisao. AGORA editável.
+    expect(body.locked_reason).toBeNull();
+    // preview = o cartão legado atual (verbatim), byte-a-byte.
+    expect(body.preview).toBe(CARTAO_TPL);
+    // picker semeado com os emojis do cartão legado (= defaults barbearia).
+    expect(body.config.emojis.marca).toBe('💈');
+    expect(body.config.emojis.servico).toBe('✂️');
+    await app.close();
+  });
+
   it('BAKED prompt_custom=true (Ingrid) → LOCKED: editable:false, locked_reason=prompt_custom', async () => {
     mockClone({ cartaoMode: 'baked', promptCustom: true });
     getPromptMock.mockResolvedValue(BAKED_PROMPT);
@@ -165,7 +206,7 @@ describe('GET /portal/cartao-config', () => {
     await app.close();
   });
 
-  it('BAKED sem cartão extraível (template/estab) → requer_revisao: editable:false, preview null', async () => {
+  it('BAKED sem cartão reconhecível (estab code-injected/persona pura) → requer_revisao: editable:false, preview null', async () => {
     mockClone({ cartaoMode: 'baked', promptCustom: false });
     getPromptMock.mockResolvedValue('Só a persona, sem cartão baked reconhecível.');
     const app = await buildApp();
@@ -273,6 +314,57 @@ describe('PUT /portal/cartao-config', () => {
     };
     expect(arg.cartaoConfig.verbatim).toBeUndefined(); // legado dropado
     expect(arg.cartaoConfig.emojis).toEqual({ marca: '💇' });
+    await app.close();
+  });
+
+  it('flip template LEGADO SEM mudança → persona-only correta + VERBATIM byte-a-byte + runtime', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_TEMPLATE_PROMPT);
+    const app = await buildApp();
+    // Dono salva os valores JÁ semeados (barbearia = defaults) → nada mudou → grava verbatim.
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: {} },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.mode).toBe('runtime');
+    expect(body.editable).toBe(true);
+    expect(migrateMock).toHaveBeenCalledTimes(1);
+    const arg = migrateMock.mock.calls[0][0] as {
+      personaOnlyPrompt: string;
+      cartaoConfig: { verbatim?: string; template?: string };
+      editedBy: string;
+    };
+    // persona-only = o prompt SEM o cartão legado (a ref textual do [FLUXO] permanece).
+    expect(arg.personaOnlyPrompt).toBe(PERSONA_TPL);
+    expect(arg.personaOnlyPrompt).not.toContain('💈CARTAO DE CONFIRMACAO💈');
+    // cartão preservado LITERAL → em runtime o cliente vê o MESMO cartão de sempre.
+    expect(arg.cartaoConfig.verbatim).toBe(CARTAO_TPL);
+    expect(arg.cartaoConfig.template).toBeUndefined();
+    expect(arg.editedBy).toBe('portal:cartao-config'); // revertível pelo mesmo --revert
+    expect(body.preview).toBe(CARTAO_TPL);
+    await app.close();
+  });
+
+  it('flip template LEGADO COM mudança → grava { template, emojis } (dropa o legado)', async () => {
+    mockClone({ cartaoMode: 'baked', promptCustom: false });
+    getPromptMock.mockResolvedValue(BAKED_TEMPLATE_PROMPT);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'compacto', emojis: { valor: '💵' } }, // trocou template + 💰→💵
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().mode).toBe('runtime');
+    const arg = migrateMock.mock.calls[0][0] as {
+      cartaoConfig: { verbatim?: string; template?: string; emojis?: Record<string, string> };
+    };
+    expect(arg.cartaoConfig.verbatim).toBeUndefined(); // legado dropado
+    expect(arg.cartaoConfig.template).toBe('compacto');
+    expect(arg.cartaoConfig.emojis).toEqual({ valor: '💵' });
     await app.close();
   });
 

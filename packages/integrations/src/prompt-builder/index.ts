@@ -20,4 +20,4 @@ export {
   CARTAO_TEMPLATES,
   type EmojiValidation,
 } from './cartao-catalog.js';
-export { extractBakedCartao, type CartaoExtract } from './cartao-extract.js';
+export { extractBakedCartao, isCartaoFlipSafe, type CartaoExtract } from './cartao-extract.js';
