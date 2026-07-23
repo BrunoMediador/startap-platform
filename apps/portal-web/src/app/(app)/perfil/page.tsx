@@ -30,6 +30,7 @@ import {
   toggleFormaPagamento,
   validatePerfil,
 } from '@/lib/perfil';
+import { type GrupoDef, type GrupoKey, PERFIL_GRUPOS } from '@/lib/perfil-grupos';
 import { qk, usePerfil, useSavePerfil } from '@/lib/queries';
 /**
  * Meu negócio / Perfil (Missão 023 W13). O cliente edita os dados do próprio
@@ -47,6 +48,13 @@ import { qk, usePerfil, useSavePerfil } from '@/lib/queries';
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+
+/** Lookup por chave dos 3 grupos da tela (SCRUM-98). Fonte: PERFIL_GRUPOS (ordem e
+ * completude travadas em perfil-grupos.test.ts). */
+const GRUPO = Object.fromEntries(PERFIL_GRUPOS.map((g) => [g.key, g])) as Record<
+  GrupoKey,
+  GrupoDef
+>;
 
 export default function PerfilPage() {
   const { slot, atendFromAgenda, productType } = useTenant();
@@ -164,163 +172,258 @@ export default function PerfilPage() {
   }
 
   return (
-    <>
+    <div data-perfil-page>
       <PageHead
         title="Meu negócio"
         subtitle="Os dados do seu negócio. O assistente usa essas informações ao falar com seus clientes."
       />
 
-      {perfilQ.isPending ? (
-        <>
-          <span className="sr-only">Carregando os dados do seu negócio…</span>
-          <SkeletonList rows={6} />
-        </>
-      ) : perfilQ.isError ? (
-        <ErrorState onRetry={() => perfilQ.refetch()} />
-      ) : (
-        <form onSubmit={onSubmit} className="stagger stagger-2 flex flex-col gap-4" noValidate>
-          <div className="flex flex-col gap-4 rounded-card border border-line bg-surface p-[18px] shadow-card">
-            <Input
-              label="Nome do negócio"
-              placeholder="Ex.: Barbearia do Zé"
-              value={draft.nome_negocio}
-              error={errors.nome_negocio}
-              onChange={(e) => set('nome_negocio', e.target.value)}
-              autoComplete="organization"
-              enterKeyHint="next"
-            />
-            {showPrestador && (
+      {/* Mini-nav "pula pra" (SCRUM-98): chips fixos no topo que rolam pras âncoras
+          dos 3 blocos. Nada fica escondido — só organiza o scroll longo no celular.
+          O chip de um grupo TODO oculto some junto (regra em globals.css). */}
+      <PerfilMiniNav />
+
+      {/* GRUPO 1 — Dados do negócio. Sempre visível: o form principal renderiza
+          sempre (loading/erro/conteúdo). Planos e Recepção se auto-gateiam. */}
+      <GrupoBloco def={GRUPO.dados} primeiro>
+        {perfilQ.isPending ? (
+          <>
+            <span className="sr-only">Carregando os dados do seu negócio…</span>
+            <SkeletonList rows={6} />
+          </>
+        ) : perfilQ.isError ? (
+          <ErrorState onRetry={() => perfilQ.refetch()} />
+        ) : (
+          <form onSubmit={onSubmit} className="stagger stagger-2 flex flex-col gap-4" noValidate>
+            <div className="flex flex-col gap-4 rounded-card border border-line bg-surface p-[18px] shadow-card">
               <Input
-                label="Nome do prestador de serviço"
-                placeholder="Ex.: José da Silva"
-                value={draft.nome_prestador}
-                error={errors.nome_prestador}
-                onChange={(e) => set('nome_prestador', e.target.value)}
-                autoComplete="name"
+                label="Nome do negócio"
+                placeholder="Ex.: Barbearia do Zé"
+                value={draft.nome_negocio}
+                error={errors.nome_negocio}
+                onChange={(e) => set('nome_negocio', e.target.value)}
+                autoComplete="organization"
                 enterKeyHint="next"
               />
-            )}
-            <Input
-              label="Telefone"
-              type="tel"
-              inputMode="tel"
-              placeholder="Ex.: (11) 99999-9999"
-              value={draft.telefone_contato}
-              error={errors.telefone_contato}
-              onChange={(e) => set('telefone_contato', e.target.value)}
-              autoComplete="tel"
-            />
-            <TextArea
-              label="Endereço"
-              placeholder="Rua, número, bairro, cidade"
-              rows={2}
-              value={draft.endereco}
-              error={errors.endereco}
-              onChange={(v) => set('endereco', v)}
-            />
-            <Input
-              label="Instagram"
-              prefix="@"
-              placeholder="seu.perfil"
-              value={draft.instagram}
-              error={errors.instagram}
-              onChange={(e) => set('instagram', e.target.value)}
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-            <TimezoneCombobox
-              id="perfil-tz"
-              label="Fuso horário"
-              hint="O assistente usa esse fuso pra agendar no horário certo da sua cidade."
-              value={timezone || tenantTz}
-              onChange={onTimezoneChange}
-            />
-            <FormasPagamentoChecklist
-              selecionadas={draft.formas_pagamento}
-              onToggle={toggleForma}
-            />
+              {showPrestador && (
+                <Input
+                  label="Nome do prestador de serviço"
+                  placeholder="Ex.: José da Silva"
+                  value={draft.nome_prestador}
+                  error={errors.nome_prestador}
+                  onChange={(e) => set('nome_prestador', e.target.value)}
+                  autoComplete="name"
+                  enterKeyHint="next"
+                />
+              )}
+              <Input
+                label="Telefone"
+                type="tel"
+                inputMode="tel"
+                placeholder="Ex.: (11) 99999-9999"
+                value={draft.telefone_contato}
+                error={errors.telefone_contato}
+                onChange={(e) => set('telefone_contato', e.target.value)}
+                autoComplete="tel"
+              />
+              <TextArea
+                label="Endereço"
+                placeholder="Rua, número, bairro, cidade"
+                rows={2}
+                value={draft.endereco}
+                error={errors.endereco}
+                onChange={(v) => set('endereco', v)}
+              />
+              <Input
+                label="Instagram"
+                prefix="@"
+                placeholder="seu.perfil"
+                value={draft.instagram}
+                error={errors.instagram}
+                onChange={(e) => set('instagram', e.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <TimezoneCombobox
+                id="perfil-tz"
+                label="Fuso horário"
+                hint="O assistente usa esse fuso pra agendar no horário certo da sua cidade."
+                value={timezone || tenantTz}
+                onChange={onTimezoneChange}
+              />
+              <FormasPagamentoChecklist
+                selecionadas={draft.formas_pagamento}
+                onToggle={toggleForma}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button type="submit" className="flex-1" loading={save.isPending} disabled={!dirty}>
+                Salvar
+              </Button>
+            </div>
+
+            <p aria-live="polite" className="px-0.5 text-[12.5px] leading-normal text-ink-soft">
+              {save.isPending
+                ? 'Salvando…'
+                : dirty
+                  ? 'Você tem alterações não salvas.'
+                  : 'Tudo salvo. Você pode editar quando quiser — é tudo opcional.'}
+            </p>
+          </form>
+        )}
+
+        {/* Planos e assinaturas (Onda 1, SCRUM-68 — DE-GATE): texto livre que alimenta o
+            contexto do bot. Passa a aparecer pra TODOS os formatos (o bot já renderiza
+            planos em [NEGOCIO] sem gate); só destravamos a edição no portal. Traz o próprio
+            divisor. */}
+        <PlanosSection />
+
+        {/* WhatsApp da recepção (Onda 1, SCRUM-68): destino dos avisos ao dono
+            (alert_owner_phone). DE-GATE — editável por TODOS os formatos (saiu da
+            AgendamentoSection, que segue gated por modo atendente). Vazio = fallback pro
+            próprio WhatsApp do negócio (SCRUM-62). Traz o próprio divisor. */}
+        <RecepcaoSection />
+      </GrupoBloco>
+
+      {/* GRUPO 2 — Personalidade do seu atendente (SCRUM-98). Bundle de "como o
+          assistente conversa": Monte + Tom + Cartão + FAQ. Cada seção segue se
+          auto-gateando exatamente como antes; o bloco inteiro (header + subtítulo)
+          some via fail-closed quando NENHUMA renderiza. */}
+      <GrupoBloco def={GRUPO.personalidade}>
+        {/* Monte seu atendente (SCRUM-92): chat de configuração que PROPÕE a persona do
+            robô (meta-agente DeepSeek) + prévia + Aprovar/Ajustar. A seção SE AUTO-GATEIA
+            pelo GET /portal/prompt-builder/draft — 404 (PROMPT_BUILDER_ENABLED OFF) some
+            INTEIRA (byte-idêntico pros clientes atuais). Traz o próprio divisor. */}
+        <MonteAssistenteSection />
+
+        {/* Tom da conversa (SCRUM-92): slider de 4 paradas (do mais direto ao mais caloroso)
+            que mapeia, no backend, pra temperatura do modelo — o dono nunca vê número. A seção
+            SE AUTO-GATEIA pelo GET /portal/tom-assistente — 404 (feature off / sem config) some
+            INTEIRA (byte-idêntico pros clientes atuais); erro real vira ErrorState com retry.
+            Traz o próprio divisor. */}
+        <TomAssistenteSection />
+
+        {/* Cartão de confirmação (SCRUM-92 inc.2): template + emojis do cartão que o robô
+            manda antes de marcar. Aparece pra TODO cliente elegível, seedada com o cartão
+            atual — o GET /portal/cartao-config decide editável (form) ou travado (read-only +
+            suporte). Flag global OFF / 404 / erro -> some INTEIRA (byte-idêntico pros clientes
+            atuais). Some também no modo atendente. Traz o próprio divisor. */}
+        <CartaoConfigSection />
+
+        {/* Perguntas frequentes (FAQ personalizado, SCRUM-65): até 10 pares P/R que o dono
+            cadastra e a assistente usa ao responder. A seção SE AUTO-GATEIA por
+            features.faq_personalizado (por-clone, FAQ_PERSONALIZADO_SLOTS) e traz o próprio
+            divisor — some INTEIRA (sem divisor órfão) pros clientes atuais (byte-idêntico). */}
+        <FaqSection />
+      </GrupoBloco>
+
+      {/* GRUPO 3 — Agenda e lembretes (SCRUM-98). Agendamento + Lembretes + Conta
+          Google. Bloco some via fail-closed quando nenhuma das três renderiza. */}
+      <GrupoBloco def={GRUPO.agenda}>
+        {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
+            link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
+            MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
+            órfão) pros clientes atuais (byte-idêntico). */}
+        <AgendamentoSection />
+
+        {/* Lembretes: seção da própria "Meu negócio" (config self-service do lembrete
+            automático). Só aparece pra quem tem agenda ativa (atend_from_agenda) —
+            sem agenda não há agendamento pra lembrar. O componente cuida do próprio
+            loading/erro/gating. O wrapper `data-grupo-collapsavel` traz o divisor E
+            some junto quando a seção interna renderiza null (sem divisor órfão). */}
+        {atendFromAgenda && (
+          <div data-grupo-collapsavel className="mt-8 border-t border-line pt-6">
+            <LembretesSection />
           </div>
+        )}
 
-          <div className="flex items-center gap-3">
-            <Button type="submit" className="flex-1" loading={save.isPending} disabled={!dirty}>
-              Salvar
-            </Button>
-          </div>
-
-          <p aria-live="polite" className="px-0.5 text-[12.5px] leading-normal text-ink-soft">
-            {save.isPending
-              ? 'Salvando…'
-              : dirty
-                ? 'Você tem alterações não salvas.'
-                : 'Tudo salvo. Você pode editar quando quiser — é tudo opcional.'}
-          </p>
-        </form>
-      )}
-
-      {/* Monte seu atendente (SCRUM-92): chat de configuração que PROPÕE a persona do
-          robô (meta-agente DeepSeek) + prévia + Aprovar/Ajustar. A seção SE AUTO-GATEIA
-          pelo GET /portal/prompt-builder/draft — 404 (PROMPT_BUILDER_ENABLED OFF) some
-          INTEIRA (byte-idêntico pros clientes atuais). Traz o próprio divisor. */}
-      <MonteAssistenteSection />
-
-      {/* Cartão de confirmação (SCRUM-92 inc.2): template + emojis do cartão que o robô
-          manda antes de marcar. Aparece pra TODO cliente elegível, seedada com o cartão
-          atual — o GET /portal/cartao-config decide editável (form) ou travado (read-only +
-          suporte). Flag global OFF / 404 / erro -> some INTEIRA (byte-idêntico pros clientes
-          atuais). Some também no modo atendente. Traz o próprio divisor. */}
-      <CartaoConfigSection />
-
-      {/* Tom da conversa (SCRUM-92): slider de 4 paradas (do mais direto ao mais caloroso)
-          que mapeia, no backend, pra temperatura do modelo — o dono nunca vê número. A seção
-          SE AUTO-GATEIA pelo GET /portal/tom-assistente — 404 (feature off / sem config) some
-          INTEIRA (byte-idêntico pros clientes atuais); erro real vira ErrorState com retry.
-          Traz o próprio divisor. */}
-      <TomAssistenteSection />
-
-      {/* Agendamento (modo atendente, SCRUM-59): toggle "agenda automática (Google)" +
-          link externo. A seção SE AUTO-GATEIA por features.modo_atendente (por-clone,
-          MODO_ATENDENTE_SLOTS) e traz o próprio divisor — some INTEIRA (sem divisor
-          órfão) pros clientes atuais (byte-idêntico). */}
-      <AgendamentoSection />
-
-      {/* WhatsApp da recepção (Onda 1, SCRUM-68): destino dos avisos ao dono
-          (alert_owner_phone). DE-GATE — editável por TODOS os formatos (saiu da
-          AgendamentoSection, que segue gated por modo atendente). Vazio = fallback pro
-          próprio WhatsApp do negócio (SCRUM-62). Traz o próprio divisor. */}
-      <RecepcaoSection />
-
-      {/* Planos e assinaturas (Onda 1, SCRUM-68 — DE-GATE): texto livre que alimenta o
-          contexto do bot. Passa a aparecer pra TODOS os formatos (o bot já renderiza
-          planos em [NEGOCIO] sem gate); só destravamos a edição no portal. Traz o próprio
-          divisor. */}
-      <PlanosSection />
-
-      {/* Perguntas frequentes (FAQ personalizado, SCRUM-65): até 10 pares P/R que o dono
-          cadastra e a assistente usa ao responder. A seção SE AUTO-GATEIA por
-          features.faq_personalizado (por-clone, FAQ_PERSONALIZADO_SLOTS) e traz o próprio
-          divisor — some INTEIRA (sem divisor órfão) pros clientes atuais (byte-idêntico). */}
-      <FaqSection />
-
-      {/* Lembretes: seção da própria "Meu negócio" (config self-service do lembrete
-          automático). Só aparece pra quem tem agenda ativa (atend_from_agenda) —
-          sem agenda não há agendamento pra lembrar. O componente cuida do próprio
-          loading/erro/gating. */}
-      {atendFromAgenda && (
-        <div className="mt-8 border-t border-line pt-6">
-          <LembretesSection />
+        {/* Google Agenda: credencial da conta Google + guia pra instalar o app e ser
+            notificado no celular/computador. Bloco gateado por
+            GOOGLE_ACCOUNT_PORTAL_ENABLED (404 -> some) e por credencial cadastrada — o
+            componente cuida do próprio loading/erro/gating e some quando não há o que
+            mostrar. O wrapper `data-grupo-collapsavel` traz o divisor E some junto
+            (elimina o divisor órfão que sobrava aqui antes). */}
+        <div data-grupo-collapsavel className="mt-8 border-t border-line pt-6">
+          <GoogleAgendaSection />
         </div>
-      )}
+      </GrupoBloco>
+    </div>
+  );
+}
 
-      {/* Google Agenda: credencial da conta Google + guia pra instalar o app e ser
-          notificado no celular/computador. Bloco gateado por
-          GOOGLE_ACCOUNT_PORTAL_ENABLED (404 -> some) e por credencial cadastrada — o
-          componente cuida do próprio loading/erro/gating e some quando não há o que
-          mostrar (degrada limpo). */}
-      <div className="mt-8 border-t border-line pt-6">
-        <GoogleAgendaSection />
+/**
+ * Mini-nav "pula pra" (SCRUM-98): chips fixos no topo (Dados · Personalidade ·
+ * Agenda) que rolam até a âncora de cada bloco. Ancorada abaixo da Topbar mobile
+ * (`--topbar-h`) e no topo no desktop. NADA fica escondido por padrão — só reduz o
+ * scroll cego no celular. O chip de um grupo integralmente oculto some via CSS
+ * (`[data-perfil-page]:not(:has(...)) [data-chip=...]` em globals.css); o chip de
+ * "Dados" nunca some (o form principal sempre renderiza). Data-driven pelo mesmo
+ * PERFIL_GRUPOS que monta os cabeçalhos — uma fonte-da-verdade só.
+ */
+function PerfilMiniNav() {
+  return (
+    <nav
+      aria-label="Ir para uma seção desta página"
+      className="sticky top-[var(--topbar-h)] z-10 -mx-5 mb-5 border-b border-line bg-bg/95 px-5 py-2.5 backdrop-blur-sm md:top-0"
+    >
+      <ul className="flex gap-2 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {PERFIL_GRUPOS.map((g) => (
+          <li key={g.key}>
+            <a
+              href={`#${g.anchorId}`}
+              data-chip={g.key}
+              className="inline-flex h-9 items-center whitespace-nowrap rounded-full border border-line-strong bg-surface px-3.5 font-display text-[13px] font-semibold text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+            >
+              {g.chip}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+/**
+ * Bloco rotulado (SCRUM-98): cabeçalho (título + subtítulo) + o corpo com as seções
+ * do grupo (envolvidas, nunca alteradas por dentro). O `<section>` carrega a âncora
+ * (`id`) e o `scroll-mt` pra não ficar sob a mini-nav sticky. Fail-closed: quando o
+ * corpo não tem nenhuma seção renderizada, o bloco inteiro some (regra
+ * `[data-grupo-blk]:not(:has([data-grupo-corpo] *:has(*)))` em globals.css) — nunca
+ * sobra header vazio. `primeiro` tira o divisor de topo do primeiro bloco (a mini-nav
+ * já separa).
+ */
+function GrupoBloco({
+  def,
+  primeiro = false,
+  children,
+}: {
+  def: GrupoDef;
+  primeiro?: boolean;
+  children: React.ReactNode;
+}) {
+  const titleId = `${def.anchorId}-titulo`;
+  return (
+    <section
+      id={def.anchorId}
+      data-grupo-blk={def.key}
+      aria-labelledby={titleId}
+      className="scroll-mt-[calc(var(--topbar-h)+72px)] md:scroll-mt-[72px]"
+    >
+      <div
+        className={cn(
+          'flex flex-col',
+          primeiro ? 'mb-4' : 'mb-4 mt-10 border-t-2 border-line-strong pt-9',
+        )}
+      >
+        <h2 id={titleId} className="font-display text-[19px] font-bold tracking-[-0.01em] text-ink">
+          {def.titulo}
+        </h2>
+        <p className="mt-1 text-[13.5px] leading-snug text-ink-soft">{def.subtitulo}</p>
       </div>
-    </>
+      <div data-grupo-corpo>{children}</div>
+    </section>
   );
 }
 

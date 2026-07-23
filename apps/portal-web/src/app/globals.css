@@ -568,3 +568,44 @@ body {
     opacity: 0.6;
   }
 }
+
+/* ==========================================================================
+   SCRUM-98 — tela "Meu negócio" agrupada em 3 blocos + mini-nav sticky.
+   ========================================================================== */
+
+:root {
+  /* Altura da Topbar mobile (`md:hidden`, sticky top-0) — usada pela mini-nav
+     sticky da "Meu negócio" pra encostar logo abaixo dela e pelo scroll-mt das
+     âncoras. Derivada do topbar.tsx: pt(16 + safe-area) + linha(38) + pb(16) +
+     borda(1). Se a Topbar mudar de altura, ajustar aqui. */
+  --topbar-h: calc(71px + env(safe-area-inset-top));
+}
+
+/* Fail-closed dos grupos: um bloco só existe se tiver conteúdo REAL renderizado.
+   Cada seção se auto-gateia (retorna null quando a feature está off); o grupo se
+   esconde quando o corpo não tem NENHUM descendente-com-filhos — ou seja, nenhuma
+   seção nem wrapper preenchido. Assim nunca sobra um header de grupo vazio, sem
+   tocar no interior de nenhuma `*-section.tsx`. `*:has(*)` ignora wrappers vazios
+   (divisor órfão) e casa tanto o `<section>` de sucesso quanto o `<div>` de erro
+   (ambos têm filhos), então um ErrorState nunca some junto. */
+[data-grupo-blk]:not(:has([data-grupo-corpo] *:has(*))) {
+  display: none;
+}
+
+/* Wrapper de seção sem divisor próprio (Lembretes, Google Agenda): some — junto
+   com o divisor que carrega — quando a seção interna renderiza null. Remove o
+   divisor órfão que ficava no rodapé e não conta pro fail-closed do grupo. */
+[data-grupo-collapsavel]:not(:has(*)) {
+  display: none;
+}
+
+/* Chip da mini-nav some junto do grupo vazio (não oferece um "pula pra" morto).
+   O grupo "Dados" sempre tem o form principal, então seu chip nunca some. */
+[data-perfil-page]:not(:has([data-grupo-blk="personalidade"] [data-grupo-corpo] *:has(*)))
+  [data-chip="personalidade"] {
+  display: none;
+}
+[data-perfil-page]:not(:has([data-grupo-blk="agenda"] [data-grupo-corpo] *:has(*)))
+  [data-chip="agenda"] {
+  display: none;
+}
