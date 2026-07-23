@@ -523,7 +523,7 @@ function SectionShell({ children }: { children: React.ReactNode }) {
           <span className="text-brand" aria-hidden>
             <IconSparkle size={18} />
           </span>
-          Monte seu assistente
+          Monte seu atendente
         </h2>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
           Converse com nosso assistente e defina a personalidade do seu assistente — nome, tom e
