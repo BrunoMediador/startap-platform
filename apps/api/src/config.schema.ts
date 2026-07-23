@@ -319,6 +319,24 @@ export const ConfigSchema = z.object({
   // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy de código. NUNCA hardcoded.
   FAQ_PERSONALIZADO_SLOTS: z.string().optional().default(''),
 
+  // ── Cartão de confirmação em RUNTIME — kill-switch GLOBAL (SCRUM-92 inc.2 / ADR 0032) ──
+  // Gate macro do cartão de confirmação montado EM RUNTIME (em vez de baked no bot_prompt).
+  // DORMENTE e NÃO USADA ainda: esta PR (fundação do increment 2) só PROVISIONA a flag OFF —
+  // o código que injeta o cartão em runtime (que lerá flow_clones.cartao_mode='runtime' +
+  // cartao_config, migration 075) vem na próxima PR, atrás DESTE kill-switch.
+  //   OFF (ausente/false) -> comportamento ATUAL byte-a-byte: cartão vem do bot_prompt (baked).
+  //                          Cirilo/Samuel e todo clone 100% inalterados (a rede de segurança
+  //                          golden em bots/systemprompt-golden.test.ts congela exatamente isso).
+  //   ON  (true)          -> (FUTURO) clones com cartao_mode='runtime' passam a receber o
+  //                          cartão injetado por código; env vazio deriva a decisão só da coluna.
+  // OPCIONAL no boot (lição #247: env nova NUNCA derruba api/worker) — ausente = OFF, sem
+  // provisionar nada em prod nesta release. KILL-SWITCH global independente da coluna por-clone.
+  // NUNCA hardcoded.
+  CARTAO_RUNTIME_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   SERVICE_NAME: z.string().optional(),
 });
 
