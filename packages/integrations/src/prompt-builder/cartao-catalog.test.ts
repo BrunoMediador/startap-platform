@@ -26,10 +26,10 @@ import {
 // Espelho do catálogo do picker da UI (apps/portal-web/src/lib/cartao-config.ts EMOJI_CATALOG).
 // Se a UI mudar, este espelho muda junto — o teste é o guarda do contrato compartilhado.
 const UI_CATALOG: Record<string, string[]> = {
-  marca: ['💈', '💇', '💅', '💆', '✂️', '📅'],
+  marca: ['💈', '💇', '💅', '💆', '✂️', '📅', '🌻'],
   dia: ['📅', '🗓️', '📆'],
   horario: ['⏰', '🕐', '⌚'],
-  servico: ['✂️', '💇', '💅', '✨', '📋'],
+  servico: ['✂️', '💇', '💅', '✨', '📋', '📝'],
   valor: ['💰', '💵', '💲', '🪙'],
   confirma: ['✅', '☑️', '👍'],
   profissional: ['👤', '🧑‍🔧', '💇‍♂️'],
