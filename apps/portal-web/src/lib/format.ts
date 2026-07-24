@@ -56,13 +56,30 @@ export function initials(name: string | null | undefined): string {
 }
 
 /**
- * Normaliza um telefone pra so digitos, sem DDI 55 (numero BR). Usado pra
- * comparar contatos x pausas (join client-side) sem depender de formatacao.
- * Ex: "+55 (35) 99115-327" -> "3599115327".
+ * CHAVE DE JOIN telefone->contato, INVARIANTE ao 9º dígito móvel BR. Usado pra
+ * casar /portal/pausas (telefone guardado pelo runtime, COM o 9) com
+ * /portal/contatos (telefone vindo do WAHA/NOWEB, que ora entrega COM ora SEM
+ * o 9 — packages/core/phone.ts::canonicalE164 documenta o mesmo). Sem essa
+ * invariancia o mesmo contato gera chaves diferentes e o NOME nunca resolve
+ * (o dono ve so o numero — bug reportado pelo Bruno).
+ *
+ * Regras (espelham canonicalE164, mas em forma LOCAL sem DDI — a chave e opaca):
+ *  1. tira DDI 55 (13/12 dig com 55 -> local de 11/10);
+ *  2. celular COM 9 (local 11 dig, 3º dig = '9') -> remove o 9 -> forma canonica
+ *     de 10 dig. Fixo (10 dig, comeca 2-5) e celular-sem-9 (10 dig, comeca 6-9)
+ *     ficam intactos e NUNCA colidem entre si.
+ * Ex: "+55 (35) 99115-3270" e "553591153270" -> ambos "3591153270".
  */
 export function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, '');
-  return digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
+  const local = digits.length > 11 && digits.startsWith('55') ? digits.slice(2) : digits;
+  // 9º dígito móvel BR: local de 11 díg (DDD + 9 + 8) com o 9 na posição 2 ->
+  // remove pra bater com a mesma linha entregue SEM o 9 (10 díg). Fixo tem 10
+  // díg (nunca cai aqui) e não colide (começa 2-5, celular-sem-9 começa 6-9).
+  if (local.length === 11 && local[2] === '9') {
+    return local.slice(0, 2) + local.slice(3);
+  }
+  return local;
 }
 
 /**

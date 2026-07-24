@@ -40,10 +40,14 @@ import { ContactSheet } from './contact-sheet';
 
 const PAGE_SIZE = 10;
 
-/** Nome amigavel de um contato/pausa, com fallback. */
-function displayName(name: string | null | undefined): string {
+/**
+ * Rótulo de um contato pra toasts/confirmações: o NOME quando houver, senão o
+ * NÚMERO formatado — nunca a palavra "Contato" sozinha, que não ajuda o dono a
+ * reconhecer quem é (mesma degradação da lista: número vira o título).
+ */
+function rotuloContato(name: string | null | undefined, phone: string): string {
   const trimmed = name?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : 'Contato';
+  return trimmed && trimmed.length > 0 ? trimmed : formatPhoneDisplay(phone);
 }
 
 export default function PausasPage() {
@@ -136,7 +140,7 @@ export default function PausasPage() {
     addPausa.mutate(c.phone, {
       onSuccess: () => {
         setPausando(null);
-        toast.success(`${displayName(c.name)} pausado`);
+        toast.success(`${rotuloContato(c.name, c.phone)} pausado`);
       },
       onError: () => {
         setPausando(null);
@@ -322,7 +326,9 @@ export default function PausasPage() {
       <ConfirmDialog
         open={pausando !== null}
         icon={<IconPause size={24} />}
-        title={`Pausar atendimento de ${pausando ? displayName(pausando.name) : 'esse contato'}?`}
+        title={`Pausar atendimento de ${
+          pausando ? rotuloContato(pausando.name, pausando.phone) : 'esse contato'
+        }?`}
         description="O assistente vai parar de responder esse contato até você despausar."
         confirmLabel="Pausar"
         loading={addPausa.isPending}
