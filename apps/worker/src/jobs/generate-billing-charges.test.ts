@@ -60,6 +60,7 @@ async function loadJob(flag: boolean, apiKey: string | null = 'abc_dev_key') {
       BILLING_DUE_DATE_MODEL: flag,
       ABACATEPAY_API_KEY: apiKey ?? undefined,
       ABACATEPAY_BASE_URL: 'https://api.abacatepay.com',
+      BILLING_REISSUE_AHEAD_MIN: 120,
     },
   }));
   return import('./generate-billing-charges.js');
@@ -126,12 +127,40 @@ describe('runGenerateBillingCharges — GERACAO (so na janela)', () => {
     // amount = snapshot do slot; duePeriod = next_due_date vigente.
     expect(ensurePixChargeForSlot).toHaveBeenCalledWith(
       expect.anything(),
-      { slot: 'a_vencer_slot', duePeriod: '2026-06-15', amountCents: 19900 },
+      expect.objectContaining({
+        slot: 'a_vencer_slot',
+        duePeriod: '2026-06-15',
+        amountCents: 19900,
+      }),
       NOW,
     );
     expect(ensurePixChargeForSlot).toHaveBeenCalledWith(
       expect.anything(),
-      { slot: 'vencido_slot', duePeriod: '2026-05-01', amountCents: 9900 },
+      expect.objectContaining({ slot: 'vencido_slot', duePeriod: '2026-05-01', amountCents: 9900 }),
+      NOW,
+    );
+  });
+
+  // SCRUM-124: o cron passa a janela de reemissao antecipada (BILLING_REISSUE_AHEAD_MIN em
+  // ms) pro service — e o que faz a proxima cobranca nascer ANTES do vencimento (sem gap).
+  it('repassa reissueAheadMs (reemissao antecipada) pro ensurePixChargeForSlot', async () => {
+    listBilling.mockResolvedValue([
+      { slot: 'a_vencer_slot', next_due_date: '2026-06-15', amount_cents: 19900 },
+    ]);
+    computeBillingState.mockReturnValue({ state: 'a_vencer', podeGerarPix: true });
+    ensurePixChargeForSlot.mockResolvedValue({
+      charge: { id: '1' },
+      created: false,
+      reissued: false,
+    });
+
+    const { runGenerateBillingCharges } = await loadJob(true);
+    // default do param = config.BILLING_REISSUE_AHEAD_MIN (120) * 60_000 = 7_200_000 ms.
+    await runGenerateBillingCharges(NOW);
+
+    expect(ensurePixChargeForSlot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ slot: 'a_vencer_slot', reissueAheadMs: 120 * 60_000 }),
       NOW,
     );
   });

@@ -174,11 +174,15 @@ async function main() {
     }
   });
 
-  // Billing F4 (ADR 0014 §G): 1x/dia as 08:00 America/Sao_Paulo. Geracao + reconciliacao +
-  // expiracao de cobrancas PIX. ATRAS da flag BILLING_DUE_DATE_MODEL — com a flag OFF o job
-  // e NO-OP (nao le billing, nao instancia gateway, nao toca banco). SEM aviso ao cliente.
-  new Cron(
-    '0 8 * * *',
+  // Billing F4 (ADR 0014 §G): HORARIO (BILLING_CRON, default '0 * * * *'). Geracao (com
+  // reemissao antecipada) + reconciliacao + expiracao de cobrancas PIX. Era 1x/dia as 08:00,
+  // o que deixava um buraco deterministico de ~24h sem PIX pagavel entre o vencimento de uma
+  // cobranca e a geracao da proxima (SCRUM-124). ATRAS da flag BILLING_DUE_DATE_MODEL — com a
+  // flag OFF o job e NO-OP (nao le billing, nao instancia gateway, nao toca banco). SEM aviso
+  // ao cliente. Padrao de cron invalido cai no fallback via scheduleCronSafe.
+  scheduleCronSafe(
+    config.BILLING_CRON,
+    '0 * * * *',
     { name: 'generate-billing-charges', timezone: 'America/Sao_Paulo' },
     async () => {
       const executionId = randomUUID();

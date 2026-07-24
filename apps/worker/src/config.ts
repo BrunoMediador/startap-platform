@@ -41,6 +41,23 @@ export const WorkerConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Cadencia + reemissao antecipada do cron de billing F4 (SCRUM-124) ───────
+  // O cron de geracao/reconciliacao/expiracao roda HORARIO (era 1x/dia as 08:00): antes
+  // uma cobranca vencia (expires_at) e a PROXIMA so nascia ~24h depois — janela
+  // deterministica SEM PIX pagavel (cliente abria o portal e nao achava cobranca). So a
+  // CADENCIA horaria ja corta o buraco de ~24h pra <=1h, com ZERO risco novo: a proxima
+  // cobranca nasce no cron seguinte a expiracao. Padrao invalido NUNCA crasha o boot
+  // (scheduleCronSafe -> fallback).
+  BILLING_CRON: z.string().default('0 * * * *'),
+  // Janela (min) de reemissao ANTECIPADA: pending cujo expires_at cai dentro de now+janela
+  // e reemitida AGORA reusando a MESMA linha (idempotente, sem duplicar). Isso fecharia a
+  // ultima <=1h do buraco, MAS sobrescreve o abacate_charge_id antigo — o QR velho segue
+  // pagavel ~janela e o webhook casa SO por abacate_charge_id (webhook.ts) => pagamento no
+  // QR velho vira ORFAO, nunca creditado. Por isso o DEFAULT DO CODIGO e 0 (OFF): NAO
+  // confiar em env=0 (deploy futuro esqueceria e ligaria o vetor). So ligar (>0) DEPOIS do
+  // fallback por external_id no webhook (SCRUM-124 follow-up). nonnegative: aceita o 0.
+  BILLING_REISSUE_AHEAD_MIN: z.coerce.number().int().nonnegative().default(0),
+
   // ── Cron de limpeza de trials ÓRFÃOS (Missao 020 F1 — condicao 2 do PORTAL_SIGNUP) ──
   // TODAS opcionais com default (licao #247: nada aqui e obrigatorio no boot).
   // Com PORTAL_SIGNUP OFF nao existe clone trial_status='awaiting' => o job roda e

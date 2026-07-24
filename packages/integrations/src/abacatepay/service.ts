@@ -186,6 +186,16 @@ export interface EnsureChargeForSlotInput {
   /** Texto curto exibido no PIX. Default 'Mensalidade'. */
   description?: string;
   expiresInSec?: number;
+  /**
+   * Janela de REEMISSAO ANTECIPADA em ms (SCRUM-124). Uma pending cuja validade cai DENTRO
+   * de [now, now+reissueAheadMs] e tratada como "precisa reemitir" — a proxima cobranca
+   * nasce ANTES da atual expirar. Reemite a MESMA linha (idempotente, 1 pending/slot — NAO
+   * cria 2a cobranca), MAS abandona o abacate_charge_id antigo (QR velho segue pagavel =>
+   * pagamento orfao enquanto o webhook casar so por abacate_charge_id). Default 0 = OFF
+   * (comportamento legado: so reemite ja expirada) — e o valor de prod ate o fallback por
+   * external_id no webhook (BILLING_REISSUE_AHEAD_MIN=0 no config). O portal mantem 0.
+   */
+  reissueAheadMs?: number;
 }
 
 /**
@@ -219,10 +229,18 @@ export async function ensurePixChargeForSlot(
 
   return billingCharges.withBillingSlotLock(input.slot, async (client) => {
     // 1) Recheck sob o lock: ja existe uma pending nao-expirada? Reusa (idempotencia).
+    // O filtro do read usa o `now` REAL (expires_at > now): idempotencia intacta, nunca
+    // enxerga uma linha ja-expirada como ativa.
     const active = await billingCharges.getActivePendingCharge(input.slot, now, client);
 
     if (active) {
-      if (isChargeStillValid(active, now)) {
+      // Horizonte da decisao de validade: agora + janela de reemissao antecipada. Uma
+      // pending que expira DENTRO da proxima janela de execucao ja e reemitida (reusando a
+      // MESMA linha), pra proxima cobranca nascer ANTES da atual expirar — sem gap sem PIX
+      // (SCRUM-124). reissueAheadMs=0 (default/portal) => horizonte == agora (legado).
+      const aheadMs = input.reissueAheadMs && input.reissueAheadMs > 0 ? input.reissueAheadMs : 0;
+      const decisionAt = aheadMs > 0 ? new Date(now.getTime() + aheadMs) : now;
+      if (isChargeStillValid(active, decisionAt)) {
         log.info({ slot: input.slot, chargeId: active.id }, 'cobranca ativa valida — reuso');
         return { charge: active, created: false, reissued: false };
       }
