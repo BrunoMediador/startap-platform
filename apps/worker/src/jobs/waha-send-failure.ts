@@ -5,4 +5,4 @@
  * pelo apps/api (owner-alert/client-alert), que não pode importar do worker. Este arquivo mantém
  * o caminho de import histórico do worker (client-disconnect-notify/monitor + o teste local).
  */
-export { isDefinitiveNonDelivery } from '@startap/core/waha-send-failure';
+export { isDefinitiveNonDelivery, sendWithSettleTimeout } from '@startap/core/waha-send-failure';
