@@ -67,14 +67,30 @@ describe('formatPhoneDisplay (numero COMPLETO pro dono — sem mascara)', () => 
   });
 });
 
-describe('normalizePhone (join contatos x pausas)', () => {
-  it('tira DDI 55 e qualquer formatacao', () => {
-    expect(normalizePhone('+55 (35) 99115-3270')).toBe('35991153270');
-    expect(normalizePhone('5535991153270')).toBe('35991153270');
-    expect(normalizePhone('35991153270')).toBe('35991153270');
+describe('normalizePhone (chave de join contatos x pausas, invariante ao 9º dígito)', () => {
+  it('tira DDI 55, qualquer formatacao E o 9º dígito móvel (forma canônica de 10 díg)', () => {
+    expect(normalizePhone('+55 (35) 99115-3270')).toBe('3591153270');
+    expect(normalizePhone('5535991153270')).toBe('3591153270');
+    expect(normalizePhone('35991153270')).toBe('3591153270');
   });
   it('numeros equivalentes (com/sem DDI) normalizam igual', () => {
     expect(normalizePhone('5511999990007')).toBe(normalizePhone('11999990007'));
+  });
+  // CORE DO FIX: WAHA/NOWEB entrega o celular ora COM ora SEM o 9 (canonicalE164
+  // no backend); o pausas guarda COM o 9. A chave TEM que casar os dois — senão o
+  // nome nunca resolve e o dono vê só o número.
+  it('celular COM 9 e o MESMO SEM 9 geram a MESMA chave (join contatos↔pausas)', () => {
+    // com o 9 (como o runtime guarda a pausa) vs sem o 9 (como o WAHA às vezes lista)
+    expect(normalizePhone('5535991153270')).toBe(normalizePhone('553591153270'));
+    expect(normalizePhone('35991153270')).toBe(normalizePhone('3591153270'));
+    // com DDI de um lado, sem DDI do outro, e ainda a diferença do 9
+    expect(normalizePhone('+55 (35) 99115-3270')).toBe(normalizePhone('(35) 9115-3270'));
+  });
+  it('fixo (10 díg, começa 2-5) fica intacto e NÃO colide com celular-sem-9', () => {
+    expect(normalizePhone('3533224455')).toBe('3533224455');
+    expect(normalizePhone('5535 3322-4455')).toBe('3533224455');
+    // celular-sem-9 (começa 6-9) e fixo (começa 2-5) permanecem distintos
+    expect(normalizePhone('3591153270')).not.toBe(normalizePhone('3533224455'));
   });
 });
 

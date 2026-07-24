@@ -16,6 +16,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import type { PausaRow, RecentContact } from '@/lib/api-types';
 import { formatPausadoHa, formatPhoneDisplay, initials, normalizePhone } from '@/lib/format';
+import { pausaMatchesBusca } from '@/lib/pausas';
 import { useAddPausa, useContatos, usePausas, useRemovePausa } from '@/lib/queries';
 /**
  * Pausas (spec 6.9/6.10 + 3.5). Lista de pausados + "Pausar um número" (abre
@@ -40,10 +41,14 @@ import { ContactSheet } from './contact-sheet';
 
 const PAGE_SIZE = 10;
 
-/** Nome amigavel de um contato/pausa, com fallback. */
-function displayName(name: string | null | undefined): string {
+/**
+ * Rótulo de um contato pra toasts/confirmações: o NOME quando houver, senão o
+ * NÚMERO formatado — nunca a palavra "Contato" sozinha, que não ajuda o dono a
+ * reconhecer quem é (mesma degradação da lista: número vira o título).
+ */
+function rotuloContato(name: string | null | undefined, phone: string): string {
   const trimmed = name?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : 'Contato';
+  return trimmed && trimmed.length > 0 ? trimmed : formatPhoneDisplay(phone);
 }
 
 export default function PausasPage() {
@@ -96,20 +101,16 @@ export default function PausasPage() {
     [nomePorTelefone],
   );
 
-  // Filtro por numero (normalizado) e por nome. Busca vazia = lista inteira.
-  const buscaDigitos = busca.replace(/\D/g, '');
-  const buscaTexto = busca.trim().toLowerCase();
+  // Filtro por numero (digitos crus do ORIGINAL) e por nome (via join). Busca
+  // por NÚMERO casa o número que o dono VÊ/digita, NÃO a chave de-9'd — ver
+  // pausaMatchesBusca. Busca vazia = lista inteira.
   const filtradas = useMemo(() => {
     if (busca.trim() === '') return pausas;
-    return pausas.filter((p) => {
-      const tel = normalizePhone(p.telefone);
-      const porNumero = buscaDigitos.length > 0 && tel.includes(buscaDigitos);
-      const nome = nomePorTelefone.get(normalizePhone(p.telefone))?.toLowerCase();
-      const porNome = nome ? nome.includes(buscaTexto) : false;
-      return porNumero || porNome;
-    });
+    return pausas.filter((p) =>
+      pausaMatchesBusca(p.telefone, nomePorTelefone.get(normalizePhone(p.telefone)) ?? null, busca),
+    );
     // nomePorTelefone entra na dep pra refiltrar quando os contatos chegam.
-  }, [pausas, busca, buscaDigitos, buscaTexto, nomePorTelefone]);
+  }, [pausas, busca, nomePorTelefone]);
 
   // Paginacao client-side de 10/10 (item 4).
   const totalPages = Math.max(1, Math.ceil(filtradas.length / PAGE_SIZE));
@@ -136,7 +137,7 @@ export default function PausasPage() {
     addPausa.mutate(c.phone, {
       onSuccess: () => {
         setPausando(null);
-        toast.success(`${displayName(c.name)} pausado`);
+        toast.success(`${rotuloContato(c.name, c.phone)} pausado`);
       },
       onError: () => {
         setPausando(null);
@@ -322,7 +323,9 @@ export default function PausasPage() {
       <ConfirmDialog
         open={pausando !== null}
         icon={<IconPause size={24} />}
-        title={`Pausar atendimento de ${pausando ? displayName(pausando.name) : 'esse contato'}?`}
+        title={`Pausar atendimento de ${
+          pausando ? rotuloContato(pausando.name, pausando.phone) : 'esse contato'
+        }?`}
         description="O assistente vai parar de responder esse contato até você despausar."
         confirmLabel="Pausar"
         loading={addPausa.isPending}
