@@ -16,6 +16,7 @@ import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import type { PausaRow, RecentContact } from '@/lib/api-types';
 import { formatPausadoHa, formatPhoneDisplay, initials, normalizePhone } from '@/lib/format';
+import { pausaMatchesBusca } from '@/lib/pausas';
 import { useAddPausa, useContatos, usePausas, useRemovePausa } from '@/lib/queries';
 /**
  * Pausas (spec 6.9/6.10 + 3.5). Lista de pausados + "Pausar um número" (abre
@@ -100,20 +101,16 @@ export default function PausasPage() {
     [nomePorTelefone],
   );
 
-  // Filtro por numero (normalizado) e por nome. Busca vazia = lista inteira.
-  const buscaDigitos = busca.replace(/\D/g, '');
-  const buscaTexto = busca.trim().toLowerCase();
+  // Filtro por numero (digitos crus do ORIGINAL) e por nome (via join). Busca
+  // por NÚMERO casa o número que o dono VÊ/digita, NÃO a chave de-9'd — ver
+  // pausaMatchesBusca. Busca vazia = lista inteira.
   const filtradas = useMemo(() => {
     if (busca.trim() === '') return pausas;
-    return pausas.filter((p) => {
-      const tel = normalizePhone(p.telefone);
-      const porNumero = buscaDigitos.length > 0 && tel.includes(buscaDigitos);
-      const nome = nomePorTelefone.get(normalizePhone(p.telefone))?.toLowerCase();
-      const porNome = nome ? nome.includes(buscaTexto) : false;
-      return porNumero || porNome;
-    });
+    return pausas.filter((p) =>
+      pausaMatchesBusca(p.telefone, nomePorTelefone.get(normalizePhone(p.telefone)) ?? null, busca),
+    );
     // nomePorTelefone entra na dep pra refiltrar quando os contatos chegam.
-  }, [pausas, busca, buscaDigitos, buscaTexto, nomePorTelefone]);
+  }, [pausas, busca, nomePorTelefone]);
 
   // Paginacao client-side de 10/10 (item 4).
   const totalPages = Math.max(1, Math.ceil(filtradas.length / PAGE_SIZE));

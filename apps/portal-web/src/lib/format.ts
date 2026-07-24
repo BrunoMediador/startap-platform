@@ -76,7 +76,9 @@ export function normalizePhone(raw: string): string {
   // 9º dígito móvel BR: local de 11 díg (DDD + 9 + 8) com o 9 na posição 2 ->
   // remove pra bater com a mesma linha entregue SEM o 9 (10 díg). Fixo tem 10
   // díg (nunca cai aqui) e não colide (começa 2-5, celular-sem-9 começa 6-9).
-  if (local.length === 11 && local[2] === '9') {
+  // Guarda defensiva: só de-9 quando o dígito após o 9 é prefixo real de celular
+  // (6-9) — um 11-díg malformado "DD 9 [2-5]…" não é achatado pra forma de fixo.
+  if (local.length === 11 && local[2] === '9' && local[3] >= '6') {
     return local.slice(0, 2) + local.slice(3);
   }
   return local;
