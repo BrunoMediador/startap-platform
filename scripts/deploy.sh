@@ -5,7 +5,7 @@
 # Uso: ./scripts/deploy.sh
 #
 # O que faz:
-#   1. git pull origin main (rebase para evitar merges acidentais)
+#   1. checkout do sha do CI (DEPLOY_SHA, se vier) ou pull de main (fallback manual)
 #   2. docker compose build  (rebuild images com novo código)
 #   3. apply migrations (migrate.sh)
 #   4. docker compose up -d  (substitui containers api/worker)
@@ -18,10 +18,28 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "==> git pull"
+echo "==> git fetch origin main"
 git fetch origin main
-git checkout main
-git pull --rebase origin main
+
+# SCRUM-109: sobe EXATAMENTE o commit que passou no CI, nao o HEAD de main NA HORA.
+# O deploy.yml (workflow_run) exporta DEPLOY_SHA=workflow_run.head_sha. Sem esse pin,
+# um 2o merge proximo entrava em prod sem CI verde (corrida provada por carimbo de
+# tempo: deploy fez "Updating ..X" 1s ANTES do CI de X terminar).
+DEPLOY_SHA="${DEPLOY_SHA:-}"
+if [ -n "$DEPLOY_SHA" ]; then
+  echo "==> git checkout ${DEPLOY_SHA} (sha do CI que passou, detached) [SCRUM-109]"
+  # best-effort: garante o objeto mesmo em corrida rara (o fetch de main ja o traz,
+  # pois head_sha e alcancavel a partir de origin/main). Se o sha nao existir, o
+  # checkout abaixo falha ALTO e o deploy aborta (fail-safe) — nunca sobe errado.
+  git fetch origin "$DEPLOY_SHA" 2>/dev/null || true
+  git checkout --detach "$DEPLOY_SHA"
+else
+  # Fallback: deploy manual na VPS / workflow_dispatch sem sha — comportamento antigo.
+  # (o proximo deploy volta pra main normal via este mesmo caminho ou re-pina o sha).
+  echo "==> sem DEPLOY_SHA — checkout main + pull --rebase (fallback manual)"
+  git checkout main
+  git pull --rebase origin main
+fi
 
 echo "==> docker compose build (sem cache pra evitar staleness)"
 docker compose build --no-cache

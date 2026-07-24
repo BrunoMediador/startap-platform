@@ -46,13 +46,21 @@ jobs:
     steps:
       # NÃO usamos actions/checkout: o deploy roda no checkout de PRODUÇÃO
       # (/opt/automacoes/code), não no _work do runner. O próprio deploy.sh
-      # faz `git fetch + checkout main + pull --rebase` lá dentro. Assim o
-      # comportamento é byte-a-byte idêntico ao deploy manual já validado.
+      # faz `git fetch` + checkout lá dentro.
+      #
+      # SCRUM-109: passamos o SHA EXATO que passou no CI (workflow_run.head_sha)
+      # via DEPLOY_SHA. O deploy.sh faz `git checkout --detach <sha>` desse commit
+      # — assim sobe o codigo TESTADO, e nao o HEAD de main NA HORA (que, com um 2o
+      # merge proximo, poderia ser um commit ainda SEM CI verde). Se DEPLOY_SHA vier
+      # vazio (deploy manual na VPS / dispatch), o script cai pro checkout main antigo.
       - name: Deploy (scripts/deploy.sh local na VPS)
         working-directory: /opt/automacoes/code
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -e
           echo "Runner: $(hostname) | user: $(whoami) | pwd: $(pwd)"
+          echo "DEPLOY_SHA (workflow_run.head_sha): ${DEPLOY_SHA:-<vazio>}"
           bash ./scripts/deploy.sh
 
       # Limpeza pos-deploy: o build roda com --no-cache, entao o cache de build
