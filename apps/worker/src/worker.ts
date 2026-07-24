@@ -12,6 +12,7 @@ import { runAntibot } from './jobs/antibot.js';
 import { runBillingSilenceAlert } from './jobs/billing-silence-alert.js';
 import { runBotDetectAutopause } from './jobs/bot-detect-autopause.js';
 import { runBotDetect } from './jobs/bot-detect.js';
+import { runChatRetention } from './jobs/chat-retention.js';
 import { runCleanupBotPausa } from './jobs/cleanup-bot-pausa.js';
 import { runCleanupChat } from './jobs/cleanup-chat.js';
 import { runCleanupTrialOrphans } from './jobs/cleanup-trial-orphans.js';
@@ -110,6 +111,10 @@ async function main() {
       log.info({ ...cleanupResult }, 'cleanup cycle');
       const botPausaResult = await runCleanupBotPausa();
       if (botPausaResult.deleted > 0) log.info({ ...botPausaResult }, 'cleanup-bot-pausa cycle');
+      // Retenção por IDADE (SCRUM-136) — DRY-RUN por default; só apaga com
+      // CHAT_RETENTION_ENABLED=true + GO do Bruno. Roda DEPOIS do prune por quantidade.
+      const retentionResult = await runChatRetention();
+      Object.assign(cleanupResult as object, { chatRetention: retentionResult });
       const prunedLogs = await flowExecutionLog.pruneOldFlowEvents(14);
       // Fecha execuções presas em running há mais de 5 minutos (safety net).
       const closedStale = await flowExecutionLog.closeStaleRunning(5);

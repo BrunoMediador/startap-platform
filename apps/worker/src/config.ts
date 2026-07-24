@@ -8,6 +8,27 @@ export const WorkerConfigSchema = z.object({
   CHAT_MEMORY_RETENTION: z.coerce.number().int().positive().default(30),
   CHAT_STALE_RUNNING_MAX_MINUTES: z.coerce.number().int().positive().default(30),
 
+  // ── Retenção por IDADE das mensagens de clientes finais (SCRUM-136, LGPD) ────
+  // "Não precisamos ficar salvando por muito tempo as mensagens dos clientes dos
+  // nossos clientes" (Bruno). Remove CONVERSA VELHA inteira (idade > CHAT_RETENTION_DAYS)
+  // das tabelas chat_histories* — inclusive tabelas órfãs de clones excluídos (Seven 7).
+  // É ADICIONAL ao prune por quantidade (CHAT_MEMORY_RETENTION, memória do bot), que NÃO
+  // muda: sessão ATIVA nunca perde suas últimas N mensagens, mesmo velhas.
+  //
+  // APAGAR CONVERSA É IRREVERSÍVEL. Por isso a feature nasce em DRY-RUN: com
+  // CHAT_RETENTION_ENABLED ausente/false (default) o job só CONTA e LOGA quantas linhas
+  // seriam apagadas por tabela, SEM apagar nada. A deleção REAL só roda com
+  // CHAT_RETENTION_ENABLED=true — equivalente do "sobe OFF" pra código destrutivo.
+  // ⚠️ Ligar (=true) em prod é decisão do Bruno (GO explícito). NUNCA hardcoded.
+  CHAT_RETENTION_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Idade (dias) a partir da qual uma mensagem é candidata à remoção. Default CONSERVADOR
+  // de 180 dias — o Bruno bate o número final. Piso de segurança anti-fat-finger no job
+  // (CHAT_RETENTION_FLOOR_DAYS): valor abaixo do piso força DRY-RUN mesmo com ENABLED=true.
+  CHAT_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
+
   // ── Allowlist DURA do antibot (SCRUM-4 PR-A) ───────────────────────────────
   // Quando ON, ANTES de o antibot pausar um suspeito de flood, checa se aquele telefone JÁ
   // tem histórico de agendamento NAQUELE clone (atendimentos) — se tem, é cliente real e NÃO
