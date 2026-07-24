@@ -117,11 +117,13 @@ async function loadCloneContext(slot: string): Promise<{
   productType: 'individual' | 'estabelecimento';
   servicos: string[];
   cartaoMode: 'baked' | 'runtime';
+  promptCustom: boolean;
 } | null> {
   const clone = await flowClones.getCloneBySlot(slot);
   if (!clone) return null;
-  // área + cartao_mode ATUAL do clone numa única leitura (getAreaPromptCustomCartao, SCRUM-92 inc.2).
-  const { area, cartaoMode } = await cloneColaboradores.getAreaPromptCustomCartao(slot);
+  // área + cartao_mode + prompt_custom ATUAIS do clone numa única leitura (getAreaPromptCustomCartao,
+  // SCRUM-92 inc.2). promptCustom alimenta o guard anti-cartão-duplo do approve (SCRUM-120).
+  const { area, cartaoMode, promptCustom } = await cloneColaboradores.getAreaPromptCustomCartao(slot);
 
   // ── MODO REAL DO RUNTIME (SCRUM-92, raiz do incidente Ingrid) ──────────────────────
   // O runtime (apps/api/src/bots/teste_barbearia.ts, process()) só entra no ramo ATENDENTE
@@ -151,6 +153,7 @@ async function loadCloneContext(slot: string): Promise<{
     productType,
     servicos,
     cartaoMode,
+    promptCustom,
   };
 }
 
@@ -491,6 +494,27 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // — o runtime injeta o cartão e teríamos CARTÃO-DUPLO. Runtime quando a flag global liga (clones
     // novos) OU o clone já está em runtime (preserva o modo, nunca REGRIDE pra baked).
     const cartaoRuntime = config.CARTAO_RUNTIME_ENABLED || ctx?.cartaoMode === 'runtime';
+
+    // INVARIANTE anti-cartão-duplo (SCRUM-120): MESMO guard do endpoint PUT /portal/cartao-config
+    // (isCartaoRuntimeFlipBlocked, fonte única). Se o approve FLIPARIA pra runtime (cartaoRuntime)
+    // um clone que é persona à mão (prompt_custom=true) AINDA baked, bloqueia com 409 — NÃO depende
+    // do bakedMarker (heurística). Foi por aqui que o clone da Ingrid virou runtime (prompt_custom
+    // baked + flag ON setava cartao_mode='runtime' na transação). Clone já-runtime e template
+    // (prompt_custom=false) NÃO são bloqueados. O draft do Redis fica intacto (nada é perdido).
+    if (
+      cartaoRuntime &&
+      promptBuilder.isCartaoRuntimeFlipBlocked({
+        promptCustom: ctx?.promptCustom ?? false,
+        cartaoMode: ctx?.cartaoMode ?? 'baked',
+      })
+    ) {
+      log.warn(
+        { slot },
+        'approve bloqueado: prompt_custom baked não pode flipar pra cartao_mode=runtime (SCRUM-120)',
+      );
+      return reply.code(409).send({ error: 'cartao_bloqueado', reason: 'prompt_custom' });
+    }
+
     const bloco = cartaoRuntime
       ? ''
       : promptBuilder.buildBlocoEstrutural({ modo: blocoModo, area });
