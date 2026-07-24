@@ -66,6 +66,14 @@ export interface GcalAtendSyncResult extends Record<string, unknown> {
   deleted: number;
   /** slots cuja DELEÇÃO foi pulada por listagem incompleta (fail-safe). */
   skippedIncomplete: number;
+  /** slots pulados por gcal não configurado/ativo — snapshot null (fail-safe: zero upsert/delete). */
+  skippedNoGcal: number;
+  /**
+   * Linhas de atendimento PRESERVADAS na F4 porque o colaborador delas não foi listado por completo
+   * neste ciclo (dropout parcial de um colaborador do estabelecimento — SCRUM-111). Fail-safe: sem
+   * conhecimento completo do calendário daquele colaborador, seu faturamento não é apagado.
+   */
+  deletionsSkippedColabAbsent: number;
   /** slots que caíram no catch individual (erro isolado, não derrubou o ciclo). */
   slotsWithError: number;
 }
@@ -82,6 +90,15 @@ interface SlotSnapshot {
   complete: boolean;
   pages: number;
   incompleteReason?: string;
+  /**
+   * Estabelecimento: conjunto dos colaboradorId que getGcalsForSlot ENTREGOU e cuja listagem
+   * chegou (a F4 só é alcançada com `complete=true`, ou seja, todos os ENTREGUES vieram por
+   * inteiro). Um colaborador que SUMIU de getGcalsForSlot (dropout parcial: gcal_status virou
+   * != 'active', calendarId caiu, etc.) NÃO está aqui — e por isso o faturamento dele não é
+   * apagado nesta rodada (fail-safe SCRUM-111). `null` = caminho INDIVIDUAL (1 calendário; a
+   * deleção é gated só por `complete`, comportamento inalterado).
+   */
+  listedColaboradorIds: Set<number> | null;
 }
 
 /** CSV → lista de slots (trim, ignora vazios). '*' não é expandido aqui (ver listAtendSyncSlots). */
@@ -184,10 +201,14 @@ async function buildSlotSnapshot(
     const colabs = await gcal.getGcalsForSlot(scope.slot);
     if (colabs.length === 0) return null; // sem agenda ativa de colaborador → skip slot.
     const events: SnapEvent[] = [];
+    // Só os colaboradores ENTREGUES por getGcalsForSlot entram aqui. Um colaborador que sumiu
+    // da lista (dropout parcial) nunca é adicionado → a F4 não deleta o faturamento dele (SCRUM-111).
+    const listedColaboradorIds = new Set<number>();
     let complete = true;
     let pages = 0;
     let incompleteReason: string | undefined;
     for (const c of colabs) {
+      listedColaboradorIds.add(c.colaboradorId);
       const paged = await c.client.listEventsPaged({
         timeMin: listFromIso,
         timeMax: listToIso,
@@ -201,7 +222,7 @@ async function buildSlotSnapshot(
       }
       for (const ev of paged.events) events.push({ event: ev, colaboradorId: c.colaboradorId });
     }
-    return { events, complete, pages, incompleteReason };
+    return { events, complete, pages, incompleteReason, listedColaboradorIds };
   }
 
   // Individual: 1 calendário do clone.
@@ -218,6 +239,7 @@ async function buildSlotSnapshot(
     complete: paged.complete,
     pages: paged.pages,
     incompleteReason: paged.incompleteReason,
+    listedColaboradorIds: null, // individual → sem gate por colaborador (só `complete`).
   };
 }
 
@@ -258,7 +280,16 @@ async function reconcileSlot(
 
   // F1 — snapshot da agenda.
   const snapshot = await buildSlotSnapshot(scope, listFrom.toISOString(), listTo.toISOString());
-  if (snapshot === null) return; // gcal não configurado/ativo → skip inteiro (fail-safe).
+  if (snapshot === null) {
+    // gcal não configurado/ativo → skip inteiro (fail-safe: zero upsert/delete). Antes saía MUDO
+    // e sem contador — agora conta e loga pra visibilidade (SCRUM-111).
+    result.skippedNoGcal++;
+    log.warn(
+      { slot: scope.slot, product_type: scope.product_type },
+      'gcal-atend-sync: gcal não configurado/ativo — slot pulado (nenhum upsert/delete)',
+    );
+    return;
+  }
 
   // F2/F3 — conjunto PRESENTE + upsert (sempre roda, mesmo com listagem incompleta).
   const presentIds = new Set<string>();
@@ -310,8 +341,25 @@ async function reconcileSlot(
     delTo.toISOString(),
     updatedBefore,
   );
+  // SCRUM-111: no estabelecimento, um evento só pode ser tido por "sumiu da agenda" se o
+  // calendário do colaborador DELE foi listado por completo neste ciclo. Se o colaborador sumiu
+  // de getGcalsForSlot (dropout parcial), NÃO temos conhecimento da agenda dele → preservar.
+  const colabGate = snapshot.listedColaboradorIds; // null = individual (sem gate).
+  const absentColabIds = new Set<number>();
+  let skippedByColab = 0;
   for (const r of dbRows) {
     if (presentIds.has(r.gcal_event_id)) continue; // ainda na agenda → mantém.
+    if (colabGate !== null) {
+      // Estabelecimento: só deleta se o colaborador da linha entrou no snapshot deste ciclo.
+      // colaborador_id null (linha SOLO/legada) OU ausente do gate = sem conhecimento → preserva.
+      const colabId = r.colaborador_id;
+      if (colabId == null || !colabGate.has(colabId)) {
+        skippedByColab++;
+        result.deletionsSkippedColabAbsent++;
+        if (colabId != null) absentColabIds.add(colabId);
+        continue;
+      }
+    }
     // SCRUM-90: carimba deleted_reason/deleted_by na MESMA linha (trilha durável no banco).
     await atendimentos.softDeleteAtendimentoByEvent(scope.slot, r.gcal_event_id, SYNC_DELETE_AUDIT);
     result.deleted++;
@@ -330,6 +378,20 @@ async function reconcileSlot(
       'gcal-atend-sync: linha removida — agenda é fonte da verdade (inclusive paga)',
     );
   }
+
+  // SCRUM-111: visibilidade do fail-safe por colaborador. Sem este log, um dropout parcial
+  // preservava faturamento em silêncio (bom pro cliente, cego pra operação).
+  if (skippedByColab > 0) {
+    log.warn(
+      {
+        slot: scope.slot,
+        skippedRows: skippedByColab,
+        listedColabs: colabGate ? colabGate.size : 0,
+        absentColabIds: [...absentColabIds].sort((a, b) => a - b),
+      },
+      'gcal-atend-sync: deleção pulada — colaborador ausente/incompleto no snapshot (fail-safe SCRUM-111)',
+    );
+  }
 }
 
 /**
@@ -344,6 +406,8 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
     upserted: 0,
     deleted: 0,
     skippedIncomplete: 0,
+    skippedNoGcal: 0,
+    deletionsSkippedColabAbsent: 0,
     slotsWithError: 0,
   };
 

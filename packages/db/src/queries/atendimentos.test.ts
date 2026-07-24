@@ -757,6 +757,8 @@ describe('listAgendaAtendimentosInWindow (candidatos do reconciler — SQL)', ()
     const [sql, params] = lastCall();
     expect(sql).toContain("origem = 'agenda'");
     expect(sql).toContain('gcal_event_id IS NOT NULL');
+    // SCRUM-111: projeta colaborador_id (fail-safe de deleção por colaborador no estabelecimento).
+    expect(sql).toContain('colaborador_id');
     expect(sql).toContain('deleted_at IS NULL');
     expect(sql).toContain('inicio_at >= $2::timestamptz');
     expect(sql).toContain('inicio_at <  $3::timestamptz');
@@ -773,7 +775,7 @@ describe('listAgendaAtendimentosInWindow (candidatos do reconciler — SQL)', ()
     ]);
   });
 
-  it('mapeia números coeridos (valor/desconto) e preserva forma/data', async () => {
+  it('mapeia números coeridos (valor/desconto/colaborador_id) e preserva forma/data', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -782,9 +784,18 @@ describe('listAgendaAtendimentosInWindow (candidatos do reconciler — SQL)', ()
           desconto_cents: '0',
           forma_pagamento: 'pix',
           data: '2026-07-10',
+          colaborador_id: '20', // BIGINT chega como string no driver pg → coerção pra number.
+        },
+        {
+          gcal_event_id: 'evt_solo',
+          valor_cents: '5000',
+          desconto_cents: '0',
+          forma_pagamento: null,
+          data: '2026-07-11',
+          colaborador_id: null, // atendimento SOLO/individual → null preservado.
         },
       ],
-      rowCount: 1,
+      rowCount: 2,
     });
     const rows = await listAgendaAtendimentosInWindow('clone_x', 'a', 'b', 'c');
     expect(rows).toEqual([
@@ -794,6 +805,15 @@ describe('listAgendaAtendimentosInWindow (candidatos do reconciler — SQL)', ()
         desconto_cents: 0,
         forma_pagamento: 'pix',
         data: '2026-07-10',
+        colaborador_id: 20,
+      },
+      {
+        gcal_event_id: 'evt_solo',
+        valor_cents: 5000,
+        desconto_cents: 0,
+        forma_pagamento: null,
+        data: '2026-07-11',
+        colaborador_id: null,
       },
     ]);
   });
