@@ -8898,24 +8898,52 @@ function _renderGcalTab(opts) {
     container.appendChild(box);
   }
 
+  /* Aviso persistente de PENDÊNCIA pós-teste (fail-closed do backend).
+   * O mesmo POST pode validar a agenda MAS recusar o flip pra modo agenda quando a persona
+   * do clone ainda não tem a mecânica de agendamento (cartão de confirmação + regra do SIM +
+   * inserir_agendamento). Ligar mesmo assim deixaria o bot marcando SEM confirmar — pior que
+   * o bug original. O clone segue em modo atendente; sem este aviso o operador validaria a
+   * agenda, acharia que ligou, e o cliente continuaria sem agendar. É AÇÃO NECESSÁRIA (âmbar),
+   * não erro — bloco persistente, não some como o toast. Mutuamente exclusivo com o aviso de
+   * cima (o backend nunca devolve os dois). */
+  function _renderAgendaBloqueadaPersonaAviso() {
+    const old = container.querySelector('#gcal-agenda-bloqueada-persona');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'gcal-agenda-bloqueada-persona';
+    box.setAttribute('role', 'status');
+    box.style.cssText = 'margin-top:.75rem;padding:.75rem 1rem;background:var(--surface-2);border-left:3px solid var(--warning);border-radius:var(--radius-sm)';
+    box.innerHTML = `
+      <div style="font-weight:600;margin-bottom:.375rem;display:flex;gap:.5rem;align-items:center"><span style="color:var(--warning);flex-shrink:0">${icon('alert-triangle', 15)}</span> Agenda validada — mas o assistente ainda não está pronto pra marcar</div>
+      <p style="margin:0 0 .375rem;font-size:.85rem;line-height:1.5">A conexão com o Google Calendar está <strong>OK</strong>, mas o modo agenda <strong>não foi ligado</strong>: a persona deste cliente ainda é de <strong>atendimento</strong> e não sabe montar o <strong>cartão de confirmação</strong> antes de marcar. Ligar assim faria o bot marcar horário <strong>sem confirmar</strong> com o cliente.</p>
+      <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Para ativar: vá na aba <strong>Prompt</strong>, ajuste/regenere a persona para o <strong>modo agenda</strong> e clique em <strong>Testar de novo</strong>. O cliente continua em <strong>modo atendente</strong> até lá.</p>`;
+    container.appendChild(box);
+  }
+
   async function runTest() {
     const testBtn = container.querySelector('#gcal-retest-btn') || container.querySelector('#gcal-test-pending-btn');
     if (testBtn) testBtn.disabled = true;
     try {
       const result = await api(`${baseUrl}/gcal/test`, { method: 'POST' });
       if (result.ok) {
-        // `agendaAtivada` SÓ existe na rota de CLONE (POST /api/clones/:id/gcal/test) e SÓ
-        // quando o flip aconteceu de verdade. A rota da MATRIZ (/api/bots/<slot>), que usa
-        // este mesmo helper, NUNCA devolve o campo — por isso a checagem é estrita
-        // (`=== true`), nunca presença/truthiness.
+        // `agendaAtivada` e `agendaBloqueadaPersona` SÓ existem na rota de CLONE
+        // (POST /api/clones/:id/gcal/test) e SÓ quando o caso ocorre de verdade; são
+        // mutuamente exclusivos (o backend nunca devolve os dois). A rota da MATRIZ
+        // (/api/bots/<slot>), que usa este mesmo helper, NUNCA devolve nenhum — por isso a
+        // checagem é estrita (`=== true`), nunca presença/truthiness.
         const promoveuAgenda = result.agendaAtivada === true;
-        if (!promoveuAgenda) {
-          toast('Conexão com Google Calendar OK!', 'success');
-          loadTab();
-        } else {
+        const bloqueadaPersona = result.agendaBloqueadaPersona === true;
+        if (promoveuAgenda) {
           toast('Conexão OK — e este cliente passou pro modo agenda.', 'success');
           await loadTab(); // await: o aviso é anexado DEPOIS do re-render da aba (sem race)
           _renderAgendaAtivadaAviso();
+        } else if (bloqueadaPersona) {
+          toast('Conexão OK — mas o modo agenda não foi ligado. Veja abaixo.', 'warning');
+          await loadTab();
+          _renderAgendaBloqueadaPersonaAviso();
+        } else {
+          toast('Conexão com Google Calendar OK!', 'success');
+          loadTab();
         }
       } else if (result.errorHint) {
         // Diagnóstico acionável: mostra hint + link clicável em alerta inline

@@ -1,20 +1,23 @@
-// Testes do aviso de UI "validar a agenda LIGOU o modo agenda" (aba Google Calendar do
-// gestão, helper `_renderGcalTab` em public/index.html).
+// Testes dos avisos de UI do teste de Google Calendar do gestão (helper `_renderGcalTab`
+// em public/index.html), pós-validação da agenda.
 // Uso: node --test painel-admin/test/gcal-test-aviso-agenda-ui.test.js
 //
 // ⚠️ NÃO rodam no CI (vitest.config.ts exclui painel-admin/test/** — SCRUM-50).
 //    Rode à mão: `node --test painel-admin/test/*.test.js`.
 //
-// CONTEXTO: o backend (PR #491) passou a devolver `agendaAtivada: true` no
-// POST /api/clones/:id/gcal/test quando a validação da agenda PROMOVE o clone de modo
-// atendente pra modo agenda. O campo é OMITIDO quando não houve promoção.
+// CONTEXTO: o backend (PR #491) devolve DOIS campos no POST /api/clones/:id/gcal/test, cada
+// um `true` só quando o caso ocorre (a chave some do JSON quando não), MUTUAMENTE EXCLUSIVOS:
+//   • `agendaAtivada: true`          → agenda validada E clone promovido pra modo agenda.
+//   • `agendaBloqueadaPersona: true` → agenda validada MAS flip barrado (fail-closed) porque
+//                                       a persona do clone ainda não tem a mecânica de
+//                                       agendamento (cartão + SIM + inserir_agendamento).
+//                                       O clone segue em modo atendente.
 //
 // ARMADILHA QUE ESTES TESTES GUARDAM: `_renderGcalTab` é COMPARTILHADO com a tela de MATRIZ
-// (baseUrl `/api/bots/<slot>`), e a rota da matriz NÃO devolve o campo. Uma checagem por
-// truthiness/presença (`result.agendaAtivada`, `'agendaAtivada' in result`) continuaria
-// passando nos casos felizes, mas afrouxaria a garantia — por isso o teste EXTRAI a
-// expressão real do index.html e a AVALIA contra as respostas possíveis das duas rotas.
-// Nada aqui é replicado à mão: mexer no guard sem manter a semântica deixa o teste vermelho.
+// (baseUrl `/api/bots/<slot>`), cuja rota NÃO devolve nenhum dos dois campos. Uma checagem por
+// truthiness/presença passaria nos casos felizes mas afrouxaria a garantia — por isso o teste
+// EXTRAI as expressões reais do index.html e as AVALIA contra as respostas possíveis. Nada
+// aqui é replicado à mão: mexer num guard sem manter a semântica deixa o teste vermelho.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -40,117 +43,171 @@ function functionSource(decl) {
 }
 
 const RUN_TEST = functionSource('async function runTest() {');
-const AVISO = functionSource('function _renderAgendaAtivadaAviso() {');
+const AVISO_ATIVADA = functionSource('function _renderAgendaAtivadaAviso() {');
+const AVISO_BLOQUEADA = functionSource('function _renderAgendaBloqueadaPersonaAviso() {');
 
-/** A expressão do guard, como está escrita no arquivo. */
-function guardExpression() {
-  const m = RUN_TEST.match(/const promoveuAgenda\s*=\s*([^;]+);/);
-  assert.ok(m, 'runTest deveria decidir o aviso numa const `promoveuAgenda`');
+/** A expressão de um guard `const <nome> = ...;`, como está escrita no arquivo. */
+function guardExpression(nome) {
+  const m = RUN_TEST.match(new RegExp(`const ${nome}\\s*=\\s*([^;]+);`));
+  assert.ok(m, `runTest deveria decidir o aviso numa const \`${nome}\``);
   return m[1].trim();
 }
 
-/** Avalia o guard extraído contra uma resposta de API simulada. */
-function evalGuard(result) {
+/** Avalia um guard extraído contra uma resposta de API simulada. */
+function evalGuard(nome, result) {
   // `new Function` é proposital: o objetivo é avaliar o código REAL extraído do index.html
   // (não uma cópia). A entrada vem do próprio arquivo do repo, não de rede/usuário.
-  const fn = new Function('result', `return (${guardExpression()});`);
+  const fn = new Function('result', `return (${guardExpression(nome)});`);
   return fn(result);
 }
 
-// ── O guard ──────────────────────────────────────────────────────────────────
+const promoveu = (r) => evalGuard('promoveuAgenda', r);
+const bloqueada = (r) => evalGuard('bloqueadaPersona', r);
 
-test('resposta da MATRIZ (sem o campo) NÃO mostra o aviso', () => {
-  // GET/POST /api/bots/<slot>/gcal/test — rota que não conhece `agendaAtivada`.
-  assert.equal(evalGuard({ ok: true, gcal_client_email: 'sa@x.iam.gserviceaccount.com' }), false);
+// ── Os guards: matriz e caso "nenhum" não disparam nada ──────────────────────
+
+test('resposta da MATRIZ (sem os campos) não dispara nenhum aviso', () => {
+  const r = { ok: true, gcal_client_email: 'sa@x.iam.gserviceaccount.com' };
+  assert.equal(promoveu(r), false);
+  assert.equal(bloqueada(r), false);
 });
 
-test('clone testado SEM promoção (campo omitido) NÃO mostra o aviso', () => {
-  // O backend omite a chave (`undefined` some do JSON) quando não houve flip.
-  assert.equal(evalGuard({ ok: true }), false);
-  assert.equal(evalGuard({ ok: true, agendaAtivada: undefined }), false);
+test('clone testado sem flip e sem bloqueio (campos omitidos) não dispara nada', () => {
+  for (const r of [
+    { ok: true },
+    { ok: true, agendaAtivada: undefined, agendaBloqueadaPersona: undefined },
+  ]) {
+    assert.equal(promoveu(r), false);
+    assert.equal(bloqueada(r), false);
+  }
 });
 
-test('clone PROMOVIDO pra modo agenda mostra o aviso', () => {
-  assert.equal(evalGuard({ ok: true, agendaAtivada: true }), true);
+// ── Guard do flip (agenda ligada) ────────────────────────────────────────────
+
+test('clone PROMOVIDO pra modo agenda dispara só o aviso de agenda ligada', () => {
+  const r = { ok: true, agendaAtivada: true };
+  assert.equal(promoveu(r), true);
+  assert.equal(bloqueada(r), false);
 });
 
-test('guard é estrito — valores truthy que não são `true` não disparam o aviso', () => {
-  // Blinda contra `if (result.agendaAtivada)`: um payload alterado no futuro
-  // (string, objeto, 1) não pode anunciar mudança de modo que não houve.
+test('guard do flip é estrito — truthy que não é `true` não dispara', () => {
   for (const v of ['true', 'false', 1, {}, [], 'sim']) {
     assert.equal(
-      evalGuard({ ok: true, agendaAtivada: v }),
+      promoveu({ ok: true, agendaAtivada: v }),
       false,
-      `agendaAtivada=${JSON.stringify(v)} não deveria disparar`,
+      `agendaAtivada=${JSON.stringify(v)}`,
     );
   }
-  assert.equal(evalGuard({ ok: true, agendaAtivada: false }), false);
+  assert.equal(promoveu({ ok: true, agendaAtivada: false }), false);
 });
 
-// ── O ramo sem promoção não regride (matriz byte-idêntica) ───────────────────
+// ── Guard do bloqueio por persona (fail-closed) ──────────────────────────────
 
-test('sem promoção, o caminho antigo é preservado (toast original + loadTab)', () => {
-  const semFlip = RUN_TEST.slice(
-    RUN_TEST.indexOf('if (!promoveuAgenda)'),
-    RUN_TEST.indexOf('} else {'),
-  );
-  assert.match(semFlip, /toast\('Conexão com Google Calendar OK!', 'success'\)/);
-  assert.match(semFlip, /loadTab\(\)/);
+test('clone BARRADO por persona dispara só o aviso de pendência', () => {
+  const r = { ok: true, agendaBloqueadaPersona: true };
+  assert.equal(bloqueada(r), true);
+  assert.equal(promoveu(r), false);
+});
+
+test('guard do bloqueio é estrito — truthy que não é `true` não dispara', () => {
+  for (const v of ['true', 'false', 1, {}, [], 'sim']) {
+    assert.equal(
+      bloqueada({ ok: true, agendaBloqueadaPersona: v }),
+      false,
+      `agendaBloqueadaPersona=${JSON.stringify(v)}`,
+    );
+  }
+  assert.equal(bloqueada({ ok: true, agendaBloqueadaPersona: false }), false);
+});
+
+// ── Mutuamente exclusivos (o backend nunca devolve os dois) ──────────────────
+
+test('os dois casos são mutuamente exclusivos — exatamente um aviso por resposta', () => {
+  const respostas = [
+    { ok: true },
+    { ok: true, agendaAtivada: true },
+    { ok: true, agendaBloqueadaPersona: true },
+  ];
+  for (const r of respostas) {
+    const n = (promoveu(r) ? 1 : 0) + (bloqueada(r) ? 1 : 0);
+    assert.ok(n <= 1, `mais de um aviso disparou para ${JSON.stringify(r)}`);
+  }
+});
+
+// ── Ramificação no runTest: ordem, unicidade e caminho antigo preservado ─────
+
+test('cada aviso é renderizado uma única vez em runTest', () => {
+  assert.equal([...RUN_TEST.matchAll(/_renderAgendaAtivadaAviso\(\)/g)].length, 1);
+  assert.equal([...RUN_TEST.matchAll(/_renderAgendaBloqueadaPersonaAviso\(\)/g)].length, 1);
+});
+
+test('o ramo default (sem flip/sem bloqueio) preserva o caminho antigo intacto', () => {
+  // Ramo neutro = o `else {` logo depois do ramo de bloqueio, terminando onde o `if
+  // (result.ok)` fecha (`} else if (result.errorHint)`). Deve ter o toast original + loadTab
+  // e NENHUM dos dois avisos (matriz e clone-sem-caso continuam byte-idênticos ao de hoje).
+  const posBloqueio = RUN_TEST.indexOf('_renderAgendaBloqueadaPersonaAviso()');
+  const neutroStart = RUN_TEST.indexOf('} else {', posBloqueio);
+  const neutro = RUN_TEST.slice(neutroStart, RUN_TEST.indexOf('} else if (result.errorHint)'));
+  assert.match(neutro, /toast\('Conexão com Google Calendar OK!', 'success'\)/);
+  assert.match(neutro, /loadTab\(\)/);
   assert.ok(
-    !semFlip.includes('_renderAgendaAtivadaAviso'),
-    'o aviso não pode ser renderizado no ramo sem promoção',
+    !neutro.includes('_renderAgendaAtivadaAviso'),
+    'ramo neutro não renderiza aviso de flip',
   );
-});
-
-// ── O ramo com promoção ──────────────────────────────────────────────────────
-
-test('o aviso é renderizado uma única vez, e só no ramo da promoção', () => {
-  const chamadas = [...RUN_TEST.matchAll(/_renderAgendaAtivadaAviso\(\)/g)];
-  assert.equal(chamadas.length, 1, 'o aviso deve ser renderizado em um único ponto de runTest');
-  const comFlip = RUN_TEST.slice(RUN_TEST.indexOf('} else {'));
   assert.ok(
-    comFlip.includes('_renderAgendaAtivadaAviso()'),
-    'a chamada deve estar no ramo `promoveuAgenda`',
+    !neutro.includes('_renderAgendaBloqueadaPersonaAviso'),
+    'ramo neutro não renderiza aviso de bloqueio',
   );
 });
 
-test('o aviso é anexado DEPOIS do re-render da aba (await loadTab), sem setTimeout', () => {
-  const comFlip = RUN_TEST.slice(RUN_TEST.indexOf('} else {'));
-  const awaitAt = comFlip.indexOf('await loadTab()');
-  const avisoAt = comFlip.indexOf('_renderAgendaAtivadaAviso()');
-  assert.ok(
-    awaitAt > -1,
-    'o re-render precisa ser aguardado, senão o aviso é apagado pelo loadTab',
-  );
-  assert.ok(awaitAt < avisoAt, 'o aviso deve ser anexado depois do await loadTab()');
+test('cada aviso é anexado DEPOIS do await loadTab() (sem race, sem setTimeout)', () => {
+  for (const fn of ['_renderAgendaAtivadaAviso', '_renderAgendaBloqueadaPersonaAviso']) {
+    const at = RUN_TEST.indexOf(`${fn}()`);
+    const awaitBefore = RUN_TEST.lastIndexOf('await loadTab()', at);
+    assert.ok(awaitBefore > -1 && awaitBefore < at, `${fn} deve vir depois de um await loadTab()`);
+  }
 });
 
-// ── Conteúdo e acessibilidade do bloco ───────────────────────────────────────
+// ── Conteúdo e acessibilidade dos DOIS blocos ────────────────────────────────
 
-test('o bloco tem id estável e não duplica em testes seguidos', () => {
-  assert.match(AVISO, /id = 'gcal-agenda-ativada'/);
+test('cada bloco tem id estável e remove a instância anterior (sem duplicar)', () => {
+  assert.match(AVISO_ATIVADA, /id = 'gcal-agenda-ativada'/);
+  assert.match(AVISO_ATIVADA, /querySelector\('#gcal-agenda-ativada'\)/);
+  assert.match(AVISO_BLOQUEADA, /id = 'gcal-agenda-bloqueada-persona'/);
+  assert.match(AVISO_BLOQUEADA, /querySelector\('#gcal-agenda-bloqueada-persona'\)/);
+});
+
+test('os dois blocos são anunciados por leitor de tela (role=status)', () => {
+  assert.match(AVISO_ATIVADA, /setAttribute\('role', 'status'\)/);
+  assert.match(AVISO_BLOQUEADA, /setAttribute\('role', 'status'\)/);
+});
+
+test('copy do aviso de agenda ligada nomeia a MUDANÇA de modo, não só "ok"', () => {
+  assert.match(AVISO_ATIVADA, /modo atendente/i);
+  assert.match(AVISO_ATIVADA, /marca horário sozinho/i);
+  assert.match(AVISO_ATIVADA, /agenda_automatica=true/);
+  assert.match(AVISO_ATIVADA, /modo_atendente_enabled=false/);
+});
+
+test('copy do aviso de bloqueio é AÇÃO NECESSÁRIA (não erro): diz o porquê e o próximo passo', () => {
+  assert.match(AVISO_BLOQUEADA, /não foi ligado/i, 'precisa deixar claro que o modo NÃO mudou');
+  assert.match(AVISO_BLOQUEADA, /cartão de confirmação/i, 'precisa dizer o que falta na persona');
+  assert.match(AVISO_BLOQUEADA, /sem confirmar/i, 'precisa dizer o risco de ligar assim');
+  assert.match(AVISO_BLOQUEADA, /aba <strong>Prompt<\/strong>/i, 'precisa apontar a ação concreta');
+  assert.match(AVISO_BLOQUEADA, /Testar de novo/i, 'precisa dizer que re-testa depois de ajustar');
   assert.match(
-    AVISO,
-    /querySelector\('#gcal-agenda-ativada'\)/,
-    'deve remover a instância anterior antes de anexar',
+    AVISO_BLOQUEADA,
+    /continua em <strong>modo atendente<\/strong>/i,
+    'precisa dizer o estado atual',
   );
 });
 
-test('o bloco é anunciado por leitor de tela (role=status)', () => {
-  assert.match(AVISO, /setAttribute\('role', 'status'\)/);
-});
-
-test('a copy nomeia a MUDANÇA de modo, não só "ok"', () => {
-  assert.match(AVISO, /modo atendente/i, 'precisa dizer de onde o cliente saiu');
-  assert.match(AVISO, /marca horário sozinho/i, 'precisa dizer o que passou a acontecer');
-  assert.match(AVISO, /agenda_automatica=true/, 'campo gravado, pro operador conferir');
-  assert.match(AVISO, /modo_atendente_enabled=false/);
-});
-
-test('o ícone usado existe no dicionário ICONS (fallback é SVG vazio e silencioso)', () => {
-  const usados = [...AVISO.matchAll(/icon\('([^']+)'/g)].map((m) => m[1]);
-  assert.ok(usados.length > 0, 'o bloco usa ao menos um ícone');
-  for (const nome of usados) {
-    assert.match(INDEX, new RegExp(`'${nome}':\\s*'<`), `ícone '${nome}' não existe em ICONS`);
+test('os ícones usados existem no dicionário ICONS (fallback é SVG vazio e silencioso)', () => {
+  for (const bloco of [AVISO_ATIVADA, AVISO_BLOQUEADA]) {
+    const usados = [...bloco.matchAll(/icon\('([^']+)'/g)].map((m) => m[1]);
+    assert.ok(usados.length > 0, 'o bloco usa ao menos um ícone');
+    for (const nome of usados) {
+      assert.match(INDEX, new RegExp(`'${nome}':\\s*'<`), `ícone '${nome}' não existe em ICONS`);
+    }
   }
 });
