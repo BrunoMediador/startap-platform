@@ -3773,6 +3773,20 @@ app.get('/api/clones/:id', async (req, res) => {
   }
 });
 
+/**
+ * SCRUM-138 — decisão PURA (sem I/O) do bloqueio de downgrade estabelecimento→individual.
+ * Fail-closed: bloqueia SÓ quando o clone É estabelecimento HOJE, o alvo É individual, e
+ * existe estado que o downgrade destruiria (colaboradores cadastrados OU faturamento já
+ * realizado com origem='agenda'). Qualquer outro caso — upgrade, no-op, tipo novo/futuro,
+ * clone vazio — libera. Isolar a decisão aqui deixa o teste exercitá-la lendo o source
+ * (painel-admin/test/downgrade-guard.test.js) sem subir Express + pool Postgres.
+ */
+function bloqueiaDowngradeEstab(prevType, novoType, nColaboradores, nAtendAgenda) {
+  if (novoType !== 'individual') return false;      // só o downgrade PARA individual
+  if (prevType !== 'estabelecimento') return false; // só quando HOJE é estabelecimento
+  return nColaboradores > 0 || nAtendAgenda > 0;    // ...e há estado que seria apagado
+}
+
 // PATCH /api/clones/:id
 app.patch('/api/clones/:id', async (req, res) => {
   const id = Number(req.params.id);
@@ -3819,6 +3833,52 @@ app.patch('/api/clones/:id', async (req, res) => {
       }
       const erroDuracao = validarDuracaoServico(s);
       if (erroDuracao) return res.status(400).json({ error: erroDuracao });
+    }
+  }
+
+  // ── SCRUM-138: trava fail-closed contra downgrade destrutivo estab→individual ──
+  // Trocar product_type p/ 'individual' num clone que HOJE é 'estabelecimento' e ainda
+  // carrega estado da agenda por-colaborador (colaboradores cadastrados OU faturamento já
+  // realizado com origem='agenda') faria o gcal-atend-sync soft-deletar em massa o FATURADO
+  // e reescrever comissão — silencioso e IRRECUPERÁVEL. O downgrade correto é migração
+  // supervisionada (SCRUM-137), não este campo. Só barra o caso destrutivo: upgrade,
+  // no-op e estab→individual num clone VAZIO seguem normais. Só consulta o banco quando o
+  // alvo é 'individual' (não onera as outras edições). Padrão do SCRUM-74 (409 server-side).
+  if (product_type !== undefined && String(product_type) === 'individual') {
+    try {
+      const cur = await pool.query(
+        'SELECT product_type, slot FROM flow_clones WHERE id = $1',
+        [id],
+      );
+      if (!cur.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+      const prevType = cur.rows[0].product_type;
+      const slot = cur.rows[0].slot;
+      const dep = await pool.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM clone_colaboradores WHERE slot = $1) AS colaboradores,
+           (SELECT COUNT(*)::int FROM atendimentos
+              WHERE slot = $1
+                AND origem = 'agenda'
+                AND deleted_at IS NULL
+                AND (fim_at IS NULL OR fim_at <= now())) AS faturamento_agenda`,
+        [slot],
+      );
+      const nColab = dep.rows[0].colaboradores;
+      const nAtend = dep.rows[0].faturamento_agenda;
+      if (bloqueiaDowngradeEstab(prevType, String(product_type), nColab, nAtend)) {
+        return res.status(409).json({
+          error: 'downgrade_estabelecimento_bloqueado',
+          message:
+            `Este clone é um estabelecimento com ${nColab} colaborador(es) e ${nAtend} ` +
+            'atendimento(s) faturado(s) na agenda. Trocar para individual apagaria esse ' +
+            'faturamento e a comissão dos profissionais. Downgrade exige migração ' +
+            'supervisionada — não pode ser feito por este campo.',
+          colaboradores: nColab,
+          faturamento_agenda: nAtend,
+        });
+      }
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
     }
   }
 
