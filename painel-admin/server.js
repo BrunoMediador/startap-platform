@@ -4517,15 +4517,68 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     const newStatus = testResult.ok ? 'active' : 'invalid';
     console.log(`[gcal] TEST clone ${id} (${gcal_client_email}): ${newStatus}`);
 
-    await pool.query(
-      `UPDATE flow_clones
+    // ── Validar a agenda LIGA o modo agenda do clone (caso MVS BARBEARIA) ──────────
+    // Bug de produto: clone que se cadastrou como ATENDENTE (personalizacao
+    // .agenda_automatica='false' + modo_atendente_enabled=true) e depois teve uma agenda
+    // Google conectada+validada pelo time continuava no ramo `processAtendente` do runtime
+    // (apps/api/src/bots/teste_barbearia.ts) — que NÃO registra tool de agendamento — mesmo
+    // com o bot_prompt de agenda prometendo marcar horário. Resultado no MVS: 11 conversas,
+    // 126 mensagens, ZERO agendamentos.
+    //
+    // Regras (uma statement só, sem ler-e-escrever em 2 etapas — o endpoint tem concorrência):
+    //  1. Só na TRANSIÇÃO pra active (gcal_status anterior != 'active'). O botão "Testar"
+    //     também re-checa conexão existente; re-teste de rotina NÃO pode desfazer, em
+    //     silêncio, uma volta deliberada pra atendente com a agenda ainda conectada.
+    //  2. NUNCA o inverso: teste que falha ('invalid') não desliga agenda de ninguém — falha
+    //     temporária de rede não pode transformar cliente de agenda em atendente.
+    //  3. `billing_from_agenda_enabled` (ADR 0027) NÃO é tocado — outro gate, SCRUM-112.
+    //  4. `bot_prompt`/persona NÃO é tocado — trocar prompt de cliente é caminho separado.
+    //  5. `product_type='estabelecimento'` fica de fora: lá a agenda é POR COLABORADOR
+    //     (clone_colaboradores.gcal_*) e o teste do nível do clone não significa
+    //     "a agenda passou a valer" (a própria UI esconde este botão pro estabelecimento).
+    //     Protege o piloto Meduzza (estabelecimento em modo atendente).
+    //
+    // O CTE `prev` lê o estado ANTERIOR no mesmo snapshot da statement — é o que permite
+    // detectar a transição e devolver `agenda_ativada` (em RETURNING, colunas de flow_clones
+    // já valem o valor NOVO; por isso a decisão sai do `prev`, não da linha atualizada).
+    const upd = await pool.query(
+      `WITH prev AS (
+         SELECT id,
+                (
+                  $1 = 'active'
+                  AND gcal_status IS DISTINCT FROM 'active'
+                  AND product_type IS DISTINCT FROM 'estabelecimento'
+                  AND (
+                    modo_atendente_enabled IS TRUE
+                    OR personalizacao->>'agenda_automatica' = 'false'
+                  )
+                ) AS flip
+           FROM flow_clones
+          WHERE id = $2
+       )
+       UPDATE flow_clones fc
           SET gcal_status        = $1,
               gcal_last_check_at = NOW(),
-              gcal_connected_at  = CASE WHEN $1 = 'active' AND gcal_connected_at IS NULL THEN NOW() ELSE gcal_connected_at END,
+              gcal_connected_at  = CASE WHEN $1 = 'active' AND fc.gcal_connected_at IS NULL THEN NOW() ELSE fc.gcal_connected_at END,
+              personalizacao     = CASE
+                                     WHEN prev.flip
+                                       THEN jsonb_set(COALESCE(fc.personalizacao, '{}'::jsonb), '{agenda_automatica}', to_jsonb('true'::text), true)
+                                     ELSE fc.personalizacao
+                                   END,
+              modo_atendente_enabled = CASE WHEN prev.flip THEN false ELSE fc.modo_atendente_enabled END,
               updated_at         = NOW()
-        WHERE id = $2`,
+         FROM prev
+        WHERE fc.id = prev.id
+        RETURNING prev.flip AS agenda_ativada, fc.slot`,
       [newStatus, id],
     );
+
+    const agendaAtivada = upd.rows[0]?.agenda_ativada === true;
+    if (agendaAtivada) {
+      console.log(
+        `[gcal] clone ${id} (${upd.rows[0].slot}): AGENDA ATIVADA na validação da SA — modo atendente -> modo agenda (agenda_automatica=true, modo_atendente_enabled=false)`,
+      );
+    }
 
     const enriched = testResult.ok ? null : enrichGcalError(testResult.error, decryptGcalCredentials(gcal_credentials_json));
     res.json({
@@ -4535,6 +4588,9 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
       errorCode: enriched?.code,
       errorHint: enriched?.hint,
       errorLink: enriched?.link,
+      // Só aparece quando o flip REALMENTE aconteceu (undefined some do JSON) — o operador
+      // precisa saber que o tipo do fluxo mudou; mudança de estado silenciosa criou este bug.
+      agendaAtivada: agendaAtivada ? true : undefined,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
