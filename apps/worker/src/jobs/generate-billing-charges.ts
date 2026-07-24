@@ -4,17 +4,22 @@
  * ATRAS DA FLAG `BILLING_DUE_DATE_MODEL`. Com a flag OFF (default), o job e NO-OP: nao le
  * billing, nao instancia gateway, nao toca o banco. Liga so quando o modelo por data esta ON.
  *
- * Roda 1x/dia (registrado no worker.ts as 08:00 America/Sao_Paulo). SEM aviso ao cliente
+ * Roda HORARIO (registrado no worker.ts, BILLING_CRON default '0 * * * *'). Era 1x/dia
+ * as 08:00, o que abria um buraco deterministico de ~24h sem PIX pagavel (SCRUM-124):
+ * a cobranca vencia e a proxima so nascia no cron do dia seguinte. SEM aviso ao cliente
  * (decisao do Bruno — Fase 4, ainda nao). Conforme ADR 0010: croner over BullMQ.
  *
  * Tres responsabilidades por execucao (idempotente; lock por slot via withBillingSlotLock):
  *
- *  1. GERACAO: para cada slot cujo estado (computeBillingState, janela 7) e `a_vencer` ou
- *     `vencido` e que NAO tem pending valida -> gera via ensurePixChargeForSlot (valor =
- *     snapshot client_billing.amount_cents). Pula slot sem amount_cents (loga skip). NAO
- *     gera para `em_dia`/`sem_config`. A idempotencia (1 pending/slot) vive no proprio
- *     ensurePixChargeForSlot (advisory lock + recheck) — o cron e a tela compartilham o
- *     caminho, sem duplicar.
+ *  1. GERACAO (com REEMISSAO ANTECIPADA — SCRUM-124): para cada slot cujo estado
+ *     (computeBillingState, janela 7) e `a_vencer`/`vencido` -> ensurePixChargeForSlot com
+ *     `reissueAheadMs` (= BILLING_REISSUE_AHEAD_MIN). Uma pending cujo expires_at cai DENTRO
+ *     da proxima janela de execucao ja e REEMITIDA agora (mesma linha), pra proxima cobranca
+ *     nascer ANTES da atual expirar — sem gap. Valor = snapshot client_billing.amount_cents;
+ *     pula slot sem amount_cents (loga skip); NAO gera para `em_dia`/`sem_config`. A
+ *     idempotencia (1 pending/slot, reusa/reemite a MESMA linha — NUNCA 2a cobranca) vive no
+ *     proprio ensurePixChargeForSlot (advisory lock + recheck) — o cron e a tela compartilham
+ *     o caminho, sem duplicar. So o cron passa reissueAheadMs>0; o portal mantem 0 (legado).
  *
  *  2. RECONCILIACAO (rede de seguranca p/ webhook perdido): para cada `pending` com
  *     abacate_charge_id, consulta client.getChargeStatus; se o gateway diz PAID e o banco
@@ -67,6 +72,9 @@ const EMPTY_RESULT: GenerateBillingResult = {
 
 export async function runGenerateBillingCharges(
   now: Date = new Date(),
+  // Janela de reemissao antecipada (ms). Default = BILLING_REISSUE_AHEAD_MIN em ms.
+  // Parametrizado pra teste deterministico (sem mexer em env).
+  reissueAheadMs: number = config.BILLING_REISSUE_AHEAD_MIN * 60_000,
 ): Promise<GenerateBillingResult> {
   // ── FLAG OFF -> NO-OP total. Nao le billing, nao instancia gateway, nao toca banco. ──
   if (!config.BILLING_DUE_DATE_MODEL) {
@@ -118,7 +126,7 @@ export async function runGenerateBillingCharges(
       // `created` cobre geracao nova E reemissao de PIX expirado (mesma linha).
       const { charge, created, reissued } = await abacatepay.ensurePixChargeForSlot(
         client,
-        { slot, duePeriod: billing.next_due_date, amountCents },
+        { slot, duePeriod: billing.next_due_date, amountCents, reissueAheadMs },
         now,
       );
       if (created) {

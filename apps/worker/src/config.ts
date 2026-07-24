@@ -41,6 +41,20 @@ export const WorkerConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Cadencia + reemissao antecipada do cron de billing F4 (SCRUM-124) ───────
+  // O cron de geracao/reconciliacao/expiracao roda HORARIO (era 1x/dia as 08:00): antes
+  // uma cobranca vencia (expires_at) e a PROXIMA so nascia ~24h depois — janela
+  // deterministica SEM PIX pagavel (cliente abria o portal e nao achava cobranca).
+  // Rodando horario + reemitindo a proxima ANTES do vencimento (janela abaixo), sempre
+  // existe 1 PIX pagavel. Padrao invalido NUNCA crasha o boot (scheduleCronSafe -> fallback).
+  BILLING_CRON: z.string().default('0 * * * *'),
+  // Janela (min) de reemissao antecipada: pending cujo expires_at cai dentro de now+janela
+  // e reemitida AGORA reusando a MESMA linha (idempotente, sem duplicar). Deve ser >=
+  // cadencia do cron + folga p/ 1 run perdido. Default 120min (60 de cadencia + 60 de
+  // folga): fecha o buraco a zero mantendo pequena a janela em que a cobranca antiga fica
+  // orfa no gateway. Opcional com default (licao #247: nada obrigatorio no boot).
+  BILLING_REISSUE_AHEAD_MIN: z.coerce.number().int().positive().default(120),
+
   // ── Cron de limpeza de trials ÓRFÃOS (Missao 020 F1 — condicao 2 do PORTAL_SIGNUP) ──
   // TODAS opcionais com default (licao #247: nada aqui e obrigatorio no boot).
   // Com PORTAL_SIGNUP OFF nao existe clone trial_status='awaiting' => o job roda e

@@ -79,6 +79,9 @@ const input = { slot: 'barbearia-cirilo', cycle: '2026-06', amountCents: 19900 }
 const NOW = new Date('2026-06-11T10:00:00.000Z');
 const FUTURE = new Date('2026-06-14T10:00:00.000Z'); // valido (> margem)
 const PAST = new Date('2026-06-10T10:00:00.000Z'); // expirado
+// SCRUM-124: expira daqui 1h — AINDA valido agora, mas DENTRO da janela de reemissao (2h).
+const NEAR = new Date('2026-06-11T11:00:00.000Z');
+const AHEAD_2H_MS = 2 * 60 * 60 * 1000;
 
 beforeEach(() => {
   insertPendingChargeIfAbsent.mockReset();
@@ -384,6 +387,83 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
     );
     expect(insertPendingCharge).not.toHaveBeenCalled();
     expect(attachGatewayDataById).not.toHaveBeenCalled();
+  });
+
+  // ── SCRUM-124: reemissao ANTECIPADA (fecha o buraco de ~24h sem PIX pagavel) ──────
+  it('SCRUM-124: REEMITE ANTECIPADO quando a pending expira DENTRO da janela reissueAheadMs (mesma linha, sem duplicar)', async () => {
+    // Pending ainda valida AGORA (expira daqui 1h) mas DENTRO da janela de 2h -> reemite
+    // a proxima ANTES do vencimento, sem deixar buraco. REGRESSAO: sem o fix o service
+    // ignora reissueAheadMs, considera valida (1h > margem) e REUSA (created=false) -> RED.
+    getActivePendingCharge.mockResolvedValueOnce(
+      makeRow({ id: '7', abacate_charge_id: 'pix_char_expira_logo', expires_at: NEAR }),
+    );
+    reissueGatewayDataById.mockResolvedValueOnce(
+      makeRow({ id: '7', abacate_charge_id: 'pix_char_antecipado', expires_at: FUTURE }),
+    );
+    const createPixCharge = vi.fn().mockResolvedValue({
+      id: 'pix_char_antecipado',
+      brCode: 'x',
+      brCodeBase64: 'y',
+      status: 'pending',
+      expiresAt: '2026-06-14T10:00:00.000Z',
+      platformFee: 80,
+    });
+
+    const res = await ensurePixChargeForSlot(
+      fakeClient(createPixCharge),
+      { ...slotInput, reissueAheadMs: AHEAD_2H_MS },
+      NOW,
+    );
+
+    // Reemitiu (proxima cobranca nasce ANTES do vencimento) reusando a MESMA linha (id '7').
+    expect(res.created).toBe(true);
+    expect(res.reissued).toBe(true);
+    expect(res.charge.abacate_charge_id).toBe('pix_char_antecipado');
+    expect(createPixCharge).toHaveBeenCalledTimes(1);
+    expect(reissueGatewayDataById).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: '7', abacateChargeId: 'pix_char_antecipado' }),
+    );
+    // GARANTIA anti-duplicacao: NAO insere 2a linha — reusa a existente.
+    expect(insertPendingCharge).not.toHaveBeenCalled();
+  });
+
+  it('SCRUM-124: NAO reemite quando a pending e valida ALEM da janela (reusa, sem 2a cobranca)', async () => {
+    // Expira daqui 3 dias (>> janela 2h) -> reusa. Prova que a reemissao antecipada NAO e
+    // "gerar mais agressivo": nada de churn de gateway nem cobranca duplicada.
+    getActivePendingCharge.mockResolvedValueOnce(
+      makeRow({ id: '7', abacate_charge_id: 'pix_char_valido_longe', expires_at: FUTURE }),
+    );
+    const createPixCharge = vi.fn();
+
+    const res = await ensurePixChargeForSlot(
+      fakeClient(createPixCharge),
+      { ...slotInput, reissueAheadMs: AHEAD_2H_MS },
+      NOW,
+    );
+
+    expect(res.created).toBe(false);
+    expect(res.reissued).toBe(false);
+    expect(res.charge.abacate_charge_id).toBe('pix_char_valido_longe');
+    expect(createPixCharge).not.toHaveBeenCalled();
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
+    expect(insertPendingCharge).not.toHaveBeenCalled();
+  });
+
+  it('SCRUM-124: SEM reissueAheadMs (portal/legado) a pending que expira em 1h ainda e REUSADA', async () => {
+    // Portal (geracao sob demanda) nao passa a janela -> horizonte == agora -> so reemite se
+    // JA expirada. Garante que o fix nao muda o caminho on-demand (nem risco de duplicar QR).
+    getActivePendingCharge.mockResolvedValueOnce(
+      makeRow({ id: '7', abacate_charge_id: 'pix_char_valido', expires_at: NEAR }),
+    );
+    const createPixCharge = vi.fn();
+
+    const res = await ensurePixChargeForSlot(fakeClient(createPixCharge), slotInput, NOW);
+
+    expect(res.created).toBe(false);
+    expect(res.reissued).toBe(false);
+    expect(createPixCharge).not.toHaveBeenCalled();
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('GERA linha NOVA quando NAO ha pending valida (insere + gateway + attach por id)', async () => {
