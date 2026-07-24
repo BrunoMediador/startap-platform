@@ -40,15 +40,15 @@ function sqlLiterals(src) {
 }
 
 /**
- * Recorta o predicado `( ... ) AS flip` da SQL, casando parênteses de trás pra frente
+ * Recorta o predicado `( ... ) AS <alias>` da SQL, casando parênteses de trás pra frente
  * (regex ingênua pegaria o `(` do `WITH prev AS (`).
  */
-function extractFlipPredicate(sql) {
-  const at = sql.indexOf('AS flip');
-  assert.ok(at > -1, 'a SQL do teste de GCal deveria expor a decisão como `AS flip`');
+function extractPredicate(sql, alias) {
+  const at = sql.indexOf(`AS ${alias}`);
+  assert.ok(at > -1, `a SQL do teste de GCal deveria expor a decisão como \`AS ${alias}\``);
   let close = at - 1;
   while (close >= 0 && /\s/.test(sql[close])) close--;
-  assert.equal(sql[close], ')', 'esperado `) AS flip`');
+  assert.equal(sql[close], ')', `esperado \`) AS ${alias}\``);
   let depth = 0;
   for (let i = close; i >= 0; i--) {
     if (sql[i] === ')') depth++;
@@ -57,7 +57,7 @@ function extractFlipPredicate(sql) {
       if (depth === 0) return sql.slice(i + 1, close).trim();
     }
   }
-  throw new Error('parênteses do predicado `AS flip` não fecham');
+  throw new Error(`parênteses do predicado \`AS ${alias}\` não fecham`);
 }
 
 // ── Mini-interpretador de predicado SQL (só o subconjunto usado na statement) ─
@@ -165,7 +165,8 @@ function evalPredicate(src, row, params) {
 const HANDLER = handlerSource("app.post('/api/clones/:id/gcal/test'");
 const SQL = sqlLiterals(HANDLER).find((s) => s.includes('UPDATE flow_clones'));
 assert.ok(SQL, 'handler do teste de GCal deveria conter um UPDATE flow_clones');
-const PREDICADO = extractFlipPredicate(SQL);
+const PREDICADO = extractPredicate(SQL, 'flip');
+const PREDICADO_BLOQUEADO = extractPredicate(SQL, 'flip_bloqueado_nao_individual');
 /** Só a cláusula SET do UPDATE (o que é ESCRITO), sem o predicado do CTE (o que é LIDO). */
 const SET_CLAUSE = SQL.slice(
   SQL.indexOf('SET ', SQL.indexOf('UPDATE flow_clones')),
@@ -176,6 +177,11 @@ assert.ok(SET_CLAUSE.includes('gcal_status'), 'cláusula SET não recortada');
 /** `true` se a statement real flipa o clone com este estado anterior + resultado do teste. */
 function flipa(rowAntes, novoStatus) {
   return evalPredicate(PREDICADO, rowAntes, [novoStatus]) === true;
+}
+
+/** `true` se o clone TERIA flipado, mas foi barrado por não ser individual (vira log). */
+function flipBloqueado(rowAntes, novoStatus) {
+  return evalPredicate(PREDICADO_BLOQUEADO, rowAntes, [novoStatus]) === true;
 }
 
 /** Estado do MVS antes do fix: individual, atendente, agenda recém-conectada (pending). */
@@ -317,15 +323,49 @@ test('(d) re-teste de clone já active que foi devolvido pra atendente: NÃO fli
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Estabelecimento: agenda é POR COLABORADOR — teste do nível do clone não vale
+// product_type: SÓ 'individual' flipa (decisão do Bruno, 24/07)
+// No estabelecimento a agenda é 1 calendarId por COLABORADOR (clone_colaboradores.gcal_*):
+// validar o gcal do NÍVEL do clone não significa "a agenda passou a valer", e ligar o modo
+// agenda ali pode deixar o clone com agenda ligada e nenhum calendário utilizável.
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('estabelecimento em modo atendente (Meduzza): NÃO flipa', () => {
-  assert.equal(flipa({ ...MVS_ATENDENTE, product_type: 'estabelecimento' }, 'active'), false);
+const MEDUZZA = {
+  gcal_status: 'pending',
+  product_type: 'estabelecimento',
+  modo_atendente_enabled: true,
+  personalizacao: { nome_negocio: 'Meduzza', agenda_automatica: 'false' },
+};
+
+test('estabelecimento em modo atendente (Meduzza, R$150): NÃO flipa', () => {
+  assert.equal(flipa(MEDUZZA, 'active'), false);
 });
 
-test('product_type NULL (clone legado) ainda flipa', () => {
-  assert.equal(flipa({ ...MVS_ATENDENTE, product_type: null }, 'active'), true);
+test('estabelecimento barrado é LOGADO (não silencioso): flip_bloqueado = true', () => {
+  assert.equal(flipBloqueado(MEDUZZA, 'active'), true);
+});
+
+test('individual que flipa NÃO acende o log de bloqueio (os dois são mutuamente exclusivos)', () => {
+  assert.equal(flipa(MVS_ATENDENTE, 'active'), true);
+  assert.equal(flipBloqueado(MVS_ATENDENTE, 'active'), false);
+});
+
+test('estabelecimento que JÁ é agenda: nem flipa nem loga bloqueio', () => {
+  const estabAgenda = { ...MEDUZZA, modo_atendente_enabled: false, personalizacao: {} };
+  assert.equal(flipa(estabAgenda, 'active'), false);
+  assert.equal(flipBloqueado(estabAgenda, 'active'), false);
+});
+
+test('estabelecimento com teste FALHO: nada acontece (nem log de bloqueio)', () => {
+  assert.equal(flipa(MEDUZZA, 'invalid'), false);
+  assert.equal(flipBloqueado(MEDUZZA, 'invalid'), false);
+});
+
+test('comparação é ESTRITA (= individual): product_type desconhecido/futuro NÃO flipa', () => {
+  // product_type é NOT NULL DEFAULT 'individual' (migration 052), mas a guarda estrita
+  // garante que um formato novo (ex.: 'franquia') entre como "não flipa" até ser avaliado.
+  assert.equal(flipa({ ...MVS_ATENDENTE, product_type: 'franquia' }, 'active'), false);
+  assert.equal(flipBloqueado({ ...MVS_ATENDENTE, product_type: 'franquia' }, 'active'), true);
+  assert.match(PREDICADO, /product_type\s*=\s*'individual'/, 'a guarda tem de ser estrita');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -373,6 +413,19 @@ test('o operador é avisado: resposta expõe agendaAtivada e há log [gcal]', ()
     HANDLER,
     /\[gcal\][^`]*AGENDA ATIVADA/i,
     'flip precisa deixar rastro no padrão [gcal]',
+  );
+});
+
+test('estabelecimento barrado também é avisado: log explicando por que NÃO flipou', () => {
+  assert.match(
+    HANDLER,
+    /flip_bloqueado === true\) \{[\s\S]*console\.log\(/,
+    'o caso barrado precisa de log próprio',
+  );
+  assert.match(
+    HANDLER,
+    /\[gcal\][^`]*modo NÃO alterado[^`]*product_type/,
+    'o log de bloqueio precisa dizer o motivo (product_type não individual)',
   );
 });
 

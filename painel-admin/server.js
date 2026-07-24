@@ -4533,10 +4533,15 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     //     temporária de rede não pode transformar cliente de agenda em atendente.
     //  3. `billing_from_agenda_enabled` (ADR 0027) NÃO é tocado — outro gate, SCRUM-112.
     //  4. `bot_prompt`/persona NÃO é tocado — trocar prompt de cliente é caminho separado.
-    //  5. `product_type='estabelecimento'` fica de fora: lá a agenda é POR COLABORADOR
-    //     (clone_colaboradores.gcal_*) e o teste do nível do clone não significa
-    //     "a agenda passou a valer" (a própria UI esconde este botão pro estabelecimento).
-    //     Protege o piloto Meduzza (estabelecimento em modo atendente).
+    //  5. SÓ `product_type='individual'` (decisão do Bruno, 24/07). No ESTABELECIMENTO a
+    //     agenda é 1 calendarId por COLABORADOR (clone_colaboradores.gcal_*) — o gcal do
+    //     NÍVEL do clone não é o que o bot usa, então validá-lo não significa "a agenda
+    //     passou a valer" (a própria UI esconde este botão pro estabelecimento). Flipar ali
+    //     jogaria o clone no ramo estabelecimento podendo ficar com agenda ligada e NENHUM
+    //     calendário utilizável — quebraria a Meduzza (estabelecimento + modo atendente,
+    //     cliente pagante). Errar pra menos aqui só mantém o status quo. Comparação ESTRITA
+    //     `= 'individual'`: product_type novo/desconhecido no futuro também não flipa.
+    //     O caso bloqueado é LOGADO explicando por que não flipou (nunca silencioso).
     //
     // O CTE `prev` lê o estado ANTERIOR no mesmo snapshot da statement — é o que permite
     // detectar a transição e devolver `agenda_ativada` (em RETURNING, colunas de flow_clones
@@ -4547,12 +4552,21 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
                 (
                   $1 = 'active'
                   AND gcal_status IS DISTINCT FROM 'active'
-                  AND product_type IS DISTINCT FROM 'estabelecimento'
+                  AND product_type = 'individual'
                   AND (
                     modo_atendente_enabled IS TRUE
                     OR personalizacao->>'agenda_automatica' = 'false'
                   )
-                ) AS flip
+                ) AS flip,
+                (
+                  $1 = 'active'
+                  AND gcal_status IS DISTINCT FROM 'active'
+                  AND product_type <> 'individual'
+                  AND (
+                    modo_atendente_enabled IS TRUE
+                    OR personalizacao->>'agenda_automatica' = 'false'
+                  )
+                ) AS flip_bloqueado_nao_individual
            FROM flow_clones
           WHERE id = $2
        )
@@ -4569,7 +4583,10 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
               updated_at         = NOW()
          FROM prev
         WHERE fc.id = prev.id
-        RETURNING prev.flip AS agenda_ativada, fc.slot`,
+        RETURNING prev.flip AS agenda_ativada,
+                  prev.flip_bloqueado_nao_individual AS flip_bloqueado,
+                  fc.slot,
+                  fc.product_type`,
       [newStatus, id],
     );
 
@@ -4577,6 +4594,14 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     if (agendaAtivada) {
       console.log(
         `[gcal] clone ${id} (${upd.rows[0].slot}): AGENDA ATIVADA na validação da SA — modo atendente -> modo agenda (agenda_automatica=true, modo_atendente_enabled=false)`,
+      );
+    } else if (upd.rows[0]?.flip_bloqueado === true) {
+      // Estabelecimento em modo atendente com gcal validado no NÍVEL DO CLONE: não flipamos
+      // porque a agenda dele é por colaborador (clone_colaboradores.gcal_*) — ligar o modo
+      // agenda aqui poderia deixá-lo sem nenhum calendário utilizável. Fica registrado pro
+      // operador saber que o modo NÃO mudou e por quê (nada silencioso nos dois sentidos).
+      console.log(
+        `[gcal] clone ${id} (${upd.rows[0].slot}): agenda validada mas modo NÃO alterado — product_type='${upd.rows[0].product_type}' (não é individual); no estabelecimento a agenda é por colaborador (clone_colaboradores.gcal_*). Ajuste o modo pela aba Colaboradores/perfil se for o caso.`,
       );
     }
 
