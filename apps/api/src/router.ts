@@ -766,7 +766,7 @@ export async function handleWebhook(
       if (suspensaoManual) {
         log.info(
           {
-            telefone,
+            fone: phoneLogTag(telefone),
             flowId: route.workflow_id,
             suspendedReason: cloneForGate.suspended_reason,
             suspendedAt: cloneForGate.suspended_at,
@@ -793,7 +793,7 @@ export async function handleWebhook(
       if (vencidoComCarencia) {
         log.info(
           {
-            telefone,
+            fone: phoneLogTag(telefone),
             flowId: route.workflow_id,
             nextDueDate: cloneForGate.next_due_date,
             diasRestantes,
@@ -1022,7 +1022,7 @@ async function buildIncomingMessage(input: {
     if (!audioInfo.url) {
       log.warn(
         {
-          telefone,
+          fone: phoneLogTag(telefone),
           hasMedia: payload?.hasMedia,
           mimetype: audioInfo.mimetype,
           payloadKeys: payload ? Object.keys(payload) : [],
@@ -1046,7 +1046,7 @@ async function buildIncomingMessage(input: {
           );
         } else {
           log.warn(
-            { telefone, source: audioInfo.source },
+            { fone: phoneLogTag(telefone), source: audioInfo.source },
             'Whisper devolveu texto vazio para audio',
           );
           texto = '[audio sem fala identificada]';
@@ -1054,7 +1054,12 @@ async function buildIncomingMessage(input: {
         }
       } catch (e) {
         log.error(
-          { err: e, telefone, source: audioInfo.source, url: audioInfo.url.slice(0, 80) },
+          {
+            err: e,
+            fone: phoneLogTag(telefone),
+            source: audioInfo.source,
+            url: audioInfo.url.slice(0, 80),
+          },
           'Falha ao transcrever áudio',
         );
         texto = '[áudio não transcrito]';
@@ -1066,7 +1071,7 @@ async function buildIncomingMessage(input: {
     // ou audio em campo novo que ainda nao conhecemos. Loga estrutura.
     log.info(
       {
-        telefone,
+        fone: phoneLogTag(telefone),
         mediaMime: payload?.media?.mimetype,
         dataMsgKeys: getDataMessageKeys(payload),
         payloadKeys: payload ? Object.keys(payload) : [],

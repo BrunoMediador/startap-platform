@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   canonicalE164,
   ensureDddBr,
@@ -328,35 +328,45 @@ describe('phoneHint', () => {
 // ── phoneLogTag (SCRUM-117 — telefone NUNCA em claro no log) ──────────────────
 describe('phoneLogTag', () => {
   const PEPPER = 'log-pepper-de-teste-32-bytes-hex-aa';
+  const prev = process.env.LOG_PHONE_PEPPER;
 
-  it('sem LOG_PHONE_PEPPER: degrada para só a máscara (LGPD-safe, boot-safe)', () => {
-    const prev = process.env.LOG_PHONE_PEPPER;
-    process.env.LOG_PHONE_PEPPER = undefined;
-    // dígitos crus como o extractPhone entrega (com o 9º dígito)
-    const tag = phoneLogTag('5531999998842');
-    expect(tag).toBe('+55 31 •••••-••42');
-    if (prev === undefined) process.env.LOG_PHONE_PEPPER = undefined;
+  // F5 (review #501): REMOÇÃO de verdade — `= undefined` viraria a string 'undefined'
+  // (env coage p/ string), testando "pepper curto", não AUSÊNCIA real da env.
+  // Reflect.deleteProperty em vez de `delete` (biome lint/performance/noDelete).
+  function semPepper() {
+    Reflect.deleteProperty(process.env, 'LOG_PHONE_PEPPER');
+  }
+  function comPepper() {
+    process.env.LOG_PHONE_PEPPER = PEPPER;
+  }
+  afterEach(() => {
+    if (prev === undefined) Reflect.deleteProperty(process.env, 'LOG_PHONE_PEPPER');
     else process.env.LOG_PHONE_PEPPER = prev;
+  });
+
+  it('sem LOG_PHONE_PEPPER (env AUSENTE): degrada para só a máscara (boot-safe)', () => {
+    semPepper();
+    // dígitos crus como o extractPhone entrega (com o 9º dígito)
+    expect(phoneLogTag('5531999998842')).toBe('+55 31 •••••-••42');
   });
 
   it('NUNCA contém o número em claro (com ou sem pepper)', () => {
     const raw = '5531999998842';
-    const semPepper = phoneLogTag(raw);
-    process.env.LOG_PHONE_PEPPER = PEPPER;
-    const comPepper = phoneLogTag(raw);
-    process.env.LOG_PHONE_PEPPER = undefined;
+    semPepper();
+    const out1 = phoneLogTag(raw);
+    comPepper();
+    const out2 = phoneLogTag(raw);
     // nem os 8 dígitos finais nem o número inteiro podem aparecer
-    for (const out of [semPepper, comPepper]) {
+    for (const out of [out1, out2]) {
       expect(out).not.toContain('99998842');
       expect(out).not.toContain('5531999998842');
     }
   });
 
   it('com LOG_PHONE_PEPPER: anexa sufixo de correlação estável e não-reversível', () => {
-    process.env.LOG_PHONE_PEPPER = PEPPER;
+    comPepper();
     const a = phoneLogTag('5531999998842');
     const b = phoneLogTag('553199998842'); // mesmo número canônico (sem o 9º dígito)
-    process.env.LOG_PHONE_PEPPER = undefined;
     // formato: "+55 31 •••••-••42#xxxxxxxx" (8 hex)
     expect(a).toMatch(/#[0-9a-f]{8}$/);
     // mesma identidade canônica => mesmo sufixo => correlaciona a conversa
@@ -364,13 +374,17 @@ describe('phoneLogTag', () => {
   });
 
   it('números diferentes => sufixos diferentes (sem colisão de DDD+2díg)', () => {
-    process.env.LOG_PHONE_PEPPER = PEPPER;
+    comPepper();
     // mesmos DDD (31) e mesmos 2 últimos dígitos (42): a máscara colidiria
     const a = phoneLogTag('5531988887842');
     const b = phoneLogTag('5531977776842');
-    process.env.LOG_PHONE_PEPPER = undefined;
     expect(a.slice(0, a.indexOf('#'))).toBe(b.slice(0, b.indexOf('#')));
     expect(a).not.toBe(b);
+  });
+
+  it('pepper CURTO (<16) é ignorado — degrada como se ausente', () => {
+    process.env.LOG_PHONE_PEPPER = 'curto';
+    expect(phoneLogTag('5531999998842')).toBe('+55 31 •••••-••42');
   });
 
   it('entrada inaproveitável (null/vazio/lixo curto) => [no-phone], nunca lança', () => {
@@ -381,10 +395,8 @@ describe('phoneLogTag', () => {
   });
 
   it('aceita chatId sujo (@c.us) e máscara BR', () => {
-    const prev = process.env.LOG_PHONE_PEPPER;
-    process.env.LOG_PHONE_PEPPER = undefined;
+    semPepper();
     expect(phoneLogTag('5531999998842@c.us')).toBe('+55 31 •••••-••42');
     expect(phoneLogTag('(31) 99999-8842')).toBe('+55 31 •••••-••42');
-    process.env.LOG_PHONE_PEPPER = prev;
   });
 });

@@ -21,7 +21,7 @@ import {
   buildCartaoEmojiOverrideBlock,
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
-import { phoneHint, sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
+import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
 import { buildEquipeBlock, buildModoAtendenteBlock } from '../lib/modo-atendente.js';
 import {
   buildSeuPacoteBlock,
@@ -456,7 +456,7 @@ export class TesteBarbeariaBot extends BotBase {
         });
         if (conflito) {
           this.log.warn(
-            { slot: this.slot, telefone, eventId, novoStart, colaboradorId },
+            { slot: this.slot, fone: phoneLogTag(telefone), eventId, novoStart, colaboradorId },
             'remarcar_agendamento bloqueado: nova janela ocupada (conflito server-side)',
           );
           return {
@@ -475,7 +475,14 @@ export class TesteBarbeariaBot extends BotBase {
           timeZone: cloneTz,
         });
         this.log.info(
-          { slot: this.slot, telefone, eventId, colaboradorId, novoStart, novoEnd },
+          {
+            slot: this.slot,
+            fone: phoneLogTag(telefone),
+            eventId,
+            colaboradorId,
+            novoStart,
+            novoEnd,
+          },
           'Agendamento remarcado (patchEvent — eventId preservado)',
         );
 
@@ -515,7 +522,12 @@ export class TesteBarbeariaBot extends BotBase {
         });
       }
       this.log.info(
-        { slot: this.slot, telefone, pushName, escalado: config.CANCELAMENTO_ESCALADO_ENABLED },
+        {
+          slot: this.slot,
+          fone: phoneLogTag(telefone),
+          pushName,
+          escalado: config.CANCELAMENTO_ESCALADO_ENABLED,
+        },
         'cancelamento detectado (botão literal) — bot NÃO cancela; escala pro dono se flag ON',
       );
       return 'ok! vou avisar o time, e logo entraremos em contato!';
@@ -584,7 +596,11 @@ export class TesteBarbeariaBot extends BotBase {
       scheduleConfig = await loadScheduleConfig(this.slot);
     } catch (err) {
       this.log.error(
-        { err: err instanceof Error ? err.message : String(err), slot: this.slot, telefone },
+        {
+          err: err instanceof Error ? err.message : String(err),
+          slot: this.slot,
+          fone: phoneLogTag(telefone),
+        },
         'free-slots: configuração ausente — bot não responde para evitar dados fictícios',
       );
       return null;
@@ -790,7 +806,7 @@ export class TesteBarbeariaBot extends BotBase {
                 },
                 requestedStart: startISO,
                 requestedEnd: endISO,
-                telefone,
+                fone: phoneLogTag(telefone),
               },
               'inserir_agendamento bloqueado: conflito detectado server-side',
             );
@@ -855,14 +871,19 @@ export class TesteBarbeariaBot extends BotBase {
             // mensagem -> NAO cria 2º evento. Devolve sucesso pro agente para
             // a conversa nao virar erro nem nova tentativa.
             this.log.info(
-              { lockKey, telefone },
+              { lockKey, fone: phoneLogTag(telefone) },
               'inserir_agendamento pulado: acao ja em andamento (action-lock)',
             );
             return { ok: true, skipped: true };
           }
           const ev = lock.value as Awaited<ReturnType<typeof createEvent>>;
           this.log.info(
-            { eventId: ev.id, summary: ev.summary, telefone, degraded: lock.degraded },
+            {
+              eventId: ev.id,
+              summary: ev.summary,
+              fone: phoneLogTag(telefone),
+              degraded: lock.degraded,
+            },
             'Agendamento criado',
           );
           // Dedução de pacote (ADR 0025 2b) sob o MESMO action-lock — gated; OFF = pula.
@@ -1017,7 +1038,7 @@ export class TesteBarbeariaBot extends BotBase {
       promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
     } catch (err) {
       this.log.error(
-        { err, slot: this.slot, telefone: phoneHint(telefone) },
+        { err, slot: this.slot, fone: phoneLogTag(telefone) },
         'renderPrompt falhou (modo atendente) — bot nao responde',
       );
       return null;
@@ -1396,7 +1417,7 @@ export class TesteBarbeariaBot extends BotBase {
       // ramo NÃO roda mais (vira estabelecimento com agenda, sem deploy). BYTE-IDÊNTICO pro
       // dragon (que TEM colaboradores/gcal): getGcalsForSlot != [] => nunca entra aqui.
       this.log.info(
-        { slot: this.slot, telefone },
+        { slot: this.slot, fone: phoneLogTag(telefone) },
         'estabelecimento sem colaborador agendável — degrade elegante para atendente (ADR 0030 D3)',
       );
       return this.processAtendente(ctx);
@@ -1408,7 +1429,11 @@ export class TesteBarbeariaBot extends BotBase {
       scheduleConfig = await loadScheduleConfig(this.slot);
     } catch (err) {
       this.log.error(
-        { err: err instanceof Error ? err.message : String(err), slot: this.slot, telefone },
+        {
+          err: err instanceof Error ? err.message : String(err),
+          slot: this.slot,
+          fone: phoneLogTag(telefone),
+        },
         'estabelecimento: configuração de horários/serviços ausente — bot não responde',
       );
       return null;
@@ -1436,7 +1461,7 @@ export class TesteBarbeariaBot extends BotBase {
       const msg = err instanceof Error ? err.message : String(err);
       if (/40[13]/.test(msg)) gcal.invalidateGcalsForSlot(this.slot);
       this.log.error(
-        { err: msg, slot: this.slot, telefone },
+        { err: msg, slot: this.slot, fone: phoneLogTag(telefone) },
         'estabelecimento: freebusy falhou — bot não responde (não inventa disponibilidade)',
       );
       return null;
@@ -1630,7 +1655,11 @@ export class TesteBarbeariaBot extends BotBase {
           const colaborador = resolveColaboradorByShortId(decorados, String(colaborador_id ?? ''));
           if (!colaborador) {
             this.log.warn(
-              { slot: this.slot, telefone, colaboradorIdRecebido: colaborador_id },
+              {
+                slot: this.slot,
+                fone: phoneLogTag(telefone),
+                colaboradorIdRecebido: colaborador_id,
+              },
               'inserir_agendamento rejeitado: colaborador_id invalido/inativo/fora do slot',
             );
             return {
@@ -1655,7 +1684,7 @@ export class TesteBarbeariaBot extends BotBase {
             this.log.warn(
               {
                 slot: this.slot,
-                telefone,
+                fone: phoneLogTag(telefone),
                 colaboradorId: colaborador.colaboradorId,
                 servicoPedido,
               },
@@ -1690,7 +1719,7 @@ export class TesteBarbeariaBot extends BotBase {
                 conflito: { start: conflito.start.dateTime, end: conflito.end.dateTime },
                 requestedStart: startISO,
                 requestedEnd: endISO,
-                telefone,
+                fone: phoneLogTag(telefone),
               },
               'inserir_agendamento (estab) bloqueado: conflito na agenda do colaborador',
             );
@@ -1712,7 +1741,7 @@ export class TesteBarbeariaBot extends BotBase {
                 eventId: ev.id,
                 summary: ev.summary,
                 colaboradorId: colaborador.colaboradorId,
-                telefone,
+                fone: phoneLogTag(telefone),
               },
               'Agendamento criado (estabelecimento)',
             );
@@ -1753,7 +1782,7 @@ export class TesteBarbeariaBot extends BotBase {
           const lock = await withActionLock(lockKey, createEvent);
           if (!lock.executed) {
             this.log.info(
-              { lockKey, telefone },
+              { lockKey, fone: phoneLogTag(telefone) },
               'inserir_agendamento (estab) pulado: acao ja em andamento (action-lock)',
             );
             return { ok: true, skipped: true, colaborador_nome: colaborador.nome };
@@ -1764,7 +1793,7 @@ export class TesteBarbeariaBot extends BotBase {
               eventId: ev.id,
               summary: ev.summary,
               colaboradorId: colaborador.colaboradorId,
-              telefone,
+              fone: phoneLogTag(telefone),
               degraded: lock.degraded,
             },
             'Agendamento criado (estabelecimento)',
