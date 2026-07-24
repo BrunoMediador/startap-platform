@@ -8,6 +8,7 @@
  *
  * Esta função abstrai essa lógica. Sempre retorna apenas dígitos (com DDI).
  */
+import { createHmac } from 'node:crypto';
 import type { WahaWebhookBody } from './types.js';
 
 /** Extrai telefone "real" do payload WAHA. Retorna string de dígitos (ex: 5535999998888) ou null. */
@@ -334,6 +335,50 @@ export function phoneHint(canonical: string): string {
     return `+55 ${ddd} •••••-••${last2}`;
   }
   return `+${digits.slice(0, 2)} •••••-••${last2}`;
+}
+
+const LOG_PEPPER_ENV = 'LOG_PHONE_PEPPER';
+const LOG_PEPPER_MIN_LENGTH = 16;
+
+/**
+ * Tag ESTÁVEL e MASCARADA de um telefone para uso em LOG (SCRUM-117; Regra de Ouro
+ * nº6 do CLAUDE.md: "logs nunca persistem CPF/telefone sem hash"). NUNCA devolve o
+ * número em claro. É o helper canônico que todo log do núcleo bot/router deve usar no
+ * lugar do telefone cru.
+ *
+ * Formato: `+55 31 •••••-••42` (máscara sancionada de suporte/ops — phoneHint), com um
+ * sufixo opaco de correlação `#<8 hex>` ANEXADO quando `LOG_PHONE_PEPPER` (≥16 chars)
+ * está configurada. O sufixo é os 8 primeiros hex de HMAC-SHA256(pepper, E.164
+ * canônico): estável por-número (mesma conversa → mesmo sufixo) e não-reversível — dá
+ * correlação forte SEM a colisão de "DDD + 2 últimos dígitos" da máscara sozinha, e SEM
+ * expor o número.
+ *
+ * BOOT-SAFE: `LOG_PHONE_PEPPER` é OPCIONAL — lida lazy, só no ponto de uso. Sem ela,
+ * degrada para SÓ a máscara (que já é LGPD-safe); o boot NUNCA crasha e nenhum caminho
+ * quebra pela ausência. Pepper PRÓPRIO de propósito: reusar TRIAL/PACKAGE_PHONE_PEPPER
+ * permitiria JOIN entre o log e o trial_ledger/pacotes pelo mesmo hash — a linkability
+ * cross-finalidade que a ADR 0025 §4 desencoraja.
+ *
+ * Aceita entrada suja: dígitos crus do extractPhone, chatId "55…@c.us", máscara BR.
+ * Sem dígitos aproveitáveis (grupo/lid/vazio) → `[no-phone]` (nunca lança).
+ *
+ * ⚠️ NÃO use a saída como identidade de decisão (anti-eco/pausa/roteamento) — só LOG.
+ */
+export function phoneLogTag(raw: string | null | undefined): string {
+  if (!raw) return '[no-phone]';
+  const canonical = canonicalE164(raw);
+  const digits = canonical ?? raw.replace(/\D/g, '');
+  if (digits.length < 4) return '[no-phone]';
+  const masked = phoneHint(digits);
+  const pepper = process.env[LOG_PEPPER_ENV];
+  if (canonical && pepper && pepper.trim().length >= LOG_PEPPER_MIN_LENGTH) {
+    const tag = createHmac('sha256', pepper.trim())
+      .update(canonical, 'utf8')
+      .digest('hex')
+      .slice(0, 8);
+    return `${masked}#${tag}`;
+  }
+  return masked;
 }
 
 /**

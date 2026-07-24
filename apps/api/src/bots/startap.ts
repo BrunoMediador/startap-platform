@@ -1,3 +1,4 @@
+import { phoneLogTag } from '@startap/core/phone';
 import type { BotContext } from '@startap/core/types';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { config } from '../config.js';
@@ -115,12 +116,12 @@ export class StartapBot extends BotBase {
     // Pausa manual: humano assume / volta
     if (command === 'pause') {
       await applyStartapManualCommand(command, telefone);
-      this.log.info({ telefone }, 'Startap pausado (intervencao humana)');
+      this.log.info({ fone: phoneLogTag(telefone) }, 'Startap pausado (intervencao humana)');
       return null;
     }
     if (command === 'resume') {
       await applyStartapManualCommand(command, telefone);
-      this.log.info({ telefone }, 'Startap retomado apos chat humano');
+      this.log.info({ fone: phoneLogTag(telefone) }, 'Startap retomado apos chat humano');
       return null;
     }
 
@@ -134,7 +135,10 @@ export class StartapBot extends BotBase {
         vars: { nome: pushName || telefone, telefone },
       });
     } catch (err) {
-      this.log.error({ err, slot: SLOT, telefone }, 'renderPrompt falhou — bot nao responde');
+      this.log.error(
+        { err, slot: SLOT, fone: phoneLogTag(telefone) },
+        'renderPrompt falhou — bot nao responde',
+      );
       return null;
     }
 
