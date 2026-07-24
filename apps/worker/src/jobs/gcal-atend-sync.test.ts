@@ -427,6 +427,84 @@ describe('estabelecimento (N calendários)', () => {
       ['b', 20],
     ]);
   });
+
+  // ── SCRUM-111: fail-safe de deleção POR colaborador ──────────────────────────────
+  // Bug de dinheiro: no estabelecimento a listagem é POR colaborador. Se UM colaborador some de
+  // getGcalsForSlot (dropout parcial: gcal_status virou != active, calendarId caiu), o ciclo
+  // ainda marca complete=true (todos os ENTREGUES vieram por inteiro) e o reconciler conclui que
+  // TODO evento daquele colaborador "sumiu da agenda" → soft-delete em massa com motivo FALSO.
+  it('dropout parcial (colaborador some de getGcalsForSlot, complete=true) → atendimento dele NÃO é deletado e o skip é logado/contado', async () => {
+    listAtendSyncSlots.mockResolvedValue([slot({ product_type: 'estabelecimento' })]);
+    // Só o colaborador 10 foi ENTREGUE (listagem completa). O colaborador 20 sumiu da lista.
+    getGcalsForSlot.mockResolvedValue([
+      { colaboradorId: 10, client: pagedClient({ events: [ev('a10')], complete: true }) },
+    ]);
+    // No banco há uma linha bilhetada do colaborador 20 (o que sumiu) ausente do presentIds.
+    listAgendaAtendimentosInWindow.mockResolvedValue([
+      {
+        gcal_event_id: 'ag20',
+        valor_cents: 11000,
+        desconto_cents: 0,
+        forma_pagamento: 'pix',
+        data: '2026-07-10',
+        colaborador_id: 20,
+      },
+    ]);
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    // Sem o fix: complete=true + evento fora do presentIds → seria DELETADO (motivo falso).
+    expect(res.deleted).toBe(0);
+    expect(softDeleteAtendimentoByEvent).not.toHaveBeenCalled();
+    expect(res.deletionsSkippedColabAbsent).toBe(1);
+    // O upsert do colaborador presente segue normal.
+    expect(res.upserted).toBe(1);
+    // Skip logado pra visibilidade (antes o dropout preservava em silêncio).
+    const skipLog = logWarn.mock.calls.find((c) => String(c[1]).includes('fail-safe SCRUM-111'));
+    expect(skipLog).toBeDefined();
+    const payload = skipLog?.[0] as Record<string, unknown>;
+    expect(payload.skippedRows).toBe(1);
+    expect(payload.absentColabIds).toEqual([20]);
+  });
+
+  it('listagem completa dos 2 colaboradores → deleção normal do evento que sumiu DE VERDADE', async () => {
+    listAtendSyncSlots.mockResolvedValue([slot({ product_type: 'estabelecimento' })]);
+    getGcalsForSlot.mockResolvedValue([
+      { colaboradorId: 10, client: pagedClient({ events: [ev('a10')], complete: true }) },
+      { colaboradorId: 20, client: pagedClient({ events: [ev('b20')], complete: true }) },
+    ]);
+    // 'a10' presente → mantém; 'sumiu20' (colaborador 20) não está na agenda → deleta de verdade.
+    listAgendaAtendimentosInWindow.mockResolvedValue([
+      {
+        gcal_event_id: 'a10',
+        valor_cents: 5000,
+        desconto_cents: 0,
+        forma_pagamento: null,
+        data: '2026-07-10',
+        colaborador_id: 10,
+      },
+      {
+        gcal_event_id: 'sumiu20',
+        valor_cents: 9000,
+        desconto_cents: 0,
+        forma_pagamento: 'pix',
+        data: '2026-07-10',
+        colaborador_id: 20,
+      },
+    ]);
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(res.deleted).toBe(1);
+    expect(res.deletionsSkippedColabAbsent).toBe(0);
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledTimes(1);
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'sumiu20', {
+      reason: 'gcal_sync_absent',
+      by: 'gcal-atend-sync',
+    });
+  });
 });
 
 describe('gate + tenant', () => {

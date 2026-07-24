@@ -753,6 +753,8 @@ async function main() {
             syncResult.upserted > 0 ||
             syncResult.deleted > 0 ||
             syncResult.skippedIncomplete > 0 ||
+            syncResult.skippedNoGcal > 0 ||
+            syncResult.deletionsSkippedColabAbsent > 0 ||
             syncResult.slotsWithError > 0
           ) {
             log.info({ ...syncResult }, 'gcal-atend-sync: atividade neste ciclo');

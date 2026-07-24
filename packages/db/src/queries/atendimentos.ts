@@ -1151,6 +1151,13 @@ export interface AgendaAtendimentoWindowRow {
   desconto_cents: number;
   forma_pagamento: string | null;
   data: string;
+  /**
+   * Colaborador dono da linha (estabelecimento; NULL em atendimento SOLO/individual). O reconciler
+   * usa isto para o fail-safe de deleção POR colaborador (SCRUM-111): só deleta se o colaborador
+   * DESTA linha foi listado por completo neste ciclo — colaborador ausente do snapshot (dropout
+   * parcial de getGcalsForSlot) NÃO habilita deleção.
+   */
+  colaborador_id: number | null;
 }
 
 /**
@@ -1181,8 +1188,9 @@ export async function listAgendaAtendimentosInWindow(
     desconto_cents: number;
     forma_pagamento: string | null;
     data: string;
+    colaborador_id: string | number | null;
   }>(
-    `SELECT gcal_event_id, valor_cents, desconto_cents, forma_pagamento, data
+    `SELECT gcal_event_id, valor_cents, desconto_cents, forma_pagamento, data, colaborador_id
        FROM atendimentos
       WHERE slot = $1
         AND origem = 'agenda'
@@ -1199,6 +1207,7 @@ export async function listAgendaAtendimentosInWindow(
     desconto_cents: Number(x.desconto_cents),
     forma_pagamento: x.forma_pagamento,
     data: x.data,
+    colaborador_id: x.colaborador_id == null ? null : Number(x.colaborador_id),
   }));
 }
 
