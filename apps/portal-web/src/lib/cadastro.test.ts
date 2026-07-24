@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatoFields,
   isArea,
+  looksLikeFixoBR,
   maskPhoneBR,
   phoneDigits,
   signupCardFromError,
@@ -41,6 +42,41 @@ describe('maskPhoneBR', () => {
 
   it('normaliza paste sujo direto pra mascara', () => {
     expect(maskPhoneBR('+55 (31) 99999-8842')).toBe('(31) 99999-8842');
+  });
+});
+
+describe('looksLikeFixoBR (SCRUM-82 — sinal do aviso "cara de fixo")', () => {
+  it('o caso REAL do card: cliente cadastrou um fixo de 8 dígitos (35 1001-9347)', () => {
+    expect(looksLikeFixoBR('(35) 1001-9347')).toBe(true);
+    expect(looksLikeFixoBR('3510019347')).toBe(true);
+  });
+
+  it('fixo BR clássico (assinante 2-5, 10 locais) → avisa', () => {
+    expect(looksLikeFixoBR('(11) 3333-4444')).toBe(true);
+    expect(looksLikeFixoBR('(21) 2555-1234')).toBe(true);
+    expect(looksLikeFixoBR('(31) 4002-8922')).toBe(true);
+  });
+
+  it('celular completo (11 locais, com o 9º dígito) → NÃO avisa', () => {
+    expect(looksLikeFixoBR('(31) 99999-8842')).toBe(false);
+    expect(looksLikeFixoBR('(11) 98765-4321')).toBe(false);
+  });
+
+  it('NÃO pisca o aviso no meio da digitação de um celular (10 locais começando em 9)', () => {
+    // Celular sendo digitado passa por 10 dígitos antes do 11º; o assinante já
+    // começa em 9 nesse ponto — guard d[2] !== '9' evita o flash.
+    expect(looksLikeFixoBR('(31) 9999-8842')).toBe(false);
+  });
+
+  it('número incompleto (< 10 locais) ainda não avisa', () => {
+    expect(looksLikeFixoBR('')).toBe(false);
+    expect(looksLikeFixoBR('(35) 1001')).toBe(false);
+    expect(looksLikeFixoBR('(35) 1001-934')).toBe(false); // 9 dígitos
+  });
+
+  it('paste com DDI +55 é normalizado antes de decidir (eco do phoneDigits)', () => {
+    expect(looksLikeFixoBR('+55 (11) 3333-4444')).toBe(true);
+    expect(looksLikeFixoBR('+55 (31) 99999-8842')).toBe(false);
   });
 });
 
@@ -111,6 +147,14 @@ describe('validateCadastro', () => {
     const res = validateCadastro({ ...ok, whatsapp: '(31) 9999' });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.errors.whatsapp).toBe('Confere o número? Faltou dígito');
+  });
+
+  it('número com cara de fixo (10 dígitos) NÃO bloqueia o submit — aviso ≠ erro (SCRUM-82)', () => {
+    // O aviso "parece um fixo" é só client-side; o backend segue sendo a autoridade
+    // (WhatsApp Business em fixo existe). O payload sai com os 10 dígitos locais.
+    const res = validateCadastro({ ...ok, whatsapp: '(35) 1001-9347' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.whatsapp).toBe('3510019347');
   });
 
   it('rejeita senha menor que o minimo do backend (8)', () => {

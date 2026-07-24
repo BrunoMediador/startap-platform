@@ -1,7 +1,15 @@
 'use client';
 
 import { ParticleField } from '@/components/fx/particle-field';
-import { Brandmark, IconEye, IconEyeOff, IconInfo, IconWhatsapp } from '@/components/icons';
+import {
+  Brandmark,
+  IconAlert,
+  IconEye,
+  IconEyeOff,
+  IconInfo,
+  IconWhatsapp,
+  IconX,
+} from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { TimezoneCombobox } from '@/components/ui/timezone-combobox';
@@ -16,6 +24,7 @@ import {
   type ModoIa,
   type SignupCardView,
   type TipoAtendimento,
+  looksLikeFixoBR,
   maskPhoneBR,
   signupCardFromError,
   validateCadastro,
@@ -62,6 +71,9 @@ export function CadastroForm() {
   const [tipoAtendimento, setTipoAtendimento] = useState<TipoAtendimento>(DEFAULT_TIPO_ATENDIMENTO);
   const [modoIa, setModoIa] = useState<ModoIa>(DEFAULT_MODO_IA);
   const [whatsapp, setWhatsapp] = useState('');
+  // Aviso "cara de fixo" (SCRUM-82) dispensado pelo usuário. Rearma sozinho quando o
+  // número deixa de parecer fixo (ver onChange do campo), pra um novo fixo re-avisar.
+  const [fixoDispensado, setFixoDispensado] = useState(false);
   // Fuso do negócio: pré-selecionado em São Paulo; o combobox só troca por seleção.
   const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
   const [senha, setSenha] = useState('');
@@ -247,7 +259,11 @@ export function CadastroForm() {
                       error={errors.whatsapp}
                       aria-describedby={errors.whatsapp ? 'cad-wa-err cad-wa-help' : 'cad-wa-help'}
                       onChange={(e) => {
-                        setWhatsapp(maskPhoneBR(e.target.value));
+                        const masked = maskPhoneBR(e.target.value);
+                        setWhatsapp(masked);
+                        // Rearma o aviso de fixo quando o número deixa de parecer fixo,
+                        // pra um novo número "cara de fixo" voltar a avisar.
+                        if (!looksLikeFixoBR(masked)) setFixoDispensado(false);
                         if (errors.whatsapp) {
                           setErrors((prev) => ({ ...prev, whatsapp: undefined }));
                         }
@@ -264,6 +280,11 @@ export function CadastroForm() {
                         vez por número.
                       </span>
                     </p>
+                    {/* Aviso (NÃO bloqueio) de número com cara de fixo — SCRUM-82.
+                        Dismissível; some quando o número deixa de parecer fixo. */}
+                    {looksLikeFixoBR(whatsapp) && !fixoDispensado && (
+                      <AvisoFixo onDispensar={() => setFixoDispensado(true)} />
+                    )}
                   </div>
 
                   <TimezoneCombobox
@@ -327,6 +348,37 @@ export function CadastroForm() {
           </div>
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Aviso amigável (SCRUM-82) quando o número tem cara de telefone FIXO (10 dígitos,
+ * sem o 9º dígito do celular). NÃO bloqueia o cadastro — WhatsApp Business em fixo
+ * existe; é só um empurrãozinho pra conferir o número antes de brigar com o
+ * pareamento. Dismissível. role="status" + aria-live="polite" (não é erro).
+ */
+function AvisoFixo({ onDispensar }: { onDispensar: () => void }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-2 flex items-start gap-2 rounded-[11px] border border-amber/30 bg-amber-soft px-3 py-2.5 text-[12.5px] leading-normal text-amber"
+    >
+      <IconAlert size={15} className="mt-px shrink-0" />
+      <span className="flex-1">
+        Isso parece um telefone <b className="font-semibold">fixo</b>. O WhatsApp quase sempre fica
+        num <b className="font-semibold">celular</b>, com 9 dígitos (o 9 na frente). Confere o
+        número? Se o seu WhatsApp é mesmo nesse, pode seguir.
+      </span>
+      <button
+        type="button"
+        onClick={onDispensar}
+        aria-label="Dispensar aviso"
+        className="-mr-1 -mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-[7px] text-amber outline-none transition-colors hover:bg-amber/10 focus-visible:ring-2 focus-visible:ring-amber"
+      >
+        <IconX size={14} />
+      </button>
     </div>
   );
 }
