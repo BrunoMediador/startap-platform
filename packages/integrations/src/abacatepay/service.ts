@@ -190,10 +190,12 @@ export interface EnsureChargeForSlotInput {
    * Janela de REEMISSAO ANTECIPADA em ms (SCRUM-124). Uma pending cuja validade cai DENTRO
    * de [now, now+reissueAheadMs] e tratada como "precisa reemitir" — a proxima cobranca
    * nasce ANTES da atual expirar. Reemite a MESMA linha (idempotente, 1 pending/slot — NAO
-   * cria 2a cobranca), MAS abandona o abacate_charge_id antigo (QR velho segue pagavel =>
-   * pagamento orfao enquanto o webhook casar so por abacate_charge_id). Default 0 = OFF
-   * (comportamento legado: so reemite ja expirada) — e o valor de prod ate o fallback por
-   * external_id no webhook (BILLING_REISSUE_AHEAD_MIN=0 no config). O portal mantem 0.
+   * cria 2a cobranca), MAS abandona o abacate_charge_id antigo (QR velho segue pagavel). O
+   * vetor de "pagamento orfao no QR velho" ja esta FECHADO pelo FALLBACK por external_id no
+   * webhook (SCRUM-139, PR #497): o pagamento do QR velho casa a linha 'pending' mais
+   * recente por external_id e credita sem orfao/duplo-credito. Por isso o cron liga
+   * (BILLING_REISSUE_AHEAD_MIN default 120 no config). Default 0 aqui = OFF (legado: so
+   * reemite ja expirada) — o portal (geracao sob demanda) mantem 0.
    */
   reissueAheadMs?: number;
 }
