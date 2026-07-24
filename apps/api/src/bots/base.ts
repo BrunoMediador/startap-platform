@@ -6,7 +6,7 @@
  */
 import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
-import { phoneHint } from '@startap/core/phone';
+import { phoneHint, phoneLogTag } from '@startap/core/phone';
 import type { Bot, BotContext } from '@startap/core/types';
 import {
   chatMemory,
@@ -76,7 +76,10 @@ export abstract class BotBase implements Bot {
         .isFlowPaused({ flowId: ctx.flowId, telefone })
         .catch(() => false);
       if (flowPaused) {
-        this.log.info({ telefone, flowId: ctx.flowId }, 'Cliente em pausa no fluxo, ignorando');
+        this.log.info(
+          { fone: phoneLogTag(telefone), flowId: ctx.flowId },
+          'Cliente em pausa no fluxo, ignorando',
+        );
         await this.logEvent({
           ...baseLog,
           eventType: 'bot.flow-paused',
@@ -92,7 +95,7 @@ export abstract class BotBase implements Bot {
     if (this.cfg.pauseTable) {
       const paused = await pausaQueries.isPaused(this.cfg.pauseTable, telefone).catch(() => false);
       if (paused) {
-        this.log.info({ telefone }, 'Cliente em pausa, ignorando');
+        this.log.info({ fone: phoneLogTag(telefone) }, 'Cliente em pausa, ignorando');
         await this.logEvent({
           ...baseLog,
           eventType: 'bot.project-paused',
@@ -200,7 +203,7 @@ export abstract class BotBase implements Bot {
         });
       }
     } catch (e) {
-      this.log.error({ err: e, telefone }, 'Bot processing failed');
+      this.log.error({ err: e, fone: phoneLogTag(telefone) }, 'Bot processing failed');
       await this.logEvent({
         ...baseLog,
         eventType: 'bot.processing-error',

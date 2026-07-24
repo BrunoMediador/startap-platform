@@ -108,6 +108,16 @@ vi.mock('@startap/core/phone', () => ({
     }
     return digits;
   },
+  // SCRUM-117: máscara de LOG (degrada p/ só a máscara sem LOG_PHONE_PEPPER).
+  phoneLogTag: (raw?: string | null): string => {
+    if (!raw) return '[no-phone]';
+    const d = String(raw).replace(/\D/g, '');
+    if (d.length < 4) return '[no-phone]';
+    const last2 = d.slice(-2);
+    return d.startsWith('55') && d.length >= 12
+      ? `+55 ${d.slice(2, 4)} •••••-••${last2}`
+      : `+${d.slice(0, 2)} •••••-••${last2}`;
+  },
 }));
 
 vi.mock('./lib/idempotency.js', () => ({

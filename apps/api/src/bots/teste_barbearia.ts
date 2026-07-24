@@ -1,3 +1,4 @@
+import { phoneLogTag } from '@startap/core/phone';
 import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -629,7 +630,10 @@ export class TesteBarbeariaBot extends BotBase {
     try {
       promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
     } catch (err) {
-      this.log.error({ err, slot: this.slot, telefone }, 'renderPrompt falhou — bot nao responde');
+      this.log.error(
+        { err, slot: this.slot, fone: phoneLogTag(telefone) },
+        'renderPrompt falhou — bot nao responde',
+      );
       return null;
     }
 
@@ -813,7 +817,10 @@ export class TesteBarbeariaBot extends BotBase {
           // Flag OFF (default) -> cria o evento direto, IGUAL a hoje.
           if (!config.IDEMPOTENCY_ACTION_LOCK) {
             const ev = await createEvent();
-            this.log.info({ eventId: ev.id, summary: ev.summary, telefone }, 'Agendamento criado');
+            this.log.info(
+              { eventId: ev.id, summary: ev.summary, fone: phoneLogTag(telefone) },
+              'Agendamento criado',
+            );
             // Dedução de pacote (ADR 0025 2b) — gated por PACOTES_ENABLED; OFF = pula tudo.
             const pacote = await this.maybeDeduzirPacote({
               telefone,
@@ -1459,7 +1466,10 @@ export class TesteBarbeariaBot extends BotBase {
     try {
       promptPersona = await renderPrompt({ slot: this.slot, vars: {} });
     } catch (err) {
-      this.log.error({ err, slot: this.slot, telefone }, 'renderPrompt falhou — bot nao responde');
+      this.log.error(
+        { err, slot: this.slot, fone: phoneLogTag(telefone) },
+        'renderPrompt falhou — bot nao responde',
+      );
       return null;
     }
 

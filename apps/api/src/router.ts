@@ -12,7 +12,7 @@
 import { isHumanReplyAgendaEnabled } from '@startap/core/human-reply-agenda-gate';
 import { logger } from '@startap/core/logger';
 import { parseWahaAckPayload } from '@startap/core/message-ack';
-import { extractPhone, isGroupChat } from '@startap/core/phone';
+import { extractPhone, isGroupChat, phoneLogTag } from '@startap/core/phone';
 import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap/core/types';
 import {
   antibot,
@@ -232,7 +232,16 @@ export async function handleWebhook(
   // 3. Extrai telefone real
   const telefone = extractPhone(body);
   if (!telefone) {
-    log.warn({ payload: body.payload }, 'Não foi possível extrair telefone');
+    log.warn(
+      {
+        // SCRUM-117: NÃO dumpar o payload cru (contém from/remoteJid/texto = PII).
+        // Só os campos de diagnóstico da extração, e o chatId mascarado.
+        fone: phoneLogTag(body.payload?.from),
+        addressingMode: body.payload?._data?.key?.addressingMode ?? null,
+        hasRemoteJidAlt: !!body.payload?._data?.key?.remoteJidAlt,
+      },
+      'Não foi possível extrair telefone',
+    );
     await flowExecutionLog.logFlowEvent({
       ...baseLog,
       eventType: 'router.no-phone',
@@ -669,7 +678,10 @@ export async function handleWebhook(
         .catch(() => false)) ||
       (await pausa.isPaused(sessionEntry.legacyPauseTable, telefone).catch(() => false));
     if (sessionPaused) {
-      log.info({ telefone, sessao }, 'Número em pausa de sessão própria, ignorando');
+      log.info(
+        { fone: phoneLogTag(telefone), sessao },
+        'Número em pausa de sessão própria, ignorando',
+      );
       await flowExecutionLog.logFlowEvent({
         ...phoneLog,
         flowId: sessionEntry.workflowId,
@@ -688,7 +700,7 @@ export async function handleWebhook(
   // 6. Busca rota
   const route = await findRoute(telefone, sessao, sessionEntry);
   if (!route) {
-    log.debug({ telefone, sessao }, 'Telefone sem roteamento configurado');
+    log.debug({ fone: phoneLogTag(telefone), sessao }, 'Telefone sem roteamento configurado');
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       eventType: 'router.no-routing',
@@ -704,7 +716,10 @@ export async function handleWebhook(
     .isFlowPaused({ flowId: route.workflow_id, telefone })
     .catch(() => false);
   if (isFlowPaused) {
-    log.info({ telefone, flowId: route.workflow_id }, 'Número em pausa de fluxo, ignorando');
+    log.info(
+      { fone: phoneLogTag(telefone), flowId: route.workflow_id },
+      'Número em pausa de fluxo, ignorando',
+    );
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       flowId: route.workflow_id,
@@ -824,7 +839,10 @@ export async function handleWebhook(
     (route.workflow_id.startsWith('clone_') ? await resolveCloneBot(route.workflow_id) : null);
 
   if (!bot) {
-    log.warn({ workflowId: route.workflow_id, telefone }, 'Bot não encontrado no registry');
+    log.warn(
+      { workflowId: route.workflow_id, fone: phoneLogTag(telefone) },
+      'Bot não encontrado no registry',
+    );
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       flowId: route.workflow_id,
@@ -860,7 +878,7 @@ export async function handleWebhook(
       message: 'Bot iniciou processamento',
     });
     await bot.handle(ctx);
-    log.info({ bot: bot.name, telefone }, 'Mensagem processada');
+    log.info({ bot: bot.name, fone: phoneLogTag(telefone) }, 'Mensagem processada');
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       flowId: route.workflow_id,
@@ -873,7 +891,7 @@ export async function handleWebhook(
     });
     return { status: 'ok' };
   } catch (e) {
-    log.error({ err: e, bot: bot.name, telefone }, 'Bot falhou');
+    log.error({ err: e, bot: bot.name, fone: phoneLogTag(telefone) }, 'Bot falhou');
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
       flowId: route.workflow_id,
@@ -1022,7 +1040,10 @@ async function buildIncomingMessage(input: {
         if (cleaned.length > 0) {
           texto = cleaned;
           wasAudio = true;
-          log.info({ telefone, len: cleaned.length, source: audioInfo.source }, 'Áudio transcrito');
+          log.info(
+            { fone: phoneLogTag(telefone), len: cleaned.length, source: audioInfo.source },
+            'Áudio transcrito',
+          );
         } else {
           log.warn(
             { telefone, source: audioInfo.source },
