@@ -6,20 +6,25 @@
  *
  * Roda HORARIO (registrado no worker.ts, BILLING_CRON default '0 * * * *'). Era 1x/dia
  * as 08:00, o que abria um buraco deterministico de ~24h sem PIX pagavel (SCRUM-124):
- * a cobranca vencia e a proxima so nascia no cron do dia seguinte. SEM aviso ao cliente
- * (decisao do Bruno — Fase 4, ainda nao). Conforme ADR 0010: croner over BullMQ.
+ * a cobranca vencia e a proxima so nascia no cron do dia seguinte. A CADENCIA horaria
+ * sozinha ja corta o buraco pra <=1h (a proxima cobranca nasce no cron seguinte a
+ * expiracao), com ZERO risco novo. SEM aviso ao cliente (decisao do Bruno — Fase 4, ainda
+ * nao). Conforme ADR 0010: croner over BullMQ.
  *
  * Tres responsabilidades por execucao (idempotente; lock por slot via withBillingSlotLock):
  *
- *  1. GERACAO (com REEMISSAO ANTECIPADA — SCRUM-124): para cada slot cujo estado
- *     (computeBillingState, janela 7) e `a_vencer`/`vencido` -> ensurePixChargeForSlot com
- *     `reissueAheadMs` (= BILLING_REISSUE_AHEAD_MIN). Uma pending cujo expires_at cai DENTRO
- *     da proxima janela de execucao ja e REEMITIDA agora (mesma linha), pra proxima cobranca
- *     nascer ANTES da atual expirar — sem gap. Valor = snapshot client_billing.amount_cents;
+ *  1. GERACAO: para cada slot cujo estado (computeBillingState, janela 7) e `a_vencer`/
+ *     `vencido` -> ensurePixChargeForSlot. Valor = snapshot client_billing.amount_cents;
  *     pula slot sem amount_cents (loga skip); NAO gera para `em_dia`/`sem_config`. A
  *     idempotencia (1 pending/slot, reusa/reemite a MESMA linha — NUNCA 2a cobranca) vive no
  *     proprio ensurePixChargeForSlot (advisory lock + recheck) — o cron e a tela compartilham
- *     o caminho, sem duplicar. So o cron passa reissueAheadMs>0; o portal mantem 0 (legado).
+ *     o caminho, sem duplicar.
+ *     REEMISSAO ANTECIPADA (reissueAheadMs = BILLING_REISSUE_AHEAD_MIN): fecharia a ultima
+ *     <=1h reemitindo a pending que expira dentro da proxima janela ANTES do vencimento, MAS
+ *     abandona o abacate_charge_id antigo (QR velho pagavel => risco de pagamento orfao com o
+ *     match so-por-abacate_charge_id de hoje). Por isso vem GATED OFF (default 0); a maquina e
+ *     os testes ficam, aguardando o fallback por external_id no webhook. So o cron passaria
+ *     reissueAheadMs>0; o portal mantem 0 (legado).
  *
  *  2. RECONCILIACAO (rede de seguranca p/ webhook perdido): para cada `pending` com
  *     abacate_charge_id, consulta client.getChargeStatus; se o gateway diz PAID e o banco
