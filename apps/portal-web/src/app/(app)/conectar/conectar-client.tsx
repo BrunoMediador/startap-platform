@@ -862,8 +862,8 @@ function SugestaoQr({ onUsarQr }: { onUsarQr: () => void }) {
         </h3>
       </div>
       <p className="mt-2 text-[13.5px] leading-snug text-ink-soft">
-        Isso costuma acontecer quando o WhatsApp está em outro número. O QR é lido direto pelo
-        celular do assistente — não depende do número cadastrado.
+        Isso costuma acontecer quando o WhatsApp está em outro número — e o QR não depende do número
+        que você digitou: é só ler no WhatsApp do seu negócio.
       </p>
       <div className="mt-4">
         <Button onClick={onUsarQr}>
@@ -900,7 +900,7 @@ function CodigoExpiradoCard({
       </div>
       <p className="mt-1 text-center text-[13.5px] text-ink-soft">
         {qrSugerido
-          ? 'O código expirou de novo. Quando isso se repete, o QR costuma resolver — ele não depende do número cadastrado.'
+          ? 'O código expirou de novo. Nesses casos, o QR costuma resolver — ele não depende do número que você digitou.'
           : 'Código expirado. Gere um novo pra continuar.'}
       </p>
       {qrSugerido ? (

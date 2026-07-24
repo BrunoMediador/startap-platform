@@ -367,8 +367,8 @@ function AvisoFixo({ onDispensar }: { onDispensar: () => void }) {
     >
       <IconAlert size={15} className="mt-px shrink-0" />
       <span className="flex-1">
-        Isso parece um telefone <b className="font-semibold">fixo</b>. O WhatsApp quase sempre fica
-        num <b className="font-semibold">celular</b>, com 9 dígitos (o 9 na frente). Confere o
+        Esse número parece um telefone <b className="font-semibold">fixo</b>. O WhatsApp quase
+        sempre fica num <b className="font-semibold">celular</b>, com o 9 na frente. Confere o
         número? Se o seu WhatsApp é mesmo nesse, pode seguir.
       </span>
       <button
