@@ -8877,14 +8877,46 @@ function _renderGcalTab(opts) {
     }
   }
 
+  /* Aviso persistente de MUDANÇA DE MODO pós-teste.
+   * O POST /api/clones/:id/gcal/test pode, além de validar a conexão, PROMOVER o clone de
+   * modo atendente pra modo agenda (personalizacao.agenda_automatica=true +
+   * modo_atendente_enabled=false). Mudança de estado silenciosa foi exatamente a causa do
+   * bug que originou o fix (prompt de agenda rodando no ramo atendente = zero agendamento),
+   * então o operador precisa VER que o modo mudou — o toast some, este bloco fica até o
+   * próximo render da aba. */
+  function _renderAgendaAtivadaAviso() {
+    const old = container.querySelector('#gcal-agenda-ativada');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'gcal-agenda-ativada';
+    box.setAttribute('role', 'status');
+    box.style.cssText = 'margin-top:.75rem;padding:.75rem 1rem;background:var(--surface-2);border-left:3px solid var(--info);border-radius:var(--radius-sm)';
+    box.innerHTML = `
+      <div style="font-weight:600;margin-bottom:.375rem;display:flex;gap:.5rem;align-items:center"><span style="color:var(--info);flex-shrink:0">${icon('calendar', 15)}</span> Modo agenda ligado neste cliente</div>
+      <p style="margin:0 0 .375rem;font-size:.85rem;line-height:1.5">Além de validar a conexão, o teste <strong>mudou o modo do fluxo</strong>: o cliente estava em <strong>modo atendente</strong> (o bot só respondia) e agora <strong>marca horário sozinho</strong> na agenda que você acabou de conectar.</p>
+      <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">A persona <strong>não</strong> foi alterada — se o texto dela ainda for de atendente, ajuste na aba <strong>Prompt</strong>. Gravado no clone: <code>agenda_automatica=true</code>, <code>modo_atendente_enabled=false</code>.</p>`;
+    container.appendChild(box);
+  }
+
   async function runTest() {
     const testBtn = container.querySelector('#gcal-retest-btn') || container.querySelector('#gcal-test-pending-btn');
     if (testBtn) testBtn.disabled = true;
     try {
       const result = await api(`${baseUrl}/gcal/test`, { method: 'POST' });
       if (result.ok) {
-        toast('Conexão com Google Calendar OK!', 'success');
-        loadTab();
+        // `agendaAtivada` SÓ existe na rota de CLONE (POST /api/clones/:id/gcal/test) e SÓ
+        // quando o flip aconteceu de verdade. A rota da MATRIZ (/api/bots/<slot>), que usa
+        // este mesmo helper, NUNCA devolve o campo — por isso a checagem é estrita
+        // (`=== true`), nunca presença/truthiness.
+        const promoveuAgenda = result.agendaAtivada === true;
+        if (!promoveuAgenda) {
+          toast('Conexão com Google Calendar OK!', 'success');
+          loadTab();
+        } else {
+          toast('Conexão OK — e este cliente passou pro modo agenda.', 'success');
+          await loadTab(); // await: o aviso é anexado DEPOIS do re-render da aba (sem race)
+          _renderAgendaAtivadaAviso();
+        }
       } else if (result.errorHint) {
         // Diagnóstico acionável: mostra hint + link clicável em alerta inline
         toast('Falha na conexão. Veja a instrução abaixo pra resolver.', 'danger');
