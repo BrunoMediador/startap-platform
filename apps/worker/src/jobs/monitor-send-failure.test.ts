@@ -254,3 +254,74 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(comp.restore.state).toBe('down');
   });
 });
+
+describe('monitor SCRUM-126 — 422 tardio (colado no SEND_TIMEOUT) classifica DEFINITIVA e desfaz o carimbo', () => {
+  // Reproduz o incidente Cirilo: a sessão FAILED faz o WAHA responder 422, mas a resposta pousa
+  // ~20ms DEPOIS do deadline de envio (10s). Antes do fix o timeout vencia a corrida e TODA falha
+  // virava "ambígua": o carimbo ficava, o rollback (SCRUM-53) nunca rodava e o alerta se perdia em
+  // silêncio (alert_count 1→4 sem NENHUMA entrega). Agora o grace deixa o 422 subir e ser
+  // classificado por STATUS. Timers fake pra dirigir o deadline+grace de forma determinística.
+  const SEND_TIMEOUT_MS = 10_000;
+  const SEND_ERROR_GRACE_MS = 3_000;
+
+  function wireDownClone() {
+    stubWahaSessions([{ name: 'clone_cirilo', status: 'FAILED' }]);
+    mocks.listMonitoredSessions.mockResolvedValue([
+      { sessao: 'clone_cirilo', label: 'Cirilo', slot: 'clone_cirilo' },
+    ]);
+    mocks.listStates.mockResolvedValue([wahaPending('clone_cirilo')]);
+  }
+
+  it('(a) WAHA responde 422 ~20ms APÓS o timeout → falha DEFINITIVA → rollback do carimbo (reenvia no próximo ciclo)', async () => {
+    vi.useFakeTimers();
+    try {
+      wireDownClone();
+      mocks.sendText.mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(
+              () =>
+                reject(new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING')),
+              SEND_TIMEOUT_MS + 20,
+            ),
+          ),
+      );
+
+      const promise = runMonitor();
+      await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + SEND_ERROR_GRACE_MS + 50);
+      const r = await promise;
+
+      expect(r.sent).toBe(0);
+      // ROLLBACK: o carimbo é desfeito → o próximo ciclo (2 min) re-tenta. Era EXATAMENTE isto que
+      // não acontecia no incidente (o guard do SCRUM-53 ficava inerte porque a falha virava ambígua).
+      expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+      const comp = mocks.restoreStateIfUnchanged.mock.calls[0][0];
+      expect(comp.checkKey).toBe('waha:clone_cirilo');
+      expect(comp.expect.state).toBe('down');
+      // Falha definitiva → NÃO marca transição avisada → não avisa o dono por uma sessão que recusou.
+      expect(mocks.notifyClientDisconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('(b) rede pendurada: sendText NUNCA responde → após deadline+grace segue AMBÍGUO → NÃO faz rollback (anti-duplicação intacto)', async () => {
+    vi.useFakeTimers();
+    try {
+      wireDownClone();
+      mocks.sendText.mockImplementation(() => new Promise(() => {})); // nunca assenta (rede caiu)
+
+      const promise = runMonitor();
+      await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + SEND_ERROR_GRACE_MS + 50);
+      const r = await promise;
+
+      expect(r.sent).toBe(0);
+      // AMBÍGUO (pode ter saído): mantém o carimbo → NÃO re-tenta a cada ciclo (não duplica pra pagante).
+      expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
+      // Segue como transição avisada (justWentDown=true) — o notify tem cooldown/taxonomia próprios.
+      expect(mocks.notifyClientDisconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

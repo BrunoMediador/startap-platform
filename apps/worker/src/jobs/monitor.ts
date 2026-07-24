@@ -44,7 +44,7 @@ import { pool } from '@startap/db';
 import { waha } from '@startap/integrations';
 import { config } from '../config.js';
 import { notifyClientDisconnect } from './client-disconnect-notify.js';
-import { isDefinitiveNonDelivery } from './waha-send-failure.js';
+import { isDefinitiveNonDelivery, sendWithSettleTimeout } from './waha-send-failure.js';
 
 const log = logger.child({ job: 'monitor' });
 
@@ -66,6 +66,11 @@ const WAHA_LIST_TIMEOUT_MS = 8_000;
 /** Timeout do envio — sendText não tem timeout próprio (client.ts). Embrulha o
  *  sendText INTEIRO, incluindo o delay humanizador (cabe com folga: 1.5s << 10s). */
 const SEND_TIMEOUT_MS = 10_000;
+/** Janela de graça pós-deadline (SCRUM-126): quando o deadline bate sem resposta, espera MAIS um
+ *  pouco pra uma resposta de ERRO do WAHA que pousa colada no deadline (o 422 que chegava ~20ms
+ *  tarde e virava "timeout" ambíguo, mascarando não-entrega DEFINITIVA — incidente Cirilo). Curta e
+ *  limitada: só captura o erro tardio; rede genuinamente muda nunca assenta e segue ambígua. */
+const SEND_ERROR_GRACE_MS = 3_000;
 
 /** Humanização do envio de alerta — reduz risco de derrubar a sessão remetente
  *  (ALERTAS) por padrão de bot. "Digitando…" + delay antes de cada mensagem, e
@@ -329,18 +334,21 @@ async function broadcast(
   for (let i = 0; i < recipients.length; i++) {
     const r = recipients[i];
     try {
-      await Promise.race([
-        waha.sendText({
-          sessao,
-          chatId: toChatId(r.phone),
-          texto,
-          typing: true,
-          delayMs: ALERT_TYPING_DELAY_MS,
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('sendText timeout')), SEND_TIMEOUT_MS),
-        ),
-      ]);
+      // Deadline COM classificação por status (SCRUM-126): se o WAHA responder um erro DEFINITIVO
+      // (422) colado no deadline, o helper deixa ESSE erro subir pra taxonomia (rollback do carimbo
+      // + reenvia) em vez de o timeout cortar antes e rotular como ambíguo. Só resposta-nenhuma
+      // (rede caiu) vira "sendText timeout" (ambíguo → mantém o carimbo → não duplica).
+      await sendWithSettleTimeout(
+        () =>
+          waha.sendText({
+            sessao,
+            chatId: toChatId(r.phone),
+            texto,
+            typing: true,
+            delayMs: ALERT_TYPING_DELAY_MS,
+          }),
+        { deadlineMs: SEND_TIMEOUT_MS, settleGraceMs: SEND_ERROR_GRACE_MS },
+      );
       anyOk = true;
     } catch (e) {
       result.sendErrors += 1;
