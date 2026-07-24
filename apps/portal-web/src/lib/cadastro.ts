@@ -167,6 +167,27 @@ export function maskPhoneBR(raw: string): string {
 }
 
 /**
+ * "Cara de fixo" (SCRUM-82): true quando os digitos LOCAIS somam 10 (DDD + 8) e o
+ * primeiro digito do assinante NAO e 9. O celular BR tem 11 locais (DDD + 9 + 8): o
+ * "9o digito" mora na frente do assinante. Fixo tem 10 (DDD + 8, assinante 2-5).
+ *
+ * E so um SINAL pra AVISO amigavel — NUNCA bloqueia o submit (WhatsApp Business em
+ * numero fixo existe; e o backend, nao o front, e a autoridade). O caso real do card
+ * (cliente cadastrou "35 1001-9347") cai aqui: 10 locais, assinante comeca em 1.
+ *
+ * Por que checar d[2] !== '9' e nao so length === 10: enquanto se DIGITA um celular
+ * o valor passa por 10 digitos antes do 11o — e nesse meio-caminho o assinante ja
+ * comeca em 9. Fixo BR nunca comeca o assinante em 9 (prefixos 2-5), entao o guard
+ * pega todo fixo real (e o caso do card) sem piscar o aviso no meio da digitacao de
+ * um celular. PURA e sem efeito colateral (base do teste). NAO canonicaliza — isso e
+ * do backend (canonicalE164 em packages/core).
+ */
+export function looksLikeFixoBR(raw: string): boolean {
+  const d = phoneDigits(raw);
+  return d.length === 10 && d[2] !== '9';
+}
+
+/**
  * Valida o draft e monta o payload do POST /auth/signup. O whatsapp segue como
  * digitos locais (10/11) — o backend assume BR e canonicaliza (DDI + regra do
  * 9o digito). Senha NAO sofre trim: espaco e caractere valido.

@@ -60,6 +60,7 @@ import {
 } from '@/lib/bot-pausa';
 import { cn } from '@/lib/cn';
 import { isPrimeiraConexao, resolveConexaoCardCopy } from '@/lib/conexao-copy';
+import { deveSugerirQr } from '@/lib/conexao-qr';
 import {
   type SucessoConexaoCopy,
   resolveConexaoFormato,
@@ -176,6 +177,12 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
 
   const [phase, setPhase] = useState<Phase>(() => resolveInitialPhase(initial));
   const [pairingCode, setPairingCode] = useState<string | null>(null);
+  // Nº de códigos de pareamento mostrados sem chegar a WORKING (SCRUM-82). Cada
+  // código exibido conta 1; ao cruzar o limiar a UI destaca o QR (independe do
+  // número). Cumulativo no ciclo (remonta por slot via key), pra um cliente que
+  // insiste no código não perder a sugestão do QR entre tentativas.
+  const [pairingAttempts, setPairingAttempts] = useState(0);
+  const qrSugerido = deveSugerirQr(pairingAttempts);
   const [codeExpiresIn, setCodeExpiresIn] = useState(0);
   const [qrSrc, setQrSrc] = useState<string | null>(null);
   const [erroMsg, setErroMsg] = useState<string>('');
@@ -277,6 +284,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
       onSuccess: (res) => {
         setPairingCode(res.pairing_code);
         setCodeExpiresIn(res.expires_in_seconds);
+        setPairingAttempts((n) => n + 1);
         setPhase('codigo');
       },
       onError: (err) => {
@@ -375,6 +383,7 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
         // no-op fora de tela); jogar o código fora é o bug (lição do PR #262).
         setPairingCode(res.pairing_code);
         setCodeExpiresIn(res.expires_in_seconds);
+        setPairingAttempts((n) => n + 1); // conta a tentativa p/ sugerir QR (SCRUM-82)
         setPhase('codigo');
       } catch (err) {
         if (isErr(err, 'sessao_nao_pronta')) {
@@ -447,7 +456,12 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
         {phase === 'reiniciando' && <ReiniciandoCard />}
 
         {phase === 'codigo' && pairingCode && (
-          <CodigoCard code={pairingCode} expiresIn={codeExpiresIn} onUsarQr={openQr} />
+          <CodigoCard
+            code={pairingCode}
+            expiresIn={codeExpiresIn}
+            onUsarQr={openQr}
+            qrSugerido={qrSugerido}
+          />
         )}
 
         {phase === 'codigo_expirado' && pairingCode && (
@@ -455,6 +469,8 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
             code={pairingCode}
             onGerarNovo={gerarNovoCodigo}
             gerando={gerarCodigo.isPending}
+            onUsarQr={openQr}
+            qrSugerido={qrSugerido}
           />
         )}
 
@@ -768,15 +784,20 @@ function ReiniciandoCard() {
   );
 }
 
-/** (e) Codigo: code GIGANTE + copiar + countdown + passo-a-passo + link QR. */
+/** (e) Codigo: code GIGANTE + copiar + countdown + passo-a-passo + link QR.
+ *  `qrSugerido` (SCRUM-82): após algumas tentativas de código sem conectar, o QR
+ *  deixa de ser um link discreto e vira um bloco em destaque (o QR não depende do
+ *  número cadastrado — resolve o caso de código indo pro número errado). */
 function CodigoCard({
   code,
   expiresIn,
   onUsarQr,
+  qrSugerido,
 }: {
   code: string;
   expiresIn: number;
   onUsarQr: () => void;
+  qrSugerido: boolean;
 }) {
   return (
     <>
@@ -802,28 +823,74 @@ function CodigoCard({
 
       <PassoAPasso />
 
-      <div className="text-center">
-        <button
-          type="button"
-          onClick={onUsarQr}
-          className="text-[13px] font-medium text-brand underline-offset-2 outline-none hover:underline focus-visible:underline"
-        >
-          Prefere o QR? Usar QR Code
-        </button>
-      </div>
+      {qrSugerido ? (
+        <SugestaoQr onUsarQr={onUsarQr} />
+      ) : (
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={onUsarQr}
+            className="text-[13px] font-medium text-brand underline-offset-2 outline-none hover:underline focus-visible:underline"
+          >
+            Prefere o QR? Usar QR Code
+          </button>
+        </div>
+      )}
     </>
   );
 }
 
-/** (e') Codigo expirado: code esmaecido + "Gerar novo codigo". */
+/**
+ * Bloco de SUGESTÃO ATIVA do QR (SCRUM-82) — aparece depois de algumas tentativas de
+ * código sem conectar. O código de pareamento é emitido PARA o número cadastrado; se
+ * o WhatsApp está em outro número (ex.: cadastraram um fixo), ele nunca chega. O QR é
+ * lido pelo próprio aparelho, então NÃO depende do número — por isso vira o caminho
+ * recomendado aqui. role="status" pra anunciar a mudança de estratégia ao leitor.
+ */
+function SugestaoQr({ onUsarQr }: { onUsarQr: () => void }) {
+  return (
+    <section
+      className="rounded-card border border-brand/40 bg-brand-soft p-5 shadow-card"
+      role="status"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-7 items-center justify-center rounded-full bg-brand text-bg">
+          <IconQr size={16} />
+        </span>
+        <h3 className="font-display text-[15px] font-semibold text-ink">
+          O código não está funcionando? Tente pelo QR
+        </h3>
+      </div>
+      <p className="mt-2 text-[13.5px] leading-snug text-ink-soft">
+        Isso costuma acontecer quando o WhatsApp está em outro número — e o QR não depende do número
+        que você digitou: é só ler no WhatsApp do seu negócio.
+      </p>
+      <div className="mt-4">
+        <Button onClick={onUsarQr}>
+          <IconQr size={18} />
+          Conectar pelo QR Code
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/** (e') Codigo expirado: code esmaecido + "Gerar novo codigo".
+ *  `qrSugerido` (SCRUM-82): depois de algumas tentativas o QR passa a ser a ação
+ *  PRIMÁRIA (o código pode estar indo pro número errado) e "Gerar novo código"
+ *  recua pra secundária. */
 function CodigoExpiradoCard({
   code,
   onGerarNovo,
   gerando,
+  onUsarQr,
+  qrSugerido,
 }: {
   code: string;
   onGerarNovo: () => void;
   gerando: boolean;
+  onUsarQr: () => void;
+  qrSugerido: boolean;
 }) {
   return (
     <section className="rounded-card border border-line bg-surface p-5 shadow-card">
@@ -832,13 +899,32 @@ function CodigoExpiradoCard({
         <GiantCode code={code} muted />
       </div>
       <p className="mt-1 text-center text-[13.5px] text-ink-soft">
-        Código expirado. Gere um novo pra continuar.
+        {qrSugerido
+          ? 'O código expirou de novo. Nesses casos, o QR costuma resolver — ele não depende do número que você digitou.'
+          : 'Código expirado. Gere um novo pra continuar.'}
       </p>
-      <div className="mt-4">
-        <Button onClick={onGerarNovo} loading={gerando} loadingLabel="Gerando…">
-          Gerar novo código
-        </Button>
-      </div>
+      {qrSugerido ? (
+        <div className="mt-4 flex flex-col gap-2.5 sm:flex-row">
+          <Button onClick={onUsarQr}>
+            <IconQr size={18} />
+            Conectar pelo QR Code
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={onGerarNovo}
+            loading={gerando}
+            loadingLabel="Gerando…"
+          >
+            Gerar novo código
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-4">
+          <Button onClick={onGerarNovo} loading={gerando} loadingLabel="Gerando…">
+            Gerar novo código
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
