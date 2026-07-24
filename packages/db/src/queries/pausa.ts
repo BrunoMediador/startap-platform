@@ -157,6 +157,12 @@ export interface HumanReplyPauseInput {
   reason?: string | null;
   /** Fim da pausa temporária (agora + TTL). Obrigatório — human_reply é SEMPRE com validade. */
   expiresAt: Date;
+  /**
+   * Nome do CONTATO (SCRUM-144) — snapshotado na pausa pra durar. O caller resolve do store
+   * durável contact_names (pushName do inbound), NUNCA do pushName do evento fromMe (que é o
+   * nome do DONO). Ausente/NULL não toca um contact_name já capturado (COALESCE/NULLIF).
+   */
+  contactName?: string | null;
 }
 
 /**
@@ -178,8 +184,8 @@ export interface HumanReplyPauseInput {
 export async function addHumanReplyPause(input: HumanReplyPauseInput): Promise<void> {
   await query(
     `INSERT INTO flow_pauses
-       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, updated_at)
-     VALUES ($1,$2,$3,$4,TRUE,'human_reply',$5,$6,NOW())
+       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, contact_name, updated_at)
+     VALUES ($1,$2,$3,$4,TRUE,'human_reply',$5,$6,$7,NOW())
      ON CONFLICT (flow_id, telefone) DO UPDATE SET
        flow_name = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
        session = COALESCE(EXCLUDED.session, flow_pauses.session),
@@ -187,6 +193,7 @@ export async function addHumanReplyPause(input: HumanReplyPauseInput): Promise<v
        source = 'human_reply',
        reason = COALESCE(EXCLUDED.reason, flow_pauses.reason),
        expires_at = EXCLUDED.expires_at,
+       contact_name = COALESCE(NULLIF(EXCLUDED.contact_name, ''), flow_pauses.contact_name),
        updated_at = NOW()
      WHERE flow_pauses.active = FALSE
         OR flow_pauses.source = 'human_reply'
@@ -198,6 +205,7 @@ export async function addHumanReplyPause(input: HumanReplyPauseInput): Promise<v
       input.session ?? null,
       input.reason ?? null,
       input.expiresAt,
+      input.contactName ?? null,
     ],
   );
 }

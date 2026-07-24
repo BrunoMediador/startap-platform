@@ -17,6 +17,7 @@ import type { Bot, BotContext, IncomingMessage, WahaWebhookBody } from '@startap
 import {
   antibot,
   clientBilling,
+  contactNames,
   flowClones,
   flowExecutionLog,
   outboundMessages,
@@ -466,6 +467,11 @@ export async function handleWebhook(
           });
           return { status: 'ignored:fromMe:lid-unresolved' };
         }
+        // SCRUM-144: snapshota o nome do CONTATO (do store durável, pelo pushName do INBOUND) —
+        // NUNCA o pushName deste evento fromMe (que é o nome do DONO). Fail-safe: sem nome = NULL.
+        const contactName = await contactNames
+          .getContactName({ session: sessao, telefone: atendenteTelefone })
+          .catch(() => null);
         // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
         // outro source (keyword/escalated/antibot/portal) pro TTL — só cria/renova a própria
         // human_reply (review security N1, SCRUM-60).
@@ -476,6 +482,7 @@ export async function handleWebhook(
           session: sessao,
           reason: 'Atendente respondeu à mão — pausa temporária (modo atendente)',
           expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),
+          contactName,
         });
         await flowExecutionLog.logFlowEvent({
           ...phoneLog,
@@ -579,6 +586,11 @@ export async function handleWebhook(
         // pausar o próprio bot). Exige que base.ts registre o eco pros slots deste gate.
         const echoState = await isBotEcho(sessao, atendenteTelefone, text);
         if (echoState === 'human' && text.trim().length > 0) {
+          // SCRUM-144: snapshota o nome do CONTATO (store durável, pushName do INBOUND) — nunca
+          // o pushName do evento fromMe (nome do DONO). Fail-safe: sem nome = NULL.
+          const contactName = await contactNames
+            .getContactName({ session: sessao, telefone: atendenteTelefone })
+            .catch(() => null);
           // addHumanReplyPause (não addFlowPause): NUNCA rebaixa uma pausa explícita ativa de
           // outro source (keyword/portal/antibot) pro TTL — só cria/renova a própria human_reply.
           await pausa.addHumanReplyPause({
@@ -588,6 +600,7 @@ export async function handleWebhook(
             session: sessao,
             reason: 'Atendente respondeu à mão — pausa temporária (ramo agenda)',
             expiresAt: new Date(Date.now() + HUMAN_REPLY_PAUSE_TTL_MS),
+            contactName,
           });
           await flowExecutionLog.logFlowEvent({
             ...phoneLog,
@@ -667,6 +680,22 @@ export async function handleWebhook(
 
   // 4. Log para antibot
   await antibot.logMessage(telefone, sessao).catch((e) => log.warn(e, 'log msg failed'));
+
+  // 4b. SCRUM-144 — store durável do pushName do CONTATO (só INBOUND; o bloco fromMe acima já
+  // retornou, então aqui é sempre mensagem do cliente). Fonte de verdade do nome pra
+  // snapshotar na pausa fromMe/human_reply, e independente do store do WAHA (pushName vem no
+  // payload). Fire-and-forget FAIL-SAFE: NUNCA quebra o webhook nem bloqueia a resposta do bot
+  // (não usa await no caminho de resposta). PII: nunca logamos o nome — só a máscara do fone.
+  {
+    const inboundPush = body.payload?._data?.pushName ?? '';
+    if (inboundPush) {
+      void contactNames
+        .upsertContactName({ session: sessao, telefone, pushName: inboundPush })
+        .catch((e) =>
+          log.warn({ fone: phoneLogTag(telefone), err: e }, 'contact-name upsert failed'),
+        );
+    }
+  }
 
   // Bots com sessão própria têm tabela de pausa legada verificada aqui.
   // Isso preserva o comportamento anterior onde pause_startap bloqueava

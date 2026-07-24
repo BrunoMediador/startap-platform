@@ -77,6 +77,45 @@ describe('addPausaBySlot — pausa via portal é INDETERMINADA (SCRUM-86)', () =
     expect(params[0]).toBe(SLOT);
     expect(params[2]).toBe(TEL);
   });
+
+  it('SCRUM-144: nome → contact_name ($5), COALESCE/NULLIF no conflito, RETURNING contact_name', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ display_name: 'Meduzza', waha_sessao: 'SESS' }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            telefone: TEL,
+            source: 'portal',
+            reason: 'Pausado via portal',
+            contact_name: 'Wal Delfim',
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ],
+      });
+
+    const row = await addPausaBySlot({ slot: SLOT, telefone: TEL, nome: '  Wal Delfim  ' });
+
+    const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+    // contact_name entra no INSERT e no RETURNING; no conflito só sobrescreve se veio nome novo.
+    expect(sql).toMatch(/INSERT INTO flow_pauses[\s\S]*contact_name/i);
+    expect(sql).toMatch(/contact_name = COALESCE\(NULLIF\(EXCLUDED\.contact_name, ''\)/i);
+    expect(sql).toMatch(/RETURNING[\s\S]*contact_name/i);
+    // $5 = nome JÁ TRIMADO (o front pode mandar com espaços).
+    expect(params[4]).toBe('Wal Delfim');
+    expect(row?.contact_name).toBe('Wal Delfim');
+  });
+
+  it('SCRUM-144: sem nome → $5 = null (não grava nem apaga contact_name)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ display_name: null, waha_sessao: null }] })
+      .mockResolvedValueOnce({ rows: [{ telefone: TEL, contact_name: null }] });
+
+    await addPausaBySlot({ slot: SLOT, telefone: TEL });
+
+    const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(params[4]).toBeNull();
+  });
 });
 
 describe('removePausaBySlot — despausa linha ativa MESMO com expires_at vencido', () => {

@@ -231,6 +231,8 @@ export interface PortalPausaRow {
   telefone: string;
   source: string | null;
   reason: string | null;
+  /** Nome do contato snapshotado na criação da pausa (SCRUM-144). NULL = não capturado. */
+  contact_name: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -246,7 +248,7 @@ export async function listPausasBySlot(slot: string): Promise<PortalPausaRow[]> 
     // Exclui pausas EXPIRADAS (SCRUM-59 human_reply com TTL vencido): o bot já voltou pra
     // esse contato, não mostrar como "pausado". Byte-a-byte enquanto não houver expires_at
     // (só o modo atendente seta) — clones fora do gate nunca têm linha com validade.
-    `SELECT telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at
+    `SELECT telefone, source, LEFT(reason, 200) AS reason, contact_name, created_at, updated_at
      FROM flow_pauses
      WHERE flow_id = $1 AND active = TRUE AND source IS DISTINCT FROM 'bot_detected'
        AND (expires_at IS NULL OR expires_at > NOW())
@@ -264,7 +266,7 @@ export async function listPausasBySlot(slot: string): Promise<PortalPausaRow[]> 
  */
 export async function listBotDetectPausasBySlot(slot: string): Promise<PortalPausaRow[]> {
   const r = await query<PortalPausaRow>(
-    `SELECT telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at
+    `SELECT telefone, source, LEFT(reason, 200) AS reason, contact_name, created_at, updated_at
      FROM flow_pauses
      WHERE flow_id = $1 AND active = TRUE AND source = 'bot_detected'
      ORDER BY updated_at DESC, created_at DESC
@@ -285,12 +287,19 @@ export async function listBotDetectPausasBySlot(slot: string): Promise<PortalPau
  * linha pre-existente (ex.: uma pausa human_reply com TTL de 60min vencido — SCRUM-86).
  * Sem isso a linha herdava o TTL vencido e sumia do painel/soltava o bot em <1h, mesmo
  * o dono tendo pausado de proposito pelo portal.
+ *
+ * SCRUM-144: `nome` opcional (o front manda o nome que ele JA tem do contato selecionado no
+ * sheet de recentes) e SNAPSHOTA em contact_name — pra o nome DURAR independente da janela de
+ * recentes/store do WAHA. No conflito, so sobrescreve se veio nome novo (COALESCE/NULLIF):
+ * re-pausar sem nome nao apaga um contact_name ja capturado.
  */
 export async function addPausaBySlot(input: {
   slot: string;
   telefone: string;
+  nome?: string | null;
 }): Promise<PortalPausaRow | null> {
   const { slot, telefone } = input;
+  const nome = input.nome?.trim() ? input.nome.trim() : null;
 
   // Resolve flow_name + session a partir do clone (graceful: NULL se nao achar).
   const meta = await query<{ display_name: string | null; waha_sessao: string | null }>(
@@ -302,22 +311,23 @@ export async function addPausaBySlot(input: {
 
   const r = await query<PortalPausaRow>(
     `INSERT INTO flow_pauses
-       (flow_id, flow_name, telefone, session, active, source, reason, updated_at)
-     VALUES ($1, $2, $3, $4, TRUE, 'portal', 'Pausado via portal', NOW())
+       (flow_id, flow_name, telefone, session, active, source, reason, contact_name, updated_at)
+     VALUES ($1, $2, $3, $4, TRUE, 'portal', 'Pausado via portal', $5, NOW())
      ON CONFLICT (flow_id, telefone) DO UPDATE
        SET active     = TRUE,
            flow_name  = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
            session    = COALESCE(EXCLUDED.session, flow_pauses.session),
            source     = 'portal',
            expires_at = NULL,
+           contact_name = COALESCE(NULLIF(EXCLUDED.contact_name, ''), flow_pauses.contact_name),
            reason     = CASE
              WHEN flow_pauses.reason IS NULL OR flow_pauses.reason = ''
              THEN 'Pausado via portal'
              ELSE flow_pauses.reason || ' | reativado via portal'
            END,
            updated_at = NOW()
-     RETURNING telefone, source, LEFT(reason, 200) AS reason, created_at, updated_at`,
-    [slot, flowName, telefone, session],
+     RETURNING telefone, source, LEFT(reason, 200) AS reason, contact_name, created_at, updated_at`,
+    [slot, flowName, telefone, session, nome],
   );
   return r.rows[0] ?? null;
 }

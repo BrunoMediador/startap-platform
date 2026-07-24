@@ -33,6 +33,11 @@ const mocks = vi.hoisted(() => ({
   resolveFromMeIdentity: vi.fn(),
   // SCRUM-58: update de ack de outbound mockado (data layer testada em outbound-messages.test.ts).
   applyAck: vi.fn(),
+  // SCRUM-144: store durável de pushName. upsert no inbound; get pra snapshotar na human_reply.
+  // Default = promises resolvidas (o router usa .catch()/void — precisa de thenable mesmo após
+  // clearAllMocks, que NÃO reseta implementação).
+  upsertContactName: vi.fn().mockResolvedValue(undefined),
+  getContactName: vi.fn().mockResolvedValue(null),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — o router testa o gate por env
   // (process.env.MODO_ATENDENTE_SLOTS); byte-idêntico ao isModoAtendenteEnabled de antes.
   csvGate: (slot: string, csv?: string | null): boolean => {
@@ -67,6 +72,10 @@ vi.mock('@startap/db', () => ({
       mocks.csvGate(slot, csv),
   },
   outboundMessages: { applyAck: mocks.applyAck },
+  contactNames: {
+    upsertContactName: mocks.upsertContactName,
+    getContactName: mocks.getContactName,
+  },
   // clientBilling: gate de silêncio por cobrança (ADR 0016) usa daysUntilDue + GRACE_DAYS.
   // Reimplementacao fiel das funcoes PURAS (mesma ancoragem UTC meia-noite do real).
   clientBilling: {
@@ -245,6 +254,16 @@ describe('handleWebhook', () => {
         flowName: 'STARTAP_AI',
       }),
     );
+  });
+
+  it('SCRUM-144: INBOUND grava o pushName no store durável (session + telefone), fail-safe', async () => {
+    // makeBody() traz _data.pushName='Teste'; a mensagem é do cliente (fromMe=false).
+    await handleWebhook(makeBody('TESTE_STARTAP'), { executionId: 'e-inbound', startedAt: 0 });
+    expect(mocks.upsertContactName).toHaveBeenCalledWith({
+      session: 'TESTE_STARTAP',
+      telefone: '553598877248',
+      pushName: 'Teste',
+    });
   });
 
   it('usa fallback da Lola somente na sessao startap oficial', async () => {
@@ -899,6 +918,9 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     mocks.removeFlowPause.mockResolvedValue(undefined);
     mocks.addPause.mockResolvedValue(undefined);
     mocks.removePause.mockResolvedValue(undefined);
+    // SCRUM-144: por padrão o store não tem nome (snapshot=null); upsert é no-op resolvido.
+    mocks.getContactName.mockResolvedValue(null);
+    mocks.upsertContactName.mockResolvedValue(undefined);
     mocks.extractPhone.mockReturnValue('553598877248');
     mocks.isGroupChat.mockReturnValue(false);
     mocks.getCloneBySession.mockResolvedValue(null);
@@ -952,6 +974,21 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     const deltaMs = arg.expiresAt.getTime() - Date.now();
     expect(deltaMs).toBeGreaterThan(59 * 60 * 1000);
     expect(deltaMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5000);
+  });
+
+  it('SCRUM-144: snapshota contact_name do STORE (não do pushName fromMe) pelo telefone do contato', async () => {
+    // O store durável (populado pelo INBOUND) tem o nome do CONTATO — não o do dono do fromMe.
+    mocks.getContactName.mockResolvedValue('Dona Meduzza');
+    await handleWebhook(fromMeBody('ja te respondo'), { executionId: 'e-name', startedAt: 0 });
+
+    // Lookup escopado pela SESSION (body.session) + telefone DO CONTATO (atendenteTelefone),
+    // nunca pelo pushName do evento fromMe (que seria o nome do dono).
+    expect(mocks.getContactName).toHaveBeenCalledWith({
+      session: 'TESTE_STARTAP',
+      telefone: '553598877248',
+    });
+    const arg = mocks.addHumanReplyPause.mock.calls[0]![0] as { contactName?: string | null };
+    expect(arg.contactName).toBe('Dona Meduzza');
   });
 
   it('cada resposta humana RENOVA (novo upsert com expiresAt adiante)', async () => {

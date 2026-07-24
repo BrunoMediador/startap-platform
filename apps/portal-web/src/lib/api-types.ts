@@ -255,6 +255,8 @@ export interface PausaRow {
   telefone: string;
   source: string | null;
   reason: string | null;
+  /** Nome do contato snapshotado na criação da pausa (SCRUM-144). null = não capturado. */
+  contact_name: string | null;
   created_at: string; // ISO (serializado de Date)
   updated_at: string;
 }
