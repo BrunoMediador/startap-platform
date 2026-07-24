@@ -183,6 +183,9 @@ export const abacatePayWebhookRoute: FastifyPluginAsync = async (app) => {
         eventId: evt.eventId,
         event: evt.event,
         abacateChargeId: evt.abacateChargeId,
+        // SCRUM-139: chave estavel entre reemissoes. Fallback de casamento quando o
+        // abacate_charge_id foi sobrescrito por reemissao e o cliente pagou o QR velho.
+        externalId: evt.externalId,
         paidAmountCents: evt.paidAmountCents,
         redactedPayload,
         actor: 'abacatepay-webhook',

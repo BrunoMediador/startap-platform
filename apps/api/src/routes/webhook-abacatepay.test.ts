@@ -135,11 +135,13 @@ describe('POST /webhooks/abacatepay', () => {
     expect(res.statusCode).toBe(200);
     expect(applyPaidWebhook).toHaveBeenCalledTimes(1);
     // slot vem do casamento no banco, nao do payload — handler so passa o charge id.
+    // externalId (SCRUM-139) e repassado pro fallback de casamento por chave estavel.
     expect(applyPaidWebhook).toHaveBeenCalledWith(
       expect.objectContaining({
         eventId: 'evt_unique_1',
         abacateChargeId: 'pix_char_abc',
         paidAmountCents: 19900,
+        externalId: 'barbearia-cirilo-2026-06',
       }),
     );
   });

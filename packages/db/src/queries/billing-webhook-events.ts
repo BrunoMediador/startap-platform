@@ -72,6 +72,14 @@ export interface ApplyPaidWebhookInput {
   event: string;
   /** id da cobranca no gateway ('pix_char_*') — casa com billing_charges.abacate_charge_id. */
   abacateChargeId: string;
+  /**
+   * external_id do evento ("{slot}-{ciclo}", estavel entre reemissoes). FALLBACK de
+   * casamento (SCRUM-139): usado SO quando o match primario por abacate_charge_id nao
+   * acha linha — ex.: uma reemissao (reissueGatewayDataById) sobrescreveu o
+   * abacate_charge_id e o cliente pagou o QR VELHO, cujo id ja nao existe no banco.
+   * Opcional: ausente/null -> nenhum fallback, mantem o comportamento orphan atual.
+   */
+  externalId?: string | null;
   /** valor efetivamente pago, em centavos (do payload). */
   paidAmountCents: number;
   /** payload JA REDIGIDO (C5) pelo handler — sem CPF/email/telefone/brCode. */
@@ -127,19 +135,43 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
     }
 
     // ── (2) Casa a cobranca por abacate_charge_id, com FOR UPDATE (C4 race). ─────
-    const chargeRes = await client.query<{
-      id: string;
-      slot: string;
-      amount_cents: number;
-      status: string;
-    }>(
+    type ChargeRow = { id: string; slot: string; amount_cents: number; status: string };
+    const chargeRes = await client.query<ChargeRow>(
       `SELECT id::text AS id, slot, amount_cents, status
          FROM billing_charges
         WHERE abacate_charge_id = $1
         FOR UPDATE`,
       [input.abacateChargeId],
     );
-    const charge = chargeRes.rows[0];
+    let charge = chargeRes.rows[0];
+
+    // ── (2b) FALLBACK por external_id (SCRUM-139) ────────────────────────────────
+    // O match primario nao achou. Uma reemissao (reissueGatewayDataById) pode ter
+    // SOBRESCRITO o abacate_charge_id na linha — o id do QR VELHO pago some do match
+    // primario. external_id ("{slot}-{ciclo}") e ESTAVEL entre reemissoes (indice
+    // idx_billing_charges_external_id, migration 041) e casa a mesma cobranca.
+    //
+    // DESEMPATE DETERMINISTICO (migration 043 permite 2+ linhas por (slot,ciclo) via
+    // expira->regenera): SO status='pending' e a MAIS RECENTE (ORDER BY id DESC LIMIT 1),
+    // sob FOR UPDATE (serializa como o match primario). O filtro status='pending' e a
+    // trava anti-duplo-credito: uma linha JA 'paid' NUNCA e selecionada aqui — logo o
+    // fallback nunca reescreve/credita duas vezes uma cobranca paga (idempotencia
+    // preservada). A reconciliacao de valor (C2) roda igual abaixo, contra o snapshot
+    // amount_cents da linha casada. Sem external_id no input -> pula o fallback.
+    if (!charge && input.externalId) {
+      const byExternal = await client.query<ChargeRow>(
+        `SELECT id::text AS id, slot, amount_cents, status
+           FROM billing_charges
+          WHERE external_id = $1
+            AND status = 'pending'
+          ORDER BY id DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [input.externalId],
+      );
+      charge = byExternal.rows[0];
+    }
+
     if (!charge) {
       // Orfao: evento sem cobranca casada. Registra (ja inserido) com charge_id NULL
       // e marca processado pra nao reprocessar. 200 no handler (evita retry infinito).
