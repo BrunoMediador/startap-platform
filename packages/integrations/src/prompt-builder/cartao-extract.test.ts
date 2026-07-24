@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildBlocoEstrutural } from './bloco-estrutural.js';
-import { extractBakedCartao, isCartaoFlipSafe } from './cartao-extract.js';
+import {
+  extractBakedCartao,
+  isCartaoFlipSafe,
+  isCartaoRuntimeFlipBlocked,
+} from './cartao-extract.js';
 
 /** Formato REAL do cartão legado de Cirilo/Samuel/mvs (dump SSH read-only 23/07): seção
  *  [CARTAO DE CONFIRMACAO] SEM o marcador novo ===== REGRAS, arte 💈 + DIA/HORARIO/SERVICO/
@@ -157,5 +161,24 @@ describe('extractBakedCartao — sem cartão', () => {
 
   it('vazio → sem_cartao', () => {
     expect(extractBakedCartao('').found).toBe(false);
+  });
+});
+
+// ── SCRUM-120: guard ÚNICO do flip pra runtime (endpoint + approve do builder) ──────────────
+describe('isCartaoRuntimeFlipBlocked — invariante anti-cartão-duplo', () => {
+  it('BLOQUEIA prompt_custom=true + baked (persona à mão, cartão no bot_prompt — caso Ingrid)', () => {
+    expect(isCartaoRuntimeFlipBlocked({ promptCustom: true, cartaoMode: 'baked' })).toBe(true);
+  });
+
+  it('NÃO bloqueia clone já runtime (o flip já aconteceu; o modo não regride)', () => {
+    expect(isCartaoRuntimeFlipBlocked({ promptCustom: true, cartaoMode: 'runtime' })).toBe(false);
+  });
+
+  it('NÃO bloqueia clone de template (prompt_custom=false) baked', () => {
+    expect(isCartaoRuntimeFlipBlocked({ promptCustom: false, cartaoMode: 'baked' })).toBe(false);
+  });
+
+  it('NÃO bloqueia template já runtime', () => {
+    expect(isCartaoRuntimeFlipBlocked({ promptCustom: false, cartaoMode: 'runtime' })).toBe(false);
   });
 });

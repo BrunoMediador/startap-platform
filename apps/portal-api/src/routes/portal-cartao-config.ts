@@ -362,7 +362,10 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // B. Baked + persona à mão → 409 (NUNCA flipa uma persona gerenciada à mão; invariante).
-    if (promptCustom) {
+    // SCRUM-120: guard ÚNICO compartilhado com o approve do builder (isCartaoRuntimeFlipBlocked).
+    // Aqui cartaoMode já é != 'runtime' (o ramo A retornou), então o predicado reduz a `promptCustom`
+    // — comportamento idêntico ao antigo `if (promptCustom)`, mas agora a regra vive num só lugar.
+    if (promptBuilder.isCartaoRuntimeFlipBlocked({ promptCustom, cartaoMode })) {
       log.warn({ slot }, 'PUT cartao-config bloqueado: prompt_custom (persona à mão)');
       return reply.code(409).send({ error: 'cartao_bloqueado', reason: 'prompt_custom' });
     }

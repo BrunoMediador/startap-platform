@@ -139,3 +139,29 @@ export function isCartaoFlipSafe(ex: CartaoExtract): boolean {
     !ex.personaOnly.includes(ex.cartao)
   );
 }
+
+/**
+ * INVARIANTE anti-cartão-duplo (SCRUM-120): um clone com persona gerenciada à mão
+ * (prompt_custom=true) que AINDA está baked (cartão dentro do bot_prompt) NÃO pode ser flipado
+ * pra cartao_mode='runtime' sem reconciliação explícita — o bot_prompt pode carregar o cartão
+ * baked num formato que o guard heurístico (bakedMarker) não detecta, e o runtime injetaria um
+ * 2º cartão por cima → CARTÃO-DUPLO. Foi exatamente por aí que o clone da Ingrid virou runtime:
+ * o approve setava prompt_custom=true E cartao_mode='runtime' na mesma transação, apoiado só no
+ * bakedMarker (heurística), sem o invariante explícito.
+ *
+ * Fonte ÚNICA da regra, consumida pelos DOIS caminhos de escrita que podem flipar pra runtime:
+ *   - PUT /portal/cartao-config (portal-cartao-config.ts) → 409 cartao_bloqueado / prompt_custom;
+ *   - approve do builder conversacional (prompt-builder.ts)  → mesmo 409.
+ *
+ * NÃO bloqueia (retorna false):
+ *   - clone JÁ runtime (o flip já aconteceu; o modo não regride) → cartaoMode === 'runtime';
+ *   - clone de TEMPLATE (prompt_custom=false): flip-on-customize via extração segura
+ *     (isCartaoFlipSafe) no endpoint, ou persona FRESCA persona-only no approve.
+ * Puro/determinístico.
+ */
+export function isCartaoRuntimeFlipBlocked(state: {
+  promptCustom: boolean;
+  cartaoMode: 'baked' | 'runtime';
+}): boolean {
+  return state.promptCustom === true && state.cartaoMode !== 'runtime';
+}

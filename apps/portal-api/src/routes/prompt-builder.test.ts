@@ -90,6 +90,15 @@ vi.mock('@startap/integrations', () => ({
       return BLOCO_MARKER;
     },
     BLOCO_ESTRUTURAL_MARKER: BLOCO_MARKER,
+    // SCRUM-120: guard puro compartilhado com o endpoint. Implementação FIEL à real (predicado
+    // trivial) — o teste dedicado da função real vive em cartao-extract.test.ts.
+    isCartaoRuntimeFlipBlocked: ({
+      promptCustom,
+      cartaoMode,
+    }: {
+      promptCustom: boolean;
+      cartaoMode: string;
+    }) => promptCustom === true && cartaoMode !== 'runtime',
   },
 }));
 
@@ -809,6 +818,49 @@ describe('approve', () => {
       // preserva runtime na transação (applyGeneratedPrompt seta cartao_mode='runtime', não regride).
       expect(opts.cartaoMode).toBe('runtime');
       expect(opts.bakedMarker).toBe(BLOCO_MARKER);
+    });
+
+    // ── SCRUM-120: o approve NÃO pode flipar pra runtime uma persona à mão AINDA baked ──────
+    // Era o buraco: com a flag ON, um clone prompt_custom=true + baked (persona gerenciada à mão,
+    // cartão DENTRO do bot_prompt — o caso Ingrid) virava cartao_mode='runtime' na transação,
+    // apoiado só no bakedMarker. Agora é bloqueado EXPLÍCITO (409), o MESMO guard do endpoint.
+    it('flag ON + prompt_custom=true baked -> 409 cartao_bloqueado, NÃO chama applyGeneratedPrompt (SCRUM-120)', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'barbearia',
+        promptCustom: true, // persona à mão (ex.: Ingrid)
+        cartaoMode: 'baked', // cartão ainda dentro do bot_prompt
+        cartaoConfig: null,
+        nomeNegocio: 'Barbearia X',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('cartao_bloqueado');
+      expect(res.json().reason).toBe('prompt_custom');
+      // NÃO tocou o prompt (nenhuma escrita) — o draft do dono fica intacto pra ele revisar.
+      expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
+    });
+
+    // Regra dura: só bloqueia se REALMENTE flipa. flag OFF + prompt_custom baked NÃO flipa
+    // (approve cola o bloco baked, cartao_mode segue baked) → segue 200, sem falso-positivo.
+    it('flag OFF + prompt_custom=true baked -> segue 200 (não há flip, não bloqueia)', async () => {
+      expect(cfg.CARTAO_RUNTIME_ENABLED).toBe(false);
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'barbearia',
+        promptCustom: true,
+        cartaoMode: 'baked',
+        cartaoConfig: null,
+        nomeNegocio: 'Barbearia X',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(200);
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      expect(call[1]).toContain(BLOCO_MARKER); // baked, cartão colado no bot_prompt
+      expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined(); // não flipa
     });
   });
 });
