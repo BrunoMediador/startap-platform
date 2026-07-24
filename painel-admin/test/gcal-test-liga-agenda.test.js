@@ -84,7 +84,12 @@ function tokenize(src) {
 
 /** Resolve um operando pro valor JS (null = NULL do SQL). */
 function operand(tok, row, params) {
-  if (/^\$\d+$/.test(tok)) return params[Number(tok.slice(1)) - 1] ?? null;
+  if (/^\$\d+$/.test(tok)) {
+    const v = params[Number(tok.slice(1)) - 1];
+    return v === undefined ? null : v;
+  }
+  if (/^TRUE$/i.test(tok)) return true;
+  if (/^FALSE$/i.test(tok)) return false;
   if (tok.startsWith("'")) return tok.slice(1, -1);
   const json = tok.match(/^([A-Za-z_][A-Za-z0-9_]*)->>'([^']*)'$/);
   if (json) {
@@ -167,6 +172,7 @@ const SQL = sqlLiterals(HANDLER).find((s) => s.includes('UPDATE flow_clones'));
 assert.ok(SQL, 'handler do teste de GCal deveria conter um UPDATE flow_clones');
 const PREDICADO = extractPredicate(SQL, 'flip');
 const PREDICADO_BLOQUEADO = extractPredicate(SQL, 'flip_bloqueado_nao_individual');
+const PREDICADO_PERSONA = extractPredicate(SQL, 'flip_bloqueado_persona_sem_mecanica');
 /** Só a cláusula SET do UPDATE (o que é ESCRITO), sem o predicado do CTE (o que é LIDO). */
 const SET_CLAUSE = SQL.slice(
   SQL.indexOf('SET ', SQL.indexOf('UPDATE flow_clones')),
@@ -174,14 +180,26 @@ const SET_CLAUSE = SQL.slice(
 );
 assert.ok(SET_CLAUSE.includes('gcal_status'), 'cláusula SET não recortada');
 
-/** `true` se a statement real flipa o clone com este estado anterior + resultado do teste. */
-function flipa(rowAntes, novoStatus) {
-  return evalPredicate(PREDICADO, rowAntes, [novoStatus]) === true;
+// $1 = novoStatus, $2 = id (não usado nos predicados), $3 = personaTemMecanica.
+const params = (novoStatus, mecanica) => [novoStatus, 999, mecanica];
+
+/**
+ * `true` se a statement real flipa o clone. `mecanica` (default true) simula o
+ * `personaTemMecanica` que o handler calcula em JS (cartao_mode='runtime' OU
+ * extractBakedCartao(bot_prompt).found).
+ */
+function flipa(rowAntes, novoStatus, mecanica = true) {
+  return evalPredicate(PREDICADO, rowAntes, params(novoStatus, mecanica)) === true;
 }
 
 /** `true` se o clone TERIA flipado, mas foi barrado por não ser individual (vira log). */
-function flipBloqueado(rowAntes, novoStatus) {
-  return evalPredicate(PREDICADO_BLOQUEADO, rowAntes, [novoStatus]) === true;
+function flipBloqueado(rowAntes, novoStatus, mecanica = true) {
+  return evalPredicate(PREDICADO_BLOQUEADO, rowAntes, params(novoStatus, mecanica)) === true;
+}
+
+/** `true` se individual atendente em transição, mas barrado por persona SEM mecânica. */
+function flipBloqueadoPersona(rowAntes, novoStatus, mecanica) {
+  return evalPredicate(PREDICADO_PERSONA, rowAntes, params(novoStatus, mecanica)) === true;
 }
 
 /** Estado do MVS antes do fix: individual, atendente, agenda recém-conectada (pending). */
@@ -369,6 +387,131 @@ test('comparação é ESTRITA (= individual): product_type desconhecido/futuro N
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GUARD da PERSONA (qa+security, 24/07): só flipa se a persona já tem a mecânica de
+// agendamento (cartão + SIM + inserir_agendamento) OU cartao_mode='runtime'. Flipar um
+// clone atendente cuja persona (ATENDENTE_PROMPT_TPL) NÃO tem cartão/SIM ganharia as tools
+// de agenda sem a trava do SIM => bot marca sem confirmar (pior que o bug do MVS).
+// `personaTemMecanica` entra como $3 (calculado em JS pelo handler).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('(persona-a) individual atendente COM mecânica ($3=true): flipa', () => {
+  assert.equal(flipa(MVS_ATENDENTE, 'active', true), true);
+});
+
+test('(persona-b) individual atendente SEM mecânica ($3=false): NÃO flipa', () => {
+  assert.equal(flipa(MVS_ATENDENTE, 'active', false), false);
+});
+
+test('(persona-b) o bloqueio por persona acende o motivo próprio (não silencioso)', () => {
+  assert.equal(flipBloqueadoPersona(MVS_ATENDENTE, 'active', false), true);
+  // e é mutuamente exclusivo com o flip e com o bloqueio de não-individual
+  assert.equal(flipa(MVS_ATENDENTE, 'active', false), false);
+  assert.equal(flipBloqueado(MVS_ATENDENTE, 'active', false), false);
+});
+
+test('(persona-c) cartao_mode=runtime ⇒ $3=true ⇒ flipa (mecânica vem do código)', () => {
+  // O handler resolve cartao_mode='runtime' => personaTemMecanica=true ANTES da SQL; aqui
+  // isso é o $3=true. Cobre o caso c pedido pela consulta.
+  assert.equal(flipa(MVS_ATENDENTE, 'active', true), true);
+});
+
+test('persona sem mecânica só bloqueia INDIVIDUAL: estabelecimento vira o outro motivo', () => {
+  // Meduzza (estabelecimento) sem mecânica: o motivo é nao_individual, não persona
+  // (o guard de persona é product_type='individual').
+  assert.equal(flipBloqueadoPersona(MEDUZZA, 'active', false), false);
+  assert.equal(flipBloqueado(MEDUZZA, 'active', false), true);
+});
+
+test('o guard de persona exige $3 = TRUE no predicado do flip (sem ele, some a proteção)', () => {
+  assert.match(PREDICADO, /\$3\s*=\s*TRUE/i, 'o flip precisa exigir personaTemMecanica');
+  assert.match(
+    PREDICADO_PERSONA,
+    /\$3\s*=\s*FALSE/i,
+    'o motivo do bloqueio por persona é $3 = FALSE',
+  );
+});
+
+// ── End-to-end da decisão de mecânica: extractBakedCartao REAL do dist ────────
+// Prova que o cálculo de personaTemMecanica (o que o handler faz em JS) separa de fato o
+// ATENDENTE_PROMPT_TPL (sem mecânica) dos templates de agenda (com cartão+SIM). Importa a
+// função COMPILADA (mesma que o server.js importa) — exige `npm run build --workspaces`.
+const distExtract = await import(
+  '../../packages/integrations/dist/prompt-builder/cartao-extract.js'
+);
+
+/** Espelha o cálculo do handler: runtime dispensa a persona; senão exige o cartão baked. */
+function personaTemMecanica(cartaoMode, botPrompt) {
+  if (cartaoMode === 'runtime') return true;
+  return distExtract.extractBakedCartao(botPrompt ?? '').found === true;
+}
+
+// Cópia fiel do ATENDENTE_PROMPT_TPL (clone-provisioning.ts) — persona de pré-venda, SEM
+// cartão/SIM/inserir_agendamento. Mantido em sync com o provisioning.
+const ATENDENTE_TPL = [
+  'Voce e o atendente virtual de MVS BARBEARIA e conversa com os clientes pelo WhatsApp.',
+  '',
+  '[SEU PAPEL AQUI]',
+  '- Da as boas-vindas, explica o que MVS BARBEARIA oferece e tira as duvidas da pessoa.',
+  '- Quando percebe interesse, acolhe e cuida de encaminhar pra equipe dar sequencia.',
+].join('\n');
+
+// Persona de AGENDA no formato dos templates legados (Cirilo/Samuel/mvs): seção
+// [CARTAO DE CONFIRMACAO] TRAILING + inserir_agendamento + regra do SIM.
+const AGENDA_TPL = [
+  'Voce e o assistente virtual de uma barbearia.',
+  '[FLUXO OBRIGATORIO]',
+  '4. Se estiver -> apresente o CARTAO DE CONFIRMACAO e peca SIM.',
+  '5. APOS o SIM: chame inserir_agendamento.',
+  '',
+  '[CARTAO DE CONFIRMACAO]',
+  'DIA / HORARIO / SERVICO / VALOR e pede SIM.',
+].join('\n');
+
+test('(a) atendente individual com persona de AGENDA (mvs-real) => tem mecânica => flipa', () => {
+  assert.equal(personaTemMecanica('baked', AGENDA_TPL), true);
+  assert.equal(flipa(MVS_ATENDENTE, 'active', personaTemMecanica('baked', AGENDA_TPL)), true);
+});
+
+test('(b) atendente individual com ATENDENTE_PROMPT_TPL => SEM mecânica => NÃO flipa', () => {
+  assert.equal(personaTemMecanica('baked', ATENDENTE_TPL), false);
+  assert.equal(flipa(MVS_ATENDENTE, 'active', personaTemMecanica('baked', ATENDENTE_TPL)), false);
+  assert.equal(
+    flipBloqueadoPersona(MVS_ATENDENTE, 'active', personaTemMecanica('baked', ATENDENTE_TPL)),
+    true,
+  );
+});
+
+test('(c) atendente individual cartao_mode=runtime => mecânica pelo código => flipa', () => {
+  // Mesmo com a persona de atendente (sem cartão baked), runtime dispensa a persona.
+  assert.equal(personaTemMecanica('runtime', ATENDENTE_TPL), true);
+  assert.equal(flipa(MVS_ATENDENTE, 'active', personaTemMecanica('runtime', ATENDENTE_TPL)), true);
+});
+
+test('bot_prompt NULL (clone sem linha em bot_prompt) => SEM mecânica => NÃO flipa', () => {
+  assert.equal(personaTemMecanica('baked', null), false);
+});
+
+test('o handler reusa extractBakedCartao do dist e resolve cartao_mode=runtime como mecânica', () => {
+  // Casa a LINHA DE CÓDIGO exata (não o comentário) — senão a asserção passaria só pela
+  // menção em comentário e não guardaria a computação real (mutação "= true" escaparia).
+  assert.match(
+    HANDLER,
+    /personaTemMecanica = extractBakedCartao\(bot_prompt \?\? ''\)\.found === true;/,
+    'o guard deve reusar o detector já testado, não uma string mágica nova',
+  );
+  assert.match(
+    HANDLER,
+    /if \(cartao_mode === 'runtime'\) \{\s*personaTemMecanica = true;/,
+    'runtime dispensa a persona (mecânica vem do código)',
+  );
+  assert.match(
+    HANDLER,
+    /catch \(importErr\) \{\s*\/\/[\s\S]*?personaTemMecanica = false;/,
+    'import quebrado deve ser fail-closed (não flipa)',
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Contrato da statement e da resposta
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -429,9 +572,28 @@ test('estabelecimento barrado também é avisado: log explicando por que NÃO fl
   );
 });
 
-test('parâmetros continuam parametrizados ($1/$2) — sem interpolação', () => {
+test('persona sem mecânica é avisada: resposta expõe agendaBloqueadaPersona + log próprio', () => {
+  assert.match(
+    HANDLER,
+    /agendaBloqueadaPersona:/,
+    'a resposta precisa sinalizar que a persona não tem a mecânica (pro front avisar)',
+  );
+  assert.match(
+    HANDLER,
+    /flip_bloqueado_persona === true\) \{[\s\S]*console\.log\(/,
+    'o bloqueio por persona precisa de log próprio (não silencioso)',
+  );
+  assert.match(
+    HANDLER,
+    /\[gcal\][^`]*persona SEM mecânica[^`]*inserir_agendamento/,
+    'o log deve dizer o motivo: persona sem cartão/SIM/inserir_agendamento',
+  );
+});
+
+test('parâmetros continuam parametrizados ($1/$2/$3) — sem interpolação', () => {
   assert.match(SQL, /\$1/);
   assert.match(SQL, /\$2/);
+  assert.match(SQL, /\$3/, 'personaTemMecanica entra parametrizado, não interpolado');
   assert.doesNotMatch(SQL, /\$\{/, 'nada de template string dentro da SQL');
 });
 

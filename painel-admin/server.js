@@ -4488,12 +4488,17 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
 
   try {
     const r = await pool.query(
-      `SELECT gcal_credentials_json, gcal_calendar_id, gcal_client_email FROM flow_clones WHERE id = $1`,
+      `SELECT fc.gcal_credentials_json, fc.gcal_calendar_id, fc.gcal_client_email,
+              fc.slot, fc.cartao_mode, bp.prompt AS bot_prompt
+         FROM flow_clones fc
+         LEFT JOIN bot_prompt bp ON bp.slot = fc.slot
+        WHERE fc.id = $1`,
       [id],
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
 
-    const { gcal_credentials_json, gcal_calendar_id, gcal_client_email } = r.rows[0];
+    const { gcal_credentials_json, gcal_calendar_id, gcal_client_email, cartao_mode, bot_prompt } =
+      r.rows[0];
     if (!gcal_credentials_json || !gcal_calendar_id) {
       return res.status(400).json({ error: 'Credenciais não configuradas' });
     }
@@ -4542,13 +4547,56 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     //     cliente pagante). Errar pra menos aqui só mantém o status quo. Comparação ESTRITA
     //     `= 'individual'`: product_type novo/desconhecido no futuro também não flipa.
     //     O caso bloqueado é LOGADO explicando por que não flipou (nunca silencioso).
+    //  6. SÓ flipa se a persona JÁ carrega a mecânica de agendamento (cartão de confirmação
+    //     + regra do SIM antes de inserir_agendamento) — OU o cartão vem do CÓDIGO
+    //     (cartao_mode='runtime'). Um clone que nasceu ATENDENTE tem o ATENDENTE_PROMPT_TPL
+    //     (clone-provisioning.ts), que por construção NÃO tem cartão/SIM/inserir_agendamento
+    //     e diz "encaminhar pra equipe". Flipar esse clone ganharia as tools de agenda SEM a
+    //     trava do SIM → bot marca sem confirmar (pior que o bug do MVS). `personaTemMecanica`
+    //     é calculado em JS (abaixo) e entra como $3 — FAIL-CLOSED: na dúvida NÃO flipa.
     //
+    // `personaTemMecanica` reusa o detector JÁ testado `extractBakedCartao().found`
+    // (packages/integrations — o MESMO guard que o flip-on-customize do SCRUM-92 usa,
+    // verificado contra os bot_prompt reais de Cirilo/Samuel/mvs). `.found === true` = há um
+    // cartão de confirmação bem-formado no bot_prompt (bloco do builder OU seção
+    // [CARTAO DE CONFIRMACAO] dos templates de agenda). O ATENDENTE_PROMPT_TPL não tem cartão
+    // nenhum → found:false. cartao_mode='runtime' → a mecânica vem do buildCartaoRuntimeBlock
+    // (código), a persona não precisa carregá-la → dispensa a checagem do prompt.
+    let personaTemMecanica = false;
+    if (testResult.ok) {
+      if (cartao_mode === 'runtime') {
+        personaTemMecanica = true;
+      } else {
+        try {
+          const { extractBakedCartao } = await import(
+            '../packages/integrations/dist/prompt-builder/cartao-extract.js'
+          );
+          personaTemMecanica = extractBakedCartao(bot_prompt ?? '').found === true;
+        } catch (importErr) {
+          // Sem conseguir PROVAR a mecânica, fail-closed: não flipa (nunca cria o bug pior).
+          personaTemMecanica = false;
+          console.log(
+            `[gcal] clone ${id}: não foi possível checar a mecânica da persona (${importErr.message}) — fail-closed, NÃO flipa`,
+          );
+        }
+      }
+    }
+
     // O CTE `prev` lê o estado ANTERIOR no mesmo snapshot da statement — é o que permite
     // detectar a transição e devolver `agenda_ativada` (em RETURNING, colunas de flow_clones
     // já valem o valor NOVO; por isso a decisão sai do `prev`, não da linha atualizada).
+    // $3 = personaTemMecanica (já resolvido em JS, incl. cartao_mode='runtime').
     const upd = await pool.query(
       `WITH prev AS (
          SELECT id,
+                (
+                  $1 = 'active'
+                  AND gcal_status IS DISTINCT FROM 'active'
+                  AND (
+                    modo_atendente_enabled IS TRUE
+                    OR personalizacao->>'agenda_automatica' = 'false'
+                  )
+                ) AS atendente_ativou,
                 (
                   $1 = 'active'
                   AND gcal_status IS DISTINCT FROM 'active'
@@ -4557,6 +4605,7 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
                     modo_atendente_enabled IS TRUE
                     OR personalizacao->>'agenda_automatica' = 'false'
                   )
+                  AND $3 = TRUE
                 ) AS flip,
                 (
                   $1 = 'active'
@@ -4566,7 +4615,17 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
                     modo_atendente_enabled IS TRUE
                     OR personalizacao->>'agenda_automatica' = 'false'
                   )
-                ) AS flip_bloqueado_nao_individual
+                ) AS flip_bloqueado_nao_individual,
+                (
+                  $1 = 'active'
+                  AND gcal_status IS DISTINCT FROM 'active'
+                  AND product_type = 'individual'
+                  AND (
+                    modo_atendente_enabled IS TRUE
+                    OR personalizacao->>'agenda_automatica' = 'false'
+                  )
+                  AND $3 = FALSE
+                ) AS flip_bloqueado_persona_sem_mecanica
            FROM flow_clones
           WHERE id = $2
        )
@@ -4585,15 +4644,24 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
         WHERE fc.id = prev.id
         RETURNING prev.flip AS agenda_ativada,
                   prev.flip_bloqueado_nao_individual AS flip_bloqueado,
+                  prev.flip_bloqueado_persona_sem_mecanica AS flip_bloqueado_persona,
                   fc.slot,
                   fc.product_type`,
-      [newStatus, id],
+      [newStatus, id, personaTemMecanica],
     );
 
     const agendaAtivada = upd.rows[0]?.agenda_ativada === true;
     if (agendaAtivada) {
       console.log(
         `[gcal] clone ${id} (${upd.rows[0].slot}): AGENDA ATIVADA na validação da SA — modo atendente -> modo agenda (agenda_automatica=true, modo_atendente_enabled=false)`,
+      );
+    } else if (upd.rows[0]?.flip_bloqueado_persona === true) {
+      // Individual atendente cuja PERSONA não tem a mecânica de agendamento (cartão+SIM+
+      // inserir_agendamento) e não está em cartao_mode='runtime'. Flipar deixaria o bot com as
+      // tools de agenda SEM a trava do SIM (marcaria sem confirmar). Barramos e avisamos: o
+      // operador precisa regenerar/ajustar a persona pra agenda antes que o modo mude.
+      console.log(
+        `[gcal] clone ${id} (${upd.rows[0].slot}): agenda validada mas modo NÃO alterado — persona SEM mecânica de agendamento (cartão de confirmação + SIM + inserir_agendamento) e cartao_mode != 'runtime'. Regenere a persona pra agenda antes de ativar (evita marcar sem confirmação).`,
       );
     } else if (upd.rows[0]?.flip_bloqueado === true) {
       // Estabelecimento em modo atendente com gcal validado no NÍVEL DO CLONE: não flipamos
@@ -4616,6 +4684,10 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
       // Só aparece quando o flip REALMENTE aconteceu (undefined some do JSON) — o operador
       // precisa saber que o tipo do fluxo mudou; mudança de estado silenciosa criou este bug.
       agendaAtivada: agendaAtivada ? true : undefined,
+      // A agenda foi validada mas o modo NÃO mudou porque a persona não tem a mecânica de
+      // agendamento (cartão+SIM+inserir_agendamento). O front usa isto pra avisar o operador
+      // a regenerar a persona pra agenda antes de ativar. Undefined some do JSON.
+      agendaBloqueadaPersona: upd.rows[0]?.flip_bloqueado_persona === true ? true : undefined,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
