@@ -19,12 +19,14 @@
  *     idempotencia (1 pending/slot, reusa/reemite a MESMA linha — NUNCA 2a cobranca) vive no
  *     proprio ensurePixChargeForSlot (advisory lock + recheck) — o cron e a tela compartilham
  *     o caminho, sem duplicar.
- *     REEMISSAO ANTECIPADA (reissueAheadMs = BILLING_REISSUE_AHEAD_MIN): fecharia a ultima
- *     <=1h reemitindo a pending que expira dentro da proxima janela ANTES do vencimento, MAS
- *     abandona o abacate_charge_id antigo (QR velho pagavel => risco de pagamento orfao com o
- *     match so-por-abacate_charge_id de hoje). Por isso vem GATED OFF (default 0); a maquina e
- *     os testes ficam, aguardando o fallback por external_id no webhook. So o cron passaria
- *     reissueAheadMs>0; o portal mantem 0 (legado).
+ *     REEMISSAO ANTECIPADA (reissueAheadMs = BILLING_REISSUE_AHEAD_MIN): fecha a ultima <=1h
+ *     reemitindo a pending que expira dentro da proxima janela ANTES do vencimento. A
+ *     reemissao abandona o abacate_charge_id antigo (QR velho segue pagavel) — o vetor de
+ *     pagamento orfao no QR velho JA ESTA FECHADO pelo FALLBACK por external_id no webhook
+ *     (SCRUM-139, PR #497 — casa a linha 'pending' mais recente por external_id, sem orfao
+ *     nem duplo-credito). Com a dependencia atendida, o cron liga: BILLING_REISSUE_AHEAD_MIN
+ *     default 120 (min). Kill-switch: =0 volta ao legado (so reemite ja expirada). So o cron
+ *     passa reissueAheadMs>0; o portal (geracao sob demanda) mantem 0.
  *
  *  2. RECONCILIACAO (rede de seguranca p/ webhook perdido): para cada `pending` com
  *     abacate_charge_id, consulta client.getChargeStatus; se o gateway diz PAID e o banco

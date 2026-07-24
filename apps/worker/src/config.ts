@@ -50,13 +50,20 @@ export const WorkerConfigSchema = z.object({
   // (scheduleCronSafe -> fallback).
   BILLING_CRON: z.string().default('0 * * * *'),
   // Janela (min) de reemissao ANTECIPADA: pending cujo expires_at cai dentro de now+janela
-  // e reemitida AGORA reusando a MESMA linha (idempotente, sem duplicar). Isso fecharia a
-  // ultima <=1h do buraco, MAS sobrescreve o abacate_charge_id antigo — o QR velho segue
-  // pagavel ~janela e o webhook casa SO por abacate_charge_id (webhook.ts) => pagamento no
-  // QR velho vira ORFAO, nunca creditado. Por isso o DEFAULT DO CODIGO e 0 (OFF): NAO
-  // confiar em env=0 (deploy futuro esqueceria e ligaria o vetor). So ligar (>0) DEPOIS do
-  // fallback por external_id no webhook (SCRUM-124 follow-up). nonnegative: aceita o 0.
-  BILLING_REISSUE_AHEAD_MIN: z.coerce.number().int().nonnegative().default(0),
+  // e reemitida AGORA reusando a MESMA linha (idempotente, sem duplicar). Isso fecha a
+  // ultima <=1h do buraco sem PIX pagavel. A reemissao sobrescreve o abacate_charge_id
+  // antigo — o QR velho segue pagavel ~janela; ANTES o webhook casava SO por
+  // abacate_charge_id, entao um pagamento no QR velho virava ORFAO. Por isso ficou GATED
+  // OFF (default 0) ate o fallback existir.
+  // DEPENDENCIA ATENDIDA (SCRUM-139, PR #497, bfba5bd): o webhook agora tem FALLBACK por
+  // external_id ("{slot}-{ciclo}", estavel entre reemissoes) — quando o match por
+  // abacate_charge_id nao acha (QR velho pago), casa a linha 'pending' mais recente por
+  // external_id (billing-webhook-events.ts: FOR UPDATE + ORDER BY id DESC LIMIT 1). O
+  // filtro status='pending' e a trava anti-duplo-credito. Com o vetor de orfao fechado,
+  // o reissue-ahead liga: DEFAULT 120 (min) = reemite ~2h antes de vencer, cliente SEMPRE
+  // tem PIX pagavel (SCRUM-124). Kill-switch: BILLING_REISSUE_AHEAD_MIN=0 desliga.
+  // nonnegative: aceita o 0.
+  BILLING_REISSUE_AHEAD_MIN: z.coerce.number().int().nonnegative().default(120),
 
   // ── Cron de limpeza de trials ÓRFÃOS (Missao 020 F1 — condicao 2 do PORTAL_SIGNUP) ──
   // TODAS opcionais com default (licao #247: nada aqui e obrigatorio no boot).
