@@ -237,9 +237,18 @@ const WAHA_WEBHOOK_HMAC_KEY = process.env.WAHA_WEBHOOK_HMAC_KEY || '';
 const WAHA_WEBHOOK_RETRIES = { attempts: 15, delaySeconds: 3, policy: 'constant' };
 // Bot SO responde chat privado: ignora status, grupos, canais e broadcast.
 const WAHA_SESSION_IGNORE = { status: true, groups: true, channels: true, broadcast: true };
-// Engine NOWEB igual Cirilo: markOnline ligado, store de chats/contatos
-// DESLIGADO (recent-contacts ja tem fallback via message_log p/ sessao sem store).
-const WAHA_SESSION_NOWEB = { markOnline: true, store: { enabled: false, fullSync: false } };
+// Engine NOWEB: markOnline ligado + store de chats/contatos LIGADO (SCRUM-145).
+// store ON e pre-requisito do GET /chats e /contacts do WAHA (fonte de NOME de
+// contato do portal) e do /api/sendSeen (o "visto"); sem ele o WAHA responde 400
+// "Enable NOWEB store". Toda sessao NOVA criada por aqui (deploy-waha via gestao)
+// nasce com store ON — igual ao provisionamento (clone-provisioning.ts
+// SESSION_NOWEB) e ao signup self-service. MANTER OS DOIS CAMINHOS EM SINCRONIA.
+// fullSync:false de proposito (~3 meses de historico, suficiente, sem o I/O e o
+// crescimento de disco do fullSync completo). NAO retroage: sessoes ja pareadas
+// (Cirilo/Samuel/dragon) seguem store-less ate um re-pareamento natural — mudar
+// store depois de pareado tem risco de perda de historico (doc WAHA), tratado
+// no SCRUM-144. O fallback via message_log (recent-contacts) segue como rede.
+const WAHA_SESSION_NOWEB = { markOnline: true, store: { enabled: true, fullSync: false } };
 
 /**
  * Monta o array `config.webhooks` padrao de uma sessao WAHA nova: url do TS api +
