@@ -76,6 +76,11 @@ export interface GcalAtendSyncResult extends Record<string, unknown> {
   deletionsSkippedColabAbsent: number;
   /** slots que caíram no catch individual (erro isolado, não derrubou o ciclo). */
   slotsWithError: number;
+  /**
+   * SCRUM-129: eventos cujo serviço estava presente no summary mas NÃO casou o catálogo (nem por
+   * normalização) e sem preço uniforme → nasceram com valor 0. Contador da cauda a investigar.
+   */
+  unrecognizedServices: number;
 }
 
 /** Evento do snapshot + o colaborador (estabelecimento) de cujo calendário ele veio (null = individual). */
@@ -138,18 +143,39 @@ export function parseBotSummary(summary: string): {
   return { nome: resto.trim(), servico: '', telefone };
 }
 
+/** Como o preço foi obtido — para observabilidade da cauda "serviço não reconhecido" (SCRUM-129). */
+export type PrecoMatch = 'exact' | 'normalized' | 'uniform' | 'none';
+
+export interface PrecoResolution {
+  /** preço em centavos (0 quando nada casou e o catálogo não é uniforme). */
+  cents: number;
+  /** 'none' = serviço presente porém fora do catálogo, sem preço uniforme → sinal observável. */
+  match: PrecoMatch;
+}
+
 /**
- * Preço (centavos) de um serviço a partir do pricing pré-carregado: catálogo por nome
- * (case-insensitive) e, sem match, o preço UNIFORME do catálogo (ADR 0031, caso Ingrid); 0 se nada
- * casa. A edição manual do dono (sticky) vence isto no upsert.
+ * Preço (centavos) de um serviço a partir do pricing pré-carregado, em CAMADAS (SCRUM-129):
+ *   1. match EXATO (case-insensitive/trim) no catálogo;
+ *   2. fallback NORMALIZADO (sem acentos/caixa/espaços — normalizeServiceName) contra o mesmo
+ *      catálogo, antes de desistir (elimina a classe "Sobrâncelha" vs "sobrancelha", 72% do Samuel);
+ *   3. preço UNIFORME do catálogo (ADR 0031, caso Ingrid "Fulano Atendimento" com serviço vazio);
+ *   4. 0 quando nada casa — NUNCA inventa preço. O caller emite o sinal observável quando match='none'.
+ * A edição manual do dono (sticky) vence isto no upsert.
  */
-export function resolvePreco(pricing: atendimentos.SlotPricing, servico: string): number {
+export function resolvePreco(pricing: atendimentos.SlotPricing, servico: string): PrecoResolution {
   const key = servico.trim().toLowerCase();
   if (key) {
-    const p = pricing.byNameLower.get(key);
-    if (p != null) return p;
+    const exact = pricing.byNameLower.get(key);
+    if (exact != null) return { cents: exact, match: 'exact' };
+    const norm = atendimentos.normalizeServiceName(servico);
+    if (norm) {
+      const normHit = pricing.byNameNormalized.get(norm);
+      if (normHit != null) return { cents: normHit, match: 'normalized' };
+    }
   }
-  return pricing.uniformPriceCents ?? 0;
+  const uniform = pricing.uniformPriceCents;
+  if (uniform != null) return { cents: uniform, match: 'uniform' };
+  return { cents: 0, match: 'none' };
 }
 
 /**
@@ -299,7 +325,22 @@ async function reconcileSlot(
     result.scanned++;
     presentIds.add(ev.id);
     const parsed = parseBotSummary(ev.summary ?? '');
-    const valorCents = resolvePreco(pricing, parsed.servico);
+    const preco = resolvePreco(pricing, parsed.servico);
+    const valorCents = preco.cents;
+    // SCRUM-129: serviço presente no evento mas SEM match no catálogo (nem normalizado) e sem preço
+    // uniforme → nasce com valor 0. Emite sinal estruturado observável (slot + nome do serviço, NUNCA
+    // telefone/nome do cliente, LGPD) pra vermos a cauda de nomes fora do catálogo. NÃO chuta preço.
+    if (preco.match === 'none' && parsed.servico.trim() !== '') {
+      result.unrecognizedServices++;
+      log.warn(
+        {
+          slot: scope.slot,
+          servico: parsed.servico.trim().slice(0, 80),
+          catalogSize: pricing.byNameLower.size,
+        },
+        'gcal-atend-sync: serviço do evento não reconhecido no catálogo — atendimento nasce com valor 0 (SCRUM-129)',
+      );
+    }
     // NÃO passa formaPagamento (undefined → o UPDATE PRESERVA forma/valor/desconto: não reabre o
     // bug DOBRA) nem reprecificarServico (reconciler nunca reprecifica). Sticky respeitado no helper.
     await atendimentos.upsertAtendimentoFromEvent({
@@ -409,6 +450,7 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
     skippedNoGcal: 0,
     deletionsSkippedColabAbsent: 0,
     slotsWithError: 0,
+    unrecognizedServices: 0,
   };
 
   const explicitSlots = csvToArray(config.ATEND_FROM_AGENDA_SLOTS);

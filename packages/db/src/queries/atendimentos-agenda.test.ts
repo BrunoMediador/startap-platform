@@ -87,6 +87,30 @@ describe('resolvePrecoCents (preço do catálogo flow_clones.servicos)', () => {
     expect(await resolvePrecoCents('clone_dragon', 'Corte')).toBe(0);
   });
 
+  it('SCRUM-129: casa por normalização (acento/caixa/espaço) quando não bate o exato', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ servicos: [{ nome: 'Sobrancelha', preco_cents: 2000 }] }],
+      rowCount: 1,
+    });
+    // "SOBRÂNCELHA" com espaços/acento não bate o exato lower, mas casa o normalizado.
+    expect(await resolvePrecoCents('clone_dragon', '  SOBRÂNCELHA ')).toBe(2000);
+  });
+
+  it('SCRUM-129: match exato tem prioridade sobre normalizado', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'Corte', preco_cents: 5000 },
+            { nome: 'Côrte', preco_cents: 9999 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    expect(await resolvePrecoCents('clone_dragon', 'Corte')).toBe(5000);
+  });
+
   it('servico_nome vazio -> 0 sem nem consultar', async () => {
     expect(await resolvePrecoCents('clone_dragon', '')).toBe(0);
     expect(mockQuery).not.toHaveBeenCalled();

@@ -28,6 +28,7 @@ const {
   upsertAtendimentoFromEvent,
   listAgendaAtendimentosInWindow,
   loadSlotPricing,
+  normalizeServiceName,
 } = await import('./atendimentos.js');
 
 beforeEach(() => {
@@ -856,6 +857,42 @@ describe('loadSlotPricing (catálogo + uniforme)', () => {
     expect(p.byNameLower.get('barba')).toBe(3000);
   });
 
+  it('SCRUM-129: byNameNormalized guarda a chave sem acento/espaço extra', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: '  Sobrâncelha ', preco_cents: 2000 },
+            { nome: 'Corte  Masculino', preco_cents: 5000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    expect(p.byNameNormalized.get('sobrancelha')).toBe(2000);
+    expect(p.byNameNormalized.get('corte masculino')).toBe(5000);
+  });
+
+  it('SCRUM-129: chave normalizada ambígua (mesmo nome normalizado, preços diferentes) é omitida', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'Côrte', preco_cents: 5000 },
+            { nome: 'Corte', preco_cents: 7000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    // Ambas normalizam para 'corte' com preços diferentes → conservador: não confia em nenhuma.
+    expect(p.byNameNormalized.has('corte')).toBe(false);
+    // O match EXATO (byNameLower) segue disponível para 'corte' (última ganha).
+    expect(p.byNameLower.get('corte')).toBe(7000);
+  });
+
   it('serviço sem preço válido quebra a uniformidade (conservador → null)', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
@@ -887,5 +924,19 @@ describe('loadSlotPricing (catálogo + uniforme)', () => {
     const p2 = await loadSlotPricing('clone_x');
     expect(p2.uniformPriceCents).toBe(4000);
     expect(p2.byNameLower.get('x')).toBe(4000);
+  });
+});
+
+describe('normalizeServiceName (SCRUM-129)', () => {
+  it('remove acentos, caixa-baixa, colapsa espaços e trim', () => {
+    expect(normalizeServiceName('  Sobrâncelha ')).toBe('sobrancelha');
+    expect(normalizeServiceName('CORTE')).toBe('corte');
+    expect(normalizeServiceName('Corte  Masculino')).toBe('corte masculino');
+    expect(normalizeServiceName('Barba e Cabêlo')).toBe('barba e cabelo');
+  });
+
+  it('é idempotente e devolve string vazia para só-espaços', () => {
+    expect(normalizeServiceName('corte')).toBe('corte');
+    expect(normalizeServiceName('   ')).toBe('');
   });
 });

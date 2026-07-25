@@ -652,8 +652,25 @@ function isoToDateOnly(iso: string | null, timeZone: string = TZ_SAO_PAULO): str
 }
 
 /**
- * Resolve o preço do serviço (centavos) a partir de flow_clones.servicos pelo nome
- * (case-insensitive, trim). Fonte do preço — MESMO catálogo que o bot usa (free-slots.ts).
+ * Normaliza o NOME de um serviço para casar catálogo↔evento de forma robusta (SCRUM-129): remove
+ * acentos (NFD + descarta diacríticos combinantes), caixa-baixa, colapsa espaços internos e trim.
+ * Ex.: " Sobrâncelha", "SOBRANCELHA", "Corte  Masculino" → "sobrancelha" / "corte masculino".
+ * Determinística e sem estado. NÃO é PII (nome de serviço, não de pessoa). É a MESMA normalização
+ * usada pelo catálogo (loadSlotPricing.byNameNormalized) e pelo matcher do reconciler (resolvePreco).
+ */
+export function normalizeServiceName(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resolve o preço do serviço (centavos) a partir de flow_clones.servicos pelo nome. Fonte do preço
+ * — MESMO catálogo que o bot usa (free-slots.ts). Match em 2 camadas (SCRUM-129): (1) exato
+ * case-insensitive/trim; (2) fallback NORMALIZADO (acentos/caixa/espaços) — sem inventar preço.
  * Retorna 0 se o serviço não bate (atendimento de previsão nasce sem valor; o dono ajusta).
  */
 export async function resolvePrecoCents(slot: string, servicoNome: string | null): Promise<number> {
@@ -676,14 +693,19 @@ export async function resolvePrecoCents(slot: string, servicoNome: string | null
   } else return 0;
 
   const alvo = servicoNome.trim().toLowerCase();
+  const alvoNorm = normalizeServiceName(servicoNome);
+  let normHit: number | null = null; // SCRUM-129: 1º acerto normalizado (exato tem prioridade).
   for (const s of list) {
-    const nome = typeof s.nome === 'string' ? s.nome.trim().toLowerCase() : '';
-    if (nome === alvo) {
-      const preco = Number(s.preco_cents);
-      return Number.isFinite(preco) && preco > 0 ? Math.trunc(preco) : 0;
+    const nomeRaw = typeof s.nome === 'string' ? s.nome : '';
+    const preco = Number(s.preco_cents);
+    const precoCents = Number.isFinite(preco) && preco > 0 ? Math.trunc(preco) : 0;
+    if (precoCents <= 0) continue; // serviço sem preço válido nunca casa
+    if (nomeRaw.trim().toLowerCase() === alvo) return precoCents; // match exato vence
+    if (alvoNorm && normHit == null && normalizeServiceName(nomeRaw) === alvoNorm) {
+      normHit = precoCents;
     }
   }
-  return 0;
+  return normHit ?? 0;
 }
 
 /**
@@ -1216,6 +1238,13 @@ export interface SlotPricing {
   /** nome do serviço (lower-case, trim) → preço em centavos (>0). */
   byNameLower: Map<string, number>;
   /**
+   * SCRUM-129: nome NORMALIZADO (sem acentos, caixa-baixa, espaços colapsados — normalizeServiceName)
+   * → preço (>0). Fallback de match tolerante quando o nome do evento diverge do catálogo só por
+   * acento/caixa/espaço. Chave AMBÍGUA (2 serviços que normalizam igual com preços diferentes) é
+   * OMITIDA (conservador: cai no fallback uniforme/0, nunca chuta preço errado).
+   */
+  byNameNormalized: Map<string, number>;
+  /**
    * Preço COMUM quando TODOS os serviços do catálogo têm o MESMO preco_cents (>0); senão null.
    * Fallback do reconciler quando o summary do evento não casa nenhum serviço (caso Ingrid
    * "Fulano Atendimento" com catálogo uniforme a R$110) — ADR 0031.
@@ -1240,6 +1269,8 @@ function toPrecoCents(raw: unknown): number | null {
  */
 export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
   const byNameLower = new Map<string, number>();
+  const byNameNormalized = new Map<string, number>();
+  const ambiguousNorm = new Set<string>(); // SCRUM-129: chaves normalizadas com preços conflitantes.
   const r = await query<{ servicos: unknown }>(
     'SELECT servicos FROM flow_clones WHERE slot = $1 LIMIT 1',
     [slot],
@@ -1261,8 +1292,18 @@ export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
   let seenAny = false;
   for (const s of list) {
     const preco = toPrecoCents(s?.preco_cents);
-    const nome = typeof s?.nome === 'string' ? s.nome.trim().toLowerCase() : '';
-    if (nome && preco != null) byNameLower.set(nome, preco);
+    const nomeRaw = typeof s?.nome === 'string' ? s.nome : '';
+    const nome = nomeRaw.trim().toLowerCase();
+    if (nome && preco != null) {
+      byNameLower.set(nome, preco);
+      // SCRUM-129: mapa normalizado (acento/caixa/espaço). Colisão com preço diferente → ambígua.
+      const norm = normalizeServiceName(nomeRaw);
+      if (norm) {
+        const existing = byNameNormalized.get(norm);
+        if (existing != null && existing !== preco) ambiguousNorm.add(norm);
+        else byNameNormalized.set(norm, preco);
+      }
+    }
 
     // Uniformidade: precisa de preço válido em CADA serviço, todos iguais.
     if (preco == null) {
@@ -1274,9 +1315,11 @@ export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
       uniformBroken = true;
     }
   }
+  for (const k of ambiguousNorm) byNameNormalized.delete(k); // ambígua não casa (conservador).
 
   return {
     byNameLower,
+    byNameNormalized,
     uniformPriceCents: seenAny && !uniformBroken ? uniform : null,
   };
 }
