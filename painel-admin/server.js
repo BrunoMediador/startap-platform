@@ -1566,12 +1566,17 @@ app.get('/api/flows/:flowId/pauses', async (req, res) => {
     if (!flowId) return res.status(400).json({ error: 'flowId inválido' });
     const includeInactive =
       req.query.includeInactive === 'true' || req.query.includeInactive === '1';
+    // SCRUM-114: uma pausa só conta como ATIVA se estiver active E dentro da validade
+    // (expires_at NULL = permanente, ou > NOW()). Sem o filtro de validade, uma linha
+    // human_reply com TTL já vencido aparecia como "ativa" no painel (estado inerte:
+    // some do runtime via isFlowPaused, mas o operador via a pausa). Espelha o predicado
+    // de isFlowPaused (packages/db/src/queries/pausa.ts). includeInactive mostra tudo.
     const r = await pool.query(
       `SELECT flow_id, flow_name, telefone, active, source,
               LEFT(reason, 200) AS reason,
-              created_at, updated_at
+              expires_at, created_at, updated_at
        FROM flow_pauses
-       WHERE flow_id = $1 ${includeInactive ? '' : 'AND active = true'}
+       WHERE flow_id = $1 ${includeInactive ? '' : 'AND active = true AND (expires_at IS NULL OR expires_at > NOW())'}
        ORDER BY active DESC, updated_at DESC, created_at DESC
        LIMIT 500`,
       [flowId],
@@ -1670,6 +1675,11 @@ app.post('/api/flows/:flowId/pauses', async (req, res) => {
              flow_name   = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
              session     = COALESCE(EXCLUDED.session,   flow_pauses.session),
              source      = 'manual-painel',
+             -- SCRUM-114: pausa manual do operador = INDETERMINADA. Zera qualquer TTL
+             -- herdado (ex.: linha human_reply já vencida) — senão o upsert promove a
+             -- pausa mas mantém o expires_at morto: some do /pausas E o bot volta a
+             -- responder um contato pausado de propósito (mesma classe do SCRUM-86).
+             expires_at  = NULL,
              reason      = CASE
                WHEN flow_pauses.reason IS NULL OR flow_pauses.reason = ''
                THEN 'Pausado via painel'
