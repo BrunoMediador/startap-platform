@@ -28,6 +28,8 @@ const {
   reserveGlobalSend,
   resolveMonitorExtraSessions,
   restoreStateIfUnchanged,
+  bumpMonitorSendErrors,
+  getMonitorSendErrorsTotal,
   DEFAULT_MONITOR_EXTRA_SESSIONS,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
@@ -354,6 +356,36 @@ describe('heartbeat de liveness do monitor (SCRUM-54)', () => {
 
     const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
     expect(sql).toContain('SELECT last_cycle_at FROM alert_states WHERE check_key = $1');
+    expect(params).toEqual(['__heartbeat__']);
+  });
+});
+
+describe('contador vigiado de sendErrors do monitor (SCRUM-135)', () => {
+  it('bumpMonitorSendErrors: UPSERT acumula alert_count na __heartbeat__ (reaproveita a coluna, sem migration)', async () => {
+    await bumpMonitorSendErrors(2);
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('INSERT INTO alert_states');
+    expect(sql).toContain('ON CONFLICT (check_key) DO UPDATE');
+    expect(sql).toContain('alert_count = alert_states.alert_count + EXCLUDED.alert_count');
+    expect(params).toEqual(['__heartbeat__', 2]);
+  });
+
+  it('bumpMonitorSendErrors: delta <= 0 é NO-OP (não chama query)', async () => {
+    await bumpMonitorSendErrors(0);
+    await bumpMonitorSendErrors(-1);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('getMonitorSendErrorsTotal: lê alert_count da __heartbeat__ (0 quando nunca houve erro)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await getMonitorSendErrorsTotal()).toBe(0);
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ alert_count: 5 }] });
+    expect(await getMonitorSendErrorsTotal()).toBe(5);
+
+    const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('SELECT alert_count FROM alert_states WHERE check_key = $1');
     expect(params).toEqual(['__heartbeat__']);
   });
 });

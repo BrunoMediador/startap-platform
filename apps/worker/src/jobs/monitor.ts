@@ -715,6 +715,21 @@ export async function runMonitor(): Promise<MonitorResult> {
       'monitor: falha ao carimbar last_cycle_at (heartbeat) — ciclo segue',
     );
   }
+
+  // Contador VIGIADO de sendErrors (SCRUM-135, item 7): antes só virava log.error (grep-only);
+  // agora acumula em alert_states.__heartbeat__.alert_count pra dar SELECT direto (getMonitorSendErrorsTotal).
+  // Fail-safe simétrico ao heartbeat acima — falha aqui NUNCA derruba o ciclo.
+  if (result.sendErrors > 0) {
+    try {
+      await alerts.bumpMonitorSendErrors(result.sendErrors);
+    } catch (e) {
+      log.warn(
+        { err: e instanceof Error ? e.message : String(e) },
+        'monitor: falha ao acumular contador de sendErrors — ciclo segue',
+      );
+    }
+  }
+
   log.info({ ...result }, 'monitor cycle');
   return result;
 }
