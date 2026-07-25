@@ -125,7 +125,8 @@ describe('updatePerfilBySlot', () => {
   /**
    * Prepara a sequencia de mocks que updatePerfilBySlot + updateClone disparam:
    * 1) SELECT id, personalizacao (updatePerfilBySlot)
-   * 2) UPDATE flow_clones ... RETURNING * (updateClone)
+   * 2) WITH prev AS (...) UPDATE flow_clones ... RETURNING * (updateClone — SCRUM-112 envolveu
+   *    o UPDATE num CTE pra decidir o flip de billing_from_agenda_enabled na mesma statement)
    * 3) SELECT matriz_slot (updateClone, re-render)
    * 4) SELECT prompt FROM bot_prompt (matriz)
    * 5) INSERT bot_prompt ... ON CONFLICT (re-render)
@@ -137,8 +138,9 @@ describe('updatePerfilBySlot', () => {
       if (sql.includes('SELECT id, personalizacao')) {
         return { rows: [{ id: 42, personalizacao: personalizacaoAtual }] };
       }
-      if (sql.startsWith('UPDATE flow_clones SET')) {
-        // updateClone: personalizacao = $1::jsonb (primeiro/unico SET dinamico aqui)
+      if (sql.includes('UPDATE flow_clones')) {
+        // updateClone: personalizacao = $1::jsonb (primeiro/unico SET dinamico aqui) — o CTE
+        // do SCRUM-112 acrescenta parametros DEPOIS (id + flip), nunca antes do $1.
         captured.mergedJson = params[0] as string;
         return {
           rows: [
@@ -148,6 +150,7 @@ describe('updatePerfilBySlot', () => {
               matriz_slot: 'teste_barbearia',
               waha_sessao: null,
               personalizacao: JSON.parse(params[0] as string),
+              billing_agenda_ativado: false,
             },
           ],
         };

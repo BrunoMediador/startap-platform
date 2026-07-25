@@ -469,14 +469,68 @@ export async function updateClone(
 
   if (sets.length === 0) return getClone(id);
 
+  // SCRUM-112 (ADR 0027 / precedente SCRUM-121, PR #491): quando o SAVE do perfil contém a
+  // chave `agenda_automatica` explicitamente e ela resolve para TRUE (isAgendaAutomaticaIntent),
+  // ligamos `billing_from_agenda_enabled` NA MESMA transação — senão o clone que nasceu
+  // atendente (sem billing-da-agenda) e depois ganha agenda fica SEM o gate ligado, e a única
+  // forma de religar é um UPDATE manual (o buraco que gerou este card: caso Ingrid).
+  //
+  // FAIL-CLOSED em 3 níveis, mesmo desenho do gcal/test (SCRUM-121):
+  //   1. Só quando `agenda_automatica` está PRESENTE no patch novo (chave explícita — chave
+  //      ausente em outros saves do perfil, ex.: só telefone/endereço, nunca aciona o flip).
+  //   2. Só na TRANSIÇÃO: intenção NOVA = true (isAgendaAutomaticaIntent) E o valor ANTERIOR
+  //      gravado no JSONB era a string 'false' explícita (== estava atendente; ausência já
+  //      conta como "já era agenda" por convenção de isAgendaAutomaticaIntent, então não é
+  //      transição). Estado ANTERIOR lido via CTE `prev` no MESMO snapshot da statement — no
+  //      PG não existe `RETURNING OLD.*`. true→true (já ligado) é no-op.
+  //   3. Só se `billing_from_agenda_enabled` ainda NÃO estava ligado (evita re-escrever à toa;
+  //      também não desliga nunca — o fix é one-way, só liga).
+  // Dinheiro de cliente (regra de negócio): na dúvida, NÃO ligar — nunca fazemos o inverso
+  // (nunca desligamos billing_from_agenda_enabled por aqui).
+  const agendaAutomaticaPresente =
+    patch.personalizacao !== undefined &&
+    Object.prototype.hasOwnProperty.call(patch.personalizacao, 'agenda_automatica');
+  const novaIntencaoAgenda = agendaAutomaticaPresente
+    ? isAgendaAutomaticaIntent((patch.personalizacao as Record<string, unknown>).agenda_automatica)
+    : false;
+
   sets.push('updated_at = NOW()');
   vals.push(id);
+  const idParamIdx = i; // índice do $N do id, antes de reservar o índice do flip abaixo.
+  i++;
+  const flipParamIdx = i++; // $N = novaIntencaoAgenda (só relevante quando agendaAutomaticaPresente)
+  vals.push(novaIntencaoAgenda);
 
-  const r = await query<CloneRow & { id: string }>(
-    `UPDATE flow_clones SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+  const r = await query<CloneRow & { id: string; billing_agenda_ativado?: boolean }>(
+    `WITH prev AS (
+       SELECT id,
+              (
+                $${flipParamIdx} = TRUE
+                AND personalizacao->>'agenda_automatica' = 'false'
+                AND billing_from_agenda_enabled IS NOT TRUE
+              ) AS flip
+         FROM flow_clones
+        WHERE id = $${idParamIdx}
+     )
+     UPDATE flow_clones fc
+        SET ${sets.join(', ')},
+            billing_from_agenda_enabled = CASE
+                                             WHEN prev.flip THEN TRUE
+                                             ELSE fc.billing_from_agenda_enabled
+                                           END
+       FROM prev
+      WHERE fc.id = prev.id
+      RETURNING fc.*, prev.flip AS billing_agenda_ativado`,
     vals,
   );
   if (!r.rows[0]) return null;
+
+  if (r.rows[0].billing_agenda_ativado === true) {
+    // Nada silencioso: mudança de estado derivado precisa deixar rastro (lição SCRUM-121).
+    console.log(
+      `[updateClone] clone ${id} (${r.rows[0].slot}): billing_from_agenda_enabled ATIVADO — transição agenda_automatica 'false' -> true (ADR 0027, SCRUM-112).`,
+    );
+  }
 
   const row = normalizeCloneRow(r.rows[0]);
 

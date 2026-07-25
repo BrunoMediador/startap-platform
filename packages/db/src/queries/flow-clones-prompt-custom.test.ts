@@ -20,7 +20,8 @@ const { updateClone } = await import('./flow-clones.js');
 
 /**
  * Arma a sequência de queries do updateClone:
- * 1) UPDATE flow_clones ... RETURNING *  (traz prompt_custom)
+ * 1) WITH prev AS (...) UPDATE flow_clones ... RETURNING fc.*  (traz prompt_custom; CTE do
+ *    SCRUM-112 decide o flip de billing_from_agenda_enabled na mesma statement)
  * 2) SELECT matriz_slot                  (só no caminho de re-render)
  * 3) SELECT prompt FROM bot_prompt       (só no re-render)
  * 4) INSERT INTO bot_prompt              (só no re-render)
@@ -30,8 +31,11 @@ function arm(promptCustom: boolean) {
   const seen = { renderInsert: 0, matrizSelect: 0 };
   mockQuery.mockImplementation(async (sql: unknown) => {
     const s = typeof sql === 'string' ? sql : '';
-    if (s.startsWith('UPDATE flow_clones SET')) {
-      // RETURNING * do updateClone — personalizacao fixa (o re-render usa o patch de ENTRADA,
+    // SCRUM-112 envolveu o UPDATE num CTE (`WITH prev AS (...) UPDATE flow_clones fc SET ...`)
+    // pra decidir o flip de billing_from_agenda_enabled na mesma statement — a statement não
+    // começa mais com "UPDATE flow_clones SET" (começa com "WITH prev AS").
+    if (s.includes('UPDATE flow_clones') && s.includes('RETURNING fc.*')) {
+      // RETURNING do updateClone — personalizacao fixa (o re-render usa o patch de ENTRADA,
       // não o valor da row; só precisa ser um objeto válido pro normalizeCloneRow).
       return {
         rows: [
@@ -42,6 +46,7 @@ function arm(promptCustom: boolean) {
             waha_sessao: null,
             personalizacao: {},
             prompt_custom: promptCustom,
+            billing_agenda_ativado: false,
           },
         ],
         rowCount: 1,
@@ -83,8 +88,9 @@ describe('updateClone — guard prompt_custom (SCRUM-59)', () => {
     expect(seen.matrizSelect).toBe(0);
     expect(seen.renderInsert).toBe(0);
     // e o UPDATE de flow_clones em si aconteceu (personalizacao foi gravada).
-    const updateCalls = mockQuery.mock.calls.filter(([sql]) =>
-      String(sql).startsWith('UPDATE flow_clones SET'),
+    const updateCalls = mockQuery.mock.calls.filter(
+      ([sql]) =>
+        String(sql).includes('UPDATE flow_clones') && String(sql).includes('RETURNING fc.*'),
     );
     expect(updateCalls).toHaveLength(1);
   });
