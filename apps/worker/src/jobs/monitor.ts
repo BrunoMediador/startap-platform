@@ -69,8 +69,11 @@ const SEND_TIMEOUT_MS = 10_000;
 /** Janela de graça pós-deadline (SCRUM-126): quando o deadline bate sem resposta, espera MAIS um
  *  pouco pra uma resposta de ERRO do WAHA que pousa colada no deadline (o 422 que chegava ~20ms
  *  tarde e virava "timeout" ambíguo, mascarando não-entrega DEFINITIVA — incidente Cirilo). Curta e
- *  limitada: só captura o erro tardio; rede genuinamente muda nunca assenta e segue ambígua. */
-const SEND_ERROR_GRACE_MS = 3_000;
+ *  limitada: só captura o erro tardio; rede genuinamente muda nunca assenta e segue ambígua.
+ *  1s (SCRUM-140, era 3s): ainda ~50x a latência observada do 422 (~20ms), e reduz o pior caso de
+ *  soma de graça sob queda TOTAL do WAHA (todo broadcast × destinatário bate a graça) — evita que o
+ *  ciclo do monitor estoure o limiar de liveness do heartbeat (~3min) e dispare falso alarme. */
+const SEND_ERROR_GRACE_MS = 1_000;
 
 /** Humanização do envio de alerta — reduz risco de derrubar a sessão remetente
  *  (ALERTAS) por padrão de bot. "Digitando…" + delay antes de cada mensagem, e

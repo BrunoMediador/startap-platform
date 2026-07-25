@@ -280,7 +280,12 @@ async function main() {
   // SÓ registra o cron se ALERTS_ENABLED=true (default OFF). Com a env ausente o
   // worker sobe normal e este cron NÃO existe (zero chamada a WAHA/health/envio).
   // Camada 2 (toggle quente alert_config.enabled) vive no próprio runMonitor.
-  // A cada 2 min (ALERTS_CRON, default */2). Padrão inválido cai no fallback.
+  // { protect:true } impede overlap de ciclos (SCRUM-140): sob queda do WAHA, a
+  // janela de graça do envio de alerta (SEND_ERROR_GRACE_MS) pode somar dezenas de
+  // segundos ao ciclo e empurrá-lo perto/além do heartbeat de 3min — sem protect,
+  // o próximo tick do */2 sobrepõe e gera falso "worker travado" durante um
+  // incidente real. A cada 2 min (ALERTS_CRON, default */2). Padrão inválido cai
+  // no fallback via scheduleCronSafe.
   if (config.ALERTS_ENABLED) {
     log.info(
       { cron: config.ALERTS_CRON },
@@ -289,7 +294,7 @@ async function main() {
     scheduleCronSafe(
       config.ALERTS_CRON,
       '*/2 * * * *',
-      { name: 'monitor', timezone: 'America/Sao_Paulo' },
+      { name: 'monitor', timezone: 'America/Sao_Paulo', protect: true },
       async () => {
         const executionId = randomUUID();
         const startedAt = Date.now();

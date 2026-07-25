@@ -262,7 +262,7 @@ describe('monitor SCRUM-126 — 422 tardio (colado no SEND_TIMEOUT) classifica D
   // silêncio (alert_count 1→4 sem NENHUMA entrega). Agora o grace deixa o 422 subir e ser
   // classificado por STATUS. Timers fake pra dirigir o deadline+grace de forma determinística.
   const SEND_TIMEOUT_MS = 10_000;
-  const SEND_ERROR_GRACE_MS = 3_000;
+  const SEND_ERROR_GRACE_MS = 1_000; // SCRUM-140: espelha o valor real (era 3_000)
 
   function wireDownClone() {
     stubWahaSessions([{ name: 'clone_cirilo', status: 'FAILED' }]);
