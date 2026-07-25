@@ -442,6 +442,23 @@ describe('PUT /portal/cartao-config', () => {
     await app.close();
   });
 
+  it('SCRUM-143 fail-closed: reader falha (erro transitório de DB) → 503, NÃO flipa nada', async () => {
+    // O reader é chamado com failClosed:true no PUT → RELANÇA no erro → handler devolve 503.
+    // Antes (fail-open) devolvia {promptCustom:false} e o guard deixava flipar às cegas.
+    getCartaoMock.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: { marca: '💈' } },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe('estado_indeterminado');
+    expect(migrateMock).not.toHaveBeenCalled();
+    expect(setConfigMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('flip com extração NÃO-limpa (sem cartão) → 422 requer_revisao (não flipa silencioso)', async () => {
     mockClone({ cartaoMode: 'baked', promptCustom: false });
     getPromptMock.mockResolvedValue('Persona sem cartão baked reconhecível.');

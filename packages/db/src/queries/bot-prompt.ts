@@ -150,6 +150,23 @@ export async function applyGeneratedPrompt(
     // pedido (approve com a flag ON). NÃO mexe em cartao_config aqui (persona do builder é fresca
     // → o cartão é montado por template/emojis default; sem verbatim). Um único UPDATE.
     if (opts.cartaoMode === 'runtime') {
+      // BELT GUARD (SCRUM-143, defesa em profundidade — qa): antes deste era um flip
+      // INCONDICIONAL, 100% dependente do guard da ROTA (isCartaoRuntimeFlipBlocked, que lê
+      // fail-open e num erro transitório de DB deixava passar). Aqui, DENTRO da transação e com
+      // FOR UPDATE (contra corrida), confirmamos no BANCO que o clone NÃO é uma persona à mão
+      // AINDA baked: se for (prompt_custom=true E cartao_mode != 'runtime'), o flip introduziria
+      // cartão-duplo (o caso Ingrid) → ABORTA (ROLLBACK). Espelha isCartaoRuntimeFlipBlocked no
+      // data layer. Clone template (prompt_custom=false), já-runtime, ou matriz (sem linha) passam.
+      const st = await client.query<{
+        prompt_custom: boolean | null;
+        cartao_mode: string | null;
+      }>('SELECT prompt_custom, cartao_mode FROM flow_clones WHERE slot = $1 FOR UPDATE', [slot]);
+      const flowState = st.rows[0];
+      if (flowState && flowState.prompt_custom === true && flowState.cartao_mode !== 'runtime') {
+        throw new Error(
+          'applyGeneratedPrompt: bloqueado — prompt_custom=true baked não pode flipar pra cartao_mode=runtime (SCRUM-143 belt guard)',
+        );
+      }
       await client.query(
         "UPDATE flow_clones SET prompt_custom = true, cartao_mode = 'runtime' WHERE slot = $1",
         [slot],

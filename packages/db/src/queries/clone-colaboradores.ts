@@ -594,8 +594,22 @@ function parseCartaoConfig(raw: unknown): CloneCartaoConfig | null {
  * de query → NUNCA lança): cartaoMode='baked' (comportamento de HOJE — cartão vem do
  * bot_prompt) e cartaoConfig=null. Assim, mesmo se a migration 075 não tiver rodado neste
  * ambiente, o bot cai no caminho baked e nada muda.
+ *
+ * ⚠️ POLÍTICA DE FALHA (SCRUM-143) — este reader alimenta DOIS tipos de consumidor com
+ * necessidades OPOSTAS no erro:
+ *   - HOT-PATH do bot + reads informativos (default, `opts.failClosed` ausente/false):
+ *     FAIL-OPEN. O bot NUNCA pode cair por erro transitório de DB → cai no baked (acima).
+ *   - GUARDS de ESCRITA que podem flipar cartao_mode→'runtime' (approve do builder + PUT
+ *     /portal/cartao-config): `opts.failClosed: true` → FAIL-CLOSED: no erro **RELANÇA** em vez
+ *     de devolver {promptCustom:false, cartaoMode:'baked'}. Sem isso, um erro transitório fazia
+ *     o guard isCartaoRuntimeFlipBlocked ler {promptCustom:false} e NÃO bloquear → um clone
+ *     prompt_custom=true baked podia virar cartao_mode='runtime' (o caso Ingrid). O handler de
+ *     escrita captura o throw e aborta (503) — NADA é flipado com estado indeterminado.
  */
-export async function getAreaPromptCustomCartao(slot: string): Promise<{
+export async function getAreaPromptCustomCartao(
+  slot: string,
+  opts?: { failClosed?: boolean },
+): Promise<{
   area: string | null;
   promptCustom: boolean;
   cartaoMode: CartaoMode;
@@ -640,9 +654,17 @@ export async function getAreaPromptCustomCartao(slot: string): Promise<{
       cartaoConfig: parseCartaoConfig(row?.cartao_config),
       nomeNegocio,
     };
-  } catch {
-    // Coluna ausente (pré-051/070/075) ou erro → caminho atual: área desconhecida, não
-    // custom, cartão BAKED, sem config. Nunca lança (não derruba o bot).
+  } catch (err) {
+    // FAIL-CLOSED (SCRUM-143): consumidor de ESCRITA. Estado do clone INDETERMINADO → RELANÇA,
+    // pra o guard isCartaoRuntimeFlipBlocked NÃO ler {promptCustom:false} e deixar passar um
+    // flip pra runtime. O handler de escrita captura e aborta (503). Nunca flipa às cegas.
+    if (opts?.failClosed) {
+      throw err instanceof Error
+        ? err
+        : new Error('getAreaPromptCustomCartao: leitura falhou (failClosed)');
+    }
+    // FAIL-OPEN (hot-path/read): coluna ausente (pré-051/070/075) ou erro → caminho atual: área
+    // desconhecida, não custom, cartão BAKED, sem config. Nunca lança (não derruba o bot).
     return {
       area: null,
       promptCustom: false,
