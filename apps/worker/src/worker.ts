@@ -280,12 +280,19 @@ async function main() {
   // SÓ registra o cron se ALERTS_ENABLED=true (default OFF). Com a env ausente o
   // worker sobe normal e este cron NÃO existe (zero chamada a WAHA/health/envio).
   // Camada 2 (toggle quente alert_config.enabled) vive no próprio runMonitor.
-  // { protect:true } impede overlap de ciclos (SCRUM-140): sob queda do WAHA, a
-  // janela de graça do envio de alerta (SEND_ERROR_GRACE_MS) pode somar dezenas de
-  // segundos ao ciclo e empurrá-lo perto/além do heartbeat de 3min — sem protect,
-  // o próximo tick do */2 sobrepõe e gera falso "worker travado" durante um
-  // incidente real. A cada 2 min (ALERTS_CRON, default */2). Padrão inválido cai
-  // no fallback via scheduleCronSafe.
+  // `protect` impede overlap de ciclos (SCRUM-140): sob queda do WAHA, a janela de
+  // graça do envio de alerta (SEND_ERROR_GRACE_MS) pode somar dezenas de segundos ao
+  // ciclo e empurrá-lo perto/além do heartbeat de 3min — sem protect, o próximo tick
+  // do */2 sobrepõe e gera falso "worker travado" durante um incidente real.
+  // ⚠️ protect COMO FUNÇÃO (não `true`), achado da review SCRUM-140: o croner só
+  // bloqueia o tick sobreposto — nunca loga o skip nem chama callback — quando
+  // `protect` é `true`. Aqui é o cron que DETECTA incidente dos outros; um skip
+  // silencioso e repetido (ciclos "quase-lentos", abaixo do limiar do heartbeat)
+  // seria degradê PERMANENTE e silencioso bem dentro do próprio detector de falha
+  // silenciosa. A função NÃO muda o bloqueio (croner: `true` e função bloqueiam
+  // igual — só o callback de observabilidade muda) — só adiciona o warn abaixo.
+  // A cada 2 min (ALERTS_CRON, default */2). Padrão inválido cai no fallback via
+  // scheduleCronSafe.
   if (config.ALERTS_ENABLED) {
     log.info(
       { cron: config.ALERTS_CRON },
@@ -294,7 +301,18 @@ async function main() {
     scheduleCronSafe(
       config.ALERTS_CRON,
       '*/2 * * * *',
-      { name: 'monitor', timezone: 'America/Sao_Paulo', protect: true },
+      {
+        name: 'monitor',
+        timezone: 'America/Sao_Paulo',
+        protect: (job) => {
+          const currentRun = job.currentRun();
+          const runningSinceMs = currentRun ? Date.now() - currentRun.getTime() : null;
+          log.warn(
+            { cron: 'monitor', runningSinceMs },
+            'monitor: ciclo pulado por over-run — o anterior ainda está rodando (protect)',
+          );
+        },
+      },
       async () => {
         const executionId = randomUUID();
         const startedAt = Date.now();
