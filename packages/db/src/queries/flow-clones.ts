@@ -6,6 +6,7 @@
  */
 import { isAgendaAutomaticaIntent } from '@startap/core/agenda-degrade';
 import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
+import { ATENDENTE_PROMPT_TPL, areaArtigo } from '@startap/core/atendente-persona';
 import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
@@ -488,31 +489,51 @@ export async function updateClone(
   // quando ausente. O gestão (PATCH /api/clones) já não re-renderiza desde maio.
   if (patch.personalizacao !== undefined && !row.prompt_custom) {
     const personalizacao = patch.personalizacao;
-    const matrizRes = await query<{ matriz_slot: string }>(
-      'SELECT matriz_slot FROM flow_clones WHERE id = $1',
-      [id],
-    );
-    const matrizSlot = matrizRes.rows[0]?.matriz_slot;
-    if (matrizSlot) {
-      const promptRes = await query<{ prompt: string }>(
-        'SELECT prompt FROM bot_prompt WHERE slot = $1',
-        [matrizSlot],
+    // FONTE do template por MODO (SCRUM-122, regressão do SCRUM-79): este re-render
+    // precisa HONRAR modo_atendente_enabled, exatamente como regerarPromptClone
+    // (clone-provisioning). Sem isto, o 1º save de perfil de um clone ATENDENTE
+    // (prompt_custom ainda false) reescrevia o bot_prompt com a persona de AGENDA
+    // da matriz — cartão de confirmação + inserir_agendamento + regra do SIM —
+    // matando a persona de pré-venda. modo_atendente_enabled vem do RETURNING *
+    // (normalizeCloneRow => false quando ausente), mesmo predicado do provisioning.
+    let template: string | undefined;
+    let atendentePers: Record<string, unknown> = personalizacao;
+    if (row.modo_atendente_enabled) {
+      // Persona de pré-venda vem do SEED em código (fonte única @startap/core),
+      // NUNCA da matriz de agenda. {{area_artigo}} não é chave de personalizacao
+      // (é derivada de personalizacao.area) — resolvo aqui pra não vazar o
+      // placeholder literal; applyPersonalizacao cobre {{nome_negocio}} e demais.
+      // NÃO toco o ramo de AGENDA (else) pra preservar o byte-a-byte de Cirilo/Samuel.
+      template = ATENDENTE_PROMPT_TPL;
+      atendentePers = { ...personalizacao, area_artigo: areaArtigo(personalizacao.area) };
+    } else {
+      const matrizRes = await query<{ matriz_slot: string }>(
+        'SELECT matriz_slot FROM flow_clones WHERE id = $1',
+        [id],
       );
-      if (promptRes.rows[0]) {
-        const novo = applyPersonalizacao(promptRes.rows[0].prompt, personalizacao);
-        // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline — o clone já
-        // existe aqui, então resolve o UUID. NULL-safe se não houver linha.
-        // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
-        // "inconsistent types deduced for parameter $1": bot_prompt.slot
-        // varchar(50) vs flow_clones.slot varchar(80)).
-        await query(
-          `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
-           VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
-           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
-             tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
-          [row.slot, novo, row.slot],
+      const matrizSlot = matrizRes.rows[0]?.matriz_slot;
+      if (matrizSlot) {
+        const promptRes = await query<{ prompt: string }>(
+          'SELECT prompt FROM bot_prompt WHERE slot = $1',
+          [matrizSlot],
         );
+        template = promptRes.rows[0]?.prompt;
       }
+    }
+    if (typeof template === 'string') {
+      const novo = applyPersonalizacao(template, atendentePers);
+      // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline — o clone já
+      // existe aqui, então resolve o UUID. NULL-safe se não houver linha.
+      // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
+      // "inconsistent types deduced for parameter $1": bot_prompt.slot
+      // varchar(50) vs flow_clones.slot varchar(80)).
+      await query(
+        `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
+         VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
+         ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
+           tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
+        [row.slot, novo, row.slot],
+      );
     }
   }
 

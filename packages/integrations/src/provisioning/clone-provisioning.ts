@@ -16,8 +16,20 @@
  * Multi-tenant: tudo keyed por slot; sessão WAHA derivada do slot; defaults vêm
  * do banco da MATRIZ (bot_config) — zero default de modelo hardcoded.
  */
+import {
+  AREA_ARTIGO_FALLBACK,
+  ATENDENTE_PROMPT_TPL,
+  NOME_NEGOCIO_FALLBACK,
+  areaArtigo,
+} from '@startap/core/atendente-persona';
 import { logger } from '@startap/core/logger';
 import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
+
+// Re-export: a persona de pré-venda e os helpers de área agora moram em
+// @startap/core (SCRUM-122, fonte única compartilhada com @startap/db). Mantemos o
+// re-export de `areaArtigo` porque testes e callers históricos o importam DESTE
+// módulo — evita quebrar imports existentes ao mover a implementação.
+export { areaArtigo };
 
 const log = logger.child({ module: 'clone-provisioning' });
 
@@ -277,62 +289,48 @@ export function renderServicosPrecos(servicos: unknown): string {
   );
 }
 
-/**
- * Fallback seguro para o nome do negócio. Centralizado pra que o render e o
- * passe de sanitização final usem EXATAMENTE o mesmo texto.
- */
-const NOME_NEGOCIO_FALLBACK = 'a barbearia';
+/** Teto de tamanho de um nome injetável (SCRUM-81). Nome de negócio real cabe
+ * folgado; o cap corta um "nome-bomba" hostil que empurraria a persona pra fora
+ * da janela de contexto ou inflaria o system prompt de todo turno. */
+export const NOME_INJETAVEL_MAX = 80;
 
 /**
- * Área/vertical do negócio (Missão 023 W8). Mapa CÓDIGO -> {{area_artigo}}, a
- * frase pronta COM artigo que entra no prompt (ex.: "a barbearia", "o salao").
- *
- * Por que frase pronta e não montar artigo no template: evita concordância
- * errada da IA e mantém o prompt-base legível pro operador (decisão ai-engineer).
- *
- * Os valores são DELIBERADAMENTE iguais ao design (w5-w6-w8-w11-ia-design.md). A
- * TAXONOMIA canônica é validada por Zod NO APP (signup) — este mapa só traduz o
- * código já-validado pra frase. Código desconhecido/ausente cai no fallback
- * genérico AREA_ARTIGO_FALLBACK (nunca placeholder cru, nunca artigo errado).
- *
- * `'outro'` é o catch-all do signup; `'generico'` é alias histórico do design —
- * ambos mapeiam pro tom neutro.
+ * ALLOWLIST de caracteres de um nome injetável (SCRUM-81). Mantém tudo que um
+ * nome de negócio de verdade usa e NADA de estrutural:
+ *  - letras/números/marcas Unicode (\p{L}\p{N}\p{M}) — acentos, alfabetos, dígitos;
+ *  - espaço e pontuação segura de nome comercial: . _ , ' & / ( ) + @ # -;
+ *  - emoji de verdade: \p{Extended_Pictographic} (💈 do Samuel é legítimo e já era
+ *    preservado). NÃO uso \p{Emoji_Component} de propósito: ele reincluiria as bases
+ *    ASCII de keycap (`*`, `#`, dígitos) e o `*` é justamente um token de markdown
+ *    que queremos barrar. Os JOINERS de emoji composto (ZWJ/variation-selector/tom
+ *    de pele/bandeira) FICAM DE FORA da classe de propósito — pô-los aqui dispara o
+ *    lint noMisleadingCharacterClass, e um nome de negócio raramente usa emoji ZWJ;
+ *    no pior caso um emoji composto perde o joiner (degrada pro símbolo base), nunca
+ *    injeta nada.
+ * Fica DE FORA (é removido) todo o resto: `{ } [ ] < > \` (backtick) | \ * ~ =`,
+ * controles etc. — os tokens que um atacante usaria pra forjar seção/placeholder/
+ * markdown no system prompt. `_` fica no allowlist porque o vetor de injeção é o
+ * DELIMITADOR `{{ }}` (removido antes), não o underscore solto — um `key` sem
+ * chaves nunca é expandido pelo render.
  */
-const AREA_ARTIGO: Readonly<Record<string, string>> = {
-  barbearia: 'a barbearia',
-  cabeleireiro: 'o salao',
-  manicure: 'o espaco de unhas',
-  estetica: 'o studio de estetica',
-  outro: 'o atendimento',
-  generico: 'o atendimento',
-};
-
-/** Tom neutro quando a área é ausente/desconhecida (clone antigo, valor fora do mapa). */
-const AREA_ARTIGO_FALLBACK = 'o atendimento';
-
-/**
- * Resolve a frase {{area_artigo}} a partir do código de área (já validado no app).
- * Trim + lower defensivo; valor fora do mapa -> fallback genérico ("o atendimento").
- * Centralizado pra que render e backfill/tests usem a MESMA tabela.
- */
-export function areaArtigo(area: unknown): string {
-  if (typeof area !== 'string') return AREA_ARTIGO_FALLBACK;
-  const key = area.trim().toLowerCase();
-  return AREA_ARTIGO[key] ?? AREA_ARTIGO_FALLBACK;
-}
+const NOME_INJETAVEL_ALLOWLIST = /[^\p{L}\p{N}\p{M} ._,'&/()+@#\p{Extended_Pictographic}-]/gu;
 
 /**
  * Neutraliza um valor injetável (display_name / nome_negocio) ANTES de entrar no
- * prompt: remove as sequências de delimitador de placeholder ("{{" e "}}") e
- * quebras de linha (\n,\r). Isso impede que um nome de cadastro self-service
- * (a) injete um placeholder novo — ex.: um nome "{{servicos_precos_render}}"
- * passaria a ser expandido — e (b) reduz superfície de prompt-injection por
- * quebra de linha. Nomes legítimos não são alterados (só strip dessas
- * sequências). NÃO faz trim de espaços comuns — a checagem de "vazio" é feita
- * por quem chama, com trim.
+ * prompt. Três passes (SCRUM-81 endurece o histórico):
+ *  1. remove os delimitadores de placeholder ("{{" e "}}") — impede que um nome
+ *     "{{servicos_precos_render}}" vire um placeholder que o render expandiria;
+ *  2. quebras de linha (\n,\r) viram espaço — reduz prompt-injection por linha nova;
+ *  3. APLICA A ALLOWLIST (novo): descarta qualquer caractere estrutural fora do
+ *     conjunto seguro acima, e
+ *  4. corta em NOME_INJETAVEL_MAX (novo) — teto de tamanho.
+ * Nomes legítimos (letras, acentos, dígitos, emoji, pontuação comum) passam intactos.
+ * NÃO faz trim de espaços comuns — a checagem de "vazio" é feita por quem chama, com trim.
  */
 export function sanitizeNomeInjetavel(nome: string): string {
-  return nome.replace(/\{\{|\}\}/g, '').replace(/[\r\n]+/g, ' ');
+  const semDelimitador = nome.replace(/\{\{|\}\}/g, '').replace(/[\r\n]+/g, ' ');
+  const soAllowlist = semDelimitador.replace(NOME_INJETAVEL_ALLOWLIST, '');
+  return soAllowlist.slice(0, NOME_INJETAVEL_MAX);
 }
 
 /**
@@ -363,46 +361,9 @@ export function sanitizeOrphanPlaceholders(prompt: string): string {
   });
 }
 
-/**
- * SEED do MODO ATENDENTE (bug 2026-07-13: clone atendente self-service nascia com
- * a persona de AGENDA da matriz teste_barbearia — "DEVE chamar inserir_agendamento"
- * / "Ta na agenda" — enquanto o guardrail de runtime (buildModoAtendenteBlock) diz o
- * oposto → bot esquizofrênico). Este template dá a PERSONA de pré-venda a todo clone
- * provisionado com modo_atendente_enabled, em vez de renderizar a matriz de agenda.
- *
- * SÓ persona + tom + enquadramento de pré-venda. As REGRAS DURAS (nunca "agendei",
- * não invente, registrar_interesse/escalar_para_humano, link-vs-equipe, fora-do-
- * expediente, não-invasivo) já são injetadas em RUNTIME por buildModoAtendenteBlock
- * (modoBlock em processAtendente) — duplicar aqui só criaria risco de contradição
- * futura e desperdício de token. Os dados do negócio (serviços, preços, horários,
- * endereço, FAQ) também são injetados em runtime por buildContextBlock — por isso o
- * template NÃO inclui {{servicos_precos_render}}/{{horarios_funcionamento_render}}
- * (inline duplicaria no system prompt e arrisca drift).
- *
- * Placeholders: SÓ {{double_brace}} de identidade ({{nome_negocio}}, {{area_artigo}}),
- * resolvidos no PROVISIONING por renderClonePrompt. ZERO token single-brace {x}:
- * em runtime o atendente chama renderPrompt({ vars: {} }) — qualquer {x} ficaria
- * literal. Molde ASCII-sem-acento do DEFAULT_PROMPT_TPL (teste_barbearia).
- */
-const ATENDENTE_PROMPT_TPL = [
-  'Voce e o atendente virtual de {{nome_negocio}} e conversa com os clientes pelo WhatsApp.',
-  'Aqui e {{area_artigo}}: voce recebe quem chega, apresenta o negocio com simpatia e ajuda a pessoa a dar o proximo passo.',
-  '',
-  '[QUEM VOCE E]',
-  '- Uma recepcao boa gente de {{nome_negocio}}: acolhedora, prestativa e direta.',
-  '- Fala como uma pessoa de verdade, no calor humano, sem parecer robo e sem formalidade dura.',
-  '- Conhece o negocio e tem orgulho do trabalho da equipe; passa confianca sem exagerar.',
-  '',
-  '[COMO VOCE FALA]',
-  '- Mensagens curtas de WhatsApp, tom leve e caloroso. Uma ideia por mensagem.',
-  '- Chama a pessoa pelo nome quando souber. No maximo um emoji, so quando combinar com a conversa.',
-  '- Escuta o que a pessoa precisa antes de sair falando: conversa, nao empurra, nao faz textao.',
-  '',
-  '[SEU PAPEL AQUI]',
-  '- Da as boas-vindas, explica o que {{nome_negocio}} oferece e tira as duvidas da pessoa usando somente as informacoes do negocio que voce recebe no contexto (servicos, valores, horarios, endereco, formas de pagamento).',
-  '- Quando percebe interesse, acolhe, entende o que a pessoa quer e cuida de encaminhar pra equipe dar sequencia.',
-  '- Seu objetivo e ser a primeira boa impressao de {{nome_negocio}}: a pessoa tem que sair da conversa bem atendida e com vontade de ir.',
-].join('\n');
+// ATENDENTE_PROMPT_TPL (persona de pré-venda do modo atendente) mora agora em
+// @startap/core/atendente-persona — importado no topo. Fonte única compartilhada
+// com @startap/db (SCRUM-122); ver o docblock lá.
 
 /**
  * Aplica os 3 grupos de placeholders {{double_brace}} sobre o template da matriz.

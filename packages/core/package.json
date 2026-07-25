@@ -15,6 +15,7 @@
     "./package-phone": "./dist/package-phone.js",
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
     "./modo-atendente-gate": "./dist/modo-atendente-gate.js",
+    "./atendente-persona": "./dist/atendente-persona.js",
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./pause-keyword": "./dist/pause-keyword.js",
