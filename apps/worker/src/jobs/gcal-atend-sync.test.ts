@@ -32,12 +32,23 @@ const softDeleteAtendimentoByEvent = vi.fn();
 const getGcalForSlot = vi.fn();
 const getGcalsForSlot = vi.fn();
 
+// normalizeServiceName é PURO (sem I/O) — usamos a implementação REAL no mock para que o matcher
+// normalizado (SCRUM-129) seja exercitado de verdade nos testes do reconciler.
+const normalizeServiceName = (s: string): string =>
+  s
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
 vi.mock('@startap/db', () => ({
   atendimentos: {
     loadSlotPricing,
     upsertAtendimentoFromEvent,
     listAgendaAtendimentosInWindow,
     softDeleteAtendimentoByEvent,
+    normalizeServiceName,
   },
   flowClones: { listAtendSyncSlots, resolveAtendFromAgendaEnabledForSlot },
 }));
@@ -112,7 +123,11 @@ beforeEach(() => {
   // Defaults: 1 slot individual, gate ON, catálogo vazio, sem candidatos a deleção.
   listAtendSyncSlots.mockResolvedValue([slot()]);
   resolveAtendFromAgendaEnabledForSlot.mockResolvedValue(true);
-  loadSlotPricing.mockResolvedValue({ byNameLower: new Map(), uniformPriceCents: null });
+  loadSlotPricing.mockResolvedValue({
+    byNameLower: new Map(),
+    byNameNormalized: new Map(),
+    uniformPriceCents: null,
+  });
   listAgendaAtendimentosInWindow.mockResolvedValue([]);
   upsertAtendimentoFromEvent.mockResolvedValue({ id: 1 });
   softDeleteAtendimentoByEvent.mockResolvedValue({ id: 1 });
@@ -126,7 +141,11 @@ afterEach(() => {
 
 describe('UPSERT — preço', () => {
   it('evento manual "Fulano Atendimento" (sem " - ") → servico="" → preço uniforme do catálogo', async () => {
-    loadSlotPricing.mockResolvedValue({ byNameLower: new Map(), uniformPriceCents: 11000 });
+    loadSlotPricing.mockResolvedValue({
+      byNameLower: new Map(),
+      byNameNormalized: new Map(),
+      uniformPriceCents: 11000,
+    });
     getGcalForSlot.mockResolvedValue(
       pagedClient({ events: [ev('m1', { summary: 'Fulano Atendimento' })], complete: true }),
     );
@@ -149,6 +168,7 @@ describe('UPSERT — preço', () => {
   it('match no catálogo usa o preço do serviço', async () => {
     loadSlotPricing.mockResolvedValue({
       byNameLower: new Map([['corte', 5000]]),
+      byNameNormalized: new Map([['corte', 5000]]),
       uniformPriceCents: null,
     });
     getGcalForSlot.mockResolvedValue(
@@ -156,14 +176,37 @@ describe('UPSERT — preço', () => {
     );
 
     const { runGcalAtendSync } = await loadJob();
-    await runGcalAtendSync();
+    const res = await runGcalAtendSync();
 
     expect(upsertAtendimentoFromEvent.mock.calls[0][0].valorCents).toBe(5000);
+    expect(res.unrecognizedServices).toBe(0);
   });
 
-  it('catálogo não-uniforme e sem match → 0', async () => {
+  it('SCRUM-129: match NORMALIZADO (acento/caixa/espaço) → preço do catálogo, sem sinal de não-reconhecido', async () => {
+    loadSlotPricing.mockResolvedValue({
+      byNameLower: new Map([['sobrancelha', 2000]]),
+      byNameNormalized: new Map([['sobrancelha', 2000]]),
+      uniformPriceCents: null,
+    });
+    getGcalForSlot.mockResolvedValue(
+      pagedClient({ events: [ev('e1', { summary: 'Zé -  SOBRÂNCELHA ' })], complete: true }),
+    );
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(upsertAtendimentoFromEvent.mock.calls[0][0].valorCents).toBe(2000);
+    expect(res.unrecognizedServices).toBe(0);
+    // Nenhum warn de "não reconhecido" quando o normalizado casou.
+    expect(
+      logWarn.mock.calls.find((c) => String(c[1]).includes('não reconhecido')),
+    ).toBeUndefined();
+  });
+
+  it('SCRUM-129: serviço presente fora do catálogo (sem uniforme) → valor 0 + sinal observável SEM PII', async () => {
     loadSlotPricing.mockResolvedValue({
       byNameLower: new Map([['barba', 3000]]),
+      byNameNormalized: new Map([['barba', 3000]]),
       uniformPriceCents: null,
     });
     getGcalForSlot.mockResolvedValue(
@@ -171,9 +214,40 @@ describe('UPSERT — preço', () => {
     );
 
     const { runGcalAtendSync } = await loadJob();
-    await runGcalAtendSync();
+    const res = await runGcalAtendSync();
 
     expect(upsertAtendimentoFromEvent.mock.calls[0][0].valorCents).toBe(0);
+    expect(res.unrecognizedServices).toBe(1);
+    const warn = logWarn.mock.calls.find((c) => String(c[1]).includes('não reconhecido'));
+    expect(warn).toBeDefined();
+    const payload = warn?.[0] as Record<string, unknown>;
+    expect(payload.servico).toBe('Progressiva');
+    expect(payload.slot).toBe('clone_x');
+    // LGPD: nunca vaza telefone/nome do cliente no sinal.
+    expect(payload).not.toHaveProperty('telefone');
+    expect(payload).not.toHaveProperty('clienteNome');
+    expect(payload).not.toHaveProperty('nome');
+  });
+
+  it('SCRUM-129: serviço VAZIO sem uniforme → valor 0 MAS não conta como não-reconhecido', async () => {
+    loadSlotPricing.mockResolvedValue({
+      byNameLower: new Map([['barba', 3000]]),
+      byNameNormalized: new Map([['barba', 3000]]),
+      uniformPriceCents: null,
+    });
+    // "Fulano Atendimento" (sem " - ") → servico='' → não é "serviço não reconhecido".
+    getGcalForSlot.mockResolvedValue(
+      pagedClient({ events: [ev('e1', { summary: 'Fulano Atendimento' })], complete: true }),
+    );
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(upsertAtendimentoFromEvent.mock.calls[0][0].valorCents).toBe(0);
+    expect(res.unrecognizedServices).toBe(0);
+    expect(
+      logWarn.mock.calls.find((c) => String(c[1]).includes('não reconhecido')),
+    ).toBeUndefined();
   });
 });
 
@@ -549,5 +623,58 @@ describe('gate + tenant', () => {
     expect(res.deleted).toBe(0);
     expect(softDeleteAtendimentoByEvent).not.toHaveBeenCalled();
     expect(listAgendaAtendimentosInWindow).not.toHaveBeenCalled();
+  });
+});
+
+// Matcher puro (SCRUM-129) — sem I/O. normalizeServiceName vem do mock de @startap/db abaixo;
+// aqui exercitamos as 4 camadas: exato → normalizado → uniforme → none.
+function pricing(over: Partial<import('@startap/db').atendimentos.SlotPricing> = {}) {
+  return {
+    byNameLower: new Map<string, number>(),
+    byNameNormalized: new Map<string, number>(),
+    uniformPriceCents: null,
+    ...over,
+  } as import('@startap/db').atendimentos.SlotPricing;
+}
+
+describe('resolvePreco (matcher em camadas — SCRUM-129)', () => {
+  it('match EXATO case-insensitive/trim', async () => {
+    const { resolvePreco } = await loadJob();
+    const p = pricing({ byNameLower: new Map([['corte', 5000]]) });
+    expect(resolvePreco(p, '  Corte ')).toEqual({ cents: 5000, match: 'exact' });
+  });
+
+  it('match NORMALIZADO (acento + caixa + espaços internos)', async () => {
+    const { resolvePreco } = await loadJob();
+    const p = pricing({
+      byNameLower: new Map([['corte masculino', 4500]]),
+      byNameNormalized: new Map([['corte masculino', 4500]]),
+    });
+    // Acento diferente e espaço duplo: não bate no byNameLower, bate no normalizado.
+    expect(resolvePreco(p, 'Córte  Masculino')).toEqual({ cents: 4500, match: 'normalized' });
+  });
+
+  it('serviço FORA do catálogo (não-uniforme) → 0 / none', async () => {
+    const { resolvePreco } = await loadJob();
+    const p = pricing({
+      byNameLower: new Map([['barba', 3000]]),
+      byNameNormalized: new Map([['barba', 3000]]),
+    });
+    expect(resolvePreco(p, 'Progressiva')).toEqual({ cents: 0, match: 'none' });
+  });
+
+  it('serviço vazio + catálogo uniforme → uniforme', async () => {
+    const { resolvePreco } = await loadJob();
+    const p = pricing({ uniformPriceCents: 11000 });
+    expect(resolvePreco(p, '')).toEqual({ cents: 11000, match: 'uniform' });
+  });
+
+  it('exato tem prioridade sobre normalizado', async () => {
+    const { resolvePreco } = await loadJob();
+    const p = pricing({
+      byNameLower: new Map([['corte', 5000]]),
+      byNameNormalized: new Map([['corte', 9999]]),
+    });
+    expect(resolvePreco(p, 'corte')).toEqual({ cents: 5000, match: 'exact' });
   });
 });

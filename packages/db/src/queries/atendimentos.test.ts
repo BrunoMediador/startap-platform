@@ -25,9 +25,13 @@ const {
   getColaboradorComissao,
   getFaturamento,
   getComissao,
+  getComissaoColaborador,
+  listAtendimentos,
+  getAtendimentoByEvent,
   upsertAtendimentoFromEvent,
   listAgendaAtendimentosInWindow,
   loadSlotPricing,
+  normalizeServiceName,
 } = await import('./atendimentos.js');
 
 beforeEach(() => {
@@ -856,6 +860,42 @@ describe('loadSlotPricing (catálogo + uniforme)', () => {
     expect(p.byNameLower.get('barba')).toBe(3000);
   });
 
+  it('SCRUM-129: byNameNormalized guarda a chave sem acento/espaço extra', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: '  Sobrâncelha ', preco_cents: 2000 },
+            { nome: 'Corte  Masculino', preco_cents: 5000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    expect(p.byNameNormalized.get('sobrancelha')).toBe(2000);
+    expect(p.byNameNormalized.get('corte masculino')).toBe(5000);
+  });
+
+  it('SCRUM-129: chave normalizada ambígua (mesmo nome normalizado, preços diferentes) é omitida', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          servicos: [
+            { nome: 'Côrte', preco_cents: 5000 },
+            { nome: 'Corte', preco_cents: 7000 },
+          ],
+        },
+      ],
+      rowCount: 1,
+    });
+    const p = await loadSlotPricing('clone_x');
+    // Ambas normalizam para 'corte' com preços diferentes → conservador: não confia em nenhuma.
+    expect(p.byNameNormalized.has('corte')).toBe(false);
+    // O match EXATO (byNameLower) segue disponível para 'corte' (última ganha).
+    expect(p.byNameLower.get('corte')).toBe(7000);
+  });
+
   it('serviço sem preço válido quebra a uniformidade (conservador → null)', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
@@ -887,5 +927,133 @@ describe('loadSlotPricing (catálogo + uniforme)', () => {
     const p2 = await loadSlotPricing('clone_x');
     expect(p2.uniformPriceCents).toBe(4000);
     expect(p2.byNameLower.get('x')).toBe(4000);
+  });
+});
+
+describe('normalizeServiceName (SCRUM-129)', () => {
+  it('remove acentos, caixa-baixa, colapsa espaços e trim', () => {
+    expect(normalizeServiceName('  Sobrâncelha ')).toBe('sobrancelha');
+    expect(normalizeServiceName('CORTE')).toBe('corte');
+    expect(normalizeServiceName('Corte  Masculino')).toBe('corte masculino');
+    expect(normalizeServiceName('Barba e Cabêlo')).toBe('barba e cabelo');
+  });
+
+  it('é idempotente e devolve string vazia para só-espaços', () => {
+    expect(normalizeServiceName('corte')).toBe('corte');
+    expect(normalizeServiceName('   ')).toBe('');
+  });
+});
+
+// ── SCRUM-129 (fix COMPLETO): Faturamento conta SÓ atendimento que RESOLVEU PREÇO (valor_cents>0) ──
+// Regra do dono (fonte da verdade): R$0 — pacote pré-pago (receita já entrou na venda), evento
+// pessoal na agenda ("buscar filha na creche"), serviço não reconhecido pelo catálogo — NÃO é
+// receita e NÃO entra em NENHUM agregado (total faturado, previsão, comissão). Mas CONTINUA na
+// AGENDA: o card por evento (getAtendimentoByEvent) e a lista de agenda (GET /portal/agendamentos,
+// lida do Google Calendar) NÃO são filtrados — o dono ainda enxerga/precifica o R$0 e a
+// disponibilidade de horário não muda. CRITÉRIO = O PREÇO, NUNCA A PRESENÇA DE NOME DE SERVIÇO
+// (a Ingrid tem 64 linhas servico_nome VAZIO com valor_cents=11000 e DEVE contar).
+describe('SCRUM-129 — Faturamento só conta atendimento com preço resolvido (valor_cents > 0)', () => {
+  it('getFaturamento: as 4 somas de receita (total, forma, profissional, previsto) filtram valor_cents > 0', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getFaturamento('clone_barbearia_samuel_uefpqc', 'tid-samuel', '2026-07-01', '2026-07-31');
+    const sqls = (mockQuery.mock.calls as [string, unknown[]][]).map(([s]) => s);
+    expect(sqls).toHaveLength(4); // total, por forma, por profissional, previsto
+    for (const s of sqls) {
+      // TODA soma de dinheiro carrega o predicado de preço resolvido (pacote/pessoal/desconhecido caem fora).
+      expect(s).toContain('valor_cents > 0');
+    }
+  });
+
+  it('getFaturamento e listAtendimentos NÃO filtram por nome de serviço (guarda a Ingrid: servico_nome vazio + R$110 PASSA)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getFaturamento(
+      'clone_psicoterapeuta_ingrid_ou1cwu',
+      'tid-ingrid',
+      '2026-07-01',
+      '2026-07-31',
+    );
+    await listAtendimentos(
+      'clone_psicoterapeuta_ingrid_ou1cwu',
+      'tid-ingrid',
+      'faturado',
+      '2026-07-01',
+      '2026-07-31',
+    );
+    const sqls = (mockQuery.mock.calls as [string, unknown[]][]).map(([s]) => s);
+    for (const s of sqls) {
+      // O critério é o PREÇO. Nenhum agregado condiciona receita à presença/valor de servico_nome —
+      // senão as 64 recorrências semeadas da Ingrid (servico_nome VAZIO, valor_cents=11000) sumiriam.
+      expect(s).not.toMatch(/servico_nome\s+(IS NOT NULL|<>|!=|=)/i);
+    }
+  });
+
+  it('getComissao (faturado E previsao): predicado valor_cents>0 no ON do JOIN (linha R$0 não soma; colaborador ativo segue aparecendo)', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getComissao('clone_dragon', 'tid-2', '2026-07-01', '2026-07-31', 'faturado');
+    const [sqlFat] = lastCall();
+    await getComissao('clone_dragon', 'tid-2', '2026-07-01', '2026-07-31', 'previsao');
+    const [sqlPrev] = lastCall();
+    expect(sqlFat).toContain('a.valor_cents > 0');
+    expect(sqlPrev).toContain('a.valor_cents > 0');
+    // O filtro está no ON (não no WHERE): a query segue PARTINDO de clone_colaboradores, então TODO
+    // colaborador ativo continua aparecendo (com 0 se só tiver linhas R$0).
+    expect(sqlFat).toContain('FROM clone_colaboradores cc');
+    expect(sqlFat).toContain('cc.ativo = TRUE');
+  });
+
+  it('getComissaoColaborador (painel do colaborador): predicado valor_cents>0 no ON do JOIN', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await getComissaoColaborador(
+      'clone_dragon',
+      'tid-2',
+      9,
+      '2026-07-01',
+      '2026-07-31',
+      'faturado',
+    );
+    const [sql] = lastCall();
+    expect(sql).toContain('a.valor_cents > 0');
+    expect(sql).toContain('FROM clone_colaboradores cc');
+  });
+
+  it('listAtendimentos (abas Faturado e Previsão da tela Faturamento): filtra valor_cents > 0', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    await listAtendimentos(
+      'clone_barbearia_samuel_uefpqc',
+      'tid-samuel',
+      'faturado',
+      '2026-07-01',
+      '2026-07-31',
+    );
+    const [sqlFat] = lastCall();
+    await listAtendimentos(
+      'clone_barbearia_samuel_uefpqc',
+      'tid-samuel',
+      'previsao',
+      '2026-07-01',
+      '2026-07-31',
+    );
+    const [sqlPrev] = lastCall();
+    expect(sqlFat).toContain('a.valor_cents > 0');
+    expect(sqlPrev).toContain('a.valor_cents > 0');
+  });
+
+  it('AGENDA NÃO é filtrada: getAtendimentoByEvent (card por evento) NÃO carrega valor_cents>0 — o dono ainda precifica um R$0', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await getAtendimentoByEvent('clone_barbearia_samuel_uefpqc', 'tid-samuel', 'evt-buscar-filha');
+    const [sql] = lastCall();
+    expect(sql).not.toContain('valor_cents > 0');
+  });
+
+  it('classifica as 3 linhas canônicas da produção por PREÇO, não por nome (regra do dono)', () => {
+    // O predicado que a query aplica é `valor_cents > 0` (== _COM_PRECO_SQL). Estas são as linhas
+    // reais citadas no SCRUM-129 — a classificação NÃO olha servico_nome:
+    const contabilizaReceita = (valorCents: number) => valorCents > 0;
+    // Samuel: "Kleber pacote" / "buscar filha na creche" → R$0 lixo → NÃO conta como receita.
+    expect(contabilizaReceita(0)).toBe(false);
+    // Ingrid: recorrência semeada, servico_nome VAZIO mas R$110 → CONTA (o nome é irrelevante).
+    expect(contabilizaReceita(11000)).toBe(true);
+    // Samuel: "Corte" R$30 → CONTA.
+    expect(contabilizaReceita(3000)).toBe(true);
   });
 });

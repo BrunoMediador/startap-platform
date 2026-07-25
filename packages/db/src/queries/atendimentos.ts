@@ -170,6 +170,9 @@ export async function createAtendimento(input: CreateAtendimentoInput): Promise<
 // ── Relatórios ─────────────────────────────────────────────────────────────────────
 // Escopo SEMPRE slot + tenant_id. Período inclusivo [de, ate]. Faturamento = SUM(valor -
 // desconto). ADR 0027: relatórios contam SÓ linhas FATURADAS (passado) e NÃO deletadas.
+// SCRUM-129 (regra do dono): TODO agregado de RECEITA (faturado, previsão, comissão) conta
+// SÓ atendimento que RESOLVEU UM PREÇO (valor_cents > 0, ver _COM_PRECO_SQL). R$0 = pacote/
+// evento pessoal/serviço não reconhecido = NÃO é receita (mas fica na agenda, que é o GCal).
 //
 // FATURADO (predicado canônico — alinhado com listAtendimentos balde='faturado'):
 //   deleted_at IS NULL AND status <> 'cancelado' AND (fim_at <= now() OR origem='manual')
@@ -190,6 +193,22 @@ const _FATURADO_SQL_A =
 const _PREVISAO_SQL = "status <> 'cancelado' AND fim_at > now()";
 // Versão prefixada com alias `a.` para as queries que usam JOIN.
 const _PREVISAO_SQL_A = "a.status <> 'cancelado' AND a.fim_at > now()";
+
+// COM PREÇO RESOLVIDO (SCRUM-129 — regra do dono, fonte da verdade): o Faturamento contabiliza
+// SÓ atendimento que RESOLVEU UM PREÇO (valor_cents > 0). Atendimento R$0 — pacote pré-pago
+// (a receita já entrou na venda do pacote, contar de novo = dobra), evento pessoal na agenda
+// ("buscar filha na creche"), ou serviço não reconhecido pelo catálogo — NÃO é receita e NÃO
+// entra em NENHUM agregado de faturamento/previsão/comissão. Mas CONTINUA existindo: a AGENDA
+// (GET /portal/agendamentos, lida direto do Google Calendar) NÃO passa por aqui, então os R$0
+// seguem aparecendo lá e a disponibilidade de horário não muda.
+//
+// CRITÉRIO = O PREÇO, NUNCA A PRESENÇA DE NOME DE SERVIÇO. Regra UNIVERSAL (todo clone): a Ingrid
+// tem 64 linhas com servico_nome VAZIO mas valor_cents=11000 (recorrências semeadas) — passam
+// naturalmente porque 11000 > 0. Filtrar por "tem nome de serviço" MATARIA a receita dela; por
+// isso o predicado olha só valor_cents. Só colunas (sem placeholder extra): seguro pra interpolar.
+const _COM_PRECO_SQL = 'valor_cents > 0';
+// Versão prefixada com alias `a.` para as queries que usam JOIN.
+const _COM_PRECO_SQL_A = 'a.valor_cents > 0';
 
 export interface FaturamentoPorFormaRow {
   forma_pagamento: string | null;
@@ -235,7 +254,7 @@ export async function getFaturamento(
     `SELECT COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos
-      WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL}
+      WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL} AND ${_COM_PRECO_SQL}
         AND data >= $3 AND data <= $4`,
     params,
   );
@@ -249,7 +268,7 @@ export async function getFaturamento(
             COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents,
             COUNT(*)::bigint AS count
        FROM atendimentos
-      WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL}
+      WHERE slot = $1 AND tenant_id = $2 AND ${_FATURADO_SQL} AND ${_COM_PRECO_SQL}
         AND data >= $3 AND data <= $4
       GROUP BY forma_pagamento
       ORDER BY total_cents DESC`,
@@ -269,7 +288,7 @@ export async function getFaturamento(
        FROM atendimentos a
        LEFT JOIN clone_colaboradores c
          ON c.id = a.colaborador_id AND c.slot = a.slot
-      WHERE a.slot = $1 AND a.tenant_id = $2 AND ${_FATURADO_SQL_A}
+      WHERE a.slot = $1 AND a.tenant_id = $2 AND ${_FATURADO_SQL_A} AND ${_COM_PRECO_SQL_A}
         AND a.data >= $3 AND a.data <= $4
       GROUP BY a.colaborador_id, c.nome
       ORDER BY total_cents DESC`,
@@ -282,7 +301,7 @@ export async function getFaturamento(
     `SELECT COALESCE(SUM(GREATEST(valor_cents - desconto_cents, 0)), 0)::bigint AS total_cents
        FROM atendimentos
       WHERE slot = $1 AND tenant_id = $2
-        AND deleted_at IS NULL AND ${_PREVISAO_SQL}
+        AND deleted_at IS NULL AND ${_PREVISAO_SQL} AND ${_COM_PRECO_SQL}
         AND data >= $3 AND data <= $4`,
     params,
   );
@@ -423,6 +442,7 @@ export async function getComissao(
         AND a.deleted_at IS NULL
         AND a.data >= $3 AND a.data <= $4
         AND ${baldeCond}
+        AND ${_COM_PRECO_SQL_A}
       WHERE cc.slot = $1 AND cc.ativo = TRUE
       GROUP BY cc.id, cc.nome, cc.comissao_pct, cc.ordem
       ORDER BY comissao_cents DESC, cc.ordem ASC, cc.nome ASC, cc.id ASC`,
@@ -512,6 +532,7 @@ export async function getComissaoColaborador(
         AND a.deleted_at IS NULL
         AND a.data >= $4 AND a.data <= $5
         AND ${baldeCond}
+        AND ${_COM_PRECO_SQL_A}
       WHERE cc.slot = $1 AND cc.id = $3 AND cc.ativo = TRUE
       GROUP BY cc.id, cc.nome, cc.comissao_pct`,
     [slot, tenantId, colaboradorId, de, ate],
@@ -652,8 +673,25 @@ function isoToDateOnly(iso: string | null, timeZone: string = TZ_SAO_PAULO): str
 }
 
 /**
- * Resolve o preço do serviço (centavos) a partir de flow_clones.servicos pelo nome
- * (case-insensitive, trim). Fonte do preço — MESMO catálogo que o bot usa (free-slots.ts).
+ * Normaliza o NOME de um serviço para casar catálogo↔evento de forma robusta (SCRUM-129): remove
+ * acentos (NFD + descarta diacríticos combinantes), caixa-baixa, colapsa espaços internos e trim.
+ * Ex.: " Sobrâncelha", "SOBRANCELHA", "Corte  Masculino" → "sobrancelha" / "corte masculino".
+ * Determinística e sem estado. NÃO é PII (nome de serviço, não de pessoa). É a MESMA normalização
+ * usada pelo catálogo (loadSlotPricing.byNameNormalized) e pelo matcher do reconciler (resolvePreco).
+ */
+export function normalizeServiceName(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resolve o preço do serviço (centavos) a partir de flow_clones.servicos pelo nome. Fonte do preço
+ * — MESMO catálogo que o bot usa (free-slots.ts). Match em 2 camadas (SCRUM-129): (1) exato
+ * case-insensitive/trim; (2) fallback NORMALIZADO (acentos/caixa/espaços) — sem inventar preço.
  * Retorna 0 se o serviço não bate (atendimento de previsão nasce sem valor; o dono ajusta).
  */
 export async function resolvePrecoCents(slot: string, servicoNome: string | null): Promise<number> {
@@ -676,14 +714,19 @@ export async function resolvePrecoCents(slot: string, servicoNome: string | null
   } else return 0;
 
   const alvo = servicoNome.trim().toLowerCase();
+  const alvoNorm = normalizeServiceName(servicoNome);
+  let normHit: number | null = null; // SCRUM-129: 1º acerto normalizado (exato tem prioridade).
   for (const s of list) {
-    const nome = typeof s.nome === 'string' ? s.nome.trim().toLowerCase() : '';
-    if (nome === alvo) {
-      const preco = Number(s.preco_cents);
-      return Number.isFinite(preco) && preco > 0 ? Math.trunc(preco) : 0;
+    const nomeRaw = typeof s.nome === 'string' ? s.nome : '';
+    const preco = Number(s.preco_cents);
+    const precoCents = Number.isFinite(preco) && preco > 0 ? Math.trunc(preco) : 0;
+    if (precoCents <= 0) continue; // serviço sem preço válido nunca casa
+    if (nomeRaw.trim().toLowerCase() === alvo) return precoCents; // match exato vence
+    if (alvoNorm && normHit == null && normalizeServiceName(nomeRaw) === alvoNorm) {
+      normHit = precoCents;
     }
   }
-  return 0;
+  return normHit ?? 0;
 }
 
 /**
@@ -952,6 +995,11 @@ function mapJoinedRow(x: JoinedRawRow): AtendimentoListRow {
  *   - previsao: deleted_at NULL AND status<>'cancelado' AND fim_at > now()
  *   - faturado: deleted_at NULL AND (fim_at <= now() OR origem='manual')
  * Walk-in (origem='manual', tipicamente fim_at NULL) é sempre FATURADO.
+ *
+ * SCRUM-129 (regra do dono): esta é a fonte das abas Faturado/Previsão da tela FATURAMENTO —
+ * lista SÓ atendimento que resolveu preço (_COM_PRECO_SQL_A = valor_cents > 0). R$0 (pacote/
+ * pessoal/serviço não reconhecido) NÃO aparece aqui nem soma no total_cents, mas SEGUE na
+ * AGENDA — que é GET /portal/agendamentos (lido do Google Calendar, não desta query).
  */
 export async function listAtendimentos(
   slot: string,
@@ -974,6 +1022,7 @@ export async function listAtendimentos(
         AND a.deleted_at IS NULL
         AND a.data >= $3 AND a.data <= $4
         AND ${baldeCond}
+        AND ${_COM_PRECO_SQL_A}
       ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC`,
     [slot, tenantId, de, ate],
   );
@@ -1216,6 +1265,13 @@ export interface SlotPricing {
   /** nome do serviço (lower-case, trim) → preço em centavos (>0). */
   byNameLower: Map<string, number>;
   /**
+   * SCRUM-129: nome NORMALIZADO (sem acentos, caixa-baixa, espaços colapsados — normalizeServiceName)
+   * → preço (>0). Fallback de match tolerante quando o nome do evento diverge do catálogo só por
+   * acento/caixa/espaço. Chave AMBÍGUA (2 serviços que normalizam igual com preços diferentes) é
+   * OMITIDA (conservador: cai no fallback uniforme/0, nunca chuta preço errado).
+   */
+  byNameNormalized: Map<string, number>;
+  /**
    * Preço COMUM quando TODOS os serviços do catálogo têm o MESMO preco_cents (>0); senão null.
    * Fallback do reconciler quando o summary do evento não casa nenhum serviço (caso Ingrid
    * "Fulano Atendimento" com catálogo uniforme a R$110) — ADR 0031.
@@ -1240,6 +1296,8 @@ function toPrecoCents(raw: unknown): number | null {
  */
 export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
   const byNameLower = new Map<string, number>();
+  const byNameNormalized = new Map<string, number>();
+  const ambiguousNorm = new Set<string>(); // SCRUM-129: chaves normalizadas com preços conflitantes.
   const r = await query<{ servicos: unknown }>(
     'SELECT servicos FROM flow_clones WHERE slot = $1 LIMIT 1',
     [slot],
@@ -1261,8 +1319,18 @@ export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
   let seenAny = false;
   for (const s of list) {
     const preco = toPrecoCents(s?.preco_cents);
-    const nome = typeof s?.nome === 'string' ? s.nome.trim().toLowerCase() : '';
-    if (nome && preco != null) byNameLower.set(nome, preco);
+    const nomeRaw = typeof s?.nome === 'string' ? s.nome : '';
+    const nome = nomeRaw.trim().toLowerCase();
+    if (nome && preco != null) {
+      byNameLower.set(nome, preco);
+      // SCRUM-129: mapa normalizado (acento/caixa/espaço). Colisão com preço diferente → ambígua.
+      const norm = normalizeServiceName(nomeRaw);
+      if (norm) {
+        const existing = byNameNormalized.get(norm);
+        if (existing != null && existing !== preco) ambiguousNorm.add(norm);
+        else byNameNormalized.set(norm, preco);
+      }
+    }
 
     // Uniformidade: precisa de preço válido em CADA serviço, todos iguais.
     if (preco == null) {
@@ -1274,9 +1342,11 @@ export async function loadSlotPricing(slot: string): Promise<SlotPricing> {
       uniformBroken = true;
     }
   }
+  for (const k of ambiguousNorm) byNameNormalized.delete(k); // ambígua não casa (conservador).
 
   return {
     byNameLower,
+    byNameNormalized,
     uniformPriceCents: seenAny && !uniformBroken ? uniform : null,
   };
 }
