@@ -190,14 +190,27 @@ export function buildCartaoEmojiOverrideBlock(
  *
  * Nota: no cartão de estabelecimento o HORARIO usa 🕐 (igual ao #325 original),
  * não ⏰ — preservamos o literal de hoje pra barbearia ficar byte-a-byte.
+ *
+ * DUAS COISAS SEPARADAS (SCRUM-85, espelha o SCRUM-84/#458 do individual):
+ *   (1) REGRA ESTRUTURAL — cartão obrigatório completo + esperar SIM antes de
+ *       inserir_agendamento + PROFISSIONAL pelo nome + valer a CADA agendamento
+ *       (inclusive back-to-back). É crítica pra correção do agendamento e vai
+ *       SEMPRE, inegociável, INDEPENDENTE de persona. Diferente do individual, este
+ *       bloco NÃO pode ser pulado — ele carrega essa regra.
+ *   (2) ESTILO/EMOJIS — só o "Formato do cartão" com ícones por área. Com
+ *       prompt_custom=false o bloco sai BYTE-A-BYTE o de hoje (emojis da área;
+ *       protege o barber_dragon). Com prompt_custom=true a persona é a autoridade
+ *       do estilo: mantemos os MESMOS campos obrigatórios, mas SEM impor emoji de
+ *       área — os ícones/tom ficam por conta da persona custom.
+ * Default false = comportamento byte-a-byte de antes (protege chamadas legadas).
  */
-export function buildCartaoEstabelecimentoBlock(area: string | null | undefined): string {
-  const e = emojisForArea(area);
-  // Horário no estabelecimento herda do #325 (🕐). Barbearia/genérico expõem 🕐;
-  // pra manter o #325 idêntico na barbearia, forçamos 🕐 aqui independentemente do
-  // CardEmojis.horario (que é ⏰ no individual). As demais posições seguem a área.
-  const horarioEstab = '🕐';
-  return [
+export function buildCartaoEstabelecimentoBlock(
+  area: string | null | undefined,
+  promptCustom = false,
+): string {
+  // Regra ESTRUTURAL — SEMPRE injetada, inegociável, independe de persona (SCRUM-85).
+  // Estas 10 linhas são idênticas nos dois ramos: mudam só as linhas de "Formato".
+  const estrutura = [
     '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO — REGRA CRITICA, VIOLACAO = ERRO GRAVE]',
     'Antes de CADA agendamento você DEVE, OBRIGATORIAMENTE e SEM EXCEÇÃO:',
     '1. Mostrar o CARTAO DE CONFIRMACAO completo (todos os campos abaixo).',
@@ -208,6 +221,29 @@ export function buildCartaoEstabelecimentoBlock(area: string | null | undefined)
     'direto, NUNCA pule o cartão, NUNCA assuma o SIM porque o cliente já confirmou antes.',
     'Neste estabelecimento o cliente escolhe o profissional, então o cartão DEVE incluir o',
     'nome do profissional escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2).',
+  ];
+
+  // (2b) PROMPT_CUSTOM (SCRUM-85): persona é a autoridade do ESTILO. Mantém TODOS os
+  // campos obrigatórios (PROFISSIONAL/DIA/HORARIO/SERVICO/VALOR) e a exigência do SIM,
+  // mas NÃO impõe os emojis da área — a persona custom dita os ícones/tom.
+  if (promptCustom) {
+    return [
+      ...estrutura,
+      'Formato do cartão (mantenha estes campos; use os emojis e o estilo da SUA persona):',
+      'PROFISSIONAL: <nome do profissional escolhido>',
+      'DIA: <dia> / HORARIO: <horario> / SERVICO: <servico> / VALOR: <valor>',
+      'Termine o cartão pedindo: "Responda SIM para confirmar." Mantenha o tom da persona.',
+    ].join('\n');
+  }
+
+  // (2a) prompt_custom=false → BYTE-A-BYTE o bloco de hoje (protege barber_dragon).
+  // Horário no estabelecimento herda do #325 (🕐). Barbearia/genérico expõem 🕐;
+  // pra manter o #325 idêntico na barbearia, forçamos 🕐 aqui independentemente do
+  // CardEmojis.horario (que é ⏰ no individual). As demais posições seguem a área.
+  const e = emojisForArea(area);
+  const horarioEstab = '🕐';
+  return [
+    ...estrutura,
     'Formato do cartão:',
     `${e.profissional} PROFISSIONAL: <nome do profissional escolhido>`,
     `${e.dia} DIA: <dia> / ${horarioEstab} HORARIO: <horario> / ${e.servico} SERVICO: <servico> / ${e.valor} VALOR: <valor>`,
