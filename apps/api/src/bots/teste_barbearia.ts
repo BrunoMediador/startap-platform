@@ -1530,7 +1530,12 @@ export class TesteBarbeariaBot extends BotBase {
     // Os EMOJIS do cartão seguem a ÁREA do clone (migration 051): barbearia mantém
     // 📅 🕐 ✂️ 💰 👤 (idêntico ao bloco original); salão/manicure/estética trocam
     // marca+serviço. getArea degrada pra null (→ genérico) em erro/coluna ausente.
-    const { area, cartaoMode, cartaoConfig, nomeNegocio } =
+    //
+    // SCRUM-85: a REGRA ESTRUTURAL do cartão (obrigatório + SIM + PROFISSIONAL +
+    // back-to-back) vai SEMPRE; só o ESTILO/emojis respeita prompt_custom. Se a persona
+    // é custom (dono estilizou o cartão à mão), buildCartaoEstabelecimentoBlock mantém
+    // os campos obrigatórios mas NÃO impõe os emojis da área — a persona dita os ícones.
+    const { area, promptCustom, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
@@ -1550,7 +1555,7 @@ export class TesteBarbeariaBot extends BotBase {
           })
         : '';
     const cartaoEstabelecimentoBlock =
-      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area);
+      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area, promptCustom);
 
     // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
     // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,

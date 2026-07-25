@@ -181,3 +181,66 @@ describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
     expect(block).toContain('🕐 HORARIO');
   });
 });
+
+// SCRUM-85: cartão de estabelecimento respeita persona custom — MAS, diferente do
+// individual, o bloco NÃO some (ele carrega a regra ESTRUTURAL crítica). Separamos:
+// (1) regra estrutural = SEMPRE injetada; (2) estilo/emojis = só com prompt_custom=false.
+describe('buildCartaoEstabelecimentoBlock — prompt_custom (SCRUM-85)', () => {
+  it('prompt_custom=false (default) → BYTE-A-BYTE o bloco de hoje (protege barber_dragon)', () => {
+    // O ramo false NÃO pode mudar 1 byte: passar false explícito == omitir == atual.
+    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(ESTAB_BARBEARIA);
+    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(
+      buildCartaoEstabelecimentoBlock('barbearia'),
+    );
+    for (const area of ['barbearia', 'salao', 'manicure', 'estetica', 'outro', null, undefined]) {
+      expect(buildCartaoEstabelecimentoBlock(area, false)).toBe(
+        buildCartaoEstabelecimentoBlock(area),
+      );
+    }
+  });
+
+  it('prompt_custom=true → mantém a REGRA ESTRUTURAL inegociável (cartão+SIM+PROFISSIONAL+back-to-back)', () => {
+    for (const area of ['barbearia', 'manicure', 'outro', null]) {
+      const block = buildCartaoEstabelecimentoBlock(area, true);
+      // cartão obrigatório + SIM antes de inserir_agendamento
+      expect(block).toMatch(/CADA agendamento/i);
+      expect(block).toMatch(/SÓ DEPOIS do SIM, chamar inserir_agendamento/);
+      expect(block).toMatch(/Responda SIM/i);
+      // back-to-back
+      expect(block).toMatch(/back-to-back|mesma conversa/i);
+      expect(block).toMatch(/NUNCA pule o cartão|NUNCA agende\s+direto/i);
+      // PROFISSIONAL pelo nome (campo obrigatório preservado)
+      expect(block).toContain('PROFISSIONAL: <nome do profissional escolhido>');
+      expect(block).toContain('nome que está em [PROFISSIONAIS]');
+      // demais campos obrigatórios seguem presentes
+      expect(block).toMatch(/DIA: <dia>/);
+      expect(block).toMatch(/HORARIO: <horario>/);
+      expect(block).toMatch(/SERVICO: <servico>/);
+      expect(block).toMatch(/VALOR: <valor>/);
+    }
+  });
+
+  it('prompt_custom=true → NÃO impõe emojis da área (persona custom dita o estilo)', () => {
+    // Nenhum ícone de área nas linhas de formato — a persona escolhe (caso Ingrid 🌻).
+    for (const area of ['barbearia', 'manicure', 'estetica', 'salao', 'outro', null]) {
+      const block = buildCartaoEstabelecimentoBlock(area, true);
+      expect(block).not.toContain('👤 PROFISSIONAL');
+      expect(block).not.toContain('🕐 HORARIO');
+      expect(block).not.toContain('✂️ SERVICO');
+      expect(block).not.toContain('💅 SERVICO');
+      expect(block).not.toContain('📅 DIA');
+      expect(block).not.toContain('💰 VALOR');
+      // a instrução avisa que os emojis são da persona
+      expect(block).toContain('use os emojis e o estilo da SUA persona');
+    }
+  });
+
+  it('prompt_custom=true difere do false SÓ nas linhas de estilo (estrutura idêntica)', () => {
+    const custom = buildCartaoEstabelecimentoBlock('manicure', true);
+    const legado = buildCartaoEstabelecimentoBlock('manicure', false);
+    expect(custom).not.toBe(legado);
+    // as 10 primeiras linhas (regra estrutural) são idênticas entre os dois ramos
+    const head = (s: string) => s.split('\n').slice(0, 10).join('\n');
+    expect(head(custom)).toBe(head(legado));
+  });
+});
