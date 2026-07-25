@@ -371,6 +371,32 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── "Testar conversa" — SANDBOX da persona real do clone (SCRUM-101) ──────────
+  // Endpoint AUTENTICADO (withTenant — slot SÓ da sessão) em que o DONO conversa com o
+  // PRÓPRIO assistente rodando a persona+tom+cartão REAIS do clone, mas em SANDBOX: SEM
+  // NENHUMA tool registrada (tools:[]) — zero escrita em GCal/DB/billing/pausa, nenhuma
+  // mensagem sai por WAHA. É read-only por construção (as write-tools nem existem neste
+  // caminho). Custo de LLM controlado (teto de turns/dia + cap global). TODAS as envs abaixo
+  // são OPCIONAIS no boot (lição #247: feature dormente nunca derruba o portal-api). Com
+  // SANDBOX_ENABLED ausente/false as rotas /portal/sandbox/* respondem 404 (front esconde).
+  // Sobe dormente; liga em prod sem novo deploy de código, só após QA.
+  SANDBOX_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Timeout (ms) da chamada ao modelo — nunca aguardar infinito (regra 7).
+  SANDBOX_LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // Teto de turns do DONO por sessão de teste (corta loop caro; UI manda recomeçar).
+  SANDBOX_MAX_TURNS: z.coerce.number().int().positive().default(30),
+  // Quantas mensagens de histórico o sandbox reenvia ao modelo (corta custo de input).
+  SANDBOX_HISTORY_TURNS: z.coerce.number().int().positive().default(12),
+  // Truncagem do texto do dono antes de enviar ao modelo (input bounded).
+  SANDBOX_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(1_000),
+  // Teto de mensagens/dia por TENANT (slot) — corta um tenant que exagera sem afetar outros.
+  SANDBOX_MAX_MSGS_DAY: z.coerce.number().int().positive().default(200),
+  // HARD CAP GLOBAL diário (nº de chamadas LLM somando TODOS os tenants) — kill-switch de custo.
+  SANDBOX_DAILY_CALL_CAP: z.coerce.number().int().positive().default(3_000),
+
   SERVICE_NAME: z.string().optional(),
 });
 
