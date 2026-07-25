@@ -141,6 +141,23 @@ export const WorkerConfigSchema = z.object({
   // #247: nada aqui é obrigatório — worker sobe sem a env, cai no default 24). NUNCA hardcoded.
   MONITOR_REALERT_HOURS: z.coerce.number().positive().default(24),
 
+  // ── Check host:disk (SCRUM-134 — fast-follow da spec 021, "disco fica pra fase 2") ──
+  // O worker NÃO mede o disco (containerizado, enxerga cgroup/overlay — spec §1). Quem mede é
+  // o script `/opt/automacoes/disco-alerta.sh` (cron 6/6h no HOST), que grava o fato bruto em
+  // alert_states.host_reported_pct/host_reported_at (migration 078). O worker só LÊ esse fato
+  // (observeHostDisk em monitor.ts) e aplica a mesma máquina de estado dos demais checks — mas
+  // SÓ entra na varredura se alert_config.check_host=true (gate por-check já existia desde a
+  // migration 046, default FALSE — ligar é decisão do Bruno, sem deploy). Limiar defensável:
+  // 90% = alerta (a spec 021 já props 85% warn/90% alerta; 90% dá ~9.6GB livre nesta VPS de 96GB,
+  // folga real pro tempo de reação de 1 pessoa só, e casa com o STALE abaixo). Ajustável por env
+  // sem deploy. NUNCA hardcoded.
+  HOST_DISK_ALERT_PCT: z.coerce.number().int().min(1).max(100).default(90),
+  // O script roda a cada 6h — se a última coleta reportada tiver mais que isto, o dado está
+  // FRIO (script travou/cron caiu/container psql sumiu) e o worker LOGA warning (visibilidade
+  // do próprio pipeline de coleta) sem fabricar um alerta DOWN de disco a partir de silêncio
+  // (silêncio != disco cheio — são causas diferentes, não confundir na mensagem ao Bruno).
+  HOST_DISK_STALE_HOURS: z.coerce.number().positive().default(13),
+
   // ── Reconciliacao de pacotes (ADR 0025 divida 5: cancelar+reagendar) ───────
   // RELATORIO read-only de suspeitas de dupla-baixa (2+ redeem do mesmo servico/credito
   // sem refund compensatorio) pra ops AGIR (refund manual). NAO estorna nada sozinho.

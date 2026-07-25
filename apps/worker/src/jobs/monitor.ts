@@ -8,7 +8,11 @@
  *   - waha:<sessao>  — 1 por cliente real conectado + a Lola (1 GET /api/sessions);
  *   - api:health     — /health do startap-api (HTTP 200 E db/redis saudáveis: 'up'/'ok');
  *   - pg:main        — SELECT 1 direto (redundância barata do worker).
- * Disco/RAM (host) ficam pra fase 2 (worker enxerga cgroup, não o host — spec §1).
+ * host:disk (fast-follow SCRUM-134, atrás de alert_config.check_host — default FALSE): o worker
+ * NÃO mede disco (containerizado, enxergaria cgroup/overlay, não o host físico — spec §1). Quem
+ * mede é `/opt/automacoes/disco-alerta.sh` (cron 6/6h no HOST); o worker só LÊ o fato gravado em
+ * alert_states.host_reported_pct via observeHostDisk() e aplica a MESMA máquina de estado abaixo.
+ * RAM segue fase 2 (não coberta por este card).
  *
  * Para cada check aplica a máquina de estado anti-spam (spec §4):
  *   up→down   => alerta DOWN, grava down_since/last_alert_at, alert_count=1;
@@ -52,6 +56,8 @@ const log = logger.child({ job: 'monitor' });
 const HEALTH_KEY = 'api:health';
 /** check_key do Postgres direto. */
 const PG_KEY = 'pg:main';
+/** check_key do disco do HOST (SCRUM-134). */
+const HOST_DISK_KEY = alerts.HOST_DISK_STATE_KEY;
 /** Limiar de debounce do api:health: 2 observações down seguidas pra transicionar. */
 const HEALTH_DEBOUNCE = 2;
 /** Limiar de debounce do waha:<sessao>: 2 polls down seguidos (~4 min) pra
@@ -280,6 +286,60 @@ async function observePg(): Promise<CheckObservation> {
       debounceThreshold: NO_DEBOUNCE,
       slot: null,
     };
+  }
+}
+
+/**
+ * Disco do HOST (SCRUM-134): o worker NÃO mede — LÊ o fato bruto que o script
+ * `/opt/automacoes/disco-alerta.sh` (cron 6/6h no HOST) grava em
+ * alert_states.host_reported_pct/host_reported_at (migration 078). Isolamento
+ * deliberado: medir aqui via node:fs/os enxergaria o cgroup/overlay do
+ * CONTAINER, não o disco físico do host (spec 021 §1) — dado errado seria pior
+ * que dado nenhum. `debounceThreshold=1`: um script que já roda a cada 6h e só
+ * grava um fato (sem flap) não precisa de carência extra — se reportou ≥limiar,
+ * é real. Nunca lança: fato ausente ou frio vira 'up' silencioso (loga warning),
+ * não fabrica alerta DOWN a partir de silêncio de coleta (causa diferente de
+ * disco cheio — não confundir na mensagem ao Bruno).
+ */
+async function observeHostDisk(alertPct: number, staleHours: number): Promise<CheckObservation> {
+  const base = {
+    key: HOST_DISK_KEY,
+    label: 'Disco do host (VPS)',
+    debounceThreshold: NO_DEBOUNCE,
+    slot: null,
+  };
+  try {
+    const report = await alerts.getHostDiskReport();
+    if (report.pct === null || report.reportedAt === null) {
+      log.warn(
+        { checkKey: HOST_DISK_KEY },
+        'monitor: host:disk sem coleta ainda (script não rodou)',
+      );
+      return { ...base, obs: 'up', detail: 'sem coleta ainda' };
+    }
+    const ageHours = (Date.now() - report.reportedAt.getTime()) / 3_600_000;
+    if (ageHours > staleHours) {
+      // Dado FRIO (script travou/cron caiu) — visibilidade via log, sem fabricar alerta de disco.
+      log.warn(
+        { checkKey: HOST_DISK_KEY, ageHours: Math.round(ageHours), pct: report.pct },
+        'monitor: host:disk com coleta ANTIGA (script pode ter parado de rodar)',
+      );
+      return { ...base, obs: 'up', detail: `coleta com ${Math.round(ageHours)}h (frio)` };
+    }
+    const up = report.pct < alertPct;
+    return {
+      ...base,
+      obs: up ? 'up' : 'down',
+      detail: up ? `${report.pct}% (< ${alertPct}%)` : `${report.pct}% (>= ${alertPct}%)`,
+    };
+  } catch (e) {
+    // Falha de leitura no Postgres (mesmo pool que observePg já testa) — trata como sem
+    // dado, não como disco cheio.
+    log.warn(
+      { checkKey: HOST_DISK_KEY, err: e instanceof Error ? e.message : String(e) },
+      'monitor: falha ao ler host:disk — tratado como sem coleta',
+    );
+    return { ...base, obs: 'up', detail: 'falha ao ler estado' };
   }
 }
 
@@ -576,6 +636,13 @@ export async function runMonitor(): Promise<MonitorResult> {
   if (cfg.check_waha) observations.push(...(await observeWaha(cfg.sender_slot)));
   if (cfg.check_health) observations.push(await observeHealth());
   observations.push(await observePg()); // PG é redundância barata — sempre observa.
+  // check_host (SCRUM-134): default FALSE desde a migration 046 — decisão do Bruno ligar
+  // (UPDATE alert_config SET check_host=true), sem deploy.
+  if (cfg.check_host) {
+    observations.push(
+      await observeHostDisk(config.HOST_DISK_ALERT_PCT, config.HOST_DISK_STALE_HOURS),
+    );
+  }
 
   result.checked = observations.length;
 

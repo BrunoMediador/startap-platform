@@ -22,6 +22,7 @@ const {
   addRecipient,
   getSenderSession,
   getMonitorHeartbeat,
+  getHostDiskReport,
   listMonitoredSessions,
   recordCycleHeartbeat,
   reserveGlobalSend,
@@ -30,6 +31,7 @@ const {
   DEFAULT_MONITOR_EXTRA_SESSIONS,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
+  HOST_DISK_STATE_KEY,
 } = await import('./alerts.js');
 
 beforeEach(() => {
@@ -425,5 +427,48 @@ describe('restoreStateIfUnchanged — compensação condicional do carimbo (SCRU
 
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(params[8]).toBeNull(); // expect.lastAlertAt null vira $9 = null (IS NOT DISTINCT FROM NULL)
+  });
+});
+
+describe('getHostDiskReport — leitura do fato bruto de host:disk (SCRUM-134, migration 078)', () => {
+  it('SELECT usa a check_key correta (host:disk)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: 22, host_reported_at: new Date() }],
+    });
+
+    await getHostDiskReport();
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('FROM alert_states WHERE check_key = $1');
+    expect(params).toEqual([HOST_DISK_STATE_KEY]);
+  });
+
+  it('normaliza pct de string (driver pg) pra number', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: '87', host_reported_at: new Date('2026-07-25T06:00:00Z') }],
+    });
+
+    const report = await getHostDiskReport();
+
+    expect(report.pct).toBe(87);
+    expect(report.reportedAt).toEqual(new Date('2026-07-25T06:00:00Z'));
+  });
+
+  it('linha ausente (banco recém-migrado, script nunca rodou): retorna pct/reportedAt null', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const report = await getHostDiskReport();
+
+    expect(report).toEqual({ pct: null, reportedAt: null });
+  });
+
+  it('linha existe mas host_reported_pct ainda NULL (seed da migration, pré-1ª coleta)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: null, host_reported_at: null }],
+    });
+
+    const report = await getHostDiskReport();
+
+    expect(report).toEqual({ pct: null, reportedAt: null });
   });
 });
