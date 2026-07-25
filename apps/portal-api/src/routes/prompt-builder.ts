@@ -123,7 +123,13 @@ async function loadCloneContext(slot: string): Promise<{
   if (!clone) return null;
   // área + cartao_mode + prompt_custom ATUAIS do clone numa única leitura (getAreaPromptCustomCartao,
   // SCRUM-92 inc.2). promptCustom alimenta o guard anti-cartão-duplo do approve (SCRUM-120).
-  const { area, cartaoMode, promptCustom } = await cloneColaboradores.getAreaPromptCustomCartao(slot);
+  // failClosed:true (SCRUM-143): este é caminho de ESCRITA (o approve pode flipar cartao_mode) →
+  // no erro de DB o reader RELANÇA (em vez de devolver {promptCustom:false}) e o approve aborta,
+  // nunca flipa um clone prompt_custom=true às cegas (caso Ingrid).
+  const { area, cartaoMode, promptCustom } = await cloneColaboradores.getAreaPromptCustomCartao(
+    slot,
+    { failClosed: true },
+  );
 
   // ── MODO REAL DO RUNTIME (SCRUM-92, raiz do incidente Ingrid) ──────────────────────
   // O runtime (apps/api/src/bots/teste_barbearia.ts, process()) só entra no ramo ATENDENTE
@@ -457,7 +463,20 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // Se o clone trocou de modo (atendente↔agenda) entre iniciar e aprovar, o bloco tem que
     // refletir o modo de AGORA — senão colaria a variante errada (ex.: bloco de atendente, sem
     // cartão/SIM, num clone que virou agenda), enfraquecendo a garantia (F1, security).
-    const ctx = await loadCloneContext(slot);
+    // SCRUM-143: o reader interno é fail-CLOSED (failClosed:true) — num erro de DB ele RELANÇA e
+    // aqui viramos 503 SEM tocar em nada. Fail-closed: melhor recusar o approve do que flipar um
+    // clone prompt_custom=true pra runtime com estado indeterminado. (ctx=null = clone sumiu no
+    // meio, caminho SOFT já tratado abaixo com fallback ao state — só o THROW vira 503.)
+    let ctx: Awaited<ReturnType<typeof loadCloneContext>>;
+    try {
+      ctx = await loadCloneContext(slot);
+    } catch (err) {
+      log.error(
+        { slot, err: err instanceof Error ? err.message : 'unknown' },
+        'approve bloqueado: contexto do clone indeterminado (fail-closed, SCRUM-143)',
+      );
+      return reply.code(503).send({ error: 'estado_indeterminado' });
+    }
     const servicos = ctx?.servicos ?? [];
     const modo = ctx?.modo ?? state.modo; // fallback ao state só se o clone sumiu no meio.
     const area = ctx?.area ?? state.area;

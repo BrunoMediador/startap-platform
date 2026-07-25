@@ -561,6 +561,18 @@ describe('approve', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  it('SCRUM-143 fail-closed: reader do contexto falha → 503, NÃO chama applyGeneratedPrompt', async () => {
+    const app = await buildApp();
+    await startAndDraft(app);
+    // loadCloneContext lê com failClosed:true → RELANÇA no erro de DB. O approve vira 503 SEM
+    // tocar no prompt (antes, fail-open devolvia {promptCustom:false} e podia flipar às cegas).
+    mocks.getAreaPromptCustomCartao.mockRejectedValueOnce(new Error('connection terminated'));
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json().error).toBe('estado_indeterminado');
+    expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
+  });
+
   it('finalPrompt SEMPRE contém persona + BLOCO_ESTRUTURAL e chama applyGeneratedPrompt', async () => {
     const app = await buildApp();
     await startAndDraft(app);

@@ -20,7 +20,9 @@ vi.mock('../client.js', () => ({
   query: (...a: unknown[]) => mockQuery(...a),
 }));
 
-const { create, update, listBySlot } = await import('./clone-colaboradores.js');
+const { create, update, listBySlot, getAreaPromptCustomCartao } = await import(
+  './clone-colaboradores.js'
+);
 
 // Linha CRUA como o pg devolve: NUMERIC vira string ('15.50'), não number.
 const RAW_ROW = {
@@ -274,5 +276,49 @@ describe('update — valida serviços contra o catálogo do clone', () => {
       /SELECT servicos FROM flow_clones/i.test(String(c[0])),
     );
     expect(consultou).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCRUM-143 — política de falha do reader compartilhado getAreaPromptCustomCartao.
+// O MESMO reader alimenta o hot-path do bot (fail-OPEN) e os guards de ESCRITA que podem
+// flipar cartao_mode→runtime (fail-CLOSED via opts.failClosed). Sem o fail-closed, um erro
+// transitório de DB devolvia {promptCustom:false} e o guard NÃO bloqueava um flip indevido.
+describe('getAreaPromptCustomCartao — política de falha (SCRUM-143)', () => {
+  const CLONE_ROW = {
+    area: 'Barbearia',
+    prompt_custom: true,
+    cartao_mode: 'baked',
+    cartao_config: null,
+    display_name: 'Barbearia X',
+    cliente_nome: null,
+    personalizacao: null,
+  };
+
+  it('default (fail-OPEN): erro de DB NÃO lança — cai no baked seguro (hot-path do bot)', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('connection terminated'));
+    const r = await getAreaPromptCustomCartao('clone_x');
+    expect(r).toEqual({
+      area: null,
+      promptCustom: false,
+      cartaoMode: 'baked',
+      cartaoConfig: null,
+      nomeNegocio: null,
+    });
+  });
+
+  it('failClosed:true: erro de DB RELANÇA — guard de escrita aborta (nunca flipa às cegas)', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(getAreaPromptCustomCartao('clone_x', { failClosed: true })).rejects.toThrow(
+      /connection terminated/,
+    );
+  });
+
+  it('failClosed:true no caminho FELIZ: devolve o estado REAL (não muda o happy path)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [CLONE_ROW], rowCount: 1 });
+    const r = await getAreaPromptCustomCartao('clone_x', { failClosed: true });
+    expect(r.promptCustom).toBe(true);
+    expect(r.cartaoMode).toBe('baked');
+    expect(r.area).toBe('barbearia');
   });
 });

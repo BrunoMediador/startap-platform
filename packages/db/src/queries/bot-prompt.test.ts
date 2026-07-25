@@ -32,11 +32,25 @@ interface FakeClient extends Pick<PoolClient, 'query' | 'release'> {
 }
 
 /** Cria um client de transação falso que roteia por substring do SQL. */
-function makeClient(opts: { currentPrompt?: string | null; maxVersion?: number }): FakeClient {
+function makeClient(opts: {
+  currentPrompt?: string | null;
+  maxVersion?: number;
+  /** Estado do flow_clones lido pelo BELT GUARD (SCRUM-143) do branch runtime — SELECT ...
+   *  FOR UPDATE. `undefined` = sem linha (matriz); default = template (prompt_custom=false). */
+  flowClonesState?: { prompt_custom: boolean | null; cartao_mode: string | null } | null;
+}): FakeClient {
   const calls: Array<{ sql: string; params?: unknown[] }> = [];
   const clientQuery = vi.fn(async (sql: string, params?: unknown[]) => {
     calls.push({ sql, params });
     if (sql === 'BEGIN' || sql === 'COMMIT' || sql.startsWith('ROLLBACK')) return { rows: [] };
+    // BELT GUARD (SCRUM-143): estado atual do clone lido dentro da transação antes do flip.
+    if (sql.startsWith('SELECT prompt_custom, cartao_mode FROM flow_clones')) {
+      const st =
+        'flowClonesState' in opts
+          ? opts.flowClonesState
+          : { prompt_custom: false, cartao_mode: 'baked' };
+      return st ? { rows: [st] } : { rows: [] };
+    }
     if (sql.startsWith('SELECT prompt FROM bot_prompt')) {
       return opts.currentPrompt == null ? { rows: [] } : { rows: [{ prompt: opts.currentPrompt }] };
     }
@@ -170,6 +184,64 @@ describe('applyGeneratedPrompt', () => {
     await applyGeneratedPrompt('clone_x', FINAL, 'admin');
     const upd = client.calls.find((c) => c.sql.startsWith('UPDATE flow_clones SET prompt_custom'));
     expect(upd?.sql).not.toContain('cartao_mode');
+  });
+
+  // ── SCRUM-143: BELT GUARD (defesa em profundidade sobre o guard da ROTA) ─────────────
+  it('BELT GUARD bloqueia flip pra runtime de clone prompt_custom=true baked (ROLLBACK, sem UPDATE de flip)', async () => {
+    const client = makeClient({
+      currentPrompt: 'persona antiga',
+      maxVersion: 0,
+      flowClonesState: { prompt_custom: true, cartao_mode: 'baked' },
+    });
+    connectMock.mockResolvedValue(client);
+
+    await expect(
+      applyGeneratedPrompt('clone_x', PERSONA_ONLY, 'portal:builder:x', 'prompt-builder', {
+        cartaoMode: 'runtime',
+        bakedMarker: '===== REGRAS DO SISTEMA',
+      }),
+    ).rejects.toThrow(/belt guard/i);
+
+    // Nunca gravou o flip; deu ROLLBACK (nunca COMMIT).
+    const flipUpd = client.calls.find((c) => c.sql.includes("cartao_mode = 'runtime'"));
+    expect(flipUpd).toBeUndefined();
+    expect(client.calls.some((c) => c.sql.startsWith('ROLLBACK'))).toBe(true);
+    expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(false);
+  });
+
+  it('BELT GUARD PERMITE flip de clone template (prompt_custom=false) — caminho legítimo do approve', async () => {
+    const client = makeClient({
+      currentPrompt: 'persona antiga',
+      maxVersion: 0,
+      flowClonesState: { prompt_custom: false, cartao_mode: 'baked' },
+    });
+    connectMock.mockResolvedValue(client);
+
+    await applyGeneratedPrompt('clone_x', PERSONA_ONLY, 'portal:builder:x', 'prompt-builder', {
+      cartaoMode: 'runtime',
+      bakedMarker: '===== REGRAS DO SISTEMA',
+    });
+
+    const upd = client.calls.find((c) => c.sql.startsWith('UPDATE flow_clones SET prompt_custom'));
+    expect(upd?.sql).toContain("cartao_mode = 'runtime'");
+    expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it('BELT GUARD PERMITE re-flip de clone JÁ runtime (idempotente, não regride)', async () => {
+    const client = makeClient({
+      currentPrompt: 'persona antiga',
+      maxVersion: 0,
+      flowClonesState: { prompt_custom: true, cartao_mode: 'runtime' },
+    });
+    connectMock.mockResolvedValue(client);
+
+    await applyGeneratedPrompt('clone_x', PERSONA_ONLY, 'portal:builder:x', 'prompt-builder', {
+      cartaoMode: 'runtime',
+      bakedMarker: '===== REGRAS DO SISTEMA',
+    });
+
+    const upd = client.calls.find((c) => c.sql.startsWith('UPDATE flow_clones SET prompt_custom'));
+    expect(upd?.sql).toContain("cartao_mode = 'runtime'");
   });
 });
 

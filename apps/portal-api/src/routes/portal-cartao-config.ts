@@ -337,8 +337,20 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'emoji_invalido', campo: emojiCheck.invalidKey });
     }
 
-    const { area, promptCustom, cartaoMode, nomeNegocio } =
-      await cloneColaboradores.getAreaPromptCustomCartao(slot);
+    // SCRUM-143: caminho de ESCRITA que pode flipar cartao_mode→runtime → reader fail-CLOSED
+    // (failClosed:true). No erro de DB ele RELANÇA e devolvemos 503 SEM tocar em nada, em vez de
+    // ler {promptCustom:false} e deixar o guard isCartaoRuntimeFlipBlocked passar (flip cego).
+    let readState: Awaited<ReturnType<typeof cloneColaboradores.getAreaPromptCustomCartao>>;
+    try {
+      readState = await cloneColaboradores.getAreaPromptCustomCartao(slot, { failClosed: true });
+    } catch (err) {
+      log.error(
+        { slot, err: err instanceof Error ? err.message : 'unknown' },
+        'PUT cartao-config bloqueado: estado do clone indeterminado (fail-closed, SCRUM-143)',
+      );
+      return reply.code(503).send({ error: 'estado_indeterminado' });
+    }
+    const { area, promptCustom, cartaoMode, nomeNegocio } = readState;
     const modo = await resolveModo(slot);
     const sample = await buildSample(slot, modo, nomeNegocio);
 
