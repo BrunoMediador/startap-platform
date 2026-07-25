@@ -70,7 +70,7 @@ const SEND_TIMEOUT_MS = 10_000;
  *  pouco pra uma resposta de ERRO do WAHA que pousa colada no deadline (o 422 que chegava ~20ms
  *  tarde e virava "timeout" ambíguo, mascarando não-entrega DEFINITIVA — incidente Cirilo). Curta e
  *  limitada: só captura o erro tardio; rede genuinamente muda nunca assenta e segue ambígua. */
-const SEND_ERROR_GRACE_MS = 3_000;
+const SEND_ERROR_GRACE_MS = 1_000;
 
 /** Humanização do envio de alerta — reduz risco de derrubar a sessão remetente
  *  (ALERTAS) por padrão de bot. "Digitando…" + delay antes de cada mensagem, e

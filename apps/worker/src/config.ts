@@ -329,18 +329,18 @@ export const WorkerConfigSchema = z.object({
   // ALERTAS ("bot do <cliente> silenciado por atraso — reconciliar ou confirmar churn"), com cooldown
   // por-slot pra não spammar todo ciclo. NÃO toca o silêncio (comportamento intocado) — só avisa o time.
   //
-  // GATE: SÓ registra o cron com BILLING_SILENCE_ALERT_ENABLED=true (default OFF — lição #247: nada
-  // aqui é obrigatório no boot; ausente = OFF = nenhum alerta). Com OFF o worker sobe normal e o cron
-  // NEM é registrado (zero query, zero WAHA). Além disso, o job só age quando o PRÓPRIO gate está ON
-  // (process.env.BILLING_OVERDUE_SILENCE === 'true', mesma fonte do router): com o gate OFF ninguém
-  // está silenciado -> NO-OP (nenhum alerta falso). ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo
-  // do PR). Pra ligar: devops seta BILLING_SILENCE_ALERT_ENABLED=true (+ garantir BILLING_OVERDUE_SILENCE
-  // no worker) + restart do worker; o monitor de alertas (ALERTS_ENABLED) já precisa estar configurado
-  // pra a ALERTAS/destinatários existirem. NUNCA hardcoded.
+  // GATE: default-ON (SCRUM-130, ordem do Bruno 25/07 — alerta INTERNO ao time, seguro pra nascer
+  // ligado). Env AUSENTE => cron REGISTRADO. Kill-switch: BILLING_SILENCE_ALERT_ENABLED=false desliga
+  // sem deploy (só reinício). É seguro nascer ON porque o job é DUPLAMENTE gated: só age quando o
+  // PRÓPRIO gate de silêncio está ON (process.env.BILLING_OVERDUE_SILENCE === 'true', mesma fonte do
+  // router) — com o gate de silêncio OFF ninguém está mudo -> NO-OP (zero alerta falso, só 1 query
+  // barata por ciclo). O alerta sai só quando um PAGANTE está de fato silenciado por atraso, o que já
+  // é uma condição rara e acionável. Precisa do monitor de alertas (ALERTS_ENABLED) configurado pra a
+  // ALERTAS/destinatários existirem. NUNCA hardcoded.
   BILLING_SILENCE_ALERT_ENABLED: z
     .enum(['true', 'false'])
     .optional()
-    .transform((v) => v === 'true'),
+    .transform((v) => v !== 'false'),
   // Padrão cron (croner). Default de hora em hora no minuto 43 (não colide com :00 cleanup, :08
   // billing, :09 reconcile, :15 close-stale, :17 bot-detect, :23 gcal, :30 trial). Padrão inválido
   // NUNCA crasha o boot — worker.ts cai pro fallback via scheduleCronSafe.
@@ -349,6 +349,36 @@ export const WorkerConfigSchema = z.object({
   // alerta por janela (não 1 por ciclo). Reusa alert_states (chave 'billsilence:<slot>'). Default 1440
   // (24h) = 1 lembrete/dia enquanto pendente — igual à cadência do "🔴 AINDA CAÍDO" do monitor.
   BILLING_SILENCE_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(1_440),
+
+  // ── Alerta interno: TRIAL prestes a expirar com bot DESLIGADO pelo dono (SCRUM-125) ──────────
+  // CENÁRIO (Meduzza, 07/2026): trial (last_payment_at NULL) perto de vencer + o DONO desligou o bot
+  // pelo portal (suspended_kind='owner_request') e não religou. O bot fica mudo, o cliente NÃO paga,
+  // e vira CHURN SILENCIOSO — ninguém no time sabe. ⚠️ PIX NÃO religa owner_request: ele pode pagar e
+  // continuar mudo. Este cron cruza client_billing (trial + next_due_date dentro da janela) × o estado
+  // atual de pausa do dono (flow_clones.suspended_kind='owner_request' + suspended_at há > N dias — que
+  // é a materialização transacional do "último suspend sem resume" do flow_suspension_log) e dispara UM
+  // alerta INTERNO via ALERTAS pro time falar com o cliente. NÃO toca o bot/pausa (visibilidade só).
+  //
+  // GATE: default-ON (ordem do Bruno 25/07 — alerta interno, seguro pra nascer ligado). Env AUSENTE =>
+  // cron REGISTRADO. Kill-switch: TRIAL_PAUSE_ALERT_ENABLED=false desliga sem deploy. É seguro ON porque
+  // o escopo é ESTREITO (trial + owner-paused há dias + perto do vencimento) e há COOLDOWN por-slot —
+  // não spamma. Sem candidato = 1 query barata por ciclo e NO-OP. LGPD-safe (mensagem sem telefone/CPF).
+  TRIAL_PAUSE_ALERT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v !== 'false'),
+  // Padrão cron (croner). Default de hora em hora no :51 (não colide com :00/:08/:09/:15/:17/:23/:30/
+  // :37/:43 já usados). Padrão inválido NUNCA crasha o boot — cai no fallback via scheduleCronSafe.
+  TRIAL_PAUSE_ALERT_CRON: z.string().default('51 * * * *'),
+  // Cooldown (min) por CLONE entre alertas do MESMO trial pausado. Default 1440 (24h) = no máx 1
+  // lembrete/dia enquanto o quadro persistir. Reusa alert_states (chave 'trialpause:<slot>').
+  TRIAL_PAUSE_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(1_440),
+  // Dias MÍNIMOS de pausa do dono pra alertar (evita alarme por toggle curto/legítimo). Default 2:
+  // pausado há >= 2 dias já é sinal de que não vai voltar sozinho. Piso 1.
+  TRIAL_PAUSE_ALERT_MIN_PAUSED_DAYS: z.coerce.number().int().positive().default(2),
+  // Janela (dias) até o vencimento do trial pra considerar "prestes a expirar". Default 7 (mesma janela
+  // do PIX/BILLING_WINDOW_DAYS): dentro dela ou já vencido (dias_ate_vencer <= 7) = acionável.
+  TRIAL_PAUSE_ALERT_DUE_WINDOW_DAYS: z.coerce.number().int().positive().default(7),
 
   // ── Rastreio de ENTREGA de outbound + alerta de nack/preso (SCRUM-58) ────────────────────────
   // O app é CEGO à entrega: loga `bot.reply-sent` no 2xx do WAHA, mas o `ack error:463` e outros

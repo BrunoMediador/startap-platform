@@ -41,6 +41,7 @@ import {
   msgClienteAtivou,
   msgClientePagou,
   msgNovoCadastro,
+  msgTrialOwnerPausado,
   sendInternalAlert,
 } from './internal-alert.js';
 
@@ -261,5 +262,35 @@ describe('mensagens LGPD-safe', () => {
         diasAtraso: -2,
       }),
     ).toContain('0 dias');
+  });
+
+  it('H: trial em risco de churn (SCRUM-125) — nome + slot + venc + dias, sem PII', () => {
+    const m = msgTrialOwnerPausado({
+      displayName: 'Meduzza Barbearia',
+      slot: 'clone_meduzza_q23psc',
+      nextDueDate: '2026-07-27',
+      diasAteVencer: 2,
+      diasPausado: 5,
+    });
+    expect(m).toContain('Meduzza Barbearia');
+    expect(m).toContain('clone_meduzza_q23psc');
+    expect(m).toContain('2026-07-27');
+    expect(m).toContain('5 dias');
+    expect(m.toLowerCase()).toContain('churn');
+    expect(m.toLowerCase()).toContain('pix'); // alerta que PIX não religa
+    // LGPD: nenhum bloco de 8+ dígitos (telefone/CPF) — as datas têm separadores.
+    expect(m).not.toMatch(/\d{8,}/);
+  });
+
+  it('H: já vencido (diasAteVencer <= 0) usa copy "JÁ venceu"; 1 dia de pausa = singular', () => {
+    const vencido = msgTrialOwnerPausado({
+      displayName: 'X',
+      slot: 'clone_x',
+      nextDueDate: '2026-07-20',
+      diasAteVencer: -3,
+      diasPausado: 1,
+    });
+    expect(vencido).toContain('JÁ venceu');
+    expect(vencido).toContain('1 dia');
   });
 });

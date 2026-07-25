@@ -8,6 +8,7 @@ export {
   msgClientePagou,
   msgAguardandoAgenda,
   msgBotSilenciadoInadimplencia,
+  msgTrialOwnerPausado,
   msgOutboundNaoEntregue,
   type SendInternalAlertOpts,
   type SendInternalAlertResult,

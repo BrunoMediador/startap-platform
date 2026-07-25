@@ -24,6 +24,7 @@ import { runMessageAckAlert } from './jobs/message-ack-alert.js';
 import { runMonitor } from './jobs/monitor.js';
 import { runReconcilePackages } from './jobs/reconcile-packages.js';
 import { runReminders } from './jobs/reminders.js';
+import { runTrialOwnerPauseAlert } from './jobs/trial-owner-pause-alert.js';
 
 const log = logger.child({ service: 'worker' });
 
@@ -289,7 +290,11 @@ async function main() {
     scheduleCronSafe(
       config.ALERTS_CRON,
       '*/2 * * * *',
-      { name: 'monitor', timezone: 'America/Sao_Paulo' },
+      // { protect:true } (SCRUM-140): impede sobreposição de ciclos do monitor. Um ciclo lento
+      // (WAHA/PG travado + envio humanizado sequencial) pode passar dos 2 min; sem protect, o croner
+      // dispararia um 2º ciclo em paralelo — dobrando envios pela ALERTAS (risco de derrubar a sessão)
+      // e correndo no mesmo alert_states. O CAS já protegia o carimbo, mas protect elimina o overlap.
+      { name: 'monitor', timezone: 'America/Sao_Paulo', protect: true },
       async () => {
         const executionId = randomUUID();
         const startedAt = Date.now();
@@ -586,12 +591,12 @@ async function main() {
   }
 
   // Alerta interno de bot PAGANTE silenciado por inadimplência (SCRUM-67) — VISIBILIDADE, não muda o
-  // gate. Camada 1 do rollout: SÓ registra o cron com BILLING_SILENCE_ALERT_ENABLED=true (default OFF —
-  // lição #247). Com a env ausente o worker sobe normal e este cron NÃO existe (zero query, zero WAHA).
-  // Camada 2: o job só age quando o PRÓPRIO gate de silêncio está ON (process.env.BILLING_OVERDUE_SILENCE
-  // === 'true', mesma fonte do router) — com o gate OFF é NO-OP (nenhum alerta falso). { protect:true }
-  // impede overlap de ciclos. A cada hora no :43 (BILLING_SILENCE_ALERT_CRON). Padrão inválido cai no
-  // fallback via scheduleCronSafe. ⚠️ Decisão ON/OFF em prod é do Bruno (ver corpo do PR).
+  // gate. Camada 1: default-ON (SCRUM-130, ordem do Bruno 25/07 — alerta interno, nasce ligado). Env
+  // AUSENTE => cron REGISTRADO. Kill-switch: BILLING_SILENCE_ALERT_ENABLED=false desliga. Camada 2: o
+  // job só age quando o PRÓPRIO gate de silêncio está ON (process.env.BILLING_OVERDUE_SILENCE === 'true',
+  // mesma fonte do router) — com o gate OFF é NO-OP (nenhum alerta falso). { protect:true } impede
+  // overlap de ciclos. A cada hora no :43 (BILLING_SILENCE_ALERT_CRON). Padrão inválido cai no fallback
+  // via scheduleCronSafe.
   if (config.BILLING_SILENCE_ALERT_ENABLED) {
     log.info(
       { cron: config.BILLING_SILENCE_ALERT_CRON },
@@ -652,6 +657,70 @@ async function main() {
   } else {
     log.info(
       'billing-silence-alert: BILLING_SILENCE_ALERT_ENABLED ausente/false — cron NÃO registrado',
+    );
+  }
+
+  // Alerta interno: TRIAL prestes a expirar com o bot DESLIGADO pelo dono (SCRUM-125) — VISIBILIDADE,
+  // não toca o bot/pausa. Cruza trial (last_payment_at NULL + vencimento na janela) × pausa do dono
+  // (suspended_kind='owner_request' há dias). Default-ON (kill-switch TRIAL_PAUSE_ALERT_ENABLED=false).
+  // { protect:true } impede overlap. A cada hora no :51 (TRIAL_PAUSE_ALERT_CRON). Padrão inválido cai
+  // no fallback via scheduleCronSafe. Sem candidato = 1 query barata + NO-OP.
+  if (config.TRIAL_PAUSE_ALERT_ENABLED) {
+    log.info(
+      { cron: config.TRIAL_PAUSE_ALERT_CRON },
+      'trial-owner-pause-alert: cron registrado (TRIAL_PAUSE_ALERT_ENABLED=true/default)',
+    );
+    scheduleCronSafe(
+      config.TRIAL_PAUSE_ALERT_CRON,
+      '51 * * * *',
+      { name: 'trial-owner-pause-alert', timezone: 'America/Sao_Paulo', protect: true },
+      async () => {
+        const executionId = randomUUID();
+        const startedAt = Date.now();
+        let trialResult: Awaited<ReturnType<typeof runTrialOwnerPauseAlert>> | null = null;
+        let trialError: unknown = null;
+        await flowExecutionLog.logFlowEvent({
+          executionId,
+          flowId: 'worker:trial-owner-pause-alert',
+          flowName: 'trial-owner-pause-alert',
+          bot: 'worker',
+          eventType: 'worker.job-started',
+          status: 'running',
+          message: 'Job trial-owner-pause-alert iniciado',
+        });
+        try {
+          trialResult = await runTrialOwnerPauseAlert({
+            minPausedDays: config.TRIAL_PAUSE_ALERT_MIN_PAUSED_DAYS,
+            dueWindowDays: config.TRIAL_PAUSE_ALERT_DUE_WINDOW_DAYS,
+            cooldownMin: config.TRIAL_PAUSE_ALERT_COOLDOWN_MIN,
+          });
+          if (trialResult.atRisk > 0 || trialResult.alerted > 0) {
+            log.warn({ ...trialResult }, 'trial-owner-pause-alert: trial(s) em risco de churn');
+          }
+        } catch (e) {
+          trialError = e;
+          log.error({ err: e }, 'trial-owner-pause-alert crashed');
+        } finally {
+          await flowExecutionLog.logFlowEvent({
+            executionId,
+            flowId: 'worker:trial-owner-pause-alert',
+            flowName: 'trial-owner-pause-alert',
+            bot: 'worker',
+            eventType: trialError ? 'worker.job-failed' : 'worker.job-finished',
+            status: trialError ? 'error' : 'success',
+            message: trialError
+              ? 'Job trial-owner-pause-alert falhou'
+              : 'Job trial-owner-pause-alert concluído',
+            ...(trialResult ? { metadata: trialResult } : {}),
+            ...(trialError ? { error: trialError } : {}),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      },
+    );
+  } else {
+    log.info(
+      'trial-owner-pause-alert: TRIAL_PAUSE_ALERT_ENABLED=false — cron NÃO registrado (kill-switch)',
     );
   }
 

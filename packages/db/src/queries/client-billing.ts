@@ -232,6 +232,70 @@ export async function listBillingClonesForSilenceCheck(): Promise<BillingSilence
   }));
 }
 
+export interface TrialOwnerPausedCandidate {
+  slot: string;
+  /** Nome amigável do clone (flow_clones.display_name). null = usa o slot na mensagem. */
+  display_name: string | null;
+  /** Vencimento 'YYYY-MM-DD' (garantido não-nulo pelo WHERE). */
+  next_due_date: string | null;
+  /** Último pagamento. Garantido NULL pelo WHERE (só TRIAL entra). */
+  last_payment_at: Date | null;
+  /** Quando o dono pausou (flow_clones.suspended_at). Garantido não-nulo pelo WHERE. */
+  suspended_at: Date | null;
+  /** Dias até vencer = vencimento − hoje(UTC). Negativo = já venceu. Mesmo eixo UTC do daysUntilDue. */
+  dias_ate_vencer: number;
+  /** Dias que o dono está com o bot pausado = hoje(UTC) − suspended_at (piso 0). */
+  dias_pausado: number;
+}
+
+/**
+ * Lista TRIALS (last_payment_at NULL) cujo bot está DESLIGADO pelo próprio dono
+ * (flow_clones.suspended_kind='owner_request' + flow_enabled=false) para o alerta de churn
+ * silencioso (SCRUM-125). Usa o ESTADO ATUAL de flow_clones como fonte da pausa — que é a
+ * materialização transacional (pauseBotByOwner/resumeBotByOwner) do "último suspend do dono
+ * sem resume" do flow_suspension_log, e é a mesma fonte que o portal usa pra classificar a pausa.
+ *
+ * NÃO filtra por janela/dias aqui de propósito — o job DECIDE em TS (mantém a decisão pura e
+ * testável sem banco). O WHERE só exige: escopo clone_%, trial (sem pagamento), owner-paused (kind
+ * + suspended_at), e cobrança configurada (next_due_date não-nulo, pra saber quando o trial vence).
+ */
+export async function listTrialOwnerPausedCandidates(): Promise<TrialOwnerPausedCandidate[]> {
+  const r = await query<{
+    slot: string;
+    display_name: string | null;
+    next_due_date: string | null;
+    last_payment_at: Date | null;
+    suspended_at: Date | null;
+    dias_ate_vencer: string | number;
+    dias_pausado: string | number;
+  }>(
+    `SELECT cb.slot,
+            fc.display_name,
+            to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
+            cb.last_payment_at,
+            fc.suspended_at,
+            (cb.next_due_date - ((NOW() AT TIME ZONE 'UTC')::date))::int AS dias_ate_vencer,
+            GREATEST(0, (((NOW() AT TIME ZONE 'UTC')::date) - (fc.suspended_at AT TIME ZONE 'UTC')::date))::int AS dias_pausado
+       FROM client_billing cb
+       JOIN flow_clones fc ON fc.slot = cb.slot
+      WHERE left(cb.slot, 6) = 'clone_'
+        AND cb.last_payment_at IS NULL
+        AND cb.next_due_date IS NOT NULL
+        AND fc.flow_enabled = FALSE
+        AND fc.suspended_kind = 'owner_request'
+        AND fc.suspended_at IS NOT NULL`,
+  );
+  return r.rows.map((row) => ({
+    slot: row.slot,
+    display_name: row.display_name,
+    next_due_date: row.next_due_date,
+    last_payment_at: row.last_payment_at,
+    suspended_at: row.suspended_at,
+    dias_ate_vencer: Number(row.dias_ate_vencer),
+    dias_pausado: Number(row.dias_pausado),
+  }));
+}
+
 // ─── Modelo por DATA DE VENCIMENTO (ADR 0014) ──────────────────────────────────
 
 /** Janela de pagamento default: 7 dias antes do vencimento (decisao do Bruno, ADR 0014). */

@@ -54,20 +54,50 @@ describe('WorkerConfigSchema', () => {
     expect(result.BOT_DETECT_SLOTS).toBe('clone_barber_dragon_caly8b');
   });
 
-  it('billing-silence-alert (SCRUM-67) nasce OFF com defaults seguros', () => {
+  it('billing-silence-alert (SCRUM-130) nasce ON com defaults seguros — ausente = ligado', () => {
     const result = WorkerConfigSchema.parse({});
-    expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(false); // ausente = OFF (cron nem registra)
+    expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(true); // ausente = ON (cron registrado; duplo-gate protege)
     expect(result.BILLING_SILENCE_ALERT_CRON).toBe('43 * * * *');
     expect(result.BILLING_SILENCE_ALERT_COOLDOWN_MIN).toBe(1_440); // 24h
   });
 
-  it('billing-silence-alert ON via env, cooldown ajustável sem deploy', () => {
+  it('billing-silence-alert kill-switch =false desliga o cron sem deploy', () => {
+    const result = WorkerConfigSchema.parse({ BILLING_SILENCE_ALERT_ENABLED: 'false' });
+    expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(false);
+  });
+
+  it('billing-silence-alert =true explícito também liga; cooldown ajustável sem deploy', () => {
     const result = WorkerConfigSchema.parse({
       BILLING_SILENCE_ALERT_ENABLED: 'true',
       BILLING_SILENCE_ALERT_COOLDOWN_MIN: '720',
     });
     expect(result.BILLING_SILENCE_ALERT_ENABLED).toBe(true);
     expect(result.BILLING_SILENCE_ALERT_COOLDOWN_MIN).toBe(720);
+  });
+
+  it('trial-owner-pause-alert (SCRUM-125) nasce ON com defaults seguros — ausente = ligado', () => {
+    const result = WorkerConfigSchema.parse({});
+    expect(result.TRIAL_PAUSE_ALERT_ENABLED).toBe(true); // ausente = ON (escopo estreito + cooldown)
+    expect(result.TRIAL_PAUSE_ALERT_CRON).toBe('51 * * * *');
+    expect(result.TRIAL_PAUSE_ALERT_COOLDOWN_MIN).toBe(1_440); // 24h
+    expect(result.TRIAL_PAUSE_ALERT_MIN_PAUSED_DAYS).toBe(2);
+    expect(result.TRIAL_PAUSE_ALERT_DUE_WINDOW_DAYS).toBe(7);
+  });
+
+  it('trial-owner-pause-alert kill-switch =false desliga o cron sem deploy', () => {
+    const result = WorkerConfigSchema.parse({ TRIAL_PAUSE_ALERT_ENABLED: 'false' });
+    expect(result.TRIAL_PAUSE_ALERT_ENABLED).toBe(false);
+  });
+
+  it('trial-owner-pause-alert thresholds ajustáveis por env sem deploy', () => {
+    const result = WorkerConfigSchema.parse({
+      TRIAL_PAUSE_ALERT_MIN_PAUSED_DAYS: '3',
+      TRIAL_PAUSE_ALERT_DUE_WINDOW_DAYS: '10',
+      TRIAL_PAUSE_ALERT_COOLDOWN_MIN: '720',
+    });
+    expect(result.TRIAL_PAUSE_ALERT_MIN_PAUSED_DAYS).toBe(3);
+    expect(result.TRIAL_PAUSE_ALERT_DUE_WINDOW_DAYS).toBe(10);
+    expect(result.TRIAL_PAUSE_ALERT_COOLDOWN_MIN).toBe(720);
   });
 
   it('gcal-atend-sync (SCRUM-89) nasce OFF com defaults seguros (lição #247)', () => {

@@ -320,3 +320,34 @@ export function msgBotSilenciadoInadimplencia(input: {
     `inadimplência — venceu em ${input.nextDueDate} (${dias} ${plural} de atraso). ${acao}`
   );
 }
+
+/**
+ * H — TRIAL prestes a expirar com o bot DESLIGADO pelo próprio dono (SCRUM-125). Churn silencioso:
+ * o dono pausou pelo portal (owner_request) e não religou, e o trial vai vencer sem conversão. O time
+ * precisa falar com o cliente ANTES. ⚠️ PIX NÃO religa owner_request — pagar não basta. Visibilidade
+ * pura (não toca o bot/pausa). LGPD-safe: SEM telefone em claro/CPF (só nome do negócio + slot + data
+ * + dias). Cobre "já venceu" (diasAteVencer <= 0) com copy adequada.
+ */
+export function msgTrialOwnerPausado(input: {
+  displayName: string;
+  slot: string;
+  /** Vencimento do trial 'YYYY-MM-DD'. */
+  nextDueDate: string;
+  /** Dias até o trial vencer (negativo/0 = já venceu). */
+  diasAteVencer: number;
+  /** Dias que o dono está com o bot pausado (positivo). */
+  diasPausado: number;
+}): string {
+  const pausa = Math.max(0, Math.trunc(input.diasPausado));
+  const pPlural = pausa === 1 ? 'dia' : 'dias';
+  const venc =
+    input.diasAteVencer <= 0
+      ? `o trial JÁ venceu (${input.nextDueDate})`
+      : `o trial vence em ${input.nextDueDate} (${input.diasAteVencer} dia(s))`;
+  const acao =
+    'Falar com o cliente antes de virar churn silencioso. ⚠️ PIX NÃO religa pausa do dono.';
+  return (
+    `🟠 Trial em risco de churn: "${input.displayName}" (slot ${input.slot}) — o DONO desligou o bot ` +
+    `há ${pausa} ${pPlural} e ${venc}. ${acao}`
+  );
+}
