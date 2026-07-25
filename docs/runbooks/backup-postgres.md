@@ -172,6 +172,10 @@ DRILL_DB="startap_restore_drill"
 DRILL_PORT="55432"          # porta no host, fora do 5432 de prod
 DRILL_PW="drill_$(date +%s)"  # senha throwaway, só vive no container efêmero
 BACKUPS_DIR="/root/startap-backups"   # ajustar se o clone estiver em outro path
+# Chave PRIVADA age pra decifrar os dumps novos (.sql.gz.age). Guardada offline pelo
+# Bruno (~/Documents/backup-key.txt + vault). SÓ é necessária se o dump mais recente
+# estiver cifrado; dumps antigos em claro (.sql.gz) não usam esta variável.
+AGE_KEY_FILE="${AGE_KEY_FILE:-/root/backup-key.txt}"
 
 # --- Passo 0: idempotência — derruba drill anterior se existir ---
 docker rm -f "${DRILL_CONTAINER}" 2>/dev/null || true
@@ -180,7 +184,10 @@ docker rm -f "${DRILL_CONTAINER}" 2>/dev/null || true
 # Se o repo de backups não estiver no host, clonar antes (read-only basta):
 #   git clone git@github.com:BrunoMediador/startap-backups.git "${BACKUPS_DIR}"
 # ou atualizar:  git -C "${BACKUPS_DIR}" pull --ff-only
-LATEST_DUMP=$(find "${BACKUPS_DIR}/dumps" -name '*.sql.gz' | sort | tail -n1)
+# Desde SCRUM-20 (24/07) o backup grava CIFRADO com age (.sql.gz.age); dumps
+# antigos ficaram em claro (.sql.gz). Considera os DOIS e pega o mais recente por
+# nome (timestamp no filename ordena cronologicamente).
+LATEST_DUMP=$(find "${BACKUPS_DIR}/dumps" \( -name '*.sql.gz' -o -name '*.sql.gz.age' \) | sort | tail -n1)
 echo ">> Dump mais recente: ${LATEST_DUMP}"
 test -s "${LATEST_DUMP}"   # falha se vazio/inexistente
 
@@ -205,7 +212,19 @@ done
 
 # --- Passo 4: restaura o dump no DB efêmero (NUNCA no prod) ---
 # O dump foi feito com --no-owner --no-acl → restaura como 'postgres' sem recriar roles.
-gunzip -c "${LATEST_DUMP}" \
+# Se o dump está cifrado (.sql.gz.age), decifra com a chave PRIVADA age ANTES do gunzip.
+# 'age -d -i <chave>' desfaz o 'age -r <pubkey>' do backup-postgres.yml (l.108-109);
+# só então o stream volta a ser gzip válido pro gunzip.
+if [ "${LATEST_DUMP%.age}" != "${LATEST_DUMP}" ]; then
+  echo ">> Dump CIFRADO — decifrando com age (${AGE_KEY_FILE})."
+  command -v age >/dev/null 2>&1 || { echo "ERRO: 'age' não instalado (apt-get install -y age)"; docker rm -f "${DRILL_CONTAINER}"; exit 1; }
+  test -s "${AGE_KEY_FILE}" || { echo "ERRO: chave privada age ausente/vazia em ${AGE_KEY_FILE} — não dá pra decifrar"; docker rm -f "${DRILL_CONTAINER}"; exit 1; }
+  DECRYPT_CMD=(age -d -i "${AGE_KEY_FILE}" "${LATEST_DUMP}")
+else
+  echo ">> Dump em CLARO (legado) — sem etapa de decifração."
+  DECRYPT_CMD=(cat "${LATEST_DUMP}")
+fi
+"${DECRYPT_CMD[@]}" | gunzip -c \
   | docker exec -i "${DRILL_CONTAINER}" psql -v ON_ERROR_STOP=1 -U postgres -d "${DRILL_DB}"
 
 # --- Passo 5: sanity checks (schema presente + contagem de linhas em tabelas-chave) ---

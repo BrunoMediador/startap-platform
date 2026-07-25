@@ -307,8 +307,18 @@ async function main() {
         try {
           monitorResult = await runMonitor();
           // Com o toggle de banco OFF (skipped) ou tudo UP/silêncio, fica mudo.
+          // sendErrors (SCRUM-135 item7): falha de envio de alerta era só contada e
+          // enterrada no info-level 'monitor cycle'. Incluí no gatilho de WARN pra virar
+          // sinal consumível — remetente caído (ex.: ALERTAS FAILED) sobe como aviso, não
+          // fica invisível. Separado num log próprio pra não depender de haver atividade.
           if (monitorResult.sent > 0 || monitorResult.down > 0 || monitorResult.suppressed > 0) {
             log.warn({ ...monitorResult }, 'monitor: atividade neste ciclo');
+          }
+          if (monitorResult.sendErrors > 0) {
+            log.warn(
+              { sendErrors: monitorResult.sendErrors, checked: monitorResult.checked },
+              'monitor: falhas de envio de alerta neste ciclo (remetente pode estar caído)',
+            );
           }
         } catch (e) {
           monitorError = e;

@@ -1,3 +1,12 @@
+# Log rotation padrão (SCRUM-135 item1): sem isto, o driver json-file cresce sem
+# limite e pode entupir o disco da VPS (mesma causa-raiz do disco-alerta). 10m x 3
+# arquivos = teto de ~30MB de log por container. Ancora reusada em todos os serviços.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   api:
     build:
@@ -6,6 +15,7 @@ services:
         APP: api
     container_name: startap-api
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - SERVICE_NAME=api
@@ -25,6 +35,7 @@ services:
         APP: worker
     container_name: startap-worker
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - SERVICE_NAME=worker
@@ -42,6 +53,7 @@ services:
       dockerfile: apps/portal-api/Dockerfile
     container_name: startap-portal-api
     restart: unless-stopped
+    logging: *default-logging
     env_file: .env
     environment:
       - SERVICE_NAME=portal-api
@@ -62,6 +74,7 @@ services:
       dockerfile: apps/portal-web/Dockerfile
     container_name: startap-portal-web
     restart: unless-stopped
+    logging: *default-logging
     # Sem env_file: o Next so precisa de PORTAL_API_URL (rede interna). Herdar o
     # .env inteiro exporia segredos desnecessarios (PORTAL_SESSION_SECRET, chaves
     # OpenAI etc.) num container que so faz proxy. So o necessario abaixo.
@@ -85,6 +98,7 @@ services:
     image: redis:7-alpine
     container_name: startap-redis
     restart: unless-stopped
+    logging: *default-logging
     command: redis-server --save 60 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     networks: [rede_interna]
     volumes:
