@@ -65,6 +65,7 @@ function makeRow(over: Partial<BillingChargeRow> = {}): BillingChargeRow {
     paid_at: null,
     created_at: new Date(),
     updated_at: new Date(),
+    superseded_charge_ids: [],
     ...over,
   };
 }

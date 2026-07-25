@@ -61,6 +61,12 @@ export interface GenerateBillingResult extends Record<string, unknown> {
   skippedNoAmount: number;
   /** pendentes reconciliadas (gateway PAID, banco estava pending -> aplicado). */
   reconciledPaid: number;
+  /**
+   * QRs VELHOS abandonados por reemissao antecipada que sairam PAID no gateway e foram
+   * creditados via fallback por external_id (SCRUM-141 — caso "QR velho pago + webhook
+   * perdido", invisivel pra reconciliacao normal que so olha o abacate_charge_id vigente).
+   */
+  recoveredSuperseded: number;
   /** pendentes marcadas expired (expires_at no passado). */
   expired: number;
   /** erros nao-fatais por slot/cobranca (job nao quebra os demais). */
@@ -73,6 +79,7 @@ const EMPTY_RESULT: GenerateBillingResult = {
   generated: 0,
   skippedNoAmount: 0,
   reconciledPaid: 0,
+  recoveredSuperseded: 0,
   expired: 0,
   errors: 0,
 };
@@ -158,6 +165,56 @@ export async function runGenerateBillingCharges(
     const { slot } = charge;
     const abacateChargeId = charge.abacate_charge_id;
     if (!abacateChargeId) continue; // defensivo: query ja filtra NOT NULL
+
+    // (2a) RECUPERACAO DE QR VELHO (SCRUM-141) — ANTES de expirar/reconciliar o vigente.
+    // A reemissao antecipada abandona o abacate_charge_id antigo (QR velho segue pagavel);
+    // a reconciliacao normal so olha o VIGENTE, entao um "QR velho pago + webhook perdido"
+    // fica invisivel. Aqui pollamos cada id abandonado no gateway; se algum saiu PAID,
+    // creditamos via applyPaidWebhook usando o external_id como FALLBACK (casa a linha
+    // 'pending' vigente — mesma trava anti-duplo-credito do webhook, SCRUM-139). Dedupe por
+    // event_id 'recon:<id>'. Feito primeiro: se creditar, a linha vira 'paid' e nao deve
+    // mais expirar nem reconciliar o QR vigente -> `continue`.
+    const supersededIds = charge.superseded_charge_ids ?? [];
+    let recovered = false;
+    for (const oldId of supersededIds) {
+      try {
+        const oldStatus = await client.getChargeStatus(oldId);
+        if (oldStatus.status !== 'paid') continue;
+        const paidAmountCents = oldStatus.paidAmountCents ?? charge.amount_cents;
+        const applied = await billingWebhookEvents.applyPaidWebhook({
+          // event_id determinístico por id ABANDONADO — nao colide com o recon do vigente
+          // nem com o webhook real; dedupe impede efeito duplo em reruns.
+          eventId: `recon:${oldId}`,
+          event: 'reconciliation.poll.superseded',
+          abacateChargeId: oldId,
+          // FALLBACK: o oldId nao esta mais em abacate_charge_id (foi sobrescrito). O
+          // external_id ("{slot}-{ciclo}", estavel) casa a linha 'pending' vigente.
+          externalId: charge.external_id,
+          paidAmountCents,
+          redactedPayload: { source: 'cron-f4-superseded-recovery', abacateChargeId: oldId },
+          actor: 'cron-f4-superseded-recovery',
+          cycleMonths: 1,
+          dueDateModel: true,
+        });
+        if (applied.outcome === 'applied' || applied.outcome === 'underpaid') {
+          result.recoveredSuperseded += 1;
+          recovered = true;
+          log.info(
+            { slot, chargeId: charge.id, oldChargeId: oldId, outcome: applied.outcome },
+            'QR velho (reemissao antecipada) pago + webhook perdido recuperado pelo cron F4',
+          );
+          break; // linha ja creditada — nao polla os demais ids abandonados
+        }
+      } catch (err) {
+        result.errors += 1;
+        log.error(
+          { slot, chargeId: charge.id, err: err instanceof Error ? err.message : 'erro' },
+          'falha ao recuperar QR velho superseded (cron F4, demais seguem)',
+        );
+      }
+    }
+    // Creditado pelo QR velho: a linha nao e mais pending -> nao expira nem reconcilia.
+    if (recovered) continue;
 
     // (3) Expiracao: pending com validade no passado -> expired (sem deletar). Antes da
     // reconciliacao: se ja expirou no gateway tambem, getChargeStatus nao dira PAID.
