@@ -1,13 +1,25 @@
 /**
- * Testa a rota GET /health em isolamento.
+ * Testa a rota GET /health em isolamento (SCRUM-131).
+ *
+ * O /health deve refletir o estado REAL de Postgres (SELECT 1) e Redis (PING):
+ *  - tudo up   → HTTP 200 + status 'ok';
+ *  - algo down → HTTP 503 + status 'degraded', com detalhe por componente.
  *
  * Strategy:
  * - Mocka `@startap/db` (pool) para evitar conexao real com Postgres.
- * - Mocka `node:net` para controlar o resultado do tcpPing sem socket real.
+ * - Mocka `ioredis` para controlar o resultado do PING sem Redis real.
  * - Mocka `../config.js` para evitar que o IIFE do config singleton lance
  *   ZodError por falta de envs obrigatórias no ambiente de testes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Mocks hoisted — referenciáveis dentro da factory de vi.mock('ioredis').
+const { redisConnectMock, redisPingMock, redisDisconnectMock, redisCtorMock } = vi.hoisted(() => ({
+  redisConnectMock: vi.fn(),
+  redisPingMock: vi.fn(),
+  redisDisconnectMock: vi.fn(),
+  redisCtorMock: vi.fn(),
+}));
 
 // Mock do config singleton — evita execucao do IIFE que valida envs obrigatórias
 vi.mock('../config.js', () => ({
@@ -27,6 +39,7 @@ vi.mock('../config.js', () => ({
     OPENAI_MODEL: 'gpt-4o',
     REDIS_HOST: 'redis',
     REDIS_PORT: 6379,
+    REDIS_PASSWORD: undefined,
     STARTAP_WAHA_SESSIONS: 'startap',
     AGENT_HISTORY_MAX_CHARS: 12000,
     AGENT_TOOL_RESULT_MAX_CHARS: 6000,
@@ -58,43 +71,22 @@ vi.mock('@startap/db', () => ({
   botCourses: {},
 }));
 
-// Mock do modulo net para controlar tcpPing sem socket real
-vi.mock('node:net', () => ({
-  createConnection: vi.fn(),
-}));
+// Mock do ioredis — o construtor devolve um client fake controlável.
+vi.mock('ioredis', () => {
+  redisCtorMock.mockImplementation(() => ({
+    on: vi.fn(),
+    connect: redisConnectMock,
+    ping: redisPingMock,
+    disconnect: redisDisconnectMock,
+  }));
+  return { Redis: redisCtorMock };
+});
 
-import * as net from 'node:net';
 import { pool } from '@startap/db';
 import Fastify from 'fastify';
 import { healthRoute } from './health.js';
 
 type MockFn = ReturnType<typeof vi.fn>;
-
-/** Helper: cria um socket fake que dispara evento 'connect' no próximo tick. */
-function makeSocketOk() {
-  const socket = {
-    once: (event: string, cb: () => void) => {
-      if (event === 'connect') {
-        setTimeout(() => cb(), 0);
-      }
-    },
-    destroy: vi.fn(),
-  };
-  return socket;
-}
-
-/** Helper: cria um socket fake que dispara evento 'error' no próximo tick. */
-function makeSocketError() {
-  const socket = {
-    once: (event: string, cb: () => void) => {
-      if (event === 'error') {
-        setTimeout(() => cb(), 0);
-      }
-    },
-    destroy: vi.fn(),
-  };
-  return socket;
-}
 
 /** Helper: cria um mock de client pg que executa SELECT 1 com sucesso. */
 function makePgClientOk() {
@@ -103,6 +95,25 @@ function makePgClientOk() {
     release: vi.fn(),
   };
 }
+
+/** Deixa o Redis mock saudável (connect resolve, PING → PONG). */
+function redisUp() {
+  redisConnectMock.mockResolvedValue(undefined);
+  redisPingMock.mockResolvedValue('PONG');
+}
+
+/** Deixa o Redis mock indisponível (connect rejeita, como Redis inacessível). */
+function redisDown() {
+  redisConnectMock.mockRejectedValue(new Error('ECONNREFUSED'));
+  redisPingMock.mockResolvedValue('PONG');
+}
+
+type HealthBody = {
+  status: string;
+  uptime: number;
+  version: string;
+  checks: { db: string; redis: string };
+};
 
 describe('GET /health', () => {
   let app: ReturnType<typeof Fastify>;
@@ -118,52 +129,57 @@ describe('GET /health', () => {
     vi.clearAllMocks();
   });
 
-  it('retorna 200 com status ok quando DB e Redis estao saudaveis', async () => {
+  it('retorna 200 + status ok quando DB e Redis estao saudaveis', async () => {
     (pool.connect as MockFn).mockResolvedValue(makePgClientOk());
-    (net.createConnection as MockFn).mockReturnValue(makeSocketOk());
+    redisUp();
 
     const res = await app.inject({ method: 'GET', url: '/health' });
 
     expect(res.statusCode).toBe(200);
-    type HealthBody = {
-      status: string;
-      uptime: number;
-      version: string;
-      checks: { db: string; redis: string };
-    };
     const body = res.json() as HealthBody;
     expect(body.status).toBe('ok');
-    expect(body.checks.db).toBe('ok');
-    expect(body.checks.redis).toBe('ok');
+    expect(body.checks.db).toBe('up');
+    expect(body.checks.redis).toBe('up');
     expect(typeof body.uptime).toBe('number');
     expect(typeof body.version).toBe('string');
   });
 
-  it('retorna 200 com checks.db=degraded quando DB falha — processo nao cai', async () => {
+  it('retorna 503 + status degraded (db=down) quando o Postgres falha — processo nao cai', async () => {
     (pool.connect as MockFn).mockRejectedValue(new Error('connection refused'));
-    (net.createConnection as MockFn).mockReturnValue(makeSocketOk());
+    redisUp();
 
     const res = await app.inject({ method: 'GET', url: '/health' });
 
-    expect(res.statusCode).toBe(200);
-    type ChecksBody = { status: string; checks: { db: string; redis: string } };
-    const body = res.json() as ChecksBody;
-    expect(body.status).toBe('ok');
-    expect(body.checks.db).toBe('degraded');
-    expect(body.checks.redis).toBe('ok');
+    expect(res.statusCode).toBe(503);
+    const body = res.json() as HealthBody;
+    expect(body.status).toBe('degraded');
+    expect(body.checks.db).toBe('down');
+    expect(body.checks.redis).toBe('up');
   });
 
-  it('retorna 200 com checks.redis=degraded quando Redis falha — processo nao cai', async () => {
+  it('retorna 503 + status degraded (redis=down) quando o Redis falha — processo nao cai', async () => {
     (pool.connect as MockFn).mockResolvedValue(makePgClientOk());
-    (net.createConnection as MockFn).mockReturnValue(makeSocketError());
+    redisDown();
 
     const res = await app.inject({ method: 'GET', url: '/health' });
 
-    expect(res.statusCode).toBe(200);
-    type ChecksBody = { status: string; checks: { db: string; redis: string } };
-    const body = res.json() as ChecksBody;
-    expect(body.status).toBe('ok');
-    expect(body.checks.db).toBe('ok');
-    expect(body.checks.redis).toBe('degraded');
+    expect(res.statusCode).toBe(503);
+    const body = res.json() as HealthBody;
+    expect(body.status).toBe('degraded');
+    expect(body.checks.db).toBe('up');
+    expect(body.checks.redis).toBe('down');
+  });
+
+  it('retorna 503 + status degraded quando ambos falham', async () => {
+    (pool.connect as MockFn).mockRejectedValue(new Error('pg down'));
+    redisDown();
+
+    const res = await app.inject({ method: 'GET', url: '/health' });
+
+    expect(res.statusCode).toBe(503);
+    const body = res.json() as HealthBody;
+    expect(body.status).toBe('degraded');
+    expect(body.checks.db).toBe('down');
+    expect(body.checks.redis).toBe('down');
   });
 });

@@ -6,7 +6,7 @@
  * Varre, a cada 2 min (atrás da flag ALERTS_ENABLED + do toggle quente
  * alert_config.enabled), os checks da Fase 1:
  *   - waha:<sessao>  — 1 por cliente real conectado + a Lola (1 GET /api/sessions);
- *   - api:health     — /health do startap-api (HTTP 200 E checks.db=ok E checks.redis=ok);
+ *   - api:health     — /health do startap-api (HTTP 200 E db/redis saudáveis: 'up'/'ok');
  *   - pg:main        — SELECT 1 direto (redundância barata do worker).
  * Disco/RAM (host) ficam pra fase 2 (worker enxerga cgroup, não o host — spec §1).
  *
@@ -191,7 +191,16 @@ async function observeWaha(senderSlot: string): Promise<CheckObservation[]> {
   });
 }
 
-/** GET /health: DOWN se HTTP != 200 OU checks.db != ok OU checks.redis != ok. */
+/**
+ * Componente do /health está saudável? Aceita 'up' (SCRUM-131) e 'ok' (legado)
+ * como saudável; qualquer outra coisa ('down'/'degraded'/ausente) = falha.
+ * Tolerar os dois vocabulários evita falso alarme na janela de rolling deploy.
+ */
+function healthComponentUp(v: unknown): boolean {
+  return v === 'up' || v === 'ok';
+}
+
+/** GET /health: DOWN se HTTP != 200 OU db/redis reportam falha (down/degraded/ausente). */
 async function observeHealth(): Promise<CheckObservation> {
   try {
     const res = await fetch(config.ALERTS_API_HEALTH_URL, {
@@ -210,7 +219,7 @@ async function observeHealth(): Promise<CheckObservation> {
     const body = (await res.json()) as { checks?: { db?: unknown; redis?: unknown } };
     const db = body.checks?.db;
     const redis = body.checks?.redis;
-    if (db !== 'ok' || redis !== 'ok') {
+    if (!healthComponentUp(db) || !healthComponentUp(redis)) {
       return {
         key: HEALTH_KEY,
         label: 'API (startap-api)',
