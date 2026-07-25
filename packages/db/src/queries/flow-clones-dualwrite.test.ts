@@ -53,8 +53,21 @@ const MATRIZ_SLOT = 'teste_barbearia';
 function mockUpdateCloneFlow(): void {
   queryMock.mockImplementation(async (sql: string) => {
     const norm = sql.replace(/\s+/g, ' ');
-    if (norm.includes('UPDATE flow_clones') && norm.includes('RETURNING *')) {
-      return { rows: [{ id: String(CLONE_ID), slot: CLONE_SLOT, waha_sessao: null }], rowCount: 1 };
+    // SCRUM-112 envolveu o UPDATE num CTE (`WITH prev AS (...) UPDATE ... RETURNING fc.*, ...`)
+    // pra decidir o flip de billing_from_agenda_enabled na mesma statement — o RETURNING deixou
+    // de ser a string exata "RETURNING *" (agora tem prefixo de alias + coluna extra).
+    if (norm.includes('UPDATE flow_clones') && /RETURNING fc\.\*/.test(norm)) {
+      return {
+        rows: [
+          {
+            id: String(CLONE_ID),
+            slot: CLONE_SLOT,
+            waha_sessao: null,
+            billing_agenda_ativado: false,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     if (norm.includes('SELECT matriz_slot FROM flow_clones')) {
       return { rows: [{ matriz_slot: MATRIZ_SLOT }], rowCount: 1 };
