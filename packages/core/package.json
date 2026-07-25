@@ -18,6 +18,7 @@
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./pause-keyword": "./dist/pause-keyword.js",
+    "./gcal-event-log": "./dist/gcal-event-log.js",
     "./waha-send-failure": "./dist/waha-send-failure.js",
     "./message-ack": "./dist/message-ack.js",
     "./agenda-degrade": "./dist/agenda-degrade.js",
