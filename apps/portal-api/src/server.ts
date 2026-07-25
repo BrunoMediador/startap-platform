@@ -39,6 +39,7 @@ import { portalSignupRoutes } from './routes/portal-signup.js';
 import { portalStatusRoutes } from './routes/portal-status.js';
 import { portalTomRoutes } from './routes/portal-tom.js';
 import { promptBuilderRoutes } from './routes/prompt-builder.js';
+import { sandboxChatRoutes } from './routes/sandbox-chat.js';
 
 const log = logger.child({ service: 'portal-api' });
 
@@ -164,6 +165,11 @@ async function main() {
   // o clone dele flipado pra runtime (flip-on-customize, revertível pelo snapshot do migrate).
   // withTenant (slot da sessão) + allowlist FECHADA de emoji server-side.
   await app.register(portalCartaoConfigRoutes);
+  // "Testar conversa" (SCRUM-101): SANDBOX da persona/tom/cartão REAIS do clone logado. Gated por
+  // SANDBOX_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual. withTenant (slot só da
+  // sessão) + tools:[] no runAgent (ZERO escrita em GCal/DB/billing/pausa; nada sai por WAHA) +
+  // teto de turns/dia + cap global (Redis). read-only por construção — não usa runAgentConfigured.
+  await app.register(sandboxChatRoutes);
 
   app.setErrorHandler((err: unknown, req, reply) => {
     const msg = err instanceof Error ? err.message : String(err);

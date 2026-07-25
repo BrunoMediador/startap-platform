@@ -9,6 +9,7 @@ import { LembretesSection } from '@/components/lembretes/lembretes-section';
 import { PlanosSection } from '@/components/planos/planos-section';
 import { MonteAssistenteSection } from '@/components/prompt-builder/monte-assistente-section';
 import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
+import { TestarConversaSection } from '@/components/sandbox/testar-conversa-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { TomAssistenteSection } from '@/components/tom-assistente/tom-assistente-section';
@@ -317,6 +318,13 @@ export default function PerfilPage() {
             features.faq_personalizado (por-clone, FAQ_PERSONALIZADO_SLOTS) e traz o próprio
             divisor — some INTEIRA (sem divisor órfão) pros clientes atuais (byte-idêntico). */}
         <FaqSection />
+
+        {/* Testar conversa (SCRUM-101): SANDBOX da persona/tom/cartão REAIS do clone — o dono
+            conversa com o próprio assistente SEM efeito colateral (backend chama o LLM com
+            tools:[]; nada é agendado/enviado). A seção SE AUTO-GATEIA pelo GET /portal/sandbox/
+            status — 404 (SANDBOX_ENABLED OFF) some INTEIRA (byte-idêntico pros clientes atuais).
+            Traz o próprio divisor. Fica no fim do grupo: testa o que foi configurado acima. */}
+        <TestarConversaSection />
       </GrupoBloco>
 
       {/* GRUPO 3 — Agenda e lembretes (SCRUM-98). Agendamento + Lembretes + Conta
