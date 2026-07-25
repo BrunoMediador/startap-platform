@@ -149,6 +149,13 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     //   - false→true E !agenda configurada                -> 409 agenda_nao_configurada.
     // Checagem ANTES de qualquer escrita (sem write parcial). agendaConfigurada é derivada do
     // slot da SESSÃO (anti-IDOR: nunca de input) e fail-closed (na dúvida, não religa).
+    // SCRUM-112: se ESTE PUT é a transição agenda_automatica false→true (o clone acabou de virar
+    // um clone de agenda), liga também o gate billing-da-agenda (billing_from_agenda_enabled=true)
+    // DEPOIS da escrita do perfil — senão a tela Faturamento nasce morta (bug do MVS: individual
+    // +agenda mas o billing nunca ligava). Só na TRANSIÇÃO (estavaDesligado): true→true no-op não
+    // reativa billing de quem o desligou de propósito. A checagem só roda quando o payload pede
+    // agenda_automatica=true e passou pelo gate 409 (agenda já configurada).
+    let ligarBillingAgenda = false;
     if (parsed.data.agenda_automatica === true) {
       const perfilAtual = await portalConfig.getPerfilBySlot(slot);
       if (perfilAtual === null) return reply.code(404).send({ error: 'fluxo nao encontrado' });
@@ -156,9 +163,15 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       if (estavaDesligado && !(await flowClones.isAgendaConfiguradaBySlot(slot))) {
         return reply.code(409).send({ error: 'agenda_nao_configurada' });
       }
+      ligarBillingAgenda = estavaDesligado;
     }
     const ok = await portalConfig.updatePerfilBySlot(slot, parsed.data);
     if (!ok) return reply.code(404).send({ error: 'fluxo nao encontrado' });
+    // Liga o billing-da-agenda na transição (idempotente/só-liga no data layer — anti-IDOR: slot
+    // da sessão). Depois da escrita do perfil pra o clone já valer como "de agenda".
+    if (ligarBillingAgenda) {
+      await flowClones.enableBillingFromAgendaBySlot(slot);
+    }
     // Escrita do fuso escopada ao slot da SESSÃO (withTenant) — nunca outro tenant.
     if (timezoneToSet !== undefined) {
       await flowClones.updateTimezoneBySlot(slot, timezoneToSet);

@@ -878,6 +878,30 @@ export async function resolveModoAtendenteEnabledForSlot(
   return resolveModoAtendenteEnabled(slot, envCsv, clone?.modo_atendente_enabled);
 }
 
+/**
+ * Liga o gate billing-da-agenda por-clone (flow_clones.billing_from_agenda_enabled=true) —
+ * SCRUM-112. Chamado na TRANSIÇÃO agenda_automatica false→true (o clone acabou de VIRAR um
+ * clone de agenda), pra que a tela Faturamento nasça com Previsão|Faturado vivas em vez de
+ * morta (bug do MVS: individual+agenda mas billing_from_agenda_enabled=false → Faturamento
+ * inerte). Idempotente: só escreve quando ainda estava false (WHERE ... IS DISTINCT FROM TRUE),
+ * então re-save de agenda já-ligada é no-op e NUNCA reativa o billing de quem o desligou de
+ * propósito depois. NÃO desliga nada (nunca o inverso). Escopado por slot (SEMPRE parametrizado;
+ * o slot vem da sessão withTenant no portal, jamais do input — anti-IDOR). Invalida o cache
+ * (a coluna entra no CloneRow). Retorna true se ESTA chamada ligou; false se já estava ligado
+ * ou o slot não existe.
+ */
+export async function enableBillingFromAgendaBySlot(slot: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE flow_clones
+        SET billing_from_agenda_enabled = TRUE, updated_at = NOW()
+      WHERE slot = $1 AND billing_from_agenda_enabled IS DISTINCT FROM TRUE`,
+    [slot],
+  );
+  const updated = (r.rowCount ?? 0) > 0;
+  if (updated) invalidateCloneCache({ slot });
+  return updated;
+}
+
 /** BILLING DA AGENDA (ADR 0027): env ATEND_FROM_AGENDA_SLOTS OR flow_clones.billing_from_agenda_enabled. */
 export async function resolveAtendFromAgendaEnabledForSlot(
   slot: string,

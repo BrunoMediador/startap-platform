@@ -33,6 +33,7 @@ const {
   clearAlertOwnerPhoneBySlotMock,
   isAwaitingAgendaConnectionMock,
   isAgendaConfiguradaBySlotMock,
+  enableBillingFromAgendaBySlotMock,
   csvGateMock,
 } = vi.hoisted(() => ({
   getPerfilBySlotMock: vi.fn(),
@@ -44,6 +45,7 @@ const {
   clearAlertOwnerPhoneBySlotMock: vi.fn(),
   isAwaitingAgendaConnectionMock: vi.fn(),
   isAgendaConfiguradaBySlotMock: vi.fn(),
+  enableBillingFromAgendaBySlotMock: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por
   // env (cfgMock.MODO_ATENDENTE_SLOTS / FAQ_PERSONALIZADO_SLOTS); byte-idêntico ao gate de antes.
   csvGateMock: (slot: string, csv?: string | null): boolean => {
@@ -72,6 +74,7 @@ vi.mock('@startap/db', () => ({
       csvGateMock(slot, csv),
     isAwaitingAgendaConnection: (...a: unknown[]) => isAwaitingAgendaConnectionMock(...a),
     isAgendaConfiguradaBySlot: (...a: unknown[]) => isAgendaConfiguradaBySlotMock(...a),
+    enableBillingFromAgendaBySlot: (...a: unknown[]) => enableBillingFromAgendaBySlotMock(...a),
   },
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
 }));
@@ -124,6 +127,8 @@ beforeEach(() => {
   isAwaitingAgendaConnectionMock.mockResolvedValue(false);
   // Default: agenda NÃO configurada (estado da maioria dos clones — SCRUM-74). Testes ligam.
   isAgendaConfiguradaBySlotMock.mockResolvedValue(false);
+  // SCRUM-112: liga do gate billing-da-agenda OK por padrão (só é chamado na transição false→true).
+  enableBillingFromAgendaBySlotMock.mockResolvedValue(true);
 });
 
 describe('GET /portal/perfil', () => {
@@ -538,6 +543,9 @@ describe('PUT /portal/perfil — gate agenda_automatica false→true (SCRUM-74)'
       injectedSlot,
       expect.objectContaining({ agenda_automatica: true }),
     );
+    // SCRUM-112: a TRANSIÇÃO false→true liga o gate billing-da-agenda no slot da SESSÃO
+    // (Faturamento nasce vivo). Anti-IDOR: slot da sessão, nunca do body.
+    expect(enableBillingFromAgendaBySlotMock).toHaveBeenCalledWith(injectedSlot);
     await app.close();
   });
 
@@ -560,6 +568,8 @@ describe('PUT /portal/perfil — gate agenda_automatica false→true (SCRUM-74)'
       injectedSlot,
       expect.objectContaining({ agenda_automatica: false }),
     );
+    // SCRUM-112: desligar NUNCA liga billing (o fix é one-way só na transição PRA true).
+    expect(enableBillingFromAgendaBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -581,6 +591,8 @@ describe('PUT /portal/perfil — gate agenda_automatica false→true (SCRUM-74)'
       injectedSlot,
       expect.objectContaining({ agenda_automatica: true }),
     );
+    // SCRUM-112: true→true NÃO é transição — não reativa o billing de quem o desligou depois.
+    expect(enableBillingFromAgendaBySlotMock).not.toHaveBeenCalled();
     await app.close();
   });
 

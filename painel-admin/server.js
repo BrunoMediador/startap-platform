@@ -4615,7 +4615,10 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
     //     silêncio, uma volta deliberada pra atendente com a agenda ainda conectada.
     //  2. NUNCA o inverso: teste que falha ('invalid') não desliga agenda de ninguém — falha
     //     temporária de rede não pode transformar cliente de agenda em atendente.
-    //  3. `billing_from_agenda_enabled` (ADR 0027) NÃO é tocado — outro gate, SCRUM-112.
+    //  3. `billing_from_agenda_enabled` (ADR 0027) É LIGADO junto no flip (SCRUM-112): o clone
+    //     que acaba de virar clone de agenda precisa da tela Faturamento viva (Previsão|Faturado)
+    //     — sem isso ela nasce morta (bug do MVS: individual+agenda mas billing nunca ligava).
+    //     SÓ liga no flip; nunca desliga (o inverso não existe aqui).
     //  4. `bot_prompt`/persona NÃO é tocado — trocar prompt de cliente é caminho separado.
     //  5. SÓ `product_type='individual'` (decisão do Bruno, 24/07). No ESTABELECIMENTO a
     //     agenda é 1 calendarId por COLABORADOR (clone_colaboradores.gcal_*) — o gcal do
@@ -4717,6 +4720,10 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
                                        THEN jsonb_set(COALESCE(fc.personalizacao, '{}'::jsonb), '{agenda_automatica}', to_jsonb('true'::text), true)
                                      ELSE fc.personalizacao
                                    END,
+              -- SCRUM-112: o flip liga o gate billing-da-agenda (ADR 0027) na MESMA statement —
+              -- clone de agenda com Faturamento morto era o bug do MVS. Só liga no flip; jamais
+              -- desliga (mesma disciplina one-way do modo_atendente_enabled abaixo).
+              billing_from_agenda_enabled = CASE WHEN prev.flip THEN true ELSE fc.billing_from_agenda_enabled END,
               modo_atendente_enabled = CASE WHEN prev.flip THEN false ELSE fc.modo_atendente_enabled END,
               updated_at         = NOW()
          FROM prev

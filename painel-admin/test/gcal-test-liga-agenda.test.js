@@ -540,8 +540,14 @@ test('flip é ATÔMICO: um único UPDATE flow_clones no handler', () => {
   );
 });
 
-test('billing_from_agenda_enabled e bot_prompt NÃO são tocados (fora do escopo)', () => {
-  assert.doesNotMatch(SQL, /billing_from_agenda_enabled/i, 'ADR 0027 / SCRUM-112 é outro gate');
+test('billing_from_agenda_enabled É LIGADO no flip (SCRUM-112); bot_prompt NÃO é tocado', () => {
+  // SCRUM-112: o flip agora liga o gate billing-da-agenda na MESMA statement (Faturamento
+  // nasce vivo). Só via prev.flip (nunca incondicional, nunca desligando).
+  assert.match(
+    SQL,
+    /billing_from_agenda_enabled\s*=\s*CASE\s+WHEN\s+prev\.flip\s+THEN\s+true/i,
+    'o flip deve ligar billing_from_agenda_enabled (só no flip, na mesma statement)',
+  );
   assert.doesNotMatch(SQL, /bot_prompt/i, 'trocar persona de cliente é caminho separado');
 });
 
