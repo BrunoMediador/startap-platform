@@ -91,9 +91,10 @@ describe('addHumanReplyPause — NÃO rebaixa pausa permanente ativa (N1, SCRUM-
     expect(sql).toMatch(
       /flow_pauses\.expires_at IS NOT NULL AND flow_pauses\.expires_at <= NOW\(\)/i,
     );
-    // $6 = expiresAt (ordem: flowId, flowName, telefone, session, reason, expires_at) — sem source no param.
+    // $6 = expiresAt, $7 = contact_name (ordem: flowId, flowName, telefone, session, reason,
+    // expires_at, contact_name) — sem source no param.
     expect(params[5]).toBe(exp);
-    expect(params).toHaveLength(6);
+    expect(params).toHaveLength(7);
   });
 
   it('expiresAt obrigatório é repassado; telefone/flow escopados por param ($1/$3)', async () => {
@@ -104,6 +105,32 @@ describe('addHumanReplyPause — NÃO rebaixa pausa permanente ativa (N1, SCRUM-
     expect(params[0]).toBe('clone_x');
     expect(params[2]).toBe('5511999990000');
     expect(params[5]).toBe(exp);
+  });
+
+  it('SCRUM-144: snapshota contact_name via $7 e preserva o antigo no conflito (COALESCE/NULLIF)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const exp = new Date(Date.now() + 3_600_000);
+    await addHumanReplyPause({
+      flowId: 'clone_x',
+      telefone: '5511999990000',
+      expiresAt: exp,
+      contactName: 'Wal Delfim',
+    });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // Coluna contact_name entra no INSERT e o DO UPDATE só sobrescreve se veio nome novo
+    // (nome ausente numa renovação não apaga o já capturado).
+    expect(sql).toMatch(/INSERT INTO flow_pauses[\s\S]*contact_name/i);
+    expect(sql).toMatch(/contact_name = COALESCE\(NULLIF\(EXCLUDED\.contact_name, ''\)/i);
+    expect(params[6]).toBe('Wal Delfim');
+    expect(params).toHaveLength(7);
+  });
+
+  it('SCRUM-144: sem contactName → $7 = null (não grava nem apaga nome)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const exp = new Date(Date.now() + 3_600_000);
+    await addHumanReplyPause({ flowId: 'clone_x', telefone: '5511999990000', expiresAt: exp });
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params[6]).toBeNull();
   });
 });
 

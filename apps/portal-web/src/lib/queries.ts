@@ -684,11 +684,18 @@ export function useContatos(slot: string, enabled: boolean): UseQueryResult<Cont
   });
 }
 
-export function useAddPausa(slot: string): UseMutationResult<unknown, Error, string> {
+// SCRUM-144: manda também o `nome` que o front já tem do contato selecionado no sheet de
+// recentes, pra o backend snapshotar em contact_name (nome durável na pausa).
+export interface AddPausaInput {
+  telefone: string;
+  nome?: string | null;
+}
+
+export function useAddPausa(slot: string): UseMutationResult<unknown, Error, AddPausaInput> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (telefone: string) =>
-      apiFetch('/portal/pausas', { method: 'POST', body: { telefone } }),
+    mutationFn: ({ telefone, nome }: AddPausaInput) =>
+      apiFetch('/portal/pausas', { method: 'POST', body: { telefone, nome: nome ?? undefined } }),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.pausas(slot) });
       client.invalidateQueries({ queryKey: qk.status(slot) });

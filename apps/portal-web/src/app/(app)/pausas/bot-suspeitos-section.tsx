@@ -6,6 +6,9 @@ import { useToast } from '@/components/ui/toast';
 import type { PausaRow } from '@/lib/api-types';
 import { formatPausadoHa, formatPhoneDisplay, initials } from '@/lib/format';
 import { useBotDetectPausas, useRemoveBotDetectPausa } from '@/lib/queries';
+
+/** Placeholder muted quando nenhum nome resolve (SCRUM-144) — igual ao da lista de Pausas. */
+const NOME_NAO_CAPTURADO = 'nome não capturado';
 /**
  * Seção "Números pausados (suspeita de bot)" (SCRUM-4 PR-E). Lista os números que a auto-pausa do
  * bot-detect pausou (source='bot_detected') e deixa o dono DESPAUSAR num clique — a rede de proteção
@@ -36,10 +39,18 @@ export function BotSuspeitosSection({ slot, resolveName }: BotSuspeitosSectionPr
   // Enquanto a auto-pausa estiver OFF a lista vem vazia -> não renderiza nada (nem em erro/loading).
   if (pausas.length === 0) return null;
 
+  // SCRUM-144: contact_name snapshotado na pausa PRIMEIRO; senão o join com recentes (prop
+  // resolveName). null = nenhum nome real → UI mostra "nome não capturado".
+  function nomeReal(p: PausaRow): string | null {
+    const snap = p.contact_name?.trim();
+    if (snap && snap.length > 0) return snap;
+    return resolveName(p.telefone);
+  }
+
   function confirmDespausar() {
     const p = despausando;
     if (!p) return;
-    const rotulo = resolveName(p.telefone) ?? formatPhoneDisplay(p.telefone);
+    const rotulo = nomeReal(p) ?? formatPhoneDisplay(p.telefone);
     removePausa.mutate(p.telefone, {
       onSuccess: () => {
         setDespausando(null);
@@ -52,7 +63,7 @@ export function BotSuspeitosSection({ slot, resolveName }: BotSuspeitosSectionPr
     });
   }
 
-  const despausandoNome = despausando ? resolveName(despausando.telefone) : null;
+  const despausandoNome = despausando ? nomeReal(despausando) : null;
 
   return (
     <section className="mb-4">
@@ -72,7 +83,9 @@ export function BotSuspeitosSection({ slot, resolveName }: BotSuspeitosSectionPr
 
       <div className="overflow-hidden rounded-card border border-warn/40 bg-surface shadow-card">
         {pausas.map((p) => {
-          const nome = resolveName(p.telefone);
+          // SCRUM-144: TÍTULO = nome real OU "nome não capturado" (muted); SUBTÍTULO = número
+          // sempre visível. Mesma regra uniforme da lista principal de Pausas.
+          const nome = nomeReal(p);
           const numero = formatPhoneDisplay(p.telefone);
           return (
             <div
@@ -84,24 +97,17 @@ export function BotSuspeitosSection({ slot, resolveName }: BotSuspeitosSectionPr
               </span>
               <div className="min-w-0 flex-1">
                 {nome ? (
-                  <>
-                    <div className="truncate font-display text-[15px] font-semibold text-ink">
-                      {nome}
-                    </div>
-                    <div className="mt-0.5 text-[12.5px] tabular-nums text-ink-soft">
-                      {numero} · {formatPausadoHa(p.updated_at)}
-                    </div>
-                  </>
+                  <div className="truncate font-display text-[15px] font-semibold text-ink">
+                    {nome}
+                  </div>
                 ) : (
-                  <>
-                    <div className="truncate font-display text-[15px] font-semibold tabular-nums text-ink">
-                      {numero}
-                    </div>
-                    <div className="mt-0.5 text-[12.5px] text-ink-soft">
-                      {formatPausadoHa(p.updated_at)}
-                    </div>
-                  </>
+                  <div className="truncate font-display text-[15px] font-medium italic text-ink-faint">
+                    {NOME_NAO_CAPTURADO}
+                  </div>
                 )}
+                <div className="mt-0.5 text-[12.5px] tabular-nums text-ink-soft">
+                  {numero} · {formatPausadoHa(p.updated_at)}
+                </div>
               </div>
               <button
                 type="button"

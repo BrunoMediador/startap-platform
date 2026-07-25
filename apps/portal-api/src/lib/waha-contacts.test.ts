@@ -9,7 +9,7 @@ vi.mock('@startap/core/logger', () => ({
 }));
 
 import { query } from '@startap/db';
-import { getRecentContacts } from './waha-contacts.js';
+import { enrichContactName, getRecentContacts, parseContactName } from './waha-contacts.js';
 
 const queryMock = vi.mocked(query);
 
@@ -90,5 +90,65 @@ describe('getRecentContacts — fallback DB (SCRUM-43)', () => {
       (sql as string).includes('message_log'),
     );
     expect(contactsCall?.[1]).toContain(null);
+  });
+});
+
+// ── SCRUM-144 / consulta waha-specialist: enrichment via GET /api/contacts ──────────────────
+function fetchOk(body: unknown): Response {
+  return { ok: true, status: 200, json: async () => body } as unknown as Response;
+}
+function fetchStatus(status: number): Response {
+  return { ok: false, status, json: async () => null } as unknown as Response;
+}
+
+describe('parseContactName — shape do WAHA 2026.6.2 { id, name, lid, phoneNumber }', () => {
+  it('extrai name (o campo do /api/contacts)', () => {
+    expect(parseContactName({ id: '55@c.us', name: 'Wal Delfim', lid: null })).toBe('Wal Delfim');
+  });
+  it('cai em pushName por compat quando name vazio/ausente', () => {
+    expect(parseContactName({ name: '   ', pushName: 'Zé' })).toBe('Zé');
+    expect(parseContactName({ pushName: 'Ana' })).toBe('Ana');
+  });
+  it('null quando nada de nome (não-vácuo)', () => {
+    expect(parseContactName({ id: 'x', name: null })).toBeNull();
+    expect(parseContactName({})).toBeNull();
+    expect(parseContactName(null)).toBeNull();
+    expect(parseContactName('nope')).toBeNull();
+  });
+});
+
+describe('enrichContactName — GET /api/contacts (não mais /chats/{id}, que dá 404 na 2026.6.2)', () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('chama /api/contacts?session&contactId e devolve o name; não usa mais /chats/{id}', async () => {
+    fetchMock.mockResolvedValue(
+      fetchOk({
+        id: '5535999998888@c.us',
+        name: 'Wal Delfim',
+        lid: null,
+        phoneNumber: '5535999998888',
+      }),
+    );
+    const name = await enrichContactName('SESS', '5535999998888@c.us');
+    expect(name).toBe('Wal Delfim');
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain('/api/contacts?session=SESS');
+    expect(url).toContain('contactId=');
+    expect(url).not.toMatch(/\/chats\//);
+  });
+
+  it('HTTP não-ok (404) → null (fail-safe, não quebra recent-contacts)', async () => {
+    fetchMock.mockResolvedValue(fetchStatus(404));
+    expect(await enrichContactName('SESS', 'x@c.us')).toBeNull();
+  });
+
+  it('fetch lança (timeout/rede) → null', async () => {
+    fetchMock.mockRejectedValue(new Error('aborted'));
+    expect(await enrichContactName('SESS', 'x@c.us')).toBeNull();
   });
 });

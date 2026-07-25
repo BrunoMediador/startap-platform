@@ -42,9 +42,16 @@ import { ContactSheet } from './contact-sheet';
 const PAGE_SIZE = 10;
 
 /**
+ * Placeholder do TÍTULO quando NENHUM nome resolve (nem contact_name snapshotado, nem join com
+ * recent-contacts). Ordem do Bruno (SCRUM-144): estilo muted/secundário, NÃO com o peso de um
+ * nome real; o número segue como subtítulo (sempre visível e pesquisável). Literal fixo — não
+ * interpola dado, não é um nome de verdade (por isso NÃO entra na busca por nome).
+ */
+const NOME_NAO_CAPTURADO = 'nome não capturado';
+
+/**
  * Rótulo de um contato pra toasts/confirmações: o NOME quando houver, senão o
- * NÚMERO formatado — nunca a palavra "Contato" sozinha, que não ajuda o dono a
- * reconhecer quem é (mesma degradação da lista: número vira o título).
+ * NÚMERO formatado — nunca "nome não capturado" (num toast o número reconhece melhor).
  */
 function rotuloContato(name: string | null | undefined, phone: string): string {
   const trimmed = name?.trim();
@@ -90,8 +97,15 @@ export default function PausasPage() {
     [pausas],
   );
 
-  /** Nome a exibir pra um pausado: do join (se houver) ou null (mostra so o numero). */
+  /**
+   * Nome REAL de um pausado (ou null): SCRUM-144 = contact_name snapshotado na pausa PRIMEIRO
+   * (durável, independe do WAHA); senão o join com recent-contacts (SCRUM-142, invariante ao 9º
+   * dígito) como FALLBACK. null = nenhum nome real → a UI mostra "nome não capturado". Este
+   * valor (real ou null) é o que vai pra busca-por-nome e pros toasts (nunca o placeholder).
+   */
   function nomePausado(p: PausaRow): string | null {
+    const snap = p.contact_name?.trim();
+    if (snap && snap.length > 0) return snap;
     return nomePorTelefone.get(normalizePhone(p.telefone)) ?? null;
   }
 
@@ -106,9 +120,11 @@ export default function PausasPage() {
   // pausaMatchesBusca. Busca vazia = lista inteira.
   const filtradas = useMemo(() => {
     if (busca.trim() === '') return pausas;
-    return pausas.filter((p) =>
-      pausaMatchesBusca(p.telefone, nomePorTelefone.get(normalizePhone(p.telefone)) ?? null, busca),
-    );
+    return pausas.filter((p) => {
+      // Nome real (contact_name durável → join recentes); nunca o placeholder (não é nome).
+      const nomeReal = p.contact_name?.trim() || nomePorTelefone.get(normalizePhone(p.telefone));
+      return pausaMatchesBusca(p.telefone, nomeReal ?? null, busca);
+    });
     // nomePorTelefone entra na dep pra refiltrar quando os contatos chegam.
   }, [pausas, busca, nomePorTelefone]);
 
@@ -134,16 +150,21 @@ export default function PausasPage() {
   function confirmPausar() {
     const c = pausando;
     if (!c) return;
-    addPausa.mutate(c.phone, {
-      onSuccess: () => {
-        setPausando(null);
-        toast.success(`${rotuloContato(c.name, c.phone)} pausado`);
+    // SCRUM-144: manda o nome que já temos do contato selecionado no sheet → backend snapshota
+    // em contact_name (nome durável, independe do store do WAHA depois).
+    addPausa.mutate(
+      { telefone: c.phone, nome: c.name },
+      {
+        onSuccess: () => {
+          setPausando(null);
+          toast.success(`${rotuloContato(c.name, c.phone)} pausado`);
+        },
+        onError: () => {
+          setPausando(null);
+          toast.error('Não foi possível pausar. Tente de novo.');
+        },
       },
-      onError: () => {
-        setPausando(null);
-        toast.error('Não foi possível pausar. Tente de novo.');
-      },
-    });
+    );
   }
 
   function confirmDespausar() {
@@ -220,6 +241,9 @@ export default function PausasPage() {
           ) : (
             <div className="stagger stagger-2 mb-3.5 overflow-hidden rounded-card border border-line bg-surface shadow-card">
               {visiveis.map((p) => {
+                // SCRUM-144: TÍTULO = nome real (contact_name → join) OU "nome não capturado"
+                // (muted); SUBTÍTULO = número, SEMPRE visível (reconhecer + buscar). Regra
+                // uniforme — o número nunca mais vira título.
                 const nome = nomePausado(p);
                 const numero = formatPhoneDisplay(p.telefone);
                 return (
@@ -232,24 +256,17 @@ export default function PausasPage() {
                     </span>
                     <div className="min-w-0 flex-1">
                       {nome ? (
-                        <>
-                          <div className="truncate font-display text-[15px] font-semibold text-ink">
-                            {nome}
-                          </div>
-                          <div className="mt-0.5 text-[12.5px] tabular-nums text-ink-soft">
-                            {numero} · {formatPausadoHa(p.updated_at)}
-                          </div>
-                        </>
+                        <div className="truncate font-display text-[15px] font-semibold text-ink">
+                          {nome}
+                        </div>
                       ) : (
-                        <>
-                          <div className="truncate font-display text-[15px] font-semibold tabular-nums text-ink">
-                            {numero}
-                          </div>
-                          <div className="mt-0.5 text-[12.5px] text-ink-soft">
-                            {formatPausadoHa(p.updated_at)}
-                          </div>
-                        </>
+                        <div className="truncate font-display text-[15px] font-medium italic text-ink-faint">
+                          {NOME_NAO_CAPTURADO}
+                        </div>
                       )}
+                      <div className="mt-0.5 text-[12.5px] tabular-nums text-ink-soft">
+                        {numero} · {formatPausadoHa(p.updated_at)}
+                      </div>
                     </div>
                     <button
                       type="button"

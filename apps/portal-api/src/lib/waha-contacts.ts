@@ -16,6 +16,7 @@ const WAHA_URL = process.env.WAHA_URL ?? 'http://waha:3000';
 const WAHA_API_KEY = process.env.WAHA_API_KEY ?? '';
 
 const TIMEOUT_MS = 8_000;
+const ENRICH_TIMEOUT_MS = 3_000;
 const ENRICH_LIMIT = 30;
 const RESPONSE_LIMIT = 100;
 
@@ -30,6 +31,48 @@ interface WahaChat {
   name?: string | null;
   conversationTimestamp?: number;
   timestamp?: number;
+}
+
+/**
+ * Extrai o nome de um contato da resposta do WAHA GET /api/contacts. Shape do WAHA 2026.6.2 =
+ * `{ id, name, lid, phoneNumber }`; caímos em `pushName` por compat. Puro/testável.
+ */
+export function parseContactName(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as { name?: unknown; pushName?: unknown };
+  const name = typeof d.name === 'string' ? d.name.trim() : '';
+  if (name) return name;
+  const push = typeof d.pushName === 'string' ? d.pushName.trim() : '';
+  return push.length > 0 ? push : null;
+}
+
+/**
+ * Busca o nome de UM contato via GET /api/contacts?session&contactId (WAHA 2026.6.2).
+ *
+ * Migrado do antigo GET /api/{session}/chats/{id}, que passou a retornar 404 nessa versão
+ * (validado em prod) — por isso MESMO os clones com store ON vinham com nome nulo pela via
+ * recent-contacts. Fail-safe: timeout duro + null em qualquer erro (NUNCA quebra recent-contacts).
+ */
+export async function enrichContactName(
+  session: string,
+  contactId: string,
+): Promise<string | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ENRICH_TIMEOUT_MS);
+  try {
+    const url = `${WAHA_URL}/api/contacts?session=${encodeURIComponent(session)}&contactId=${encodeURIComponent(contactId)}`;
+    const r = await fetch(url, {
+      headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {},
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (!r.ok) return null;
+    const data = (await r.json().catch(() => null)) as unknown;
+    return parseContactName(data);
+  } catch {
+    clearTimeout(t);
+    return null;
+  }
 }
 
 /** Fallback: telefones distintos que conversaram com a session em message_log. */
@@ -128,29 +171,10 @@ export async function getRecentContacts(
   mapped.sort((a, b) => b.ts - a.ts);
   const limited = mapped.slice(0, RESPONSE_LIMIT);
 
-  // 3. enriquece pushName para os primeiros ENRICH_LIMIT chats
+  // 3. enriquece o nome (via GET /api/contacts, WAHA 2026.6.2) para os primeiros ENRICH_LIMIT chats
   const enrichBatch = limited.slice(0, ENRICH_LIMIT);
   const enrichResults = await Promise.allSettled(
-    enrichBatch.map(async (item) => {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 3_000);
-      try {
-        const r = await fetch(
-          `${WAHA_URL}/api/${session}/chats/${encodeURIComponent(item.chatId)}`,
-          { headers: WAHA_API_KEY ? { 'X-Api-Key': WAHA_API_KEY } : {}, signal: ctrl.signal },
-        );
-        clearTimeout(t);
-        if (!r.ok) return null;
-        const data = (await r.json().catch(() => null)) as {
-          name?: string;
-          pushName?: string;
-        } | null;
-        return data?.name ?? data?.pushName ?? null;
-      } catch {
-        clearTimeout(t);
-        return null;
-      }
-    }),
+    enrichBatch.map((item) => enrichContactName(session, item.chatId)),
   );
 
   const contacts: RecentContact[] = limited.map((item, idx) => {

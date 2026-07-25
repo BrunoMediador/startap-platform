@@ -52,18 +52,21 @@ describeIf('pausas do portal contra Postgres REAL (SCRUM-86)', () => {
          VALUES ($1, 'Meduzza Teste', 'SESS_ITEST') ON CONFLICT (slot) DO NOTHING`,
       [SLOT],
     );
-    // Mesmo shape de migrations 008 + 071 (flow_id+telefone PK; expires_at TIMESTAMP NULL).
+    // Mesmo shape de migrations 008 + 071 + 077 (flow_id+telefone PK; expires_at TIMESTAMP NULL;
+    // contact_name TEXT NULL = nome snapshotado do contato, SCRUM-144 — o INSERT das funções sob
+    // teste agora referencia essa coluna; sem ela o PG estoura 42703 undefined_column).
     await exec(`CREATE TABLE IF NOT EXISTS flow_pauses (
-      flow_id     VARCHAR(100) NOT NULL,
-      flow_name   VARCHAR(150),
-      telefone    VARCHAR(32)  NOT NULL,
-      session     VARCHAR(100),
-      active      BOOLEAN NOT NULL DEFAULT TRUE,
-      source      VARCHAR(40) DEFAULT 'manual',
-      reason      TEXT,
-      expires_at  TIMESTAMP NULL,
-      created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
-      updated_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+      flow_id      VARCHAR(100) NOT NULL,
+      flow_name    VARCHAR(150),
+      telefone     VARCHAR(32)  NOT NULL,
+      session      VARCHAR(100),
+      active       BOOLEAN NOT NULL DEFAULT TRUE,
+      source       VARCHAR(40) DEFAULT 'manual',
+      reason       TEXT,
+      expires_at   TIMESTAMP NULL,
+      contact_name TEXT NULL,
+      created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMP NOT NULL DEFAULT NOW(),
       PRIMARY KEY (flow_id, telefone))`);
   }
 

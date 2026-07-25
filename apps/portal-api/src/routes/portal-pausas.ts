@@ -23,6 +23,15 @@ const phoneSchema = z
     message: 'telefone deve ter 10-15 digitos (DDI+DDD+numero)',
   });
 
+// SCRUM-144: nome do contato que o front JA tem (do sheet de recentes). Opcional; snapshotado
+// em flow_pauses.contact_name pra o nome durar. Trim + teto de 120 chars (defesa em
+// profundidade — e PII, nunca logado). Vazio/ausente => null (nao grava, nao apaga o antigo).
+const nomeSchema = z
+  .string()
+  .max(120)
+  .transform((v) => v.trim())
+  .optional();
+
 export const portalPausasRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/pausas', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
@@ -32,7 +41,7 @@ export const portalPausasRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/portal/pausas', { preHandler: withTenant }, async (req, reply) => {
     const { slot, userId } = requireTenant(req);
-    const body = (req.body ?? {}) as { telefone?: unknown };
+    const body = (req.body ?? {}) as { telefone?: unknown; nome?: unknown };
     const parsed = phoneSchema.safeParse(String(body.telefone ?? ''));
     if (!parsed.success) {
       return reply
@@ -40,8 +49,17 @@ export const portalPausasRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: parsed.error.issues[0]?.message ?? 'telefone invalido' });
     }
     const telefone = parsed.data;
-    const pausa = await portalConfig.addPausaBySlot({ slot, telefone });
-    log.info({ slot, userId, phone: maskPhone(telefone) }, 'pausa criada via portal');
+    // Nome opcional (SCRUM-144). Best-effort: nome invalido/gigante nao bloqueia a pausa — a
+    // pausa e o efeito importante; o nome e enriquecimento. NUNCA logado (PII).
+    const nomeParsed = nomeSchema.safeParse(
+      body.nome === undefined ? undefined : String(body.nome),
+    );
+    const nome = nomeParsed.success && nomeParsed.data ? nomeParsed.data : null;
+    const pausa = await portalConfig.addPausaBySlot({ slot, telefone, nome });
+    log.info(
+      { slot, userId, phone: maskPhone(telefone), hasNome: nome !== null },
+      'pausa criada via portal',
+    );
     return reply.code(201).send({ ok: true, pausa });
   });
 
