@@ -282,7 +282,7 @@ describe('runGenerateBillingCharges — RECONCILIACAO + EXPIRACAO', () => {
   // A reconciliacao normal so olha o abacate_charge_id VIGENTE (ainda pending) — o pagamento
   // do QR velho fica invisivel. A recuperacao polla os superseded_charge_ids e credita via
   // fallback por external_id.
-  it('recupera QR velho (superseded) PAID + webhook perdido via external_id, e NAO reconcilia o vigente', async () => {
+  it('recupera QR velho (superseded) PAID integral + webhook perdido via external_id, e NAO reconcilia o vigente', async () => {
     listPendingChargesWithGateway.mockResolvedValue([
       {
         id: '60',
@@ -299,7 +299,14 @@ describe('runGenerateBillingCharges — RECONCILIACAO + EXPIRACAO', () => {
         ? Promise.resolve({ id, status: 'paid', paidAmountCents: 5000 })
         : Promise.resolve({ id, status: 'pending', paidAmountCents: null }),
     );
-    applyPaidWebhook.mockResolvedValue({ outcome: 'applied', slot: 'samuel', resumed: true });
+    // outcome 'applied' (pago >= snapshot): so ENTAO e correto dar continue/parar de pollar.
+    applyPaidWebhook.mockResolvedValue({
+      outcome: 'applied',
+      slot: 'samuel',
+      resumed: true,
+      amountCents: 5000,
+      paidAmountCents: 5000,
+    });
 
     const { runGenerateBillingCharges } = await loadJob(true);
     const r = await runGenerateBillingCharges(NOW);
@@ -316,10 +323,69 @@ describe('runGenerateBillingCharges — RECONCILIACAO + EXPIRACAO', () => {
         dueDateModel: true,
       }),
     );
-    // `continue` apos recuperar: o QR vigente NAO e pollado nem expira.
+    // `continue` apos recuperar (SO com 'applied'): o QR vigente NAO e pollado nem expira.
     expect(getChargeStatus).toHaveBeenCalledWith('pix_char_old');
     expect(getChargeStatus).not.toHaveBeenCalledWith('pix_char_new');
     expect(markChargeExpired).not.toHaveBeenCalled();
+  });
+
+  // FIX (security review #517, 25/07): 'underpaid' NAO pode dar `continue`. A linha do
+  // superseded ja vira 'paid' (sem avancar vencimento) — se pularmos o vigente aqui, um
+  // pagamento integral do QR VIGENTE fica pra sempre invisivel (a linha ja e 'paid',
+  // listPendingChargesWithGateway filtra so 'pending' -> nunca mais recupera). Sem este
+  // teste, o `continue` incondicional antigo passava verde e o dinheiro do vigente sumia
+  // em silencio.
+  it('QR velho (superseded) pago A MENOS (underpaid) NAO aborta a linha — reconcilia o vigente pago integral', async () => {
+    listPendingChargesWithGateway.mockResolvedValue([
+      {
+        id: '63',
+        slot: 'samuel',
+        external_id: 'samuel-2026-06-10',
+        abacate_charge_id: 'pix_char_new', // QR vigente — foi pago INTEGRAL em paralelo
+        superseded_charge_ids: ['pix_char_old'], // QR velho pago A MENOS
+        amount_cents: 5000,
+        expires_at: new Date('2026-06-20T00:00:00Z'),
+      },
+    ]);
+    getChargeStatus.mockImplementation(
+      (id: string) =>
+        id === 'pix_char_old'
+          ? Promise.resolve({ id, status: 'paid', paidAmountCents: 2000 }) // pago a menos
+          : Promise.resolve({ id, status: 'paid', paidAmountCents: 5000 }), // vigente OK
+    );
+    applyPaidWebhook.mockImplementation((input: { abacateChargeId: string }) =>
+      input.abacateChargeId === 'pix_char_old'
+        ? Promise.resolve({
+            outcome: 'underpaid',
+            slot: 'samuel',
+            resumed: false,
+            amountCents: 5000,
+            paidAmountCents: 2000,
+          })
+        : Promise.resolve({
+            outcome: 'applied',
+            slot: 'samuel',
+            resumed: true,
+            amountCents: 5000,
+            paidAmountCents: 5000,
+          }),
+    );
+
+    const { runGenerateBillingCharges } = await loadJob(true);
+    const r = await runGenerateBillingCharges(NOW);
+
+    // O velho (underpaid) conta como recuperado, MAS NAO interrompe o loop.
+    expect(r.recoveredSuperseded).toBe(1);
+    // O vigente, pago integral, É reconciliado — sem o fix isso ficaria 0 (dinheiro sumido).
+    expect(r.reconciledPaid).toBe(1);
+    expect(getChargeStatus).toHaveBeenCalledWith('pix_char_old');
+    expect(getChargeStatus).toHaveBeenCalledWith('pix_char_new');
+    expect(applyPaidWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 'recon:pix_char_old', abacateChargeId: 'pix_char_old' }),
+    );
+    expect(applyPaidWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 'recon:pix_char_new', abacateChargeId: 'pix_char_new' }),
+    );
   });
 
   it('QR velho (superseded) ainda PENDING -> nao recupera, cai na reconciliacao normal do vigente', async () => {
