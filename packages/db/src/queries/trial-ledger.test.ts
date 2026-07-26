@@ -18,6 +18,7 @@ vi.mock('../client.js', () => ({
 }));
 
 const {
+  BLOCKED_TETO_GRACE_DAYS,
   countActiveTrials,
   findOrphanTrialClone,
   listOrphanTrialCandidates,
@@ -100,13 +101,24 @@ describe('countActiveTrials — teto anti-DoS (guardas no SQL)', () => {
     // reintroduziria EXATAMENTE o bug P1 (pagante voltando a contar) e passaria
     // nos toContain acima — este toMatch ancora o `AND (` logo após a guarda.
     expect(sql).toMatch(/cb\.last_payment_at IS NULL\s+AND\s*\(/);
-    // awaiting (e blocked) CONTAM: sessão viva sem pagamento.
-    expect(sql).toContain(`fc.trial_status IN ('awaiting', 'blocked')`);
+    // awaiting SEMPRE conta: sessão pendurada sem pagamento.
+    expect(sql).toContain(`fc.trial_status = 'awaiting'`);
+    // blocked conta SÓ dentro da janela BLOCKED_TETO_GRACE_DAYS (SCRUM-80): o cron de
+    // órfãos nunca recupera blocked, então um blocked abandonado tem que sair do teto
+    // por idade — senão trava o signup pra sempre. Guarda de regressão do fix.
+    expect(sql).toContain(`fc.trial_status = 'blocked'`);
+    expect(sql).toContain(
+      `fc.updated_at >= NOW() - make_interval(days => ${BLOCKED_TETO_GRACE_DAYS})`,
+    );
     // active CONTA só dentro da janela (next_due_date NULL ou >= hoje UTC):
     // active vencido já saiu do trial pendente.
     expect(sql).toContain(`fc.trial_status = 'active'`);
     expect(sql).toContain('cb.next_due_date IS NULL');
     expect(sql).toContain(`cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date`);
+  });
+
+  it('BLOCKED_TETO_GRACE_DAYS é 14 (janela de graça do blocked no teto — SCRUM-80)', () => {
+    expect(BLOCKED_TETO_GRACE_DAYS).toBe(14);
   });
 
   it('normaliza o COUNT (pg devolve string) para número', async () => {

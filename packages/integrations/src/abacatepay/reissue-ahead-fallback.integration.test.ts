@@ -113,7 +113,8 @@ describeIf(
       br_code TEXT, br_code_base64 TEXT, expires_at TIMESTAMPTZ, paid_at TIMESTAMPTZ,
       tenant_id UUID,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      superseded_charge_ids TEXT[] NOT NULL DEFAULT '{}')`);
       await exec(`CREATE INDEX IF NOT EXISTS idx_billing_charges_external_id
       ON billing_charges (external_id)`);
       await exec(`CREATE TABLE IF NOT EXISTS billing_webhook_events (

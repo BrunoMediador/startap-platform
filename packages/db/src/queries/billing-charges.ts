@@ -38,11 +38,19 @@ export interface BillingChargeRow {
   paid_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  /**
+   * abacate_charge_id ANTIGOS abandonados por reemissao ANTECIPADA (SCRUM-141). Cada
+   * reissue* sobrescreve abacate_charge_id (QR novo) e faz APPEND do id anterior aqui —
+   * o QR velho segue pagavel no gateway. A reconciliacao do cron F4 polla estes ids
+   * (getChargeStatus) pra fechar o caso "QR velho pago + webhook PERDIDO". '{}' por padrao.
+   */
+  superseded_charge_ids: string[];
 }
 
 const COLUMNS = `id::text AS id, slot, cycle, external_id, abacate_charge_id,
   amount_cents, paid_amount_cents, status, br_code, br_code_base64,
-  expires_at, paid_at, created_at, updated_at`;
+  expires_at, paid_at, created_at, updated_at,
+  COALESCE(superseded_charge_ids, '{}') AS superseded_charge_ids`;
 
 /** Le a cobranca de um (slot, ciclo). null se nao existe. */
 export async function getCharge(slot: string, cycle: string): Promise<BillingChargeRow | null> {
@@ -144,6 +152,11 @@ export async function attachGatewayData(input: {
  * NUNCA e reescrita por reemissao (invariante de seguranca C2). Nao avanca vencimento.
  *
  * Retorna null se a linha nao existe OU ja esta paga (nenhuma reescrita aconteceu).
+ *
+ * SCRUM-141: preserva o abacate_charge_id ANTIGO em superseded_charge_ids (append idempotente)
+ * — o QR velho segue pagavel e a reconciliacao do cron F4 precisa saber pollar por ele. Na
+ * clausula SET, a referencia a abacate_charge_id no RHS usa o valor ANTIGO da linha (semantica
+ * do UPDATE do Postgres); $3 e o NOVO id.
  */
 export async function reissueGatewayData(input: {
   slot: string;
@@ -155,7 +168,14 @@ export async function reissueGatewayData(input: {
 }): Promise<BillingChargeRow | null> {
   const r = await query<BillingChargeRow>(
     `UPDATE billing_charges
-     SET abacate_charge_id = $3,
+     SET superseded_charge_ids = CASE
+           WHEN abacate_charge_id IS NOT NULL
+            AND abacate_charge_id <> $3
+            AND NOT (abacate_charge_id = ANY (COALESCE(superseded_charge_ids, '{}')))
+           THEN array_append(COALESCE(superseded_charge_ids, '{}'), abacate_charge_id)
+           ELSE COALESCE(superseded_charge_ids, '{}')
+         END,
+         abacate_charge_id = $3,
          br_code           = $4,
          br_code_base64    = $5,
          expires_at        = $6,
@@ -342,6 +362,11 @@ export async function attachGatewayDataById(
  * REEMITE reusando a MESMA linha (modelo novo), chaveando por `id`: novo abacate_charge_id/
  * br_code/validade, status volta 'pending'. WHERE exige status <> 'paid' (nunca reescreve
  * cobranca paga — invariante C2). Recebe o client da transacao do lock.
+ *
+ * SCRUM-141: preserva o abacate_charge_id ANTIGO em superseded_charge_ids (append idempotente)
+ * — este e o caminho da REEMISSAO ANTECIPADA (reissue-ahead), onde o QR velho segue pagavel
+ * enquanto o cliente ja recebe o novo. A referencia a abacate_charge_id no RHS do SET usa o
+ * valor ANTIGO da linha (semantica do UPDATE do Postgres); $2 e o NOVO id.
  */
 export async function reissueGatewayDataById(
   client: PoolClient,
@@ -355,7 +380,14 @@ export async function reissueGatewayDataById(
 ): Promise<BillingChargeRow | null> {
   const r = await client.query<BillingChargeRow>(
     `UPDATE billing_charges
-        SET abacate_charge_id = $2,
+        SET superseded_charge_ids = CASE
+              WHEN abacate_charge_id IS NOT NULL
+               AND abacate_charge_id <> $2
+               AND NOT (abacate_charge_id = ANY (COALESCE(superseded_charge_ids, '{}')))
+              THEN array_append(COALESCE(superseded_charge_ids, '{}'), abacate_charge_id)
+              ELSE COALESCE(superseded_charge_ids, '{}')
+            END,
+            abacate_charge_id = $2,
             br_code           = $3,
             br_code_base64    = $4,
             expires_at        = $5,
