@@ -1,4 +1,4 @@
--- Migration 078: billing_charges.superseded_charge_ids — QRs abandonados pela reemissao
+-- Migration 079: billing_charges.superseded_charge_ids — QRs abandonados pela reemissao
 -- antecipada (SCRUM-141).
 --
 -- CONTEXTO (ADR 0014 + SCRUM-124/139): a reemissao ANTECIPADA (BILLING_REISSUE_AHEAD_MIN,
