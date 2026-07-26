@@ -28,8 +28,13 @@ vi.mock('../config.js', () => ({
   },
 }));
 
+// SCRUM-91: spies ESTÁVEIS (o módulo captura `log = logger.child(...)` uma vez no import) —
+// permitem asserir que o eventId CRU nunca vai pro log durável.
+const { logSpies } = vi.hoisted(() => ({
+  logSpies: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 vi.mock('@startap/core/logger', () => ({
-  logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
+  logger: { child: () => logSpies },
 }));
 
 const {
@@ -848,6 +853,66 @@ describe('DELETE /portal/agendamentos/:eventId — erros', () => {
   });
 });
 
+// ---- SCRUM-91: LGPD — gcal_event_id NUNCA cru no log durável + `by` do soft-delete atribuído ----
+//
+// O log do portal-api é durável/exportável (art. 12 §2): o eventId tem de ir HASHEADO
+// (sha256:<16hex>), nunca cru. E a trilha do soft-delete carimba `by: portal:<ownerId>` (atribuição
+// de responsabilidade), não o genérico 'portal'. Usa a função hash REAL (@startap/core/gcal-event-log).
+describe('DELETE /portal/agendamentos/:eventId — LGPD (SCRUM-91)', () => {
+  const RAW_ID = EVT_DO_TENANT.id; // 'evt_do_tenant'
+
+  it('o eventId CRU não aparece em NENHUM campo de log; vai como sha256:<hex>', async () => {
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${RAW_ID}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Consolida TODOS os args de todos os níveis de log emitidos nesta request.
+    const allLogArgs = [
+      ...logSpies.info.mock.calls,
+      ...logSpies.warn.mock.calls,
+      ...logSpies.error.mock.calls,
+    ];
+    expect(allLogArgs.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(allLogArgs);
+    // O id cru sumiu do log…
+    expect(serialized).not.toContain(RAW_ID);
+    // …e o log de sucesso levou o hash (prefixo + 16 hex), não o id.
+    const successLog = logSpies.info.mock.calls.find(
+      ([, msg]) => msg === 'agendamento cancelado via portal',
+    );
+    expect(successLog).toBeDefined();
+    expect((successLog?.[0] as { eventId: string }).eventId).toMatch(/^sha256:[0-9a-f]{16}$/);
+    await app.close();
+  });
+
+  it("soft-delete carimba by: 'portal:<ownerId>' (não o genérico 'portal')", async () => {
+    // Gate do gancho de billing ON pro slot logado (senão o hook faz early-return).
+    estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = injectedSlot;
+    const client = gcalClientComEventos([EVT_DO_TENANT]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/portal/agendamentos/${RAW_ID}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    // injectedSlot.userId === 7 (mock do withTenant).
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, RAW_ID, {
+      reason: 'portal_cancel',
+      by: 'portal:7',
+    });
+    await app.close();
+  });
+});
+
 // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
 //
 // Foco: caminho feliz (remarca via patchEvent no MESMO eventId, sem delete+create),
@@ -1535,9 +1600,10 @@ describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA_SLOTS, gate por-c
     });
 
     expect(res.statusCode).toBe(200);
+    // SCRUM-91: `by` atribuído ao dono (portal:<userId>), userId=7 do mock do withTenant.
     expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id, {
       reason: 'portal_cancel',
-      by: 'portal',
+      by: 'portal:7',
     });
     await app.close();
   });
@@ -1574,9 +1640,10 @@ describe('Fase B2 — gancho de atendimento (ATEND_FROM_AGENDA_SLOTS, gate por-c
 
     // Estado final = evento ausente → a previsão derivada também deve sumir.
     expect(res.statusCode).toBe(200);
+    // SCRUM-91: `by` atribuído ao dono (portal:<userId>).
     expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, EVT_DO_TENANT.id, {
       reason: 'portal_cancel',
-      by: 'portal',
+      by: 'portal:7',
     });
     await app.close();
   });
