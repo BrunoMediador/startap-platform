@@ -321,18 +321,48 @@ export function areaArtigo(area: unknown): string {
   return AREA_ARTIGO[key] ?? AREA_ARTIGO_FALLBACK;
 }
 
+/** Teto de tamanho de um nome injetável (SCRUM-81). Nome de negócio real cabe
+ * folgado; o cap corta um "nome-bomba" hostil que empurraria a persona pra fora
+ * da janela de contexto ou inflaria o system prompt de todo turno. */
+export const NOME_INJETAVEL_MAX = 80;
+
+/**
+ * ALLOWLIST de caracteres de um nome injetável (SCRUM-81). Mantém tudo que um
+ * nome de negócio de verdade usa e NADA de estrutural:
+ *  - letras/números/marcas Unicode (\p{L}\p{N}\p{M}) — acentos, alfabetos, dígitos;
+ *  - espaço e pontuação segura de nome comercial: . _ , ' & / ( ) + @ # -;
+ *  - emoji de verdade: \p{Extended_Pictographic} (💈 do Samuel é legítimo e já era
+ *    preservado). NÃO uso \p{Emoji_Component} de propósito: ele reincluiria as bases
+ *    ASCII de keycap (`*`, `#`, dígitos) e o `*` é justamente um token de markdown
+ *    que queremos barrar. Os JOINERS de emoji composto (ZWJ/variation-selector/tom
+ *    de pele/bandeira) FICAM DE FORA da classe de propósito — pô-los aqui dispara o
+ *    lint noMisleadingCharacterClass, e um nome de negócio raramente usa emoji ZWJ;
+ *    no pior caso um emoji composto perde o joiner (degrada pro símbolo base), nunca
+ *    injeta nada.
+ * Fica DE FORA (é removido) todo o resto: `{ } [ ] < > \` (backtick) | \ * ~ =`,
+ * controles etc. — os tokens que um atacante usaria pra forjar seção/placeholder/
+ * markdown no system prompt. `_` fica no allowlist porque o vetor de injeção é o
+ * DELIMITADOR `{{ }}` (removido antes), não o underscore solto — um `key` sem
+ * chaves nunca é expandido pelo render.
+ */
+const NOME_INJETAVEL_ALLOWLIST = /[^\p{L}\p{N}\p{M} ._,'&/()+@#\p{Extended_Pictographic}-]/gu;
+
 /**
  * Neutraliza um valor injetável (display_name / nome_negocio) ANTES de entrar no
- * prompt: remove as sequências de delimitador de placeholder ("{{" e "}}") e
- * quebras de linha (\n,\r). Isso impede que um nome de cadastro self-service
- * (a) injete um placeholder novo — ex.: um nome "{{servicos_precos_render}}"
- * passaria a ser expandido — e (b) reduz superfície de prompt-injection por
- * quebra de linha. Nomes legítimos não são alterados (só strip dessas
- * sequências). NÃO faz trim de espaços comuns — a checagem de "vazio" é feita
- * por quem chama, com trim.
+ * prompt. Três passes (SCRUM-81 endurece o histórico):
+ *  1. remove os delimitadores de placeholder ("{{" e "}}") — impede que um nome
+ *     "{{servicos_precos_render}}" vire um placeholder que o render expandiria;
+ *  2. quebras de linha (\n,\r) viram espaço — reduz prompt-injection por linha nova;
+ *  3. APLICA A ALLOWLIST (novo): descarta qualquer caractere estrutural fora do
+ *     conjunto seguro acima, e
+ *  4. corta em NOME_INJETAVEL_MAX (novo) — teto de tamanho.
+ * Nomes legítimos (letras, acentos, dígitos, emoji, pontuação comum) passam intactos.
+ * NÃO faz trim de espaços comuns — a checagem de "vazio" é feita por quem chama, com trim.
  */
 export function sanitizeNomeInjetavel(nome: string): string {
-  return nome.replace(/\{\{|\}\}/g, '').replace(/[\r\n]+/g, ' ');
+  const semDelimitador = nome.replace(/\{\{|\}\}/g, '').replace(/[\r\n]+/g, ' ');
+  const soAllowlist = semDelimitador.replace(NOME_INJETAVEL_ALLOWLIST, '');
+  return soAllowlist.slice(0, NOME_INJETAVEL_MAX);
 }
 
 /**

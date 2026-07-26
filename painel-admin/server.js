@@ -3991,6 +3991,23 @@ app.post('/api/clones/:id/regerar-prompt', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM flow_clones WHERE id = $1', [id]);
     if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    // GUARD SCRUM-81: regerar-prompt é DESTRUTIVO pra persona custom — re-renderiza
+    // da matriz e desarma prompt_custom (o UPDATE abaixo). Num clone com
+    // prompt_custom=true isso apaga uma persona escrita à mão, e o re-render NÃO
+    // versiona (só PUTs do gestão vão pra bot_prompt_versions), então a volta é
+    // manual. Fail-closed: exige confirmação EXPLÍCITA (confirm=true no body ou na
+    // query). prompt_custom=false (template) segue sem fricção — nada a perder.
+    const confirmed =
+      req.body?.confirm === true ||
+      req.body?.confirm === 'true' ||
+      req.query?.confirm === 'true';
+    if (r.rows[0].prompt_custom === true && !confirmed) {
+      return res.status(409).json({
+        error: 'prompt_custom_confirm_required',
+        message:
+          'Este clone tem persona personalizada. Regerar vai substituí-la pelo template da matriz e não versiona a persona atual. Reenvie com confirm=true para confirmar.',
+      });
+    }
     const result = await regerarPromptClone(r.rows[0]);
     if (!result.ok) return res.status(500).json({ error: result.error });
     // Este e o caminho EXPLICITO de voltar ao template da matriz -> desarma o
