@@ -328,6 +328,39 @@ describe('sanitizeNomeInjetavel — neutraliza injeção via nome (PONTO 2)', ()
     expect(sanitizeNomeInjetavel('Barbearia do Samuel 💈')).toBe('Barbearia do Samuel 💈');
   });
 
+  it('allowlist (SCRUM-81): preserva pontuação comum de nome comercial', () => {
+    expect(sanitizeNomeInjetavel('Studio Beleza & Cia. (Centro)')).toBe(
+      'Studio Beleza & Cia. (Centro)',
+    );
+    expect(sanitizeNomeInjetavel('Salão Glam #1 @unhas +Você')).toBe('Salão Glam #1 @unhas +Você');
+    expect(sanitizeNomeInjetavel("Corte & Cor - D'Oro/ME")).toBe("Corte & Cor - D'Oro/ME");
+  });
+
+  it('allowlist (SCRUM-81): descarta caracteres estruturais de prompt-injection', () => {
+    // Backtick, colchetes, ângulos, pipe, barra invertida, chaves, til/estrela/= — fora.
+    const hostil = 'Barber `[system]` <b>x</b> | \\ {role} ~*= end';
+    const out = sanitizeNomeInjetavel(hostil);
+    for (const bad of ['`', '[', ']', '<', '>', '|', '\\', '{', '}', '~', '*', '=']) {
+      expect(out).not.toContain(bad);
+    }
+    // letras/espaços dos pedaços legítimos permanecem.
+    expect(out).toContain('Barber');
+    expect(out).toContain('system');
+    expect(out).toContain('end');
+  });
+
+  it('limite de tamanho (SCRUM-81): corta em NOME_INJETAVEL_MAX (80)', () => {
+    const bomba = 'A'.repeat(500);
+    const out = sanitizeNomeInjetavel(bomba);
+    expect(out.length).toBe(80);
+    expect(out).toBe('A'.repeat(80));
+  });
+
+  it('allowlist não quebra o strip de {{ }} nem o underscore do teste histórico', () => {
+    // {{ }} some (delimitador = vetor real); o miolo com underscore sobrevive.
+    expect(sanitizeNomeInjetavel('{{servicos_precos_render}}')).toBe('servicos_precos_render');
+  });
+
   it('via renderClonePrompt: display_name com placeholder não vaza nem injeta', () => {
     // display_name hostil entra no template; o nome sanitizado NÃO reintroduz o
     // marcador (que o render expandiria pra lista de serviços) e NÃO vaza {{ }}.
