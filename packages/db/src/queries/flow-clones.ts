@@ -6,11 +6,6 @@
  */
 import { isAgendaAutomaticaIntent } from '@startap/core/agenda-degrade';
 import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
-import {
-  ATENDENTE_PROMPT_TPL,
-  NOME_NEGOCIO_FALLBACK,
-  areaArtigo,
-} from '@startap/core/atendente-prompt';
 import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
@@ -539,77 +534,25 @@ export async function updateClone(
 
   const row = normalizeCloneRow(r.rows[0]);
 
-  // Se personalizacao mudou, regenera bot_prompt — SALVO se o clone tem prompt CUSTOM
-  // (migration 070, SCRUM-59): re-renderizar apagaria a persona escrita à mão (bug provado
-  // no piloto Meduzza — salvar o perfil, inclusive o toggle agenda_automatica da seção nova,
-  // jogava a persona de 6141 chars fora). prompt_custom=false (default) = re-renderiza como
-  // hoje. RETURNING * traz a coluna; normalizeCloneRow => false quando ausente. O gestão
-  // (PATCH /api/clones) já não re-renderiza desde maio.
+  // ADR 0035 §2.1 (emenda 30/07, decisão do Bruno): bot_prompt é CÓPIA MATERIALIZADA no
+  // nascimento (createClone). Nenhum caminho de edição de perfil volta a regenerá-lo a
+  // partir da matriz ou do template de atendente — a persona do clone é intocável por save
+  // de personalizacao. Este `if` REMOVIA a persona editada à mão sempre que
+  // `prompt_custom=false` (o estado default de todo clone), reintroduzindo o clobber que o
+  // SCRUM-59/83/122 vinham tapando caso a caso — a causa-raiz era este bloco existir.
   //
-  // FONTE do template por MODO (SCRUM-122, precedente SCRUM-79): clone com
-  // modo_atendente_enabled=true usa a persona de pré-venda (ATENDENTE_PROMPT_TPL, de
-  // @startap/core — MESMA constante que regerarPromptClone em @startap/integrations usa no
-  // provisioning); senão, template da MATRIZ (comportamento histórico). @startap/db NÃO
-  // importa @startap/integrations (ciclo — ver CloneCartaoConfig acima), então a fonte única
-  // possível é a constante estática em @startap/core, não a função regerarPromptClone em si.
-  // Sem este branch, TODO clone atendente self-service (prompt_custom=false, o caso normal —
-  // a flag só vira true se o dono editar o prompt bruto à mão) perde a persona de pré-venda
-  // no 1º save de QUALQUER campo de personalizacao no portal — bug reaberto do SCRUM-79.
-  if (patch.personalizacao !== undefined && !row.prompt_custom) {
-    const personalizacao = patch.personalizacao;
-    let novo: string | null = null;
-    if (row.modo_atendente_enabled === true) {
-      // ATENDENTE_PROMPT_TPL usa {{area_artigo}}, que a matriz de agenda NÃO usa —
-      // applyPersonalizacao só substitui chave EXATA presente em personalizacao (nunca
-      // resolveu área) e deixaria {{area_artigo}} literal no bot_prompt persistido. Resolve
-      // aqui com a MESMA função pura do provisioning (areaArtigo), e garante {{nome_negocio}}
-      // nunca vazio (precedência personalizacao > display_name > fallback, igual
-      // renderClonePrompt) — sem isso ficaria placeholder cru ou string vazia.
-      const persNome = personalizacao.nome_negocio;
-      const nomeResolvido =
-        typeof persNome === 'string' && persNome.trim() !== ''
-          ? persNome
-          : row.display_name && row.display_name.trim() !== ''
-            ? row.display_name
-            : NOME_NEGOCIO_FALLBACK;
-      const personalizacaoResolvida: Record<string, unknown> = {
-        ...personalizacao,
-        nome_negocio: nomeResolvido,
-        area_artigo: areaArtigo(personalizacao.area),
-      };
-      novo = applyPersonalizacao(ATENDENTE_PROMPT_TPL, personalizacaoResolvida);
-    } else {
-      const matrizRes = await query<{ matriz_slot: string }>(
-        'SELECT matriz_slot FROM flow_clones WHERE id = $1',
-        [id],
-      );
-      const matrizSlot = matrizRes.rows[0]?.matriz_slot;
-      if (matrizSlot) {
-        const promptRes = await query<{ prompt: string }>(
-          'SELECT prompt FROM bot_prompt WHERE slot = $1',
-          [matrizSlot],
-        );
-        if (promptRes.rows[0]) {
-          novo = applyPersonalizacao(promptRes.rows[0].prompt, personalizacao);
-        }
-      }
-    }
-    if (novo !== null) {
-      // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline — o clone já
-      // existe aqui, então resolve o UUID. NULL-safe se não houver linha.
-      // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
-      // "inconsistent types deduced for parameter $1": bot_prompt.slot
-      // varchar(50) vs flow_clones.slot varchar(80)).
-      await query(
-        `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
-         VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
-         ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
-           tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
-        [row.slot, novo, row.slot],
-      );
-    }
-  }
-
+  // `buildContextBlock` (packages/integrations/src/scheduling/free-slots.ts:516-531) já
+  // injeta [FUNCIONAMENTO]/[SERVICOS E PRECOS]/[HORARIOS DISPONIVEIS] em runtime a cada
+  // turno, direto de bot_config — o dado que esta releitura mantinha "atualizado" já chega
+  // ao modelo por um caminho separado e autoritativo. `renderPrompt`
+  // (apps/api/src/lib/render-prompt.ts:24-37) já lê só bot_prompt do slot, sem fallback pra
+  // template — a invariante "runtime não deriva da matriz" já vive no leitor.
+  //
+  // Consequência ACEITA (Bruno, 30/07, não reabrir): melhoria de template só vale pra
+  // cliente novo; clone existente se melhora à mão via regerar-prompt/edição, nunca em
+  // massa. `flow_clones.prompt_custom` segue vivo — ainda consumido pelo guard
+  // anti-cartão-duplo baked→runtime (isCartaoRuntimeFlipBlocked e afins), fora do escopo
+  // desta mudança.
   invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
   return row;
 }

@@ -146,19 +146,25 @@ export function isBarbearia(area: string | null | undefined): boolean {
  * instrução curta que MANDA o modelo trocar os emojis do cartão pelos da área.
  * Não reescreve a estrutura do cartão (DIA/HORARIO/SERVICO/VALOR) — só os ícones.
  *
- * PROMPT_CUSTOM (SCRUM-84): quando o dono estilizou a persona à mão (flow_clones
- * .prompt_custom=true, migration 070), a PERSONA É A AUTORIDADE FINAL do cartão —
- * NÃO injetamos override nenhum, senão sobrescrevemos os emojis que ele escolheu de
- * propósito (caso Ingrid: 🌻 no cabeçalho virava 📅 do genérico). O override existe
- * só pra clones de TEMPLATE, que herdaram 💈/✂️ da matriz sem querer. Default false
- * = comportamento byte-a-byte de antes (protege Cirilo/Samuel e chamadas legadas).
+ * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno após achado sobre a
+ * Ingrid): o parâmetro `promptCustom` (SCRUM-84 original, flag `flow_clones.prompt_custom`)
+ * foi trocado por `temCartaoProprio` — **fato do dado**, não flag. O caller
+ * (teste_barbearia.ts) calcula isso rodando `extractBakedCartao` (cartao-extract.ts) sobre
+ * o `bot_prompt` renderizado: `found:true` = o texto JÁ contém um cartão reconhecível
+ * (escrito pelo dono ou pelo builder) → a persona é autoridade do estilo, NÃO injetamos
+ * override (mesmo comportamento protetor do SCRUM-84 original, ex.: Ingrid com 🌻). `found:
+ * false` = clone de TEMPLATE puro, sem cartão próprio → injeta o override normalmente.
+ * Diferença pro predicado antigo: não depende de a coluna `prompt_custom` ter sido setada
+ * corretamente por algum caminho de escrita — deriva do CONTEÚDO real do prompt, então
+ * sobrevive à morte da flag e não pode ficar dessincronizado dela.
  */
 export function buildCartaoEmojiOverrideBlock(
   area: string | null | undefined,
-  promptCustom = false,
+  temCartaoProprio = false,
 ): string {
-  // Persona custom manda no cartão — não sobrepõe emoji nenhum (SCRUM-84).
-  if (promptCustom) return '';
+  // Cartão próprio no bot_prompt (dono escreveu à mão ou builder gerou) → autoridade do
+  // estilo é a persona; não sobrepõe emoji nenhum.
+  if (temCartaoProprio) return '';
   // barbearia → conjunto atual já está no prompt; null/desconhecido → não arrisca
   // mudar o visual de um clone antigo. Em ambos: nenhum bloco.
   if (!area || area === 'barbearia') return '';
@@ -191,25 +197,30 @@ export function buildCartaoEmojiOverrideBlock(
  * Nota: no cartão de estabelecimento o HORARIO usa 🕐 (igual ao #325 original),
  * não ⏰ — preservamos o literal de hoje pra barbearia ficar byte-a-byte.
  *
- * DUAS COISAS SEPARADAS (SCRUM-85, espelha o SCRUM-84/#458 do individual):
- *   (1) REGRA ESTRUTURAL — cartão obrigatório completo + esperar SIM antes de
- *       inserir_agendamento + PROFISSIONAL pelo nome + valer a CADA agendamento
- *       (inclusive back-to-back). É crítica pra correção do agendamento e vai
- *       SEMPRE, inegociável, INDEPENDENTE de persona. Diferente do individual, este
- *       bloco NÃO pode ser pulado — ele carrega essa regra.
- *   (2) ESTILO/EMOJIS — só o "Formato do cartão" com ícones por área. Com
- *       prompt_custom=false o bloco sai BYTE-A-BYTE o de hoje (emojis da área;
- *       protege o barber_dragon). Com prompt_custom=true a persona é a autoridade
- *       do estilo: mantemos os MESMOS campos obrigatórios, mas SEM impor emoji de
- *       área — os ícones/tom ficam por conta da persona custom.
- * Default false = comportamento byte-a-byte de antes (protege chamadas legadas).
+ * REGRA ESTRUTURAL — cartão obrigatório completo + esperar SIM antes de
+ * inserir_agendamento + PROFISSIONAL pelo nome + valer a CADA agendamento (inclusive
+ * back-to-back). É crítica pra correção do agendamento e vai SEMPRE, inegociável,
+ * INDEPENDENTE de persona (SCRUM-85, invariante intocada por esta mudança) — este bloco
+ * NUNCA pode ser pulado, é ele que carrega essa regra, EM QUALQUER ramo abaixo.
+ *
+ * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno — achado sobre a Meduzza,
+ * estabelecimento+baked+persona custom, e a Ingrid): o parâmetro `promptCustom` (SCRUM-85
+ * original) foi trocado por `temCartaoProprio` — **fato do dado**, calculado pelo caller via
+ * `extractBakedCartao` sobre o `bot_prompt` renderizado (mesmo padrão do caminho individual
+ * acima). `temCartaoProprio=true` → persona é autoridade do ESTILO: mantém TODOS os campos
+ * obrigatórios e a exigência do SIM (a regra estrutural NUNCA sai), mas NÃO impõe os emojis
+ * da área — os ícones ficam por conta do que o dono/builder já escreveu. `false` (clone de
+ * TEMPLATE puro) → "Formato do cartão" segue BYTE-A-BYTE os emojis da área (protege
+ * barber_dragon). CRÍTICO: sem este ramo, um clone estabelecimento com cartão próprio (ex.:
+ * Meduzza) teria o estilo dela sobrescrito pelos emojis fixos da área a cada turno — bug que
+ * o qa-tester pegou antes do merge.
  */
 export function buildCartaoEstabelecimentoBlock(
   area: string | null | undefined,
-  promptCustom = false,
+  temCartaoProprio = false,
 ): string {
   // Regra ESTRUTURAL — SEMPRE injetada, inegociável, independe de persona (SCRUM-85).
-  // Estas 10 linhas são idênticas nos dois ramos: mudam só as linhas de "Formato".
+  // Estas 10 linhas são idênticas nos dois ramos abaixo: muda só o "Formato do cartão".
   const estrutura = [
     '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO — REGRA CRITICA, VIOLACAO = ERRO GRAVE]',
     'Antes de CADA agendamento você DEVE, OBRIGATORIAMENTE e SEM EXCEÇÃO:',
@@ -223,10 +234,10 @@ export function buildCartaoEstabelecimentoBlock(
     'nome do profissional escolhido (o nome que está em [PROFISSIONAIS], não o id curto C1/C2).',
   ];
 
-  // (2b) PROMPT_CUSTOM (SCRUM-85): persona é a autoridade do ESTILO. Mantém TODOS os
-  // campos obrigatórios (PROFISSIONAL/DIA/HORARIO/SERVICO/VALOR) e a exigência do SIM,
-  // mas NÃO impõe os emojis da área — a persona custom dita os ícones/tom.
-  if (promptCustom) {
+  // Cartão próprio (dono escreveu à mão ou builder gerou) → persona é autoridade do ESTILO.
+  // Mantém TODOS os campos obrigatórios (PROFISSIONAL/DIA/HORARIO/SERVICO/VALOR) e a
+  // exigência do SIM, mas NÃO impõe os emojis da área.
+  if (temCartaoProprio) {
     return [
       ...estrutura,
       'Formato do cartão (mantenha estes campos; use os emojis e o estilo da SUA persona):',
@@ -236,10 +247,10 @@ export function buildCartaoEstabelecimentoBlock(
     ].join('\n');
   }
 
-  // (2a) prompt_custom=false → BYTE-A-BYTE o bloco de hoje (protege barber_dragon).
-  // Horário no estabelecimento herda do #325 (🕐). Barbearia/genérico expõem 🕐;
-  // pra manter o #325 idêntico na barbearia, forçamos 🕐 aqui independentemente do
-  // CardEmojis.horario (que é ⏰ no individual). As demais posições seguem a área.
+  // Sem cartão próprio (clone de TEMPLATE puro) → BYTE-A-BYTE o bloco de hoje (protege
+  // barber_dragon). Horário no estabelecimento herda do #325 (🕐). Barbearia/genérico
+  // expõem 🕐; pra manter o #325 idêntico na barbearia, forçamos 🕐 aqui independentemente
+  // do CardEmojis.horario (que é ⏰ no individual). As demais posições seguem a área.
   const e = emojisForArea(area);
   const horarioEstab = '🕐';
   return [
