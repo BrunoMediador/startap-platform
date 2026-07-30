@@ -26,7 +26,8 @@
     "./reminders": "./dist/reminders.js",
     "./client-disconnect-alert": "./dist/client-disconnect-alert.js",
     "./timezones": "./dist/timezones.js",
-    "./schemas": "./dist/schemas/flow-config.js"
+    "./schemas": "./dist/schemas/flow-config.js",
+    "./atendente-prompt": "./dist/atendente-prompt.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

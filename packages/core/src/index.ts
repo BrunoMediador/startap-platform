@@ -22,6 +22,7 @@ export {
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { hashEventIdForLog } from './gcal-event-log.js';
 export { resolveNomeNegocio } from './nome-negocio.js';
+export { ATENDENTE_PROMPT_TPL } from './atendente-prompt.js';
 export { isDefinitiveNonDelivery, sendWithSettleTimeout } from './waha-send-failure.js';
 export {
   ackStatusRank,
