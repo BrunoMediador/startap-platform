@@ -4,7 +4,7 @@ import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
-import { buildCartaoRuntimeBlock } from '@startap/integrations/prompt-builder';
+import { buildCartaoRuntimeBlock, extractBakedCartao } from '@startap/integrations/prompt-builder';
 import {
   type ColaboradorAgenda,
   buildContextBlock,
@@ -83,6 +83,25 @@ const DEFAULT_PROMPT_TPL = [
   '[CARTAO DE CONFIRMACAO]',
   'DIA / HORARIO / SERVICO / VALOR e pede SIM.',
 ].join('\n');
+
+/**
+ * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno): decide, a partir do
+ * CONTEÚDO do bot_prompt já renderizado (não de uma flag), se a persona já contém um
+ * cartão de confirmação próprio — sinal de que o estilo/emoji NÃO deve ser sobreposto por
+ * buildCartaoEmojiOverrideBlock/buildCartaoEstabelecimentoBlock. Usa extractBakedCartao
+ * (cartao-extract.ts), a MESMA função que o script de migração usa pra decidir
+ * flip-safe. FAIL-SAFE: `found:true` (cartão reconhecido, trailing) → true (óbvio). Mas
+ * `found:false, reason:'cartao_nao_trailing'` (HÁ um cartão no texto, só não está em
+ * posição extraível com segurança) TAMBÉM conta como "tem cartão próprio" — não injetar
+ * override é o lado seguro quando existe QUALQUER sinal textual de cartão no prompt; a
+ * alternativa (injetar por cima) arrisca contradizer ou duplicar instrução de estilo num
+ * cartão que já existe. Só `reason:'sem_cartao'` (nenhum marcador encontrado — clone de
+ * TEMPLATE puro) libera a injeção do override.
+ */
+function cloneTemCartaoProprio(botPrompt: string): boolean {
+  const ex = extractBakedCartao(botPrompt);
+  return ex.found || ex.reason === 'cartao_nao_trailing';
+}
 
 function sanitizarResposta(text: string): string {
   return text
@@ -702,13 +721,17 @@ export class TesteBarbeariaBot extends BotBase {
     // o de hoje. getAreaPromptCustomCartao degrada área pra null em erro/coluna
     // ausente (fallback seguro).
     //
-    // ADR 0035 §2.1 (emenda 30/07): `promptCustom` (SCRUM-84 original) deixou de ser
-    // repassado ao builder — bot_prompt é cópia materializada, não há mais releitura da
-    // matriz a proteger. `prompt_custom` da query abaixo continua vivo só pro guard
-    // anti-cartão-duplo baked→runtime (fora do escopo desta mudança), por isso a coluna
-    // não é removida da SELECT, só não é mais usada aqui.
+    // ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno): `promptCustom`
+    // (SCRUM-84 original) deixou de ser repassado ao builder como FLAG — em vez disso,
+    // `temCartaoProprio` (abaixo) é calculado como FATO DO DADO via extractBakedCartao sobre
+    // o promptPersona já renderizado: `found:true` = o texto já contém um cartão reconhecível
+    // (escrito à mão ou pelo builder), autoridade do estilo é a persona. `prompt_custom` da
+    // query abaixo continua vivo só pro guard anti-cartão-duplo baked→runtime (fora do
+    // escopo desta mudança), por isso a coluna não é removida da SELECT, só não decide mais
+    // o estilo do cartão aqui.
     const { area, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
+    const temCartaoProprio = cartaoMode !== 'runtime' && cloneTemCartaoProprio(promptPersona);
 
     // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ────────────────
     // runtimeCartao só é NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026)
@@ -731,7 +754,8 @@ export class TesteBarbeariaBot extends BotBase {
             nomeNegocio: nomeNegocio ?? undefined,
           })
         : '';
-    const cartaoBlock = runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area);
+    const cartaoBlock =
+      runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, temCartaoProprio);
 
     const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoBlock]
       .filter((b) => b !== '')
@@ -1546,13 +1570,16 @@ export class TesteBarbeariaBot extends BotBase {
     // SCRUM-85: a REGRA ESTRUTURAL do cartão (obrigatório + SIM + PROFISSIONAL +
     // back-to-back) vai SEMPRE, incondicional — invariante intocada por esta mudança.
     //
-    // ADR 0035 §2.1 (emenda 30/07): `promptCustom` (SCRUM-85 original) deixou de ser
-    // repassado ao builder — bot_prompt é cópia materializada, não há mais releitura da
-    // matriz a proteger. `prompt_custom` da query abaixo continua vivo só pro guard
-    // anti-cartão-duplo baked→runtime (fora do escopo desta mudança), por isso a coluna
-    // não é removida da SELECT, só não é mais usada aqui.
+    // ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno — achado sobre a
+    // Meduzza, estabelecimento+baked+persona custom): `promptCustom` (SCRUM-85 original)
+    // deixou de ser repassado ao builder como FLAG — em vez disso, `temCartaoProprio`
+    // (abaixo) é FATO DO DADO via extractBakedCartao sobre o promptPersona já renderizado.
+    // `prompt_custom` da query abaixo continua vivo só pro guard anti-cartão-duplo
+    // baked→runtime (fora do escopo desta mudança), por isso a coluna não é removida da
+    // SELECT, só não decide mais o estilo do cartão aqui.
     const { area, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
+    const temCartaoProprio = cartaoMode !== 'runtime' && cloneTemCartaoProprio(promptPersona);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
     // Igual ao individual: só NÃO-VAZIO com CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026)
@@ -1571,7 +1598,9 @@ export class TesteBarbeariaBot extends BotBase {
           })
         : '';
     const cartaoEstabelecimentoBlock =
-      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area);
+      runtimeCartao !== ''
+        ? runtimeCartao
+        : buildCartaoEstabelecimentoBlock(area, temCartaoProprio);
 
     // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
     // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,

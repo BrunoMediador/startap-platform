@@ -114,25 +114,36 @@ describe('buildCartaoEmojiOverrideBlock — caminho INDIVIDUAL', () => {
     expect(block).not.toBe('');
     expect(block).toContain('NAO use 💈');
   });
+});
 
-  // ADR 0035 §2.1 (emenda 30/07): bot_prompt é cópia materializada — o parâmetro
-  // `promptCustom` (SCRUM-84 original, "persona custom é autoridade final, não sobrepõe
-  // emoji") foi REMOVIDO da assinatura. A função só recebe `area` agora: em área
-  // não-barbearia o override SEMPRE é injetado, mesmo que a persona do clone `baked` seja
-  // custom (caso hipotético: Ingrid tem persona custom mas é `cartao_mode='runtime'`, então
-  // NUNCA chega aqui na prática — medição de prod 30/07 confirma zero clone hoje na
-  // combinação área≠barbearia + baked + persona custom). Este teste EXISTE para o dia em
-  // que um clone novo nascer nessa combinação: prova qual é o comportamento (não há mais
-  // supressão condicional — decisão aceita, ver PR).
-  it('área "outro" (baked, ex-persona-custom hipotética) → override é injetado do mesmo jeito', () => {
-    const block = buildCartaoEmojiOverrideBlock('outro');
-    expect(block).not.toBe('');
-    expect(block).toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
+// ADR 0035 §2.1 (emenda 30/07, CORRIGIDO 30/07 pelo qa-tester + Bruno — achado sobre a
+// Ingrid): o parâmetro `promptCustom` (SCRUM-84 original, flag `flow_clones.prompt_custom`)
+// virou `temCartaoProprio` — FATO DO DADO, calculado pelo caller (teste_barbearia.ts) via
+// extractBakedCartao sobre o bot_prompt renderizado. O comportamento OBSERVÁVEL da função
+// pura é idêntico ao original: `true` suprime o override (persona é autoridade do estilo),
+// `false`/omitido injeta. O que mudou é SÓ a origem do sinal (conteúdo, não coluna).
+describe('buildCartaoEmojiOverrideBlock — temCartaoProprio (simetria pós-fix)', () => {
+  it('temCartaoProprio=true + área "outro" → string vazia (persona/cartão próprio é autoridade)', () => {
+    // Caso real: Ingrid (area='outro') tem cartão próprio no bot_prompt dela — o comentário
+    // original citava literalmente "🌻 no cabeçalho virava 📅 do genérico" como o bug a evitar.
+    expect(buildCartaoEmojiOverrideBlock('outro', true)).toBe('');
   });
 
-  it('assinatura aceita só 1 argumento (promptCustom removido, SCRUM-84 sticky morreu)', () => {
-    // @ts-expect-error — 2º argumento não existe mais na assinatura.
-    expect(buildCartaoEmojiOverrideBlock('outro', true)).not.toBe('');
+  it('temCartaoProprio=true + salão/manicure → string vazia (não sobrepõe cartão já existente)', () => {
+    expect(buildCartaoEmojiOverrideBlock('salao', true)).toBe('');
+    expect(buildCartaoEmojiOverrideBlock('manicure', true)).toBe('');
+  });
+
+  it('temCartaoProprio=false (default) → comportamento byte-a-byte de antes', () => {
+    expect(buildCartaoEmojiOverrideBlock('outro', false)).toBe(
+      buildCartaoEmojiOverrideBlock('outro'),
+    );
+    expect(buildCartaoEmojiOverrideBlock('outro', false)).not.toBe('');
+    expect(buildCartaoEmojiOverrideBlock('barbearia', false)).toBe('');
+  });
+
+  it('temCartaoProprio=true + barbearia → continua vazia (early-return de área já cobria)', () => {
+    expect(buildCartaoEmojiOverrideBlock('barbearia', true)).toBe('');
   });
 });
 
@@ -181,26 +192,60 @@ describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
   });
 });
 
-// ADR 0035 §2.1 (emenda 30/07): bot_prompt é cópia materializada — o parâmetro
-// `promptCustom` (SCRUM-85 original) foi REMOVIDO. A regra ESTRUTURAL (cartão+SIM+
-// PROFISSIONAL+back-to-back) sempre foi e continua SEMPRE injetada, incondicional —
-// isso NÃO muda. O que mudou é que o "Formato do cartão" (estilo/emojis) agora segue
-// SEMPRE a área, sem exceção pra persona custom (era o ramo prompt_custom=false).
-describe('buildCartaoEstabelecimentoBlock — assinatura pós-ADR-0035', () => {
-  it('assinatura aceita só 1 argumento (promptCustom removido, SCRUM-85 sticky morreu)', () => {
-    // @ts-expect-error — 2º argumento não existe mais na assinatura.
-    expect(buildCartaoEstabelecimentoBlock('manicure', true)).toContain('💅 SERVICO');
+// ADR 0035 §2.1, CORRIGIDO 30/07 pelo qa-tester + Bruno (achado sobre a Meduzza):
+// buildCartaoEstabelecimentoBlock NÃO tinha o early-return por área que o individual tem —
+// era o `if (promptCustom)` o ÚNICO guard que protegia persona/cartão custom de estabelecimento.
+// Removê-lo sem substituto teria sobrescrito o estilo da Meduzza (estabelecimento+baked+cartão
+// próprio) a cada turno. Fix: `temCartaoProprio` (fato do dado) restaura a proteção.
+describe('buildCartaoEstabelecimentoBlock — temCartaoProprio (fix Meduzza)', () => {
+  it('temCartaoProprio=false (default) → BYTE-A-BYTE o bloco de hoje (protege barber_dragon)', () => {
+    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(ESTAB_BARBEARIA);
+    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(
+      buildCartaoEstabelecimentoBlock('barbearia'),
+    );
+    for (const area of ['barbearia', 'salao', 'manicure', 'estetica', 'outro', null, undefined]) {
+      expect(buildCartaoEstabelecimentoBlock(area, false)).toBe(
+        buildCartaoEstabelecimentoBlock(area),
+      );
+    }
   });
 
-  it('regra ESTRUTURAL inegociável presente em toda área (invariante intocada)', () => {
+  it('temCartaoProprio=true → mantém a REGRA ESTRUTURAL inegociável (cartão+SIM+PROFISSIONAL+back-to-back)', () => {
     for (const area of ['barbearia', 'manicure', 'outro', null]) {
-      const block = buildCartaoEstabelecimentoBlock(area);
+      const block = buildCartaoEstabelecimentoBlock(area, true);
       expect(block).toMatch(/CADA agendamento/i);
       expect(block).toMatch(/SÓ DEPOIS do SIM, chamar inserir_agendamento/);
       expect(block).toMatch(/Responda SIM/i);
       expect(block).toMatch(/back-to-back|mesma conversa/i);
       expect(block).toMatch(/NUNCA pule o cartão|NUNCA agende\s+direto/i);
+      expect(block).toContain('PROFISSIONAL: <nome do profissional escolhido>');
       expect(block).toContain('nome que está em [PROFISSIONAIS]');
+      expect(block).toMatch(/DIA: <dia>/);
+      expect(block).toMatch(/HORARIO: <horario>/);
+      expect(block).toMatch(/SERVICO: <servico>/);
+      expect(block).toMatch(/VALOR: <valor>/);
     }
+  });
+
+  it('temCartaoProprio=true → NÃO impõe emojis da área (cartão próprio dita o estilo — protege a Meduzza)', () => {
+    for (const area of ['barbearia', 'manicure', 'estetica', 'salao', 'outro', null]) {
+      const block = buildCartaoEstabelecimentoBlock(area, true);
+      expect(block).not.toContain('👤 PROFISSIONAL');
+      expect(block).not.toContain('🕐 HORARIO');
+      expect(block).not.toContain('✂️ SERVICO');
+      expect(block).not.toContain('💅 SERVICO');
+      expect(block).not.toContain('📅 DIA');
+      expect(block).not.toContain('💰 VALOR');
+      expect(block).toContain('use os emojis e o estilo da SUA persona');
+    }
+  });
+
+  it('temCartaoProprio=true difere do false SÓ nas linhas de estilo (estrutura idêntica)', () => {
+    const custom = buildCartaoEstabelecimentoBlock('manicure', true);
+    const legado = buildCartaoEstabelecimentoBlock('manicure', false);
+    expect(custom).not.toBe(legado);
+    // as 10 primeiras linhas (regra estrutural) são idênticas entre os dois ramos
+    const head = (s: string) => s.split('\n').slice(0, 10).join('\n');
+    expect(head(custom)).toBe(head(legado));
   });
 });
