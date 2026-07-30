@@ -142,6 +142,14 @@ export const ConfigSchema = z.object({
   // semaforo e nao o segura pra sempre. Default 60s. 0 desativa (espera indefinida
   // — nao recomendado em prod). Rede final = close-stale-running no worker.
   WEBHOOK_TASK_TIMEOUT_MS: z.coerce.number().int().nonnegative().default(60_000),
+  // Corte de idade de mensagem inbound (incidente WAHA 26h fora do ar, 28-30/07 —
+  // ao voltar, a engine reentregou o backlog inteiro via webhook e o app processou
+  // tudo como novo: 31 mensagens de fato ENVIADAS a clientes finais). Mensagem cujo
+  // messageTimestamp original (WhatsApp) for mais velho que este teto e DESCARTADA
+  // no webhook, antes de dedup/LLM/router (lib/inbound-age.ts). Default 20min —
+  // ordem do Bruno. Ausente na env -> vale o default (nunca comportamento
+  // indefinido).
+  INBOUND_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(20),
 
   STARTAP_WAHA_SESSIONS: z.string().default('startap,STARTAP_AI,STARTAP_AI_PROD'),
 

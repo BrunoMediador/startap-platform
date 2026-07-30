@@ -31,6 +31,7 @@ const configState = vi.hoisted(() => ({
   webhookAsync: false,
   maxInFlight: 4,
   taskTimeoutMs: 0,
+  inboundMaxAgeMinutes: 20,
 }));
 
 vi.mock('../config.js', () => ({
@@ -55,6 +56,9 @@ vi.mock('../config.js', () => ({
     },
     get WEBHOOK_TASK_TIMEOUT_MS() {
       return configState.taskTimeoutMs;
+    },
+    get INBOUND_MAX_AGE_MINUTES() {
+      return configState.inboundMaxAgeMinutes;
     },
   },
 }));
@@ -117,6 +121,7 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
     configState.webhookAsync = false;
     configState.maxInFlight = 4;
     configState.taskTimeoutMs = 0;
+    configState.inboundMaxAgeMinutes = 20;
     handleWebhook.mockReset();
     logFlowEvent.mockReset();
     checkAndMarkDuplicate.mockReset();
@@ -326,6 +331,66 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(handleWebhook).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── INBOUND_MAX_AGE_MINUTES (incidente WAHA 26h fora do ar, 28-30/07) ──────
+  describe('corte de idade de mensagem inbound', () => {
+    function wahaBodyWithTimestamp(ageMinutes: number, over: Record<string, unknown> = {}) {
+      const tsSeconds = Math.floor(Date.now() / 1000) - Math.floor(ageMinutes * 60);
+      return wahaBody({
+        payload: {
+          id: 'msg1',
+          from: '5535999998888@c.us',
+          fromMe: false,
+          body: 'oi',
+          _data: { messageTimestamp: tsSeconds },
+        },
+        ...over,
+      });
+    }
+
+    it('mensagem de 30min (> teto de 20min) -> 200 ignored:stale, router NUNCA chamado', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        payload: wahaBodyWithTimestamp(30),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ignored:stale' });
+      expect(handleWebhook).not.toHaveBeenCalled();
+    });
+
+    it('mensagem recente (5min) -> processa normalmente', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        payload: wahaBodyWithTimestamp(5),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ok' });
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+    });
+
+    it('mensagem sem messageTimestamp -> fail-open, processa normalmente', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        payload: wahaBody(), // sem _data.messageTimestamp
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ status: 'ok' });
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
+    });
+
+    it('evento não-message (ex.: session.status) não passa pelo corte de idade', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/webhooks/waha',
+        payload: wahaBody({ event: 'session.status', payload: { status: 'WORKING' } }),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(handleWebhook).toHaveBeenCalledTimes(1);
     });
   });
 

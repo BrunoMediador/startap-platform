@@ -7,6 +7,7 @@ import type { FastifyPluginAsync, onRequestHookHandler, preValidationHookHandler
 import { config } from '../config.js';
 import { AsyncRunner } from '../lib/async-runner.js';
 import { checkAndMarkDuplicate } from '../lib/idempotency.js';
+import { checkInboundAge, logInboundAgeDiscard } from '../lib/inbound-age.js';
 import {
   WAHA_WEBHOOK_SECRET_HEADER,
   isWahaWebhookAuthorized,
@@ -198,6 +199,35 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
           durationMs: Date.now() - startedAt,
         });
         return reply.code(200).send({ status: 'ignored:invalid-payload' });
+      }
+
+      // Corte de idade (incidente WAHA 26h fora do ar, 28-30/07 — backlog reentregue
+      // processado como novo). O MAIS CEDO possível no pipeline: antes do log de
+      // recebido, do dedup e do ACK-early — mensagem velha demais não gasta token
+      // nem produz efeito colateral. Só se aplica a evento `message*` (ex.:
+      // session.status não tem messageTimestamp e o router trata separadamente);
+      // fail-open sem timestamp utilizável (lib/inbound-age.ts).
+      if (parsed.data.event === 'message' || parsed.data.event.startsWith('message.')) {
+        const ageCheck = checkInboundAge(parsed.data, config.INBOUND_MAX_AGE_MINUTES);
+        if (ageCheck.stale && ageCheck.ageMinutes !== null) {
+          logInboundAgeDiscard(parsed.data, ageCheck.ageMinutes, config.INBOUND_MAX_AGE_MINUTES);
+          await flowExecutionLog
+            .logFlowEvent({
+              executionId,
+              session: parsed.data.session,
+              eventType: 'webhook.stale-discarded',
+              status: 'ignored',
+              message: 'Mensagem inbound descartada por idade (backlog)',
+              metadata: {
+                ageMinutes: Math.round(ageCheck.ageMinutes * 10) / 10,
+                maxAgeMinutes: config.INBOUND_MAX_AGE_MINUTES,
+                event: parsed.data.event,
+              },
+              durationMs: Date.now() - startedAt,
+            })
+            .catch((e) => log.error({ err: e }, 'Falha ao logar descarte por idade'));
+          return reply.code(200).send({ status: 'ignored:stale' });
+        }
       }
 
       await flowExecutionLog.logFlowEvent({
