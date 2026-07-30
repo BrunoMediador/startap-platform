@@ -26,6 +26,7 @@
  * estas funções com a flag ON. Flag OFF -> inserir_agendamento byte-a-byte o de hoje
  * (Cirilo/Samuel intocados).
  */
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { DEFAULT_TIMEZONE } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
@@ -1033,6 +1034,10 @@ export async function reativarCredito(input: RecargaInput): Promise<RecargaResul
  * Este hook NÃO resolve o furo — ele só deixa RASTRO (log estruturado) para um job de
  * reconciliação futuro detectar e o ops auditar. Chamado pelo caminho de dedução quando
  * descontou, registrando o vínculo (telefone-hmac + serviço + evento) sem PII.
+ *
+ * ⚠️ SCRUM-148 item 2: o gcalEventId sai HASHEADO (mesmo `hashEventIdForLog` do SCRUM-91/#531).
+ * Diferente do reconcile-packages (cron OFF hoje), ESTE hook roda em PROD a cada dedução de
+ * pacote — era o sink cru de maior volume. O id cru continua na linha do ledger.
  */
 export function reconciliationHook(entry: {
   slot: string;
@@ -1045,7 +1050,7 @@ export function reconciliationHook(entry: {
   log.info(
     {
       slot: entry.slot,
-      gcalEventId: entry.gcalEventId,
+      gcalEventId: hashEventIdForLog(entry.gcalEventId),
       creditId: entry.creditId,
       servico: entry.servicoNome,
       stub: true,
