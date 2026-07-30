@@ -4,6 +4,7 @@
  * Único modo de operação: instanciar GoogleCalendarClient com { credentialsJson, calendarId }.
  * O JSON deve ter type === "service_account". Token obtido via JWT/SA direto no token endpoint.
  */
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'google-calendar' });
@@ -11,6 +12,53 @@ const log = logger.child({ module: 'google-calendar' });
 /** Mensagem de um erro `unknown` (sem vazar stack/objeto cru em log). */
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * SCRUM-148 (LGPD art. 12 §2) — extrai o gcal_event_id do path de um endpoint POR EVENTO
+ * (`/calendars/<calendarId>/events/<eventId>`, usado por deleteEvent/patchEvent).
+ *
+ * Endpoints de COLEÇÃO (`.../events`, `.../events?<qs>`, `/freeBusy`) não têm id e devolvem
+ * null — nada a redigir, a mensagem do Google chega inteira pro debug.
+ */
+function eventIdFromPath(path: string): string | null {
+  const m = /\/calendars\/[^/]+\/events\/([^/?#]+)/.exec(path);
+  if (!m) return null;
+  const raw = m[1];
+  // O path é montado com o eventId CRU (sem encode) nos dois call sites; decodificar mesmo
+  // assim cobre um id que já venha percent-encoded, pra redigir a forma que o Google ecoa.
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** Escapa metacaracteres para montar um RegExp literal a partir de um id arbitrário. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * SCRUM-148 — ponto ÚNICO de saída da redação do event id.
+ *
+ * O SCRUM-91 hasheou o CAMPO `eventId` nos logs do portal, mas o caminho de ERRO escapava:
+ * a mensagem `GCal ${path} -> HTTP ${status}: ${text}` carrega o id cru DUAS vezes — no path
+ * e dentro do corpo que o Google ecoa (`"Event not found: <id>"`). Como o portal loga
+ * `{ eventId: hashEventIdForLog(id), err: msg }`, o hash ia no campo certo e o id cru ia no
+ * `err` ao lado. Aqui o id é substituído pelo MESMO hash do SCRUM-91 em TODAS as ocorrências
+ * do texto, então a correlação cross-serviço continua funcionando e nada cru sai da integração.
+ */
+function redactEventId(text: string, eventId: string | null): string {
+  if (!eventId) return text;
+  const hashed = hashEventIdForLog(eventId);
+  let out = text.split(eventId).join(hashed);
+  // O Google pode ecoar a forma percent-encoded do id; redigir as duas grafias.
+  const encoded = encodeURIComponent(eventId);
+  if (encoded !== eventId) out = out.split(encoded).join(hashed);
+  // Defesa em profundidade: se o id ainda aparecer com case diferente, pega também.
+  const re = new RegExp(escapeRegExp(eventId), 'gi');
+  return out.replace(re, hashed);
 }
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -96,8 +144,13 @@ async function gcalFetch<T = unknown>(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    log.error({ path, status: res.status, body: text }, 'GCal error');
-    throw new Error(`GCal ${path} -> HTTP ${res.status}: ${text}`);
+    // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
+    // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
+    const eventId = eventIdFromPath(path);
+    const safePath = redactEventId(path, eventId);
+    const safeBody = redactEventId(text, eventId);
+    log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
+    throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
   }
   // DELETE retorna 204 sem corpo
   if (res.status === 204) return undefined as unknown as T;
