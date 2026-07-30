@@ -10414,10 +10414,18 @@ function _renderFormatoCard(el, clone) {
         clone.personalizacao = { ...(clone.personalizacao || {}), agenda_automatica: result.formato === 'agenda' ? 'true' : 'false' };
       }
       if (result.avisoTextoAssado === true) {
+        // avisoTextoAssadoForaDoPadrao: o cartão foi detectado mas FORA da posição
+        // canônica (trailing) — ainda é cartão no texto, mas o motivo é mais preciso
+        // (fix do falso-negativo: as duas razões de "não encontrado" do detector não
+        // podem colapsar em "não avisa", senão o aviso deixa de ser confiável).
+        const foraDoPadrao = result.avisoTextoAssadoForaDoPadrao === true;
+        const desc = foraDoPadrao
+          ? 'Este clone parece ter um cartão de confirmação no prompt, mas <strong>fora do formato padrão</strong> (não foi possível confirmar automaticamente que é só isso). Desligar a agenda não mexeu no texto — revise manualmente na aba <strong>Prompt</strong> antes de confiar que o cartão saiu de fato.'
+          : 'Este clone tem o cartão de confirmação escrito no próprio prompt (modo <code>baked</code>). Desligar a agenda não removeu esse trecho — o texto continua prometendo agendamento. Ajuste manualmente na aba <strong>Prompt</strong> ou use <strong>Regerar Prompt</strong> se for aceitável perder a persona personalizada.';
         resultBox.innerHTML = `
           <div style="padding:.625rem .75rem;background:var(--surface-2);border-left:3px solid var(--warning);border-radius:var(--radius-sm)">
             <div style="font-weight:600;font-size:.8125rem;display:flex;gap:.5rem;align-items:center"><span style="color:var(--warning)">${icon('alert-triangle', 14)}</span> Persona ainda tem o cartão de confirmação no texto</div>
-            <p class="muted" style="margin:.25rem 0 0;font-size:.75rem;line-height:1.5">Este clone tem o cartão de confirmação escrito no próprio prompt (modo <code>baked</code>). Desligar a agenda não removeu esse trecho — o texto continua prometendo agendamento. Ajuste manualmente na aba <strong>Prompt</strong> ou use <strong>Regerar Prompt</strong> se for aceitável perder a persona personalizada.</p>
+            <p class="muted" style="margin:.25rem 0 0;font-size:.75rem;line-height:1.5">${desc}</p>
           </div>`;
       }
       _rendered['bots'] = false;

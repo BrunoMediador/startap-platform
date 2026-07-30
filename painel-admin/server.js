@@ -4880,7 +4880,20 @@ function decideFormatoClone(cur, alvo, opts) {
   // [CARTAO DE CONFIRMACAO]) — desligar a tool de agenda NÃO tira o cartão do
   // texto (prompt é cópia intocável, decisão do Bruno). Detecta, não conserta:
   // devolve aviso explícito pro operador rodar regerar-prompt.
-  const avisoTextoAssado = cur.cartaoMode === 'baked' && cur.personaTemMecanicaBaked === true;
+  //
+  // FIX (review qa+security, 30/07): extractBakedCartao devolve found:false por
+  // DUAS razões distintas — 'sem_cartao' (não há cartão mesmo) e
+  // 'cartao_nao_trailing' (HÁ cartão, só não está na posição canônica — cartão
+  // editado à mão "no meio" do prompt é cenário real, coberto em
+  // cartao-extract.test.ts). Colapsar as duas em "não avisa" é falso-negativo:
+  // um clone com cartão fora do trailing desligaria a agenda SEM avisar
+  // ninguém — exatamente o que a regra 13-bis existe pra impedir. Decisão do
+  // Bruno (30/07): o aviso é a ÚNICA proteção deste caminho (não conserta o
+  // bot_prompt), então ele TEM que disparar sempre que houver qualquer sinal
+  // de cartão no texto — fail-closed no sentido do AVISO: na dúvida, avisa.
+  const cartaoNoTexto =
+    cur.cartaoBakedReason === 'found' || cur.cartaoBakedReason === 'cartao_nao_trailing';
+  const avisoTextoAssado = cur.cartaoMode === 'baked' && cartaoNoTexto === true;
 
   return {
     ok: true,
@@ -4888,6 +4901,9 @@ function decideFormatoClone(cur, alvo, opts) {
     motivo: 'desligou_agenda',
     formato: 'atendente',
     avisoTextoAssado,
+    // Diferencia a mensagem na UI: cartão fora do formato padrão (detectado mas
+    // não-trailing) vs. cartão no formato canônico — mesmo aviso, motivo mais preciso.
+    avisoTextoAssadoForaDoPadrao: avisoTextoAssado && cur.cartaoBakedReason === 'cartao_nao_trailing',
     // Estabelecimento nunca chega aqui (barrado acima); campo mantido só pra
     // simetria de shape caso o guard suba de nível no futuro.
     temColaboradorComCalendario: temColaboradorComCalendario === true ? true : undefined,
@@ -4902,23 +4918,47 @@ app.post('/api/clones/:id/formato', async (req, res) => {
     return res.status(400).json({ error: 'formato obrigatório ("agenda" | "atendente")' });
   }
 
+  // FIX (review qa+security, 30/07): decisão + escrita não podiam ser 1 CTE atômica
+  // como o /gcal/test porque a decisão depende de I/O assíncrono fora do SQL
+  // (import dinâmico + extractBakedCartao rodando em JS). A alternativa aceita
+  // pelo PM: SELECT ... FOR UPDATE dentro de uma transação explícita — trava a
+  // LINHA do clone entre a leitura que decide e o UPDATE que escreve, então 2
+  // chamadas concorrentes pro MESMO clone serializam (a 2ª só lê depois que a
+  // 1ª commitou, e reavalia idempotência com o estado JÁ atualizado — nunca
+  // decide sobre um estado que ficou stale). O UPDATE em si já era atômico
+  // (par de colunas nunca sai meio-a-meio, confirmado pelo security); o que
+  // faltava era a leitura-que-decide não ser pisada por uma escrita concorrente
+  // entre o SELECT e o UPDATE.
+  const client = await pool.connect();
   try {
-    const r = await pool.query(
+    await client.query('BEGIN');
+    const r = await client.query(
       `SELECT fc.id, fc.slot, fc.product_type, fc.personalizacao,
               fc.modo_atendente_enabled, fc.cartao_mode, bp.prompt AS bot_prompt
          FROM flow_clones fc
          LEFT JOIN bot_prompt bp ON bp.slot = fc.slot
-        WHERE fc.id = $1`,
+        WHERE fc.id = $1
+          FOR UPDATE OF fc`,
       [id],
     );
-    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    if (!r.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Clone não encontrado' });
+    }
     const row = r.rows[0];
 
     // personaTemMecanica: MESMO cálculo do /gcal/test (reusa o detector já
     // testado extractBakedCartao — nunca duplica a lógica). runtime dispensa a
     // persona (mecânica vem do código); baked exige o cartão no texto.
+    //
+    // cartaoBakedReason carrega o resultado FINO da extração (não só o
+    // found/!found colapsado): 'found' (cartão em posição canônica, trailing),
+    // 'cartao_nao_trailing' (HÁ cartão, fora da posição canônica — ainda
+    // precisa avisar no caminho de desligar) ou 'sem_cartao' (nada a avisar).
+    // 'erro_extracao' cobre o import falhar (fail-closed = trata como se
+    // houvesse cartão, pra nunca perder o aviso por falha transitória).
     let personaTemMecanica = false;
-    let personaTemMecanicaBaked = false;
+    let cartaoBakedReason = 'sem_cartao';
     if (row.cartao_mode === 'runtime') {
       personaTemMecanica = true;
     } else {
@@ -4926,11 +4966,15 @@ app.post('/api/clones/:id/formato', async (req, res) => {
         const { extractBakedCartao } = await import(
           '../packages/integrations/dist/prompt-builder/cartao-extract.js'
         );
-        personaTemMecanicaBaked = extractBakedCartao(row.bot_prompt ?? '').found === true;
-        personaTemMecanica = personaTemMecanicaBaked;
+        const extracted = extractBakedCartao(row.bot_prompt ?? '');
+        cartaoBakedReason = extracted.found === true ? 'found' : extracted.reason;
+        personaTemMecanica = extracted.found === true;
       } catch (importErr) {
-        // Sem conseguir PROVAR a mecânica, fail-closed: não libera o flip.
+        // Sem conseguir PROVAR a mecânica, fail-closed nos dois sentidos: não
+        // libera o flip pra agenda E assume que PODE haver cartão no texto
+        // (nunca perder o aviso por falha transitória do import).
         personaTemMecanica = false;
+        cartaoBakedReason = 'cartao_nao_trailing';
         console.log(
           `[formato] clone ${id}: não foi possível checar a mecânica da persona (${importErr.message}) — fail-closed`,
         );
@@ -4943,32 +4987,42 @@ app.post('/api/clones/:id/formato', async (req, res) => {
         personalizacao: row.personalizacao,
         modoAtendenteEnabled: row.modo_atendente_enabled,
         cartaoMode: row.cartao_mode,
-        personaTemMecanicaBaked,
+        cartaoBakedReason,
       },
       alvo,
       { personaTemMecanica },
     );
 
     if (!decisao.ok) {
+      await client.query('ROLLBACK');
       console.log(
         `[formato] clone ${id} (${row.slot}): alvo=${alvo} BARRADO — motivo=${decisao.motivo}`,
       );
-      return res.status(decisao.http).json({ ok: false, error: decisao.motivo, ...decisao });
+      // Resposta de erro enumera os campos explicitamente (não espalha `decisao`
+      // inteira) — evita derramar campos internos como `http`/`ok` no JSON.
+      return res.status(decisao.http).json({
+        ok: false,
+        error: decisao.motivo,
+        productType: decisao.productType,
+      });
     }
 
     if (!decisao.mudou) {
+      await client.query('ROLLBACK');
       console.log(
         `[formato] clone ${id} (${row.slot}): alvo=${alvo} — já estava neste formato (no-op explícito)`,
       );
       return res.json({ ok: true, mudou: false, motivo: decisao.motivo, formato: decisao.formato, slot: row.slot });
     }
 
-    // Escreve as DUAS colunas coerentemente numa transação só (nunca meio-a-meio).
-    // agenda_automatica é STRING 'true'/'false' no JSONB — convenção do pipeline
-    // inteiro (portal-config.ts), NUNCA boolean.
+    // Escreve as DUAS colunas coerentemente numa statement só (nunca meio-a-meio)
+    // dentro da MESMA transação que travou a linha com FOR UPDATE acima — nenhuma
+    // outra escrita concorrente neste clone pôde intercalar entre a decisão e o
+    // commit. agenda_automatica é STRING 'true'/'false' no JSONB — convenção do
+    // pipeline inteiro (portal-config.ts), NUNCA boolean.
     const novoAA = decisao.formato === 'agenda' ? 'true' : 'false';
     const novoModoAtendente = decisao.formato === 'atendente';
-    const upd = await pool.query(
+    const upd = await client.query(
       `UPDATE flow_clones
           SET personalizacao = jsonb_set(COALESCE(personalizacao, '{}'::jsonb), '{agenda_automatica}', to_jsonb($2::text), true),
               modo_atendente_enabled = $3,
@@ -4977,6 +5031,7 @@ app.post('/api/clones/:id/formato', async (req, res) => {
     RETURNING slot, product_type`,
       [id, novoAA, novoModoAtendente],
     );
+    await client.query('COMMIT');
     console.log(
       `[formato] clone ${id} (${row.slot}): ${decisao.motivo} — agenda_automatica=${novoAA}, modo_atendente_enabled=${novoModoAtendente}`,
     );
@@ -4991,9 +5046,13 @@ app.post('/api/clones/:id/formato', async (req, res) => {
       // o operador precisa rodar regerar-prompt à mão pra tirar a mecânica do
       // prompt (não mexemos em bot_prompt aqui). Undefined some do JSON.
       avisoTextoAssado: decisao.avisoTextoAssado === true ? true : undefined,
+      avisoTextoAssadoForaDoPadrao: decisao.avisoTextoAssadoForaDoPadrao === true ? true : undefined,
     });
   } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 

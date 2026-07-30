@@ -65,7 +65,7 @@ const CLONE_AGENDA = {
   personalizacao: { agenda_automatica: 'true' },
   modoAtendenteEnabled: false,
   cartaoMode: 'baked',
-  personaTemMecanicaBaked: true,
+  cartaoBakedReason: 'found',
 };
 
 const CLONE_ATENDENTE = {
@@ -73,7 +73,7 @@ const CLONE_ATENDENTE = {
   personalizacao: { agenda_automatica: 'false' },
   modoAtendenteEnabled: true,
   cartaoMode: 'baked',
-  personaTemMecanicaBaked: false,
+  cartaoBakedReason: 'sem_cartao',
 };
 
 test('idempotência: pedir "agenda" num clone já em agenda ⇒ mudou:false, motivo explícito', () => {
@@ -121,7 +121,7 @@ test('FAIL-CLOSED: ligar agenda SEM mecânica garantida ⇒ barra (409), nunca e
 });
 
 test('desligar agenda num clone RUNTIME (mecânica é código, não texto) ⇒ muda, SEM aviso de texto assado', () => {
-  const cur = { ...CLONE_AGENDA, cartaoMode: 'runtime', personaTemMecanicaBaked: false };
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'runtime', cartaoBakedReason: 'sem_cartao' };
   const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
   assert.equal(d.ok, true);
   assert.equal(d.mudou, true);
@@ -129,16 +129,17 @@ test('desligar agenda num clone RUNTIME (mecânica é código, não texto) ⇒ m
   assert.notEqual(d.avisoTextoAssado, true);
 });
 
-test('desligar agenda num clone BAKED com cartão no texto ⇒ muda MAS avisa avisoTextoAssado', () => {
-  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', personaTemMecanicaBaked: true };
+test('desligar agenda num clone BAKED com cartão no texto (posição canônica) ⇒ muda MAS avisa avisoTextoAssado', () => {
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'found' };
   const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
   assert.equal(d.ok, true);
   assert.equal(d.mudou, true);
   assert.equal(d.avisoTextoAssado, true, 'clone baked com cartão no texto precisa do aviso');
+  assert.notEqual(d.avisoTextoAssadoForaDoPadrao, true, 'cartão canônico não é "fora do padrão"');
 });
 
 test('desligar agenda num clone BAKED SEM cartão detectável no texto ⇒ muda, sem aviso (nada a avisar)', () => {
-  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', personaTemMecanicaBaked: false };
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'sem_cartao' };
   const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
   assert.equal(d.ok, true);
   assert.equal(d.mudou, true);
@@ -149,6 +150,51 @@ test('desligar nunca é bloqueado por falta de mecânica (só LIGAR exige a gara
   const d = decideFormatoClone(CLONE_AGENDA, 'atendente', { personaTemMecanica: false });
   assert.equal(d.ok, true);
   assert.equal(d.mudou, true);
+});
+
+// ── FIX 1 (review qa+security, 30/07): falso-negativo do avisoTextoAssado ────
+// extractBakedCartao devolve found:false por 2 razões: 'sem_cartao' (não há
+// cartão) e 'cartao_nao_trailing' (HÁ cartão, só não em posição canônica —
+// cenário real, coberto em cartao-extract.test.ts:58,103). Colapsar as duas em
+// "não avisa" deixava desligar a agenda de um clone com cartão editado à mão
+// "no meio" do prompt SEM avisar ninguém — exatamente o que a 13-bis existe pra
+// impedir. Decisão do Bruno (30/07): o aviso é a ÚNICA proteção deste caminho
+// (não conserta o bot_prompt), então tem que disparar sempre que há QUALQUER
+// sinal de cartão no texto — fail-closed no sentido do aviso.
+
+test('FIX 1: cartão HÁ mas fora do trailing (cartao_nao_trailing) ⇒ avisa MESMO ASSIM', () => {
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'cartao_nao_trailing' };
+  const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
+  assert.equal(d.ok, true);
+  assert.equal(d.mudou, true);
+  assert.equal(d.avisoTextoAssado, true, 'cartão fora do trailing AINDA é cartão no texto — tem que avisar');
+});
+
+test('FIX 1: aviso por cartão fora do trailing tem motivo diferenciado (avisoTextoAssadoForaDoPadrao)', () => {
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'cartao_nao_trailing' };
+  const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
+  assert.equal(d.avisoTextoAssadoForaDoPadrao, true);
+});
+
+test('FIX 1: sem_cartao (razão distinta de cartao_nao_trailing) NÃO avisa — nada a avisar de fato', () => {
+  const cur = { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'sem_cartao' };
+  const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
+  assert.notEqual(d.avisoTextoAssado, true);
+  assert.notEqual(d.avisoTextoAssadoForaDoPadrao, true);
+});
+
+test('FIX 1: as duas razões de found:false são tratadas DIFERENTE uma da outra (não colapsam)', () => {
+  const semCartao = decideFormatoClone(
+    { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'sem_cartao' },
+    'atendente',
+    { personaTemMecanica: true },
+  );
+  const foraDoTrailing = decideFormatoClone(
+    { ...CLONE_AGENDA, cartaoMode: 'baked', cartaoBakedReason: 'cartao_nao_trailing' },
+    'atendente',
+    { personaTemMecanica: true },
+  );
+  assert.notEqual(semCartao.avisoTextoAssado, foraDoTrailing.avisoTextoAssado);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +222,65 @@ test('alvo inválido ⇒ 400 explícito (não silencia entrada malformada)', () 
   assert.equal(d.ok, false);
   assert.equal(d.http, 400);
   assert.equal(d.motivo, 'alvo_invalido');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (3-bis) Gaps de teste pedidos pelo QA — clone inexistente, personalizacao
+// malformado, product_type ausente. O QA verificou manualmente que o código já
+// se comporta certo nestes casos; aqui é a cobertura automatizada.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('clone inexistente: o handler responde 404 ANTES de tentar decidir qualquer coisa', () => {
+  assert.match(HANDLER, /if \(!r\.rows\[0\]\) \{/, 'checa a linha antes de seguir');
+  assert.match(HANDLER, /res\.status\(404\)\.json\(\{ error: 'Clone não encontrado' \}\)/);
+});
+
+test('clone inexistente: faz ROLLBACK antes do 404 (não deixa transação pendurada)', () => {
+  const notFoundBlock = HANDLER.slice(
+    HANDLER.indexOf('if (!r.rows[0]) {'),
+    HANDLER.indexOf('const row = r.rows[0];'),
+  );
+  assert.match(notFoundBlock, /await client\.query\('ROLLBACK'\)/);
+  assert.match(notFoundBlock, /404/);
+});
+
+test('personalizacao=null ⇒ lido como agenda (guard typeof já cobre; não lança)', () => {
+  const cur = { product_type: 'individual', personalizacao: null, modoAtendenteEnabled: false, cartaoMode: 'baked' };
+  assert.doesNotThrow(() => decideFormatoClone(cur, 'agenda', { personaTemMecanica: true }));
+  const d = decideFormatoClone(cur, 'agenda', { personaTemMecanica: true });
+  assert.equal(d.mudou, false, 'null é tratado como agenda (mesma leitura de chave ausente)');
+});
+
+test('personalizacao=string (JSONB corrompido/tipo errado) ⇒ não lança, cai no default agenda', () => {
+  const cur = { product_type: 'individual', personalizacao: 'não deveria ser string', modoAtendenteEnabled: false, cartaoMode: 'baked' };
+  assert.doesNotThrow(() => decideFormatoClone(cur, 'agenda', { personaTemMecanica: true }));
+  const d = decideFormatoClone(cur, 'agenda', { personaTemMecanica: true });
+  assert.equal(d.mudou, false);
+});
+
+test('personalizacao=array (typeof "object" mas não é o shape esperado) ⇒ não lança', () => {
+  const cur = { product_type: 'individual', personalizacao: [], modoAtendenteEnabled: false, cartaoMode: 'baked' };
+  assert.doesNotThrow(() => decideFormatoClone(cur, 'atendente', { personaTemMecanica: true }));
+  // array não tem chave agenda_automatica ⇒ lido como agenda ⇒ pedir atendente MUDA.
+  const d = decideFormatoClone(cur, 'atendente', { personaTemMecanica: true });
+  assert.equal(d.ok, true);
+  assert.equal(d.mudou, true);
+});
+
+test('product_type=null ⇒ NÃO é "individual" ⇒ 400 fail-closed (mesmo caminho do estabelecimento)', () => {
+  const cur = { product_type: null, personalizacao: {}, modoAtendenteEnabled: false };
+  const d = decideFormatoClone(cur, 'agenda', { personaTemMecanica: true });
+  assert.equal(d.ok, false);
+  assert.equal(d.http, 400);
+  assert.equal(d.motivo, 'nao_individual');
+});
+
+test('product_type=undefined (coluna ausente/erro de leitura) ⇒ 400 fail-closed, não lança', () => {
+  const cur = { personalizacao: {}, modoAtendenteEnabled: false };
+  assert.doesNotThrow(() => decideFormatoClone(cur, 'agenda', { personaTemMecanica: true }));
+  const d = decideFormatoClone(cur, 'agenda', { personaTemMecanica: true });
+  assert.equal(d.ok, false);
+  assert.equal(d.motivo, 'nao_individual');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,7 +330,7 @@ test('a função de decisão é PURA (sem I/O) — só lê os argumentos', () =>
 test('reusa extractBakedCartao (mesmo detector do /gcal/test, não uma heurística nova)', () => {
   assert.match(
     HANDLER,
-    /extractBakedCartao\(row\.bot_prompt \?\? ''\)\.found === true/,
+    /const extracted = extractBakedCartao\(row\.bot_prompt \?\? ''\);/,
     'deve reusar o detector já testado, nunca reimplementar',
   );
 });
@@ -234,11 +339,21 @@ test('runtime dispensa a checagem de texto (mecânica vem do código)', () => {
   assert.match(HANDLER, /if \(row\.cartao_mode === 'runtime'\) \{\s*personaTemMecanica = true;/);
 });
 
-test('import quebrado é FAIL-CLOSED (não libera o flip)', () => {
+test('import quebrado é FAIL-CLOSED nos DOIS sentidos: não libera o flip E assume que pode haver cartão', () => {
   assert.match(
     HANDLER,
-    /catch \(importErr\) \{[\s\S]*?personaTemMecanica = false;/,
-    'sem conseguir provar a mecânica, não pode liberar',
+    /catch \(importErr\) \{[\s\S]*?personaTemMecanica = false;[\s\S]*?cartaoBakedReason = 'cartao_nao_trailing';/,
+    'sem conseguir provar a mecânica, não pode liberar o flip NEM perder o aviso',
+  );
+});
+
+// FIX 1 — wiring: cartaoBakedReason carrega o `reason` FINO da extração, não o
+// found/!found colapsado (era o bug do falso-negativo).
+test('cartaoBakedReason vem do extracted.reason quando found:false (não colapsa em booleano)', () => {
+  assert.match(
+    HANDLER,
+    /cartaoBakedReason = extracted\.found === true \? 'found' : extracted\.reason;/,
+    'precisa propagar cartao_nao_trailing vs sem_cartao, não só true/false',
   );
 });
 
@@ -261,6 +376,11 @@ test('caso barrado responde com o status http da decisão (409/400), não 200', 
 
 test('resposta de desligar clone baked-com-cartão expõe avisoTextoAssado (não conserta, avisa)', () => {
   assert.match(HANDLER, /avisoTextoAssado: decisao\.avisoTextoAssado === true \? true : undefined/);
+  assert.match(
+    HANDLER,
+    /avisoTextoAssadoForaDoPadrao: decisao\.avisoTextoAssadoForaDoPadrao === true \? true : undefined/,
+    'motivo diferenciado pra cartão fora do trailing também precisa chegar na resposta',
+  );
 });
 
 test('handler NUNCA escreve em bot_prompt (o texto assado é intocado — decisão do Bruno)', () => {
@@ -285,6 +405,50 @@ test('rota valida id numérico e formato antes de tocar o banco', () => {
 test('log [formato] registra tanto o sucesso quanto o bloqueio (nada silencioso no console)', () => {
   assert.match(HANDLER, /\[formato\][^`]*BARRADO/);
   assert.match(HANDLER, /\[formato\][^`]*já estava/);
+});
+
+// ── FIX 2 (review qa+security, 30/07): concorrência — SELECT ... FOR UPDATE
+// dentro de transação explícita (BEGIN/COMMIT/ROLLBACK). O UPDATE em si já era
+// atômico (par de colunas nunca sai meio-a-meio); o que faltava travar era a
+// leitura-que-decide não ser pisada por uma escrita concorrente no mesmo clone
+// entre o SELECT e o UPDATE. Decisão+escrita não cabem numa CTE única como o
+// /gcal/test porque a decisão depende de I/O assíncrono (import + JS) fora do SQL.
+test('FIX 2: usa transação explícita com BEGIN e a leitura trava a linha (FOR UPDATE)', () => {
+  assert.match(HANDLER, /await client\.query\('BEGIN'\)/, 'precisa abrir transação explícita');
+  assert.match(HANDLER, /FOR UPDATE OF fc/, 'a leitura que decide precisa travar a linha do clone');
+});
+
+test('FIX 2: todo caminho de saída fecha a transação — sucesso commita, erro/no-op faz rollback', () => {
+  assert.match(HANDLER, /await client\.query\('COMMIT'\)/, 'caminho de escrita precisa commitar');
+  const rollbacks = [...HANDLER.matchAll(/await client\.query\('ROLLBACK'\)/g)];
+  assert.ok(rollbacks.length >= 3, 'clone não encontrado, decisão barrada e no-op idempotente precisam rollback');
+});
+
+test('FIX 2: catch genérico também faz ROLLBACK (nunca deixa transação pendurada)', () => {
+  assert.match(HANDLER, /catch \(e\) \{\s*await client\.query\('ROLLBACK'\)\.catch/);
+});
+
+test('FIX 2: conexão é sempre liberada de volta ao pool (finally com client.release)', () => {
+  assert.match(HANDLER, /\} finally \{\s*client\.release\(\);\s*\}/);
+});
+
+test('FIX 2: leitura e escrita usam a MESMA conexão (client), não pool.query solto', () => {
+  const withoutComment = HANDLER.replace(/\/\/.*$/gm, '');
+  assert.doesNotMatch(
+    withoutComment,
+    /pool\.query/,
+    'dentro do handler tudo deve passar pela conexão travada (client), não pelo pool genérico',
+  );
+});
+
+// ── Security P3 (opcional, aplicado): resposta de erro não derrama campos
+// internos da decisão (http/ok) — enumera os campos explicitamente.
+test('resposta de erro enumera campos explicitamente, não espalha a decisão inteira (`...decisao`)', () => {
+  assert.doesNotMatch(HANDLER, /\.\.\.decisao/, 'nunca espalhar a decisão inteira na resposta HTTP');
+  assert.match(
+    HANDLER,
+    /res\.status\(decisao\.http\)\.json\(\{\s*ok: false,\s*error: decisao\.motivo,\s*productType: decisao\.productType,\s*\}\)/,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
