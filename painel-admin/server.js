@@ -3779,6 +3779,7 @@ app.get('/api/clones/:id', async (req, res) => {
               fc.horarios_funcionamento, fc.servicos,
               fc.product_type, fc.seat_cap, fc.timezone,
               fc.created_at, fc.updated_at,
+              fc.modo_atendente_enabled, fc.cartao_mode, fc.gcal_status,
               bc.display_name AS matriz_display_name
        FROM flow_clones fc
        LEFT JOIN bot_config bc ON bc.slot = fc.matriz_slot
@@ -4784,6 +4785,212 @@ app.post('/api/clones/:id/gcal/test', async (req, res) => {
       // agendamento (cartão+SIM+inserir_agendamento). O front usa isto pra avisar o operador
       // a regenerar a persona pra agenda antes de ativar. Undefined some do JSON.
       agendaBloqueadaPersona: upd.rows[0]?.flip_bloqueado_persona === true ? true : undefined,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// POST /api/clones/:id/formato — toggle EXPLÍCITO e IDEMPOTENTE "modo agenda /
+// modo atendente" (achado 30/07: o ÚNICO caminho de escrita de agenda_automatica
+// + modo_atendente_enabled pelo gestão era efeito colateral do botão "Testar
+// conexão" do GCal — e só disparava na TRANSIÇÃO de gcal_status, então um clone
+// já `active` fazia UPDATE sem SET (rowCount 0) e devolvia 200 idêntico a um
+// teste de rotina: o Bruno clicava, nada mudava, nada avisava).
+//
+// DECISÃO PURA extraída em `decideFormatoClone` (mesmo padrão do
+// `bloqueiaDowngradeEstab`/SCRUM-138 e do predicado do /gcal/test): zero I/O,
+// testável lendo o source. Contrato:
+//   - IDEMPOTENTE: 2 chamadas com o mesmo alvo → mesmo resultado, HTTP 200, e a
+//     2ª diz `mudou:false` + motivo 'ja_estava'. Nunca 200 mudo — resposta
+//     sempre carrega `mudou` (bool) + `motivo`.
+//   - SIMETRIA DO CARTÃO (regra 13-bis, incontestável): ligar agenda ⇒ mecânica
+//     cartão+SIM tem que estar garantida (persona já tem OU cartao_mode=runtime)
+//     — senão FAIL-CLOSED (barra, nunca entrega bot com tool de agendar e sem
+//     cartão). Desligar agenda ⇒ se o clone é `baked` (cartão dentro do
+//     bot_prompt, texto intocável por decisão do Bruno) o texto SEGUE com o
+//     cartão — não conserta, avisa explícito (`avisoTextoAssado`) pro operador
+//     rodar `regerar-prompt` à mão. `runtime` não tem esse problema (o cartão é
+//     código, sai/entra sozinho conforme cartao_mode + a tool registrada em
+//     runtime lê agenda_automatica a cada turno).
+//   - Estabelecimento: NUNCA silencioso — 400 explícito (a agenda dele é por
+//     COLABORADOR, não há "o clone" pra ligar/desligar aqui; mesma razão do
+//     /gcal/test não flipar estabelecimento).
+//   - Coerência: as 2 colunas (personalizacao.agenda_automatica STRING
+//     'true'/'false' — convenção do pipeline, NUNCA boolean — e
+//     modo_atendente_enabled) saem SEMPRE do mesmo UPDATE, nunca meio-a-meio.
+//   - NÃO migra dado, NÃO roda sozinho: só age quando chamado. Os clones no
+//     estado atual (Cirilo/Samuel/Dragon/Meduzza/Ingrid/MVS) ficam EXATAMENTE
+//     como estão até alguém chamar o endpoint neles (ordem do Bruno).
+//
+// NÃO substitui nem altera o /gcal/test (continua fazendo o que faz).
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Decisão PURA (sem I/O) do toggle de formato. `cur` = estado atual do clone;
+ * `alvo` = 'agenda' | 'atendente'. `personaTemMecanica`/`temColaboradorComCalendario`
+ * já vêm calculados pelo caller (I/O fica todo no handler).
+ *
+ * Retorna sempre um motivo — nunca {mudou:false} sem dizer por quê (é o bug que
+ * este endpoint existe pra matar).
+ */
+function decideFormatoClone(cur, alvo, opts) {
+  const { personaTemMecanica, temColaboradorComCalendario } = opts;
+
+  if (alvo !== 'agenda' && alvo !== 'atendente') {
+    return { ok: false, http: 400, motivo: 'alvo_invalido' };
+  }
+  if (cur.product_type !== 'individual') {
+    // Estabelecimento: a agenda é por colaborador (tabela clone_colaboradores,
+    // coluna gcal_calendar_id), não há "o clone" pra flipar aqui — mesma razão
+    // do /gcal/test (regra do Bruno 24/07). Nunca silencioso: 400 c/ o motivo.
+    return { ok: false, http: 400, motivo: 'nao_individual', productType: cur.product_type };
+  }
+
+  // Estado ATUAL do formato, pela mesma leitura boolean-ou-string que o resto
+  // do código usa (agenda-degrade.ts / teste_barbearia.ts): chave ausente ou
+  // 'true' = agenda; só 'false'/false explícito é atendente. modo_atendente_enabled
+  // TRUE também conta como atendente mesmo se agenda_automatica não foi setado.
+  const aa = cur.personalizacao && typeof cur.personalizacao === 'object'
+    ? cur.personalizacao.agenda_automatica
+    : undefined;
+  const agendaDesligadaExplicita = aa === 'false' || aa === false;
+  const formatoAtual = (cur.modoAtendenteEnabled === true || agendaDesligadaExplicita)
+    ? 'atendente'
+    : 'agenda';
+
+  if (formatoAtual === alvo) {
+    // IDEMPOTÊNCIA: já está no formato pedido. 200, mudou:false, motivo explícito
+    // — nunca o 200-mudo que causou o bug original.
+    return { ok: true, mudou: false, motivo: 'ja_estava', formato: alvo };
+  }
+
+  if (alvo === 'agenda') {
+    // Ligar agenda: SIMETRIA DO CARTÃO fail-closed. Sem a mecânica garantida,
+    // barra — nunca entrega bot com tool de agendar e sem cartão/SIM (regra 13-bis).
+    if (!personaTemMecanica) {
+      return { ok: false, http: 409, motivo: 'sem_mecanica_cartao' };
+    }
+    return { ok: true, mudou: true, motivo: 'ligou_agenda', formato: 'agenda' };
+  }
+
+  // alvo === 'atendente': desligar agenda.
+  // cartao_mode='baked': o cartão mora NO TEXTO do bot_prompt (seção
+  // [CARTAO DE CONFIRMACAO]) — desligar a tool de agenda NÃO tira o cartão do
+  // texto (prompt é cópia intocável, decisão do Bruno). Detecta, não conserta:
+  // devolve aviso explícito pro operador rodar regerar-prompt.
+  const avisoTextoAssado = cur.cartaoMode === 'baked' && cur.personaTemMecanicaBaked === true;
+
+  return {
+    ok: true,
+    mudou: true,
+    motivo: 'desligou_agenda',
+    formato: 'atendente',
+    avisoTextoAssado,
+    // Estabelecimento nunca chega aqui (barrado acima); campo mantido só pra
+    // simetria de shape caso o guard suba de nível no futuro.
+    temColaboradorComCalendario: temColaboradorComCalendario === true ? true : undefined,
+  };
+}
+
+app.post('/api/clones/:id/formato', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'id inválido' });
+  const alvo = typeof req.body?.formato === 'string' ? req.body.formato.trim() : '';
+  if (alvo !== 'agenda' && alvo !== 'atendente') {
+    return res.status(400).json({ error: 'formato obrigatório ("agenda" | "atendente")' });
+  }
+
+  try {
+    const r = await pool.query(
+      `SELECT fc.id, fc.slot, fc.product_type, fc.personalizacao,
+              fc.modo_atendente_enabled, fc.cartao_mode, bp.prompt AS bot_prompt
+         FROM flow_clones fc
+         LEFT JOIN bot_prompt bp ON bp.slot = fc.slot
+        WHERE fc.id = $1`,
+      [id],
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'Clone não encontrado' });
+    const row = r.rows[0];
+
+    // personaTemMecanica: MESMO cálculo do /gcal/test (reusa o detector já
+    // testado extractBakedCartao — nunca duplica a lógica). runtime dispensa a
+    // persona (mecânica vem do código); baked exige o cartão no texto.
+    let personaTemMecanica = false;
+    let personaTemMecanicaBaked = false;
+    if (row.cartao_mode === 'runtime') {
+      personaTemMecanica = true;
+    } else {
+      try {
+        const { extractBakedCartao } = await import(
+          '../packages/integrations/dist/prompt-builder/cartao-extract.js'
+        );
+        personaTemMecanicaBaked = extractBakedCartao(row.bot_prompt ?? '').found === true;
+        personaTemMecanica = personaTemMecanicaBaked;
+      } catch (importErr) {
+        // Sem conseguir PROVAR a mecânica, fail-closed: não libera o flip.
+        personaTemMecanica = false;
+        console.log(
+          `[formato] clone ${id}: não foi possível checar a mecânica da persona (${importErr.message}) — fail-closed`,
+        );
+      }
+    }
+
+    const decisao = decideFormatoClone(
+      {
+        product_type: row.product_type,
+        personalizacao: row.personalizacao,
+        modoAtendenteEnabled: row.modo_atendente_enabled,
+        cartaoMode: row.cartao_mode,
+        personaTemMecanicaBaked,
+      },
+      alvo,
+      { personaTemMecanica },
+    );
+
+    if (!decisao.ok) {
+      console.log(
+        `[formato] clone ${id} (${row.slot}): alvo=${alvo} BARRADO — motivo=${decisao.motivo}`,
+      );
+      return res.status(decisao.http).json({ ok: false, error: decisao.motivo, ...decisao });
+    }
+
+    if (!decisao.mudou) {
+      console.log(
+        `[formato] clone ${id} (${row.slot}): alvo=${alvo} — já estava neste formato (no-op explícito)`,
+      );
+      return res.json({ ok: true, mudou: false, motivo: decisao.motivo, formato: decisao.formato, slot: row.slot });
+    }
+
+    // Escreve as DUAS colunas coerentemente numa transação só (nunca meio-a-meio).
+    // agenda_automatica é STRING 'true'/'false' no JSONB — convenção do pipeline
+    // inteiro (portal-config.ts), NUNCA boolean.
+    const novoAA = decisao.formato === 'agenda' ? 'true' : 'false';
+    const novoModoAtendente = decisao.formato === 'atendente';
+    const upd = await pool.query(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(COALESCE(personalizacao, '{}'::jsonb), '{agenda_automatica}', to_jsonb($2::text), true),
+              modo_atendente_enabled = $3,
+              updated_at = NOW()
+        WHERE id = $1
+    RETURNING slot, product_type`,
+      [id, novoAA, novoModoAtendente],
+    );
+    console.log(
+      `[formato] clone ${id} (${row.slot}): ${decisao.motivo} — agenda_automatica=${novoAA}, modo_atendente_enabled=${novoModoAtendente}`,
+    );
+
+    res.json({
+      ok: true,
+      mudou: true,
+      motivo: decisao.motivo,
+      formato: decisao.formato,
+      slot: upd.rows[0].slot,
+      // Presente SÓ quando desligou um clone baked com cartão ainda no texto —
+      // o operador precisa rodar regerar-prompt à mão pra tirar a mecânica do
+      // prompt (não mexemos em bot_prompt aqui). Undefined some do JSON.
+      avisoTextoAssado: decisao.avisoTextoAssado === true ? true : undefined,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
