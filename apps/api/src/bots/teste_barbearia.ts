@@ -1,3 +1,4 @@
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { phoneLogTag } from '@startap/core/phone';
 import type { BotContext } from '@startap/core/types';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
@@ -456,7 +457,13 @@ export class TesteBarbeariaBot extends BotBase {
         });
         if (conflito) {
           this.log.warn(
-            { slot: this.slot, fone: phoneLogTag(telefone), eventId, novoStart, colaboradorId },
+            {
+              slot: this.slot,
+              fone: phoneLogTag(telefone),
+              eventId: hashEventIdForLog(eventId),
+              novoStart,
+              colaboradorId,
+            },
             'remarcar_agendamento bloqueado: nova janela ocupada (conflito server-side)',
           );
           return {
@@ -478,7 +485,7 @@ export class TesteBarbeariaBot extends BotBase {
           {
             slot: this.slot,
             fone: phoneLogTag(telefone),
-            eventId,
+            eventId: hashEventIdForLog(eventId),
             colaboradorId,
             novoStart,
             novoEnd,
@@ -834,7 +841,11 @@ export class TesteBarbeariaBot extends BotBase {
           if (!config.IDEMPOTENCY_ACTION_LOCK) {
             const ev = await createEvent();
             this.log.info(
-              { eventId: ev.id, summary: ev.summary, fone: phoneLogTag(telefone) },
+              {
+                eventId: hashEventIdForLog(ev.id),
+                summary: ev.summary,
+                fone: phoneLogTag(telefone),
+              },
               'Agendamento criado',
             );
             // Dedução de pacote (ADR 0025 2b) — gated por PACOTES_ENABLED; OFF = pula tudo.
@@ -879,7 +890,7 @@ export class TesteBarbeariaBot extends BotBase {
           const ev = lock.value as Awaited<ReturnType<typeof createEvent>>;
           this.log.info(
             {
-              eventId: ev.id,
+              eventId: hashEventIdForLog(ev.id),
               summary: ev.summary,
               fone: phoneLogTag(telefone),
               degraded: lock.degraded,
@@ -1185,7 +1196,7 @@ export class TesteBarbeariaBot extends BotBase {
     this.log.info(
       {
         slot: this.slot,
-        eventId: input.eventId,
+        eventId: hashEventIdForLog(input.eventId),
         descontou: r.descontou_do_pacote,
         motivo: r.motivo,
         sessoesRestantes: r.sessoes_restantes,
@@ -1256,7 +1267,7 @@ export class TesteBarbeariaBot extends BotBase {
       const tenantId = scope.tenant_id;
       if (!tenantId) {
         this.log.warn(
-          { slot: this.slot, eventId: input.eventId },
+          { slot: this.slot, eventId: hashEventIdForLog(input.eventId) },
           'atend-from-agenda: tenant_id não resolvido — linha NÃO criada (isolamento)',
         );
         return;
@@ -1290,7 +1301,7 @@ export class TesteBarbeariaBot extends BotBase {
       this.log.info(
         {
           slot: this.slot,
-          eventId: input.eventId,
+          eventId: hashEventIdForLog(input.eventId),
           atendimentoId: row.id,
           colaboradorId: input.colaboradorId ?? null,
         },
@@ -1302,7 +1313,7 @@ export class TesteBarbeariaBot extends BotBase {
         {
           err: err instanceof Error ? err.message : String(err),
           slot: this.slot,
-          eventId: input.eventId,
+          eventId: hashEventIdForLog(input.eventId),
         },
         'atend-from-agenda: falha ao gravar atendimento — IGNORADA (bot segue normal)',
       );
@@ -1342,7 +1353,7 @@ export class TesteBarbeariaBot extends BotBase {
       const tenantId = scope.tenant_id;
       if (!tenantId) {
         this.log.warn(
-          { slot: this.slot, eventId: input.eventId },
+          { slot: this.slot, eventId: hashEventIdForLog(input.eventId) },
           'atend-from-agenda (remarcar): tenant_id não resolvido — linha NÃO sincronizada (isolamento)',
         );
         return;
@@ -1365,7 +1376,7 @@ export class TesteBarbeariaBot extends BotBase {
       this.log.info(
         {
           slot: this.slot,
-          eventId: input.eventId,
+          eventId: hashEventIdForLog(input.eventId),
           atendimentoId: row.id,
           colaboradorId: input.colaboradorId ?? null,
         },
@@ -1376,7 +1387,7 @@ export class TesteBarbeariaBot extends BotBase {
         {
           err: err instanceof Error ? err.message : String(err),
           slot: this.slot,
-          eventId: input.eventId,
+          eventId: hashEventIdForLog(input.eventId),
         },
         'atend-from-agenda (remarcar): falha ao sincronizar — IGNORADA (remarcação OK)',
       );
@@ -1743,7 +1754,7 @@ export class TesteBarbeariaBot extends BotBase {
             const ev = await createEvent();
             this.log.info(
               {
-                eventId: ev.id,
+                eventId: hashEventIdForLog(ev.id),
                 summary: ev.summary,
                 colaboradorId: colaborador.colaboradorId,
                 fone: phoneLogTag(telefone),
@@ -1795,7 +1806,7 @@ export class TesteBarbeariaBot extends BotBase {
           const ev = lock.value as Awaited<ReturnType<typeof createEvent>>;
           this.log.info(
             {
-              eventId: ev.id,
+              eventId: hashEventIdForLog(ev.id),
               summary: ev.summary,
               colaboradorId: colaborador.colaboradorId,
               fone: phoneLogTag(telefone),

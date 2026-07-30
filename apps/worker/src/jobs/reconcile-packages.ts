@@ -16,10 +16,17 @@
  * flag OFF o job nem existe — zero query. Acompanha o rollout de PACOTES_ENABLED.
  *
  * LGPD: a query agrega por crédito+serviço; NUNCA toca telefone (nem hash). Só slot, serviço,
- * contagem e gcal_event_ids entram no log.
+ * contagem e os gcal_event_ids HASHEADOS entram no log.
+ *
+ * ⚠️ SCRUM-148 item 2: este job logava o ARRAY de gcal_event_id CRU (reidentificação indireta,
+ * LGPD art. 12 §2 — mesma classe fechada no #531 pro caminho de erro do GCal). O array agora sai
+ * pelo MESMO `hashEventIdForLog` do SCRUM-91: o ops continua cruzando com a agenda pelo hash
+ * (determinístico) e, se precisar do id cru, ele permanece na LINHA do ledger (package_redemptions),
+ * que é a fonte de investigação — nunca o log.
  *
  * IDEMPOTENTE: é só leitura + log; rodar de novo não tem efeito colateral.
  */
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { type SuspectDoubleRedeem, packages } from '@startap/db';
 import { config } from '../config.js';
@@ -52,7 +59,8 @@ export async function runReconcilePackages(): Promise<ReconcilePackagesResult> {
     return { suspects: 0, windowHours };
   }
 
-  // Uma linha de WARN por suspeita: o ops cruza gcal_event_ids com a agenda e faz refund manual.
+  // Uma linha de WARN por suspeita: o ops cruza os gcalEventIds (HASHEADOS, SCRUM-148 item 2)
+  // com a agenda via a linha do ledger e faz o refund manual.
   for (const s of suspects) {
     log.warn(
       {
@@ -62,7 +70,7 @@ export async function runReconcilePackages(): Promise<ReconcilePackagesResult> {
         redeems: s.redeems,
         refunds: s.refunds,
         baixaLiquida: s.redeems - s.refunds,
-        gcalEventIds: s.gcal_event_ids,
+        gcalEventIds: s.gcal_event_ids.map(hashEventIdForLog),
         primeiro: s.primeiro,
         ultimo: s.ultimo,
       },
