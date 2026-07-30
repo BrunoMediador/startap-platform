@@ -10349,6 +10349,101 @@ function _renderPersonalizacaoTab(opts) {
   });
 }
 
+/**
+ * Card "Formato do fluxo" — controle EXPLÍCITO pra alternar modo agenda / modo
+ * atendente (achado 30/07: antes disso a ÚNICA escrita dessas colunas pelo
+ * gestão era efeito colateral do botão "Testar conexão" do GCal, e só rodava na
+ * transição — clone já ativo dava 200 idêntico a no-op). SEMPRE visível (não
+ * condicionado a `agenda_automatica` existir no personalizacao — é por isso que
+ * Cirilo/Samuel/Dragon não apareciam no editor chave-valor genérico).
+ * Estabelecimento mostra nota explicativa em vez do toggle (agenda é por
+ * colaborador — mesma regra do /gcal/test).
+ */
+function _renderFormatoCard(el, clone) {
+  if (!el) return;
+
+  if (clone.product_type === 'estabelecimento') {
+    el.innerHTML = `
+      <div style="font-weight:600;margin-bottom:.5rem">Formato do fluxo</div>
+      <div style="padding:.75rem 1rem;background:var(--surface-2);border:1px solid var(--info);border-radius:var(--radius-md);display:flex;gap:.75rem;align-items:flex-start">
+        <span style="color:var(--info);flex-shrink:0">${icon('info', 18)}</span>
+        <p class="muted" style="margin:0;font-size:.8125rem;line-height:1.5">Estabelecimento não tem um formato único pro clone — cada <strong>colaborador</strong> liga/desliga a agenda dele na aba <strong>👥 Colaboradores</strong>.</p>
+      </div>`;
+    return;
+  }
+
+  const aa = clone.personalizacao && typeof clone.personalizacao === 'object'
+    ? clone.personalizacao.agenda_automatica : undefined;
+  const agendaDesligada = aa === 'false' || aa === false;
+  const formatoAtual = (clone.modo_atendente_enabled === true || agendaDesligada) ? 'atendente' : 'agenda';
+  const label = formatoAtual === 'agenda' ? 'Modo agenda (marca horário sozinho)' : 'Modo atendente (bot escala pra humano)';
+
+  el.innerHTML = `
+    <div style="font-weight:600;margin-bottom:.5rem">Formato do fluxo</div>
+    <div style="padding:.75rem 1rem;background:var(--surface-2);border-radius:var(--radius-md);display:flex;flex-direction:column;gap:.625rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <div>
+          <div style="font-size:.8125rem" id="cd-formato-atual">Formato atual: <strong>${escapeHtml(label)}</strong></div>
+          <p class="muted" style="margin:.25rem 0 0;font-size:.75rem">Cartão de confirmação: <code>${escapeHtml(clone.cartao_mode || 'baked')}</code></p>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button type="button" class="btn btn--sm${formatoAtual === 'agenda' ? ' btn--primary' : ''}" id="cd-formato-agenda" ${formatoAtual === 'agenda' ? 'disabled' : ''}>${icon('calendar', 13)} Ligar agenda</button>
+          <button type="button" class="btn btn--sm${formatoAtual === 'atendente' ? ' btn--primary' : ''}" id="cd-formato-atendente" ${formatoAtual === 'atendente' ? 'disabled' : ''}>${icon('message-circle', 13)} Modo atendente</button>
+        </div>
+      </div>
+      <div id="cd-formato-resultado"></div>
+    </div>`;
+
+  async function aplicar(formato) {
+    const resultBox = el.querySelector('#cd-formato-resultado');
+    const btns = el.querySelectorAll('#cd-formato-agenda, #cd-formato-atendente');
+    btns.forEach(b => b.disabled = true);
+    resultBox.innerHTML = '';
+    try {
+      const result = await api(`/api/clones/${clone.id}/formato`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formato }),
+      });
+      // Nunca 200 mudo: SEMPRE mostra o que aconteceu (mudou ou já estava).
+      if (result.mudou === false) {
+        toast(`Já estava em modo ${result.formato === 'agenda' ? 'agenda' : 'atendente'}.`, 'info');
+      } else {
+        toast(`Formato alterado para modo ${result.formato === 'agenda' ? 'agenda' : 'atendente'}.`, 'success');
+        clone.modo_atendente_enabled = result.formato === 'atendente';
+        clone.personalizacao = { ...(clone.personalizacao || {}), agenda_automatica: result.formato === 'agenda' ? 'true' : 'false' };
+      }
+      if (result.avisoTextoAssado === true) {
+        // avisoTextoAssadoForaDoPadrao: o cartão foi detectado mas FORA da posição
+        // canônica (trailing) — ainda é cartão no texto, mas o motivo é mais preciso
+        // (fix do falso-negativo: as duas razões de "não encontrado" do detector não
+        // podem colapsar em "não avisa", senão o aviso deixa de ser confiável).
+        const foraDoPadrao = result.avisoTextoAssadoForaDoPadrao === true;
+        const desc = foraDoPadrao
+          ? 'Este clone parece ter um cartão de confirmação no prompt, mas <strong>fora do formato padrão</strong> (não foi possível confirmar automaticamente que é só isso). Desligar a agenda não mexeu no texto — revise manualmente na aba <strong>Prompt</strong> antes de confiar que o cartão saiu de fato.'
+          : 'Este clone tem o cartão de confirmação escrito no próprio prompt (modo <code>baked</code>). Desligar a agenda não removeu esse trecho — o texto continua prometendo agendamento. Ajuste manualmente na aba <strong>Prompt</strong> ou use <strong>Regerar Prompt</strong> se for aceitável perder a persona personalizada.';
+        resultBox.innerHTML = `
+          <div style="padding:.625rem .75rem;background:var(--surface-2);border-left:3px solid var(--warning);border-radius:var(--radius-sm)">
+            <div style="font-weight:600;font-size:.8125rem;display:flex;gap:.5rem;align-items:center"><span style="color:var(--warning)">${icon('alert-triangle', 14)}</span> Persona ainda tem o cartão de confirmação no texto</div>
+            <p class="muted" style="margin:.25rem 0 0;font-size:.75rem;line-height:1.5">${desc}</p>
+          </div>`;
+      }
+      _rendered['bots'] = false;
+      _renderFormatoCard(el, clone);
+    } catch (err) {
+      const msgMap = {
+        sem_mecanica_cartao: 'A persona deste clone ainda não tem a mecânica de agendamento (cartão de confirmação + SIM). Ligar a agenda assim faria o bot marcar horário sem confirmar — ajuste a persona na aba Prompt antes.',
+        nao_individual: 'Estabelecimento não usa este toggle — configure a agenda por colaborador.',
+      };
+      toast(msgMap[err.message] || ('Erro: ' + err.message), 'danger');
+      btns.forEach(b => b.disabled = false);
+    }
+  }
+
+  el.querySelector('#cd-formato-agenda')?.addEventListener('click', () => aplicar('agenda'));
+  el.querySelector('#cd-formato-atendente')?.addEventListener('click', () => aplicar('atendente'));
+}
+
 function loadCloneConfigTab(tab, clone) {
   const content = document.getElementById('cfg-clone-tab-content');
   if (!content) return;
@@ -10387,7 +10482,10 @@ function loadCloneConfigTab(tab, clone) {
           <p class="muted" style="font-size:.75rem;margin:.25rem 0 0">Fuso da cidade do cliente. O bot agenda nesse horário (default São Paulo).</p>
         </div>
         <button type="submit" class="btn btn--primary">${icon('check-circle-2', 14)} Salvar</button>
-      </form>`;
+      </form>
+      <div id="cd-formato-card" style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border)"></div>`;
+
+    _renderFormatoCard(content.querySelector('#cd-formato-card'), clone);
 
     // Mostra/esconde campo de vagas conforme o tipo de conta.
     content.querySelector('#cd-product-type')?.addEventListener('change', (ev) => {
