@@ -115,25 +115,24 @@ describe('buildCartaoEmojiOverrideBlock — caminho INDIVIDUAL', () => {
     expect(block).toContain('NAO use 💈');
   });
 
-  // SCRUM-84: persona custom (dono estilizou o cartão à mão — ex. Ingrid com 🌻) é
-  // AUTORIDADE FINAL. Mesmo em área não-barbearia, o override NÃO entra — senão
-  // sobrescreve os emojis escolhidos de propósito.
-  it('prompt_custom=true + área "outro" → string vazia (persona manda, sem override)', () => {
-    expect(buildCartaoEmojiOverrideBlock('outro', true)).toBe('');
+  // ADR 0035 §2.1 (emenda 30/07): bot_prompt é cópia materializada — o parâmetro
+  // `promptCustom` (SCRUM-84 original, "persona custom é autoridade final, não sobrepõe
+  // emoji") foi REMOVIDO da assinatura. A função só recebe `area` agora: em área
+  // não-barbearia o override SEMPRE é injetado, mesmo que a persona do clone `baked` seja
+  // custom (caso hipotético: Ingrid tem persona custom mas é `cartao_mode='runtime'`, então
+  // NUNCA chega aqui na prática — medição de prod 30/07 confirma zero clone hoje na
+  // combinação área≠barbearia + baked + persona custom). Este teste EXISTE para o dia em
+  // que um clone novo nascer nessa combinação: prova qual é o comportamento (não há mais
+  // supressão condicional — decisão aceita, ver PR).
+  it('área "outro" (baked, ex-persona-custom hipotética) → override é injetado do mesmo jeito', () => {
+    const block = buildCartaoEmojiOverrideBlock('outro');
+    expect(block).not.toBe('');
+    expect(block).toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
   });
 
-  it('prompt_custom=true + salão/manicure → string vazia (não sobrepõe persona estilizada)', () => {
-    expect(buildCartaoEmojiOverrideBlock('salao', true)).toBe('');
-    expect(buildCartaoEmojiOverrideBlock('manicure', true)).toBe('');
-  });
-
-  it('prompt_custom=false (default) → comportamento byte-a-byte de antes', () => {
-    // Passar false explicitamente ou omitir dá o MESMO resultado das asserções acima.
-    expect(buildCartaoEmojiOverrideBlock('outro', false)).toBe(
-      buildCartaoEmojiOverrideBlock('outro'),
-    );
-    expect(buildCartaoEmojiOverrideBlock('outro', false)).not.toBe('');
-    expect(buildCartaoEmojiOverrideBlock('barbearia', false)).toBe('');
+  it('assinatura aceita só 1 argumento (promptCustom removido, SCRUM-84 sticky morreu)', () => {
+    // @ts-expect-error — 2º argumento não existe mais na assinatura.
+    expect(buildCartaoEmojiOverrideBlock('outro', true)).not.toBe('');
   });
 });
 
@@ -182,65 +181,26 @@ describe('buildCartaoEstabelecimentoBlock — caminho ESTABELECIMENTO', () => {
   });
 });
 
-// SCRUM-85: cartão de estabelecimento respeita persona custom — MAS, diferente do
-// individual, o bloco NÃO some (ele carrega a regra ESTRUTURAL crítica). Separamos:
-// (1) regra estrutural = SEMPRE injetada; (2) estilo/emojis = só com prompt_custom=false.
-describe('buildCartaoEstabelecimentoBlock — prompt_custom (SCRUM-85)', () => {
-  it('prompt_custom=false (default) → BYTE-A-BYTE o bloco de hoje (protege barber_dragon)', () => {
-    // O ramo false NÃO pode mudar 1 byte: passar false explícito == omitir == atual.
-    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(ESTAB_BARBEARIA);
-    expect(buildCartaoEstabelecimentoBlock('barbearia', false)).toBe(
-      buildCartaoEstabelecimentoBlock('barbearia'),
-    );
-    for (const area of ['barbearia', 'salao', 'manicure', 'estetica', 'outro', null, undefined]) {
-      expect(buildCartaoEstabelecimentoBlock(area, false)).toBe(
-        buildCartaoEstabelecimentoBlock(area),
-      );
-    }
+// ADR 0035 §2.1 (emenda 30/07): bot_prompt é cópia materializada — o parâmetro
+// `promptCustom` (SCRUM-85 original) foi REMOVIDO. A regra ESTRUTURAL (cartão+SIM+
+// PROFISSIONAL+back-to-back) sempre foi e continua SEMPRE injetada, incondicional —
+// isso NÃO muda. O que mudou é que o "Formato do cartão" (estilo/emojis) agora segue
+// SEMPRE a área, sem exceção pra persona custom (era o ramo prompt_custom=false).
+describe('buildCartaoEstabelecimentoBlock — assinatura pós-ADR-0035', () => {
+  it('assinatura aceita só 1 argumento (promptCustom removido, SCRUM-85 sticky morreu)', () => {
+    // @ts-expect-error — 2º argumento não existe mais na assinatura.
+    expect(buildCartaoEstabelecimentoBlock('manicure', true)).toContain('💅 SERVICO');
   });
 
-  it('prompt_custom=true → mantém a REGRA ESTRUTURAL inegociável (cartão+SIM+PROFISSIONAL+back-to-back)', () => {
+  it('regra ESTRUTURAL inegociável presente em toda área (invariante intocada)', () => {
     for (const area of ['barbearia', 'manicure', 'outro', null]) {
-      const block = buildCartaoEstabelecimentoBlock(area, true);
-      // cartão obrigatório + SIM antes de inserir_agendamento
+      const block = buildCartaoEstabelecimentoBlock(area);
       expect(block).toMatch(/CADA agendamento/i);
       expect(block).toMatch(/SÓ DEPOIS do SIM, chamar inserir_agendamento/);
       expect(block).toMatch(/Responda SIM/i);
-      // back-to-back
       expect(block).toMatch(/back-to-back|mesma conversa/i);
       expect(block).toMatch(/NUNCA pule o cartão|NUNCA agende\s+direto/i);
-      // PROFISSIONAL pelo nome (campo obrigatório preservado)
-      expect(block).toContain('PROFISSIONAL: <nome do profissional escolhido>');
       expect(block).toContain('nome que está em [PROFISSIONAIS]');
-      // demais campos obrigatórios seguem presentes
-      expect(block).toMatch(/DIA: <dia>/);
-      expect(block).toMatch(/HORARIO: <horario>/);
-      expect(block).toMatch(/SERVICO: <servico>/);
-      expect(block).toMatch(/VALOR: <valor>/);
     }
-  });
-
-  it('prompt_custom=true → NÃO impõe emojis da área (persona custom dita o estilo)', () => {
-    // Nenhum ícone de área nas linhas de formato — a persona escolhe (caso Ingrid 🌻).
-    for (const area of ['barbearia', 'manicure', 'estetica', 'salao', 'outro', null]) {
-      const block = buildCartaoEstabelecimentoBlock(area, true);
-      expect(block).not.toContain('👤 PROFISSIONAL');
-      expect(block).not.toContain('🕐 HORARIO');
-      expect(block).not.toContain('✂️ SERVICO');
-      expect(block).not.toContain('💅 SERVICO');
-      expect(block).not.toContain('📅 DIA');
-      expect(block).not.toContain('💰 VALOR');
-      // a instrução avisa que os emojis são da persona
-      expect(block).toContain('use os emojis e o estilo da SUA persona');
-    }
-  });
-
-  it('prompt_custom=true difere do false SÓ nas linhas de estilo (estrutura idêntica)', () => {
-    const custom = buildCartaoEstabelecimentoBlock('manicure', true);
-    const legado = buildCartaoEstabelecimentoBlock('manicure', false);
-    expect(custom).not.toBe(legado);
-    // as 10 primeiras linhas (regra estrutural) são idênticas entre os dois ramos
-    const head = (s: string) => s.split('\n').slice(0, 10).join('\n');
-    expect(head(custom)).toBe(head(legado));
   });
 });

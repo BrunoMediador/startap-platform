@@ -699,13 +699,15 @@ export class TesteBarbeariaBot extends BotBase {
     // que manda o modelo trocar os ícones — assim clones JÁ existentes (Bruna/salão)
     // pegam o emoji certo SEM re-renderizar o prompt. Para barbearia (Cirilo/Samuel)
     // e para área NULL/desconhecida o builder devolve '' → systemPrompt byte-a-byte
-    // o de hoje. getAreaAndPromptCustom degrada pra { null, false } em erro/coluna
+    // o de hoje. getAreaPromptCustomCartao degrada área pra null em erro/coluna
     // ausente (fallback seguro).
     //
-    // SCRUM-84: se a persona é custom (prompt_custom=true, dono estilizou o cartão à
-    // mão — ex. Ingrid com 🌻), ela é autoridade final e o override de emojis NÃO é
-    // injetado. Mesma leitura por slot de antes, só com a coluna prompt_custom junto.
-    const { area, promptCustom, cartaoMode, cartaoConfig, nomeNegocio } =
+    // ADR 0035 §2.1 (emenda 30/07): `promptCustom` (SCRUM-84 original) deixou de ser
+    // repassado ao builder — bot_prompt é cópia materializada, não há mais releitura da
+    // matriz a proteger. `prompt_custom` da query abaixo continua vivo só pro guard
+    // anti-cartão-duplo baked→runtime (fora do escopo desta mudança), por isso a coluna
+    // não é removida da SELECT, só não é mais usada aqui.
+    const { area, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ────────────────
@@ -729,8 +731,7 @@ export class TesteBarbeariaBot extends BotBase {
             nomeNegocio: nomeNegocio ?? undefined,
           })
         : '';
-    const cartaoBlock =
-      runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, promptCustom);
+    const cartaoBlock = runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area);
 
     const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoBlock]
       .filter((b) => b !== '')
@@ -1543,10 +1544,14 @@ export class TesteBarbeariaBot extends BotBase {
     // marca+serviço. getArea degrada pra null (→ genérico) em erro/coluna ausente.
     //
     // SCRUM-85: a REGRA ESTRUTURAL do cartão (obrigatório + SIM + PROFISSIONAL +
-    // back-to-back) vai SEMPRE; só o ESTILO/emojis respeita prompt_custom. Se a persona
-    // é custom (dono estilizou o cartão à mão), buildCartaoEstabelecimentoBlock mantém
-    // os campos obrigatórios mas NÃO impõe os emojis da área — a persona dita os ícones.
-    const { area, promptCustom, cartaoMode, cartaoConfig, nomeNegocio } =
+    // back-to-back) vai SEMPRE, incondicional — invariante intocada por esta mudança.
+    //
+    // ADR 0035 §2.1 (emenda 30/07): `promptCustom` (SCRUM-85 original) deixou de ser
+    // repassado ao builder — bot_prompt é cópia materializada, não há mais releitura da
+    // matriz a proteger. `prompt_custom` da query abaixo continua vivo só pro guard
+    // anti-cartão-duplo baked→runtime (fora do escopo desta mudança), por isso a coluna
+    // não é removida da SELECT, só não é mais usada aqui.
+    const { area, cartaoMode, cartaoConfig, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
@@ -1566,7 +1571,7 @@ export class TesteBarbeariaBot extends BotBase {
           })
         : '';
     const cartaoEstabelecimentoBlock =
-      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area, promptCustom);
+      runtimeCartao !== '' ? runtimeCartao : buildCartaoEstabelecimentoBlock(area);
 
     // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
     // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,

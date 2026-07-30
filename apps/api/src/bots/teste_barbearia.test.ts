@@ -775,7 +775,7 @@ async function runIndividual(texto: string): Promise<{
   return { tools: call.tools, systemPrompt: call.systemPrompt };
 }
 
-describe('TesteBarbeariaBot — override de emoji respeita prompt_custom (SCRUM-84)', () => {
+describe('TesteBarbeariaBot — override de emoji por área (ADR 0035 §2.1, ex-SCRUM-84)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     cfg.CANCELAMENTO_ESCALADO_ENABLED = false;
@@ -790,6 +790,9 @@ describe('TesteBarbeariaBot — override de emoji respeita prompt_custom (SCRUM-
 
   // buildCartaoEmojiOverrideBlock é a função REAL (não mockada) — o teste exercita o
   // systemPrompt de ponta a ponta. PERSONA/CONTEXT vêm dos mocks de setupSchedule.
+  // `promptCustom` segue sendo passado ao mock do reader (a coluna/leitura não mudou — só
+  // deixou de ser repassada ao builder de emoji, ADR 0035 §2.1) para provar que ela deixou de
+  // influenciar este caminho especificamente.
   async function systemPromptForArea(area: string | null, promptCustom: boolean): Promise<string> {
     setupSchedule();
     mocks.getAreaAndPromptCustom.mockResolvedValue({ area, promptCustom });
@@ -801,20 +804,21 @@ describe('TesteBarbeariaBot — override de emoji respeita prompt_custom (SCRUM-
     return calls[calls.length - 1][0].systemPrompt as string;
   }
 
-  it('persona custom + área não-barbearia → SEM bloco de override (persona é autoridade)', async () => {
+  it('ADR 0035 §2.1: persona custom + área não-barbearia → bloco de override É injetado (mudou de comportamento)', async () => {
+    // Medição de prod 30/07: zero clone hoje combina área≠barbearia + baked + prompt_custom=true
+    // (Ingrid tem persona custom mas é cartao_mode='runtime', nunca chega neste caminho). Este
+    // teste documenta o comportamento para o dia em que um clone novo nascer nessa combinação —
+    // decisão aceita (ver ADR 0035 §2.1): não há mais supressão condicional por prompt_custom.
     const sp = await systemPromptForArea('outro', true);
-    // Ingrid: prompt_custom=true → cartão 🌻 do dono intocado, systemPrompt byte-a-byte
-    // persona+contexto.
-    expect(sp).toBe('PERSONA\n\nCONTEXT');
-    expect(sp).not.toContain('EMOJIS DESTE NEGOCIO');
+    expect(sp).toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
   });
 
-  it('persona NÃO-custom + área "outro" → bloco de override injetado (comportamento atual)', async () => {
+  it('persona NÃO-custom + área "outro" → bloco de override injetado (comportamento intocado)', async () => {
     const sp = await systemPromptForArea('outro', false);
     expect(sp).toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
   });
 
-  it('barbearia (Cirilo/Samuel) → nunca recebe bloco, independe de prompt_custom', async () => {
+  it('barbearia (Cirilo/Samuel) → nunca recebe bloco, independe de prompt_custom (regressão pagante protegida)', async () => {
     expect(await systemPromptForArea('barbearia', false)).toBe('PERSONA\n\nCONTEXT');
     expect(await systemPromptForArea('barbearia', true)).toBe('PERSONA\n\nCONTEXT');
   });
