@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NAV_SPEC, type NavGateContext, filterByGates } from './nav';
+import { NAV_SPEC, type NavGateContext, filterByGates, isNavItemActive } from './nav';
 
 // Harness pure-fn do portal (sem RTL/jsdom): cobrimos o CONTRATO da nav —
 // menu de 8 itens pós-reorganização em telas (SCRUM-157: Serviços/Horários/
@@ -126,6 +126,30 @@ describe('nav — filtragem por formato', () => {
       '/pausas',
       '/mensalidade',
     ]);
+  });
+});
+
+describe('nav — isNavItemActive (SCRUM-157: sub-rotas de "Meu negócio"/"Meu atendente")', () => {
+  it('itens com sub-abas acendem em match exato E em qualquer sub-rota', () => {
+    expect(isNavItemActive('/negocio', '/negocio')).toBe(true);
+    expect(isNavItemActive('/negocio/dados', '/negocio')).toBe(true);
+    expect(isNavItemActive('/negocio/servicos', '/negocio')).toBe(true);
+    expect(isNavItemActive('/atendente/personalidade', '/atendente')).toBe(true);
+  });
+
+  it('itens comuns exigem match EXATO (não acende por prefixo solto)', () => {
+    expect(isNavItemActive('/agenda', '/agenda')).toBe(true);
+    expect(isNavItemActive('/agenda/nova', '/agenda')).toBe(false);
+    expect(isNavItemActive('/inicio', '/inicio')).toBe(true);
+  });
+
+  it('não confunde prefixo textual sem barra (ex.: "/negociosecreto" não é sub-rota de "/negocio")', () => {
+    expect(isNavItemActive('/negociosecreto', '/negocio')).toBe(false);
+  });
+
+  it('"Meu negócio" nunca acende em rota de "Meu atendente" e vice-versa', () => {
+    expect(isNavItemActive('/atendente/mensagens', '/negocio')).toBe(false);
+    expect(isNavItemActive('/negocio/equipe', '/atendente')).toBe(false);
   });
 });
 
