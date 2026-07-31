@@ -7,6 +7,8 @@ import {
   appendMessage,
   approveBuilder,
   buildApproveBody,
+  diffPersona,
+  diffToPlainText,
   fetchBuilderDraft,
   generateNowContent,
   isBuilderUnavailable,
@@ -15,6 +17,7 @@ import {
   parseTurns,
   personaCharsLeft,
   remainingChars,
+  resolveDiffBase,
   sendBuilderMessage,
   startBuilder,
 } from './prompt-builder';
@@ -43,6 +46,7 @@ describe('startBuilder — mapa de outcome', () => {
       draftReady: false,
       retomada: true,
       turns: [],
+      modo: 'criacao',
     });
   });
 
@@ -54,7 +58,35 @@ describe('startBuilder — mapa de outcome', () => {
       draftReady: true,
       retomada: false,
       turns: [],
+      modo: 'criacao',
     });
+  });
+
+  it('modo ausente -> "criacao" (degrada pro comportamento anterior); "melhoria" preservado', async () => {
+    apiFetchMock.mockResolvedValue({
+      session_id: 's',
+      pergunta: 'p',
+      draft_ready: false,
+      retomada: false,
+    });
+    expect((await startBuilder()) as { modo?: string }).toMatchObject({ modo: 'criacao' });
+    apiFetchMock.mockResolvedValue({
+      session_id: 's',
+      pergunta: 'p',
+      draft_ready: false,
+      retomada: false,
+      modo: 'melhoria',
+    });
+    expect((await startBuilder()) as { modo?: string }).toMatchObject({ modo: 'melhoria' });
+    // Valor desconhecido/lixo do backend -> nunca quebra, cai em 'criacao' (fail-safe).
+    apiFetchMock.mockResolvedValue({
+      session_id: 's',
+      pergunta: 'p',
+      draft_ready: false,
+      retomada: false,
+      modo: 'lixo',
+    });
+    expect((await startBuilder()) as { modo?: string }).toMatchObject({ modo: 'criacao' });
   });
 
   it('retomada com turns -> histórico normalizado em bolhas (item 6)', async () => {
@@ -77,6 +109,7 @@ describe('startBuilder — mapa de outcome', () => {
         { id: 1, role: 'assistant', text: 'Como ele deve falar?' },
         { id: 2, role: 'user', text: 'Descontraído' },
       ],
+      modo: 'criacao',
     });
   });
 
@@ -96,12 +129,13 @@ describe('startBuilder — mapa de outcome', () => {
 });
 
 describe('sendBuilderMessage — mapa de outcome', () => {
-  it('200 mapeia reply + draftReady + resumo + nomeBot', async () => {
+  it('200 mapeia reply + draftReady + resumo + nomeBot + personaRascunho', async () => {
     apiFetchMock.mockResolvedValue({
       reply: 'Anotado!',
       draft_ready: true,
       resumo: 'Descontraído, chama de Léo',
       nome_do_bot: 'Léo',
+      persona_rascunho: 'Você é o Léo, descontraído.',
     });
     expect(await sendBuilderMessage('quero descontraído')).toEqual({
       kind: 'ok',
@@ -109,6 +143,7 @@ describe('sendBuilderMessage — mapa de outcome', () => {
       draftReady: true,
       resumo: 'Descontraído, chama de Léo',
       nomeBot: 'Léo',
+      personaRascunho: 'Você é o Léo, descontraído.',
     });
   });
 
@@ -123,7 +158,13 @@ describe('sendBuilderMessage — mapa de outcome', () => {
       draftReady: false,
       resumo: null,
       nomeBot: null,
+      personaRascunho: null,
     });
+  });
+
+  it('persona_rascunho ausente/null -> personaRascunho null (preview ao vivo degrada sem quebrar)', async () => {
+    apiFetchMock.mockResolvedValue({ reply: 'ok', draft_ready: false, persona_rascunho: null });
+    expect(await sendBuilderMessage('x')).toMatchObject({ personaRascunho: null });
   });
 
   it('nome_do_bot null (sem nome) vira nomeBot null', async () => {
@@ -307,13 +348,14 @@ describe('isPersonaSavable / personaCharsLeft — estado do botão "Salvar e ati
 });
 
 describe('fetchBuilderDraft', () => {
-  it('200 mapeia campos (status pronto)', async () => {
+  it('200 mapeia campos (status pronto, modo melhoria com base)', async () => {
     apiFetchMock.mockResolvedValue({
       status: 'pronto',
       persona_rascunho: 'Você é o Léo...',
       preview_final: 'Você é o Léo...\n\n[BLOCO]',
       nome_do_bot: 'Léo',
       resumo: 'Descontraído',
+      persona_base: 'Você é o assistente padrão.',
     });
     expect(await fetchBuilderDraft()).toEqual({
       status: 'pronto',
@@ -321,10 +363,11 @@ describe('fetchBuilderDraft', () => {
       previewFinal: 'Você é o Léo...\n\n[BLOCO]',
       nomeBot: 'Léo',
       resumo: 'Descontraído',
+      personaBase: 'Você é o assistente padrão.',
     });
   });
 
-  it('status sem_rascunho: campos null coerentes', async () => {
+  it('status sem_rascunho: campos null coerentes (persona_base ausente -> null, modo criação)', async () => {
     apiFetchMock.mockResolvedValue({
       status: 'sem_rascunho',
       persona_rascunho: null,
@@ -336,6 +379,7 @@ describe('fetchBuilderDraft', () => {
       previewFinal: null,
       nomeBot: null,
       resumo: null,
+      personaBase: null,
     });
   });
 
@@ -423,5 +467,94 @@ describe('parseTurns — reidratação do chat na retomada (item 6)', () => {
         { role: 'user', content: 'válido' },
       ]),
     ).toEqual([{ id: 1, role: 'user', text: 'válido' }]);
+  });
+});
+
+describe('diffPersona — diff por palavra (preview ao vivo, item 2)', () => {
+  it('sem base (null) -> tudo added (primeira prévia da sessão / modo criação)', () => {
+    expect(diffPersona(null, 'Você é o Léo.')).toEqual([{ text: 'Você é o Léo.', kind: 'added' }]);
+  });
+
+  it('sem base ("") e after vazio -> [] (nada a mostrar)', () => {
+    expect(diffPersona('', '')).toEqual([]);
+    expect(diffPersona(null, '')).toEqual([]);
+  });
+
+  it('textos idênticos -> 1 parte equal só', () => {
+    const texto = 'Você é o Léo, descontraído.';
+    expect(diffPersona(texto, texto)).toEqual([{ text: texto, kind: 'equal' }]);
+  });
+
+  it('acréscimo puro no fim -> equal + added', () => {
+    expect(diffPersona('Você é o Léo.', 'Você é o Léo. Adora futebol.')).toEqual([
+      { text: 'Você é o Léo.', kind: 'equal' },
+      { text: ' Adora futebol.', kind: 'added' },
+    ]);
+  });
+
+  it('remoção pura no fim -> equal + removed', () => {
+    expect(diffPersona('Você é o Léo. Adora futebol.', 'Você é o Léo.')).toEqual([
+      { text: 'Você é o Léo.', kind: 'equal' },
+      { text: ' Adora futebol.', kind: 'removed' },
+    ]);
+  });
+
+  it('substituição no meio -> removed seguido de added (não intercalado)', () => {
+    const parts = diffPersona('Você é sério e direto.', 'Você é descontraído e direto.');
+    expect(parts[0]).toEqual({ text: 'Você é ', kind: 'equal' });
+    // "sério" sai, "descontraído" entra — cada lado como run próprio.
+    expect(parts.some((p) => p.kind === 'removed' && p.text.includes('sério'))).toBe(true);
+    expect(parts.some((p) => p.kind === 'added' && p.text.includes('descontraído'))).toBe(true);
+    expect(parts[parts.length - 1]).toEqual({ text: ' e direto.', kind: 'equal' });
+  });
+
+  it('invariante: concatenar todos os `text` reconstrói o `after` (added+equal, sem removed)', () => {
+    const before = 'Você é sério, formal e direto ao ponto.';
+    const after = 'Você é descontraído, engraçado e direto ao ponto, sempre com emoji.';
+    const parts = diffPersona(before, after);
+    const reconstruido = parts
+      .filter((p) => p.kind !== 'removed')
+      .map((p) => p.text)
+      .join('');
+    expect(reconstruido).toBe(after);
+  });
+
+  it('invariante: concatenar equal+removed reconstrói o `before`', () => {
+    const before = 'Você é sério, formal e direto ao ponto.';
+    const after = 'Você é descontraído e direto ao ponto, sempre com emoji.';
+    const parts = diffPersona(before, after);
+    const reconstruido = parts
+      .filter((p) => p.kind !== 'added')
+      .map((p) => p.text)
+      .join('');
+    expect(reconstruido).toBe(before);
+  });
+});
+
+describe('diffToPlainText — alternância "ver texto limpo"', () => {
+  it('remove as partes "removed", mantém equal+added (reconstrói o after)', () => {
+    const parts = diffPersona('Você é sério.', 'Você é descontraído.');
+    expect(diffToPlainText(parts)).toBe('Você é descontraído.');
+  });
+
+  it('sem diff (array vazio) -> string vazia', () => {
+    expect(diffToPlainText([])).toBe('');
+  });
+});
+
+describe('resolveDiffBase — qual texto vira a base do diff (item 1)', () => {
+  it('modo melhoria com personaBase conhecida -> usa personaBase', () => {
+    expect(resolveDiffBase('melhoria', 'Você é o assistente padrão.')).toBe(
+      'Você é o assistente padrão.',
+    );
+  });
+
+  it('modo melhoria SEM personaBase ainda (backend não expôs / carregando) -> null (vira added)', () => {
+    expect(resolveDiffBase('melhoria', null)).toBeNull();
+  });
+
+  it('modo criação -> sempre null, mesmo que personaBase venha preenchida por engano', () => {
+    expect(resolveDiffBase('criacao', null)).toBeNull();
+    expect(resolveDiffBase('criacao', 'lixo que não devia vir')).toBeNull();
   });
 });
