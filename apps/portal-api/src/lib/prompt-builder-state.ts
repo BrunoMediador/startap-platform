@@ -37,6 +37,23 @@ export interface PromptBuilderState {
    *  preview refletirem a variante certa. Ausente em estados antigos (pré-deploy) →
    *  fallback 'individual' no consumidor. SCRUM-92 / ADR 0032 Fase 0. */
   productType: 'individual' | 'estabelecimento';
+  /** Modo da SESSÃO do builder (SCRUM-153), decidido no /start pelo estado do clone e NUNCA
+   *  por input: 'criacao' = clone sem persona própria (entrevista V4, caminho original);
+   *  'melhoria' = clone que JÁ TEM persona (conversa livre V5, parte da persona atual).
+   *  Ausente em estados antigos (pré-deploy) → consumidor trata como 'criacao' (o caminho de
+   *  sempre), então uma entrevista viva no Redis durante o deploy não muda de comportamento. */
+  sessaoModo?: 'criacao' | 'melhoria';
+  /** Só no modo 'melhoria': persona que estava no ar quando a sessão começou. Guardada pra o
+   *  system prompt de CADA turno ser montado sem reler o banco a cada mensagem, e pra o approve
+   *  saber comparar (observabilidade: mudou muito? foi acréscimo?). É a persona do PRÓPRIO
+   *  tenant (withTenant), efêmera com TTL como o resto do estado. */
+  personaAtual?: string;
+  /** Só no modo 'melhoria': RÓTULOS dos campos já preenchidos em outras telas — nunca valores. */
+  camposConfigurados?: string[];
+  /** Só no modo 'melhoria': o dono pediu REESCRITA TOTAL nesta sessão ("refaz tudo"). STICKY —
+   *  uma vez pedido vale até o /reset, pra ele não repetir a cada refino. Desliga a guarda de
+   *  preservação (encolher passa a ser o que ele pediu). */
+  reescritaExplicita?: boolean;
   turns: PbTurn[];
   draft: PbDraft | null;
   updatedAt: number;
