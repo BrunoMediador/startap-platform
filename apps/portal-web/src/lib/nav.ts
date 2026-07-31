@@ -123,3 +123,26 @@ export function filterByGates<T extends { gated?: NavGate[] }>(
   };
   return items.filter((item) => !item.gated || item.gated.every(passes));
 }
+
+/**
+ * Itens do menu de topo que viraram TELAS com sub-abas (SCRUM-157): a rota do
+ * item não é mais uma página folha, é um prefixo (`/negocio/dados`, `/negocio/
+ * servicos`, `/atendente/personalidade`...). Sidebar/bottom-nav usavam
+ * `pathname === href` pro estado ativo — com sub-rotas isso nunca mais acende
+ * pra "Meu negócio"/"Meu atendente". Lista fechada (não any-href-with-slash):
+ * itens comuns como '/agenda' continuam exigindo match EXATO.
+ */
+const NAV_ITEMS_COM_SUBROTAS: readonly string[] = ['/negocio', '/atendente'];
+
+/**
+ * Item ativo do menu: match EXATO pros itens comuns; match de PREFIXO
+ * (`pathname === href || pathname.startsWith(href + '/')`) só pros itens de
+ * `NAV_ITEMS_COM_SUBROTAS`. Único ponto de verdade — sidebar e bottom-nav
+ * chamam esta função em vez de comparar `pathname === href` cada um por si.
+ */
+export function isNavItemActive(pathname: string, href: string): boolean {
+  if (NAV_ITEMS_COM_SUBROTAS.includes(href)) {
+    return pathname === href || pathname.startsWith(`${href}/`);
+  }
+  return pathname === href;
+}

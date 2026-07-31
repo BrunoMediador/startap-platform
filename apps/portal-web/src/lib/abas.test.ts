@@ -3,18 +3,20 @@ import {
   ATENDENTE_ABAS,
   type AbaKey,
   NEGOCIO_ABAS,
+  type SecaoKey,
   TODAS_ABAS,
+  TODAS_SECOES,
   abaDaSecao,
   filterAtendenteAbas,
   filterNegocioAbas,
 } from './abas';
 import type { NavGateContext } from './nav';
-import { type SecaoKey, TODAS_SECOES } from './perfil-grupos';
 
 // Harness pure-fn do portal (sem RTL/jsdom), SCRUM-157: cobre o CONTRATO das
 // sub-abas de "Meu negócio"/"Meu atendente" — completude do mapa seção->aba
-// (herdado de perfil-grupos), sem href duplicado, ordem travada, e os gates
-// ligando/desligando cada aba (individual × estabelecimento, feature on/off).
+// (herdado da extinta perfil-grupos.ts), sem href duplicado, ordem travada, e
+// os gates ligando/desligando cada aba (individual × estabelecimento, feature
+// on/off).
 
 const BASE: NavGateContext = {
   conexaoEnabled: false,
@@ -22,8 +24,8 @@ const BASE: NavGateContext = {
   atendimentosEnabled: false,
 };
 
-describe('abas — completude do mapa seção -> aba (herdado de perfil-grupos)', () => {
-  it('toda SecaoKey de perfil-grupos resolve pra alguma aba', () => {
+describe('abas — completude do mapa seção -> aba (herdado da extinta perfil-grupos.ts)', () => {
+  it('toda SecaoKey resolve pra alguma aba', () => {
     for (const secao of TODAS_SECOES) {
       expect(abaDaSecao(secao), `seção "${secao}" sem aba mapeada`).toBeDefined();
     }

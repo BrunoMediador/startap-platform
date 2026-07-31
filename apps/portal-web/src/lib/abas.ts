@@ -6,13 +6,10 @@
  *
  * Por que isto existe: o Bruno rejeitou o padrão anterior (10 itens de menu
  * planos + "Meu negócio" empilhando 10 seções numa página só com chips que
- * só ROLAM até âncora, ver `@/lib/perfil-grupos`). A troca é por TELAS
+ * só ROLAM até âncora, extinta `perfil-grupos.ts`). A troca é por TELAS
  * separadas de verdade, com URL própria — Serviços/Horários/Equipe saem do
  * menu e viram sub-abas de "Meu negócio"; a personalização da IA vira o item
  * próprio "Meu atendente".
- *
- * Este PR é SÓ dados + testes — nenhuma rota/componente/tela nasce aqui
- * (vem em PR(s) seguinte(s), quando as sub-páginas forem escritas).
  *
  * Gate: reaproveita `filterByGates`/`NavGate`/`NavGateContext` de `@/lib/nav`
  * em vez de duplicar a função — fonte ÚNICA da regra "todos os gates de um
@@ -22,13 +19,12 @@
  * `atendenteMensagens`), não pela função de filtro (que só sabe fazer AND).
  */
 import { type NavGateContext, type NavItemSpec, filterByGates } from './nav';
-import type { SecaoKey } from './perfil-grupos';
 
 /**
- * Chave de cada sub-aba. Reaproveita o nome de domínio de `SecaoKey`
- * (perfil-grupos) onde a aba corresponde 1:1 a uma seção existente; adiciona
- * 'agenda' (a antiga seção 'agendamento'+'lembretes'+'google-agenda' viram a
- * aba "Agenda" de "Meu negócio") e as 3 abas novas de "Meu atendente".
+ * Chave de cada sub-aba. Reaproveita o nome de domínio de `SecaoKey` (abaixo)
+ * onde a aba corresponde 1:1 a uma seção existente; adiciona 'agenda' (a
+ * antiga seção 'agendamento'+'lembretes'+'google-agenda' viram a aba "Agenda"
+ * de "Meu negócio") e as 3 abas novas de "Meu atendente".
  */
 export type AbaKey =
   // Sub-abas de "Meu negócio" (`/negocio/*`)
@@ -47,6 +43,42 @@ export interface AbaSpec extends NavItemSpec {
   label: string;
   key: AbaKey;
 }
+
+/**
+ * Cada seção renderizada hoje nas telas `/negocio/dados` e `/atendente/*`, em
+ * chave estável. Herdado da extinta `perfil-grupos.ts` (mega-página "Meu
+ * negócio" com mini-nav de âncoras, SCRUM-98) — a divisão em GRUPOS morreu com
+ * ela, mas o mapa seção->ABA (agora uma tela/rota de verdade) continua vivo
+ * aqui, fonte única.
+ */
+export type SecaoKey =
+  // "Meu negócio" / Dados
+  | 'dados-negocio' // form principal (nome, contato, endereço, fuso, formas de pagamento)
+  | 'planos' // Planos e assinaturas (texto livre)
+  | 'recepcao' // WhatsApp da recepção (destino dos avisos ao dono)
+  // "Meu atendente" / Personalidade
+  | 'monte-assistente' // Monte seu atendente (builder conversacional)
+  | 'tom' // Tom da conversa (slider)
+  | 'cartao' // Cartão de confirmação
+  | 'faq' // Perguntas frequentes
+  // "Meu negócio" / Agenda
+  | 'agendamento' // Agendamento (toggle + link, modo atendente)
+  | 'lembretes' // Lembretes automáticos
+  | 'google-agenda'; // Conta Google / instalar app
+
+/** Todas as seções, na ordem em que apareciam na extinta mega-página (SCRUM-98). */
+export const TODAS_SECOES: readonly SecaoKey[] = [
+  'dados-negocio',
+  'planos',
+  'recepcao',
+  'monte-assistente',
+  'tom',
+  'cartao',
+  'faq',
+  'agendamento',
+  'lembretes',
+  'google-agenda',
+];
 
 /**
  * Sub-abas de "Meu negócio", na ordem de exibição.
@@ -114,10 +146,11 @@ export const ATENDENTE_ABAS: readonly AbaSpec[] = [
 export const TODAS_ABAS: readonly AbaSpec[] = [...NEGOCIO_ABAS, ...ATENDENTE_ABAS];
 
 /**
- * Mapa seção (herdada de `perfil-grupos.SecaoKey`) -> aba nova. Substituto de
- * `grupoDaSecao` para o mundo de telas separadas: toda seção que a extinta
- * mega-página "Meu negócio" renderizava hoje tem que resolver pra UMA aba —
- * o teste (`abas.test.ts`) trava a completude deste mapa contra `SecaoKey`.
+ * Mapa seção (`SecaoKey`, acima) -> aba nova. Substituto do extinto
+ * `grupoDaSecao` (perfil-grupos.ts) para o mundo de telas separadas: toda
+ * seção que a extinta mega-página "Meu negócio" renderizava hoje tem que
+ * resolver pra UMA aba — o teste (`abas.test.ts`) trava a completude deste
+ * mapa contra `SecaoKey`.
  */
 const SECAO_PARA_ABA: Record<SecaoKey, AbaKey> = {
   // Grupo "Dados do negócio" -> aba "Dados"

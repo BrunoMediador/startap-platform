@@ -3,7 +3,6 @@
 import { Brandmark, IconLogout } from '@/components/icons';
 import { cn } from '@/lib/cn';
 import { initials } from '@/lib/format';
-import { useLogout } from '@/lib/use-logout';
 /**
  * Sidebar desktop (>=md) — spec 6.13 + polish 1.D.7.
  *
@@ -17,6 +16,8 @@ import { useLogout } from '@/lib/use-logout';
  * plano (decisao Bruno — nao ha planos ainda) e SEM toggle de tema (o app e
  * sempre escuro): so avatar + nome + sair.
  */
+import { isNavItemActive } from '@/lib/nav';
+import { useLogout } from '@/lib/use-logout';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useConexaoNav } from './use-conexao-nav';
@@ -43,7 +44,7 @@ export function Sidebar({ businessName }: { businessName: string }) {
       >
         {visibleItems.map((item) => {
           const { href, label, Icon } = item;
-          const active = pathname === href;
+          const active = isNavItemActive(pathname, href);
           const dot = showDot(item);
           return (
             <Link
