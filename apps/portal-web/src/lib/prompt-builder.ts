@@ -105,12 +105,13 @@ interface MessageResponse {
    * Confirmado (31/07): SEMPRE presentes em toda resposta 200 (string|null, nunca
    * undefined) — inclusive nas respostas barradas por teto de turns/guarda de custo. O
    * rascunho corrente pro painel de prévia atualizar A CADA TURNO, sem esperar
-   * draft_ready. `preview_final` é uso INTERNO (nunca exibido — contém o bloco
-   * estrutural/nomes de tool, item 3 do design original); mantido no transporte só por
-   * paridade de contrato com /draft. `?` no tipo é só defesa (parsing tolera ausência).
+   * draft_ready. `?` no tipo é só defesa (parsing tolera ausência).
+   *
+   * ⚠️ `preview_final` NÃO vem no /message (removido no review de security S1): ninguém o
+   * consumia aqui e ele carregava o bloco estrutural (marcadores + nomes de tool) a cada
+   * turno. Ele existe só no GET /draft — ver DraftResponse.
    */
   persona_rascunho?: string | null;
-  preview_final?: string | null;
   /** Confirmado (31/07): chega já no 1º turno do modo melhoria, mesmo sem rascunho ainda. */
   persona_base?: string | null;
 }
