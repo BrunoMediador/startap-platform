@@ -48,6 +48,16 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       modo_atendente: modoAtendente,
       faq_personalizado: faqPersonalizado,
       agenda_configurada: agendaConfigurada,
+      // features.prompt_builder: gate GLOBAL (não por-clone) da flag PROMPT_BUILDER_ENABLED
+      // (SCRUM-92). Serve pro front decidir se a ABA "Monte seu atendente" aparece na barra de
+      // abas do portal ANTES de navegar — hoje a rota só se revela via 404 depois de entrar, o
+      // que não dá pra gate de aba. Mesma flag que já gateia /portal/prompt-builder/*.
+      prompt_builder: config.PROMPT_BUILDER_ENABLED,
+      // features.sandbox: gate GLOBAL (não por-clone) da flag SANDBOX_ENABLED (SCRUM-101).
+      // Mesmo motivo do prompt_builder acima: o front usa isto pra decidir se a aba "Testar
+      // conversa" aparece, sem depender de 404 pós-navegação. Mesma flag que gateia
+      // /portal/sandbox/*.
+      sandbox: config.SANDBOX_ENABLED,
     };
     // recepcao_telefone (SCRUM-59 → Onda 1 de-gate, SCRUM-68 / ADR 0030): destino dos avisos de
     // lead/escalação/desconexão ao dono (= flow_clones.alert_owner_phone RAW). UNIVERSAL: exposto

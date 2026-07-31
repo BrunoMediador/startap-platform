@@ -1,12 +1,6 @@
 'use client';
 
-import {
-  IconChevronRight,
-  IconPencil,
-  IconRefresh,
-  IconSend,
-  IconSparkle,
-} from '@/components/icons';
+import { IconPencil, IconRefresh, IconSend, IconSparkle } from '@/components/icons';
 /**
  * Seção "Monte seu atendente" (SCRUM-92) dentro de "Meu negócio".
  *
@@ -38,15 +32,21 @@ import { cn } from '@/lib/cn';
 import {
   BUILDER_MAX_INPUT,
   type BuilderMessage,
+  type BuilderModo,
+  type DiffPart,
   PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
+  diffPersona,
+  diffToPlainText,
   generateNowContent,
   isPersonaSavable,
   isSendable,
   personaCharsLeft,
   remainingChars,
   resetBuilder,
+  resolveDiffBase,
+  resolvePersonaAtual,
   sendBuilderMessage,
   startBuilder,
 } from '@/lib/prompt-builder';
@@ -117,14 +117,20 @@ export function MonteAssistenteSection() {
   // Caminho "Editar": textarea aberta + texto da persona sendo ajustado pelo dono.
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState('');
+  // Preview ao vivo (ordem do Bruno 31/07): modo da sessão + rascunho corrente, atualizados
+  // a cada turno via /message (não dependem mais de esperar draft_ready pra existir).
+  const [modo, setModo] = useState<BuilderModo>('criacao');
+  const [personaAoVivo, setPersonaAoVivo] = useState<string | null>(null);
+  // persona_base também volta em TODA resposta de /message (confirmado 31/07, já no 1º
+  // turno) — captura local evita depender só do staleTime/refetch da query useBuilderDraft.
+  const [personaBaseAoVivo, setPersonaBaseAoVivo] = useState<string | null>(null);
+  // Alternância "ver com marcações / ver texto limpo" do painel de diff.
+  const [verMarcacoes, setVerMarcacoes] = useState(true);
 
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
-  const previewRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // Rola pra prévia só 1x por geração (rearma quando a prévia deixa de estar pronta).
-  const scrolledRef = useRef(false);
 
   const draft = draftQ.data;
   const started = messages.length > 0;
@@ -133,8 +139,23 @@ export function MonteAssistenteSection() {
   const previewPronto = draft?.status === 'pronto' && !!draft.previewFinal;
   // Prévia visível: pronta E não descartada pelo dono ("Rejeitar").
   const showPreview = previewReady && !previewDismissed;
+  const personaBase =
+    personaBaseAoVivo ?? (draft?.status !== 'indisponivel' ? (draft?.personaBase ?? null) : null);
+  // Rascunho corrente (proposta em cima da base): prioriza o que chegou NESTE turno
+  // (snappy); cai pro do draft do servidor quando ainda não houve turno nesta sessão
+  // (retomada com rascunho salvo no Redis).
+  const rascunhoAtual =
+    personaAoVivo ?? (draft?.status !== 'indisponivel' ? (draft?.personaRascunho ?? null) : null);
+  // Texto corrente do painel: o RASCUNHO se já existir; senão, em melhoria, a persona
+  // BASE (texto no ar) — o painel mostra "de cara" o texto atual mesmo ANTES do dono
+  // trocar 1 mensagem (item 1, ordem do Bruno). Em criação sem rascunho -> null (vazio
+  // honesto: ainda não há nada pra mostrar).
+  const personaAtual = resolvePersonaAtual(rascunhoAtual, personaBase);
+  const diffBase = resolveDiffBase(modo, personaBase);
 
-  // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando".
+  // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando". O painel de
+  // prévia é ANCORADO (sticky) — não precisa mais de scrollIntoView pra "trazer pra
+  // dentro da viewport" (a prévia já está sempre visível).
   const totalMsgs = messages.length;
   useEffect(() => {
     void totalMsgs;
@@ -142,18 +163,6 @@ export function MonteAssistenteSection() {
     const el = logRef.current;
     if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [totalMsgs, pending]);
-
-  // UX mobile: quando a persona fica pronta, traz a área de prévia+botões pra dentro da
-  // viewport (o dono pode estar lendo o topo do chat e não ver os botões lá embaixo).
-  useEffect(() => {
-    if (previewPronto && !editing && !previewDismissed && !scrolledRef.current) {
-      scrolledRef.current = true;
-      requestAnimationFrame(() =>
-        previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-      );
-    }
-    if (!previewPronto) scrolledRef.current = false; // rearma pra próxima geração
-  }, [previewPronto, editing, previewDismissed]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -182,6 +191,7 @@ export function MonteAssistenteSection() {
         setMessages([{ id: 1, role: 'assistant', text: out.pergunta }]);
       }
       setLocalDraftReady(out.draftReady);
+      setModo(out.modo);
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
@@ -218,6 +228,12 @@ export function MonteAssistenteSection() {
 
     if (out.kind === 'ok') {
       setMessages((m) => appendMessage(m, 'assistant', out.reply));
+      // Preview ao vivo (item 1): atualiza a CADA turno que trouxer rascunho/base novos,
+      // mesmo antes de draft_ready — o painel ancorado reage em tempo real, sem esperar a
+      // IA chamar a tool de propor_prompt. Campo ausente/null (backend antigo) -> sem
+      // update, degrada pro comportamento anterior.
+      if (out.personaRascunho) setPersonaAoVivo(out.personaRascunho);
+      if (out.personaBase) setPersonaBaseAoVivo(out.personaBase);
       if (out.draftReady) {
         setLocalDraftReady(true);
         setPreviewDismissed(false); // prévia NOVA volta a aparecer mesmo após um "Rejeitar"
@@ -230,6 +246,8 @@ export function MonteAssistenteSection() {
       toast.error('A conversa expirou. Vamos recomeçar do zero.');
       setMessages([]);
       setLocalDraftReady(false);
+      setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       return;
     }
@@ -245,16 +263,16 @@ export function MonteAssistenteSection() {
     setErroRetry(conteudo);
   }
 
-  /** "Pedir ajuste": sem conversa aberta abre um bubble-guia; em conversa, foca o campo. */
+  /**
+   * "Pedir ajuste"/"Continuar a conversa": com o painel sempre visível (item 1), este
+   * botão pode ser clicado ANTES de qualquer turno (`!started`) — precisa iniciar a
+   * sessão DE VERDADE (`/start`), não simular uma bolha local, senão o 1º envio bate
+   * 409 `entrevista_nao_iniciada` (o backend não sabe que essa conversa existe).
+   */
   function pedirAjuste() {
     if (!started) {
-      setMessages([
-        {
-          id: 1,
-          role: 'assistant',
-          text: 'Combinado! O que você quer mudar? Escreva com suas palavras — ex.: "mais formal", "chama de Léo", "tira a piada".',
-        },
-      ]);
+      void iniciar();
+      return;
     }
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -278,6 +296,8 @@ export function MonteAssistenteSection() {
       setPreviewDismissed(false);
       setEditing(false);
       setEditText('');
+      setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
       setAplicada(true);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       client.invalidateQueries({ queryKey: qk.perfil(slot) });
@@ -306,15 +326,65 @@ export function MonteAssistenteSection() {
     toast.error('Não foi possível ativar. Tente de novo.');
   }
 
-  /** Abre o editor da persona SEMEADO com o rascunho (persona pura, SEM o bloco estrutural). */
-  function editar() {
-    const seed = previewPronto ? (draft?.personaRascunho ?? '') : '';
-    setEditText(seed);
-    setEditing(true);
-    requestAnimationFrame(() => {
-      editRef.current?.focus();
-      previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  /**
+   * "Salvar" sempre disponível (item 3, ordem do Bruno): o dono não precisa saber se já
+   * existe rascunho. Com rascunho pronto -> approve normal (abre o ConfirmDialog de
+   * sempre). Sem rascunho -> força a geração AGORA (generate_now:true) e, assim que o
+   * rascunho voltar, abre o MESMO ConfirmDialog de aprovar — um único gesto do dono.
+   */
+  async function salvarSempre() {
+    if (previewPronto) {
+      setConfirmApprove({});
+      return;
+    }
+    if (pending || approving) return;
+    setPending(true);
+    setErroRetry(null);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const out = await sendBuilderMessage(generateNowContent(input), {
+      signal: ctrl.signal,
+      generateNow: true,
     });
+    setPending(false);
+    setInput('');
+    if (out.kind === 'ok') {
+      setMessages((m) => appendMessage(m, 'assistant', out.reply));
+      if (out.personaRascunho) setPersonaAoVivo(out.personaRascunho);
+      if (out.personaBase) setPersonaBaseAoVivo(out.personaBase);
+      setPreviewDismissed(false);
+      if (out.draftReady) {
+        setLocalDraftReady(true);
+        client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
+      }
+      // Abre a confirmação de aprovar assim que o rascunho existir — o dono só clicou
+      // "Salvar" uma vez, o resto é o backend forçando a geração.
+      if (out.draftReady) setConfirmApprove({});
+      else toast.error('Ainda não consegui gerar uma personalidade — conte mais um pouco no chat.');
+      return;
+    }
+    if (out.kind === 'not_started') {
+      toast.error('A conversa expirou. Vamos recomeçar do zero.');
+      setMessages([]);
+      setLocalDraftReady(false);
+      setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
+      client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
+      return;
+    }
+    if (out.kind === 'unavailable') {
+      toast.error('O assistente de configuração está indisponível agora. Tente mais tarde.');
+      return;
+    }
+    toast.error('Não foi possível salvar agora. Tente de novo.');
+  }
+
+  /** Abre o editor da persona SEMEADO com o rascunho corrente (persona pura, sem o bloco
+   * estrutural). O painel de prévia é sticky/ancorado — não precisa mais rolar até ele. */
+  function editar() {
+    setEditText(personaAtual ?? '');
+    setEditing(true);
+    requestAnimationFrame(() => editRef.current?.focus());
   }
 
   /**
@@ -339,7 +409,6 @@ export function MonteAssistenteSection() {
   function descartarPrevia() {
     setConfirmReject(false);
     setPreviewDismissed(true);
-    scrolledRef.current = false;
     if (!started) {
       void iniciar();
     } else {
@@ -359,6 +428,11 @@ export function MonteAssistenteSection() {
     setAplicada(false);
     setEditing(false);
     setEditText('');
+    // Só o RASCUNHO (proposta em cima da base) é apagado — a persona BASE (texto que
+    // está no ar hoje) e o `modo` da sessão continuam os mesmos: "recomeçar" reinicia a
+    // ENTREVISTA, não o estado real do clone. O próximo `iniciar()` re-sincroniza ambos
+    // via /start (o backend decide `modo` pelo estado real, nunca reset local).
+    setPersonaAoVivo(null);
     client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
   }
 
@@ -389,77 +463,88 @@ export function MonteAssistenteSection() {
     );
   }
 
+  // Diff a exibir no painel ao vivo: base resolvida (persona_base em melhoria, null em
+  // criação) contra o texto corrente (rascunho do turno mais recente).
+  const diffParts = personaAtual ? diffPersona(diffBase, personaAtual) : [];
+
   return (
     <SectionShell>
       {aplicada ? (
         <AplicadaCard onReconfigurar={iniciar} pending={pending} atendente={isAtendente} />
       ) : (
-        <div className="flex flex-col gap-4">
-          {!started && !previewReady && draft.status === 'sem_rascunho' && (
-            <RetomarCard
-              onContinuar={iniciar}
-              onRecomecar={() => setConfirmReset(true)}
-              pending={pending}
-            />
-          )}
-          {!started && !previewReady && draft.status !== 'sem_rascunho' && (
-            <IntroCard onStart={iniciar} pending={pending} garantia={copy.full} />
-          )}
+        /*
+         * Painel de preview ANCORADO (item 1, ordem do Bruno): visível desde o COMEÇO da
+         * sessão — inclusive ANTES do dono clicar "Começar"/"Conversar agora" (em melhoria,
+         * mostra de cara a persona_base = texto que está no ar). No mobile fica STICKY logo
+         * abaixo da topbar; no desktop vira coluna lateral sticky ao lado do chat/intro. Sem
+         * scrollIntoView, sem "role a tela pra baixo" em nenhum estado.
+         */
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+          <div className="order-2 flex flex-col gap-4 lg:order-1">
+            {!started && !previewReady && draft.status === 'sem_rascunho' && (
+              <RetomarCard
+                onContinuar={iniciar}
+                onRecomecar={() => setConfirmReset(true)}
+                pending={pending}
+              />
+            )}
+            {!started && !previewReady && draft.status !== 'sem_rascunho' && (
+              <IntroCard onStart={iniciar} pending={pending} garantia={copy.full} modo={modo} />
+            )}
+            {started && (
+              <ChatView
+                messages={messages}
+                pending={pending}
+                input={input}
+                erroRetry={erroRetry}
+                logRef={logRef}
+                inputRef={inputRef}
+                modo={modo}
+                onInput={setInput}
+                onSubmit={onSubmit}
+                onKeyDown={onKeyDown}
+                onRetry={() => erroRetry && void enviar(erroRetry)}
+                onGerarAgora={() => void enviar(input, { generateNow: true })}
+              />
+            )}
+          </div>
 
-          {started && (
-            <ChatView
-              messages={messages}
-              pending={pending}
-              input={input}
-              erroRetry={erroRetry}
-              logRef={logRef}
-              inputRef={inputRef}
-              onInput={setInput}
-              onSubmit={onSubmit}
-              onKeyDown={onKeyDown}
-              onRetry={() => erroRetry && void enviar(erroRetry)}
-              onGerarAgora={() => void enviar(input, { generateNow: true })}
-            />
-          )}
-
-          {showPreview && (
-            <>
-              {previewPronto && !editing && (
-                <PreviewAviso
-                  onIrParaPrevia={() =>
-                    previewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                  }
-                />
-              )}
-              <div ref={previewRef} className="scroll-mt-4">
-                {editing ? (
-                  <EditPersonaPanel
-                    value={editText}
-                    saving={approving}
-                    nota={copy.editor}
-                    textareaRef={editRef}
-                    onChange={setEditText}
-                    onSalvar={salvarEdicao}
-                    onCancelar={cancelarEdicao}
-                  />
-                ) : (
-                  <PreviewPanel
-                    ready={previewPronto}
-                    resumo={draft.resumo}
-                    nomeBot={draft.nomeBot}
-                    personaRascunho={draft.personaRascunho}
-                    nota={copy.nota}
-                    approving={approving}
-                    onAprovar={() => setConfirmApprove({})}
-                    onEditar={editar}
-                    onRejeitar={() => setConfirmReject(true)}
-                    onRecomecar={() => setConfirmReset(true)}
-                    onAjustarConversa={pedirAjuste}
-                  />
-                )}
-              </div>
-            </>
-          )}
+          <div className="sticky top-[calc(var(--topbar-h)+8px)] z-[5] order-1 max-h-[calc(100dvh-var(--topbar-h)-24px)] overflow-y-auto lg:order-2 lg:top-4 lg:max-h-[calc(100dvh-32px)]">
+            {editing ? (
+              <EditPersonaPanel
+                value={editText}
+                saving={approving}
+                nota={copy.editor}
+                textareaRef={editRef}
+                onChange={setEditText}
+                onSalvar={salvarEdicao}
+                onCancelar={cancelarEdicao}
+              />
+            ) : (
+              <PreviewPanel
+                modo={modo}
+                montando={showPreview && !previewPronto}
+                nomeBot={draft.nomeBot}
+                resumo={draft.resumo}
+                diffParts={diffParts}
+                verMarcacoes={verMarcacoes}
+                onToggleMarcacoes={() => setVerMarcacoes((v) => !v)}
+                nota={copy.nota}
+                approving={approving}
+                salvando={pending && !previewPronto}
+                // Salvar exige a sessão JÁ iniciada no backend (sendBuilderMessage bate 409
+                // sem isso) — antes do 1º "Começar"/"Conversar agora" ainda não há o que
+                // gerar/aprovar (mostrar a base intocada como "ativação" seria redundante).
+                podeSalvar={started || previewPronto}
+                onSalvar={() => void salvarSempre()}
+                onEditar={editar}
+                editavel={previewPronto}
+                onRejeitar={previewPronto ? () => setConfirmReject(true) : undefined}
+                onRecomecar={() => setConfirmReset(true)}
+                onAjustarConversa={pedirAjuste}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -511,10 +596,7 @@ export function MonteAssistenteSection() {
 /** Cabeçalho + card da seção (reutilizado por todos os estados). */
 function SectionShell({ children }: { children: React.ReactNode }) {
   return (
-    <section
-      aria-labelledby="monte-assistente-title"
-      className="mt-8 flex flex-col gap-3 border-t border-line pt-6"
-    >
+    <section aria-labelledby="monte-assistente-title" className="flex flex-col gap-3">
       <div>
         <h2
           id="monte-assistente-title"
@@ -540,27 +622,35 @@ function SectionShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Estado inicial: explica o que é + botão "Começar". */
+/**
+ * Estado inicial: explica o que é + botão "Começar". Copy honesta por modo (item 5): no
+ * modo criação (fluxo validado em prod, NUNCA muda) é entrevista de 4-5 perguntas; no
+ * modo melhoria é conversa livre sobre o texto que já está no ar — dizer "perguntas" aqui
+ * foi o que confundiu a cliente Ingrid (achou que a IA reescreveria tudo do zero).
+ */
 function IntroCard({
   onStart,
   pending,
   garantia,
+  modo,
 }: {
   onStart: () => void;
   pending: boolean;
   garantia: string;
+  modo: BuilderModo;
 }) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[13.5px] leading-normal text-ink-soft">
-        Em 4 ou 5 perguntas rápidas, deixamos o seu assistente com a cara do seu negócio: como ele
-        fala, se tem nome, e o que ele nunca deve fazer. Sem termos técnicos — é só conversar.
+        {modo === 'melhoria'
+          ? 'Converse sobre a personalidade que seu assistente já tem hoje: peça pra acrescentar algo, remover algo, ou mudar o que quiser — sem perder o que já está bom. Você acompanha o texto mudando ao vivo, e só ativa quando estiver do seu jeito.'
+          : 'Em 4 ou 5 perguntas rápidas, deixamos o seu assistente com a cara do seu negócio: como ele fala, se tem nome, e o que ele nunca deve fazer. Sem termos técnicos — é só conversar.'}
       </p>
       <GarantiaNota texto={garantia} />
       <div>
         <Button size="inline" onClick={onStart} loading={pending} loadingLabel="Abrindo…">
           <IconSparkle size={17} />
-          Começar
+          {modo === 'melhoria' ? 'Conversar agora' : 'Começar'}
         </Button>
       </div>
     </div>
@@ -667,6 +757,7 @@ function ChatView({
   erroRetry,
   logRef,
   inputRef,
+  modo,
   onInput,
   onSubmit,
   onKeyDown,
@@ -679,6 +770,7 @@ function ChatView({
   erroRetry: string | null;
   logRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  modo: BuilderModo;
   onInput: (v: string) => void;
   onSubmit: (e: React.FormEvent) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -729,7 +821,9 @@ function ChatView({
             maxLength={BUILDER_MAX_INPUT + 200}
             disabled={pending}
             enterKeyHint="send"
-            placeholder="Escreva sua resposta…"
+            placeholder={
+              modo === 'melhoria' ? 'Escreva o que quer mudar…' : 'Escreva sua resposta…'
+            }
             className="max-h-28 min-h-[42px] min-w-0 flex-1 resize-none rounded-field border border-line-strong bg-surface-sunken px-3.5 py-2.5 text-[15px] leading-snug text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-brand focus:ring-[3px] focus:ring-brand/35 disabled:opacity-60"
           />
           <button
@@ -817,85 +911,96 @@ function TypingBubble() {
 }
 
 /**
- * Aviso mobile (melhoria 5): quando a persona fica pronta, sinaliza que os botões estão
- * logo abaixo — o dono no celular pode estar lendo o topo do chat. Clicável = rola até a
- * prévia. O wrapper é region `status`/aria-live (anuncia ao leitor de tela sem roubar o
- * foco); o alvo de toque é o <button> interno (a11y: role não vai no elemento interativo).
- */
-function PreviewAviso({ onIrParaPrevia }: { onIrParaPrevia: () => void }) {
-  return (
-    <div role="status" aria-live="polite">
-      <button
-        type="button"
-        onClick={onIrParaPrevia}
-        aria-label="Sua prévia está pronta. Ir para a área de aprovar, editar ou rejeitar."
-        className="flex min-h-11 w-full items-center gap-2.5 rounded-[12px] border border-brand/40 bg-brand-soft px-3.5 py-2.5 text-left outline-none transition-colors hover:bg-brand-soft/70 focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-      >
-        <span className="shrink-0 text-brand" aria-hidden>
-          <IconSparkle size={17} />
-        </span>
-        <span className="flex-1 text-[13px] font-semibold leading-snug text-ink">
-          Sua prévia está pronta! Role a tela para baixo para aprovar, editar ou rejeitar.
-        </span>
-        <span className="inline-flex shrink-0 rotate-90 text-brand" aria-hidden>
-          <IconChevronRight size={18} />
-        </span>
-      </button>
-    </div>
-  );
-}
-
-/**
- * Painel de prévia: nome + resumo + (persona PURA colapsada) + Aprovar/Editar/Rejeitar.
+ * Painel de prévia ANCORADO (item 1-2, ordem do Bruno 31/07): nome + resumo + diff
+ * verde/vermelho da persona + Salvar/Editar/Rejeitar. Fica visível desde o começo da
+ * sessão (não só quando draft_ready) — em melhoria mostra de cara a persona NO AR; em
+ * criação mostra um estado vazio honesto até a 1ª prévia existir.
  *
- * Item 3: a prévia mostra SÓ a persona pura (`personaRascunho`), NÃO o preview_final — este
- * inclui o BLOCO_ESTRUTURAL técnico (regras do sistema, nomes de ferramenta) que contradiz a
- * promessa "você só cuida da personalidade" e assusta. A `nota` tranquiliza no lugar do bloco.
+ * Item 3 (preservado): a prévia mostra SÓ a persona pura (diff sobre `personaRascunho`),
+ * NÃO o `preview_final` — este inclui o BLOCO_ESTRUTURAL técnico (regras de sistema,
+ * nomes de tool) que contradiz "você só cuida da personalidade" e assusta o dono.
  */
 function PreviewPanel({
-  ready,
+  modo,
+  montando,
   resumo,
   nomeBot,
-  personaRascunho,
+  diffParts,
+  verMarcacoes,
+  onToggleMarcacoes,
   nota,
   approving,
-  onAprovar,
+  salvando,
+  podeSalvar,
+  onSalvar,
   onEditar,
+  editavel,
   onRejeitar,
   onRecomecar,
   onAjustarConversa,
 }: {
-  ready: boolean;
+  modo: BuilderModo;
+  /** Ainda não há NENHUM texto de rascunho pra mostrar (nem local, nem do servidor). */
+  montando: boolean;
   resumo: string | null;
   nomeBot: string | null;
-  personaRascunho: string | null;
+  diffParts: DiffPart[];
+  verMarcacoes: boolean;
+  onToggleMarcacoes: () => void;
   nota: string;
   approving: boolean;
-  onAprovar: () => void;
+  /** "Salvar" disparou generate_now e está aguardando o rascunho voltar (item 3). */
+  salvando: boolean;
+  /** Sessão já iniciada no backend (ou rascunho pronto) -> "Salvar" pode agir de verdade. */
+  podeSalvar: boolean;
+  onSalvar: () => void;
   onEditar: () => void;
-  onRejeitar: () => void;
+  /** Rascunho existe -> pode editar/rejeitar. Sem rascunho ainda, essas ações não fazem sentido. */
+  editavel: boolean;
+  onRejeitar?: () => void;
   onRecomecar: () => void;
   onAjustarConversa: () => void;
 }) {
-  // localDraftReady=true mas o draft do servidor ainda não voltou 'pronto' -> montando.
-  const montando = !ready;
+  const temTexto = diffParts.length > 0;
+  const houveMudanca = diffParts.some((p) => p.kind !== 'equal');
   return (
     <div className="flex flex-col gap-3 rounded-[14px] border border-brand/30 bg-brand-soft/40 p-4">
-      <div className="flex items-center gap-2">
-        <span className="text-brand" aria-hidden>
-          <IconSparkle size={17} />
-        </span>
-        <h3 className="font-display text-[14.5px] font-semibold text-ink">
-          Prévia do seu assistente
-        </h3>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-brand" aria-hidden>
+            <IconSparkle size={17} />
+          </span>
+          <h3 className="font-display text-[14.5px] font-semibold text-ink">
+            {modo === 'melhoria' ? 'Seu assistente' : 'Prévia do seu assistente'}
+          </h3>
+        </div>
+        {/* Alternância "ver com marcações / ver texto limpo" — só faz sentido havendo diff. */}
+        {temTexto && houveMudanca && (
+          <button
+            type="button"
+            onClick={onToggleMarcacoes}
+            className="shrink-0 rounded-pill border border-line-strong bg-surface px-3 py-1 text-[11.5px] font-semibold text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft"
+          >
+            {verMarcacoes ? 'Ver texto limpo' : 'Ver com marcações'}
+          </button>
+        )}
       </div>
 
-      {montando ? (
-        <p className="text-[13px] text-ink-soft" aria-live="polite">
-          Montando a prévia…
+      {!temTexto ? (
+        <p className="text-[13px] leading-normal text-ink-soft" aria-live="polite">
+          {montando
+            ? 'Montando a prévia…'
+            : modo === 'melhoria'
+              ? 'Seu texto aparece aqui conforme vocês conversam.'
+              : 'Seu texto aparece aqui conforme vocês conversam — responda a primeira pergunta pra começar.'}
         </p>
       ) : (
         <>
+          {modo === 'melhoria' && !houveMudanca && (
+            <p className="text-[11.5px] font-semibold uppercase tracking-wide text-ink-faint">
+              Texto atual
+            </p>
+          )}
           {/* Item 4: deixa claro que é o nome pelo qual o ASSISTENTE se apresenta, distinto
               do nome do NEGÓCIO (cadastrado em "Meu negócio", logo acima). */}
           {nomeBot && (
@@ -912,51 +1017,59 @@ function PreviewPanel({
           {resumo && (
             <p className="whitespace-pre-wrap text-[13.5px] leading-normal text-ink">{resumo}</p>
           )}
-          {personaRascunho && (
-            <details className="group">
-              <summary className="cursor-pointer list-none text-[12.5px] font-semibold text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-brand-soft">
-                Ver o texto completo
-              </summary>
-              <pre className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] border border-line bg-surface px-3 py-2.5 font-sans text-[12.5px] leading-normal text-ink-soft">
-                {personaRascunho}
-              </pre>
-            </details>
-          )}
+          <div
+            aria-live="polite"
+            aria-label={
+              houveMudanca && verMarcacoes
+                ? 'Texto da personalidade, com o que foi acrescentado e removido marcado'
+                : 'Texto da personalidade'
+            }
+            className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] border border-line bg-surface px-3 py-2.5 text-[13px] leading-normal text-ink"
+          >
+            {verMarcacoes
+              ? diffParts.map((p, i) => <DiffSpan key={`${p.kind}-${i}`} part={p} />)
+              : diffToPlainText(diffParts)}
+          </div>
           <p className="text-[12px] leading-normal text-ink-faint">{nota}</p>
         </>
       )}
 
-      {/* Full-width no mobile (touch-friendly, sem apertar), inline a partir de sm. */}
+      {/* Salvar SEMPRE disponível (item 3, ordem do Bruno): com rascunho -> aprova; sem
+          rascunho -> gera agora e aprova no mesmo gesto (a fn decide, o dono só clica). */}
       <div className="mt-1 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
         <Button
           size="inline"
           className="w-full sm:w-auto"
-          onClick={onAprovar}
-          loading={approving}
-          loadingLabel="Ativando…"
-          disabled={montando}
+          onClick={onSalvar}
+          loading={approving || salvando}
+          loadingLabel={salvando ? 'Gerando…' : 'Ativando…'}
+          disabled={!podeSalvar}
         >
-          Aprovar e ativar
+          Salvar e ativar
         </Button>
-        <Button
-          size="inline"
-          variant="secondary"
-          className="w-full sm:w-auto"
-          onClick={onEditar}
-          disabled={approving || montando}
-        >
-          <IconPencil size={16} />
-          Editar
-        </Button>
-        <Button
-          size="inline"
-          variant="ghost"
-          className="w-full sm:w-auto"
-          onClick={onRejeitar}
-          disabled={approving}
-        >
-          Rejeitar
-        </Button>
+        {editavel && (
+          <Button
+            size="inline"
+            variant="secondary"
+            className="w-full sm:w-auto"
+            onClick={onEditar}
+            disabled={approving}
+          >
+            <IconPencil size={16} />
+            Editar
+          </Button>
+        )}
+        {editavel && onRejeitar && (
+          <Button
+            size="inline"
+            variant="ghost"
+            className="w-full sm:w-auto"
+            onClick={onRejeitar}
+            disabled={approving}
+          >
+            Rejeitar
+          </Button>
+        )}
       </div>
 
       {/*
@@ -965,7 +1078,9 @@ function PreviewPanel({
        */}
       <div className="mt-1 flex flex-col gap-2 border-t border-brand/20 pt-3">
         <p className="text-[12.5px] leading-normal text-ink-soft">
-          Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu assistente.
+          {modo === 'melhoria'
+            ? 'Quer acrescentar, remover ou mudar mais alguma coisa? Continue a conversa que eu ajusto.'
+            : 'Quer incluir mais alguma coisa? Continue a conversa que eu ajusto o seu assistente.'}
         </p>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
           <button
@@ -987,6 +1102,32 @@ function PreviewPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Um trecho do diff visual. Acessibilidade (item obrigatório): NUNCA depende só de cor —
+ * added leva prefixo "+" + sublinhado, removed leva prefixo "−" + tachado. Cada trecho
+ * mudado é also um <mark>/<del> semântico (leitor de tela anuncia a mudança).
+ */
+function DiffSpan({ part }: { part: DiffPart }) {
+  if (part.kind === 'equal') return <span>{part.text}</span>;
+  if (part.kind === 'added') {
+    // Verde = acrescentado. Cor semântica de diff (não é cor de marca) — reforçada com
+    // "+"/sublinhado pra não depender só de cor (daltonismo).
+    return (
+      <mark className="rounded-[3px] bg-emerald-500/15 px-0.5 text-emerald-400 underline decoration-emerald-400/50 decoration-2 underline-offset-2">
+        <span aria-hidden>+</span>
+        {part.text}
+      </mark>
+    );
+  }
+  // Vermelho = removido, sempre com tachado (não só cor).
+  return (
+    <del className="rounded-[3px] bg-danger-soft px-0.5 text-danger decoration-danger/60">
+      <span aria-hidden>−</span>
+      {part.text}
+    </del>
   );
 }
 

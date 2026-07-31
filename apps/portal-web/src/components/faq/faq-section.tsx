@@ -235,10 +235,7 @@ export function FaqSection() {
 /** Cabeçalho + card da seção (reutilizado por todos os estados). */
 function SectionShell({ children }: { children: React.ReactNode }) {
   return (
-    <section
-      aria-labelledby="faq-title"
-      className="mt-8 flex flex-col gap-3 border-t border-line pt-6"
-    >
+    <section aria-labelledby="faq-title" className="flex flex-col gap-3">
       <div>
         <h2 id="faq-title" className="font-display text-[17px] font-semibold text-ink">
           Perguntas frequentes

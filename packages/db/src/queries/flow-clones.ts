@@ -9,6 +9,7 @@ import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-g
 import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
+import { OWNER_PAUSE_KIND } from '@startap/core/silence-gate';
 import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
@@ -469,53 +470,90 @@ export async function updateClone(
 
   if (sets.length === 0) return getClone(id);
 
+  // SCRUM-112 (ADR 0027 / precedente SCRUM-121, PR #491): quando o SAVE do perfil contém a
+  // chave `agenda_automatica` explicitamente e ela resolve para TRUE (isAgendaAutomaticaIntent),
+  // ligamos `billing_from_agenda_enabled` NA MESMA transação — senão o clone que nasceu
+  // atendente (sem billing-da-agenda) e depois ganha agenda fica SEM o gate ligado, e a única
+  // forma de religar é um UPDATE manual (o buraco que gerou este card: caso Ingrid).
+  //
+  // FAIL-CLOSED em 3 níveis, mesmo desenho do gcal/test (SCRUM-121):
+  //   1. Só quando `agenda_automatica` está PRESENTE no patch novo (chave explícita — chave
+  //      ausente em outros saves do perfil, ex.: só telefone/endereço, nunca aciona o flip).
+  //   2. Só na TRANSIÇÃO: intenção NOVA = true (isAgendaAutomaticaIntent) E o valor ANTERIOR
+  //      gravado no JSONB era a string 'false' explícita (== estava atendente; ausência já
+  //      conta como "já era agenda" por convenção de isAgendaAutomaticaIntent, então não é
+  //      transição). Estado ANTERIOR lido via CTE `prev` no MESMO snapshot da statement — no
+  //      PG não existe `RETURNING OLD.*`. true→true (já ligado) é no-op.
+  //   3. Só se `billing_from_agenda_enabled` ainda NÃO estava ligado (evita re-escrever à toa;
+  //      também não desliga nunca — o fix é one-way, só liga).
+  // Dinheiro de cliente (regra de negócio): na dúvida, NÃO ligar — nunca fazemos o inverso
+  // (nunca desligamos billing_from_agenda_enabled por aqui).
+  const agendaAutomaticaPresente =
+    patch.personalizacao !== undefined &&
+    Object.prototype.hasOwnProperty.call(patch.personalizacao, 'agenda_automatica');
+  const novaIntencaoAgenda = agendaAutomaticaPresente
+    ? isAgendaAutomaticaIntent((patch.personalizacao as Record<string, unknown>).agenda_automatica)
+    : false;
+
   sets.push('updated_at = NOW()');
   vals.push(id);
+  const idParamIdx = i; // índice do $N do id, antes de reservar o índice do flip abaixo.
+  i++;
+  const flipParamIdx = i++; // $N = novaIntencaoAgenda (só relevante quando agendaAutomaticaPresente)
+  vals.push(novaIntencaoAgenda);
 
-  const r = await query<CloneRow & { id: string }>(
-    `UPDATE flow_clones SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+  const r = await query<CloneRow & { id: string; billing_agenda_ativado?: boolean }>(
+    `WITH prev AS (
+       SELECT id,
+              (
+                $${flipParamIdx} = TRUE
+                AND personalizacao->>'agenda_automatica' = 'false'
+                AND billing_from_agenda_enabled IS NOT TRUE
+              ) AS flip
+         FROM flow_clones
+        WHERE id = $${idParamIdx}
+     )
+     UPDATE flow_clones fc
+        SET ${sets.join(', ')},
+            billing_from_agenda_enabled = CASE
+                                             WHEN prev.flip THEN TRUE
+                                             ELSE fc.billing_from_agenda_enabled
+                                           END
+       FROM prev
+      WHERE fc.id = prev.id
+      RETURNING fc.*, prev.flip AS billing_agenda_ativado`,
     vals,
   );
   if (!r.rows[0]) return null;
 
-  const row = normalizeCloneRow(r.rows[0]);
-
-  // Se personalizacao mudou, regenera bot_prompt a partir da matriz — SALVO se o clone tem
-  // prompt CUSTOM (migration 070, SCRUM-59): re-renderizar apagaria a persona escrita à mão
-  // (bug provado no piloto Meduzza — salvar o perfil, inclusive o toggle agenda_automatica da
-  // seção nova, jogava a persona de 6141 chars fora). prompt_custom=false (default) = re-renderiza
-  // como hoje (Cirilo/Samuel byte-a-byte). RETURNING * traz a coluna; normalizeCloneRow => false
-  // quando ausente. O gestão (PATCH /api/clones) já não re-renderiza desde maio.
-  if (patch.personalizacao !== undefined && !row.prompt_custom) {
-    const personalizacao = patch.personalizacao;
-    const matrizRes = await query<{ matriz_slot: string }>(
-      'SELECT matriz_slot FROM flow_clones WHERE id = $1',
-      [id],
+  if (r.rows[0].billing_agenda_ativado === true) {
+    // Nada silencioso: mudança de estado derivado precisa deixar rastro (lição SCRUM-121).
+    console.log(
+      `[updateClone] clone ${id} (${r.rows[0].slot}): billing_from_agenda_enabled ATIVADO — transição agenda_automatica 'false' -> true (ADR 0027, SCRUM-112).`,
     );
-    const matrizSlot = matrizRes.rows[0]?.matriz_slot;
-    if (matrizSlot) {
-      const promptRes = await query<{ prompt: string }>(
-        'SELECT prompt FROM bot_prompt WHERE slot = $1',
-        [matrizSlot],
-      );
-      if (promptRes.rows[0]) {
-        const novo = applyPersonalizacao(promptRes.rows[0].prompt, personalizacao);
-        // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline — o clone já
-        // existe aqui, então resolve o UUID. NULL-safe se não houver linha.
-        // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
-        // "inconsistent types deduced for parameter $1": bot_prompt.slot
-        // varchar(50) vs flow_clones.slot varchar(80)).
-        await query(
-          `INSERT INTO bot_prompt (slot, prompt, updated_at, tenant_id)
-           VALUES ($1, $2, NOW(), (SELECT tenant_id FROM flow_clones WHERE slot = $3))
-           ON CONFLICT (slot) DO UPDATE SET prompt = EXCLUDED.prompt, updated_at = NOW(),
-             tenant_id = COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)`,
-          [row.slot, novo, row.slot],
-        );
-      }
-    }
   }
 
+  const row = normalizeCloneRow(r.rows[0]);
+
+  // ADR 0035 §2.1 (emenda 30/07, decisão do Bruno): bot_prompt é CÓPIA MATERIALIZADA no
+  // nascimento (createClone). Nenhum caminho de edição de perfil volta a regenerá-lo a
+  // partir da matriz ou do template de atendente — a persona do clone é intocável por save
+  // de personalizacao. Este `if` REMOVIA a persona editada à mão sempre que
+  // `prompt_custom=false` (o estado default de todo clone), reintroduzindo o clobber que o
+  // SCRUM-59/83/122 vinham tapando caso a caso — a causa-raiz era este bloco existir.
+  //
+  // `buildContextBlock` (packages/integrations/src/scheduling/free-slots.ts:516-531) já
+  // injeta [FUNCIONAMENTO]/[SERVICOS E PRECOS]/[HORARIOS DISPONIVEIS] em runtime a cada
+  // turno, direto de bot_config — o dado que esta releitura mantinha "atualizado" já chega
+  // ao modelo por um caminho separado e autoritativo. `renderPrompt`
+  // (apps/api/src/lib/render-prompt.ts:24-37) já lê só bot_prompt do slot, sem fallback pra
+  // template — a invariante "runtime não deriva da matriz" já vive no leitor.
+  //
+  // Consequência ACEITA (Bruno, 30/07, não reabrir): melhoria de template só vale pra
+  // cliente novo; clone existente se melhora à mão via regerar-prompt/edição, nunca em
+  // massa. `flow_clones.prompt_custom` segue vivo — ainda consumido pelo guard
+  // anti-cartão-duplo baked→runtime (isCartaoRuntimeFlipBlocked e afins), fora do escopo
+  // desta mudança.
   invalidateCloneCache({ slot: row.slot, sessao: row.waha_sessao ?? undefined });
   return row;
 }
@@ -1370,8 +1408,13 @@ export async function resumeClone(opts: {
 // invalidateCloneCache é IMPRESCINDÍVEL (cache TTL 60s; senão a pausa demora a valer).
 // ---------------------------------------------------------------------------
 
-/** kind canônico da pausa self-service. NUNCA 'billing' (anti auto-resume do PIX). */
-export const OWNER_PAUSE_KIND = 'owner_request' as const;
+/**
+ * kind canônico da pausa self-service. NUNCA 'billing' (anti auto-resume do PIX).
+ * Reexportado de @startap/core/silence-gate (fonte ÚNICA, achado do security 31/07) — @startap/db
+ * já depende de @startap/core, então reexportar aqui elimina o literal duplicado que um teste
+ * "anti-divergência" comparando 2 constantes independentes não conseguiria pegar de verdade.
+ */
+export { OWNER_PAUSE_KIND };
 const OWNER_PAUSE_REASON = 'Pausado pelo cliente no portal';
 
 export interface OwnerPauseResult {

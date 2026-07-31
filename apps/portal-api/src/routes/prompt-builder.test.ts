@@ -35,6 +35,8 @@ const cfg = vi.hoisted(() => ({
   MODO_ATENDENTE_SLOTS: '',
   // SCRUM-92 inc.2: OFF por default (approve cola o bloco baked). Um describe liga pra runtime.
   CARTAO_RUNTIME_ENABLED: false,
+  // SCRUM-153: modo MELHORIA OFF por default (todo clone entrevista na V4). Um describe liga.
+  PROMPT_BUILDER_MELHORIA_ENABLED: false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -47,6 +49,10 @@ const mocks = vi.hoisted(() => ({
   getProductType: vi.fn(),
   resolveModoAtendenteEnabledForSlot: vi.fn(),
   matchesGenerateIntent: vi.fn(),
+  // SCRUM-153 (modo melhoria)
+  matchesReescritaTotalIntent: vi.fn(),
+  derivarCamposConfigurados: vi.fn(),
+  getPrompt: vi.fn(),
 }));
 
 // Hoisted (não const simples): a factory do vi.mock — hoistada — referencia BLOCO_MARKER como
@@ -61,7 +67,11 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
 }));
 vi.mock('@startap/db', () => ({
-  botPrompt: { applyGeneratedPrompt: (...a: unknown[]) => mocks.applyGeneratedPrompt(...a) },
+  botPrompt: {
+    applyGeneratedPrompt: (...a: unknown[]) => mocks.applyGeneratedPrompt(...a),
+    // SCRUM-153: o /start lê a persona ATUAL pra decidir o modo da sessão.
+    getPrompt: (...a: unknown[]) => mocks.getPrompt(...a),
+  },
   cloneColaboradores: {
     getAreaAndPromptCustom: (...a: unknown[]) => mocks.getAreaAndPromptCustom(...a),
     getAreaPromptCustomCartao: (...a: unknown[]) => mocks.getAreaPromptCustomCartao(...a),
@@ -82,6 +92,15 @@ vi.mock('@startap/integrations', () => ({
     buildEntrevistadorSystemPrompt: () => 'SYSTEM_ENTREVISTADOR_FIXO_SECRETO',
     primeiraPergunta: () => 'Como você quer que ele fale com o cliente?',
     matchesGenerateIntent: (...a: unknown[]) => mocks.matchesGenerateIntent(...a),
+    // ── modo MELHORIA (SCRUM-153) ──────────────────────────────────────────────
+    // System prompt da V5 é STUB com marcador: o teste do route prova a MECÂNICA (qual
+    // prompt foi escolhido, o que foi injetado); o CONTEÚDO real da V5 é coberto em
+    // meta-entrevistador.test.ts (paridade com o v5.md).
+    buildMelhoriaSystemPrompt: (ctx: { personaAtual: string; camposConfigurados: string[] }) =>
+      `SYSTEM_MELHORIA_V5 persona=<${ctx.personaAtual}> campos=<${ctx.camposConfigurados.join('|')}>`,
+    primeiraMensagemMelhoria: () => 'Já tenho a persona atual aqui. O que você quer mudar?',
+    matchesReescritaTotalIntent: (...a: unknown[]) => mocks.matchesReescritaTotalIntent(...a),
+    derivarCamposConfigurados: (...a: unknown[]) => mocks.derivarCamposConfigurados(...a),
   },
   promptBuilder: {
     buildBlocoEstrutural: ({ modo }: { modo: string }) => {
@@ -199,6 +218,12 @@ beforeEach(() => {
   mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
   // Default: sem intenção textual de gerar (cada teste liga quando precisa).
   mocks.matchesGenerateIntent.mockReturnValue(false);
+  // SCRUM-153: modo MELHORIA OFF por default = TODO teste existente segue no caminho de
+  // CRIAÇÃO (V4), byte-a-byte. O describe do modo melhoria liga a flag.
+  cfg.PROMPT_BUILDER_MELHORIA_ENABLED = false;
+  mocks.matchesReescritaTotalIntent.mockReturnValue(false);
+  mocks.derivarCamposConfigurados.mockReturnValue([]);
+  mocks.getPrompt.mockResolvedValue(null);
   mocks.applyGeneratedPrompt.mockResolvedValue({
     slot: 'clone_x',
     prompt: 'x',
@@ -874,6 +899,76 @@ describe('approve', () => {
       expect(call[1]).toContain(BLOCO_MARKER); // baked, cartão colado no bot_prompt
       expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined(); // não flipa
     });
+
+    // ── SCRUM-155 (caso Meduzza): clone ATENDENTE nunca tem cartão -> guard não se aplica ──────
+    // Meduzza é estabelecimento NO FORMATO mas atendente NO COMPORTAMENTO (agenda_automatica=
+    // false + flag ON): o ramo atendente intercepta antes de qualquer cartão de agendamento
+    // (teste_barbearia.ts processAtendente). Ela é prompt_custom=true + cartao_mode='baked' em
+    // prod hoje — exatamente a combinação que isCartaoRuntimeFlipBlocked bloquearia SE o guard
+    // se aplicasse. A correção: pra blocoModo==='atendente' o conceito baked/runtime nem entra
+    // em jogo (não há cartão pra flipar), então o approve segue 200 sempre, com QUALQUER
+    // product_type — cobre não só a Meduzza mas qualquer atendente self-service futuro.
+    it('SCRUM-155: atendente (estabelecimento no formato) + prompt_custom=true baked + flag ON -> 200, NÃO bloqueia (caso Meduzza)', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+      mocks.getProductType.mockResolvedValue('estabelecimento');
+      mocks.getCloneBySlot.mockResolvedValue({
+        id: 42,
+        display_name: 'Meduzza',
+        cliente_nome: null,
+        personalizacao: { nome_negocio: 'Meduzza', agenda_automatica: false },
+        servicos: [{ nome: 'Corte', preco_cents: 4500, duracao_min: 30 }],
+      });
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'outro',
+        promptCustom: true, // estado REAL da Meduzza em prod (30/07)
+        cartaoMode: 'baked', // estado REAL da Meduzza em prod (30/07)
+        cartaoConfig: null,
+        nomeNegocio: 'Meduzza',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(200);
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      const finalPrompt = call[1] as string;
+      // Bloco ATENDENTE colado (o mock devolve a string literal 'BLOCO_ATENDENTE', disjunta de
+      // BLOCO_MARKER/BLOCO_ESTAB_MARKER — os 3 stubs deste arquivo são literais distintos por
+      // design de teste). ⚠️ Isso NÃO prova que o bloco atendente real seja livre do marcador:
+      // no código de produção as 3 variantes COMPARTILHAM o mesmo HEADER/BLOCO_ESTRUTURAL_MARKER
+      // (bloco-estrutural.ts) — quem garante ausência de cartão-duplo aqui é a estrutura do IF em
+      // prompt-builder.ts (cartaoRuntime=false ⇒ bakedMarker nunca é passado pro applyGeneratedPrompt),
+      // não uma propriedade textual do bloco. Ver comentário em prompt-builder.ts:606-620.
+      expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+      expect(finalPrompt).not.toContain(BLOCO_MARKER);
+      expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
+      // NÃO flipa cartao_mode (não há cartão em jogo pro atendente) — mesmo shape do caminho
+      // baked de sempre, prompt_custom segue true por conta própria (setPrompt de sempre).
+      expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined();
+    });
+
+    // ── Proteção SCRUM-120/143 CONTINUA de pé pro caso que ela protege de verdade ──────────────
+    // Mesma combinação de flags (prompt_custom=true + baked + flag ON), mas modo AGENDA (o caso
+    // Ingrid): aqui HÁ cartão em jogo (bloco individual/estabelecimento tem marcador), então o
+    // 409 segue firme. Prova que a correção do SCRUM-155 não enfraqueceu a proteção geral.
+    it('regressão SCRUM-120/143: mesma combinação de flags em modo AGENDA continua 409 (guard intacto)', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false); // NÃO é atendente
+      mocks.getProductType.mockResolvedValue('estabelecimento');
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'barbearia',
+        promptCustom: true,
+        cartaoMode: 'baked',
+        cartaoConfig: null,
+        nomeNegocio: 'Barbearia X',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('cartao_bloqueado');
+      expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -1069,5 +1164,498 @@ describe('draft / reset', () => {
     expect(res.json().ok).toBe(true);
     const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
     expect(draft.json().status).toBe('nao_iniciado');
+  });
+});
+
+// ── MODO MELHORIA (SCRUM-153) ────────────────────────────────────────────────────
+// Conversa LIVRE sobre a persona que JÁ EXISTE (caso real: psicóloga Ingrid). O foco aqui é o
+// que o modo GARANTE, não o texto do modelo (esse é da eval/V5): (a) só entra em melhoria quando
+// o clone REALMENTE tem persona e a flag está ON; (b) a persona atual + os RÓTULOS dos campos
+// vão pro system; (c) VALOR de campo da personalização NUNCA vai; (d) acréscimo preserva o que
+// existia; (e) proposta que encolheu demais NÃO vira rascunho, a menos que o dono peça reescrita.
+describe('modo melhoria (SCRUM-153)', () => {
+  /** Persona da Ingrid (forma, não o texto real): persona PURA, sem cartão/FAQ/preço. */
+  const PERSONA_ATUAL = [
+    'Você é a assistente do consultório e fala com acolhimento e calma.',
+    'Trate cada pessoa com respeito e sem pressa, chamando pelo nome quando souber.',
+    'Não faça diagnóstico nem prometa resultado de tratamento.',
+    'Se a pessoa pedir para remarcar, seja compreensiva e encaminhe para a profissional.',
+    'Mantenha sempre um tom educado, paciente e reservado.',
+  ].join('\n');
+
+  /** Liga o cenário "clone COM persona própria" (prompt_custom=true + bot_prompt não-vazio). */
+  function comPersonaAtual(persona = PERSONA_ATUAL): void {
+    cfg.PROMPT_BUILDER_MELHORIA_ENABLED = true;
+    mocks.getAreaPromptCustomCartao.mockResolvedValue({
+      area: 'outro', // Ingrid é psicóloga — regra 28: NUNCA testar só com barbearia.
+      promptCustom: true,
+      cartaoMode: 'runtime',
+      cartaoConfig: null,
+      nomeNegocio: 'Consultório',
+    });
+    mocks.getPrompt.mockResolvedValue(persona);
+  }
+
+  /** Extrai o systemPrompt com que o runAgent foi chamado no último turn. */
+  function lastSystemPrompt(): string {
+    const call = mocks.runAgent.mock.calls.at(-1);
+    return (call?.[0] as { systemPrompt: string }).systemPrompt;
+  }
+
+  it('clone COM persona + flag ON -> sessão nasce em melhoria e injeta a persona atual', async () => {
+    comPersonaAtual();
+    mocks.derivarCamposConfigurados.mockReturnValue([
+      'Perguntas frequentes (tela de FAQ)',
+      'Formas de pagamento (tela "Meu negócio")',
+    ]);
+    const app = await buildApp();
+    const start = await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    expect(start.json().modo).toBe('melhoria');
+
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_ATUAL));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'o que dá pra melhorar?' },
+    });
+    const sys = lastSystemPrompt();
+    expect(sys).toContain('SYSTEM_MELHORIA_V5');
+    // A persona ATUAL é o ponto de partida: tem que estar no contexto do agente.
+    expect(sys).toContain('Não faça diagnóstico nem prometa resultado de tratamento.');
+    // E os RÓTULOS dos campos já configurados também (pra ele referenciar/recusar duplicar).
+    expect(sys).toContain('Perguntas frequentes (tela de FAQ)');
+  });
+
+  it('flag OFF -> clone COM persona segue na ENTREVISTA V4 (nada muda em prod)', async () => {
+    comPersonaAtual();
+    cfg.PROMPT_BUILDER_MELHORIA_ENABLED = false; // kill-switch
+    const app = await buildApp();
+    const start = await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    expect(start.json().modo).toBe('criacao');
+
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'oi' },
+    });
+    expect(lastSystemPrompt()).toBe('SYSTEM_ENTREVISTADOR_FIXO_SECRETO');
+  });
+
+  it('CRIAÇÃO DO ZERO INALTERADA: clone sem persona própria roda a V4 mesmo com a flag ON', async () => {
+    cfg.PROMPT_BUILDER_MELHORIA_ENABLED = true;
+    // prompt_custom=false = clone template, nunca personalizado -> criação.
+    mocks.getPrompt.mockResolvedValue('prompt da matriz renderizado');
+    const app = await buildApp();
+    const start = await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    expect(start.json().modo).toBe('criacao');
+    expect(start.json().pergunta).toBe('Como você quer que ele fale com o cliente?');
+
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'descontraído' },
+    });
+    expect(lastSystemPrompt()).toBe('SYSTEM_ENTREVISTADOR_FIXO_SECRETO');
+    // E o /start nem consultou a persona atual: não há o que melhorar.
+    expect(mocks.getPrompt).not.toHaveBeenCalled();
+  });
+
+  it('prompt_custom=true mas bot_prompt VAZIO -> cai em criação (não injeta contexto vazio)', async () => {
+    comPersonaAtual('   ');
+    const app = await buildApp();
+    const start = await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    expect(start.json().modo).toBe('criacao');
+  });
+
+  it('NÃO injeta VALOR da personalização no system (só os rótulos dos campos)', async () => {
+    comPersonaAtual();
+    // O clone tem dado operacional de verdade na personalização (planos, FAQ, endereço...).
+    mocks.getCloneBySlot.mockResolvedValue({
+      id: 42,
+      display_name: 'Consultório',
+      cliente_nome: null,
+      personalizacao: {
+        nome_negocio: 'Consultório',
+        endereco: 'Rua das Flores 123',
+        formas_pagamento: 'Dinheiro, PIX',
+        planos_beneficios: 'pacote mensal R$396 por 4 sessões',
+        faq_personalizado: [{ pergunta: 'atende convênio?', resposta: 'não, só particular' }],
+      },
+      servicos: [{ nome: 'Sessão', preco_cents: 15000, duracao_min: 50 }],
+    });
+    // derivarCamposConfigurados é a fonte dos rótulos — devolve NOME de campo, nunca valor.
+    mocks.derivarCamposConfigurados.mockReturnValue([
+      'Endereço (tela "Meu negócio")',
+      'Formas de pagamento (tela "Meu negócio")',
+      'Planos e benefícios (catálogo)',
+      'Perguntas frequentes (tela de FAQ)',
+    ]);
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_ATUAL));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'quero acrescentar uma coisa' },
+    });
+    const sys = lastSystemPrompt();
+    // Rótulo: SIM. Valor: NUNCA (LGPD + anti-redundância — o bot já recebe isso em runtime).
+    expect(sys).toContain('Planos e benefícios (catálogo)');
+    expect(sys).not.toContain('Rua das Flores 123');
+    expect(sys).not.toContain('Dinheiro, PIX');
+    expect(sys).not.toContain('R$396');
+    expect(sys).not.toContain('não, só particular');
+  });
+
+  it('ACRÉSCIMO preserva o anterior: proposta = persona atual + a linha nova vira rascunho', async () => {
+    comPersonaAtual();
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    // O modelo devolve a persona INTEIRA com o acréscimo (é o que a V5 manda fazer).
+    const comAcrescimo = `${PERSONA_ATUAL}\nSe a pessoa perguntar sobre atendimento infantil, explique que não é atendido aqui.`;
+    mocks.runAgent.mockResolvedValue(proporToolResult(comAcrescimo));
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'acrescenta que não atendo criança' },
+    });
+    expect(res.json().draft_ready).toBe(true);
+    const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+    const persona = draft.json().persona_rascunho as string;
+    // Tudo que existia continua lá, palavra por palavra...
+    for (const linha of PERSONA_ATUAL.split('\n')) expect(persona).toContain(linha);
+    // ...e o acréscimo entrou.
+    expect(persona).toContain('atendimento infantil');
+  });
+
+  it('proposta que ENCOLHEU demais NÃO vira rascunho (guarda de preservação)', async () => {
+    comPersonaAtual();
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    // Modo de falha real: o modelo devolve SÓ o trecho novo. O approve sobrescreveria o
+    // bot_prompt inteiro e a dona perderia a persona dela (regra de negócio 27).
+    mocks.runAgent.mockResolvedValue(
+      proporToolResult('Você é a assistente do consultório e não atende criança nenhuma aqui.'),
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'acrescenta que não atendo criança' },
+    });
+    expect(res.json().draft_ready).toBe(false);
+    const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+    expect(draft.json().status).toBe('sem_rascunho');
+  });
+
+  it('REESCRITA só sob pedido explícito: com "refaz tudo" a persona menor é aceita', async () => {
+    comPersonaAtual();
+    mocks.matchesReescritaTotalIntent.mockReturnValue(true); // "refaz tudo"
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    mocks.runAgent.mockResolvedValue(
+      proporToolResult(
+        'Você é a assistente do consultório. Fale de forma breve, direta e cordial.',
+      ),
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'refaz tudo, quero uma persona nova' },
+    });
+    expect(res.json().draft_ready).toBe(true);
+  });
+
+  it('reescrita explícita é STICKY: vale pros refinos seguintes da mesma sessão', async () => {
+    comPersonaAtual();
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    // Turno 1: pede reescrita.
+    mocks.matchesReescritaTotalIntent.mockReturnValue(true);
+    mocks.runAgent.mockResolvedValue(
+      proporToolResult('Persona nova, curta, direta e cordial com o paciente.'),
+    );
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'refaz tudo' },
+    });
+    // Turno 2: refino comum (sem repetir "refaz tudo") — a guarda segue desligada.
+    mocks.matchesReescritaTotalIntent.mockReturnValue(false);
+    mocks.runAgent.mockResolvedValue(
+      proporToolResult('Persona nova, curta, direta, cordial e um pouco mais calorosa.'),
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'deixa um pouco mais calorosa' },
+    });
+    expect(res.json().draft_ready).toBe(true);
+  });
+
+  it('approve em melhoria: clone runtime NÃO ganha cartão baked e a persona vai inteira', async () => {
+    comPersonaAtual(); // cartaoMode='runtime' + promptCustom=true
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    const comAcrescimo = `${PERSONA_ATUAL}\nSe a pessoa perguntar sobre atendimento infantil, explique que não é atendido aqui.`;
+    mocks.runAgent.mockResolvedValue(proporToolResult(comAcrescimo));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'acrescenta que não atendo criança' },
+    });
+    const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+    expect(res.statusCode).toBe(200);
+    const finalPrompt = mocks.applyGeneratedPrompt.mock.calls[0][1] as string;
+    // Clone JÁ em runtime: o cartão é injetado em runtime -> NUNCA baked no bot_prompt.
+    expect(finalPrompt).not.toContain(BLOCO_MARKER);
+    // E a persona foi inteira (acréscimo + o que já existia).
+    expect(finalPrompt).toContain('Não faça diagnóstico nem prometa resultado de tratamento.');
+    expect(finalPrompt).toContain('atendimento infantil');
+    // O guard anti-cartão-duplo segue valendo: passa cartaoMode=runtime + bakedMarker.
+    const opts = mocks.applyGeneratedPrompt.mock.calls[0][4] as {
+      cartaoMode?: string;
+      bakedMarker?: string;
+    };
+    expect(opts.cartaoMode).toBe('runtime');
+    expect(opts.bakedMarker).toBe(BLOCO_MARKER);
+  });
+
+  it('dado operacional que o modelo insistir em escrever continua sendo removido (validador)', async () => {
+    comPersonaAtual();
+    const app = await buildApp();
+    await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+    // Modelo desobedece a V6 e cola preço/endereço na persona.
+    const comDadoOperacional = `${PERSONA_ATUAL}\nO pacote mensal custa R$ 396 por 4 sessões.\nAtendemos na Rua das Flores 123.`;
+    mocks.runAgent.mockResolvedValue(proporToolResult(comDadoOperacional));
+    await app.inject({
+      method: 'POST',
+      url: '/portal/prompt-builder/message',
+      payload: { content: 'coloca o preço do pacote' },
+    });
+    const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+    const persona = draft.json().persona_rascunho as string;
+    expect(persona).not.toContain('396');
+    expect(persona).not.toContain('Rua das Flores');
+    // ...mas o que já existia sobreviveu (o corte é cirúrgico, por linha).
+    expect(persona).toContain('Não faça diagnóstico nem prometa resultado de tratamento.');
+  });
+
+  // ── PREVIEW VIVO (31/07) ───────────────────────────────────────────────────────
+  // Ordem do Bruno: a persona atualizada volta a CADA turno e a tela mostra o diff contra a
+  // que está no ar. Antes o texto só existia num GET /draft separado e o dono conversava às
+  // cegas. Aqui travamos o CONTRATO do payload — a frente do front depende dele.
+  describe('preview vivo: /message devolve o rascunho corrente', () => {
+    it('turno com proposta devolve persona_rascunho no MESMO turno', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      const comAcrescimo = `${PERSONA_ATUAL}\nSe perguntarem sobre atendimento infantil, explique que não é atendido aqui.`;
+      mocks.runAgent.mockResolvedValue(proporToolResult(comAcrescimo));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta que não atendo criança' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(true);
+      // A persona volta NO TURNO (sem precisar do GET /draft).
+      expect(body.persona_rascunho).toContain('atendimento infantil');
+      expect(body.persona_rascunho).toContain('Não faça diagnóstico');
+      // Compat: os campos antigos continuam iguais (a tela atual não pode quebrar).
+      expect(body.reply).toBeTruthy();
+      expect(body.resumo).toBe('Tom descontraído, nome Léo.');
+      expect(body.nome_do_bot).toBe('Léo');
+    });
+
+    // S1 (review de security, P3): `preview_final` NÃO trafega no /message — o front descarta o
+    // campo no parser e só lê `previewFinal` do GET /draft. Mandá-lo a cada turno serializava o
+    // BLOCO ESTRUTURAL (marcadores + nomes de tool) sem nenhum consumidor. Este teste trava a
+    // remoção: se alguém reintroduzir o campo "por paridade", a suíte avisa.
+    it('NÃO trafega preview_final no /message (bloco estrutural fica só no GET /draft)', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue(proporToolResult(`${PERSONA_ATUAL}\nLinha nova.`));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta uma linha' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(true);
+      expect('preview_final' in body).toBe(false);
+      // E o bloco estrutural (com os nomes de tool) não vaza por nenhum outro campo do turno.
+      expect(res.payload).not.toContain(BLOCO_MARKER);
+
+      // ...mas segue disponível onde é consumido de verdade.
+      const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+      expect(draft.json().preview_final).toContain(BLOCO_MARKER);
+    });
+
+    it('sem rascunho ainda -> persona_rascunho NULL (nunca undefined)', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      // Turno de conversa sem tool call (é o caso do turno de OPINIÃO).
+      mocks.runAgent.mockResolvedValue({
+        reply: 'Vejo três pontos: o tom está bom, falta postura sobre atraso...',
+        toolCalls: [],
+        usage: { prompt: 10, completion: 5, total: 15, cached: 0 },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'o que você acha da persona?' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(false);
+      // NULL explícito — a tela distingue "não tem rascunho" sem heurística.
+      expect(body.persona_rascunho).toBeNull();
+      expect('persona_rascunho' in body).toBe(true);
+    });
+
+    it('turno de OPINIÃO NÃO gera: nada é forçado e o rascunho segue nulo', async () => {
+      comPersonaAtual();
+      mocks.matchesGenerateIntent.mockReturnValue(false);
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue({
+        reply: 'Posso apontar 3 coisas. Quer que eu aplique alguma?',
+        toolCalls: [],
+        usage: { prompt: 10, completion: 5, total: 15, cached: 0 },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'dá pra melhorar alguma coisa?' },
+      });
+      // O servidor NÃO força tool_choice em turno comum — é o que preserva a OPINIÃO
+      // (a V6 reforça a geração por PROMPT, nunca por forçamento cego).
+      expect(mocks.runAgent.mock.calls.at(-1)?.[0].toolChoice).toBeUndefined();
+      expect(res.json().draft_ready).toBe(false);
+      expect(res.json().persona_rascunho).toBeNull();
+    });
+
+    it('persona_base = a persona NO AR (lado esquerdo do diff) no modo melhoria', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue(proporToolResult(`${PERSONA_ATUAL}\nLinha nova.`));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta uma linha' },
+      });
+      // É a persona do PRÓPRIO tenant (withTenant), a mesma injetada no system.
+      expect(res.json().persona_base).toBe(PERSONA_ATUAL);
+    });
+
+    it('persona_base vem mesmo em turno SEM rascunho (a tela precisa do diff desde o 1º turno)', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue({
+        reply: 'O que você quer mudar?',
+        toolCalls: [],
+        usage: { prompt: 10, completion: 5, total: 15, cached: 0 },
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'oi' },
+      });
+      expect(res.json().persona_base).toBe(PERSONA_ATUAL);
+      expect(res.json().persona_rascunho).toBeNull();
+    });
+
+    it('modo CRIAÇÃO: persona_base é NULL (não há texto anterior contra o que comparar)', async () => {
+      // Flag OFF / clone sem persona própria = criação, o caminho de sempre.
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue(proporToolResult(PERSONA_OK));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'descontraído' },
+      });
+      const body = res.json();
+      expect(body.persona_base).toBeNull();
+      // ...mas o rascunho corrente volta igual (preview vivo vale nos DOIS modos).
+      expect(body.persona_rascunho).toContain('Barbearia X');
+    });
+
+    it('PRESERVAÇÃO: proposta que encolheu não vira rascunho e NÃO vaza no persona_rascunho', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue(
+        proporToolResult('Você é a assistente do consultório e não atende criança nenhuma aqui.'),
+      );
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta que não atendo criança' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(false);
+      // A proposta barrada NÃO pode aparecer no preview (senão o dono aprovaria pela tela um
+      // texto que a guarda recusou — regra de negócio 27).
+      expect(body.persona_rascunho).toBeNull();
+      // ...e a persona no ar segue disponível pro diff.
+      expect(body.persona_base).toBe(PERSONA_ATUAL);
+    });
+
+    it('turno barrado pela GUARDA de custo também devolve o preview (não some da tela)', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      // Turno 1: consegue um rascunho.
+      mocks.runAgent.mockResolvedValue(proporToolResult(`${PERSONA_ATUAL}\nSeja paciente.`));
+      await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta paciência' },
+      });
+      // Turno 2: estoura o orçamento diário -> resposta canned, SEM chamar o LLM.
+      cfg.PROMPT_BUILDER_MAX_MSGS_DAY = 1;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'mais uma coisa' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(true);
+      // O rascunho que ele JÁ tem continua visível (é dele que sai o approve).
+      expect(body.persona_rascunho).toContain('Seja paciente.');
+      expect(body.persona_base).toBe(PERSONA_ATUAL);
+    });
+
+    it('PRESERVAÇÃO com draft anterior: mantém o rascunho BOM, não o barrado', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      // Turno 1: acréscimo legítimo vira rascunho.
+      const bom = `${PERSONA_ATUAL}\nSeja paciente com quem está remarcando.`;
+      mocks.runAgent.mockResolvedValue(proporToolResult(bom));
+      await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta paciência no reagendamento' },
+      });
+      // Turno 2: o modelo devolve só o trecho novo -> barrado pela guarda.
+      mocks.runAgent.mockResolvedValue(proporToolResult('Seja breve.'));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'deixa mais curto' },
+      });
+      const body = res.json();
+      // O rascunho ANTERIOR sobrevive e é ele que volta no preview (nunca o barrado).
+      expect(body.draft_ready).toBe(true);
+      expect(body.persona_rascunho).toContain('Seja paciente com quem está remarcando.');
+      expect(body.persona_rascunho).not.toBe('Seja breve.');
+    });
   });
 });

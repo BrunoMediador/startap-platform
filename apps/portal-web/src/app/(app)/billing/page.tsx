@@ -114,7 +114,7 @@ export default function BillingPage() {
 function Indisponivel() {
   return (
     <>
-      <PageHead title="Faturamento" subtitle="O dinheiro do seu negócio: previsto e faturado." />
+      <PageHead title="Faturamento" subtitle="O que você já faturou." />
       <EmptyState
         icon={<IconWallet size={26} />}
         title="Recurso indisponível"

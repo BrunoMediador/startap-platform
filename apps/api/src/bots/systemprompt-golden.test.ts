@@ -311,10 +311,10 @@ describe('systemPrompt golden — clones BAKED de barbearia (SCRUM-92 inc.2, T1)
   });
 
   it('buildCartaoEmojiOverrideBlock (peça pura que o inc.2 vai encostar) devolve "" no baked barbearia', async () => {
-    // Congela a pré-condição do gate: no caminho individual+barbearia+não-custom nada é
-    // injetado. É a função REAL (não mockada) que roda dentro do process() acima.
+    // Congela a pré-condição do gate: no caminho individual+barbearia nada é injetado.
+    // É a função REAL (não mockada) que roda dentro do process() acima. ADR 0035 §2.1
+    // (emenda 30/07): a assinatura passou a ter só `area` (promptCustom removido).
     const { buildCartaoEmojiOverrideBlock } = await import('../lib/area-emojis.js');
-    expect(buildCartaoEmojiOverrideBlock('barbearia', false)).toBe('');
-    expect(buildCartaoEmojiOverrideBlock('barbearia', true)).toBe('');
+    expect(buildCartaoEmojiOverrideBlock('barbearia')).toBe('');
   });
 });

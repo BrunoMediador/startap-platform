@@ -22,14 +22,18 @@ const {
   addRecipient,
   getSenderSession,
   getMonitorHeartbeat,
+  getHostDiskReport,
   listMonitoredSessions,
   recordCycleHeartbeat,
   reserveGlobalSend,
   resolveMonitorExtraSessions,
   restoreStateIfUnchanged,
+  bumpMonitorSendErrors,
+  getMonitorSendErrorsTotal,
   DEFAULT_MONITOR_EXTRA_SESSIONS,
   TooManyRecipientsError,
   MAX_RECIPIENTS,
+  HOST_DISK_STATE_KEY,
 } = await import('./alerts.js');
 
 beforeEach(() => {
@@ -356,6 +360,36 @@ describe('heartbeat de liveness do monitor (SCRUM-54)', () => {
   });
 });
 
+describe('contador vigiado de sendErrors do monitor (SCRUM-135)', () => {
+  it('bumpMonitorSendErrors: UPSERT acumula alert_count na __heartbeat__ (reaproveita a coluna, sem migration)', async () => {
+    await bumpMonitorSendErrors(2);
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('INSERT INTO alert_states');
+    expect(sql).toContain('ON CONFLICT (check_key) DO UPDATE');
+    expect(sql).toContain('alert_count = alert_states.alert_count + EXCLUDED.alert_count');
+    expect(params).toEqual(['__heartbeat__', 2]);
+  });
+
+  it('bumpMonitorSendErrors: delta <= 0 é NO-OP (não chama query)', async () => {
+    await bumpMonitorSendErrors(0);
+    await bumpMonitorSendErrors(-1);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('getMonitorSendErrorsTotal: lê alert_count da __heartbeat__ (0 quando nunca houve erro)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await getMonitorSendErrorsTotal()).toBe(0);
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ alert_count: 5 }] });
+    expect(await getMonitorSendErrorsTotal()).toBe(5);
+
+    const [sql, params] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(sql).toContain('SELECT alert_count FROM alert_states WHERE check_key = $1');
+    expect(params).toEqual(['__heartbeat__']);
+  });
+});
+
 describe('restoreStateIfUnchanged — compensação condicional do carimbo (SCRUM-53)', () => {
   const stampedAt = new Date('2026-07-02T12:00:00.000Z');
   const prevAt = new Date('2026-07-02T06:00:00.000Z');
@@ -425,5 +459,48 @@ describe('restoreStateIfUnchanged — compensação condicional do carimbo (SCRU
 
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(params[8]).toBeNull(); // expect.lastAlertAt null vira $9 = null (IS NOT DISTINCT FROM NULL)
+  });
+});
+
+describe('getHostDiskReport — leitura do fato bruto de host:disk (SCRUM-134, migration 078)', () => {
+  it('SELECT usa a check_key correta (host:disk)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: 22, host_reported_at: new Date() }],
+    });
+
+    await getHostDiskReport();
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('FROM alert_states WHERE check_key = $1');
+    expect(params).toEqual([HOST_DISK_STATE_KEY]);
+  });
+
+  it('normaliza pct de string (driver pg) pra number', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: '87', host_reported_at: new Date('2026-07-25T06:00:00Z') }],
+    });
+
+    const report = await getHostDiskReport();
+
+    expect(report.pct).toBe(87);
+    expect(report.reportedAt).toEqual(new Date('2026-07-25T06:00:00Z'));
+  });
+
+  it('linha ausente (banco recém-migrado, script nunca rodou): retorna pct/reportedAt null', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const report = await getHostDiskReport();
+
+    expect(report).toEqual({ pct: null, reportedAt: null });
+  });
+
+  it('linha existe mas host_reported_pct ainda NULL (seed da migration, pré-1ª coleta)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ host_reported_pct: null, host_reported_at: null }],
+    });
+
+    const report = await getHostDiskReport();
+
+    expect(report).toEqual({ pct: null, reportedAt: null });
   });
 });

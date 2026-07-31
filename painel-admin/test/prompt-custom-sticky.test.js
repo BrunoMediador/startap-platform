@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 // Testes do fix "persona sticky" no gestao (fix/gestao-prompt-persona-sticky).
 // Uso: node --test painel-admin/test/prompt-custom-sticky.test.js
 //
@@ -13,7 +14,6 @@
 // Express/Postgres reais — verifica que o UPDATE flow_clones acontece na MESMA transacao,
 // parametrizado, e que o valor certo (true/false) e escrito. Manter em sync com server.js.
 import { test } from 'node:test';
-import assert from 'node:assert/strict';
 
 // ── Mock de client transacional (pool.connect) ──────────────────────────────
 // Cada rota do server.js abre client = await pool.connect(), roda BEGIN/COMMIT.
@@ -77,20 +77,30 @@ async function rollbackHandler(client, { slot, version }) {
     await client.query('ROLLBACK');
     return { status: 404 };
   }
-  await client.query(
-    'UPDATE bot_prompt SET prompt = $1, updated_at = NOW() WHERE slot = $2',
-    [v.rows[0].prompt, slot],
-  );
+  await client.query('UPDATE bot_prompt SET prompt = $1, updated_at = NOW() WHERE slot = $2', [
+    v.rows[0].prompt,
+    slot,
+  ]);
   await client.query('UPDATE flow_clones SET prompt_custom = true WHERE slot = $1', [slot]);
   await client.query('COMMIT');
   return { status: 200 };
 }
 
 // ── Copia fiel do endpoint regerar-prompt (parte que importa) ────────────────
-// Aqui NAO ha transacao (pool.query direto) — regerarPromptClone + reset da flag.
-async function regerarHandler(pool, { id }) {
+// Aqui NAO ha transacao (pool.query direto). Espelha server.js:
+//   SELECT * -> GUARD prompt_custom (SCRUM-81) -> regerarPromptClone -> reset flag.
+// O GUARD (SCRUM-81): regerar e DESTRUTIVO pra persona custom e NAO versiona; se
+// prompt_custom=true exige confirm explicito (body/query confirm=true), senao 409.
+async function regerarHandler(pool, { id, body = {}, query = {} }) {
+  const r = await pool.query('SELECT * FROM flow_clones WHERE id = $1', [id]);
+  if (!r.rows[0]) return { status: 404 };
+  const confirmed = body.confirm === true || body.confirm === 'true' || query.confirm === 'true';
+  if (r.rows[0].prompt_custom === true && !confirmed) {
+    return { status: 409, error: 'prompt_custom_confirm_required' };
+  }
   // regerarPromptClone (nao mockado aqui — assumimos ok) re-renderiza da matriz.
   await pool.query('UPDATE flow_clones SET prompt_custom = false WHERE id = $1', [id]);
+  return { status: 200 };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,7 +112,10 @@ test('PUT prompt (clone): seta prompt_custom=true parametrizado, antes do COMMIT
     ['SELECT prompt FROM bot_prompt WHERE slot', { rows: [{ prompt: 'persona antiga' }] }],
     ['COALESCE(MAX(version)', { rows: [{ m: 3 }] }],
     ['INSERT INTO bot_prompt_versions', { rows: [{ version: 4 }], rowCount: 1 }],
-    ['INSERT INTO bot_prompt', { rows: [{ slot: 'clone_x', prompt: 'nova persona', updated_at: 'now' }] }],
+    [
+      'INSERT INTO bot_prompt',
+      { rows: [{ slot: 'clone_x', prompt: 'nova persona', updated_at: 'now' }] },
+    ],
   ]);
   await putPromptHandler(client, { slot: 'clone_x', newPrompt: 'nova persona' });
 
@@ -115,7 +128,10 @@ test('PUT prompt (clone): seta prompt_custom=true parametrizado, antes do COMMIT
   const iBegin = indexOfSql(client.calls, 'BEGIN');
   const iUpd = indexOfSql(client.calls, 'UPDATE flow_clones SET prompt_custom');
   const iCommit = indexOfSql(client.calls, 'COMMIT');
-  assert.ok(iBegin < iUpd && iUpd < iCommit, 'UPDATE deve estar entre BEGIN e COMMIT (mesma transacao)');
+  assert.ok(
+    iBegin < iUpd && iUpd < iCommit,
+    'UPDATE deve estar entre BEGIN e COMMIT (mesma transacao)',
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +143,10 @@ test('PUT prompt (matriz): UPDATE flow_clones e no-op (rowCount 0), nao lanca', 
     ['SELECT prompt FROM bot_prompt WHERE slot', { rows: [{ prompt: 'template' }] }],
     ['COALESCE(MAX(version)', { rows: [{ m: 0 }] }],
     ['INSERT INTO bot_prompt_versions', { rows: [{ version: 1 }], rowCount: 1 }],
-    ['INSERT INTO bot_prompt', { rows: [{ slot: 'teste_barbearia', prompt: 'novo', updated_at: 'now' }] }],
+    [
+      'INSERT INTO bot_prompt',
+      { rows: [{ slot: 'teste_barbearia', prompt: 'novo', updated_at: 'now' }] },
+    ],
     ['UPDATE flow_clones SET prompt_custom', { rows: [], rowCount: 0 }],
   ]);
   await assert.doesNotReject(
@@ -163,9 +182,7 @@ test('rollback: seta prompt_custom=true parametrizado dentro da transacao', asyn
 });
 
 test('rollback: versao inexistente -> 404 e NAO toca prompt_custom', async () => {
-  const client = makeClient([
-    ['SELECT prompt FROM bot_prompt_versions WHERE slot', { rows: [] }],
-  ]);
+  const client = makeClient([['SELECT prompt FROM bot_prompt_versions WHERE slot', { rows: [] }]]);
   const out = await rollbackHandler(client, { slot: 'clone_x', version: 99 });
   assert.equal(out.status, 404);
   assert.equal(findUpdate(client.calls), undefined, 'nao deve armar a flag se a versao nao existe');
@@ -174,12 +191,58 @@ test('rollback: versao inexistente -> 404 e NAO toca prompt_custom', async () =>
 // ─────────────────────────────────────────────────────────────────────────────
 // regerar-prompt — caminho de voltar ao template DESARMA prompt_custom=false
 // ─────────────────────────────────────────────────────────────────────────────
-test('regerar-prompt: reseta prompt_custom=false por id, parametrizado', async () => {
-  const pool = makeClient([]);
-  await regerarHandler(pool, { id: 42 });
+test('regerar-prompt (prompt_custom=false): reseta prompt_custom=false por id, parametrizado', async () => {
+  // Template (nada a perder) -> segue sem confirm.
+  const pool = makeClient([
+    ['SELECT * FROM flow_clones WHERE id', { rows: [{ id: 42, prompt_custom: false }] }],
+  ]);
+  const out = await regerarHandler(pool, { id: 42 });
+  assert.equal(out.status, 200);
 
   const upd = findUpdate(pool.calls);
   assert.ok(upd, 'regerar-prompt deveria resetar prompt_custom');
   assert.match(upd.sql, /prompt_custom = false/, 'volta ao template = DESARMA o sticky');
   assert.deepEqual(upd.params, [42], 'id parametrizado ($1)');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GUARD SCRUM-81 — regerar num clone com persona custom exige confirmacao
+// ─────────────────────────────────────────────────────────────────────────────
+test('regerar-prompt (prompt_custom=true, SEM confirm): 409 e NAO toca o bot_prompt/flag', async () => {
+  const pool = makeClient([
+    ['SELECT * FROM flow_clones WHERE id', { rows: [{ id: 7, prompt_custom: true }] }],
+  ]);
+  const out = await regerarHandler(pool, { id: 7 });
+  assert.equal(out.status, 409, 'persona custom sem confirmacao = bloqueado');
+  assert.equal(out.error, 'prompt_custom_confirm_required');
+  // NADA de UPDATE prompt_custom=false: a persona custom nao foi destruida.
+  assert.equal(findUpdate(pool.calls), undefined, 'guard fail-closed: nao reseta a flag');
+});
+
+test('regerar-prompt (prompt_custom=true, confirm=true no body): procede e desarma a flag', async () => {
+  const pool = makeClient([
+    ['SELECT * FROM flow_clones WHERE id', { rows: [{ id: 7, prompt_custom: true }] }],
+  ]);
+  const out = await regerarHandler(pool, { id: 7, body: { confirm: true } });
+  assert.equal(out.status, 200, 'com confirmacao explicita o regerar procede');
+  const upd = findUpdate(pool.calls);
+  assert.ok(upd, 'confirmado -> reseta prompt_custom');
+  assert.match(upd.sql, /prompt_custom = false/);
+  assert.deepEqual(upd.params, [7]);
+});
+
+test('regerar-prompt (prompt_custom=true, confirm=true na query): tambem procede', async () => {
+  const pool = makeClient([
+    ['SELECT * FROM flow_clones WHERE id', { rows: [{ id: 7, prompt_custom: true }] }],
+  ]);
+  const out = await regerarHandler(pool, { id: 7, query: { confirm: 'true' } });
+  assert.equal(out.status, 200, 'confirm=true tambem aceito via query string');
+  assert.ok(findUpdate(pool.calls), 'confirmado por query -> reseta a flag');
+});
+
+test('regerar-prompt: id inexistente -> 404 e NAO reseta nada', async () => {
+  const pool = makeClient([['SELECT * FROM flow_clones WHERE id', { rows: [] }]]);
+  const out = await regerarHandler(pool, { id: 999 });
+  assert.equal(out.status, 404);
+  assert.equal(findUpdate(pool.calls), undefined);
 });

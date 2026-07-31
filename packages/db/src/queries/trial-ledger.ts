@@ -31,6 +31,27 @@ export interface TrialLedgerRow {
 /** Dias de teste grátis (decisão Bruno 2026-07-14: 7 dias; era 10 na Missão 020). */
 export const TRIAL_DAYS = 7;
 
+/**
+ * Janela (dias) em que um trial `blocked` ainda ocupa o teto TRIAL_MAX_ATIVOS (SCRUM-80).
+ *
+ * Um `blocked` é uma sessão WAHA pareada e viva cujo bot está mudo (número já consumiu
+ * trial em outro clone). O cron de órfãos (cleanup-trial-orphans) SÓ recupera `awaiting`
+ * — nunca `blocked`. Sem esta janela, cada `blocked` que nunca paga o PIX consome 1 vaga
+ * do teto PARA SEMPRE: bastam TRIAL_MAX_ATIVOS abandonados pra travar todo signup novo em
+ * 503 `trial_lotado`, sem operador conseguir destravar sem mexer no banco.
+ *
+ * Regra: `blocked` conta no teto só enquanto `updated_at >= now - N dias`. Passados N
+ * dias sem virar pagante (last_payment_at continua NULL), o clone abandonado deixa de
+ * ocupar a vaga e o signup volta a aceitar novos trials. N=14 (2 semanas — folga
+ * generosa pra o dono decidir pagar antes de perder a vaga; ajuste aqui, sem migration).
+ *
+ * `updated_at` é o carimbo do card. blockTrial() seta updated_at=NOW() ao bloquear, então
+ * um `blocked` recém-criado nasce dentro da janela. Trade-off conhecido: um UPDATE não
+ * relacionado na row reinicia a janela (updated_at é genérico); aceitável — o efeito é
+ * só segurar a vaga por mais 14 dias, nunca liberar cedo demais nem contar pagante.
+ */
+export const BLOCKED_TETO_GRACE_DAYS = 14;
+
 const LEDGER_COLS = 'id, phone_hmac, phone_hint, status, slot, consumed_at, created_at, notes';
 
 function normalize(row: TrialLedgerRow & { id: string | number }): TrialLedgerRow {
@@ -62,10 +83,13 @@ export async function countConsumedBySlot(slot: string): Promise<number> {
  *
  * Conta como "vivo" (modelo da migration 044):
  *  - awaiting => clone provisionado aguardando QR (sessão pendurada — pior caso);
- *  - blocked  => sessão pareada e viva, bot mudo (até PIX ou cleanup — card próprio);
+ *  - blocked  => sessão pareada e viva, bot mudo, MAS só até BLOCKED_TETO_GRACE_DAYS
+ *    dias desde updated_at (SCRUM-80): passada a janela, o `blocked` abandonado deixa
+ *    de ocupar a vaga do teto — senão travaria o signup pra sempre, já que o cron de
+ *    órfãos nunca recupera `blocked` (só `awaiting`).
  *  - active NÃO expirado => trial corrente (next_due_date NULL ou >= hoje UTC).
- * NÃO conta: none/exempt (não são trials) e active vencido (silenciado pelo gate
- * ADR-0016 — deixou de ser "trial pendente").
+ * NÃO conta: none/exempt (não são trials), active vencido (silenciado pelo gate
+ * ADR-0016 — deixou de ser "trial pendente") e blocked frio (> janela, ver acima).
  *
  * PAGANTE convertido nunca conta (fix P1 auditoria 2026-07-13): o clone que já
  * pagou fica trial_status='active' pra sempre, então sem esta guarda ~10 pagantes
@@ -79,7 +103,9 @@ export async function countActiveTrials(): Promise<number> {
      FROM flow_clones fc
      LEFT JOIN client_billing cb ON cb.slot = fc.slot
      WHERE cb.last_payment_at IS NULL
-       AND (fc.trial_status IN ('awaiting', 'blocked')
+       AND (fc.trial_status = 'awaiting'
+            OR (fc.trial_status = 'blocked'
+                AND fc.updated_at >= NOW() - make_interval(days => ${BLOCKED_TETO_GRACE_DAYS}))
             OR (fc.trial_status = 'active'
                 AND (cb.next_due_date IS NULL
                      OR cb.next_due_date >= (NOW() AT TIME ZONE 'utc')::date)))`,

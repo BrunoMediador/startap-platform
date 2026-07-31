@@ -96,6 +96,7 @@ export type {
   AlertState,
   AlertStateRow,
   MonitoredSession,
+  HostDiskReport,
 } from './queries/alerts.js';
 export type {
   ClientRollupRow,

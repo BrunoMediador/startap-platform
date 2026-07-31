@@ -79,6 +79,23 @@ describe('reissueGatewayData', () => {
     const row = await reissueGatewayData(reissueInput);
     expect(row).toBeNull();
   });
+
+  // SCRUM-141: o abacate_charge_id ANTIGO precisa ir pra superseded_charge_ids (append
+  // idempotente) — o QR velho segue pagavel e a reconciliacao do cron F4 polla por ele.
+  it('preserva o abacate_charge_id antigo em superseded_charge_ids (append idempotente)', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ id: '1', status: 'pending' }], rowCount: 1 });
+    await reissueGatewayData(reissueInput);
+    const [sql] = queryMock.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, ' ');
+    // Faz APPEND do id antigo (RHS = valor antigo da linha; $3 = novo id).
+    expect(flat).toContain('array_append(COALESCE(superseded_charge_ids');
+    // Idempotente: nao duplica se o id antigo ja estiver no array; ignora NULL/igual.
+    expect(flat).toContain('abacate_charge_id IS NOT NULL');
+    expect(flat).toContain('abacate_charge_id <> $3');
+    expect(flat).toContain('NOT (abacate_charge_id = ANY (COALESCE(superseded_charge_ids');
+    // COLUMNS retornado inclui a coluna nova.
+    expect(flat).toContain("COALESCE(superseded_charge_ids, '{}') AS superseded_charge_ids");
+  });
 });
 
 // ── ADR 0014: invariante "1 pending por slot" via advisory lock + recheck ───────

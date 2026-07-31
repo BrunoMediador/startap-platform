@@ -1,0 +1,159 @@
+/**
+ * DERIVA PROMPT × TELA — o prompt do builder cita nomes de tela; a tela pode ser renomeada.
+ *
+ * Os system prompts VIVOS do meta-entrevistador (`v7.md` = criação, `v8.md` = melhoria) dizem ao
+ * dono ONDE configurar cada dado operacional. Esses nomes são uma dependência NÃO-TIPADA do
+ * front: se alguém renomear uma tela e esquecer o prompt, ele passa a mandar o cliente para uma
+ * tela que não existe — ele procura, não acha e chama o suporte.
+ *
+ * Já aconteceu DUAS vezes:
+ *  1. a v5 citava "Horário de atendimento" e "catálogo de serviços", que nunca existiram;
+ *  2. a #538 corrigiu isso só na v6 e a **v4 ficou para trás** — e a v4 era o prompt do cliente
+ *     NOVO, justamente quem mais precisa de orientação. A SCRUM-159 matou a duplicação (os
+ *     caminhos passaram a vir de `ONDE_SE_CONFIGURA`, fonte única no pacote de integrations) e
+ *     este teste passou a cobrir as DUAS versões vivas.
+ *
+ * Por que o teste mora AQUI (apps/portal-web) e não junto do prompt (packages/integrations):
+ * `apps/portal-web` NÃO depende de `@startap/core` nem de `@startap/integrations` (é um bundle
+ * Next, sem workspace deps), e `packages/integrations` não pode importar do app. Aqui o teste
+ * importa os rótulos NORMALMENTE (mesmo pacote) e lê o `.md` do prompt do disco, sem tocar no
+ * grafo de dependências. A checagem passa a existir de UM lado, que é o que importa: renomear a
+ * tela QUEBRA a suíte em vez de degradar em silêncio.
+ *
+ * ⚠️ Este teste é sensível à FONTE REAL dos rótulos, diferente do de `meta-entrevistador.test.ts`,
+ * que trava o prompt contra a fonte única do lado do backend. Os dois se complementam: aquele
+ * pega "o prompt citou tela fora do mapa"; ESTE pega "o mapa e a tela real divergiram".
+ */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { NAV_SPEC } from './nav';
+
+/** Corpo de um prompt versionado (tudo depois do separador `---` isolado). */
+function readPrompt(versao: 'v7' | 'v8'): string {
+  const path = fileURLToPath(
+    new URL(
+      `../../../../packages/integrations/ai/prompts/meta-entrevistador/${versao}.md`,
+      import.meta.url,
+    ),
+  );
+  const md = readFileSync(path, 'utf8');
+  const parts = md.split(/\n---\n/);
+  return parts[parts.length - 1];
+}
+
+/**
+ * Fonte ÚNICA dos caminhos, lida como TEXTO do disco.
+ *
+ * Desde a SCRUM-159 os caminhos NÃO estão mais no `.md` — o prompt traz só o placeholder
+ * `{onde_se_configura}` e o texto real é renderizado em runtime a partir de
+ * `packages/integrations/src/ai/onde-se-configura.ts`. É exatamente o ponto da mudança: existe
+ * UM lugar com os nomes de tela. Como `apps/portal-web` não pode IMPORTAR aquele pacote (não há
+ * dependência de workspace), o teste lê o arquivo como texto — é o mesmo recurso que ele já usa
+ * para o `.md`, e continua quebrando quando os nomes divergirem da tela real.
+ */
+function readFonteUnica(): string {
+  const path = fileURLToPath(
+    new URL('../../../../packages/integrations/src/ai/onde-se-configura.ts', import.meta.url),
+  );
+  return readFileSync(path, 'utf8');
+}
+
+/**
+ * Caminhos como aparecem no prompt RENDERIZADO. O `.md` guarda o placeholder; o mapa guarda
+ * `tela` e `aba` separados. Aqui reconstruímos o par para conferir contra a estrutura esperada.
+ */
+function caminhosDaFonteUnica(): string[] {
+  const src = readFonteUnica();
+  // Casa os literais `tela: 'X', aba: 'Y'` do mapa (e de TELA_DO_BUILDER).
+  return [...src.matchAll(/tela:\s*'([^']+)',\s*aba:\s*'([^']+)'/g)].map(
+    (m) => `"${m[1]}" › "${m[2]}"`,
+  );
+}
+
+/**
+ * Estrutura de telas ESPERADA pelos prompts, no formato `"Tela" › "Aba"`.
+ *
+ * ⚠️ FOLLOW-UP declarado: quando `apps/portal-web/src/lib/abas.ts` (spec das sub-abas, SCRUM-157,
+ * escrita em paralelo) estiver na main, estes literais devem passar a ser DERIVADOS de
+ * `NEGOCIO_ABAS`/`ATENDENTE_ABAS` — do mesmo jeito que `labelDaRota` deriva de `NAV_SPEC` abaixo.
+ * Enquanto isso, ficam explícitos aqui para não criar dependência de um arquivo que ainda não
+ * existe neste checkout.
+ */
+const CAMINHOS_ESPERADOS = {
+  horarios: '"Meu negócio" › "Horários"',
+  servicos: '"Meu negócio" › "Serviços"',
+  dados: '"Meu negócio" › "Dados"',
+  faq: '"Meu atendente" › "Mensagens"',
+  builder: '"Meu atendente" › "Personalidade"',
+} as const;
+
+const VIVOS = ['v7', 'v8'] as const;
+
+describe('prompts vivos × telas reais do portal (anti-deriva)', () => {
+  it('a FONTE ÚNICA declara exatamente os caminhos que as telas reais oferecem', () => {
+    // Este é o teste que pega a DERIVA: se alguém renomear uma aba no portal e esquecer o mapa
+    // (ou vice-versa), os caminhos divergem do esperado e isto cai com mensagem acionável.
+    const declarados = caminhosDaFonteUnica();
+    for (const caminho of Object.values(CAMINHOS_ESPERADOS)) {
+      expect(
+        declarados,
+        `a fonte única não declara ${caminho} — renomeou a tela e esqueceu o mapa?`,
+      ).toContain(caminho);
+    }
+    // E nenhum caminho declarado pode estar fora da estrutura conhecida.
+    const esperados = new Set<string>(Object.values(CAMINHOS_ESPERADOS));
+    for (const caminho of declarados) {
+      expect(esperados.has(caminho), `a fonte única declara caminho desconhecido: ${caminho}`).toBe(
+        true,
+      );
+    }
+  });
+
+  it.each(VIVOS)('%s: interpola o bloco da fonte única (não reescreve à mão)', (versao) => {
+    // Se alguém voltar a escrever o bloco à mão numa versão, o placeholder some e o bug de
+    // "corrigiram uma cópia e esqueceram a outra" volta a ser possível.
+    const prompt = readPrompt(versao);
+    expect(prompt, `${versao}.md deixou de interpolar {onde_se_configura}`).toContain(
+      '{onde_se_configura}',
+    );
+    expect(prompt).toContain('{tela_do_builder}');
+    expect(prompt).toContain('{caminho_dados_negocio}');
+  });
+
+  it.each(VIVOS)('%s: NÃO ressuscita nomes de tela que nunca existiram', (versao) => {
+    const prompt = readPrompt(versao);
+    // Nomes que a v4/v5 usavam e que não existem em lugar nenhum do portal.
+    for (const fantasma of ['Horário de atendimento', 'catálogo de serviços']) {
+      expect(prompt, `${versao}.md ressuscitou a tela inexistente "${fantasma}"`).not.toContain(
+        fantasma,
+      );
+    }
+  });
+
+  it.each(VIVOS)('%s: NÃO usa navegação relativa (apodrece quando a tela move)', (versao) => {
+    const prompt = readPrompt(versao);
+    // A v6 dizia "aqui mesmo nesta página" / "logo abaixo" / "no menu lateral" — verdade quando
+    // o builder morava em "Meu negócio", falso depois que ele virou "Meu atendente".
+    for (const relativo of ['aqui mesmo nesta página', 'logo abaixo', 'no menu lateral']) {
+      expect(prompt, `${versao}.md usa navegação relativa: "${relativo}"`).not.toContain(relativo);
+    }
+  });
+
+  it('as telas de primeiro nível citadas existem no NAV_SPEC (fonte real do menu)', () => {
+    // "Meu negócio" tem que continuar existindo como item de menu; se for renomeado, os
+    // caminhos dos prompts (e este teste) precisam ser revistos juntos.
+    const labels = new Set(NAV_SPEC.map((i) => i.label));
+    expect(labels.has('Meu negócio'), '"Meu negócio" sumiu do NAV_SPEC — revise os prompts').toBe(
+      true,
+    );
+  });
+
+  it('a regra anti-invenção de tela vive na fonte única (acompanha TODA versão)', () => {
+    // Ela nasceu órfã na v6 e por isso a v4 nunca a teve. Agora mora junto do mapa, então
+    // qualquer versão que interpole o bloco a recebe por construção.
+    const src = readFonteUnica();
+    expect(src).toContain('Nunca invente outro nome de tela');
+    expect(src).toContain('Nome errado de tela é pior do que não indicar');
+  });
+});

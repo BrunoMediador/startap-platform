@@ -11,6 +11,7 @@ import { cn } from '@/lib/cn';
  * fixa (min-w ~62px) — cada item segue tappable (>=44px) e o rótulo ("Meu negócio",
  * "Mensalidade") deixa de espremer/quebrar. snap pra parar alinhado em cada item.
  */
+import { isNavItemActive } from '@/lib/nav';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useConexaoNav } from './use-conexao-nav';
@@ -33,7 +34,7 @@ export function BottomNav() {
     >
       {visibleItems.map((item) => {
         const { href, label, Icon } = item;
-        const active = pathname === href;
+        const active = isNavItemActive(pathname, href);
         const dot = showDot(item);
         return (
           <Link

@@ -61,6 +61,12 @@ export interface GenerateBillingResult extends Record<string, unknown> {
   skippedNoAmount: number;
   /** pendentes reconciliadas (gateway PAID, banco estava pending -> aplicado). */
   reconciledPaid: number;
+  /**
+   * QRs VELHOS abandonados por reemissao antecipada que sairam PAID no gateway e foram
+   * creditados via fallback por external_id (SCRUM-141 — caso "QR velho pago + webhook
+   * perdido", invisivel pra reconciliacao normal que so olha o abacate_charge_id vigente).
+   */
+  recoveredSuperseded: number;
   /** pendentes marcadas expired (expires_at no passado). */
   expired: number;
   /** erros nao-fatais por slot/cobranca (job nao quebra os demais). */
@@ -73,6 +79,7 @@ const EMPTY_RESULT: GenerateBillingResult = {
   generated: 0,
   skippedNoAmount: 0,
   reconciledPaid: 0,
+  recoveredSuperseded: 0,
   expired: 0,
   errors: 0,
 };
@@ -159,6 +166,83 @@ export async function runGenerateBillingCharges(
     const abacateChargeId = charge.abacate_charge_id;
     if (!abacateChargeId) continue; // defensivo: query ja filtra NOT NULL
 
+    // (2a) RECUPERACAO DE QR VELHO (SCRUM-141) — ANTES de expirar/reconciliar o vigente.
+    // A reemissao antecipada abandona o abacate_charge_id antigo (QR velho segue pagavel);
+    // a reconciliacao normal so olha o VIGENTE, entao um "QR velho pago + webhook perdido"
+    // fica invisivel. Aqui pollamos cada id abandonado no gateway; se algum saiu PAID,
+    // creditamos via applyPaidWebhook usando o external_id como FALLBACK (casa a linha
+    // 'pending' vigente — mesma trava anti-duplo-credito do webhook, SCRUM-139). Dedupe por
+    // event_id 'recon:<id>'. Feito primeiro: se creditar de fato (outcome 'applied'), a linha
+    // vira 'paid' e nao deve mais expirar nem reconciliar o QR vigente -> `continue`.
+    //
+    // FIX (security review #517, 25/07): `underpaid` NAO pode dar `continue`. underpaid marca
+    // a linha 'paid' mas NAO avanca next_due_date/reativa (C2, ver applyPaidWebhook) — e o QR
+    // VIGENTE pode ter sido pago integralmente em paralelo. Se pularmos a reconciliacao do
+    // vigente aqui, a linha ja esta 'paid' e listPendingChargesWithGateway (filtra
+    // status='pending') NUNCA MAIS a recupera: o pagamento do vigente some do nosso lado, sem
+    // alerta, e o gate de silencio cala o bot sem ninguem entender por que. So `applied`
+    // encerra o loop; `underpaid` segue pra reconciliacao do vigente (pode aplicar outro
+    // credito, inclusive avancando o vencimento que o underpaid do velho nao avancou).
+    const supersededIds = charge.superseded_charge_ids ?? [];
+    let recovered = false;
+    for (const oldId of supersededIds) {
+      try {
+        const oldStatus = await client.getChargeStatus(oldId);
+        if (oldStatus.status !== 'paid') continue;
+        const paidAmountCents = oldStatus.paidAmountCents ?? charge.amount_cents;
+        const applied = await billingWebhookEvents.applyPaidWebhook({
+          // event_id determinístico por id ABANDONADO — nao colide com o recon do vigente
+          // nem com o webhook real; dedupe impede efeito duplo em reruns.
+          eventId: `recon:${oldId}`,
+          event: 'reconciliation.poll.superseded',
+          abacateChargeId: oldId,
+          // FALLBACK: o oldId nao esta mais em abacate_charge_id (foi sobrescrito). O
+          // external_id ("{slot}-{ciclo}", estavel) casa a linha 'pending' vigente.
+          externalId: charge.external_id,
+          paidAmountCents,
+          redactedPayload: { source: 'cron-f4-superseded-recovery', abacateChargeId: oldId },
+          actor: 'cron-f4-superseded-recovery',
+          cycleMonths: 1,
+          dueDateModel: true,
+        });
+        if (applied.outcome === 'underpaid') {
+          // C2: pago a MENOS que o snapshot. Marcou pago mas NAO avancou/reativou. Mesmo
+          // alerta do handler HTTP (apps/api/src/routes/webhook-abacatepay.ts) — paridade:
+          // o cron tambem credita pagamento e o operador precisa saber pra tratar manual.
+          result.recoveredSuperseded += 1;
+          log.error(
+            {
+              alert: 'billing-underpaid',
+              slot,
+              chargeId: charge.id,
+              oldChargeId: oldId,
+              expectedCents: applied.amountCents,
+              paidCents: applied.paidAmountCents,
+              eventId: `recon:${oldId}`,
+            },
+            'PAGAMENTO PIX ABAIXO DO VALOR (QR velho, cron F4) — vencimento NAO avancado, fluxo NAO reativado. Revisar manual.',
+          );
+          // NAO break/continue: o vigente pode ter sido pago integralmente — segue avaliando.
+        } else if (applied.outcome === 'applied') {
+          result.recoveredSuperseded += 1;
+          recovered = true;
+          log.info(
+            { slot, chargeId: charge.id, oldChargeId: oldId, outcome: applied.outcome },
+            'QR velho (reemissao antecipada) pago + webhook perdido recuperado pelo cron F4',
+          );
+          break; // linha ja creditada (e avancada) — nao polla os demais ids abandonados
+        }
+      } catch (err) {
+        result.errors += 1;
+        log.error(
+          { slot, chargeId: charge.id, err: err instanceof Error ? err.message : 'erro' },
+          'falha ao recuperar QR velho superseded (cron F4, demais seguem)',
+        );
+      }
+    }
+    // Creditado pelo QR velho: a linha nao e mais pending -> nao expira nem reconcilia.
+    if (recovered) continue;
+
     // (3) Expiracao: pending com validade no passado -> expired (sem deletar). Antes da
     // reconciliacao: se ja expirou no gateway tambem, getChargeStatus nao dira PAID.
     if (charge.expires_at && charge.expires_at.getTime() < now.getTime()) {
@@ -206,7 +290,23 @@ export async function runGenerateBillingCharges(
         dueDateModel: true, // flag ON neste caminho -> avanco max(due, hoje)
       });
 
-      if (applied.outcome === 'applied' || applied.outcome === 'underpaid') {
+      if (applied.outcome === 'underpaid') {
+        // Paridade com o handler HTTP (webhook-abacatepay.ts): mesmo alerta, mesmo
+        // outcome — o cron tambem credita pagamento abaixo do valor, e sem isto o
+        // operador nunca saberia que o vencimento NAO avancou por este caminho.
+        result.reconciledPaid += 1;
+        log.error(
+          {
+            alert: 'billing-underpaid',
+            slot,
+            chargeId: charge.id,
+            expectedCents: applied.amountCents,
+            paidCents: applied.paidAmountCents,
+            eventId: `recon:${abacateChargeId}`,
+          },
+          'PAGAMENTO PIX ABAIXO DO VALOR (reconciliacao, cron F4) — vencimento NAO avancado, fluxo NAO reativado. Revisar manual.',
+        );
+      } else if (applied.outcome === 'applied') {
         result.reconciledPaid += 1;
         log.info(
           { slot, chargeId: charge.id, outcome: applied.outcome, resumed: applied.resumed },

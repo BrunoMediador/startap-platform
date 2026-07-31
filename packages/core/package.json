@@ -16,8 +16,10 @@
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
     "./modo-atendente-gate": "./dist/modo-atendente-gate.js",
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
+    "./silence-gate": "./dist/silence-gate.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./pause-keyword": "./dist/pause-keyword.js",
+    "./gcal-event-log": "./dist/gcal-event-log.js",
     "./waha-send-failure": "./dist/waha-send-failure.js",
     "./message-ack": "./dist/message-ack.js",
     "./agenda-degrade": "./dist/agenda-degrade.js",
@@ -25,7 +27,8 @@
     "./reminders": "./dist/reminders.js",
     "./client-disconnect-alert": "./dist/client-disconnect-alert.js",
     "./timezones": "./dist/timezones.js",
-    "./schemas": "./dist/schemas/flow-config.js"
+    "./schemas": "./dist/schemas/flow-config.js",
+    "./atendente-prompt": "./dist/atendente-prompt.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,22 +1,25 @@
 /**
- * Regressão DEDICADA do hot path que QUEBROU em prod: updateClone re-render do
- * bot_prompt (ADR 0018, Fase 2 — dual-write tenant_id).
+ * Regressão histórica do hot path que QUEBROU em prod: dual-write tenant_id (ADR 0018,
+ * Fase 2) reusando o MESMO placeholder $1 no alvo do INSERT e no subselect (hotfix #309,
+ * 2026-06-14) — "inconsistent types deduced for parameter $1" (bot_prompt.slot varchar(50)
+ * vs flow_clones.slot varchar(80)).
  *
- * Contexto (hotfix #309, 2026-06-14): o dual-write reusava o MESMO placeholder $1
- * no alvo do INSERT (bot_prompt.slot = varchar(50)) e no subselect
- * `(SELECT tenant_id FROM flow_clones WHERE slot = $1)` (flow_clones.slot =
- * varchar(80)). O Postgres 16 deduz tipos conflitantes pro mesmo parâmetro e lança
- * "inconsistent types deduced for parameter $1" → a query FALHA. Esse era
- * EXATAMENTE o caminho do botão "salvar perfil Meu negócio" do portal: quando o
- * cliente muda a personalizacao, updateClone regenera o bot_prompt a partir da
- * matriz e dispara o UPSERT com o subselect de tenant_id.
+ * ORIGEM deste arquivo: o caminho concreto que disparava o bug era updateClone re-renderizando
+ * bot_prompt a partir da matriz a cada save de personalizacao no portal ("Meu negócio"), com o
+ * INSERT INTO bot_prompt usando o subselect de tenant_id.
  *
- * O dualwrite-param-type.test.ts existente cobre setPrompt/upsertMedia/etc., mas
- * NÃO exercita updateClone — a função que o QA apontou como um dos dois caminhos
- * sem assertion unitária dedicada. Este teste fecha a lacuna: roda updateClone com
- * patch de personalizacao, captura o INSERT INTO bot_prompt e pina o invariante.
- * Com o padrão antigo (`slot = $1` reusado) este teste FALHARIA; com o corrigido
- * (subselect em $3) passa.
+ * SUPERADO pelo ADR 0035 §2.1 (30/07): esse re-render foi REMOVIDO por completo — bot_prompt é
+ * cópia materializada, updateClone não escreve mais em bot_prompt em NENHUM caminho. O
+ * subselect com placeholder compartilhado que este arquivo guardava não existe mais em
+ * flow-clones.ts (createClone, que fica, propaga tenant_id às satélites via UPDATE pós-INSERT
+ * com params próprios — packages/db/src/queries/flow-clones.ts:363-377 —, nunca via subselect
+ * inline). A cobertura GERAL do padrão "dual-write não pode reusar $1" continua viva em
+ * dualwrite-param-type.test.ts, que exercita setPrompt (bot-prompt.ts) — a MESMA função/query
+ * que o updateClone antigo chamava, então o padrão de regressão real (#309) segue coberto lá.
+ *
+ * Este arquivo agora prova só a invariante NOVA e mais estrita: updateClone não dispara
+ * NENHUM INSERT/UPDATE em bot_prompt, então o bug de #309 é estruturalmente impossível por
+ * este caminho (não há mais placeholder pra reusar).
  *
  * `../client.js` é MOCKADO — não toca banco.
  */
@@ -41,38 +44,27 @@ import { updateClone } from './flow-clones.js';
 
 const CLONE_ID = 42;
 const CLONE_SLOT = 'clone_cirilobarbearia_c8w2f0';
-const MATRIZ_SLOT = 'teste_barbearia';
 
-/**
- * Simula a sequência de queries do updateClone quando personalizacao muda:
- *   1) UPDATE flow_clones ... RETURNING *   -> row do clone (slot do clone)
- *   2) SELECT matriz_slot FROM flow_clones  -> matriz do clone
- *   3) SELECT prompt FROM bot_prompt        -> template da matriz
- *   4) INSERT INTO bot_prompt ... (dual-write tenant_id) -> alvo da asserção
- */
 function mockUpdateCloneFlow(): void {
   queryMock.mockImplementation(async (sql: string) => {
     const norm = sql.replace(/\s+/g, ' ');
-    if (norm.includes('UPDATE flow_clones') && norm.includes('RETURNING *')) {
-      return { rows: [{ id: String(CLONE_ID), slot: CLONE_SLOT, waha_sessao: null }], rowCount: 1 };
-    }
-    if (norm.includes('SELECT matriz_slot FROM flow_clones')) {
-      return { rows: [{ matriz_slot: MATRIZ_SLOT }], rowCount: 1 };
-    }
-    if (norm.includes('SELECT prompt FROM bot_prompt')) {
-      return { rows: [{ prompt: 'Oi, sou da {{nome_negocio}}.' }], rowCount: 1 };
+    // SCRUM-112 envolveu o UPDATE num CTE (`WITH prev AS (...) UPDATE ... RETURNING fc.*, ...`)
+    // pra decidir o flip de billing_from_agenda_enabled na mesma statement.
+    if (norm.includes('UPDATE flow_clones') && /RETURNING fc\.\*/.test(norm)) {
+      return {
+        rows: [
+          {
+            id: String(CLONE_ID),
+            slot: CLONE_SLOT,
+            waha_sessao: null,
+            billing_agenda_ativado: false,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     return { rows: [], rowCount: 0 };
   });
-}
-
-/** Captura o INSERT INTO bot_prompt (o dual-write) dentre as queries emitidas. */
-function botPromptInsert(): [string, unknown[]] {
-  const call = queryMock.mock.calls.find(([sql]) =>
-    String(sql).replace(/\s+/g, ' ').includes('INSERT INTO bot_prompt'),
-  );
-  expect(call, 'updateClone deveria ter feito o INSERT INTO bot_prompt (re-render)').toBeTruthy();
-  return call as [string, unknown[]];
 }
 
 beforeEach(() => {
@@ -80,53 +72,37 @@ beforeEach(() => {
   connectMock.mockReset();
 });
 
-describe('updateClone — dual-write tenant_id NÃO reusa $1 entre INSERT e subselect (hotfix #309)', () => {
-  it('re-render do bot_prompt ao mudar personalizacao usa placeholder SEPARADO no subselect', async () => {
+describe('updateClone — bot_prompt nunca é tocado (ADR 0035 §2.1) → #309 estruturalmente impossível aqui', () => {
+  it('mudar personalizacao NÃO dispara INSERT/UPDATE em bot_prompt (sem placeholder pra reusar)', async () => {
     mockUpdateCloneFlow();
 
     await updateClone(CLONE_ID, { personalizacao: { nome_negocio: 'Barbearia do Cirilo' } });
 
-    const [sql, params] = botPromptInsert();
-    const norm = sql.replace(/\s+/g, ' ');
-
-    // O subselect de tenant_id existe e NÃO pode reusar $1 (o slot do alvo do INSERT).
-    const m = norm.match(/SELECT tenant_id FROM flow_clones WHERE slot = \$(\d+)/);
-    expect(m, `subselect de tenant_id não encontrado em: ${norm}`).not.toBeNull();
-    const subselectIdx = Number((m as RegExpMatchArray)[1]);
-    // ANTI-REGRESSÃO: com o bug, o subselect era $1; o fix moveu pra $3.
-    expect(
-      subselectIdx,
-      'subselect de tenant_id NÃO pode reusar $1 (era o bug do #309)',
-    ).toBeGreaterThan(1);
-
-    // O array de params cobre todo $N e o param do subselect é o slot do clone.
-    const maxPlaceholder = Math.max(...[...norm.matchAll(/\$(\d+)/g)].map((x) => Number(x[1])));
-    expect(params).toHaveLength(maxPlaceholder);
-    expect(params[subselectIdx - 1]).toBe(CLONE_SLOT);
-    // $1 (alvo do INSERT) também é o slot do clone — mesmo VALOR, contexto de tipo distinto.
-    expect(params[0]).toBe(CLONE_SLOT);
+    const botPromptCalls = queryMock.mock.calls.filter(([sql]) =>
+      String(sql).replace(/\s+/g, ' ').includes('bot_prompt'),
+    );
+    expect(botPromptCalls, 'updateClone não deve tocar bot_prompt em nenhum patch').toHaveLength(0);
   });
 
-  it('semântica preservada: ON CONFLICT + COALESCE do tenant_id existente continuam no UPSERT', async () => {
+  it('nem sequer busca matriz_slot ou o prompt da matriz (a releitura foi removida, não só o write)', async () => {
     mockUpdateCloneFlow();
 
     await updateClone(CLONE_ID, { personalizacao: { nome_negocio: 'Outra' } });
 
-    const [sql] = botPromptInsert();
-    const norm = sql.replace(/\s+/g, ' ');
-    expect(norm).toContain('ON CONFLICT (slot) DO UPDATE');
-    // Não sobrescreve um tenant_id já carimbado (NULL-safe / idempotente).
-    expect(norm).toContain('COALESCE(bot_prompt.tenant_id, EXCLUDED.tenant_id)');
+    const matrizCalls = queryMock.mock.calls.filter(([sql]) =>
+      String(sql).includes('SELECT matriz_slot'),
+    );
+    expect(matrizCalls).toHaveLength(0);
   });
 
-  it('sem mudar personalizacao NÃO re-renderiza bot_prompt (nenhum dual-write disparado)', async () => {
+  it('sem patch de personalizacao também não toca bot_prompt (comportamento já esperado, sem mudança)', async () => {
     mockUpdateCloneFlow();
 
     await updateClone(CLONE_ID, { displayName: 'Nome Novo' });
 
-    const insert = queryMock.mock.calls.find(([sql]) =>
-      String(sql).replace(/\s+/g, ' ').includes('INSERT INTO bot_prompt'),
+    const botPromptCalls = queryMock.mock.calls.filter(([sql]) =>
+      String(sql).replace(/\s+/g, ' ').includes('bot_prompt'),
     );
-    expect(insert, 'sem patch de personalizacao não deve tocar bot_prompt').toBeUndefined();
+    expect(botPromptCalls).toHaveLength(0);
   });
 });

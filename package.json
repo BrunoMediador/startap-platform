@@ -23,5 +23,13 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "_comment_overrides": "SCRUM-102: pins de seguranca em deps TRANSITIVAS de producao (patch/minor, zero major bump). Todas entram via fastify/openai/next, que ainda nao publicaram release puxando a versao corrigida. Remover um pin quando o pai passar a exigir >= a versao aqui. Detalhe do triage no corpo do PR.",
+  "overrides": {
+    "fast-uri": "^3.1.4",
+    "find-my-way": "^9.7.0",
+    "form-data": "^4.0.6",
+    "postcss": "^8.5.23",
+    "sharp": "^0.35.3"
   }
 }

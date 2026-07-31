@@ -61,6 +61,24 @@ export const GLOBAL_STATE_KEY = '__global__';
  */
 export const HEARTBEAT_STATE_KEY = '__heartbeat__';
 
+/**
+ * check_key do disco do HOST (SCRUM-134, migration 078). Fato bruto escrito pelo script
+ * `/opt/automacoes/disco-alerta.sh` (cron 6/6h no HOST — NUNCA pelo worker, que enxerga
+ * cgroup/overlay do container, não o disco físico; ver monitor.ts `observeHostDisk`).
+ * `host_reported_pct`/`host_reported_at` são inertes quanto a state/alert_count até o
+ * worker os LER e alimentar applyTransition — mesmo padrão do heartbeat (produtor externo
+ * carimba um fato numa linha dedicada; o consumidor decide o que fazer com ele).
+ */
+export const HOST_DISK_STATE_KEY = 'host:disk';
+
+/** Fato bruto reportado pelo script de disco do host (migration 078). */
+export interface HostDiskReport {
+  /** % de uso do disco '/' na última coleta. null se o script nunca rodou. */
+  pct: number | null;
+  /** timestamp da última coleta. null se o script nunca rodou. */
+  reportedAt: Date | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Recipients — CRUD
 // ─────────────────────────────────────────────────────────────────────────────
@@ -481,6 +499,56 @@ export async function getMonitorHeartbeat(): Promise<Date | null> {
     [HEARTBEAT_STATE_KEY],
   );
   return r.rows[0]?.last_cycle_at ?? null;
+}
+
+/**
+ * Contador VIGIADO de sendErrors do monitor (SCRUM-135, item 7). Reaproveita a coluna
+ * `alert_count` da linha sintética __heartbeat__ (nunca usada por essa linha pra outro fim —
+ * só checks reais up/down consomem alert_count com sentido de "quantas vezes alertou"). Zero
+ * migration nova: soma ACUMULADA desde sempre, resetável manualmente via UPDATE se precisar
+ * zerar a série. Antes disso, sendErrors só existia como log.error (grep-only, sem contador
+ * consultável) — este UPSERT dá um SELECT direto pra decidir alarme futuro sem parsear log.
+ */
+export async function bumpMonitorSendErrors(delta: number): Promise<void> {
+  if (delta <= 0) return;
+  await query(
+    `INSERT INTO alert_states (check_key, state, alert_count, updated_at)
+     VALUES ($1, 'up', $2, NOW())
+     ON CONFLICT (check_key) DO UPDATE SET
+       alert_count = alert_states.alert_count + EXCLUDED.alert_count,
+       updated_at  = NOW()`,
+    [HEARTBEAT_STATE_KEY, delta],
+  );
+}
+
+/** Lê o total acumulado de sendErrors do monitor (alert_count da __heartbeat__). 0 se nunca houve. */
+export async function getMonitorSendErrorsTotal(): Promise<number> {
+  const r = await query<{ alert_count: number }>(
+    'SELECT alert_count FROM alert_states WHERE check_key = $1',
+    [HEARTBEAT_STATE_KEY],
+  );
+  return r.rows[0]?.alert_count ?? 0;
+}
+
+/**
+ * Lê o último fato de disco reportado pelo script do HOST (SCRUM-134, migration 078). SÓ leitura
+ * — quem grava é o script bash via `startap_app` (INSERT ... ON CONFLICT DO UPDATE), nunca o
+ * worker. Retorna { pct: null, reportedAt: null } se a linha ainda não existe (banco recém
+ * migrado antes do 1º ciclo do script) ou nunca recebeu uma coleta.
+ */
+export async function getHostDiskReport(): Promise<HostDiskReport> {
+  const r = await query<{
+    host_reported_pct: number | string | null;
+    host_reported_at: Date | null;
+  }>('SELECT host_reported_pct, host_reported_at FROM alert_states WHERE check_key = $1', [
+    HOST_DISK_STATE_KEY,
+  ]);
+  const row = r.rows[0];
+  if (!row) return { pct: null, reportedAt: null };
+  return {
+    pct: row.host_reported_pct === null ? null : Number(row.host_reported_pct),
+    reportedAt: row.host_reported_at ?? null,
+  };
 }
 
 /**

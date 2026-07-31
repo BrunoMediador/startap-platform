@@ -20,6 +20,7 @@
  * DTO whitelist (parecer-001): apenas id, titulo, inicio, fim. NAO expor
  * telefone/descricao/summary cru alem do titulo.
  */
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -326,7 +327,7 @@ async function hookUpsertAtendimento(args: {
       // Sem tenant_id não há como carimbar a linha (regra de ouro 5). No-op silencioso —
       // o agendamento já foi criado; só o billing derivado não acontece pra este clone.
       log.warn(
-        { slot: args.slot, eventId: args.eventId },
+        { slot: args.slot, eventId: hashEventIdForLog(args.eventId) },
         'atend-from-agenda: clone sem tenant_id — gancho de previsão ignorado',
       );
       return;
@@ -355,7 +356,7 @@ async function hookUpsertAtendimento(args: {
     log.info(
       {
         slot: args.slot,
-        eventId: args.eventId,
+        eventId: hashEventIdForLog(args.eventId),
         atendimentoId: row.id,
         colaboradorId: args.colaboradorId,
         mode: args.mode,
@@ -365,7 +366,11 @@ async function hookUpsertAtendimento(args: {
   } catch (err) {
     // CRÍTICO: o billing derivado NUNCA derruba o agendamento. Loga e segue.
     log.error(
-      { slot: args.slot, eventId: args.eventId, err: err instanceof Error ? err.message : 'erro' },
+      {
+        slot: args.slot,
+        eventId: hashEventIdForLog(args.eventId),
+        err: err instanceof Error ? err.message : 'erro',
+      },
       'atend-from-agenda: falha ao sincronizar previsão (agendamento NÃO afetado)',
     );
   }
@@ -376,24 +381,34 @@ async function hookUpsertAtendimento(args: {
  * (ATEND_FROM_AGENDA_SLOTS); ISOLADO em try/catch (nunca lança). Escopado por slot (helper nunca cruza tenant).
  * Idempotente: re-rodar é no-op. Não derruba o cancelamento se falhar.
  */
-async function hookSoftDeleteAtendimento(slot: string, eventId: string): Promise<void> {
+async function hookSoftDeleteAtendimento(
+  slot: string,
+  eventId: string,
+  ownerId: number | string,
+): Promise<void> {
   if (
     !(await flowClones.resolveAtendFromAgendaEnabledForSlot(slot, config.ATEND_FROM_AGENDA_SLOTS))
   )
     return;
   try {
-    // SCRUM-90: carimba a origem da deleção (cancelamento pelo portal) na trilha durável.
+    // SCRUM-90/91: carimba a origem da deleção na trilha durável. `by` inclui o dono que disparou
+    // o cancelamento (portal:<ownerId>) — atribuição de responsabilidade sem PII (id interno do
+    // usuário do portal, nunca telefone/CPF).
     const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId, {
       reason: 'portal_cancel',
-      by: 'portal',
+      by: `portal:${ownerId}`,
     });
     log.info(
-      { slot, eventId, removido: row != null },
+      { slot, eventId: hashEventIdForLog(eventId), removido: row != null },
       'atend-from-agenda: previsão removida no cancelamento',
     );
   } catch (err) {
     log.error(
-      { slot, eventId, err: err instanceof Error ? err.message : 'erro' },
+      {
+        slot,
+        eventId: hashEventIdForLog(eventId),
+        err: err instanceof Error ? err.message : 'erro',
+      },
       'atend-from-agenda: falha ao remover previsão (cancelamento NÃO afetado)',
     );
   }
@@ -624,7 +639,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         {
           slot,
           userId,
-          eventId: ev.id,
+          eventId: hashEventIdForLog(ev.id),
           colaboradorId,
           servico: svc.name,
           data,
@@ -722,7 +737,10 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       resolved = await resolveEventClient(slot, estab, eventId, timeMin, timeMax);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
-      log.error({ slot, userId, eventId, err: msg }, 'cancelamento: falha ao resolver agenda');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        'cancelamento: falha ao resolver agenda',
+      );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
 
@@ -731,11 +749,17 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
     if (resolved.kind === 'error') {
       if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
-      log.error({ slot, userId, eventId, err: resolved.msg }, 'cancelamento: falha no GCal');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: resolved.msg },
+        'cancelamento: falha no GCal',
+      );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
     if (resolved.kind === 'not_found') {
-      log.warn({ slot, userId, eventId }, 'cancelamento negado: eventId fora da agenda do tenant');
+      log.warn(
+        { slot, userId, eventId: hashEventIdForLog(eventId) },
+        'cancelamento negado: eventId fora da agenda do tenant',
+      );
       return reply.code(404).send({ error: 'evento_nao_encontrado' });
     }
 
@@ -744,8 +768,11 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     try {
       await client.deleteEvent(eventId);
       // Gancho ADR 0027: some do faturamento. Gated + ISOLADO (não derruba o cancelamento).
-      await hookSoftDeleteAtendimento(slot, eventId);
-      log.info({ slot, userId, eventId, colaboradorId }, 'agendamento cancelado via portal');
+      await hookSoftDeleteAtendimento(slot, eventId, userId);
+      log.info(
+        { slot, userId, eventId: hashEventIdForLog(eventId), colaboradorId },
+        'agendamento cancelado via portal',
+      );
       return reply.code(200).send({ ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
@@ -754,12 +781,18 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       // final desejado (evento ausente) foi atingido.
       if (/HTTP 4(0[49]|10)/.test(msg)) {
         // Estado final = evento ausente: garante que a previsão derivada também suma.
-        await hookSoftDeleteAtendimento(slot, eventId);
-        log.info({ slot, userId, eventId }, 'cancelamento idempotente: evento ja ausente no GCal');
+        await hookSoftDeleteAtendimento(slot, eventId, userId);
+        log.info(
+          { slot, userId, eventId: hashEventIdForLog(eventId) },
+          'cancelamento idempotente: evento ja ausente no GCal',
+        );
         return reply.code(200).send({ ok: true });
       }
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
-      log.error({ slot, userId, eventId, err: msg }, 'cancelamento: falha no GCal');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        'cancelamento: falha no GCal',
+      );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
   });
@@ -834,7 +867,10 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       resolved = await resolveEventClient(slot, estab, eventId, timeMinGuard, timeMaxGuard);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
-      log.error({ slot, userId, eventId, err: msg }, 'edicao: falha ao resolver agenda');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        'edicao: falha ao resolver agenda',
+      );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
     }
 
@@ -843,11 +879,17 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
     if (resolved.kind === 'error') {
       if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
-      log.error({ slot, userId, eventId, err: resolved.msg }, 'edicao: falha no GCal');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: resolved.msg },
+        'edicao: falha no GCal',
+      );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
     }
     if (resolved.kind === 'not_found') {
-      log.warn({ slot, userId, eventId }, 'edicao negada: eventId fora da agenda do tenant');
+      log.warn(
+        { slot, userId, eventId: hashEventIdForLog(eventId) },
+        'edicao negada: eventId fora da agenda do tenant',
+      );
       return reply.code(404).send({ error: 'evento_nao_encontrado' });
     }
 
@@ -967,7 +1009,13 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         });
         if (conflito) {
           log.warn(
-            { slot, userId, eventId, data: dataAlvo, hora: minsToHHmm(startMins) },
+            {
+              slot,
+              userId,
+              eventId: hashEventIdForLog(eventId),
+              data: dataAlvo,
+              hora: minsToHHmm(startMins),
+            },
             'edicao bloqueada: slot ocupado na nova janela',
           );
           // Troca de serviço (mais longo) que colide com o próximo -> erro claro e tratável.
@@ -1039,7 +1087,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         {
           slot,
           userId,
-          eventId,
+          eventId: hashEventIdForLog(eventId),
           colaboradorId,
           reagenda,
           mudaServico,
@@ -1060,11 +1108,17 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       const msg = err instanceof Error ? err.message : 'erro';
       // Idempotência: evento sumiu entre a re-listagem e o patch → 404/410 do Google.
       if (/HTTP 4(0[49]|10)/.test(msg)) {
-        log.info({ slot, userId, eventId }, 'edicao: evento ja ausente no GCal');
+        log.info(
+          { slot, userId, eventId: hashEventIdForLog(eventId) },
+          'edicao: evento ja ausente no GCal',
+        );
         return reply.code(404).send({ error: 'evento_nao_encontrado' });
       }
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
-      log.error({ slot, userId, eventId, err: msg }, 'edicao: falha no GCal');
+      log.error(
+        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        'edicao: falha no GCal',
+      );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
     }
   });

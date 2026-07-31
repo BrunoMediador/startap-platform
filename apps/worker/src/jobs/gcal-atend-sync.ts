@@ -29,7 +29,7 @@
  * GATE MACRO: só é registrado com GCAL_ATEND_SYNC_ENABLED=true (worker.ts). Default OFF.
  * ISOLAMENTO: falha de 1 clone loga e segue — nunca derruba o ciclo dos outros (regra 7).
  */
-import { createHash } from 'node:crypto';
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { atendimentos, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
@@ -46,14 +46,11 @@ const SYNC_DELETE_AUDIT: atendimentos.SoftDeleteAudit = {
 };
 
 /**
- * Hash one-way do gcal_event_id para o LOG de auditoria (SCRUM-90, jurídico): o log é durável e
- * exportável, então não carrega o id cru. sha256 hex truncado a 16 chars, prefixo `sha256:`. O
- * BANCO mantém o id CRU na linha soft-deletada (deleted_at IS NOT NULL) — a investigação continua
- * possível cruzando pelo valor/forma/data + este hash. Determinístico (mesmo id → mesmo hash).
+ * Hash one-way do gcal_event_id para o LOG de auditoria (SCRUM-90/91, jurídico). A implementação
+ * agora vive em @startap/core/gcal-event-log (fonte ÚNICA, compartilhada com o portal-api — SCRUM-91).
+ * Re-exportada aqui pra preservar os call sites e o teste deste módulo.
  */
-export function hashEventIdForLog(gcalEventId: string): string {
-  return `sha256:${createHash('sha256').update(gcalEventId).digest('hex').slice(0, 16)}`;
-}
+export { hashEventIdForLog };
 
 export interface GcalAtendSyncResult extends Record<string, unknown> {
   /** clones enumerados e efetivamente processados neste ciclo (sob o teto por ciclo). */

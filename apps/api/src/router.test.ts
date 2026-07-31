@@ -453,6 +453,7 @@ describe('handleWebhook', () => {
       waha_sessao: 'cirilobarbearia',
       status: 'conectado',
       flow_enabled: false,
+      suspended_kind: 'billing',
       suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
       suspended_at: new Date('2026-05-30T10:00:00Z'),
       horarios_funcionamento: null,
@@ -473,6 +474,7 @@ describe('handleWebhook', () => {
       waha_sessao: 'cirilobarbearia',
       status: 'conectado',
       flow_enabled: false,
+      suspended_kind: 'billing',
       suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
       suspended_at: new Date('2026-05-30T10:00:00Z'),
       horarios_funcionamento: null,
@@ -598,6 +600,12 @@ const BILLING_CLONE_SLOT = 'clone_billing_gate_abc123';
 
 interface BillingCloneOverrides {
   flow_enabled?: boolean;
+  /**
+   * Default 'manual_other' quando flow_enabled=false (não especificado): estes testes
+   * legados (ADR 0016) representam suspensão ADMINISTRATIVA, nunca pausa do dono — ver
+   * silence-gate.test.ts pra matriz completa envolvendo owner_request.
+   */
+  suspended_kind?: string | null;
   next_due_date?: string | null;
   billing_amount_cents?: number | null;
 }
@@ -614,6 +622,8 @@ function makeBillingClone(overrides: BillingCloneOverrides = {}) {
     waha_sessao: 'billinggate',
     status: 'conectado' as const,
     flow_enabled: overrides.flow_enabled ?? true,
+    suspended_kind:
+      overrides.suspended_kind ?? (overrides.flow_enabled === false ? 'manual_other' : null),
     suspended_reason: null,
     suspended_at: null,
     horarios_funcionamento: null,
@@ -805,6 +815,258 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
       }),
     );
     expect(result).toEqual({ status: 'ignored:flow-suspended' });
+    expect(botHandle).not.toHaveBeenCalled();
+  });
+
+  // ── REGRESSÃO 31/07 (achado do qa-tester + PM): este bloco (ramo cliente-final, gate
+  // LEGADO do ADR 0016) é a ÚNICA barreira em prod com GATE_SILENCIO_TOTAL_ENABLED OFF —
+  // e usava `flow_enabled === false` PURO, sem olhar suspended_kind. Corrigido pra reusar
+  // resolveSilenceGate (mesma matriz do gate único). Sem estes testes, a flag OFF (estado
+  // real de prod) continuaria calando cliente final de clone pausado pelo PRÓPRIO DONO.
+  it('11) owner_request + EM DIA, flag OFF (estado real de prod) → responde (cliente final NÃO é silenciado)', async () => {
+    delete process.env[ENV_KEY];
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(23),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ok' });
+    expect(botHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it('12) owner_request + VENCIDO dentro da carência, flag ON → responde (mesmo caso do MVS medido em prod)', async () => {
+    process.env[ENV_KEY] = 'true';
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(-2),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ok' });
+    expect(botHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it('13) owner_request + VENCIDO ALÉM da carência, flag ON → SILENCIA por billing-overdue (eixo billing independe de quem pausou; mesmo caso da Meduzza medido em prod)', async () => {
+    process.env[ENV_KEY] = 'true';
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(-4),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ignored:billing-overdue' });
+    expect(botHandle).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.billing-overdue', status: 'ignored' }),
+    );
+  });
+
+  it('14) suspenso pela Startap (manual_other, default do helper) + flag OFF → segue silenciando (comportamento administrativo intacto)', async () => {
+    delete process.env[ENV_KEY];
+    const result = await dispatch(
+      makeBillingClone({ flow_enabled: false, next_due_date: dueDateOffset(30) }),
+    );
+    expect(result).toEqual({ status: 'ignored:flow-suspended' });
+    expect(botHandle).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GATE ÚNICO DE SILÊNCIO TOTAL (fix pós-SCRUM-155, decisão do Bruno) — cobre o ramo fromMe
+// (comando manual do dono / human-reply-pause) que HOJE roda 100% ANTES do gate legado
+// (que só existe no ramo cliente-final). Flag GATE_SILENCIO_TOTAL_ENABLED (default OFF).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('handleWebhook — GATE ÚNICO de silêncio total (fromMe + antibot)', () => {
+  const GATE_ENV_KEY = 'GATE_SILENCIO_TOTAL_ENABLED';
+  const BILLING_ENV_KEY = 'BILLING_OVERDUE_SILENCE';
+  const HR_ENV_KEY = 'HUMAN_REPLY_AGENDA_SLOTS';
+
+  function fromMeBody(text: string): WahaWebhookBody {
+    const body = makeBody('billinggate');
+    body.payload!.fromMe = true;
+    body.payload!.body = text;
+    return body;
+  }
+
+  function billingRoute() {
+    return {
+      id: 91,
+      telefone: '553598877248',
+      workflow_id: BILLING_CLONE_SLOT,
+      workflow_name: 'billing_gate_bot',
+      webhook_url: 'http://api/webhooks/waha',
+      nome_cliente: 'Cliente',
+      ativo: true,
+      criado_em: new Date(),
+      atualizado_em: new Date(),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.logFlowEvent.mockResolvedValue(null);
+    mocks.logMessage.mockResolvedValue(undefined);
+    mocks.isFlowPaused.mockResolvedValue(false);
+    mocks.isPaused.mockResolvedValue(false);
+    mocks.addFlowPause.mockResolvedValue(undefined);
+    mocks.addHumanReplyPause.mockResolvedValue(undefined);
+    mocks.removeFlowPause.mockResolvedValue(undefined);
+    mocks.addPause.mockResolvedValue(undefined);
+    mocks.removePause.mockResolvedValue(undefined);
+    mocks.upsertContactName.mockResolvedValue(undefined);
+    mocks.getContactName.mockResolvedValue(null);
+    mocks.extractPhone.mockReturnValue('553598877248');
+    mocks.isGroupChat.mockReturnValue(false);
+    mocks.findRouting.mockResolvedValue(billingRoute());
+    mocks.isFlowActive.mockResolvedValue(true);
+    mocks.isBotEcho.mockResolvedValue('human');
+    mocks.isSelfChat.mockReturnValue(false);
+    mocks.resolveFromMeIdentity.mockImplementation(
+      (_session: string, _body: unknown, phone: string) =>
+        Promise.resolve({ phone, wasLid: false, via: 'not-lid' }),
+    );
+    // Keyword de pausa manual "atendente aqui!!" — mesma frase usada nos testes de cima.
+    mocks.listFlowPauseKeywords.mockResolvedValue([
+      {
+        flow_id: BILLING_CLONE_SLOT,
+        command: 'pause',
+        keyword: 'atendente aqui!!',
+        keyword_norm: 'atendenteaqui!!',
+        enabled: true,
+        updated_at: new Date(),
+      },
+    ]);
+    delete process.env[MODO_ENV_KEY];
+    delete process.env[BILLING_ENV_KEY];
+    delete process.env[GATE_ENV_KEY];
+    // Ramo AGENDA (não modo-atendente) precisa desta flag pra o dono responder à mão
+    // gerar human-reply-pause — sem ela, fromMe cai em 'ignored:fromMe' puro (byte-idêntico
+    // ainda mais antigo). Os testes (a)-(f) exercitam justamente esse ramo.
+    process.env[HR_ENV_KEY] = BILLING_CLONE_SLOT;
+  });
+
+  afterEach(() => {
+    delete process.env[GATE_ENV_KEY];
+    delete process.env[BILLING_ENV_KEY];
+    delete process.env[MODO_ENV_KEY];
+    delete process.env[HR_ENV_KEY];
+  });
+
+  // (a) fromMe em clone SUSPENSO (flow_enabled=false) → não grava pausa nenhuma.
+  it('(a) fromMe em clone suspenso → ignored:suspended:fromMe, NÃO grava pausa', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ flow_enabled: false, next_due_date: dueDateOffset(30) }),
+    );
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-gate-a',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:suspended:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    // Nem chega a resolver eco/self-chat — corta ANTES de qualquer leitura do ramo.
+    expect(mocks.isBotEcho).not.toHaveBeenCalled();
+    expect(mocks.isSelfChat).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.flow-suspended', status: 'ignored' }),
+    );
+  });
+
+  // (b) fromMe em clone VENCIDO além da carência → não grava pausa nenhuma.
+  it('(b) fromMe em clone vencido>carência → ignored:billing-overdue:fromMe, NÃO grava pausa', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    process.env[BILLING_ENV_KEY] = 'true';
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ next_due_date: dueDateOffset(-4), billing_amount_cents: 8500 }),
+    );
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-gate-b',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:billing-overdue:fromMe' });
+    expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.billing-overdue', status: 'ignored' }),
+    );
+  });
+
+  // (c) REGRESSÃO — fromMe em clone EM DIA → funciona igual a hoje (human-reply-pause normal).
+  it('(c) fromMe em clone EM DIA com flag ON → funciona igual a hoje (regressão)', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    process.env[BILLING_ENV_KEY] = 'true';
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ next_due_date: dueDateOffset(20), billing_amount_cents: 8500 }),
+    );
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-gate-c',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+  });
+
+  // (d) COMANDO MANUAL do dono (keyword) em clone suspenso → bloqueado pelo gate.
+  it('(d) comando manual do dono (keyword) em clone suspenso → bloqueado, NÃO pausa/retoma', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ flow_enabled: false, next_due_date: dueDateOffset(30) }),
+    );
+    const result = await handleWebhook(fromMeBody('atendente aqui!!'), {
+      executionId: 'exec-gate-d',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ignored:suspended:fromMe' });
+    // O comando manual (keyword) NUNCA chega a rodar — nem lê a lista de keywords.
+    expect(mocks.listFlowPauseKeywords).not.toHaveBeenCalled();
+    expect(mocks.addFlowPause).not.toHaveBeenCalled();
+    expect(mocks.removeFlowPause).not.toHaveBeenCalled();
+  });
+
+  // (f) FLAG OFF → comportamento byte-a-byte de hoje: fromMe em clone suspenso AINDA
+  // grava human-reply-pause (o gate único não existia antes desta mudança).
+  it('(f) flag OFF → fromMe em clone suspenso continua gravando pausa (byte-idêntico ao legado)', async () => {
+    delete process.env[GATE_ENV_KEY]; // OFF (default)
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ flow_enabled: false, next_due_date: dueDateOffset(30) }),
+    );
+    const result = await handleWebhook(fromMeBody('ja te respondo, so um instante'), {
+      executionId: 'exec-gate-f',
+      startedAt: 0,
+    });
+    // Sem o gate novo, o ramo fromMe roda como sempre rodou (bug pré-existente, ainda
+    // presente com a flag OFF — é o comportamento a preservar até o Bruno ligar a flag).
+    expect(result).toEqual({ status: 'ok:human-reply-pause' });
+    expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+  });
+
+  // (f2) FLAG OFF no ramo cliente-final → gate legado (posição de sempre) continua sozinho.
+  it('(f2) flag OFF, ramo cliente-final vencido → ainda silencia pelo gate LEGADO', async () => {
+    delete process.env[GATE_ENV_KEY];
+    process.env[BILLING_ENV_KEY] = 'true';
+    const botHandle = vi.fn().mockResolvedValue(undefined);
+    const { registerBot } = await import('./router.js');
+    registerBot(BILLING_CLONE_SLOT, { name: 'billing_clone_bot_f2', handle: botHandle });
+    mocks.getCloneBySession.mockResolvedValue(
+      makeBillingClone({ next_due_date: dueDateOffset(-10), billing_amount_cents: 8500 }),
+    );
+    mocks.getCloneBySlot.mockResolvedValue(
+      makeBillingClone({ next_due_date: dueDateOffset(-10), billing_amount_cents: 8500 }),
+    );
+    const result = await handleWebhook(makeBody('billinggate'), {
+      executionId: 'exec-gate-f2',
+      startedAt: 0,
+    });
+    // Status SEM sufixo ":cliente-final" — é o gate LEGADO respondendo (gate único é no-op).
+    expect(result).toEqual({ status: 'ignored:billing-overdue' });
     expect(botHandle).not.toHaveBeenCalled();
   });
 });
