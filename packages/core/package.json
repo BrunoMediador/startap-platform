@@ -16,6 +16,7 @@
     "./atend-from-agenda-gate": "./dist/atend-from-agenda-gate.js",
     "./modo-atendente-gate": "./dist/modo-atendente-gate.js",
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
+    "./silence-gate": "./dist/silence-gate.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./pause-keyword": "./dist/pause-keyword.js",
     "./gcal-event-log": "./dist/gcal-event-log.js",
