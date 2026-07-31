@@ -453,6 +453,7 @@ describe('handleWebhook', () => {
       waha_sessao: 'cirilobarbearia',
       status: 'conectado',
       flow_enabled: false,
+      suspended_kind: 'billing',
       suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
       suspended_at: new Date('2026-05-30T10:00:00Z'),
       horarios_funcionamento: null,
@@ -473,6 +474,7 @@ describe('handleWebhook', () => {
       waha_sessao: 'cirilobarbearia',
       status: 'conectado',
       flow_enabled: false,
+      suspended_kind: 'billing',
       suspended_reason: 'Inadimplência — fatura vencida em 30/05/2026',
       suspended_at: new Date('2026-05-30T10:00:00Z'),
       horarios_funcionamento: null,
@@ -598,6 +600,12 @@ const BILLING_CLONE_SLOT = 'clone_billing_gate_abc123';
 
 interface BillingCloneOverrides {
   flow_enabled?: boolean;
+  /**
+   * Default 'manual_other' quando flow_enabled=false (não especificado): estes testes
+   * legados (ADR 0016) representam suspensão ADMINISTRATIVA, nunca pausa do dono — ver
+   * silence-gate.test.ts pra matriz completa envolvendo owner_request.
+   */
+  suspended_kind?: string | null;
   next_due_date?: string | null;
   billing_amount_cents?: number | null;
 }
@@ -614,6 +622,8 @@ function makeBillingClone(overrides: BillingCloneOverrides = {}) {
     waha_sessao: 'billinggate',
     status: 'conectado' as const,
     flow_enabled: overrides.flow_enabled ?? true,
+    suspended_kind:
+      overrides.suspended_kind ?? (overrides.flow_enabled === false ? 'manual_other' : null),
     suspended_reason: null,
     suspended_at: null,
     horarios_funcionamento: null,
@@ -803,6 +813,65 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
         next_due_date: dueDateOffset(-10),
         billing_amount_cents: 8500,
       }),
+    );
+    expect(result).toEqual({ status: 'ignored:flow-suspended' });
+    expect(botHandle).not.toHaveBeenCalled();
+  });
+
+  // ── REGRESSÃO 31/07 (achado do qa-tester + PM): este bloco (ramo cliente-final, gate
+  // LEGADO do ADR 0016) é a ÚNICA barreira em prod com GATE_SILENCIO_TOTAL_ENABLED OFF —
+  // e usava `flow_enabled === false` PURO, sem olhar suspended_kind. Corrigido pra reusar
+  // resolveSilenceGate (mesma matriz do gate único). Sem estes testes, a flag OFF (estado
+  // real de prod) continuaria calando cliente final de clone pausado pelo PRÓPRIO DONO.
+  it('11) owner_request + EM DIA, flag OFF (estado real de prod) → responde (cliente final NÃO é silenciado)', async () => {
+    delete process.env[ENV_KEY];
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(23),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ok' });
+    expect(botHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it('12) owner_request + VENCIDO dentro da carência, flag ON → responde (mesmo caso do MVS medido em prod)', async () => {
+    process.env[ENV_KEY] = 'true';
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(-2),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ok' });
+    expect(botHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it('13) owner_request + VENCIDO ALÉM da carência, flag ON → SILENCIA por billing-overdue (eixo billing independe de quem pausou; mesmo caso da Meduzza medido em prod)', async () => {
+    process.env[ENV_KEY] = 'true';
+    const result = await dispatch(
+      makeBillingClone({
+        flow_enabled: false,
+        suspended_kind: 'owner_request',
+        next_due_date: dueDateOffset(-4),
+        billing_amount_cents: 8500,
+      }),
+    );
+    expect(result).toEqual({ status: 'ignored:billing-overdue' });
+    expect(botHandle).not.toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.billing-overdue', status: 'ignored' }),
+    );
+  });
+
+  it('14) suspenso pela Startap (manual_other, default do helper) + flag OFF → segue silenciando (comportamento administrativo intacto)', async () => {
+    delete process.env[ENV_KEY];
+    const result = await dispatch(
+      makeBillingClone({ flow_enabled: false, next_due_date: dueDateOffset(30) }),
     );
     expect(result).toEqual({ status: 'ignored:flow-suspended' });
     expect(botHandle).not.toHaveBeenCalled();

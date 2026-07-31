@@ -1,30 +1,39 @@
 /**
- * silence-gate.ts — GATE ÚNICO de silêncio total por-clone (ordem do Bruno, fix pós-SCRUM-155).
+ * silence-gate.ts — GATE ÚNICO de silêncio total por-clone (fix pós-SCRUM-155).
  *
- * Contexto: o router tinha DOIS ramos de entrada (fromMe / cliente-final) e só o ramo
- * cliente-final aplicava o gate de suspensão/inadimplência (ADR 0016). O ramo `fromMe`
- * (comando manual do dono, human-reply-pause, modo atendente) rodava 100% ANTES de
- * qualquer checagem — um clone suspenso ou vencido além da carência continuava gravando
- * `flow_pauses` (source=human_reply / manual) e respondendo ao PRÓPRIO dono. O job
- * `antibot` também era cego a isso.
+ * Fonte ÚNICA de decisão: router (2 ramos: fromMe e cliente-final, incluindo o gate LEGADO
+ * do ADR 0016) e worker/antibot chamam a MESMA função pura, sem duplicar lógica. Regra de
+ * negócio completa (por que os 2 eixos existem e são independentes): regras-negocio.md 8-bis.
  *
- * Decisão do Bruno (literal): "se esta inadimplente ou parado nao deveria nem pausar
- * sozinho, se esta inadimplente nao deveria processar nada". SILÊNCIO TOTAL, SEM EXCEÇÃO:
- * nenhum efeito colateral roda pra um clone suspenso/vencido, nem o comando manual do
- * dono pelo WhatsApp. O portal continua sendo o canal de controle (não é afetado).
- *
- * Este módulo é PURO (sem I/O, sem process.env, sem cache): dado o CloneRow já carregado
- * (getCloneBySlot/getCloneBySession) + os flags/config do caller, decide silenciar ou não.
- * Fonte ÚNICA — router (2 ramos) e worker/antibot chamam a MESMA função, sem duplicar lógica.
+ * Modelo mental resumido: inadimplência/suspensão-Startap suspende o PROCESSAMENTO inteiro;
+ * a pausa do dono (`suspended_kind='owner_request'`) suspende só a RESPOSTA do bot (decisão
+ * do CALLER, fora deste gate) — são camadas independentes que podem coexistir. Ver
+ * silence-gate.test.ts para a matriz completa + casos reais medidos em prod.
  *
  * IMPORTANTE (regra dura): isto é sempre um `return` de LEITURA. NUNCA escreve
  * flow_enabled/next_due_date, nunca apaga dado. Pagar ou reativar pelo portal volta o
  * bot a funcionar no PRÓXIMO turno, sem nenhuma ação aqui.
  */
 
+/**
+ * kind canônico da pausa self-service do dono (NUNCA 'billing' — anti auto-resume do PIX).
+ * Fonte ÚNICA (movida de packages/db/src/queries/flow-clones.ts, achado do security 31/07):
+ * @startap/db JÁ depende de @startap/core (sem ciclo nessa direção) — flow-clones.ts
+ * reexporta este mesmo valor em vez de declarar um literal duplicado. Elimina o risco de
+ * divergência silenciosa entre os dois pacotes (um teste que comparasse 2 literais digitados
+ * não pegaria a divergência — só comparar contra ESTA constante, importada, prova algo).
+ */
+export const OWNER_PAUSE_KIND = 'owner_request' as const;
+
 /** Recorte mínimo do CloneRow que este gate precisa — evita import circular com @startap/db. */
 export interface SilenceGateCloneInput {
   flow_enabled: boolean;
+  /**
+   * Motivo da suspensão manual (mesma coluna que `flow_enabled=false` acompanha). `null`/
+   * ausente com flow_enabled=false é tratado como PAUSA DO DONO (fail-safe: calar cliente
+   * ativo por engano é pior que gravar uma pausa a mais) — ver resolveSilenceGate.
+   */
+  suspended_kind: string | null;
   next_due_date: string | null;
   billing_amount_cents: number | null;
 }
@@ -49,19 +58,37 @@ export type SilenceGateResult =
     };
 
 /**
- * Decide se um clone deve ficar em SILÊNCIO TOTAL agora. Dois eixos em OR:
- *  (a) suspensão MANUAL: flow_enabled === false (toggle do gestão / pausa self-service);
+ * Decide se um clone deve ficar em SILÊNCIO TOTAL agora. Dois eixos INDEPENDENTES em OR
+ * — a pausa do dono NÃO blinda contra o eixo (b), e vice-versa (regras-negocio.md 8-bis):
+ *  (a) suspensão NÃO-DO-DONO: flow_enabled === false E suspended_kind !== 'owner_request'
+ *      (suspensão da Startap: billing/manual_other/abuse/etc). `suspended_kind` nulo/ausente
+ *      NÃO entra neste eixo — ver fail-safe abaixo;
  *  (b) VENCIDO além da carência: daysUntilDue(next_due_date) < -graceDays, só quando há
  *      billing configurado (next_due_date E amount_cents>0), atrás de billingOverdueSilenceOn.
+ *      Roda MESMO quando o clone está com `owner_request` — é assim que "pausado pelo
+ *      dono + inadimplente" vira silêncio total, e "pausado pelo dono + pagou" volta a
+ *      processar (o CALLER decide se o bot RESPONDE olhando flow_enabled à parte).
  *
- * Suspensão manual tem precedência no motivo retornado (eixo explícito do operador).
+ * Fail-safe do eixo (a): `suspended_kind` ausente/null com flow_enabled=false é tratado
+ * como PAUSA DO DONO (não entra no eixo a) — calar um cliente ativo por engano
+ * (falso-positivo) é pior que gravar uma pausa a mais (falso-negativo, no pior caso vira
+ * ruído no /pausas). Isso cobre linhas antigas/paths que ainda não populam a coluna. O
+ * eixo (b) continua rodando normalmente neste caso.
+ *
+ * Suspensão não-do-dono tem precedência no motivo retornado sobre vencimento quando os
+ * dois são true ao mesmo tempo (eixo explícito do operador/Startap).
  */
 export function resolveSilenceGate(
   clone: SilenceGateCloneInput,
   deps: SilenceGateDeps,
 ): SilenceGateResult {
-  const suspensaoManual = clone.flow_enabled === false;
-  if (suspensaoManual) {
+  // Fail-safe: só silencia quando o motivo é CONHECIDO e diferente de owner_request.
+  // suspended_kind null/ausente NÃO entra aqui — cai no fail-safe (não silencia por este eixo).
+  const suspensaoNaoDoDono =
+    clone.flow_enabled === false &&
+    clone.suspended_kind != null &&
+    clone.suspended_kind !== OWNER_PAUSE_KIND;
+  if (suspensaoNaoDoDono) {
     return { silenced: true, reason: 'flow-suspended', diasRestantes: null };
   }
 

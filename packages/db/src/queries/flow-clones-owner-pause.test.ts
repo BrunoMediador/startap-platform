@@ -52,6 +52,17 @@ const {
   invalidateCloneCache,
 } = await import('./flow-clones.js');
 
+// Import DIRETO da fonte única (@startap/core/silence-gate) — prova real de anti-divergência
+// (achado do security 31/07: comparar 2 literais digitados à mão não pega divergência; só
+// comparar o REEXPORT com o import direto do módulo original prova que são o MESMO binding).
+const { OWNER_PAUSE_KIND: OWNER_PAUSE_KIND_SOURCE } = await import('@startap/core/silence-gate');
+
+describe('OWNER_PAUSE_KIND — reexport de @startap/core/silence-gate (fonte única)', () => {
+  it('flow-clones.ts REEXPORTA o mesmo binding de @startap/core/silence-gate, não duplica o literal', () => {
+    expect(OWNER_PAUSE_KIND).toBe(OWNER_PAUSE_KIND_SOURCE);
+  });
+});
+
 function setup(rowCountUpdate: number, sessao: string | null = 'sess_x') {
   calls.length = 0;
   currentClient = makeClient(rowCountUpdate, sessao);
