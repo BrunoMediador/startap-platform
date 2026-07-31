@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   getCloneBySlot: vi.fn(),
   resolveModoAtendenteEnabledForSlot: vi.fn(),
   buildCartaoRuntimeBlock: vi.fn(),
+  buildContextBlock: vi.fn(),
   reserveSandboxBudget: vi.fn(),
 }));
 
@@ -69,6 +70,9 @@ vi.mock('@startap/integrations', () => ({
 }));
 vi.mock('@startap/integrations/prompt-builder', () => ({
   buildCartaoRuntimeBlock: (...a: unknown[]) => mocks.buildCartaoRuntimeBlock(...a),
+}));
+vi.mock('@startap/integrations/scheduling', () => ({
+  buildContextBlock: (...a: unknown[]) => mocks.buildContextBlock(...a),
 }));
 vi.mock('../lib/session.js', () => ({ getRedis: () => ({}) as unknown, closeRedis: vi.fn() }));
 vi.mock('../lib/sandbox-guards.js', async () => {
@@ -131,9 +135,16 @@ beforeEach(() => {
     nomeNegocio: 'Barbearia do Cirilo',
   });
   mocks.getProductType.mockResolvedValue('individual');
-  mocks.getCloneBySlot.mockResolvedValue({ id: 1, personalizacao: { agenda_automatica: true } });
+  mocks.getCloneBySlot.mockResolvedValue({
+    id: 1,
+    personalizacao: { agenda_automatica: true },
+    timezone: 'America/Sao_Paulo',
+  });
   mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false);
   mocks.buildCartaoRuntimeBlock.mockReturnValue('===CARTAO_RUNTIME===');
+  mocks.buildContextBlock.mockResolvedValue(
+    '[CONTEXTO - DADOS DO BANCO, NAO REMOVIVEL]\n\n[FUNCIONAMENTO]\nSeg-Sex 09:00-18:00\n\n[SERVICOS E PRECOS]\nCorte - R$50',
+  );
   mocks.runAgent.mockResolvedValue({
     reply: 'Opa! Bom dia, como posso te ajudar?',
     toolCalls: [],
@@ -198,6 +209,33 @@ describe('sandbox — ZERO efeito colateral (garantia do card)', () => {
     await app.close();
   });
 
+  it('injeta o [CONTEXTO] real (SCRUM-158) — funcionamento/serviços SIM, agenda NÃO', async () => {
+    const app = await buildApp();
+    const res = await app.inject(chat([{ role: 'user', content: 'quanto é o corte?' }]));
+    expect(res.statusCode).toBe(200);
+
+    // 1. o system prompt CONTÉM os blocos reais do clone.
+    const opts = mocks.runAgent.mock.calls[0][0];
+    expect(opts.systemPrompt).toContain('[FUNCIONAMENTO]');
+    expect(opts.systemPrompt).toContain('[SERVICOS E PRECOS]');
+
+    // 2. NUNCA contém agenda (PII de clientes finais) — buildContextBlock nunca recebe
+    // agendaFormatada, então o próprio bloco [HORARIOS DISPONIVEIS...] não existe.
+    expect(opts.systemPrompt).not.toContain('[HORARIOS DISPONIVEIS');
+
+    // 3. a chamada ao LLM segue com tools:[] (garantia de zero efeito colateral preservada).
+    expect(opts.tools).toEqual([]);
+
+    // buildContextBlock foi chamado com o slot da SESSÃO, cliente FICTÍCIO fixo e SEM agenda.
+    expect(mocks.buildContextBlock).toHaveBeenCalledTimes(1);
+    const ctxOpts = mocks.buildContextBlock.mock.calls[0][0];
+    expect(ctxOpts.slot).toBe('clone_do_dono_logado');
+    expect(ctxOpts.nomeCliente).toBe('Cliente Teste');
+    expect(ctxOpts.telefoneCliente).toBe('+5511900000000');
+    expect(ctxOpts.agendaFormatada).toBeUndefined();
+    await app.close();
+  });
+
   it('provider deepseek do clone usa baseURL + chave DeepSeek', async () => {
     mocks.getConfig.mockResolvedValue({
       slot: 'clone_do_dono_logado',
@@ -240,6 +278,9 @@ describe('sandbox — isolamento multi-tenant', () => {
     expect(mocks.getPrompt).toHaveBeenCalledWith('slot_da_sessao_correto');
     expect(mocks.getConfig).toHaveBeenCalledWith('slot_da_sessao_correto');
     expect(mocks.getAreaPromptCustomCartao).toHaveBeenCalledWith('slot_da_sessao_correto');
+    expect(mocks.buildContextBlock).toHaveBeenCalledWith(
+      expect.objectContaining({ slot: 'slot_da_sessao_correto' }),
+    );
     expect(mocks.reserveSandboxBudget).toHaveBeenCalledWith(
       expect.anything(),
       'slot_da_sessao_correto',
