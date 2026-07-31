@@ -104,6 +104,11 @@ ratificação humana.
   base do art. 11 aplicável (tutela da saúde por profissional / consentimento) é
   **do controlador** (a psicoterapeuta), a empresa como operador deve garantir que
   o metadado adjacente permaneça pseudonimizado e de acesso restrito.
+- ⚠️ **Limite da mitigação (achado de 29/07):** o hash acima cobre a trilha de
+  auditoria, mas apuraram-se **três sinks que ainda logavam o id em claro** —
+  mensagem de erro do GCal, `reconciliationHook` e `teste_barbearia.ts` — corrigidos
+  nas PRs #531/#533. **Logs gravados antes desse fix ainda contêm o id cru** e
+  aguardam decisão de purga (§ 4).
 - **A ratificar com advogado humano:** se o hash + minimização são suficientes, ou
   se há dever adicional (ex.: contrato específico de operador para dado sensível,
   DPIA/RIPD para o clone de saúde).
@@ -140,10 +145,11 @@ ratificação humana.
 
 ## 4. Retenção e eliminação
 
-- **Regra atual:** ainda **não há política de retenção por idade ativa em
-  produção**. O mecanismo existe em **dry-run** (SCRUM-136, migration 076) —
-  aguarda o Bruno definir o número de dias, ligar e passar por revisão jurídica.
-  Enquanto isso, os dados são retidos indefinidamente.
+- **Regra atual:** retenção por idade **ATIVA em produção** (SCRUM-136, migration
+  076). Medido em 31/07 nos containers `startap-api` e `startap-worker`:
+  `CHAT_RETENTION_ENABLED=true`, `CHAT_RETENTION_DAYS=90` — histórico de conversa
+  é eliminado após **90 dias**, sem dry-run. Revisão jurídica do prazo segue
+  recomendada (ver § 9).
 - **Sync GCal (ADR 0031):** espelho **total** da agenda — evento que some do
   Google Calendar sai do Previsto/Faturado, inclusive passado/pago; soft-delete
   com trilha `deleted_reason`/`deleted_by` + id **hasheado** (LGPD art. 12 §2).
@@ -151,12 +157,19 @@ ratificação humana.
   em **texto claro** (com PII: telefones, mensagens, hashes, aceites) ainda no
   repositório de backup — limpeza é decisão destrutiva pendente do Bruno; trava a
   retenção LGPD dos históricos do cliente Seven 7 (churn).
-- **Pendência de retenção viva:** SCRUM-136 (mecanismo por idade, ligar + dias +
-  jurídico) e retenção LGPD dos históricos do Seven 7.
+- ⚠️ **Passivo de log com `gcal_event_id` em claro (achado de 29/07, posterior à
+  1ª redação deste RoPA):** o hash descrito em § 1.5 cobria o campo do SCRUM-90/91,
+  mas em 29/07 apuraram-se **vazamentos residuais do id cru por outros caminhos** —
+  mensagem de erro do GCal, `reconciliationHook` e `teste_barbearia.ts` — corrigidos
+  nas PRs #531 e #533. Consequência: **logs já gravados antes do fix ainda contêm o
+  id em claro**, e o parecer do jurídico interno é que a **purga antecipada desses
+  logs é NECESSÁRIA**. Volume e janela **ainda não medidos**. Decisão de purga
+  pendente do Bruno.
+- **Pendência de retenção viva:** retenção LGPD dos históricos do Seven 7 (churn) e
+  a purga do passivo de log acima.
 
-> **Ver card SCRUM-136** para o mecanismo de retenção por idade (hoje em dry-run,
-> não aplicado). Este RoPA deve ser **atualizado** quando a retenção entrar em
-> produção, registrando os prazos efetivos por categoria de dado.
+> Este RoPA deve ser **atualizado** quando a purga do passivo de log for executada
+> e quando o volume/janela afetados forem medidos.
 
 ---
 
@@ -219,9 +232,12 @@ onde indicado (art. 33) — a ratificar as salvaguardas com advogado humano.
   para o clone de psicoterapia (dado de saúde, §1.5).
 - [ ] Revisar **salvaguardas de transferência internacional** (OpenAI, DeepSeek,
   Google — §5).
-- [ ] Ligar a **retenção por idade** (SCRUM-136) e atualizar §4 com prazos
-  efetivos.
+- [x] Ligar a **retenção por idade** (SCRUM-136) — ATIVA, 90 dias, medido em prod
+  31/07; §4 atualizada.
+- [ ] Revisar juridicamente se **90 dias** é o prazo adequado por categoria de dado.
 - [ ] Decidir destino dos **dumps antigos em claro** (retenção LGPD Seven 7).
+- [ ] Decidir a **purga do passivo de log com `gcal_event_id` em claro** (achado de
+  29/07, §4) e medir volume/janela afetados.
 
 ---
 
