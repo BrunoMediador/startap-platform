@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TODAS_ABAS } from './abas';
 import type { Horarios } from './api-types';
 import {
   GUIA_HEADER,
@@ -8,6 +9,7 @@ import {
   deriveConectado,
   temHorarioConfigurado,
 } from './guia-ativacao';
+import { NAV_SPEC } from './nav';
 
 // Harness pure-fn do portal (sem RTL/jsdom): cobre o CONTRATO do checklist de
 // ativação (SCRUM-96) — quais passos existem e quais estão feitos dado o estado,
@@ -148,7 +150,29 @@ describe('copy (draft)', () => {
     }
   });
 
-  it('persona aponta pra Meu negócio (âncora do builder)', () => {
-    expect(GUIA_PASSOS_COPY.persona.href).toBe('/perfil#monte-assistente-title');
+  it('persona aponta pra "Meu atendente" > Personalidade (SCRUM-157, tela própria)', () => {
+    expect(GUIA_PASSOS_COPY.persona.href).toBe('/atendente/personalidade');
+  });
+
+  // SCRUM-157/#SCRUM-157-links: trava de regressão — todo href do guia precisa
+  // existir de verdade no NAV_SPEC (itens de topo) ou em TODAS_ABAS (sub-abas de
+  // "Meu negócio"/"Meu atendente"), e nenhum pode carregar fragmento (`#...`).
+  // Um builder virando tela própria (como aconteceu com /perfil#monte-assistente-title)
+  // não pode voltar a deixar o guia de ativação com âncora morta.
+  it('nenhum href do guia contém fragmento de âncora (#)', () => {
+    for (const key of Object.keys(GUIA_PASSOS_COPY) as (keyof typeof GUIA_PASSOS_COPY)[]) {
+      expect(GUIA_PASSOS_COPY[key].href, `passo "${key}"`).not.toContain('#');
+    }
+  });
+
+  it('todo href do guia existe no NAV_SPEC ou em TODAS_ABAS (rota real, não órfã)', () => {
+    const rotasValidas = new Set<string>([
+      ...NAV_SPEC.map((item) => item.href),
+      ...TODAS_ABAS.map((aba) => aba.href),
+    ]);
+    for (const key of Object.keys(GUIA_PASSOS_COPY) as (keyof typeof GUIA_PASSOS_COPY)[]) {
+      const href = GUIA_PASSOS_COPY[key].href;
+      expect(rotasValidas.has(href), `passo "${key}" aponta pra rota órfã: ${href}`).toBe(true);
+    }
   });
 });

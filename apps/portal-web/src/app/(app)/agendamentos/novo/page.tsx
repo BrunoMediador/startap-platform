@@ -261,7 +261,7 @@ export default function NovoAgendamentoPage() {
           icon={<IconScissors size={26} />}
           title="Cadastre um serviço primeiro"
           description="É o serviço que define a duração do horário. Leva menos de um minuto."
-          action={{ label: 'Ir pra Serviços', onClick: () => router.push('/servicos') }}
+          action={{ label: 'Ir pra Serviços', onClick: () => router.push('/negocio/servicos') }}
         />
       ) : (
         <div className="space-y-6">
@@ -283,7 +283,11 @@ export default function NovoAgendamentoPage() {
                 />
               ) : colaboradores.length === 0 ? (
                 <NotaGrade texto="Nenhum profissional ativo. Cadastre um em Equipe pra marcar horários.">
-                  <Button variant="secondary" size="inline" onClick={() => router.push('/equipe')}>
+                  <Button
+                    variant="secondary"
+                    size="inline"
+                    onClick={() => router.push('/negocio/equipe')}
+                  >
                     Ir pra Equipe
                   </Button>
                 </NotaGrade>

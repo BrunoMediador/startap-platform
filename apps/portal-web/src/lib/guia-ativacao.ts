@@ -159,20 +159,22 @@ export const GUIA_PASSOS_COPY: Record<GuiaPassoKey, GuiaPassoCopy> = {
   persona: {
     titulo: `Dê personalidade ao ${TERMO_ASSISTENTE}`,
     descricao: 'Nome, tom e jeito de falar — pra não soar robô.',
-    // Âncora da seção "Monte seu atendente" na tela Meu negócio (/perfil).
-    href: '/perfil#monte-assistente-title',
+    // SCRUM-157: builder virou tela própria "Meu atendente" > "Personalidade"
+    // (/atendente/personalidade). Sem fragmento: a âncora antiga
+    // (#monte-assistente-title) não existe mais nessa tela.
+    href: '/atendente/personalidade',
     cta: 'Personalizar',
   },
   servicos: {
     titulo: 'Cadastre seus serviços',
     descricao: 'Os serviços e preços que ele vai passar.',
-    href: '/servicos',
+    href: '/negocio/servicos',
     cta: 'Cadastrar',
   },
   horarios: {
     titulo: 'Defina seus horários',
     descricao: 'Quando você abre e fecha, dia a dia.',
-    href: '/horarios',
+    href: '/negocio/horarios',
     cta: 'Configurar',
   },
 };
