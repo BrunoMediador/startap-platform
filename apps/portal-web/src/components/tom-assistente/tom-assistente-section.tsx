@@ -242,10 +242,7 @@ function TomSlider({
 /** Cabeçalho + card da seção (traz o próprio divisor mt-8/border-t). */
 function SectionShell({ children }: { children: React.ReactNode }) {
   return (
-    <section
-      aria-labelledby="tom-assistente-title"
-      className="mt-8 flex flex-col gap-3 border-t border-line pt-6"
-    >
+    <section aria-labelledby="tom-assistente-title" className="flex flex-col gap-3">
       <div>
         <h2
           id="tom-assistente-title"
