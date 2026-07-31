@@ -10,11 +10,25 @@
  *
  * Contrato (portal-api, plugin prompt-builder.ts — TODAS autenticadas por sessão,
  * slot SÓ da sessão via withTenant; base /portal/prompt-builder):
- *   POST /start    -> { session_id, pergunta, draft_ready, retomada, turns? }
- *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot? }   (body { content, generate_now? })
- *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo? }
+ *   POST /start    -> { session_id, pergunta, draft_ready, retomada, turns?, modo? }
+ *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot?,
+ *                       persona_rascunho, preview_final, persona_base }
+ *                     (body { content, generate_now? })
+ *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo?, persona_base }
  *   POST /approve  -> { ok, persona_aplicada, version_saved }
  *   POST /reset    -> { ok }
+ *
+ * Preview ao vivo + diff (ordem do Bruno, 31/07 — contrato CONFIRMADO com o backend,
+ * branch feat/builder-preview-vivo commit e1385bf): `modo` distingue CRIAÇÃO (sem persona
+ * anterior) de MELHORIA (conversa livre sobre o texto que já está no ar). Em /message e
+ * /draft, `persona_rascunho`/`preview_final`/`persona_base` são SEMPRE presentes em toda
+ * resposta 200 (string|null, NUNCA undefined) — inclusive quando o dono bate o teto de
+ * turns ou a guarda de custo (ele continua vendo o rascunho e pode aprovar dali).
+ * `persona_rascunho`/`preview_final` vêm null JUNTOS ou preenchidos JUNTOS. `persona_base`
+ * NÃO depende de haver rascunho — chega já no 1º turno do modo melhoria (é o texto NO AR;
+ * o painel usa isso pra mostrar "de cara" o texto atual ANTES de qualquer proposta, ver
+ * resolvePersonaAtual). 400/409/503 seguem SEM esses campos — tratamos a ausência mesmo
+ * assim (parsing defensivo com fallback null) por robustez, não por dúvida no contrato.
  *
  * Gating: flag PROMPT_BUILDER_ENABLED OFF => TODAS respondem 404 recurso_indisponivel.
  * O front trata 404 como "feature off" (esconde a seção) — mesmo critério de
@@ -50,6 +64,14 @@ export interface BuilderMessage {
 /** Status do rascunho no servidor (GET /draft). `indisponivel` = feature off (404). */
 export type DraftStatus = 'nao_iniciado' | 'sem_rascunho' | 'pronto';
 
+/**
+ * Modo da sessão do builder. `criacao` = sem persona anterior (entrevista do zero,
+ * fluxo validado em prod — nunca muda). `melhoria` = já existe persona no ar; a
+ * conversa é livre ("acrescenta"/"remove"/"refaz"), nunca uma entrevista estruturada.
+ * Campo ADITIVO: ausente -> tratamos como 'criacao' (comportamento anterior).
+ */
+export type BuilderModo = 'criacao' | 'melhoria';
+
 // ── Contratos crus (não exportados; a UI consome os outcomes normalizados) ──────
 
 /** Um turno cru da entrevista viva devolvido no /start (retomada). Shape defensivo. */
@@ -70,6 +92,8 @@ interface StartResponse {
    * o front cai no `pergunta` (abertura) sozinho, sem quebrar (parseTurns([]) -> []).
    */
   turns?: RawTurn[];
+  /** Campo ADITIVO (preview ao vivo, 31/07): ausente -> tratado como 'criacao'. */
+  modo?: BuilderModo;
 }
 
 interface MessageResponse {
@@ -77,6 +101,19 @@ interface MessageResponse {
   draft_ready: boolean;
   resumo?: string;
   nome_do_bot?: string | null;
+  /**
+   * Confirmado (31/07): SEMPRE presentes em toda resposta 200 (string|null, nunca
+   * undefined) — inclusive nas respostas barradas por teto de turns/guarda de custo. O
+   * rascunho corrente pro painel de prévia atualizar A CADA TURNO, sem esperar
+   * draft_ready. `?` no tipo é só defesa (parsing tolera ausência).
+   *
+   * ⚠️ `preview_final` NÃO vem no /message (removido no review de security S1): ninguém o
+   * consumia aqui e ele carregava o bloco estrutural (marcadores + nomes de tool) a cada
+   * turno. Ele existe só no GET /draft — ver DraftResponse.
+   */
+  persona_rascunho?: string | null;
+  /** Confirmado (31/07): chega já no 1º turno do modo melhoria, mesmo sem rascunho ainda. */
+  persona_base?: string | null;
 }
 
 interface DraftResponse {
@@ -85,6 +122,11 @@ interface DraftResponse {
   preview_final: string | null;
   nome_do_bot?: string | null;
   resumo?: string;
+  /**
+   * Campo ADITIVO (preview ao vivo, 31/07): no modo melhoria, a persona que está NO AR
+   * hoje — base do diff verde/vermelho. null no modo criação ou se o backend não expõe.
+   */
+  persona_base?: string | null;
 }
 
 interface ApproveResponse {
@@ -103,6 +145,8 @@ export type StartOutcome =
       retomada: boolean;
       /** Histórico já normalizado em bolhas (retomada). Vazio numa entrevista nova. */
       turns: BuilderMessage[];
+      /** Ausente no backend -> 'criacao' (comportamento anterior à sessão de melhoria). */
+      modo: BuilderModo;
     }
   | { kind: 'unavailable' } // 404 (feature off / clone não encontrado) ou upstream fora
   | { kind: 'error' }; // soluço transitório -> "tentar de novo"
@@ -114,6 +158,10 @@ export type MessageOutcome =
       draftReady: boolean;
       resumo: string | null;
       nomeBot: string | null;
+      /** Rascunho corrente pro preview ao vivo (item 1). Ausente/null -> sem atualização. */
+      personaRascunho: string | null;
+      /** Persona NO AR (modo melhoria) — confirmado presente já no 1º turno, sem esperar rascunho. */
+      personaBase: string | null;
     }
   | { kind: 'not_started' } // 409 entrevista_nao_iniciada (Redis expirou) -> recomeçar
   | { kind: 'invalid' } // 400 dados_invalidos / mensagem_vazia
@@ -136,6 +184,8 @@ export type BuilderDraft =
       previewFinal: string | null;
       nomeBot: string | null;
       resumo: string | null;
+      /** null no modo criação, ou se o backend ainda não expõe o campo. */
+      personaBase: string | null;
     };
 
 /** 404 = feature off no backend (não é erro do cliente). Esconde a seção. */
@@ -162,6 +212,7 @@ export async function startBuilder(signal?: AbortSignal): Promise<StartOutcome> 
       draftReady: r.draft_ready === true,
       retomada: r.retomada === true,
       turns: parseTurns(r.turns),
+      modo: r.modo === 'melhoria' ? 'melhoria' : 'criacao',
     };
   } catch (err) {
     if (isDegrade(err)) return { kind: 'unavailable' };
@@ -202,6 +253,8 @@ export async function sendBuilderMessage(
       draftReady: r.draft_ready === true,
       resumo: typeof r.resumo === 'string' ? r.resumo : null,
       nomeBot: typeof r.nome_do_bot === 'string' ? r.nome_do_bot : null,
+      personaRascunho: typeof r.persona_rascunho === 'string' ? r.persona_rascunho : null,
+      personaBase: typeof r.persona_base === 'string' ? r.persona_base : null,
     };
   } catch (err) {
     if (err instanceof ApiError) {
@@ -225,6 +278,7 @@ export async function fetchBuilderDraft(signal?: AbortSignal): Promise<BuilderDr
       previewFinal: r.preview_final ?? null,
       nomeBot: r.nome_do_bot ?? null,
       resumo: typeof r.resumo === 'string' ? r.resumo : null,
+      personaBase: typeof r.persona_base === 'string' ? r.persona_base : null,
     };
   } catch (err) {
     if (isBuilderUnavailable(err)) return { status: 'indisponivel' };
@@ -348,4 +402,119 @@ export function appendMessage(
 ): BuilderMessage[] {
   const lastId = list.length > 0 ? list[list.length - 1].id : 0;
   return [...list, { id: lastId + 1, role, text }];
+}
+
+// ── Preview ao vivo + diff (ordem do Bruno, 31/07) ───────────────────────────────
+
+/** Um pedaço do diff: token (palavra ou run de espaço) + o que aconteceu com ele. */
+export interface DiffPart {
+  text: string;
+  kind: 'equal' | 'added' | 'removed';
+}
+
+/**
+ * Tokeniza preservando espaços/quebras como tokens PRÓPRIOS (não só palavras) — assim o
+ * diff reconstrói o texto original byte-a-byte ao concatenar os `text` dos parts, o que
+ * a suíte usa como invariante (nunca perder/inventar espaço).
+ */
+function tokenize(text: string): string[] {
+  return text.match(/\s+|\S+/g) ?? [];
+}
+
+/**
+ * Diff por palavra entre duas versões da persona (LCS clássico — O(n*m), textos de até
+ * ~4000 chars/algumas centenas de tokens, custo desprezível). Devolve uma sequência de
+ * partes 'equal'/'removed'/'added': tokens só em `before` = removidos (vermelho), só em
+ * `after` = adicionados (verde), presentes nos dois na mesma posição relativa = iguais.
+ *
+ * Requisito de acessibilidade (não depender só de cor): o CALL SITE deve marcar 'added'/
+ * 'removed' também com texto/ícone (ex.: prefixo "+"/"−" ou aria-label), não só className.
+ *
+ * Degradação: `before` null/'' -> tudo 'added' (não há base ainda: primeira prévia da
+ * sessão, ou modo criação sem persona_base). `after` vazio -> tudo 'removed'.
+ */
+export function diffPersona(before: string | null, after: string): DiffPart[] {
+  const a = tokenize(before ?? '');
+  const b = tokenize(after);
+  if (a.length === 0) return b.length > 0 ? [{ text: after, kind: 'added' }] : [];
+
+  // Tabela de LCS (comprimento) — clássica, bottom-up.
+  const n = a.length;
+  const m = b.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+
+  // Backtrack acumulando runs contíguos do mesmo tipo (evita 1 DiffPart por token).
+  const parts: DiffPart[] = [];
+  const push = (text: string, kind: DiffPart['kind']) => {
+    const last = parts[parts.length - 1];
+    if (last && last.kind === kind) last.text += text;
+    else parts.push({ text, kind });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      push(a[i], 'equal');
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      push(a[i], 'removed');
+      i++;
+    } else {
+      push(b[j], 'added');
+      j++;
+    }
+  }
+  while (i < n) {
+    push(a[i], 'removed');
+    i++;
+  }
+  while (j < m) {
+    push(b[j], 'added');
+    j++;
+  }
+  return parts;
+}
+
+/**
+ * Reconstrói o texto "limpo" (sem marcações) a partir do diff — usado na alternância
+ * "ver texto limpo" (mostra só o `after`, ou seja, tudo exceto os tokens removidos).
+ */
+export function diffToPlainText(parts: DiffPart[]): string {
+  return parts
+    .filter((p) => p.kind !== 'removed')
+    .map((p) => p.text)
+    .join('');
+}
+
+/**
+ * Qual texto usar como BASE do diff, e se há algo pra comparar. Regras (item 1 do design):
+ * - `melhoria` com `personaBase` conhecida: base = a persona QUE ESTÁ NO AR (rótulo "texto
+ *   atual"), SEMPRE — o diff mostra a distância entre o rascunho corrente e o que roda hoje,
+ *   não "turno a turno" (evita diff que parece reduzir a mudança acumulada).
+ * - `criacao` (ou melhoria sem base ainda carregada): sem base -> primeira prévia é toda
+ *   'added' (nada a comparar; ver diffPersona(null, ...)).
+ */
+export function resolveDiffBase(modo: BuilderModo, personaBase: string | null): string | null {
+  return modo === 'melhoria' ? personaBase : null;
+}
+
+/**
+ * Qual texto mostrar no painel de preview AGORA (item 1, ordem do Bruno: "aparece desde o
+ * começo da sessão"). Prioriza o RASCUNHO corrente (proposta em cima da base, já veio de
+ * algum turno); se ainda não há rascunho nenhum, cai na `personaBase` — assim, em melhoria,
+ * o painel mostra de cara o texto que já está no ar, mesmo ANTES do dono trocar 1 mensagem.
+ * Em criação sem rascunho ainda, `personaBase` é sempre null -> resultado null (vazio
+ * honesto: não há nada pra mostrar até a 1ª prévia existir).
+ */
+export function resolvePersonaAtual(
+  rascunhoAtual: string | null,
+  personaBase: string | null,
+): string | null {
+  return rascunhoAtual ?? personaBase;
 }
