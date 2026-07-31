@@ -168,11 +168,12 @@ describe('runAntibot — GATE ÚNICO de silêncio total (fix pós-SCRUM-155)', (
     expect(r).toEqual({ blocked: 1, pruned: 0, skipped: 0 });
   });
 
-  it('flag ON + clone SUSPENSO (flow_enabled=false) -> NÃO pausa (skip)', async () => {
+  it('flag ON + clone SUSPENSO pela Startap (suspended_kind=manual_other) -> NÃO pausa (skip)', async () => {
     process.env[GATE_ENV_KEY] = 'true';
     findSuspects.mockResolvedValue([{ telefone: TELEFONE, total: 8, session: 'sess-1' }]);
     getCloneBySlot.mockResolvedValue({
       flow_enabled: false,
+      suspended_kind: 'manual_other',
       next_due_date: null,
       billing_amount_cents: null,
     });
@@ -182,6 +183,39 @@ describe('runAntibot — GATE ÚNICO de silêncio total (fix pós-SCRUM-155)', (
     expect(addFlowPause).not.toHaveBeenCalled();
     // Nem chega a consultar a allowlist — o gate corta antes.
     expect(hasScheduledHistory).not.toHaveBeenCalled();
+    expect(r).toEqual({ blocked: 0, pruned: 0, skipped: 1 });
+  });
+
+  it('flag ON + clone pausado PELO DONO (owner_request) + EM DIA -> AINDA pausa (antibot grava normalmente; só a resposta do bot é opção do dono)', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    findSuspects.mockResolvedValue([{ telefone: TELEFONE, total: 8, session: 'sess-1' }]);
+    getCloneBySlot.mockResolvedValue({
+      flow_enabled: false,
+      suspended_kind: 'owner_request',
+      next_due_date: null,
+      billing_amount_cents: null,
+    });
+
+    const r = await runAntibot();
+
+    expect(addFlowPause).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ blocked: 1, pruned: 0, skipped: 0 });
+  });
+
+  it('flag ON + BILLING ON + clone pausado PELO DONO (owner_request) + VENCIDO além da carência -> NÃO pausa (os dois eixos são independentes)', async () => {
+    process.env[GATE_ENV_KEY] = 'true';
+    process.env[BILLING_ENV_KEY] = 'true';
+    findSuspects.mockResolvedValue([{ telefone: TELEFONE, total: 8, session: 'sess-1' }]);
+    getCloneBySlot.mockResolvedValue({
+      flow_enabled: false,
+      suspended_kind: 'owner_request',
+      next_due_date: dueDateOffset(-10),
+      billing_amount_cents: 8500,
+    });
+
+    const r = await runAntibot();
+
+    expect(addFlowPause).not.toHaveBeenCalled();
     expect(r).toEqual({ blocked: 0, pruned: 0, skipped: 1 });
   });
 

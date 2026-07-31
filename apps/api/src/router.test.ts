@@ -598,6 +598,12 @@ const BILLING_CLONE_SLOT = 'clone_billing_gate_abc123';
 
 interface BillingCloneOverrides {
   flow_enabled?: boolean;
+  /**
+   * Default 'manual_other' quando flow_enabled=false (não especificado): estes testes
+   * legados (ADR 0016) representam suspensão ADMINISTRATIVA, nunca pausa do dono — ver
+   * silence-gate.test.ts pra matriz completa envolvendo owner_request.
+   */
+  suspended_kind?: string | null;
   next_due_date?: string | null;
   billing_amount_cents?: number | null;
 }
@@ -614,6 +620,8 @@ function makeBillingClone(overrides: BillingCloneOverrides = {}) {
     waha_sessao: 'billinggate',
     status: 'conectado' as const,
     flow_enabled: overrides.flow_enabled ?? true,
+    suspended_kind:
+      overrides.suspended_kind ?? (overrides.flow_enabled === false ? 'manual_other' : null),
     suspended_reason: null,
     suspended_at: null,
     horarios_funcionamento: null,
