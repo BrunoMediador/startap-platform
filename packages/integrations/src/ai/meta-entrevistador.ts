@@ -428,14 +428,29 @@ export interface MelhoriaContext extends EntrevistadorContext {
  * texto injetado: sem isso, uma persona contendo a string de fecho poderia "sair" do bloco de
  * dado e o resto ser lido como instrução do system. Também corta delimitadores de placeholder
  * ({ }) pra a persona não reinjetar {nome_negocio} & cia. no replaceAll seguinte.
+ *
+ * ⚠️ O casamento é TOLERANTE de propósito (review de security, PR #536): a 1ª versão usava
+ * replaceAll com a string EXATA e deixava passar verbatim `PERSONA_ATUAL >>>` (com espaço),
+ * `Persona_Atual>>>` (caso diferente) e `>>>` sozinho. Um modelo lendo qualquer uma dessas
+ * pode interpretar que o bloco de DADO fechou e passar a ler o resto da persona como instrução
+ * do system. Regras: case-insensitive, espaço/quebra opcional entre o nome e as setas, e a
+ * seta SOLTA também morre. Todos os padrões são lineares (sem quantificador aninhado) — sem ReDoS.
  */
 function sanitizePersonaAtual(raw: string): string {
   const clipped = (raw ?? '').slice(0, MAX_PERSONA_ATUAL_CONTEXT_CHARS);
-  return clipped
-    .replaceAll('<<<PERSONA_ATUAL', '<<<persona_atual')
-    .replaceAll('PERSONA_ATUAL>>>', 'persona_atual>>>')
-    .replace(/[{}]/g, '')
-    .trim();
+  return (
+    clipped
+      // fecho do bloco, em qualquer caso/espaçamento ("PERSONA_ATUAL >>>", "Persona_Atual>>>")
+      .replace(/persona_atual\s*>>>/gi, '[fim]')
+      // abertura do bloco, idem
+      .replace(/<<<\s*persona_atual/gi, '[ini]')
+      // seta SOLTA: sobra do caso acima e marcador por conta própria — sem nome, ainda sinaliza
+      // fronteira de bloco pro modelo.
+      .replace(/>>>/g, '[fim]')
+      .replace(/<<</g, '[ini]')
+      .replace(/[{}]/g, '')
+      .trim()
+  );
 }
 
 /**
