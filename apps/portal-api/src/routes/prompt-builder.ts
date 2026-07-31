@@ -606,13 +606,23 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     //
     // SCRUM-155 (caso Meduzza): o conceito "cartão em runtime/baked" só existe pros modos que TÊM
     // cartão de agendamento (agenda/estabelecimento) — blocoModo==='atendente' NUNCA teve, NUNCA
-    // terá cartão (buildBlocoEstrutural({modo:'atendente'}) não injeta marcador nenhum; é pré-venda
-    // pura, escala pra humano). Pra um clone atendente, "flipar cartao_mode" não tem sentido: não há
-    // cartão pra tirar do bot_prompt nem pra passar a injetar em runtime. Por isso o cálculo de
-    // cartaoRuntime (e o guard abaixo) SÓ se aplica quando blocoModo !== 'atendente' — nem toca a
-    // flag global, nem herda cartaoMode='runtime' antigo de uma migração de formato anterior
-    // (agenda->atendente), que já teria zerado o bloco de qualquer forma (finalPrompt é sempre
-    // regerado do zero pelo approve, nunca preserva cartão residual).
+    // terá cartão (é pré-venda pura, escala pra humano). ⚠️ CUIDADO: buildBlocoEstrutural({modo:
+    // 'atendente'}) AINDA contém BLOCO_ESTRUTURAL_MARKER — o marcador é o HEADER genérico
+    // ('===== REGRAS DO SISTEMA...'), COMPARTILHADO pelas 3 variantes (agenda/estabelecimento/
+    // atendente); ele não distingue "tem cartão" de "não tem". A proteção real NÃO é "o atendente
+    // não tem o marcador" — é que, com cartaoRuntime=false, applyGeneratedPrompt() abaixo NUNCA
+    // recebe opts.bakedMarker (só vai quando cartaoRuntime é true), então o BELT GUARD de
+    // bot-prompt.ts (que rejeita finalPrompt contendo o marker quando cartaoMode='runtime') nunca
+    // é sequer avaliado pro atendente. Pra um clone atendente, "flipar cartao_mode" não tem
+    // sentido: não há cartão pra tirar do bot_prompt nem pra passar a injetar em runtime. Por isso
+    // o cálculo de cartaoRuntime (e o guard abaixo) SÓ se aplica quando blocoModo !== 'atendente'
+    // — nem toca a flag global, nem herda cartaoMode='runtime' antigo de uma migração de formato
+    // anterior (agenda->atendente), que já teria zerado o bloco de qualquer forma (finalPrompt é
+    // sempre regerado do zero pelo approve, nunca preserva cartão residual).
+    // ⚠️ NÃO "consertar" isso passando bakedMarker incondicionalmente pro atendente também — o
+    // BLOCO_ATENDENTE contém o HEADER (=marker) e o guard de bot-prompt.ts faria o approve
+    // LANÇAR (throw) pra TODO clone atendente, sempre. A proteção mora na estrutura do IF acima
+    // (cartaoRuntime=false ⇒ bakedMarker nunca é passado), não em o marcador estar ausente do texto.
     const cartaoRuntime =
       blocoModo !== 'atendente' && (config.CARTAO_RUNTIME_ENABLED || ctx?.cartaoMode === 'runtime');
 

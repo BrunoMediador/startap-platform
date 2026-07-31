@@ -932,7 +932,13 @@ describe('approve', () => {
       expect(res.statusCode).toBe(200);
       const call = mocks.applyGeneratedPrompt.mock.calls[0];
       const finalPrompt = call[1] as string;
-      // bloco atendente colado (sem cartão nenhum, nem baked nem marcador de estabelecimento).
+      // Bloco ATENDENTE colado (o mock devolve a string literal 'BLOCO_ATENDENTE', disjunta de
+      // BLOCO_MARKER/BLOCO_ESTAB_MARKER — os 3 stubs deste arquivo são literais distintos por
+      // design de teste). ⚠️ Isso NÃO prova que o bloco atendente real seja livre do marcador:
+      // no código de produção as 3 variantes COMPARTILHAM o mesmo HEADER/BLOCO_ESTRUTURAL_MARKER
+      // (bloco-estrutural.ts) — quem garante ausência de cartão-duplo aqui é a estrutura do IF em
+      // prompt-builder.ts (cartaoRuntime=false ⇒ bakedMarker nunca é passado pro applyGeneratedPrompt),
+      // não uma propriedade textual do bloco. Ver comentário em prompt-builder.ts:606-620.
       expect(finalPrompt).toContain('BLOCO_ATENDENTE');
       expect(finalPrompt).not.toContain(BLOCO_MARKER);
       expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
