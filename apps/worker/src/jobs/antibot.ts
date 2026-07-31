@@ -11,7 +11,8 @@
  */
 import { logger } from '@startap/core/logger';
 import { phoneHint } from '@startap/core/phone';
-import { antibot, flowClones, pausa, routing } from '@startap/db';
+import { resolveSilenceGate } from '@startap/core/silence-gate';
+import { antibot, clientBilling, flowClones, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
@@ -56,6 +57,35 @@ export async function runAntibot(
     }
 
     if (flowId) {
+      // ── GATE ÚNICO DE SILÊNCIO TOTAL (fix pós-SCRUM-155, decisão do Bruno) ──────────────
+      // Clone suspenso/vencido além da carência não deve ganhar NENHUM efeito colateral —
+      // inclusive a pausa que o PRÓPRIO antibot grava. Mesma função pura do router
+      // (@startap/core/silence-gate), fonte única. Flag-gated (GATE_SILENCIO_TOTAL_ENABLED,
+      // default OFF): OFF = pula esta checagem, comportamento byte-idêntico ao de hoje.
+      // Só clones (slot "clone_"); getCloneBySlot traz next_due_date/billing_amount_cents
+      // via LEFT JOIN (getCloneBySession, usado na etapa 2 acima, NÃO traz billing).
+      if (process.env.GATE_SILENCIO_TOTAL_ENABLED === 'true' && flowId.startsWith('clone_')) {
+        const cloneForGate = await flowClones.getCloneBySlot(flowId).catch((e: unknown) => {
+          log.warn({ err: e, slot: flowId }, 'antibot: erro ao buscar clone para gate — segue');
+          return null;
+        });
+        if (cloneForGate) {
+          const gate = resolveSilenceGate(cloneForGate, {
+            graceDays: clientBilling.GRACE_DAYS,
+            daysUntilDue: (nextDueDate) => clientBilling.daysUntilDue(nextDueDate),
+            billingOverdueSilenceOn: process.env.BILLING_OVERDUE_SILENCE === 'true',
+          });
+          if (gate.silenced) {
+            log.info(
+              { slot: flowId, telefone: phoneHint(s.telefone), reason: gate.reason },
+              'antibot: clone silenciado (gate único) — pausa NÃO gravada',
+            );
+            skipped++;
+            continue;
+          }
+        }
+      }
+
       // ── ALLOWLIST DURA (SCRUM-4 PR-A; gated por ANTIBOT_ALLOWLIST_ENABLED) ──────────────
       // Telefone que JÁ agendou neste clone = cliente real -> NÃO pausa (anti-falso-positivo).
       // Só consulta o banco com a flag ON; OFF = comportamento idêntico ao de hoje (sem query).
