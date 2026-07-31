@@ -10,9 +10,10 @@
  * UM componente, não navega. Reaproveitamos só o VISUAL do estado ativo daquele
  * padrão, nunca a semântica de aba.
  *
- * Visual: mesmas classes de chip do `PerfilMiniNav` (perfil/page.tsx), sticky
- * logo abaixo da topbar mobile / no topo no desktop, scroll horizontal sem
- * barra de rolagem visível. Zero token novo.
+ * Visual: mesmas classes de chip da extinta mini-nav "pula pra" da antiga
+ * mega-página `/perfil` (SCRUM-98), sticky logo abaixo da topbar mobile / no
+ * topo no desktop, scroll horizontal sem barra de rolagem visível. Zero token
+ * novo.
  *
  * Aba única visível = a barra não renderiza (navegação de 1 item é ruído).
  */
