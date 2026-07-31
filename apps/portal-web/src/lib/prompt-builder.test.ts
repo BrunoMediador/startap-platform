@@ -18,6 +18,7 @@ import {
   personaCharsLeft,
   remainingChars,
   resolveDiffBase,
+  resolvePersonaAtual,
   sendBuilderMessage,
   startBuilder,
 } from './prompt-builder';
@@ -129,13 +130,14 @@ describe('startBuilder — mapa de outcome', () => {
 });
 
 describe('sendBuilderMessage — mapa de outcome', () => {
-  it('200 mapeia reply + draftReady + resumo + nomeBot + personaRascunho', async () => {
+  it('200 mapeia reply + draftReady + resumo + nomeBot + personaRascunho + personaBase', async () => {
     apiFetchMock.mockResolvedValue({
       reply: 'Anotado!',
       draft_ready: true,
       resumo: 'Descontraído, chama de Léo',
       nome_do_bot: 'Léo',
       persona_rascunho: 'Você é o Léo, descontraído.',
+      persona_base: 'Você é o assistente padrão.',
     });
     expect(await sendBuilderMessage('quero descontraído')).toEqual({
       kind: 'ok',
@@ -144,6 +146,7 @@ describe('sendBuilderMessage — mapa de outcome', () => {
       resumo: 'Descontraído, chama de Léo',
       nomeBot: 'Léo',
       personaRascunho: 'Você é o Léo, descontraído.',
+      personaBase: 'Você é o assistente padrão.',
     });
   });
 
@@ -159,12 +162,26 @@ describe('sendBuilderMessage — mapa de outcome', () => {
       resumo: null,
       nomeBot: null,
       personaRascunho: null,
+      personaBase: null,
     });
   });
 
   it('persona_rascunho ausente/null -> personaRascunho null (preview ao vivo degrada sem quebrar)', async () => {
     apiFetchMock.mockResolvedValue({ reply: 'ok', draft_ready: false, persona_rascunho: null });
     expect(await sendBuilderMessage('x')).toMatchObject({ personaRascunho: null });
+  });
+
+  it('persona_base chega no 1º turno do modo melhoria mesmo SEM rascunho ainda (confirmado 31/07)', async () => {
+    apiFetchMock.mockResolvedValue({
+      reply: 'Entendi, vou ajustar.',
+      draft_ready: false,
+      persona_base: 'Você é o assistente que já está no ar.',
+    });
+    expect(await sendBuilderMessage('deixa mais direto')).toMatchObject({
+      draftReady: false,
+      personaRascunho: null,
+      personaBase: 'Você é o assistente que já está no ar.',
+    });
   });
 
   it('nome_do_bot null (sem nome) vira nomeBot null', async () => {
@@ -556,5 +573,23 @@ describe('resolveDiffBase — qual texto vira a base do diff (item 1)', () => {
   it('modo criação -> sempre null, mesmo que personaBase venha preenchida por engano', () => {
     expect(resolveDiffBase('criacao', null)).toBeNull();
     expect(resolveDiffBase('criacao', 'lixo que não devia vir')).toBeNull();
+  });
+});
+
+describe('resolvePersonaAtual — o que o painel de preview mostra AGORA (item 1)', () => {
+  it('rascunho existe -> usa o rascunho, mesmo havendo base (rascunho tem prioridade)', () => {
+    expect(resolvePersonaAtual('Você é o Léo, novo texto.', 'Você é o texto antigo.')).toBe(
+      'Você é o Léo, novo texto.',
+    );
+  });
+
+  it('sem rascunho, com base (melhoria antes do 1º turno) -> mostra a base (texto no ar)', () => {
+    expect(resolvePersonaAtual(null, 'Você é o texto que está no ar hoje.')).toBe(
+      'Você é o texto que está no ar hoje.',
+    );
+  });
+
+  it('sem rascunho e sem base (criação, ainda sem prévia) -> null (vazio honesto)', () => {
+    expect(resolvePersonaAtual(null, null)).toBeNull();
   });
 });
