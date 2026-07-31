@@ -899,6 +899,70 @@ describe('approve', () => {
       expect(call[1]).toContain(BLOCO_MARKER); // baked, cartão colado no bot_prompt
       expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined(); // não flipa
     });
+
+    // ── SCRUM-155 (caso Meduzza): clone ATENDENTE nunca tem cartão -> guard não se aplica ──────
+    // Meduzza é estabelecimento NO FORMATO mas atendente NO COMPORTAMENTO (agenda_automatica=
+    // false + flag ON): o ramo atendente intercepta antes de qualquer cartão de agendamento
+    // (teste_barbearia.ts processAtendente). Ela é prompt_custom=true + cartao_mode='baked' em
+    // prod hoje — exatamente a combinação que isCartaoRuntimeFlipBlocked bloquearia SE o guard
+    // se aplicasse. A correção: pra blocoModo==='atendente' o conceito baked/runtime nem entra
+    // em jogo (não há cartão pra flipar), então o approve segue 200 sempre, com QUALQUER
+    // product_type — cobre não só a Meduzza mas qualquer atendente self-service futuro.
+    it('SCRUM-155: atendente (estabelecimento no formato) + prompt_custom=true baked + flag ON -> 200, NÃO bloqueia (caso Meduzza)', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(true);
+      mocks.getProductType.mockResolvedValue('estabelecimento');
+      mocks.getCloneBySlot.mockResolvedValue({
+        id: 42,
+        display_name: 'Meduzza',
+        cliente_nome: null,
+        personalizacao: { nome_negocio: 'Meduzza', agenda_automatica: false },
+        servicos: [{ nome: 'Corte', preco_cents: 4500, duracao_min: 30 }],
+      });
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'outro',
+        promptCustom: true, // estado REAL da Meduzza em prod (30/07)
+        cartaoMode: 'baked', // estado REAL da Meduzza em prod (30/07)
+        cartaoConfig: null,
+        nomeNegocio: 'Meduzza',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(200);
+      const call = mocks.applyGeneratedPrompt.mock.calls[0];
+      const finalPrompt = call[1] as string;
+      // bloco atendente colado (sem cartão nenhum, nem baked nem marcador de estabelecimento).
+      expect(finalPrompt).toContain('BLOCO_ATENDENTE');
+      expect(finalPrompt).not.toContain(BLOCO_MARKER);
+      expect(finalPrompt).not.toContain(BLOCO_ESTAB_MARKER);
+      // NÃO flipa cartao_mode (não há cartão em jogo pro atendente) — mesmo shape do caminho
+      // baked de sempre, prompt_custom segue true por conta própria (setPrompt de sempre).
+      expect((call[4] as { cartaoMode?: string }).cartaoMode).toBeUndefined();
+    });
+
+    // ── Proteção SCRUM-120/143 CONTINUA de pé pro caso que ela protege de verdade ──────────────
+    // Mesma combinação de flags (prompt_custom=true + baked + flag ON), mas modo AGENDA (o caso
+    // Ingrid): aqui HÁ cartão em jogo (bloco individual/estabelecimento tem marcador), então o
+    // 409 segue firme. Prova que a correção do SCRUM-155 não enfraqueceu a proteção geral.
+    it('regressão SCRUM-120/143: mesma combinação de flags em modo AGENDA continua 409 (guard intacto)', async () => {
+      cfg.CARTAO_RUNTIME_ENABLED = true;
+      mocks.resolveModoAtendenteEnabledForSlot.mockResolvedValue(false); // NÃO é atendente
+      mocks.getProductType.mockResolvedValue('estabelecimento');
+      mocks.getAreaPromptCustomCartao.mockResolvedValue({
+        area: 'barbearia',
+        promptCustom: true,
+        cartaoMode: 'baked',
+        cartaoConfig: null,
+        nomeNegocio: 'Barbearia X',
+      });
+      const app = await buildApp();
+      await startAndDraft(app);
+      const res = await app.inject({ method: 'POST', url: '/portal/prompt-builder/approve' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('cartao_bloqueado');
+      expect(mocks.applyGeneratedPrompt).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -603,7 +603,18 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // cartao_mode='runtime' (ex.: migrado à mão), o approve NUNCA pode assar o bloco no bot_prompt
     // — o runtime injeta o cartão e teríamos CARTÃO-DUPLO. Runtime quando a flag global liga (clones
     // novos) OU o clone já está em runtime (preserva o modo, nunca REGRIDE pra baked).
-    const cartaoRuntime = config.CARTAO_RUNTIME_ENABLED || ctx?.cartaoMode === 'runtime';
+    //
+    // SCRUM-155 (caso Meduzza): o conceito "cartão em runtime/baked" só existe pros modos que TÊM
+    // cartão de agendamento (agenda/estabelecimento) — blocoModo==='atendente' NUNCA teve, NUNCA
+    // terá cartão (buildBlocoEstrutural({modo:'atendente'}) não injeta marcador nenhum; é pré-venda
+    // pura, escala pra humano). Pra um clone atendente, "flipar cartao_mode" não tem sentido: não há
+    // cartão pra tirar do bot_prompt nem pra passar a injetar em runtime. Por isso o cálculo de
+    // cartaoRuntime (e o guard abaixo) SÓ se aplica quando blocoModo !== 'atendente' — nem toca a
+    // flag global, nem herda cartaoMode='runtime' antigo de uma migração de formato anterior
+    // (agenda->atendente), que já teria zerado o bloco de qualquer forma (finalPrompt é sempre
+    // regerado do zero pelo approve, nunca preserva cartão residual).
+    const cartaoRuntime =
+      blocoModo !== 'atendente' && (config.CARTAO_RUNTIME_ENABLED || ctx?.cartaoMode === 'runtime');
 
     // INVARIANTE anti-cartão-duplo (SCRUM-120): MESMO guard do endpoint PUT /portal/cartao-config
     // (isCartaoRuntimeFlipBlocked, fonte única). Se o approve FLIPARIA pra runtime (cartaoRuntime)
@@ -611,6 +622,9 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // do bakedMarker (heurística). Foi por aqui que o clone da Ingrid virou runtime (prompt_custom
     // baked + flag ON setava cartao_mode='runtime' na transação). Clone já-runtime e template
     // (prompt_custom=false) NÃO são bloqueados. O draft do Redis fica intacto (nada é perdido).
+    // blocoModo==='atendente' NUNCA cai aqui (cartaoRuntime já é false acima) — elimina a CLASSE
+    // do bug SCRUM-155 (não só a Meduzza): todo clone atendente self-service futuro com
+    // prompt_custom=true segue liberado, sem depender de product_type.
     if (
       cartaoRuntime &&
       promptBuilder.isCartaoRuntimeFlipBlocked({
