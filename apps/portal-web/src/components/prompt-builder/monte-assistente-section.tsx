@@ -153,9 +153,11 @@ export function MonteAssistenteSection() {
   const personaAtual = resolvePersonaAtual(rascunhoAtual, personaBase);
   const diffBase = resolveDiffBase(modo, personaBase);
 
-  // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando". O painel de
-  // prévia é ANCORADO (sticky) — não precisa mais de scrollIntoView pra "trazer pra
-  // dentro da viewport" (a prévia já está sempre visível).
+  // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando". No desktop o
+  // painel de prévia é ANCORADO (sticky); no mobile ele é estático, empilhado abaixo do
+  // chat. Nos dois casos não precisa mais de scrollIntoView pra "trazer pra dentro da
+  // viewport" — no desktop porque a prévia já está sempre visível, no mobile porque o
+  // chat vem primeiro na ordem visual.
   const totalMsgs = messages.length;
   useEffect(() => {
     void totalMsgs;
@@ -380,7 +382,8 @@ export function MonteAssistenteSection() {
   }
 
   /** Abre o editor da persona SEMEADO com o rascunho corrente (persona pura, sem o bloco
-   * estrutural). O painel de prévia é sticky/ancorado — não precisa mais rolar até ele. */
+   * estrutural). No desktop o painel de prévia é sticky/ancorado; no mobile é estático
+   * logo abaixo do chat — em nenhum dos dois casos precisa rolar até ele manualmente. */
   function editar() {
     setEditText(personaAtual ?? '');
     setEditing(true);
@@ -475,12 +478,14 @@ export function MonteAssistenteSection() {
         /*
          * Painel de preview ANCORADO (item 1, ordem do Bruno): visível desde o COMEÇO da
          * sessão — inclusive ANTES do dono clicar "Começar"/"Conversar agora" (em melhoria,
-         * mostra de cara a persona_base = texto que está no ar). No mobile fica STICKY logo
-         * abaixo da topbar; no desktop vira coluna lateral sticky ao lado do chat/intro. Sem
-         * scrollIntoView, sem "role a tela pra baixo" em nenhum estado.
+         * mostra de cara a persona_base = texto que está no ar). No mobile o painel é
+         * ESTÁTICO, empilhado ABAIXO do chat (sem sticky, sem scroll interno) — quem rola é
+         * a página inteira, liberando o chat pra escrever sem sobreposição. Só no desktop
+         * (`lg:`) ele vira coluna lateral sticky ao lado do chat/intro. Sem scrollIntoView,
+         * sem "role a tela pra baixo" em nenhum estado.
          */
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
-          <div className="order-2 flex flex-col gap-4 lg:order-1">
+          <div className="order-1 flex flex-col gap-4 lg:order-1">
             {!started && !previewReady && draft.status === 'sem_rascunho' && (
               <RetomarCard
                 onContinuar={iniciar}
@@ -509,7 +514,11 @@ export function MonteAssistenteSection() {
             )}
           </div>
 
-          <div className="sticky top-[calc(var(--topbar-h)+8px)] z-[5] order-1 max-h-[calc(100dvh-var(--topbar-h)-24px)] overflow-y-auto lg:order-2 lg:top-4 lg:max-h-[calc(100dvh-32px)]">
+          {/* order-2 sem prefixo já vale em todas as larguras (Tailwind não faz "unset" em
+              breakpoint maior); redeclarado como lg:order-2 só para deixar explícito que o
+              desktop também é order-2 — evita alguém ler a classe base sozinha e achar que o
+              desktop ficou órfão de ordem. */}
+          <div className="order-2 lg:sticky lg:top-4 lg:z-[5] lg:order-2 lg:max-h-[calc(100dvh-32px)] lg:overflow-y-auto">
             {editing ? (
               <EditPersonaPanel
                 value={editText}
