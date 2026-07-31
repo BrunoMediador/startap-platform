@@ -869,43 +869,39 @@ export async function handleWebhook(
     return { status: 'ignored:flow-paused' };
   }
 
-  // 6b. Gate de silêncio do bot por PERFIL DE COBRANÇA (ADR 0016) — LEGADO, mantido intacto.
+  // 6b. Gate de silêncio do bot por PERFIL DE COBRANÇA (ADR 0016) — LEGADO, mesma DECISÃO do
+  // gate único (@startap/core/silence-gate), formato de log próprio preservado.
   // Aplica apenas para clones (slot prefixado com "clone_").
-  // Dois eixos em OR — ambos silenciam total, sessão WAHA permanece intacta:
-  //   (a) suspensão MANUAL: flow_clones.flow_enabled === false (toggle do gestão);
-  //   (b) VENCIDO além da carência: daysUntilDue(next_due_date) < -GRACE_DAYS,
-  //       só quando há billing (next_due_date E amount_cents>0). DERIVADO no ato,
-  //       nunca escreve flow_enabled — perdão (data pro futuro) volta o bot sem UPDATE.
-  // Eixo (b) atrás da flag BILLING_OVERDUE_SILENCE (env). OFF (default) = comportamento
-  // legado: só (a) cala. getCloneBySlot já traz next_due_date/amount_cents via LEFT JOIN
-  // (cache TTL 60s) — sem query nova no hot path.
+  //
+  // CORRIGIDO 31/07 (achado do qa-tester + PM): o eixo (a) usava `flow_enabled === false` PURO,
+  // sem olhar `suspended_kind` — silenciava TAMBÉM quando o PRÓPRIO DONO pausou o bot
+  // (owner_request), o que é bug (mesmo erro corrigido no gate único, ver silence-gate.ts).
+  // Como este bloco é a ÚNICA barreira em prod com GATE_SILENCIO_TOTAL_ENABLED OFF (estado
+  // atual), o bug afetava PRODUÇÃO — não era regressão da #539, é comportamento legado desde
+  // o ADR 0016. Fix: reusa resolveSilenceGate (fonte única, mesma matriz de 2 eixos
+  // independentes) em vez de duplicar o cálculo — só a decisão muda; log/status/eventType
+  // deste bloco continuam iguais (suspendedReason/suspendedAt aqui, ausentes no gate único).
+  //
+  // Eixo (b) atrás da flag BILLING_OVERDUE_SILENCE (env), igual antes. getCloneBySlot já traz
+  // next_due_date/amount_cents/suspended_kind via SELECT único (cache TTL 60s) — sem query
+  // nova no hot path.
   //
   // CONVIVÊNCIA COM O GATE ÚNICO (checkSilenceGate, mais acima): com
   // GATE_SILENCIO_TOTAL_ENABLED=true este bloco NUNCA é alcançado nesse ramo — o gate único
   // já deu early-return antes do antibot/upsert-de-contato. Com a flag OFF (default), o gate
-  // único é sempre no-op e ESTE bloco continua sendo a única barreira, na posição de sempre —
-  // por isso não foi removido: é o fallback byte-idêntico ao comportamento anterior à mudança.
+  // único é sempre no-op e ESTE bloco continua sendo a única barreira, na posição de sempre.
   if (route.workflow_id.startsWith('clone_')) {
     const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
 
     if (cloneForGate) {
-      const suspensaoManual = cloneForGate.flow_enabled === false;
-
       const overdueSilenceOn = process.env.BILLING_OVERDUE_SILENCE === 'true';
-      // Guard duro: só há cobrança quando data E valor>0 estão presentes.
-      const temBilling =
-        cloneForGate.next_due_date != null && (cloneForGate.billing_amount_cents ?? 0) > 0;
-      const diasRestantes = temBilling
-        ? clientBilling.daysUntilDue(cloneForGate.next_due_date)
-        : null;
-      const vencidoComCarencia =
-        overdueSilenceOn &&
-        temBilling &&
-        diasRestantes != null &&
-        diasRestantes < -clientBilling.GRACE_DAYS;
+      const gate = resolveSilenceGate(cloneForGate, {
+        graceDays: clientBilling.GRACE_DAYS,
+        daysUntilDue: (nextDueDate) => clientBilling.daysUntilDue(nextDueDate),
+        billingOverdueSilenceOn: overdueSilenceOn,
+      });
 
-      // Suspensão manual tem precedência no log (eixo explícito do operador).
-      if (suspensaoManual) {
+      if (gate.silenced && gate.reason === 'flow-suspended') {
         log.info(
           {
             fone: phoneLogTag(telefone),
@@ -932,13 +928,13 @@ export async function handleWebhook(
         return { status: 'ignored:flow-suspended' };
       }
 
-      if (vencidoComCarencia) {
+      if (gate.silenced && gate.reason === 'billing-overdue') {
         log.info(
           {
             fone: phoneLogTag(telefone),
             flowId: route.workflow_id,
             nextDueDate: cloneForGate.next_due_date,
-            diasRestantes,
+            diasRestantes: gate.diasRestantes,
             graceDays: clientBilling.GRACE_DAYS,
           },
           'Fluxo silenciado por inadimplência (vencido além da carência), ignorando',
@@ -953,7 +949,7 @@ export async function handleWebhook(
           metadata: {
             flowId: route.workflow_id,
             nextDueDate: cloneForGate.next_due_date,
-            diasRestantes,
+            diasRestantes: gate.diasRestantes,
             graceDays: clientBilling.GRACE_DAYS,
           },
           durationMs: Date.now() - startedAt,

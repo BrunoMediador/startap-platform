@@ -9,6 +9,7 @@ import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-g
 import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
+import { OWNER_PAUSE_KIND } from '@startap/core/silence-gate';
 import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
 import { invalidateTenantCache } from './tenant.js';
@@ -1407,8 +1408,13 @@ export async function resumeClone(opts: {
 // invalidateCloneCache é IMPRESCINDÍVEL (cache TTL 60s; senão a pausa demora a valer).
 // ---------------------------------------------------------------------------
 
-/** kind canônico da pausa self-service. NUNCA 'billing' (anti auto-resume do PIX). */
-export const OWNER_PAUSE_KIND = 'owner_request' as const;
+/**
+ * kind canônico da pausa self-service. NUNCA 'billing' (anti auto-resume do PIX).
+ * Reexportado de @startap/core/silence-gate (fonte ÚNICA, achado do security 31/07) — @startap/db
+ * já depende de @startap/core, então reexportar aqui elimina o literal duplicado que um teste
+ * "anti-divergência" comparando 2 constantes independentes não conseguiria pegar de verdade.
+ */
+export { OWNER_PAUSE_KIND };
 const OWNER_PAUSE_REASON = 'Pausado pelo cliente no portal';
 
 export interface OwnerPauseResult {

@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { OWNER_PAUSE_KIND_MIRROR, resolveSilenceGate } from './silence-gate.js';
+import { OWNER_PAUSE_KIND, resolveSilenceGate } from './silence-gate.js';
 
 /** daysUntilDue determinístico pra teste: recebe o mapa fixo do cenário. */
 function fixedDaysUntilDue(days: number | null) {
   return (_nextDueDate: string | null) => days;
 }
 
-describe('OWNER_PAUSE_KIND_MIRROR (anti-divergência com @startap/db)', () => {
-  it('espelha o literal exato de flow-clones.ts OWNER_PAUSE_KIND ("owner_request")', () => {
-    // @startap/core NÃO pode importar @startap/db (ciclo — db depende de core), então este
-    // valor é replicado. Se packages/db/src/queries/flow-clones.ts:1411 mudar o literal de
-    // OWNER_PAUSE_KIND, este teste quebra e força atualizar os dois lugares juntos.
-    expect(OWNER_PAUSE_KIND_MIRROR).toBe('owner_request');
+describe('OWNER_PAUSE_KIND (contrato de schema)', () => {
+  it('é "owner_request" — literal usado em suspended_kind por todo o sistema (WHERE de queries, portal-conexao)', () => {
+    // Fonte ÚNICA nasce AQUI (@startap/core); @startap/db/queries/flow-clones.ts REEXPORTA
+    // este mesmo valor (não duplica) — a prova de que os dois pacotes nunca divergem está em
+    // packages/db/src/queries/flow-clones-owner-pause.test.ts (testa o import real, não um
+    // 2º literal digitado — comparar 2 literais escritos à mão nunca pega divergência real).
+    expect(OWNER_PAUSE_KIND).toBe('owner_request');
   });
 });
 
