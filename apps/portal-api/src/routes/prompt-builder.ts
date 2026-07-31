@@ -34,6 +34,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { PROMPT_BUILDER_CANNED, reserveMessageBudget } from '../lib/prompt-builder-guards.js';
+import { avaliarPreservacao } from '../lib/prompt-builder-preservacao.js';
 import {
   type PromptBuilderState,
   deleteState,
@@ -118,6 +119,9 @@ async function loadCloneContext(slot: string): Promise<{
   servicos: string[];
   cartaoMode: 'baked' | 'runtime';
   promptCustom: boolean;
+  /** JSONB de personalizacao do clone — usado SÓ pra derivar os RÓTULOS dos campos preenchidos
+   *  (derivarCamposConfigurados). Nenhum VALOR daqui entra em prompt (SCRUM-153). */
+  personalizacao: Record<string, unknown> | null;
 } | null> {
   const clone = await flowClones.getCloneBySlot(slot);
   if (!clone) return null;
@@ -160,6 +164,7 @@ async function loadCloneContext(slot: string): Promise<{
     servicos,
     cartaoMode,
     promptCustom,
+    personalizacao: (clone.personalizacao ?? null) as Record<string, unknown> | null,
   };
 }
 
@@ -225,32 +230,70 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
         resumo: existing.draft?.resumo,
         nome_do_bot: existing.draft?.nome_do_bot,
         retomada: true,
+        // Aditivo (SCRUM-153): a UI pode rotular a sessão retomada. Estado antigo sem o campo
+        // = 'criacao' (o comportamento de sempre).
+        modo: existing.sessaoModo ?? 'criacao',
       });
     }
 
     const ctx = await loadCloneContext(slot);
     if (!ctx) return reply.code(404).send({ error: 'clone_nao_encontrado' });
 
-    const pergunta = metaEntrevistador.primeiraPergunta({
-      nomeNegocio: ctx.nomeNegocio,
-      area: ctx.area || 'atendimento',
-      modo: ctx.modo,
-    });
+    // ── MODO DA SESSÃO (SCRUM-153) ───────────────────────────────────────────
+    // Decidido AQUI, uma vez, pelo estado REAL do clone — nunca por input do cliente:
+    //   clone com persona própria (prompt_custom=true) E bot_prompt não-vazio -> 'melhoria'
+    //   qualquer outro caso -> 'criacao' (o caminho de sempre, byte-a-byte).
+    // A flag PROMPT_BUILDER_MELHORIA_ENABLED é o kill-switch: OFF -> TODO clone cai em
+    // 'criacao', ou seja, o comportamento atual de produção, sem nenhuma mudança.
+    // prompt_custom=true SEM prompt no banco (estado inconsistente) também cai em 'criacao':
+    // sem persona atual não há o que melhorar, e a V5 ficaria com contexto vazio.
+    let sessaoModo: 'criacao' | 'melhoria' = 'criacao';
+    let personaAtual = '';
+    if (config.PROMPT_BUILDER_MELHORIA_ENABLED && ctx.promptCustom) {
+      const atual = await botPrompt.getPrompt(slot);
+      if (atual && atual.trim().length > 0) {
+        sessaoModo = 'melhoria';
+        personaAtual = atual;
+      }
+    }
+    const camposConfigurados =
+      sessaoModo === 'melhoria'
+        ? metaEntrevistador.derivarCamposConfigurados(ctx.personalizacao, ctx.servicos)
+        : [];
+
+    const pergunta =
+      sessaoModo === 'melhoria'
+        ? metaEntrevistador.primeiraMensagemMelhoria({
+            nomeNegocio: ctx.nomeNegocio,
+            area: ctx.area || 'atendimento',
+            modo: ctx.modo,
+          })
+        : metaEntrevistador.primeiraPergunta({
+            nomeNegocio: ctx.nomeNegocio,
+            area: ctx.area || 'atendimento',
+            modo: ctx.modo,
+          });
     const state: PromptBuilderState = {
       slot,
       nomeNegocio: ctx.nomeNegocio,
       area: ctx.area,
       modo: ctx.modo,
       productType: ctx.productType,
+      sessaoModo,
+      ...(sessaoModo === 'melhoria' ? { personaAtual, camposConfigurados } : {}),
       turns: [{ role: 'assistant', content: pergunta }],
       draft: null,
       updatedAt: Date.now(),
     };
     await saveState(redis, state);
-    log.info({ slot, modo: ctx.modo }, 'prompt-builder: entrevista iniciada');
+    // LGPD: loga só o SINAL (modo + quantos campos), nunca a persona nem o conteúdo dos campos.
+    log.info(
+      { slot, modo: ctx.modo, sessaoModo, camposCount: camposConfigurados.length },
+      'prompt-builder: sessão iniciada',
+    );
     return reply
       .code(200)
-      .send({ session_id: slot, pergunta, draft_ready: false, retomada: false });
+      .send({ session_id: slot, pergunta, draft_ready: false, retomada: false, modo: sessaoModo });
   });
 
   // ── POST /message ────────────────────────────────────────────────────────────
@@ -280,6 +323,16 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const forceGenerate =
       parsed.data.generate_now === true || metaEntrevistador.matchesGenerateIntent(userMessage);
 
+    // REESCRITA EXPLÍCITA (SCRUM-153, só importa no modo melhoria): "refaz tudo", "quero uma
+    // persona nova", "começa do zero". Uma vez pedida, vale pro RESTO da sessão (fica no state):
+    // o dono não precisa repetir a cada refino, e a guarda de preservação para de segurar
+    // proposta menor — ele declarou que quer trocar o texto. STICKY de propósito; pra voltar a
+    // preservar, o caminho é /reset (recomeça a sessão limpa).
+    const reescritaPedida =
+      state.reescritaExplicita === true ||
+      metaEntrevistador.matchesReescritaTotalIntent(userMessage);
+    if (reescritaPedida) state.reescritaExplicita = true;
+
     // 1. teto de turns por entrevista (corta loop de refino infinito) — sem chamar o LLM. NÃO se
     // aplica ao caminho determinístico de geração forçada: esse é 1 turno terminal que fecha o draft.
     const userTurns = state.turns.filter((t) => t.role === 'user').length;
@@ -304,11 +357,23 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(503).send({ error: 'builder_indisponivel' });
     }
 
-    const systemPrompt = metaEntrevistador.buildEntrevistadorSystemPrompt({
-      nomeNegocio: state.nomeNegocio,
-      area: state.area || 'atendimento',
-      modo: state.modo,
-    });
+    // System prompt por MODO DA SESSÃO (SCRUM-153). 'melhoria' roda a V5 com a persona atual +
+    // rótulos dos campos já configurados no contexto; qualquer outro valor (inclusive estado
+    // antigo sem o campo) roda a V4 — o caminho de criação-do-zero, INALTERADO.
+    const emMelhoria = state.sessaoModo === 'melhoria' && !!state.personaAtual;
+    const systemPrompt = emMelhoria
+      ? metaEntrevistador.buildMelhoriaSystemPrompt({
+          nomeNegocio: state.nomeNegocio,
+          area: state.area || 'atendimento',
+          modo: state.modo,
+          personaAtual: state.personaAtual ?? '',
+          camposConfigurados: state.camposConfigurados ?? [],
+        })
+      : metaEntrevistador.buildEntrevistadorSystemPrompt({
+          nomeNegocio: state.nomeNegocio,
+          area: state.area || 'atendimento',
+          modo: state.modo,
+        });
     const history: ChatTurn[] = state.turns
       .slice(-config.PROMPT_BUILDER_HISTORY_TURNS)
       .map(toChatTurn);
@@ -348,13 +413,32 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
         if (argsParsed.success) {
           const servicos = (await loadCloneContext(slot))?.servicos ?? [];
           const v = validatePersona(stripPII(argsParsed.data.persona_prompt), { servicos });
-          if (v.ok) {
+          // GUARDA DE PRESERVAÇÃO (SCRUM-153, só no modo melhoria): o approve SOBRESCREVE o
+          // bot_prompt inteiro, então uma proposta que voltou pela metade faz o dono PERDER
+          // texto que ele não pediu pra remover (regra de negócio 27). Se encolheu demais E ele
+          // não pediu reescrita explícita nesta conversa, NÃO promovemos a rascunho: avisamos e
+          // deixamos ele escolher. O draft anterior (se houver) fica intacto.
+          const preserv = emMelhoria
+            ? avaliarPreservacao(state.personaAtual ?? '', v.cleaned, reescritaPedida)
+            : { ok: true, ratio: 1 };
+          if (v.ok && preserv.ok) {
             state.draft = {
               persona: v.cleaned,
               nome_do_bot: argsParsed.data.nome_do_bot ?? null,
               resumo: argsParsed.data.resumo,
             };
             draftReady = true;
+          } else if (v.ok && !preserv.ok) {
+            // Observabilidade: só a RAZÃO de tamanho, nunca o texto (persona é durável/PII).
+            log.warn(
+              { slot, ratio: preserv.ratio },
+              'prompt-builder melhoria: proposta encolheu demais — rascunho NÃO promovido',
+            );
+            draftReady = state.draft !== null;
+            replyText =
+              'Segurei essa versão: ela ficou bem menor que a persona que está no ar, e eu não ' +
+              'quero apagar o que você já tinha. Quer que eu refaça mantendo o texto atual e só ' +
+              'aplicando a mudança? Se preferir mesmo começar do zero, é só dizer "refaz tudo".';
           } else {
             // Refino que não passou na validação NÃO destrói um draft anterior já aprovável:
             // preserva o corrente e sinaliza draft_ready pelo que REALMENTE existe. Antes zerava
@@ -392,6 +476,8 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           turns: userTurns + 1,
           draftReady,
           forceGenerate,
+          sessaoModo: state.sessaoModo ?? 'criacao',
+          reescritaPedida,
           tokens: result.usage.total,
           latencyMs: Date.now() - startedAt,
         },
@@ -485,6 +571,11 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // Persona a persistir: a editada pelo dono (se veio) OU o rascunho do Redis. Em AMBOS os
     // casos passa pelo MESMO pipeline (stripPII + validatePersona) — defesa em profundidade,
     // nunca confia no texto cru (nem do Redis, nem do body do dono). O bloco vem por código.
+    // NOTA (SCRUM-153): a guarda de preservação do modo melhoria roda no /message, sobre a
+    // proposta do MODELO. Ela NÃO se aplica a `persona_editada`: ali é o dono digitando o
+    // próprio texto na UI — encurtar a própria persona é direito dele, e segurar seria o produto
+    // discordando do cliente. A rede de segurança nesse caminho é o snapshot em
+    // bot_prompt_versions (applyGeneratedPrompt), que grava a versão anterior antes de sobrescrever.
     const personaBase =
       personaEditada && personaEditada.length > 0 ? personaEditada : state.draft.persona;
     const edited = personaBase === personaEditada;
@@ -586,6 +677,8 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           edited,
           cartaoRuntime,
           cartaoModeAtual: ctx?.cartaoMode,
+          sessaoModo: state.sessaoModo ?? 'criacao',
+          reescritaExplicita: state.reescritaExplicita === true,
         },
         'prompt-builder: persona aplicada (prompt_custom=true)',
       );

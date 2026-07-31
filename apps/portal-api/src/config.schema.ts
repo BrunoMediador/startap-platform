@@ -328,6 +328,20 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Modo MELHORIA do builder — conversa livre sobre persona que JÁ EXISTE (SCRUM-153) ──
+  // OFF (default e estado de deploy): TODA sessão do builder roda a V4 (entrevista, criação do
+  // zero) — comportamento atual de produção, byte-a-byte, para todos os clones.
+  // ON: clone com persona própria (prompt_custom=true E bot_prompt não-vazio) passa a abrir o
+  // builder em CONVERSA LIVRE de melhoria (system prompt V5), com a persona atual + os RÓTULOS
+  // dos campos já configurados injetados no contexto; o padrão passa a ser PRESERVAR o texto
+  // existente (guarda determinística de encolhimento) e reescrever só sob pedido explícito.
+  // Clone SEM persona própria continua na V4 mesmo com a flag ON — a flag não toca a criação.
+  // OPCIONAL no boot (env nova NUNCA derruba o serviço — lição #247). NUNCA hardcoded.
+  PROMPT_BUILDER_MELHORIA_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // O meta-agente entrevistador roda SEMPRE no OpenAI (gpt-4o) — NÃO herda o bot_config do
   // clone (é meta-agente, não o bot do cliente) e NÃO muda o bot real do cliente. Desde 20/07
   // usa OPENAI_API_KEY (endpoint default OpenAI, sem baseURL); o DeepSeek foi trocado por dar
