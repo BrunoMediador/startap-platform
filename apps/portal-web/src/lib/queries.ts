@@ -108,6 +108,8 @@ export const qk = {
   planosConfig: (slot: string) => ['planos-config', slot] as const,
   /** Config do FAQ personalizado (SCRUM-65) — derivada do GET /portal/perfil. */
   faqConfig: (slot: string) => ['faq-config', slot] as const,
+  /** Gates de "Meu atendente" (prompt_builder/sandbox, SCRUM-157) — derivados do GET /portal/perfil. */
+  atendenteFeatures: (slot: string) => ['atendente-features', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
   pausas: (slot: string) => ['pausas', slot] as const,
   botDetectPausas: (slot: string) => ['bot-detect-pausas', slot] as const,
@@ -639,6 +641,32 @@ export function useSaveFaq(
         faq: toFaqItens(perfil.faq_personalizado),
       }));
     },
+  });
+}
+
+// ── Gate das abas de "Meu atendente" (SCRUM-157) ─────────────────────────────
+//
+// Deriva do MESMO GET /portal/perfil, numa query própria (qk.atendenteFeatures) pra
+// NÃO tocar no cache/otimista do formulário principal do perfil — mesma isolação de
+// agendaConfig/planosConfig/faqConfig. Expõe os 2 gates GLOBAIS (prompt_builder,
+// sandbox, #541) usados pelo layout de `/atendente/*` pra montar o NavGateContext
+// ANTES de navegar (o gate real de cada seção, por 404, continua no componente).
+
+export interface AtendenteFeatures {
+  prompt_builder: boolean;
+  faq_personalizado: boolean;
+  sandbox: boolean;
+}
+
+export function useAtendenteFeatures(slot: string): UseQueryResult<AtendenteFeatures> {
+  return useQuery({
+    queryKey: qk.atendenteFeatures(slot),
+    queryFn: ({ signal }) =>
+      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
+        prompt_builder: r.features?.prompt_builder === true,
+        faq_personalizado: r.features?.faq_personalizado === true,
+        sandbox: r.features?.sandbox === true,
+      })),
   });
 }
 

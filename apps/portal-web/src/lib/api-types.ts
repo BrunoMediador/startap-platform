@@ -706,6 +706,17 @@ export interface PerfilResponse {
      * clone cujo agendamento já funciona). Ver @/lib/agenda-config#isAgendaConfigurada.
      */
     agenda_configurada?: boolean;
+    /**
+     * SCRUM-92/#541: gate GLOBAL (não por-clone) da flag PROMPT_BUILDER_ENABLED. Usado
+     * pra decidir se a aba "Personalidade" de "Meu atendente" aparece ANTES de navegar
+     * (SCRUM-157) — junto com o sinal "tom disponível" (OR resolvido no chamador).
+     */
+    prompt_builder?: boolean;
+    /**
+     * SCRUM-101/#541: gate GLOBAL (não por-clone) da flag SANDBOX_ENABLED. Usado pra
+     * decidir se a aba "Testar" de "Meu atendente" aparece (SCRUM-157).
+     */
+    sandbox?: boolean;
   };
   /**
    * WhatsApp da recepção (SCRUM-59 PR-E) = destino dos avisos de lead/escalação ao

@@ -596,10 +596,7 @@ export function MonteAssistenteSection() {
 /** Cabeçalho + card da seção (reutilizado por todos os estados). */
 function SectionShell({ children }: { children: React.ReactNode }) {
   return (
-    <section
-      aria-labelledby="monte-assistente-title"
-      className="mt-8 flex flex-col gap-3 border-t border-line pt-6"
-    >
+    <section aria-labelledby="monte-assistente-title" className="flex flex-col gap-3">
       <div>
         <h2
           id="monte-assistente-title"
