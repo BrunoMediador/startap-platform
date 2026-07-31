@@ -18,6 +18,7 @@ import {
   IconHome,
   IconPause,
   IconServices,
+  IconSparkle,
   IconUser,
   IconUsers,
   IconWallet,
@@ -36,6 +37,7 @@ const ICONS: Record<NavIconKey, typeof IconHome> = {
   clock: IconClock,
   user: IconUser,
   pause: IconPause,
+  sparkle: IconSparkle,
 };
 
 export interface NavItem {
