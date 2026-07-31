@@ -46,6 +46,7 @@ import {
   remainingChars,
   resetBuilder,
   resolveDiffBase,
+  resolvePersonaAtual,
   sendBuilderMessage,
   startBuilder,
 } from '@/lib/prompt-builder';
@@ -120,6 +121,9 @@ export function MonteAssistenteSection() {
   // a cada turno via /message (não dependem mais de esperar draft_ready pra existir).
   const [modo, setModo] = useState<BuilderModo>('criacao');
   const [personaAoVivo, setPersonaAoVivo] = useState<string | null>(null);
+  // persona_base também volta em TODA resposta de /message (confirmado 31/07, já no 1º
+  // turno) — captura local evita depender só do staleTime/refetch da query useBuilderDraft.
+  const [personaBaseAoVivo, setPersonaBaseAoVivo] = useState<string | null>(null);
   // Alternância "ver com marcações / ver texto limpo" do painel de diff.
   const [verMarcacoes, setVerMarcacoes] = useState(true);
 
@@ -135,11 +139,18 @@ export function MonteAssistenteSection() {
   const previewPronto = draft?.status === 'pronto' && !!draft.previewFinal;
   // Prévia visível: pronta E não descartada pelo dono ("Rejeitar").
   const showPreview = previewReady && !previewDismissed;
-  const personaBase = draft?.status !== 'indisponivel' ? (draft?.personaBase ?? null) : null;
-  // Texto corrente do painel ao vivo: prioriza o rascunho que chegou NESTE turno (snappy);
-  // cai pro do draft do servidor quando ainda não houve turno nesta sessão (retomada).
-  const personaAtual =
+  const personaBase =
+    personaBaseAoVivo ?? (draft?.status !== 'indisponivel' ? (draft?.personaBase ?? null) : null);
+  // Rascunho corrente (proposta em cima da base): prioriza o que chegou NESTE turno
+  // (snappy); cai pro do draft do servidor quando ainda não houve turno nesta sessão
+  // (retomada com rascunho salvo no Redis).
+  const rascunhoAtual =
     personaAoVivo ?? (draft?.status !== 'indisponivel' ? (draft?.personaRascunho ?? null) : null);
+  // Texto corrente do painel: o RASCUNHO se já existir; senão, em melhoria, a persona
+  // BASE (texto no ar) — o painel mostra "de cara" o texto atual mesmo ANTES do dono
+  // trocar 1 mensagem (item 1, ordem do Bruno). Em criação sem rascunho -> null (vazio
+  // honesto: ainda não há nada pra mostrar).
+  const personaAtual = resolvePersonaAtual(rascunhoAtual, personaBase);
   const diffBase = resolveDiffBase(modo, personaBase);
 
   // Auto-scroll pro fim quando entra bolha ou aparece/some o "digitando". O painel de
@@ -217,11 +228,12 @@ export function MonteAssistenteSection() {
 
     if (out.kind === 'ok') {
       setMessages((m) => appendMessage(m, 'assistant', out.reply));
-      // Preview ao vivo (item 1): atualiza a CADA turno que trouxer rascunho novo, mesmo
-      // antes de draft_ready — o painel ancorado reage em tempo real, sem esperar a IA
-      // chamar a tool de propor_prompt. Campo ausente/null (backend antigo) -> sem update,
-      // degrada pro comportamento anterior (painel só aparece quando draftReady).
+      // Preview ao vivo (item 1): atualiza a CADA turno que trouxer rascunho/base novos,
+      // mesmo antes de draft_ready — o painel ancorado reage em tempo real, sem esperar a
+      // IA chamar a tool de propor_prompt. Campo ausente/null (backend antigo) -> sem
+      // update, degrada pro comportamento anterior.
       if (out.personaRascunho) setPersonaAoVivo(out.personaRascunho);
+      if (out.personaBase) setPersonaBaseAoVivo(out.personaBase);
       if (out.draftReady) {
         setLocalDraftReady(true);
         setPreviewDismissed(false); // prévia NOVA volta a aparecer mesmo após um "Rejeitar"
@@ -235,6 +247,7 @@ export function MonteAssistenteSection() {
       setMessages([]);
       setLocalDraftReady(false);
       setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       return;
     }
@@ -250,16 +263,16 @@ export function MonteAssistenteSection() {
     setErroRetry(conteudo);
   }
 
-  /** "Pedir ajuste": sem conversa aberta abre um bubble-guia; em conversa, foca o campo. */
+  /**
+   * "Pedir ajuste"/"Continuar a conversa": com o painel sempre visível (item 1), este
+   * botão pode ser clicado ANTES de qualquer turno (`!started`) — precisa iniciar a
+   * sessão DE VERDADE (`/start`), não simular uma bolha local, senão o 1º envio bate
+   * 409 `entrevista_nao_iniciada` (o backend não sabe que essa conversa existe).
+   */
   function pedirAjuste() {
     if (!started) {
-      setMessages([
-        {
-          id: 1,
-          role: 'assistant',
-          text: 'Combinado! O que você quer mudar? Escreva com suas palavras — ex.: "mais formal", "chama de Léo", "tira a piada".',
-        },
-      ]);
+      void iniciar();
+      return;
     }
     requestAnimationFrame(() => inputRef.current?.focus());
   }
@@ -284,6 +297,7 @@ export function MonteAssistenteSection() {
       setEditing(false);
       setEditText('');
       setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
       setAplicada(true);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       client.invalidateQueries({ queryKey: qk.perfil(slot) });
@@ -337,6 +351,7 @@ export function MonteAssistenteSection() {
     if (out.kind === 'ok') {
       setMessages((m) => appendMessage(m, 'assistant', out.reply));
       if (out.personaRascunho) setPersonaAoVivo(out.personaRascunho);
+      if (out.personaBase) setPersonaBaseAoVivo(out.personaBase);
       setPreviewDismissed(false);
       if (out.draftReady) {
         setLocalDraftReady(true);
@@ -353,6 +368,7 @@ export function MonteAssistenteSection() {
       setMessages([]);
       setLocalDraftReady(false);
       setPersonaAoVivo(null);
+      setPersonaBaseAoVivo(null);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       return;
     }
@@ -412,8 +428,11 @@ export function MonteAssistenteSection() {
     setAplicada(false);
     setEditing(false);
     setEditText('');
+    // Só o RASCUNHO (proposta em cima da base) é apagado — a persona BASE (texto que
+    // está no ar hoje) e o `modo` da sessão continuam os mesmos: "recomeçar" reinicia a
+    // ENTREVISTA, não o estado real do clone. O próximo `iniciar()` re-sincroniza ambos
+    // via /start (o backend decide `modo` pelo estado real, nunca reset local).
     setPersonaAoVivo(null);
-    setModo('criacao');
     client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
   }
 
@@ -453,78 +472,79 @@ export function MonteAssistenteSection() {
       {aplicada ? (
         <AplicadaCard onReconfigurar={iniciar} pending={pending} atendente={isAtendente} />
       ) : (
-        <div className="flex flex-col gap-4">
-          {!started && !previewReady && draft.status === 'sem_rascunho' && (
-            <RetomarCard
-              onContinuar={iniciar}
-              onRecomecar={() => setConfirmReset(true)}
-              pending={pending}
-            />
-          )}
-          {!started && !previewReady && draft.status !== 'sem_rascunho' && (
-            <IntroCard onStart={iniciar} pending={pending} garantia={copy.full} modo={modo} />
-          )}
+        /*
+         * Painel de preview ANCORADO (item 1, ordem do Bruno): visível desde o COMEÇO da
+         * sessão — inclusive ANTES do dono clicar "Começar"/"Conversar agora" (em melhoria,
+         * mostra de cara a persona_base = texto que está no ar). No mobile fica STICKY logo
+         * abaixo da topbar; no desktop vira coluna lateral sticky ao lado do chat/intro. Sem
+         * scrollIntoView, sem "role a tela pra baixo" em nenhum estado.
+         */
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+          <div className="order-2 flex flex-col gap-4 lg:order-1">
+            {!started && !previewReady && draft.status === 'sem_rascunho' && (
+              <RetomarCard
+                onContinuar={iniciar}
+                onRecomecar={() => setConfirmReset(true)}
+                pending={pending}
+              />
+            )}
+            {!started && !previewReady && draft.status !== 'sem_rascunho' && (
+              <IntroCard onStart={iniciar} pending={pending} garantia={copy.full} modo={modo} />
+            )}
+            {started && (
+              <ChatView
+                messages={messages}
+                pending={pending}
+                input={input}
+                erroRetry={erroRetry}
+                logRef={logRef}
+                inputRef={inputRef}
+                modo={modo}
+                onInput={setInput}
+                onSubmit={onSubmit}
+                onKeyDown={onKeyDown}
+                onRetry={() => erroRetry && void enviar(erroRetry)}
+                onGerarAgora={() => void enviar(input, { generateNow: true })}
+              />
+            )}
+          </div>
 
-          {/*
-           * Painel de preview ANCORADO (item 1): visível desde o começo da sessão (não só
-           * quando draft_ready). No mobile fica STICKY logo abaixo da topbar (colado acima
-           * do chat/input, sempre na viewport — mesmo offset `--topbar-h` já usado pelas
-           * tabs de #487); no desktop vira coluna lateral sticky (lado a lado com o chat).
-           * Em ambos os casos: sem scrollIntoView, sem "role a tela pra baixo".
-           */}
-          {started && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
-              <div className="order-2 lg:order-1">
-                <ChatView
-                  messages={messages}
-                  pending={pending}
-                  input={input}
-                  erroRetry={erroRetry}
-                  logRef={logRef}
-                  inputRef={inputRef}
-                  modo={modo}
-                  onInput={setInput}
-                  onSubmit={onSubmit}
-                  onKeyDown={onKeyDown}
-                  onRetry={() => erroRetry && void enviar(erroRetry)}
-                  onGerarAgora={() => void enviar(input, { generateNow: true })}
-                />
-              </div>
-
-              <div className="sticky top-[calc(var(--topbar-h)+8px)] z-[5] order-1 max-h-[calc(100dvh-var(--topbar-h)-24px)] overflow-y-auto lg:order-2 lg:top-4 lg:max-h-[calc(100dvh-32px)]">
-                {editing ? (
-                  <EditPersonaPanel
-                    value={editText}
-                    saving={approving}
-                    nota={copy.editor}
-                    textareaRef={editRef}
-                    onChange={setEditText}
-                    onSalvar={salvarEdicao}
-                    onCancelar={cancelarEdicao}
-                  />
-                ) : (
-                  <PreviewPanel
-                    modo={modo}
-                    montando={showPreview && !previewPronto}
-                    nomeBot={draft.nomeBot}
-                    resumo={draft.resumo}
-                    diffParts={diffParts}
-                    verMarcacoes={verMarcacoes}
-                    onToggleMarcacoes={() => setVerMarcacoes((v) => !v)}
-                    nota={copy.nota}
-                    approving={approving}
-                    salvando={pending && !previewPronto}
-                    onSalvar={() => void salvarSempre()}
-                    onEditar={editar}
-                    editavel={previewPronto}
-                    onRejeitar={previewPronto ? () => setConfirmReject(true) : undefined}
-                    onRecomecar={() => setConfirmReset(true)}
-                    onAjustarConversa={pedirAjuste}
-                  />
-                )}
-              </div>
-            </div>
-          )}
+          <div className="sticky top-[calc(var(--topbar-h)+8px)] z-[5] order-1 max-h-[calc(100dvh-var(--topbar-h)-24px)] overflow-y-auto lg:order-2 lg:top-4 lg:max-h-[calc(100dvh-32px)]">
+            {editing ? (
+              <EditPersonaPanel
+                value={editText}
+                saving={approving}
+                nota={copy.editor}
+                textareaRef={editRef}
+                onChange={setEditText}
+                onSalvar={salvarEdicao}
+                onCancelar={cancelarEdicao}
+              />
+            ) : (
+              <PreviewPanel
+                modo={modo}
+                montando={showPreview && !previewPronto}
+                nomeBot={draft.nomeBot}
+                resumo={draft.resumo}
+                diffParts={diffParts}
+                verMarcacoes={verMarcacoes}
+                onToggleMarcacoes={() => setVerMarcacoes((v) => !v)}
+                nota={copy.nota}
+                approving={approving}
+                salvando={pending && !previewPronto}
+                // Salvar exige a sessão JÁ iniciada no backend (sendBuilderMessage bate 409
+                // sem isso) — antes do 1º "Começar"/"Conversar agora" ainda não há o que
+                // gerar/aprovar (mostrar a base intocada como "ativação" seria redundante).
+                podeSalvar={started || previewPronto}
+                onSalvar={() => void salvarSempre()}
+                onEditar={editar}
+                editavel={previewPronto}
+                onRejeitar={previewPronto ? () => setConfirmReject(true) : undefined}
+                onRecomecar={() => setConfirmReset(true)}
+                onAjustarConversa={pedirAjuste}
+              />
+            )}
+          </div>
         </div>
       )}
 
@@ -914,6 +934,7 @@ function PreviewPanel({
   nota,
   approving,
   salvando,
+  podeSalvar,
   onSalvar,
   onEditar,
   editavel,
@@ -933,6 +954,8 @@ function PreviewPanel({
   approving: boolean;
   /** "Salvar" disparou generate_now e está aguardando o rascunho voltar (item 3). */
   salvando: boolean;
+  /** Sessão já iniciada no backend (ou rascunho pronto) -> "Salvar" pode agir de verdade. */
+  podeSalvar: boolean;
   onSalvar: () => void;
   onEditar: () => void;
   /** Rascunho existe -> pode editar/rejeitar. Sem rascunho ainda, essas ações não fazem sentido. */
@@ -1023,6 +1046,7 @@ function PreviewPanel({
           onClick={onSalvar}
           loading={approving || salvando}
           loadingLabel={salvando ? 'Gerando…' : 'Ativando…'}
+          disabled={!podeSalvar}
         >
           Salvar e ativar
         </Button>

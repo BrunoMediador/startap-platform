@@ -11,18 +11,24 @@
  * Contrato (portal-api, plugin prompt-builder.ts — TODAS autenticadas por sessão,
  * slot SÓ da sessão via withTenant; base /portal/prompt-builder):
  *   POST /start    -> { session_id, pergunta, draft_ready, retomada, turns?, modo? }
- *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot?, persona_rascunho?, preview_final? }
+ *   POST /message  -> { reply, draft_ready, resumo?, nome_do_bot?,
+ *                       persona_rascunho, preview_final, persona_base }
  *                     (body { content, generate_now? })
- *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo?, persona_base? }
+ *   GET  /draft    -> { status, persona_rascunho, preview_final, nome_do_bot?, resumo?, persona_base }
  *   POST /approve  -> { ok, persona_aplicada, version_saved }
  *   POST /reset    -> { ok }
  *
- * Preview ao vivo + diff (ordem do Bruno, 31/07): `modo` distingue CRIAÇÃO (sem persona
- * anterior) de MELHORIA (conversa livre sobre o texto que já está no ar). `persona_base`
- * (só populada em melhoria) é o texto ATUAL no ar — a base do diff verde/vermelho contra
- * o `persona_rascunho` corrente. Campos ADITIVOS: ausentes/null -> degrada pro
- * comportamento antigo (sem preview ao vivo, sem diff) sem quebrar (o backend pode subir
- * fora de ordem).
+ * Preview ao vivo + diff (ordem do Bruno, 31/07 — contrato CONFIRMADO com o backend,
+ * branch feat/builder-preview-vivo commit e1385bf): `modo` distingue CRIAÇÃO (sem persona
+ * anterior) de MELHORIA (conversa livre sobre o texto que já está no ar). Em /message e
+ * /draft, `persona_rascunho`/`preview_final`/`persona_base` são SEMPRE presentes em toda
+ * resposta 200 (string|null, NUNCA undefined) — inclusive quando o dono bate o teto de
+ * turns ou a guarda de custo (ele continua vendo o rascunho e pode aprovar dali).
+ * `persona_rascunho`/`preview_final` vêm null JUNTOS ou preenchidos JUNTOS. `persona_base`
+ * NÃO depende de haver rascunho — chega já no 1º turno do modo melhoria (é o texto NO AR;
+ * o painel usa isso pra mostrar "de cara" o texto atual ANTES de qualquer proposta, ver
+ * resolvePersonaAtual). 400/409/503 seguem SEM esses campos — tratamos a ausência mesmo
+ * assim (parsing defensivo com fallback null) por robustez, não por dúvida no contrato.
  *
  * Gating: flag PROMPT_BUILDER_ENABLED OFF => TODAS respondem 404 recurso_indisponivel.
  * O front trata 404 como "feature off" (esconde a seção) — mesmo critério de
@@ -96,13 +102,17 @@ interface MessageResponse {
   resumo?: string;
   nome_do_bot?: string | null;
   /**
-   * Campos ADITIVOS (preview ao vivo, 31/07): o rascunho corrente pro painel de prévia
-   * atualizar A CADA TURNO, sem esperar draft_ready. `preview_final` é uso INTERNO
-   * (nunca exibido — contém o bloco estrutural/nomes de tool, item 3 do design
-   * original); mantido no transporte só por paridade de contrato com /draft.
+   * Confirmado (31/07): SEMPRE presentes em toda resposta 200 (string|null, nunca
+   * undefined) — inclusive nas respostas barradas por teto de turns/guarda de custo. O
+   * rascunho corrente pro painel de prévia atualizar A CADA TURNO, sem esperar
+   * draft_ready. `preview_final` é uso INTERNO (nunca exibido — contém o bloco
+   * estrutural/nomes de tool, item 3 do design original); mantido no transporte só por
+   * paridade de contrato com /draft. `?` no tipo é só defesa (parsing tolera ausência).
    */
   persona_rascunho?: string | null;
   preview_final?: string | null;
+  /** Confirmado (31/07): chega já no 1º turno do modo melhoria, mesmo sem rascunho ainda. */
+  persona_base?: string | null;
 }
 
 interface DraftResponse {
@@ -149,6 +159,8 @@ export type MessageOutcome =
       nomeBot: string | null;
       /** Rascunho corrente pro preview ao vivo (item 1). Ausente/null -> sem atualização. */
       personaRascunho: string | null;
+      /** Persona NO AR (modo melhoria) — confirmado presente já no 1º turno, sem esperar rascunho. */
+      personaBase: string | null;
     }
   | { kind: 'not_started' } // 409 entrevista_nao_iniciada (Redis expirou) -> recomeçar
   | { kind: 'invalid' } // 400 dados_invalidos / mensagem_vazia
@@ -241,6 +253,7 @@ export async function sendBuilderMessage(
       resumo: typeof r.resumo === 'string' ? r.resumo : null,
       nomeBot: typeof r.nome_do_bot === 'string' ? r.nome_do_bot : null,
       personaRascunho: typeof r.persona_rascunho === 'string' ? r.persona_rascunho : null,
+      personaBase: typeof r.persona_base === 'string' ? r.persona_base : null,
     };
   } catch (err) {
     if (err instanceof ApiError) {
@@ -488,4 +501,19 @@ export function diffToPlainText(parts: DiffPart[]): string {
  */
 export function resolveDiffBase(modo: BuilderModo, personaBase: string | null): string | null {
   return modo === 'melhoria' ? personaBase : null;
+}
+
+/**
+ * Qual texto mostrar no painel de preview AGORA (item 1, ordem do Bruno: "aparece desde o
+ * começo da sessão"). Prioriza o RASCUNHO corrente (proposta em cima da base, já veio de
+ * algum turno); se ainda não há rascunho nenhum, cai na `personaBase` — assim, em melhoria,
+ * o painel mostra de cara o texto que já está no ar, mesmo ANTES do dono trocar 1 mensagem.
+ * Em criação sem rascunho ainda, `personaBase` é sempre null -> resultado null (vazio
+ * honesto: não há nada pra mostrar até a 1ª prévia existir).
+ */
+export function resolvePersonaAtual(
+  rascunhoAtual: string | null,
+  personaBase: string | null,
+): string | null {
+  return rascunhoAtual ?? personaBase;
 }
