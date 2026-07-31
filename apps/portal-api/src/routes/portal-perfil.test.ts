@@ -16,6 +16,9 @@ const cfgMock = vi.hoisted(() => ({
   REDIS_PASSWORD: '',
   MODO_ATENDENTE_SLOTS: '',
   FAQ_PERSONALIZADO_SLOTS: '',
+  // Globais (não por-slot) — gate das ABAS prompt_builder/sandbox (SCRUM-157). Mutável por teste.
+  PROMPT_BUILDER_ENABLED: false,
+  SANDBOX_ENABLED: false,
 }));
 vi.mock('../config.js', () => ({ config: cfgMock }));
 
@@ -116,6 +119,9 @@ beforeEach(() => {
   cfgMock.MODO_ATENDENTE_SLOTS = '';
   // Default: FAQ personalizado OFF pra todos (byte-a-byte). Testes específicos ligam.
   cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
+  // Default: prompt_builder/sandbox OFF (byte-a-byte). Testes específicos ligam.
+  cfgMock.PROMPT_BUILDER_ENABLED = false;
+  cfgMock.SANDBOX_ENABLED = false;
   // Defaults do destino dos avisos: nenhum setado / escrita OK.
   getAlertOwnerPhoneBySlotMock.mockResolvedValue(null);
   updateAlertOwnerPhoneBySlotMock.mockResolvedValue(true);
@@ -174,7 +180,33 @@ describe('GET /portal/perfil', () => {
       modo_atendente: false,
       faq_personalizado: false,
       agenda_configurada: false,
+      prompt_builder: false,
+      sandbox: false,
     });
+    await app.close();
+  });
+
+  it('SCRUM-157: features.prompt_builder reflete PROMPT_BUILDER_ENABLED (gate global, não por-clone)', async () => {
+    cfgMock.PROMPT_BUILDER_ENABLED = true;
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features.prompt_builder).toBe(true);
+    await app.close();
+  });
+
+  it('SCRUM-157: features.sandbox reflete SANDBOX_ENABLED (gate global, não por-clone)', async () => {
+    cfgMock.SANDBOX_ENABLED = true;
+    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
+    const app = await buildApp();
+
+    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().features.sandbox).toBe(true);
     await app.close();
   });
 
