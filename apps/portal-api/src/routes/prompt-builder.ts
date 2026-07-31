@@ -341,14 +341,18 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
      * Campos do PREVIEW VIVO (31/07) presentes em TODA resposta 200 do /message — inclusive nas
      * barradas por guarda: quem bateu o teto de turns continua precisando VER o rascunho que já
      * conseguiu (é justamente daí que ele aprova). Contrato: string|null, nunca undefined.
+     *
+     * ⚠️ `preview_final` NÃO entra aqui de propósito (review de security S1, P3): o front
+     * descarta o campo no parser do /message (`sendBuilderMessage` só extrai `persona_rascunho`)
+     * e só lê `previewFinal` do GET /draft. Mandá-lo a cada turno serializava o BLOCO ESTRUTURAL
+     * (marcadores + nomes de tool tipo inserir_agendamento) à toa: payload maior e superfície
+     * desnecessária, sem nenhum consumidor. Ele continua no GET /draft, que é onde é usado.
      */
     const previewFields = (): {
       persona_rascunho: string | null;
-      preview_final: string | null;
       persona_base: string | null;
     } => ({
       persona_rascunho: state.draft?.persona ?? null,
-      preview_final: state.draft ? buildPreviewFinal(state) : null,
       // Persona NO AR = lado esquerdo do diff. Do PRÓPRIO tenant (withTenant); null em criação.
       persona_base: emMelhoria ? (state.personaAtual ?? null) : null,
     });
@@ -524,11 +528,10 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // precisava de scrollIntoView e o próprio prompt mandava "role a tela para baixo"). O custo
     // extra de token por turno foi aprovado por ele.
     //   persona_rascunho: a persona proposta (JÁ validada/limpa), sem o bloco estrutural.
-    //   preview_final:    o que SERÁ persistido (persona + bloco colado por código) — mesma
-    //                     função do GET /draft (buildPreviewFinal), fonte única.
     //   persona_base:     no modo MELHORIA, a persona que está NO AR (lado esquerdo do diff).
-    // Contrato: os três são string|null, NUNCA undefined (ver previewFields). `resumo`/
-    // `nome_do_bot` seguem como estavam (undefined sem draft) pra não quebrar a UI atual.
+    // Contrato: os DOIS são string|null, NUNCA undefined (ver previewFields). `preview_final`
+    // fica só no GET /draft (S1: ninguém consome no /message). `resumo`/`nome_do_bot` seguem
+    // como estavam (undefined sem draft) pra não quebrar a UI atual.
     // ⚠️ previewFields lê `state.draft`, que só recebe proposta APROVADA pelo validador E pela
     // guarda de preservação — proposta barrada nunca vaza pro preview (regra de negócio 27).
     // NUNCA devolve o system prompt aqui.

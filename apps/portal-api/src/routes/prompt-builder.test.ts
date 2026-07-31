@@ -1377,7 +1377,7 @@ describe('modo melhoria (SCRUM-153)', () => {
   // que está no ar. Antes o texto só existia num GET /draft separado e o dono conversava às
   // cegas. Aqui travamos o CONTRATO do payload — a frente do front depende dele.
   describe('preview vivo: /message devolve o rascunho corrente', () => {
-    it('turno com proposta devolve persona_rascunho + preview_final no MESMO turno', async () => {
+    it('turno com proposta devolve persona_rascunho no MESMO turno', async () => {
       comPersonaAtual();
       const app = await buildApp();
       await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
@@ -1393,15 +1393,38 @@ describe('modo melhoria (SCRUM-153)', () => {
       // A persona volta NO TURNO (sem precisar do GET /draft).
       expect(body.persona_rascunho).toContain('atendimento infantil');
       expect(body.persona_rascunho).toContain('Não faça diagnóstico');
-      // E o preview do que SERÁ persistido também (mesma fonte do GET /draft).
-      expect(body.preview_final).toContain('atendimento infantil');
       // Compat: os campos antigos continuam iguais (a tela atual não pode quebrar).
       expect(body.reply).toBeTruthy();
       expect(body.resumo).toBe('Tom descontraído, nome Léo.');
       expect(body.nome_do_bot).toBe('Léo');
     });
 
-    it('sem rascunho ainda -> persona_rascunho e preview_final NULL (nunca undefined)', async () => {
+    // S1 (review de security, P3): `preview_final` NÃO trafega no /message — o front descarta o
+    // campo no parser e só lê `previewFinal` do GET /draft. Mandá-lo a cada turno serializava o
+    // BLOCO ESTRUTURAL (marcadores + nomes de tool) sem nenhum consumidor. Este teste trava a
+    // remoção: se alguém reintroduzir o campo "por paridade", a suíte avisa.
+    it('NÃO trafega preview_final no /message (bloco estrutural fica só no GET /draft)', async () => {
+      comPersonaAtual();
+      const app = await buildApp();
+      await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
+      mocks.runAgent.mockResolvedValue(proporToolResult(`${PERSONA_ATUAL}\nLinha nova.`));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/prompt-builder/message',
+        payload: { content: 'acrescenta uma linha' },
+      });
+      const body = res.json();
+      expect(body.draft_ready).toBe(true);
+      expect('preview_final' in body).toBe(false);
+      // E o bloco estrutural (com os nomes de tool) não vaza por nenhum outro campo do turno.
+      expect(res.payload).not.toContain(BLOCO_MARKER);
+
+      // ...mas segue disponível onde é consumido de verdade.
+      const draft = await app.inject({ method: 'GET', url: '/portal/prompt-builder/draft' });
+      expect(draft.json().preview_final).toContain(BLOCO_MARKER);
+    });
+
+    it('sem rascunho ainda -> persona_rascunho NULL (nunca undefined)', async () => {
       comPersonaAtual();
       const app = await buildApp();
       await app.inject({ method: 'POST', url: '/portal/prompt-builder/start' });
@@ -1418,11 +1441,9 @@ describe('modo melhoria (SCRUM-153)', () => {
       });
       const body = res.json();
       expect(body.draft_ready).toBe(false);
-      // NULL explícito nos dois — a tela distingue "não tem rascunho" sem heurística.
+      // NULL explícito — a tela distingue "não tem rascunho" sem heurística.
       expect(body.persona_rascunho).toBeNull();
-      expect(body.preview_final).toBeNull();
       expect('persona_rascunho' in body).toBe(true);
-      expect('preview_final' in body).toBe(true);
     });
 
     it('turno de OPINIÃO NÃO gera: nada é forçado e o rascunho segue nulo', async () => {
@@ -1493,7 +1514,6 @@ describe('modo melhoria (SCRUM-153)', () => {
       expect(body.persona_base).toBeNull();
       // ...mas o rascunho corrente volta igual (preview vivo vale nos DOIS modos).
       expect(body.persona_rascunho).toContain('Barbearia X');
-      expect(body.preview_final).toContain(BLOCO_MARKER);
     });
 
     it('PRESERVAÇÃO: proposta que encolheu não vira rascunho e NÃO vaza no persona_rascunho', async () => {
@@ -1513,7 +1533,6 @@ describe('modo melhoria (SCRUM-153)', () => {
       // A proposta barrada NÃO pode aparecer no preview (senão o dono aprovaria pela tela um
       // texto que a guarda recusou — regra de negócio 27).
       expect(body.persona_rascunho).toBeNull();
-      expect(body.preview_final).toBeNull();
       // ...e a persona no ar segue disponível pro diff.
       expect(body.persona_base).toBe(PERSONA_ATUAL);
     });

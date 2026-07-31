@@ -111,6 +111,11 @@ describe('meta-entrevistador — V6 (preview vivo, sucede a V5 no modo melhoria)
     expect(sp).toMatch(/Só chame propor_prompt depois que ele escolher/);
   });
 
+  // ⚠️ ESTE teste compara o prompt contra strings HARDCODED aqui: pega regressão do TEXTO do
+  // prompt, mas NÃO pega a deriva da tela — se alguém renomear `label` em nav.ts, ele segue
+  // verde. A checagem contra a FONTE REAL (NAV_SPEC / PERFIL_GRUPOS) vive em
+  // `apps/portal-web/src/lib/prompt-telas-citadas.test.ts`, porque portal-web não pode ser
+  // importado daqui (não há dependência entre os pacotes). Os dois se complementam.
   it('nomes das telas são os REAIS do portal e dizem menu lateral vs. esta página', () => {
     const sp = buildMelhoriaSystemPrompt(CTX_V6);
     // Nomes reais (nav.ts: /horarios "Horários", /servicos "Serviços"; perfil-grupos.ts:
