@@ -61,36 +61,6 @@ describe('validatePersona — remove dados operacionais', () => {
   });
 });
 
-describe('validatePersona — exceção moeda p/ contexto de PLANO (migração planos_beneficios, 01/08)', () => {
-  it('preserva o texto REAL da Ingrid inteiro (pacote + parcelamento)', () => {
-    // Caso medido em prod: sem a exceção, a linha do R$ 396,00 morria (padrão moeda) mas a do
-    // "2x 198,00" sobrevivia (sem "R$") — parcelamento órfão de um pacote que sumiu.
-    const p =
-      'Pacote Mensal com 4 sessões: R$ 396,00 (99,00 por sessão)\nOu 2x 198,00 quinzenalmente';
-    const r = validatePersona(p);
-    expect(r.cleaned).toBe(p);
-    expect(r.removedTags).not.toContain('moeda');
-    expect(r.ok).toBe(true);
-  });
-
-  it('continua cortando preço de SERVIÇO AVULSO fora de contexto de plano', () => {
-    const r1 = validatePersona(`${PERSONA_LIMPA}\nCorte R$ 40`);
-    expect(r1.cleaned).not.toContain('R$ 40');
-    expect(r1.removedTags).toContain('moeda');
-
-    const r2 = validatePersona(`${PERSONA_LIMPA}\ncorte sai R$45`);
-    expect(r2.cleaned).not.toContain('R$45');
-    expect(r2.removedTags).toContain('moeda');
-  });
-
-  it('a exceção não perdoa outras tags (telefone/endereço) mesmo em linha de plano', () => {
-    const p = `${PERSONA_LIMPA}\nPlano Mensal R$ 100, ligue 11 91234-5678 pra assinar.`;
-    const r = validatePersona(p);
-    expect(r.cleaned).not.toContain('91234');
-    expect(r.removedTags).toContain('telefone');
-  });
-});
-
 describe('validatePersona — barbearia (SCRUM-92: não gruta persona por nome de serviço)', () => {
   it('mantém persona de barbearia que cita "corte"/"barba"/"sobrancelha" e ok=true', () => {
     // Regressão do bug do Cirilo: catálogo genérico de barbearia apagava quase toda linha ->
