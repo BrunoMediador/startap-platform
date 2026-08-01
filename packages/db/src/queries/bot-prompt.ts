@@ -297,6 +297,111 @@ export async function migrateCloneToCartaoRuntime(
   }
 }
 
+/** Comentário-marcador do snapshot que o script migrate-faq-para-prompt grava — usado como
+ *  base de rollback manual (restaurar de bot_prompt_versions filtrando por este comment). */
+export const FAQ_MIGRATION_SNAPSHOT_COMMENT = 'faq-para-prompt-migration';
+
+export interface MigrateFaqToPromptInput {
+  slot: string;
+  /** Bloco FAQ pronto (header + pares P:/R:) — já sanitizado/capado pelo caller
+   *  (narrowFaqPairs), byte-a-byte igual ao que renderFaqBlock produziria em runtime. */
+  faqBlock: string;
+  editedBy: string;
+}
+
+export type MigrateFaqToPromptResult =
+  | { migrated: true; versionSaved: number | null; newPrompt: string }
+  | { migrated: false; skipped: 'sem_clone' | 'sem_prompt' | 'ja_migrado' | 'faq_vazio' };
+
+/**
+ * Migra o FAQ personalizado (JSONB) de UM clone pra dentro do bot_prompt (script
+ * migrate-faq-para-prompt, ETAPA 1 do plano aprovado 31/07). Transacional, espelhando
+ * migrateCloneToCartaoRuntime:
+ *   1. GUARD IDEMPOTENTE: se o bot_prompt JÁ contém o header do bloco FAQ, aborta sem gravar
+ *      (migrado:false, skipped:'ja_migrado') — nunca duplica o bloco numa 2ª execução;
+ *   2. snapshot do bot_prompt ATUAL em bot_prompt_versions (comment marcador → base de rollback
+ *      manual, mesma receita do cartão-runtime);
+ *   3. bot_prompt = prompt atual + '\n\n' + faqBlock (anexado ao FIM, nunca no meio);
+ *   4. personalizacao = personalizacao - 'faq_personalizado' NA MESMA transação — sem isso o
+ *      bot receberia o FAQ DUAS vezes (prompt migrado + renderFaqBlock ainda injetando em
+ *      runtime). Removendo a chave, renderFaqBlock volta a retornar '' naturalmente (a função
+ *      de runtime não precisa ser tocada).
+ * Idempotente: re-rodar num clone já migrado não altera nada (guard do passo 1).
+ */
+export async function migrateCloneFaqToBotPrompt(
+  input: MigrateFaqToPromptInput,
+): Promise<MigrateFaqToPromptResult> {
+  const { slot, faqBlock, editedBy } = input;
+  if (typeof faqBlock !== 'string' || faqBlock.trim().length === 0) {
+    return { migrated: false, skipped: 'faq_vazio' };
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const clone = await client.query<{ slot: string }>(
+      'SELECT slot FROM flow_clones WHERE slot = $1 FOR UPDATE',
+      [slot],
+    );
+    if (clone.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'sem_clone' };
+    }
+    const cur = await client.query<{ prompt: string }>(
+      'SELECT prompt FROM bot_prompt WHERE slot = $1',
+      [slot],
+    );
+    if (cur.rows.length === 0 || !cur.rows[0].prompt) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'sem_prompt' };
+    }
+    const currentPrompt = cur.rows[0].prompt;
+    // GUARD IDEMPOTENTE (espelha o guard anti-cartão-duplo de migrateCloneToCartaoRuntime):
+    // se o header do bloco FAQ já está no prompt, uma 2ª execução é NO-OP — nunca duplica.
+    const headerFirstLine = faqBlock.split('\n')[0];
+    if (currentPrompt.includes(headerFirstLine)) {
+      await client.query('ROLLBACK');
+      return { migrated: false, skipped: 'ja_migrado' };
+    }
+    const newPrompt = `${currentPrompt}\n\n${faqBlock}`;
+
+    // Snapshot do prompt ATUAL (ANTES do update) — base de rollback manual.
+    let versionSaved: number | null = null;
+    const maxRes = await client.query<{ m: string }>(
+      'SELECT COALESCE(MAX(version), 0) AS m FROM bot_prompt_versions WHERE slot = $1',
+      [slot],
+    );
+    const nextVersion = Number(maxRes.rows[0].m) + 1;
+    const insRes = await client.query<{ version: number }>(
+      `INSERT INTO bot_prompt_versions (slot, version, prompt, edited_by, comment)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (slot, version) DO NOTHING
+       RETURNING version`,
+      [slot, nextVersion, currentPrompt, editedBy, FAQ_MIGRATION_SNAPSHOT_COMMENT],
+    );
+    if (insRes.rowCount && insRes.rowCount > 0) versionSaved = insRes.rows[0].version;
+
+    await client.query('UPDATE bot_prompt SET prompt = $2, updated_at = NOW() WHERE slot = $1', [
+      slot,
+      newPrompt,
+    ]);
+    // Anti-duplicação (passo 7 do plano): remove a chave do JSONB NA MESMA transação —
+    // renderFaqBlock(personalizacao) volta a retornar '' naturalmente (chave ausente),
+    // sem precisar tocar o código de runtime.
+    await client.query(
+      "UPDATE flow_clones SET personalizacao = personalizacao - 'faq_personalizado', updated_at = NOW() WHERE slot = $1",
+      [slot],
+    );
+    await client.query('COMMIT');
+    cache.delete(slot);
+    return { migrated: true, versionSaved, newPrompt };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 export type RevertCartaoRuntimeResult =
   | { reverted: true; restoredVersion: number }
   | { reverted: false; skipped: 'sem_snapshot' | 'sem_clone' };
