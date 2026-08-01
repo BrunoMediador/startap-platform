@@ -24,6 +24,7 @@
  */
 import { IconAlert, IconBrush, IconCheck, IconHeadset, IconLock } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import {
@@ -111,24 +112,51 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
     setDraft((d) => setEmoji(d, s, emoji));
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!dirty || save.isPending) return;
+  /**
+   * Núcleo do submit (save otimista). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158, "Salvar e sair"), que precisa da Promise pra decidir se
+   * navega. Não há validação client-side aqui (picker fechado, sempre
+   * válido) — só resolve/rejeita conforme o resultado do save.
+   */
+  function submitCartao(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty || save.isPending) {
+        resolve();
+        return;
+      }
 
-    const prev = saved;
-    setSaved(draft); // otimista
-    touched.current = false;
+      const prev = saved;
+      setSaved(draft); // otimista
+      touched.current = false;
 
-    save.mutate(toCartaoPayload(draft), {
-      onSuccess: () => {
-        toast.success(CARTAO_COPY.toastSucesso);
-      },
-      onError: () => {
-        setSaved(prev);
-        toast.error(CARTAO_COPY.toastErro);
-      },
+      save.mutate(toCartaoPayload(draft), {
+        onSuccess: () => {
+          toast.success(CARTAO_COPY.toastSucesso);
+          resolve();
+        },
+        onError: (err) => {
+          setSaved(prev);
+          toast.error(CARTAO_COPY.toastErro);
+          reject(err instanceof Error ? err : new Error('save-falhou'));
+        },
+      });
     });
   }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitCartao().catch(() => {
+      // erro já tratado (toast) dentro de submitCartao — aqui só evita
+      // unhandled rejection quando o disparo vem do <form>.
+    });
+  }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Este componente (`CartaoConfigForm`) só monta quando o estado é
+  // 'editable' (o pai `CartaoConfigSection` já filtrou hidden/locked/loading
+  // antes), então não há early-return concorrendo com este hook aqui dentro.
+  useRegistrarNaoSalvo('Cartão de confirmação', dirty, submitCartao);
 
   return (
     <SectionShell>
