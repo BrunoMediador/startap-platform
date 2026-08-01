@@ -205,18 +205,43 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
         seguem no automático.
       </p>
 
-      {/* Aviso (P0 da seção): a frase aparece pro cliente final. Rótulo textual
-          "Atenção:" + ícone — não depende só de cor (WCAG). */}
+      {/* Aviso (P0 da seção): a frase aparece pro cliente final + as 3 formas de pausar e
+          por quanto tempo cada uma dura. Rótulo textual "Atenção:" + ícone — não depende só
+          de cor (WCAG). */}
       <div className="mt-3 flex items-start gap-2.5 rounded-[12px] border border-warn/30 bg-warn-soft px-3.5 py-3 text-warn">
         <span className="mt-0.5 shrink-0" aria-hidden="true">
           <IconAlert size={17} />
         </span>
-        <p className="text-[12.5px] leading-normal">
-          <span className="font-semibold">Atenção:</span> a frase que você digitar aparece na
-          conversa e o cliente lê. Escolha algo com a cara do seu negócio — ex.:{' '}
-          <span className="font-semibold">"Oi! Aqui é a equipe Meduzza 👋"</span>. Evite frases que
-          pareçam comando de robô ("/pausar", "ativar humano").
-        </p>
+        <div className="flex flex-col gap-2 text-[12.5px] leading-normal">
+          <p>
+            <span className="font-semibold">Atenção:</span> a frase que você digitar aparece na
+            conversa e o cliente lê. Escolha algo com a cara do seu negócio — ex.:{' '}
+            <span className="font-semibold">"Oi! Aqui é a equipe Meduzza 👋"</span>. Evite frases
+            que pareçam comando de robô ("/pausar", "ativar humano").
+          </p>
+          <p>Existem 3 formas de pausar o assistente, cada uma com uma duração:</p>
+          <ul className="flex flex-col gap-1 pl-4">
+            <li className="list-disc">
+              <span className="font-semibold">Responder você mesmo direto na conversa</span>: pausa
+              só aquele cliente por <span className="font-semibold">1 hora</span> — o assistente
+              volta sozinho. Cada nova resposta sua renova a hora.
+            </li>
+            <li className="list-disc">
+              <span className="font-semibold">Digitar a frase de pausa</span>: pausa aquele cliente
+              por <span className="font-semibold">tempo indeterminado</span>, até você digitar a
+              frase de retomada.
+            </li>
+            <li className="list-disc">
+              <span className="font-semibold">Pausar pelo painel</span> (botão "Pausar um número"):
+              também <span className="font-semibold">tempo indeterminado</span>, até você despausar
+              por lá.
+            </li>
+          </ul>
+          <p>
+            Se você já estiver respondendo à mão (pausa de 1 hora) e digitar a frase de pausa nessa
+            mesma conversa, ela vira pausa por tempo indeterminado — a mais longa sempre prevalece.
+          </p>
+        </div>
       </div>
 
       <form onSubmit={onSubmit} className="mt-4 flex flex-col gap-3" noValidate>
