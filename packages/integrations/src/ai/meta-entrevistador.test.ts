@@ -28,6 +28,8 @@ import {
   META_ENTREVISTADOR_PROMPT_V8,
   META_ENTREVISTADOR_PROMPT_V9,
   META_ENTREVISTADOR_PROMPT_V10,
+  META_ENTREVISTADOR_PROMPT_V11,
+  META_ENTREVISTADOR_PROMPT_V12,
   buildEntrevistadorSystemPrompt,
   buildMelhoriaSystemPrompt,
   derivarCamposConfigurados,
@@ -44,7 +46,7 @@ import {
 } from './onde-se-configura.js';
 
 function readMdBody(
-  version: 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10',
+  version: 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | 'v11' | 'v12',
 ): string {
   const path = fileURLToPath(
     new URL(`../../ai/prompts/meta-entrevistador/${version}.md`, import.meta.url),
@@ -88,12 +90,20 @@ describe('meta-entrevistador — drift guard', () => {
     expect(META_ENTREVISTADOR_PROMPT_V8.trim()).toBe(readMdBody('v8'));
   });
 
-  it('const V9 (runtime, modo criação) == corpo do v9.md (fonte canônica)', () => {
+  it('const V9 (histórico, sucedida pela V11) == corpo do v9.md (fonte canônica imutável)', () => {
     expect(META_ENTREVISTADOR_PROMPT_V9.trim()).toBe(readMdBody('v9'));
   });
 
-  it('const V10 (runtime, modo melhoria) == corpo do v10.md (fonte canônica)', () => {
+  it('const V10 (histórico, sucedida pela V12) == corpo do v10.md (fonte canônica imutável)', () => {
     expect(META_ENTREVISTADOR_PROMPT_V10.trim()).toBe(readMdBody('v10'));
+  });
+
+  it('const V11 (runtime, modo criação) == corpo do v11.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V11.trim()).toBe(readMdBody('v11'));
+  });
+
+  it('const V12 (runtime, modo melhoria) == corpo do v12.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V12.trim()).toBe(readMdBody('v12'));
   });
 });
 
@@ -108,7 +118,7 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
   /** Os dois prompts VIVOS, já montados (é o texto que o modelo realmente recebe). */
   const vivos: Array<[string, string]> = [
     [
-      'V9 (criação)',
+      'V11 (criação)',
       buildEntrevistadorSystemPrompt({
         nomeNegocio: 'Barbearia do Zé',
         area: 'barbearia',
@@ -116,7 +126,7 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
       }),
     ],
     [
-      'V10 (melhoria)',
+      'V12 (melhoria)',
       buildMelhoriaSystemPrompt({
         nomeNegocio: 'Consultório',
         area: 'outro',
@@ -227,6 +237,10 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
     // perguntas frequentes passaram a ser conteúdo legítimo da persona. Um clone legado com
     // `faq_personalizado` ainda no JSONB não pode reintroduzir a recusa por essa porta.
     expect(rotulos).not.toMatch(/perguntas frequentes/i);
+    // 01/08: os PLANOS saíram pela MESMA porta e pelo mesmo motivo. A Ingrid tem
+    // `planos_beneficios` preenchido HOJE (medido em prod: 1 de 6 clones, 86 chars) — se o rótulo
+    // continuasse aqui, ela seria a primeira a ouvir a IA recusar o caminho que virou o certo.
+    expect(rotulos).not.toMatch(/planos/i);
   });
 
   it('corrigir o mapa conserta as DUAS versões vivas de uma vez (a propriedade que mata o bug)', () => {
@@ -242,7 +256,11 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
     const linhasMelhoria = bloco(melhoria)
       .split('\n')
       .filter((l) => l.startsWith('- '));
-    expect(linhasCriacao.length).toBeGreaterThan(3);
+    // Sanity check de que o bloco foi mesmo encontrado. Ancora no TAMANHO DO MAPA em vez de um
+    // número mágico: o `> 3` original virou falso quando a entrada `planos` saiu (01/08) e o mapa
+    // passou a ter 3 linhas — a asserção teria que ser reescrita a cada mudança de produto,
+    // quando o que ela realmente quer dizer é "o bloco renderizou uma linha por dado do mapa".
+    expect(linhasCriacao.length).toBe(Object.keys(ONDE_SE_CONFIGURA).length);
     expect(linhasCriacao).toEqual(linhasMelhoria);
   });
 });
@@ -272,8 +290,8 @@ describe('perguntas frequentes viraram conteúdo da persona (V9/V10)', () => {
     camposConfigurados: ['Endereço ("Meu negócio" › "Dados")'],
   });
   const vivosFaq: Array<[string, string]> = [
-    ['V9 (criação)', criacao],
-    ['V10 (melhoria)', melhoria],
+    ['V11 (criação)', criacao],
+    ['V12 (melhoria)', melhoria],
   ];
 
   it.each(vivosFaq)(
@@ -306,17 +324,20 @@ describe('perguntas frequentes viraram conteúdo da persona (V9/V10)', () => {
     expect(listaFechada).toMatch(/PERGUNTAS FREQUENTES/);
   });
 
-  it('V10: some o "ou perguntas frequentes" da REGRA DURA 1 (era a recusa mais forte)', () => {
+  it('melhoria: some o "ou perguntas frequentes" da REGRA DURA 1 (era a recusa mais forte)', () => {
     // A regra dura vence o catálogo: enquanto ela citasse FAQ, remover a linha do mapa não
     // mudaria o comportamento. Esta é a asserção que prova que a etapa foi feita de fato.
+    // 01/08 (V12): a EXCEÇÃO deixou de ser uma e virou DUAS (FAQ + planos) — a redação mudou, a
+    // propriedade não: a regra dura precisa declarar o FAQ como exceção, não só omiti-lo.
     const regra1 = melhoria.split('REGRAS DURAS (inegociáveis):')[1].split('\n2.')[0];
     expect(regra1).not.toMatch(/agenda ou perguntas frequentes/);
-    expect(regra1).toMatch(/perguntas frequentes do negócio são a EXCEÇÃO/);
+    expect(regra1).toMatch(/perguntas frequentes do negócio e os planos.*entram na persona/);
   });
 
   it.each(vivosFaq)('%s: o guardrail dos OUTROS dados operacionais NÃO afrouxou', (_nome, sp) => {
-    // Só o FAQ mudou de lado. Horário/serviço/preço/endereço/planos continuam proibidos na
-    // persona e continuam tendo tela própria — inclusive dentro da resposta de um FAQ.
+    // Só o FAQ (e, desde 01/08, os planos) mudaram de lado. Horário/serviço/preço avulso/endereço
+    // continuam proibidos na persona e continuam tendo tela própria — inclusive dentro da
+    // resposta de um FAQ.
     for (const destino of Object.values(ONDE_SE_CONFIGURA)) {
       expect(sp, `sumiu o redirecionamento de "${destino.dado}"`).toContain(
         formatCaminho(destino.caminho),
@@ -327,7 +348,7 @@ describe('perguntas frequentes viraram conteúdo da persona (V9/V10)', () => {
       'endereço',
       'horário de funcionamento',
       'lista de serviços',
-      'preços',
+      'preços de serviço avulso',
     ]) {
       expect(regra1, `regra dura 1 parou de proibir ${proibido}`).toContain(proibido);
     }
@@ -342,6 +363,138 @@ describe('perguntas frequentes viraram conteúdo da persona (V9/V10)', () => {
       sp.split('PERGUNTAS FREQUENTES (isto SIM entra na persona):')[1].split('\n\n')[0];
     expect(secao(criacao).length).toBeGreaterThan(200);
     expect(secao(criacao)).toBe(secao(melhoria));
+  });
+});
+
+// ── PLANOS E ASSINATURAS ENTRAM NA PERSONA (V11/V12, 01/08) ──────────────────────
+// Repetição exata da frente do FAQ, uma semana depois e com outro campo: "Planos e assinaturas"
+// SAI do portal ("Meu negócio" › "Dados") e o conteúdo (`personalizacao.planos_beneficios`)
+// migra para dentro do `bot_prompt`. Até a V9/V10 o código instruía a IA a RECUSAR o assunto e
+// redirecionar para aquela seção — se ela sumisse sem esta mudança, a primeira conversa da dona
+// (a Ingrid é a ÚNICA com planos preenchido hoje — medido em prod 01/08: 1 de 6 clones, 86
+// chars) tentaria EXPULSAR o conteúdo recém-migrado.
+//
+// Havia QUATRO portas de recusa, e só uma vinha do catálogo:
+//  1. a linha `planos` do mapa `ONDE_SE_CONFIGURA` (a porta óbvia);
+//  2. a REGRA DURA 1 da V10, que citava `planos, pacotes` NOMINALMENTE (a mais forte);
+//  3. a REGRA DURA 1 da V9, que proibia `preços` — um plano TEM valor, então caía debaixo dela
+//     por leitura literal, mesmo sem citar plano (a assimetria que ninguém tinha visto);
+//  4. o rótulo `Planos e benefícios` em CAMPOS_PERSONALIZACAO_ROTULOS, cujo parágrafo manda
+//     "recusar com segurança" o que estiver na lista (a porta hardcoded, fora do catálogo).
+//
+// Como no FAQ, os testes travam as DUAS metades: a NEGATIVA (nenhuma porta sobrou) e a POSITIVA
+// (o prompt ACOLHE), porque remover a proibição não faz o modelo aceitar uma lista fechada.
+describe('planos e assinaturas viraram conteúdo da persona (V11/V12)', () => {
+  const criacao = buildEntrevistadorSystemPrompt({
+    nomeNegocio: 'Barbearia do Zé',
+    area: 'barbearia',
+    modo: 'agenda',
+  });
+  // area 'outro' de propósito (regra de negócio 28): a Ingrid é psicóloga, não barbearia, e é
+  // justamente o ramo não-barbearia que costuma escapar das proteções com early-return.
+  const melhoria = buildMelhoriaSystemPrompt({
+    nomeNegocio: 'Consultório',
+    area: 'outro',
+    modo: 'agenda',
+    personaAtual: 'Você é a assistente e fala com acolhimento.',
+    camposConfigurados: ['Endereço ("Meu negócio" › "Dados")'],
+  });
+  const vivosPlanos: Array<[string, string]> = [
+    ['V11 (criação)', criacao],
+    ['V12 (melhoria)', melhoria],
+  ];
+
+  it.each(vivosPlanos)(
+    '%s: NÃO manda mais configurar plano em tela nenhuma (a seção vai deixar de existir)',
+    (_nome, sp) => {
+      // Porta 1: a linha do mapa. O bloco de redirecionamento não pode mais citar plano/pacote/
+      // assinatura como dado a cadastrar em tela.
+      const blocoRedirect = sp
+        .split('ONDE CADA COISA SE CONFIGURA')[1]
+        .split(/\nPERGUNTAS FREQUENTES \(isto SIM/)[0];
+      expect(blocoRedirect).not.toMatch(/planos/i);
+      expect(blocoRedirect).not.toMatch(/pacotes/i);
+      expect(blocoRedirect).not.toMatch(/assinaturas/i);
+    },
+  );
+
+  it.each(vivosPlanos)('%s: ACOLHE planos de forma explícita, COM o valor', (_nome, sp) => {
+    // A metade positiva: sem ela, a lista fechada ("nada além disso") faz o modelo recusar por
+    // omissão, exatamente como aconteceu no FAQ.
+    expect(sp).toContain('PLANOS E ASSINATURAS (isto SIM entra na persona)');
+    expect(sp).toMatch(/E O VALOR DELES — são conteúdo LEGÍTIMO da persona/);
+    expect(sp).toMatch(/planos não se configuram em tela nenhuma, eles moram aqui/);
+    // O exemplo concreto do pedido do Bruno tem que estar no texto: é o que ancora o modelo.
+    expect(sp).toContain('pacote mensal de 4 sessões por R$ 396');
+  });
+
+  it.each(vivosPlanos)('%s: a lista fechada do que entra na persona inclui os planos', (_n, sp) => {
+    const listaFechada = sp
+      .split(/O QUE (?:VOCÊ COLETA E GERA|PODE ENTRAR NA PERSONA) \(só isto\)/)[1]
+      .split('\n\n')[0];
+    expect(listaFechada).toMatch(/PLANOS, PACOTES OU ASSINATURAS/);
+  });
+
+  it.each(vivosPlanos)('%s: a REGRA DURA 1 não proíbe mais plano/pacote', (_nome, sp) => {
+    // Portas 2 e 3, nas DUAS versões (a V9 não citava `planos` e a V10 citava — a assimetria
+    // acabou aqui: v11 e v12 dizem a mesma coisa).
+    const regra1 = sp.split('REGRAS DURAS (inegociáveis):')[1].split('\n2.')[0];
+    expect(regra1, 'regra dura 1 ainda cita planos como proibido').not.toMatch(/\bplanos,/);
+    expect(regra1).not.toMatch(/\bpacotes,/);
+    // E declara a exceção EXPLICITAMENTE — omitir não basta num prompt de lista fechada.
+    expect(regra1).toMatch(/planos\/pacotes\/assinaturas/);
+  });
+
+  it.each(vivosPlanos)('%s: o preço de SERVIÇO AVULSO continua proibido', (_nome, sp) => {
+    // O guardrail que NÃO podia afrouxar junto. A fronteira é a ORIGEM do dado (catálogo × plano),
+    // não o cifrão: se isto cair, o bot volta a ter "corte R$ 45" colado na persona, que é
+    // exatamente o bug do horário no prompt do dragon.
+    const regra1 = sp.split('REGRAS DURAS (inegociáveis):')[1].split('\n2.')[0];
+    expect(regra1).toContain('preços de serviço avulso');
+    expect(sp).toMatch(/preço de SERVIÇO AVULSO segue proibido/);
+    expect(sp).toContain('"corte R$ 45" não entra');
+    // E os outros dados operacionais seguem com tela própria e redirecionamento vivo.
+    for (const destino of Object.values(ONDE_SE_CONFIGURA)) {
+      expect(sp, `sumiu o redirecionamento de "${destino.dado}"`).toContain(
+        formatCaminho(destino.caminho),
+      );
+    }
+  });
+
+  it('a seção nova é IDÊNTICA nas duas versões vivas (uma regra, uma redação)', () => {
+    // Mesmo motivo do FAQ: duas redações para a mesma regra foi como nasceu o bug dos nomes de
+    // tela (v4 corrigida × v6 esquecida).
+    const secao = (sp: string) =>
+      sp.split('PLANOS E ASSINATURAS (isto SIM entra na persona):')[1].split('\n\n')[0];
+    expect(secao(criacao).length).toBeGreaterThan(200);
+    expect(secao(criacao)).toBe(secao(melhoria));
+  });
+
+  it('a 4ª porta (rótulo em campos_configurados) não reintroduz a recusa no prompt MONTADO', () => {
+    // Esta é a porta hardcoded, fora do catálogo — a que quase furou a entrega do FAQ. O teste
+    // monta o prompt do jeito que o servidor monta, a partir do JSONB de um clone que TEM
+    // `planos_beneficios`. Medido em prod 01/08: esse clone é UM só, a Ingrid (psicóloga,
+    // `area='outro'`, ramo AGENDA, 86 chars no campo) — é o estado real antes da migração.
+    const camposDoCloneComPlanos = derivarCamposConfigurados(
+      { nome_negocio: 'Consultório', planos_beneficios: 'Pacote 4 sessões R$396' },
+      [],
+    );
+    expect(camposDoCloneComPlanos.join('\n')).not.toMatch(/planos/i);
+    const sp = buildMelhoriaSystemPrompt({
+      nomeNegocio: 'Consultório',
+      area: 'outro',
+      modo: 'agenda',
+      personaAtual: 'Você é a assistente do consultório.',
+      camposConfigurados: camposDoCloneComPlanos,
+    });
+    // O parágrafo que envolve a lista manda RECUSAR o que está nela. Se "Planos" aparecesse ali,
+    // a IA recusaria justamente o caminho que passou a ser o certo.
+    const blocoCampos = sp
+      .split('O QUE O DONO JÁ CONFIGUROU NAS OUTRAS TELAS')[1]
+      .split('ESCOPO DO PEDIDO')[0];
+    expect(blocoCampos).not.toMatch(/Planos e benefícios/);
+    // E o parágrafo declara a exceção dupla, para o modelo não recair na recusa por generalização.
+    expect(blocoCampos).toMatch(/planos\/pacotes\/assinaturas não aparecem nesta lista/);
   });
 });
 
@@ -794,12 +947,18 @@ describe('derivarCamposConfigurados (SCRUM-153) — só NOMES de campo, nunca va
     );
     const joined = out.join('\n');
     // Rótulos presentes...
-    expect(joined).toContain('Planos e benefícios');
+    expect(joined).toContain('Endereço');
+    expect(joined).toContain('Formas de pagamento');
     // 31/07: `faq_personalizado` NÃO produz mais rótulo, mesmo preenchido. Esta lista alimenta o
     // parágrafo que manda a IA RECUSAR o que está nela — e as perguntas frequentes passaram a ser
     // conteúdo legítimo da persona (V9/V10). Um clone legado com o FAQ ainda no JSONB (antes da
     // migração para o bot_prompt) não pode reintroduzir a recusa por esta porta.
     expect(joined).not.toMatch(/perguntas frequentes/i);
+    // 01/08: `planos_beneficios` SAIU pela mesma porta e pelo mesmo motivo (V11/V12). Note que o
+    // JSONB acima TEM o campo preenchido de propósito: é o estado real do ÚNICO clone que o tem
+    // em prod (a Ingrid, medido 01/08: 1 de 6, 86 chars), antes da migração para o bot_prompt.
+    // Rótulo aqui = a IA recusa o caminho novo.
+    expect(joined).not.toMatch(/planos/i);
     // SCRUM-159: o rótulo passou a citar o caminho REAL ("Serviços"), não mais "Catálogo de
     // serviços" — nome que não existe em tela nenhuma e que ia direto pro system prompt ativo.
     expect(joined).toContain('Serviços (1 cadastrado');

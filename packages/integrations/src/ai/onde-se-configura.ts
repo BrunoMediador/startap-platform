@@ -21,7 +21,7 @@
  * saem do menu lateral e viram sub-abas de "Meu negócio"; a personalização da IA vira o item
  * próprio "Meu atendente". Consequência direta nos prompts: TODO "aqui mesmo nesta página" da
  * v6 deixou de ser verdade — o builder passa a viver em "Meu atendente › Personalidade",
- * enquanto Dados e Planos ficam em "Meu negócio › Dados". Por isso o formato de caminho agora é
+ * enquanto os Dados do negócio ficam em "Meu negócio › Dados". Por isso o formato de caminho é
  * sempre `"Tela › Aba"`, absoluto e navegável de qualquer lugar do portal, em vez de relativo
  * ("nesta mesma página") — instrução relativa é a que apodrece primeiro quando a tela se move.
  *
@@ -33,9 +33,19 @@
  * mandando o dono para uma tela que deixou de existir — a mesma classe de bug que este módulo
  * nasceu para matar, só que ao contrário: não um nome errado, mas um destino morto.
  *
+ * ## Por que os PLANOS saíram deste mapa (01/08)
+ *
+ * Mesma história, uma semana depois e com outro campo: `planos` era a 4ª linha, apontando para
+ * "Meu negócio › Dados". O campo "Planos e assinaturas" está sendo REMOVIDO do portal e o
+ * conteúdo (`personalizacao.planos_beneficios`) migra para dentro do `bot_prompt` — daí em
+ * diante o dono configura plano CONVERSANDO com a IA do builder (V11/V12). Manter a linha aqui
+ * mandaria o dono para uma seção morta e faria a IA recusar exatamente o caminho novo.
+ *
  * ⚠️ Este mapa é a lista do que a persona NÃO pode conter. Tirar uma linha daqui é decisão de
- * PRODUTO (o dado mudou de lado), não faxina de código: horários, serviços, preços, endereço,
- * telefone e planos CONTINUAM proibidos na persona, cada um com sua tela própria.
+ * PRODUTO (o dado mudou de lado), não faxina de código: horários, serviços, PREÇO DE SERVIÇO
+ * AVULSO, endereço e telefone CONTINUAM proibidos na persona, cada um com sua tela própria.
+ * O critério não é "tem cifrão": preço avulso vem do catálogo de Serviços e é injetado em
+ * runtime, sempre atualizado; plano não tem mais catálogo nenhum e por isso mora na persona.
  *
  * ## Alinhamento com a fonte real dos rótulos (follow-up conhecido)
  *
@@ -66,7 +76,7 @@ export interface CaminhoTela {
  * Chave de cada linha do bloco de redirecionamento. Nomeadas pelo DADO que o dono cita
  * ("falei do meu horário"), não pela tela — é assim que o modelo faz o casamento.
  */
-export type DadoOperacional = 'horarios' | 'servicos' | 'dados-negocio' | 'planos';
+export type DadoOperacional = 'horarios' | 'servicos' | 'dados-negocio';
 
 /**
  * Uma linha do bloco: o que o dono citou → onde aquilo se configura.
@@ -100,10 +110,6 @@ export const ONDE_SE_CONFIGURA: Readonly<Record<DadoOperacional, DestinoConfigur
   },
   'dados-negocio': {
     dado: 'Endereço, nome do negócio, telefone, formas de pagamento',
-    caminho: { tela: 'Meu negócio', aba: 'Dados' },
-  },
-  planos: {
-    dado: 'Planos, pacotes e assinaturas',
     caminho: { tela: 'Meu negócio', aba: 'Dados' },
   },
 } as const;
