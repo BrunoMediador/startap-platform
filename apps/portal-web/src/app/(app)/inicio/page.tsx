@@ -1,6 +1,5 @@
 'use client';
 
-import { IconPlus } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 /**
  * Home / Status (spec 7, hierarquia 3 niveis: status > vencimento > metricas/listas).
@@ -10,13 +9,11 @@ import { useTenant } from '@/components/shell/session-context';
  * pagina busca tudo. Suspensao por inadimplencia mostra aviso informativo (D3).
  */
 import { MetricCard } from '@/components/ui/card';
-import { Skeleton, SkeletonList } from '@/components/ui/skeleton';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { agruparAgendamentos } from '@/lib/agendamentos';
 import { useAgendamentos, useStatus } from '@/lib/queries';
 import { resolveMotivoPausa } from '@/lib/suspensao';
-import Link from 'next/link';
-import { AgendamentosList } from './agendamentos-list';
 import { GuiaAtivacao } from './guia-ativacao';
 import { HeroZone } from './hero-zone';
 import { SuspendedNotice } from './suspended-notice';
@@ -45,7 +42,6 @@ export default function InicioPage() {
           <Skeleton className="h-[74px] rounded-card-sm" />
           <Skeleton className="h-[74px] rounded-card-sm" />
         </div>
-        <SkeletonList rows={3} />
       </>
     );
   }
@@ -91,36 +87,13 @@ export default function InicioPage() {
           href="/pausas"
           ariaLabel={`${data.pausas_ativas} números pausados — ver pausas`}
         />
-        <MetricCard value={proximosCount} caption="Próximos agendamentos" />
-      </div>
-
-      <div className="stagger stagger-4 mx-0.5 mb-[11px] mt-1 flex items-center justify-between">
-        <h2 className="font-display text-[15px] font-semibold text-ink">Agendamentos</h2>
-        {/* Entrada do agendamento manual (Missão 020 F4 — Fluxo B, ponto 1). */}
-        <Link
-          href="/agendamentos/novo"
-          className="inline-flex h-9 items-center gap-1.5 rounded-pill border border-line-strong bg-surface px-3.5 font-display text-[13px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-        >
-          <IconPlus size={16} />
-          Novo
-        </Link>
-      </div>
-
-      {agendamentos.isPending ? (
-        <>
-          <span className="sr-only">Carregando seus agendamentos…</span>
-          <SkeletonList rows={3} />
-        </>
-      ) : agendamentos.isError || !agendamentos.data ? (
-        <ErrorState
-          title="Não foi possível carregar os agendamentos"
-          onRetry={() => agendamentos.refetch()}
+        <MetricCard
+          value={proximosCount}
+          caption="Próximos agendamentos"
+          href="/agenda"
+          ariaLabel={`${proximosCount} próximos agendamentos — ver agenda`}
         />
-      ) : (
-        <div className="stagger stagger-4">
-          <AgendamentosList data={agendamentos.data} />
-        </div>
-      )}
+      </div>
     </>
   );
 }
