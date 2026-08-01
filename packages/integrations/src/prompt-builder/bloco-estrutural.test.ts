@@ -52,8 +52,8 @@ describe('buildBlocoEstrutural — variante estabelecimento (MVP SCRUM-92)', () 
     const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'barbearia' });
     expect(bloco).toContain(BLOCO_ESTRUTURAL_MARKER);
     expect(bloco).toContain('CARTAO DE CONFIRMACAO');
-    // campo do profissional no cartão (casando o runtime: 👤 PROFISSIONAL).
-    expect(bloco).toContain('👤 PROFISSIONAL:');
+    // campo do profissional no cartão (layout aprovado 31/07/2026: 👤 Profissional).
+    expect(bloco).toContain('👤 Profissional:');
     // cliente escolhe pelo NOME, nunca id curto (C1/C2).
     expect(bloco).toMatch(/NOME do profissional/);
     expect(bloco).toContain('C1/C2');
@@ -81,7 +81,7 @@ describe('buildBlocoEstrutural — variante estabelecimento (MVP SCRUM-92)', () 
   it('área não-barbearia troca o serviço (manicure → 💅) e mantém 👤', () => {
     const bloco = buildBlocoEstrutural({ modo: 'estabelecimento', area: 'manicure' });
     expect(bloco).toContain('💅');
-    expect(bloco).toContain('👤 PROFISSIONAL:');
+    expect(bloco).toContain('👤 Profissional:');
   });
 });
 

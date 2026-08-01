@@ -312,21 +312,22 @@ describe('cartão em runtime — caminho ESTABELECIMENTO (gate ON + cartao_mode=
     cfg.CARTAO_RUNTIME_ENABLED = true;
   });
 
-  it('injeta o cartão de estabelecimento por código com 👤 PROFISSIONAL uma única vez', async () => {
+  it('injeta o cartão de estabelecimento por código com 👤 Profissional uma única vez', async () => {
     setupEstabelecimento({ area: 'barbearia', cartaoMode: 'runtime' });
     const sp = await systemPromptFor('clone_estab_runtime');
     // Header estrutural presente = bloco RUNTIME (o baked buildCartaoEstabelecimentoBlock não tem HEADER).
     expect(sp).toContain(BLOCO_ESTRUTURAL_MARKER);
-    expect(count(sp, '👤 PROFISSIONAL:')).toBe(1);
+    expect(count(sp, '👤 Profissional:')).toBe(1);
     expect(count(sp, '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO')).toBe(1);
     expect(sp).toMatch(/SÓ DEPOIS do SIM, chamar a ferramenta inserir_agendamento/);
   });
 
-  it('baked (default) NÃO usa o bloco runtime (sem HEADER estrutural), cartão do #325 intacto', async () => {
+  it('baked (default) NÃO usa o bloco runtime (sem HEADER estrutural), cartão do #325 INTACTO (baked NUNCA muda)', async () => {
     setupEstabelecimento({ area: 'barbearia', cartaoMode: 'baked' });
     const sp = await systemPromptFor('clone_estab_baked');
     expect(sp).not.toContain(BLOCO_ESTRUTURAL_MARKER);
-    // Cartão de estabelecimento baked (#325) segue presente — 1 vez, com 👤.
+    // Cartão de estabelecimento baked (#325, buildCartaoEmojiOverrideBlock) é OUTRO módulo —
+    // não tocado por esta PR. Segue com o rótulo velho (CAIXA ALTA), 1 vez, com 👤.
     expect(count(sp, '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO')).toBe(1);
     expect(count(sp, '👤 PROFISSIONAL:')).toBe(1);
   });
