@@ -73,6 +73,11 @@ import * as promptBuilder from '@startap/integrations/prompt-builder';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { portalCartaoConfigRoutes } from './portal-cartao-config.js';
 
+// Módulo REAL de @startap/db (não o vi.mock acima — importActual pra pegar a constante do
+// sentinela e travar a PARIDADE com @startap/integrations, já que os dois lados duplicam o
+// valor de propósito por causa da direção da dependência — ver clone-colaboradores.ts).
+const realDb = await vi.importActual<typeof import('@startap/db')>('@startap/db');
+
 // Cartão BAKED "limpo" (bloco estrutural do builder): fronteira clara + trailing → extraível.
 const CARTAO_BLOCO = promptBuilder.buildBlocoEstrutural({ modo: 'agenda', area: 'barbearia' });
 const PERSONA = 'Você é o Cirilo, atendente da Barbearia do Cirilo. Seja simpático e objetivo.';
@@ -506,7 +511,7 @@ describe('PUT /portal/cartao-config', () => {
     await app.close();
   });
 
-  it('emoji fora do catálogo → 400 emoji_invalido', async () => {
+  it('emoji livre (fora do antigo catálogo curado) é ACEITO — decisão do Bruno, emoji livre', async () => {
     mockClone();
     const app = await buildApp();
     const res = await app.inject({
@@ -514,8 +519,34 @@ describe('PUT /portal/cartao-config', () => {
       url: '/portal/cartao-config',
       payload: { template: 'padrao', emojis: { valor: '🎩' } },
     });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('texto/letra/dígito não é emoji → 400 emoji_invalido', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: { valor: 'DROP TABLE' } },
+    });
     expect(res.statusCode).toBe(400);
     expect(res.json().campo).toBe('valor');
+    await app.close();
+  });
+
+  it('sentinela de DESABILITADO é aceito e persistido tal qual', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/portal/cartao-config',
+      payload: { template: 'padrao', emojis: { valor: '__off__' } },
+    });
+    expect(res.statusCode).toBe(200);
+    const [, cfgArg] = setConfigMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect((cfgArg.emojis as Record<string, string>).valor).toBe('__off__');
     await app.close();
   });
 
@@ -592,7 +623,7 @@ describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-
     await app.close();
   });
 
-  it('emoji fora da allowlist na query → IGNORADO (default da área, prévia não quebra)', async () => {
+  it('emoji livre válido na query (fora do antigo catálogo curado) é RENDERIZADO na prévia', async () => {
     mockClone();
     const app = await buildApp();
     const res = await app.inject({
@@ -600,10 +631,50 @@ describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-
       url: `/portal/cartao-config/preview?marca=${encodeURIComponent('🎩')}`,
     });
     expect(res.statusCode).toBe(200);
-    // 🎩 não está no catálogo → cai no default da área (💈), nunca renderiza o emoji arbitrário.
-    expect(res.json().previews.padrao).toContain('💈');
-    expect(res.json().previews.padrao).not.toContain('🎩');
+    expect(res.json().previews.padrao).toContain('🎩');
+    expect(res.json().previews.padrao).not.toContain('💈');
     await app.close();
+  });
+
+  it('texto malicioso na query → IGNORADO (default da área, prévia nunca quebra/injeta)', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/cartao-config/preview?marca=${encodeURIComponent('DROP TABLE')}`,
+    });
+    expect(res.statusCode).toBe(200);
+    // texto arbitrário não é 1 emoji → IGNORADO, cai no default da área (💈).
+    expect(res.json().previews.padrao).toContain('💈');
+    expect(res.json().previews.padrao).not.toContain('DROP TABLE');
+    await app.close();
+  });
+
+  it('sentinela de desabilitado na query → prévia mostra a linha SEM o ícone', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/cartao-config/preview?marca=__off__',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().previews.padrao.split('\n')[0]).toBe('Barbearia do Cirilo');
+  });
+
+  it('previewsSegmentados vem junto (fonte única com previews, os 3 templates)', async () => {
+    mockClone();
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/cartao-config/preview' });
+    const body = res.json();
+    expect(Object.keys(body.previewsSegmentados).sort()).toEqual([
+      'compacto',
+      'detalhado',
+      'padrao',
+    ]);
+    const juntos = (body.previewsSegmentados.padrao as { valor: string }[])
+      .map((s) => s.valor)
+      .join('');
+    expect(juntos).toBe(body.previews.padrao);
   });
 
   it('slot vem SEMPRE da sessão (anti-IDOR): a query não nomeia outro clone', async () => {
@@ -614,5 +685,18 @@ describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-
     expect(getCartaoMock).toHaveBeenCalledWith(injectedSlot);
     expect(getServicosMock).toHaveBeenCalledWith(injectedSlot);
     await app.close();
+  });
+});
+
+// Este arquivo é o ÚNICO módulo do monorepo que já importa @startap/db E
+// @startap/integrations/prompt-builder juntos (os pacotes não podem depender um do outro —
+// ciclo). O sentinela de "emoji desabilitado" é duplicado entre os dois de propósito
+// (CARTAO_EMOJI_DISABLED_SENTINEL no db, CARTAO_EMOJI_DISABLED em integrations); este teste
+// trava a PARIDADE — se alguém mudar um sem o outro, quebra aqui, não silenciosamente em prod.
+describe('paridade do sentinela de emoji desabilitado entre @startap/db e @startap/integrations', () => {
+  it('CARTAO_EMOJI_DISABLED_SENTINEL (db) === CARTAO_EMOJI_DISABLED (integrations)', () => {
+    expect(realDb.cloneColaboradores.CARTAO_EMOJI_DISABLED_SENTINEL).toBe(
+      promptBuilder.CARTAO_EMOJI_DISABLED,
+    );
   });
 });

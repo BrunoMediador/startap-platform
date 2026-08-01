@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BLOCO_ESTRUTURAL_MARKER,
+  CARTAO_EMOJI_DISABLED,
   buildCartaoRuntimeBlock,
   mergeEmojis,
 } from './bloco-estrutural.js';
@@ -44,6 +45,23 @@ describe('mergeEmojis', () => {
   it('valor vazio/branco NÃO apaga o ícone (herda a base — defensivo)', () => {
     expect(mergeEmojis(BASE, { marca: '' }).marca).toBe('💈');
     expect(mergeEmojis(BASE, { marca: '   ' }).marca).toBe('💈');
+  });
+
+  it('SENTINELA CARTAO_EMOJI_DISABLED apaga o ícone (emoji vazio) — só ele, não string em branco', () => {
+    const out = mergeEmojis(BASE, { marca: CARTAO_EMOJI_DISABLED });
+    expect(out.marca).toBe('');
+    // as outras chaves seguem herdando a base normalmente.
+    expect(out.servico).toBe('✂️');
+  });
+
+  it('sentinela funciona em qualquer chave, inclusive confirma/profissional', () => {
+    const out = mergeEmojis(BASE, {
+      confirma: CARTAO_EMOJI_DISABLED,
+      profissional: CARTAO_EMOJI_DISABLED,
+    });
+    expect(out.confirma).toBe('');
+    expect(out.profissional).toBe('');
+    expect(out.marca).toBe('💈'); // não tocado → herda
   });
 });
 
@@ -184,5 +202,108 @@ describe('buildCartaoRuntimeBlock — atendente + determinismo', () => {
       nomeNegocio: 'Studio X',
     };
     expect(buildCartaoRuntimeBlock(opts)).toBe(buildCartaoRuntimeBlock(opts));
+  });
+});
+
+/**
+ * Emoji DESABILITADO (CARTAO_EMOJI_DISABLED) — decisão do Bruno: desabilitar tira SÓ o ícone,
+ * a linha FICA. `💈 Barbearia X` vira `Barbearia X`, NUNCA ` Barbearia X` (espaço à esquerda).
+ * Cobre os 3 templates × agenda/estabelecimento (regra 27/28: byte-a-byte quando não muda nada,
+ * e área NÃO-barbearia — Ingrid é `area='outro'` — é o caminho desprotegido do
+ * buildCartaoEmojiOverrideBlock legado; aqui cobrimos com area='outro' e area=null/dragon).
+ */
+describe('buildCartaoRuntimeBlock — emoji DESABILITADO (sentinela) não deixa espaço órfão', () => {
+  it('agenda/padrao: marca desabilitada → linha some o ícone, sem espaço à esquerda (area="outro", caso Ingrid)', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'outro',
+      config: { emojis: { marca: CARTAO_EMOJI_DISABLED } },
+      nomeNegocio: 'Consultório da Ingrid',
+    });
+    expect(bloco).toContain('\nConsultório da Ingrid\n');
+    expect(bloco).not.toContain(' Consultório da Ingrid');
+    expect(bloco).not.toContain('  Consultório'); // dois espaços = sinal de campo vazio no meio
+  });
+
+  it('agenda/padrao: dia desabilitado no meio da linha combinada não deixa "//" nem espaço duplo (area=null, caso dragon)', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: null,
+      config: { emojis: { dia: CARTAO_EMOJI_DISABLED } },
+    });
+    // "DIA: <dia> / HORARIO: <horario> / ..." sem o emoji de dia, mas com separador ' / ' intacto.
+    expect(bloco).toContain('DIA: <dia> / ⏰ HORARIO: <horario>');
+    expect(bloco).not.toContain('  DIA'); // não sobrou espaço duplo onde o emoji estava
+  });
+
+  it('agenda/compacto: TODOS os emojis desabilitados → linha vira só texto com separadores intactos', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'barbearia',
+      config: {
+        template: 'compacto',
+        emojis: {
+          marca: CARTAO_EMOJI_DISABLED,
+          dia: CARTAO_EMOJI_DISABLED,
+          horario: CARTAO_EMOJI_DISABLED,
+          servico: CARTAO_EMOJI_DISABLED,
+          valor: CARTAO_EMOJI_DISABLED,
+        },
+      },
+      nomeNegocio: 'Barbearia X',
+    });
+    expect(bloco).toContain('Barbearia X — <dia> <horario> <servico> <valor>');
+    expect(bloco).not.toMatch(/ {2,}/); // nunca 2+ espaços seguidos
+  });
+
+  it('agenda/detalhado: valor desabilitado → linha vira só "VALOR: <valor>" sem espaço à esquerda', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'barbearia',
+      config: { template: 'detalhado', emojis: { valor: CARTAO_EMOJI_DISABLED } },
+      nomeNegocio: 'Barbearia X',
+    });
+    expect(bloco).toContain('\nVALOR: <valor>\n');
+    expect(bloco).not.toContain(' VALOR: <valor>');
+  });
+
+  it('estabelecimento/padrao: profissional desabilitado → linha vira só "PROFISSIONAL: <...>"', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      config: { emojis: { profissional: CARTAO_EMOJI_DISABLED } },
+    });
+    expect(bloco).toContain('\nPROFISSIONAL: <nome do profissional escolhido>\n');
+    expect(bloco).not.toContain(' PROFISSIONAL:');
+  });
+
+  it('estabelecimento/compacto: horario (🕐) desabilitado não deixa espaço duplo', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      config: { template: 'compacto', emojis: { horario: CARTAO_EMOJI_DISABLED } },
+    });
+    expect(bloco).not.toMatch(/ {2,}/);
+  });
+
+  it('estabelecimento/detalhado: confirma desabilitado → fechamento sem espaço à direita', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      config: { template: 'detalhado', emojis: { confirma: CARTAO_EMOJI_DISABLED } },
+    });
+    expect(bloco).toContain('Termine o cartão pedindo: "Responda SIM para confirmar."\n');
+    expect(bloco).not.toContain('confirmar." \n');
+    expect(bloco).not.toMatch(/confirmar\."\s+$/m);
+  });
+
+  it('confirma desabilitado no fechamento (compacto) não deixa trailing space', () => {
+    const bloco = buildCartaoRuntimeBlock({
+      modo: 'agenda',
+      area: 'barbearia',
+      config: { template: 'compacto', emojis: { confirma: CARTAO_EMOJI_DISABLED } },
+    });
+    const linhaFechamento = bloco.split('\n').find((l) => l.includes('Depois peça'));
+    expect(linhaFechamento).toBe('Depois peça: "Responda SIM para confirmar."');
   });
 });

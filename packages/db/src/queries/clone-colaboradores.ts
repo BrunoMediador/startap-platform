@@ -535,6 +535,11 @@ export type CartaoMode = 'baked' | 'runtime';
  * @startap/db NÃO depende de @startap/integrations (a dependência é o contrário; importar
  * de lá criaria ciclo). O caller (apps/api) passa este objeto direto pro buildCartaoRuntimeBlock
  * (tipo estruturalmente compatível). Só campos VALIDADOS entram — o resto é descartado.
+ *
+ * `emojis[key]` aceita, além de um emoji livre, o SENTINELA de "desabilitado"
+ * (CARTAO_EMOJI_DISABLED_SENTINEL abaixo — espelha CARTAO_EMOJI_DISABLED de
+ * @startap/integrations/prompt-builder, mesma razão de duplicação estrutural do resto deste
+ * tipo). O tipo continua `string` de propósito (ver a decisão completa no arquivo de origem).
  */
 export interface CloneCartaoConfig {
   template?: 'padrao' | 'compacto' | 'detalhado';
@@ -558,10 +563,26 @@ const CARTAO_EMOJI_KEYS = [
 ] as const;
 
 /**
+ * SENTINELA de "emoji desabilitado" — cópia local do valor definido em
+ * `@startap/integrations/prompt-builder` (`CARTAO_EMOJI_DISABLED`). @startap/db NÃO importa de
+ * @startap/integrations (ciclo), então o valor é duplicado de propósito. A paridade entre os
+ * dois é travada por teste em `apps/portal-api/src/routes/portal-cartao-config.test.ts` (o
+ * único módulo do monorepo que já importa @startap/db E @startap/integrations juntos) — mudar
+ * um sem o outro quebra aquele teste, não silenciosamente em prod.
+ */
+export const CARTAO_EMOJI_DISABLED_SENTINEL = '__off__' as const;
+
+/**
  * Valida DEFENSIVAMENTE o JSONB cru de cartao_config numa CloneCartaoConfig. Nunca lança:
  * shape inesperado (não-objeto, template fora do domínio, emoji não-string) é descartado
  * silenciosamente → null ou objeto parcial. O buildCartaoRuntimeBlock é puro/tolerante, mas
  * validar aqui garante que o tipo forte (`template` union) não é uma mentira sobre o dado.
+ *
+ * `v !== ''` (guard de sempre, preservado) já deixa passar o SENTINELA de desabilitado sem
+ * precisar de um caso especial: o sentinela é uma string NÃO-VAZIA (`'__off__'`), então cai
+ * naturalmente no mesmo ramo de "emoji válido" — só uma string EM BRANCO acidental (`''`,
+ * `'   '`... não, `'   '` passaria hoje; ver nota) continua sendo descartada. O consumidor
+ * (mergeEmojis) é quem interpreta o sentinela como emoji vazio; aqui só preservamos o valor.
  */
 function parseCartaoConfig(raw: unknown): CloneCartaoConfig | null {
   if (!raw || typeof raw !== 'object') return null;

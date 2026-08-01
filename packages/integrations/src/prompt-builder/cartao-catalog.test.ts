@@ -1,73 +1,148 @@
 /**
- * Testes da ALLOWLIST FECHADA de emoji (SCRUM-92 inc.2, decisão do security).
+ * Testes da validação de EMOJI LIVRE do cartão (decisão do Bruno, substitui a allowlist
+ * fechada do SCRUM-92 inc.2 / ADR 0032).
  *
  * O que provamos:
- *  - membership por sequência INTEIRA + NFC (não por categoria/grapheme);
- *  - TAG CHARS (U+E00xx) coladas num emoji válido = REJEITADO (o furo que grapheme deixaria);
- *  - fora do catálogo / chave desconhecida / tipo errado = rejeitado;
- *  - TODO default por área é membro do catálogo (o picker nunca oferece algo que o backend nega);
- *  - paridade com o catálogo da UI (feat/scrum92-cartao-config-ui) — contrato compartilhado;
- *  - extractSeedEmojis puxa os emojis de um cartão capturado só quando estão na allowlist.
+ *  - aceita EXATAMENTE 1 emoji (grapheme cluster único), incluindo ZWJ legítimo e VS16;
+ *  - rejeita TODO caso malicioso do enunciado (tag chars, ZWJ órfão, VS solto, controle,
+ *    ZWSP, newline, múltiplos emojis, texto, dígito, espaço, pontuação, string vazia);
+ *  - o sentinela de "desabilitado" (CARTAO_EMOJI_DISABLED) é aceito pelo validador do PUT
+ *    mas NUNCA passa em isSingleValidEmoji (não é alcançável por digitação);
+ *  - extractSeedEmojis extrai por POSIÇÃO/RÓTULO (não por membership num catálogo, que não
+ *    existe mais) e não confunde chaves com o MESMO emoji (caso real: Samuel tem
+ *    marca=servico=✂️).
  */
 import { describe, expect, it } from 'vitest';
+import { CARTAO_EMOJI_DISABLED } from './bloco-estrutural.js';
 import {
-  CARTAO_EMOJI_KEYS,
-  allAreaDefaultEmojiSets,
-  resolveDefaultCartaoEmojis,
-} from './bloco-estrutural.js';
-import {
-  emojiCatalog,
   extractSeedEmojis,
   isEmojiAllowed,
+  isSingleValidEmoji,
   isTemplateAllowed,
   validateCartaoEmojis,
 } from './cartao-catalog.js';
 
-// Espelho do catálogo do picker da UI (apps/portal-web/src/lib/cartao-config.ts EMOJI_CATALOG).
-// Se a UI mudar, este espelho muda junto — o teste é o guarda do contrato compartilhado.
-const UI_CATALOG: Record<string, string[]> = {
-  marca: ['💈', '💇', '💅', '💆', '✂️', '📅', '🌻'],
-  dia: ['📅', '🗓️', '📆'],
-  horario: ['⏰', '🕐', '⌚'],
-  servico: ['✂️', '💇', '💅', '✨', '📋', '📝'],
-  valor: ['💰', '💵', '💲', '🪙'],
-  confirma: ['✅', '☑️', '👍'],
-  profissional: ['👤', '🧑‍🔧', '💇‍♂️'],
-};
+// Tag chars U+E0000..U+E007F (o vetor de injeção que motivou a validação inteira).
+const TAG_CHAR_1 = String.fromCodePoint(0xe0067);
+const TAG_CHAR_CANCEL = String.fromCodePoint(0xe007f);
+const ZWJ = String.fromCodePoint(0x200d);
+const VS16 = String.fromCodePoint(0xfe0f);
+const ZWSP = String.fromCodePoint(0x200b);
 
-describe('allowlist — membership exata (NFC + sequência inteira)', () => {
-  it('aceita um emoji do catálogo daquela chave', () => {
-    expect(isEmojiAllowed('marca', '💈')).toBe(true);
-    expect(isEmojiAllowed('confirma', '✅')).toBe(true);
-    expect(isEmojiAllowed('valor', '💵')).toBe(true);
+describe('isSingleValidEmoji — casos VÁLIDOS', () => {
+  it('aceita um emoji simples', () => {
+    expect(isSingleValidEmoji('💈')).toBe(true);
   });
 
-  it('REJEITA emoji certo na chave ERRADA (catálogo é por chave)', () => {
-    // 🪙 é válido em valor, não em confirma.
-    expect(isEmojiAllowed('valor', '🪙')).toBe(true);
-    expect(isEmojiAllowed('confirma', '🪙')).toBe(false);
+  it('aceita emoji com variation selector (✂️ = U+2702 U+FE0F)', () => {
+    expect(isSingleValidEmoji('✂️')).toBe(true);
   });
 
-  it('REJEITA tag chars (U+E00xx) coladas num emoji válido — o furo do grapheme', () => {
-    const tagged = `💈${String.fromCodePoint(0xe0067)}${String.fromCodePoint(0xe007f)}`;
-    expect(isEmojiAllowed('marca', tagged)).toBe(false);
-    const check = validateCartaoEmojis({ marca: tagged });
-    expect(check.ok).toBe(false);
+  it('aceita sequência ZWJ legítima (família 👨‍👩‍👧)', () => {
+    expect(isSingleValidEmoji('👨‍👩‍👧')).toBe(true);
   });
 
-  it('REJEITA texto arbitrário, string vazia e tipo errado', () => {
-    expect(isEmojiAllowed('marca', 'DROP TABLE')).toBe(false);
-    expect(isEmojiAllowed('marca', '')).toBe(false);
-    expect(isEmojiAllowed('marca', 42 as unknown)).toBe(false);
-    expect(isEmojiAllowed('marca', null as unknown)).toBe(false);
+  it('aceita emoji fora do antigo catálogo curado (emoji livre de verdade)', () => {
+    expect(isSingleValidEmoji('🎩')).toBe(true);
+    expect(isSingleValidEmoji('🌟')).toBe(true);
+  });
+});
+
+describe('isSingleValidEmoji — casos MALICIOSOS/INVÁLIDOS (todos DEVEM ser rejeitados)', () => {
+  it('rejeita emoji + tag chars (U+E0000-E007F) coladas', () => {
+    expect(isSingleValidEmoji(`💈${TAG_CHAR_1}${TAG_CHAR_CANCEL}`)).toBe(false);
+  });
+
+  it('rejeita emoji + letra (💈a)', () => {
+    expect(isSingleValidEmoji('💈a')).toBe(false);
+  });
+
+  it('rejeita 2 emojis (💈💈)', () => {
+    expect(isSingleValidEmoji('💈💈')).toBe(false);
+  });
+
+  it('rejeita letra sozinha (a)', () => {
+    expect(isSingleValidEmoji('a')).toBe(false);
+  });
+
+  it('rejeita espaço', () => {
+    expect(isSingleValidEmoji(' ')).toBe(false);
+  });
+
+  it('rejeita pontuação (.)', () => {
+    expect(isSingleValidEmoji('.')).toBe(false);
+  });
+
+  it('rejeita string vazia', () => {
+    expect(isSingleValidEmoji('')).toBe(false);
+  });
+
+  it('rejeita ZWJ órfão (sozinho, sem sequência)', () => {
+    expect(isSingleValidEmoji(ZWJ)).toBe(false);
+  });
+
+  it('rejeita variation selector solto (sozinho, sem base)', () => {
+    expect(isSingleValidEmoji(VS16)).toBe(false);
+  });
+
+  it('rejeita emoji + newline', () => {
+    expect(isSingleValidEmoji('💈\n')).toBe(false);
+  });
+
+  it('rejeita emoji + caractere de controle', () => {
+    expect(isSingleValidEmoji(`💈${String.fromCharCode(1)}`)).toBe(false);
+    expect(isSingleValidEmoji('💈\t')).toBe(false);
+  });
+
+  it('rejeita emoji + ZWSP (zero-width space)', () => {
+    expect(isSingleValidEmoji(`💈${ZWSP}`)).toBe(false);
+  });
+
+  it('rejeita dígito', () => {
+    expect(isSingleValidEmoji('1')).toBe(false);
+  });
+
+  it('rejeita tipo errado (não-string)', () => {
+    expect(isSingleValidEmoji(42 as unknown)).toBe(false);
+    expect(isSingleValidEmoji(null as unknown)).toBe(false);
+    expect(isSingleValidEmoji(undefined as unknown)).toBe(false);
+  });
+
+  it('rejeita bandeira de SUBDIVISÃO (RGI_Emoji válida, mas CARREGA tag chars por design) — a defesa em profundidade explícita', () => {
+    // 🏴 + tag chars da Inglaterra (gbeng). É um RGI_Emoji legítimo (bandeira reconhecida), mas
+    // o deny-list de tag chars rejeita por cima — não confiamos cegamente no RGI_Emoji sozinho.
+    const bandeiraSubdivisao = String.fromCodePoint(
+      0x1f3f4,
+      0xe0067,
+      0xe0062,
+      0xe0065,
+      0xe006e,
+      0xe0067,
+      0xe007f,
+    );
+    expect(isSingleValidEmoji(bandeiraSubdivisao)).toBe(false);
+  });
+});
+
+describe('isEmojiAllowed — wrapper compat (emoji livre, chave não restringe mais)', () => {
+  it('delega em isSingleValidEmoji independente da chave', () => {
+    expect(isEmojiAllowed('marca', '🎩')).toBe(true);
+    expect(isEmojiAllowed('valor', '🎩')).toBe(true);
+    expect(isEmojiAllowed('confirma', 'DROP TABLE')).toBe(false);
   });
 });
 
 describe('validateCartaoEmojis', () => {
-  it('aceita override parcial e re-normaliza (NFC) os valores', () => {
-    const r = validateCartaoEmojis({ marca: '💈', servico: '✨' });
+  it('aceita override parcial de emoji livre e re-normaliza (NFC)', () => {
+    const r = validateCartaoEmojis({ marca: '💈', servico: '🎩' });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.emojis).toEqual({ marca: '💈', servico: '✨' });
+    if (r.ok) expect(r.emojis).toEqual({ marca: '💈', servico: '🎩' });
+  });
+
+  it('aceita o SENTINELA de desabilitado numa chave', () => {
+    const r = validateCartaoEmojis({ marca: CARTAO_EMOJI_DISABLED });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.emojis).toEqual({ marca: CARTAO_EMOJI_DISABLED });
   });
 
   it('chave desconhecida = rejeitada (anti mass-assignment)', () => {
@@ -76,8 +151,9 @@ describe('validateCartaoEmojis', () => {
     if (!r.ok) expect(r.invalidKey).toBe('hack');
   });
 
-  it('valor fora do catálogo = rejeitado com a chave ofensora', () => {
-    const r = validateCartaoEmojis({ valor: '🎩' });
+  it('emoji malicioso (tag chars) = rejeitado com a chave ofensora', () => {
+    const tagged = `💈${TAG_CHAR_1}`;
+    const r = validateCartaoEmojis({ valor: tagged });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.invalidKey).toBe('valor');
   });
@@ -92,7 +168,7 @@ describe('validateCartaoEmojis', () => {
   });
 });
 
-describe('template enum fechado', () => {
+describe('template enum fechado (inalterado)', () => {
   it('só padrao/compacto/detalhado', () => {
     expect(isTemplateAllowed('padrao')).toBe(true);
     expect(isTemplateAllowed('compacto')).toBe(true);
@@ -102,39 +178,12 @@ describe('template enum fechado', () => {
   });
 });
 
-describe('catálogo cobre defaults e casa a UI', () => {
-  it('TODO default por área é membro do catálogo daquela chave', () => {
-    for (const set of allAreaDefaultEmojiSets()) {
-      for (const k of CARTAO_EMOJI_KEYS) {
-        expect(isEmojiAllowed(k, set[k])).toBe(true);
-      }
-    }
-  });
-
-  it('defaults por área do endpoint são todos válidos (agenda + estabelecimento)', () => {
-    for (const modo of ['agenda', 'estabelecimento'] as const) {
-      for (const area of ['barbearia', 'salao', 'manicure', 'estetica', null]) {
-        const d = resolveDefaultCartaoEmojis(modo, area);
-        for (const k of CARTAO_EMOJI_KEYS) expect(isEmojiAllowed(k, d[k])).toBe(true);
-      }
-    }
-  });
-
-  it('o conjunto do catálogo é IGUAL ao do picker da UI (contrato compartilhado)', () => {
-    const backend = emojiCatalog();
-    for (const k of CARTAO_EMOJI_KEYS) {
-      expect(new Set(backend[k])).toEqual(new Set(UI_CATALOG[k].map((e) => e.normalize('NFC'))));
-    }
-  });
-});
-
-describe('extractSeedEmojis (seed do picker a partir do cartão capturado)', () => {
-  it('puxa os emojis presentes no texto, por chave', () => {
+describe('extractSeedEmojis (seed do picker — extração por POSIÇÃO/RÓTULO, emoji livre)', () => {
+  it('puxa os emojis presentes no texto, por posição/rótulo (template padrao)', () => {
     const cartao = [
-      '[CARTAO DE CONFIRMACAO]',
       '💈 Barbearia do Zé',
       '📅 DIA: <dia> / ⏰ HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
-      'Responda SIM ✅',
+      'Responda SIM para confirmar. ✅',
     ].join('\n');
     const seed = extractSeedEmojis(cartao);
     expect(seed.marca).toBe('💈');
@@ -145,7 +194,38 @@ describe('extractSeedEmojis (seed do picker a partir do cartão capturado)', () 
     expect(seed.confirma).toBe('✅');
   });
 
-  it('texto sem emoji de catálogo → objeto vazio (best-effort, nunca lança)', () => {
+  it('puxa emoji FORA do antigo catálogo curado (emoji livre de verdade)', () => {
+    const cartao = ['🎩 Studio X', '🌟 DIA: <dia>', 'Responda SIM para confirmar. 🚀'].join('\n');
+    const seed = extractSeedEmojis(cartao);
+    expect(seed.marca).toBe('🎩');
+    expect(seed.dia).toBe('🌟');
+    expect(seed.confirma).toBe('🚀');
+  });
+
+  it('CRÍTICO (caso real do Samuel): marca e servico com o MESMO emoji não se confundem — extração é POSICIONAL', () => {
+    const cartao = [
+      '✂️ Barbearia Samuel',
+      '📅 DIA: <dia> / ⏰ HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
+      'Responda SIM para confirmar. ✅',
+    ].join('\n');
+    const seed = extractSeedEmojis(cartao);
+    expect(seed.marca).toBe('✂️'); // 1ª linha
+    expect(seed.servico).toBe('✂️'); // rótulo SERVICO — mesmo emoji, chave correta pela posição
+    expect(seed.dia).toBe('📅');
+  });
+
+  it('estabelecimento: extrai PROFISSIONAL pelo rótulo', () => {
+    const cartao = [
+      '👤 PROFISSIONAL: <nome do profissional escolhido>',
+      '📅 DIA: <dia> / 🕐 HORARIO: <horario> / ✂️ SERVICO: <servico> / 💰 VALOR: <valor>',
+      'Responda SIM para confirmar. ✅',
+    ].join('\n');
+    const seed = extractSeedEmojis(cartao);
+    expect(seed.profissional).toBe('👤');
+    expect(seed.horario).toBe('🕐');
+  });
+
+  it('texto sem emoji reconhecível → objeto vazio/parcial (best-effort, nunca lança)', () => {
     expect(extractSeedEmojis('cartão só texto sem ícone')).toEqual({});
     expect(extractSeedEmojis('')).toEqual({});
     expect(extractSeedEmojis(null)).toEqual({});
