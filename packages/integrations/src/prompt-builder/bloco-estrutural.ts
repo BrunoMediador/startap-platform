@@ -400,9 +400,11 @@ function blocoAgenda(e: CartaoEmojis, template: CartaoTemplate, nome: string): s
 function cartaoLinhasEstabelecimento(
   e: CartaoEmojis,
   _template: CartaoTemplate,
+  nome: string,
   v: CartaoValores,
 ): string[] {
   return [
+    joinCampo(' ', e.marca, `*${nome}*`),
     campoRotulado(e.dia, 'Dia', v.dia),
     campoRotulado(e.horario, 'Horário', v.horario),
     campoRotulado(e.servico, 'Serviço', v.servico),
@@ -416,9 +418,11 @@ function cartaoLinhasEstabelecimento(
 function cartaoLinhasEstabelecimentoSeg(
   e: CartaoEmojis,
   _template: CartaoTemplate,
+  nome: string,
   v: CartaoValores,
 ): CartaoExemploSegmento[][] {
   return [
+    joinSegmentos(' ', segEmoji('marca', e.marca), segTexto(`*${nome}*`)),
     campoRotuladoSeg('dia', e.dia, 'Dia', v.dia),
     campoRotuladoSeg('horario', e.horario, 'Horário', v.horario),
     campoRotuladoSeg('servico', e.servico, 'Serviço', v.servico),
@@ -432,14 +436,16 @@ function cartaoLinhasEstabelecimentoSeg(
  *  (o `template` de 1 linha só deixou de existir). Linha em branco antes dos campos e antes
  *  do fechamento, espelhando o layout aprovado pelo Bruno (31/07/2026). */
 function formatoEstabelecimento(e: CartaoEmojis, template: CartaoTemplate): string[] {
-  const linhas = cartaoLinhasEstabelecimento(e, template, {
+  const [header, ...campos] = cartaoLinhasEstabelecimento(e, template, PLACEHOLDER_NOME, {
     ...PLACEHOLDERS_AGENDA,
     profissional: '<nome do profissional escolhido>',
   });
   return [
-    'Formato do cartão (um campo por linha, com linha em branco separando os campos do',
+    'Formato do cartão (um campo por linha, com linha em branco separando o cabeçalho e o',
     'fechamento — copie exatamente este espaçamento):',
-    ...linhas,
+    header,
+    '',
+    ...campos,
     '',
     fechamentoLinha('Responda SIM para confirmar.', e),
   ];
@@ -616,14 +622,16 @@ export function buildCartaoExemplo(opts: {
   const e = resolveEmojis(opts.modo, opts.area, opts.config?.emojis);
   const s = opts.sample;
   if (opts.modo === 'estabelecimento') {
-    const linhas = cartaoLinhasEstabelecimento(e, template, {
+    const nomeEst =
+      s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;
+    const [header, ...campos] = cartaoLinhasEstabelecimento(e, template, nomeEst, {
       dia: s.dia,
       horario: s.horario,
       servico: s.servico,
       valor: s.valor,
       profissional: s.profissional,
     });
-    return [...linhas, '', fechamentoExemplo(e)].join('\n');
+    return [header, '', ...campos, '', fechamentoExemplo(e)].join('\n');
   }
   const nome =
     s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;
@@ -661,15 +669,17 @@ export function buildCartaoExemploSegmentado(opts: {
   const s = opts.sample;
   let linhas: CartaoExemploSegmento[][];
   if (opts.modo === 'estabelecimento') {
-    const campos = cartaoLinhasEstabelecimentoSeg(e, template, {
+    const nomeEst =
+      s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;
+    const [header, ...campos] = cartaoLinhasEstabelecimentoSeg(e, template, nomeEst, {
       dia: s.dia,
       horario: s.horario,
       servico: s.servico,
       valor: s.valor,
       profissional: s.profissional,
     });
-    // linha em branco (array vazio) entre os campos e o fechamento — espelha a string version.
-    linhas = [...campos, []];
+    // linhas em branco (array vazio) após o cabeçalho e antes do fechamento — espelha a string.
+    linhas = [header, [], ...campos, []];
   } else {
     const nome =
       s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;

@@ -109,10 +109,14 @@ describe('buildCartaoExemplo — variante agenda (individual)', () => {
 });
 
 describe('buildCartaoExemplo — variante estabelecimento', () => {
-  it('padrao: campo por linha, 👤 Profissional POR ÚLTIMO, usa 🕐 (não ⏰) e "✅ Responda SIM"', () => {
+  it('padrao: cabeçalho com o negócio + campo por linha, 👤 Profissional POR ÚLTIMO, usa 🕐 (não ⏰) e "✅ Responda SIM"', () => {
     const card = buildCartaoExemplo({ modo: 'estabelecimento', area: 'barbearia', sample: SAMPLE });
     expect(card).toBe(
       [
+        // O estabelecimento NUNCA teve cabeçalho (limitação pré-existente): o cliente recebia
+        // um cartão sem saber de qual negócio era. O layout novo o traz, igual à agenda.
+        '💈 *Barbearia do Zé*',
+        '',
         '📅 Dia: quinta, 24/07',
         '🕐 Horário: 15:00',
         '✂️ Serviço: Corte',
@@ -123,6 +127,15 @@ describe('buildCartaoExemplo — variante estabelecimento', () => {
       ].join('\n'),
     );
     expect(card).not.toMatch(/⏰ Horário/);
+  });
+
+  it('sem nomeNegocio → placeholder no cabeçalho (nunca cabeçalho vazio/negrito quebrado)', () => {
+    const card = buildCartaoExemplo({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      sample: { ...SAMPLE, nomeNegocio: '' },
+    });
+    expect(card.split('\n')[0]).toBe('💈 *<nome do negócio>*');
   });
 
   it('os 3 templates convergem pro MESMO layout (layout único aprovado 31/07/2026)', () => {
@@ -263,8 +276,22 @@ describe('buildCartaoExemplo — emoji DESABILITADO não deixa espaço órfão',
       config: { emojis: { profissional: CARTAO_EMOJI_DISABLED } },
       sample: SAMPLE,
     });
+    // Busca a linha em vez de fixar o índice: o cabeçalho do negócio deslocou as posições
+    // uma vez e travou este teste — asserção por conteúdo não quebra no próximo ajuste.
     const linhas = card.split('\n');
-    expect(linhas[4]).toBe('Profissional: Léo');
+    expect(linhas).toContain('Profissional: Léo');
+    expect(linhas.some((l) => l.startsWith(' '))).toBe(false); // sem espaço órfão
+  });
+
+  it('estabelecimento: marca desabilitada → cabeçalho só com o nome, negrito íntegro', () => {
+    const card = buildCartaoExemplo({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      config: { emojis: { marca: CARTAO_EMOJI_DISABLED } },
+      sample: SAMPLE,
+    });
+    expect(card.split('\n')[0]).toBe('*Barbearia do Zé*');
+    expect(card).not.toContain(CARTAO_EMOJI_DISABLED);
   });
 });
 
