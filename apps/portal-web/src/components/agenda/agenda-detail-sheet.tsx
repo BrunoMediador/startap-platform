@@ -35,6 +35,8 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Overlay } from '@/components/ui/overlay';
 import { useToast } from '@/components/ui/toast';
+import { UnsavedChangesDialog } from '@/components/ui/unsaved-changes-dialog';
+import { useGuardAoFechar } from '@/components/ui/use-guard-ao-fechar';
 import { parseTitulo } from '@/lib/agenda-titulo';
 import { ApiError } from '@/lib/api';
 import type { Agendamento, ConflitoReason, Servico } from '@/lib/api-types';
@@ -174,61 +176,107 @@ export function AgendaDetailSheet({
         ? Boolean(servicoSel) && (manterHorario || Boolean(dataSel && horaSel))
         : false;
 
-  function salvar() {
-    if (!agendamento) return;
-    // Só manda dia/hora quando o dono de fato escolheu um novo horário; trocar só o
-    // serviço viaja apenas com { servico } (item 1).
-    const mandarHorario = escolheNovoHorario && Boolean(dataSel && horaSel);
-    const patch =
-      modo === 'remarcar'
-        ? { data: dataSel ?? undefined, hora: horaSel ?? undefined }
-        : {
-            servico: servicoSel ?? undefined,
-            ...(mandarHorario ? { data: dataSel ?? undefined, hora: horaSel ?? undefined } : {}),
-          };
+  // Dirty = há alguma seleção feita nos modos de edição (mesmo sinal que já
+  // liga o resumo na tela, ver `(servicoSel || dataSel || horaSel) &&` mais
+  // abaixo) — o modo 'detalhe' é sempre read-only, nunca dirty.
+  const dirty = modo !== 'detalhe' && Boolean(servicoSel || dataSel || horaSel);
 
-    editar.mutate(
-      { eventId: agendamento.id, patch },
-      {
-        onSuccess: () => {
-          toast.success(
-            modo === 'remarcar'
-              ? `Remarcado: ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
-              : mandarHorario
-                ? `Trocado: ${servicoSel} · ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
-                : `Serviço trocado: ${servicoSel}`,
-          );
-          fechar();
-        },
-        onError: (err) => {
-          if (err instanceof ApiError && err.status === 409) {
-            // 409 NOVO: serviço mais longo bate no próximo horário → mostra a message
-            // do backend inline, sem mexer na grade (não é corrida de slot).
-            const msgLongo = conflitoHorarioMsg(err.body);
-            if (msgLongo) {
-              setAviso(msgLongo);
+  // Guard de fechamento do sheet (SCRUM-158, PR 3): Esc/backdrop/X não passam
+  // pelo guard de NAVEGAÇÃO global (aquele só intercepta <a>/popstate/beforeunload)
+  // — sem isto, uma seleção de remarcação/troca se perderia em silêncio ao
+  // fechar o sheet. Precisa vir ANTES do early-return abaixo (Rules of Hooks).
+  const guard = useGuardAoFechar(dirty, salvarAgenda, fechar);
+
+  /**
+   * Núcleo do save (patch + PATCH). Extraído de `salvar()` pra também poder
+   * ser chamado pelo guard de fechamento do sheet (SCRUM-158, PR 3,
+   * "Salvar e sair" do Esc/backdrop/X) — que precisa saber se deu certo
+   * (Promise) pra decidir se fecha ou mantém o sheet aberto. `modo ===
+   * 'detalhe'` nunca chega aqui com `dirty=true` (ver `dirty` abaixo), mas o
+   * guard de tipos exige o cedo-return.
+   */
+  function salvarAgenda(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!agendamento) {
+        resolve();
+        return;
+      }
+      if (!podeSalvar) {
+        // Selecionou algo (dirty) mas não terminou de preencher (ex.: só o
+        // dia, falta a hora) — não dá pra montar um PATCH válido. Mantém o
+        // sheet aberto pro dono terminar, igual à validação dos outros sheets.
+        toast.error('Termine a seleção antes de salvar (falta escolher o horário).');
+        reject(new Error('incompleto'));
+        return;
+      }
+      // Só manda dia/hora quando o dono de fato escolheu um novo horário; trocar só o
+      // serviço viaja apenas com { servico } (item 1).
+      const mandarHorario = escolheNovoHorario && Boolean(dataSel && horaSel);
+      const patch =
+        modo === 'remarcar'
+          ? { data: dataSel ?? undefined, hora: horaSel ?? undefined }
+          : {
+              servico: servicoSel ?? undefined,
+              ...(mandarHorario ? { data: dataSel ?? undefined, hora: horaSel ?? undefined } : {}),
+            };
+
+      editar.mutate(
+        { eventId: agendamento.id, patch },
+        {
+          onSuccess: () => {
+            toast.success(
+              modo === 'remarcar'
+                ? `Remarcado: ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
+                : mandarHorario
+                  ? `Trocado: ${servicoSel} · ${formatDiaCurto(dataSel ?? '')} · ${horaSel}`
+                  : `Serviço trocado: ${servicoSel}`,
+            );
+            resolve();
+          },
+          onError: (err) => {
+            if (err instanceof ApiError && err.status === 409) {
+              // 409 NOVO: serviço mais longo bate no próximo horário → mostra a message
+              // do backend inline, sem mexer na grade (não é corrida de slot).
+              const msgLongo = conflitoHorarioMsg(err.body);
+              if (msgLongo) {
+                setAviso(msgLongo);
+                reject(err);
+                return;
+              }
+              // Corrida com o robô: o slot some, recarrega a grade (só livres),
+              // mantém dia/serviço. Invalidar a base força o SlotPicker a refetch.
+              setHoraSel(null);
+              setAviso(CONFLITO_MSG[conflitoReason(err.body)]);
+              queryClient.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
+              reject(err);
               return;
             }
-            // Corrida com o robô: o slot some, recarrega a grade (só livres),
-            // mantém dia/serviço. Invalidar a base força o SlotPicker a refetch.
-            setHoraSel(null);
-            setAviso(CONFLITO_MSG[conflitoReason(err.body)]);
-            queryClient.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
-            return;
-          }
-          if (err instanceof ApiError && err.status === 404) {
-            toast.error('Esse horário não está mais na sua agenda.');
-            fechar();
-            return;
-          }
-          if (err instanceof ApiError && err.status === 422) {
-            toast.error('Conecte sua agenda Google pra editar horários. Fale com o suporte.');
-            return;
-          }
-          toast.error('Não foi possível salvar agora. Tente de novo.');
+            if (err instanceof ApiError && err.status === 404) {
+              toast.error('Esse horário não está mais na sua agenda.');
+              // Evento sumiu: não há mais o que salvar. Deixa o guard fechar.
+              resolve();
+              return;
+            }
+            if (err instanceof ApiError && err.status === 422) {
+              toast.error('Conecte sua agenda Google pra editar horários. Fale com o suporte.');
+              reject(err);
+              return;
+            }
+            toast.error('Não foi possível salvar agora. Tente de novo.');
+            reject(err instanceof Error ? err : new Error('save-falhou'));
+          },
         },
-      },
-    );
+      );
+    });
+  }
+
+  function salvar() {
+    salvarAgenda()
+      .then(fechar)
+      .catch(() => {
+        // erro já tratado (inline/toast) dentro de salvarAgenda — aqui só
+        // evita unhandled rejection quando o disparo vem do botão (sem quem escute a Promise).
+      });
   }
 
   function cancelarHorario() {
@@ -259,7 +307,7 @@ export function AgendaDetailSheet({
 
   return (
     <>
-      <Overlay open={open} onClose={fechar} variant="detail" ariaLabelledBy={titleId}>
+      <Overlay open={open} onClose={guard.pedirFechar} variant="detail" ariaLabelledBy={titleId}>
         <div className="flex min-h-0 flex-1 flex-col px-5 pt-3.5">
           {/* Cabeçalho STICKY: botão SEMPRE presente (no detalhe = Fechar/X; nos modos
               de edição = Voltar ao detalhe). Sticky + bg pra o título e o botão de
@@ -269,8 +317,12 @@ export function AgendaDetailSheet({
             <button
               type="button"
               onClick={() => {
+                // "Fechar" no modo detalhe passa pelo guard (SCRUM-158, PR 3).
+                // "Voltar ao detalhe" nos modos de edição fica como estava —
+                // não fecha o sheet, é navegação interna do próprio componente
+                // (fora do escopo dos 3 gestos de saída: Esc/backdrop/X do sheet).
                 if (modo === 'detalhe') {
-                  fechar();
+                  guard.pedirFechar();
                   return;
                 }
                 setModo('detalhe');
@@ -416,6 +468,18 @@ export function AgendaDetailSheet({
         onCancel={() => {
           if (!excluir.isPending) setConfirmarCancelar(false);
         }}
+      />
+
+      {/* Guard de fechamento (SCRUM-158, PR 3): Esc/backdrop/X com uma
+          remarcação/troca em progresso. Overlay "modal" empilhado sobre o
+          "detail" acima — mesmo padrão já provado do ConfirmDialog de
+          cancelar, nesta mesma tela. */}
+      <UnsavedChangesDialog
+        open={guard.open}
+        loading={guard.salvando}
+        onSalvarESair={guard.onSalvarESair}
+        onDescartar={guard.onDescartar}
+        onCancelar={guard.onCancelar}
       />
     </>
   );

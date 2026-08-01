@@ -26,6 +26,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Overlay } from '@/components/ui/overlay';
 import { useToast } from '@/components/ui/toast';
+import { UnsavedChangesDialog } from '@/components/ui/unsaved-changes-dialog';
+import { useGuardAoFechar } from '@/components/ui/use-guard-ao-fechar';
 import { ApiError } from '@/lib/api';
 import type {
   AtendimentoBalde,
@@ -94,6 +96,27 @@ export function AtendimentoEditSheet({
   }, [row?.id]);
 
   const open = row !== null;
+
+  function fechar() {
+    onClose();
+  }
+
+  // Dirty do rascunho atual: precisa ser calculado ANTES do early-return
+  // abaixo pra alimentar o hook do guard (Rules of Hooks — hook não pode vir
+  // depois de um return condicional). row/draft null -> false. Inválido
+  // (ok:false) sempre implica edição real: `validateEdit` só rejeita quando
+  // o dono mexeu num campo (valor/desconto) pra um estado vazio/inválido —
+  // o draftFromRow original nunca nasce inválido.
+  const resAtualParaDirty = row && draft ? validateEdit(row, draft) : null;
+  const dirty = resAtualParaDirty
+    ? !resAtualParaDirty.ok || !patchVazio(resAtualParaDirty.patch)
+    : false;
+
+  // Guard de fechamento do sheet (SCRUM-158, PR 3): Esc/backdrop/X não passam
+  // pelo guard de NAVEGAÇÃO global (aquele só intercepta <a>/popstate/beforeunload)
+  // — sem isto, um rascunho aqui se perderia em silêncio ao fechar o sheet.
+  const guard = useGuardAoFechar(dirty, salvarAtendimento, fechar);
+
   if (!open || !row || !draft) return null;
 
   const isPacote = draft.forma === 'pacote';
@@ -102,45 +125,68 @@ export function AtendimentoEditSheet({
     setDraft((d) => (d ? { ...d, forma, valor: forma === 'pacote' ? '' : d.valor } : d));
   }
 
-  function fechar() {
-    onClose();
+  /**
+   * Núcleo do save (validação + PATCH). Extraído de `salvar()` pra também
+   * poder ser chamado pelo guard de fechamento do sheet (SCRUM-158, PR 3,
+   * "Salvar e sair" do Esc/backdrop/X) — que precisa saber se deu certo
+   * (Promise) pra decidir se fecha ou mantém o sheet aberto pra corrigir.
+   * Mesma semântica de erro do `submitFaq` (#546): rejeita em
+   * validação/backend recusado, resolve (sem fechar) quando não há nada
+   * pra salvar.
+   */
+  function salvarAtendimento(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!row || !draft) {
+        resolve();
+        return;
+      }
+      const res = validateEdit(row, draft);
+      if (!res.ok) {
+        setErrors(res.errors);
+        reject(new Error('validacao'));
+        return;
+      }
+      setErrors({});
+      if (patchVazio(res.patch)) {
+        // Nada mudou — botão já estaria travado, mas defende contra corrida.
+        resolve();
+        return;
+      }
+      editar.mutate(
+        { id: row.id, patch: res.patch },
+        {
+          onSuccess: () => {
+            toast.success('Atendimento atualizado');
+            resolve();
+          },
+          onError: (err) => {
+            if (is404(err)) {
+              onFlagOff();
+              toast.error('Esse atendimento não está mais disponível.');
+              // Linha sumiu: não há mais o que salvar. Deixa o guard fechar.
+              resolve();
+              return;
+            }
+            if (err instanceof ApiError && err.status === 400) {
+              toast.error('Confira os campos e tente de novo.');
+              reject(err);
+              return;
+            }
+            toast.error('Não foi possível salvar agora. Tente de novo.');
+            reject(err instanceof Error ? err : new Error('save-falhou'));
+          },
+        },
+      );
+    });
   }
 
   function salvar() {
-    if (!row || !draft) return;
-    const res = validateEdit(row, draft);
-    if (!res.ok) {
-      setErrors(res.errors);
-      return;
-    }
-    setErrors({});
-    if (patchVazio(res.patch)) {
-      // Nada mudou — botão já estaria travado, mas defende contra corrida.
-      fechar();
-      return;
-    }
-    editar.mutate(
-      { id: row.id, patch: res.patch },
-      {
-        onSuccess: () => {
-          toast.success('Atendimento atualizado');
-          fechar();
-        },
-        onError: (err) => {
-          if (is404(err)) {
-            onFlagOff();
-            toast.error('Esse atendimento não está mais disponível.');
-            fechar();
-            return;
-          }
-          if (err instanceof ApiError && err.status === 400) {
-            toast.error('Confira os campos e tente de novo.');
-            return;
-          }
-          toast.error('Não foi possível salvar agora. Tente de novo.');
-        },
-      },
-    );
+    salvarAtendimento()
+      .then(fechar)
+      .catch(() => {
+        // erro já tratado (inline/toast) dentro de salvarAtendimento — aqui só
+        // evita unhandled rejection quando o disparo vem do botão (sem quem escute a Promise).
+      });
   }
 
   function removerLinha() {
@@ -172,7 +218,7 @@ export function AtendimentoEditSheet({
 
   return (
     <>
-      <Overlay open={open} onClose={fechar} variant="detail" ariaLabelledBy={titleId}>
+      <Overlay open={open} onClose={guard.pedirFechar} variant="detail" ariaLabelledBy={titleId}>
         <div className="flex min-h-0 flex-1 flex-col px-5 pt-3.5">
           {/* Cabeçalho STICKY com botão Fechar (X) sempre presente: no mobile o sheet
               é alto (forma+valor+desconto+serviço+cliente) e o usuário não pode rolar
@@ -180,7 +226,7 @@ export function AtendimentoEditSheet({
           <div className="sticky top-0 z-10 -mx-5 mb-3 flex items-center gap-2 bg-surface-elev px-5 pb-3 pt-[max(2px,env(safe-area-inset-top))]">
             <button
               type="button"
-              onClick={fechar}
+              onClick={guard.pedirFechar}
               aria-label="Fechar"
               className="flex size-9 shrink-0 items-center justify-center rounded-[10px] border border-line-strong bg-surface text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand"
             >
@@ -320,6 +366,17 @@ export function AtendimentoEditSheet({
         onCancel={() => {
           if (!remover.isPending) setConfirmarRemover(false);
         }}
+      />
+
+      {/* Guard de fechamento (SCRUM-158, PR 3): Esc/backdrop/X com rascunho
+          pendente. Overlay "modal" empilhado sobre o "detail" acima — mesmo
+          padrão já provado do ConfirmDialog de remover, nesta mesma tela. */}
+      <UnsavedChangesDialog
+        open={guard.open}
+        loading={guard.salvando}
+        onSalvarESair={guard.onSalvarESair}
+        onDescartar={guard.onDescartar}
+        onCancelar={guard.onCancelar}
       />
     </>
   );
