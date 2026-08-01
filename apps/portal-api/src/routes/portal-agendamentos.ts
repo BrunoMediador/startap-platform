@@ -20,6 +20,7 @@
  * DTO whitelist (parecer-001): apenas id, titulo, inicio, fim. NAO expor
  * telefone/descricao/summary cru alem do titulo.
  */
+import { randomUUID } from 'node:crypto';
 import {
   buildEventSummary,
   normalizeClientePhone,
@@ -27,6 +28,12 @@ import {
 } from '@startap/core/agenda-summary';
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
+import {
+  OCORRENCIAS_MAX,
+  OCORRENCIAS_MIN,
+  type Periodicidade,
+  expandirDatas,
+} from '@startap/core/recorrencia';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import {
@@ -40,6 +47,14 @@ import {
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
+import {
+  type AvaliarSlotConflito,
+  type AvaliarSlotStatus,
+  avaliarConflito,
+  avaliarJanela,
+  avaliarSlot,
+} from '../lib/avaliar-slot.js';
+import { isGcalForbiddenOrAuthError, isGcalRateLimitError } from '../lib/gcal-rate-limit.js';
 import { maskPhone } from '../lib/mask.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
@@ -140,6 +155,83 @@ const criarAgendamentoSchema = z
     message: 'telefone obrigatorio (ou marque sem_whatsapp)',
     path: ['cliente_telefone'],
   });
+
+// ---- POST /portal/agendamentos/recorrencia/preview (SÓ LÊ) -------------------
+//
+// Mesmos campos-base do agendamento único (reusa telefoneSchema/sem_whatsapp/
+// colaborador_id) + periodicidade/ocorrências. Cap DURO [2,24] em `ocorrencias` —
+// risco operacional nº1 é rate-limit do GCal (N chamadas events.insert no /serie
+// e N chamadas listEvents aqui no preview).
+const periodicidadeSchema = z.enum(['semanal', 'mensal', 'trimestral', 'semestral']);
+
+const previewRecorrenciaSchema = z
+  .object({
+    servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+    data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
+    hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm'),
+    cliente_nome: z.string().trim().min(1, 'nome do cliente obrigatorio').max(80),
+    cliente_telefone: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      telefoneSchema.optional(),
+    ),
+    sem_whatsapp: z.boolean().optional().default(false),
+    colaborador_id: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      z.coerce.number().int().positive().optional(),
+    ),
+    periodicidade: periodicidadeSchema,
+    ocorrencias: z.coerce.number().int().min(OCORRENCIAS_MIN).max(OCORRENCIAS_MAX),
+  })
+  .refine((b) => b.sem_whatsapp === true || b.cliente_telefone !== undefined, {
+    message: 'telefone obrigatorio (ou marque sem_whatsapp)',
+    path: ['cliente_telefone'],
+  });
+
+// ---- POST /portal/agendamentos/serie (GRAVA) ----------------------------------
+//
+// 🔴 O servidor NÃO recalcula a periodicidade — grava exatamente as `datas`
+// confirmadas na tela de revisão (é o que respeita o "desmarcar" do dono). Sem
+// campo `periodicidade`/`ocorrencias` aqui: a lista explícita é a única fonte.
+const criarSerieSchema = z
+  .object({
+    servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+    cliente_nome: z.string().trim().min(1, 'nome do cliente obrigatorio').max(80),
+    cliente_telefone: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      telefoneSchema.optional(),
+    ),
+    sem_whatsapp: z.boolean().optional().default(false),
+    colaborador_id: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      z.coerce.number().int().positive().optional(),
+    ),
+    // Lista EXPLÍCITA de datas confirmadas pelo dono na tela de revisão (após o
+    // preview) — cada uma vira 1 evento GCal independente. Mesmo cap [2,24] do
+    // preview (defesa em profundidade; o preview já capa `ocorrencias` antes).
+    datas: z
+      .array(
+        z.object({
+          data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
+          hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm'),
+        }),
+      )
+      .min(OCORRENCIAS_MIN, `informe ao menos ${OCORRENCIAS_MIN} datas`)
+      .max(OCORRENCIAS_MAX, `máximo de ${OCORRENCIAS_MAX} datas por série`),
+  })
+  .refine((b) => b.sem_whatsapp === true || b.cliente_telefone !== undefined, {
+    message: 'telefone obrigatorio (ou marque sem_whatsapp)',
+    path: ['cliente_telefone'],
+  })
+  // P2 do security (01/08): data+hora repetida no MESMO request criaria 2 eventos
+  // idênticos sem aviso (dono duplicaria receita por engano, ex. copiar/colar na
+  // tela de revisão). Rejeita ANTES de qualquer I/O.
+  .refine(
+    (b) => {
+      const chaves = b.datas.map((d) => `${d.data}T${d.hora}`);
+      return new Set(chaves).size === chaves.length;
+    },
+    { message: 'datas repetidas na lista (data+hora duplicado)', path: ['datas'] },
+  );
 
 // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
 //
@@ -285,6 +377,55 @@ async function resolveEventClient(
   // menos uma agenda respondeu e o evento não estava em lugar nenhum, é 404 real.
   if (!houveSucesso) return { kind: 'error', msg: ultimaFalha || 'erro' };
   return { kind: 'not_found' };
+}
+
+// ── Resolução da agenda ALVO pra CRIAR um evento novo (individual + estabelecimento) ──
+//
+// Extraído do POST /portal/agendamentos original — reusado pelo preview e pelo /serie
+// de recorrência (🔴 nunca duplicar: a guarda anti-IDOR do colaborador_id vive só aqui).
+//
+// INDIVIDUAL: agenda única do clone (getGcalForSlot), colaboradorId = null.
+// ESTABELECIMENTO: o clone NÃO tem agenda própria — o evento nasce na agenda de UM
+// colaborador (clone_colaboradores.gcal_calendar_id). Resolve o colaborador alvo
+// (colaborador_id do body) contra a lista de getGcalsForSlot — já escopada por
+// slot+tenant na integração (ADR 0024 §4). Colaborador de outro tenant JAMAIS
+// aparece nessa lista → input alheio é rejeitado naturalmente (404_colaborador),
+// mesma guarda anti-IDOR do DELETE/PATCH (#347).
+type ResolveAgendaAlvoResult =
+  | { kind: 'colaborador_obrigatorio' }
+  | { kind: 'gcal_nao_configurado' }
+  | { kind: 'colaborador_nao_encontrado' }
+  | { kind: 'found'; client: ResolvedGcalClient; colaboradorId: number | null };
+
+async function resolveAgendaAlvo(
+  slot: string,
+  userId: number | string,
+  colaboradorId: number | undefined,
+): Promise<ResolveAgendaAlvoResult> {
+  if (await isEstabelecimentoSlot(slot)) {
+    if (colaboradorId === undefined) {
+      return { kind: 'colaborador_obrigatorio' };
+    }
+    const colaboradores = await gcal.getGcalsForSlot(slot);
+    if (colaboradores.length === 0) {
+      return { kind: 'gcal_nao_configurado' };
+    }
+    const alvo = colaboradores.find((c) => c.colaboradorId === colaboradorId);
+    if (!alvo) {
+      log.warn(
+        { slot, userId, colaboradorId },
+        'agendamento manual negado: colaborador fora do tenant ou sem agenda ativa',
+      );
+      return { kind: 'colaborador_nao_encontrado' };
+    }
+    return { kind: 'found', client: alvo.client, colaboradorId: alvo.colaboradorId };
+  }
+
+  const single = await gcal.getGcalForSlot(slot);
+  if (!single) {
+    return { kind: 'gcal_nao_configurado' };
+  }
+  return { kind: 'found', client: single, colaboradorId: null };
 }
 
 // ── Gancho de billing DERIVADO DA AGENDA (ADR 0027, Fase B2) ─────────────────
@@ -556,94 +697,61 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     // byte-idêntico ao de hoje em weekday/now/conversão de horário-de-parede.
     const tz = config.timezone;
 
+    // 'fechado' do helper cobre tanto "data calendarialmente inexistente" (weekdayOfDateKey
+    // null) quanto "dia sem janela de funcionamento" — o POST distingue os dois: aqui só
+    // checamos a existência da data (dia-fechado por horário vira 409 pouco abaixo, byte-
+    // idêntico a antes da extração do helper).
     const wd = weekdayOfDateKey(data, tz);
     if (wd === null) {
       return reply.code(400).send({ error: 'payload_invalido', detalhe: 'data inexistente' });
     }
 
-    // Janela de aceitação: hoje..+60d (mesma do GET /slots).
-    const agora = nowPartsInTz(new Date(), tz);
-    const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000), tz);
-    if (data > limite.dateKey) {
+    // ── Validação de janela/horário (Fase 1 do helper COMPARTILHADO com o preview de
+    // recorrência — SEM I/O, roda ANTES de resolver a agenda; 🔴 nunca duplicar esta
+    // lógica, ver lib/avaliar-slot.ts) — mesma ORDEM do comportamento pré-refactor
+    // (passado/janela/horário são baratos e vêm antes de qualquer chamada ao GCal).
+    const janelaAvaliada = avaliarJanela({
+      config,
+      data,
+      hora,
+      duracaoMin: svc.min,
+      maxAheadDays: POST_MAX_AHEAD_DAYS,
+    });
+    if (janelaAvaliada.status === 'fora_da_janela') {
       return reply.code(400).send({ error: 'data_fora_da_janela', max_dias: POST_MAX_AHEAD_DAYS });
     }
-
-    const startMins = hhmmToMins(hora);
-    const endMins = startMins + svc.min;
-
-    // Slot no passado (ou perto demais do relógio) → tratado como conflito:
-    // o front recarrega a grade e o horário some sozinho.
-    if (
-      data < agora.dateKey ||
-      (data === agora.dateKey && startMins < agora.mins + POST_TODAY_FLOOR_MIN)
-    ) {
+    if (janelaAvaliada.status === 'passado') {
+      // Slot no passado (ou perto demais do relógio) → tratado como conflito:
+      // o front recarrega a grade e o horário some sozinho.
       return reply.code(409).send({ error: 'conflito', reason: 'horario_passado' });
     }
-
-    // Dentro do horário de funcionamento do dia (pode ter mudado entre a grade
-    // e o submit) — fora → conflito, front recarrega.
-    const janela = config.work[wd];
-    if (!janela || startMins < janela[0] || endMins > janela[1]) {
+    if (janelaAvaliada.status === 'fechado' || janelaAvaliada.status === 'fora_do_horario') {
+      // Dentro do horário de funcionamento do dia (pode ter mudado entre a grade
+      // e o submit) — fora → conflito, front recarrega.
       return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
     }
 
     // ── Resolução da agenda DONA do evento (individual + estabelecimento) ──────
-    // INDIVIDUAL: agenda única do clone (getGcalForSlot), colaboradorId = null.
-    // ESTABELECIMENTO: o clone NÃO tem agenda própria — o evento nasce na agenda de
-    // UM colaborador (clone_colaboradores.gcal_calendar_id). Resolvemos o colaborador
-    // alvo (colaborador_id do body) contra a lista de getGcalsForSlot — que já é
-    // escopada por slot+tenant na integração (ADR 0024 §4). Um colaborador de outro
-    // tenant JAMAIS aparece nessa lista → input alheio é rejeitado naturalmente (404),
-    // mesma guarda anti-IDOR do DELETE/PATCH (#347).
-    let client: ResolvedGcalClient;
-    let colaboradorId: number | null = null;
-
-    if (await isEstabelecimentoSlot(slot)) {
-      // Estabelecimento exige escolher o profissional (qual agenda recebe o evento).
-      if (colaborador_id === undefined) {
-        return reply.code(422).send({ error: 'colaborador_obrigatorio' });
-      }
-      const colaboradores = await gcal.getGcalsForSlot(slot);
-      if (colaboradores.length === 0) {
-        // Nenhum colaborador com agenda ativa (pré-setup do estabelecimento).
-        return reply.code(422).send({ error: 'gcal_nao_configurado' });
-      }
-      const alvo = colaboradores.find((c) => c.colaboradorId === colaborador_id);
-      if (!alvo) {
-        // colaborador_id não pertence a ESTE slot/tenant (ou não tem agenda ativa).
-        // Anti-IDOR: a lista só contém colaboradores deste tenant — alheio cai aqui.
-        log.warn(
-          { slot, userId, colaboradorId: colaborador_id },
-          'agendamento manual negado: colaborador fora do tenant ou sem agenda ativa',
-        );
-        return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
-      }
-      client = alvo.client;
-      colaboradorId = alvo.colaboradorId;
-    } else {
-      const single = await gcal.getGcalForSlot(slot);
-      if (!single) {
-        return reply.code(422).send({ error: 'gcal_nao_configurado' });
-      }
-      client = single;
+    const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+    if (resolved.kind === 'colaborador_obrigatorio') {
+      return reply.code(422).send({ error: 'colaborador_obrigatorio' });
     }
+    if (resolved.kind === 'gcal_nao_configurado') {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+    if (resolved.kind === 'colaborador_nao_encontrado') {
+      return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
+    }
+    const { client, colaboradorId } = resolved;
 
-    const startUtc = zonedWallTimeToUtc(data, startMins, tz);
-    const endUtc = zonedWallTimeToUtc(data, endMins, tz);
+    const startUtc = janelaAvaliada.startUtc as Date;
+    const endUtc = janelaAvaliada.endUtc as Date;
 
     try {
-      // Double-check anti-corrida: recheca contra o GCal AGORA (mesma regra
-      // server-side do inserir_agendamento do bot — o GCal é a fonte de verdade).
-      const existing = await client.listEvents({
-        timeMin: startUtc.toISOString(),
-        timeMax: endUtc.toISOString(),
-      });
-      const conflito = existing.find((ev) => {
-        const evStart = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`).getTime();
-        const evEnd = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`).getTime();
-        return evStart < endUtc.getTime() && evEnd > startUtc.getTime();
-      });
-      if (conflito) {
+      // Fase 2 do helper: double-check anti-corrida contra o GCal AGORA que a agenda
+      // já foi resolvida (mesma regra server-side do inserir_agendamento do bot).
+      const conflitoCheck = await avaliarConflito({ client, startUtc, endUtc });
+      if (conflitoCheck.status === 'ocupado') {
         log.warn(
           { slot, userId, servico: svc.name, data, hora },
           'agendamento manual bloqueado: slot ocupado entre a grade e o submit',
@@ -651,10 +759,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(409).send({
           error: 'conflito',
           reason: 'ocupado',
-          conflito: {
-            inicio: conflito.start.dateTime ?? conflito.start.date ?? null,
-            fim: conflito.end.dateTime ?? conflito.end.date ?? null,
-          },
+          conflito: conflitoCheck.conflito,
         });
       }
 
@@ -723,6 +828,304 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       log.error({ slot, userId, err: msg }, 'agendamento manual: falha no GCal');
       return reply.code(502).send({ error: 'nao foi possivel criar o agendamento agora' });
     }
+  });
+
+  // ---- POST /portal/agendamentos/recorrencia/preview (SÓ LÊ) -------------------
+  //
+  // O dono monta uma série (periodicidade + qtd ocorrências) e vê ANTES de gravar
+  // quais datas batem com algo já agendado — decisão do Bruno: "os conflitos aparecem
+  // ANTES de gravar". Nada é criado aqui; o dono desmarca/ajusta na tela de revisão e
+  // só então confirma via POST /portal/agendamentos/serie com a lista final.
+  //
+  // Reusa `expandirDatas` (packages/core/recorrencia — clamp de fim-de-mês) para as
+  // datas candidatas e o MESMO helper `avaliarSlot` do POST único (fonte única das
+  // validações — 🔴 nunca duplicar). Sequencial (não Promise.all): evita rajada de N
+  // chamadas simultâneas ao GCal (risco de rate-limit, mesmo sendo leitura).
+  app.post(
+    '/portal/agendamentos/recorrencia/preview',
+    { preHandler: withTenant },
+    async (req, reply) => {
+      const { slot, userId } = requireTenant(req);
+
+      const parsed = previewRecorrenciaSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'payload_invalido',
+          detalhe: parsed.error.issues[0]?.message ?? 'payload invalido',
+        });
+      }
+      const { servico, data, hora, colaborador_id, periodicidade, ocorrencias } = parsed.data;
+
+      let config: Awaited<ReturnType<typeof loadScheduleConfig>>;
+      try {
+        config = await loadScheduleConfig(slot);
+      } catch (err) {
+        log.warn(
+          { slot, err: err instanceof Error ? err.message : 'erro' },
+          'preview recorrencia: horarios/servicos nao configurados',
+        );
+        return reply.code(422).send({ error: 'config_ausente' });
+      }
+
+      const svc = config.services.find((s) => s.name.toLowerCase() === servico.toLowerCase());
+      if (!svc) {
+        return reply.code(400).send({ error: 'servico_nao_encontrado' });
+      }
+
+      const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+      if (resolved.kind === 'colaborador_obrigatorio') {
+        return reply.code(422).send({ error: 'colaborador_obrigatorio' });
+      }
+      if (resolved.kind === 'gcal_nao_configurado') {
+        return reply.code(422).send({ error: 'gcal_nao_configurado' });
+      }
+      if (resolved.kind === 'colaborador_nao_encontrado') {
+        return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
+      }
+      const { client } = resolved;
+
+      let datas: string[];
+      try {
+        datas = expandirDatas(data, periodicidade as Periodicidade, ocorrencias);
+      } catch (err) {
+        return reply.code(400).send({
+          error: 'payload_invalido',
+          detalhe: err instanceof Error ? err.message : 'nao foi possivel expandir as datas',
+        });
+      }
+
+      // Sequencial (não Promise.all — risco operacional nº1 é rate-limit do GCal).
+      const previews: Array<{
+        data: string;
+        hora: string;
+        status: AvaliarSlotStatus;
+        conflito?: AvaliarSlotConflito;
+      }> = [];
+      for (const dataOcorrencia of datas) {
+        try {
+          const avaliacao = await avaliarSlot({
+            client,
+            config,
+            data: dataOcorrencia,
+            hora,
+            duracaoMin: svc.min,
+            maxAheadDays: POST_MAX_AHEAD_DAYS,
+          });
+          previews.push({
+            data: dataOcorrencia,
+            hora,
+            status: avaliacao.status,
+            ...(avaliacao.status === 'ocupado' && avaliacao.conflito
+              ? { conflito: avaliacao.conflito }
+              : {}),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'erro';
+          // Mesma taxonomia do POST único: 403/401 real (não rate-limit) invalida
+          // o cache; rate-limit NÃO demove agenda (regra de negócio 20).
+          if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+          log.error(
+            { slot, userId, data: dataOcorrencia, err: msg },
+            'preview recorrencia: falha ao checar uma ocorrencia no GCal',
+          );
+          return reply.code(502).send({ error: 'nao foi possivel avaliar a serie agora' });
+        }
+      }
+
+      log.info(
+        {
+          slot,
+          userId,
+          servico: svc.name,
+          periodicidade,
+          ocorrencias,
+          colaboradorId: resolved.colaboradorId,
+        },
+        'preview de recorrencia gerado',
+      );
+      return reply.code(200).send({ ok: true, previews });
+    },
+  );
+
+  // ---- POST /portal/agendamentos/serie (GRAVA) ----------------------------------
+  //
+  // O dono já revisou o preview e confirma a lista EXPLÍCITA de datas — o servidor
+  // NÃO recalcula periodicidade (respeita o "desmarcar" do dono). Cada ocorrência
+  // vira 1 evento GCal INDEPENDENTE (sem RRULE — ADR 0027), carimbado com o mesmo
+  // `serieId` (uuid) em extendedProperties.private, pra permitir "listar a série"
+  // no futuro sem precisar reconstituir por heurística de texto.
+  //
+  // Sequencial (não Promise.all) + circuit-break: ao primeiro 403 de RATE-LIMIT o
+  // lote PARA e devolve o parcial (não insiste) — regra de negócio 20 (403 de
+  // rate-limit NÃO demove agenda; só um 401/403 "de verdade" invalida o cache).
+  // NUNCA faz rollback do que já foi criado (reportar parcial > apagar por falha).
+  //
+  // Não refaz o double-check por ocorrência aqui — o preview já checou; a janela de
+  // corrida entre preview e confirmação é aceita conscientemente (documentado no
+  // corpo do loop abaixo).
+  app.post('/portal/agendamentos/serie', { preHandler: withTenant }, async (req, reply) => {
+    const { slot, userId } = requireTenant(req);
+
+    const parsed = criarSerieSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'payload_invalido',
+        detalhe: parsed.error.issues[0]?.message ?? 'payload invalido',
+      });
+    }
+    const { servico, cliente_nome, cliente_telefone, colaborador_id, datas } = parsed.data;
+
+    let config: Awaited<ReturnType<typeof loadScheduleConfig>>;
+    try {
+      config = await loadScheduleConfig(slot);
+    } catch (err) {
+      log.warn(
+        { slot, err: err instanceof Error ? err.message : 'erro' },
+        'criar serie: horarios/servicos nao configurados',
+      );
+      return reply.code(422).send({ error: 'config_ausente' });
+    }
+
+    const svc = config.services.find((s) => s.name.toLowerCase() === servico.toLowerCase());
+    if (!svc) {
+      return reply.code(400).send({ error: 'servico_nao_encontrado' });
+    }
+
+    const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+    if (resolved.kind === 'colaborador_obrigatorio') {
+      return reply.code(422).send({ error: 'colaborador_obrigatorio' });
+    }
+    if (resolved.kind === 'gcal_nao_configurado') {
+      return reply.code(422).send({ error: 'gcal_nao_configurado' });
+    }
+    if (resolved.kind === 'colaborador_nao_encontrado') {
+      return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
+    }
+    const { client, colaboradorId } = resolved;
+
+    const serieId = randomUUID();
+    const criados: Array<{ id: string; data: string; hora: string }> = [];
+    const falhas: Array<{ data: string; hora: string; error: string; reason: string }> = [];
+
+    for (const { data, hora } of datas) {
+      // 🔴 CORRIGIDO (P1 do security, 01/08): double-check REAL contra o GCal por
+      // ocorrência — `avaliarSlot` (janela + conflito), não só `avaliarJanela`. A
+      // instrução original ("preview já checou, não repetir") ignorava que o preview
+      // roda numa requisição ANTERIOR sem lock/TTL: o BOT (inserir_agendamento) ou
+      // outra aba do portal pode ocupar o horário entre o preview e a confirmação da
+      // série. Sem este check, `/serie` gravava por cima de um agendamento concorrente
+      // — exatamente o cenário que o Bruno pediu para impedir ("alguém que agendou
+      // aquele horário lá na frente"). Custo aceito: +1 listEvents por ocorrência
+      // (mesmo custo que o preview já paga), sequencial, capado em 24.
+      let avaliacao: Awaited<ReturnType<typeof avaliarSlot>>;
+      try {
+        avaliacao = await avaliarSlot({
+          client,
+          config,
+          data,
+          hora,
+          duracaoMin: svc.min,
+          maxAheadDays: POST_MAX_AHEAD_DAYS,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'erro';
+        log.error(
+          { slot, userId, data, hora, serieId, err: msg },
+          'criar serie: falha ao revalidar uma ocorrencia no GCal',
+        );
+        if (isGcalRateLimitError(msg)) {
+          falhas.push({ data, hora, error: 'rate_limit', reason: 'gcal_rate_limit' });
+          break;
+        }
+        if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+        falhas.push({ data, hora, error: 'gcal_falhou', reason: 'erro_gcal' });
+        continue;
+      }
+      if (avaliacao.status !== 'livre') {
+        falhas.push({
+          data,
+          hora,
+          error: avaliacao.status === 'ocupado' ? 'conflito' : 'slot_invalido',
+          reason: avaliacao.status,
+        });
+        continue;
+      }
+      const startUtc = avaliacao.startUtc as Date;
+      const endUtc = avaliacao.endUtc as Date;
+
+      try {
+        const summary = buildEventSummary({
+          nome: cliente_nome,
+          servico: svc.name,
+          telefoneDigits: cliente_telefone,
+        });
+        const ev = await client.createEvent({
+          summary,
+          startISO: startUtc.toISOString(),
+          endISO: endUtc.toISOString(),
+          timeZone: config.timezone,
+          extendedPropertiesPrivate: { serieId },
+        });
+
+        log.info(
+          {
+            slot,
+            userId,
+            eventId: hashEventIdForLog(ev.id),
+            colaboradorId,
+            servico: svc.name,
+            data,
+            hora,
+            serieId,
+            phone: cliente_telefone ? maskPhone(cliente_telefone) : undefined,
+          },
+          'ocorrencia de serie recorrente criada via portal',
+        );
+
+        // Gancho de billing derivado da agenda (ADR 0027 Fase B2) — idêntico ao POST
+        // único: gated por slot, isolado (try/catch interno; nunca derruba a criação).
+        await hookUpsertAtendimento({
+          slot,
+          eventId: ev.id,
+          servicoNome: svc.name,
+          clienteNome: cliente_nome,
+          clienteContato: cliente_telefone ?? null,
+          inicioAt: ev.start?.dateTime ?? startUtc.toISOString(),
+          fimAt: ev.end?.dateTime ?? endUtc.toISOString(),
+          colaboradorId,
+          mode: 'create',
+        });
+
+        criados.push({ id: ev.id, data, hora });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'erro';
+        log.error(
+          { slot, userId, data, hora, serieId, err: msg },
+          'criar serie: falha ao criar uma ocorrencia no GCal',
+        );
+
+        if (isGcalRateLimitError(msg)) {
+          // Circuit-break: para o lote AGORA e devolve o parcial. NÃO invalida o
+          // cache nem demove agenda (regra de negócio 20 — rate-limit não é forbidden).
+          falhas.push({ data, hora, error: 'rate_limit', reason: 'gcal_rate_limit' });
+          break;
+        }
+        if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+        falhas.push({ data, hora, error: 'gcal_falhou', reason: 'erro_gcal' });
+        // NÃO faz rollback dos já criados — segue tentando as próximas ocorrências
+        // (uma falha isolada, ex. conflito criado entre o preview e agora, não deve
+        // derrubar o resto da série).
+      }
+    }
+
+    const resposta = { serie_id: serieId, criados, falhas };
+    if (criados.length === 0) {
+      return reply.code(409).send({ ok: false, ...resposta });
+    }
+    if (falhas.length > 0) {
+      return reply.code(207).send({ ok: true, ...resposta });
+    }
+    return reply.code(201).send({ ok: true, ...resposta });
   });
 
   // ---- DELETE /portal/agendamentos/:eventId (Missão 023 W10 — cancelar) -------
