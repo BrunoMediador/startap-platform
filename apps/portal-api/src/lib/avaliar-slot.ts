@@ -1,3 +1,4 @@
+import type { gcal } from '@startap/integrations';
 /**
  * Helper COMPARTILHADO de avaliação de um slot de agendamento (data+hora+serviço) contra
  * a config do tenant (horários/serviços) e a agenda GCal — extraído do POST
@@ -19,13 +20,12 @@
  * mesma ordem de resolução.
  */
 import {
+  type ScheduleConfig,
   hhmmToMins,
   nowPartsInTz,
   weekdayOfDateKey,
   zonedWallTimeToUtc,
-  type ScheduleConfig,
 } from '@startap/integrations/scheduling';
-import type { gcal } from '@startap/integrations';
 
 /** Piso pra HOJE: não aceitar slot que começa em menos de 10min (regra do bot). */
 export const AVALIAR_SLOT_TODAY_FLOOR_MIN = 10;
@@ -76,12 +76,17 @@ interface AvaliarJanelaInput {
  *
  * Contrato de status (retorna cedo, sem chegar a 'ocupado'/'livre' — quem decide isso é
  * `avaliarConflito`, na Fase 2):
- *  - 'fora_da_janela'  : data > hoje+maxAheadDays.
- *  - 'passado'         : data no passado, ou hoje com hora dentro do piso de 10min.
- *  - 'fechado'         : weekday sem janela de funcionamento (dia fechado) OU data
- *                        calendarialmente inexistente (weekdayOfDateKey null).
- *  - 'fora_do_horario' : dia aberto, mas o horário/duração não cabe na janela.
- *  - 'livre'           : passou nas checagens síncronas — falta só o double-check no GCal.
+ *  - 'fechado'          : data calendarialmente inexistente (weekdayOfDateKey null — ex.
+ *                         31/02). Único caso de 'fechado' — o POST original tratava isso
+ *                         num 400 separado ANTES de sequer chamar esta validação; o preview
+ *                         (que só tem este helper) devolve 'fechado' pro caller decidir.
+ *  - 'fora_da_janela'   : data > hoje+maxAheadDays.
+ *  - 'passado'          : data no passado, ou hoje com hora dentro do piso de 10min.
+ *  - 'fora_do_horario'  : dia SEM janela de funcionamento (dia fechado da semana, ex.
+ *                         domingo) OU horário/duração que não cabe na janela do dia —
+ *                         mesma condição única (`!janela || ...`) do POST original,
+ *                         preservada byte-a-byte (o POST nunca distinguiu os dois).
+ *  - 'livre'            : passou nas checagens síncronas — falta só o double-check no GCal.
  */
 export function avaliarJanela(input: AvaliarJanelaInput): AvaliarSlotResult {
   const { config, data, hora, duracaoMin, maxAheadDays } = input;

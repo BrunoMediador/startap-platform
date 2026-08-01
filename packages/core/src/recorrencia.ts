@@ -91,7 +91,11 @@ export function expandirDatas(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dataAncora)) {
     throw new Error(`dataAncora invalida (esperado YYYY-MM-DD): ${dataAncora}`);
   }
-  if (!Number.isInteger(ocorrencias) || ocorrencias < OCORRENCIAS_MIN || ocorrencias > OCORRENCIAS_MAX) {
+  if (
+    !Number.isInteger(ocorrencias) ||
+    ocorrencias < OCORRENCIAS_MIN ||
+    ocorrencias > OCORRENCIAS_MAX
+  ) {
     throw new Error(
       `ocorrencias fora do intervalo [${OCORRENCIAS_MIN}, ${OCORRENCIAS_MAX}]: ${ocorrencias}`,
     );

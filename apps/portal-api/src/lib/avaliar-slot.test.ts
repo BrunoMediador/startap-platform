@@ -71,10 +71,22 @@ describe('avaliarJanela (Fase 1 — sem I/O)', () => {
     expect(r.status).toBe('passado');
   });
 
-  it('fechado: weekday sem janela de funcionamento (domingo)', () => {
+  it('fora_do_horario: dia da semana sem janela de funcionamento (domingo) — mesmo status do horario fora da faixa', () => {
     const r = avaliarJanela({
       config: CONFIG_OK,
       data: '2026-08-09', // domingo
+      hora: '10:00',
+      duracaoMin: 30,
+      maxAheadDays: 60,
+      now: REF_NOW,
+    });
+    expect(r.status).toBe('fora_do_horario');
+  });
+
+  it('fechado: data calendarialmente inexistente (31 de fevereiro)', () => {
+    const r = avaliarJanela({
+      config: CONFIG_OK,
+      data: '2026-02-31',
       hora: '10:00',
       duracaoMin: 30,
       maxAheadDays: 60,
