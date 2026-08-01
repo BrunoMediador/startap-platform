@@ -1,5 +1,6 @@
 'use client';
 
+import { ContactSheet } from '@/components/contatos/contact-sheet';
 import { FrasesPausaSection } from '@/components/frases-pausa/frases-pausa-section';
 import {
   IconChevronLeft,
@@ -37,7 +38,6 @@ import { useAddPausa, useContatos, usePausas, useRemovePausa } from '@/lib/queri
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BotSuspeitosSection } from './bot-suspeitos-section';
-import { ContactSheet } from './contact-sheet';
 
 const PAGE_SIZE = 10;
 

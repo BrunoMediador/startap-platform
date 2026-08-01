@@ -385,13 +385,23 @@ export interface AgendaSlotsResponse {
   grupos: SlotsGrupos;
 }
 
-/** Body do POST /portal/agendamentos (telefone já só dígitos, com DDI). */
+/**
+ * Body do POST /portal/agendamentos (telefone já só dígitos, com DDI).
+ *
+ * 🔴 `cliente_telefone` é OBRIGATÓRIO a menos que `sem_whatsapp: true` (schema
+ * `criarAgendamentoSchema` do backend, branch feat/agenda-recorrente, `.refine`):
+ * é a identidade que `reminders.ts` usa como destino do lembrete. `sem_whatsapp`
+ * é o escape hatch explícito pro dono que genuinamente não tem o número do
+ * cliente — sem ele o backend responde 400 com `path: ['cliente_telefone']`.
+ */
 export interface CriarAgendamentoBody {
   servico: string;
   data: string; // 'YYYY-MM-DD'
   hora: string; // 'HH:mm'
   cliente_nome: string;
   cliente_telefone?: string;
+  /** Escape hatch: sem WhatsApp do cliente → sem lembrete automático. Default false. */
+  sem_whatsapp?: boolean;
   /**
    * Profissional do estabelecimento que vai atender. OBRIGATÓRIO quando o tenant é
    * `product_type=estabelecimento` (o backend responde 422 colaborador_obrigatorio
@@ -408,6 +418,98 @@ export interface CriarAgendamentoResponse {
 
 /** Razões do 409 ({error:'conflito'}) do POST /portal/agendamentos. */
 export type ConflitoReason = 'ocupado' | 'horario_passado' | 'fora_do_horario';
+
+// ── Recorrência (POST /portal/agendamentos/recorrencia/preview + /serie) ─────
+// Contrato final do backend (branch feat/agenda-recorrente, apps/portal-api/src/
+// routes/portal-agendamentos.ts) — front escrito contra ele antes do merge.
+
+/** Espelha PERIODICIDADES de packages/core/src/recorrencia.ts. */
+export type Periodicidade = 'semanal' | 'mensal' | 'trimestral' | 'semestral';
+
+/** Espelha OCORRENCIAS_MIN/MAX de packages/core/src/recorrencia.ts — cap duro (rate-limit GCal). */
+export const OCORRENCIAS_MIN = 2;
+export const OCORRENCIAS_MAX = 24;
+
+/** Status de UMA ocorrência no preview — espelha AvaliarSlotStatus do backend. */
+export type PreviewOcorrenciaStatus =
+  | 'livre'
+  | 'ocupado'
+  | 'fora_do_horario'
+  | 'fechado'
+  | 'fora_da_janela'
+  | 'passado';
+
+/** Presente só quando status==='ocupado' — horário do evento existente que colide. */
+export interface PreviewConflito {
+  inicio: string | null; // ISO
+  fim: string | null; // ISO
+}
+
+export interface PreviewOcorrencia {
+  data: string; // 'YYYY-MM-DD'
+  hora: string; // 'HH:mm'
+  status: PreviewOcorrenciaStatus;
+  conflito?: PreviewConflito;
+}
+
+/** Body do POST /portal/agendamentos/recorrencia/preview — SÓ LÊ, não grava nada. */
+export interface PreviewRecorrenciaBody {
+  servico: string;
+  data: string; // 'YYYY-MM-DD' — âncora (1ª ocorrência)
+  hora: string; // 'HH:mm'
+  cliente_nome: string;
+  cliente_telefone?: string;
+  sem_whatsapp?: boolean;
+  colaborador_id?: number;
+  periodicidade: Periodicidade;
+  ocorrencias: number; // 2..24
+}
+
+export interface PreviewRecorrenciaResponse {
+  ok: true;
+  previews: PreviewOcorrencia[];
+}
+
+/** Uma data já confirmada pelo dono na tela de revisão (o servidor NÃO recalcula). */
+export interface SerieDataHora {
+  data: string; // 'YYYY-MM-DD'
+  hora: string; // 'HH:mm'
+}
+
+/** Body do POST /portal/agendamentos/serie — GRAVA a lista explícita que o dono confirmou. */
+export interface CriarSerieBody {
+  servico: string;
+  cliente_nome: string;
+  cliente_telefone?: string;
+  sem_whatsapp?: boolean;
+  colaborador_id?: number;
+  datas: SerieDataHora[]; // 2..24
+}
+
+export interface SerieOcorrenciaCriada {
+  id: string; // eventId do GCal
+  data: string;
+  hora: string;
+}
+
+export interface SerieOcorrenciaFalha {
+  data: string;
+  hora: string;
+  error: string;
+  reason: string;
+}
+
+/**
+ * Resposta do POST /portal/agendamentos/serie. Status HTTP conta a história:
+ *   201 = tudo criado (falhas vazio) · 207 = parcial (ok:true, ALGUMAS falharam,
+ *   NÃO é exceção — trate como sucesso parcial na UI) · 409 = nenhuma criada.
+ */
+export interface CriarSerieResponse {
+  ok: boolean;
+  serie_id: string;
+  criados: SerieOcorrenciaCriada[];
+  falhas: SerieOcorrenciaFalha[];
+}
 
 /**
  * 200 do DELETE /portal/agendamentos/:eventId — cancela/exclui o evento no GCal
