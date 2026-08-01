@@ -373,6 +373,11 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
   for (const [key, val] of Object.entries(e.personalizacao)) {
     if (persUsadas.has(key)) continue;
     if (_PERS_CONTROL_KEYS.has(key)) continue; // flags de controle nunca vao pro contexto
+    // Valor ESTRUTURADO (array/objeto) nunca vira linha de texto aqui: `String(valor)` de um
+    // array/objeto produz "[object Object]"/"a,b,c" ilegível no contexto do bot. Cobre QUALQUER
+    // chave estruturada — legado (ex.: um `faq_personalizado` esquecido em JSONB antigo) ou
+    // futura (alguém adiciona uma chave nao-string via gestao) — sem precisar nomear chave nenhuma.
+    if (val !== null && typeof val === 'object') continue;
     if (!val || String(val).trim() === '') continue;
     observacoes.push(`${humanizarChave(key)}: ${val}`);
   }

@@ -480,4 +480,21 @@ describe('buildContextBlock — planos_beneficios (SCRUM-59)', () => {
     const ctx = await buildContextBlock(baseOpts);
     expect(ctx).not.toContain('Planos e assinaturas');
   });
+
+  it('chave com valor ESTRUTURADO (array/objeto) nunca vira linha de [OBSERVACOES] — nem "[object Object]"', async () => {
+    // Defesa em profundidade: qualquer chave nao-string no JSONB de personalizacao (legado ou
+    // futura) e pulada no loop de [OBSERVACOES], nunca String()-ada. Cobre tanto array quanto
+    // objeto puro, sem citar nenhuma chave especifica pelo nome.
+    mockGetCloneBySlot.mockResolvedValue(
+      cloneWith({
+        nome_negocio: 'X',
+        legado_array: [{ pergunta: 'a', resposta: 'b' }],
+        legado_objeto: { chave: 'valor' },
+      }) as never,
+    );
+    const ctx = await buildContextBlock(baseOpts);
+    expect(ctx).not.toContain('[object Object]');
+    expect(ctx).not.toMatch(/Legado Array/i);
+    expect(ctx).not.toMatch(/Legado Objeto/i);
+  });
 });
