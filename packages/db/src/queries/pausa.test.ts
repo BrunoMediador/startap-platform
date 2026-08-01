@@ -64,6 +64,34 @@ describe('addFlowPause — pausa permanente/keyword (promove: zera TTL prévio)'
     // O guard "não rebaixar permanente" é EXCLUSIVO do addHumanReplyPause.
     expect(sql).not.toMatch(/DO UPDATE[\s\S]*WHERE/i);
   });
+
+  it('SCRUM-144: com contactName → coluna contact_name entra no INSERT e no DO UPDATE com COALESCE/NULLIF', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await addFlowPause({
+      flowId: 'clone_x',
+      telefone: '5511999990000',
+      source: 'fromMe',
+      contactName: 'Wal Delfim',
+    });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/INSERT INTO flow_pauses[\s\S]*contact_name/i);
+    expect(sql).toMatch(/contact_name = COALESCE\(NULLIF\(EXCLUDED\.contact_name, ''\)/i);
+    // $8 = contact_name (ordem: flowId, flowName, telefone, session, source, reason,
+    // expires_at, contact_name).
+    expect(params[7]).toBe('Wal Delfim');
+    expect(params).toHaveLength(8);
+  });
+
+  it('SCRUM-144: SEM contactName → $8 = null; caller sem nome NUNCA apaga um nome já capturado (COALESCE/NULLIF no upsert)', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    await addFlowPause({ flowId: 'clone_x', telefone: '5511999990000', source: 'antibot' });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params[7]).toBeNull();
+    // A garantia de não-apagar é o COALESCE/NULLIF no SQL (não o valor do param): mesmo com
+    // $8=NULL, o DO UPDATE preserva flow_pauses.contact_name quando EXCLUDED.contact_name é
+    // NULL/''. Reafirma a mesma expressão coberta no teste acima.
+    expect(sql).toMatch(/contact_name = COALESCE\(NULLIF\(EXCLUDED\.contact_name, ''\), flow_pauses\.contact_name\)/i);
+  });
 });
 
 describe('addHumanReplyPause — NÃO rebaixa pausa permanente ativa (N1, SCRUM-60)', () => {

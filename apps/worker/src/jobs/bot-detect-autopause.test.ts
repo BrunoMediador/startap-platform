@@ -29,6 +29,7 @@ const isFlowPaused = vi.fn();
 const addFlowPause = vi.fn();
 const removeFlowPause = vi.fn();
 const listActiveFlowPausesBySource = vi.fn();
+const getContactName = vi.fn();
 
 vi.mock('@startap/db', () => ({
   botDetect: {
@@ -42,6 +43,7 @@ vi.mock('@startap/db', () => ({
   },
   antibot: { hasScheduledHistory },
   pausa: { isFlowPaused, addFlowPause, removeFlowPause, listActiveFlowPausesBySource },
+  contactNames: { getContactName },
 }));
 // bot-detect.js (funções puras reais) referencia @startap/integrations — mock mínimo.
 vi.mock('@startap/integrations', () => ({ waha: { sendText: vi.fn() } }));
@@ -84,6 +86,7 @@ function wireEscalationBot() {
   addFlowPause.mockResolvedValue(undefined);
   markPaused.mockResolvedValue(true);
   markHumanOverride.mockResolvedValue(undefined);
+  getContactName.mockResolvedValue(null);
   // TTL step: sem pausas ativas por default.
   listActiveFlowPausesBySource.mockResolvedValue([]);
 }

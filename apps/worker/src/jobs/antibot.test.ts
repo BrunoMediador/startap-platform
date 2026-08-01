@@ -23,12 +23,14 @@ const findRouting = vi.fn();
 const getCloneBySession = vi.fn();
 const getCloneBySlot = vi.fn();
 const addFlowPause = vi.fn();
+const getContactName = vi.fn();
 
 vi.mock('@startap/db', () => ({
   antibot: { findSuspects, pruneOldLogs, hasScheduledHistory },
   routing: { findRouting },
   flowClones: { getCloneBySession, getCloneBySlot },
   pausa: { addFlowPause },
+  contactNames: { getContactName },
   // clientBilling: reimplementação fiel das funções PURAS (mesmo padrão do router.test.ts).
   clientBilling: {
     GRACE_DAYS: 3,
@@ -69,6 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   pruneOldLogs.mockResolvedValue(0);
   addFlowPause.mockResolvedValue(undefined);
+  getContactName.mockResolvedValue(null);
   // flowId resolvido pela etapa 1 (routing) -> = SLOT do clone.
   findRouting.mockResolvedValue({ workflow_id: SLOT });
   getCloneBySession.mockResolvedValue(null);

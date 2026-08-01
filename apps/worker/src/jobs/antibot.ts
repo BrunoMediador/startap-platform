@@ -12,7 +12,7 @@
 import { logger } from '@startap/core/logger';
 import { phoneHint } from '@startap/core/phone';
 import { resolveSilenceGate } from '@startap/core/silence-gate';
-import { antibot, clientBilling, flowClones, pausa, routing } from '@startap/db';
+import { antibot, clientBilling, contactNames, flowClones, pausa, routing } from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
@@ -112,12 +112,19 @@ export async function runAntibot(
         }
       }
 
+      // SCRUM-144: snapshota o nome do CONTATO do store durável (pushName do INBOUND). Este
+      // evento não tem payload próprio (é derivado de message_log) — a única fonte válida
+      // é contact_names. Fail-safe: erro/ausência nunca atrasa nem derruba a pausa (nome NULL).
+      const contactNameAntibot = await contactNames
+        .getContactName({ session: s.session, telefone: s.telefone })
+        .catch(() => null);
       await pausa.addFlowPause({
         flowId,
         telefone: s.telefone,
         session: s.session,
         source: 'antibot',
         reason: `flood: ${s.total} msgs em ${WINDOW_SEC}s`,
+        contactName: contactNameAntibot,
       });
       blocked++;
     } else {

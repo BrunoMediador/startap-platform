@@ -1313,6 +1313,49 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     expect(arg.expiresAt ?? null).toBeNull();
   });
 
+  it('SCRUM-144: KEYWORD fromMe também snapshota contact_name do STORE (não do pushName fromMe)', async () => {
+    mocks.getContactName.mockResolvedValue('Dona Meduzza');
+    const result = await handleWebhook(fromMeBody('atendente aqui!!'), {
+      executionId: 'exec-keyword-name',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:manual-pause' });
+    // Lookup pela SESSION + telefone DO CONTATO — nunca pelo pushName do evento fromMe (dono).
+    expect(mocks.getContactName).toHaveBeenCalledWith({
+      session: 'TESTE_STARTAP',
+      telefone: '553598877248',
+    });
+    const arg = mocks.addFlowPause.mock.calls[0]![0] as { contactName?: string | null };
+    expect(arg.contactName).toBe('Dona Meduzza');
+  });
+
+  it('SCRUM-144: pushName do PRÓPRIO evento fromMe (nome do DONO) NUNCA vira contact_name', async () => {
+    // O body fromMe pode trazer um pushName no payload (nome de exibição do DONO da sessão,
+    // não do contato) — mesmo que existisse, o código NUNCA deve lê-lo pra contact_name; a
+    // única fonte é o store getContactName. Aqui simulamos o store SEM nome (caso comum:
+    // contato ainda não mandou inbound) para provar que nenhum pushName "vaza" como fallback.
+    mocks.getContactName.mockResolvedValue(null);
+    const body = fromMeBody('atendente aqui!!');
+    (body.payload as { _data?: { pushName?: string } })._data = { pushName: 'Dono Da Sessao' };
+    const result = await handleWebhook(body, { executionId: 'exec-keyword-owner', startedAt: 0 });
+    expect(result).toEqual({ status: 'ok:manual-pause' });
+    const arg = mocks.addFlowPause.mock.calls[0]![0] as { contactName?: string | null };
+    expect(arg.contactName ?? null).toBeNull();
+    expect(arg.contactName).not.toBe('Dono Da Sessao');
+  });
+
+  it('SCRUM-144: getContactName REJEITA → pausa ainda é criada, com contactName NULL (fail-safe)', async () => {
+    mocks.getContactName.mockRejectedValue(new Error('db down'));
+    const result = await handleWebhook(fromMeBody('atendente aqui!!'), {
+      executionId: 'exec-keyword-reject',
+      startedAt: 0,
+    });
+    expect(result).toEqual({ status: 'ok:manual-pause' });
+    expect(mocks.addFlowPause).toHaveBeenCalledTimes(1);
+    const arg = mocks.addFlowPause.mock.calls[0]![0] as { contactName?: string | null };
+    expect(arg.contactName ?? null).toBeNull();
+  });
+
   it('Redis DEGRADED → fail-safe: NÃO auto-pausa (keyword ainda roda, mas sem match aqui)', async () => {
     mocks.isBotEcho.mockResolvedValue('degraded');
     const result = await handleWebhook(fromMeBody('resposta qualquer nao-keyword'), {

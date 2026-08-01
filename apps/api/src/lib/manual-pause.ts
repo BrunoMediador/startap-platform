@@ -61,6 +61,12 @@ export async function applyFlowManualCommand(input: {
   session?: string | null;
   source?: string | null;
   reason?: string | null;
+  /**
+   * Nome do CONTATO (SCRUM-144), já resolvido pelo CALLER (router — que tem sessão e
+   * telefone em mão) via store durável contact_names. Esta função NÃO resolve sozinha
+   * nem faz I/O extra pra isso; só repassa. Ausente/NULL = comportamento idêntico a antes.
+   */
+  contactName?: string | null;
 }): Promise<void> {
   if (input.command === 'pause') {
     await pausa.addFlowPause({
@@ -70,6 +76,7 @@ export async function applyFlowManualCommand(input: {
       session: input.session,
       source: input.source ?? 'manual',
       reason: input.reason,
+      contactName: input.contactName,
     });
   } else {
     await pausa.removeFlowPause({
