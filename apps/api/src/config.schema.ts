@@ -118,6 +118,21 @@ export const ConfigSchema = z.object({
   // Default 10000ms (chamada GCal + rede). Ajustavel sem deploy.
   IDEMPOTENCY_ACTION_LOCK_TTL_MS: z.coerce.number().int().positive().default(10000),
 
+  // ── Padronização do telefone no título da agenda (ADR 0028) ────────────────
+  // Flag-gated, default OFF, OPCIONAL no boot (mesma lição do #247: env nova NUNCA
+  // derruba api/worker). OFF = comportamento ATUAL byte-a-byte: o summary escrito
+  // pelo LLM vai direto pro createEvent, sem normalizar telefone/comparar por
+  // identidade. ON = normaliza o telefone do summary (ensureDddBr, preserva o 9º
+  // dígito) ANTES do createEvent e troca o casamento por substring (.includes) nas
+  // tools de consulta/remarcação por comparação de IDENTIDADE (mesmoTelefone,
+  // canonicalE164 dos dois lados — tolera COM/SEM-9 e COM/SEM-55 do mesmo cliente).
+  // NUNCA muda o param `summary` da tool nem a descrição (system prompt/golden test
+  // ficam byte-idênticos) — só o handler, depois que o LLM já respondeu.
+  AGENDA_SUMMARY_NORMALIZE_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Decouple async do webhook WAHA (ADR 0021) ─────────────────────────────
   // Flag-gated, default OFF, OPCIONAL no boot (licao do #247: env nova NUNCA
   // derruba api/worker). OFF = comportamento ATUAL byte-a-byte (await handleWebhook

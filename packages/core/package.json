@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./phone": "./dist/phone.js",
+    "./agenda-summary": "./dist/agenda-summary.js",
     "./logger": "./dist/logger.js",
     "./types": "./dist/types.js",
     "./crypto": "./dist/crypto.js",

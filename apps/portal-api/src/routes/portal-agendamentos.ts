@@ -20,6 +20,11 @@
  * DTO whitelist (parecer-001): apenas id, titulo, inicio, fim. NAO expor
  * telefone/descricao/summary cru alem do titulo.
  */
+import {
+  buildEventSummary,
+  normalizeClientePhone,
+  parseEventSummary,
+} from '@startap/core/agenda-summary';
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
@@ -78,32 +83,57 @@ const POST_TODAY_FLOOR_MIN = 10;
 /** Mesmo limite do GET /portal/agenda/slots. */
 const POST_MAX_AHEAD_DAYS = 60;
 
-const telefoneSchema = z
-  .string()
-  .transform((v) => v.replace(/\D/g, ''))
-  .refine((v) => v.length >= 10 && v.length <= 15, {
-    message: 'telefone deve ter 10-15 digitos (DDI+DDD+numero)',
-  });
-
-const criarAgendamentoSchema = z.object({
-  servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
-  data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
-  hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm'),
-  cliente_nome: z.string().trim().min(1, 'nome do cliente obrigatorio').max(80),
-  // '' e null contam como "sem telefone" (campo opcional no form).
-  cliente_telefone: z.preprocess(
-    (v) => (v == null || v === '' ? undefined : v),
-    telefoneSchema.optional(),
-  ),
-  // ESTABELECIMENTO (multi-profissional): qual colaborador/agenda recebe o evento.
-  // É clone_colaboradores.id (numérico). OPCIONAL no schema porque o INDIVIDUAL não
-  // usa (single-agenda) — a obrigatoriedade no estabelecimento é validada no handler
-  // (422 'colaborador_obrigatorio'). '' / null => undefined (form individual não manda).
-  colaborador_id: z.preprocess(
-    (v) => (v == null || v === '' ? undefined : v),
-    z.coerce.number().int().positive().optional(),
-  ),
+// Delega INTEIRAMENTE a normalizeClientePhone (@startap/core/agenda-summary ->
+// ensureDddBr, ADR 0028): garante DDI 55 + valida DDD contra whitelist Anatel,
+// preserva o 9º dígito como veio. Ganho medido: antes um DDD inexistente
+// ("(00) 99999-9999") passava no .refine(10..15) e virava destino inválido de
+// lembrete (reminders.ts); agora normalizeClientePhone->ok:false rejeita.
+const telefoneSchema = z.string().transform((v, ctx) => {
+  const r = normalizeClientePhone(v);
+  if (!r.ok) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        r.reason === 'vazio'
+          ? 'telefone obrigatorio'
+          : 'telefone invalido (DDD/formato nao reconhecido)',
+    });
+    return z.NEVER;
+  }
+  return r.digits;
 });
+
+const criarAgendamentoSchema = z
+  .object({
+    servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+    data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
+    hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm'),
+    cliente_nome: z.string().trim().min(1, 'nome do cliente obrigatorio').max(80),
+    // Obrigatório por padrão (identidade do lembrete — reminders.ts usa este campo como
+    // destino WhatsApp direto). '' e null contam como "não informado" no preprocess; a
+    // obrigatoriedade real é decidida pelo .refine abaixo, junto com sem_whatsapp.
+    cliente_telefone: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      telefoneSchema.optional(),
+    ),
+    // Escape hatch EXPLÍCITO (decisão do Bruno): o dono pode criar o evento sem WhatsApp
+    // do cliente quando genuinamente não tem o número (cliente na cadeira, sem contato).
+    // Sem isso, o dono digitaria um número fake pra passar da validação — e o
+    // reminders.ts mandaria WhatsApp pra um terceiro (dano real). Default false.
+    sem_whatsapp: z.boolean().optional().default(false),
+    // ESTABELECIMENTO (multi-profissional): qual colaborador/agenda recebe o evento.
+    // É clone_colaboradores.id (numérico). OPCIONAL no schema porque o INDIVIDUAL não
+    // usa (single-agenda) — a obrigatoriedade no estabelecimento é validada no handler
+    // (422 'colaborador_obrigatorio'). '' / null => undefined (form individual não manda).
+    colaborador_id: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      z.coerce.number().int().positive().optional(),
+    ),
+  })
+  .refine((b) => b.sem_whatsapp === true || b.cliente_telefone !== undefined, {
+    message: 'telefone obrigatorio (ou marque sem_whatsapp)',
+    path: ['cliente_telefone'],
+  });
 
 // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
 //
@@ -624,9 +654,13 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
 
       // MESMO formato de título do bot ("Nome - Servico | WhatsApp: numero") —
       // a lista da Início e o consultar_agendamento do bot enxergam igual.
-      const summary = cliente_telefone
-        ? `${cliente_nome} - ${svc.name} | WhatsApp: ${cliente_telefone}`
-        : `${cliente_nome} - ${svc.name}`;
+      // cliente_telefone já normalizado (ADR 0028) pelo schema; ausente só quando
+      // sem_whatsapp=true (escape hatch explícito).
+      const summary = buildEventSummary({
+        nome: cliente_nome,
+        servico: svc.name,
+        telefoneDigits: cliente_telefone,
+      });
 
       const ev = await client.createEvent({
         summary,
@@ -909,7 +943,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Recompõe os campos do título a partir do summary atual + o que mudou.
-      const parsedAtual = parseBotSummary(atual.summary ?? '');
+      const parsedAtual = parseEventSummary(atual.summary ?? '');
       const novoNome = patch.cliente_nome ?? parsedAtual.nome;
       const novoServicoNome = svc?.name ?? parsedAtual.servico;
       const novoTelefone =
@@ -1041,11 +1075,15 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // MESMO formato do bot SÓ se nome/servico/telefone mudaram; senão preserva o
-      // título atual (não reescreve summary à toa).
+      // título atual (não reescreve summary à toa). novoTelefone já normalizado
+      // (ADR 0028) quando veio no PATCH; senão é o telefone extraído do título atual
+      // (já persistido, não renormalizado aqui — PATCH não é o ponto de entrada dele).
       const summary = mudaTitulo
-        ? novoTelefone
-          ? `${novoNome} - ${novoServicoNome} | WhatsApp: ${novoTelefone}`
-          : `${novoNome} - ${novoServicoNome}`
+        ? buildEventSummary({
+            nome: novoNome,
+            servico: novoServicoNome,
+            telefoneDigits: novoTelefone,
+          })
         : undefined;
 
       const updated = await client.patchEvent(eventId, {
@@ -1212,31 +1250,8 @@ async function handleEstabelecimento(
   });
 }
 
-/**
- * Quebra o summary do bot ("Nome - Servico | WhatsApp: numero") em partes pra
- * recompor o título quando só ALGUNS campos mudam. Tolerante: se o formato não
- * casar, devolve o texto inteiro como `nome` e os demais vazios (o caller só usa
- * os pedaços que vai sobrescrever; se o cliente mandou nome+servico+telefone, o
- * parse nem importa).
- */
-function parseBotSummary(summary: string): { nome: string; servico: string; telefone?: string } {
-  let telefone: string | undefined;
-  let resto = summary;
-  const waIdx = resto.indexOf('| WhatsApp:');
-  if (waIdx >= 0) {
-    const tel = resto
-      .slice(waIdx + '| WhatsApp:'.length)
-      .trim()
-      .replace(/\D/g, '');
-    telefone = tel.length > 0 ? tel : undefined;
-    resto = resto.slice(0, waIdx).trim();
-  }
-  const sep = resto.indexOf(' - ');
-  if (sep >= 0) {
-    return { nome: resto.slice(0, sep).trim(), servico: resto.slice(sep + 3).trim(), telefone };
-  }
-  return { nome: resto.trim(), servico: '', telefone };
-}
+// parseBotSummary foi UNIFICADO em @startap/core/agenda-summary::parseEventSummary
+// (fonte única compartilhada com apps/worker/src/jobs/gcal-atend-sync.ts — ADR 0028).
 
 /** Diferença em minutos entre dois ISO dateTimes (ou 0 se faltar algum). */
 function minutesBetween(startIso?: string, endIso?: string): number {
