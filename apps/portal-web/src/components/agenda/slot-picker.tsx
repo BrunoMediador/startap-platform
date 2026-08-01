@@ -2,20 +2,31 @@
 
 /**
  * Seletor de DIA + HORÁRIO LIVRE reutilizável (Bloco C — remarcar/trocar).
- * Reusa ~90% do fluxo de /novo: DayStrip de 14 dias (buildDayStrip) + grade SÓ de
+ * Reusa ~90% do fluxo de /novo: strip semanal (buildWeekStrip) + grade SÓ de
  * horários livres (useAgendaSlots), agrupada manhã/tarde/noite. Mostrar só livres
  * previne 409 de conflito; se o backend devolver 409 mesmo assim, o pai recarrega
  * a grade (refetch exposto via `slotsQuery`).
  *
+ * Horizonte de navegação = MAX_AHEAD_DAYS (365d, igual /novo) — se este
+ * componente ficasse preso em 14 dias enquanto /novo foi pra 365, remarcar
+ * teria uma janela visivelmente menor que criar (inconsistência visível).
+ *
  * Estados: skeleton (procurando livres), erro+retry, dia fechado, dia lotado,
  * agenda Google não conectada (422/gcal off — o pai trata e nem monta isto).
  */
+import { IconChevronLeft, IconChevronRight } from '@/components/icons';
 import { Skeleton, skeletonKeys } from '@/components/ui/skeleton';
 import type { SlotsGrupos } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
-import { buildDayStrip, formatDiaExtenso } from '@/lib/novo-agendamento';
+import {
+  buildWeekStrip,
+  formatDiaExtenso,
+  formatIntervaloSemana,
+  podeAvancarSemana,
+  podeVoltarSemana,
+} from '@/lib/novo-agendamento';
 import { useAgendaSlots, useHorarios } from '@/lib/queries';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 export function SlotPicker({
   slot,
@@ -45,13 +56,43 @@ export function SlotPicker({
 }) {
   const horariosQ = useHorarios(slot);
   const slotsQ = useAgendaSlots(slot, dataSel, servico, colaboradorId);
-  const strip = useMemo(() => buildDayStrip(horariosQ.data), [horariosQ.data]);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const strip = useMemo(
+    () => buildWeekStrip(horariosQ.data, weekOffset),
+    [horariosQ.data, weekOffset],
+  );
+  const intervalo = useMemo(() => formatIntervaloSemana(strip), [strip]);
 
   return (
     <div className="space-y-4">
       {/* Dia */}
       <div>
-        <h3 className="mb-2 font-display text-[13.5px] font-semibold text-ink">Novo dia</h3>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="font-display text-[13.5px] font-semibold text-ink">Novo dia</h3>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={!podeVoltarSemana(weekOffset)}
+              aria-label="Semana anterior"
+              onClick={() => setWeekOffset((w) => w - 1)}
+              className="flex size-7 items-center justify-center rounded-full text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <IconChevronLeft size={16} />
+            </button>
+            <span className="min-w-[92px] text-center text-[11.5px] font-medium text-ink-soft">
+              {intervalo}
+            </span>
+            <button
+              type="button"
+              disabled={!podeAvancarSemana(weekOffset)}
+              aria-label="Próxima semana"
+              onClick={() => setWeekOffset((w) => w + 1)}
+              className="flex size-7 items-center justify-center rounded-full text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <IconChevronRight size={16} />
+            </button>
+          </div>
+        </div>
         <div
           role="radiogroup"
           aria-label="Escolha o dia"
@@ -59,13 +100,14 @@ export function SlotPicker({
         >
           {strip.map((d) => {
             const ativo = d.dateKey === dataSel;
+            const desabilitado = d.fechado || d.passado || d.foraDaJanela;
             return (
               <button
                 key={d.dateKey}
                 type="button"
                 role="radio"
                 aria-checked={ativo}
-                disabled={d.fechado}
+                disabled={desabilitado}
                 aria-label={`${d.longo}${d.fechado ? ' — fechado' : ''}`}
                 onClick={() => onPickDia(d.dateKey)}
                 className={cn(
@@ -73,7 +115,7 @@ export function SlotPicker({
                   ativo
                     ? 'border-brand bg-brand-soft'
                     : 'border-line bg-surface hover:bg-surface-hover',
-                  d.fechado && 'cursor-not-allowed opacity-45 hover:bg-surface',
+                  desabilitado && 'cursor-not-allowed opacity-45 hover:bg-surface',
                 )}
               >
                 <span

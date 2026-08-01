@@ -436,14 +436,20 @@ export const WorkerConfigSchema = z.object({
   GCAL_ATEND_SYNC_CRON: z.string().default('37 * * * *'),
   // Janela de DELEÇÃO pra trás (dias): cobre a aba "Mês passado" do portal com folga. Default 62.
   GCAL_ATEND_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().default(62),
-  // Janela de DELEÇÃO pra frente (dias): cobre a Previsão. Default 60.
-  GCAL_ATEND_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().positive().default(60),
+  // Janela de DELEÇÃO pra frente (dias): cobre a Previsão. Default 365 (Bruno 31/07 — horizonte
+  // do agendamento manual subiu 60→365; evento fora desta janela fica fora do espelho
+  // agenda→faturamento (regra de negócio 16) até entrar nela. Era 60.
+  GCAL_ATEND_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().positive().default(365),
   // Pad (dias) da janela de LISTAGEM sobre a de deleção (listagem = deleção ± pad). Evita
   // falso-delete de evento arrastado pra borda da janela de deleção. Default 7.
   GCAL_ATEND_SYNC_LIST_PAD_DAYS: z.coerce.number().int().positive().default(7),
-  // Teto de páginas do listEventsPaged por calendário (100 eventos/página → 20 = até 2000). É o
-  // LIMITE DE COMPLETUDE: teto atingido com token pendente → ciclo "incompleto" → NÃO deleta. Default 20.
-  GCAL_ATEND_SYNC_MAX_PAGES: z.coerce.number().int().positive().default(20),
+  // Teto de páginas do listEventsPaged por calendário (100 eventos/página → 60 = até 6000). É o
+  // LIMITE DE COMPLETUDE: teto atingido com token pendente → ciclo "incompleto" → NÃO deleta.
+  // Default 60 (era 20/2000 eventos p/ janela de 60d): a janela de listagem cresceu ~6x
+  // (60→365 dias de lookahead, regra 16 exige espelho total), então o teto de páginas sobe
+  // proporcionalmente pra manter a mesma folga relativa — 6000 eventos cobre com margem a
+  // agenda mais densa medida hoje (Ingrid, ~1000 instâncias de recorrência semanal em ±60d).
+  GCAL_ATEND_SYNC_MAX_PAGES: z.coerce.number().int().positive().default(60),
   // Timeout duro (ms) por PÁGINA do listEventsPaged — nunca aguardar o Google infinito (regra 7).
   // Timeout = página incompleta = não deleta. Default 15000.
   GCAL_ATEND_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().default(15_000),

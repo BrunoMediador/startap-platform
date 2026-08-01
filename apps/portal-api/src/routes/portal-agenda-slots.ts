@@ -37,8 +37,12 @@ import { isEstabelecimentoSlot } from './portal-agendamentos.js';
 
 const log = logger.child({ service: 'portal-api', module: 'agenda-slots' });
 
-/** Janela máxima de consulta: hoje até +60 dias (DayStrip do front usa 14). */
-const MAX_AHEAD_DAYS = 60;
+/**
+ * Janela máxima de consulta: hoje até +365 dias (horizonte decidido pelo
+ * Bruno 31/07 — a navegação por semana do front pode chegar até aqui, mesmo
+ * que o bot ofereça janela menor; ver nota em novo-agendamento.ts).
+ */
+const MAX_AHEAD_DAYS = 365;
 
 const querySchema = z.object({
   data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),

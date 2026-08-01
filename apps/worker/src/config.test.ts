@@ -75,9 +75,9 @@ describe('WorkerConfigSchema', () => {
     expect(result.GCAL_ATEND_SYNC_ENABLED).toBe(false); // ausente = OFF (cron nem registra)
     expect(result.GCAL_ATEND_SYNC_CRON).toBe('37 * * * *');
     expect(result.GCAL_ATEND_SYNC_LOOKBACK_DAYS).toBe(62);
-    expect(result.GCAL_ATEND_SYNC_LOOKAHEAD_DAYS).toBe(60);
+    expect(result.GCAL_ATEND_SYNC_LOOKAHEAD_DAYS).toBe(365); // horizonte 365 (era 60, Bruno 31/07)
     expect(result.GCAL_ATEND_SYNC_LIST_PAD_DAYS).toBe(7);
-    expect(result.GCAL_ATEND_SYNC_MAX_PAGES).toBe(20);
+    expect(result.GCAL_ATEND_SYNC_MAX_PAGES).toBe(60); // subiu proporcional ao lookahead (era 20)
     expect(result.GCAL_ATEND_SYNC_TIMEOUT_MS).toBe(15_000);
     expect(result.GCAL_ATEND_SYNC_DELETE_GRACE_SEC).toBe(120);
     expect(result.GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN).toBe(50);
