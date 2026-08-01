@@ -1,7 +1,7 @@
 /**
  * DERIVA PROMPT × TELA — o prompt do builder cita nomes de tela; a tela pode ser renomeada.
  *
- * Os system prompts VIVOS do meta-entrevistador (`v7.md` = criação, `v8.md` = melhoria) dizem ao
+ * Os system prompts VIVOS do meta-entrevistador (`v9.md` = criação, `v10.md` = melhoria) dizem ao
  * dono ONDE configurar cada dado operacional. Esses nomes são uma dependência NÃO-TIPADA do
  * front: se alguém renomear uma tela e esquecer o prompt, ele passa a mandar o cliente para uma
  * tela que não existe — ele procura, não acha e chama o suporte.
@@ -30,7 +30,7 @@ import { describe, expect, it } from 'vitest';
 import { NAV_SPEC } from './nav';
 
 /** Corpo de um prompt versionado (tudo depois do separador `---` isolado). */
-function readPrompt(versao: 'v7' | 'v8'): string {
+function readPrompt(versao: 'v9' | 'v10'): string {
   const path = fileURLToPath(
     new URL(
       `../../../../packages/integrations/ai/prompts/meta-entrevistador/${versao}.md`,
@@ -84,11 +84,19 @@ const CAMINHOS_ESPERADOS = {
   horarios: '"Meu negócio" › "Horários"',
   servicos: '"Meu negócio" › "Serviços"',
   dados: '"Meu negócio" › "Dados"',
-  faq: '"Meu atendente" › "Mensagens"',
   builder: '"Meu atendente" › "Personalidade"',
 } as const;
 
-const VIVOS = ['v7', 'v8'] as const;
+/**
+ * ⚠️ `faq: '"Meu atendente" › "Mensagens"'` SAIU desta lista em 31/07 — e a remoção é o ponto,
+ * não um efeito colateral. O campo "Perguntas frequentes" está sendo removido do portal e o
+ * conteúdo passa a viver dentro do texto da persona, escrito com o builder (v9/v10). Se o
+ * caminho continuasse declarado na fonte única, os prompts seguiriam mandando o dono para uma
+ * tela que deixou de existir — a mesma classe de bug que este teste nasceu para pegar, só que
+ * com destino morto em vez de nome errado. O teste abaixo garante os dois lados: o caminho não
+ * pode estar declarado E nenhum prompt vivo pode citar a aba.
+ */
+const VIVOS = ['v9', 'v10'] as const;
 
 describe('prompts vivos × telas reais do portal (anti-deriva)', () => {
   it('a FONTE ÚNICA declara exatamente os caminhos que as telas reais oferecem', () => {
@@ -147,6 +155,28 @@ describe('prompts vivos × telas reais do portal (anti-deriva)', () => {
     expect(labels.has('Meu negócio'), '"Meu negócio" sumiu do NAV_SPEC — revise os prompts').toBe(
       true,
     );
+  });
+
+  it('a fonte única NÃO declara mais a tela de FAQ (o campo saiu do portal)', () => {
+    // Contrapartida do que foi removido de CAMINHOS_ESPERADOS: se alguém reintroduzir a linha
+    // do FAQ no mapa, os prompts voltam a mandar o dono para uma aba que não existe mais.
+    const declarados = caminhosDaFonteUnica();
+    expect(
+      declarados,
+      'a fonte única voltou a declarar a tela de FAQ — o campo foi removido do portal',
+    ).not.toContain('"Meu atendente" › "Mensagens"');
+    const src = readFonteUnica();
+    expect(src, 'a entrada `faq` voltou ao mapa ONDE_SE_CONFIGURA').not.toMatch(/^\s*faq:\s*\{/m);
+  });
+
+  it.each(VIVOS)('%s: não cita a aba "Mensagens" nem manda configurar FAQ em tela', (versao) => {
+    // O prompt vivo lido do disco (o `.md` canônico, que é a fonte do que o modelo recebe).
+    const prompt = readPrompt(versao);
+    expect(prompt, `${versao}.md cita a aba "Mensagens", que deixou de hospedar o FAQ`).not.toMatch(
+      /Mensagens/,
+    );
+    // E acolhe o assunto, em vez de apenas silenciar sobre ele.
+    expect(prompt).toContain('PERGUNTAS FREQUENTES (isto SIM entra na persona)');
   });
 
   it('a regra anti-invenção de tela vive na fonte única (acompanha TODA versão)', () => {
