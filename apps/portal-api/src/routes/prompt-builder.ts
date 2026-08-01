@@ -44,10 +44,12 @@ import {
 } from '../lib/prompt-builder-state.js';
 import {
   MAX_FINAL_PROMPT_CHARS,
+  extrairLinhasComTagMoeda,
   sanitizeOrphanPlaceholders,
   stripPII,
   validatePersona,
 } from '../lib/prompt-builder-validator.js';
+import { classificarLinhasDeMoeda } from '../lib/servico-persona-validator.js';
 import { getRedis } from '../lib/session.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
@@ -91,6 +93,39 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       setTimeout(() => reject(new Error('prompt_builder_llm_timeout')), ms),
     ),
   ]);
+}
+
+/**
+ * `validatePersona` + classificação de linha de moeda (ADR 0035) — 1 função pros 2 call-sites
+ * (mensagem que gera draft + approve). Kill-switch `SERVICO_VALIDACAO_CRUZADA_ENABLED`: OFF
+ * (default) → `validatePersona` roda SEM allowlist, byte-a-byte com o comportamento antigo
+ * (toda linha `moeda` é cortada, inclusive plano legítimo). ON → extrai as linhas com indício de
+ * moeda, pergunta à IA quais são plano/pacote/assinatura legítimo, e só essas sobrevivem.
+ *
+ * Falha do classificador NUNCA bloqueia o approve/draft (fail-closed dentro de
+ * `classificarLinhasDeMoeda`: em erro devolve lista vazia) — o pior caso é a linha de plano ser
+ * cortada como sempre foi, nunca um 503 no meio da conversa do builder.
+ */
+async function validatePersonaComClassificacaoDeMoeda(
+  persona: string,
+  opts: { servicos?: string[] } = {},
+): Promise<ReturnType<typeof validatePersona>> {
+  if (!config.SERVICO_VALIDACAO_CRUZADA_ENABLED || !config.OPENAI_API_KEY) {
+    return validatePersona(persona, opts);
+  }
+  const linhas = extrairLinhasComTagMoeda(persona);
+  if (linhas.length === 0) return validatePersona(persona, opts);
+
+  const { linhasLegitimas } = await classificarLinhasDeMoeda(linhas, {
+    model: config.SERVICO_VALIDATOR_MODEL,
+    temperature: config.SERVICO_VALIDATOR_TEMPERATURE,
+    timeoutMs: config.SERVICO_VALIDATOR_TIMEOUT_MS,
+    apiKey: config.OPENAI_API_KEY,
+  });
+  return validatePersona(persona, {
+    ...opts,
+    linhasMoedaPermitidas: new Set(linhasLegitimas),
+  });
 }
 
 /** Sanitiza o texto do dono antes de virar role:user (strip {{ }} + colapsa quebras + trunca). */
@@ -437,7 +472,10 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
         const argsParsed = proporPromptArgsSchema.safeParse(lastCall.args);
         if (argsParsed.success) {
           const servicos = (await loadCloneContext(slot))?.servicos ?? [];
-          const v = validatePersona(stripPII(argsParsed.data.persona_prompt), { servicos });
+          const v = await validatePersonaComClassificacaoDeMoeda(
+            stripPII(argsParsed.data.persona_prompt),
+            { servicos },
+          );
           // GUARDA DE PRESERVAÇÃO (SCRUM-153, só no modo melhoria): o approve SOBRESCREVE o
           // bot_prompt inteiro, então uma proposta que voltou pela metade faz o dono PERDER
           // texto que ele não pediu pra remover (regra de negócio 27). Se encolheu demais E ele
@@ -616,7 +654,9 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     // sexta pela manhã" ou "o corte sai quarenta reais" sem avisar — apagava em silêncio ou
     // persistia divergente do resto do sistema. Só a IA escreve a persona; quem quer mudar,
     // conversa com ela (ela recusa dado operacional e manda pra tela própria).
-    const v = validatePersona(stripPII(state.draft.persona), { servicos });
+    const v = await validatePersonaComClassificacaoDeMoeda(stripPII(state.draft.persona), {
+      servicos,
+    });
     if (!v.ok) return reply.code(422).send({ error: 'rascunho_insuficiente' });
 
     // Nome do ASSISTENTE = campo de 1ª classe, SEPARADO do nome do negócio (decisão de produto).
