@@ -1,19 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import type { Horarios } from './api-types';
+import type { CriarSerieResponse, Horarios, PreviewOcorrencia } from './api-types';
 import {
   DIAS_STRIP,
   MAX_AHEAD_DAYS,
+  PERIODICIDADE_LABELS,
   addMinutosHora,
   buildCriarAgendamentoBody,
+  buildCriarSerieBody,
   buildDayStrip,
+  buildPreviewRecorrenciaBody,
   buildWeekStrip,
+  contarMarcados,
+  datasMarcadas,
   dateKeyLocal,
   formatDiaCurto,
   formatDiaExtenso,
   formatIntervaloSemana,
   formatPhoneBR,
+  initRevisaoOcorrencias,
   podeAvancarSemana,
   podeVoltarSemana,
+  resumoResultadoSerie,
+  statusOcorrenciaLabel,
   telefoneDigits,
   validateNovoAgendamento,
 } from './novo-agendamento';
@@ -184,17 +192,27 @@ describe('validateNovoAgendamento', () => {
     if (!res.ok) expect(res.errors.nome).toBe('Diga o nome do cliente');
   });
 
-  it('telefone incompleto → erro; vazio → ok sem telefone', () => {
+  it('telefone incompleto → erro', () => {
     const incompleto = validateNovoAgendamento({ nome: 'João', telefone: '(11) 9999' });
     expect(incompleto.ok).toBe(false);
     if (!incompleto.ok) expect(incompleto.errors.telefone).toBe('Confere o número? Faltou dígito');
-
-    const semTelefone = validateNovoAgendamento({ nome: 'João', telefone: '' });
-    expect(semTelefone.ok).toBe(true);
-    if (semTelefone.ok) expect(semTelefone.value).toEqual({ cliente_nome: 'João' });
   });
 
-  it('telefone válido sai com DDI 55 (formato dos títulos do bot)', () => {
+  it('telefone vazio SEM o escape hatch → erro (backend agora exige)', () => {
+    const res = validateNovoAgendamento({ nome: 'João', telefone: '' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.errors.telefone).toBe('Informe o WhatsApp ou marque que não tem o número');
+    }
+  });
+
+  it('telefone vazio COM semWhatsapp=true → ok, manda sem_whatsapp:true', () => {
+    const res = validateNovoAgendamento({ nome: 'João', telefone: '', semWhatsapp: true });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value).toEqual({ cliente_nome: 'João', sem_whatsapp: true });
+  });
+
+  it('telefone válido sai com DDI 55 (formato dos títulos do bot), sem sem_whatsapp', () => {
     const res = validateNovoAgendamento({ nome: ' João Pedro ', telefone: '(11) 99999-0007' });
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -202,6 +220,32 @@ describe('validateNovoAgendamento', () => {
         cliente_nome: 'João Pedro',
         cliente_telefone: '5511999990007',
       });
+      expect('sem_whatsapp' in res.value).toBe(false);
+    }
+  });
+
+  it('telefone digitado MESMO com semWhatsapp marcado ainda é validado (10-11 dígitos)', () => {
+    const invalido = validateNovoAgendamento({
+      nome: 'João',
+      telefone: '(11) 999',
+      semWhatsapp: true,
+    });
+    expect(invalido.ok).toBe(false);
+
+    const valido = validateNovoAgendamento({
+      nome: 'João',
+      telefone: '(11) 99999-0007',
+      semWhatsapp: true,
+    });
+    expect(valido.ok).toBe(true);
+    if (valido.ok) {
+      // sem_whatsapp só faz sentido sem telefone — um telefone digitado é sinal
+      // concreto de WhatsApp, mesmo que o checkbox tenha ficado marcado.
+      expect(valido.value).toEqual({
+        cliente_nome: 'João',
+        cliente_telefone: '5511999990007',
+      });
+      expect('sem_whatsapp' in valido.value).toBe(false);
     }
   });
 
@@ -263,5 +307,215 @@ describe('buildCriarAgendamentoBody (gating de profissional)', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('colaborador_obrigatorio');
+  });
+});
+
+describe('recorrência — PERIODICIDADE_LABELS (copy do dono, não o enum cru)', () => {
+  it('cobre os 4 valores do enum com português claro', () => {
+    expect(PERIODICIDADE_LABELS).toEqual({
+      semanal: 'Toda semana',
+      mensal: 'Todo mês',
+      trimestral: 'A cada 3 meses',
+      semestral: 'A cada 6 meses',
+    });
+  });
+});
+
+describe('buildPreviewRecorrenciaBody (gating de profissional, espelha buildCriarAgendamentoBody)', () => {
+  const base = {
+    servico: 'Corte',
+    data: '2026-06-13',
+    hora: '10:00',
+    cliente_nome: 'João',
+  } as const;
+
+  it('individual: nunca envia colaborador_id', () => {
+    const res = buildPreviewRecorrenciaBody({
+      productType: 'individual',
+      base: { ...base },
+      colaboradorId: 7,
+      periodicidade: 'semanal',
+      ocorrencias: 6,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.body).toEqual({ ...base, periodicidade: 'semanal', ocorrencias: 6 });
+      expect('colaborador_id' in res.body).toBe(false);
+    }
+  });
+
+  it('estabelecimento: envia o colaborador_id selecionado', () => {
+    const res = buildPreviewRecorrenciaBody({
+      productType: 'estabelecimento',
+      base: { ...base },
+      colaboradorId: 42,
+      periodicidade: 'mensal',
+      ocorrencias: 3,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.body).toEqual({
+        ...base,
+        colaborador_id: 42,
+        periodicidade: 'mensal',
+        ocorrencias: 3,
+      });
+    }
+  });
+
+  it('estabelecimento sem profissional: erro colaborador_obrigatorio', () => {
+    const res = buildPreviewRecorrenciaBody({
+      productType: 'estabelecimento',
+      base: { ...base },
+      colaboradorId: null,
+      periodicidade: 'trimestral',
+      ocorrencias: 4,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('colaborador_obrigatorio');
+  });
+});
+
+describe('initRevisaoOcorrencias / contarMarcados / datasMarcadas (tela de revisão)', () => {
+  const previews: PreviewOcorrencia[] = [
+    { data: '2026-06-13', hora: '10:00', status: 'livre' },
+    {
+      data: '2026-06-20',
+      hora: '10:00',
+      status: 'ocupado',
+      conflito: { inicio: '2026-06-20T13:00:00Z', fim: '2026-06-20T13:30:00Z' },
+    },
+    { data: '2026-06-27', hora: '10:00', status: 'fechado' },
+    { data: '2026-07-04', hora: '10:00', status: 'livre' },
+  ];
+
+  it('livre vem MARCADO por padrão; qualquer outro status vem DESMARCADO', () => {
+    const revisao = initRevisaoOcorrencias(previews);
+    expect(revisao.map((o) => o.marcado)).toEqual([true, false, false, true]);
+  });
+
+  it('contarMarcados conta honesto ("8 de 12" na tela real, aqui 2 de 4)', () => {
+    const revisao = initRevisaoOcorrencias(previews);
+    expect(contarMarcados(revisao)).toEqual({ marcados: 2, total: 4 });
+  });
+
+  it('desmarcar o dono à mão reflete no contador e em datasMarcadas', () => {
+    const revisao = initRevisaoOcorrencias(previews);
+    revisao[0].marcado = false; // dono desmarca a primeira livre também
+    revisao[1].marcado = true; // dono opta por incluir mesmo com conflito
+    expect(contarMarcados(revisao)).toEqual({ marcados: 2, total: 4 });
+    expect(datasMarcadas(revisao)).toEqual([
+      { data: '2026-06-20', hora: '10:00' },
+      { data: '2026-07-04', hora: '10:00' },
+    ]);
+  });
+
+  it('datasMarcadas só manda data+hora (shape exato do POST /serie)', () => {
+    const revisao = initRevisaoOcorrencias(previews);
+    expect(datasMarcadas(revisao)).toEqual([
+      { data: '2026-06-13', hora: '10:00' },
+      { data: '2026-07-04', hora: '10:00' },
+    ]);
+  });
+});
+
+describe('buildCriarSerieBody', () => {
+  const cliente = { cliente_nome: 'João', cliente_telefone: '5511999990007' };
+  const ocorrencias = initRevisaoOcorrencias([
+    { data: '2026-06-13', hora: '10:00', status: 'livre' },
+    { data: '2026-06-20', hora: '10:00', status: 'ocupado' },
+  ]);
+
+  it('individual: nunca envia colaborador_id; só as datas marcadas', () => {
+    const res = buildCriarSerieBody({
+      productType: 'individual',
+      servico: 'Corte',
+      cliente,
+      colaboradorId: null,
+      ocorrencias,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.body).toEqual({
+        servico: 'Corte',
+        ...cliente,
+        datas: [{ data: '2026-06-13', hora: '10:00' }],
+      });
+    }
+  });
+
+  it('estabelecimento: envia colaborador_id', () => {
+    const res = buildCriarSerieBody({
+      productType: 'estabelecimento',
+      servico: 'Corte',
+      cliente,
+      colaboradorId: 9,
+      ocorrencias,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.body.colaborador_id).toBe(9);
+  });
+
+  it('estabelecimento sem profissional: erro colaborador_obrigatorio', () => {
+    const res = buildCriarSerieBody({
+      productType: 'estabelecimento',
+      servico: 'Corte',
+      cliente,
+      colaboradorId: null,
+      ocorrencias,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe('colaborador_obrigatorio');
+  });
+});
+
+describe('statusOcorrenciaLabel', () => {
+  it('cobre os 6 status possíveis do preview com copy do dono', () => {
+    expect(statusOcorrenciaLabel('livre')).toBe('Livre');
+    expect(statusOcorrenciaLabel('ocupado')).toBe('Já tem algo marcado');
+    expect(statusOcorrenciaLabel('fora_do_horario')).toBe('Fora do horário de funcionamento');
+    expect(statusOcorrenciaLabel('fechado')).toBe('Fechado nesse dia');
+    expect(statusOcorrenciaLabel('fora_da_janela')).toBe('Fora do período permitido');
+    expect(statusOcorrenciaLabel('passado')).toBe('Esse horário já passou');
+  });
+});
+
+describe('resumoResultadoSerie (207 é sucesso PARCIAL, não erro)', () => {
+  function resposta(criados: number, falhas: number): CriarSerieResponse {
+    return {
+      ok: true,
+      serie_id: 'abc',
+      criados: Array.from({ length: criados }, (_, i) => ({
+        id: `ev${i}`,
+        data: '2026-06-13',
+        hora: '10:00',
+      })),
+      falhas: Array.from({ length: falhas }, () => ({
+        data: '2026-06-20',
+        hora: '10:00',
+        error: 'conflito',
+        reason: 'ocupado',
+      })),
+    };
+  }
+
+  it('tudo criado (201): "N horários marcados", sem menção a falha', () => {
+    expect(resumoResultadoSerie(resposta(3, 0))).toBe('3 horários marcados.');
+  });
+
+  it('singular: "1 horário marcado."', () => {
+    expect(resumoResultadoSerie(resposta(1, 0))).toBe('1 horário marcado.');
+  });
+
+  it('parcial (207): diz o que entrou E o que não entrou — nunca "sucesso" puro', () => {
+    const msg = resumoResultadoSerie(resposta(2, 1));
+    expect(msg).toContain('2 de 3');
+    expect(msg).toContain('1 não entrou');
+  });
+
+  it('nenhuma criada (409): mensagem clara de falha total', () => {
+    expect(resumoResultadoSerie(resposta(0, 3))).toBe(
+      'Nenhum horário foi marcado. Tente rever a série.',
+    );
   });
 });

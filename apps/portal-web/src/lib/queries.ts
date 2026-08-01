@@ -42,6 +42,8 @@ import type {
   CriarAgendamentoResponse,
   CriarAtendimentoBody,
   CriarAtendimentoResponse,
+  CriarSerieBody,
+  CriarSerieResponse,
   EditarAgendamentoBody,
   EditarAgendamentoResponse,
   EditarAtendimentoBody,
@@ -62,6 +64,8 @@ import type {
   PerfilNegocio,
   PerfilResponse,
   PlanosConfig,
+  PreviewRecorrenciaBody,
+  PreviewRecorrenciaResponse,
   QrResponse,
   ReconectarResponse,
   SaveColaboradorResponse,
@@ -294,6 +298,49 @@ export function useCriarAgendamento(
       client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
       // Billing-da-agenda (ADR 0027): um agendamento novo materializa uma linha de
       // atendimento (Previsão) → Previsão/comissão ficam stale sem isto.
+      client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
+      client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
+    },
+  });
+}
+
+/**
+ * POST /portal/agendamentos/recorrencia/preview — SÓ LÊ, nunca grava (decisão do
+ * Bruno: conflitos aparecem ANTES de gravar). Sem cache (mutation, não query): cada
+ * chamada precisa refletir o estado vivo da agenda no instante da revisão.
+ */
+export function usePreviewRecorrencia(): UseMutationResult<
+  PreviewRecorrenciaResponse,
+  Error,
+  PreviewRecorrenciaBody
+> {
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<PreviewRecorrenciaResponse>('/portal/agendamentos/recorrencia/preview', {
+        method: 'POST',
+        body,
+      }),
+  });
+}
+
+/**
+ * POST /portal/agendamentos/serie — grava a lista EXPLÍCITA de datas que o dono
+ * confirmou na tela de revisão (o servidor não recalcula periodicidade). 201/207/409
+ * são tratados NA TELA (207 é sucesso PARCIAL, não erro — a mutation resolve normal
+ * nos três casos, quem decide o que mostrar é quem chama). Invalida os mesmos caches
+ * do agendamento único: N eventos entraram de uma vez, prepend otimista não vale a
+ * pena — deixa a lista ressincronizar.
+ */
+export function useCriarSerie(
+  slot: string,
+): UseMutationResult<CriarSerieResponse, Error, CriarSerieBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarSerieResponse>('/portal/agendamentos/serie', { method: 'POST', body }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: qk.agendaSlotsBase(slot) });
       client.invalidateQueries({ queryKey: qk.atendimentosBaldeBase(slot) });
       client.invalidateQueries({ queryKey: qk.relatoriosBase(slot) });
     },

@@ -18,42 +18,70 @@
  *
  * Cancelar/remarcar é fase 2 (020 B8) — esta tela só CRIA.
  */
+import { ContactSheet } from '@/components/contatos/contact-sheet';
 import {
+  IconAlert,
   IconCalendar,
+  IconCheck,
   IconChevronLeft,
   IconChevronRight,
+  IconRefresh,
   IconScissors,
+  IconUsers,
   IconWhatsapp,
 } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Overlay } from '@/components/ui/overlay';
 import { Skeleton, SkeletonList, skeletonKeys } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
-import type { Colaborador, ConflitoReason, Servico, SlotsGrupos } from '@/lib/api-types';
+import {
+  type Colaborador,
+  type ConflitoReason,
+  type CriarSerieResponse,
+  OCORRENCIAS_MAX,
+  OCORRENCIAS_MIN,
+  type Periodicidade,
+  type RecentContact,
+  type Servico,
+  type SlotsGrupos,
+} from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatDuracao, formatPrecoCents } from '@/lib/format';
 import {
+  type NovoAgendamentoCliente,
   type NovoAgendamentoErrors,
+  PERIODICIDADE_LABELS,
+  type RevisaoOcorrencia,
   addMinutosHora,
   buildCriarAgendamentoBody,
+  buildCriarSerieBody,
+  buildPreviewRecorrenciaBody,
   buildWeekStrip,
+  contarMarcados,
   formatDiaCurto,
   formatDiaExtenso,
   formatIntervaloSemana,
   formatPhoneBR,
+  initRevisaoOcorrencias,
   podeAvancarSemana,
   podeVoltarSemana,
+  resumoResultadoSerie,
+  statusOcorrenciaLabel,
   validateNovoAgendamento,
 } from '@/lib/novo-agendamento';
 import {
   useAgendaSlots,
   useAgendamentos,
   useCriarAgendamento,
+  useCriarSerie,
   useEquipe,
   useHorarios,
+  usePreviewRecorrencia,
   useServicos,
 } from '@/lib/queries';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
@@ -84,6 +112,18 @@ function errorCode(err: unknown): string | null {
 function isColaboradorErro(err: unknown): boolean {
   const code = errorCode(err);
   return code === 'colaborador_obrigatorio' || code === 'colaborador_nao_encontrado';
+}
+
+/**
+ * Copy de UMA falha do POST /serie (shape `falhas[].reason` do backend:
+ * status de avaliarSlot reaproveitado + 'gcal_rate_limit'/'erro_gcal').
+ * Reusa statusOcorrenciaLabel pros reasons que casam com o enum de status;
+ * fallback pros reasons exclusivos do /serie (rate-limit/erro de rede).
+ */
+function falhaOcorrenciaLabel(reason: string): string {
+  if (reason === 'gcal_rate_limit') return 'A agenda ficou sobrecarregada nesse momento';
+  if (reason === 'erro_gcal') return 'Não foi possível confirmar com a agenda';
+  return statusOcorrenciaLabel(reason as Parameters<typeof statusOcorrenciaLabel>[0]);
 }
 
 /** Extrai o `reason` do corpo do 409 (shape do POST /portal/agendamentos). */
@@ -118,11 +158,24 @@ export default function NovoAgendamentoPage() {
   const [colaboradorErro, setColaboradorErro] = useState<string | null>(null);
   const [nome, setNome] = useState('');
   const [telefone, setTelefone] = useState('');
+  /** Checkbox "Não tenho o WhatsApp deste cliente" — escape hatch do telefone obrigatório. */
+  const [semWhatsapp, setSemWhatsapp] = useState(false);
+  const [contatoSheetOpen, setContatoSheetOpen] = useState(false);
   const [errors, setErrors] = useState<NovoAgendamentoErrors>({});
   /** Aviso amber inline na grade (409 / troca de serviço com hora escolhida). */
   const [aviso, setAviso] = useState<string | null>(null);
   /** 422 no POST (gcal_nao_configurado/config_ausente) — vira o estado explicativo. */
   const [gcalBloqueado, setGcalBloqueado] = useState(false);
+
+  // Recorrência: "os usuários que têm agenda podem além de criar um único
+  // agendamento poder vincular serviços recorrentes" (Bruno). Conflitos aparecem
+  // ANTES de gravar — revisaoOcorrencias é o estado da tela de revisão (nulo até
+  // o preview voltar; o dono desmarca/ajusta e só então confirma via /serie).
+  const [repetir, setRepetir] = useState(false);
+  const [periodicidade, setPeriodicidade] = useState<Periodicidade>('semanal');
+  const [ocorrencias, setOcorrencias] = useState(4);
+  const [revisaoOcorrencias, setRevisaoOcorrencias] = useState<RevisaoOcorrencia[] | null>(null);
+  const [resultadoSerie, setResultadoSerie] = useState<CriarSerieResponse | null>(null);
 
   // No estabelecimento a grade tem que olhar a agenda DO PROFISSIONAL escolhido (que já é
   // selecionado antes da grade); senão o backend não acha agenda própria do clone e devolve
@@ -134,6 +187,8 @@ export default function NovoAgendamentoPage() {
     isEstabelecimento ? colaboradorSel : null,
   );
   const criar = useCriarAgendamento(slot);
+  const preview = usePreviewRecorrencia();
+  const criarSerie = useCriarSerie(slot);
 
   const servicos = servicosQ.data ?? [];
   const servico = servicos.find((s) => s.nome === servicoSel) ?? null;
@@ -199,14 +254,26 @@ export default function NovoAgendamentoPage() {
   const profissionalOk = !isEstabelecimento || colaboradorSel != null;
   const pronto = Boolean(servico && dataSel && horaSel && nome.trim() && profissionalOk);
 
+  function onSelecionarContato(c: RecentContact) {
+    setContatoSheetOpen(false);
+    setTelefone(formatPhoneBR(c.phone));
+    setSemWhatsapp(false);
+    setErrors((prev) => ({ ...prev, telefone: undefined }));
+  }
+
   function onConfirmar() {
-    const res = validateNovoAgendamento({ nome, telefone });
+    const res = validateNovoAgendamento({ nome, telefone, semWhatsapp });
     if (!res.ok) {
       setErrors(res.errors);
       return;
     }
     setErrors({});
     if (!servico || !dataSel || !horaSel) return;
+
+    if (repetir) {
+      onPreviewRecorrencia({ servico, dataSel, horaSel, cliente: res.value });
+      return;
+    }
 
     // Monta o body com o gating de profissional do backend (estabelecimento exige
     // colaborador_id; individual nunca envia). Trava antes de bater na API.
@@ -249,6 +316,105 @@ export default function NovoAgendamentoPage() {
         toast.error('Não foi possível marcar. Tente de novo.');
       },
     });
+  }
+
+  /**
+   * Recorrência passo 1: SÓ LÊ (preview). Decisão do Bruno: conflitos aparecem
+   * ANTES de gravar — abre a tela de revisão com o estado inicial de seleção
+   * (livre marcado, o resto desmarcado por padrão).
+   */
+  function onPreviewRecorrencia(args: {
+    servico: Servico;
+    dataSel: string;
+    horaSel: string;
+    cliente: NovoAgendamentoCliente;
+  }) {
+    const { servico: svc, dataSel: data, horaSel: hora, cliente } = args;
+    const built = buildPreviewRecorrenciaBody({
+      productType,
+      base: { servico: svc.nome, data, hora, ...cliente },
+      colaboradorId: colaboradorSel,
+      periodicidade,
+      ocorrencias,
+    });
+    if (!built.ok) {
+      setColaboradorErro('Escolha o profissional que vai atender.');
+      return;
+    }
+    setColaboradorErro(null);
+
+    preview.mutate(built.body, {
+      onSuccess: (resp) => {
+        setRevisaoOcorrencias(initRevisaoOcorrencias(resp.previews));
+      },
+      onError: (err) => {
+        if (isColaboradorErro(err)) {
+          setColaboradorErro('Escolha o profissional que vai atender.');
+          toast.error('Escolha um profissional pra marcar o horário.');
+          return;
+        }
+        if (is422(err)) {
+          setGcalBloqueado(true);
+          return;
+        }
+        toast.error('Não foi possível calcular a série agora. Tente de novo.');
+      },
+    });
+  }
+
+  /** Alterna a marcação de UMA ocorrência na tela de revisão. */
+  function onToggleOcorrencia(index: number) {
+    setRevisaoOcorrencias((prev) =>
+      prev ? prev.map((o, i) => (i === index ? { ...o, marcado: !o.marcado } : o)) : prev,
+    );
+  }
+
+  /** Recorrência passo 2: grava só as datas MARCADAS pelo dono na revisão. */
+  function onConfirmarSerie() {
+    if (!servico || !revisaoOcorrencias) return;
+    const res = validateNovoAgendamento({ nome, telefone, semWhatsapp });
+    if (!res.ok) return; // já validado no passo 1; defensivo.
+
+    const built = buildCriarSerieBody({
+      productType,
+      servico: servico.nome,
+      cliente: res.value,
+      colaboradorId: colaboradorSel,
+      ocorrencias: revisaoOcorrencias,
+    });
+    if (!built.ok) {
+      setColaboradorErro('Escolha o profissional que vai atender.');
+      return;
+    }
+
+    criarSerie.mutate(built.body, {
+      onSuccess: (resp) => {
+        setResultadoSerie(resp);
+      },
+      onError: (err) => {
+        if (err instanceof ApiError && err.status === 409) {
+          // Nenhuma ocorrência entrou — o corpo do 409 tem o mesmo shape (falhas).
+          setResultadoSerie(err.body as CriarSerieResponse);
+          return;
+        }
+        if (is422(err)) {
+          setGcalBloqueado(true);
+          setRevisaoOcorrencias(null);
+          return;
+        }
+        toast.error('Não foi possível criar a série agora. Tente de novo.');
+      },
+    });
+  }
+
+  function onFecharRevisao() {
+    setRevisaoOcorrencias(null);
+    setResultadoSerie(null);
+  }
+
+  function onConcluirSerie() {
+    onFecharRevisao();
+    router.push('/inicio');
   }
 
   return (
@@ -487,20 +653,146 @@ export default function NovoAgendamentoPage() {
               onChange={(e) => setNome(e.target.value)}
             />
             <div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <label htmlFor="telefone-cliente" className="text-[13px] font-semibold text-ink">
+                  WhatsApp do cliente
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setContatoSheetOpen(true)}
+                  className="flex h-8 shrink-0 items-center gap-1.5 rounded-pill border border-line-strong bg-surface px-3 font-display text-[12.5px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                >
+                  <IconUsers size={14} />
+                  Escolher dos contatos
+                </button>
+              </div>
               <Input
-                label="WhatsApp (opcional)"
+                id="telefone-cliente"
+                hideLabel
+                label="WhatsApp do cliente"
                 type="tel"
                 inputMode="tel"
                 placeholder="(11) 99999-9999"
                 value={telefone}
                 error={errors.telefone}
                 autoComplete="off"
+                disabled={semWhatsapp}
                 onChange={(e) => setTelefone(formatPhoneBR(e.target.value))}
               />
               <p className="mt-1.5 text-[12.5px] leading-snug text-ink-faint">
-                Com o WhatsApp do cliente, o assistente reconhece ele na próxima conversa.
+                Abra o WhatsApp do cliente, copie o número de lá e cole aqui — a gente formata. É o
+                número que recebe o lembrete automático do horário.
               </p>
+              <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-card-sm border border-line bg-surface px-3.5 py-3">
+                <input
+                  type="checkbox"
+                  checked={semWhatsapp}
+                  onChange={(e) => {
+                    setSemWhatsapp(e.target.checked);
+                    if (e.target.checked) setTelefone('');
+                    setErrors((prev) => ({ ...prev, telefone: undefined }));
+                  }}
+                  className="mt-0.5 size-[18px] shrink-0 rounded border-[1.5px] border-line-strong bg-surface-sunken text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                />
+                <span className="text-[13px] leading-snug text-ink-soft">
+                  Não tenho o WhatsApp deste cliente
+                  <span className="block text-[12px] text-ink-faint">
+                    Sem número, não tem lembrete automático pra esse horário.
+                  </span>
+                </span>
+              </label>
             </div>
+          </section>
+
+          {/* 5. Repetição — Frente 4 (recorrência). Conflitos aparecem ANTES de
+              gravar (decisão do Bruno): ligar o toggle não cria nada ainda. */}
+          <section aria-labelledby="sec-repetir" className="space-y-3">
+            <div className="flex items-center justify-between gap-3 rounded-card-sm border border-line bg-surface px-4 py-3.5">
+              <div>
+                <h2 id="sec-repetir" className="font-display text-[15px] font-semibold text-ink">
+                  Repetir esse agendamento
+                </h2>
+                <p className="mt-0.5 text-[12.5px] leading-snug text-ink-soft">
+                  Cria vários horários de uma vez, no mesmo dia da semana e hora.
+                </p>
+              </div>
+              <Switch checked={repetir} onChange={setRepetir} label="Repetir esse agendamento" />
+            </div>
+
+            {repetir && (
+              <div className="space-y-3 rounded-card-sm border border-line bg-surface px-4 py-3.5">
+                <div>
+                  <span className="mb-2 block text-[13px] font-semibold text-ink">
+                    Com que frequência?
+                  </span>
+                  <div
+                    role="radiogroup"
+                    aria-label="Frequência da repetição"
+                    className="grid grid-cols-2 gap-2"
+                  >
+                    {(Object.keys(PERIODICIDADE_LABELS) as Periodicidade[]).map((p) => {
+                      const ativo = p === periodicidade;
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          role="radio"
+                          aria-checked={ativo}
+                          onClick={() => setPeriodicidade(p)}
+                          className={cn(
+                            'h-11 rounded-field border px-3 font-display text-[13.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+                            ativo
+                              ? 'border-brand bg-brand-soft text-brand'
+                              : 'border-line bg-surface-sunken text-ink hover:bg-surface-hover',
+                          )}
+                        >
+                          {PERIODICIDADE_LABELS[p]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="ocorrencias"
+                    className="mb-2 block text-[13px] font-semibold text-ink"
+                  >
+                    Quantas vezes?
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-label="Diminuir quantidade de vezes"
+                      disabled={ocorrencias <= OCORRENCIAS_MIN}
+                      onClick={() => setOcorrencias((o) => Math.max(OCORRENCIAS_MIN, o - 1))}
+                      className="flex size-11 shrink-0 items-center justify-center rounded-field border border-line-strong bg-surface font-display text-[18px] font-semibold text-ink outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      −
+                    </button>
+                    <span
+                      id="ocorrencias"
+                      className="min-w-[64px] text-center font-display text-[20px] font-bold tabular-nums text-ink"
+                    >
+                      {ocorrencias}×
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Aumentar quantidade de vezes"
+                      disabled={ocorrencias >= OCORRENCIAS_MAX}
+                      onClick={() => setOcorrencias((o) => Math.min(OCORRENCIAS_MAX, o + 1))}
+                      className="flex size-11 shrink-0 items-center justify-center rounded-field border border-line-strong bg-surface font-display text-[18px] font-semibold text-ink outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug text-ink-faint">
+                    De {OCORRENCIAS_MIN} a {OCORRENCIAS_MAX} vezes. Você revisa cada data antes de
+                    confirmar.
+                  </p>
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Resumo vivo (prevenção de erro — sem dialog de confirmação). */}
@@ -523,13 +815,33 @@ export default function NovoAgendamentoPage() {
 
           <Button
             disabled={!pronto}
-            loading={criar.isPending}
-            loadingLabel="Marcando…"
+            loading={criar.isPending || preview.isPending}
+            loadingLabel={repetir ? 'Calculando as datas…' : 'Marcando…'}
             onClick={onConfirmar}
           >
-            Confirmar agendamento
+            {repetir ? 'Ver datas da série' : 'Confirmar agendamento'}
           </Button>
         </div>
+      )}
+
+      <ContactSheet
+        open={contatoSheetOpen}
+        slot={slot}
+        onClose={() => setContatoSheetOpen(false)}
+        onSelect={onSelecionarContato}
+      />
+
+      {revisaoOcorrencias && servico && (
+        <RevisaoSerieSheet
+          servico={servico}
+          periodicidade={periodicidade}
+          ocorrencias={revisaoOcorrencias}
+          resultado={resultadoSerie}
+          loading={criarSerie.isPending}
+          onToggle={onToggleOcorrencia}
+          onConfirmar={onConfirmarSerie}
+          onFechar={resultadoSerie ? onConcluirSerie : onFecharRevisao}
+        />
       )}
     </>
   );
@@ -743,5 +1055,179 @@ function GcalPendente() {
         Falar com o suporte
       </a>
     </div>
+  );
+}
+
+/**
+ * Tela de revisão da série (recorrência, Frente 4). Decisão do Bruno: conflitos
+ * aparecem ANTES de gravar — o dono vê CADA data com seu status, desmarca o que
+ * não quer (problemáticas já vêm desmarcadas por padrão) e só então confirma.
+ * Depois do POST /serie, a MESMA sheet vira o resultado (207 é sucesso PARCIAL,
+ * nunca "sucesso" puro quando algo falhou).
+ */
+function RevisaoSerieSheet({
+  servico,
+  periodicidade,
+  ocorrencias,
+  resultado,
+  loading,
+  onToggle,
+  onConfirmar,
+  onFechar,
+}: {
+  servico: Servico;
+  periodicidade: Periodicidade;
+  ocorrencias: RevisaoOcorrencia[];
+  resultado: CriarSerieResponse | null;
+  loading: boolean;
+  onToggle: (index: number) => void;
+  onConfirmar: () => void;
+  onFechar: () => void;
+}) {
+  const { marcados, total } = contarMarcados(ocorrencias);
+  const falhasPorChave = useMemo(() => {
+    const map = new Map<string, { error: string; reason: string }>();
+    for (const f of resultado?.falhas ?? []) map.set(`${f.data}T${f.hora}`, f);
+    return map;
+  }, [resultado]);
+  const criadosSet = useMemo(
+    () => new Set((resultado?.criados ?? []).map((c) => `${c.data}T${c.hora}`)),
+    [resultado],
+  );
+
+  return (
+    <Overlay
+      open
+      onClose={onFechar}
+      variant="detail"
+      ariaLabel={resultado ? 'Resultado da série' : 'Revisar datas da série'}
+    >
+      <div className="flex items-center justify-between border-b border-line-soft px-5 py-4">
+        <div>
+          <h2 className="font-display text-[17px] font-semibold text-ink">
+            {resultado ? 'Resultado da série' : 'Revise antes de confirmar'}
+          </h2>
+          <p className="mt-0.5 text-[12.5px] text-ink-soft">
+            {servico.nome} · {PERIODICIDADE_LABELS[periodicidade]}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        {resultado && (
+          <p
+            role="status"
+            className={cn(
+              'mb-4 rounded-card-sm border px-3.5 py-2.5 text-[13.5px] font-medium',
+              resultado.falhas.length === 0
+                ? 'border-brand/40 bg-brand-soft text-brand'
+                : resultado.criados.length === 0
+                  ? 'border-danger/40 bg-danger/10 text-danger'
+                  : 'border-amber/40 bg-amber-soft text-amber',
+            )}
+          >
+            {resumoResultadoSerie(resultado)}
+          </p>
+        )}
+
+        {!resultado && (
+          <p className="mb-4 text-[13px] font-medium text-ink-soft">
+            {marcados} de {total} serão marcados
+          </p>
+        )}
+
+        <ul className="space-y-2">
+          {ocorrencias.map((o, i) => {
+            const chave = `${o.data}T${o.hora}`;
+            const conflitoOk = o.status === 'livre';
+            const falha = falhasPorChave.get(chave);
+            const criada = criadosSet.has(chave);
+            return (
+              <li
+                key={chave}
+                className={cn(
+                  'flex items-start gap-3 rounded-card-sm border px-3.5 py-3',
+                  conflitoOk ? 'border-line bg-surface' : 'border-amber/40 bg-amber-soft',
+                )}
+              >
+                {!resultado ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`Incluir ${formatDiaExtenso(o.data)} às ${o.hora}`}
+                    checked={o.marcado}
+                    onChange={() => onToggle(i)}
+                    className="mt-0.5 size-[18px] shrink-0 rounded border-[1.5px] border-line-strong bg-surface-sunken text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                  />
+                ) : (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full',
+                      criada
+                        ? 'bg-brand text-bg'
+                        : falha
+                          ? 'bg-danger/20 text-danger'
+                          : 'bg-line text-ink-faint',
+                    )}
+                  >
+                    {criada ? <IconCheck size={12} /> : <IconAlert size={11} />}
+                  </span>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="font-display text-[14px] font-semibold text-ink">
+                    {formatDiaExtenso(o.data)} · {o.hora}
+                  </div>
+                  {!conflitoOk && !resultado && (
+                    <div className="mt-0.5 text-[12.5px] text-amber">
+                      {statusOcorrenciaLabel(o.status)}
+                      {o.conflito?.inicio && o.status === 'ocupado' && (
+                        <>
+                          {' '}
+                          — já tem algo às{' '}
+                          {new Date(o.conflito.inicio).toLocaleTimeString('pt-BR', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {resultado && falha && (
+                    <div className="mt-0.5 text-[12.5px] text-danger">
+                      Não entrou — {falhaOcorrenciaLabel(falha.reason)}
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      <div className="border-t border-line-soft px-5 py-4">
+        {resultado ? (
+          <Button onClick={onFechar}>Concluir</Button>
+        ) : (
+          <>
+            <Button
+              disabled={marcados === 0}
+              loading={loading}
+              loadingLabel="Criando a série…"
+              onClick={onConfirmar}
+            >
+              Confirmar {marcados} {marcados === 1 ? 'horário' : 'horários'}
+            </Button>
+            <button
+              type="button"
+              onClick={onFechar}
+              className="mt-2.5 flex h-11 w-full items-center justify-center gap-2 rounded-btn text-[14px] font-semibold text-ink-soft outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-brand"
+            >
+              <IconRefresh size={16} />
+              Ajustar e recalcular
+            </button>
+          </>
+        )}
+      </div>
+    </Overlay>
   );
 }

@@ -26,7 +26,19 @@
  * mais curto porque, quando o contexto dela chegar lá na frente, o horário
  * já vai existir na agenda.
  */
-import type { CriarAgendamentoBody, DiaSemana, Horarios, ProductType } from './api-types';
+import type {
+  CriarAgendamentoBody,
+  CriarSerieBody,
+  CriarSerieResponse,
+  DiaSemana,
+  Horarios,
+  Periodicidade,
+  PreviewOcorrencia,
+  PreviewOcorrenciaStatus,
+  PreviewRecorrenciaBody,
+  ProductType,
+  SerieDataHora,
+} from './api-types';
 
 /** Quantos dias o strip mostra POR SEMANA (navegação por semana, não grid de mês). */
 export const DIAS_STRIP = 7;
@@ -255,6 +267,13 @@ export interface NovoAgendamentoDraft {
   nome: string;
   /** Telefone como exibido (mascarado) — a validação extrai os dígitos. */
   telefone: string;
+  /**
+   * Escape hatch explícito (checkbox "Não tenho o WhatsApp deste cliente") — sem
+   * ele, telefone vazio agora é ERRO (o backend passou a exigir, ver
+   * `criarAgendamentoSchema`/`.refine` na branch feat/agenda-recorrente: o campo
+   * é a identidade que os lembretes automáticos usam como destino). Default false.
+   */
+  semWhatsapp?: boolean;
 }
 
 export interface NovoAgendamentoErrors {
@@ -266,12 +285,20 @@ export interface NovoAgendamentoCliente {
   cliente_nome: string;
   /** DDI 55 + DDD + número (formato que o bot grava no título do evento). */
   cliente_telefone?: string;
+  /** Presente (true) só quando o dono marcou o escape hatch — espelha o backend. */
+  sem_whatsapp?: boolean;
 }
 
 /**
- * Valida o bloco Cliente do form. Espelha o criarAgendamentoSchema do backend:
- * nome obrigatório (<=80), telefone opcional com 10-11 dígitos BR — enviado com
- * DDI 55 na frente pra casar com o formato que o robô usa nos títulos de evento
+ * Valida o bloco Cliente do form. Espelha `criarAgendamentoSchema` do backend
+ * (branch feat/agenda-recorrente): nome obrigatório (<=80); telefone com 10-11
+ * dígitos BR é OBRIGATÓRIO a menos que `semWhatsapp` esteja marcado — sem os dois,
+ * 400 no backend (`path: ['cliente_telefone']`). Telefone preenchido é sempre
+ * validado (10-11 dígitos), mesmo com o checkbox marcado (se o dono digitou
+ * algo, tem que estar certo) — e `sem_whatsapp` só sai `true` quando o telefone
+ * fica REALMENTE vazio (um número digitado é sinal concreto de WhatsApp,
+ * independente do checkbox ter ficado marcado por engano). Enviado com DDI 55
+ * na frente pra casar com o formato que o robô usa nos títulos de evento
  * ("Nome - Serviço | WhatsApp: 5511…"), permitindo reconhecer o cliente depois.
  */
 export function validateNovoAgendamento(
@@ -282,8 +309,11 @@ export function validateNovoAgendamento(
   if (nome.length === 0) errors.nome = 'Diga o nome do cliente';
   else if (nome.length > 80) errors.nome = 'Nome muito longo (máx. 80 letras)';
 
+  const semWhatsapp = d.semWhatsapp === true;
   const digits = telefoneDigits(d.telefone);
-  if (digits.length > 0 && digits.length < 10) {
+  if (digits.length === 0 && !semWhatsapp) {
+    errors.telefone = 'Informe o WhatsApp ou marque que não tem o número';
+  } else if (digits.length > 0 && digits.length < 10) {
     errors.telefone = 'Confere o número? Faltou dígito';
   }
 
@@ -293,6 +323,9 @@ export function validateNovoAgendamento(
     value: {
       cliente_nome: nome,
       ...(digits.length > 0 ? { cliente_telefone: `55${digits}` } : {}),
+      // sem_whatsapp só faz sentido quando NÃO há telefone — um telefone digitado
+      // é sinal concreto de WhatsApp, independente do checkbox ter ficado marcado.
+      ...(semWhatsapp && digits.length === 0 ? { sem_whatsapp: true } : {}),
     },
   };
 }
@@ -322,4 +355,132 @@ export function buildCriarAgendamentoBody(args: {
   }
   // individual: nunca manda colaborador_id (comportamento de hoje preservado).
   return { ok: true, body: { ...base } };
+}
+
+// ── Recorrência (preview → revisão → /serie) ──────────────────────────────────
+//
+// Ordem do Bruno: "os usuários que têm agenda podem além de criar um único
+// agendamento poder vincular serviços recorrentes… e tem que considerar se o
+// usuário inserir um recorrente mas já ter alguma coisa no futuro impedindo
+// isso". Decisão: conflitos aparecem ANTES de gravar — o dono revisa e
+// desmarca o que não quer, só então confirma. O SERVIDOR não recalcula a
+// periodicidade no /serie: a lista de datas marcadas na revisão é a única
+// fonte (respeita o "desmarcar" do dono, ver contrato do backend).
+
+/** Rótulos em português claro do dono de barbearia (não o enum cru na tela). */
+export const PERIODICIDADE_LABELS: Record<Periodicidade, string> = {
+  semanal: 'Toda semana',
+  mensal: 'Todo mês',
+  trimestral: 'A cada 3 meses',
+  semestral: 'A cada 6 meses',
+};
+
+/** Monta o body do POST /portal/agendamentos/recorrencia/preview (mesmo gating de profissional). */
+export function buildPreviewRecorrenciaBody(args: {
+  productType: ProductType;
+  base: { servico: string; data: string; hora: string } & NovoAgendamentoCliente;
+  colaboradorId: number | null;
+  periodicidade: Periodicidade;
+  ocorrencias: number;
+}): { ok: true; body: PreviewRecorrenciaBody } | { ok: false; error: 'colaborador_obrigatorio' } {
+  const { productType, base, colaboradorId, periodicidade, ocorrencias } = args;
+  if (productType === 'estabelecimento' && colaboradorId == null) {
+    return { ok: false, error: 'colaborador_obrigatorio' };
+  }
+  return {
+    ok: true,
+    body: {
+      ...base,
+      ...(productType === 'estabelecimento' && colaboradorId != null
+        ? { colaborador_id: colaboradorId }
+        : {}),
+      periodicidade,
+      ocorrencias,
+    },
+  };
+}
+
+/** Ocorrência do preview + se o dono a marcou pra entrar na série (estado da tela de revisão). */
+export interface RevisaoOcorrencia extends PreviewOcorrencia {
+  marcado: boolean;
+}
+
+/**
+ * Decora o preview do backend com o estado inicial de seleção da tela de revisão:
+ * livre → marcado por padrão; qualquer outro status (ocupado/fora_do_horario/
+ * fechado/fora_da_janela/passado) → DESMARCADO por padrão (o dono opta por
+ * incluir, nunca o contrário — decisão do Bruno).
+ */
+export function initRevisaoOcorrencias(previews: PreviewOcorrencia[]): RevisaoOcorrencia[] {
+  return previews.map((p) => ({ ...p, marcado: p.status === 'livre' }));
+}
+
+/** Contador honesto da tela de revisão: "8 de 12 serão marcados". */
+export function contarMarcados(ocorrencias: RevisaoOcorrencia[]): {
+  marcados: number;
+  total: number;
+} {
+  return { marcados: ocorrencias.filter((o) => o.marcado).length, total: ocorrencias.length };
+}
+
+/** Só as datas MARCADAS pelo dono, no shape que o POST /serie espera (data+hora). */
+export function datasMarcadas(ocorrencias: RevisaoOcorrencia[]): SerieDataHora[] {
+  return ocorrencias.filter((o) => o.marcado).map((o) => ({ data: o.data, hora: o.hora }));
+}
+
+/** Monta o body do POST /portal/agendamentos/serie a partir do que o dono confirmou na revisão. */
+export function buildCriarSerieBody(args: {
+  productType: ProductType;
+  servico: string;
+  cliente: NovoAgendamentoCliente;
+  colaboradorId: number | null;
+  ocorrencias: RevisaoOcorrencia[];
+}): { ok: true; body: CriarSerieBody } | { ok: false; error: 'colaborador_obrigatorio' } {
+  const { productType, servico, cliente, colaboradorId, ocorrencias } = args;
+  if (productType === 'estabelecimento' && colaboradorId == null) {
+    return { ok: false, error: 'colaborador_obrigatorio' };
+  }
+  return {
+    ok: true,
+    body: {
+      servico,
+      ...cliente,
+      ...(productType === 'estabelecimento' && colaboradorId != null
+        ? { colaborador_id: colaboradorId }
+        : {}),
+      datas: datasMarcadas(ocorrencias),
+    },
+  };
+}
+
+/** Copy curta do status de UMA ocorrência na lista de revisão. */
+export function statusOcorrenciaLabel(status: PreviewOcorrenciaStatus): string {
+  switch (status) {
+    case 'livre':
+      return 'Livre';
+    case 'ocupado':
+      return 'Já tem algo marcado';
+    case 'fora_do_horario':
+      return 'Fora do horário de funcionamento';
+    case 'fechado':
+      return 'Fechado nesse dia';
+    case 'fora_da_janela':
+      return 'Fora do período permitido';
+    case 'passado':
+      return 'Esse horário já passou';
+    default:
+      return status;
+  }
+}
+
+/** Copy honesta pós-/serie: diz claramente o que entrou e o que não entrou (207 é sucesso parcial). */
+export function resumoResultadoSerie(resposta: CriarSerieResponse): string {
+  const { criados, falhas } = resposta;
+  if (falhas.length === 0) {
+    return criados.length === 1 ? '1 horário marcado.' : `${criados.length} horários marcados.`;
+  }
+  if (criados.length === 0) {
+    return 'Nenhum horário foi marcado. Tente rever a série.';
+  }
+  return `${criados.length} de ${criados.length + falhas.length} horários marcados — ${falhas.length} não entrou porque o horário mudou.`;
 }

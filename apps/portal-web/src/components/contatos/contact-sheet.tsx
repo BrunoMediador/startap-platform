@@ -9,26 +9,41 @@ import { useContatos } from '@/lib/queries';
  * Bottom sheet de contatos recentes (spec 6.9). SEM digitacao livre de numero —
  * trava de UX da missao. Lista vem de /portal/contatos (recent-contacts).
  *
+ * Movido de app/(app)/pausas/contact-sheet.tsx pra components/contatos/ (SCRUM-
+ * agenda-recorrente, 01/08): a tela de Novo agendamento reusa o MESMO seletor pro
+ * campo de WhatsApp do cliente. Comportamento preservado byte-a-byte — só o path
+ * mudou; Pausas segue chamando este componente sem nenhuma mudança visual.
+ *
  * Item 3: exibe o numero COMPLETO formatado (sem mascara) — o dono ve os proprios
  *   clientes.
  * Item 4: esconde quem JA esta pausado (pausadosSet, por telefone normalizado).
- *   Se todos os recentes ja estao pausados, empty state claro.
+ *   Se todos os recentes ja estao pausados, empty state claro. `pausadosSet` vazio
+ *   (ex.: chamado de Novo agendamento, onde pausa não é o contexto) não esconde
+ *   ninguém — comportamento é opt-in de quem usa o sheet.
  *
  * Loading: skeleton 4 linhas. Selecionar -> callback com o contato, que abre a
- * confirmacao de pausa.
+ * confirmacao de pausa (Pausas) ou preenche o campo de telefone (Novo agendamento).
  */
 import { useMemo } from 'react';
 
 interface ContactSheetProps {
   open: boolean;
   slot: string;
-  /** Telefones (normalizados) ja pausados — filtrados da lista (item 4). */
-  pausadosSet: Set<string>;
+  /** Telefones (normalizados) ja pausados — filtrados da lista (item 4). Default: nenhum. */
+  pausadosSet?: Set<string>;
   onClose: () => void;
   onSelect: (contact: RecentContact) => void;
 }
 
-export function ContactSheet({ open, slot, pausadosSet, onClose, onSelect }: ContactSheetProps) {
+const EMPTY_SET: Set<string> = new Set();
+
+export function ContactSheet({
+  open,
+  slot,
+  pausadosSet = EMPTY_SET,
+  onClose,
+  onSelect,
+}: ContactSheetProps) {
   const contatos = useContatos(slot, open);
 
   const todos = contatos.data?.contacts ?? [];
