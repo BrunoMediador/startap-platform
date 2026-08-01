@@ -39,7 +39,6 @@ describe('abas — completude do mapa seção -> aba (herdado da extinta perfil-
       'monte-assistente': 'atendente-personalidade',
       tom: 'atendente-personalidade',
       cartao: 'atendente-mensagens',
-      faq: 'atendente-mensagens',
       agendamento: 'negocio-agenda',
       lembretes: 'negocio-agenda',
       'google-agenda': 'negocio-agenda',
@@ -121,7 +120,7 @@ describe('abas — gates de "Meu atendente"', () => {
     expect(on.map((a) => a.href)).toContain('/atendente/personalidade');
   });
 
-  it('Mensagens aparece com cartão OU faq (composto em atendenteMensagens)', () => {
+  it('Mensagens aparece com cartão disponível (atendenteMensagens)', () => {
     const off = filterAtendenteAbas({ ...BASE, atendenteMensagens: false });
     const on = filterAtendenteAbas({ ...BASE, atendenteMensagens: true });
     expect(off.map((a) => a.href)).not.toContain('/atendente/mensagens');

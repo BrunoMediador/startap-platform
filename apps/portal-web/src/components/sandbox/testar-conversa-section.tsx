@@ -277,12 +277,12 @@ export function TestarConversaSection() {
           className="inline-flex h-11 items-center gap-1.5 rounded-btn px-3.5 font-display text-[13px] font-semibold text-brand outline-none transition-colors hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
         >
           <IconPencil size={15} />
-          Mudar cartão/FAQ
+          Mudar cartão
         </Link>
       </div>
       {messages.length > 0 && (
         <p className="mt-2 text-[12px] leading-normal text-ink-faint">
-          Ajustou a personalidade ou o cartão/FAQ? O histórico acima fica desatualizado — recomece a
+          Ajustou a personalidade ou o cartão? O histórico acima fica desatualizado — recomece a
           conversa pra testar a versão nova.
         </p>
       )}

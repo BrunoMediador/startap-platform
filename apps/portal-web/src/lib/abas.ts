@@ -60,7 +60,6 @@ export type SecaoKey =
   | 'monte-assistente' // Monte seu atendente (builder conversacional)
   | 'tom' // Tom da conversa (slider)
   | 'cartao' // Cartão de confirmação
-  | 'faq' // Perguntas frequentes
   // "Meu negócio" / Agenda
   | 'agendamento' // Agendamento (toggle + link, modo atendente)
   | 'lembretes' // Lembretes automáticos
@@ -74,7 +73,6 @@ export const TODAS_SECOES: readonly SecaoKey[] = [
   'monte-assistente',
   'tom',
   'cartao',
-  'faq',
   'agendamento',
   'lembretes',
   'google-agenda',
@@ -114,8 +112,9 @@ export const NEGOCIO_ABAS: readonly AbaSpec[] = [
  * Sub-abas de "Meu atendente", na ordem de exibição.
  *  - 'atendente-personalidade': builder conversacional + tom — aparece se
  *    QUALQUER um dos dois estiver disponível.
- *  - 'atendente-mensagens': cartão de confirmação + FAQ — aparece se
- *    QUALQUER um dos dois estiver disponível.
+ *  - 'atendente-mensagens': cartão de confirmação — aparece se disponível.
+ *    (a antiga "Perguntas frequentes" saiu daqui: conteúdo passa a viver no
+ *    prompt via IA, formulário próprio removido; backend/coluna intocados.)
  *  - 'atendente-testar': sandbox de conversa (SCRUM-101), só com a flag ON.
  */
 export const ATENDENTE_ABAS: readonly AbaSpec[] = [
@@ -161,7 +160,6 @@ const SECAO_PARA_ABA: Record<SecaoKey, AbaKey> = {
   'monte-assistente': 'atendente-personalidade',
   tom: 'atendente-personalidade',
   cartao: 'atendente-mensagens',
-  faq: 'atendente-mensagens',
   // Grupo "Agenda e lembretes" -> aba "Agenda" de "Meu negócio"
   agendamento: 'negocio-agenda',
   lembretes: 'negocio-agenda',

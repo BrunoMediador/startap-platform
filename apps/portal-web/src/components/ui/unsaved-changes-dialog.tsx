@@ -24,7 +24,9 @@ interface UnsavedChangesDialogProps {
   loading?: boolean;
   /**
    * Nomes das seções com rascunho pendente (SCRUM-158, guard global — várias
-   * seções podem estar sujas ao mesmo tempo, ex.: Cartão + FAQ). Sem essa
+   * seções podem estar sujas ao mesmo tempo, ex. histórico: Cartão + FAQ, antes
+   * da UI de FAQ ser removida — o mecanismo de "várias sujas" segue valendo
+   * pra qualquer par de seções). Sem essa
    * prop (ou lista vazia), o texto fica byte-idêntico ao de antes do guard
    * virar global.
    */
