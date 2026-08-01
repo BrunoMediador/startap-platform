@@ -1,3 +1,9 @@
+import {
+  buildEventSummary,
+  mesmoTelefone,
+  normalizeClientePhone,
+  parseEventSummary,
+} from '@startap/core/agenda-summary';
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { phoneLogTag } from '@startap/core/phone';
 import type { BotContext } from '@startap/core/types';
@@ -127,6 +133,78 @@ export class TesteBarbeariaBot extends BotBase {
       memoryWindow: 10,
       slotOverride: opts?.slotOverride,
     });
+  }
+
+  /**
+   * Normaliza o telefone dentro do summary escrito LIVREMENTE pelo LLM ANTES do
+   * createEvent (ADR 0028). Gated por AGENDA_SUMMARY_NORMALIZE_ENABLED — default
+   * OFF, devolve o summary CRU do LLM byte-idêntico a hoje.
+   *
+   * NÃO muda o param `summary` da tool nem sua descrição (system prompt/golden test
+   * ficam intocados) — só o handler, depois que o LLM já respondeu.
+   *
+   * Precedência do telefone: (a) o que o LLM extraiu no summary; (b) telefone REAL
+   * da conversa (mais confiável — é quem está mandando mensagem agora). Se nenhum
+   * dos dois normalizar, o evento nasce SEM telefone (nunca bloqueia o agendamento
+   * por causa disso).
+   *
+   * 🔴 Fallback duro: se o parse não extrair um `nome` não-vazio, devolve o summary
+   * CRU do LLM sem tocar — nunca degrada o título por causa de um parse falho.
+   */
+  private normalizeAgendaSummary(summaryLLM: string, telefoneConversa: string): string {
+    if (!config.AGENDA_SUMMARY_NORMALIZE_ENABLED) return summaryLLM;
+
+    const parsed = parseEventSummary(summaryLLM);
+    if (!parsed.nome.trim()) {
+      this.log.warn(
+        { slot: this.slot, fone: phoneLogTag(telefoneConversa) },
+        'normalizeAgendaSummary: parse sem nome — mantendo summary cru do LLM',
+      );
+      return summaryLLM;
+    }
+
+    // (a) telefone extraído do summary do LLM; (b) telefone REAL da conversa (fonte
+    // mais confiável); ausência de ambos = evento nasce sem telefone.
+    const doSummary = parsed.telefone ? normalizeClientePhone(parsed.telefone) : null;
+    const telefoneDigits = doSummary?.ok
+      ? doSummary.digits
+      : (() => {
+          const daConversa = normalizeClientePhone(telefoneConversa);
+          return daConversa.ok ? daConversa.digits : undefined;
+        })();
+
+    return buildEventSummary({ nome: parsed.nome, servico: parsed.servico, telefoneDigits });
+  }
+
+  /**
+   * Casa um evento da agenda com o telefone DA CONVERSA (nunca input do LLM — mesma
+   * guarda anti-IDOR de sempre). Gated pela MESMA flag AGENDA_SUMMARY_NORMALIZE_ENABLED:
+   *
+   * OFF (default) → `.includes()` de substring no summary/description, BYTE-IDÊNTICO
+   * ao comportamento atual.
+   *
+   * ON → extrai o telefone do summary via parseEventSummary e compara por IDENTIDADE
+   * com `mesmoTelefone` (canonicalE164 dos dois lados — tolera COM/SEM-9 e COM/SEM-55
+   * do mesmo cliente; nunca casa por acidente em duração/preço embutido no título, o
+   * que `.includes()` fazia). Fallback: se o summary não tem telefone extraível (evento
+   * legado sem "| WhatsApp:"), cai de volta pro `.includes()` — nunca fica mais
+   * restritivo que hoje pra eventos antigos.
+   */
+  private matchEventoPorTelefone(
+    e: { summary?: string; description?: string },
+    telefoneConversa: string,
+  ): boolean {
+    if (!config.AGENDA_SUMMARY_NORMALIZE_ENABLED) {
+      const phone = telefoneConversa.replace(/\D/g, '');
+      return Boolean(e.summary?.includes(phone) || e.description?.includes(phone));
+    }
+    const parsed = parseEventSummary(e.summary ?? '');
+    if (parsed.telefone) {
+      return mesmoTelefone(parsed.telefone, telefoneConversa);
+    }
+    // Evento legado sem telefone no título — mesmo fallback de hoje (não regride).
+    const phone = telefoneConversa.replace(/\D/g, '');
+    return Boolean(e.summary?.includes(phone) || e.description?.includes(phone));
   }
 
   /**
@@ -853,9 +931,13 @@ export class TesteBarbeariaBot extends BotBase {
             };
           }
 
+          // Normaliza UMA vez (ADR 0028), antes do createEvent — gated por
+          // AGENDA_SUMMARY_NORMALIZE_ENABLED (OFF = summary CRU, byte-idêntico a hoje).
+          const finalSummary = this.normalizeAgendaSummary(summary, telefone);
+
           const createEvent = () =>
             calClient.createEvent({
-              summary,
+              summary: finalSummary,
               startISO,
               endISO,
               timeZone: cloneTz,
@@ -877,7 +959,7 @@ export class TesteBarbeariaBot extends BotBase {
             const pacote = await this.maybeDeduzirPacote({
               telefone,
               eventId: ev.id,
-              summary,
+              summary: finalSummary,
               servicoArg,
               usaPacoteArg,
             });
@@ -886,7 +968,7 @@ export class TesteBarbeariaBot extends BotBase {
             // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
-              summary,
+              summary: finalSummary,
               servicoArg,
               start: startISO,
               end: endISO,
@@ -927,7 +1009,7 @@ export class TesteBarbeariaBot extends BotBase {
           const pacote = await this.maybeDeduzirPacote({
             telefone,
             eventId: ev.id,
-            summary,
+            summary: finalSummary,
             servicoArg,
             usaPacoteArg,
           });
@@ -939,7 +1021,7 @@ export class TesteBarbeariaBot extends BotBase {
           // clones não-SP (ex.: Seven/Cuiabá −04). Clone SP = byte-idêntico (no-op).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
-            summary,
+            summary: finalSummary,
             servicoArg,
             start: startISO,
             end: endISO,
@@ -964,13 +1046,10 @@ export class TesteBarbeariaBot extends BotBase {
           // usa SEMPRE o número da CONVERSA (o remetente). Antes a tool filtrava pelo
           // telefone cru passado pelo modelo → um cliente pedia "ver o horário do 5511…"
           // e recebia nome/horário de OUTRO cliente do mesmo tenant.
-          const phone = telefone.replace(/\D/g, '');
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
           const evs = await calClient.listEvents({ timeMin: tMin, timeMax: tMax });
-          const matching = evs.filter(
-            (e) => e.summary?.includes(phone) || e.description?.includes(phone),
-          );
+          const matching = evs.filter((e) => this.matchEventoPorTelefone(e, telefone));
           if (!matching.length)
             return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
           return {
@@ -997,11 +1076,10 @@ export class TesteBarbeariaBot extends BotBase {
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
           const evs = await calClient.listEvents({ timeMin: tMin, timeMax: tMax });
-          const phone = telefone.replace(/\D/g, '');
           const targetMs = new Date(startAtualISO).getTime();
           const matches = evs.filter(
             (e) =>
-              (e.summary?.includes(phone) || e.description?.includes(phone)) &&
+              this.matchEventoPorTelefone(e, telefone) &&
               e.start.dateTime != null &&
               new Date(e.start.dateTime).getTime() === targetMs,
           );
@@ -1780,8 +1858,11 @@ export class TesteBarbeariaBot extends BotBase {
             };
           }
 
+          // Normaliza UMA vez (ADR 0028), antes do createEvent — mesma flag do individual.
+          const finalSummary = this.normalizeAgendaSummary(summary, telefone);
+
           const createEvent = () =>
-            colabClient.createEvent({ summary, startISO, endISO, timeZone: cloneTz });
+            colabClient.createEvent({ summary: finalSummary, startISO, endISO, timeZone: cloneTz });
 
           // Action-lock por (slot, colaborador, telefone, inicio): flag OFF -> cria direto.
           if (!config.IDEMPOTENCY_ACTION_LOCK) {
@@ -1798,7 +1879,7 @@ export class TesteBarbeariaBot extends BotBase {
             const pacote = await this.maybeDeduzirPacote({
               telefone,
               eventId: ev.id,
-              summary,
+              summary: finalSummary,
               servicoArg,
               usaPacoteArg,
               colaboradorId: colaborador.colaboradorId,
@@ -1808,7 +1889,7 @@ export class TesteBarbeariaBot extends BotBase {
             // formaPagamento='pacote' quando o pacote foi DEDUZIDO -> linha conta receita 0 (não dobra).
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
-              summary,
+              summary: finalSummary,
               servicoArg,
               start: startISO,
               end: endISO,
@@ -1851,7 +1932,7 @@ export class TesteBarbeariaBot extends BotBase {
           const pacote = await this.maybeDeduzirPacote({
             telefone,
             eventId: ev.id,
-            summary,
+            summary: finalSummary,
             servicoArg,
             usaPacoteArg,
             colaboradorId: colaborador.colaboradorId,
@@ -1864,7 +1945,7 @@ export class TesteBarbeariaBot extends BotBase {
           // clones não-SP (ex.: Seven/Cuiabá −04). Clone SP = byte-idêntico (no-op).
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
-            summary,
+            summary: finalSummary,
             servicoArg,
             start: startISO,
             end: endISO,
@@ -1893,7 +1974,6 @@ export class TesteBarbeariaBot extends BotBase {
         run: async () => {
           // SEGURANÇA (IDOR/PII cross-cliente): ignora QUALQUER telefone do LLM; usa SEMPRE
           // o número da CONVERSA (o remetente) ao cruzar as agendas dos colaboradores.
-          const phone = telefone.replace(/\D/g, '');
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
           const matching: Array<{
@@ -1906,7 +1986,7 @@ export class TesteBarbeariaBot extends BotBase {
           for (const c of decorados) {
             const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
             for (const e of evs) {
-              if (e.summary?.includes(phone) || e.description?.includes(phone)) {
+              if (this.matchEventoPorTelefone(e, telefone)) {
                 matching.push({
                   summary: e.summary,
                   start: e.start.dateTime,
@@ -1935,7 +2015,6 @@ export class TesteBarbeariaBot extends BotBase {
         resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
           const tMin = new Date().toISOString();
           const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const phone = telefone.replace(/\D/g, '');
           const targetMs = new Date(startAtualISO).getTime();
           const matches: Array<{
             client: gcal.GoogleCalendarClient;
@@ -1946,7 +2025,7 @@ export class TesteBarbeariaBot extends BotBase {
             const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
             for (const e of evs) {
               if (
-                (e.summary?.includes(phone) || e.description?.includes(phone)) &&
+                this.matchEventoPorTelefone(e, telefone) &&
                 e.start.dateTime != null &&
                 new Date(e.start.dateTime).getTime() === targetMs
               ) {

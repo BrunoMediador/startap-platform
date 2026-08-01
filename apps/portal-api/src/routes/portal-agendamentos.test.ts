@@ -414,7 +414,7 @@ describe('POST /portal/agendamentos — caminho feliz', () => {
     await app.close();
   });
 
-  it('201: telefone ausente/vazio cria título sem sufixo de WhatsApp', async () => {
+  it('201: sem_whatsapp=true cria título sem sufixo de WhatsApp (escape hatch)', async () => {
     const client = gcalClientLivre();
     getGcalForSlotMock.mockResolvedValue(client);
 
@@ -422,13 +422,57 @@ describe('POST /portal/agendamentos — caminho feliz', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/portal/agendamentos',
-      payload: { ...PAYLOAD_OK, cliente_telefone: '' },
+      payload: { ...PAYLOAD_OK, cliente_telefone: '', sem_whatsapp: true },
     });
 
     expect(res.statusCode).toBe(201);
     expect(client.createEvent).toHaveBeenCalledWith(
       expect.objectContaining({ summary: 'João Pedro - Corte' }),
     );
+    await app.close();
+  });
+
+  it('201: telefone nacional sem DDI ganha o 55 no título (ADR 0028)', async () => {
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, cliente_telefone: '11999998888' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(client.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'João Pedro - Corte | WhatsApp: 5511999998888' }),
+    );
+    await app.close();
+  });
+});
+
+describe('POST /portal/agendamentos — telefone obrigatório (ADR 0028 + escape hatch)', () => {
+  it('400: sem telefone e sem sem_whatsapp → payload_invalido (nunca cria destino de lembrete inválido)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, cliente_telefone: '' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('payload_invalido');
+    await app.close();
+  });
+
+  it('400: DDD inexistente é rejeitado (antes passava e virava destino inválido de lembrete)', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos',
+      payload: { ...PAYLOAD_OK, cliente_telefone: '(00) 99999-9999' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('payload_invalido');
     await app.close();
   });
 });
@@ -997,6 +1041,27 @@ describe('PATCH /portal/agendamentos/:eventId — caminho feliz', () => {
     // pra 10:45. O start é PRESERVADO; só o end muda. (Sem troca de duração, start/end ficam undefined.)
     expect(fields.startISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60).toISOString());
     expect(fields.endISO).toBe(zonedWallTimeToUtc(FUTURO, 10 * 60 + 45).toISOString());
+    await app.close();
+  });
+
+  it('200: PATCH em evento LEGADO sem telefone (título sem WhatsApp) preserva ausência — nunca obriga telefone no PATCH', async () => {
+    // Evento legado: título sem "| WhatsApp: ..." (pré-existente, sem telefone gravado).
+    const legado = evtAtual({ summary: 'Cliente Antigo - Corte' });
+    const client = gcalClientPatch([legado]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/agendamentos/evt_atual',
+      payload: { servico: 'Corte + barba' }, // só troca serviço; telefone NÃO é enviado
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [, fields] = client.patchEvent.mock.calls[0];
+    // Título recomposto SEM sufixo de WhatsApp — o PATCH nunca torna telefone obrigatório
+    // (editarAgendamentoSchema continua com todos os campos opcionais por design).
+    expect(fields.summary).toBe('Cliente Antigo - Corte + barba');
     await app.close();
   });
 

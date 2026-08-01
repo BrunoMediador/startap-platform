@@ -29,6 +29,7 @@
  * GATE MACRO: só é registrado com GCAL_ATEND_SYNC_ENABLED=true (worker.ts). Default OFF.
  * ISOLAMENTO: falha de 1 clone loga e segue — nunca derruba o ciclo dos outros (regra 7).
  */
+import { parseEventSummary } from '@startap/core/agenda-summary';
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 import { atendimentos, flowClones } from '@startap/db';
@@ -113,32 +114,14 @@ function csvToArray(csv: string): string[] {
 
 /**
  * Quebra o summary do bot ("Nome - Servico | WhatsApp: numero") em partes. Tolerante: sem match
- * do formato, devolve o texto inteiro como `nome` e serviço vazio (idêntico ao parseBotSummary da
- * rota do portal). Ex.: "Fulano Atendimento" (evento manual da Ingrid) → servico='' → preço cai no
- * fallback uniforme do catálogo.
+ * do formato, devolve o texto inteiro como `nome` e serviço vazio. Ex.: "Fulano Atendimento"
+ * (evento manual da Ingrid) → servico='' → preço cai no fallback uniforme do catálogo.
+ *
+ * UNIFICADO (ADR 0028): a implementação agora é @startap/core/agenda-summary::parseEventSummary
+ * — fonte única compartilhada com apps/portal-api/src/routes/portal-agendamentos.ts (antes eram
+ * dois parsers duplicados). Re-exportada aqui pra preservar o símbolo e os call sites deste módulo.
  */
-export function parseBotSummary(summary: string): {
-  nome: string;
-  servico: string;
-  telefone?: string;
-} {
-  let telefone: string | undefined;
-  let resto = summary;
-  const waIdx = resto.indexOf('| WhatsApp:');
-  if (waIdx >= 0) {
-    const tel = resto
-      .slice(waIdx + '| WhatsApp:'.length)
-      .trim()
-      .replace(/\D/g, '');
-    telefone = tel.length > 0 ? tel : undefined;
-    resto = resto.slice(0, waIdx).trim();
-  }
-  const sep = resto.indexOf(' - ');
-  if (sep >= 0) {
-    return { nome: resto.slice(0, sep).trim(), servico: resto.slice(sep + 3).trim(), telefone };
-  }
-  return { nome: resto.trim(), servico: '', telefone };
-}
+export const parseBotSummary = parseEventSummary;
 
 /** Como o preço foi obtido — para observabilidade da cauda "serviço não reconhecido" (SCRUM-129). */
 export type PrecoMatch = 'exact' | 'normalized' | 'uniform' | 'none';
