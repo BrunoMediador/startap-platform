@@ -70,6 +70,12 @@ export interface CalendarEvent {
   start: { dateTime?: string; date?: string; timeZone?: string };
   end: { dateTime?: string; date?: string; timeZone?: string };
   status?: string;
+  /**
+   * Metadado privado do evento, invisível na UI do Google (SCRUM — agenda recorrente).
+   * Usado hoje só para `serieId` (vínculo de uma série de ocorrências independentes —
+   * ver createEvent). Chaves/valores são sempre string (contrato da API do Google).
+   */
+  extendedProperties?: { private?: Record<string, string> };
 }
 
 interface ServiceAccountCredentials {
@@ -433,6 +439,13 @@ export class GoogleCalendarClient {
     startISO: string;
     endISO: string;
     timeZone?: string;
+    /**
+     * Metadado privado (SCRUM — agenda recorrente): hoje só usado para carimbar
+     * `serieId` (uuid) e ligar as N ocorrências independentes de uma série sem RRULE
+     * (ver ADR 0027 — RRULE quebraria o anti-IDOR do DELETE/PATCH, que casa por
+     * eventId de INSTÂNCIA). Chaves/valores string (contrato da API do Google).
+     */
+    extendedPropertiesPrivate?: Record<string, string>;
   }): Promise<CalendarEvent> {
     const tz = opts.timeZone ?? 'America/Sao_Paulo';
     return gcalFetch<CalendarEvent>(
@@ -444,6 +457,9 @@ export class GoogleCalendarClient {
           description: opts.description,
           start: { dateTime: opts.startISO, timeZone: tz },
           end: { dateTime: opts.endISO, timeZone: tz },
+          ...(opts.extendedPropertiesPrivate
+            ? { extendedProperties: { private: opts.extendedPropertiesPrivate } }
+            : {}),
         }),
       },
       () => this.getAccessToken(),

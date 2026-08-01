@@ -40,6 +40,7 @@ import {
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
+import { avaliarConflito, avaliarJanela } from '../lib/avaliar-slot.js';
 import { maskPhone } from '../lib/mask.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
@@ -556,34 +557,37 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     // byte-idêntico ao de hoje em weekday/now/conversão de horário-de-parede.
     const tz = config.timezone;
 
+    // 'fechado' do helper cobre tanto "data calendarialmente inexistente" (weekdayOfDateKey
+    // null) quanto "dia sem janela de funcionamento" — o POST distingue os dois: aqui só
+    // checamos a existência da data (dia-fechado por horário vira 409 pouco abaixo, byte-
+    // idêntico a antes da extração do helper).
     const wd = weekdayOfDateKey(data, tz);
     if (wd === null) {
       return reply.code(400).send({ error: 'payload_invalido', detalhe: 'data inexistente' });
     }
 
-    // Janela de aceitação: hoje..+60d (mesma do GET /slots).
-    const agora = nowPartsInTz(new Date(), tz);
-    const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000), tz);
-    if (data > limite.dateKey) {
+    // ── Validação de janela/horário (Fase 1 do helper COMPARTILHADO com o preview de
+    // recorrência — SEM I/O, roda ANTES de resolver a agenda; 🔴 nunca duplicar esta
+    // lógica, ver lib/avaliar-slot.ts) — mesma ORDEM do comportamento pré-refactor
+    // (passado/janela/horário são baratos e vêm antes de qualquer chamada ao GCal).
+    const janelaAvaliada = avaliarJanela({
+      config,
+      data,
+      hora,
+      duracaoMin: svc.min,
+      maxAheadDays: POST_MAX_AHEAD_DAYS,
+    });
+    if (janelaAvaliada.status === 'fora_da_janela') {
       return reply.code(400).send({ error: 'data_fora_da_janela', max_dias: POST_MAX_AHEAD_DAYS });
     }
-
-    const startMins = hhmmToMins(hora);
-    const endMins = startMins + svc.min;
-
-    // Slot no passado (ou perto demais do relógio) → tratado como conflito:
-    // o front recarrega a grade e o horário some sozinho.
-    if (
-      data < agora.dateKey ||
-      (data === agora.dateKey && startMins < agora.mins + POST_TODAY_FLOOR_MIN)
-    ) {
+    if (janelaAvaliada.status === 'passado') {
+      // Slot no passado (ou perto demais do relógio) → tratado como conflito:
+      // o front recarrega a grade e o horário some sozinho.
       return reply.code(409).send({ error: 'conflito', reason: 'horario_passado' });
     }
-
-    // Dentro do horário de funcionamento do dia (pode ter mudado entre a grade
-    // e o submit) — fora → conflito, front recarrega.
-    const janela = config.work[wd];
-    if (!janela || startMins < janela[0] || endMins > janela[1]) {
+    if (janelaAvaliada.status === 'fechado' || janelaAvaliada.status === 'fora_do_horario') {
+      // Dentro do horário de funcionamento do dia (pode ter mudado entre a grade
+      // e o submit) — fora → conflito, front recarrega.
       return reply.code(409).send({ error: 'conflito', reason: 'fora_do_horario' });
     }
 
@@ -628,22 +632,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       client = single;
     }
 
-    const startUtc = zonedWallTimeToUtc(data, startMins, tz);
-    const endUtc = zonedWallTimeToUtc(data, endMins, tz);
+    const startUtc = janelaAvaliada.startUtc as Date;
+    const endUtc = janelaAvaliada.endUtc as Date;
 
     try {
-      // Double-check anti-corrida: recheca contra o GCal AGORA (mesma regra
-      // server-side do inserir_agendamento do bot — o GCal é a fonte de verdade).
-      const existing = await client.listEvents({
-        timeMin: startUtc.toISOString(),
-        timeMax: endUtc.toISOString(),
-      });
-      const conflito = existing.find((ev) => {
-        const evStart = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`).getTime();
-        const evEnd = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`).getTime();
-        return evStart < endUtc.getTime() && evEnd > startUtc.getTime();
-      });
-      if (conflito) {
+      // Fase 2 do helper: double-check anti-corrida contra o GCal AGORA que a agenda
+      // já foi resolvida (mesma regra server-side do inserir_agendamento do bot).
+      const conflitoCheck = await avaliarConflito({ client, startUtc, endUtc });
+      if (conflitoCheck.status === 'ocupado') {
         log.warn(
           { slot, userId, servico: svc.name, data, hora },
           'agendamento manual bloqueado: slot ocupado entre a grade e o submit',
@@ -651,10 +647,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(409).send({
           error: 'conflito',
           reason: 'ocupado',
-          conflito: {
-            inicio: conflito.start.dateTime ?? conflito.start.date ?? null,
-            fim: conflito.end.dateTime ?? conflito.end.date ?? null,
-          },
+          conflito: conflitoCheck.conflito,
         });
       }
 
