@@ -13,9 +13,12 @@ import { useTenant } from '@/components/shell/session-context';
  *   - atendentePersonalidade = features.prompt_builder || tom disponível
  *     (useAtendenteFeatures = GET /portal/perfil; tom disponível = GET
  *     /portal/tom-assistente 200, não 404).
- *   - atendenteMensagens = features.faq_personalizado || cartão disponível
- *     (faq_personalizado vem do MESMO useAtendenteFeatures; cartão disponível =
- *     GET /portal/cartao-config com status !== 'hidden').
+ *   - atendenteMensagens = cartão disponível (GET /portal/cartao-config com
+ *     status !== 'hidden'). Antes era `|| features.faq_personalizado`, mas a
+ *     UI de "Perguntas frequentes" foi removida (conteúdo passa a viver no
+ *     prompt via IA) — MEDIDO EM PROD 31/07: ninguém perde a aba, pois
+ *     `CARTAO_RUNTIME_ENABLED=true` e os 3 clones em `cartao_mode=baked`
+ *     recebem 200 read-only/locked, então `cartaoDisponivel` é true pros 6.
  *   - sandbox = features.sandbox (useAtendenteFeatures).
  *
  * ANTI-FLASH: enquanto QUALQUER uma das 3 queries remotas (atendenteFeatures/
@@ -72,9 +75,7 @@ function useAtendenteGateSignals(): {
     atendentePersonalidade: pending
       ? false
       : featuresQ.data?.prompt_builder === true || tomDisponivel,
-    atendenteMensagens: pending
-      ? false
-      : featuresQ.data?.faq_personalizado === true || cartaoDisponivel,
+    atendenteMensagens: pending ? false : cartaoDisponivel,
     sandbox: pending ? false : featuresQ.data?.sandbox === true,
   };
 }

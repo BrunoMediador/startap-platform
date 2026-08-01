@@ -10,7 +10,8 @@
  * rascunho dentro do sheet se perde em silêncio ao fechar.
  *
  * Por que NÃO estender o registry global do PR 1: lá "sair" = trocar de
- * rota, e o diálogo lista N seções sujas ao mesmo tempo (Cartão + FAQ) numa
+ * rota, e o diálogo lista N seções sujas ao mesmo tempo (ex. histórico:
+ * Cartão + FAQ, antes da UI de FAQ ser removida) numa
  * página. Fechar um sheet é um gesto LOCAL e sempre 1:1 (uma seção, um
  * dono). Dá pra reusar o MESMO componente de diálogo (`UnsavedChangesDialog`,
  * 3 ações — Salvar e sair / Descartar / Cancelar) sem tocar o registry nem

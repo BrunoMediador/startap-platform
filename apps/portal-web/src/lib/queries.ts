@@ -48,8 +48,6 @@ import type {
   EditarAtendimentoResponse,
   EquipeResponse,
   ExcluirAgendamentoResponse,
-  FaqConfig,
-  FaqItem,
   FaturamentoReport,
   FrasePausa,
   FrasesPausaResponse,
@@ -106,8 +104,6 @@ export const qk = {
   agendaConfig: (slot: string) => ['agenda-config', slot] as const,
   /** Config de Planos (modo atendente) — derivada do GET /portal/perfil. */
   planosConfig: (slot: string) => ['planos-config', slot] as const,
-  /** Config do FAQ personalizado (SCRUM-65) — derivada do GET /portal/perfil. */
-  faqConfig: (slot: string) => ['faq-config', slot] as const,
   /** Gates de "Meu atendente" (prompt_builder/sandbox, SCRUM-157) — derivados do GET /portal/perfil. */
   atendenteFeatures: (slot: string) => ['atendente-features', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
@@ -589,72 +585,21 @@ export function useSavePlanos(
   });
 }
 
-// ── FAQ personalizado (SCRUM-65) ─────────────────────────────────────────────
-//
-// Deriva do MESMO GET/PUT /portal/perfil, numa query própria (qk.faqConfig) pra NÃO
-// tocar no cache/otimista do formulário principal do perfil (regressão zero pros
-// clientes atuais) — mesma isolação de planos/agenda. A seção só renderiza quando
-// `faq_personalizado` é true (por-clone via FAQ_PERSONALIZADO_SLOTS — NÃO flag global).
-// FAQ ausente no GET (feature off) -> []. O array de pares vem em perfil.faq_personalizado.
-
-/** Narrow do array cru do /portal/perfil pros pares {pergunta,resposta} (default []). */
-function toFaqItens(raw: unknown): FaqItem[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((v) => {
-    const o = (v ?? {}) as Record<string, unknown>;
-    return {
-      pergunta: typeof o.pergunta === 'string' ? o.pergunta : '',
-      resposta: typeof o.resposta === 'string' ? o.resposta : '',
-    };
-  });
-}
-
-export function useFaqConfig(slot: string): UseQueryResult<FaqConfig> {
-  return useQuery({
-    queryKey: qk.faqConfig(slot),
-    queryFn: ({ signal }) =>
-      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
-        faq_personalizado: r.features?.faq_personalizado === true,
-        faq: toFaqItens(r.perfil?.faq_personalizado),
-      })),
-  });
-}
-
-/**
- * PUT parcial /portal/perfil só com `{ perfil: { faq_personalizado } }` (lista completa =
- * replace-set). Merge parcial no backend (chave ausente = não toca; [] = limpa). Os demais
- * campos do perfil ficam intactos. Preserva o flag `faq_personalizado` no cache derivado.
- */
-export function useSaveFaq(
-  slot: string,
-): UseMutationResult<PerfilNegocio, Error, { faq_personalizado: FaqItem[] }> {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (input) =>
-      apiFetch<SavePerfilResponse>('/portal/perfil', {
-        method: 'PUT',
-        body: { perfil: input },
-      }).then((r) => r.perfil),
-    onSuccess: (perfil) => {
-      client.setQueryData(qk.faqConfig(slot), (prev: FaqConfig | undefined) => ({
-        faq_personalizado: prev?.faq_personalizado ?? true,
-        faq: toFaqItens(perfil.faq_personalizado),
-      }));
-    },
-  });
-}
-
 // ── Gate das abas de "Meu atendente" (SCRUM-157) ─────────────────────────────
 //
 // Deriva do MESMO GET /portal/perfil, numa query própria (qk.atendenteFeatures) pra
 // NÃO tocar no cache/otimista do formulário principal do perfil — mesma isolação de
-// agendaConfig/planosConfig/faqConfig. Expõe os 2 gates GLOBAIS (prompt_builder,
-// sandbox, #541) usados pelo layout de `/atendente/*` pra montar o NavGateContext
-// ANTES de navegar (o gate real de cada seção, por 404, continua no componente).
+// agendaConfig/planosConfig. Expõe os 2 gates GLOBAIS (prompt_builder, sandbox, #541)
+// usados pelo layout de `/atendente/*` pra montar o NavGateContext ANTES de navegar
+// (o gate real de cada seção, por 404, continua no componente).
+//
+// `faq_personalizado` NÃO faz mais parte deste contrato (refactor pós-plano do
+// Bruno: conteúdo de FAQ passa a viver no prompt via IA, formulário próprio saiu).
+// O gate de "Mensagens" (`atendenteMensagens`) agora depende só de cartão
+// disponível — ver `atendente/layout.tsx`.
 
 export interface AtendenteFeatures {
   prompt_builder: boolean;
-  faq_personalizado: boolean;
   sandbox: boolean;
 }
 
@@ -664,7 +609,6 @@ export function useAtendenteFeatures(slot: string): UseQueryResult<AtendenteFeat
     queryFn: ({ signal }) =>
       apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
         prompt_builder: r.features?.prompt_builder === true,
-        faq_personalizado: r.features?.faq_personalizado === true,
         sandbox: r.features?.sandbox === true,
       })),
   });

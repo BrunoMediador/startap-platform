@@ -25,7 +25,7 @@ export type NavGate =
   // aqui em vez de a função ganhar lógica de OR.
   | 'negocioAgenda' // modo_atendente || atendFromAgenda || temCredencialGoogle
   | 'atendentePersonalidade' // builder || tom
-  | 'atendenteMensagens' // cartão || faq
+  | 'atendenteMensagens' // cartão disponível
   | 'sandbox';
 
 export type NavIconKey =
@@ -69,7 +69,7 @@ export const NAV_SPEC: NavItemSpec[] = [
   { href: '/billing', label: 'Faturamento', icon: 'wallet', gated: ['atendimentos'] },
   // "Meu negócio" absorve Dados/Serviços/Horários/Equipe/Agenda como sub-abas.
   { href: '/negocio', label: 'Meu negócio', icon: 'user' },
-  // "Meu atendente" absorve a personalização da IA (builder/tom/cartão/FAQ/testar).
+  // "Meu atendente" absorve a personalização da IA (builder/tom/cartão/testar).
   { href: '/atendente', label: 'Meu atendente', icon: 'sparkle' },
   { href: '/pausas', label: 'Pausas', icon: 'pause' },
   // Faturamento (o que o dono RECEBE) usa 'wallet'; Mensalidade (o que ele PAGA

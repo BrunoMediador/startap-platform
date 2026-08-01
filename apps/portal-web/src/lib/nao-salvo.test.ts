@@ -141,25 +141,25 @@ describe('sujos', () => {
   });
 });
 
-describe('salvarTodos — regressão do bug (Cartão + FAQ sujos juntos)', () => {
+describe('salvarTodos — regressão do bug (2 seções sujas juntas, SCRUM-158)', () => {
   it('duas seções sujas -> chama salvar das DUAS, ok:true', async () => {
-    const salvarFaq = vi.fn().mockResolvedValue(undefined);
+    const salvarTom = vi.fn().mockResolvedValue(undefined);
     const salvarCartao = vi.fn().mockResolvedValue(undefined);
     const regs: RegistroNaoSalvo[] = [
-      { nome: 'Perguntas frequentes', dirty: true, salvar: salvarFaq },
+      { nome: 'Tom da conversa', dirty: true, salvar: salvarTom },
       { nome: 'Cartão de confirmação', dirty: true, salvar: salvarCartao },
     ];
     const res = await salvarTodos(sujos(regs));
     expect(res).toEqual({ ok: true });
-    expect(salvarFaq).toHaveBeenCalledTimes(1);
+    expect(salvarTom).toHaveBeenCalledTimes(1);
     expect(salvarCartao).toHaveBeenCalledTimes(1);
   });
 
   it('uma das duas rejeita -> ok:false (não navega)', async () => {
-    const salvarFaq = vi.fn().mockResolvedValue(undefined);
+    const salvarTom = vi.fn().mockResolvedValue(undefined);
     const salvarCartao = vi.fn().mockRejectedValue(new Error('save-falhou'));
     const regs: RegistroNaoSalvo[] = [
-      { nome: 'Perguntas frequentes', dirty: true, salvar: salvarFaq },
+      { nome: 'Tom da conversa', dirty: true, salvar: salvarTom },
       { nome: 'Cartão de confirmação', dirty: true, salvar: salvarCartao },
     ];
     const res = await salvarTodos(sujos(regs));
@@ -184,12 +184,12 @@ describe('descreveSecoesSujas', () => {
   });
 
   it('1 seção -> só o nome', () => {
-    expect(descreveSecoesSujas(['Perguntas frequentes'])).toBe('Perguntas frequentes');
+    expect(descreveSecoesSujas(['Tom da conversa'])).toBe('Tom da conversa');
   });
 
   it('2 seções -> "A e B"', () => {
-    expect(descreveSecoesSujas(['Perguntas frequentes', 'Cartão de confirmação'])).toBe(
-      'Perguntas frequentes e Cartão de confirmação',
+    expect(descreveSecoesSujas(['Tom da conversa', 'Cartão de confirmação'])).toBe(
+      'Tom da conversa e Cartão de confirmação',
     );
   });
 

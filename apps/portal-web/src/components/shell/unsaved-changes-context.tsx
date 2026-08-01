@@ -5,8 +5,10 @@
  * anterior de "a página declara seu dirty" (`useAvisarNaoSalvo`, ligado só em
  * `/negocio/dados`) por um REGISTRY: cada seção salvável se registra aqui
  * (`useRegistrarNaoSalvo`); um guard central observa TODAS e sobe um único
- * diálogo, mesmo com várias seções sujas ao mesmo tempo (ex.: Cartão + FAQ em
- * "Meu atendente › Mensagens" — o bug original que motivou isto).
+ * diálogo, mesmo com várias seções sujas ao mesmo tempo (ex. histórico: Cartão
+ * + FAQ em "Meu atendente › Mensagens" — o bug original que motivou isto; a
+ * UI de FAQ foi removida depois, mas o mecanismo de "várias sujas" continua
+ * valendo pra qualquer par de seções salváveis).
  *
  * Por que registry e não `useAvisarNaoSalvo` chamado 9x: o hook registra 3
  * listeners globais (click em captura, popstate, beforeunload). N instâncias
