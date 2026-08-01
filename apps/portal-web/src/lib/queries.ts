@@ -77,7 +77,7 @@ import { pausaFromResposta } from './bot-pausa';
 import {
   type CartaoConfigState,
   type CartaoEmojis,
-  type CartaoPreviews,
+  type CartaoPreviewLive,
   type SaveCartaoResult,
   fetchCartaoConfig,
   fetchCartaoPreview,
@@ -1353,7 +1353,7 @@ export function useCartaoConfig(slot: string): UseQueryResult<CartaoConfigState>
 export function useCartaoPreview(
   slot: string,
   emojis: CartaoEmojis,
-): UseQueryResult<CartaoPreviews | null> {
+): UseQueryResult<CartaoPreviewLive> {
   return useQuery({
     queryKey: qk.cartaoPreview(slot, emojis),
     queryFn: ({ signal }) => fetchCartaoPreview(emojis, signal),

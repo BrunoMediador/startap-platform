@@ -112,9 +112,13 @@ export const NEGOCIO_ABAS: readonly AbaSpec[] = [
  * Sub-abas de "Meu atendente", na ordem de exibição.
  *  - 'atendente-personalidade': builder conversacional + tom — aparece se
  *    QUALQUER um dos dois estiver disponível.
- *  - 'atendente-mensagens': cartão de confirmação — aparece se disponível.
- *    (a antiga "Perguntas frequentes" saiu daqui: conteúdo passa a viver no
- *    prompt via IA, formulário próprio removido; backend/coluna intocados.)
+ *  - 'atendente-mensagens': o cartão de confirmação — aparece se disponível. A aba
+ *    se CHAMA "Cartão de confirmação" (rename 31/07) porque passa a ter só isso: a
+ *    antiga "Perguntas frequentes" saiu daqui (#554), com o conteúdo passando a viver
+ *    no prompt via IA — formulário próprio removido, backend/coluna intocados.
+ *    ⚠️ O `key`/`href` continuam 'atendente-mensagens'/'/atendente/mensagens' de
+ *    propósito: renomear a ROTA quebraria URL salva e link interno — foi o estrago
+ *    que a #547 teve de limpar. Só o RÓTULO mudou.
  *  - 'atendente-testar': sandbox de conversa (SCRUM-101), só com a flag ON.
  */
 export const ATENDENTE_ABAS: readonly AbaSpec[] = [
@@ -128,7 +132,7 @@ export const ATENDENTE_ABAS: readonly AbaSpec[] = [
   {
     key: 'atendente-mensagens',
     href: '/atendente/mensagens',
-    label: 'Mensagens',
+    label: 'Cartão de confirmação',
     icon: 'card',
     gated: ['atendenteMensagens'],
   },

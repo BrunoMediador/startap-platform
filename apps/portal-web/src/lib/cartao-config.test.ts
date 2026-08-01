@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CARTAO_EMOJI_DISABLED,
   CARTAO_SLOTS,
   type CartaoDraft,
   type CartaoEmojis,
   FALLBACK_EMOJIS,
   PREVIEW_SAMPLE,
   buildCartaoPreview,
+  disableEmoji,
   isCartaoDirty,
   isCartaoEditable,
   isCartaoLocked,
   isEmojiAllowed,
+  isEmojiDisabled,
+  isSingleValidEmoji,
   normalizeCartaoResponse,
   normalizeLockedReason,
   normalizePreviews,
@@ -86,24 +90,72 @@ describe('normalizeLockedReason', () => {
 });
 
 describe('isEmojiAllowed (allowlist do picker)', () => {
-  it('aceita só o que está no catálogo daquele slot', () => {
+  it('aceita QUALQUER emoji único válido, em qualquer slot (emoji livre)', () => {
     expect(isEmojiAllowed('marca', '💈')).toBe(true);
     expect(isEmojiAllowed('confirma', '✅')).toBe(true);
-    // emoji válido, mas de OUTRO slot -> negado (allowlist por-slot)
-    expect(isEmojiAllowed('confirma', '💈')).toBe(false);
-    // emoji arbitrário fora de qualquer catálogo -> negado (anti-injeção)
-    expect(isEmojiAllowed('marca', '🔥')).toBe(false);
+    // O catálogo fechado MORREU (decisão do Bruno 31/07): emoji do teclado do aparelho.
+    // Emoji de "outro slot" e emoji fora de qualquer catálogo agora PASSAM.
+    expect(isEmojiAllowed('confirma', '💈')).toBe(true);
+    expect(isEmojiAllowed('marca', '🔥')).toBe(true);
+    // ...e o sentinela de desabilitado também é um valor aceitável.
+    expect(isEmojiAllowed('marca', CARTAO_EMOJI_DISABLED)).toBe(true);
+  });
+
+  it('continua negando o que NÃO é um emoji único (a trava que importa)', () => {
     expect(isEmojiAllowed('marca', 'não-emoji')).toBe(false);
+    expect(isEmojiAllowed('marca', 'a')).toBe(false);
+    expect(isEmojiAllowed('marca', '')).toBe(false);
+    expect(isEmojiAllowed('marca', ' ')).toBe(false);
+    expect(isEmojiAllowed('marca', '💈💈')).toBe(false); // 2 emojis
+    expect(isEmojiAllowed('marca', '💈a')).toBe(false); // emoji + texto
+  });
+});
+
+describe('isSingleValidEmoji — paridade com o backend (anti prompt-injection)', () => {
+  it('aceita emoji simples, variation selector, ZWJ legítimo e keycap', () => {
+    expect(isSingleValidEmoji('💈')).toBe(true);
+    expect(isSingleValidEmoji('✂️')).toBe(true); // VS16
+    expect(isSingleValidEmoji('👨‍👩‍👧')).toBe(true); // ZWJ
+    expect(isSingleValidEmoji('1️⃣')).toBe(true); // keycap
+    expect(isSingleValidEmoji('🇧🇷')).toBe(true); // bandeira
+  });
+
+  it('rejeita bytes invisíveis coláveis no system prompt do bot', () => {
+    // Tag chars (U+E0000-E007F): o vetor canônico de smuggling em prompt de LLM.
+    expect(isSingleValidEmoji('💈\u{E0041}\u{E007F}')).toBe(false);
+    // Bandeira de subdivisão é RGI válida mas USA tag chars — rejeitada de propósito.
+    expect(
+      isSingleValidEmoji('\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}'),
+    ).toBe(false);
+    expect(isSingleValidEmoji('💈​')).toBe(false); // ZWSP
+    expect(isSingleValidEmoji('💈﻿')).toBe(false); // BOM
+    expect(isSingleValidEmoji('💈‮')).toBe(false); // RLO (bidi override)
+    expect(isSingleValidEmoji('💈\n')).toBe(false); // newline
+    expect(isSingleValidEmoji('‍')).toBe(false); // ZWJ órfão
+  });
+
+  it('rejeita não-emoji', () => {
+    expect(isSingleValidEmoji('a')).toBe(false);
+    expect(isSingleValidEmoji('7')).toBe(false);
+    expect(isSingleValidEmoji('.')).toBe(false);
+    expect(isSingleValidEmoji('')).toBe(false);
+    expect(isSingleValidEmoji(null)).toBe(false);
+    expect(isSingleValidEmoji(CARTAO_EMOJI_DISABLED)).toBe(false); // sentinela não é emoji
   });
 });
 
 describe('sanitizeEmojis', () => {
-  it('mantém emojis válidos e cai no fallback nos slots ausentes/ inválidos', () => {
+  it('mantém emoji livre válido e cai no fallback no que não é emoji', () => {
     const out = sanitizeEmojis({ marca: '✂️', dia: '🔥', valor: 'texto' }, FALLBACK_EMOJIS);
     expect(out.marca).toBe('✂️'); // válido
-    expect(out.dia).toBe(FALLBACK_EMOJIS.dia); // fora do catálogo -> fallback
+    expect(out.dia).toBe('🔥'); // emoji LIVRE agora passa (não há mais catálogo)
     expect(out.valor).toBe(FALLBACK_EMOJIS.valor); // não-emoji -> fallback
     expect(out.confirma).toBe(FALLBACK_EMOJIS.confirma); // ausente -> fallback
+  });
+
+  it('preserva o sentinela de desabilitado (não é "inválido")', () => {
+    const out = sanitizeEmojis({ marca: CARTAO_EMOJI_DISABLED }, FALLBACK_EMOJIS);
+    expect(out.marca).toBe(CARTAO_EMOJI_DISABLED);
   });
   it('cru não-objeto -> tudo fallback', () => {
     expect(sanitizeEmojis(null, FALLBACK_EMOJIS)).toEqual(FALLBACK_EMOJIS);
@@ -220,13 +272,30 @@ describe('rascunho: setTemplate / setEmoji (picker fechado)', () => {
     expect(next.emojis.marca).toBe('✂️');
     expect(base.emojis.marca).toBe('💈'); // imutável
   });
-  it('setEmoji IGNORA emoji fora do catálogo (2ª trava anti-injeção)', () => {
+  it('setEmoji ACEITA emoji livre (o catálogo fechado saiu)', () => {
     const next = setEmoji(base, 'marca', '🔥');
-    expect(next).toBe(base); // rascunho intacto
+    expect(next.emojis.marca).toBe('🔥');
+    expect(next).not.toBe(base);
   });
-  it('setEmoji não deixa vazar emoji de outro slot', () => {
+  it('setEmoji aceita emoji de qualquer slot em qualquer slot', () => {
     const next = setEmoji(base, 'confirma', '💈');
-    expect(next).toBe(base);
+    expect(next.emojis.confirma).toBe('💈');
+  });
+  it('setEmoji IGNORA o que não é emoji único (2ª trava anti-injeção)', () => {
+    expect(setEmoji(base, 'marca', 'texto')).toBe(base); // rascunho intacto
+    expect(setEmoji(base, 'marca', '💈💈')).toBe(base);
+    expect(setEmoji(base, 'marca', '💈\u{E0041}')).toBe(base); // tag char
+    expect(setEmoji(base, 'marca', '')).toBe(base);
+  });
+
+  it('disableEmoji grava o sentinela e isEmojiDisabled o reconhece', () => {
+    const next = disableEmoji(base, 'marca');
+    expect(next.emojis.marca).toBe(CARTAO_EMOJI_DISABLED);
+    expect(isEmojiDisabled(next.emojis, 'marca')).toBe(true);
+    expect(isEmojiDisabled(next.emojis, 'dia')).toBe(false);
+    // reversível: reabilitar é só setEmoji de novo
+    const volta = setEmoji(next, 'marca', '💈');
+    expect(isEmojiDisabled(volta.emojis, 'marca')).toBe(false);
   });
 });
 
