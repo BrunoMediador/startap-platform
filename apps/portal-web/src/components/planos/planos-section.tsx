@@ -18,6 +18,7 @@
  * Edição OTIMISTA com revert (padrão D5 das telas servicos/horarios/perfil/lembretes).
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/cn';
@@ -70,38 +71,66 @@ export function PlanosSection() {
     setDraft({ planos_beneficios: v });
   }
 
+  /**
+   * Núcleo do submit (save otimista). Extraído de `onSubmit` pra também poder
+   * ser chamado pelo guard global de "alterações não salvas" (SCRUM-158). O
+   * save é OTIMISTA (aplica no cache antes da resposta) — resolve assim que
+   * o cache é atualizado; o `mutate` fire-and-forget segue rodando em
+   * background (mesma semântica visível de sempre, o guard só precisa saber
+   * que o rascunho parou de estar "sujo").
+   */
+  function submitPlanos(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty || !valido) {
+        resolve();
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
+
+      const value = toPlanosValue(draft);
+      const nextSaved: PlanosDraft = { planos_beneficios: value };
+      const prev = client.getQueryData(qk.planosConfig(slot));
+
+      // Otimista: aplica no cache + fixa o draft normalizado (aparado) na tela.
+      client.setQueryData(qk.planosConfig(slot), (p: typeof cfgQ.data) => ({
+        modo_atendente: p?.modo_atendente ?? true,
+        planos_beneficios: value,
+      }));
+      setSaved(nextSaved);
+      setDraft(nextSaved);
+      touched.current = false;
+
+      save.mutate(
+        { planos_beneficios: value },
+        {
+          onSuccess: () => toast.success('Planos atualizados'),
+          onError: () => {
+            if (prev !== undefined) client.setQueryData(qk.planosConfig(slot), prev);
+            const back = toPlanosDraft(prev as Parameters<typeof toPlanosDraft>[0]);
+            setSaved(back);
+            setDraft(back);
+            touched.current = false;
+            toast.error('Não foi possível salvar. Tente de novo.');
+          },
+        },
+      );
+      resolve();
+    });
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!dirty || !valido || save.isPending) return;
-
-    const value = toPlanosValue(draft);
-    const nextSaved: PlanosDraft = { planos_beneficios: value };
-    const prev = client.getQueryData(qk.planosConfig(slot));
-
-    // Otimista: aplica no cache + fixa o draft normalizado (aparado) na tela.
-    client.setQueryData(qk.planosConfig(slot), (p: typeof cfgQ.data) => ({
-      modo_atendente: p?.modo_atendente ?? true,
-      planos_beneficios: value,
-    }));
-    setSaved(nextSaved);
-    setDraft(nextSaved);
-    touched.current = false;
-
-    save.mutate(
-      { planos_beneficios: value },
-      {
-        onSuccess: () => toast.success('Planos atualizados'),
-        onError: () => {
-          if (prev !== undefined) client.setQueryData(qk.planosConfig(slot), prev);
-          const back = toPlanosDraft(prev as Parameters<typeof toPlanosDraft>[0]);
-          setSaved(back);
-          setDraft(back);
-          touched.current = false;
-          toast.error('Não foi possível salvar. Tente de novo.');
-        },
-      },
-    );
+    submitPlanos().catch(() => {
+      // erro já tratado (toast) dentro de submitPlanos.
+    });
   }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  useRegistrarNaoSalvo('Planos e assinaturas', dirty, submitPlanos);
 
   // Load: não renderiza nada (sem flash). Onda 1 (SCRUM-68): visível pra TODOS os
   // formatos assim que o perfil carrega — não gateia mais por modo_atendente.

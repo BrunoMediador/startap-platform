@@ -24,6 +24,7 @@
  */
 import { IconSparkle } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
@@ -96,24 +97,48 @@ function TomForm({
     setDraft(indexToNivel(idx, paradas));
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!dirty || save.isPending) return;
+  /**
+   * Núcleo do submit (save otimista). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158). Sem validação client-side aqui (slider fechado, sempre
+   * válido) — resolve assim que o cache aplica o otimista, o `mutate`
+   * segue em background com revert no erro.
+   */
+  function submitTom(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!dirty || save.isPending) {
+        resolve();
+        return;
+      }
 
-    const prev = saved;
-    setSaved(draft); // otimista
-    touched.current = false;
+      const prev = saved;
+      setSaved(draft); // otimista
+      touched.current = false;
 
-    save.mutate(draft, {
-      onSuccess: () => {
-        toast.success(TOM_COPY.sucesso);
-      },
-      onError: (err) => {
-        setSaved(prev);
-        toast.error(isTomInvalido(err) ? TOM_COPY.erroInvalido : TOM_COPY.erroGenerico);
-      },
+      save.mutate(draft, {
+        onSuccess: () => {
+          toast.success(TOM_COPY.sucesso);
+        },
+        onError: (err) => {
+          setSaved(prev);
+          toast.error(isTomInvalido(err) ? TOM_COPY.erroInvalido : TOM_COPY.erroGenerico);
+        },
+      });
+      resolve();
     });
   }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitTom().catch(() => {
+      // erro já tratado (toast) dentro de submitTom.
+    });
+  }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Este componente (`TomForm`) só monta quando o estado é OK (o
+  // pai `TomAssistenteSection` já filtrou loading/erro/indisponível antes).
+  useRegistrarNaoSalvo('Tom do assistente', dirty, submitTom);
 
   return (
     <SectionShell>

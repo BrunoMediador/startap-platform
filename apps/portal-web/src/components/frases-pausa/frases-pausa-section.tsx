@@ -25,6 +25,7 @@ import { IconAlert, IconPlus, IconTrash } from '@/components/icons';
  * resposta; falha -> toast, mantém o rascunho pro dono corrigir.
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -111,30 +112,63 @@ export function FrasesPausaSection({ slot }: { slot: string }) {
     setDraft((d) => toggleFraseEnabled(d, id));
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!dirty || !valido || save.isPending) return;
+  /**
+   * Núcleo do submit (validação + save). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158). Rejeita quando inválido/já salvando ou quando o backend
+   * recusa (nunca navega/descarta em silêncio com erro pendente).
+   */
+  function submitFrases(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty) {
+        resolve();
+        return;
+      }
+      if (!valido) {
+        reject(new Error('validacao'));
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
 
-    const payload = toFrasesPayload(draft);
-    save.mutate(payload, {
-      onSuccess: (res) => {
-        const next = toFrasesDraft(res.frases);
-        client.setQueryData(qk.frasesPausa(slot), res);
-        setSaved(next);
-        setDraft(next);
-        touched.current = false;
-        toast.success('Frases salvas');
-      },
-      onError: (err) => {
-        // O rascunho FICA na tela pro dono corrigir (não reverte). 400 = backend recusou.
-        if (isFrasesRejeitadas(err)) {
-          toast.error('Não foi possível salvar. Revise as frases e tente de novo.');
-        } else {
-          toast.error('Não foi possível salvar. Tente de novo.');
-        }
-      },
+      const payload = toFrasesPayload(draft);
+      save.mutate(payload, {
+        onSuccess: (res) => {
+          const next = toFrasesDraft(res.frases);
+          client.setQueryData(qk.frasesPausa(slot), res);
+          setSaved(next);
+          setDraft(next);
+          touched.current = false;
+          toast.success('Frases salvas');
+          resolve();
+        },
+        onError: (err) => {
+          // O rascunho FICA na tela pro dono corrigir (não reverte). 400 = backend recusou.
+          if (isFrasesRejeitadas(err)) {
+            toast.error('Não foi possível salvar. Revise as frases e tente de novo.');
+          } else {
+            toast.error('Não foi possível salvar. Tente de novo.');
+          }
+          reject(err instanceof Error ? err : new Error('save-falhou'));
+        },
+      });
     });
   }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitFrases().catch(() => {
+      // erro já tratado (inline/toast) dentro de submitFrases.
+    });
+  }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  // Enquanto carrega/feature OFF, `draft`/`saved` nascem vazios e iguais ->
+  // `dirty` é sempre `false`, então o registro nunca dispara o guard à toa.
+  useRegistrarNaoSalvo('Frases de pausa', dirty, submitFrases);
 
   // Load: nada renderiza (sem flash). Onda 1 (SCRUM-68): visível pra TODOS os formatos —
   // não gateia mais por modo_atendente. O 404 do GET (abaixo) segue como rede de proteção.

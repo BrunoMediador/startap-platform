@@ -18,6 +18,7 @@
  * seguem gated no backend). Edição OTIMISTA com revert. O <section> traz o próprio divisor.
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/toast';
@@ -69,59 +70,91 @@ export function RecepcaoSection() {
     if (error) setError(undefined);
   }
 
+  /**
+   * Núcleo do submit (save otimista). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158). Rejeita em validação inválida (nunca navega/descarta em
+   * silêncio com erro pendente) ou quando o backend recusa.
+   */
+  function submitRecepcao(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty) {
+        resolve();
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
+
+      // SCRUM-62: preenchido+inválido -> erro; preenchido+mudado -> E.164; ESVAZIADO (tinha
+      // número, o dono apagou) -> "" pra LIMPAR (avisos voltam ao WhatsApp do negócio);
+      // sem mudança -> não deveria chegar aqui (dirty=false).
+      const recep = recepcaoPayload(draft, saved);
+      if (recep.kind === 'invalid') {
+        setError(RECEPCAO_TELEFONE_ERRO);
+        reject(new Error('validacao'));
+        return;
+      }
+      if (recep.kind === 'omit') {
+        resolve();
+        return;
+      }
+      setError(undefined);
+
+      const recepValue = recep.kind === 'set' ? recep.value : '';
+      const nextDisplay = recep.kind === 'set' ? maskPhoneBR(recep.value) : '';
+      const prev = client.getQueryData(qk.agendaConfig(slot));
+
+      // Otimista: só o recepcao_telefone no cache (os demais campos ficam intactos).
+      client.setQueryData(qk.agendaConfig(slot), (p: AgendaConfig | undefined) =>
+        p ? { ...p, recepcao_telefone: recepValue } : p,
+      );
+      setSaved(nextDisplay);
+      setDraft(nextDisplay);
+      touched.current = false;
+
+      save.mutate(
+        { recepcao_telefone: recepValue },
+        {
+          onSuccess: () => {
+            toast.success(
+              recepValue === ''
+                ? 'Avisos voltam pro WhatsApp do negócio'
+                : 'WhatsApp da recepção salvo',
+            );
+            resolve();
+          },
+          onError: (err) => {
+            if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
+            const back = displayFrom(prev as AgendaConfig | undefined);
+            setSaved(back);
+            setDraft(back);
+            touched.current = false;
+            if (isTelefoneInvalido(err)) {
+              toast.error('Não foi possível salvar o telefone da recepção. Confere o número.');
+            } else if (isRecepcaoIndisponivel(err)) {
+              toast.error('O telefone da recepção não está disponível agora.');
+            } else {
+              toast.error('Não foi possível salvar. Tente de novo.');
+            }
+            reject(err instanceof Error ? err : new Error('save-falhou'));
+          },
+        },
+      );
+    });
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!dirty || save.isPending) return;
-
-    // SCRUM-62: preenchido+inválido -> erro; preenchido+mudado -> E.164; ESVAZIADO (tinha
-    // número, o dono apagou) -> "" pra LIMPAR (avisos voltam ao WhatsApp do negócio);
-    // sem mudança -> não deveria chegar aqui (dirty=false).
-    const recep = recepcaoPayload(draft, saved);
-    if (recep.kind === 'invalid') {
-      setError(RECEPCAO_TELEFONE_ERRO);
-      return;
-    }
-    if (recep.kind === 'omit') return;
-    setError(undefined);
-
-    const recepValue = recep.kind === 'set' ? recep.value : '';
-    const nextDisplay = recep.kind === 'set' ? maskPhoneBR(recep.value) : '';
-    const prev = client.getQueryData(qk.agendaConfig(slot));
-
-    // Otimista: só o recepcao_telefone no cache (os demais campos ficam intactos).
-    client.setQueryData(qk.agendaConfig(slot), (p: AgendaConfig | undefined) =>
-      p ? { ...p, recepcao_telefone: recepValue } : p,
-    );
-    setSaved(nextDisplay);
-    setDraft(nextDisplay);
-    touched.current = false;
-
-    save.mutate(
-      { recepcao_telefone: recepValue },
-      {
-        onSuccess: () =>
-          toast.success(
-            recepValue === ''
-              ? 'Avisos voltam pro WhatsApp do negócio'
-              : 'WhatsApp da recepção salvo',
-          ),
-        onError: (err) => {
-          if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
-          const back = displayFrom(prev as AgendaConfig | undefined);
-          setSaved(back);
-          setDraft(back);
-          touched.current = false;
-          if (isTelefoneInvalido(err)) {
-            toast.error('Não foi possível salvar o telefone da recepção. Confere o número.');
-          } else if (isRecepcaoIndisponivel(err)) {
-            toast.error('O telefone da recepção não está disponível agora.');
-          } else {
-            toast.error('Não foi possível salvar. Tente de novo.');
-          }
-        },
-      },
-    );
+    submitRecepcao().catch(() => {
+      // erro já tratado (inline/toast) dentro de submitRecepcao.
+    });
   }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  useRegistrarNaoSalvo('WhatsApp da recepção', dirty, submitRecepcao);
 
   // Load: não renderiza nada (sem flash). Onda 1 (SCRUM-68): visível pra TODOS os formatos
   // assim que o perfil carrega — não gateia por modo_atendente.
