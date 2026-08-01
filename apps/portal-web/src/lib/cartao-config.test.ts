@@ -19,6 +19,7 @@ import {
   normalizePreviews,
   normalizeTemplate,
   parsePreview,
+  partirNegrito,
   previewLines,
   sanitizeEmojis,
   setEmoji,
@@ -418,5 +419,53 @@ describe('normalizeCartaoResponse expõe previews (SCRUM-99)', () => {
     const st = normalizeCartaoResponse(editableRaw());
     if (st.status !== 'editable') throw new Error('esperado editable');
     expect(st.previews).toBeNull();
+  });
+});
+
+/**
+ * partirNegrito — a prévia do portal tem que mostrar o cartão como o cliente RECEBE no
+ * WhatsApp, não a marcação crua. O Bruno pegou `*barbearia DRAGON*` com os asteriscos à
+ * mostra no smoke visual (01/08); estes casos travam o comportamento.
+ */
+describe('partirNegrito (negrito do WhatsApp na prévia)', () => {
+  it('extrai o trecho em negrito e some com os asteriscos', () => {
+    expect(partirNegrito('*Barbearia X*')).toEqual([{ texto: 'Barbearia X', negrito: true }]);
+  });
+
+  it('preserva o texto ao redor', () => {
+    expect(partirNegrito('💈 *Barbearia X* fecha às 20h')).toEqual([
+      { texto: '💈 ', negrito: false },
+      { texto: 'Barbearia X', negrito: true },
+      { texto: ' fecha às 20h', negrito: false },
+    ]);
+  });
+
+  it('texto sem marcação vira uma parte só', () => {
+    expect(partirNegrito('Dia: quinta-feira')).toEqual([
+      { texto: 'Dia: quinta-feira', negrito: false },
+    ]);
+  });
+
+  it('asterisco solto/ímpar fica literal (igual ao WhatsApp)', () => {
+    expect(partirNegrito('2 * 3 = 6')).toEqual([{ texto: '2 * 3 = 6', negrito: false }]);
+    expect(partirNegrito('*sem fechar')).toEqual([{ texto: '*sem fechar', negrito: false }]);
+  });
+
+  it('não casa através de quebra de linha nem par vazio', () => {
+    expect(partirNegrito('*abre\nfecha*')).toEqual([{ texto: '*abre\nfecha*', negrito: false }]);
+    expect(partirNegrito('**')).toEqual([{ texto: '**', negrito: false }]);
+  });
+
+  it('string vazia → nenhuma parte', () => {
+    expect(partirNegrito('')).toEqual([]);
+  });
+
+  it('reconstrução: juntar as partes devolve o texto sem os asteriscos do negrito', () => {
+    const cartao = '💈 *Barbearia do Zé*\n\n📅 Dia: quinta\n\n✅ Responda SIM para confirmar.';
+    const junto = partirNegrito(cartao)
+      .map((p) => p.texto)
+      .join('');
+    expect(junto).toBe(cartao.replace(/\*([^*\n]+)\*/g, '$1'));
+    expect(junto).not.toContain('*');
   });
 });

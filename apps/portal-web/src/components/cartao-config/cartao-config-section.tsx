@@ -46,6 +46,7 @@ import {
   isCartaoLocked,
   isEmojiDisabled,
   isSingleValidEmoji,
+  partirNegrito,
   setEmoji,
   toCartaoDraft,
   toCartaoPayload,
@@ -349,6 +350,38 @@ function PreviewCard({
  * Slot desabilitado não emite segmento de emoji (o backend já o rende vazio), então o
  * botão de REABILITAR aparece na régua abaixo da bolha, não dentro do texto.
  */
+/**
+ * Renderiza um trecho de texto do cartão aplicando o NEGRITO do WhatsApp (`*texto*`).
+ *
+ * Por que existe: o cartão é uma mensagem de WhatsApp, e lá `*Barbearia X*` vira
+ * **Barbearia X** (os asteriscos somem). A bolha do portal mostrava o texto CRU, então o
+ * dono via `*barbearia DRAGON*` com os asteriscos à mostra e parecia defeito — o Bruno
+ * pegou isso no smoke visual. A prévia tem que mostrar o que o cliente RECEBE, não o
+ * código-fonte da mensagem.
+ *
+ * Só negrito: é a única marcação que o cartão usa (`partirNegrito`, em `@/lib/cartao-config`,
+ * tem os testes). Itálico/riscado/mono do WhatsApp não aparecem aqui — se um dia aparecerem,
+ * a função é o lugar de estender.
+ */
+function TextoWhatsApp({ texto }: { texto: string }) {
+  const partes = partirNegrito(texto);
+  return (
+    <>
+      {partes.map((p, i) =>
+        p.negrito ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: partes são posicionais e imutáveis
+          <strong key={`b-${i}`} className="font-semibold">
+            {p.texto}
+          </strong>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: partes são posicionais e imutáveis
+          <span key={`p-${i}`}>{p.texto}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 function EditorBubble({
   segmentos,
   emojis,
@@ -373,7 +406,7 @@ function EditorBubble({
             />
           ) : (
             // biome-ignore lint/suspicious/noArrayIndexKey: segmentos de texto são posicionais e imutáveis
-            <span key={`t-${i}`}>{seg.valor}</span>
+            <TextoWhatsApp key={`t-${i}`} texto={seg.valor} />
           ),
         )}
       </div>
@@ -424,7 +457,7 @@ function PreviewBubble({ text }: { text: string }) {
   return (
     <div className="rounded-[14px] border border-line bg-surface-sunken p-3">
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px] rounded-bl-[5px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.5] text-ink">
-        {text}
+        <TextoWhatsApp texto={text} />
       </div>
     </div>
   );

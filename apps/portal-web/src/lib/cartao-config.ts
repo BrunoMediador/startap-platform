@@ -569,6 +569,44 @@ export function buildCartaoPreview(
   ].join('\n');
 }
 
+/** Um pedaço de texto do cartão, com a marca de negrito já resolvida. */
+export interface ParteTexto {
+  texto: string;
+  negrito: boolean;
+}
+
+/**
+ * Parte um texto do cartão nos trechos em NEGRITO do WhatsApp (`*assim*`) e no resto.
+ *
+ * O cartão é uma mensagem de WhatsApp: lá `*Barbearia X*` renderiza **Barbearia X** e os
+ * asteriscos somem. A prévia do portal precisa fazer o mesmo — mostrar o que o cliente
+ * RECEBE, não a marcação crua (o Bruno viu `*barbearia DRAGON*` na tela e reportou como
+ * "mal configurado", com razão).
+ *
+ * Regras (espelham o WhatsApp real):
+ *  - o par tem que estar na MESMA linha e ter conteúdo (`**` vazio não vira negrito);
+ *  - asterisco solto/ímpar fica literal, como no WhatsApp;
+ *  - não aninha (o primeiro par fecha).
+ *
+ * Puro e determinístico; devolve sempre ao menos 1 parte (string vazia → `[]`).
+ */
+export function partirNegrito(texto: string): ParteTexto[] {
+  const out: ParteTexto[] = [];
+  if (texto === '') return out;
+  // `[^*\n]+` garante "mesma linha" e "não vazio" sem precisar de flag /s.
+  const re = /\*([^*\n]+)\*/g;
+  let ultimo = 0;
+  let m: RegExpExecArray | null = re.exec(texto);
+  while (m !== null) {
+    if (m.index > ultimo) out.push({ texto: texto.slice(ultimo, m.index), negrito: false });
+    out.push({ texto: m[1], negrito: true });
+    ultimo = m.index + m[0].length;
+    m = re.exec(texto);
+  }
+  if (ultimo < texto.length) out.push({ texto: texto.slice(ultimo), negrito: false });
+  return out;
+}
+
 /** Linhas não-vazias do preview (pra mini-preview do seletor de template). */
 export function previewLines(preview: string): string[] {
   return preview.split('\n').filter((l) => l.trim().length > 0);
