@@ -42,9 +42,6 @@ const BASE = '/portal/prompt-builder';
 /** Espelha PROMPT_BUILDER_MAX_INPUT_CHARS do portal-api (content 1..4000). */
 export const BUILDER_MAX_INPUT = 4000;
 
-/** Espelha MAX_PERSONA_CHARS do prompt-builder-validator (persona editada 1..4000). */
-export const PERSONA_MAX_CHARS = 4000;
-
 /**
  * Texto enviado quando o dono clica "Gerar agora" SEM ter digitado nada — o backend exige
  * content >= 1 char, e com generate_now:true a geração é forçada de qualquer forma. A frase
@@ -289,25 +286,18 @@ export async function fetchBuilderDraft(signal?: AbortSignal): Promise<BuilderDr
 /**
  * Persiste a persona (ação NÃO-LLM). Efeito: bot_prompt + prompt_custom=true + versão.
  *
- * `personaEditada` (caminho "Editar"): quando o dono ajustou o TEXTO da persona antes de
- * aprovar, envia { persona_editada }. Vazio/só-espaço/ausente => aprova o RASCUNHO do Redis
- * (caminho "Aprovar", request byte-idêntico ao original SEM body). Em AMBOS os casos o backend
- * re-valida (stripPII + validatePersona) e SEMPRE cola o BLOCO_ESTRUTURAL por código — editar a
- * persona NÃO remove a mecânica de confirmação.
+ * SEMPRE aprova o RASCUNHO gerado pela IA no Redis — request SEM body (ordem do Bruno 31/07:
+ * não existe mais edição manual da persona; dado operacional tem tela própria). O backend
+ * re-valida (stripPII + validatePersona) e SEMPRE cola o BLOCO_ESTRUTURAL por código.
  */
-export async function approveBuilder(personaEditada?: string): Promise<ApproveOutcome> {
-  const body = buildApproveBody(personaEditada);
+export async function approveBuilder(): Promise<ApproveOutcome> {
   try {
-    const r = await apiFetch<ApproveResponse>(
-      `${BASE}/approve`,
-      body ? { method: 'POST', body } : { method: 'POST' },
-    );
+    const r = await apiFetch<ApproveResponse>(`${BASE}/approve`, { method: 'POST' });
     return { kind: 'ok', versionSaved: r.version_saved ?? null };
   } catch (err) {
     if (err instanceof ApiError) {
       if (err.status === 409) return { kind: 'no_draft' };
       if (err.status === 422) return { kind: 'invalid' };
-      // 400 = persona_editada fora de 1..4000 ou campo extra (schema .strict()).
       if (err.status === 400) return { kind: 'invalid' };
       if (err.status === 404) return { kind: 'unavailable' };
     }
@@ -328,37 +318,12 @@ export async function resetBuilder(): Promise<boolean> {
 // ── Lógica pura de estado do chat (testável) ─────────────────────────────────────
 
 /**
- * Monta o body do POST /approve a partir do que o dono digitou no editor de persona.
- * - undefined/vazio/só-espaço => `undefined` (aprova o RASCUNHO do Redis; caminho "Aprovar",
- *   request SEM body, byte-idêntico ao comportamento original).
- * - texto não-vazio => `{ persona_editada: <trim> }` (caminho "Editar").
- * Nunca envia campo extra (o schema .strict() do backend rejeita com 400).
- */
-export function buildApproveBody(
-  personaEditada?: string | null,
-): { persona_editada: string } | undefined {
-  const t = (personaEditada ?? '').trim();
-  return t.length > 0 ? { persona_editada: t } : undefined;
-}
-
-/**
  * Content do clique em "Gerar agora": aproveita o que o dono já digitou (se houver algo) ou
  * cai no texto padrão — o backend precisa de content >= 1 char. Puro/testável sem DOM.
  */
 export function generateNowContent(input: string): string {
   const t = input.trim();
   return t.length > 0 ? t : GENERATE_NOW_FALLBACK_CONTENT;
-}
-
-/** O texto editado pode ser salvo? Não-vazio (após trim) e dentro do teto de 4000. */
-export function isPersonaSavable(text: string): boolean {
-  const t = text.trim();
-  return t.length > 0 && t.length <= PERSONA_MAX_CHARS;
-}
-
-/** Caracteres restantes no editor de persona (negativo se colar texto acima do teto). */
-export function personaCharsLeft(text: string): number {
-  return PERSONA_MAX_CHARS - text.length;
 }
 
 /** Caracteres restantes no composer (pode ficar negativo se colar texto gigante). */
