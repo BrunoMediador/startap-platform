@@ -26,6 +26,7 @@ import { IconAlert, IconBrush, IconCheck, IconHeadset, IconLock } from '@/compon
 import { useTenant } from '@/components/shell/session-context';
 import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
+import { Overlay } from '@/components/ui/overlay';
 import { useToast } from '@/components/ui/toast';
 import {
   CARTAO_COPY,
@@ -33,18 +34,19 @@ import {
   type CartaoDraft,
   type CartaoEditableState,
   type CartaoEmojis,
+  type CartaoExemploSegmento,
   type CartaoLockedState,
   type CartaoPreviews,
   type CartaoSlot,
   type CartaoTemplate,
-  EMOJI_CATALOG,
   buildCartaoPreview,
+  disableEmoji,
   isCartaoDirty,
   isCartaoEditable,
   isCartaoLocked,
-  previewLines,
+  isEmojiDisabled,
+  isSingleValidEmoji,
   setEmoji,
-  setTemplate,
   toCartaoDraft,
   toCartaoPayload,
 } from '@/lib/cartao-config';
@@ -99,17 +101,22 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
   // que o cliente recebe). Ao vivo pelos emojis do rascunho; enquanto carrega usa a prévia da
   // config salva (state.previews). DEGRADAÇÃO GRACIOSA: sem prévia do servidor → fallback client.
   const live = useCartaoPreview(slot, draft.emojis).data;
-  const previews = live ?? state.previews;
+  const previews = live?.previews ?? state.previews;
+  const segmentados = live?.previewsSegmentados ?? state.previewsSegmentados;
   const preview = previewFor(previews, draft.template, draft.emojis);
+  const segmentos = segmentados?.[draft.template] ?? null;
 
-  function onTemplate(template: CartaoTemplate) {
-    touched.current = true;
-    setDraft((d) => setTemplate(d, template));
-  }
+  /** Slot cujo menu (editar/desabilitar) está aberto; null = nenhum. */
+  const [menuSlot, setMenuSlot] = useState<CartaoSlot | null>(null);
 
   function onEmoji(s: CartaoSlot, emoji: string) {
     touched.current = true;
     setDraft((d) => setEmoji(d, s, emoji));
+  }
+
+  function onDesabilitar(s: CartaoSlot) {
+    touched.current = true;
+    setDraft((d) => disableEmoji(d, s));
   }
 
   /**
@@ -163,16 +170,12 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <FixedWarning />
 
-        <TemplateSelector
-          value={draft.template}
+        <PreviewCard
+          segmentos={segmentos}
+          textoFallback={preview}
           emojis={draft.emojis}
-          previews={previews}
-          onChange={onTemplate}
+          onEditar={(slot) => setMenuSlot(slot)}
         />
-
-        <EmojiEditor emojis={draft.emojis} onPick={onEmoji} />
-
-        <PreviewCard text={preview} />
 
         <div className="flex flex-col gap-2">
           <Button
@@ -193,6 +196,22 @@ function CartaoConfigForm({ slot, state }: { slot: string; state: CartaoEditable
           </p>
         </div>
       </form>
+
+      {menuSlot && (
+        <EmojiActionSheet
+          slot={menuSlot}
+          emojis={draft.emojis}
+          onClose={() => setMenuSlot(null)}
+          onEmoji={(emoji) => {
+            onEmoji(menuSlot, emoji);
+            setMenuSlot(null);
+          }}
+          onDesabilitar={() => {
+            onDesabilitar(menuSlot);
+            setMenuSlot(null);
+          }}
+        />
+      )}
     </SectionShell>
   );
 }
@@ -288,150 +307,115 @@ function previewFor(
   return previews?.[template] ?? buildCartaoPreview(template, emojis);
 }
 
-/** Seletor de template (3 opções em radiogroup, cada uma com mini-preview). */
-function TemplateSelector({
-  value,
+/**
+ * Prévia AO VIVO que também é o EDITOR (decisão do Bruno 31/07): o cartão aparece no
+ * "quadradinho" e os EMOJIS dentro dele são clicáveis; o texto é inerte. A nota acima
+ * avisa que os emojis são editáveis.
+ *
+ * Sem segmentos (backend antigo/erro) → cai no texto puro, não-clicável: degradação
+ * graciosa, a seção nunca fica sem prévia.
+ */
+function PreviewCard({
+  segmentos,
+  textoFallback,
   emojis,
-  previews,
-  onChange,
+  onEditar,
 }: {
-  value: CartaoTemplate;
-  emojis: CartaoDraft['emojis'];
-  previews: CartaoPreviews | null | undefined;
-  onChange: (t: CartaoTemplate) => void;
+  segmentos: CartaoExemploSegmento[] | null;
+  textoFallback: string;
+  emojis: CartaoEmojis;
+  onEditar: (slot: CartaoSlot) => void;
 }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.formatoLabel}</span>
-      <div
-        role="radiogroup"
-        aria-label={CARTAO_COPY.formatoLabel}
-        className="flex flex-col gap-2.5"
-      >
-        {CARTAO_COPY.templates.map((opt) => {
-          const selected = value === opt.value;
-          const mini = previewLines(previewFor(previews, opt.value, emojis)).slice(0, 2);
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => onChange(opt.value)}
-              className={cn(
-                'flex items-start gap-3 rounded-[12px] border-[1.5px] p-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-bg',
-                selected
-                  ? 'border-brand bg-brand-soft'
-                  : 'border-line-strong bg-surface hover:bg-surface-hover',
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
-                  selected ? 'border-brand bg-brand text-bg' : 'border-line-strong',
-                )}
-              >
-                {selected && <IconCheck size={12} />}
-              </span>
-              <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-                <span className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="font-display text-[14px] font-semibold text-ink">
-                    {opt.label}
-                  </span>
-                  <span className="text-[12px] text-ink-soft">{opt.hint}</span>
-                </span>
-                <span className="whitespace-pre-wrap break-words rounded-[8px] border border-line bg-surface-sunken px-2.5 py-1.5 text-[11.5px] leading-snug text-ink-soft">
-                  {mini.join('\n')}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** Editor de emojis por campo do cartão (um picker de catálogo fechado por slot). */
-function EmojiEditor({
-  emojis,
-  onPick,
-}: {
-  emojis: CartaoDraft['emojis'];
-  onPick: (slot: CartaoSlot, emoji: string) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.emojisLabel}</span>
-      <p className="text-[12px] text-ink-soft">{CARTAO_COPY.emojisAjuda}</p>
-      <div className="flex flex-col gap-3">
-        {CARTAO_SLOTS.map((slot) => (
-          <EmojiRow
-            key={slot}
-            slot={slot}
-            selected={emojis[slot]}
-            onPick={(emoji) => onPick(slot, emoji)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** Uma linha do editor: rótulo do campo + os emojis do catálogo daquele slot. */
-function EmojiRow({
-  slot,
-  selected,
-  onPick,
-}: {
-  slot: CartaoSlot;
-  selected: string;
-  onPick: (emoji: string) => void;
-}) {
-  const label = CARTAO_COPY.slotLabels[slot];
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[12.5px] font-medium text-ink-soft">{label}</span>
-      <div
-        role="radiogroup"
-        aria-label={`Emoji do campo ${label}`}
-        className="flex flex-wrap gap-1.5"
-      >
-        {EMOJI_CATALOG[slot].map((emoji) => {
-          const on = selected === emoji;
-          return (
-            <button
-              key={emoji}
-              type="button"
-              role="radio"
-              aria-checked={on}
-              aria-label={`Usar ${emoji} no campo ${label}`}
-              onClick={() => onPick(emoji)}
-              className={cn(
-                'flex size-11 items-center justify-center rounded-[10px] border-[1.5px] text-[19px] leading-none outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-bg',
-                on
-                  ? 'border-brand bg-brand-soft'
-                  : 'border-line-strong bg-surface hover:bg-surface-hover',
-              )}
-            >
-              <span aria-hidden>{emoji}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/** Prévia ao vivo do cartão, com rótulo + rodapé (usada no formulário editável). */
-function PreviewCard({ text }: { text: string }) {
   return (
     <div className="flex flex-col gap-2">
       <span className="text-[13px] font-semibold text-ink">{CARTAO_COPY.previaLabel}</span>
-      <PreviewBubble text={text} />
+      <p className="text-[12px] text-ink-soft">{CARTAO_COPY.editorAjuda}</p>
+      {segmentos ? (
+        <EditorBubble segmentos={segmentos} emojis={emojis} onEditar={onEditar} />
+      ) : (
+        <PreviewBubble text={textoFallback} />
+      )}
       <p className="text-[12px] text-ink-soft">{CARTAO_COPY.previaRodape}</p>
     </div>
+  );
+}
+
+/**
+ * Bolha estilo WhatsApp em que cada segmento `tipo:'emoji'` vira um <button> destacado.
+ * Os segmentos vêm PRONTOS do backend (mesma construção da string do runtime) — nunca
+ * localizamos emoji por busca na string, senão o slot errado casaria quando dois campos
+ * usam o mesmo emoji (Samuel tem marca === servico === ✂️).
+ *
+ * Slot desabilitado não emite segmento de emoji (o backend já o rende vazio), então o
+ * botão de REABILITAR aparece na régua abaixo da bolha, não dentro do texto.
+ */
+function EditorBubble({
+  segmentos,
+  emojis,
+  onEditar,
+}: {
+  segmentos: CartaoExemploSegmento[];
+  emojis: CartaoEmojis;
+  onEditar: (slot: CartaoSlot) => void;
+}) {
+  const desligados = CARTAO_SLOTS.filter((s) => isEmojiDisabled(emojis, s));
+  return (
+    <div className="flex flex-col gap-2 rounded-[14px] border border-line bg-surface-sunken p-3">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[16px] rounded-bl-[5px] border border-line bg-surface px-3.5 py-2.5 text-[14px] leading-[1.7] text-ink">
+        {segmentos.map((seg, i) =>
+          seg.tipo === 'emoji' && seg.slot ? (
+            <EmojiBotao
+              // Índice no key: o mesmo slot pode aparecer 2x no cartão e o valor repete.
+              key={`${seg.slot}-${i}`}
+              slot={seg.slot}
+              emoji={seg.valor}
+              onClick={() => seg.slot && onEditar(seg.slot)}
+            />
+          ) : (
+            // biome-ignore lint/suspicious/noArrayIndexKey: segmentos de texto são posicionais e imutáveis
+            <span key={`t-${i}`}>{seg.valor}</span>
+          ),
+        )}
+      </div>
+      {desligados.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11.5px] text-ink-soft">{CARTAO_COPY.desligadosLabel}</span>
+          {desligados.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => onEditar(s)}
+              className="rounded-[8px] border border-dashed border-line-strong bg-surface px-2 py-1 text-[11.5px] text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-bg"
+            >
+              {CARTAO_COPY.slotLabels[s]}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Um emoji do cartão, clicável e visualmente destacado (sinaliza "dá pra editar"). */
+function EmojiBotao({
+  slot,
+  emoji,
+  onClick,
+}: {
+  slot: CartaoSlot;
+  emoji: string;
+  onClick: () => void;
+}) {
+  const label = CARTAO_COPY.slotLabels[slot];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={CARTAO_COPY.emojiBotaoAria(label, emoji)}
+      className="mx-[1px] inline-flex items-center justify-center rounded-[7px] border-[1.5px] border-dashed border-brand/45 bg-brand-soft px-[3px] align-baseline leading-none outline-none transition-colors hover:border-brand hover:bg-brand-soft focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-bg"
+    >
+      <span aria-hidden>{emoji}</span>
+    </button>
   );
 }
 
@@ -443,5 +427,134 @@ function PreviewBubble({ text }: { text: string }) {
         {text}
       </div>
     </div>
+  );
+}
+
+// ── Menu de ação do emoji (editar / desabilitar) ─────────────────────────────────
+
+/**
+ * Sheet que abre ao tocar num emoji do cartão. Duas ações (decisão do Bruno): EDITAR —
+ * abre o campo pro teclado do aparelho — e DESABILITAR (ou REABILITAR, quando o slot já
+ * está desligado).
+ *
+ * ⚠️ Teclado emoji: NÃO existe API web que force o teclado a abrir na aba de emoji (nem
+ * iOS nem Android expõem isso). O campo abre o teclado normal, de onde o usuário toca no
+ * ícone de emoji — por isso a ajuda diz "cole ou digite", sem prometer o que não dá.
+ *
+ * `Overlay variant="sheet"` já traz trap de foco, Esc pra fechar e portal pro body
+ * (não é cortado por ancestral com transform — lição da #538 no mobile).
+ */
+function EmojiActionSheet({
+  slot,
+  emojis,
+  onClose,
+  onEmoji,
+  onDesabilitar,
+}: {
+  slot: CartaoSlot;
+  emojis: CartaoEmojis;
+  onClose: () => void;
+  onEmoji: (emoji: string) => void;
+  onDesabilitar: () => void;
+}) {
+  const label = CARTAO_COPY.slotLabels[slot];
+  const desligado = isEmojiDisabled(emojis, slot);
+  const [editando, setEditando] = useState(false);
+  const [valor, setValor] = useState(desligado ? '' : emojis[slot]);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Erro só depois de digitar algo (não nasce vermelho); vazio ainda não é erro.
+  const vazio = valor.trim() === '';
+  const invalido = !vazio && !isSingleValidEmoji(valor);
+  const podeUsar = !vazio && !invalido;
+
+  function confirmar() {
+    if (!podeUsar) return;
+    onEmoji(valor);
+  }
+
+  return (
+    <Overlay open onClose={onClose} variant="sheet" ariaLabel={CARTAO_COPY.menuTitulo(label)}>
+      <div className="flex flex-col gap-4 p-5">
+        <div>
+          <h3 className="font-display text-[16px] font-semibold text-ink">
+            {CARTAO_COPY.menuTitulo(label)}
+          </h3>
+          {!desligado && (
+            <p className="mt-0.5 text-[13px] text-ink-soft">
+              {CARTAO_COPY.menuAtual} <span aria-hidden>{emojis[slot]}</span>
+            </p>
+          )}
+        </div>
+
+        {editando ? (
+          <div className="flex flex-col gap-2">
+            <label htmlFor="cartao-emoji-input" className="text-[13px] font-semibold text-ink">
+              {CARTAO_COPY.editorCampoLabel}
+            </label>
+            <input
+              id="cartao-emoji-input"
+              ref={inputRef}
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  confirmar();
+                }
+              }}
+              // inputMode="text": o teclado do aparelho abre normal e o usuário acessa o
+              // emoji por ele. Não há como forçar a aba de emoji via web.
+              inputMode="text"
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              // biome-ignore lint/a11y/noAutofocus: sheet dedicado a um único campo; foco imediato é o comportamento esperado no mobile
+              autoFocus
+              aria-invalid={invalido}
+              aria-describedby="cartao-emoji-ajuda"
+              className={cn(
+                'h-12 rounded-[10px] border-[1.5px] bg-surface px-3 text-[20px] leading-none text-ink outline-none transition-colors focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-offset-bg',
+                invalido
+                  ? 'border-danger focus-visible:ring-danger'
+                  : 'border-line-strong focus-visible:ring-brand',
+              )}
+            />
+            <p
+              id="cartao-emoji-ajuda"
+              aria-live="polite"
+              className={cn('text-[12px]', invalido ? 'text-danger' : 'text-ink-soft')}
+            >
+              {invalido ? CARTAO_COPY.editorErroInvalido : CARTAO_COPY.editorCampoAjuda}
+            </p>
+            <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+              <Button type="button" onClick={confirmar} disabled={!podeUsar}>
+                {CARTAO_COPY.editorSalvar}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setEditando(false)}>
+                {CARTAO_COPY.editorCancelar}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <Button type="button" onClick={() => setEditando(true)}>
+              {CARTAO_COPY.menuEditar}
+            </Button>
+            <Button
+              type="button"
+              variant={desligado ? 'secondary' : 'destructive'}
+              onClick={desligado ? () => setEditando(true) : onDesabilitar}
+            >
+              {desligado ? CARTAO_COPY.menuReabilitar : CARTAO_COPY.menuDesabilitar}
+            </Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {CARTAO_COPY.menuFechar}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Overlay>
   );
 }
