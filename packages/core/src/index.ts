@@ -19,6 +19,7 @@ export {
   isFaqPersonalizadoEnabled,
   resolveFaqPersonalizadoEnabled,
 } from './faq-personalizado-gate.js';
+export { FAQ_BLOCK_HEADER, FAQ_BLOCK_HEADER_MARKER } from './faq-block-marker.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { hashEventIdForLog } from './gcal-event-log.js';
 export { resolveNomeNegocio } from './nome-negocio.js';

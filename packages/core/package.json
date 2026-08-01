@@ -18,6 +18,7 @@
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
     "./silence-gate": "./dist/silence-gate.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
+    "./faq-block-marker": "./dist/faq-block-marker.js",
     "./pause-keyword": "./dist/pause-keyword.js",
     "./gcal-event-log": "./dist/gcal-event-log.js",
     "./waha-send-failure": "./dist/waha-send-failure.js",
