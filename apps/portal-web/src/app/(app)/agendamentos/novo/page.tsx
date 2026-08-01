@@ -3,8 +3,9 @@
 /**
  * Novo agendamento (Missão 020 F4, Fluxo B) — o dono marca um horário pra um
  * cliente final SEM passar pelo robô. 4 decisões numa tela só (doc 020 B3):
- * serviço (radio) → dia (strip de 14 dias) → horário (grade SÓ de livres,
- * agrupada manhã/tarde/noite) → nome (+ WhatsApp opcional) → confirmar.
+ * serviço (radio) → dia (strip semanal navegável, horizonte de 365d — Bruno
+ * 31/07) → horário (grade SÓ de livres, agrupada manhã/tarde/noite) → nome
+ * (+ WhatsApp opcional) → confirmar.
  *
  * Estados (020 B4):
  *  - serviços: skeleton / erro+retry / vazio → "Cadastre um serviço primeiro".
@@ -17,7 +18,13 @@
  *
  * Cancelar/remarcar é fase 2 (020 B8) — esta tela só CRIA.
  */
-import { IconCalendar, IconChevronLeft, IconScissors, IconWhatsapp } from '@/components/icons';
+import {
+  IconCalendar,
+  IconChevronLeft,
+  IconChevronRight,
+  IconScissors,
+  IconWhatsapp,
+} from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,10 +39,13 @@ import {
   type NovoAgendamentoErrors,
   addMinutosHora,
   buildCriarAgendamentoBody,
-  buildDayStrip,
+  buildWeekStrip,
   formatDiaCurto,
   formatDiaExtenso,
+  formatIntervaloSemana,
   formatPhoneBR,
+  podeAvancarSemana,
+  podeVoltarSemana,
   validateNovoAgendamento,
 } from '@/lib/novo-agendamento';
 import {
@@ -101,6 +111,8 @@ export default function NovoAgendamentoPage() {
   const [servicoSel, setServicoSel] = useState<string | null>(null);
   const [dataSel, setDataSel] = useState<string | null>(null);
   const [horaSel, setHoraSel] = useState<string | null>(null);
+  /** Semana exibida no strip de Dia (0 = semana atual). Navegação até MAX_AHEAD_DAYS. */
+  const [weekOffset, setWeekOffset] = useState(0);
   const [colaboradorSel, setColaboradorSel] = useState<number | null>(null);
   /** Erro inline do seletor de profissional (obrigatório no estabelecimento). */
   const [colaboradorErro, setColaboradorErro] = useState<string | null>(null);
@@ -125,7 +137,11 @@ export default function NovoAgendamentoPage() {
 
   const servicos = servicosQ.data ?? [];
   const servico = servicos.find((s) => s.nome === servicoSel) ?? null;
-  const strip = useMemo(() => buildDayStrip(horariosQ.data), [horariosQ.data]);
+  const strip = useMemo(
+    () => buildWeekStrip(horariosQ.data, weekOffset),
+    [horariosQ.data, weekOffset],
+  );
+  const intervaloSemana = useMemo(() => formatIntervaloSemana(strip), [strip]);
   // Só ativos podem ser escolhidos (mesma regra da tela de Atendimento).
   const colaboradores = (equipeQ.data?.colaboradores ?? []).filter((c) => c.ativo);
 
@@ -151,6 +167,15 @@ export default function NovoAgendamentoPage() {
     setDataSel(dateKey);
     setHoraSel(null);
     setAviso(null);
+  }
+
+  /** Troca de semana: mesma regra de "muda o contexto → limpa a hora" das trocas de serviço/profissional. */
+  function navegarSemana(delta: 1 | -1) {
+    setWeekOffset((w) => w + delta);
+    if (horaSel) {
+      setHoraSel(null);
+      setAviso('Você trocou de semana — escolha o horário de novo.');
+    }
   }
 
   function selecionarHora(hora: string) {
@@ -323,12 +348,34 @@ export default function NovoAgendamentoPage() {
 
           {/* 2. Dia */}
           <section aria-labelledby="sec-dia">
-            <h2
-              id="sec-dia"
-              className="mx-0.5 mb-2.5 font-display text-[15px] font-semibold text-ink"
-            >
-              Dia
-            </h2>
+            <div className="mx-0.5 mb-2.5 flex items-center justify-between gap-2">
+              <h2 id="sec-dia" className="font-display text-[15px] font-semibold text-ink">
+                Dia
+              </h2>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={!podeVoltarSemana(weekOffset)}
+                  aria-label="Semana anterior"
+                  onClick={() => navegarSemana(-1)}
+                  className="flex size-8 items-center justify-center rounded-full text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <IconChevronLeft size={18} />
+                </button>
+                <span className="min-w-[104px] text-center text-[12.5px] font-medium text-ink-soft">
+                  {intervaloSemana}
+                </span>
+                <button
+                  type="button"
+                  disabled={!podeAvancarSemana(weekOffset)}
+                  aria-label="Próxima semana"
+                  onClick={() => navegarSemana(1)}
+                  className="flex size-8 items-center justify-center rounded-full text-ink-soft outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <IconChevronRight size={18} />
+                </button>
+              </div>
+            </div>
             <div
               role="radiogroup"
               aria-label="Escolha o dia"
@@ -336,13 +383,14 @@ export default function NovoAgendamentoPage() {
             >
               {strip.map((d) => {
                 const ativo = d.dateKey === dataSel;
+                const desabilitado = d.fechado || d.passado || d.foraDaJanela;
                 return (
                   <button
                     key={d.dateKey}
                     type="button"
                     role="radio"
                     aria-checked={ativo}
-                    disabled={d.fechado}
+                    disabled={desabilitado}
                     aria-label={`${d.longo}${d.fechado ? ' — fechado' : ''}`}
                     onClick={() => selecionarDia(d.dateKey)}
                     className={cn(
@@ -350,7 +398,7 @@ export default function NovoAgendamentoPage() {
                       ativo
                         ? 'border-brand bg-brand-soft'
                         : 'border-line bg-surface hover:bg-surface-hover',
-                      d.fechado && 'cursor-not-allowed opacity-45 hover:bg-surface',
+                      desabilitado && 'cursor-not-allowed opacity-45 hover:bg-surface',
                     )}
                   >
                     <span
@@ -370,7 +418,7 @@ export default function NovoAgendamentoPage() {
                       {d.diaNum}
                     </span>
                     <span className="text-[10.5px] text-ink-faint">
-                      {d.fechado ? 'Fechado' : ' '}
+                      {d.fechado ? 'Fechado' : d.passado ? 'Passou' : ' '}
                     </span>
                   </button>
                 );

@@ -3,18 +3,39 @@
  * docs/missoes/020-ux-onboarding-e-agendamento-manual.md).
  *
  * Tudo aqui é função pura e testável (padrão lib/servicos.ts):
- *   - buildDayStrip: os 14 dias do DayStrip (Hoje/Amanhã/dia da semana), com
- *     `fechado` derivado da grade /portal/horarios (dia ausente = fechado —
- *     mesma regra de lib/horarios.ts). Sem a grade carregada, nada é
- *     desabilitado: o GET /portal/agenda/slots responde `aberto:false` e a
- *     tela mostra "fechado nesse dia".
+ *   - buildDayStrip: os 7 dias de UMA semana do strip (Hoje/Amanhã/dia da
+ *     semana), com `fechado` derivado da grade /portal/horarios (dia ausente
+ *     = fechado — mesma regra de lib/horarios.ts). Sem a grade carregada,
+ *     nada é desabilitado: o GET /portal/agenda/slots responde
+ *     `aberto:false` e a tela mostra "fechado nesse dia".
+ *   - buildWeekStrip: navegação por semana (offset em semanas a partir de
+ *     hoje) até o horizonte de MAX_AHEAD_DAYS — troca do strip de 14 dias
+ *     fixo (Bruno 31/07: "por mais que nossa IA passe horário só para um
+ *     determinado período, não quer dizer que já não possa criar pra
+ *     frente" — a Frente 4 de recorrência semanal/mensal/trimestral/
+ *     semestral precisa do horizonte de 1 ano pra semestral gerar mais de 1
+ *     ocorrência útil). Grid de mês foi descartado (caro, sem reuso,
+ *     acessibilidade de grade pior que radiogroup linear).
  *   - máscara/validação do form (nome obrigatório, WhatsApp opcional BR).
  *   - formatação do resumo vivo ("sáb 14/06", "10:00–10:30").
+ *
+ * ⚠️ Assimetria intencional (não é bug): o BOT continua ofertando uma janela
+ * menor que o dono (ver POST_MAX_AHEAD_DAYS no portal-api, hoje bem menor
+ * que este teto de 365 no lado da IA). Decisão do Bruno — o dono pode
+ * marcar pra qualquer ponto no ano; a IA só precisa enxergar um horizonte
+ * mais curto porque, quando o contexto dela chegar lá na frente, o horário
+ * já vai existir na agenda.
  */
 import type { CriarAgendamentoBody, DiaSemana, Horarios, ProductType } from './api-types';
 
-/** Quantos dias o DayStrip mostra (spec B3: hoje + 13). */
-export const DIAS_STRIP = 14;
+/** Quantos dias o strip mostra POR SEMANA (navegação por semana, não grid de mês). */
+export const DIAS_STRIP = 7;
+
+/**
+ * Horizonte máximo de agendamento manual (Bruno 31/07 — decisão final, não
+ * re-questionar): 365 dias. Espelha POST_MAX_AHEAD_DAYS do portal-api.
+ */
+export const MAX_AHEAD_DAYS = 365;
 
 /** Date.getDay() (0=domingo…6=sábado) → chave canônica do contrato /portal/horarios. */
 const GETDAY_TO_DIA: DiaSemana[] = [
@@ -56,6 +77,15 @@ export interface DiaStrip {
   longo: string;
   /** Dia sem expediente na grade de Horários — pill desabilitada. */
   fechado: boolean;
+  /**
+   * Dia anterior a hoje — só aparece em teoria (a navegação por semana não
+   * deixa voltar antes da semana atual, ver podeVoltarSemana), mas o
+   * primitivo marca mesmo assim pra quem quiser reusar buildDayStrip cru.
+   * Pill desabilitada igual `fechado`.
+   */
+  passado: boolean;
+  /** Além do horizonte de MAX_AHEAD_DAYS (365d) — pill desabilitada. */
+  foraDaJanela: boolean;
 }
 
 /** 'YYYY-MM-DD' do dia LOCAL (não UTC — o tenant opera em hora de parede). */
@@ -74,8 +104,12 @@ function diaFechado(horarios: Horarios, dia: DiaSemana): boolean {
 }
 
 /**
- * Os 14 dias do strip a partir de hoje. `horarios` undefined (query pendente ou
- * com erro) → nenhum dia desabilitado (o backend ainda valida no GET/POST).
+ * PRIMITIVO: os DIAS_STRIP (7) dias a partir de `now`, sem noção de semana/
+ * offset/horizonte — quem quiser paginar por semana usa buildWeekStrip.
+ * `passado`/`foraDaJanela` sempre `false` aqui (não há "hoje" de referência
+ * separado do início do strip); vira mês sem pular dia (provado em teste).
+ * `horarios` undefined (query pendente ou com erro) → nenhum dia
+ * desabilitado (o backend ainda valida no GET/POST).
  */
 export function buildDayStrip(horarios: Horarios | undefined, now = new Date()): DiaStrip[] {
   const dias: DiaStrip[] = [];
@@ -89,9 +123,79 @@ export function buildDayStrip(horarios: Horarios | undefined, now = new Date()):
       diaNum: d.getDate(),
       longo: `${WD_LONGO[wd]}, ${d.getDate()} de ${MESES[d.getMonth()]}`,
       fechado: horarios ? diaFechado(horarios, GETDAY_TO_DIA[wd]) : false,
+      passado: false,
+      foraDaJanela: false,
     });
   }
   return dias;
+}
+
+/**
+ * Navegação por semana: pagina o strip em blocos de 7 dias a partir de HOJE
+ * (`hoje`), deslocados por `weekOffset` semanas (0 = semana atual). Decora
+ * o resultado de buildDayStrip com `passado` (antes de hoje — só aparece na
+ * semana 0, dias já virados) e `foraDaJanela` (> hoje + MAX_AHEAD_DAYS).
+ * Ambos desabilitam a pill igual `fechado`; a tela decide o texto exibido.
+ *
+ * `label` só usa "Hoje"/"Amanhã" quando o offset realmente inclui hoje
+ * (semana 0) — em semanas futuras todo dia mostra o nome curto do dia da
+ * semana (não faz sentido dizer "Amanhã" numa semana que não é a atual).
+ */
+export function buildWeekStrip(
+  horarios: Horarios | undefined,
+  weekOffset: number,
+  hoje = new Date(),
+): DiaStrip[] {
+  const inicioSemana = new Date(
+    hoje.getFullYear(),
+    hoje.getMonth(),
+    hoje.getDate() + weekOffset * DIAS_STRIP,
+  );
+  const dias = buildDayStrip(horarios, inicioSemana);
+  const hojeKey = dateKeyLocal(hoje);
+  const limiteKey = dateKeyLocal(
+    new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + MAX_AHEAD_DAYS),
+  );
+  return dias.map((d, i) => {
+    // "Hoje"/"Amanhã" só fazem sentido dentro da semana atual (weekOffset 0,
+    // i 0/1); em qualquer outra semana o dia mostra sempre o nome curto.
+    const wd = (inicioSemana.getDay() + i) % 7;
+    return {
+      ...d,
+      label: weekOffset === 0 ? d.label : WD_CURTO[wd],
+      passado: d.dateKey < hojeKey,
+      foraDaJanela: d.dateKey > limiteKey,
+    };
+  });
+}
+
+/** Semana 0 é o piso — nunca deixa navegar pra trás da semana atual. */
+export function podeVoltarSemana(weekOffset: number): boolean {
+  return weekOffset > 0;
+}
+
+/**
+ * Só avança se a PRÓXIMA semana ainda tiver algum dia dentro do horizonte
+ * (evita página inteira de pills `foraDaJanela` desabilitadas).
+ */
+export function podeAvancarSemana(weekOffset: number): boolean {
+  const primeiroDiaProximaSemana = (weekOffset + 1) * DIAS_STRIP;
+  return primeiroDiaProximaSemana <= MAX_AHEAD_DAYS;
+}
+
+/**
+ * Rótulo do intervalo da semana pro cabeçalho ("9–15 de junho" / "29 de jun–5 de jul"
+ * quando vira o mês). `dias` é o retorno de buildWeekStrip (sempre 7 elementos).
+ */
+export function formatIntervaloSemana(dias: DiaStrip[]): string {
+  const primeiro = parseDateKey(dias[0]?.dateKey ?? '');
+  const ultimo = parseDateKey(dias[dias.length - 1]?.dateKey ?? '');
+  if (!primeiro || !ultimo) return '';
+  const mesmoMes = primeiro.getMonth() === ultimo.getMonth();
+  const inicio = mesmoMes
+    ? `${primeiro.getDate()}`
+    : `${primeiro.getDate()} de ${MESES[primeiro.getMonth()].slice(0, 3)}`;
+  return `${inicio}–${ultimo.getDate()} de ${MESES[ultimo.getMonth()]}`;
 }
 
 /** "sáb, 14 de junho" — cabeçalho da grade de horários livres. */

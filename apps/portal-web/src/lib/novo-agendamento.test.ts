@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest';
 import type { Horarios } from './api-types';
 import {
   DIAS_STRIP,
+  MAX_AHEAD_DAYS,
   addMinutosHora,
   buildCriarAgendamentoBody,
   buildDayStrip,
+  buildWeekStrip,
   dateKeyLocal,
   formatDiaCurto,
   formatDiaExtenso,
+  formatIntervaloSemana,
   formatPhoneBR,
+  podeAvancarSemana,
+  podeVoltarSemana,
   telefoneDigits,
   validateNovoAgendamento,
 } from './novo-agendamento';
@@ -27,13 +32,13 @@ const HORARIOS: Horarios = {
 };
 
 describe('buildDayStrip', () => {
-  it('gera 14 dias a partir de hoje, com Hoje/Amanhã e dateKeys locais', () => {
+  it('gera 7 dias a partir de hoje, com Hoje/Amanhã e dateKeys locais', () => {
     const strip = buildDayStrip(HORARIOS, NOW);
     expect(strip).toHaveLength(DIAS_STRIP);
     expect(strip[0]).toMatchObject({ dateKey: '2026-06-11', label: 'Hoje', diaNum: 11 });
     expect(strip[1]).toMatchObject({ dateKey: '2026-06-12', label: 'Amanhã', diaNum: 12 });
     expect(strip[2]).toMatchObject({ dateKey: '2026-06-13', label: 'Sáb', diaNum: 13 });
-    expect(strip[13].dateKey).toBe('2026-06-24');
+    expect(strip[6].dateKey).toBe('2026-06-17');
   });
 
   it('marca domingo (fechado:true na grade) como fechado', () => {
@@ -67,6 +72,68 @@ describe('buildDayStrip', () => {
     const strip = buildDayStrip(HORARIOS, NOW);
     expect(strip[0].longo).toBe('quinta, 11 de junho');
     expect(strip[2].longo).toBe('sábado, 13 de junho');
+  });
+});
+
+describe('buildWeekStrip (navegação por semana, horizonte 365d)', () => {
+  it('offset 0 é idêntico ao buildDayStrip cru (Hoje/Amanhã, nada passado/fora da janela)', () => {
+    const semana = buildWeekStrip(HORARIOS, 0, NOW);
+    const cru = buildDayStrip(HORARIOS, NOW);
+    expect(semana.map((d) => d.dateKey)).toEqual(cru.map((d) => d.dateKey));
+    expect(semana[0]).toMatchObject({ label: 'Hoje', passado: false, foraDaJanela: false });
+    expect(semana[1]).toMatchObject({ label: 'Amanhã', passado: false, foraDaJanela: false });
+    expect(semana.every((d) => !d.passado && !d.foraDaJanela)).toBe(true);
+  });
+
+  it('offset futuro pula 7*offset dias e nunca rotula Hoje/Amanhã', () => {
+    const semana1 = buildWeekStrip(HORARIOS, 1, NOW);
+    expect(semana1[0].dateKey).toBe('2026-06-18'); // hoje (11/06) + 7
+    expect(semana1.some((d) => d.label === 'Hoje' || d.label === 'Amanhã')).toBe(false);
+    expect(semana1[0].label).toBe('Qui'); // 18/06/2026 é quinta
+  });
+
+  it('offset negativo (semana passada) marca todo dia como passado', () => {
+    const semanaAnterior = buildWeekStrip(HORARIOS, -1, NOW);
+    expect(semanaAnterior[0].dateKey).toBe('2026-06-04');
+    expect(semanaAnterior.every((d) => d.passado)).toBe(true);
+  });
+
+  it('marca foraDaJanela além de hoje + 365 dias', () => {
+    // hoje (11/06/2026) + 365 = 11/06/2027; a semana que cruza essa borda tem
+    // dias dentro e fora do horizonte na mesma pill-row.
+    const semanasAteOLimite = Math.floor(MAX_AHEAD_DAYS / DIAS_STRIP);
+    const semanaDaBorda = buildWeekStrip(HORARIOS, semanasAteOLimite, NOW);
+    expect(semanaDaBorda.some((d) => d.foraDaJanela)).toBe(true);
+    expect(semanaDaBorda.some((d) => !d.foraDaJanela)).toBe(true);
+  });
+});
+
+describe('podeAvancarSemana / podeVoltarSemana', () => {
+  it('não deixa voltar antes da semana atual (offset 0 é o piso)', () => {
+    expect(podeVoltarSemana(0)).toBe(false);
+    expect(podeVoltarSemana(1)).toBe(true);
+  });
+
+  it('deixa avançar enquanto a PRÓXIMA semana tiver algum dia dentro do horizonte', () => {
+    // (weekOffset+1)*DIAS_STRIP <= MAX_AHEAD_DAYS → último offset válido = 51
+    // (52*7=364<=365) e o primeiro inválido = 52 (53*7=371>365).
+    const ultimaSemanaValida = Math.floor(MAX_AHEAD_DAYS / DIAS_STRIP) - 1;
+    expect(podeAvancarSemana(ultimaSemanaValida)).toBe(true);
+    const primeiraSemanaTotalmenteFora = Math.floor(MAX_AHEAD_DAYS / DIAS_STRIP);
+    expect(podeAvancarSemana(primeiraSemanaTotalmenteFora)).toBe(false);
+  });
+});
+
+describe('formatIntervaloSemana', () => {
+  it('mesmo mês: "11–17 de junho"', () => {
+    const semana = buildWeekStrip(HORARIOS, 0, NOW);
+    expect(formatIntervaloSemana(semana)).toBe('11–17 de junho');
+  });
+
+  it('virando o mês: "29 de jun–5 de julho"', () => {
+    const fimDeMes = new Date(2026, 5, 29, 10, 0); // 29/jun/2026 (segunda)
+    const semana = buildWeekStrip(HORARIOS, 0, fimDeMes);
+    expect(formatIntervaloSemana(semana)).toBe('29 de jun–5 de julho');
   });
 });
 

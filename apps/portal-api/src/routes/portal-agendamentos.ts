@@ -50,7 +50,7 @@ const DEFAULT_AHEAD = 14;
 const MAX_EVENTS = 50;
 
 const pastDaysQuery = z.coerce.number().int().min(0).max(30).default(DEFAULT_PAST);
-const aheadDaysQuery = z.coerce.number().int().min(1).max(60).default(DEFAULT_AHEAD);
+const aheadDaysQuery = z.coerce.number().int().min(1).max(365).default(DEFAULT_AHEAD);
 
 interface AgendamentoOut {
   id: string;
@@ -80,8 +80,14 @@ interface AgendamentoOut {
 
 /** Piso pra HOJE: não aceitar slot que começa em menos de 10min (regra do bot). */
 const POST_TODAY_FLOOR_MIN = 10;
-/** Mesmo limite do GET /portal/agenda/slots. */
-const POST_MAX_AHEAD_DAYS = 60;
+/**
+ * Mesmo limite do GET /portal/agenda/slots. Teto = 365 dias (Bruno 31/07):
+ * "por mais que nossa IA passe horário só para um determinado período, não
+ * quer dizer que já não possa criar para frente" — a Frente 4 (recorrência
+ * semanal/mensal/trimestral/semestral) também precisa do horizonte de 1 ano
+ * pra semestral gerar mais de 1 ocorrência útil.
+ */
+const POST_MAX_AHEAD_DAYS = 365;
 
 // Delega INTEIRAMENTE a normalizeClientePhone (@startap/core/agenda-summary ->
 // ensureDddBr, ADR 0028): garante DDI 55 + valida DDD contra whitelist Anatel,
@@ -738,7 +744,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   /** Quanto pra trás re-listar na validação de pertencimento (cobre passados recentes). */
   const DELETE_LOOKBACK_DAYS = 7;
   /** Quanto pra frente re-listar (alinha ao teto de agendamento de 60d). */
-  const DELETE_LOOKAHEAD_DAYS = 60;
+  const DELETE_LOOKAHEAD_DAYS = 365;
   /** eventId do GCal: alfanumérico (base32hex). Sanidade leve antes de ir ao GCal. */
   const eventIdParam = z.object({
     eventId: z
