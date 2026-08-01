@@ -1,7 +1,6 @@
 'use client';
 
 import { IconCheck } from '@/components/icons';
-import { PlanosSection } from '@/components/planos/planos-section';
 import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
@@ -28,9 +27,16 @@ import { qk, usePerfil, useSavePerfil } from '@/lib/queries';
  * "Meu negócio" / Dados (sub-aba `/negocio/dados`, SCRUM-157). Extraído do
  * antigo `(app)/perfil/page.tsx` (mega-página com mini-nav de âncoras) — SÓ o
  * grupo "Dados do negócio": form principal (nome, prestador, telefone,
- * endereço, instagram, fuso, formas de pagamento) + Planos + Recepção. Os
- * outros 2 grupos da extinta página viraram `/negocio/agenda` e as abas de
- * "Meu atendente" (`/atendente/*`).
+ * endereço, instagram, fuso, formas de pagamento) + Recepção. Os outros 2
+ * grupos da extinta página viraram `/negocio/agenda` e as abas de "Meu
+ * atendente" (`/atendente/*`).
+ *
+ * ⚠️ "Planos e assinaturas" (SCRUM-59) foi removido daqui (SCRUM-160, 01/08):
+ * o campo saiu do portal e o conteúdo passa a se configurar conversando com a
+ * IA do builder (mesma receita do FAQ, PRs #552/#555/#554/#562). O backend
+ * (`planos_beneficios`) segue vivo no formato TRI-STATE até a migração
+ * (`scripts/migrate-planos-para-prompt.ts`) rodar — esta PR só sai da fila de
+ * merge DEPOIS da migração da Ingrid em prod.
  *
  * 🔴 O bloco de save otimista abaixo (estado draft/saved/timezone/savedTz,
  * refs touched/tzTouched, onSubmit) é CORTA-E-COLA do `perfil/page.tsx`
@@ -196,7 +202,7 @@ export default function NegocioDadosPage() {
   // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
   // central (`UnsavedChangesProvider`, montado no layout do (app)) — troca de
   // sub-aba/menu/voltar com `dirty` sobe o diálogo de 3 saídas, cobrindo TODAS
-  // as seções sujas da tela (Planos/Recepção têm seus próprios registros).
+  // as seções sujas da tela (Recepção tem seu próprio registro).
   // "Salvar e sair" reusa `submitPerfil` — reject (validação/erro) cancela a
   // navegação; resolve libera.
   useRegistrarNaoSalvo('Dados do negócio', dirty, submitPerfil);
@@ -290,12 +296,6 @@ export default function NegocioDadosPage() {
           </p>
         </form>
       )}
-
-      {/* Planos e assinaturas (Onda 1, SCRUM-68 — DE-GATE): texto livre que alimenta o
-          contexto do bot. Passa a aparecer pra TODOS os formatos (o bot já renderiza
-          planos em [NEGOCIO] sem gate); só destravamos a edição no portal. Traz o próprio
-          divisor. */}
-      <PlanosSection />
 
       {/* WhatsApp da recepção (Onda 1, SCRUM-68): destino dos avisos ao dono
           (alert_owner_phone). DE-GATE — editável por TODOS os formatos (saiu da

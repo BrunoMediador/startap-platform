@@ -436,7 +436,7 @@ describe('fuso por clone — formatarAgendaComConfig (Cuiabá UTC-4)', () => {
   });
 });
 
-describe('buildContextBlock — planos_beneficios (SCRUM-59)', () => {
+describe('buildContextBlock — planos_beneficios REMOVIDO do rótulo dedicado (SCRUM-160, 01/08)', () => {
   const baseOpts = {
     slot: 'clone_meduzza',
     nomeCliente: 'Fulano',
@@ -455,22 +455,28 @@ describe('buildContextBlock — planos_beneficios (SCRUM-59)', () => {
     };
   }
 
-  it('planos preenchido -> aparece rotulado "Planos e assinaturas" no contexto', async () => {
-    mockGetCloneBySlot.mockResolvedValue(
-      cloneWith({
-        nome_negocio: 'Meduzza',
-        planos_beneficios: 'Plano Mensal R$99: corte ilimitado.',
-      }) as never,
-    );
-    const ctx = await buildContextBlock(baseOpts);
-    expect(ctx).toContain('Planos e assinaturas: Plano Mensal R$99: corte ilimitado.');
-  });
-
   it('planos AUSENTE -> contexto não menciona planos (byte-a-byte p/ quem não preencheu)', async () => {
     mockGetCloneBySlot.mockResolvedValue(cloneWith({ nome_negocio: 'Cirilo' }) as never);
     const ctx = await buildContextBlock(baseOpts);
     expect(ctx).not.toContain('Planos e assinaturas');
     expect(ctx).not.toMatch(/planos/i);
+  });
+
+  it('RISCO CONHECIDO documentado: se a chave ainda existir no JSONB (pré-migração), o texto ' +
+    'vaza SEM rótulo pelo catch-all [OBSERVACOES] — por isso este código só entra em prod ' +
+    'DEPOIS da migração da Ingrid remover a chave (ver comentário acima de _PERS_LABELS)', async () => {
+    mockGetCloneBySlot.mockResolvedValue(
+      cloneWith({
+        nome_negocio: 'Ingrid',
+        planos_beneficios: 'Plano Mensal R$99: corte ilimitado.',
+      }) as never,
+    );
+    const ctx = await buildContextBlock(baseOpts);
+    // NÃO tem mais o rótulo dedicado "Planos e assinaturas" — a chave não está em _PERS_LABELS.
+    expect(ctx).not.toContain('Planos e assinaturas');
+    // MAS o texto ainda aparece (humanizado) no catch-all, provando que a chave PRECISA sumir
+    // do JSONB antes deste deploy — não é responsabilidade deste bloco de código.
+    expect(ctx).toContain('Planos Beneficios: Plano Mensal R$99: corte ilimitado.');
   });
 
   it('planos vazio ("") -> omitido (não vira linha vazia no contexto)', async () => {
@@ -479,6 +485,7 @@ describe('buildContextBlock — planos_beneficios (SCRUM-59)', () => {
     );
     const ctx = await buildContextBlock(baseOpts);
     expect(ctx).not.toContain('Planos e assinaturas');
+    expect(ctx).not.toMatch(/planos/i);
   });
 
   it('chave com valor ESTRUTURADO (array/objeto) nunca vira linha de [OBSERVACOES] — nem "[object Object]"', async () => {

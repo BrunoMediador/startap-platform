@@ -63,7 +63,6 @@ import type {
   PausasResponse,
   PerfilNegocio,
   PerfilResponse,
-  PlanosConfig,
   PreviewRecorrenciaBody,
   PreviewRecorrenciaResponse,
   QrResponse,
@@ -106,8 +105,6 @@ export const qk = {
   perfil: (slot: string) => ['perfil', slot] as const,
   /** Config de Agendamento (modo atendente) — derivada do GET /portal/perfil. */
   agendaConfig: (slot: string) => ['agenda-config', slot] as const,
-  /** Config de Planos (modo atendente) — derivada do GET /portal/perfil. */
-  planosConfig: (slot: string) => ['planos-config', slot] as const,
   /** Gates de "Meu atendente" (prompt_builder/sandbox, SCRUM-157) — derivados do GET /portal/perfil. */
   atendenteFeatures: (slot: string) => ['atendente-features', slot] as const,
   horarios: (slot: string) => ['horarios', slot] as const,
@@ -510,25 +507,6 @@ export function useAgendaConfig(slot: string): UseQueryResult<AgendaConfig> {
   });
 }
 
-// ── Planos e assinaturas / modo atendente (SCRUM-59) ─────────────────────────
-//
-// Deriva do MESMO GET/PUT /portal/perfil, numa query própria (qk.planosConfig) pra NÃO
-// tocar no cache/otimista do formulário principal do perfil (regressão zero pros
-// clientes atuais). A seção só renderiza quando `modo_atendente` é true (por-clone via
-// MODO_ATENDENTE_SLOTS — NÃO é flag global). Campo ausente no GET (feature off) -> ''.
-
-export function usePlanosConfig(slot: string): UseQueryResult<PlanosConfig> {
-  return useQuery({
-    queryKey: qk.planosConfig(slot),
-    queryFn: ({ signal }) =>
-      apiFetch<PerfilResponse>('/portal/perfil', { signal }).then((r) => ({
-        modo_atendente: r.features?.modo_atendente === true,
-        planos_beneficios:
-          typeof r.perfil?.planos_beneficios === 'string' ? r.perfil.planos_beneficios : '',
-      })),
-  });
-}
-
 /**
  * PUT parcial /portal/perfil com os campos da seção Agendamento: `{ perfil:
  * { agenda_automatica, link_agendamento }, recepcao_telefone? }`. O `perfil` é merge
@@ -608,35 +586,11 @@ export function useSaveRecepcao(
   });
 }
 
-/**
- * PUT parcial /portal/perfil só com `{ perfil: { planos_beneficios } }`. Merge parcial no
- * backend (chave ausente = não toca); '' LIMPA. Os demais campos do perfil ficam intactos.
- */
-export function useSavePlanos(
-  slot: string,
-): UseMutationResult<PerfilNegocio, Error, { planos_beneficios: string }> {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (input) =>
-      apiFetch<SavePerfilResponse>('/portal/perfil', {
-        method: 'PUT',
-        body: { perfil: input },
-      }).then((r) => r.perfil),
-    onSuccess: (perfil) => {
-      client.setQueryData(qk.planosConfig(slot), (prev: PlanosConfig | undefined) => ({
-        modo_atendente: prev?.modo_atendente ?? true,
-        planos_beneficios:
-          typeof perfil.planos_beneficios === 'string' ? perfil.planos_beneficios : '',
-      }));
-    },
-  });
-}
-
 // ── Gate das abas de "Meu atendente" (SCRUM-157) ─────────────────────────────
 //
 // Deriva do MESMO GET /portal/perfil, numa query própria (qk.atendenteFeatures) pra
 // NÃO tocar no cache/otimista do formulário principal do perfil — mesma isolação de
-// agendaConfig/planosConfig. Expõe os 2 gates GLOBAIS (prompt_builder, sandbox, #541)
+// agendaConfig. Expõe os 2 gates GLOBAIS (prompt_builder, sandbox, #541)
 // usados pelo layout de `/atendente/*` pra montar o NavGateContext ANTES de navegar
 // (o gate real de cada seção, por 404, continua no componente).
 //

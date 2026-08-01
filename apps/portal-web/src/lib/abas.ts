@@ -54,7 +54,6 @@ export interface AbaSpec extends NavItemSpec {
 export type SecaoKey =
   // "Meu negócio" / Dados
   | 'dados-negocio' // form principal (nome, contato, endereço, fuso, formas de pagamento)
-  | 'planos' // Planos e assinaturas (texto livre)
   | 'recepcao' // WhatsApp da recepção (destino dos avisos ao dono)
   // "Meu atendente" / Personalidade
   | 'monte-assistente' // Monte seu atendente (builder conversacional)
@@ -68,7 +67,6 @@ export type SecaoKey =
 /** Todas as seções, na ordem em que apareciam na extinta mega-página (SCRUM-98). */
 export const TODAS_SECOES: readonly SecaoKey[] = [
   'dados-negocio',
-  'planos',
   'recepcao',
   'monte-assistente',
   'tom',
@@ -80,7 +78,9 @@ export const TODAS_SECOES: readonly SecaoKey[] = [
 
 /**
  * Sub-abas de "Meu negócio", na ordem de exibição.
- *  - 'negocio-dados': dados-negocio + planos + recepção (sempre visível, sem gate).
+ *  - 'negocio-dados': dados-negocio + recepção (sempre visível, sem gate). "Planos e
+ *    assinaturas" (SCRUM-59) saiu daqui em SCRUM-160 (01/08) — conteúdo passa a viver
+ *    no prompt via IA, mesma receita do FAQ (#554).
  *  - 'negocio-servicos' / 'negocio-horarios': Serviços/Horários que saíram do
  *    menu de topo — sempre visíveis (nenhum gate as escondia lá).
  *  - 'negocio-equipe': só estabelecimento (era gate do item "Equipe" no menu).
@@ -158,7 +158,6 @@ export const TODAS_ABAS: readonly AbaSpec[] = [...NEGOCIO_ABAS, ...ATENDENTE_ABA
 const SECAO_PARA_ABA: Record<SecaoKey, AbaKey> = {
   // Grupo "Dados do negócio" -> aba "Dados"
   'dados-negocio': 'negocio-dados',
-  planos: 'negocio-dados',
   recepcao: 'negocio-dados',
   // Grupo "Personalidade do seu atendente" -> "Meu atendente"
   'monte-assistente': 'atendente-personalidade',

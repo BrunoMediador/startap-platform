@@ -45,10 +45,9 @@ describe('getPerfilBySlot', () => {
       endereco: '',
       instagram: 'edubarber',
       formas_pagamento: [],
-      // SCRUM-59: ausente -> agenda automática ON (comportamento atual); link/planos vazios.
+      // SCRUM-59: ausente -> agenda automática ON (comportamento atual); link vazio.
       agenda_automatica: true,
       link_agendamento: '',
-      planos_beneficios: '',
     });
     // slot vai parametrizado ($1), nunca interpolado.
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE slot = $1'), [SLOT]);
@@ -215,25 +214,7 @@ describe('updatePerfilBySlot', () => {
     expect(merged.agenda_automatica).toBe('false'); // preservado
   });
 
-  it('SCRUM-59: planos_beneficios (texto) faz round-trip como STRING no personalizacao', async () => {
-    const captured = armMocks({ observacoes_gerais: 'Estacionamento' });
-    await updatePerfilBySlot(SLOT, {
-      planos_beneficios: 'Plano Mensal R$99: corte ilimitado.',
-    });
-    const merged = JSON.parse(captured.mergedJson ?? '{}');
-    expect(merged.planos_beneficios).toBe('Plano Mensal R$99: corte ilimitado.');
-    // MERGE preserva outras chaves.
-    expect(merged.observacoes_gerais).toBe('Estacionamento');
-  });
-
-  it('SCRUM-59: planos_beneficios ausente (undefined) NÃO toca a chave', async () => {
-    const captured = armMocks({ planos_beneficios: 'Plano antigo' });
-    await updatePerfilBySlot(SLOT, { nome_negocio: 'X' });
-    const merged = JSON.parse(captured.mergedJson ?? '{}');
-    expect(merged.planos_beneficios).toBe('Plano antigo'); // preservado
-  });
-
-  // ── SCRUM-75: link_agendamento / planos_beneficios — '' LIMPA (remove a chave do JSONB) ──
+  // ── SCRUM-75: link_agendamento — '' LIMPA (remove a chave do JSONB) ──
   it('SCRUM-75: link_agendamento "" REMOVE a chave do JSONB (limpar, não persiste "")', async () => {
     const captured = armMocks({
       link_agendamento: 'https://booksy.com/antigo',
@@ -263,14 +244,29 @@ describe('updatePerfilBySlot', () => {
     expect(merged.link_agendamento).toBe('https://booksy.com/antigo'); // preservado
   });
 
-  it('SCRUM-75: planos_beneficios "" REMOVE a chave do JSONB (limpar)', async () => {
+  it('SCRUM-160: planos_beneficios NÃO é mais tocado pelo merge (chave saiu de PERFIL_KEYS) — ' +
+    'nem grava valor novo, nem apaga o que já está no banco (não é responsabilidade deste ' +
+    'path; a remoção da chave em prod é feita pela migração, não pelo save do perfil)', async () => {
     const captured = armMocks({
+      // Simula o estado ANTES da migração rodar (ex.: Ingrid, único clone com a chave em prod):
+      // o JSONB já tem planos_beneficios preenchido.
       planos_beneficios: 'Plano Mensal R$99',
       observacoes_gerais: 'Estacionamento',
     });
-    await updatePerfilBySlot(SLOT, { planos_beneficios: '' });
+    // `as` simula um caller legado/desatualizado ainda mandando a chave (o schema .strict() do
+    // portal-api já barraria isso a montante com 400 — este teste prova a 2ª camada de defesa,
+    // no data layer, caso algo chegue aqui mesmo assim).
+    await updatePerfilBySlot(SLOT, {
+      nome_negocio: 'Novo Nome',
+      planos_beneficios: 'tentativa de reintroduzir',
+    } as Parameters<typeof updatePerfilBySlot>[1]);
     const merged = JSON.parse(captured.mergedJson ?? '{}');
-    expect('planos_beneficios' in merged).toBe(false);
+    // Chave enviada no perfil FOI atualizada normalmente...
+    expect(merged.nome_negocio).toBe('Novo Nome');
+    // ...mas planos_beneficios não está em PERFIL_KEYS -> o loop de merge nunca a lê nem escreve.
+    // O valor PREEXISTENTE no banco (pré-migração) sobrevive intacto — nem apagado, nem
+    // sobrescrito pelo valor "tentativa de reintroduzir" do payload.
+    expect(merged.planos_beneficios).toBe('Plano Mensal R$99');
     expect(merged.observacoes_gerais).toBe('Estacionamento');
   });
 

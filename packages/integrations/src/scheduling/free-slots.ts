@@ -250,10 +250,18 @@ const _PERS_LABELS: Record<string, string> = {
   // [NEGOCIO]. Vazio/ausente e omitido (byte-identico p/ clones sem link). O bot atendente
   // entrega esse link no fim do funil; clones com agenda automatica normalmente nao o tem.
   link_agendamento: 'Link de agendamento',
-  // Planos/assinaturas/benefícios (pedido do cliente Meduzza, SCRUM-59). Texto livre multi-linha,
-  // rotulado no contexto do LLM. Vazio/ausente é omitido (byte-idêntico p/ clones sem planos).
-  planos_beneficios: 'Planos e assinaturas',
 };
+
+// ⚠️ "Planos e assinaturas" (planos_beneficios, SCRUM-59) foi REMOVIDO daqui em SCRUM-160
+// (01/08) — o rótulo saiu do [NEGOCIO], o conteúdo passa a viver no bot_prompt via IA (mesma
+// receita do FAQ, #562). RISCO CONHECIDO herdado do FAQ (ver migracao-remove-chave-jsonb-
+// ressuscita na memória do time): se a chave `planos_beneficios` AINDA estiver presente no
+// JSONB `personalizacao` de algum clone quando este código for deployado, o conteúdo NÃO
+// desaparece do contexto do bot — ele cai no catch-all [OBSERVACOES E DADOS EXTRAS] abaixo
+// (é string simples, passa pelo guard de "valor estruturado"), só que agora SEM o rótulo "Planos
+// e assinaturas". Por isso este arquivo só pode ir a produção DEPOIS que a migração
+// (scripts/migrate-planos-para-prompt.ts --apply) já tiver removido a chave do JSONB da Ingrid
+// (único clone em prod com planos_beneficios preenchido, medido 01/08) — nunca antes.
 
 /**
  * Chaves de personalizacao que sao FLAGS DE CONTROLE (nao dados de negocio) e NUNCA
