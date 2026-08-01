@@ -94,7 +94,6 @@ const cfg = {
   PACOTES_ENABLED: false,
   ATEND_FROM_AGENDA_SLOTS: '',
   MODO_ATENDENTE_SLOTS: '',
-  FAQ_PERSONALIZADO_SLOTS: '',
   CARTAO_RUNTIME_ENABLED: true, // caminho novo LIGADO neste arquivo
 };
 vi.mock('../config.js', () => ({ config: cfg }));

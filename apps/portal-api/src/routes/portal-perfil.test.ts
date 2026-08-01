@@ -15,7 +15,6 @@ const cfgMock = vi.hoisted(() => ({
   REDIS_PORT: 6379,
   REDIS_PASSWORD: '',
   MODO_ATENDENTE_SLOTS: '',
-  FAQ_PERSONALIZADO_SLOTS: '',
   // Globais (não por-slot) — gate das ABAS prompt_builder/sandbox (SCRUM-157). Mutável por teste.
   PROMPT_BUILDER_ENABLED: false,
   SANDBOX_ENABLED: false,
@@ -48,7 +47,7 @@ const {
   isAwaitingAgendaConnectionMock: vi.fn(),
   isAgendaConfiguradaBySlotMock: vi.fn(),
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por
-  // env (cfgMock.MODO_ATENDENTE_SLOTS / FAQ_PERSONALIZADO_SLOTS); byte-idêntico ao gate de antes.
+  // env (cfgMock.MODO_ATENDENTE_SLOTS); byte-idêntico ao gate de antes.
   csvGateMock: (slot: string, csv?: string | null): boolean => {
     if (!csv) return false;
     const e = csv
@@ -70,8 +69,6 @@ vi.mock('@startap/db', () => ({
     updateAlertOwnerPhoneBySlot: (...a: unknown[]) => updateAlertOwnerPhoneBySlotMock(...a),
     clearAlertOwnerPhoneBySlot: (...a: unknown[]) => clearAlertOwnerPhoneBySlotMock(...a),
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
-      csvGateMock(slot, csv),
-    resolveFaqPersonalizadoEnabledForSlot: (slot: string, csv?: string | null) =>
       csvGateMock(slot, csv),
     isAwaitingAgendaConnection: (...a: unknown[]) => isAwaitingAgendaConnectionMock(...a),
     isAgendaConfiguradaBySlot: (...a: unknown[]) => isAgendaConfiguradaBySlotMock(...a),
@@ -117,8 +114,6 @@ beforeEach(() => {
   updateTimezoneBySlotMock.mockResolvedValue(true);
   // Default: modo atendente OFF pra todos (byte-a-byte). Testes específicos ligam.
   cfgMock.MODO_ATENDENTE_SLOTS = '';
-  // Default: FAQ personalizado OFF pra todos (byte-a-byte). Testes específicos ligam.
-  cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
   // Default: prompt_builder/sandbox OFF (byte-a-byte). Testes específicos ligam.
   cfgMock.PROMPT_BUILDER_ENABLED = false;
   cfgMock.SANDBOX_ENABLED = false;
@@ -178,7 +173,6 @@ describe('GET /portal/perfil', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().features).toEqual({
       modo_atendente: false,
-      faq_personalizado: false,
       agenda_configurada: false,
       prompt_builder: false,
       sandbox: false,
@@ -979,7 +973,6 @@ describe('PUT recepcao-only SEM envelope `perfil` (contrato useSaveRecepcao — 
 describe('planos_beneficios (universal, todos os formatos)', () => {
   it('PUT: clone INDIVIDUAL (modo OFF) SALVA planos_beneficios (200)', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = '';
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
     updatePerfilBySlotMock.mockResolvedValue(true);
     getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
@@ -1105,200 +1098,6 @@ describe('link_agendamento — limpar / alterar (SCRUM-75)', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('perfil invalido');
     expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-});
-
-// ════════════════════════════════════════════════════════════════════════════════
-// SCRUM-65: FAQ personalizado (features + validação + gate por-clone)
-// ════════════════════════════════════════════════════════════════════════════════
-
-describe('faq_personalizado (GET features / PUT validação + gate)', () => {
-  const FAQ_OK = [
-    { pergunta: 'Vocês têm estacionamento?', resposta: 'Sim, gratuito na lateral do prédio.' },
-    { pergunta: 'Aceitam pix?', resposta: 'Aceitamos.' },
-  ];
-
-  it('GET: features.faq_personalizado=false por default (clientes atuais não veem a seção)', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().features.faq_personalizado).toBe(false);
-    await app.close();
-  });
-
-  it('GET: features.faq_personalizado=true SÓ quando o slot da sessão está no gate', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().features.faq_personalizado).toBe(true);
-    await app.close();
-  });
-
-  it('GET: gate ligado em OUTRO slot NÃO liga a feature pro slot da sessão (isolado por-clone)', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = 'clone_de_OUTRO_cliente';
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({ method: 'GET', url: '/portal/perfil' });
-
-    expect(res.json().features.faq_personalizado).toBe(false);
-    await app.close();
-  });
-
-  it('PUT: com o gate ON, grava faq_personalizado válido no slot da SESSÃO', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: FAQ_OK } },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
-      injectedSlot,
-      expect.objectContaining({ faq_personalizado: FAQ_OK }),
-    );
-    await app.close();
-  });
-
-  it('PUT: com o gate OFF, tentar setar faq_personalizado => 404 indisponivel, NÃO grava', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: FAQ_OK } },
-    });
-
-    expect(res.statusCode).toBe(404);
-    expect(res.json().error).toBe('faq_personalizado_indisponivel');
-    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('PUT: gate OFF mas SEM a chave faq_personalizado -> 200 byte-a-byte (não recusa)', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = '';
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { nome_negocio: 'X' } },
-    });
-
-    expect(res.statusCode).toBe(200);
-    await app.close();
-  });
-
-  it('PUT: 11 pares -> 400 perfil invalido (max 10), NÃO grava (mesmo com gate ON)', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    const app = await buildApp();
-
-    const onze = Array.from({ length: 11 }, (_, i) => ({
-      pergunta: `P${i}`,
-      resposta: `R${i}`,
-    }));
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: onze } },
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('perfil invalido');
-    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('PUT: par com 1 lado vazio é DESCARTADO no preprocess (não é erro); sobra o válido', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: {
-        perfil: {
-          faq_personalizado: [
-            { pergunta: 'Aceitam pix?', resposta: 'Sim.' },
-            { pergunta: '  ', resposta: 'orfão sem pergunta' }, // descartado
-            { pergunta: 'e este?', resposta: '   ' }, // descartado
-          ],
-        },
-      },
-    });
-
-    expect(res.statusCode).toBe(200);
-    const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(dataArg.faq_personalizado).toEqual([{ pergunta: 'Aceitam pix?', resposta: 'Sim.' }]);
-    await app.close();
-  });
-
-  it('PUT: pergunta acima de 120 chars -> 400, NÃO grava', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: [{ pergunta: 'x'.repeat(121), resposta: 'ok' }] } },
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('perfil invalido');
-    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('PUT: resposta acima de 300 chars -> 400, NÃO grava', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: [{ pergunta: 'ok', resposta: 'y'.repeat(301) }] } },
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('perfil invalido');
-    expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('PUT: [] limpa o FAQ (gate ON) — grava array vazio', async () => {
-    cfgMock.FAQ_PERSONALIZADO_SLOTS = injectedSlot;
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { faq_personalizado: [] } },
-    });
-
-    expect(res.statusCode).toBe(200);
-    const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(dataArg.faq_personalizado).toEqual([]);
     await app.close();
   });
 });

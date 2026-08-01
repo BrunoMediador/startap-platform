@@ -11,8 +11,6 @@
  * O bot deve tratar esse erro e silenciar a resposta ao cliente (não enviar
  * horários fictícios de uma barbearia que não é a do cliente).
  */
-import { FAQ_BLOCK_HEADER as _FAQ_BLOCK_HEADER_SRC } from '@startap/core/faq-block-marker';
-import { resolveFaqPersonalizadoEnabled } from '@startap/core/faq-personalizado-gate';
 import type { HorariosFuncionamento, ServicoConfig } from '@startap/db';
 import { flowClones, query } from '@startap/db';
 import type { CalendarEvent } from '../google-calendar/client.js';
@@ -236,19 +234,6 @@ interface ContextBlockOpts {
    * Quando presente, injeta bloco [ESTADO DA CONVERSA] no contexto.
    */
   estadoConversa?: string;
-  /**
-   * FAQ personalizado (SCRUM-65) — gate POR-CLONE. Valor CRU de `config.FAQ_PERSONALIZADO_SLOTS`
-   * (CSV) passado pelos apps; avaliado aqui com resolveFaqPersonalizadoEnabled(slot, ...). Ausente/OFF
-   * pro slot => o bloco [PERGUNTAS FREQUENTES...] NAO e injetado (byte-a-byte pros clones de fora
-   * do gate). ON + faq preenchido => bloco entre [OBSERVACOES] e [FUNCIONAMENTO].
-   */
-  faqSlotsConfig?: string;
-  /**
-   * Eixo COLUNA da resolução env→coluna (ADR 0030 D1): `flow_clones.faq_personalizado_enabled`
-   * do clone. O efetivo é a UNIÃO env||coluna. Passado pelo caller (que já carrega o clone);
-   * ausente => só o env decide (byte-a-byte — hoje o env é '*', então cobre todos).
-   */
-  faqColumnEnabled?: boolean;
 }
 
 // Campos da personalizacao com label especifico no bloco [NEGOCIO].
@@ -278,100 +263,9 @@ const _PERS_LABELS: Record<string, string> = {
  */
 const _PERS_CONTROL_KEYS = new Set<string>(['agenda_automatica']);
 
-/**
- * Chaves de personalizacao com valor ESTRUTURADO (nao-string) que tem render PROPRIO e por isso
- * NUNCA devem cair no loop generico do bloco [OBSERVACOES] — la `String(valor)` de um array viraria
- * '[object Object],[object Object]' e poluiria o contexto. `faq_personalizado` (SCRUM-65) e um array
- * de {pergunta,resposta} com bloco dedicado (renderFaqBlock). Byte-a-byte pros clones sem a chave.
- */
-const _PERS_STRUCTURED_KEYS = new Set<string>(['faq_personalizado']);
-
 function humanizarChave(key: string): string {
   // 'horario_feriado' -> 'Horario feriado'
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// ---- FAQ personalizado (SCRUM-65) — bloco [PERGUNTAS FREQUENTES...] ----------
-// O dono cadastra ate 10 pares P/R no portal; injetados como DADOS de referencia (nao instrucoes)
-// no contexto do bot. Guardrail em 4 camadas (spec ai-engineer): (1) neutralizacao ESTRUTURAL —
-// cada P e R e colapsada em UMA linha (chars de controle -> espaco, whitespace colapsado, trim) +
-// slice defensivo, entao o dono NAO consegue forjar um bloco falso ou jailbreak multi-linha;
-// (2) framing explicito no header; (3) sem moderacao de conteudo (claim comercial e responsabilidade
-// do dono); (4) header manda nao inventar quando nada casa. Sem PII nova (dado autoral do negocio).
-
-const FAQ_MAX_ITEMS = 10;
-const FAQ_PERGUNTA_MAX = 120;
-const FAQ_RESPOSTA_MAX = 300;
-
-export interface FaqPair {
-  pergunta: string;
-  resposta: string;
-}
-
-/**
- * Colapsa o texto em UMA LINHA: remove chars de controle (inclui \n \r \t), junta qualquer
- * sequencia de whitespace num espaco unico e trima. Camada mais forte do guardrail — prende
- * o texto do dono dentro de uma linha P:/R:, estruturalmente incapaz de "sair" do bloco.
- */
-function sanitizeFaqLine(s: string): string {
-  // Troca cada char de controle (C0 0x00-0x1F + DEL 0x7F, inclui \n \r \t) por espaco via
-  // codepoint — evita regex com control-char literal (lint) e o resto do texto passa intacto.
-  let out = '';
-  for (const ch of s) {
-    const code = ch.codePointAt(0) ?? 0;
-    out += code < 0x20 || code === 0x7f ? ' ' : ch;
-  }
-  // Colapsa qualquer sequencia de whitespace num espaco unico e trima.
-  return out.replace(/\s+/g, ' ').trim();
-}
-
-/**
- * Narrow + sanitiza o valor cru de personalizacao.faq_personalizado num array de pares limpos.
- * Defesa em profundidade (mesmo o schema ja validando): filtra shape torto, sanitiza cada linha,
- * aplica slice defensivo nos limites (caso o gestao legado grave cru) e capa em 10 itens.
- */
-export function narrowFaqPairs(raw: unknown): FaqPair[] {
-  if (!Array.isArray(raw)) return [];
-  const out: FaqPair[] = [];
-  for (const item of raw) {
-    if (item == null || typeof item !== 'object') continue;
-    const rec = item as Record<string, unknown>;
-    const pergunta =
-      typeof rec.pergunta === 'string'
-        ? sanitizeFaqLine(rec.pergunta).slice(0, FAQ_PERGUNTA_MAX)
-        : '';
-    const resposta =
-      typeof rec.resposta === 'string'
-        ? sanitizeFaqLine(rec.resposta).slice(0, FAQ_RESPOSTA_MAX)
-        : '';
-    if (pergunta === '' || resposta === '') continue;
-    out.push({ pergunta, resposta });
-    if (out.length >= FAQ_MAX_ITEMS) break;
-  }
-  return out;
-}
-
-// Header FIXO (nao editavel pelo dono): declara que as linhas P/R sao DADOS, nao instrucoes.
-// FONTE ÚNICA em @startap/core/faq-block-marker (packages/db também precisa dele, e db não
-// pode importar integrations — evita ciclo). Re-exportado aqui como FAQ_BLOCK_HEADER pro
-// script scripts/migrate-faq-para-prompt.ts continuar puxando do subpath scheduling.
-const _FAQ_BLOCK_HEADER = _FAQ_BLOCK_HEADER_SRC;
-export const FAQ_BLOCK_HEADER = _FAQ_BLOCK_HEADER;
-
-/**
- * Monta o bloco [PERGUNTAS FREQUENTES...] a partir de personalizacao.faq_personalizado.
- * Retorna '' quando nao ha nenhum par valido (chave ausente/[]/tudo descartado) — o chamador
- * so faz partes.push quando ha conteudo => contexto byte-identico ao de hoje, zero token.
- */
-export function renderFaqBlock(personalizacao: Record<string, unknown>): string {
-  const pairs = narrowFaqPairs(personalizacao.faq_personalizado);
-  if (pairs.length === 0) return '';
-  const linhas: string[] = [_FAQ_BLOCK_HEADER];
-  for (const p of pairs) {
-    linhas.push(`P: ${p.pergunta}`);
-    linhas.push(`R: ${p.resposta}`);
-  }
-  return linhas.join('\n');
 }
 
 /**
@@ -479,20 +373,9 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
   for (const [key, val] of Object.entries(e.personalizacao)) {
     if (persUsadas.has(key)) continue;
     if (_PERS_CONTROL_KEYS.has(key)) continue; // flags de controle nunca vao pro contexto
-    if (_PERS_STRUCTURED_KEYS.has(key)) continue; // valor estruturado (faq) tem bloco proprio
     if (!val || String(val).trim() === '') continue;
     observacoes.push(`${humanizarChave(key)}: ${val}`);
   }
-
-  // [PERGUNTAS FREQUENTES...] (SCRUM-65): FAQ do dono, GATED por-clone (FAQ_PERSONALIZADO_SLOTS).
-  // '' quando o gate esta OFF pro slot OU nao ha par valido => bloco ausente (byte-a-byte).
-  const faqBlock = resolveFaqPersonalizadoEnabled(
-    opts.slot,
-    opts.faqSlotsConfig,
-    opts.faqColumnEnabled,
-  )
-    ? renderFaqBlock(e.personalizacao as Record<string, unknown>)
-    : '';
 
   const partes: string[] = [];
   partes.push('[CONTEXTO - DADOS DO BANCO, NAO REMOVIVEL]');
@@ -513,14 +396,6 @@ export async function buildContextBlock(opts: ContextBlockOpts): Promise<string>
     partes.push('');
     partes.push('[OBSERVACOES E DADOS EXTRAS]');
     for (const ln of observacoes) partes.push(ln);
-  }
-  // FAQ personalizado (SCRUM-65): agrupado com o conteudo free-text do dono (logo apos
-  // [OBSERVACOES]) e ANTES dos blocos-ancora de agendamento ([FUNCIONAMENTO]/[SERVICOS]/
-  // [HORARIOS]) — nao dilui o anchor que as [REGRAS CRITICAS] da persona referenciam. O
-  // header ja vem dentro de faqBlock; so empurra quando ha conteudo (vazio = zero token).
-  if (faqBlock) {
-    partes.push('');
-    partes.push(faqBlock);
   }
   partes.push('');
   partes.push('[FUNCIONAMENTO]');

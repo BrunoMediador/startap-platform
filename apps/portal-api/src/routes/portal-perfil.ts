@@ -32,13 +32,6 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
       slot,
       config.MODO_ATENDENTE_SLOTS,
     );
-    // features.faq_personalizado (SCRUM-65): gate POR-CLONE. Só o(s) clone(s) no
-    // FAQ_PERSONALIZADO_SLOTS veem a seção de FAQ personalizado. Mesmo padrão do modo_atendente;
-    // o front usa esse boolean como `enabled` da query (clone fora do gate = zero request).
-    const faqPersonalizado = await flowClones.resolveFaqPersonalizadoEnabledForSlot(
-      slot,
-      config.FAQ_PERSONALIZADO_SLOTS,
-    );
     // features.agenda_configurada (SCRUM-74): o clone tem Google Calendar utilizável, conectado
     // pelo TIME no gestão (ADR 0024). Contrato pro front: o toggle "agendamento automático" só
     // pode ser LIGADO quando isto é true; desligado, o front mostra "fale com o suporte pra
@@ -46,7 +39,6 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
     const agendaConfigurada = await flowClones.isAgendaConfiguradaBySlot(slot);
     const features = {
       modo_atendente: modoAtendente,
-      faq_personalizado: faqPersonalizado,
       agenda_configurada: agendaConfigurada,
       // features.prompt_builder: gate GLOBAL (não por-clone) da flag PROMPT_BUILDER_ENABLED
       // (SCRUM-92). Serve pro front decidir se a ABA "Monte seu atendente" aparece na barra de
@@ -101,20 +93,6 @@ export const portalPerfilRoutes: FastifyPluginAsync = async (app) => {
         error: 'perfil invalido',
         issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
-    }
-    // FAQ personalizado (SCRUM-65): a chave só é aceita com o gate ON pro clone (defesa em
-    // profundidade — o front só mostra a seção então). Checa presença RAW no perfil ANTES de
-    // qualquer escrita (o schema strict aceitaria a chave; o gate é a autorização). Fora do gate
-    // e chave presente => 404 indisponivel (coerente com recepcao_telefone). Ausente = byte-a-byte.
-    const rawPerfil = (body.perfil ?? {}) as Record<string, unknown>;
-    if (
-      rawPerfil.faq_personalizado !== undefined &&
-      !(await flowClones.resolveFaqPersonalizadoEnabledForSlot(
-        slot,
-        config.FAQ_PERSONALIZADO_SLOTS,
-      ))
-    ) {
-      return reply.code(404).send({ error: 'faq_personalizado_indisponivel' });
     }
     // timezone é COLUNA top-level (NÃO entra no personalizacao/perfilSchema): validada
     // e gravada por caminho SEPARADO. Opcional — só toca a coluna se enviado; ausente

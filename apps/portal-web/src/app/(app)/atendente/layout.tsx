@@ -16,9 +16,10 @@ import { useTenant } from '@/components/shell/session-context';
  *   - atendenteMensagens = cartão disponível (GET /portal/cartao-config com
  *     status !== 'hidden'). Antes era `|| features.faq_personalizado`, mas a
  *     UI de "Perguntas frequentes" foi removida (conteúdo passa a viver no
- *     prompt via IA) — MEDIDO EM PROD 31/07: ninguém perde a aba, pois
- *     `CARTAO_RUNTIME_ENABLED=true` e os 3 clones em `cartao_mode=baked`
- *     recebem 200 read-only/locked, então `cartaoDisponivel` é true pros 6.
+ *     prompt via IA, backend do FAQ eliminado 01/08) — MEDIDO EM PROD 31/07:
+ *     ninguém perde a aba, pois `CARTAO_RUNTIME_ENABLED=true` e os 3 clones em
+ *     `cartao_mode=baked` recebem 200 read-only/locked, então `cartaoDisponivel`
+ *     é true pros 6.
  *   - sandbox = features.sandbox (useAtendenteFeatures).
  *
  * ANTI-FLASH: enquanto QUALQUER uma das 3 queries remotas (atendenteFeatures/

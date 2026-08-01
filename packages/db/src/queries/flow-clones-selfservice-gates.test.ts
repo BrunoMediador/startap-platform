@@ -23,7 +23,6 @@ const {
   invalidateCloneCache,
   resolveModoAtendenteEnabledForSlot,
   resolveAtendFromAgendaEnabledForSlot,
-  resolveFaqPersonalizadoEnabledForSlot,
 } = await import('./flow-clones.js');
 
 const MEDUZZA = 'clone_meduzza_barbearia_q23psc';
@@ -34,13 +33,11 @@ const SAMUEL = 'clone_barbearia_samuel_uefpqc';
 // Envs de PRODUÇÃO hoje (o que precisa ficar byte-idêntico).
 const ENV_MODO = MEDUZZA;
 const ENV_BILLING = `${DRAGON},${CIRILO},${SAMUEL}`;
-const ENV_FAQ = '*';
 
 function rowFor(
   slot: string,
   cols: {
     modo_atendente_enabled?: boolean;
-    faq_personalizado_enabled?: boolean;
     billing_from_agenda_enabled?: boolean;
   },
 ): Record<string, unknown> {
@@ -57,7 +54,6 @@ function rowFor(
     created_at: new Date(),
     updated_at: new Date(),
     modo_atendente_enabled: cols.modo_atendente_enabled ?? false,
-    faq_personalizado_enabled: cols.faq_personalizado_enabled ?? false,
     billing_from_agenda_enabled: cols.billing_from_agenda_enabled ?? false,
   };
 }
@@ -124,27 +120,6 @@ describe('resolvers async env→coluna (flow_clones, ADR 0030 D1)', () => {
     });
   });
 
-  describe('resolveFaqPersonalizadoEnabledForSlot', () => {
-    it('env "*" -> true SEM query (estado de produção hoje)', async () => {
-      expect(await resolveFaqPersonalizadoEnabledForSlot(SAMUEL, ENV_FAQ)).toBe(true);
-      expect(mockQuery).not.toHaveBeenCalled();
-    });
-
-    it('env vazio + coluna true -> true (self-service quando env deixar de ser "*")', async () => {
-      mockQuery.mockResolvedValue({
-        rows: [rowFor('clone_novo', { faq_personalizado_enabled: true })],
-      });
-      expect(await resolveFaqPersonalizadoEnabledForSlot('clone_novo', '')).toBe(true);
-    });
-
-    it('env vazio + coluna false -> false', async () => {
-      mockQuery.mockResolvedValue({
-        rows: [rowFor('clone_novo', { faq_personalizado_enabled: false })],
-      });
-      expect(await resolveFaqPersonalizadoEnabledForSlot('clone_novo', '')).toBe(false);
-    });
-  });
-
   describe('BYTE-IDENTIDADE dos 4 clones vivos (envs atuais)', () => {
     it('modo atendente: só Meduzza ON; todos SEM query (env cobre ou não-alvo lê coluna false)', async () => {
       // Meduzza no env -> true sem query. Os demais não estão no env de modo -> leem coluna=false.
@@ -168,13 +143,6 @@ describe('resolvers async env→coluna (flow_clones, ADR 0030 D1)', () => {
       }
       expect(mockQuery).not.toHaveBeenCalled(); // os 3 estão no env -> curto-circuito, zero leitura.
       expect(await resolveAtendFromAgendaEnabledForSlot(MEDUZZA, ENV_BILLING)).toBe(false);
-    });
-
-    it('FAQ "*": todos os 4 ON via env, zero query', async () => {
-      for (const slot of [MEDUZZA, DRAGON, CIRILO, SAMUEL]) {
-        expect(await resolveFaqPersonalizadoEnabledForSlot(slot, ENV_FAQ)).toBe(true);
-      }
-      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 });
