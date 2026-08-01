@@ -19,6 +19,19 @@
  * abaixo — "Corte R$40" morre pelo padrão `moeda`. Cortar a linha só pelo nome do serviço quebrava
  * barbearia (catálogo = corte/barba/sobrancelha → quase toda linha sumia → persona vazia). SCRUM-92.
  *
+ * EXCEÇÃO `moeda`/PLANO (01/08, migração planos_beneficios→bot_prompt): preço de SERVIÇO AVULSO
+ * continua proibido na persona (vem do catálogo canônico em runtime, contextBlock/[NEGOCIO] —
+ * camada 3). Mas preço de PLANO/PACOTE/ASSINATURA/MENSALIDADE não tem fonte canônica em runtime
+ * (não existe tabela de planos) — é texto livre do dono, historicamente guardado em
+ * `personalizacao.planos_beneficios` e agora baked direto no prompt pelo script de migração. Sem
+ * essa exceção, `REJECT_LINE_PATTERNS.moeda` cortava a linha do valor cheio mas PRESERVAVA a linha
+ * do parcelamento (ex.: Ingrid: "Pacote Mensal … R$ 396,00" morre, "Ou 2x 198,00 quinzenalmente"
+ * sobrevive) — parcelamento órfão de um pacote que sumiu, pior que não migrar nada. A exceção é
+ * SÓ pra `moeda` (as outras tags — cep/horário/logradouro/telefone/estrutural/subversão — seguem
+ * cortando igual mesmo dentro de contexto de plano; um plano não legitima vazar endereço/telefone).
+ * NÃO REMOVER esta exceção num refactor futuro sem reler este comentário: o corte de preço de
+ * serviço avulso (camada 1+3) continua intacto — só o de PLANO passou a ser aceito na persona.
+ *
  * Além disso: `sanitizeOrphanPlaceholders` limpa `{var}` fora da whitelist (evita placeholder órfão
  * que o renderPrompt entregaria cru ao modelo).
  *
@@ -40,10 +53,21 @@ export const MAX_PERSONA_CHARS = 4000;
 /** Teto do prompt FINAL (persona + bloco estrutural) — proteção do renderPrompt/custo. */
 export const MAX_FINAL_PROMPT_CHARS = 12_000;
 
+/**
+ * Contexto de PLANO/PACOTE/ASSINATURA/MENSALIDADE (01/08, migração planos_beneficios→bot_prompt).
+ * Quando a LINHA (não o texto inteiro) casa com isto, o REJECT_LINE_PATTERNS.moeda abaixo deixa
+ * de cortar — ver o JSDoc do módulo pra motivação completa. Propositalmente restrito a substantivos
+ * de plano; "R$40 o corte" não casa aqui e continua caindo no corte normal de serviço avulso.
+ */
+const PLANO_CONTEXT_RE = /\b(planos?|pacotes?|assinaturas?|mensalidade|parcel|sess[õo]es?)\b/i;
+
 // ── Regex de dados operacionais / PII (rejeitam a LINHA inteira) ─────────────────
-const REJECT_LINE_PATTERNS: Array<{ tag: string; re: RegExp }> = [
+const REJECT_LINE_PATTERNS: Array<{ tag: string; re: RegExp; exceptRe?: RegExp }> = [
   { tag: 'cep', re: /\b\d{5}-?\d{3}\b/ },
-  { tag: 'moeda', re: /R\$\s?\d/i },
+  // moeda: preço de PLANO/PACOTE/ASSINATURA/MENSALIDADE é liberado (exceptRe) — não tem fonte
+  // canônica em runtime, é texto livre do dono. Preço de SERVIÇO AVULSO continua cortado (vem do
+  // catálogo canônico via contextBlock, camada 3). Ver JSDoc do módulo.
+  { tag: 'moeda', re: /R\$\s?\d/i, exceptRe: PLANO_CONTEXT_RE },
   // faixa/horário: "das 9 às 18", "9h às 18h", "09:00"
   { tag: 'horario', re: /\bdas?\s?\d{1,2}\s?(?:h|:\d{2})?\s?(?:à|a)s?\s?\d/i },
   { tag: 'horario', re: /\b\d{1,2}\s?h\s?(?:à|a)s?\s?\d{1,2}\s?h?\b/i },
@@ -154,8 +178,8 @@ export function validatePersona(
       continue;
     }
     let hit: string | null = null;
-    for (const { tag, re } of REJECT_LINE_PATTERNS) {
-      if (re.test(line)) {
+    for (const { tag, re, exceptRe } of REJECT_LINE_PATTERNS) {
+      if (re.test(line) && !exceptRe?.test(line)) {
         hit = tag;
         break;
       }
