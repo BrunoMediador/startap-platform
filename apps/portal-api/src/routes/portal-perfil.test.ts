@@ -965,16 +965,14 @@ describe('PUT recepcao-only SEM envelope `perfil` (contrato useSaveRecepcao — 
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
-// Onda 1 de-gate (SCRUM-68 / ADR 0030): planos_beneficios universal. O backend PUT já aceitava
-// a chave via perfilSchema (sem gate) e o bot já a renderiza em [NEGOCIO] pra todos (free-slots).
-// Estes testes travam a regressão: individual/agenda (modo OFF) salva planos; validação segue.
+// SCRUM-160 (01/08): "Planos e assinaturas" saiu do portal (mesma receita do FAQ,
+// #562) — planos_beneficios não é mais chave do perfilSchema (.strict()). O PUT
+// agora RECUSA a chave em vez de gravar (trava a regressão inversa do de-gate antigo).
 // ════════════════════════════════════════════════════════════════════════════════
 
-describe('planos_beneficios (universal, todos os formatos)', () => {
-  it('PUT: clone INDIVIDUAL (modo OFF) SALVA planos_beneficios (200)', async () => {
+describe('planos_beneficios (removido, SCRUM-160)', () => {
+  it('PUT: enviar planos_beneficios => 400 perfil invalido (chave não existe mais no schema .strict())', async () => {
     cfgMock.MODO_ATENDENTE_SLOTS = '';
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
     const app = await buildApp();
 
     const res = await app.inject({
@@ -983,46 +981,9 @@ describe('planos_beneficios (universal, todos os formatos)', () => {
       payload: { perfil: { planos_beneficios: 'Plano Ouro: R$120/mes\nInclui 4 cortes' } },
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(updatePerfilBySlotMock).toHaveBeenCalledWith(
-      injectedSlot,
-      expect.objectContaining({ planos_beneficios: 'Plano Ouro: R$120/mes\nInclui 4 cortes' }),
-    );
-    await app.close();
-  });
-
-  it('PUT: texto acima de 4000 chars => 400 perfil invalido, NÃO grava', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = '';
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { planos_beneficios: 'x'.repeat(4001) } },
-    });
-
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('perfil invalido');
     expect(updatePerfilBySlotMock).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it('SCRUM-75: só-espaços vira "" (sentinela de LIMPAR) e chega ao data layer', async () => {
-    cfgMock.MODO_ATENDENTE_SLOTS = '';
-    updatePerfilBySlotMock.mockResolvedValue(true);
-    getPerfilBySlotMock.mockResolvedValue(PERFIL_OK);
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/portal/perfil',
-      payload: { perfil: { planos_beneficios: '   ' } },
-    });
-
-    expect(res.statusCode).toBe(200);
-    const dataArg = updatePerfilBySlotMock.mock.calls[0][1] as Record<string, unknown>;
-    // SCRUM-75: '' = limpar (data layer remove a chave). Antes o preprocess mapeava pra undefined.
-    expect(dataArg.planos_beneficios).toBe('');
     await app.close();
   });
 });

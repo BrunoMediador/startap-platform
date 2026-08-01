@@ -135,7 +135,7 @@ export async function getPerfilBySlot(slot: string): Promise<Perfil | null> {
  * Semantica de "limpar" por tipo de chave:
  *   - texto simples (nome_negocio, etc.)   -> '' grava '' (campo vazio).
  *   - formas_pagamento                     -> [] grava '' (limpa).
- *   - link_agendamento / planos_beneficios -> '' DELETA a chave do JSONB (SCRUM-75). Um clone
+ *   - link_agendamento                     -> '' DELETA a chave do JSONB (SCRUM-75). Um clone
  *     que limpou fica byte-identico a quem NUNCA preencheu (os consumidores — bot/free-slots —
  *     tratam ausencia e '' igual, entao removemos pra nao deixar string vazia residual). Antes,
  *     o schema mapeava '' -> undefined e o merge NUNCA tocava a chave -> limpar o link no portal
@@ -175,7 +175,7 @@ export async function updatePerfilBySlot(slot: string, data: Perfil): Promise<bo
       if (v !== undefined) merged[key] = v ? 'true' : 'false';
       continue;
     }
-    if (key === 'link_agendamento' || key === 'planos_beneficios') {
+    if (key === 'link_agendamento') {
       // TRI-STATE (SCRUM-75): ausente (undefined) = nao toca; '' = LIMPAR (remove a chave do
       // JSONB, byte-identico a quem nunca preencheu); nao-vazio (ja validado) = grava. Nao
       // persistimos '' pra nao deixar string vazia residual no personalizacao.

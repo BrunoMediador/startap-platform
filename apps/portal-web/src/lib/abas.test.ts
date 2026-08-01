@@ -34,7 +34,6 @@ describe('abas — completude do mapa seção -> aba (herdado da extinta perfil-
   it('mapeamento exato seção -> aba', () => {
     const mapa: Record<SecaoKey, AbaKey> = {
       'dados-negocio': 'negocio-dados',
-      planos: 'negocio-dados',
       recepcao: 'negocio-dados',
       'monte-assistente': 'atendente-personalidade',
       tom: 'atendente-personalidade',

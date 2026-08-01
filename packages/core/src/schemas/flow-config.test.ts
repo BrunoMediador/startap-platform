@@ -334,33 +334,10 @@ describe('perfilSchema', () => {
     expect(perfilSchema.safeParse({ link_agendamento: 'https://booksy.com/x' }).success).toBe(true);
   });
 
-  // ── planos_beneficios (SCRUM-59, pedido do cliente Meduzza) ──────────────
-  it('planos_beneficios: aceita texto livre multi-linha', () => {
-    const r = perfilSchema.safeParse({
-      planos_beneficios: 'Plano Mensal R$99: corte ilimitado.\nPlano Anual R$999: 2 meses grátis.',
-    });
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data.planos_beneficios).toContain('Plano Mensal');
-  });
-
-  it('SCRUM-75: planos_beneficios "" (e só-espaços) é ACEITO e vira "" (sentinela de LIMPAR)', () => {
-    const vazio = perfilSchema.safeParse({ planos_beneficios: '' });
-    expect(vazio.success).toBe(true);
-    if (vazio.success) expect(vazio.data.planos_beneficios).toBe('');
-
-    const espacos = perfilSchema.safeParse({ planos_beneficios: '   \n  ' });
-    expect(espacos.success).toBe(true);
-    if (espacos.success) expect(espacos.data.planos_beneficios).toBe('');
-  });
-
-  it('SCRUM-75: planos_beneficios AUSENTE segue ausente (undefined — não toca a chave)', () => {
-    const r = perfilSchema.safeParse({ nome_negocio: 'X' });
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data.planos_beneficios).toBeUndefined();
-  });
-
-  it('planos_beneficios: rejeita acima de 4000 chars', () => {
-    expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4001) }).success).toBe(false);
-    expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4000) }).success).toBe(true);
+  // "Planos e assinaturas" (planos_beneficios, SCRUM-59) foi removido do perfil em SCRUM-160
+  // (01/08) — o schema é .strict(), então o campo agora é rejeitado com 400 (ver teste abaixo).
+  it('SCRUM-160: planos_beneficios não é mais aceito pelo schema (.strict() rejeita a chave legada)', () => {
+    const r = perfilSchema.safeParse({ planos_beneficios: 'Plano Mensal R$99' });
+    expect(r.success).toBe(false);
   });
 });

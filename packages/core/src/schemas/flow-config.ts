@@ -283,17 +283,6 @@ export const perfilSchema = z
         .or(z.literal('')) // '' = sentinela de LIMPAR (aceito; nunca cai no .url())
         .optional(),
     ),
-    // Planos / assinaturas / benefícios do negócio (pedido do cliente Meduzza, SCRUM-59).
-    // Texto livre MULTI-LINHA — cai sozinho no bloco [OBSERVACOES E DADOS EXTRAS] do contexto do
-    // LLM via _PERS_LABELS (free-slots), sem mudar o bot. TRI-STATE igual ao link_agendamento
-    // (SCRUM-75): ausente = nao mexe; '' (ou so-espacos) = LIMPAR (o data layer apaga a chave do
-    // JSONB); texto nao-vazio = grava (max 4000 chars, guarda contra payload abusivo). O preprocess
-    // normaliza so-espacos -> '' (antes -> undefined, que transformava "limpar" em no-op silencioso).
-    // z.string().max(4000) ja aceita '' nativamente (sem .url()), entao nao precisa de .literal('').
-    planos_beneficios: z.preprocess(
-      (v) => (typeof v === 'string' && v.trim() === '' ? '' : v),
-      z.string().trim().max(4000, 'planos e assinaturas: texto muito longo').optional(),
-    ),
   })
   .strict();
 
@@ -309,7 +298,6 @@ export const PERFIL_KEYS = [
   'formas_pagamento',
   'agenda_automatica',
   'link_agendamento',
-  'planos_beneficios',
 ] as const;
 
 export type PerfilKey = (typeof PERFIL_KEYS)[number];
