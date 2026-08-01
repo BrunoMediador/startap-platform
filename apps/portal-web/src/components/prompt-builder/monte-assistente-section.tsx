@@ -22,6 +22,12 @@ import { IconPencil, IconRefresh, IconSend, IconSparkle } from '@/components/ico
  *
  * A conversa é estado LOCAL efêmero (o back guarda no Redis com TTL); o único artefato
  * durável é o prompt APROVADO. Sem PII logada no client.
+ *
+ * NÃO registrada no guard global de "alterações não salvas" (SCRUM-158, de
+ * propósito): o rascunho da conversa vive no Redis (não se perde ao trocar
+ * de aba/navegar) e já tem seu próprio `ConfirmDialog` "Descartar esta
+ * prévia?" pra quando o dono decide abandonar. Registrar aqui também
+ * abriria DOIS diálogos concorrentes pro mesmo gesto de saída.
  */
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';

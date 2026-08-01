@@ -5,6 +5,7 @@ import { SessionProvider } from '@/components/shell/session-context';
 import { Sidebar } from '@/components/shell/sidebar';
 import { TenantTzProvider } from '@/components/shell/tenant-tz-context';
 import { Topbar } from '@/components/shell/topbar';
+import { UnsavedChangesProvider } from '@/components/shell/unsaved-changes-context';
 import { getServerAceiteStatus, getServerBusinessName, getServerSession } from '@/lib/server-auth';
 import { redirect } from 'next/navigation';
 
@@ -48,37 +49,42 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* Fuso do clone (default São Paulo) pros formatadores da agenda — lê /portal/status
           (dedup do React Query). Mato Grosso (America/Cuiaba, UTC-4) deixa de ver +1h. */}
       <TenantTzProvider>
-        {/* Fundo vivo fixo (atras de TODO o shell, z-[-1]): a constelacao do login
-          persistente em todas as rotas autenticadas. + vinheta por cima do
-          canvas pra contraste AA do texto que rola sobre as particulas. */}
-        <ParticleField variant="appbg" />
-        <div className="app-vignette pointer-events-none fixed inset-0 z-[-1]" aria-hidden />
+        {/* Guard global de "alterações não salvas" (SCRUM-158): registry central +
+          diálogo único, montado no layout RAIZ do (app) — cobre navegação pela
+          sidebar/bottom-nav/topbar, não só entre sub-abas de uma mesma página. */}
+        <UnsavedChangesProvider>
+          {/* Fundo vivo fixo (atras de TODO o shell, z-[-1]): a constelacao do login
+            persistente em todas as rotas autenticadas. + vinheta por cima do
+            canvas pra contraste AA do texto que rola sobre as particulas. */}
+          <ParticleField variant="appbg" />
+          <div className="app-vignette pointer-events-none fixed inset-0 z-[-1]" aria-hidden />
 
-        {/* Shell em flex row (1.D.7): sidebar e a coluna de conteudo sao IRMAOS.
-          A pagina inteira rola; a sidebar fica sticky/h-dvh com rodape sempre
-          visivel (fix do BLOCO A — antes esticava com o conteudo).
-          SEM bg-bg aqui: o `body` ja pinta `--color-bg`. Deixar o shell
-          transparente permite que o fundo vivo (canvas appbg, z-[-1]) apareca
-          nos vaos atras do conteudo; sidebar/topbar/bottom-nav/cards (bg-surface
-          solido, z>=20 no sticky) cobrem o canvas e seguem clicaveis. */}
-        <div className="flex min-h-dvh">
-          <Sidebar businessName={businessName} />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <Topbar businessName={businessName} />
-            {/* Banner de reconexao (acima de children, em TODAS as rotas quando
-              needs_action; some em WORKING e na propria /conectar). Gated pela flag. */}
-            <ReconnectBanner />
-            {/* pb mobile = var(--nav-clearance) (altura real da bottom-nav +
-              safe-area + respiro): garante que o conteudo em fluxo normal
-              (lixeira da Inicio, botoes de acao no fim, etc.) nunca caia atras
-              da nav. Derivado do MESMO token da agenda expandida/toast -> sem
-              magic-number drift; se a nav crescer, a folga acompanha sozinha. */}
-            <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-[var(--nav-clearance)] pt-[18px] md:pb-12">
-              {children}
-            </main>
-            <BottomNav />
+          {/* Shell em flex row (1.D.7): sidebar e a coluna de conteudo sao IRMAOS.
+            A pagina inteira rola; a sidebar fica sticky/h-dvh com rodape sempre
+            visivel (fix do BLOCO A — antes esticava com o conteudo).
+            SEM bg-bg aqui: o `body` ja pinta `--color-bg`. Deixar o shell
+            transparente permite que o fundo vivo (canvas appbg, z-[-1]) apareca
+            nos vaos atras do conteudo; sidebar/topbar/bottom-nav/cards (bg-surface
+            solido, z>=20 no sticky) cobrem o canvas e seguem clicaveis. */}
+          <div className="flex min-h-dvh">
+            <Sidebar businessName={businessName} />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <Topbar businessName={businessName} />
+              {/* Banner de reconexao (acima de children, em TODAS as rotas quando
+                needs_action; some em WORKING e na propria /conectar). Gated pela flag. */}
+              <ReconnectBanner />
+              {/* pb mobile = var(--nav-clearance) (altura real da bottom-nav +
+                safe-area + respiro): garante que o conteudo em fluxo normal
+                (lixeira da Inicio, botoes de acao no fim, etc.) nunca caia atras
+                da nav. Derivado do MESMO token da agenda expandida/toast -> sem
+                magic-number drift; se a nav crescer, a folga acompanha sozinha. */}
+              <main className="mx-auto w-full max-w-[720px] flex-1 px-5 pb-[var(--nav-clearance)] pt-[18px] md:pb-12">
+                {children}
+              </main>
+              <BottomNav />
+            </div>
           </div>
-        </div>
+        </UnsavedChangesProvider>
       </TenantTzProvider>
     </SessionProvider>
   );

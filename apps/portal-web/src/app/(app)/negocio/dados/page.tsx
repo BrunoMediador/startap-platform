@@ -5,13 +5,13 @@ import { PlanosSection } from '@/components/planos/planos-section';
 import { RecepcaoSection } from '@/components/recepcao/recepcao-section';
 import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
 import { TimezoneCombobox } from '@/components/ui/timezone-combobox';
 import { useToast } from '@/components/ui/toast';
-import { UnsavedChangesDialog } from '@/components/ui/unsaved-changes-dialog';
 import { FORMAS_PAGAMENTO_OPCOES, type FormaPagamentoOpcao } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { showPrestadorField } from '@/lib/google-conta';
@@ -24,7 +24,6 @@ import {
   validatePerfil,
 } from '@/lib/perfil';
 import { qk, usePerfil, useSavePerfil } from '@/lib/queries';
-import { useAvisarNaoSalvo } from '@/lib/use-avisar-nao-salvo';
 /**
  * "Meu negócio" / Dados (sub-aba `/negocio/dados`, SCRUM-157). Extraído do
  * antigo `(app)/perfil/page.tsx` (mega-página com mini-nav de âncoras) — SÓ o
@@ -46,10 +45,13 @@ import { useAvisarNaoSalvo } from '@/lib/use-avisar-nao-salvo';
  * tamanho, Instagram aceito com/sem "@" e normalizado pra handle) — vive em
  * @/lib/perfil (testável) e dá erro inline antes de bater na API.
  *
- * Guard de navegação (requisito do Bruno): `useAvisarNaoSalvo(dirty, onSalvarGuard)`
- * intercepta troca de sub-aba/menu/voltar enquanto `dirty` e sobe um diálogo de
- * 3 saídas. `onSalvarGuard` reaproveita a MESMA validação/submit do botão
- * "Salvar" manual (via `submitPerfil`) — nunca duplica a lógica de save.
+ * Guard de navegação GLOBAL (SCRUM-158): `useRegistrarNaoSalvo(nome, dirty,
+ * submitPerfil)` registra esta seção no `UnsavedChangesProvider` (layout do
+ * (app)) — troca de sub-aba/menu/voltar com `dirty` sobe o diálogo de 3
+ * saídas cobrindo TODAS as seções sujas da tela, não só esta. "Salvar e
+ * sair" reaproveita a MESMA validação/submit do botão "Salvar" manual (via
+ * `submitPerfil`) — nunca duplica a lógica de save. O diálogo em si é
+ * renderizado UMA vez pelo provider, não mais aqui.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -121,9 +123,9 @@ export default function NegocioDadosPage() {
   /**
    * Núcleo do submit (validação + PUT otimista). Byte-idêntico ao `onSubmit`
    * original de `perfil/page.tsx` — só deixou de ser um handler de `<form>`
-   * direto pra também poder ser chamado pelo guard de navegação
-   * (`useAvisarNaoSalvo`, "Salvar e sair"), que precisa saber se o submit deu
-   * certo (Promise) pra decidir se navega ou cancela a saída.
+   * direto pra também poder ser chamado pelo guard global de navegação
+   * (`useRegistrarNaoSalvo`, "Salvar e sair"), que precisa saber se o submit
+   * deu certo (Promise) pra decidir se navega ou cancela a saída.
    */
   function submitPerfil(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -191,10 +193,13 @@ export default function NegocioDadosPage() {
     });
   }
 
-  // Guarda de navegação (requisito do Bruno): troca de sub-aba/menu/voltar com
-  // `dirty` sobe o diálogo de 3 saídas. "Salvar e sair" reusa `submitPerfil` —
-  // reject (validação/erro) cancela a navegação; resolve libera.
-  const guard = useAvisarNaoSalvo(dirty, submitPerfil);
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central (`UnsavedChangesProvider`, montado no layout do (app)) — troca de
+  // sub-aba/menu/voltar com `dirty` sobe o diálogo de 3 saídas, cobrindo TODAS
+  // as seções sujas da tela (Planos/Recepção têm seus próprios registros).
+  // "Salvar e sair" reusa `submitPerfil` — reject (validação/erro) cancela a
+  // navegação; resolve libera.
+  useRegistrarNaoSalvo('Dados do negócio', dirty, submitPerfil);
 
   return (
     <>
@@ -297,14 +302,6 @@ export default function NegocioDadosPage() {
           AgendamentoSection, que segue gated por modo atendente). Vazio = fallback pro
           próprio WhatsApp do negócio (SCRUM-62). Traz o próprio divisor. */}
       <RecepcaoSection />
-
-      <UnsavedChangesDialog
-        open={guard.open}
-        loading={guard.salvando}
-        onSalvarESair={guard.onSalvarESair}
-        onDescartar={guard.onDescartar}
-        onCancelar={guard.onCancelar}
-      />
     </>
   );
 }

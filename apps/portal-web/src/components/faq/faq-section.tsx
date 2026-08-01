@@ -20,8 +20,14 @@ import { IconInfo, IconPlus, IconTrash } from '@/components/icons';
  * pergunta 1..120, resposta 1..300; par vazio é descartado, não trava o save dos demais); o
  * 400 é rede de proteção. Sucesso -> toast + fixa a resposta; falha -> toast, mantém o
  * rascunho pro dono corrigir.
+ *
+ * Guard de navegação GLOBAL (SCRUM-158): registra `dirty`/`submitFaq` no
+ * `UnsavedChangesProvider` (layout do (app)) — trocar de sub-aba (ex.: pra
+ * "Testar") com rascunho pendente sobe o diálogo de 3 saídas em vez de
+ * perder a edição em silêncio (era o bug original que motivou o guard).
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ErrorState } from '@/components/ui/states';
@@ -94,36 +100,72 @@ export function FaqSection() {
     setDraft((d) => setFaqResposta(d, id, v));
   }
 
+  /**
+   * Núcleo do submit (validação + save). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158, "Salvar e sair"), que precisa saber se o submit deu certo
+   * (Promise) pra decidir se navega ou cancela a saída. Rejeita quando
+   * inválido/já salvando (nunca navega/descarta em silêncio com erro
+   * pendente) ou quando o backend recusa.
+   */
+  function submitFaq(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty) {
+        resolve();
+        return;
+      }
+      if (!valido) {
+        reject(new Error('validacao'));
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
+
+      const payload = toFaqPayload(draft);
+      save.mutate(
+        { faq_personalizado: payload },
+        {
+          onSuccess: (perfil) => {
+            const next = toFaqDraft(
+              Array.isArray(perfil.faq_personalizado) ? perfil.faq_personalizado : payload,
+            );
+            setSaved(next);
+            setDraft(next);
+            touched.current = false;
+            toast.success('Perguntas salvas');
+            // Mantém a leitura do formulário principal do perfil coerente com o novo FAQ.
+            client.invalidateQueries({ queryKey: qk.perfil(slot) });
+            resolve();
+          },
+          onError: (err) => {
+            // O rascunho FICA na tela pro dono corrigir (não reverte). 400 = backend recusou.
+            if (isFaqRejeitada(err)) {
+              toast.error('Não foi possível salvar. Confira os campos destacados e tente de novo.');
+            } else {
+              toast.error('Não foi possível salvar. Tente de novo.');
+            }
+            reject(err instanceof Error ? err : new Error('save-falhou'));
+          },
+        },
+      );
+    });
+  }
+
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!dirty || !valido || save.isPending) return;
-
-    const payload = toFaqPayload(draft);
-    save.mutate(
-      { faq_personalizado: payload },
-      {
-        onSuccess: (perfil) => {
-          const next = toFaqDraft(
-            Array.isArray(perfil.faq_personalizado) ? perfil.faq_personalizado : payload,
-          );
-          setSaved(next);
-          setDraft(next);
-          touched.current = false;
-          toast.success('Perguntas salvas');
-          // Mantém a leitura do formulário principal do perfil coerente com o novo FAQ.
-          client.invalidateQueries({ queryKey: qk.perfil(slot) });
-        },
-        onError: (err) => {
-          // O rascunho FICA na tela pro dono corrigir (não reverte). 400 = backend recusou.
-          if (isFaqRejeitada(err)) {
-            toast.error('Não foi possível salvar. Confira os campos destacados e tente de novo.');
-          } else {
-            toast.error('Não foi possível salvar. Tente de novo.');
-          }
-        },
-      },
-    );
+    submitFaq().catch(() => {
+      // erro já tratado (inline/toast) dentro de submitFaq — aqui só evita
+      // unhandled rejection quando o disparo vem do <form> (sem quem escute a Promise).
+    });
   }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  // Enquanto carrega/feature OFF, `draft`/`saved` nascem vazios e iguais ->
+  // `dirty` é sempre `false`, então o registro nunca dispara o guard à toa.
+  useRegistrarNaoSalvo('Perguntas frequentes', dirty, submitFaq);
 
   // Load: nada renderiza (sem flash pra quem não tem a feature).
   if (cfgQ.isPending) {
