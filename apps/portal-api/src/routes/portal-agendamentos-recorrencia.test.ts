@@ -298,6 +298,31 @@ describe('POST /portal/agendamentos/recorrencia/preview', () => {
     expect(Math.max(...chamadas)).toBe(1);
     await app.close();
   });
+
+  it('anti-IDOR (estabelecimento): colaborador fora do tenant -> 404, nada lido', async () => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 3,
+      tenant_id: 'tenant-1',
+    });
+    const colaboradorClient = gcalClientLivre();
+    getGcalsForSlotMock.mockResolvedValue([
+      { colaboradorId: 1, nome: 'Ana', client: colaboradorClient },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos/recorrencia/preview',
+      payload: { ...PREVIEW_PAYLOAD_OK, colaborador_id: 999 },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('colaborador_nao_encontrado');
+    expect(colaboradorClient.listEvents).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -337,6 +362,105 @@ describe('POST /portal/agendamentos/serie — grava exatamente o confirmado', ()
     for (const call of client.createEvent.mock.calls) {
       expect(call[0].extendedPropertiesPrivate).toEqual({ serieId: body.serie_id });
     }
+    await app.close();
+  });
+
+  it('REGRESSÃO P1 (security 01/08): agenda OCUPADA no caminho de GRAVAÇÃO — cai em falhas, evento NÃO é criado', async () => {
+    // A 1a data (10:00) já tem um evento concorrente (ex.: o BOT agendou entre o
+    // preview e a confirmação da série). O double-check REAL contra o GCal tem que
+    // barrar essa ocorrência especificamente — sem depender do preview anterior.
+    const client = {
+      listEvents: vi.fn().mockImplementation((opts: { timeMin: string; timeMax: string }) =>
+        Promise.resolve([
+          {
+            id: 'evt_concorrente',
+            summary: 'Outro cliente (bot)',
+            start: { dateTime: opts.timeMin },
+            end: { dateTime: opts.timeMax },
+          },
+        ]),
+      ),
+      createEvent: vi.fn(),
+    };
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos/serie',
+      payload: {
+        ...SERIE_PAYLOAD_OK,
+        datas: [{ data: FUTURO, hora: '10:00' }, ...SERIE_PAYLOAD_OK.datas.slice(1)],
+      },
+    });
+
+    // Todas as 3 batem "ocupado" neste mock (listEvents sempre devolve conflito) —
+    // o que importa aqui é o invariante: NENHUM createEvent foi chamado sobre slot
+    // ocupado, e a resposta reflete isso (409 = zero criados).
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(409);
+    const body = res.json();
+    expect(body.criados).toHaveLength(0);
+    expect(body.falhas.length).toBeGreaterThan(0);
+    for (const f of body.falhas) {
+      expect(f.reason).toBe('ocupado');
+    }
+    // O invariante central do bug reportado: listEvents FOI chamado (double-check
+    // real aconteceu) — antes do fix, o loop de gravação nunca chamava listEvents.
+    expect(client.listEvents).toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('REGRESSÃO P1: 1 ocorrência ocupada entre 2 livres — só a ocupada falha, as outras criam normalmente', async () => {
+    let chamada = 0;
+    const client = {
+      listEvents: vi.fn().mockImplementation((opts: { timeMin: string; timeMax: string }) => {
+        chamada += 1;
+        if (chamada !== 2) return Promise.resolve([]);
+        return Promise.resolve([
+          {
+            id: 'evt_concorrente',
+            summary: 'Outro cliente (bot)',
+            start: { dateTime: opts.timeMin },
+            end: { dateTime: opts.timeMax },
+          },
+        ]);
+      }),
+      createEvent: gcalClientLivre().createEvent,
+    };
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos/serie',
+      payload: SERIE_PAYLOAD_OK,
+    });
+
+    expect(res.statusCode).toBe(207);
+    const body = res.json();
+    expect(body.criados).toHaveLength(2);
+    expect(body.falhas).toHaveLength(1);
+    expect(body.falhas[0].reason).toBe('ocupado');
+    expect(client.createEvent).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it('400: rejeita data+hora duplicada no mesmo request (schema, sem I/O)', async () => {
+    getGcalForSlotMock.mockResolvedValue(gcalClientLivre());
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agendamentos/serie',
+      payload: {
+        ...SERIE_PAYLOAD_OK,
+        datas: [
+          { data: FUTURO, hora: '10:00' },
+          { data: FUTURO, hora: '10:00' },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(400);
     await app.close();
   });
 

@@ -221,7 +221,17 @@ const criarSerieSchema = z
   .refine((b) => b.sem_whatsapp === true || b.cliente_telefone !== undefined, {
     message: 'telefone obrigatorio (ou marque sem_whatsapp)',
     path: ['cliente_telefone'],
-  });
+  })
+  // P2 do security (01/08): data+hora repetida no MESMO request criaria 2 eventos
+  // idênticos sem aviso (dono duplicaria receita por engano, ex. copiar/colar na
+  // tela de revisão). Rejeita ANTES de qualquer I/O.
+  .refine(
+    (b) => {
+      const chaves = b.datas.map((d) => `${d.data}T${d.hora}`);
+      return new Set(chaves).size === chaves.length;
+    },
+    { message: 'datas repetidas na lista (data+hora duplicado)', path: ['datas'] },
+  );
 
 // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -------------------
 //
@@ -998,22 +1008,50 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const falhas: Array<{ data: string; hora: string; error: string; reason: string }> = [];
 
     for (const { data, hora } of datas) {
-      // Janela/horário: recalculada por ocorrência (o cálculo do instante absoluto
-      // depende da data) — SEM double-check no GCal (o preview já checou; ver nota
-      // no cabeçalho da rota sobre a janela de corrida aceita).
-      const janelaAvaliada = avaliarJanela({
-        config,
-        data,
-        hora,
-        duracaoMin: svc.min,
-        maxAheadDays: POST_MAX_AHEAD_DAYS,
-      });
-      if (janelaAvaliada.status !== 'livre') {
-        falhas.push({ data, hora, error: 'slot_invalido', reason: janelaAvaliada.status });
+      // 🔴 CORRIGIDO (P1 do security, 01/08): double-check REAL contra o GCal por
+      // ocorrência — `avaliarSlot` (janela + conflito), não só `avaliarJanela`. A
+      // instrução original ("preview já checou, não repetir") ignorava que o preview
+      // roda numa requisição ANTERIOR sem lock/TTL: o BOT (inserir_agendamento) ou
+      // outra aba do portal pode ocupar o horário entre o preview e a confirmação da
+      // série. Sem este check, `/serie` gravava por cima de um agendamento concorrente
+      // — exatamente o cenário que o Bruno pediu para impedir ("alguém que agendou
+      // aquele horário lá na frente"). Custo aceito: +1 listEvents por ocorrência
+      // (mesmo custo que o preview já paga), sequencial, capado em 24.
+      let avaliacao: Awaited<ReturnType<typeof avaliarSlot>>;
+      try {
+        avaliacao = await avaliarSlot({
+          client,
+          config,
+          data,
+          hora,
+          duracaoMin: svc.min,
+          maxAheadDays: POST_MAX_AHEAD_DAYS,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'erro';
+        log.error(
+          { slot, userId, data, hora, serieId, err: msg },
+          'criar serie: falha ao revalidar uma ocorrencia no GCal',
+        );
+        if (isGcalRateLimitError(msg)) {
+          falhas.push({ data, hora, error: 'rate_limit', reason: 'gcal_rate_limit' });
+          break;
+        }
+        if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+        falhas.push({ data, hora, error: 'gcal_falhou', reason: 'erro_gcal' });
         continue;
       }
-      const startUtc = janelaAvaliada.startUtc as Date;
-      const endUtc = janelaAvaliada.endUtc as Date;
+      if (avaliacao.status !== 'livre') {
+        falhas.push({
+          data,
+          hora,
+          error: avaliacao.status === 'ocupado' ? 'conflito' : 'slot_invalido',
+          reason: avaliacao.status,
+        });
+        continue;
+      }
+      const startUtc = avaliacao.startUtc as Date;
+      const endUtc = avaliacao.endUtc as Date;
 
       try {
         const summary = buildEventSummary({
