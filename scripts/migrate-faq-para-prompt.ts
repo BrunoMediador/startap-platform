@@ -22,6 +22,9 @@
  *   npx tsx scripts/migrate-faq-para-prompt.ts --slot <slot>   # DRY-RUN de UM clone
  *   npx tsx scripts/migrate-faq-para-prompt.ts --apply --slot <slot>  # APLICA em UM clone
  *   npx tsx scripts/migrate-faq-para-prompt.ts --apply         # APLICA em todos elegíveis
+ *   ... --show-faq                                              # some com QUALQUER combinação
+ *       acima: revela o VERBATIM do bloco FAQ no preview (dado sensível — ver LGPD abaixo).
+ *       Sem a flag, o preview mostra só a CONTAGEM de pares por clone.
  *
  * REVERSÃO: não há flag --revert automática (o FAQ sai do JSONB no apply, então reverter exige
  * restaurar as DUAS colunas). Use o snapshot pré-migração em bot_prompt_versions
@@ -30,9 +33,12 @@
  * migrado (o preview impresso abaixo mostra os pares extraídos) — ação de dupla aprovação,
  * fora do escopo deste script (é MUTAÇÃO reversa em produção, não dry-run).
  *
- * LGPD: o preview imprime o bloco FAQ (pode conter dado sensível cadastrado pelo dono — ex.:
- * convênio/saúde). Rodar SEMPRE com --slot em ambiente controlado; NUNCA persistir a saída em
- * log de longa duração fora do terminal do operador.
+ * LGPD (F4, review de security da PR #552, 01/08): o preview VERBATIM do FAQ (pode conter dado
+ * sensível cadastrado pelo dono — ex.: convênio/saúde, caso Ingrid) só imprime com --show-faq
+ * EXPLÍCITO. Sem a flag, mostra só a contagem de pares por clone — suficiente pra decidir se
+ * roda --apply sem despejar o conteúdo em claro no stdout/log do terminal. Rodar SEMPRE com
+ * --slot em ambiente controlado; NUNCA persistir a saída em log de longa duração fora do
+ * terminal do operador, mesmo com --show-faq.
  */
 import { botPrompt, closePool, query } from '@startap/db';
 import { FAQ_BLOCK_HEADER, narrowFaqPairs } from '@startap/integrations/scheduling';
@@ -111,11 +117,19 @@ function indent(s: string): string {
     .join('\n');
 }
 
-/** Preview do bloco que ENTRARIA no prompt — não imprime o prompt inteiro (evita despejar
- *  persona/dado do dono em log maior que o necessário; o bloco FAQ já é o dado sensível). */
-function printPreview(c: Classified): void {
-  console.log('  ── bloco FAQ que seria anexado ao FIM do bot_prompt ────────────');
-  console.log(indent(c.faqBlock ?? ''));
+/** Preview do bloco que ENTRARIA no prompt. F4 (LGPD, review de security 01/08): o texto
+ *  VERBATIM (pode ter dado sensível — saúde/convênio) só sai com --show-faq explícito. Sem a
+ *  flag, mostra só a contagem de pares — suficiente pra decidir rodar --apply sem despejar o
+ *  conteúdo do dono no terminal/log por padrão. */
+function printPreview(c: Classified, showFaq: boolean): void {
+  if (showFaq) {
+    console.log('  ── bloco FAQ que seria anexado ao FIM do bot_prompt (--show-faq) ──');
+    console.log(indent(c.faqBlock ?? ''));
+  } else {
+    console.log(
+      `  ── bloco FAQ: ${c.pairCount ?? 0} par(es) P/R (rode com --show-faq pra ver o texto) ──`,
+    );
+  }
 }
 
 async function loadClones(slot: string | null): Promise<CloneRow[]> {
@@ -133,11 +147,12 @@ async function loadClones(slot: string | null): Promise<CloneRow[]> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
+  const showFaq = args.includes('--show-faq');
   const slotIdx = args.indexOf('--slot');
   const slot = slotIdx >= 0 ? args[slotIdx + 1] : null;
 
   const mode = apply ? 'APPLY (grava no banco)' : 'DRY-RUN (preview, nada gravado)';
-  console.log(`[migrate-faq-para-prompt] modo: ${mode}`);
+  console.log(`[migrate-faq-para-prompt] modo: ${mode}${showFaq ? ' | --show-faq' : ''}`);
   console.log(`[migrate-faq-para-prompt] escopo: ${slot ? `slot=${slot}` : 'todos elegíveis'}\n`);
 
   const clones = await loadClones(slot);
@@ -155,7 +170,7 @@ async function main(): Promise<void> {
     console.log(`▸ ${c.slot} [${c.verdict}] — ${c.reason}`);
     if (c.verdict === 'CANDIDATE' && c.faqBlock) {
       candidates++;
-      printPreview(c);
+      printPreview(c, showFaq);
       if (apply) {
         const res = await botPrompt.migrateCloneFaqToBotPrompt({
           slot: c.slot,
@@ -191,11 +206,26 @@ const invokedDirectly =
   Array.isArray(process.argv) &&
   /migrate-faq-para-prompt\.ts$/.test(process.argv[1] ?? '');
 
+/** F4 (LGPD, review de security da PR #552, 01/08): NUNCA loga `err.message` cru — um erro do
+ *  driver `pg` pode ecoar o VALOR do parâmetro que causou o erro (ex.: um constraint violado
+ *  sobre o próprio bloco FAQ), e o log do processo é sink persistente (fora do controle deste
+ *  script). Extrai só `err.name` + o código do Postgres (`err.code`, ex.: '23505'), suficiente
+ *  pra diagnosticar sem vazar dado. O erro completo já foi logado pelo PRÓPRIO Postgres (sink
+ *  operacional separado, dentro do perímetro de acesso do time de infra).
+ */
+export function safeErrorSummary(err: unknown): string {
+  if (err instanceof Error) {
+    const pgCode = (err as Error & { code?: unknown }).code;
+    return typeof pgCode === 'string' ? `${err.name} (pg code=${pgCode})` : err.name;
+  }
+  return 'erro não-Error';
+}
+
 if (invokedDirectly) {
   main()
     .then(() => closePool())
     .catch((err) => {
-      console.error('[migrate-faq-para-prompt] ERRO:', err instanceof Error ? err.message : err);
+      console.error('[migrate-faq-para-prompt] ERRO:', safeErrorSummary(err));
       return closePool().finally(() => process.exit(1));
     });
 }

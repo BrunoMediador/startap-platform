@@ -42,7 +42,7 @@ vi.mock('@startap/integrations/scheduling', () => ({
   },
 }));
 
-const { buildFaqBlock, classify } = await import('./migrate-faq-para-prompt.js');
+const { buildFaqBlock, classify, safeErrorSummary } = await import('./migrate-faq-para-prompt.js');
 
 describe('buildFaqBlock — montagem byte-idêntica ao renderFaqBlock do runtime', () => {
   it('header + pares P:/R: na mesma ordem, mesmo formato', () => {
@@ -118,5 +118,26 @@ describe('classify — elegibilidade sem I/O de escrita (dry-run)', () => {
     });
     expect(c.verdict).toBe('SKIP');
     expect(c.reason).toMatch(/JÁ contém o bloco FAQ/);
+  });
+});
+
+describe('safeErrorSummary — F4 (LGPD, review de security PR #552): nunca vaza err.message cru', () => {
+  it('Error comum -> só o name (sem message, que pode ecoar parâmetro/dado sensível)', () => {
+    const err = new Error('detalhe sensível que não pode vazar pro log');
+    expect(safeErrorSummary(err)).toBe('Error');
+    expect(safeErrorSummary(err)).not.toContain('detalhe sensível');
+  });
+
+  it('erro do driver pg com .code -> inclui o código Postgres (diagnosticável sem vazar dado)', () => {
+    const pgErr = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+    });
+    expect(safeErrorSummary(pgErr)).toBe('Error (pg code=23505)');
+    expect(safeErrorSummary(pgErr)).not.toContain('duplicate key');
+  });
+
+  it('valor não-Error -> resumo genérico, nunca faz String(err) do valor cru', () => {
+    expect(safeErrorSummary('algo lançado como string')).toBe('erro não-Error');
+    expect(safeErrorSummary('algo lançado como string')).not.toContain('algo lançado');
   });
 });

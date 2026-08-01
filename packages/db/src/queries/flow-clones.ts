@@ -459,9 +459,16 @@ export async function updateClone(
     sets.push(`cliente_telefone = $${i++}`);
     vals.push(patch.clienteTelefone);
   }
+  // `faqPersonalizadoParamIdx` != null <=> patch.personalizacao presente. Guardado ANTES do
+  // `if` (que reserva o índice `$N`) porque o SET de personalizacao é montado abaixo, na
+  // string final da query, e precisa saber se deve compor a reconciliação anti-ressurreição
+  // do faq_personalizado (P0 da review de security da PR #552, 01/08).
+  let faqPersonalizadoParamIdx: number | null = null;
   if (patch.personalizacao !== undefined) {
-    sets.push(`personalizacao = $${i++}::jsonb`);
+    faqPersonalizadoParamIdx = i;
+    sets.push('personalizacao = __PERSONALIZACAO_SET_PLACEHOLDER__');
     vals.push(JSON.stringify(patch.personalizacao));
+    i++;
   }
   if (patch.status !== undefined) {
     sets.push(`status = $${i++}`);
@@ -502,6 +509,47 @@ export async function updateClone(
   const flipParamIdx = i++; // $N = novaIntencaoAgenda (só relevante quando agendaAutomaticaPresente)
   vals.push(novaIntencaoAgenda);
 
+  // P0 (review de security da PR #552, 01/08): `faq_personalizado` não pode ser RESSUSCITADO
+  // por um patch que veio de uma leitura anterior/stale (ex.: o merge
+  // `{...cloneFull.personalizacao, nome_assistente}` de
+  // apps/portal-api/src/routes/prompt-builder.ts:721, que parte de getCloneBySlot — cacheado
+  // 60s, flow-clones.ts:~150). Sem isso, salvar QUALQUER outra coisa depois de o FAQ ter sido
+  // migrado pro bot_prompt (scripts/migrate-faq-para-prompt.ts) reescrevia a chave de volta no
+  // JSONB, e renderFaqBlock voltava a injetá-la em runtime POR CIMA do bloco já anexado —
+  // FAQ duplicado (dado sensível, ex. saúde/convênio, caso Ingrid).
+  //
+  // Sinal de "migrado" = a PRÓPRIA linha (fc.personalizacao, lida dentro desta MESMA statement,
+  // nunca de fora): se ela JÁ NÃO TEM a chave, nenhum patch pode reintroduzi-la. Chave ausente
+  // só acontece de 2 formas: (a) o clone nunca teve FAQ, (b) migrateCloneFaqToBotPrompt já
+  // removeu — em AMBOS os casos, ignorar o valor do patch pra essa chave é o comportamento
+  // certo (no caso (a) não há nada de útil pra "reintroduzir" mesmo). Deliberadamente NÃO lê
+  // bot_prompt (JOIN cross-tabela): updateClone tem a invariante testada (ADR 0035 §2.1,
+  // flow-clones-dualwrite.test.ts) de NUNCA referenciar bot_prompt — nem leitura.
+  //
+  // 3 ramos, avaliados no PRÓPRIO SQL (nunca no objeto JS do caller):
+  //   1. banco JÁ NÃO TEM a chave  -> chave SEMPRE ausente (ignora o patch, seja ele qual for
+  //      — fix do P0: nenhum caller reintroduz o que já saiu do JSONB).
+  //   2. banco TEM a chave + patch TEM a chave -> usa o valor do patch (edição/limpeza normal
+  //      da tela "Perguntas frequentes" — inclusive [] pra limpar).
+  //   3. banco TEM a chave + patch NÃO tem a chave -> preserva o valor JÁ NO BANCO
+  //      (fc.personalizacao, lido na MESMA statement) — replica a semântica de PATCH parcial
+  //      que updatePerfilBySlot já espera ("ausente não toca a chave").
+  const personalizacaoSetExpr =
+    faqPersonalizadoParamIdx !== null
+      ? `(($${faqPersonalizadoParamIdx}::jsonb) - 'faq_personalizado') ||
+             CASE
+               WHEN (fc.personalizacao -> 'faq_personalizado') IS NULL THEN '{}'::jsonb
+               WHEN (($${faqPersonalizadoParamIdx}::jsonb) -> 'faq_personalizado') IS NOT NULL
+                 THEN jsonb_build_object('faq_personalizado', ($${faqPersonalizadoParamIdx}::jsonb) -> 'faq_personalizado')
+               ELSE jsonb_build_object('faq_personalizado', fc.personalizacao -> 'faq_personalizado')
+             END`
+      : null;
+  const setsResolved = sets.map((s) =>
+    personalizacaoSetExpr && s === 'personalizacao = __PERSONALIZACAO_SET_PLACEHOLDER__'
+      ? `personalizacao = ${personalizacaoSetExpr}`
+      : s,
+  );
+
   const r = await query<CloneRow & { id: string; billing_agenda_ativado?: boolean }>(
     `WITH prev AS (
        SELECT id,
@@ -514,7 +562,7 @@ export async function updateClone(
         WHERE id = $${idParamIdx}
      )
      UPDATE flow_clones fc
-        SET ${sets.join(', ')},
+        SET ${setsResolved.join(', ')},
             billing_from_agenda_enabled = CASE
                                              WHEN prev.flip THEN TRUE
                                              ELSE fc.billing_from_agenda_enabled

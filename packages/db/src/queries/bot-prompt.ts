@@ -310,7 +310,9 @@ export interface MigrateFaqToPromptInput {
 }
 
 export type MigrateFaqToPromptResult =
-  | { migrated: true; versionSaved: number | null; newPrompt: string }
+  // F3 (review de security, 01/08): versionSaved é SEMPRE number no sucesso — fail-closed
+  // (abaixo) garante que a migração nunca prossegue sem snapshot gravado.
+  | { migrated: true; versionSaved: number; newPrompt: string }
   | { migrated: false; skipped: 'sem_clone' | 'sem_prompt' | 'ja_migrado' | 'faq_vazio' };
 
 /**
@@ -346,8 +348,14 @@ export async function migrateCloneFaqToBotPrompt(
       await client.query('ROLLBACK');
       return { migrated: false, skipped: 'sem_clone' };
     }
+    // F2 (review de security da PR #552, 01/08): FOR UPDATE trava a linha de bot_prompt igual
+    // ao SELECT de flow_clones acima — sem isso, um write concorrente do dono (PUT do portal
+    // no meio da migração) não serializa contra este UPDATE e pode se perder em silêncio.
+    // Deadlock teórico (ordem de lock invertida entre 2 transações concorrentes) é aceitável:
+    // o Postgres detecta e aborta uma delas, e o ROLLBACK do catch abaixo cobre — abort
+    // explícito é preferível a write perdido silenciosamente.
     const cur = await client.query<{ prompt: string }>(
-      'SELECT prompt FROM bot_prompt WHERE slot = $1',
+      'SELECT prompt FROM bot_prompt WHERE slot = $1 FOR UPDATE',
       [slot],
     );
     if (cur.rows.length === 0 || !cur.rows[0].prompt) {
@@ -364,8 +372,13 @@ export async function migrateCloneFaqToBotPrompt(
     }
     const newPrompt = `${currentPrompt}\n\n${faqBlock}`;
 
-    // Snapshot do prompt ATUAL (ANTES do update) — base de rollback manual.
-    let versionSaved: number | null = null;
+    // Snapshot do prompt ATUAL (ANTES do update) — ÚNICA via de reversão manual (este script
+    // não tem --revert automático, ver cabeçalho de scripts/migrate-faq-para-prompt.ts).
+    // F3 (review de security, 01/08): FAIL-CLOSED em colisão de version — se o INSERT não
+    // gravar (ON CONFLICT DO NOTHING por corrida concorrente), ABORTA a migração inteira em vez
+    // de seguir sem backup. Colisão é rara (2 migrações do MESMO slot ao mesmo tempo) e
+    // retentável — prosseguir sem snapshot deixaria a única via de reversão ausente sobre
+    // cliente pagante (caso Ingrid: dado de saúde/convênio).
     const maxRes = await client.query<{ m: string }>(
       'SELECT COALESCE(MAX(version), 0) AS m FROM bot_prompt_versions WHERE slot = $1',
       [slot],
@@ -378,7 +391,13 @@ export async function migrateCloneFaqToBotPrompt(
        RETURNING version`,
       [slot, nextVersion, currentPrompt, editedBy, FAQ_MIGRATION_SNAPSHOT_COMMENT],
     );
-    if (insRes.rowCount && insRes.rowCount > 0) versionSaved = insRes.rows[0].version;
+    if (!insRes.rowCount || insRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      throw new Error(
+        `migrateCloneFaqToBotPrompt: snapshot de ${slot} colidiu em version=${nextVersion} (corrida concorrente) — abortado ANTES do UPDATE (fail-closed, sem backup = sem migração). Retente.`,
+      );
+    }
+    const versionSaved: number = insRes.rows[0].version;
 
     await client.query('UPDATE bot_prompt SET prompt = $2, updated_at = NOW() WHERE slot = $1', [
       slot,

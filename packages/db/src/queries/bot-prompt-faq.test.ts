@@ -178,6 +178,42 @@ describe('migrateCloneFaqToBotPrompt', () => {
     expect(connectMock).not.toHaveBeenCalled();
   });
 
+  it('F2 (P1, review de security PR #552): SELECT prompt FROM bot_prompt usa FOR UPDATE', async () => {
+    const client = makeClient({ currentPrompt: 'persona', maxVersion: 1 });
+    connectMock.mockResolvedValue(client);
+    await migrateCloneFaqToBotPrompt({ slot: 'clone_x', faqBlock: FAQ_BLOCK, editedBy: 'script' });
+    const selectPrompt = client.calls.find((c) =>
+      c.sql.startsWith('SELECT prompt FROM bot_prompt'),
+    );
+    expect(selectPrompt?.sql).toMatch(/FOR UPDATE/);
+  });
+
+  it('F3 (P1, review de security PR #552): colisão de version FAIL-CLOSED — aborta SEM gravar bot_prompt', async () => {
+    const client = makeClient({ currentPrompt: 'persona', maxVersion: 1 });
+    const originalQuery = client.query as unknown as (
+      sql: string,
+      params?: unknown[],
+    ) => Promise<{ rows: unknown[]; rowCount?: number }>;
+    client.query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (typeof sql === 'string' && sql.startsWith('INSERT INTO bot_prompt_versions')) {
+        // Simula corrida concorrente: ON CONFLICT DO NOTHING não grava nada.
+        return { rows: [], rowCount: 0 };
+      }
+      return originalQuery(sql, params);
+    }) as unknown as PoolClient['query'];
+    connectMock.mockResolvedValue(client);
+
+    await expect(
+      migrateCloneFaqToBotPrompt({ slot: 'clone_x', faqBlock: FAQ_BLOCK, editedBy: 'script' }),
+    ).rejects.toThrow(/colidiu em version/);
+    expect(client.calls.some((c) => c.sql.startsWith('ROLLBACK'))).toBe(true);
+    // A garantia central do F3: sem snapshot, o bot_prompt NUNCA é atualizado.
+    expect(client.calls.some((c) => c.sql.startsWith('UPDATE bot_prompt SET prompt'))).toBe(false);
+    expect(client.calls.some((c) => c.sql.includes("personalizacao - 'faq_personalizado'"))).toBe(
+      false,
+    );
+  });
+
   it('ROLLBACK em erro de query — nunca deixa o prompt salvo pela metade', async () => {
     const client = makeClient({ currentPrompt: 'persona', maxVersion: 1 });
     const originalQuery = client.query as unknown as (
