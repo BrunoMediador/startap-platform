@@ -21,10 +21,21 @@
  * saem do menu lateral e viram sub-abas de "Meu negócio"; a personalização da IA vira o item
  * próprio "Meu atendente". Consequência direta nos prompts: TODO "aqui mesmo nesta página" da
  * v6 deixou de ser verdade — o builder passa a viver em "Meu atendente › Personalidade",
- * enquanto Dados e Planos ficam em "Meu negócio › Dados" e o FAQ em "Meu atendente › Mensagens",
- * que é OUTRA aba. Por isso o formato de caminho agora é sempre `"Tela › Aba"`, absoluto e
- * navegável de qualquer lugar do portal, em vez de relativo ("nesta mesma página") — instrução
- * relativa é a que apodrece primeiro quando a tela se move.
+ * enquanto Dados e Planos ficam em "Meu negócio › Dados". Por isso o formato de caminho agora é
+ * sempre `"Tela › Aba"`, absoluto e navegável de qualquer lugar do portal, em vez de relativo
+ * ("nesta mesma página") — instrução relativa é a que apodrece primeiro quando a tela se move.
+ *
+ * ## Por que as PERGUNTAS FREQUENTES saíram deste mapa (31/07)
+ *
+ * O FAQ era a 5ª linha aqui, apontando para "Meu atendente › Mensagens". O campo de FAQ do
+ * portal está sendo REMOVIDO: o conteúdo passa a viver dentro do próprio texto da persona,
+ * escrito com o builder. Se a linha continuasse no mapa, a IA seguiria RECUSANDO o assunto e
+ * mandando o dono para uma tela que deixou de existir — a mesma classe de bug que este módulo
+ * nasceu para matar, só que ao contrário: não um nome errado, mas um destino morto.
+ *
+ * ⚠️ Este mapa é a lista do que a persona NÃO pode conter. Tirar uma linha daqui é decisão de
+ * PRODUTO (o dado mudou de lado), não faxina de código: horários, serviços, preços, endereço,
+ * telefone e planos CONTINUAM proibidos na persona, cada um com sua tela própria.
  *
  * ## Alinhamento com a fonte real dos rótulos (follow-up conhecido)
  *
@@ -55,18 +66,23 @@ export interface CaminhoTela {
  * Chave de cada linha do bloco de redirecionamento. Nomeadas pelo DADO que o dono cita
  * ("falei do meu horário"), não pela tela — é assim que o modelo faz o casamento.
  */
-export type DadoOperacional = 'horarios' | 'servicos' | 'dados-negocio' | 'planos' | 'faq';
+export type DadoOperacional = 'horarios' | 'servicos' | 'dados-negocio' | 'planos';
 
-/** Uma linha do bloco: o que o dono citou → onde aquilo se configura. */
+/**
+ * Uma linha do bloco: o que o dono citou → onde aquilo se configura.
+ *
+ * ⚠️ Existiu aqui um campo opcional `gated` (item que pode não existir para aquele clone, então
+ * só seria citado quando o dono trouxesse o assunto). Ele foi REMOVIDO junto com o FAQ, seu
+ * único portador: `renderOndeSeConfigura()` nunca o leu — itera `Object.values` e imprime todas
+ * as linhas — e nenhum outro consumidor existia no repo. Era um campo que PARECIA condicionar o
+ * prompt e não condicionava nada, o pior tipo de documentação: a que mente. Se um item gated
+ * voltar a existir, ele precisa nascer com o `renderOndeSeConfigura` recebendo os gates do clone
+ * e FILTRANDO de fato — não como flag decorativa.
+ */
 export interface DestinoConfiguracao {
   /** Descrição do dado, do jeito que o dono fala dele. */
   readonly dado: string;
   readonly caminho: CaminhoTela;
-  /**
-   * Item GATED por clone: pode não existir para aquele cliente, então só é citado quando o
-   * próprio dono traz o assunto. Hoje só o FAQ (`features.faq_personalizado`).
-   */
-  readonly gated?: boolean;
 }
 
 /**
@@ -89,11 +105,6 @@ export const ONDE_SE_CONFIGURA: Readonly<Record<DadoOperacional, DestinoConfigur
   planos: {
     dado: 'Planos, pacotes e assinaturas',
     caminho: { tela: 'Meu negócio', aba: 'Dados' },
-  },
-  faq: {
-    dado: 'Perguntas frequentes e suas respostas',
-    caminho: { tela: 'Meu atendente', aba: 'Mensagens' },
-    gated: true,
   },
 } as const;
 
@@ -127,7 +138,7 @@ export const TELAS_CONHECIDAS: readonly string[] = [
 /**
  * Corpo do bloco "ONDE CADA COISA SE CONFIGURA" — as linhas `dado → caminho` + a regra
  * anti-invenção de tela. É o texto interpolado no placeholder `{onde_se_configura}` das
- * versões VIVAS do prompt (V7 criação / V8 melhoria), do mesmo jeito que `{nome_negocio}`.
+ * versões VIVAS do prompt (V9 criação / V10 melhoria), do mesmo jeito que `{nome_negocio}`.
  *
  * A regra final ("Nunca invente outro nome de tela… Nome errado de tela é pior do que não
  * indicar") nasceu na v6 e vive AQUI de propósito: assim ela acompanha o bloco para toda versão

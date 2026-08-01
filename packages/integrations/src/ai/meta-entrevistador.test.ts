@@ -26,6 +26,8 @@ import {
   META_ENTREVISTADOR_PROMPT_V6,
   META_ENTREVISTADOR_PROMPT_V7,
   META_ENTREVISTADOR_PROMPT_V8,
+  META_ENTREVISTADOR_PROMPT_V9,
+  META_ENTREVISTADOR_PROMPT_V10,
   buildEntrevistadorSystemPrompt,
   buildMelhoriaSystemPrompt,
   derivarCamposConfigurados,
@@ -41,7 +43,9 @@ import {
   formatCaminho,
 } from './onde-se-configura.js';
 
-function readMdBody(version: 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8'): string {
+function readMdBody(
+  version: 'v1' | 'v2' | 'v3' | 'v4' | 'v5' | 'v6' | 'v7' | 'v8' | 'v9' | 'v10',
+): string {
   const path = fileURLToPath(
     new URL(`../../ai/prompts/meta-entrevistador/${version}.md`, import.meta.url),
   );
@@ -76,12 +80,20 @@ describe('meta-entrevistador — drift guard', () => {
     expect(META_ENTREVISTADOR_PROMPT_V6.trim()).toBe(readMdBody('v6'));
   });
 
-  it('const V7 (runtime, modo criação) == corpo do v7.md (fonte canônica)', () => {
+  it('const V7 (histórico, sucedida pela V9) == corpo do v7.md (fonte canônica imutável)', () => {
     expect(META_ENTREVISTADOR_PROMPT_V7.trim()).toBe(readMdBody('v7'));
   });
 
-  it('const V8 (runtime, modo melhoria) == corpo do v8.md (fonte canônica)', () => {
+  it('const V8 (histórico, sucedida pela V10) == corpo do v8.md (fonte canônica imutável)', () => {
     expect(META_ENTREVISTADOR_PROMPT_V8.trim()).toBe(readMdBody('v8'));
+  });
+
+  it('const V9 (runtime, modo criação) == corpo do v9.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V9.trim()).toBe(readMdBody('v9'));
+  });
+
+  it('const V10 (runtime, modo melhoria) == corpo do v10.md (fonte canônica)', () => {
+    expect(META_ENTREVISTADOR_PROMPT_V10.trim()).toBe(readMdBody('v10'));
   });
 });
 
@@ -96,7 +108,7 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
   /** Os dois prompts VIVOS, já montados (é o texto que o modelo realmente recebe). */
   const vivos: Array<[string, string]> = [
     [
-      'V7 (criação)',
+      'V9 (criação)',
       buildEntrevistadorSystemPrompt({
         nomeNegocio: 'Barbearia do Zé',
         area: 'barbearia',
@@ -104,13 +116,13 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
       }),
     ],
     [
-      'V8 (melhoria)',
+      'V10 (melhoria)',
       buildMelhoriaSystemPrompt({
         nomeNegocio: 'Consultório',
         area: 'outro',
         modo: 'agenda',
         personaAtual: 'Você é a assistente e fala com acolhimento.',
-        camposConfigurados: ['Perguntas frequentes'],
+        camposConfigurados: ['Endereço'],
       }),
     ],
   ];
@@ -170,9 +182,13 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
   // estrutura de telas. Os anteriores pegam os nomes errados CONHECIDOS; este pega os que
   // ninguém previu — inclusive um caminho novo inventado por um edit futuro.
   it.each(vivos)('%s: toda tela citada entre aspas existe na estrutura de telas', (_nome, sp) => {
+    // O bloco termina onde começa a seção PERGUNTAS FREQUENTES (31/07): ela vem logo depois e
+    // cita frases entre aspas que são EXEMPLO DE FALA do dono, não nome de tela.
     const bloco = sp
       .split('ONDE CADA COISA SE CONFIGURA')[1]
-      .split(/\nEXEMPLOS DE PERSONA BEM-FEITA|\nFECHO \(depende do formato\)/)[0];
+      .split(
+        /\nPERGUNTAS FREQUENTES \(isto SIM|\nEXEMPLOS DE PERSONA BEM-FEITA|\nFECHO \(depende do formato\)/,
+      )[0];
     const citados = [...bloco.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     expect(citados.length, 'não achou o bloco de redirecionamento').toBeGreaterThan(3);
 
@@ -206,8 +222,11 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
     expect(rotulos).not.toContain('tela própria');
     // E cita os caminhos reais, derivados do mapa.
     expect(rotulos).toContain(formatCaminho(ONDE_SE_CONFIGURA.horarios.caminho));
-    expect(rotulos).toContain(formatCaminho(ONDE_SE_CONFIGURA.faq.caminho));
     expect(rotulos).toContain(formatCaminho(ONDE_SE_CONFIGURA.servicos.caminho));
+    // 31/07: o FAQ SAIU desta lista — o parágrafo que a envolve manda RECUSAR o que está aqui, e
+    // perguntas frequentes passaram a ser conteúdo legítimo da persona. Um clone legado com
+    // `faq_personalizado` ainda no JSONB não pode reintroduzir a recusa por essa porta.
+    expect(rotulos).not.toMatch(/perguntas frequentes/i);
   });
 
   it('corrigir o mapa conserta as DUAS versões vivas de uma vez (a propriedade que mata o bug)', () => {
@@ -215,16 +234,114 @@ describe('ONDE CADA COISA SE CONFIGURA — fonte única e caminhos válidos', ()
     // alguém voltar a escrever o bloco à mão numa das versões, os dois divergem e isto cai.
     const bloco = (sp: string) =>
       sp.split('ONDE CADA COISA SE CONFIGURA')[1].split('\nExplique o porquê')[0];
-    const [, v7] = vivos[0];
-    const [, v8] = vivos[1];
-    const linhasV7 = bloco(v7)
+    const [, criacao] = vivos[0];
+    const [, melhoria] = vivos[1];
+    const linhasCriacao = bloco(criacao)
       .split('\n')
       .filter((l) => l.startsWith('- '));
-    const linhasV8 = bloco(v8)
+    const linhasMelhoria = bloco(melhoria)
       .split('\n')
       .filter((l) => l.startsWith('- '));
-    expect(linhasV7.length).toBeGreaterThan(3);
-    expect(linhasV7).toEqual(linhasV8);
+    expect(linhasCriacao.length).toBeGreaterThan(3);
+    expect(linhasCriacao).toEqual(linhasMelhoria);
+  });
+});
+
+// ── PERGUNTAS FREQUENTES ENTRAM NA PERSONA (V9/V10, 31/07) ───────────────────────
+// O campo "Perguntas frequentes" SAI do portal ("Meu atendente" › "Mensagens"): o conteúdo passa
+// a viver dentro do texto da persona, escrito com o builder. Até a V7/V8 o código instruía a IA a
+// RECUSAR o assunto e redirecionar para aquela tela — se a tela sumisse sem esta mudança, o dono
+// ficaria sem o formulário E com uma IA mandando ele procurar uma tela que não existe mais.
+//
+// Estes testes travam as DUAS metades da mudança, porque uma sem a outra não funciona:
+//  (a) NEGATIVA — nenhum prompt vivo cita mais a tela de FAQ como destino de configuração;
+//  (b) POSITIVA — os prompts vivos ACOLHEM explicitamente o assunto. Só remover a proibição não
+//      bastaria: "O QUE VOCÊ COLETA E GERA (só isto)" / "O QUE PODE ENTRAR NA PERSONA (só isto)"
+//      são listas FECHADAS ("nada além disso"), então ausência de proibição não vira permissão.
+describe('perguntas frequentes viraram conteúdo da persona (V9/V10)', () => {
+  const criacao = buildEntrevistadorSystemPrompt({
+    nomeNegocio: 'Barbearia do Zé',
+    area: 'barbearia',
+    modo: 'agenda',
+  });
+  const melhoria = buildMelhoriaSystemPrompt({
+    nomeNegocio: 'Consultório',
+    area: 'outro',
+    modo: 'agenda',
+    personaAtual: 'Você é a assistente e fala com acolhimento.',
+    camposConfigurados: ['Endereço ("Meu negócio" › "Dados")'],
+  });
+  const vivosFaq: Array<[string, string]> = [
+    ['V9 (criação)', criacao],
+    ['V10 (melhoria)', melhoria],
+  ];
+
+  it.each(vivosFaq)(
+    '%s: NÃO manda mais configurar FAQ em tela nenhuma (a tela vai deixar de existir)',
+    (_nome, sp) => {
+      // A aba "Mensagens" era o destino do FAQ. Nenhum prompt vivo pode citá-la: ela some, e
+      // nome de tela morta é a mesma classe de bug de nome de tela errado.
+      expect(sp).not.toContain('Mensagens');
+      // Nem o dado ("Perguntas frequentes e suas respostas") pode aparecer como linha de
+      // redirecionamento no bloco ONDE CADA COISA SE CONFIGURA.
+      const blocoRedirect = sp
+        .split('ONDE CADA COISA SE CONFIGURA')[1]
+        .split(/\nPERGUNTAS FREQUENTES \(isto SIM/)[0];
+      expect(blocoRedirect).not.toMatch(/perguntas frequentes/i);
+      expect(blocoRedirect).not.toMatch(/\bFAQ\b/);
+    },
+  );
+
+  it.each(vivosFaq)('%s: ACOLHE perguntas frequentes de forma explícita', (_nome, sp) => {
+    expect(sp).toContain('PERGUNTAS FREQUENTES (isto SIM entra na persona)');
+    expect(sp).toMatch(/conteúdo LEGÍTIMO da persona/);
+    expect(sp).toMatch(/NÃO redirecione para outra tela/);
+  });
+
+  it.each(vivosFaq)('%s: a lista fechada do que entra na persona inclui o FAQ', (_nome, sp) => {
+    // Sem isto, a IA recusaria por omissão mesmo sem nenhuma regra citando FAQ.
+    const listaFechada = sp
+      .split(/O QUE (?:VOCÊ COLETA E GERA|PODE ENTRAR NA PERSONA) \(só isto\)/)[1]
+      .split('\n\n')[0];
+    expect(listaFechada).toMatch(/PERGUNTAS FREQUENTES/);
+  });
+
+  it('V10: some o "ou perguntas frequentes" da REGRA DURA 1 (era a recusa mais forte)', () => {
+    // A regra dura vence o catálogo: enquanto ela citasse FAQ, remover a linha do mapa não
+    // mudaria o comportamento. Esta é a asserção que prova que a etapa foi feita de fato.
+    const regra1 = melhoria.split('REGRAS DURAS (inegociáveis):')[1].split('\n2.')[0];
+    expect(regra1).not.toMatch(/agenda ou perguntas frequentes/);
+    expect(regra1).toMatch(/perguntas frequentes do negócio são a EXCEÇÃO/);
+  });
+
+  it.each(vivosFaq)('%s: o guardrail dos OUTROS dados operacionais NÃO afrouxou', (_nome, sp) => {
+    // Só o FAQ mudou de lado. Horário/serviço/preço/endereço/planos continuam proibidos na
+    // persona e continuam tendo tela própria — inclusive dentro da resposta de um FAQ.
+    for (const destino of Object.values(ONDE_SE_CONFIGURA)) {
+      expect(sp, `sumiu o redirecionamento de "${destino.dado}"`).toContain(
+        formatCaminho(destino.caminho),
+      );
+    }
+    const regra1 = sp.split('REGRAS DURAS (inegociáveis):')[1].split('\n2.')[0];
+    for (const proibido of [
+      'endereço',
+      'horário de funcionamento',
+      'lista de serviços',
+      'preços',
+    ]) {
+      expect(regra1, `regra dura 1 parou de proibir ${proibido}`).toContain(proibido);
+    }
+    // E o LIMITE dentro da própria seção nova: resposta de FAQ não vira veículo de preço/horário.
+    expect(sp).toMatch(/a RESPOSTA não pode conter dado operacional/);
+  });
+
+  it('a seção nova é IDÊNTICA nas duas versões vivas (uma regra, uma redação)', () => {
+    // Duas redações para a mesma regra foi exatamente como nasceu o bug dos nomes de tela
+    // (v4 corrigida × v6 esquecida). Se alguém editar só uma versão, isto cai.
+    const secao = (sp: string) =>
+      sp.split('PERGUNTAS FREQUENTES (isto SIM entra na persona):')[1].split('\n\n')[0];
+    expect(secao(criacao).length).toBeGreaterThan(200);
+    expect(secao(criacao)).toBe(secao(melhoria));
   });
 });
 
@@ -374,7 +491,9 @@ describe('meta-entrevistador — modo criação (V7 é o runtime, sucedeu a V4)'
   it('os exemplos few-shot NÃO vazam dado operacional nem mecânica (preço/horário/serviço/cartão/SIM/tool/dígito)', () => {
     // Extrai só as personas ENTRE ASPAS na seção de exemplos (a linha-guia cita os termos
     // proibidos de propósito e não deve ser escaneada).
-    const secao = META_ENTREVISTADOR_PROMPT_V7.split('EXEMPLOS DE PERSONA BEM-FEITA')[1].split(
+    // Roda contra a versão VIVA (V9): o few-shot é o que o modelo copia como referência de
+    // formato, então quem precisa estar limpo é o texto em execução, não a const histórica.
+    const secao = META_ENTREVISTADOR_PROMPT_V9.split('EXEMPLOS DE PERSONA BEM-FEITA')[1].split(
       'REGRAS DURAS',
     )[0];
     const personas = (secao.match(/"([^"]+)"/g) ?? []).join('\n');
@@ -612,8 +731,10 @@ describe('meta-entrevistador — modo melhoria (conversa livre sobre persona exi
 
   it('trunca persona atual gigante (custo de input bounded)', () => {
     const sp = buildMelhoriaSystemPrompt({ ...CTX, personaAtual: 'a'.repeat(20_000) });
-    // Compara com a V8 (o texto que o builder realmente monta hoje).
-    expect(sp.length).toBeLessThan(META_ENTREVISTADOR_PROMPT_V8.length + 8_000);
+    // Compara com a V10 (o texto que o builder realmente monta hoje). O que está sob teste é o
+    // TRUNCAMENTO da persona injetada — a base é o prompt vivo, seja qual for a versão; travar
+    // contra uma const histórica faria o teste falhar a cada versão nova sem nada ter regredido.
+    expect(sp.length).toBeLessThan(META_ENTREVISTADOR_PROMPT_V10.length + 8_000);
   });
 
   it('abertura do modo melhoria NÃO faz pergunta de roteiro — oferece o menu e devolve a palavra', () => {
@@ -673,8 +794,12 @@ describe('derivarCamposConfigurados (SCRUM-153) — só NOMES de campo, nunca va
     );
     const joined = out.join('\n');
     // Rótulos presentes...
-    expect(joined).toContain('Perguntas frequentes');
     expect(joined).toContain('Planos e benefícios');
+    // 31/07: `faq_personalizado` NÃO produz mais rótulo, mesmo preenchido. Esta lista alimenta o
+    // parágrafo que manda a IA RECUSAR o que está nela — e as perguntas frequentes passaram a ser
+    // conteúdo legítimo da persona (V9/V10). Um clone legado com o FAQ ainda no JSONB (antes da
+    // migração para o bot_prompt) não pode reintroduzir a recusa por esta porta.
+    expect(joined).not.toMatch(/perguntas frequentes/i);
     // SCRUM-159: o rótulo passou a citar o caminho REAL ("Serviços"), não mais "Catálogo de
     // serviços" — nome que não existe em tela nenhuma e que ia direto pro system prompt ativo.
     expect(joined).toContain('Serviços (1 cadastrado');
