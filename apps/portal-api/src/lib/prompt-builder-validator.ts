@@ -65,11 +65,12 @@ const REJECT_LINE_PATTERNS: Array<{ tag: string; re: RegExp }> = [
     re: /(inserir_agendamento|remarcar_agendamento|cancelar_agendamento|cart[ãa]o\s+de\s+confirma|\[horarios|\[servicos|\bpe[çc]a?\s+["']?sim|responda\s+sim\b|marcador(?:es)?\b)/i,
   },
   // SUBVERSÃO da mecânica (SCRUM-92 bug 6): o 'estrutural' acima pega quem CITA a mecânica
-  // (nomes de tool, "peça SIM"); ESTES pegam o OPOSTO — a persona (sobretudo via "Editar")
-  // mandando IGNORAR/PULAR a confirmação ("agende sem pedir SIM", "ignore as regras", "marque
-  // direto"). Sem o cartão+SIM na persona o modelo pode obedecer parcial e furar a garantia. A
-  // autoridade final é o BLOCO_ESTRUTURAL (colado por código, recência), mas removemos a linha
-  // subversiva na origem — defesa em profundidade, vale pro rascunho E pro persona_editada.
+  // (nomes de tool, "peça SIM"); ESTES pegam o OPOSTO — a persona mandando IGNORAR/PULAR a
+  // confirmação ("agende sem pedir SIM", "ignore as regras", "marque direto"), seja por injeção
+  // no chat com a IA, seja (histórico) pela edição manual removida em 31/07. Sem o cartão+SIM na
+  // persona o modelo pode obedecer parcial e furar a garantia. A autoridade final é o
+  // BLOCO_ESTRUTURAL (colado por código, recência), mas removemos a linha subversiva na origem —
+  // defesa em profundidade.
   // verbo de override (ignore/esqueça/desconsidere/desobedeça) SÓ é subversão quando aponta pra
   // um objeto da MECÂNICA por perto (regra/confirmação/SIM/sistema/instrução/agendamento). O verbo
   // PELADO é persona legítima e comum ("nunca ignore um pedido", "esqueça a formalidade") — flagá-lo

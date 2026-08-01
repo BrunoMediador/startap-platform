@@ -10,8 +10,9 @@
  *                                           `propor_prompt`, marca o rascunho pronto
  *   GET  /portal/prompt-builder/draft    -> prévia (persona + bloco estrutural que SERÁ colado)
  *   POST /portal/prompt-builder/approve  -> persiste (transação SCRUM-83) + prompt_custom=true.
- *                                           Body OPCIONAL { persona_editada } = o dono ajustou o
- *                                           texto na UI antes de aprovar (caminho "Editar").
+ *                                           Persona SEMPRE é o rascunho gerado pela IA — não há
+ *                                           edição manual (ordem do Bruno 31/07: dado operacional
+ *                                           tem tela própria, editar à mão reintroduz o furo).
  *   POST /portal/prompt-builder/reset    -> recomeça do zero (increment)
  *
  * GARANTIA INEGOCIÁVEL: o meta-agente gera SÓ a persona; a mecânica de agendamento (cartão +
@@ -43,7 +44,6 @@ import {
 } from '../lib/prompt-builder-state.js';
 import {
   MAX_FINAL_PROMPT_CHARS,
-  MAX_PERSONA_CHARS,
   sanitizeOrphanPlaceholders,
   stripPII,
   validatePersona,
@@ -69,13 +69,11 @@ const messageSchema = z
   })
   .strict();
 
-// Body do /approve: OPCIONAL. `persona_editada` = o dono ajustou o texto na UI antes de aprovar
-// (caminho "Editar"). .strict() => campo desconhecido = 400 (anti mass-assignment). O texto passa
-// pelo MESMO pipeline do rascunho (stripPII + validatePersona + sanitize) e o BLOCO_ESTRUTURAL
-// é SEMPRE colado por código depois — o dono não consegue remover a mecânica editando a persona.
-const approveBodySchema = z
-  .object({ persona_editada: z.string().min(1).max(MAX_PERSONA_CHARS).optional() })
-  .strict();
+// Body do /approve: SEM campos (ordem do Bruno 31/07 — dado operacional tem tela própria; edição
+// manual da persona permitia colar horário/endereço/preço que a IA barra por design). .strict()
+// => qualquer campo (inclusive `persona_editada` de um client antigo em cache) vira 400 de graça
+// (anti mass-assignment). NÃO reintroduzir `persona_editada` aqui — é o ponto que este PR fecha.
+const approveBodySchema = z.object({}).strict();
 
 // Args da tool propor_prompt capturados via runAgent.toolCalls — validados com Zod (não confiamos
 // no schema declarado ao modelo). Chaves extras são descartadas (default do zod object).
@@ -575,10 +573,10 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(404).send({ error: 'recurso_indisponivel' });
     const { slot, username } = requireTenant(req);
 
-    // Body opcional: se veio `persona_editada`, o dono ajustou o texto na UI (caminho "Editar").
+    // Body sem campos — ver nota no schema acima. Client antigo mandando `persona_editada`
+    // (ou qualquer outro campo) recebe 400 aqui, antes de tocar em Redis/DB.
     const parsedBody = approveBodySchema.safeParse(req.body ?? {});
     if (!parsedBody.success) return reply.code(400).send({ error: 'dados_invalidos' });
-    const personaEditada = parsedBody.data.persona_editada?.trim();
 
     const redis = getRedis();
     const state = await getState(redis, slot);
@@ -607,18 +605,18 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
     const area = ctx?.area ?? state.area;
     const productType = ctx?.productType ?? state.productType ?? 'individual';
 
-    // Persona a persistir: a editada pelo dono (se veio) OU o rascunho do Redis. Em AMBOS os
-    // casos passa pelo MESMO pipeline (stripPII + validatePersona) — defesa em profundidade,
-    // nunca confia no texto cru (nem do Redis, nem do body do dono). O bloco vem por código.
-    // NOTA (SCRUM-153): a guarda de preservação do modo melhoria roda no /message, sobre a
-    // proposta do MODELO. Ela NÃO se aplica a `persona_editada`: ali é o dono digitando o
-    // próprio texto na UI — encurtar a própria persona é direito dele, e segurar seria o produto
-    // discordando do cliente. A rede de segurança nesse caminho é o snapshot em
-    // bot_prompt_versions (applyGeneratedPrompt), que grava a versão anterior antes de sobrescrever.
-    const personaBase =
-      personaEditada && personaEditada.length > 0 ? personaEditada : state.draft.persona;
-    const edited = personaBase === personaEditada;
-    const v = validatePersona(stripPII(personaBase), { servicos });
+    // Persona a persistir: SEMPRE o rascunho gerado pela IA (state.draft.persona) — não existe
+    // mais caminho de edição manual. Passa pelo MESMO pipeline de sempre (stripPII +
+    // validatePersona) como defesa em profundidade (nunca confia cru nem no que veio do Redis).
+    // O BLOCO_ESTRUTURAL vem por código depois.
+    // ⚠️ ANTI-REFACTOR (ordem do Bruno 31/07): NÃO reintroduzir edição manual da persona aqui.
+    // O motivo é comportamental, não técnico — o dono editando à mão conseguia colar horário de
+    // funcionamento, endereço, preço etc. (dado operacional que JÁ existe personalizado em outra
+    // tela do portal) e o `validatePersona` (regex) deixava passar frases como "de segunda a
+    // sexta pela manhã" ou "o corte sai quarenta reais" sem avisar — apagava em silêncio ou
+    // persistia divergente do resto do sistema. Só a IA escreve a persona; quem quer mudar,
+    // conversa com ela (ela recusa dado operacional e manda pra tela própria).
+    const v = validatePersona(stripPII(state.draft.persona), { servicos });
     if (!v.ok) return reply.code(422).send({ error: 'rascunho_insuficiente' });
 
     // Nome do ASSISTENTE = campo de 1ª classe, SEPARADO do nome do negócio (decisão de produto).
@@ -737,7 +735,6 @@ export const promptBuilderRoutes: FastifyPluginAsync = async (app) => {
           versionSaved: result.version_saved,
           modo,
           blocoModo,
-          edited,
           cartaoRuntime,
           cartaoModeAtual: ctx?.cartaoMode,
           sessaoModo: state.sessaoModo ?? 'criacao',

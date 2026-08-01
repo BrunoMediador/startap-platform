@@ -1,6 +1,6 @@
 'use client';
 
-import { IconPencil, IconRefresh, IconSend, IconSparkle } from '@/components/icons';
+import { IconRefresh, IconSend, IconSparkle } from '@/components/icons';
 /**
  * Seção "Monte seu atendente" (SCRUM-92) dentro de "Meu negócio".
  *
@@ -40,15 +40,12 @@ import {
   type BuilderMessage,
   type BuilderModo,
   type DiffPart,
-  PERSONA_MAX_CHARS,
   appendMessage,
   approveBuilder,
   diffPersona,
   diffToPlainText,
   generateNowContent,
-  isPersonaSavable,
   isSendable,
-  personaCharsLeft,
   remainingChars,
   resetBuilder,
   resolveDiffBase,
@@ -64,12 +61,11 @@ import { useEffect, useRef, useState } from 'react';
  * Copy da garantia da mecânica, condicional ao modo do clone (item 2). No modo atendente o
  * bot NÃO marca horário — ele encaminha pra um humano; falar de "confirmação antes de marcar"
  * confunde o dono. `full` = nota do IntroCard; `nota` = tranquilizador na prévia (no lugar do
- * bloco técnico, item 3); `editor` = nota do editor de persona.
+ * bloco técnico, item 3).
  */
 interface GarantiaCopy {
   full: string;
   nota: string;
-  editor: string;
 }
 
 function garantiaCopy(atendente: boolean): GarantiaCopy {
@@ -77,15 +73,11 @@ function garantiaCopy(atendente: boolean): GarantiaCopy {
     return {
       full: 'A parte técnica (encaminhar pra um atendente humano na hora certa) já é garantida automaticamente. Você só cuida da personalidade dele.',
       nota: 'Encaminhar pra um atendente humano quando precisar já é garantido automaticamente pelo sistema — você não precisa escrever isso.',
-      editor:
-        'Ajuste o texto como preferir. O encaminhamento pra um atendente humano continua garantido automaticamente — não precisa escrevê-lo aqui.',
     };
   }
   return {
     full: 'A parte técnica (a confirmação antes de marcar um horário) já é garantida automaticamente. Você só cuida da personalidade dele.',
     nota: 'A confirmação antes de marcar um horário já é garantida automaticamente pelo sistema — você não precisa escrever isso.',
-    editor:
-      'Ajuste o texto como preferir. A confirmação antes de marcar um horário continua garantida automaticamente — não precisa escrevê-la aqui.',
   };
 }
 
@@ -110,7 +102,7 @@ export function MonteAssistenteSection() {
   // Diálogos SEPARADOS (item 1 e 5): aprovar (substitui a persona de PRODUÇÃO), rejeitar
   // (descarta só a prévia, mantém a entrevista) e recomeçar (apaga a entrevista). Estados
   // independentes — nunca compartilham o do reset.
-  const [confirmApprove, setConfirmApprove] = useState<{ persona?: string } | null>(null);
+  const [confirmApprove, setConfirmApprove] = useState(false);
   const [confirmReject, setConfirmReject] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   // Rascunho ficou pronto NESTE turno (antes do refetch do draft confirmar) — snappy.
@@ -120,9 +112,6 @@ export function MonteAssistenteSection() {
   const [previewDismissed, setPreviewDismissed] = useState(false);
   // Persona aplicada com sucesso (pós-approve) -> card de confirmação.
   const [aplicada, setAplicada] = useState(false);
-  // Caminho "Editar": textarea aberta + texto da persona sendo ajustado pelo dono.
-  const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState('');
   // Preview ao vivo (ordem do Bruno 31/07): modo da sessão + rascunho corrente, atualizados
   // a cada turno via /message (não dependem mais de esperar draft_ready pra existir).
   const [modo, setModo] = useState<BuilderModo>('criacao');
@@ -135,7 +124,6 @@ export function MonteAssistenteSection() {
 
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const editRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const draft = draftQ.data;
@@ -286,15 +274,14 @@ export function MonteAssistenteSection() {
   }
 
   /**
-   * Aprova a persona. Sem argumento => aprova o RASCUNHO do servidor (botão "Aprovar e ativar").
-   * Com `personaEditada` => aprova o TEXTO editado pelo dono (botão "Salvar e ativar" do editor).
-   * Em ambos, o BLOCO_ESTRUTURAL (confirmação/encaminhamento) é colado por código no backend.
-   * Chamado sempre DEPOIS do ConfirmDialog (item 1) — a ação escreve na PRODUÇÃO.
+   * Aprova a persona: SEMPRE o RASCUNHO gerado pela IA (botão "Aprovar e ativar"). Não existe
+   * mais caminho de edição manual — o BLOCO_ESTRUTURAL (confirmação/encaminhamento) é colado por
+   * código no backend. Chamado sempre DEPOIS do ConfirmDialog (item 1) — escreve na PRODUÇÃO.
    */
-  async function aprovar(personaEditada?: string) {
+  async function aprovar() {
     if (approving) return;
     setApproving(true);
-    const out = await approveBuilder(personaEditada);
+    const out = await approveBuilder();
     setApproving(false);
     if (out.kind === 'ok') {
       toast.success('Pronto! Seu assistente já está com a nova personalidade.');
@@ -302,8 +289,6 @@ export function MonteAssistenteSection() {
       setInput('');
       setLocalDraftReady(false);
       setPreviewDismissed(false);
-      setEditing(false);
-      setEditText('');
       setPersonaAoVivo(null);
       setPersonaBaseAoVivo(null);
       setAplicada(true);
@@ -315,16 +300,11 @@ export function MonteAssistenteSection() {
       toast.error('O rascunho expirou. Vamos recomeçar.');
       setMessages([]);
       setLocalDraftReady(false);
-      setEditing(false);
       client.invalidateQueries({ queryKey: qk.promptBuilder(slot) });
       return;
     }
     if (out.kind === 'invalid') {
-      toast.error(
-        editing
-          ? 'Esse texto não pôde ser salvo — ficou curto demais ou sem personalidade suficiente. Ajuste e tente de novo.'
-          : 'O rascunho ainda está curto. Conte mais uns detalhes no chat e tente de novo.',
-      );
+      toast.error('O rascunho ainda está curto. Conte mais uns detalhes no chat e tente de novo.');
       return;
     }
     if (out.kind === 'unavailable') {
@@ -342,7 +322,7 @@ export function MonteAssistenteSection() {
    */
   async function salvarSempre() {
     if (previewPronto) {
-      setConfirmApprove({});
+      setConfirmApprove(true);
       return;
     }
     if (pending || approving) return;
@@ -367,7 +347,7 @@ export function MonteAssistenteSection() {
       }
       // Abre a confirmação de aprovar assim que o rascunho existir — o dono só clicou
       // "Salvar" uma vez, o resto é o backend forçando a geração.
-      if (out.draftReady) setConfirmApprove({});
+      if (out.draftReady) setConfirmApprove(true);
       else toast.error('Ainda não consegui gerar uma personalidade — conte mais um pouco no chat.');
       return;
     }
@@ -385,29 +365,6 @@ export function MonteAssistenteSection() {
       return;
     }
     toast.error('Não foi possível salvar agora. Tente de novo.');
-  }
-
-  /** Abre o editor da persona SEMEADO com o rascunho corrente (persona pura, sem o bloco
-   * estrutural). No desktop o painel de prévia é sticky/ancorado; no mobile é estático
-   * logo abaixo do chat — em nenhum dos dois casos precisa rolar até ele manualmente. */
-  function editar() {
-    setEditText(personaAtual ?? '');
-    setEditing(true);
-    requestAnimationFrame(() => editRef.current?.focus());
-  }
-
-  /**
-   * Salva o texto editado (= approve com persona_editada). Gate de tamanho no front + confirma
-   * antes de escrever na PRODUÇÃO (item 1) — mesmo caminho do "Aprovar e ativar".
-   */
-  function salvarEdicao() {
-    if (!isPersonaSavable(editText)) return;
-    setConfirmApprove({ persona: editText });
-  }
-
-  function cancelarEdicao() {
-    setEditing(false);
-    setEditText('');
   }
 
   /**
@@ -435,8 +392,6 @@ export function MonteAssistenteSection() {
     setLocalDraftReady(false);
     setPreviewDismissed(false);
     setAplicada(false);
-    setEditing(false);
-    setEditText('');
     // Só o RASCUNHO (proposta em cima da base) é apagado — a persona BASE (texto que
     // está no ar hoje) e o `modo` da sessão continuam os mesmos: "recomeçar" reinicia a
     // ENTREVISTA, não o estado real do clone. O próximo `iniciar()` re-sincroniza ambos
@@ -525,58 +480,44 @@ export function MonteAssistenteSection() {
               desktop também é order-2 — evita alguém ler a classe base sozinha e achar que o
               desktop ficou órfão de ordem. */}
           <div className="order-2 lg:sticky lg:top-4 lg:z-[5] lg:order-2 lg:max-h-[calc(100dvh-32px)] lg:overflow-y-auto">
-            {editing ? (
-              <EditPersonaPanel
-                value={editText}
-                saving={approving}
-                nota={copy.editor}
-                textareaRef={editRef}
-                onChange={setEditText}
-                onSalvar={salvarEdicao}
-                onCancelar={cancelarEdicao}
-              />
-            ) : (
-              <PreviewPanel
-                modo={modo}
-                montando={showPreview && !previewPronto}
-                nomeBot={draft.nomeBot}
-                resumo={draft.resumo}
-                diffParts={diffParts}
-                verMarcacoes={verMarcacoes}
-                onToggleMarcacoes={() => setVerMarcacoes((v) => !v)}
-                nota={copy.nota}
-                approving={approving}
-                salvando={pending && !previewPronto}
-                // Salvar exige a sessão JÁ iniciada no backend (sendBuilderMessage bate 409
-                // sem isso) — antes do 1º "Começar"/"Conversar agora" ainda não há o que
-                // gerar/aprovar (mostrar a base intocada como "ativação" seria redundante).
-                podeSalvar={started || previewPronto}
-                onSalvar={() => void salvarSempre()}
-                onEditar={editar}
-                editavel={previewPronto}
-                onRejeitar={previewPronto ? () => setConfirmReject(true) : undefined}
-                onRecomecar={() => setConfirmReset(true)}
-                onAjustarConversa={pedirAjuste}
-              />
-            )}
+            <PreviewPanel
+              modo={modo}
+              montando={showPreview && !previewPronto}
+              nomeBot={draft.nomeBot}
+              resumo={draft.resumo}
+              diffParts={diffParts}
+              verMarcacoes={verMarcacoes}
+              onToggleMarcacoes={() => setVerMarcacoes((v) => !v)}
+              nota={copy.nota}
+              approving={approving}
+              salvando={pending && !previewPronto}
+              // Salvar exige a sessão JÁ iniciada no backend (sendBuilderMessage bate 409
+              // sem isso) — antes do 1º "Começar"/"Conversar agora" ainda não há o que
+              // gerar/aprovar (mostrar a base intocada como "ativação" seria redundante).
+              podeSalvar={started || previewPronto}
+              onSalvar={() => void salvarSempre()}
+              rejeitavel={previewPronto}
+              onRejeitar={previewPronto ? () => setConfirmReject(true) : undefined}
+              onRecomecar={() => setConfirmReset(true)}
+              onAjustarConversa={pedirAjuste}
+            />
           </div>
         </div>
       )}
 
       {/* Item 1: confirma antes de ATIVAR (substitui a persona de produção no WhatsApp). */}
       <ConfirmDialog
-        open={confirmApprove !== null}
+        open={confirmApprove}
         title="Ativar esta personalidade?"
         description="Isso substitui a personalidade atual do seu assistente e passa a valer no WhatsApp. Deseja ativar?"
         confirmLabel="Ativar"
         cancelLabel="Cancelar"
         loading={approving}
         onConfirm={() => {
-          const p = confirmApprove?.persona;
-          setConfirmApprove(null);
-          void aprovar(p);
+          setConfirmApprove(false);
+          void aprovar();
         }}
-        onCancel={() => setConfirmApprove(null)}
+        onCancel={() => setConfirmApprove(false)}
         icon={<IconSparkle size={22} />}
       />
 
@@ -948,8 +889,7 @@ function PreviewPanel({
   salvando,
   podeSalvar,
   onSalvar,
-  onEditar,
-  editavel,
+  rejeitavel,
   onRejeitar,
   onRecomecar,
   onAjustarConversa,
@@ -969,9 +909,8 @@ function PreviewPanel({
   /** Sessão já iniciada no backend (ou rascunho pronto) -> "Salvar" pode agir de verdade. */
   podeSalvar: boolean;
   onSalvar: () => void;
-  onEditar: () => void;
-  /** Rascunho existe -> pode editar/rejeitar. Sem rascunho ainda, essas ações não fazem sentido. */
-  editavel: boolean;
+  /** Rascunho existe -> pode rejeitar. Sem rascunho ainda, a ação não faz sentido. */
+  rejeitavel: boolean;
   onRejeitar?: () => void;
   onRecomecar: () => void;
   onAjustarConversa: () => void;
@@ -1062,19 +1001,7 @@ function PreviewPanel({
         >
           Salvar e ativar
         </Button>
-        {editavel && (
-          <Button
-            size="inline"
-            variant="secondary"
-            className="w-full sm:w-auto"
-            onClick={onEditar}
-            disabled={approving}
-          >
-            <IconPencil size={16} />
-            Editar
-          </Button>
-        )}
-        {editavel && onRejeitar && (
+        {rejeitavel && onRejeitar && (
           <Button
             size="inline"
             variant="ghost"
@@ -1143,93 +1070,5 @@ function DiffSpan({ part }: { part: DiffPart }) {
       <span aria-hidden>−</span>
       {part.text}
     </del>
-  );
-}
-
-/**
- * Editor da persona (caminho "Editar", melhoria 5): textarea SEMEADA com o rascunho (persona
- * pura, sem o bloco estrutural). Ao salvar => approve com { persona_editada }; o backend re-valida
- * e re-cola a mecânica (confirmação/encaminhamento) — o dono edita só a personalidade, nunca
- * remove a garantia. A `nota` explica isso de forma condicional ao modo do clone.
- */
-function EditPersonaPanel({
-  value,
-  saving,
-  nota,
-  textareaRef,
-  onChange,
-  onSalvar,
-  onCancelar,
-}: {
-  value: string;
-  saving: boolean;
-  nota: string;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  onChange: (v: string) => void;
-  onSalvar: () => void;
-  onCancelar: () => void;
-}) {
-  const left = personaCharsLeft(value);
-  const over = left < 0;
-  const savable = isPersonaSavable(value);
-  return (
-    <div className="flex flex-col gap-3 rounded-[14px] border border-brand/30 bg-brand-soft/40 p-4">
-      <div className="flex items-center gap-2">
-        <span className="text-brand" aria-hidden>
-          <IconPencil size={16} />
-        </span>
-        <h3 className="font-display text-[14.5px] font-semibold text-ink">
-          Editar a personalidade
-        </h3>
-      </div>
-      <p className="text-[12.5px] leading-normal text-ink-soft">{nota}</p>
-      <label htmlFor="monte-assistente-editor" className="sr-only">
-        Texto da personalidade do seu assistente
-      </label>
-      <textarea
-        id="monte-assistente-editor"
-        ref={textareaRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        rows={10}
-        maxLength={PERSONA_MAX_CHARS + 200}
-        disabled={saving}
-        className="min-h-[220px] w-full resize-y rounded-field border border-line-strong bg-surface px-3.5 py-3 font-sans text-[14px] leading-[1.55] text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-brand focus:ring-[3px] focus:ring-brand/35 disabled:opacity-60"
-      />
-      <div className="flex items-center justify-between">
-        <span
-          aria-live="polite"
-          className={cn('tabular-nums text-[11.5px]', over ? 'text-danger' : 'text-ink-faint')}
-        >
-          {value.length}/{PERSONA_MAX_CHARS}
-        </span>
-        {over && (
-          <span className="text-[11.5px] font-semibold text-danger">
-            Passou do limite — encurte o texto.
-          </span>
-        )}
-      </div>
-      <div className="mt-1 flex flex-col gap-2.5 sm:flex-row sm:items-center">
-        <Button
-          size="inline"
-          className="w-full sm:w-auto"
-          onClick={onSalvar}
-          loading={saving}
-          loadingLabel="Salvando…"
-          disabled={!savable}
-        >
-          Salvar e ativar
-        </Button>
-        <Button
-          size="inline"
-          variant="secondary"
-          className="w-full sm:w-auto"
-          onClick={onCancelar}
-          disabled={saving}
-        >
-          Cancelar
-        </Button>
-      </div>
-    </div>
   );
 }
