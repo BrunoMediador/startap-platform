@@ -322,3 +322,49 @@ describe('getAreaPromptCustomCartao — política de falha (SCRUM-143)', () => {
     expect(r.area).toBe('barbearia');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// parseCartaoConfig (via getAreaPromptCustomCartao) — SENTINELA de emoji desabilitado
+// (CARTAO_EMOJI_DISABLED_SENTINEL) precisa SOBREVIVER ao parse defensivo do JSONB: é uma
+// string NÃO-VAZIA como qualquer emoji, então cai no mesmo ramo `v !== ''` sem caso especial.
+describe('getAreaPromptCustomCartao — cartao_config.emojis com o SENTINELA de desabilitado', () => {
+  it('sentinela numa chave sobrevive ao parse (não é descartado como blank)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          area: 'barbearia',
+          prompt_custom: true,
+          cartao_mode: 'runtime',
+          cartao_config: { template: 'padrao', emojis: { marca: '__off__', servico: '✂️' } },
+          display_name: 'Barbearia X',
+          cliente_nome: null,
+          personalizacao: null,
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getAreaPromptCustomCartao('clone_x');
+    expect(r.cartaoConfig?.emojis?.marca).toBe('__off__');
+    expect(r.cartaoConfig?.emojis?.servico).toBe('✂️');
+  });
+
+  it('string em BRANCO acidental (não o sentinela) continua descartada — guard antigo preservado', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          area: 'barbearia',
+          prompt_custom: true,
+          cartao_mode: 'runtime',
+          cartao_config: { emojis: { marca: '' } },
+          display_name: 'Barbearia X',
+          cliente_nome: null,
+          personalizacao: null,
+        },
+      ],
+      rowCount: 1,
+    });
+    const r = await getAreaPromptCustomCartao('clone_x');
+    // '' descartado no parse → chave nem existe no config → herda default no merge (mergeEmojis).
+    expect(r.cartaoConfig?.emojis?.marca).toBeUndefined();
+  });
+});

@@ -39,6 +39,33 @@ export type CartaoEmojiKey =
   | 'confirma'
   | 'profissional';
 
+/**
+ * SENTINELA de "emoji DESABILITADO" pra uma chave (decisão do Bruno: emojis do cartão passam a
+ * ser desabilitáveis — decisão separada de "emoji livre"). Gravado em
+ * `flow_clones.cartao_config.emojis[key]` no lugar de um emoji de verdade.
+ *
+ * POR QUE uma STRING reservada (não `null`): `CartaoConfig.emojis` é
+ * `Partial<Record<CartaoEmojiKey, string>>` em TODA a cadeia (catálogo, endpoint,
+ * `CloneCartaoConfig` do @startap/db) — introduzir `null` como 3º estado exigiria mudar esse
+ * tipo em cascata em 4 arquivos e, mais grave, o READER do db (`parseCartaoConfig` em
+ * clone-colaboradores.ts) hoje filtra com `typeof v === 'string'`, então um `null` cru seria
+ * DESCARTADO SILENCIOSAMENTE pelo parser existente sem eu precisar tocar nele — regressão
+ * silenciosa fácil de não notar em review. Uma constante string mantém `string` em todo lugar,
+ * e o único ponto que precisa aprender o sentinela é onde ele é decidido (mergeEmojis) e onde é
+ * persistido/lido (o parser do db, que passa a reconhecê-lo explicitamente).
+ *
+ * NÃO é um valor alcançável por digitação: não casa `\p{RGI_Emoji}` (cartao-catalog.ts rejeita
+ * se alguém tentasse mandar isso via PUT) — só o backend grava este valor exato.
+ *
+ * Semântica em `mergeEmojis`/leitura (3 estados distintos):
+ *   - chave AUSENTE do objeto        → default da área (comportamento de sempre, não muda)
+ *   - chave === CARTAO_EMOJI_DISABLED → emoji VAZIO (desabilitado; a linha perde o ícone, não a
+ *     linha inteira — ver cartaoLinhasAgenda/cartaoLinhasEstabelecimento/joinCampo abaixo)
+ *   - chave === '' / string em branco → CONTINUA caindo no default (guard antigo preservado —
+ *     um blank ACIDENTAL no config nunca apaga o ícone; só o sentinela explícito desabilita)
+ */
+export const CARTAO_EMOJI_DISABLED = '__off__' as const;
+
 /** Layout do cartão em runtime. NÃO altera a REGRA (mostrar cartão + exigir SIM),
  *  só a disposição visual dos campos. 'padrao' = o layout de hoje (byte-a-byte). */
 export type CartaoTemplate = 'padrao' | 'compacto' | 'detalhado';
@@ -119,10 +146,13 @@ function emojisForArea(area: string | null | undefined): CartaoEmojis {
 }
 
 /**
- * Aplica o override PARCIAL do dono sobre o conjunto base da área. Só uma chave com
- * valor STRING NÃO-VAZIO (após trim) vence — override ausente/nulo/`''`/tipo errado
- * herda o emoji da área (defensivo: um blank acidental no config NUNCA apaga o ícone
- * e deixa o cartão quebrado). Puro/determinístico. Exportado pra teste unitário.
+ * Aplica o override PARCIAL do dono sobre o conjunto base da área. 3 estados por chave (ver
+ * CARTAO_EMOJI_DISABLED acima):
+ *   - ausente/nulo/tipo errado/string EM BRANCO acidental → herda o emoji da área (guard
+ *     defensivo de sempre: um blank acidental no config NUNCA apaga o ícone);
+ *   - === CARTAO_EMOJI_DISABLED (sentinela explícito) → emoji VAZIO ('') — desabilitado;
+ *   - qualquer outra string não-vazia → vence (o emoji escolhido pelo dono).
+ * Puro/determinístico. Exportado pra teste unitário.
  */
 export function mergeEmojis(
   base: CartaoEmojis,
@@ -131,6 +161,7 @@ export function mergeEmojis(
   if (!override) return base;
   const pick = (k: CartaoEmojiKey): string => {
     const v = override[k];
+    if (v === CARTAO_EMOJI_DISABLED) return '';
     return typeof v === 'string' && v.trim() !== '' ? v : base[k];
   };
   return {
@@ -178,11 +209,71 @@ const PLACEHOLDERS_AGENDA: CartaoValores = {
 };
 
 /**
+ * Junta partes NÃO-VAZIAS com `sep`, pulando qualquer parte vazia/blank (emoji desabilitado)
+ * SEM deixar separador/espaço órfão. Fonte única do "desabilitar tira só o ícone, a linha
+ * fica" (decisão do Bruno): `💈 Barbearia X` com marca desabilitada vira `Barbearia X`, nunca
+ * ` Barbearia X` (espaço à esquerda) nem `Barbearia X` com separador duplicado no meio.
+ */
+function joinCampo(sep: string, ...partes: string[]): string {
+  return partes.filter((p) => p !== '').join(sep);
+}
+
+/** Monta `<emoji> RÓTULO: valor` (ou só `RÓTULO: valor` se o emoji estiver desabilitado). */
+function campoRotulado(emoji: string, rotulo: string, valor: string): string {
+  return joinCampo(' ', emoji, `${rotulo}: ${valor}`);
+}
+
+/**
+ * Linha de fechamento do cartão ("Responda SIM para confirmar. ✅" / "... pedindo: ... ✅"),
+ * com o emoji de confirmação OPCIONAL — desabilitado (confirma='') não deixa espaço à direita.
+ */
+function fechamentoLinha(prefixo: string, e: CartaoEmojis): string {
+  return joinCampo(' ', prefixo, e.confirma);
+}
+
+/**
+ * SEGMENTO de um campo do cartão de EXEMPLO (buildCartaoExemplo) — pra PR 2 (front) tornar os
+ * emojis clicáveis na prévia sem precisar buscar/adivinhar posição na string pronta. `tipo`
+ * distingue emoji (clicável) de texto (não); `slot` só existe em segmentos de emoji, com a
+ * CHAVE que originou aquele ícone (permite abrir o picker daquele campo exato).
+ *
+ * ⚠️ NÃO construído por regex/busca na string pronta (Samuel tem marca E servico = ✂️, uma
+ * busca por valor casaria o campo errado) — construído NO MESMO PONTO em que cada linha é
+ * montada (buildLinhaSegmentos), então string e segmentos vêm da mesma fonte, nunca divergem.
+ */
+export interface CartaoExemploSegmento {
+  tipo: 'texto' | 'emoji';
+  valor: string;
+  slot?: CartaoEmojiKey;
+}
+
+/** Emoji desabilitado (valor '') NÃO vira segmento 'emoji' vazio — não haveria ícone pra
+ *  clicar; a linha some com ele (joinCampo já cuidou do espaço). */
+function segEmoji(slot: CartaoEmojiKey, emoji: string): CartaoExemploSegmento[] {
+  return emoji === '' ? [] : [{ tipo: 'emoji', valor: emoji, slot }];
+}
+function segTexto(valor: string): CartaoExemploSegmento[] {
+  return valor === '' ? [] : [{ tipo: 'texto', valor }];
+}
+/** Junta grupos de segmentos com um separador de TEXTO entre eles (só quando os dois lados
+ *  têm conteúdo — mesma regra do joinCampo, mas operando em listas de segmento). */
+function joinSegmentos(sep: string, ...grupos: CartaoExemploSegmento[][]): CartaoExemploSegmento[] {
+  const naoVazios = grupos.filter((g) => g.length > 0);
+  const out: CartaoExemploSegmento[] = [];
+  naoVazios.forEach((g, i) => {
+    if (i > 0) out.push(...segTexto(sep));
+    out.push(...g);
+  });
+  return out;
+}
+
+/**
  * Linhas do CARTÃO (agenda) que o assistente EMITE — a FONTE ÚNICA do layout. Tanto a
  * instrução da persona (formatoAgenda) quanto a prévia do portal (buildCartaoExemplo)
  * consomem estas MESMAS linhas; só os `v` (placeholders vs valores reais) trocam. NÃO inclui
  * o rótulo "Formato do cartão:" nem a linha de "Responda SIM" — quem chama adiciona conforme
  * o contexto (instrução com prosa; exemplo com o fechamento "Responda SIM para confirmar.").
+ * Emoji vazio (desabilitado) em qualquer chave NUNCA deixa espaço/separador órfão (joinCampo).
  */
 function cartaoLinhasAgenda(
   e: CartaoEmojis,
@@ -191,22 +282,87 @@ function cartaoLinhasAgenda(
   v: CartaoValores,
 ): string[] {
   if (template === 'compacto') {
-    return [
-      `${e.marca} ${nome} — ${e.dia} ${v.dia} ${e.horario} ${v.horario} ${e.servico} ${v.servico} ${e.valor} ${v.valor}`,
-    ];
+    const cabecalho = joinCampo(' ', e.marca, nome);
+    const campos = joinCampo(
+      ' ',
+      joinCampo(' ', e.dia, v.dia),
+      joinCampo(' ', e.horario, v.horario),
+      joinCampo(' ', e.servico, v.servico),
+      joinCampo(' ', e.valor, v.valor),
+    );
+    return [joinCampo(' — ', cabecalho, campos)];
   }
   if (template === 'detalhado') {
     return [
-      `${e.marca} ${nome}`,
-      `${e.dia} DIA: ${v.dia}`,
-      `${e.horario} HORARIO: ${v.horario}`,
-      `${e.servico} SERVICO: ${v.servico}`,
-      `${e.valor} VALOR: ${v.valor}`,
+      joinCampo(' ', e.marca, nome),
+      campoRotulado(e.dia, 'DIA', v.dia),
+      campoRotulado(e.horario, 'HORARIO', v.horario),
+      campoRotulado(e.servico, 'SERVICO', v.servico),
+      campoRotulado(e.valor, 'VALOR', v.valor),
     ];
   }
   return [
-    `${e.marca} ${nome}`,
-    `${e.dia} DIA: ${v.dia} / ${e.horario} HORARIO: ${v.horario} / ${e.servico} SERVICO: ${v.servico} / ${e.valor} VALOR: ${v.valor}`,
+    joinCampo(' ', e.marca, nome),
+    joinCampo(
+      ' / ',
+      campoRotulado(e.dia, 'DIA', v.dia),
+      campoRotulado(e.horario, 'HORARIO', v.horario),
+      campoRotulado(e.servico, 'SERVICO', v.servico),
+      campoRotulado(e.valor, 'VALOR', v.valor),
+    ),
+  ];
+}
+
+/** Versão SEGMENTADA de campoRotulado — mesmo `<emoji> RÓTULO: valor`, como segmentos. */
+function campoRotuladoSeg(
+  slot: CartaoEmojiKey,
+  emoji: string,
+  rotulo: string,
+  valor: string,
+): CartaoExemploSegmento[] {
+  return joinSegmentos(' ', segEmoji(slot, emoji), segTexto(`${rotulo}: ${valor}`));
+}
+
+/**
+ * Versão SEGMENTADA de cartaoLinhasAgenda — MESMA composição (mesmos joinCampo/joinSegmentos,
+ * mesmos separadores), linha por linha, como listas de CartaoExemploSegmento. Usada só por
+ * buildCartaoExemplo (a instrução do runtime/persona continua consumindo só a string).
+ */
+function cartaoLinhasAgendaSeg(
+  e: CartaoEmojis,
+  template: CartaoTemplate,
+  nome: string,
+  v: CartaoValores,
+): CartaoExemploSegmento[][] {
+  if (template === 'compacto') {
+    const cabecalho = joinSegmentos(' ', segEmoji('marca', e.marca), segTexto(nome));
+    const campos = joinSegmentos(
+      ' ',
+      joinSegmentos(' ', segEmoji('dia', e.dia), segTexto(v.dia)),
+      joinSegmentos(' ', segEmoji('horario', e.horario), segTexto(v.horario)),
+      joinSegmentos(' ', segEmoji('servico', e.servico), segTexto(v.servico)),
+      joinSegmentos(' ', segEmoji('valor', e.valor), segTexto(v.valor)),
+    );
+    return [joinSegmentos(' — ', cabecalho, campos)];
+  }
+  if (template === 'detalhado') {
+    return [
+      joinSegmentos(' ', segEmoji('marca', e.marca), segTexto(nome)),
+      campoRotuladoSeg('dia', e.dia, 'DIA', v.dia),
+      campoRotuladoSeg('horario', e.horario, 'HORARIO', v.horario),
+      campoRotuladoSeg('servico', e.servico, 'SERVICO', v.servico),
+      campoRotuladoSeg('valor', e.valor, 'VALOR', v.valor),
+    ];
+  }
+  return [
+    joinSegmentos(' ', segEmoji('marca', e.marca), segTexto(nome)),
+    joinSegmentos(
+      ' / ',
+      campoRotuladoSeg('dia', e.dia, 'DIA', v.dia),
+      campoRotuladoSeg('horario', e.horario, 'HORARIO', v.horario),
+      campoRotuladoSeg('servico', e.servico, 'SERVICO', v.servico),
+      campoRotuladoSeg('valor', e.valor, 'VALOR', v.valor),
+    ),
   ];
 }
 
@@ -221,20 +377,20 @@ function formatoAgenda(e: CartaoEmojis, template: CartaoTemplate, nome: string):
     return [
       'Formato do cartão (uma linha só):',
       ...linhas,
-      `Depois peça: "Responda SIM para confirmar." ${e.confirma}`,
+      fechamentoLinha('Depois peça: "Responda SIM para confirmar."', e),
     ];
   }
   if (template === 'detalhado') {
     return [
       'Formato do cartão (um campo por linha):',
       ...linhas,
-      `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
+      fechamentoLinha('Termine o cartão pedindo: "Responda SIM para confirmar."', e),
     ];
   }
   return [
     'Formato do cartão:',
     ...linhas,
-    `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
+    fechamentoLinha('Termine o cartão pedindo: "Responda SIM para confirmar."', e),
   ];
 }
 
@@ -284,22 +440,76 @@ function cartaoLinhasEstabelecimento(
   v: CartaoValores,
 ): string[] {
   if (template === 'compacto') {
-    return [
-      `${e.profissional} ${v.profissional} — ${e.dia} ${v.dia} ${e.horario} ${v.horario} ${e.servico} ${v.servico} ${e.valor} ${v.valor}`,
-    ];
+    const cabecalho = joinCampo(' ', e.profissional, v.profissional);
+    const campos = joinCampo(
+      ' ',
+      joinCampo(' ', e.dia, v.dia),
+      joinCampo(' ', e.horario, v.horario),
+      joinCampo(' ', e.servico, v.servico),
+      joinCampo(' ', e.valor, v.valor),
+    );
+    return [joinCampo(' — ', cabecalho, campos)];
   }
   if (template === 'detalhado') {
     return [
-      `${e.profissional} PROFISSIONAL: ${v.profissional}`,
-      `${e.dia} DIA: ${v.dia}`,
-      `${e.horario} HORARIO: ${v.horario}`,
-      `${e.servico} SERVICO: ${v.servico}`,
-      `${e.valor} VALOR: ${v.valor}`,
+      campoRotulado(e.profissional, 'PROFISSIONAL', v.profissional),
+      campoRotulado(e.dia, 'DIA', v.dia),
+      campoRotulado(e.horario, 'HORARIO', v.horario),
+      campoRotulado(e.servico, 'SERVICO', v.servico),
+      campoRotulado(e.valor, 'VALOR', v.valor),
     ];
   }
   return [
-    `${e.profissional} PROFISSIONAL: ${v.profissional}`,
-    `${e.dia} DIA: ${v.dia} / ${e.horario} HORARIO: ${v.horario} / ${e.servico} SERVICO: ${v.servico} / ${e.valor} VALOR: ${v.valor}`,
+    campoRotulado(e.profissional, 'PROFISSIONAL', v.profissional),
+    joinCampo(
+      ' / ',
+      campoRotulado(e.dia, 'DIA', v.dia),
+      campoRotulado(e.horario, 'HORARIO', v.horario),
+      campoRotulado(e.servico, 'SERVICO', v.servico),
+      campoRotulado(e.valor, 'VALOR', v.valor),
+    ),
+  ];
+}
+
+/** Versão SEGMENTADA de cartaoLinhasEstabelecimento — mesma composição, como segmentos. */
+function cartaoLinhasEstabelecimentoSeg(
+  e: CartaoEmojis,
+  template: CartaoTemplate,
+  v: CartaoValores,
+): CartaoExemploSegmento[][] {
+  if (template === 'compacto') {
+    const cabecalho = joinSegmentos(
+      ' ',
+      segEmoji('profissional', e.profissional),
+      segTexto(v.profissional),
+    );
+    const campos = joinSegmentos(
+      ' ',
+      joinSegmentos(' ', segEmoji('dia', e.dia), segTexto(v.dia)),
+      joinSegmentos(' ', segEmoji('horario', e.horario), segTexto(v.horario)),
+      joinSegmentos(' ', segEmoji('servico', e.servico), segTexto(v.servico)),
+      joinSegmentos(' ', segEmoji('valor', e.valor), segTexto(v.valor)),
+    );
+    return [joinSegmentos(' — ', cabecalho, campos)];
+  }
+  if (template === 'detalhado') {
+    return [
+      campoRotuladoSeg('profissional', e.profissional, 'PROFISSIONAL', v.profissional),
+      campoRotuladoSeg('dia', e.dia, 'DIA', v.dia),
+      campoRotuladoSeg('horario', e.horario, 'HORARIO', v.horario),
+      campoRotuladoSeg('servico', e.servico, 'SERVICO', v.servico),
+      campoRotuladoSeg('valor', e.valor, 'VALOR', v.valor),
+    ];
+  }
+  return [
+    campoRotuladoSeg('profissional', e.profissional, 'PROFISSIONAL', v.profissional),
+    joinSegmentos(
+      ' / ',
+      campoRotuladoSeg('dia', e.dia, 'DIA', v.dia),
+      campoRotuladoSeg('horario', e.horario, 'HORARIO', v.horario),
+      campoRotuladoSeg('servico', e.servico, 'SERVICO', v.servico),
+      campoRotuladoSeg('valor', e.valor, 'VALOR', v.valor),
+    ),
   ];
 }
 
@@ -316,20 +526,20 @@ function formatoEstabelecimento(e: CartaoEmojis, template: CartaoTemplate): stri
     return [
       'Formato do cartão (uma linha só):',
       ...linhas,
-      `Depois peça: "Responda SIM para confirmar." ${e.confirma}`,
+      fechamentoLinha('Depois peça: "Responda SIM para confirmar."', e),
     ];
   }
   if (template === 'detalhado') {
     return [
       'Formato do cartão (um campo por linha):',
       ...linhas,
-      `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
+      fechamentoLinha('Termine o cartão pedindo: "Responda SIM para confirmar."', e),
     ];
   }
   return [
     'Formato do cartão:',
     ...linhas,
-    `Termine o cartão pedindo: "Responda SIM para confirmar." ${e.confirma}`,
+    fechamentoLinha('Termine o cartão pedindo: "Responda SIM para confirmar."', e),
   ];
 }
 
@@ -449,7 +659,15 @@ export function buildCartaoRuntimeBlock(opts: {
  *  de confirmação resolvido. Espelha o "Responda SIM para confirmar." que a instrução manda o
  *  modelo escrever — usado só pelo exemplo (a instrução carrega a versão em prosa). */
 function fechamentoExemplo(e: CartaoEmojis): string {
-  return `Responda SIM para confirmar. ${e.confirma}`;
+  return fechamentoLinha('Responda SIM para confirmar.', e);
+}
+/** Versão SEGMENTADA do fechamento do exemplo. */
+function fechamentoExemploSeg(e: CartaoEmojis): CartaoExemploSegmento[] {
+  return joinSegmentos(
+    ' ',
+    segTexto('Responda SIM para confirmar.'),
+    segEmoji('confirma', e.confirma),
+  );
 }
 
 /** Valores de amostra do cartão de EXEMPLO. `nomeNegocio` só é usado na agenda (o header do
@@ -514,6 +732,57 @@ export function buildCartaoExemplo(opts: {
     profissional: '',
   });
   return [...linhas, fechamentoExemplo(e)].join('\n');
+}
+
+/**
+ * Versão SEGMENTADA de buildCartaoExemplo (pra PR 2 — front tornar os emojis clicáveis na
+ * prévia). MESMOS parâmetros, MESMA fonte de composição (cartaoLinhas*Seg/joinSegmentos —
+ * literalmente os mesmos pontos onde cada emoji entra na versão string), então string e
+ * segmentos NUNCA divergem por construção; não há regex/busca em cima da string pronta.
+ *
+ * Devolve uma lista ÚNICA e "achatada" de segmentos representando o cartão inteiro, com
+ * segmentos de texto `'\n'` marcando quebra de linha (equivalente ao `.join('\n')` da versão
+ * string) — o front decide como renderizar a quebra; o backend só garante a fonte de verdade.
+ *
+ * `atendente` → lista vazia (sem cartão, espelha a string vazia de buildCartaoExemplo).
+ */
+export function buildCartaoExemploSegmentado(opts: {
+  modo: 'agenda' | 'estabelecimento' | 'atendente';
+  area?: string | null;
+  config?: Pick<CartaoConfig, 'template' | 'emojis'> | null;
+  sample: CartaoExemploSample;
+}): CartaoExemploSegmento[] {
+  if (opts.modo === 'atendente') return [];
+  const template = opts.config?.template ?? 'padrao';
+  const e = resolveEmojis(opts.modo, opts.area, opts.config?.emojis);
+  const s = opts.sample;
+  let linhas: CartaoExemploSegmento[][];
+  if (opts.modo === 'estabelecimento') {
+    linhas = cartaoLinhasEstabelecimentoSeg(e, template, {
+      dia: s.dia,
+      horario: s.horario,
+      servico: s.servico,
+      valor: s.valor,
+      profissional: s.profissional,
+    });
+  } else {
+    const nome =
+      s.nomeNegocio && s.nomeNegocio.trim() !== '' ? s.nomeNegocio.trim() : PLACEHOLDER_NOME;
+    linhas = cartaoLinhasAgendaSeg(e, template, nome, {
+      dia: s.dia,
+      horario: s.horario,
+      servico: s.servico,
+      valor: s.valor,
+      profissional: '',
+    });
+  }
+  const todasLinhas = [...linhas, fechamentoExemploSeg(e)];
+  const out: CartaoExemploSegmento[] = [];
+  todasLinhas.forEach((linha, i) => {
+    if (i > 0) out.push({ tipo: 'texto', valor: '\n' });
+    out.push(...linha);
+  });
+  return out;
 }
 
 /**

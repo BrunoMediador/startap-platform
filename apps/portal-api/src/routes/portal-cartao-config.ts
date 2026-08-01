@@ -35,15 +35,24 @@
  * baked em bot_prompt_versions (comment=CARTAO_MIGRATION_SNAPSHOT_COMMENT). Logo o flip do portal
  * é revertível pelo MESMO caminho do script: `migrate-cartao-runtime.ts --revert <slot>`.
  *
- * SEGURANÇA (decisão do security): emoji = ALLOWLIST FECHADA de code points por chave
- * (validateCartaoEmojis: NFC + sequência inteira contra o catálogo — rejeita tag chars/fora do
- * set). `template` = enum fechado. slot SEMPRE da SESSÃO (withTenant) — nunca do body (anti-IDOR).
+ * SEGURANÇA (decisão do Bruno, PR backend): emoji LIVRE do teclado do dispositivo, validado
+ * estritamente (validateCartaoEmojis → isSingleValidEmoji: 1 grapheme cluster, RGI_Emoji,
+ * deny-list de tag chars/controle/invisíveis — ver cartao-catalog.ts). NÃO é mais allowlist
+ * fechada por catálogo curado. `template` = enum fechado. slot SEMPRE da SESSÃO (withTenant) —
+ * nunca do body (anti-IDOR). Emojis são DESABILITÁVEIS via o sentinela CARTAO_EMOJI_DISABLED
+ * (`'__off__'`) no lugar de um emoji — a linha correspondente perde só o ícone (bloco-estrutural.ts).
  *
  * Contrato (casa com apps/portal-web/src/lib/cartao-config.ts):
  *   GET  -> { mode, editable, locked_reason, config:{template,emojis}|null,
- *            defaults:{template,emojis}, canDisable:false, preview:string|null }
- *   PUT { template, emojis } -> mesmo shape (após flip/update). Erros: 400 (input/emoji), 409
+ *            defaults:{template,emojis}, canDisable:false, preview:string|null,
+ *            previews:{padrao,compacto,detalhado}, previewsSegmentados:{padrao,compacto,detalhado} }
+ *   PUT { template, emojis } -> mesmo shape (após flip/update). `emojis[key]` aceita 1 emoji
+ *            livre válido OU o sentinela de desabilitado. Erros: 400 (input/emoji), 409
  *            (prompt_custom), 422 (requer_revisao), 404 (flag OFF / sem clone).
+ *   `previewsSegmentados` (PR backend, consumido pela PR 2/front): MESMO conteúdo de `previews`,
+ *            mas como lista de segmentos {tipo,valor,slot?} — permite o front tornar cada emoji
+ *            clicável sem adivinhar posição na string (buildCartaoExemploSegmentado; fonte única
+ *            com `previews`, nunca construído por regex/busca na string pronta).
  */
 import { logger } from '@startap/core/logger';
 import { botPrompt, cloneColaboradores, portalConfig } from '@startap/db';
@@ -61,9 +70,11 @@ const log = logger.child({ service: 'portal-api', module: 'cartao-config' });
 // comment do snapshot é fixo dentro de migrateCloneToCartaoRuntime, então o --revert acha os dois.
 const EDITED_BY = 'portal:cartao-config';
 
-// Body do PUT: template obrigatório (enum fechado) + emojis parcial (validado contra a allowlist
-// FECHADA no handler, NÃO por regex/grapheme). .strict() → chave desconhecida = 400 (anti
-// mass-assignment). emojis é `record` cru aqui; a allowlist real é validateCartaoEmojis.
+// Body do PUT: template obrigatório (enum fechado) + emojis parcial (validado no HANDLER por
+// validateCartaoEmojis: emoji LIVRE estrito — 1 grapheme cluster, RGI_Emoji, deny-list de tag
+// chars/controle/invisíveis — OU o sentinela CARTAO_EMOJI_DISABLED). .strict() → chave
+// desconhecida = 400 (anti mass-assignment). emojis é `record` cru aqui; o Zod só garante que
+// cada valor é string|unknown — a validação real (e a única fonte de verdade) é o handler.
 const putSchema = z
   .object({
     template: z.enum(['padrao', 'compacto', 'detalhado']),
@@ -174,6 +185,29 @@ function renderPreviews(
   return out;
 }
 
+/**
+ * Versão SEGMENTADA de renderPreviews (consumida pela PR 2/front — SCRUM, emoji clicável na
+ * prévia). MESMOS parâmetros/MESMA amostra que renderPreviews — buildCartaoExemploSegmentado é
+ * a fonte única com buildCartaoExemplo (nunca diverge por construção; ver bloco-estrutural.ts).
+ */
+function renderPreviewsSegmentados(
+  modo: Modo,
+  area: string | null,
+  emojisOverride: Partial<Record<EmojiKey, string>> | undefined,
+  sample: promptBuilder.CartaoExemploSample,
+): Record<PreviewTemplate, promptBuilder.CartaoExemploSegmento[]> {
+  const out = {} as Record<PreviewTemplate, promptBuilder.CartaoExemploSegmento[]>;
+  for (const template of PREVIEW_TEMPLATES) {
+    out[template] = promptBuilder.buildCartaoExemploSegmentado({
+      modo,
+      area,
+      config: { template, emojis: emojisOverride },
+      sample,
+    });
+  }
+  return out;
+}
+
 /** Extrai o cartão BAKED atual do clone (via bot_prompt). Puro sobre o texto; nunca lança. */
 async function extractCurrentCartao(slot: string) {
   const prompt = await botPrompt.getPrompt(slot);
@@ -244,6 +278,9 @@ function buildResponse(args: ResponseArgs): Record<string, unknown> {
   // previews (SCRUM-99) = EXEMPLO fiel do cartão que o cliente RECEBE, pros 3 templates, com os
   // emojis-semente + nome/serviço reais. É o que a seção mostra (o `preview` acima nunca aparece).
   const previews = renderPreviews(modo, area, seedOverride, sample);
+  // previewsSegmentados (PR backend, consumido pela PR 2/front): MESMO conteúdo, como segmentos
+  // {tipo,valor,slot?} — permite tornar cada emoji clicável na prévia. Fonte única com `previews`.
+  const previewsSegmentados = renderPreviewsSegmentados(modo, area, seedOverride, sample);
 
   return {
     mode: effectiveMode,
@@ -254,6 +291,7 @@ function buildResponse(args: ResponseArgs): Record<string, unknown> {
     canDisable: false,
     preview,
     previews,
+    previewsSegmentados,
     sample,
   };
 }
@@ -459,15 +497,22 @@ export const portalCartaoConfigRoutes: FastifyPluginAsync = async (app) => {
     const modo = await resolveModo(slot);
     const sample = await buildSample(slot, modo, nomeNegocio);
 
-    // Emojis vêm da query (?marca=&dia=&...): mantém só os que passam na allowlist FECHADA por
-    // chave — inválido/desconhecido é IGNORADO (default da área vence), nunca renderiza lixo.
+    // Emojis vêm da query (?marca=&dia=&...): mantém só os que passam na validação estrita de
+    // emoji ÚNICO (isEmojiAllowed/isSingleValidEmoji) OU são o sentinela de desabilitado —
+    // inválido/desconhecido é IGNORADO (default da área vence), nunca renderiza lixo.
     const q = (req.query ?? {}) as Record<string, unknown>;
     const override: Partial<Record<EmojiKey, string>> = {};
     for (const key of promptBuilder.CARTAO_EMOJI_KEYS) {
       const v = q[key];
-      if (typeof v === 'string' && promptBuilder.isEmojiAllowed(key, v)) override[key] = v;
+      if (typeof v !== 'string') continue;
+      if (v === promptBuilder.CARTAO_EMOJI_DISABLED || promptBuilder.isEmojiAllowed(key, v)) {
+        override[key] = v;
+      }
     }
 
-    return reply.code(200).send({ previews: renderPreviews(modo, area, override, sample) });
+    return reply.code(200).send({
+      previews: renderPreviews(modo, area, override, sample),
+      previewsSegmentados: renderPreviewsSegmentados(modo, area, override, sample),
+    });
   });
 };
