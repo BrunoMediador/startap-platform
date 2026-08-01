@@ -183,6 +183,20 @@ describe('formatPhoneBR (máscara progressiva)', () => {
     expect(formatPhoneBR('119999900071234')).toBe('(11) 99999-0007');
     expect(telefoneDigits('(11) 99999-0007')).toBe('11999990007');
   });
+
+  it('colar com DDI (formato do WhatsApp) trata "55" como DDI, não DDD', () => {
+    // Bug real: colar "+55 (11) 97963-0828" mascarava como (55) 11979-6308
+    // (tratando o DDI como DDD e cortando os 2 últimos dígitos do celular).
+    expect(telefoneDigits('+55 (11) 97963-0828')).toBe('11979630828');
+    expect(formatPhoneBR('+55 (11) 97963-0828')).toBe('(11) 97963-0828');
+  });
+
+  it('DDD 55 real (Santa Maria/RS) em 10-11 dígitos NÃO é confundido com DDI', () => {
+    // Ambíguo só resolve pelo total de dígitos: 12-13 = DDI+DDD+numero;
+    // 10-11 continua sendo número nacional puro (comportamento de sempre).
+    expect(telefoneDigits('55999990007')).toBe('55999990007');
+    expect(formatPhoneBR('55999990007')).toBe('(55) 99999-0007');
+  });
 });
 
 describe('validateNovoAgendamento', () => {
@@ -253,6 +267,21 @@ describe('validateNovoAgendamento', () => {
     const res = validateNovoAgendamento({ nome: 'Maria', telefone: '(11) 3333-4444' });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.value.cliente_telefone).toBe('551133334444');
+  });
+
+  it('colar com DDI 55 (formato que o WhatsApp mostra) não duplica nem trunca', () => {
+    const casos = [
+      '+55 (11) 97963-0828', // o caso do bug — copiar/colar direto do WhatsApp
+      '5511979630828',
+      '55 11 97963 0828',
+      '(11) 97963-0828', // sem DDI — já funcionava, não pode regredir
+      '11979630828', // idem
+    ];
+    for (const telefone of casos) {
+      const res = validateNovoAgendamento({ nome: 'João', telefone });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.value.cliente_telefone).toBe('5511979630828');
+    }
   });
 });
 

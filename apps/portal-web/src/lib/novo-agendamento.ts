@@ -245,9 +245,23 @@ export function addMinutosHora(hora: string, minutos: number): string {
 
 // ── Form do cliente (nome obrigatório + WhatsApp opcional) ────────────────────
 
-/** Só os dígitos, cap em 11 (DDD + 9 dígitos — celular BR). */
+/**
+ * Só os dígitos, cap em 11 (DDD + 9 dígitos — celular BR).
+ *
+ * Aceita colar o número como o WhatsApp mostra, com DDI ("+55 (11) 97963-0828"):
+ * o dono é instruído a copiar exatamente o que vê lá (ordem do Bruno, 31/07).
+ * Só tratamos como "veio com DDI 55" quando o total de dígitos colados é 12
+ * ou 13 (DDI 55 + DDD + 8/9 dígitos) — ambíguo demais em 10-11 (ex.: DDD 55
+ * é Santa Maria/RS de verdade), então nesses casos o comportamento de sempre
+ * (número nacional puro) fica intacto. Sem isso, a máscara tratava o "55" do
+ * DDI como DDD e o `.slice(0,11)` cortava os 2 últimos dígitos do celular.
+ */
 export function telefoneDigits(input: string): string {
-  return input.replace(/\D/g, '').slice(0, 11);
+  const raw = input.replace(/\D/g, '');
+  if (raw.length >= 12 && raw.length <= 13 && raw.startsWith('55')) {
+    return raw.slice(2, 13);
+  }
+  return raw.slice(0, 11);
 }
 
 /**
