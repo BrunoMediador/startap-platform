@@ -29,6 +29,14 @@ export interface FlowPauseInput {
    * com um `expiresAt` mais adiante.
    */
   expiresAt?: Date | null;
+  /**
+   * Nome do CONTATO — snapshotado na pausa pra durar (mesmo espírito do
+   * `HumanReplyPauseInput.contactName`, ver ali). O caller resolve do store durável
+   * contact_names (pushName do INBOUND), NUNCA do pushName de um evento fromMe (que é o
+   * nome do DONO, não do contato). Ausente/NULL não toca um contact_name já capturado
+   * (COALESCE/NULLIF no upsert) — nunca apaga nome preexistente.
+   */
+  contactName?: string | null;
 }
 
 export type FlowPauseCommand = 'pause' | 'resume';
@@ -127,8 +135,8 @@ export async function addFlowPause(input: FlowPauseInput): Promise<void> {
     // NUNCA rebaixa uma permanente). Fora do modo atendente ninguém seta expires_at => byte-
     // idêntico ao comportamento anterior à coluna.
     `INSERT INTO flow_pauses
-       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, updated_at)
-     VALUES ($1,$2,$3,$4,TRUE,$5,$6,$7,NOW())
+       (flow_id, flow_name, telefone, session, active, source, reason, expires_at, contact_name, updated_at)
+     VALUES ($1,$2,$3,$4,TRUE,$5,$6,$7,$8,NOW())
      ON CONFLICT (flow_id, telefone) DO UPDATE SET
        flow_name = COALESCE(EXCLUDED.flow_name, flow_pauses.flow_name),
        session = COALESCE(EXCLUDED.session, flow_pauses.session),
@@ -136,6 +144,7 @@ export async function addFlowPause(input: FlowPauseInput): Promise<void> {
        source = COALESCE(EXCLUDED.source, flow_pauses.source),
        reason = COALESCE(EXCLUDED.reason, flow_pauses.reason),
        expires_at = EXCLUDED.expires_at,
+       contact_name = COALESCE(NULLIF(EXCLUDED.contact_name, ''), flow_pauses.contact_name),
        updated_at = NOW()`,
     [
       input.flowId,
@@ -145,6 +154,7 @@ export async function addFlowPause(input: FlowPauseInput): Promise<void> {
       input.source ?? 'manual',
       input.reason ?? null,
       input.expiresAt ?? null,
+      input.contactName ?? null,
     ],
   );
 }

@@ -32,7 +32,7 @@
  */
 import { logger } from '@startap/core/logger';
 import { phoneHint } from '@startap/core/phone';
-import { antibot, botDetect, pausa } from '@startap/db';
+import { antibot, botDetect, contactNames, pausa } from '@startap/db';
 import { config } from '../config.js';
 import {
   classifyHeuristic,
@@ -207,6 +207,12 @@ export async function runBotDetectAutopause(): Promise<BotDetectAutopauseResult>
           continue;
         }
 
+        // SCRUM-144: snapshota o nome do CONTATO do store durável (pushName do INBOUND).
+        // Fail-safe: erro/ausência nunca atrasa nem derruba a auto-pausa (nome fica NULL).
+        const contactNameAutopause = await contactNames
+          .getContactName({ session: info.waha_sessao, telefone })
+          .catch(() => null);
+
         // 3 condições VERDADEIRAS -> AUTO-PAUSA (reversível por TTL / despausar do cliente).
         await pausa.addFlowPause({
           flowId: slot,
@@ -214,6 +220,7 @@ export async function runBotDetectAutopause(): Promise<BotDetectAutopauseResult>
           session: info.waha_sessao,
           source: BOT_PAUSE_SOURCE,
           reason: 'Auto-pausado por suspeita de bot (carência expirada)',
+          contactName: contactNameAutopause,
         });
         await botDetect.markPaused(slot, telefone);
         result.paused++;

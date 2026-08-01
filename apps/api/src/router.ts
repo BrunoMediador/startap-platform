@@ -504,6 +504,12 @@ export async function handleWebhook(
         ? null
         : await getFlowManualCommandForFlow(route.workflow_id, text);
       if (flowManualCommand) {
+        // SCRUM-144: snapshota o nome do CONTATO (store durável, pushName do INBOUND) — NUNCA
+        // o pushName deste evento fromMe (que é o nome do DONO, não do contato). Fail-safe:
+        // erro na leitura NUNCA atrasa/derruba a pausa — nome fica NULL nesse caso.
+        const contactNameManual = await contactNames
+          .getContactName({ session: sessao, telefone: atendenteTelefone })
+          .catch(() => null);
         await applyFlowManualCommand({
           command: flowManualCommand,
           flowId: route.workflow_id,
@@ -512,6 +518,7 @@ export async function handleWebhook(
           session: sessao,
           source: 'fromMe',
           reason: 'Comando manual no WhatsApp',
+          contactName: contactNameManual,
         });
         await flowExecutionLog.logFlowEvent({
           ...phoneLog,
@@ -725,6 +732,13 @@ export async function handleWebhook(
       return { status: 'ignored:fromMe' };
     }
 
+    // SCRUM-144: snapshota o nome do CONTATO (store durável, pushName do INBOUND) — NUNCA o
+    // pushName deste evento fromMe (nome do DONO). Este ponto fica FORA do gate de modo
+    // atendente/resolução @lid (roda antes dela) — usa `telefone` cru, mesma variável que o
+    // resto deste bloco já usa. Fail-safe: erro na leitura não atrasa/derruba a pausa.
+    const contactNameManual = await contactNames
+      .getContactName({ session: sessao, telefone })
+      .catch(() => null);
     await applyFlowManualCommand({
       command: flowManualCommand,
       flowId: route.workflow_id,
@@ -733,6 +747,7 @@ export async function handleWebhook(
       session: sessao,
       source: 'fromMe',
       reason: 'Comando manual no WhatsApp',
+      contactName: contactNameManual,
     });
     await flowExecutionLog.logFlowEvent({
       ...phoneLog,
