@@ -15,6 +15,7 @@
  * empty ficam na PÁGINA; aqui só renderiza `data` já pronta. No clone INDIVIDUAL
  * esta tela NÃO é usada — a page escolhe AgendaClient (sem cores/profissional).
  */
+import { IconPlus } from '@/components/icons';
 import {
   agruparPorHorario,
   filtrarPorProfissional,
@@ -23,6 +24,7 @@ import {
 import { type PeriodoFiltro, filtrarAgendamentos } from '@/lib/agendamentos';
 import type { Agendamento, AgendamentosResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { AgendaDetailSheet } from './agenda-detail-sheet';
 import { EstabelecimentoHorarioGrupo } from './estabelecimento-horario-grupo';
@@ -79,32 +81,44 @@ export function AgendaEstabelecimentoClient({
         </div>
       )}
 
-      {/* Abas de período. */}
-      <div
-        role="tablist"
-        aria-label="Filtrar por período"
-        className="mb-4 flex gap-1.5 overflow-x-auto pb-0.5"
-      >
-        {ABAS.map((aba) => {
-          const ativo = periodo === aba.value;
-          return (
-            <button
-              key={aba.value}
-              type="button"
-              role="tab"
-              aria-selected={ativo}
-              onClick={() => setPeriodo(aba.value)}
-              className={cn(
-                'shrink-0 rounded-pill px-3.5 py-1.5 font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
-                ativo
-                  ? 'bg-brand-soft text-brand'
-                  : 'border border-line bg-surface text-ink-soft hover:bg-surface-hover hover:text-ink',
-              )}
-            >
-              {aba.label}
-            </button>
-          );
-        })}
+      {/* Abas de período + entrada do agendamento manual (mesmo padrão do
+          AgendaClient individual — a variante estabelecimento não tinha
+          NENHUMA forma de criar agendamento). */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div
+          role="tablist"
+          aria-label="Filtrar por período"
+          className="flex gap-1.5 overflow-x-auto pb-0.5"
+        >
+          {ABAS.map((aba) => {
+            const ativo = periodo === aba.value;
+            return (
+              <button
+                key={aba.value}
+                type="button"
+                role="tab"
+                aria-selected={ativo}
+                onClick={() => setPeriodo(aba.value)}
+                className={cn(
+                  'shrink-0 rounded-pill px-3.5 py-1.5 font-display text-[13px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+                  ativo
+                    ? 'bg-brand-soft text-brand'
+                    : 'border border-line bg-surface text-ink-soft hover:bg-surface-hover hover:text-ink',
+                )}
+              >
+                {aba.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <Link
+          href="/agendamentos/novo"
+          className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-pill border border-line-strong bg-surface px-3.5 font-display text-[13px] font-semibold text-brand outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+        >
+          <IconPlus size={16} />
+          Novo
+        </Link>
       </div>
 
       {totalVisivel === 0 ? (
