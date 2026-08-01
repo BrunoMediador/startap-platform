@@ -1,7 +1,7 @@
 /**
  * DERIVA PROMPT × TELA — o prompt do builder cita nomes de tela; a tela pode ser renomeada.
  *
- * Os system prompts VIVOS do meta-entrevistador (`v9.md` = criação, `v10.md` = melhoria) dizem ao
+ * Os system prompts VIVOS do meta-entrevistador (`v11.md` = criação, `v12.md` = melhoria) dizem ao
  * dono ONDE configurar cada dado operacional. Esses nomes são uma dependência NÃO-TIPADA do
  * front: se alguém renomear uma tela e esquecer o prompt, ele passa a mandar o cliente para uma
  * tela que não existe — ele procura, não acha e chama o suporte.
@@ -30,7 +30,7 @@ import { describe, expect, it } from 'vitest';
 import { NAV_SPEC } from './nav';
 
 /** Corpo de um prompt versionado (tudo depois do separador `---` isolado). */
-function readPrompt(versao: 'v9' | 'v10'): string {
+function readPrompt(versao: 'v11' | 'v12'): string {
   const path = fileURLToPath(
     new URL(
       `../../../../packages/integrations/ai/prompts/meta-entrevistador/${versao}.md`,
@@ -95,8 +95,15 @@ const CAMINHOS_ESPERADOS = {
  * tela que deixou de existir — a mesma classe de bug que este teste nasceu para pegar, só que
  * com destino morto em vez de nome errado. O teste abaixo garante os dois lados: o caminho não
  * pode estar declarado E nenhum prompt vivo pode citar a aba.
+ *
+ * ⚠️ 01/08 — mesma história com os PLANOS, e por isso a lista acima NÃO mudou: a entrada `planos`
+ * apontava para `"Meu negócio" › "Dados"`, o MESMO caminho de `dados-negocio`, que continua
+ * existindo. Ou seja, remover `planos` da fonte única é invisível para `CAMINHOS_ESPERADOS` — o
+ * que este arquivo cobre é a deriva PROMPT × TELA, e a deriva de conteúdo (o mapa parou de
+ * declarar planos, e os prompts passaram a acolhê-los) está travada do lado do backend, em
+ * `packages/integrations/src/ai/meta-entrevistador.test.ts`. Aqui só as versões VIVAS avançam.
  */
-const VIVOS = ['v9', 'v10'] as const;
+const VIVOS = ['v11', 'v12'] as const;
 
 describe('prompts vivos × telas reais do portal (anti-deriva)', () => {
   it('a FONTE ÚNICA declara exatamente os caminhos que as telas reais oferecem', () => {
@@ -167,6 +174,26 @@ describe('prompts vivos × telas reais do portal (anti-deriva)', () => {
     ).not.toContain('"Meu atendente" › "Mensagens"');
     const src = readFonteUnica();
     expect(src, 'a entrada `faq` voltou ao mapa ONDE_SE_CONFIGURA').not.toMatch(/^\s*faq:\s*\{/m);
+  });
+
+  it('a fonte única NÃO declara mais os PLANOS (o campo saiu do portal em 01/08)', () => {
+    // Diferente do FAQ, os planos apontavam para "Meu negócio" › "Dados" — um caminho que
+    // CONTINUA existindo. Então o teste de caminhos acima não pega esta remoção; é preciso
+    // checar a ENTRADA do mapa. Se ela voltar, a IA recusa o assunto e manda a dona para uma
+    // seção que deixou de existir dentro de uma tela que ainda existe: pior de detectar.
+    const src = readFonteUnica();
+    expect(src, 'a entrada `planos` voltou ao mapa ONDE_SE_CONFIGURA').not.toMatch(
+      /^\s*planos:\s*\{/m,
+    );
+  });
+
+  it.each(VIVOS)('%s: não manda configurar plano em tela e ACOLHE o assunto', (versao) => {
+    const prompt = readPrompt(versao);
+    // A metade positiva, lida do `.md` canônico: é a lição da PR #555 — em prompt de lista
+    // fechada, remover a proibição não faz o modelo aceitar.
+    expect(prompt).toContain('PLANOS E ASSINATURAS (isto SIM entra na persona)');
+    // E o limite que NÃO afrouxou junto: preço de serviço avulso continua vindo do catálogo.
+    expect(prompt).toContain('preço de SERVIÇO AVULSO segue proibido');
   });
 
   it.each(VIVOS)('%s: não cita a aba "Mensagens" nem manda configurar FAQ em tela', (versao) => {
