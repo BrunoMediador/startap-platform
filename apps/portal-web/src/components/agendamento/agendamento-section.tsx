@@ -29,6 +29,7 @@ import { IconCalendar, IconHeadset } from '@/components/icons';
  * comportamento do bot).
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
@@ -106,53 +107,88 @@ export function AgendamentoSection() {
     if (linkError) setLinkError(undefined);
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!dirty || save.isPending) return;
+  /**
+   * Núcleo do submit (validação + save otimista). Extraído de `onSubmit`
+   * pra também poder ser chamado pelo guard global de "alterações não
+   * salvas" (SCRUM-158). Rejeita em validação inválida (nunca navega com
+   * erro pendente); resolve assim que o cache aplica o otimista.
+   */
+  function submitAgendamento(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!dirty) {
+        resolve();
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
 
-    const res = validateAgenda(draft);
-    if (!res.ok) {
-      setLinkError(res.error);
-      return;
-    }
-    setLinkError(undefined);
+      const res = validateAgenda(draft);
+      if (!res.ok) {
+        setLinkError(res.error);
+        reject(new Error('validacao'));
+        return;
+      }
+      setLinkError(undefined);
 
-    // Só os campos da agenda (o "WhatsApp da recepção" saiu pra RecepcaoSection). Mantém o
-    // recepcao_telefone que já estava no rascunho — esta seção não o edita.
-    const value = res.value;
-    const nextSaved: AgendaConfigDraft = { ...value, recepcao_telefone: saved.recepcao_telefone };
-    const prev = client.getQueryData(qk.agendaConfig(slot));
+      // Só os campos da agenda (o "WhatsApp da recepção" saiu pra RecepcaoSection). Mantém o
+      // recepcao_telefone que já estava no rascunho — esta seção não o edita.
+      const value = res.value;
+      const nextSaved: AgendaConfigDraft = {
+        ...value,
+        recepcao_telefone: saved.recepcao_telefone,
+      };
+      const prev = client.getQueryData(qk.agendaConfig(slot));
 
-    // Otimista: aplica no cache + fixa o draft normalizado na tela.
-    client.setQueryData(qk.agendaConfig(slot), (p: typeof cfgQ.data) => ({
-      modo_atendente: p?.modo_atendente ?? true,
-      ...value,
-      recepcao_telefone: p?.recepcao_telefone ?? '',
-      // SCRUM-74: salvar não muda o estado da agenda — preserva (default TRUE).
-      agenda_configurada: p?.agenda_configurada ?? true,
-    }));
-    setSaved(nextSaved);
-    setDraft(nextSaved);
-    touched.current = false;
+      // Otimista: aplica no cache + fixa o draft normalizado na tela.
+      client.setQueryData(qk.agendaConfig(slot), (p: typeof cfgQ.data) => ({
+        modo_atendente: p?.modo_atendente ?? true,
+        ...value,
+        recepcao_telefone: p?.recepcao_telefone ?? '',
+        // SCRUM-74: salvar não muda o estado da agenda — preserva (default TRUE).
+        agenda_configurada: p?.agenda_configurada ?? true,
+      }));
+      setSaved(nextSaved);
+      setDraft(nextSaved);
+      touched.current = false;
 
-    save.mutate(value, {
-      onSuccess: () => toast.success('Agendamento atualizado'),
-      onError: (err) => {
-        if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
-        const back = toAgendaDraft(prev as Parameters<typeof toAgendaDraft>[0]);
-        setSaved(back);
-        setDraft(back);
-        touched.current = false;
-        // 409 agenda_nao_configurada (rede de proteção): religar o automático não é
-        // self-service — aponta pro suporte em vez do erro genérico.
-        toast.error(
-          isAgendaNaoConfigurada(err)
-            ? 'O agendamento automático é habilitado pela nossa equipe. Fale com o suporte para ativar.'
-            : 'Não foi possível salvar. Tente de novo.',
-        );
-      },
+      save.mutate(value, {
+        onSuccess: () => {
+          toast.success('Agendamento atualizado');
+          resolve();
+        },
+        onError: (err) => {
+          if (prev !== undefined) client.setQueryData(qk.agendaConfig(slot), prev);
+          const back = toAgendaDraft(prev as Parameters<typeof toAgendaDraft>[0]);
+          setSaved(back);
+          setDraft(back);
+          touched.current = false;
+          // 409 agenda_nao_configurada (rede de proteção): religar o automático não é
+          // self-service — aponta pro suporte em vez do erro genérico.
+          toast.error(
+            isAgendaNaoConfigurada(err)
+              ? 'O agendamento automático é habilitado pela nossa equipe. Fale com o suporte para ativar.'
+              : 'Não foi possível salvar. Tente de novo.',
+          );
+          reject(err instanceof Error ? err : new Error('save-falhou'));
+        },
+      });
     });
   }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitAgendamento().catch(() => {
+      // erro já tratado (inline/toast) dentro de submitAgendamento.
+    });
+  }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  // Enquanto carrega/feature OFF, `draft`/`saved` nascem iguais -> `dirty` é
+  // sempre `false`, então o registro nunca dispara o guard à toa.
+  useRegistrarNaoSalvo('Agendamento pela agenda', dirty, submitAgendamento);
 
   // Load: não renderiza nada (sem flash pra quem não tem a feature).
   if (cfgQ.isPending || cfgQ.isError) return null;

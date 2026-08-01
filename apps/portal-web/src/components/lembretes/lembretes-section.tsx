@@ -19,6 +19,7 @@
  * "disponível quando a agenda estiver ativa".
  */
 import { useTenant } from '@/components/shell/session-context';
+import { useRegistrarNaoSalvo } from '@/components/shell/unsaved-changes-context';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
@@ -74,33 +75,62 @@ export function LembretesSection() {
     setDraft((d) => toggleWindow(d, janela));
   }
 
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!dirty || !valido || save.isPending) return;
+  /**
+   * Núcleo do submit (save otimista). Extraído de `onSubmit` pra também
+   * poder ser chamado pelo guard global de "alterações não salvas"
+   * (SCRUM-158). Resolve assim que o cache aplica o otimista; o `mutate`
+   * segue em background com revert no erro.
+   */
+  function submitLembretes(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!dirty || !valido) {
+        resolve();
+        return;
+      }
+      if (save.isPending) {
+        resolve();
+        return;
+      }
 
-    const patch = toLembretesPatch(draft);
-    const prev = client.getQueryData(qk.lembretes(slot));
+      const patch = toLembretesPatch(draft);
+      const prev = client.getQueryData(qk.lembretes(slot));
 
-    // Otimista: aplica no cache + fixa o draft como salvo na hora.
-    client.setQueryData(qk.lembretes(slot), {
-      enabled: patch.enabled,
-      windows_min: patch.windows_min,
-    });
-    setSaved(draft);
-    touched.current = false;
+      // Otimista: aplica no cache + fixa o draft como salvo na hora.
+      client.setQueryData(qk.lembretes(slot), {
+        enabled: patch.enabled,
+        windows_min: patch.windows_min,
+      });
+      setSaved(draft);
+      touched.current = false;
 
-    save.mutate(patch, {
-      onSuccess: () => toast.success('Lembretes atualizados'),
-      onError: () => {
-        if (prev !== undefined) client.setQueryData(qk.lembretes(slot), prev);
-        const back = toLembretesDraft(prev as Parameters<typeof toLembretesDraft>[0]);
-        setSaved(back);
-        setDraft(back);
-        touched.current = false;
-        toast.error('Não foi possível salvar. Tente de novo.');
-      },
+      save.mutate(patch, {
+        onSuccess: () => toast.success('Lembretes atualizados'),
+        onError: () => {
+          if (prev !== undefined) client.setQueryData(qk.lembretes(slot), prev);
+          const back = toLembretesDraft(prev as Parameters<typeof toLembretesDraft>[0]);
+          setSaved(back);
+          setDraft(back);
+          touched.current = false;
+          toast.error('Não foi possível salvar. Tente de novo.');
+        },
+      });
+      resolve();
     });
   }
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitLembretes().catch(() => {
+      // erro já tratado (toast) dentro de submitLembretes.
+    });
+  }
+
+  // Guarda de navegação GLOBAL (SCRUM-158): registra esta seção no registry
+  // central. Precisa rodar ANTES dos early-returns abaixo (Rules of Hooks).
+  // Sem agenda ativa/loading/feature off, `dirty` nasce sempre `false`
+  // (draft/saved partem do mesmo valor), então o registro nunca dispara o
+  // guard à toa.
+  useRegistrarNaoSalvo('Lembretes', dirty, submitLembretes);
 
   // Gating (defesa em profundidade): sem agenda ativa, nada a lembrar.
   if (!atendFromAgenda) {
