@@ -162,26 +162,25 @@ describe('GET /portal/cartao-config', () => {
     await app.close();
   });
 
-  it('SCRUM-99: previews = EXEMPLO fiel do cartão (CAIXA ALTA + "Responda SIM") com nome/serviço reais', async () => {
+  it('SCRUM-99: previews = EXEMPLO fiel do cartão (layout bonito + "Responda SIM") com nome/serviço reais', async () => {
     mockClone(); // individual, nomeNegocio='Barbearia do Cirilo'
     getServicosMock.mockResolvedValue([{ nome: 'Barba', preco_cents: 5500, duracao_min: 20 }]);
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
     const body = res.json();
-    // 3 templates renderizados.
+    // 3 templates renderizados (mesmo convergindo pro mesmo layout — API preservada).
     expect(Object.keys(body.previews).sort()).toEqual(['compacto', 'detalhado', 'padrao']);
     const padrao = body.previews.padrao as string;
-    // É o cartão que o cliente RECEBE: nome real + CAIXA ALTA + barras + "Responda SIM para confirmar."
-    expect(padrao).toContain('💈 Barbearia do Cirilo');
-    expect(padrao).toContain('DIA:');
-    expect(padrao).toContain('SERVICO: Barba');
-    expect(padrao).toContain('VALOR: R$ 55,00');
-    expect(padrao).toContain('Responda SIM para confirmar.');
-    // NÃO é a prévia "elegante" antiga.
+    // É o cartão que o cliente RECEBE: nome real em negrito + campo por linha + fechamento.
+    expect(padrao).toContain('💈 *Barbearia do Cirilo*');
+    expect(padrao).toContain('Dia:');
+    expect(padrao).toContain('Serviço: Barba');
+    expect(padrao).toContain('Valor: R$ 55,00');
+    expect(padrao).toContain('✅ Responda SIM para confirmar.');
+    // NÃO é a prévia "elegante" antiga (que usava "Posso confirmar?").
     expect(padrao).not.toContain('Posso confirmar');
-    expect(padrao).not.toContain('*');
     // Individual: sem profissional (bônus SCRUM-100).
-    expect(padrao).not.toContain('PROFISSIONAL');
+    expect(padrao).not.toContain('Profissional');
     // sample carrega os dados reais que semearam o exemplo.
     expect(body.sample.nomeNegocio).toBe('Barbearia do Cirilo');
     expect(body.sample.servico).toBe('Barba');
@@ -189,15 +188,15 @@ describe('GET /portal/cartao-config', () => {
     await app.close();
   });
 
-  it('SCRUM-99: estabelecimento inclui a linha do profissional (nome de colaborador real)', async () => {
+  it('SCRUM-99: estabelecimento inclui a linha do profissional (nome de colaborador real, por último)', async () => {
     mockClone({ cartaoMode: 'runtime' });
     getProductTypeMock.mockResolvedValue('estabelecimento');
     listColabsMock.mockResolvedValue([{ nome: 'Léo', ativo: true }]);
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/cartao-config' });
     const body = res.json();
-    expect(body.previews.padrao).toContain('👤 PROFISSIONAL: Léo');
-    expect(body.previews.padrao).toContain('🕐 HORARIO:'); // estabelecimento usa 🕐
+    expect(body.previews.padrao).toContain('👤 Profissional: Léo');
+    expect(body.previews.padrao).toContain('🕐 Horário:'); // estabelecimento usa 🕐
     expect(body.sample.profissional).toBe('Léo');
     await app.close();
   });
@@ -616,10 +615,10 @@ describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-
     const body = res.json();
     expect(Object.keys(body.previews).sort()).toEqual(['compacto', 'detalhado', 'padrao']);
     // O emoji escolhido pelo dono aparece na prévia (o que ele vê = o que o cliente recebe).
-    expect(body.previews.padrao).toContain('🌻 Barbearia do Cirilo');
+    expect(body.previews.padrao).toContain('🌻 *Barbearia do Cirilo*');
     expect(body.previews.padrao).not.toContain('💈');
-    expect(body.previews.padrao).toContain('SERVICO: Corte');
-    expect(body.previews.padrao).toContain('Responda SIM para confirmar.');
+    expect(body.previews.padrao).toContain('Serviço: Corte');
+    expect(body.previews.padrao).toContain('✅ Responda SIM para confirmar.');
     await app.close();
   });
 
@@ -658,7 +657,7 @@ describe('GET /portal/cartao-config/preview (SCRUM-99 — prévia ao vivo, read-
       url: '/portal/cartao-config/preview?marca=__off__',
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().previews.padrao.split('\n')[0]).toBe('Barbearia do Cirilo');
+    expect(res.json().previews.padrao.split('\n')[0]).toBe('*Barbearia do Cirilo*');
   });
 
   it('previewsSegmentados vem junto (fonte única com previews, os 3 templates)', async () => {

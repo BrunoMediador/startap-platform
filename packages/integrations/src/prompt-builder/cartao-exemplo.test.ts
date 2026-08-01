@@ -28,20 +28,24 @@ const SAMPLE = {
 } as const;
 
 describe('buildCartaoExemplo — variante agenda (individual)', () => {
-  it('padrao: CAIXA ALTA + barras + "Responda SIM para confirmar." e SEM profissional', () => {
+  it('padrao: negrito no nome + campo por linha + "✅ Responda SIM para confirmar." e SEM profissional', () => {
     const card = buildCartaoExemplo({ modo: 'agenda', area: 'barbearia', sample: SAMPLE });
     expect(card).toBe(
       [
-        '💈 Barbearia do Zé',
-        '📅 DIA: quinta, 24/07 / ⏰ HORARIO: 15:00 / ✂️ SERVICO: Corte / 💰 VALOR: R$ 65,00',
-        'Responda SIM para confirmar. ✅',
+        '💈 *Barbearia do Zé*',
+        '',
+        '📅 Dia: quinta, 24/07',
+        '⏰ Horário: 15:00',
+        '✂️ Serviço: Corte',
+        '💰 Valor: R$ 65,00',
+        '',
+        '✅ Responda SIM para confirmar.',
       ].join('\n'),
     );
     // Individual NUNCA tem linha de profissional.
-    expect(card).not.toContain('PROFISSIONAL');
+    expect(card).not.toContain('Profissional');
     expect(card).not.toContain('👤');
-    // Não é o cartão "elegante" antigo (nada de bold markdown / "Posso confirmar?").
-    expect(card).not.toContain('*');
+    // Não é o cartão "elegante" antigo com "Posso confirmar?".
     expect(card).not.toContain('Posso confirmar');
   });
 
@@ -60,7 +64,7 @@ describe('buildCartaoExemplo — variante agenda (individual)', () => {
       area: 'barbearia',
       sample: { ...SAMPLE, nomeNegocio: '' },
     });
-    expect(card).toContain('💈 <nome do negócio>');
+    expect(card).toContain('💈 *<nome do negócio>*');
   });
 
   it('área não-barbearia troca a marca (salão → 💇, sem 💈)', () => {
@@ -76,65 +80,66 @@ describe('buildCartaoExemplo — variante agenda (individual)', () => {
       config: { emojis: { marca: '🌻' } },
       sample: SAMPLE,
     });
-    expect(card).toContain('🌻 Barbearia do Zé');
+    expect(card).toContain('🌻 *Barbearia do Zé*');
     expect(card).not.toContain('💈');
   });
 
-  it('compacto = uma linha só; detalhado = um campo por linha (layouts distintos)', () => {
-    const compacto = buildCartaoExemplo({
-      modo: 'agenda',
-      area: 'barbearia',
-      config: { template: 'compacto' },
-      sample: SAMPLE,
-    });
-    expect(compacto).toBe(
-      [
-        '💈 Barbearia do Zé — 📅 quinta, 24/07 ⏰ 15:00 ✂️ Corte 💰 R$ 65,00',
-        'Responda SIM para confirmar. ✅',
-      ].join('\n'),
-    );
+  it('os 3 templates convergem pro MESMO layout (layout único aprovado 31/07/2026)', () => {
+    const esperado = [
+      '💈 *Barbearia do Zé*',
+      '',
+      '📅 Dia: quinta, 24/07',
+      '⏰ Horário: 15:00',
+      '✂️ Serviço: Corte',
+      '💰 Valor: R$ 65,00',
+      '',
+      '✅ Responda SIM para confirmar.',
+    ].join('\n');
 
-    const detalhado = buildCartaoExemplo({
-      modo: 'agenda',
-      area: 'barbearia',
-      config: { template: 'detalhado' },
-      sample: SAMPLE,
-    });
-    expect(detalhado).toBe(
-      [
-        '💈 Barbearia do Zé',
-        '📅 DIA: quinta, 24/07',
-        '⏰ HORARIO: 15:00',
-        '✂️ SERVICO: Corte',
-        '💰 VALOR: R$ 65,00',
-        'Responda SIM para confirmar. ✅',
-      ].join('\n'),
-    );
+    for (const template of ['padrao', 'compacto', 'detalhado'] as const) {
+      const card = buildCartaoExemplo({
+        modo: 'agenda',
+        area: 'barbearia',
+        config: { template },
+        sample: SAMPLE,
+      });
+      expect(card).toBe(esperado);
+    }
   });
 });
 
 describe('buildCartaoExemplo — variante estabelecimento', () => {
-  it('padrao: inclui 👤 PROFISSIONAL com o nome, usa 🕐 (não ⏰) e "Responda SIM"', () => {
+  it('padrao: campo por linha, 👤 Profissional POR ÚLTIMO, usa 🕐 (não ⏰) e "✅ Responda SIM"', () => {
     const card = buildCartaoExemplo({ modo: 'estabelecimento', area: 'barbearia', sample: SAMPLE });
     expect(card).toBe(
       [
-        '👤 PROFISSIONAL: Léo',
-        '📅 DIA: quinta, 24/07 / 🕐 HORARIO: 15:00 / ✂️ SERVICO: Corte / 💰 VALOR: R$ 65,00',
-        'Responda SIM para confirmar. ✅',
+        '📅 Dia: quinta, 24/07',
+        '🕐 Horário: 15:00',
+        '✂️ Serviço: Corte',
+        '💰 Valor: R$ 65,00',
+        '👤 Profissional: Léo',
+        '',
+        '✅ Responda SIM para confirmar.',
       ].join('\n'),
     );
-    expect(card).not.toMatch(/⏰ HORARIO/);
+    expect(card).not.toMatch(/⏰ Horário/);
   });
 
-  it('compacto usa o nome do profissional na linha única', () => {
-    const card = buildCartaoExemplo({
+  it('os 3 templates convergem pro MESMO layout (layout único aprovado 31/07/2026)', () => {
+    const cardPadrao = buildCartaoExemplo({
+      modo: 'estabelecimento',
+      area: 'barbearia',
+      sample: SAMPLE,
+    });
+    const cardCompacto = buildCartaoExemplo({
       modo: 'estabelecimento',
       area: 'barbearia',
       config: { template: 'compacto' },
       sample: SAMPLE,
     });
-    expect(card).toContain('👤 Léo — ');
-    expect(card).toContain('🕐 15:00');
+    expect(cardCompacto).toBe(cardPadrao);
+    expect(cardCompacto).toContain('👤 Profissional: Léo');
+    expect(cardCompacto).toContain('🕐 Horário: 15:00');
   });
 });
 
@@ -194,8 +199,9 @@ describe('buildCartaoExemplo — consistência com o runtime (fonte única)', ()
             nomeNegocio: SAMPLE.nomeNegocio,
           }),
         );
-        // Toda linha de campo do exemplo (exceto o fechamento amigável) aparece na instrução.
-        const linhas = exemplo.split('\n').filter((l) => !l.startsWith('Responda SIM'));
+        // Toda linha de campo do exemplo (exceto o fechamento amigável e linhas em branco)
+        // aparece na instrução transformada.
+        const linhas = exemplo.split('\n').filter((l) => l !== '' && !l.includes('Responda SIM'));
         for (const linha of linhas) {
           expect(instrucao).toContain(linha);
         }
@@ -209,22 +215,21 @@ describe('buildCartaoExemplo — consistência com o runtime (fonte única)', ()
  * a linha fica, sem espaço órfão. Cobre os 3 templates × agenda/estabelecimento.
  */
 describe('buildCartaoExemplo — emoji DESABILITADO não deixa espaço órfão', () => {
-  it('padrao: marca desabilitada → "Barbearia do Zé" sem espaço à esquerda', () => {
+  it('marca desabilitada → "*Barbearia do Zé*" sem espaço à esquerda', () => {
     const card = buildCartaoExemplo({
       modo: 'agenda',
       area: 'barbearia',
       config: { emojis: { marca: CARTAO_EMOJI_DISABLED } },
       sample: SAMPLE,
     });
-    expect(card.split('\n')[0]).toBe('Barbearia do Zé');
+    expect(card.split('\n')[0]).toBe('*Barbearia do Zé*');
   });
 
-  it('compacto: todos os emojis desabilitados → linha só com separadores intactos', () => {
+  it('todos os emojis desabilitados (agenda) → linhas só com texto, sem espaço/emoji sobrando', () => {
     const card = buildCartaoExemplo({
       modo: 'agenda',
       area: 'barbearia',
       config: {
-        template: 'compacto',
         emojis: {
           marca: CARTAO_EMOJI_DISABLED,
           dia: CARTAO_EMOJI_DISABLED,
@@ -237,21 +242,29 @@ describe('buildCartaoExemplo — emoji DESABILITADO não deixa espaço órfão',
       sample: SAMPLE,
     });
     expect(card).toBe(
-      ['Barbearia do Zé — quinta, 24/07 15:00 Corte R$ 65,00', 'Responda SIM para confirmar.'].join(
-        '\n',
-      ),
+      [
+        '*Barbearia do Zé*',
+        '',
+        'Dia: quinta, 24/07',
+        'Horário: 15:00',
+        'Serviço: Corte',
+        'Valor: R$ 65,00',
+        '',
+        'Responda SIM para confirmar.',
+      ].join('\n'),
     );
     expect(card).not.toMatch(/ {2,}/);
   });
 
-  it('detalhado (estabelecimento): profissional desabilitado → "PROFISSIONAL: Léo" sem ícone', () => {
+  it('estabelecimento: profissional desabilitado → "Profissional: Léo" sem ícone, na última linha de campo', () => {
     const card = buildCartaoExemplo({
       modo: 'estabelecimento',
       area: 'barbearia',
-      config: { template: 'detalhado', emojis: { profissional: CARTAO_EMOJI_DISABLED } },
+      config: { emojis: { profissional: CARTAO_EMOJI_DISABLED } },
       sample: SAMPLE,
     });
-    expect(card.split('\n')[0]).toBe('PROFISSIONAL: Léo');
+    const linhas = card.split('\n');
+    expect(linhas[4]).toBe('Profissional: Léo');
   });
 });
 
@@ -313,7 +326,7 @@ describe('buildCartaoExemploSegmentado — fonte única com buildCartaoExemplo',
       sample: SAMPLE,
     });
     expect(segs.some((s) => s.tipo === 'emoji' && s.slot === 'marca')).toBe(false);
-    expect(juntarSegmentos(segs).split('\n')[0]).toBe('Barbearia do Zé');
+    expect(juntarSegmentos(segs).split('\n')[0]).toBe('*Barbearia do Zé*');
   });
 
   it('todo segmento emoji carrega slot; todo segmento texto não', () => {
