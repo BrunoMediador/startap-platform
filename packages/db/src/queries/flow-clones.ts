@@ -874,7 +874,7 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
             fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
             fc.flow_enabled, fc.suspended_reason, fc.suspended_kind, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos, fc.timezone,
-            fc.modo_atendente_enabled, fc.faq_personalizado_enabled, fc.billing_from_agenda_enabled,
+            fc.modo_atendente_enabled, fc.billing_from_agenda_enabled,
             to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
             cb.amount_cents AS billing_amount_cents,
             fc.first_connected_at,
