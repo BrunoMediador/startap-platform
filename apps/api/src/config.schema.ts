@@ -321,19 +321,6 @@ export const ConfigSchema = z.object({
   // NÃO ligar em ninguém nesta PR (env não setado). NUNCA hardcoded.
   HUMAN_REPLY_AGENDA_SLOTS: z.string().optional().default(''),
 
-  // ── FAQ PERSONALIZADO — gate POR-CLONE (SCRUM-65) ─────────────────────────────
-  // Lista de slots (CSV) em que o bloco [PERGUNTAS FREQUENTES DO NEGOCIO] (pares P/R que o
-  // dono cadastra no portal) e injetado no contexto do bot em runtime. Avaliado com
-  // isFaqPersonalizadoEnabled(slot, ...). OPCIONAL no boot (ausente = OFF, lição #247: feature
-  // dormente NUNCA derruba a api do bot). MESMA env no portal-api — liga tambem a exposicao no
-  // portal (features.faq_personalizado + aceite do PUT). Sem a env AQUI, o portal salvaria o
-  // FAQ mas o bot NUNCA o injetaria (no-op silencioso) — por isso vive nas DUAS apps.
-  //   vazio/ausente   -> OFF pra TODOS (byte-a-byte: Cirilo/Samuel intactos, zero token extra).
-  //   'slot_a,slot_b'  -> ON só nos slots listados (deploy inclui a Meduzza).
-  //   '*'              -> ON pra TODOS (enable global futuro).
-  // KILL-SWITCH: esvaziar a env volta a OFF pra todos, sem deploy de código. NUNCA hardcoded.
-  FAQ_PERSONALIZADO_SLOTS: z.string().optional().default(''),
-
   // ── Cartão de confirmação em RUNTIME — kill-switch GLOBAL (SCRUM-92 inc.2 / ADR 0032) ──
   // Gate macro do cartão de confirmação montado EM RUNTIME (em vez de baked no bot_prompt).
   // ATIVA em produção desde 23/07/2026 (ADR 0033 / SCRUM-92 inc.2). Gate DUPLO com a coluna

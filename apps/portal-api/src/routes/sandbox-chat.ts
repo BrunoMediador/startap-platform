@@ -27,7 +27,7 @@
  *  global (Redis, fail-closed) cortam ANTES do LLM; histórico enviado é aparado; maxTurns:1.
  *
  * ── CONTEXTO REAL, MENOS A AGENDA (SCRUM-158) ─────────────────────────────────────────
- * O [CONTEXTO] do bot (buildContextBlock: [NEGOCIO]/[OBSERVACOES]/[FAQ]/[FUNCIONAMENTO]/
+ * O [CONTEXTO] do bot (buildContextBlock: [NEGOCIO]/[OBSERVACOES]/[FUNCIONAMENTO]/
  * [SERVICOS E PRECOS]) É injetado aqui — mesmo formato do bot real (teste_barbearia). É o
  * que o Bruno pediu: "horários, comportamento, tudo certo" pro dono testar de verdade. O
  * bloco [HORARIOS DISPONIVEIS - ATUALIZADO AGORA] (agenda em tempo real) fica DE FORA por
@@ -120,7 +120,7 @@ interface SandboxProvider {
 
 /**
  * Monta o systemPrompt do SANDBOX a partir do estado REAL do clone (slot da sessão):
- * persona (bot_prompt) + [CONTEXTO] real (negócio/observações/FAQ/funcionamento/serviços,
+ * persona (bot_prompt) + [CONTEXTO] real (negócio/observações/funcionamento/serviços,
  * SEM agenda) + cartão em RUNTIME quando aplicável. Espelha a montagem do bot real
  * (teste_barbearia) menos a agenda (ver cabeçalho). Null quando não há persona cadastrada.
  */
@@ -157,7 +157,6 @@ async function buildSandboxSystemPrompt(slot: string): Promise<string | null> {
     ano: String(now.getFullYear()),
     // agendaFormatada OMITIDO DE PROPÓSITO: opcional em ContextBlockOpts; o bloco [HORARIOS
     // DISPONIVEIS - ATUALIZADO AGORA] só renderiza se vier (free-slots.ts:529).
-    faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
   });
 
   let runtimeCartao = '';

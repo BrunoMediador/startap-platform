@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   FORMAS_PAGAMENTO_OPCOES,
-  faqPersonalizadoSchema,
   formasPagamentoSchema,
   formasPagamentoToString,
   horarioDiaSchema,
@@ -363,88 +362,5 @@ describe('perfilSchema', () => {
   it('planos_beneficios: rejeita acima de 4000 chars', () => {
     expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4001) }).success).toBe(false);
     expect(perfilSchema.safeParse({ planos_beneficios: 'a'.repeat(4000) }).success).toBe(true);
-  });
-
-  it('faq_personalizado: array válido é aceito e normalizado (trim)', () => {
-    const r = perfilSchema.safeParse({
-      faq_personalizado: [{ pergunta: '  Aceitam pix?  ', resposta: '  Sim.  ' }],
-    });
-    expect(r.success).toBe(true);
-    if (r.success) {
-      expect(r.data.faq_personalizado).toEqual([{ pergunta: 'Aceitam pix?', resposta: 'Sim.' }]);
-    }
-  });
-
-  it('faq_personalizado: ausente => undefined (não toca a chave)', () => {
-    const r = perfilSchema.safeParse({ nome_negocio: 'X' });
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data.faq_personalizado).toBeUndefined();
-  });
-
-  it('faq_personalizado: rejeita 11 pares (max 10)', () => {
-    const onze = Array.from({ length: 11 }, (_, i) => ({ pergunta: `P${i}`, resposta: `R${i}` }));
-    expect(perfilSchema.safeParse({ faq_personalizado: onze }).success).toBe(false);
-    const dez = Array.from({ length: 10 }, (_, i) => ({ pergunta: `P${i}`, resposta: `R${i}` }));
-    expect(perfilSchema.safeParse({ faq_personalizado: dez }).success).toBe(true);
-  });
-});
-
-describe('faqPersonalizadoSchema (SCRUM-65)', () => {
-  it('não-array => undefined (não toca a chave no PATCH parcial)', () => {
-    for (const v of [undefined, 'texto', 42, {}, null]) {
-      const r = faqPersonalizadoSchema.safeParse(v);
-      expect(r.success).toBe(true);
-      if (r.success) expect(r.data).toBeUndefined();
-    }
-  });
-
-  it('[] é aceito (limpar) e devolve []', () => {
-    const r = faqPersonalizadoSchema.safeParse([]);
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data).toEqual([]);
-  });
-
-  it('descarta pares com pergunta OU resposta vazia (após trim) — não é erro', () => {
-    const r = faqPersonalizadoSchema.safeParse([
-      { pergunta: 'Aceitam pix?', resposta: 'Sim.' },
-      { pergunta: '   ', resposta: 'órfão' },
-      { pergunta: 'e este?', resposta: '   ' },
-      { pergunta: 'ok', resposta: 'ok' },
-    ]);
-    expect(r.success).toBe(true);
-    if (r.success) {
-      expect(r.data).toEqual([
-        { pergunta: 'Aceitam pix?', resposta: 'Sim.' },
-        { pergunta: 'ok', resposta: 'ok' },
-      ]);
-    }
-  });
-
-  it('rejeita pergunta > 120 chars', () => {
-    expect(
-      faqPersonalizadoSchema.safeParse([{ pergunta: 'x'.repeat(121), resposta: 'ok' }]).success,
-    ).toBe(false);
-    expect(
-      faqPersonalizadoSchema.safeParse([{ pergunta: 'x'.repeat(120), resposta: 'ok' }]).success,
-    ).toBe(true);
-  });
-
-  it('rejeita resposta > 300 chars', () => {
-    expect(
-      faqPersonalizadoSchema.safeParse([{ pergunta: 'ok', resposta: 'y'.repeat(301) }]).success,
-    ).toBe(false);
-    expect(
-      faqPersonalizadoSchema.safeParse([{ pergunta: 'ok', resposta: 'y'.repeat(300) }]).success,
-    ).toBe(true);
-  });
-
-  it('campo extra no item é DESCARTADO no preprocess (só pergunta+resposta sobrevivem)', () => {
-    // Defesa: o preprocess reconstrói cada par com APENAS {pergunta, resposta}, então um
-    // atacante não consegue smuggle de chave extra pro JSONB (ex.: {..., admin: true}).
-    const r = faqPersonalizadoSchema.safeParse([
-      { pergunta: 'ok', resposta: 'ok', evil: 'x', admin: true },
-    ]);
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data).toEqual([{ pergunta: 'ok', resposta: 'ok' }]);
   });
 });

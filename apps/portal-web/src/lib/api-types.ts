@@ -636,23 +636,6 @@ export const FORMAS_PAGAMENTO_OPCOES = [
 
 export type FormaPagamentoOpcao = (typeof FORMAS_PAGAMENTO_OPCOES)[number];
 
-/**
- * Um par pergunta/resposta do FAQ personalizado (SCRUM-65). `pergunta` = título do
- * assunto (<=120 chars após trim); `resposta` = o texto que a assistente usa ao
- * responder aquele assunto (<=300 chars após trim). Ambos já trimados pelo backend;
- * pares com pergunta OU resposta vazia são descartados no backend e nunca chegam aqui.
- * Injetado no bloco [PERGUNTAS FREQUENTES DO NEGOCIO] do contexto do bot em runtime.
- *
- * ⚠️ LEGADO SEM UI (refactor pós-plano do Bruno, 31/07): a tela "Perguntas
- * frequentes" foi removida do portal — o conteúdo passa a viver no prompt do
- * bot via IA. O tipo segue aqui só porque `PerfilNegocio.faq_personalizado`
- * (abaixo) continua fiel ao contrato REAL do backend, que não mudou.
- */
-export interface FaqItem {
-  pergunta: string;
-  resposta: string;
-}
-
 export interface PerfilNegocio {
   nome_negocio: string;
   nome_prestador: string;
@@ -676,18 +659,6 @@ export interface PerfilNegocio {
    * relevante/editável com features.modo_atendente. ''/ausente = sem planos.
    */
   planos_beneficios?: string | null;
-  /**
-   * FAQ personalizado (SCRUM-65). Até 10 pares pergunta/resposta que o dono cadastra;
-   * cada par vira uma linha P:/R: no bloco [PERGUNTAS FREQUENTES DO NEGOCIO] do contexto
-   * do bot. Gate por-clone (FAQ_PERSONALIZADO_SLOTS). Ausente/[] = sem FAQ (bloco não
-   * injetado, zero token).
-   *
-   * ⚠️ LEGADO SEM UI (31/07): o backend (`portal-perfil.ts`, schema Zod, gate,
-   * `renderFaqBlock`, migration 072/coluna) segue vivo e INTOCADO — dívida
-   * técnica aceita. O portal-web só não tem MAIS formulário próprio pra editar
-   * isto; o campo continua chegando/aceito no contrato do GET/PUT /portal/perfil.
-   */
-  faq_personalizado?: FaqItem[] | null;
 }
 
 /**
@@ -697,23 +668,16 @@ export interface PerfilNegocio {
  * pré-seleciona pelo /portal/status (useTenantTz). O hook usePerfil expõe só
  * `r.perfil` no cache.
  *
- * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS /
- * FAQ_PERSONALIZADO_SLOTS CSV, NÃO flags globais): só o clone do piloto recebe
- * modo_atendente=true. Ausente/false = as seções gateadas (Agendamento, Planos)
- * não renderizam (byte-idêntico pros clientes atuais).
+ * `features` = flags por-clone calculadas no backend (env MODO_ATENDENTE_SLOTS,
+ * NÃO flags globais): só o clone do piloto recebe modo_atendente=true.
+ * Ausente/false = as seções gateadas (Agendamento, Planos) não renderizam
+ * (byte-idêntico pros clientes atuais).
  */
 export interface PerfilResponse {
   perfil: PerfilNegocio;
   timezone?: string;
   features?: {
     modo_atendente: boolean;
-    /**
-     * ⚠️ LEGADO SEM UI (31/07): o backend segue calculando e enviando este
-     * flag (FAQ_PERSONALIZADO_SLOTS) — o portal-web só não usa mais pra
-     * gatear tela nenhuma (a UI de "Perguntas frequentes" foi removida).
-     * Mantido tipado por fidelidade ao contrato real do GET /portal/perfil.
-     */
-    faq_personalizado?: boolean;
     /**
      * SCRUM-74: o clone tem um Google Calendar UTILIZÁVEL, conectado pelo TIME no
      * gestão (ADR 0024). Só quando true o portal deixa o dono LIGAR o agendamento

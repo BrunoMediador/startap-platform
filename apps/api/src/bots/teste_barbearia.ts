@@ -767,12 +767,6 @@ export class TesteBarbeariaBot extends BotBase {
       dataAtual,
       ano: String(now.getFullYear()),
       agendaFormatada: agenda,
-      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
-      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
-      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
-      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
-      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
-      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // ── Bloco [SEU PACOTE] (ADR 0025 — DORMENTE por flag) ────────────────────────
@@ -1174,12 +1168,6 @@ export class TesteBarbeariaBot extends BotBase {
       telefoneCliente: telefone,
       dataAtual,
       ano: String(now.getFullYear()),
-      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
-      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
-      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
-      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
-      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
-      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // ── Bloco [EQUIPE] (SCRUM-59) — só pro estabelecimento com colaboradores ativos ──
@@ -1621,12 +1609,6 @@ export class TesteBarbeariaBot extends BotBase {
       dataAtual,
       ano: String(now.getFullYear()),
       agendaFormatada: '',
-      faqSlotsConfig: config.FAQ_PERSONALIZADO_SLOTS,
-      // faqColumnEnabled (ADR 0030 D1) OMITIDO de propósito no caminho do bot: o env FAQ é '*'
-      // (cobre TODOS via UNIÃO) -> ler a coluna aqui só adicionaria um getCloneBySlot sem mudar
-      // nada (byte-idêntico). A coluna do FAQ é a fonte self-service no PORTAL (portal-perfil,
-      // resolveFaqPersonalizadoEnabledForSlot). Quando o env deixar de ser '*' (Onda 3+), passa-se
-      // faqColumnEnabled aqui a partir do clone JÁ carregado no caminho — sem read novo.
     });
 
     // Blocos runtime, não-editáveis, SÓ no estabelecimento (ADR 0024 §6 / panorama §6).

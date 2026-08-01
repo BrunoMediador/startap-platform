@@ -9,8 +9,8 @@
  *
  * "Perguntas frequentes" foi REMOVIDA daqui (refactor pós-plano do Bruno): o
  * conteúdo passa a viver no prompt do bot, escrito com a IA do builder — o
- * formulário próprio ficou redundante. O backend/coluna seguem intactos (dívida
- * técnica aceita); só a UI saiu. Ver `@/lib/api-types` (`PerfilNegocio.faq_personalizado`).
+ * formulário próprio ficou redundante. O backend (rota/schema/gate/coluna) foi
+ * eliminado em 01/08 (faxina final, 0 clones ainda usavam a coluna).
  */
 import { CartaoConfigSection } from '@/components/cartao-config/cartao-config-section';
 

@@ -49,8 +49,6 @@ describe('getPerfilBySlot', () => {
       agenda_automatica: true,
       link_agendamento: '',
       planos_beneficios: '',
-      // SCRUM-65: ausente -> [] (front renderiza a lista de campos sem undefined).
-      faq_personalizado: [],
     });
     // slot vai parametrizado ($1), nunca interpolado.
     expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('WHERE slot = $1'), [SLOT]);
@@ -83,36 +81,6 @@ describe('getPerfilBySlot', () => {
 
     // tokens mapeados, ordem canonica; nada e reescrito no banco aqui.
     expect(perfil?.formas_pagamento).toEqual(['Dinheiro', 'PIX', 'Cartão de crédito']);
-  });
-
-  it('SCRUM-65: faq_personalizado narrow — devolve pares válidos e filtra shape torto', async () => {
-    mockQuery.mockResolvedValueOnce({
-      rows: [
-        {
-          personalizacao: {
-            faq_personalizado: [
-              { pergunta: 'Tem estacionamento?', resposta: 'Sim.' },
-              { pergunta: 'sem resposta', resposta: 123 }, // resposta não-string -> filtrado
-              'lixo', // item não-objeto -> filtrado
-              { pergunta: 'ok', resposta: 'ok' },
-            ],
-          },
-        },
-      ],
-    });
-
-    const perfil = await getPerfilBySlot(SLOT);
-
-    expect(perfil?.faq_personalizado).toEqual([
-      { pergunta: 'Tem estacionamento?', resposta: 'Sim.' },
-      { pergunta: 'ok', resposta: 'ok' },
-    ]);
-  });
-
-  it('SCRUM-65: faq_personalizado ausente -> [] (não undefined)', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ personalizacao: { nome_negocio: 'X' } }] });
-    const perfil = await getPerfilBySlot(SLOT);
-    expect(perfil?.faq_personalizado).toEqual([]);
   });
 
   it('retorna null quando o slot nao existe', async () => {
@@ -314,35 +282,6 @@ describe('updatePerfilBySlot', () => {
     const merged = JSON.parse(captured.mergedJson ?? '{}');
     expect('link_agendamento' in merged).toBe(false);
     expect(merged.nome_negocio).toBe('Barbearia');
-  });
-
-  it('SCRUM-65: faq_personalizado (array) faz round-trip como ARRAY no JSONB (não string)', async () => {
-    const captured = armMocks({ observacoes_gerais: 'Estacionamento' });
-    const faq = [{ pergunta: 'Tem estacionamento?', resposta: 'Sim, gratuito.' }];
-    await updatePerfilBySlot(SLOT, { faq_personalizado: faq });
-    const merged = JSON.parse(captured.mergedJson ?? '{}');
-    // Gravado CRU (array de objetos), NÃO serializado pra string como formas_pagamento.
-    expect(merged.faq_personalizado).toEqual(faq);
-    // MERGE preserva outras chaves.
-    expect(merged.observacoes_gerais).toBe('Estacionamento');
-  });
-
-  it('SCRUM-65: faq_personalizado ausente (undefined) NÃO toca a chave', async () => {
-    const captured = armMocks({
-      faq_personalizado: [{ pergunta: 'antiga', resposta: 'resposta' }],
-    } as unknown as Record<string, string>);
-    await updatePerfilBySlot(SLOT, { nome_negocio: 'X' });
-    const merged = JSON.parse(captured.mergedJson ?? '{}');
-    expect(merged.faq_personalizado).toEqual([{ pergunta: 'antiga', resposta: 'resposta' }]);
-  });
-
-  it('SCRUM-65: faq_personalizado [] LIMPA (grava array vazio)', async () => {
-    const captured = armMocks({
-      faq_personalizado: [{ pergunta: 'antiga', resposta: 'resposta' }],
-    } as unknown as Record<string, string>);
-    await updatePerfilBySlot(SLOT, { faq_personalizado: [] });
-    const merged = JSON.parse(captured.mergedJson ?? '{}');
-    expect(merged.faq_personalizado).toEqual([]);
   });
 
   it('retorna false quando o slot nao existe', async () => {

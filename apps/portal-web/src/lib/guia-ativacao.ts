@@ -24,8 +24,8 @@
  *   - personaCustom      -> ⚠️ NÃO derivável no front hoje (ver abaixo). OPCIONAL.
  *
  * ⚠️ CONTRATO FALTANTE (persona) — FLAG pro backend:
- *   O GET /portal/perfil devolve features={modo_atendente,faq_personalizado,
- *   agenda_configurada} mas NÃO `prompt_custom`. O único vazamento indireto
+ *   O GET /portal/perfil devolve features={modo_atendente,agenda_configurada}
+ *   mas NÃO `prompt_custom`. O único vazamento indireto
  *   (locked_reason='prompt_custom' do GET /portal/cartao-config) é gated por
  *   CARTAO_RUNTIME_ENABLED (ON em prod desde 23/07/2026) e semanticamente não
  *   confiável (só aparece no ramo baked+prompt_custom). Sem um
