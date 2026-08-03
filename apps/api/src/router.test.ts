@@ -819,11 +819,22 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
   });
 
   // ── REGRESSÃO 31/07 (achado do qa-tester + PM): este bloco (ramo cliente-final, gate
-  // LEGADO do ADR 0016) é a ÚNICA barreira em prod com GATE_SILENCIO_TOTAL_ENABLED OFF —
-  // e usava `flow_enabled === false` PURO, sem olhar suspended_kind. Corrigido pra reusar
-  // resolveSilenceGate (mesma matriz do gate único). Sem estes testes, a flag OFF (estado
-  // real de prod) continuaria calando cliente final de clone pausado pelo PRÓPRIO DONO.
-  it('11) owner_request + EM DIA, flag OFF (estado real de prod) → responde (cliente final NÃO é silenciado)', async () => {
+  // LEGADO do ADR 0016) sempre roda pra owner_request — mesmo com GATE_SILENCIO_TOTAL_ENABLED
+  // ON, checkSilenceGate só corta quando `silenced === true` e owner_request nunca é
+  // `silenced` (ver comentário "CONVIVÊNCIA" no router.ts). E usava `flow_enabled === false`
+  // PURO, sem olhar suspended_kind. Corrigido pra reusar resolveSilenceGate (mesma matriz do
+  // gate único). Sem estes testes, clone pausado pelo PRÓPRIO DONO ficaria calado pro
+  // cliente final.
+  //
+  // P0 03/08 (medido em prod: Ingrid/Samuel): "responder" aqui era o PRÓPRIO BUG — a matriz
+  // (regras-negocio.md 8-bis, linha 2) manda PROCESSAR mas NÃO RESPONDER quando pausado pelo
+  // dono e em dia. Corrigido: resolveSilenceGate agora devolve `respond:false` nesse caso e
+  // o router retorna `ignored:owner-paused` ANTES de chamar bot.handle — sem pular antibot/
+  // logMessage/contactNames (já rodaram antes, nas etapas 4/4b/6a; ver 'processa mas não
+  // responde' abaixo). Medido 03/08 em prod: GATE_SILENCIO_TOTAL_ENABLED=true e
+  // BILLING_OVERDUE_SILENCE=true (não OFF) — o teste 11 abaixo usa flag OFF de propósito
+  // (cobre o fallback legado), o teste 11b cobre o caminho real de prod com as duas ON.
+  it('11) owner_request + EM DIA, flag OFF (estado real de prod) → PROCESSA mas NÃO responde (fix do P0 03/08)', async () => {
     delete process.env[ENV_KEY];
     const result = await dispatch(
       makeBillingClone({
@@ -833,11 +844,42 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
         billing_amount_cents: 8500,
       }),
     );
-    expect(result).toEqual({ status: 'ok' });
-    expect(botHandle).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ status: 'ignored:owner-paused' });
+    expect(botHandle).not.toHaveBeenCalled();
+    // "processa" = antibot/log de mensagem seguem rodando (não são pulados pelo gate).
+    expect(mocks.logMessage).toHaveBeenCalled();
+    expect(mocks.logFlowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'router.owner-paused', status: 'ignored' }),
+    );
   });
 
-  it('12) owner_request + VENCIDO dentro da carência, flag ON → responde (mesmo caso do MVS medido em prod)', async () => {
+  it('11b) owner_request + EM DIA, GATE_SILENCIO_TOTAL_ENABLED=true + BILLING_OVERDUE_SILENCE=true (estado REAL de prod, medido 03/08) → PROCESSA mas NÃO responde (caso Ingrid/Samuel)', async () => {
+    process.env[ENV_KEY] = 'true'; // BILLING_OVERDUE_SILENCE
+    const GATE_ENV_KEY = 'GATE_SILENCIO_TOTAL_ENABLED';
+    const prevGate = process.env[GATE_ENV_KEY];
+    process.env[GATE_ENV_KEY] = 'true';
+    try {
+      // checkSilenceGate (gate único, roda ANTES deste bloco) só corta quando silenced===true;
+      // owner_request em dia nunca é silenced — cai aqui de qualquer forma (ver comentário
+      // "CONVIVÊNCIA" em router.ts). Prova que o fix vale com a flag ON, não só no fallback OFF.
+      const result = await dispatch(
+        makeBillingClone({
+          flow_enabled: false,
+          suspended_kind: 'owner_request',
+          next_due_date: dueDateOffset(21),
+          billing_amount_cents: 5000,
+        }),
+      );
+      expect(result).toEqual({ status: 'ignored:owner-paused' });
+      expect(botHandle).not.toHaveBeenCalled();
+      expect(mocks.logMessage).toHaveBeenCalled();
+    } finally {
+      if (prevGate === undefined) delete process.env[GATE_ENV_KEY];
+      else process.env[GATE_ENV_KEY] = prevGate;
+    }
+  });
+
+  it('12) owner_request + VENCIDO dentro da carência, flag ON → PROCESSA mas NÃO responde (mesmo caso do MVS/Samuel medido em prod)', async () => {
     process.env[ENV_KEY] = 'true';
     const result = await dispatch(
       makeBillingClone({
@@ -847,8 +889,9 @@ describe('handleWebhook — gate de silêncio por cobrança (ADR 0016)', () => {
         billing_amount_cents: 8500,
       }),
     );
-    expect(result).toEqual({ status: 'ok' });
-    expect(botHandle).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ status: 'ignored:owner-paused' });
+    expect(botHandle).not.toHaveBeenCalled();
+    expect(mocks.logMessage).toHaveBeenCalled();
   });
 
   it('13) owner_request + VENCIDO ALÉM da carência, flag ON → SILENCIA por billing-overdue (eixo billing independe de quem pausou; mesmo caso da Meduzza medido em prod)', async () => {

@@ -50,7 +50,7 @@ export interface SilenceGateDeps {
 export type SilenceGateReason = 'flow-suspended' | 'billing-overdue';
 
 export type SilenceGateResult =
-  | { silenced: false }
+  | { silenced: false; respond: boolean }
   | {
       silenced: true;
       reason: SilenceGateReason;
@@ -58,16 +58,21 @@ export type SilenceGateResult =
     };
 
 /**
- * Decide se um clone deve ficar em SILÊNCIO TOTAL agora. Dois eixos INDEPENDENTES em OR
- * — a pausa do dono NÃO blinda contra o eixo (b), e vice-versa (regras-negocio.md 8-bis):
+ * Decide se um clone deve ficar em SILÊNCIO TOTAL agora, e — quando NÃO está em silêncio
+ * total — se o bot deve RESPONDER ao cliente final (`respond`). Três desfechos possíveis
+ * (regras-negocio.md 8-bis, matriz completa):
  *  (a) suspensão NÃO-DO-DONO: flow_enabled === false E suspended_kind !== 'owner_request'
- *      (suspensão da Startap: billing/manual_other/abuse/etc). `suspended_kind` nulo/ausente
- *      NÃO entra neste eixo — ver fail-safe abaixo;
+ *      (suspensão da Startap: billing/manual_other/abuse/etc) ⇒ SILÊNCIO TOTAL.
+ *      `suspended_kind` nulo/ausente NÃO entra neste eixo — ver fail-safe abaixo;
  *  (b) VENCIDO além da carência: daysUntilDue(next_due_date) < -graceDays, só quando há
  *      billing configurado (next_due_date E amount_cents>0), atrás de billingOverdueSilenceOn.
- *      Roda MESMO quando o clone está com `owner_request` — é assim que "pausado pelo
- *      dono + inadimplente" vira silêncio total, e "pausado pelo dono + pagou" volta a
- *      processar (o CALLER decide se o bot RESPONDE olhando flow_enabled à parte).
+ *      Roda MESMO quando o clone está com `owner_request` ⇒ SILÊNCIO TOTAL — é assim que
+ *      "pausado pelo dono + inadimplente" vira silêncio total;
+ *  (c) PAUSA DO DONO em dia (flow_enabled === false, suspended_kind === 'owner_request',
+ *      sem cair em (a) nem (b)) ⇒ NÃO é silêncio total: `respond: false`. O sistema
+ *      PROCESSA normalmente (grava human_reply, roda antibot, upsert de contato) — só a
+ *      RESPOSTA ao cliente final é suprimida, porque o dono pediu. Fora deste caso,
+ *      `respond` é sempre `true` (clone ativo, nada a suprimir).
  *
  * Fail-safe do eixo (a): `suspended_kind` ausente/null com flow_enabled=false é tratado
  * como PAUSA DO DONO (não entra no eixo a) — calar um cliente ativo por engano
@@ -77,6 +82,10 @@ export type SilenceGateResult =
  *
  * Suspensão não-do-dono tem precedência no motivo retornado sobre vencimento quando os
  * dois são true ao mesmo tempo (eixo explícito do operador/Startap).
+ *
+ * IMPORTANTE pro CALLER: `respond: false` NÃO é `silenced` — o caller deve continuar
+ * rodando todo o pipeline de estado (antibot, human_reply, contactNames) e só pular a
+ * geração/envio da resposta do bot (`bot.handle`), sem dar early-return antes disso.
  */
 export function resolveSilenceGate(
   clone: SilenceGateCloneInput,
@@ -104,5 +113,7 @@ export function resolveSilenceGate(
     return { silenced: true, reason: 'billing-overdue', diasRestantes };
   }
 
-  return { silenced: false };
+  // Pausa do dono em dia (não caiu em (a) nem (b)): processa, mas não responde.
+  const pausadoPeloDono = clone.flow_enabled === false && clone.suspended_kind === OWNER_PAUSE_KIND;
+  return { silenced: false, respond: !pausadoPeloDono };
 }
