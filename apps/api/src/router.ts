@@ -891,20 +891,22 @@ export async function handleWebhook(
   // CORRIGIDO 31/07 (achado do qa-tester + PM): o eixo (a) usava `flow_enabled === false` PURO,
   // sem olhar `suspended_kind` — silenciava TAMBÉM quando o PRÓPRIO DONO pausou o bot
   // (owner_request), o que é bug (mesmo erro corrigido no gate único, ver silence-gate.ts).
-  // Como este bloco é a ÚNICA barreira em prod com GATE_SILENCIO_TOTAL_ENABLED OFF (estado
-  // atual), o bug afetava PRODUÇÃO — não era regressão da #539, é comportamento legado desde
-  // o ADR 0016. Fix: reusa resolveSilenceGate (fonte única, mesma matriz de 2 eixos
-  // independentes) em vez de duplicar o cálculo — só a decisão muda; log/status/eventType
-  // deste bloco continuam iguais (suspendedReason/suspendedAt aqui, ausentes no gate único).
+  // Medido 03/08: GATE_SILENCIO_TOTAL_ENABLED=true em prod desde 31/07 — mas este bloco
+  // segue sendo alcançado (ver "CONVIVÊNCIA" abaixo), então o bug afetava PRODUÇÃO mesmo
+  // com a flag ON — não era regressão da #539, é comportamento legado desde o ADR 0016.
+  // Fix: reusa resolveSilenceGate (fonte única, mesma matriz de 2 eixos independentes) em
+  // vez de duplicar o cálculo — só a decisão muda; log/status/eventType deste bloco
+  // continuam iguais (suspendedReason/suspendedAt aqui, ausentes no gate único).
   //
   // Eixo (b) atrás da flag BILLING_OVERDUE_SILENCE (env), igual antes. getCloneBySlot já traz
   // next_due_date/amount_cents/suspended_kind via SELECT único (cache TTL 60s) — sem query
   // nova no hot path.
   //
-  // CONVIVÊNCIA COM O GATE ÚNICO (checkSilenceGate, mais acima): com
-  // GATE_SILENCIO_TOTAL_ENABLED=true este bloco NUNCA é alcançado nesse ramo — o gate único
-  // já deu early-return antes do antibot/upsert-de-contato. Com a flag OFF (default), o gate
-  // único é sempre no-op e ESTE bloco continua sendo a única barreira, na posição de sempre.
+  // CONVIVÊNCIA COM O GATE ÚNICO (checkSilenceGate, mais acima): checkSilenceGate só dá
+  // early-return quando `silenced === true`. Medido 03/08: GATE_SILENCIO_TOTAL_ENABLED=true
+  // em prod, mas `respond:false` (pausa do dono) NÃO é `silenced` — checkSilenceGate retorna
+  // null e o fluxo cai neste bloco de qualquer forma. Ou seja: ESTE bloco é sempre alcançado
+  // para o caso owner_request, independente do valor da flag — não é só o caminho legado.
   //
   // CORRIGIDO 03/08 (P0 medido em prod: Ingrid/Samuel pausados pelo dono e o bot respondia
   // do mesmo jeito): `resolveSilenceGate` agora devolve `respond` no ramo `silenced:false` —
@@ -1031,6 +1033,14 @@ export async function handleWebhook(
   // ponto — mas NÃO gera nem envia resposta ao cliente final (regras-negocio.md 8-bis,
   // linha 2 da matriz). sendSeen acima intencionalmente NÃO entra no corte: marcar como lida
   // não é "responder" e preserva a UX de app normal enquanto o dono está pausado.
+  //
+  // appendMemory('human') SÓ roda dentro de bot.handle — este early-return o pula, então a
+  // mensagem do cliente NÃO entra na memória da conversa enquanto durar a pausa. Revisado
+  // pelo security 03/08 e decisão do PM: MANTIDO de propósito — é o MESMO comportamento que
+  // os outros três early-return de silêncio já têm há meses (ignored:flow-paused acima,
+  // ignored:flow-suspended e ignored:billing-overdue neste mesmo bloco), então este fix é
+  // consistente com o sistema, não uma exceção nova. Mudar isso seria comportamento NOVO
+  // sobre um P0 sem pedido, e reteria mais PII durante a pausa — não reabrir sem pedido.
   if (ownerPausedNoRespond) {
     log.info(
       { fone: phoneLogTag(telefone), flowId: route.workflow_id },
