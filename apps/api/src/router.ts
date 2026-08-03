@@ -905,6 +905,14 @@ export async function handleWebhook(
   // GATE_SILENCIO_TOTAL_ENABLED=true este bloco NUNCA é alcançado nesse ramo — o gate único
   // já deu early-return antes do antibot/upsert-de-contato. Com a flag OFF (default), o gate
   // único é sempre no-op e ESTE bloco continua sendo a única barreira, na posição de sempre.
+  //
+  // CORRIGIDO 03/08 (P0 medido em prod: Ingrid/Samuel pausados pelo dono e o bot respondia
+  // do mesmo jeito): `resolveSilenceGate` agora devolve `respond` no ramo `silenced:false` —
+  // `respond:false` é a pausa do dono em dia (owner_request), que NÃO é silêncio total. Este
+  // bloco continua processando tudo (antibot/human_reply/contactNames já rodaram acima, nas
+  // etapas 4/4b/6a — nada aqui muda) e só marca `ownerPausedNoRespond`, consumido logo antes
+  // de `bot.handle` (early-return ali, DEPOIS de sendSeen — ver comentário no ponto de uso).
+  let ownerPausedNoRespond = false;
   if (route.workflow_id.startsWith('clone_')) {
     const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
 
@@ -915,6 +923,10 @@ export async function handleWebhook(
         daysUntilDue: (nextDueDate) => clientBilling.daysUntilDue(nextDueDate),
         billingOverdueSilenceOn: overdueSilenceOn,
       });
+
+      if (!gate.silenced && !gate.respond) {
+        ownerPausedNoRespond = true;
+      }
 
       if (gate.silenced && gate.reason === 'flow-suspended') {
         log.info(
@@ -1013,6 +1025,29 @@ export async function handleWebhook(
 
   // 8. Marca como lida + processa
   await waha.sendSeen(sessao, chatId).catch(() => {});
+
+  // 8b. PAUSA DO DONO (owner_request, em dia): processa tudo — o pipeline acima (antibot,
+  // human_reply-de-fluxo, upsert de contactNames) já rodou nas etapas 4/4b/6a, ANTES deste
+  // ponto — mas NÃO gera nem envia resposta ao cliente final (regras-negocio.md 8-bis,
+  // linha 2 da matriz). sendSeen acima intencionalmente NÃO entra no corte: marcar como lida
+  // não é "responder" e preserva a UX de app normal enquanto o dono está pausado.
+  if (ownerPausedNoRespond) {
+    log.info(
+      { fone: phoneLogTag(telefone), flowId: route.workflow_id },
+      'Fluxo pausado pelo dono, processando sem responder',
+    );
+    await flowExecutionLog.logFlowEvent({
+      ...phoneLog,
+      flowId: route.workflow_id,
+      flowName: route.workflow_name,
+      eventType: 'router.owner-paused',
+      status: 'ignored',
+      message: 'Fluxo pausado pelo dono: processado, resposta suprimida',
+      metadata: { flowId: route.workflow_id },
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: 'ignored:owner-paused' };
+  }
 
   const ctx: BotContext = {
     message,
