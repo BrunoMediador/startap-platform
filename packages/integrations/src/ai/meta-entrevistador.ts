@@ -1236,8 +1236,12 @@ export interface MelhoriaContext extends EntrevistadorContext {
  * pode interpretar que o bloco de DADO fechou e passar a ler o resto da persona como instrução
  * do system. Regras: case-insensitive, espaço/quebra opcional entre o nome e as setas, e a
  * seta SOLTA também morre. Todos os padrões são lineares (sem quantificador aninhado) — sem ReDoS.
+ *
+ * Exportada (ADR 0035): reusada pelo validador cruzado serviço↔persona
+ * (apps/portal-api/src/lib/servico-persona-validator.ts) — MESMA sanitização/delimitador que o
+ * security já bateu 6 payloads de bypass em cima, não inventar um novo.
  */
-function sanitizePersonaAtual(raw: string): string {
+export function sanitizePersonaAtual(raw: string): string {
   const clipped = (raw ?? '').slice(0, MAX_PERSONA_ATUAL_CONTEXT_CHARS);
   return (
     clipped

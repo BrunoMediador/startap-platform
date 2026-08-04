@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  extrairLinhasComTagMoeda,
   sanitizeOrphanPlaceholders,
   stripPII,
   validatePersona,
@@ -205,6 +206,57 @@ describe('validatePersona — SCRUM-92: aceita persona de parágrafo único (1 l
     expect(p.length).toBeLessThan(60);
     const r = validatePersona(p);
     expect(r.ok).toBe(false);
+  });
+});
+
+describe('validatePersona — allowlist de linha de moeda (ADR 0035)', () => {
+  it('sem allowlist (comportamento antigo): linha de plano é cortada como qualquer moeda', () => {
+    const p = `${PERSONA_LIMPA}\nO plano mensal sai R$ 150.`;
+    const r = validatePersona(p);
+    expect(r.cleaned).not.toContain('150');
+    expect(r.removedTags).toContain('moeda');
+  });
+
+  it('com a linha na allowlist: sobrevive byte-a-byte', () => {
+    const linhaPlano = 'O plano mensal sai R$ 150.';
+    const p = `${PERSONA_LIMPA}\n${linhaPlano}`;
+    const r = validatePersona(p, { linhasMoedaPermitidas: new Set([linhaPlano]) });
+    expect(r.cleaned).toContain(linhaPlano);
+    expect(r.removedTags).not.toContain('moeda');
+  });
+
+  it('allowlist só perdoa a tag moeda — telefone em linha SEPARADA continua sendo cortado', () => {
+    // A allowlist só perdoa a linha EXATA que está nela (comparação por conteúdo). Uma linha
+    // diferente, mesmo logo abaixo, passa pelas REJECT_LINE_PATTERNS normalmente — aqui provamos
+    // que o telefone não "pega carona" na permissão dada à linha de plano.
+    const linhaPlano = 'O plano mensal sai R$ 150.';
+    const linhaTelefone = 'Fale com a gente pelo 11987654321.';
+    const p = `${PERSONA_LIMPA}\n${linhaPlano}\n${linhaTelefone}`;
+    const r = validatePersona(p, { linhasMoedaPermitidas: new Set([linhaPlano]) });
+    expect(r.cleaned).toContain(linhaPlano);
+    expect(r.cleaned).not.toContain('11987654321');
+    expect(r.removedTags).toContain('telefone');
+  });
+
+  it('allowlist com linha que NÃO bate na persona não tem efeito (fail-safe)', () => {
+    const p = `${PERSONA_LIMPA}\nO corte sai R$ 40.`;
+    const r = validatePersona(p, { linhasMoedaPermitidas: new Set(['linha que não existe aqui']) });
+    expect(r.cleaned).not.toContain('40');
+    expect(r.removedTags).toContain('moeda');
+  });
+});
+
+describe('extrairLinhasComTagMoeda', () => {
+  it('extrai só as linhas com indício de moeda (regex moeda, R$<dígito>)', () => {
+    const p = `${PERSONA_LIMPA}\nO plano mensal sai R$ 150.\nAtendemos de segunda a sexta.`;
+    expect(extrairLinhasComTagMoeda(p)).toEqual(['O plano mensal sai R$ 150.']);
+  });
+
+  it('vazio quando não há indício de moeda formal (R$<dígito>)', () => {
+    // Nota: extrairLinhasComTagMoeda espelha o regex `moeda` de REJECT_LINE_PATTERNS (só
+    // R$<dígito>) — o indício AMPLIADO (por extenso) é responsabilidade de
+    // servico-persona-validator.ts:temIndicioDeMoeda, usado no outro lado (PUT /portal/servicos).
+    expect(extrairLinhasComTagMoeda('o corte sai quarenta reais')).toEqual([]);
   });
 });
 

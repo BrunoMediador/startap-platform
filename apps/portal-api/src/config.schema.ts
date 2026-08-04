@@ -362,6 +362,26 @@ export const ConfigSchema = z.object({
     .positive()
     .default(2 * 60 * 60),
 
+  // ── Validação cruzada serviço↔persona (ADR 0035) ────────────────────────────────
+  // Kill-switch REAL (não canário log-only — decisão do Bruno 01/08): OFF (default, sobe assim)
+  // = comportamento antigo byte-a-byte no PUT /portal/servicos (sem chamada de LLM, sem 409/503
+  // novo) e no builder (validatePersona roda sem allowlist de plano, cortando toda linha `moeda`
+  // como sempre cortou). Ligar exige GO explícito do Bruno DAQUELE flag, depois da prova dos 9
+  // casos do ADR §D4 contra o modelo real. OPCIONAL no boot (lição #247). NUNCA hardcoded.
+  SERVICO_VALIDACAO_CRUZADA_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // ⚠️ Env PRÓPRIA — NÃO reusar PROMPT_BUILDER_MODEL (ADR §D5): builder é conversa criativa
+  // (temperature alta), este é classificador binário determinístico (temperature=0). Acoplar as
+  // envs faz uma troca de modelo do builder mexer numa trava de save sem ninguém perceber.
+  // ⚠️ gpt-5 puro REJEITA temperature e quebraria a chamada — usar a linha .1 (mini ou full).
+  SERVICO_VALIDATOR_MODEL: z.string().default('gpt-5.1-mini'),
+  SERVICO_VALIDATOR_TEMPERATURE: z.coerce.number().min(0).max(2).default(0),
+  // Timeout curto (regra 7) — bem abaixo do builder (20s): aqui o dono espera um botão, não uma
+  // conversa. Total pior caso com 1 retry ≈ 2x este valor antes do 503.
+  SERVICO_VALIDATOR_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
+
   // ── Cartão de confirmação em RUNTIME — kill-switch GLOBAL (SCRUM-92 inc.2 / ADR 0032) ──
   // MESMA flag do apps/api. ATIVA em produção desde 23/07/2026 (ADR 0033). No portal-api ela
   // gate 2 caminhos: (1) o approve do builder nasce em runtime (persona SEM cartão baked +

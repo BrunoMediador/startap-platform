@@ -111,6 +111,23 @@ export interface PersonaValidationResult {
   ok: boolean;
 }
 
+const EMPTY_SET: ReadonlySet<string> = new Set();
+
+/**
+ * Extrai as linhas da persona que bateriam a tag `moeda` (ADR 0035) — usado pelo caller
+ * (`prompt-builder.ts`) para montar a lista a classificar via `classificarLinhasDeMoeda` ANTES
+ * de chamar `validatePersona`. Mantido em sincronia com o regex `moeda` de REJECT_LINE_PATTERNS
+ * (mesma fonte, sem duplicar o padrão).
+ */
+export function extrairLinhasComTagMoeda(persona: string): string[] {
+  const moedaRe = REJECT_LINE_PATTERNS.find((p) => p.tag === 'moeda')?.re;
+  if (!moedaRe) return [];
+  return persona
+    .split('\n')
+    .map((l) => l.replace(/\s+$/g, ''))
+    .filter((l) => l.trim() !== '' && moedaRe.test(l));
+}
+
 /**
  * Limpa placeholders `{var}` fora da whitelist: remove as chaves (`{promo}` -> `promo`),
  * evitando que o renderPrompt entregue `{promo}` cru ao modelo. Whitelist preservada intacta.
@@ -139,13 +156,21 @@ export function stripPII(text: string): string {
  * citar o nome de um serviço na persona é natural (ver JSDoc do módulo). A linha só some se vier
  * junto de um dado operacional (ex.: "Corte R$40" cai no padrão `moeda`). Isso conserta o loop
  * infinito do builder em barbearia (catálogo genérico apagava quase toda linha). SCRUM-92.
+ *
+ * `opts.linhasMoedaPermitidas` (ADR 0035): allowlist de linhas EXATAS que sobrevivem mesmo
+ * batendo a tag `moeda` — decidida pela IA em `servico-persona-validator.ts:classificarLinhasDeMoeda`
+ * ANTES desta chamada (preço de PLANO/PACOTE/ASSINATURA legítimo). Comparação por conteúdo
+ * (trim), não por índice — a linha precisa estar LITERALMENTE na lista, senão continua cortada
+ * (fail-closed: ausência de classificação = comportamento antigo). NENHUMA outra tag (estrutural,
+ * subversao, PII…) é perdoada por esta allowlist — só `moeda`.
  */
 export function validatePersona(
   persona: string,
-  _opts: { servicos?: string[] } = {},
+  opts: { servicos?: string[]; linhasMoedaPermitidas?: ReadonlySet<string> } = {},
 ): PersonaValidationResult {
   const removedTags = new Set<string>();
   const kept: string[] = [];
+  const linhasMoedaPermitidas = opts.linhasMoedaPermitidas ?? EMPTY_SET;
 
   for (const rawLine of persona.split('\n')) {
     const line = rawLine.replace(/\s+$/g, '');
@@ -159,6 +184,11 @@ export function validatePersona(
         hit = tag;
         break;
       }
+    }
+    if (hit === 'moeda' && linhasMoedaPermitidas.has(line.trim())) {
+      // Plano/pacote/assinatura classificado como legítimo pela IA — sobrevive.
+      kept.push(line);
+      continue;
     }
     if (hit) {
       removedTags.add(hit);
