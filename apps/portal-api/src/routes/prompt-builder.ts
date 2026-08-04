@@ -102,6 +102,15 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * (toda linha `moeda` é cortada, inclusive plano legítimo). ON → extrai as linhas com indício de
  * moeda, pergunta à IA quais são plano/pacote/assinatura legítimo, e só essas sobrevivem.
  *
+ * ATALHO DETERMINÍSTICO (01/08, achado do PM em prod): linhas que aparecem DEPOIS de
+ * `botPrompt.PLANOS_BLOCK_HEADER` na persona vêm do bloco estrutural que a migração
+ * (`migrateClonePlanosToBotPrompt`, PR #568) colou byte-a-byte no `bot_prompt` — origem
+ * estruturalmente confiável (texto do dono, grafado pelo script, não pela IA), sem precisar de
+ * LLM pra confirmar. Caso real: Ingrid, `bot_prompt` de 2703 bytes com "Pacote Mensal com 4
+ * sessões: R$ 396,00 (99,00 por sessão)" + "Ou 2x 198,00 quinzenalmente" sob esse header. Essas
+ * linhas entram na allowlist ANTES de chamar o classificador — 0 chamada de LLM pro caso mais
+ * comum (o dono nem tocou nessa seção na conversa).
+ *
  * Falha do classificador NUNCA bloqueia o approve/draft (fail-closed dentro de
  * `classificarLinhasDeMoeda`: em erro devolve lista vazia) — o pior caso é a linha de plano ser
  * cortada como sempre foi, nunca um 503 no meio da conversa do builder.
@@ -113,10 +122,35 @@ async function validatePersonaComClassificacaoDeMoeda(
   if (!config.SERVICO_VALIDACAO_CRUZADA_ENABLED || !config.OPENAI_API_KEY) {
     return validatePersona(persona, opts);
   }
-  const linhas = extrairLinhasComTagMoeda(persona);
-  if (linhas.length === 0) return validatePersona(persona, opts);
 
-  const { linhasLegitimas } = await classificarLinhasDeMoeda(linhas, {
+  // Atalho determinístico: linhas dentro do bloco estrutural de planos já migrado são
+  // legítimas por origem, sem perguntar ao LLM (ver JSDoc acima).
+  const headerTitulo = botPrompt.PLANOS_BLOCK_HEADER.split('\n')[0];
+  const idxHeader = persona.indexOf(headerTitulo);
+  const linhasDoBlocoEstrutural =
+    idxHeader === -1
+      ? []
+      : persona
+          .slice(idxHeader)
+          .split('\n')
+          .slice(1) // pula a linha do título
+          .map((l) => l.replace(/\s+$/g, ''))
+          .filter((l) => l.trim() !== '');
+
+  const todasAsLinhasDeMoeda = extrairLinhasComTagMoeda(persona);
+  const linhasParaClassificar = todasAsLinhasDeMoeda.filter(
+    (l) => !linhasDoBlocoEstrutural.includes(l),
+  );
+
+  if (linhasParaClassificar.length === 0) {
+    if (linhasDoBlocoEstrutural.length === 0) return validatePersona(persona, opts);
+    return validatePersona(persona, {
+      ...opts,
+      linhasMoedaPermitidas: new Set(linhasDoBlocoEstrutural),
+    });
+  }
+
+  const { linhasLegitimas } = await classificarLinhasDeMoeda(linhasParaClassificar, {
     model: config.SERVICO_VALIDATOR_MODEL,
     temperature: config.SERVICO_VALIDATOR_TEMPERATURE,
     timeoutMs: config.SERVICO_VALIDATOR_TIMEOUT_MS,
@@ -124,7 +158,7 @@ async function validatePersonaComClassificacaoDeMoeda(
   });
   return validatePersona(persona, {
     ...opts,
-    linhasMoedaPermitidas: new Set(linhasLegitimas),
+    linhasMoedaPermitidas: new Set([...linhasDoBlocoEstrutural, ...linhasLegitimas]),
   });
 }
 

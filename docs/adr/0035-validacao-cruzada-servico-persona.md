@@ -16,6 +16,17 @@
 > parâmetro `opts.linhasMoedaPermitidas` de `validatePersona`
 > (`apps/portal-api/src/lib/prompt-builder-validator.ts`). O resto do ADR (D1-D8) foi implementado
 > como desenhado.
+>
+> **Rebase pós-#567/#568/#571 (01/08)**: entre o início desta implementação e o merge, a PR #568
+> migrou `personalizacao.planos_beneficios` da Ingrid pro FIM do `bot_prompt`, byte-a-byte, sob o
+> header `botPrompt.PLANOS_BLOCK_HEADER` — sem passar pelo `validatePersona` (dado do dono, não
+> gerado pela IA). Isso é dado REAL de produção agora (2703 bytes, "Pacote Mensal com 4 sessões:
+> R$ 396,00 (99,00 por sessão)" + "Ou 2x 198,00 quinzenalmente"). Adicionado um ATALHO
+> DETERMINÍSTICO em `validatePersonaComClassificacaoDeMoeda`
+> (`apps/portal-api/src/routes/prompt-builder.ts`): linha que aparece DEPOIS do
+> `PLANOS_BLOCK_HEADER` na persona é legítima por origem, sem perguntar ao LLM — só o que estiver
+> FORA desse bloco (plano descrito em conversa livre com o builder, fora da migração estrutural)
+> vai para `classificarLinhasDeMoeda`.
 
 ## Contexto
 

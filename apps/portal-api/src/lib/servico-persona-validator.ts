@@ -136,10 +136,12 @@ export const AVALIAR_CONFLITO_PARAMETERS: Record<string, unknown> = {
 };
 
 /**
- * v11 (ADR §D3) — texto literal do ADR, verbatim. Verificador binário determinístico: NÃO
- * reusa o system prompt do builder (aquele é conversa criativa; este é classificador).
+ * v1 do validador de conflito (ADR §D3) — texto literal do ADR, verbatim. Verificador binário
+ * determinístico: NÃO reusa o system prompt do builder (aquele é conversa criativa; este é
+ * classificador). ⚠️ Nomenclatura própria deste módulo — NÃO confundir com v11.md/v12.md do
+ * meta-entrevistador (PR #567), domínio de prompt diferente, versionamento independente.
  */
-export const SERVICO_VALIDATOR_PROMPT_V11 = `Você é um verificador de duplicação de dados. Sua única função é decidir se cadastrar
+export const SERVICO_VALIDATOR_PROMPT_CONFLITO_V1 = `Você é um verificador de duplicação de dados. Sua única função é decidir se cadastrar
 um serviço com preço cria contradição com o texto de personalidade de um assistente
 de WhatsApp. Você não conversa, não sugere, não reescreve nada.
 
@@ -258,7 +260,10 @@ async function chamarAvaliarConflitoUmaVez(input: {
     .join('\n');
   const personaSanitizada = metaEntrevistador.sanitizePersonaAtual(input.personaAtual);
 
-  const promptPreenchido = SERVICO_VALIDATOR_PROMPT_V11.replace('{servico_nome}', servicoLista)
+  const promptPreenchido = SERVICO_VALIDATOR_PROMPT_CONFLITO_V1.replace(
+    '{servico_nome}',
+    servicoLista,
+  )
     .replace('{servico_preco}', '(ver lista acima)')
     .replace('{persona_atual}', personaSanitizada);
 
@@ -383,7 +388,7 @@ export const CLASSIFICAR_LINHAS_PARAMETERS: Record<string, unknown> = {
  * que a persona pode legitimamente carregar um valor (regra de negócio vigente, PR de planos).
  * Preço de SERVIÇO AVULSO continua proibido na persona, mesmo disfarçado de "pacote de X".
  */
-export const CLASSIFICAR_LINHAS_PROMPT_V1 = `Você é um classificador de texto. Sua única função é ler linhas de um texto de personalidade
+export const SERVICO_VALIDATOR_PROMPT_CLASSIFICAR_LINHAS_V1 = `Você é um classificador de texto. Sua única função é ler linhas de um texto de personalidade
 de assistente de WhatsApp e decidir quais delas falam preço de PLANO, PACOTE ou ASSINATURA
 recorrente — o único tipo de preço que PODE ficar no texto da persona. Você não conversa, não
 sugere, não reescreve nada.
@@ -422,7 +427,7 @@ async function chamarClassificarLinhasUmaVez(input: {
   opts: ValidatorModelOpts;
 }): Promise<ClassificarLinhasResultado> {
   const linhasNumeradas = input.linhas.map((l, i) => `${i + 1}. ${l}`).join('\n');
-  const promptPreenchido = CLASSIFICAR_LINHAS_PROMPT_V1.replace(
+  const promptPreenchido = SERVICO_VALIDATOR_PROMPT_CLASSIFICAR_LINHAS_V1.replace(
     '{linhas_numeradas}',
     linhasNumeradas,
   );
