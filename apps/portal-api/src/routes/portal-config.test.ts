@@ -22,7 +22,7 @@ const {
 } = vi.hoisted(() => ({
   configMock: {
     SERVICO_VALIDACAO_CRUZADA_ENABLED: false,
-    SERVICO_VALIDATOR_MODEL: 'gpt-5.1-mini',
+    SERVICO_VALIDATOR_MODEL: 'gpt-5.1',
     SERVICO_VALIDATOR_TEMPERATURE: 0,
     SERVICO_VALIDATOR_TIMEOUT_MS: 8000,
     OPENAI_API_KEY: 'sk-test',

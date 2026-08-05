@@ -182,9 +182,21 @@ PERSONA_ATUAL>>>
 
 **Assimetria deliberada do custo de erro**: falso-negativo = 1 redundância que já existe hoje. Falso-positivo = dono **travado** sem conseguir cadastrar um serviço legítimo, com o portal acusando um problema que ele não entende. Por isso o prompt manda **PERMITIR na dúvida** e por isso a verificação de substring literal do `trecho_conflitante` é obrigatória.
 
+> ### ✅ Prova contra o modelo real — 04/08 (pré-requisito do GO, executada)
+>
+> 9 casos × 3 repetições = **27 chamadas reais**, com o validador **compilado em produção** rodando dentro do container `startap-portal-api` (a `OPENAI_API_KEY` nunca saiu do servidor).
+>
+> **Resultado com `gpt-5.1`: 8/9 · falsos positivos 0/27 · indisponível 0 · p50 2042ms / p95 3549ms.** Zero instabilidade entre repetições. Os casos 2 (preço por extenso — o buraco que a regex `moeda` não pega) e 3 (duplicação divergente) passaram devolvendo o `trecho_conflitante` **copiado literalmente**, validando a guarda anti-alucinação do §D3.
+>
+> **O caso 5 falhou 3/3 — e a causa era ESTE documento contra o prompt, não o modelo.** A `SERVICO_VALIDATOR_PROMPT_CONFLITO_V1` mandava permitir preço de plano de forma **incondicional**, usando como exemplo literalmente o caso 5 (*"o plano mensal sai por R$ 150"*); a exceção "salvo se o próprio plano estiver sendo cadastrado" não existia em lugar nenhum. O modelo obedeceu corretamente. Corrigido pela **V2** do prompt, que mantém a permissão geral do plano (é ela que sustenta o caso 4) e recorta só o "mesmo item nos dois lugares".
+>
+> ⚠️ **Nenhum dos dois defeitos era detectável pela suíte**: os 3485 testes **mockam o LLM**, então nem o id do modelo nem a fronteira de comportamento do prompt eram exercitados. Fronteira de prompt só se prova contra o modelo real.
+
 ### D5 — Modelo, latência e custo
 
-**Recomendação: `gpt-5.1-mini` (ou o mini da linha vigente), env própria `SERVICO_VALIDATOR_MODEL`, `temperature=0` e teto de saída baixo.**
+**Recomendação: `gpt-5.1`, env própria `SERVICO_VALIDATOR_MODEL`, `temperature=0` e teto de saída baixo.**
+
+> 🔴 **CORRIGIDO 04/08** — a recomendação original era `gpt-5.1-mini`, e **esse id não existe nesta conta** (`404`, medido em `GET /v1/models`: a conta tem `gpt-5-mini` e `gpt-5.1`, nunca a combinação). Com o default errado, **todo save com indício de moeda na persona cairia em 503** assim que a flag fosse ligada — CI, `tsc` e 3485 testes não pegam porque a suíte **mocka o LLM**. Default passou a `gpt-5.1`, o mesmo que `PROMPT_BUILDER_MODEL` já roda em prod. O raciocínio "mini basta" abaixo continua válido em tese: se algum dia existir um mini da linha `.1` nesta conta, é troca de env, sem deploy. Latência medida com `gpt-5.1`: **p50 2,0s / p95 3,5s** (timeout 8s).
 
 - ⚠️ **Não reusar `PROMPT_BUILDER_MODEL`.** São cargas diferentes: o builder é conversa criativa longa (`temperature=0.4`, `config.schema.ts:341`); este é classificador binário determinístico. Acoplar as duas envs faz uma troca de modelo do builder mexer numa trava de save sem ninguém perceber.
 - ⚠️ **`gpt-5` puro está PROIBIDO aqui**: rejeita `temperature` e quebraria a chamada ([[prompt-builder-modelo-gpt51]]). O `.min(0)` do schema já aceita `temperature=0`; o modelo é que precisa aceitar.
