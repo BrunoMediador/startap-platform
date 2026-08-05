@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { toDraft, validate } from './servicos';
+import { ApiError } from './api';
+import { isConflitoPersona, isValidacaoIndisponivel, toDraft, validate } from './servicos';
 
 describe('validate (draft de servico)', () => {
   it('aceita servico valido com duracao multipla de 5', () => {
@@ -42,5 +43,75 @@ describe('toDraft', () => {
       duracao: '20',
       preco: '25,50',
     });
+  });
+});
+
+describe('isConflitoPersona (409 do PUT /portal/servicos — ADR 0035 §D2)', () => {
+  it('extrai servico/trecho/mensagem de um 409 conflito_persona bem formado', () => {
+    const err = new ApiError(409, 'conflict', {
+      error: 'conflito_persona',
+      reason: 'preco_duplicado',
+      servico: 'Luzes',
+      trecho: 'Luzes saem por cento e vinte reais',
+      mensagem: 'O texto do seu assistente já fala o preço de "Luzes"...',
+    });
+    expect(isConflitoPersona(err)).toEqual({
+      servico: 'Luzes',
+      trecho: 'Luzes saem por cento e vinte reais',
+      mensagem: 'O texto do seu assistente já fala o preço de "Luzes"...',
+    });
+  });
+
+  it('null quando o status não é 409', () => {
+    const err = new ApiError(503, 'unavailable', {
+      error: 'conflito_persona',
+      servico: 'Luzes',
+      trecho: 'x',
+      mensagem: 'y',
+    });
+    expect(isConflitoPersona(err)).toBeNull();
+  });
+
+  it('null quando o error code não é conflito_persona (outro 409 do portal)', () => {
+    const err = new ApiError(409, 'conflict', { error: 'agenda_nao_configurada' });
+    expect(isConflitoPersona(err)).toBeNull();
+  });
+
+  it('null quando o corpo não tem o shape esperado (defesa contra corpo incompleto)', () => {
+    expect(
+      isConflitoPersona(new ApiError(409, 'conflict', { error: 'conflito_persona' })),
+    ).toBeNull();
+    expect(isConflitoPersona(new ApiError(409, 'conflict', null))).toBeNull();
+  });
+
+  it('null pra erro que não é ApiError', () => {
+    expect(isConflitoPersona(new Error('boom'))).toBeNull();
+    expect(isConflitoPersona(null)).toBeNull();
+    expect(isConflitoPersona(undefined)).toBeNull();
+  });
+});
+
+describe('isValidacaoIndisponivel (503 do PUT /portal/servicos — ADR 0035 §D2)', () => {
+  it('true pro 503 validacao_indisponivel', () => {
+    const err = new ApiError(503, 'unavailable', {
+      error: 'validacao_indisponivel',
+      mensagem: 'Não consegui validar agora. Tente de novo em instantes.',
+    });
+    expect(isValidacaoIndisponivel(err)).toBe(true);
+  });
+
+  it('false pra 409 (nunca confundir com conflito_persona — um é permanente, outro retriable)', () => {
+    const err = new ApiError(409, 'conflict', { error: 'conflito_persona' });
+    expect(isValidacaoIndisponivel(err)).toBe(false);
+  });
+
+  it('false pra outro 503 do portal (error code diferente)', () => {
+    const err = new ApiError(503, 'unavailable', { error: 'outra_coisa' });
+    expect(isValidacaoIndisponivel(err)).toBe(false);
+  });
+
+  it('false pra erro que não é ApiError', () => {
+    expect(isValidacaoIndisponivel(new Error('boom'))).toBe(false);
+    expect(isValidacaoIndisponivel(null)).toBe(false);
   });
 });

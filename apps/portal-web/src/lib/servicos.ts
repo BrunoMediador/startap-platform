@@ -5,9 +5,61 @@
  * nome>=1, duracao inteira > 0 e MULTIPLO DE 5 (a grade da agenda anda em
  * passos de 5min — decisao Bruno 2026-06-11), preco>=0. Erro inline aqui
  * evita bater na API pra tomar 400.
+ *
+ * ── Validação cruzada serviço↔persona (ADR 0035, §D2/§D6) ────────────────────
+ * PUT /portal/servicos pode responder, atrás da flag `SERVICO_VALIDACAO_CRUZADA_ENABLED`
+ * (hoje OFF em prod — nada aqui muda o comportamento enquanto ela estiver desligada):
+ *   409 { error:'conflito_persona', reason:'preco_duplicado', servico, trecho, mensagem }
+ *     -> PERMANENTE. Tentar de novo sem editar nada nunca resolve.
+ *   503 { error:'validacao_indisponivel', mensagem }
+ *     -> RETRIABLE. O LLM falhou/deu timeout; o dado do dono não foi julgado.
+ * Os dois nunca podem virar a mesma mensagem genérica (era o bug antes desta ADR).
  */
+import { ApiError } from './api';
 import type { Servico } from './api-types';
 import { parsePrecoToCents } from './format';
+
+export interface ConflitoPersona {
+  servico: string;
+  trecho: string;
+  mensagem: string;
+}
+
+/** Código de erro (body.error) de um ApiError, quando string. */
+function errorCode(err: unknown): string | undefined {
+  if (!(err instanceof ApiError)) return undefined;
+  const body = err.body;
+  if (body && typeof body === 'object' && 'error' in body) {
+    const code = (body as { error?: unknown }).error;
+    if (typeof code === 'string') return code;
+  }
+  return undefined;
+}
+
+/**
+ * 409 conflito_persona: o preço do serviço já está escrito no texto do assistente.
+ * Extrai o corpo estruturado pro front mostrar QUAL serviço e QUAL frase conflitam.
+ * `null` se não for esse erro (guard de tipo + shape, nunca confia cegamente no body).
+ */
+export function isConflitoPersona(err: unknown): ConflitoPersona | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  if (errorCode(err) !== 'conflito_persona') return null;
+  // errorCode() já garantiu que err.body é um objeto (senão não haveria 'error' pra ler) —
+  // mesmo assim tratamos como unknown, sem confiar cegamente no shape do resto do corpo.
+  const body = err.body as Record<string, unknown>;
+  const { servico, trecho, mensagem } = body;
+  if (typeof servico !== 'string' || typeof trecho !== 'string' || typeof mensagem !== 'string') {
+    return null;
+  }
+  return { servico, trecho, mensagem };
+}
+
+/** 503 validacao_indisponivel: o validador falhou/deu timeout — retriable, dado não julgado. */
+export function isValidacaoIndisponivel(err: unknown): boolean {
+  return (
+    err instanceof ApiError && err.status === 503 && errorCode(err) === 'validacao_indisponivel'
+  );
+}
 
 export interface Draft {
   nome: string;
