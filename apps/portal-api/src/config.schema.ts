@@ -375,8 +375,13 @@ export const ConfigSchema = z.object({
   // ⚠️ Env PRÓPRIA — NÃO reusar PROMPT_BUILDER_MODEL (ADR §D5): builder é conversa criativa
   // (temperature alta), este é classificador binário determinístico (temperature=0). Acoplar as
   // envs faz uma troca de modelo do builder mexer numa trava de save sem ninguém perceber.
-  // ⚠️ gpt-5 puro REJEITA temperature e quebraria a chamada — usar a linha .1 (mini ou full).
-  SERVICO_VALIDATOR_MODEL: z.string().default('gpt-5.1-mini'),
+  // ⚠️ gpt-5 puro REJEITA temperature e quebraria a chamada — usar a linha .1.
+  // ⚠️ `gpt-5.1-mini` NÃO EXISTE nesta conta (404, medido 04/08 em `GET /v1/models`): a conta tem
+  // `gpt-5-mini` e `gpt-5.1`, nunca a combinação. O default anterior apontava pra esse id e faria
+  // TODO save com indício de moeda na persona cair em 503 assim que a flag fosse ligada — bug que
+  // CI, tsc e 3485 testes não pegam porque a suíte MOCKA o LLM. Default = o mesmo modelo que o
+  // builder já roda em prod (`PROMPT_BUILDER_MODEL=gpt-5.1`), único id .1 provado nesta conta.
+  SERVICO_VALIDATOR_MODEL: z.string().default('gpt-5.1'),
   SERVICO_VALIDATOR_TEMPERATURE: z.coerce.number().min(0).max(2).default(0),
   // Timeout curto (regra 7) — bem abaixo do builder (20s): aqui o dono espera um botão, não uma
   // conversa. Total pior caso com 1 retry ≈ 2x este valor antes do 503.

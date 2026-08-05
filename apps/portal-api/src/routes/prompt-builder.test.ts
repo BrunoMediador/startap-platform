@@ -40,7 +40,7 @@ const cfg = vi.hoisted(() => ({
   // ADR 0035: OFF por default (comportamento antigo, validatePersona sem allowlist de plano). O
   // describe 'classificação de linha de moeda' liga.
   SERVICO_VALIDACAO_CRUZADA_ENABLED: false,
-  SERVICO_VALIDATOR_MODEL: 'gpt-5.1-mini',
+  SERVICO_VALIDATOR_MODEL: 'gpt-5.1',
   SERVICO_VALIDATOR_TEMPERATURE: 0,
   SERVICO_VALIDATOR_TIMEOUT_MS: 8000,
 }));
@@ -1383,7 +1383,7 @@ describe('modo melhoria (SCRUM-153)', () => {
   describe('classificação de linha de moeda (ADR 0035, flag ON)', () => {
     beforeEach(() => {
       cfg.SERVICO_VALIDACAO_CRUZADA_ENABLED = true;
-      cfg.SERVICO_VALIDATOR_MODEL = 'gpt-5.1-mini';
+      cfg.SERVICO_VALIDATOR_MODEL = 'gpt-5.1';
       cfg.SERVICO_VALIDATOR_TEMPERATURE = 0;
       cfg.SERVICO_VALIDATOR_TIMEOUT_MS = 8000;
     });
