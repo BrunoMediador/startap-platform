@@ -1,6 +1,6 @@
 'use client';
 
-import { IconPencil, IconPlus, IconScissors, IconTrash } from '@/components/icons';
+import { IconAlert, IconPencil, IconPlus, IconScissors, IconTrash } from '@/components/icons';
 import { useTenant } from '@/components/shell/session-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -11,12 +11,36 @@ import { useToast } from '@/components/ui/toast';
 import type { Servico } from '@/lib/api-types';
 import { formatDuracao, formatPrecoCents } from '@/lib/format';
 import { qk, useSaveServicos, useServicos } from '@/lib/queries';
-import { type Draft, type FieldErrors, toDraft, validate } from '@/lib/servicos';
+import {
+  type ConflitoPersona,
+  type Draft,
+  type FieldErrors,
+  isConflitoPersona,
+  isValidacaoIndisponivel,
+  toDraft,
+  validate,
+} from '@/lib/servicos';
 /**
  * Serviços (spec 6.7 + 3.3). Lista editavel: nome · duracao · preco. PUT envia o
- * array INTEIRO (contrato /portal/servicos). Salvamento OTIMISTA (D5): a UI
- * aplica na hora, dispara o PUT; sucesso -> toast "Serviços atualizados"; falha ->
- * reverte ao snapshot anterior + toast danger.
+ * array INTEIRO (contrato /portal/servicos).
+ *
+ * Salvamento de ADD/EDIÇÃO é PESSIMISTA (ADR 0035 §D6): o backend pode rodar uma
+ * validação cruzada serviço↔persona (flag SERVICO_VALIDACAO_CRUZADA_ENABLED, hoje
+ * OFF em prod) que bloqueia com 409 quando o mesmo preço já está no texto do
+ * assistente. Com save otimista o item apareceria na lista e sumiria 1-2s depois
+ * — o "sumiu sozinho" que a SCRUM-158 combateu. Por isso o item só entra no cache
+ * em onSuccess; enquanto pende, o botão mostra "Verificando…".
+ *
+ * REMOÇÃO continua OTIMISTA — deletar nunca aciona a validação (não há preço novo
+ * pra conflitar) e reverte ao snapshot em qualquer erro, como antes.
+ *
+ * Tratamento de erro do save pessimista (§D6/§D2):
+ *   409 conflito_persona -> PERMANENTE. Erro fica INLINE no EditRow (não é toast —
+ *     o dono precisa ler a frase citada da persona e decidir o que fazer), o editor
+ *     continua aberto com os dados dele intactos.
+ *   503 validacao_indisponivel -> RETRIABLE. Toast com ação "Tentar de novo", editor
+ *     continua aberto, nada no campo é marcado como inválido.
+ *   qualquer outro erro -> toast genérico de sempre.
  *
  * Leva 2 (item 3):
  *  - FORA do modo edicao, cada linha tem botao DELETAR (lixeira) com confirmacao
@@ -44,6 +68,8 @@ export default function ServicosPage() {
   const [draft, setDraft] = useState<Draft>({ nome: '', duracao: '', preco: '' });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [removeIdx, setRemoveIdx] = useState<number | null>(null);
+  // 409 conflito_persona do save em curso (ADR 0035 §D6) — some ao editar de novo.
+  const [conflito, setConflito] = useState<ConflitoPersona | null>(null);
 
   const servicos = servicosQ.data ?? [];
 
@@ -51,26 +77,60 @@ export default function ServicosPage() {
     setEditing(idx);
     setDraft(toDraft(servicos[idx]));
     setErrors({});
+    setConflito(null);
   }
   function startAdd() {
     setEditing('new');
     setDraft({ nome: '', duracao: '', preco: '' });
     setErrors({});
+    setConflito(null);
   }
   function cancel() {
     setEditing(null);
     setErrors({});
+    setConflito(null);
   }
 
-  /** Aplica `next` no cache na hora (otimista); reverte pro snapshot em falha. */
-  function commit(next: Servico[], successMsg: string) {
+  /**
+   * Add/edição: PESSIMISTA (§D6). Só entra no cache em onSuccess — o editor some
+   * só quando o save de fato passou. Em erro, o editor CONTINUA ABERTO com o draft
+   * intacto (nunca beco sem saída): 409 vira erro inline citando a persona, 503
+   * vira toast retriable, qualquer outro erro cai no toast genérico de sempre.
+   */
+  function commitPessimista(next: Servico[], successMsg: string) {
+    setConflito(null);
+    save.mutate(next, {
+      onSuccess: () => {
+        client.setQueryData(qk.servicos(slot), next);
+        setEditing(null);
+        toast.success(successMsg);
+      },
+      onError: (err) => {
+        const conflitoPersona = isConflitoPersona(err);
+        if (conflitoPersona) {
+          setConflito(conflitoPersona);
+          return;
+        }
+        if (isValidacaoIndisponivel(err)) {
+          toast.error('Não consegui validar agora. Tente de novo em instantes.', {
+            label: 'Tentar de novo',
+            onClick: () => commitPessimista(next, successMsg),
+          });
+          return;
+        }
+        toast.error('Não foi possível salvar. Tente de novo.');
+      },
+    });
+  }
+
+  /** Remoção: continua OTIMISTA — nunca aciona a validação cruzada (§D6). */
+  function commitRemocaoOtimista(next: Servico[], successMsg: string) {
     const prev = client.getQueryData<Servico[]>(qk.servicos(slot)) ?? servicos;
-    client.setQueryData(qk.servicos(slot), next); // otimista — UI atualiza ja
-    setEditing(null);
+    client.setQueryData(qk.servicos(slot), next);
     save.mutate(next, {
       onSuccess: () => toast.success(successMsg),
       onError: () => {
-        client.setQueryData(qk.servicos(slot), prev); // revert (D5)
+        client.setQueryData(qk.servicos(slot), prev); // revert
         toast.error('Não foi possível salvar. Tente de novo.');
       },
     });
@@ -83,10 +143,10 @@ export default function ServicosPage() {
       return;
     }
     if (editing === 'new') {
-      commit([...servicos, res.value], 'Serviços atualizados');
+      commitPessimista([...servicos, res.value], 'Serviços atualizados');
     } else if (typeof editing === 'number') {
       const next = servicos.map((s, i) => (i === editing ? res.value : s));
-      commit(next, 'Serviços atualizados');
+      commitPessimista(next, 'Serviços atualizados');
     }
   }
 
@@ -94,7 +154,7 @@ export default function ServicosPage() {
     if (removeIdx === null) return;
     const next = servicos.filter((_, i) => i !== removeIdx);
     setRemoveIdx(null);
-    commit(next, 'Serviço removido');
+    commitRemocaoOtimista(next, 'Serviço removido');
   }
 
   return (
@@ -126,7 +186,11 @@ export default function ServicosPage() {
                   key={`row-${s.nome}`}
                   draft={draft}
                   errors={errors}
-                  onChange={setDraft}
+                  conflito={conflito}
+                  onChange={(d) => {
+                    setConflito(null); // stale: dono já está corrigindo
+                    setDraft(d);
+                  }}
                   onSave={onSave}
                   onCancel={cancel}
                   saving={save.isPending}
@@ -145,7 +209,11 @@ export default function ServicosPage() {
                 isNew
                 draft={draft}
                 errors={errors}
-                onChange={setDraft}
+                conflito={conflito}
+                onChange={(d) => {
+                  setConflito(null);
+                  setDraft(d);
+                }}
                 onSave={onSave}
                 onCancel={cancel}
                 saving={save.isPending}
@@ -228,6 +296,7 @@ function ReadRow({
 function EditRow({
   draft,
   errors,
+  conflito,
   onChange,
   onSave,
   onCancel,
@@ -236,6 +305,7 @@ function EditRow({
 }: {
   draft: Draft;
   errors: FieldErrors;
+  conflito?: ConflitoPersona | null;
   onChange: (d: Draft) => void;
   onSave: () => void;
   onCancel: () => void;
@@ -275,13 +345,48 @@ function EditRow({
           onChange={(e) => onChange({ ...draft, preco: e.target.value })}
         />
       </div>
+      {conflito && <ConflitoPersonaAlerta conflito={conflito} />}
       <div className="flex gap-2.5">
         <Button variant="secondary" size="inline" onClick={onCancel} disabled={saving}>
           Cancelar
         </Button>
-        <Button size="inline" className="flex-1" loading={saving} onClick={onSave}>
+        <Button
+          size="inline"
+          className="flex-1"
+          loading={saving}
+          loadingLabel="Verificando…"
+          onClick={onSave}
+        >
           Salvar
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 409 conflito_persona (ADR 0035 §D2/§D6): o preço deste serviço já está escrito
+ * no texto do assistente. Mostra a frase EXATA citada da persona (aspas +
+ * destaque, não é "mensagem de erro" — é texto que o próprio dono escreveu) e o
+ * porquê, com saída clara pro dono resolver (editar o texto do assistente ou
+ * ajustar este serviço) sem ficar travado.
+ */
+function ConflitoPersonaAlerta({ conflito }: { conflito: ConflitoPersona }) {
+  return (
+    <div className="rounded-card-sm border border-danger/40 bg-danger-soft p-3.5" role="alert">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-[1px] flex size-6 shrink-0 items-center justify-center rounded-full bg-danger text-white">
+          <IconAlert size={14} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-[13.5px] font-semibold text-danger">
+            Preço já está no texto do assistente
+          </h3>
+          <p className="mt-1 text-[13px] leading-snug text-ink-soft">{conflito.mensagem}</p>
+          <blockquote className="mt-2 rounded-field border border-danger/30 bg-surface px-3 py-2 text-[13px] italic leading-snug text-ink">
+            “{conflito.trecho}”
+          </blockquote>
+        </div>
       </div>
     </div>
   );
