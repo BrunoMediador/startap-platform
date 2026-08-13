@@ -1,10 +1,12 @@
 import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
-    // .claude/worktrees contem copias stale dos testes de agents — excluir evita 69 falhas fantasma.
-    // painel-admin/test usa node:test (nao vitest) — rodar via: node --test painel-admin/test/*.test.js
+    // Worktrees contem copias stale dos testes de agents — excluir evita falhas fantasma.
+    // painel-admin/test usa node:test e tem gate proprio no CI: npm run test:panel.
     exclude: [
       '**/.claude/**',
+      '**/.codex/**',
+      '**/.worktrees/**',
       '**/node_modules/**',
       '**/dist/**',
       'painel-admin/test/**',

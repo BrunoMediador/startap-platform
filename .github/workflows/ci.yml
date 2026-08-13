@@ -10,10 +10,9 @@ jobs:
   build:
     name: Build & typecheck
     runs-on: ubuntu-latest
-    # Postgres 16 EFÊMERO p/ os testes de INTEGRAÇÃO de SQL real (ex.: packages-deducao.integration).
-    # Sem ele, esses testes AUTO-SKIPAM (PG_TEST_URL ausente) e classes inteiras de defeito ficam
-    # invisíveis: o mock só compara a STRING do SQL e deixou passar o P0 do #321 (FOR UPDATE + GROUP BY
-    # = erro 0A000 no PG 16, inexecutável). Banco descartável, vive só durante o job; nunca toca prod.
+    # Postgres 16 EFÊMERO p/ migrations e testes de INTEGRAÇÃO SQL real.
+    # Sem ele, integrações AUTO-SKIPAM (PG_TEST_URL ausente) e a cadeia de schema não é validada.
+    # Banco descartável, vive só durante o job; nunca toca prod.
     services:
       postgres:
         image: postgres:16
@@ -37,23 +36,28 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: TypeScript build (all workspaces)
         run: npm run build --workspaces --if-present
-      - name: Tests (suíte real na raiz)
+      - name: Migrations (Postgres 16 vazio)
+        env:
+          PG_TEST_URL: postgres://itestuser:itestpass@localhost:5432/itestdb
+        run: npm run test:migrations
+      - name: Tests (painel admin legado)
+        run: npm run test:panel
+      - name: Tests (suíte Vitest na raiz)
         # SCRUM-50: o comando antigo `npm test --workspaces --if-present` PULAVA
         # 92/149 test files (~62%): apps/* (api, portal-api, portal-web, worker) NÃO
         # têm script `test`, então `--if-present` os ignorava em SILÊNCIO — só rodavam
         # os 3 packages/* (core, db, integrations = 57 files / ~826 testes). "CI verde"
         # era falsa confiança (classes inteiras de defeito em apps/* invisíveis).
         #
-        # `npx vitest run` na RAIZ usa o vitest.config.ts da raiz e descobre TODOS os
-        # test files (packages/* + apps/* + scripts/ = 149 files / 2165 testes),
-        # respeitando os excludes (.claude/worktrees, dist, node_modules,
-        # painel-admin/test que usa node:test). O build acima é PRÉ-REQUISITO: os
+        # `npm test` na RAIZ usa o vitest.config.ts da raiz e descobre packages/*,
+        # apps/* e scripts/*. O painel-admin usa node:test e roda UMA vez na etapa
+        # anterior. O build acima é PRÉ-REQUISITO: os
         # packages exportam via ./dist/*.js, então sem build os apps/* que importam
         # @startap/* quebram na resolução.
         #
-        # PG_TEST_URL liga os testes de integração de SQL real (packages-deducao.integration)
-        # contra o service postgres:16 acima. O suite de integração cria/dropa as próprias
-        # tabelas num banco vazio (autocontido). Sem ele, esse teste AUTO-SKIPA.
+        # PG_TEST_URL liga os testes de integração de SQL real contra o service postgres:16
+        # acima. As integrações usam schemas próprios no mesmo banco descartável, depois do
+        # gate de migrations; sem a env, esses testes AUTO-SKIPAM.
         env:
           PG_TEST_URL: postgres://itestuser:itestpass@localhost:5432/itestdb
-        run: npx vitest run
+        run: npm test
