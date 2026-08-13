@@ -61,6 +61,7 @@ vi.mock('@startap/db', () => ({
     computeBillingState: computeBillingStateReal,
   },
   billingCharges: {
+    BillingSlotBusyError: class BillingSlotBusyError extends Error {},
     getCharge: vi.fn(),
     getActivePendingCharge: vi.fn(),
   },
@@ -320,6 +321,19 @@ describe('POST /portal/mensalidade/pix', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ error: 'sem_valor_configurado' });
     expect(ensureMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('503 + Retry-After quando outra instancia segura o lock do slot', async () => {
+    getBillingMock.mockResolvedValue(makeBilling({ amount_cents: 25000 }));
+    ensureMock.mockRejectedValue(new billingCharges.BillingSlotBusyError('clone_x'));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/mensalidade/pix' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['retry-after']).toBe('1');
+    expect(res.json()).toEqual({ error: 'billing_busy', retry_after_seconds: 1 });
     await app.close();
   });
 

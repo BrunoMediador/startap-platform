@@ -35,6 +35,7 @@ type FakeState = {
 };
 
 type InboundResult = { upstreamStatus: number; upstreamBody: { status?: string } };
+type PixChargeResponse = { cycle: string; br_code: string | null };
 
 function envelope(
   session: string,
@@ -809,17 +810,41 @@ test('P0 signup real provisiona os quatro formatos e valida PG, sessão WAHA e p
   expect(wahaState.state.sessions).toHaveLength(4);
   expect(wahaState.state.sessions.every((session) => session.status === 'STARTING')).toBe(true);
 
-  const pix = await contexts[0]?.post('/portal/mensalidade/pix');
-  expect(pix?.status()).toBe(200);
-  await waitForJournal(abacateUrl, (entry) => entry.path === '/v2/transparents/create');
-  const chargeCount = await withDb(async (client) => {
-    const result = await client.query<{ count: string }>(
-      'SELECT count(*)::text AS count FROM billing_charges WHERE slot = $1',
+  const [pixFirst, pixSecond] = await Promise.all([
+    contexts[0]?.post('/portal/mensalidade/pix'),
+    contexts[0]?.post('/portal/mensalidade/pix'),
+  ]);
+  expect([pixFirst?.status(), pixSecond?.status()]).toEqual([200, 200]);
+  const [firstPixBody, secondPixBody] = await Promise.all([
+    pixFirst?.json() as Promise<PixChargeResponse>,
+    pixSecond?.json() as Promise<PixChargeResponse>,
+  ]);
+  expect(firstPixBody.br_code).not.toBeNull();
+  expect(secondPixBody.br_code).toBe(firstPixBody.br_code);
+  await waitForJournal(abacateUrl, (entry) => entry.path === '/v2/transparents/create', 1);
+  expect(await journalCount(abacateUrl, (entry) => entry.path === '/v2/transparents/create')).toBe(
+    1,
+  );
+  expect((await fakeState(abacateUrl)).state.charges).toHaveLength(1);
+  const persistedCharges = await withDb(async (client) => {
+    const result = await client.query<{ id: string; cycle: string; br_code: string | null }>(
+      `SELECT id::text AS id, cycle, br_code
+       FROM billing_charges WHERE slot = $1 ORDER BY id`,
       [rows[0]?.slot],
     );
-    return Number(result.rows[0]?.count ?? 0);
+    return result.rows;
   });
-  expect(chargeCount).toBe(1);
+  expect(persistedCharges).toHaveLength(1);
+  const persistedCharge = persistedCharges[0];
+  expect(persistedCharge?.id).toMatch(/^\d+$/u);
+  expect([firstPixBody.br_code, secondPixBody.br_code]).toEqual([
+    persistedCharge?.br_code,
+    persistedCharge?.br_code,
+  ]);
+  expect([firstPixBody.cycle, secondPixBody.cycle]).toEqual([
+    persistedCharge?.cycle,
+    persistedCharge?.cycle,
+  ]);
   await Promise.all(contexts.map((context) => context.dispose()));
 });
 

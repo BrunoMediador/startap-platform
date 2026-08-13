@@ -22,7 +22,7 @@
 import { logger } from '@startap/core/logger';
 import { type BillingChargeRow, billingCharges, clientBilling } from '@startap/db';
 import { abacatepay } from '@startap/integrations';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { config } from '../config.js';
 import { requireTenant, withTenant } from '../lib/tenant.js';
 
@@ -71,6 +71,12 @@ function chargeView(charge: BillingChargeRow | null, now = new Date()) {
     paid_at: charge.paid_at ? charge.paid_at.toISOString() : null,
     is_expired: isExpired,
   };
+}
+
+function replyBillingBusy(reply: FastifyReply, err: unknown): FastifyReply | null {
+  if (!(err instanceof billingCharges.BillingSlotBusyError)) return null;
+  reply.header('Retry-After', '1');
+  return reply.code(503).send({ error: 'billing_busy', retry_after_seconds: 1 });
 }
 
 export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
@@ -165,6 +171,8 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
         });
         return reply.code(200).send(chargeView(charge));
       } catch (err) {
+        const busyReply = replyBillingBusy(reply, err);
+        if (busyReply) return busyReply;
         log.error(
           { slot, err: err instanceof Error ? err.message : 'erro' },
           'falha ao gerar cobranca PIX (modelo por data)',
@@ -202,6 +210,8 @@ export const portalBillingRoutes: FastifyPluginAsync = async (app) => {
       });
       return reply.code(200).send(chargeView(charge));
     } catch (err) {
+      const busyReply = replyBillingBusy(reply, err);
+      if (busyReply) return busyReply;
       log.error(
         { slot, cycle, err: err instanceof Error ? err.message : 'erro' },
         'falha ao gerar cobranca PIX',

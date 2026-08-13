@@ -4,9 +4,9 @@
 
 **Jira:** SCRUM-171
 
-**Apetite:** médio (harness aditivo de teste/CI; zero runtime/schema de produção)
+**Apetite:** médio (harness aditivo de teste/CI + correção runtime focal; zero migration nova)
 
-**Status:** implementação pronta; gates estáticos locais verdes, Compose aguarda execução no CI
+**Status:** implementação em validação; Compose revelou e passou a cobrir drift runtime/schema legado
 
 **ADRs relacionados:** 0018, 0019, 0023, 0024, 0030 e 0034
 
@@ -33,7 +33,8 @@ segredo, dado vivo ou comportamento não implementado.
 
 ## Fora de escopo
 
-- Alterar runtime, schema, migrations históricas ou dados de produção.
+- Alterar schema, migrations históricas, dados de produção ou runtime fora do billing legado
+  estritamente necessário para compatibilidade com a migration 043.
 - Implementar a operação de formato do ADR 0034 ou corrigir SCRUM-170 pelo teste.
 - Substituir smoke humano pós-deploy, testar WAHA real ou usar cliente como canário.
 - Prometer verde local sem Docker.
@@ -80,6 +81,25 @@ A garantia zero-egress cobre processos em runtime dentro da rede E2E. Aquisiçã
 dependências durante `docker build` ocorre antes desses processos e fica fora dessa fronteira;
 CI restringe esse estágio aos Dockerfiles e lockfile versionados.
 
+### Decisão arquitetural — billing legado após migration 043
+
+O PG16 real revelou que `BILLING_DUE_DATE_MODEL=false` ainda usava
+`ON CONFLICT (slot, cycle)`, embora a migration 043 tenha removido exatamente esse UNIQUE. A
+correção aprovada não cria migration 081 nem recria unicidade incompatível com o modelo novo:
+`ensurePixChargeForCycle` reutiliza `withBillingSlotLock`, faz recheck exato e determinístico por
+`slot/cycle` (`id DESC`) e mantém o mesmo `PoolClient` por gateway e persistência por `id` até o
+COMMIT. Falha no gateway causa ROLLBACK; duas chamadas concorrentes do mesmo slot geram uma linha e
+uma chamada externa. O trade-off aceito é manter uma conexão/transação aberta durante o timeout
+limitado do gateway; locks são por slot, portanto outros tenants não compartilham a chave. Uma
+single-flight em memória absorve concorrência local antes do pool; entre instâncias, o
+`pg_try_advisory_xact_lock` falha rápido e o portal responde `503` com `Retry-After`. Rollback falho
+descarta a conexão em vez de devolvê-la contaminada ao pool.
+
+Risco P2 aceito: timeout após o gateway confirmar e antes do attach continua ambíguo, pois banco e
+AbacatePay não compartilham transação. A correção definitiva — outbox/reconciliação durável — está
+registrada no Jira **SCRUM-173**, ligado ao SCRUM-171; não cabe nesta correção sem schema e não deve
+ser mascarada por retry ilimitado.
+
 Playwright permanece serial por causa do semáforo global intencional
 `WEBHOOK_MAX_INFLIGHT=1`, necessário à prova de backpressure. A serialização não substitui
 isolamento de fixture: message IDs, chats e contas são exclusivos; cada caso fromMe exige
@@ -101,7 +121,8 @@ faults e 404 usam somente labels de rota allowlisted, nunca path arbitrário ref
    posterior: billing volta a responder; owner alcança o gate `router.owner-paused` e
    continua sem memória do bot nem outbound.
 9. Signup real prova os quatro formatos em PG/WAHA, inclusive prompt não vazio em cada slot,
-   e usa sessão real do portal para PIX.
+   e usa sessão real do portal para dois POSTs PIX simultâneos: ambos 200, uma linha e uma chamada
+   ao fake AbacatePay sobre PG16 pós-migrations 001–080.
 10. Worker-once fecha uma execução stale; integration-probe usa clientes GCal e AbacatePay reais.
 11. Browser navega cadastro em móvel/desktop; portal equipe prova 0/1/N e cross-tenant.
 12. A stack e os volumes são recriados e a suíte completa repete o mesmo resultado.
@@ -121,6 +142,9 @@ admite skip/quarentena.
 - **Fake permissivo:** rota desconhecida devolve 404; chamadas ficam no journal; faults são
   consumidos por contagem explícita.
 - **Custo de CI:** job separado, timeout de 20 minutos e um worker evitam paralelismo ruidoso.
+- **Conexão PG durante gateway:** o lock transacional legado inclui a chamada AbacatePay; timeout
+  explícito limita retenção, single-flight evita explosão local do pool e try-lock evita espera
+  cross-instance; o escopo por slot impede bloqueio entre tenants.
 
 ## Definition of Done
 
@@ -133,6 +157,7 @@ admite skip/quarentena.
 - [x] Runner staging sem checkout/.git/credencial montada e containers hardenizados.
 - [x] Job CI com permissão read-only, checkout sem credencial persistida, typecheck e preflight.
 - [x] Expected-red executável e reportável de SCRUM-137/170 fora do aceite.
+- [x] Billing legado compatível com schema pós-043 e concorrência provada por linha/call únicas.
 - [ ] Execução Compose verde em host com Docker (Mac atual não possui Docker).
 - [ ] Reviews qa-tester e security.
 
@@ -146,6 +171,7 @@ job `e2e` do CI e esta missão. Não há migration, env produtiva, flag ou dado 
 
 ## Waiver de ADR
 
-Waiver ratificado para esta missão: a mudança é infraestrutura de CI aditiva, isolada e
-sem contrato de produção. Um ADR passa a ser obrigatório se o harness governar deploy,
-introduzir serviço/runtime produtivo, mudar migrations históricas ou permitir egress real.
+Waiver ratificado para o harness. A correção runtime focal de billing foi aprovada pelo arquiteto e
+reutiliza a decisão já documentada na migration 043 (advisory lock em vez de UNIQUE), sem schema ou
+migration nova e abaixo de 300 linhas. Um ADR novo passa a ser obrigatório se o harness governar
+deploy, mudar migrations históricas ou permitir egress real.

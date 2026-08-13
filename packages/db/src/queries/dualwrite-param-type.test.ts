@@ -30,7 +30,7 @@ vi.mock('../client.js', () => ({
   pool: { connect: connectMock },
 }));
 
-import { insertPendingChargeIfAbsent } from './billing-charges.js';
+import { insertPendingCharge } from './billing-charges.js';
 import { createCourse } from './bot-courses.js';
 import { upsertMedia } from './bot-media.js';
 import { setPrompt } from './bot-prompt.js';
@@ -130,13 +130,13 @@ describe('dual-write tenant_id: nenhum site reusa $1 entre INSERT e subselect', 
     assertDualWriteTypeSafe(sql, params, slot);
   });
 
-  it('insertPendingChargeIfAbsent (billing_charges)', async () => {
+  it('insertPendingCharge (billing_charges)', async () => {
     queryMock.mockResolvedValueOnce({
       rows: [{ slot: 'clone_x', cycle: '2026-06' }],
       rowCount: 1,
     });
     const slot = 'clone_x';
-    await insertPendingChargeIfAbsent({
+    await insertPendingCharge({ query: queryMock } as unknown as PoolClient, {
       slot,
       cycle: '2026-06',
       externalId: 'clone_x-2026-06',

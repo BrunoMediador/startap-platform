@@ -350,6 +350,16 @@ for (const signupPromptContract of [
   /new Set\(journalSessionTags\)\.size\)\.toBe\(4\)/u,
   /stateSessionTags\)\.toEqual\(expectedSessionTags\)/u,
   /new Set\(stateSessionTags\)\.size\)\.toBe\(4\)/u,
+  /const \[pixFirst, pixSecond\] = await Promise\.all\(/u,
+  /expect\(\[pixFirst\?\.status\(\), pixSecond\?\.status\(\)\]\)\.toEqual\(\[200, 200\]\)/u,
+  /const \[firstPixBody, secondPixBody\] = await Promise\.all\(/u,
+  /secondPixBody\.br_code\)\.toBe\(firstPixBody\.br_code\)/u,
+  /waitForJournal\(abacateUrl, \(entry\) => entry\.path === '\/v2\/transparents\/create', 1\)/u,
+  /expect\(await journalCount\(abacateUrl, \(entry\) => entry\.path === '\/v2\/transparents\/create'\)\)\.toBe\(\s*1,?\s*\)/u,
+  /fakeState\(abacateUrl\)\)\.state\.charges\)\.toHaveLength\(1\)/u,
+  /SELECT id::text AS id, cycle, br_code[\s\S]*?FROM billing_charges WHERE slot = \$1 ORDER BY id/u,
+  /persistedCharges\)\.toHaveLength\(1\)/u,
+  /\[firstPixBody\.br_code, secondPixBody\.br_code\][\s\S]*?persistedCharge\?\.br_code/u,
 ]) {
   if (!signupPromptContract.test(verticalSpecSource)) {
     throw new Error(`signup não prova prompts exatos e não vazios: ${signupPromptContract}`);

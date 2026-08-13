@@ -25,6 +25,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import {
+  BillingSlotBusyError,
   getActivePendingCharge,
   insertPendingCharge,
   reissueGatewayData,
@@ -122,8 +123,8 @@ function makeLockClient(s: LockScenario) {
       if (q.includes('BEGIN') || q.includes('COMMIT') || q.includes('ROLLBACK')) {
         return { rows: [], rowCount: 0 };
       }
-      if (q.includes('pg_advisory_xact_lock')) {
-        return { rows: [{ pg_advisory_xact_lock: '' }], rowCount: 1 };
+      if (q.includes('pg_try_advisory_xact_lock')) {
+        return { rows: [{ locked: true }], rowCount: 1 };
       }
       // recheck: SELECT ... WHERE status = 'pending' ... ORDER BY id DESC
       if (q.includes('FROM billing_charges') && q.includes("status = 'pending'")) {
@@ -150,7 +151,7 @@ describe('withBillingSlotLock — transacao + advisory lock por slot (ADR 0014)'
     lockCalls.length = 0;
   });
 
-  it('abre BEGIN, segura pg_advisory_xact_lock por slot e COMMITa ao final', async () => {
+  it('abre BEGIN, adquire pg_try_advisory_xact_lock por slot e COMMITa ao final', async () => {
     const client = makeLockClient({ activePending: null });
     connectMock.mockResolvedValueOnce(client);
 
@@ -161,7 +162,7 @@ describe('withBillingSlotLock — transacao + advisory lock por slot (ADR 0014)'
     expect(ran.some((q) => q.includes('BEGIN'))).toBe(true);
     expect(ran.some((q) => q.includes('COMMIT'))).toBe(true);
     // O lock e chaveado por slot (hashtext('billing:'||slot)), parametrizado ($1=slot).
-    const lockCall = lockCalls.find((c) => c.sql.includes('pg_advisory_xact_lock'));
+    const lockCall = lockCalls.find((c) => c.sql.includes('pg_try_advisory_xact_lock'));
     expect(lockCall).toBeDefined();
     expect(lockCall?.sql).toContain("hashtext('billing:' || $1)");
     expect(lockCall?.params).toEqual(['clone_x']);
@@ -182,6 +183,47 @@ describe('withBillingSlotLock — transacao + advisory lock por slot (ADR 0014)'
     expect(ran.some((q) => q.includes('ROLLBACK'))).toBe(true);
     expect(ran.some((q) => q.includes('COMMIT'))).toBe(false);
     expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release).toHaveBeenCalledWith(false);
+  });
+
+  it('lock ocupado falha rapido sem executar callback', async () => {
+    const client = makeLockClient({ activePending: null });
+    client.query.mockImplementation(async (sql: string) => {
+      lockCalls.push({ sql, params: [] });
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        return { rows: [{ locked: false }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 0 };
+    });
+    connectMock.mockResolvedValueOnce(client);
+    const fn = vi.fn();
+
+    await expect(withBillingSlotLock('clone_x', fn)).rejects.toBeInstanceOf(BillingSlotBusyError);
+
+    expect(fn).not.toHaveBeenCalled();
+    expect(sqls()).toContain('ROLLBACK');
+    expect(client.release).toHaveBeenCalledWith(false);
+  });
+
+  it('rollback falho descarta a conexao com release(true)', async () => {
+    const client = makeLockClient({ activePending: null });
+    client.query.mockImplementation(async (sql: string) => {
+      lockCalls.push({ sql, params: [] });
+      if (sql.includes('pg_try_advisory_xact_lock')) {
+        return { rows: [{ locked: true }], rowCount: 1 };
+      }
+      if (sql === 'ROLLBACK') throw new Error('rollback failed');
+      return { rows: [], rowCount: 0 };
+    });
+    connectMock.mockResolvedValueOnce(client);
+
+    await expect(
+      withBillingSlotLock('clone_x', async () => {
+        throw new Error('gateway failed');
+      }),
+    ).rejects.toThrow('gateway failed');
+
+    expect(client.release).toHaveBeenCalledWith(true);
   });
 });
 
