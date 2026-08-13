@@ -8,6 +8,7 @@ COPY known-broken.config.ts ./known-broken.config.ts
 COPY known-broken.json ./known-broken.json
 COPY specs ./specs
 COPY known-broken ./known-broken
+COPY scripts/known-broken-contract.mjs ./scripts/known-broken-contract.mjs
 COPY scripts/run-known-broken.mjs ./scripts/run-known-broken.mjs
 
 RUN mkdir -p /artifacts && chown -R pwuser:pwuser /e2e /artifacts

@@ -82,6 +82,10 @@ const required = [
   'tests/e2e/specs/vertical.spec.ts',
   'tests/e2e/known-broken/known-broken.spec.ts',
   'tests/e2e/known-broken.json',
+  'tests/e2e/known-broken.config.ts',
+  'tests/e2e/scripts/known-broken-contract.mjs',
+  'tests/e2e/scripts/run-known-broken.mjs',
+  'tests/e2e/scripts/test-known-broken-contract.mjs',
   workflowRelative,
   missionRelative,
 ];
@@ -340,6 +344,62 @@ const verticalSpecSource = await readFile(
   path.join(root, 'tests/e2e/specs/vertical.spec.ts'),
   'utf8',
 );
+const knownBrokenRunnerSource = await readFile(
+  path.join(root, 'tests/e2e/scripts/run-known-broken.mjs'),
+  'utf8',
+);
+const knownBrokenContractSource = await readFile(
+  path.join(root, 'tests/e2e/scripts/known-broken-contract.mjs'),
+  'utf8',
+);
+const knownBrokenConfigSource = await readFile(
+  path.join(root, 'tests/e2e/known-broken.config.ts'),
+  'utf8',
+);
+const e2eRunnerDockerfileSource = await readFile(
+  path.join(root, 'tests/e2e/runner/Dockerfile'),
+  'utf8',
+);
+for (const runnerContract of [
+  /await rm\(reportPath, \{ force: true \}\)/u,
+  /known-broken-results-\$\{randomUUID\(\)\}\.json/u,
+  /E2E_KNOWN_BROKEN_REPORT_PATH: invocationReportPath/u,
+  /await rename\(invocationReportPath, reportPath\)/u,
+  /validateKnownBrokenRun\(\{ manifest, report, processResult: result, reportCurrent \}\)/u,
+]) {
+  if (!runnerContract.test(knownBrokenRunnerSource)) {
+    throw new Error(`runner known-broken não é fail-closed por invocação: ${runnerContract}`);
+  }
+}
+for (const reportContract of [
+  /processResult\?\.error !== undefined/u,
+  /processResult\?\.signal !== null/u,
+  /processResult\?\.status !== 1/u,
+  /reportCurrent !== true/u,
+  /report\.errors\.length !== 0/u,
+  /manifest\?\.expectedFailures !== 2 \|\| manifestItems\.length !== 2/u,
+  /spec\.title === item\.test/u,
+  /tests\.length !== 1 \|\| tests\[0\]\?\.status !== 'unexpected'/u,
+  /annotation\.type === 'known-broken-cause' && annotation\.description === item\.causeId/u,
+  /results\.length !== 1 \|\| results\[0\]\?\.status !== 'failed'/u,
+  /stripVTControlCharacters\(String\(error\?\.message \?\? ''\)\)/u,
+  /messages\.includes\(fragment\)/u,
+  /unexpected !== manifest\?\.expectedFailures/u,
+]) {
+  if (!reportContract.test(knownBrokenContractSource)) {
+    throw new Error(`contrato known-broken incompleto: ${reportContract}`);
+  }
+}
+if (!/E2E_KNOWN_BROKEN_REPORT_PATH \?\?/u.test(knownBrokenConfigSource)) {
+  throw new Error('JSON reporter known-broken deve receber path único da invocação');
+}
+if (
+  !/COPY scripts\/known-broken-contract\.mjs \.\/scripts\/known-broken-contract\.mjs/u.test(
+    e2eRunnerDockerfileSource,
+  )
+) {
+  throw new Error('runner E2E deve incluir o contrato fail-closed do known-broken');
+}
 for (const signupPromptContract of [
   /SELECT slot, prompt FROM bot_prompt WHERE slot = ANY\(\$1::text\[\]\) ORDER BY slot/u,
   /prompts\.map\(\(prompt\) => prompt\.slot\)\)\.toEqual\(provisionedSlots\)/u,
@@ -570,7 +630,11 @@ if (
 }
 
 await probeFakeSessionSinks();
+await execFile(process.execPath, ['tests/e2e/scripts/test-known-broken-contract.mjs'], {
+  cwd: root,
+  encoding: 'utf8',
+});
 
 process.stdout.write(
-  `E2E harness estático + probe HTTP do fake: ${relevantFiles.length} arquivos relevantes + ${repoFiles.length} tracked/untracked inspecionados; sem dependência de diff HEAD.\n`,
+  `E2E harness estático + probes HTTP/known-broken: ${relevantFiles.length} arquivos relevantes + ${repoFiles.length} tracked/untracked inspecionados; sem dependência de diff HEAD.\n`,
 );
