@@ -6,7 +6,7 @@
 
 **Apetite:** médio (harness aditivo de teste/CI + correção runtime focal; zero migration nova)
 
-**Status:** implementação em validação; Compose revelou e passou a cobrir drift runtime/schema legado
+**Status:** concluída e validada no CI em 2026-08-13
 
 **ADRs relacionados:** 0018, 0019, 0023, 0024, 0030 e 0034
 
@@ -161,16 +161,36 @@ admite skip/quarentena.
 - [x] Job CI com permissão read-only, checkout sem credencial persistida, typecheck e preflight.
 - [x] Expected-red executável e reportável de SCRUM-137/170 fora do aceite.
 - [x] Billing legado compatível com schema pós-043 e concorrência provada por linha/call únicas.
-- [ ] Execução Compose verde em host com Docker (Mac atual não possui Docker).
-- [ ] Reviews qa-tester e security.
+- [x] Execução Compose verde em host CI com Docker, repetida duas vezes sobre volumes novos.
+- [x] Reviews qa-tester e security concluídos sem blocker residual.
 
-O DoD integral permanece aberto até o job Compose executar. A cobertura P1 transacional
-citada acima também não é contabilizada como verde.
+O DoD técnico desta missão está concluído. A cobertura P1 transacional citada acima permanece
+expected-red e não é contabilizada como verde nem incorporada ao aceite do SCRUM-171.
+
+## Evidência de conclusão
+
+O [CI 31750&#8203;908348](https://github.com/BrunoMediador/startap-platform/actions/runs/%33%31%37%35%30%39%30%38%33%34%38)
+terminou `success` no SHA curto `017efa1`:
+
+- as duas rodadas executaram 14/14 testes Playwright verdes (`17,7s` e `18,2s`);
+- em cada rodada, o runner validou exatamente as duas falhas known-broken de SCRUM-137/170 por
+  Jira, título, causeId, cardinalidade e fragments da assertion; elas continuam fora do aceite;
+- os one-shots `worker-once`, `integration-probe`, `egress-probe` e `network-probe` terminaram
+  com sucesso nas duas rodadas; egress e isolamento de rede registraram `OK` duas vezes;
+- `startap-e2e_e2e_artifacts` foi registrado como criado e removido na rodada 1, criado e
+  removido na rodada 2 e ausente novamente no teardown final;
+- build/typecheck, migrations em PG16 vazio, painel legado e suíte Vitest também terminaram verdes.
+
+A missão inclui a correção runtime focal do billing legado necessária para a prova sobre as
+migrations 001–080. Ela preserva schema e migration 043, serializa PIX por slot e mantém a
+ambiguidade gateway→persistência explicitamente fora deste DoD no **SCRUM-173**.
 
 ## Rollback
 
 Reverter os artefatos de `tests/e2e`, scripts do `package.json`, dependência Playwright,
-job `e2e` do CI e esta missão. Não há migration, env produtiva, flag ou dado para desfazer.
+job `e2e` do CI, esta missão e a correção focal do service/rota de billing com seus testes.
+Não há schema, migration, env produtiva, flag ou dado para desfazer. A dívida durável de
+reconciliação/outbox continua isolada no SCRUM-173 e não deve ser mascarada no rollback.
 
 ## Waiver de ADR
 
