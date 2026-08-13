@@ -243,7 +243,7 @@ test('P0 vertical: HMAC válido atravessa API async, runtime, LLM, WAHA, PG e Re
   const before = await withDb(async (client) => {
     const result = await client.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM chat_histories
-       WHERE session_id LIKE 'e2e_tenant_a:e2e_session_a:%'`,
+       WHERE session_id LIKE 'clone_e2e_tenant_a:e2e_session_a:%'`,
     );
     return Number(result.rows[0]?.count ?? 0);
   });
@@ -261,7 +261,7 @@ test('P0 vertical: HMAC válido atravessa API async, runtime, LLM, WAHA, PG e Re
         withDb(async (client) => {
           const result = await client.query<{ count: string }>(
             `SELECT count(*)::text AS count FROM chat_histories
-             WHERE session_id LIKE 'e2e_tenant_a:e2e_session_a:%'`,
+             WHERE session_id LIKE 'clone_e2e_tenant_a:e2e_session_a:%'`,
           );
           return Number(result.rows[0]?.count ?? 0);
         }),
@@ -432,13 +432,17 @@ test('P0 dois tenants homônimos e mesmo chat não cruzam PG, provider, WAHA nem
   const sessions = await withDb(async (client) => {
     const result = await client.query<{ session_id: string }>(
       `SELECT DISTINCT session_id FROM chat_histories
-       WHERE session_id LIKE 'e2e_tenant_a:e2e_session_a:%'
-          OR session_id LIKE 'e2e_tenant_b:e2e_session_b:%'`,
+       WHERE session_id LIKE 'clone_e2e_tenant_a:e2e_session_a:%'
+          OR session_id LIKE 'clone_e2e_tenant_b:e2e_session_b:%'`,
     );
     return result.rows.map((row) => row.session_id);
   });
-  expect(sessions.some((session) => session.startsWith('e2e_tenant_a:e2e_session_a:'))).toBe(true);
-  expect(sessions.some((session) => session.startsWith('e2e_tenant_b:e2e_session_b:'))).toBe(true);
+  expect(sessions.some((session) => session.startsWith('clone_e2e_tenant_a:e2e_session_a:'))).toBe(
+    true,
+  );
+  expect(sessions.some((session) => session.startsWith('clone_e2e_tenant_b:e2e_session_b:'))).toBe(
+    true,
+  );
   expect(sessions.every((session) => !session.includes('e2e_session_a:e2e_session_b'))).toBe(true);
 
   const models = (await fakeState(llmUrl)).journal
@@ -525,7 +529,7 @@ for (const mediaCase of [
       )
       .toEqual([
         expect.objectContaining({
-          flow_id: 'e2e_tenant_a',
+          flow_id: 'clone_e2e_tenant_a',
           source: 'human_reply',
           updated_at_ms: expect.any(String),
         }),
@@ -534,7 +538,7 @@ for (const mediaCase of [
       const result = await client.query<{ updated_at_ms: string }>(
         `SELECT (extract(epoch FROM updated_at) * 1000)::bigint::text AS updated_at_ms
          FROM flow_pauses WHERE flow_id = $1 AND telefone = $2`,
-        ['e2e_tenant_a', mediaCase.phone],
+        ['clone_e2e_tenant_a', mediaCase.phone],
       );
       return result.rows[0];
     });
@@ -542,7 +546,7 @@ for (const mediaCase of [
     const crossTenant = await withDb(async (client) => {
       const result = await client.query<{ count: string }>(
         'SELECT count(*)::text AS count FROM flow_pauses WHERE telefone = $1 AND flow_id <> $2',
-        [mediaCase.phone, 'e2e_tenant_a'],
+        [mediaCase.phone, 'clone_e2e_tenant_a'],
       );
       return Number(result.rows[0]?.count ?? 0);
     });
@@ -556,7 +560,7 @@ test('P0 inadimplente tem silêncio total: sem LLM, WAHA ou memória', async () 
   const before = await withDb(async (client) => {
     const result = await client.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM chat_histories
-       WHERE session_id LIKE 'e2e_overdue:e2e_session_overdue:%'`,
+       WHERE session_id LIKE 'clone_e2e_overdue:e2e_session_overdue:%'`,
     );
     return Number(result.rows[0]?.count ?? 0);
   });
@@ -570,7 +574,7 @@ test('P0 inadimplente tem silêncio total: sem LLM, WAHA ou memória', async () 
             .query<{ count: string }>(
               `SELECT count(*)::text AS count FROM flow_execution_logs
                WHERE flow_id = $1 AND event_type = 'router.billing-overdue'`,
-              ['e2e_overdue'],
+              ['clone_e2e_overdue'],
             )
             .then((query) => Number(query.rows[0]?.count ?? 0)),
         ),
@@ -582,7 +586,7 @@ test('P0 inadimplente tem silêncio total: sem LLM, WAHA ou memória', async () 
   const after = await withDb(async (client) => {
     const result = await client.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM chat_histories
-       WHERE session_id LIKE 'e2e_overdue:e2e_session_overdue:%'`,
+       WHERE session_id LIKE 'clone_e2e_overdue:e2e_session_overdue:%'`,
     );
     return Number(result.rows[0]?.count ?? 0);
   });
@@ -593,7 +597,7 @@ test('P0 AbacatePay rejeita assinatura ausente/errada/adulterada/query inválida
   const before = await withDb(async (client) => {
     const result = await client.query<{ status: string; next_due_date: Date | null }>(
       'SELECT status, next_due_date FROM client_billing WHERE slot = $1',
-      ['e2e_owner'],
+      ['clone_e2e_owner'],
     );
     return result.rows[0];
   });
@@ -608,7 +612,7 @@ test('P0 AbacatePay rejeita assinatura ausente/errada/adulterada/query inválida
   const after = await withDb(async (client) => {
     const result = await client.query<{ status: string; next_due_date: Date | null }>(
       'SELECT status, next_due_date FROM client_billing WHERE slot = $1',
-      ['e2e_owner'],
+      ['clone_e2e_owner'],
     );
     return result.rows[0];
   });
@@ -631,13 +635,13 @@ test('P0 pagamento remove billing, preserva owner_request e mantém silêncio do
     }>(
       `SELECT slot, flow_enabled, suspended_kind FROM flow_clones
        WHERE slot IN ($1, $2) ORDER BY slot`,
-      ['e2e_owner', 'e2e_billing'],
+      ['clone_e2e_owner', 'clone_e2e_billing'],
     );
     return result.rows;
   });
   expect(states).toEqual([
-    { slot: 'e2e_billing', flow_enabled: true, suspended_kind: null },
-    { slot: 'e2e_owner', flow_enabled: false, suspended_kind: 'owner_request' },
+    { slot: 'clone_e2e_billing', flow_enabled: true, suspended_kind: null },
+    { slot: 'clone_e2e_owner', flow_enabled: false, suspended_kind: 'owner_request' },
   ]);
 
   expect(
@@ -658,7 +662,7 @@ test('P0 pagamento remove billing, preserva owner_request e mantém silêncio do
             .query<{ count: string }>(
               `SELECT count(*)::text AS count FROM flow_execution_logs
                WHERE flow_id = $1 AND event_type = 'router.owner-paused'`,
-              ['e2e_owner'],
+              ['clone_e2e_owner'],
             )
             .then((query) => Number(query.rows[0]?.count ?? 0)),
         ),
@@ -769,6 +773,18 @@ test('P0 signup real provisiona os quatro formatos e valida PG, sessão WAHA e p
       agenda_automatica: format.agendaOff ? 'false' : null,
     });
   }
+  const provisionedSlots = rows.map((row) => row.slot).sort();
+  const prompts = await withDb(async (client) => {
+    const result = await client.query<{ slot: string; prompt: string }>(
+      'SELECT slot, prompt FROM bot_prompt WHERE slot = ANY($1::text[]) ORDER BY slot',
+      [provisionedSlots],
+    );
+    return result.rows;
+  });
+  expect(prompts.map((prompt) => prompt.slot)).toEqual(provisionedSlots);
+  expect(prompts).toHaveLength(4);
+  for (const prompt of prompts) expect(prompt.prompt.trim()).not.toBe('');
+
   await waitForJournal(wahaUrl, (entry) => entry.path === '/api/sessions', 4);
   expect((await fakeState(wahaUrl)).state.sessions).toHaveLength(4);
 

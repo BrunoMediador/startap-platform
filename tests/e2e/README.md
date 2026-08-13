@@ -43,10 +43,14 @@ o estado inicial reproduzível e evita que uma limpeza incompleta dê falso-verd
 
 - baseline legado 001 + migrations reais 002–080, com 80 registros no ledger;
 - readiness de apps, PG, Redis e fakes;
+- API inicia por entrypoint test-only que aguarda o singleton Redis real ficar `ready` antes de
+  importar o servidor; falha por timeout em vez de aceitar o primeiro webhook em modo degradado;
 - inbound originado no fake WAHA, assinatura HMAC válida/inválida/adulterada e router real;
 - LLM real via SDK redirecionado para fake stateful, resposta enviada ao journal WAHA;
 - efeitos persistidos em `chat_histories`/`model_usage` e dedup isolado no Redis;
 - dois tenants homônimos com mesmo chat sem cruzar sessão, provider ou chave Redis;
+- fixtures de clientes preservam o prefixo produtivo `clone_` e usam a matriz
+  `teste_barbearia`, portanto atravessam a factory dinâmica e os gates reais de clone;
 - retry real do mesmo `messageId` após admissão `503 busy:retry` antes do dedup;
 - `fromMe` de áudio, PTT e imagem com `body` vazio/ausente e `hasMedia=true`, pausando só
   o tenant correto, sem LLM, outbound ou pausa cross-tenant;
@@ -55,7 +59,8 @@ o estado inicial reproduzível e evita que uma limpeza incompleta dê falso-verd
   billing volta a responder e a pausa do dono percorre o pipeline até o gate
   `router.owner-paused`, sem memória do bot nem outbound;
 - signup real nos quatro formatos, com auto-login, provisionamento em PG, criação da
-  sessão WAHA e preço/flags server-authoritative; a mesma jornada gera PIX pelo
+  sessão WAHA, prompt não vazio vinculado exatamente a cada slot e preço/flags
+  server-authoritative; a mesma jornada gera PIX pelo
   `portal-api` e cliente AbacatePay real;
 - cliente Google Calendar real e cliente AbacatePay real exercitados por um probe da
   imagem do worker, com journal dos fakes e marcador persistido em PG;

@@ -199,6 +199,10 @@ services:
       <<: *app-env
       SERVICE_NAME: api
       API_PORT: "3040"
+    volumes:
+      - ./support:/e2e/support:ro
+      - ./support/api-entrypoint.mjs:/app/e2e-api-entrypoint.mjs:ro
+    command: [node, /app/e2e-api-entrypoint.mjs]
     healthcheck:
       test: [CMD, wget, -qO-, http://127.0.0.1:3040/health]
       interval: 2s
@@ -243,7 +247,7 @@ services:
       PORTAL_COOKIE_SECURE: "false"
       PORTAL_SIGNUP: "true"
       PORTAL_BOT_PAUSE: "true"
-      PORTAL_SIGNUP_MATRIZ_SLOT: e2e_matriz
+      PORTAL_SIGNUP_MATRIZ_SLOT: teste_barbearia
       PORTAL_SIGNUP_RATE_MAX: "20"
       TRIAL_MAX_ATIVOS: "20"
       TRIAL_PHONE_PEPPER: e2e_only_trial_pepper_value

@@ -47,6 +47,12 @@ fakes e os demais são rejeitados. O preload também barra HTTP/HTTPS/TCP/DNS; u
 preload prova a barreira de rede contra IP público, metadata, bridge e host. O migrator
 aplica a cadeia real antes dos apps. O runner Playwright fala apenas por DNS da rede.
 
+Os slots sintéticos em `flow_clones` mantêm o discriminador produtivo `clone_` e apontam
+para `teste_barbearia`; assim o dispatcher usa a factory real já registrada pela API, inclusive
+para clones aleatórios criados pelo signup. Um entrypoint montado read-only sob `/app` importa o
+singleton Redis compilado, aguarda o estado `ready` com timeout fail-closed e só então importa o
+servidor real. Ele não registra bot/factory E2E e não altera a imagem ou o runtime produtivo.
+
 O runner não recebe bind mount do repositório: uma imagem de staging copia somente
 lockfile, configs, scripts de controle e specs. Containers compatíveis rodam non-root,
 read-only, com tmpfs, `cap_drop: ALL` e `no-new-privileges`; PG/Redis preservam o usuário
@@ -81,7 +87,8 @@ faults e 404 usam somente labels de rota allowlisted, nunca path arbitrário ref
 
 1. Preflight de Docker 28+, inspeção estrutural da rede/serviços e probes negativos reais.
 2. Readiness de todas as dependências e contagem exata das migrations.
-3. Fake WAHA assina e envia mensagem; API valida HMAC e executa o clone real.
+3. Bootstrap test-only aquece o singleton Redis; fake WAHA assina e envia mensagem; API valida
+   HMAC e executa o clone real pela factory `teste_barbearia`.
 4. OpenAI SDK alcança o fake LLM pelo guard; WAHA fake registra o outbound.
 5. Playwright confirma efeitos no PG e chave `(sessão,messageId)` no Redis.
 6. Backpressure real reproduz `503` antes do dedup e o retry do mesmo ID termina uma vez.
@@ -90,7 +97,8 @@ faults e 404 usam somente labels de rota allowlisted, nunca path arbitrário ref
    no caminho válido, os eixos independentes owner/billing e o processamento
    posterior: billing volta a responder; owner alcança o gate `router.owner-paused` e
    continua sem memória do bot nem outbound.
-9. Signup real prova os quatro formatos em PG/WAHA e usa sessão real do portal para PIX.
+9. Signup real prova os quatro formatos em PG/WAHA, inclusive prompt não vazio em cada slot,
+   e usa sessão real do portal para PIX.
 10. Worker-once fecha uma execução stale; integration-probe usa clientes GCal e AbacatePay reais.
 11. Browser navega cadastro em móvel/desktop; portal equipe prova 0/1/N e cross-tenant.
 12. A stack e os volumes são recriados e a suíte completa repete o mesmo resultado.

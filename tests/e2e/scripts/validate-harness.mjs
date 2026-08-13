@@ -14,6 +14,7 @@ const required = [
   'tests/e2e/support/egress-guard.mjs',
   'tests/e2e/support/egress-probe.mjs',
   'tests/e2e/support/network-probe.mjs',
+  'tests/e2e/support/api-entrypoint.mjs',
   'tests/e2e/specs/vertical.spec.ts',
   'tests/e2e/known-broken/known-broken.spec.ts',
   'tests/e2e/known-broken.json',
@@ -80,6 +81,11 @@ if (selectionSelfTest.length !== 3)
 
 const compose = await readFile(path.join(root, 'tests/e2e/compose.yml'), 'utf8');
 const composeScript = await readFile(path.join(root, 'tests/e2e/scripts/compose.mjs'), 'utf8');
+const seed = await readFile(path.join(root, 'tests/e2e/fixtures/seed.sql'), 'utf8');
+const apiEntrypoint = await readFile(
+  path.join(root, 'tests/e2e/support/api-entrypoint.mjs'),
+  'utf8',
+);
 const legacyBaseline = await readFile(
   path.join(root, 'scripts/fixtures/001_legacy_schema.sql'),
   'utf8',
@@ -162,6 +168,58 @@ for (const requiredNetwork of [
 }
 if (!/WEBHOOK_ASYNC:\s*"true"/u.test(compose)) throw new Error('WEBHOOK_ASYNC deve estar true');
 if (!/PORTAL_SIGNUP:\s*"true"/u.test(compose)) throw new Error('PORTAL_SIGNUP deve estar true');
+if (!/PORTAL_SIGNUP_MATRIZ_SLOT:\s*teste_barbearia/u.test(compose)) {
+  throw new Error('signup E2E deve usar a matriz real teste_barbearia');
+}
+const cloneSeedBlock = seed.match(
+  /INSERT INTO flow_clones[\s\S]*?VALUES([\s\S]*?)ON CONFLICT/u,
+)?.[1];
+if (!cloneSeedBlock) throw new Error('seed não contém fixtures flow_clones reconhecíveis');
+const seededClonePairs = [...cloneSeedBlock.matchAll(/\('([^']+)',\s*'([^']+)'/gu)].map(
+  ([, slot, matrizSlot]) => ({ slot, matrizSlot }),
+);
+if (
+  seededClonePairs.length === 0 ||
+  seededClonePairs.some(
+    ({ slot, matrizSlot }) => !slot?.startsWith('clone_') || matrizSlot !== 'teste_barbearia',
+  )
+) {
+  throw new Error('todo flow_clone sintético deve usar prefixo clone_ e matriz teste_barbearia');
+}
+if (/e2e_matriz/u.test(seed) || /PORTAL_SIGNUP_MATRIZ_SLOT:\s*e2e_/u.test(compose)) {
+  throw new Error('matriz sintética não pode desviar da factory real da API');
+}
+if (
+  !/INSERT INTO bot_prompt \(slot, prompt\)\s*VALUES \('teste_barbearia', '[^']+'\)\s*ON CONFLICT \(slot\) DO NOTHING;/u.test(
+    seed,
+  )
+) {
+  throw new Error('seed deve garantir prompt sintético da matriz real sem sobrescrever migrations');
+}
+const apiService = compose.match(/^ {2}api:\n([\s\S]*?)(?=^ {2}[a-z][\w-]*:|^networks:)/mu)?.[1];
+for (const apiBootstrapContract of [
+  /\.\/support\/api-entrypoint\.mjs:\/app\/e2e-api-entrypoint\.mjs:ro/u,
+  /command:\s*\[node,\s*\/app\/e2e-api-entrypoint\.mjs\]/u,
+]) {
+  if (!apiService || !apiBootstrapContract.test(apiService)) {
+    throw new Error(`API não usa bootstrap read-only sob /app: ${apiBootstrapContract}`);
+  }
+}
+const redisImportIndex = apiEntrypoint.indexOf("import('/app/app/dist/lib/redis.js')");
+const redisReadyIndex = apiEntrypoint.indexOf('await waitForRedisReady(getRedis())');
+const serverImportIndex = apiEntrypoint.indexOf("import('/app/app/dist/server.js')");
+if (
+  redisImportIndex < 0 ||
+  redisReadyIndex <= redisImportIndex ||
+  serverImportIndex <= redisReadyIndex ||
+  !/redis\.status === 'ready'/u.test(apiEntrypoint) ||
+  !/redis\.once\('ready', onReady\)/u.test(apiEntrypoint) ||
+  !/REDIS_READY_TIMEOUT_MS/u.test(apiEntrypoint) ||
+  !/process\.exit\(1\)/u.test(apiEntrypoint) ||
+  /registerBot|registerCloneFactory/u.test(apiEntrypoint)
+) {
+  throw new Error('bootstrap deve aguardar o Redis real antes do server, sem registry sintético');
+}
 const integrationProbeSource = await readFile(
   path.join(root, 'tests/e2e/support/integration-probe.mjs'),
   'utf8',
@@ -202,6 +260,16 @@ const verticalSpecSource = await readFile(
   path.join(root, 'tests/e2e/specs/vertical.spec.ts'),
   'utf8',
 );
+for (const signupPromptContract of [
+  /SELECT slot, prompt FROM bot_prompt WHERE slot = ANY\(\$1::text\[\]\) ORDER BY slot/u,
+  /prompts\.map\(\(prompt\) => prompt\.slot\)\)\.toEqual\(provisionedSlots\)/u,
+  /expect\(prompts\)\.toHaveLength\(4\)/u,
+  /prompt\.prompt\.trim\(\)\)\.not\.toBe\(''\)/u,
+]) {
+  if (!signupPromptContract.test(verticalSpecSource)) {
+    throw new Error(`signup não prova prompts exatos e não vazios: ${signupPromptContract}`);
+  }
+}
 for (const staleJournalContract of [
   /SELECT event_type, status[\s\S]*?WHERE execution_id = \$1[\s\S]*?ORDER BY id ASC/u,
   /stale: staleEvents\.rows\.at\(-1\)\?\.status/u,
