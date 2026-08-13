@@ -422,4 +422,101 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
     );
     expect(pago.rows[0].deleted_at).toBeNull();
   });
+
+  it('TOCTOU: transição concorrente ganha o lock e bloqueia upsert + soft-delete guardados', async () => {
+    const slot = `${SLOT}_toctou`;
+    const guard = { modoAtendenteSlots: [], modoAtendenteWildcard: false };
+    await exec(
+      `INSERT INTO flow_clones
+         (slot, tenant_id, personalizacao, modo_atendente_enabled, billing_from_agenda_enabled)
+       VALUES ($1, $2, '{"agenda_automatica":"true"}'::jsonb, FALSE, TRUE)`,
+      [slot, TENANT],
+    );
+    await exec(
+      `INSERT INTO atendimentos
+         (slot, tenant_id, gcal_event_id, origem, forma_pagamento, valor_cents, status, data)
+       VALUES ($1, $2, 'evento-pago-preservado', 'agenda', 'pix', 15000, 'realizado', CURRENT_DATE),
+              ($1, $2, 'evento-manual-preservado', 'manual', 'pix', 20000, 'realizado', CURRENT_DATE)`,
+      [slot, TENANT],
+    );
+
+    const transitionUpsert = await pgPool.connect();
+    await transitionUpsert.query('BEGIN');
+    await transitionUpsert.query(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"false"'::jsonb),
+              modo_atendente_enabled = TRUE
+        WHERE slot = $1`,
+      [slot],
+    );
+    let upsertSettled = false;
+    const guardedUpsert = atend
+      .upsertAtendimentoFromEvent({
+        slot,
+        tenantId: TENANT,
+        gcalEventId: 'evento-novo-bloqueado',
+        servicoNome: 'Sessão',
+        valorCents: 11000,
+        syncModeGuard: guard,
+      })
+      .finally(() => {
+        upsertSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(upsertSettled).toBe(false); // aguardando o FOR UPDATE da transição.
+    await transitionUpsert.query('COMMIT');
+    transitionUpsert.release();
+    expect(await guardedUpsert).toBeNull();
+
+    await exec(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"true"'::jsonb),
+              modo_atendente_enabled = FALSE
+        WHERE slot = $1`,
+      [slot],
+    );
+    expect(
+      await atend.softDeleteAtendimentoByEvent(
+        slot,
+        'evento-manual-preservado',
+        { reason: 'gcal_sync_absent', by: 'gcal-atend-sync' },
+        guard,
+      ),
+    ).toBeNull();
+    const transitionDelete = await pgPool.connect();
+    await transitionDelete.query('BEGIN');
+    await transitionDelete.query(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"false"'::jsonb),
+              modo_atendente_enabled = TRUE
+        WHERE slot = $1`,
+      [slot],
+    );
+    let deleteSettled = false;
+    const guardedDelete = atend
+      .softDeleteAtendimentoByEvent(
+        slot,
+        'evento-pago-preservado',
+        { reason: 'gcal_sync_absent', by: 'gcal-atend-sync' },
+        guard,
+      )
+      .finally(() => {
+        deleteSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deleteSettled).toBe(false); // mesma serialização no caminho destrutivo.
+    await transitionDelete.query('COMMIT');
+    transitionDelete.release();
+    expect(await guardedDelete).toBeNull();
+
+    const rows = await exec(
+      `SELECT gcal_event_id, deleted_at FROM atendimentos
+        WHERE slot = $1 ORDER BY gcal_event_id`,
+      [slot],
+    );
+    expect(rows.rows).toEqual([
+      { gcal_event_id: 'evento-manual-preservado', deleted_at: null },
+      { gcal_event_id: 'evento-pago-preservado', deleted_at: null },
+    ]);
+  });
 });

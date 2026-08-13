@@ -261,6 +261,7 @@ async function buildSlotSnapshot(
 async function reconcileSlot(
   scope: flowClones.AtendSyncSlotRow,
   result: GcalAtendSyncResult,
+  syncModeGuard: atendimentos.GcalSyncModeWriteGuard,
 ): Promise<void> {
   // Reconfirma o gate por slot (belt-and-suspenders) — mesma resolução env→coluna do hook.
   const enabled = await flowClones.resolveAtendFromAgendaEnabledForSlot(
@@ -327,7 +328,7 @@ async function reconcileSlot(
     }
     // NÃO passa formaPagamento (undefined → o UPDATE PRESERVA forma/valor/desconto: não reabre o
     // bug DOBRA) nem reprecificarServico (reconciler nunca reprecifica). Sticky respeitado no helper.
-    await atendimentos.upsertAtendimentoFromEvent({
+    const row = await atendimentos.upsertAtendimentoFromEvent({
       slot: scope.slot,
       tenantId,
       gcalEventId: ev.id,
@@ -339,7 +340,15 @@ async function reconcileSlot(
       timezone: scope.timezone,
       valorCents,
       colaboradorId: se.colaboradorId,
+      syncModeGuard,
     });
+    if (!row) {
+      log.warn(
+        { slot: scope.slot },
+        'gcal-atend-sync: modo mudou para atendente durante o ciclo — escritas restantes puladas',
+      );
+      continue;
+    }
     result.upserted++;
   }
 
@@ -386,7 +395,13 @@ async function reconcileSlot(
       }
     }
     // SCRUM-90: carimba deleted_reason/deleted_by na MESMA linha (trilha durável no banco).
-    await atendimentos.softDeleteAtendimentoByEvent(scope.slot, r.gcal_event_id, SYNC_DELETE_AUDIT);
+    const deleted = await atendimentos.softDeleteAtendimentoByEvent(
+      scope.slot,
+      r.gcal_event_id,
+      SYNC_DELETE_AUDIT,
+      syncModeGuard,
+    );
+    if (!deleted) continue;
     result.deleted++;
     // AUDITORIA obrigatória (Bruno derrubou "nunca deletar pago"): valor/forma/data, NUNCA telefone.
     // gcalEventId vai HASHEADO no log (jurídico, SCRUM-90); o id cru fica na linha soft-deletada.
@@ -442,6 +457,10 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
   const modoAtendenteEntries = csvToArray(config.MODO_ATENDENTE_SLOTS);
   const modoAtendenteWildcard = modoAtendenteEntries.includes('*');
   const modoAtendenteSlots = modoAtendenteEntries.filter((entry) => entry !== '*');
+  const syncModeGuard: atendimentos.GcalSyncModeWriteGuard = {
+    modoAtendenteSlots,
+    modoAtendenteWildcard,
+  };
   const allSlots = await flowClones.listAtendSyncSlots(
     explicitSlots,
     modoAtendenteSlots,
@@ -473,7 +492,7 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
       continue;
     }
     try {
-      await reconcileSlot(scope, result);
+      await reconcileSlot(scope, result, syncModeGuard);
     } catch (err: unknown) {
       // Falha de 1 clone NUNCA derruba o ciclo dos outros (regra de ouro 7).
       result.slotsWithError++;
