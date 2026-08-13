@@ -2,6 +2,24 @@
 
 Executar antes de todo merge. Cada item precisa de resultado real (sem "parece OK").
 
+## Gates automatizados do CI
+
+Na raiz do repositório, a ordem relevante é:
+
+```bash
+npm run build --workspaces --if-present
+PG_TEST_URL=postgres://... npm run test:migrations
+npm run test:panel
+PG_TEST_URL=postgres://... npm test
+```
+
+- `test:migrations`: manifest SHA-256 do baseline 001 + migrations 002→080 num Postgres 16 local;
+  exige catálogos de usuário vazios, ordem efetiva `pg_catalog,public` e URL sem query string.
+- `test:panel`: 28 arquivos do painel legado via `node:test`; eles não pertencem ao Vitest.
+- `npm test`: suíte Vitest da raiz uma única vez, com integrações SQL habilitadas por `PG_TEST_URL`.
+
+Detalhe e rollback: [Missão 029](missoes/029-ci-regressao-integral.md).
+
 ## 1. Health da API
 
 ```bash
@@ -92,3 +110,4 @@ ssh -i ~/.ssh/hostinger_codex_ed25519 root@187.77.242.220 \
 | PR#121 | `safeTableName` ausente no cleanup run-now — SQL injection via nome de tabela | #121 | Requisicao com `tableName=x; DROP TABLE` passa sem erro |
 | PR#123 | Paginacao de leads errada — pagina 2 retornava itens da 1 | #123 | `GET /api/leads?page=2` retorna os mesmos itens da page=1 |
 | PR#125 | UNION de leads com schemas divergentes — 500 se coluna ausente em qualquer tabela | #125 | `GET /api/leads` retorna 500 quando algum clone tem schema diferente |
+| Missão 029 | Testes do painel e migrations ausentes do CI | PR pendente | Run sem `test:panel` ou `test:migrations` |

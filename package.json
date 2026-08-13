@@ -10,6 +10,8 @@
     "dev:worker": "npm -w @startap/worker run dev",
     "build": "npm run build --workspaces --if-present",
     "test": "vitest run",
+    "test:migrations": "node scripts/verify-migrations.mjs",
+    "test:panel": "node --test painel-admin/test/*.test.js",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "scaffold-bot": "tsx --tsconfig scripts/tsconfig.scripts.json scripts/scaffold-bot.ts"
