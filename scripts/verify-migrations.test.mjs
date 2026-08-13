@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import pg from 'pg';
@@ -17,7 +17,6 @@ const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 async function fixtureWithManifest(files, manifestEntries) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'startap-migration-gate-'));
   const migrationsDir = path.join(root, 'migrations');
-  const { mkdir } = await import('node:fs/promises');
   await mkdir(migrationsDir);
   await Promise.all(
     Object.entries(files).map(([filename, sql]) =>
@@ -123,5 +122,26 @@ describe('verify-migrations — manifest imutável', () => {
     await expect(
       loadMigrationPlan(migrationsDir, manifestPath, { first: 2, last: 2 }),
     ).rejects.toThrow(/002_first\.sql.*hash/i);
+  });
+
+  it('falha por hash quando o baseline legado 001 foi alterado', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'startap-baseline-gate-'));
+    const migrationsDir = path.join(root, 'migrations');
+    await mkdir(migrationsDir);
+    const baselinePath = path.join(root, '001_legacy_schema.sql');
+    const manifestPath = path.join(root, 'manifest.sha256');
+    const originalBaseline = 'CREATE TABLE legacy (id integer);\n';
+    const migration = 'SELECT 2;\n';
+    await writeFile(baselinePath, 'CREATE TABLE legacy (id text);\n', 'utf8');
+    await writeFile(path.join(migrationsDir, '002_first.sql'), migration, 'utf8');
+    await writeFile(
+      manifestPath,
+      `${sha256(originalBaseline)}  001_legacy_schema.sql\n${sha256(migration)}  002_first.sql\n`,
+      'utf8',
+    );
+
+    await expect(
+      loadMigrationPlan(migrationsDir, manifestPath, { first: 1, last: 2 }, baselinePath),
+    ).rejects.toThrow(/001_legacy_schema\.sql.*hash/i);
   });
 });

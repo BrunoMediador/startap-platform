@@ -6,19 +6,48 @@ import { runMigrationGate } from './verify-migrations.mjs';
 const pgTestUrl = process.env.PG_TEST_URL;
 const describePg = pgTestUrl ? describe : describe.skip;
 
+async function createDatabase() {
+  const baseUrl = new URL(pgTestUrl);
+  const databaseName = `migration_gate_${randomUUID().replaceAll('-', '')}`;
+  const adminUrl = new URL(baseUrl);
+  adminUrl.pathname = '/postgres';
+  const targetUrl = new URL(baseUrl);
+  targetUrl.pathname = `/${databaseName}`;
+
+  const admin = new pg.Client({ connectionString: adminUrl.toString() });
+  await admin.connect();
+  await admin.query(`CREATE DATABASE ${databaseName}`);
+  await admin.end();
+  return targetUrl;
+}
+
+async function seedAndAssertRejected(seedSql, expectedObject) {
+  const targetUrl = await createDatabase();
+  const seed = new pg.Client({ connectionString: targetUrl.toString() });
+  await seed.connect();
+  await seed.query(seedSql);
+  await seed.end();
+
+  await expect(
+    runMigrationGate({ databaseUrl: targetUrl.toString(), output: () => {} }),
+  ).rejects.toThrow(expectedObject);
+
+  const proof = new pg.Client({ connectionString: targetUrl.toString() });
+  await proof.connect();
+  const publicObjects = await proof.query(`
+    SELECT COUNT(*)::int AS count
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+  `);
+  await proof.end();
+  expect(publicObjects.rows[0]?.count).toBe(0);
+}
+
 describePg('verify-migrations — Postgres 16 real', () => {
   it('schema alternativo não-vazio falha antes de escrever em public', async () => {
-    const baseUrl = new URL(pgTestUrl);
-    const databaseName = `migration_gate_${randomUUID().replaceAll('-', '')}`;
-    const adminUrl = new URL(baseUrl);
-    adminUrl.pathname = '/postgres';
-    const targetUrl = new URL(baseUrl);
-    targetUrl.pathname = `/${databaseName}`;
-
-    const admin = new pg.Client({ connectionString: adminUrl.toString() });
-    await admin.connect();
-    await admin.query(`CREATE DATABASE ${databaseName}`);
-    await admin.end();
+    const targetUrl = await createDatabase();
 
     const seed = new pg.Client({ connectionString: targetUrl.toString() });
     await seed.connect();
@@ -45,5 +74,30 @@ describePg('verify-migrations — Postgres 16 real', () => {
     expect(publicObjects.rows[0]?.count).toBe(0);
     // O SET é por conexão: o verificador não pode contaminar a conexão de prova.
     expect(searchPath.rows[0]?.search_path).toBe('"$user", public');
+  });
+
+  it.each([
+    {
+      name: 'função',
+      sql: 'CREATE FUNCTION public.already_here() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$',
+      expected: /public\.already_here.*function/i,
+    },
+    {
+      name: 'tipo composto',
+      sql: 'CREATE TYPE public.already_here AS (id integer)',
+      expected: /public\.already_here.*type/i,
+    },
+    {
+      name: 'domínio',
+      sql: 'CREATE DOMAIN public.already_here AS text',
+      expected: /public\.already_here.*domain/i,
+    },
+    {
+      name: 'extensão',
+      sql: 'CREATE EXTENSION hstore WITH SCHEMA public',
+      expected: /public\.hstore.*extension/i,
+    },
+  ])('$name em public falha antes de aplicar baseline', async ({ sql, expected }) => {
+    await seedAndAssertRejected(sql, expected);
   });
 });

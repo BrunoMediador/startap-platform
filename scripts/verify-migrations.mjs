@@ -83,7 +83,8 @@ function parseManifest(rawManifest, manifestPath, expectedRange) {
 export async function loadMigrationPlan(
   migrationsDir,
   manifestPath,
-  expectedRange = { first: 2, last: 80 },
+  expectedRange = { first: 1, last: 80 },
+  baselinePath = undefined,
 ) {
   if (!manifestPath) throw new Error('manifest de migrations ausente');
   const filenames = (await readdir(migrationsDir))
@@ -93,9 +94,14 @@ export async function loadMigrationPlan(
     throw new Error(`nenhuma migration encontrada em ${migrationsDir}.`);
   }
   const manifest = parseManifest(await readFile(manifestPath, 'utf8'), manifestPath, expectedRange);
+  const sourcePaths = new Map(
+    filenames.map((filename) => [filename, path.join(migrationsDir, filename)]),
+  );
+  if (baselinePath) sourcePaths.set(path.basename(baselinePath), baselinePath);
   const expectedFilenames = manifest.map((entry) => entry.filename);
-  const missing = expectedFilenames.filter((filename) => !filenames.includes(filename));
-  const extra = filenames.filter((filename) => !expectedFilenames.includes(filename));
+  const actualFilenames = [...sourcePaths.keys()];
+  const missing = expectedFilenames.filter((filename) => !actualFilenames.includes(filename));
+  const extra = actualFilenames.filter((filename) => !expectedFilenames.includes(filename));
   if (missing.length > 0 || extra.length > 0) {
     throw new Error(
       `manifest diverge do diretorio; ausentes: ${missing.join(', ') || 'nenhuma'}; extras: ${
@@ -106,7 +112,7 @@ export async function loadMigrationPlan(
 
   return Promise.all(
     manifest.map(async (expected) => {
-      const sql = await readFile(path.join(migrationsDir, expected.filename), 'utf8');
+      const sql = await readFile(sourcePaths.get(expected.filename), 'utf8');
       const actualHash = createHash('sha256').update(sql).digest('hex');
       if (actualHash !== expected.sha256) {
         throw new Error(
@@ -126,9 +132,13 @@ export async function assertDatabaseEmpty(client) {
       WHERE nspname <> 'information_schema'
         AND nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
     )
-    SELECT
-      n.nspname AS schema_name,
-      c.relname AS object_name,
+    SELECT n.nspname AS schema_name, NULL::name AS object_name, 'schema' AS object_kind
+    FROM user_schemas n
+    WHERE n.nspname <> 'public'
+
+    UNION ALL
+
+    SELECT n.nspname, c.relname,
       CASE c.relkind
         WHEN 'r' THEN 'table'
         WHEN 'p' THEN 'partitioned table'
@@ -136,14 +146,101 @@ export async function assertDatabaseEmpty(client) {
         WHEN 'm' THEN 'materialized view'
         WHEN 'S' THEN 'sequence'
         WHEN 'f' THEN 'foreign table'
+        WHEN 'c' THEN 'composite type'
         ELSE c.relkind::text
-      END AS object_kind
+      END
     FROM user_schemas n
-    LEFT JOIN pg_catalog.pg_class c
-      ON c.relnamespace = n.oid
-     AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-    WHERE n.nspname <> 'public' OR c.oid IS NOT NULL
-    ORDER BY n.nspname, c.relname
+    JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid
+    WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c')
+
+    UNION ALL
+
+    SELECT n.nspname, p.proname,
+      CASE p.prokind
+        WHEN 'p' THEN 'procedure'
+        WHEN 'a' THEN 'aggregate'
+        WHEN 'w' THEN 'window function'
+        ELSE 'function'
+      END
+    FROM user_schemas n
+    JOIN pg_catalog.pg_proc p ON p.pronamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, t.typname,
+      CASE t.typtype
+        WHEN 'c' THEN 'composite type'
+        WHEN 'd' THEN 'domain'
+        WHEN 'e' THEN 'enum type'
+        WHEN 'r' THEN 'range type'
+        WHEN 'm' THEN 'multirange type'
+        ELSE 'type'
+      END
+    FROM user_schemas n
+    JOIN pg_catalog.pg_type t ON t.typnamespace = n.oid
+    WHERE t.typelem = 0
+
+    UNION ALL
+
+    SELECT n.nspname, e.extname, 'extension'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_extension e ON e.extnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, o.oprname, 'operator'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_operator o ON o.oprnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, coll.collname, 'collation'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_collation coll ON coll.collnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, conv.conname, 'conversion'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_conversion conv ON conv.connamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, opc.opcname, 'operator class'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_opclass opc ON opc.opcnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, opf.opfname, 'operator family'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_opfamily opf ON opf.opfnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, cfg.cfgname, 'text search configuration'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_ts_config cfg ON cfg.cfgnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, dict.dictname, 'text search dictionary'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_ts_dict dict ON dict.dictnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, prs.prsname, 'text search parser'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_ts_parser prs ON prs.prsnamespace = n.oid
+
+    UNION ALL
+
+    SELECT n.nspname, tmpl.tmplname, 'text search template'
+    FROM user_schemas n
+    JOIN pg_catalog.pg_ts_template tmpl ON tmpl.tmplnamespace = n.oid
+
+    ORDER BY schema_name, object_name, object_kind
   `);
   if (existing.rowCount !== 0) {
     throw new Error(
@@ -151,7 +248,7 @@ export async function assertDatabaseEmpty(client) {
         .map((row) =>
           row.object_name
             ? `${row.schema_name}.${row.object_name} (${row.object_kind})`
-            : `${row.schema_name} (schema)`,
+            : `${row.schema_name} (${row.object_kind})`,
         )
         .join(', ')}`,
     );
@@ -193,6 +290,26 @@ export async function assertConnectedToLocalServer(client) {
   }
 }
 
+export async function setSafeDdlSearchPath(client) {
+  // Com apenas public explícito, o PostgreSQL antepõe pg_catalog implicitamente
+  // para resolução, enquanto mantém public como destino do DDL não qualificado.
+  await client.query('SET search_path TO public');
+  const result = await client.query(`
+    SELECT
+      current_schema() AS current_schema,
+      array_to_string(current_schemas(true), ',') AS effective_search_path
+  `);
+  const currentSchema = result.rows[0]?.current_schema;
+  const effectiveSearchPath = result.rows[0]?.effective_search_path;
+  if (currentSchema !== 'public' || effectiveSearchPath !== 'pg_catalog,public') {
+    throw new Error(
+      `search_path efetivo inseguro; current_schema=${currentSchema ?? 'null'}, efetivo=${
+        effectiveSearchPath ?? 'null'
+      }`,
+    );
+  }
+}
+
 export async function runMigrationGate({
   databaseUrl,
   repoRoot = defaultRepoRoot,
@@ -204,14 +321,23 @@ export async function runMigrationGate({
   const migrationsDir = path.join(repoRoot, 'packages', 'db', 'migrations');
   const legacyBaselinePath = path.join(repoRoot, 'scripts', 'fixtures', '001_legacy_schema.sql');
   const manifestPath = path.join(repoRoot, 'scripts', 'fixtures', 'migrations-manifest.sha256');
-  const plan = await loadMigrationPlan(migrationsDir, manifestPath);
+  const inventory = await loadMigrationPlan(
+    migrationsDir,
+    manifestPath,
+    { first: 1, last: 80 },
+    legacyBaselinePath,
+  );
+  const [baseline, ...plan] = inventory;
+  if (baseline?.filename !== '001_legacy_schema.sql') {
+    throw new Error('manifest deve iniciar pelo baseline 001_legacy_schema.sql');
+  }
   const client = new ClientClass({ connectionString: databaseUrl });
   assertEffectiveLocalConnection(client);
 
   try {
     await client.connect();
     await assertConnectedToLocalServer(client);
-    await client.query('SET search_path TO public, pg_catalog');
+    await client.query('SET search_path TO pg_catalog, public');
 
     const server = await client.query('SHOW server_version_num');
     const version = Number(server.rows[0]?.server_version_num);
@@ -220,20 +346,21 @@ export async function runMigrationGate({
     }
 
     await assertDatabaseEmpty(client);
+    await setSafeDdlSearchPath(client);
     await client.query(`
-      CREATE TABLE schema_migrations (
+      CREATE TABLE public.schema_migrations (
         filename TEXT PRIMARY KEY,
         applied_at TIMESTAMPTZ DEFAULT NOW()
       )
     `);
 
-    await client.query(await readFile(legacyBaselinePath, 'utf8'));
-    output('BASELINE  001_legacy_schema.sql');
+    await client.query(baseline.sql);
+    output(`BASELINE  ${baseline.filename}`);
 
     for (const migration of plan) {
       try {
         await client.query(migration.sql);
-        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [
+        await client.query('INSERT INTO public.schema_migrations (filename) VALUES ($1)', [
           migration.filename,
         ]);
         output(`APPLY OK  ${migration.filename}`);
@@ -243,7 +370,9 @@ export async function runMigrationGate({
       }
     }
 
-    const applied = await client.query('SELECT COUNT(*)::int AS count FROM schema_migrations');
+    const applied = await client.query(
+      'SELECT COUNT(*)::int AS count FROM public.schema_migrations',
+    );
     const appliedCount = applied.rows[0]?.count;
     if (appliedCount !== plan.length) {
       throw new Error(`registro incompleto: ${appliedCount}/${plan.length} migrations aplicadas`);
