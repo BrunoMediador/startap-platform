@@ -1,104 +1,272 @@
+import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const { Client } = pg;
-const databaseUrl = process.env.PG_TEST_URL;
+const scriptPath = fileURLToPath(import.meta.url);
+const defaultRepoRoot = path.resolve(path.dirname(scriptPath), '..');
 const out = (message) => process.stdout.write(`${message}\n`);
 const fail = (message) => process.stderr.write(`${message}\n`);
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1']);
 
-if (!databaseUrl) {
-  fail('FATAL: PG_TEST_URL ausente; o gate exige um Postgres 16 efemero e vazio.');
-  process.exit(1);
+function isDockerBridgeAddress(address) {
+  if (isIP(address) !== 4) return false;
+  const [first, second] = address.split('.').map(Number);
+  return first === 172 && second >= 16 && second <= 31;
 }
 
-const parsedUrl = new URL(databaseUrl);
-if (!['localhost', '127.0.0.1', '::1'].includes(parsedUrl.hostname)) {
-  fail(
-    `FATAL: PG_TEST_URL aponta para host nao-local (${parsedUrl.hostname}); recusando aplicar migrations.`,
-  );
-  process.exit(1);
-}
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const migrationsDir = path.join(repoRoot, 'packages', 'db', 'migrations');
-const legacyBaselinePath = path.join(repoRoot, 'scripts', 'fixtures', '001_legacy_schema.sql');
-const filenames = (await readdir(migrationsDir))
-  .filter((filename) => filename.endsWith('.sql'))
-  .sort((left, right) => left.localeCompare(right, 'en'));
-
-if (filenames.length === 0) {
-  fail(`FATAL: nenhuma migration encontrada em ${migrationsDir}.`);
-  process.exit(1);
-}
-
-const client = new Client({ connectionString: databaseUrl });
-
-try {
-  await client.connect();
-
-  const server = await client.query('SHOW server_version_num');
-  const version = Number(server.rows[0]?.server_version_num);
-  if (!Number.isInteger(version) || version < 160000 || version >= 170000) {
-    throw new Error(`Postgres 16 obrigatorio; servidor reportou ${version || 'versao invalida'}`);
+export function validateDatabaseUrl(databaseUrl) {
+  if (!databaseUrl) {
+    throw new Error('PG_TEST_URL ausente; o gate exige um Postgres 16 efemero e vazio.');
   }
 
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(databaseUrl);
+  } catch {
+    throw new Error('PG_TEST_URL invalida; esperado postgres://usuario:senha@localhost:porta/db.');
+  }
+  if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol)) {
+    throw new Error(`protocolo proibido na PG_TEST_URL: ${parsedUrl.protocol}`);
+  }
+  if (!LOCAL_HOSTS.has(parsedUrl.hostname)) {
+    throw new Error(
+      `PG_TEST_URL aponta para host nao-local (${parsedUrl.hostname}); recusando aplicar migrations.`,
+    );
+  }
+  const firstParameter = parsedUrl.searchParams.keys().next().value;
+  if (firstParameter !== undefined) {
+    throw new Error(
+      `parametro proibido na PG_TEST_URL: ${firstParameter}; query string nao e permitida no gate.`,
+    );
+  }
+  return parsedUrl;
+}
+
+function parseManifest(rawManifest, manifestPath, expectedRange) {
+  const entries = rawManifest
+    .split(/\r?\n/u)
+    .filter((line) => line.length > 0)
+    .map((line, index) => {
+      const match = /^([a-f0-9]{64}) {2}([^/]+\.sql)$/u.exec(line);
+      if (!match) {
+        throw new Error(`manifest invalido em ${manifestPath}:${index + 1}`);
+      }
+      return { sha256: match[1], filename: match[2] };
+    });
+  if (entries.length === 0) throw new Error(`manifest vazio: ${manifestPath}`);
+  const expectedCount = expectedRange.last - expectedRange.first + 1;
+  if (entries.length !== expectedCount) {
+    throw new Error(
+      `manifest deve cobrir ${String(expectedRange.first).padStart(3, '0')}..${String(
+        expectedRange.last,
+      ).padStart(3, '0')}; recebeu ${entries.length}/${expectedCount} entradas`,
+    );
+  }
+  for (const [index, entry] of entries.entries()) {
+    const expectedNumber = expectedRange.first + index;
+    const actualNumber = Number(entry.filename.slice(0, 3));
+    if (actualNumber !== expectedNumber) {
+      throw new Error(
+        `manifest fora de sequencia: esperado prefixo ${String(expectedNumber).padStart(3, '0')}, recebeu ${entry.filename}`,
+      );
+    }
+  }
+  return entries;
+}
+
+export async function loadMigrationPlan(
+  migrationsDir,
+  manifestPath,
+  expectedRange = { first: 2, last: 80 },
+) {
+  if (!manifestPath) throw new Error('manifest de migrations ausente');
+  const filenames = (await readdir(migrationsDir))
+    .filter((filename) => filename.endsWith('.sql'))
+    .sort((left, right) => left.localeCompare(right, 'en'));
+  if (filenames.length === 0) {
+    throw new Error(`nenhuma migration encontrada em ${migrationsDir}.`);
+  }
+  const manifest = parseManifest(await readFile(manifestPath, 'utf8'), manifestPath, expectedRange);
+  const expectedFilenames = manifest.map((entry) => entry.filename);
+  const missing = expectedFilenames.filter((filename) => !filenames.includes(filename));
+  const extra = filenames.filter((filename) => !expectedFilenames.includes(filename));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `manifest diverge do diretorio; ausentes: ${missing.join(', ') || 'nenhuma'}; extras: ${
+        extra.join(', ') || 'nenhuma'
+      }`,
+    );
+  }
+
+  return Promise.all(
+    manifest.map(async (expected) => {
+      const sql = await readFile(path.join(migrationsDir, expected.filename), 'utf8');
+      const actualHash = createHash('sha256').update(sql).digest('hex');
+      if (actualHash !== expected.sha256) {
+        throw new Error(
+          `migration ${expected.filename} com hash divergente (esperado ${expected.sha256}, obtido ${actualHash})`,
+        );
+      }
+      return { filename: expected.filename, sql, sha256: actualHash };
+    }),
+  );
+}
+
+export async function assertDatabaseEmpty(client) {
   const existing = await client.query(`
-    SELECT tablename
-    FROM pg_catalog.pg_tables
-    WHERE schemaname = 'public'
-    ORDER BY tablename
+    WITH user_schemas AS (
+      SELECT oid, nspname
+      FROM pg_catalog.pg_namespace
+      WHERE nspname <> 'information_schema'
+        AND nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+    )
+    SELECT
+      n.nspname AS schema_name,
+      c.relname AS object_name,
+      CASE c.relkind
+        WHEN 'r' THEN 'table'
+        WHEN 'p' THEN 'partitioned table'
+        WHEN 'v' THEN 'view'
+        WHEN 'm' THEN 'materialized view'
+        WHEN 'S' THEN 'sequence'
+        WHEN 'f' THEN 'foreign table'
+        ELSE c.relkind::text
+      END AS object_kind
+    FROM user_schemas n
+    LEFT JOIN pg_catalog.pg_class c
+      ON c.relnamespace = n.oid
+     AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+    WHERE n.nspname <> 'public' OR c.oid IS NOT NULL
+    ORDER BY n.nspname, c.relname
   `);
   if (existing.rowCount !== 0) {
     throw new Error(
-      `banco de teste nao esta vazio; tabelas em public: ${existing.rows
-        .map((row) => row.tablename)
+      `banco de teste nao esta vazio; objetos/schemas de usuario: ${existing.rows
+        .map((row) =>
+          row.object_name
+            ? `${row.schema_name}.${row.object_name} (${row.object_kind})`
+            : `${row.schema_name} (schema)`,
+        )
         .join(', ')}`,
     );
   }
+}
 
-  await client.query(`
-    CREATE TABLE schema_migrations (
-      filename TEXT PRIMARY KEY,
-      applied_at TIMESTAMPTZ DEFAULT NOW()
-    )
-  `);
-
-  // O repositorio nasceu sobre duas tabelas legadas preexistentes; a historia
-  // versionada comeca em 002. Materializar esse baseline no banco efemero permite
-  // validar a cadeia 002..N sem reescrever migrations ja aplicadas em producao.
-  await client.query(await readFile(legacyBaselinePath, 'utf8'));
-  out('BASELINE  001_legacy_schema.sql');
-
-  for (const filename of filenames) {
-    const sql = await readFile(path.join(migrationsDir, filename), 'utf8');
-    try {
-      await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
-      out(`APPLY OK  ${filename}`);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`migration ${filename} falhou: ${detail}`, { cause: error });
-    }
-  }
-
-  const applied = await client.query('SELECT COUNT(*)::int AS count FROM schema_migrations');
-  const appliedCount = applied.rows[0]?.count;
-  if (appliedCount !== filenames.length) {
+export function assertEffectiveLocalConnection(client) {
+  const parameters = client.connectionParameters;
+  if (!parameters || !LOCAL_HOSTS.has(parameters.host)) {
     throw new Error(
-      `registro incompleto: ${appliedCount}/${filenames.length} migrations aplicadas`,
+      `destino efetivo do pg nao e local (${parameters?.host ?? 'host ausente'}); recusando conectar.`,
     );
   }
+  if (parameters.options) {
+    throw new Error('connectionParameters.options deve estar vazio no gate de migrations.');
+  }
+}
 
-  out(
-    `Migrations OK: baseline 001 + ${appliedCount}/${filenames.length} migrations aplicadas em Postgres 16 vazio.`,
+export async function assertConnectedToLocalServer(client) {
+  const result = await client.query(
+    'SELECT host(inet_server_addr()) AS server_addr, host(inet_client_addr()) AS client_addr',
   );
-} catch (error) {
-  const detail = error instanceof Error ? error.message : String(error);
-  fail(`FATAL: ${detail}`);
-  process.exitCode = 1;
-} finally {
-  await client.end().catch(() => {});
+  const serverAddress = result.rows[0]?.server_addr;
+  const clientAddress = result.rows[0]?.client_addr;
+  const loopback = serverAddress && LOOPBACK_ADDRESSES.has(serverAddress);
+  // GitHub Actions publica o service Postgres via bridge Docker: o processo do
+  // job conecta em localhost, mas o servidor enxerga ambos os lados em 172.16/12.
+  // Aceitamos somente esse segundo transporte local e simétrico; endereço público
+  // ou apenas um dos lados na bridge continua fail-closed.
+  const localDockerBridge =
+    serverAddress &&
+    clientAddress &&
+    isDockerBridgeAddress(serverAddress) &&
+    isDockerBridgeAddress(clientAddress);
+  if (!loopback && !localDockerBridge) {
+    throw new Error(
+      `Postgres conectado nao e local; inet_server_addr=${serverAddress ?? 'null'}, inet_client_addr=${clientAddress ?? 'null'}`,
+    );
+  }
+}
+
+export async function runMigrationGate({
+  databaseUrl,
+  repoRoot = defaultRepoRoot,
+  ClientClass = Client,
+  output = out,
+}) {
+  validateDatabaseUrl(databaseUrl);
+
+  const migrationsDir = path.join(repoRoot, 'packages', 'db', 'migrations');
+  const legacyBaselinePath = path.join(repoRoot, 'scripts', 'fixtures', '001_legacy_schema.sql');
+  const manifestPath = path.join(repoRoot, 'scripts', 'fixtures', 'migrations-manifest.sha256');
+  const plan = await loadMigrationPlan(migrationsDir, manifestPath);
+  const client = new ClientClass({ connectionString: databaseUrl });
+  assertEffectiveLocalConnection(client);
+
+  try {
+    await client.connect();
+    await assertConnectedToLocalServer(client);
+    await client.query('SET search_path TO public, pg_catalog');
+
+    const server = await client.query('SHOW server_version_num');
+    const version = Number(server.rows[0]?.server_version_num);
+    if (!Number.isInteger(version) || version < 160000 || version >= 170000) {
+      throw new Error(`Postgres 16 obrigatorio; servidor reportou ${version || 'versao invalida'}`);
+    }
+
+    await assertDatabaseEmpty(client);
+    await client.query(`
+      CREATE TABLE schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    await client.query(await readFile(legacyBaselinePath, 'utf8'));
+    output('BASELINE  001_legacy_schema.sql');
+
+    for (const migration of plan) {
+      try {
+        await client.query(migration.sql);
+        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [
+          migration.filename,
+        ]);
+        output(`APPLY OK  ${migration.filename}`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`migration ${migration.filename} falhou: ${detail}`, { cause: error });
+      }
+    }
+
+    const applied = await client.query('SELECT COUNT(*)::int AS count FROM schema_migrations');
+    const appliedCount = applied.rows[0]?.count;
+    if (appliedCount !== plan.length) {
+      throw new Error(`registro incompleto: ${appliedCount}/${plan.length} migrations aplicadas`);
+    }
+
+    output(
+      `Migrations OK: baseline 001 + ${appliedCount}/${plan.length} migrations aplicadas em Postgres 16 vazio.`,
+    );
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+async function main() {
+  try {
+    await runMigrationGate({ databaseUrl: process.env.PG_TEST_URL });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`FATAL: ${detail}`);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  await main();
 }

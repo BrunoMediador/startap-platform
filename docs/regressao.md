@@ -13,7 +13,8 @@ npm run test:panel
 PG_TEST_URL=postgres://... npm test
 ```
 
-- `test:migrations`: baseline legado 001 + migrations 002→080 num Postgres 16 efêmero e vazio.
+- `test:migrations`: baseline legado 001 + manifest SHA-256 das migrations 002→080 num Postgres 16
+  local e vazio em todos os schemas não-sistema; URL com query string é recusada.
 - `test:panel`: 28 arquivos do painel legado via `node:test`; eles não pertencem ao Vitest.
 - `npm test`: suíte Vitest da raiz uma única vez, com integrações SQL habilitadas por `PG_TEST_URL`.
 
