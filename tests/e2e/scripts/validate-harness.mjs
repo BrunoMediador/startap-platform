@@ -1,0 +1,189 @@
+import { execFile as execFileCallback } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCallback);
+const root = process.cwd();
+const missionRelative = 'docs/missoes/030-e2e-compose-isolado.md';
+const workflowRelative = '.github/workflows/ci.yml';
+const required = [
+  'tests/e2e/compose.yml',
+  'tests/e2e/README.md',
+  'tests/e2e/fakes/server.mjs',
+  'tests/e2e/support/egress-guard.mjs',
+  'tests/e2e/support/network-probe.mjs',
+  'tests/e2e/specs/vertical.spec.ts',
+  'tests/e2e/known-broken/known-broken.spec.ts',
+  'tests/e2e/known-broken.json',
+  workflowRelative,
+  missionRelative,
+];
+const excludedSegments = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  '.next',
+  'coverage',
+  'artifacts',
+]);
+
+function isExcluded(relative) {
+  return relative.split('/').some((segment) => excludedSegments.has(segment));
+}
+
+function isRelevant(relative) {
+  return (
+    relative.startsWith('tests/e2e/') ||
+    relative === workflowRelative ||
+    relative === missionRelative ||
+    relative === 'package.json' ||
+    relative === 'package-lock.json' ||
+    relative === 'vitest.config.ts'
+  );
+}
+
+async function readText(relative) {
+  const buffer = await readFile(path.join(root, relative));
+  if (buffer.length > 2 * 1024 * 1024 || buffer.includes(0)) return null;
+  return buffer.toString('utf8');
+}
+
+for (const file of required) await readFile(path.join(root, file));
+
+const { stdout: listed } = await execFile(
+  'git',
+  ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+  { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+);
+const repoFiles = listed
+  .split('\0')
+  .filter(Boolean)
+  .filter((relative) => !isExcluded(relative));
+const relevantFiles = repoFiles.filter(isRelevant);
+for (const requiredFile of required) {
+  if (!relevantFiles.includes(requiredFile)) {
+    throw new Error(`scanner não incluiu artefato obrigatório tracked/untracked: ${requiredFile}`);
+  }
+}
+
+// Autoteste contra no-op em checkout limpo e worktree suja: seleção independe de diff/HEAD.
+const selectionSelfTest = [
+  'package.json',
+  'tests/e2e/untracked-probe.ts',
+  workflowRelative,
+  'node_modules/ignored.js',
+].filter((relative) => !isExcluded(relative) && isRelevant(relative));
+if (selectionSelfTest.length !== 3)
+  throw new Error('autoteste da seleção tracked/untracked falhou');
+
+const compose = await readFile(path.join(root, 'tests/e2e/compose.yml'), 'utf8');
+for (const pattern of [
+  /container_name\s*:/u,
+  /env_file\s*:/u,
+  /^\s*ports\s*:/mu,
+  /privileged\s*:\s*true/u,
+  /network_mode\s*:\s*host/u,
+  /extra_hosts\s*:/u,
+  /docker\.sock/u,
+]) {
+  if (pattern.test(compose)) throw new Error(`compose inseguro: ${pattern}`);
+}
+for (const requiredNetwork of [
+  /driver:\s*bridge/u,
+  /internal:\s*true/u,
+  /enable_ipv6:\s*false/u,
+  /com\.docker\.network\.bridge\.gateway_mode_ipv4:\s*isolated/u,
+]) {
+  if (!requiredNetwork.test(compose)) {
+    throw new Error(`barreira de rede ausente: ${requiredNetwork}`);
+  }
+}
+if (!/WEBHOOK_ASYNC:\s*"true"/u.test(compose)) throw new Error('WEBHOOK_ASYNC deve estar true');
+if (!/PORTAL_SIGNUP:\s*"true"/u.test(compose)) throw new Error('PORTAL_SIGNUP deve estar true');
+if (
+  !/mcr\.microsoft\.com\/playwright:v1\.55\.1-noble/u.test(
+    await readFile(path.join(root, 'tests/e2e/runner/Dockerfile'), 'utf8'),
+  )
+) {
+  throw new Error('imagem Playwright deve acompanhar @playwright/test 1.55.1');
+}
+
+const workflow = await readFile(path.join(root, workflowRelative), 'utf8');
+for (const requiredWorkflow of [
+  /^permissions:\s*\n\s+contents:\s*read/mu,
+  /runs-on:\s*ubuntu-24\.04/u,
+  /persist-credentials:\s*false/u,
+  /npm run e2e:typecheck/u,
+  /npm run e2e:preflight/u,
+  /npm run e2e\s*$/mu,
+]) {
+  if (!requiredWorkflow.test(workflow)) {
+    throw new Error(`workflow E2E incompleto: ${requiredWorkflow}`);
+  }
+}
+
+const relevantSources = [];
+for (const relative of relevantFiles) {
+  const source = await readText(relative);
+  if (source !== null) relevantSources.push({ relative, source });
+}
+for (const { relative, source } of relevantSources) {
+  if (/\.(?:only)\s*\(/u.test(source)) throw new Error(`.only proibido: ${relative}`);
+  if (/\b(?:test|it|describe)\.(?:skip|fixme)\s*\(/u.test(source)) {
+    throw new Error(`skip/fixme proibido: ${relative}`);
+  }
+}
+
+const forbiddenHosts = /187\.77\.242\.220|(?:^|[^\w.-])(?:gestao\.|app\.)?startap\.tech\b/iu;
+const realPhone = /\b(?:\+?55)?\d{10,11}\b/u;
+const secretPatterns = [
+  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\s*(?:[A-Za-z0-9+/=]{32,}\s*)+-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/u,
+  /\bgh[opusr]_[A-Za-z0-9]{20,}\b/u,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/u,
+  /\bAKIA[0-9A-Z]{16}\b/u,
+  /\bAIza[0-9A-Za-z_-]{30,}\b/u,
+];
+for (const { relative, source } of relevantSources) {
+  if (forbiddenHosts.test(source)) throw new Error(`host de produção encontrado: ${relative}`);
+  if (realPhone.test(source)) throw new Error(`telefone com formato real encontrado: ${relative}`);
+}
+
+// Segredos de alta confiança são varridos em toda a árvore tracked/untracked textual,
+// não só no diff. Isso continua ativo em checkout limpo e inclui arquivos recém-criados.
+for (const relative of repoFiles) {
+  const source = await readText(relative);
+  if (source === null) continue;
+  for (const pattern of secretPatterns) {
+    if (pattern.test(source)) throw new Error(`credencial potencial encontrada: ${relative}`);
+  }
+}
+
+const syntheticAllowed = [
+  "const phone = '880000000001'",
+  "const chat = '990000000001@c.us'",
+  "const apiKey = 'e2e_openai_key'",
+].join('\n');
+if (
+  forbiddenHosts.test(syntheticAllowed) ||
+  realPhone.test(syntheticAllowed) ||
+  secretPatterns.some((pattern) => pattern.test(syntheticAllowed))
+) {
+  throw new Error('allowlist sintética deixou de aceitar identificadores E2E explícitos');
+}
+const syntheticLeaks = [
+  ['187', '77', '242', '220'].join('.'),
+  ['55', '11', '98765', '4321'].join(''),
+  ['ghp', 'A'.repeat(24)].join('_'),
+];
+if (
+  !forbiddenHosts.test(syntheticLeaks[0]) ||
+  !realPhone.test(syntheticLeaks[1]) ||
+  !secretPatterns.some((pattern) => pattern.test(syntheticLeaks[2]))
+) {
+  throw new Error('autoteste dos detectores de host/telefone/segredo falhou');
+}
+
+process.stdout.write(
+  `E2E harness estático: ${relevantFiles.length} arquivos relevantes + ${repoFiles.length} tracked/untracked inspecionados; sem dependência de diff HEAD.\n`,
+);

@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [main]
@@ -29,6 +32,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -61,3 +66,26 @@ jobs:
         env:
           PG_TEST_URL: postgres://itestuser:itestpass@localhost:5432/itestdb
         run: npm test
+
+  e2e:
+    name: E2E Compose isolado
+    runs-on: ubuntu-24.04
+    needs: build
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci --no-audit --no-fund
+      - name: Guardas estáticos do harness
+        run: npm run e2e:validate
+      - name: Typecheck do harness
+        run: npm run e2e:typecheck
+      - name: Preflight Docker Engine
+        run: npm run e2e:preflight
+      - name: Prova E2E (up + test + teardown)
+        run: npm run e2e

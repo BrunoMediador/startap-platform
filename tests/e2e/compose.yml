@@ -1,0 +1,394 @@
+name: startap-e2e
+
+x-app-env: &app-env
+  NODE_ENV: test
+  LOG_LEVEL: warn
+  PG_HOST: postgres
+  PG_PORT: "5432"
+  PG_USER: e2e_app
+  PG_PASS: e2e_app_password
+  PG_DB: startap_e2e
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: e2e_redis_password
+  WAHA_URL: http://fake-waha:4010
+  WAHA_API_KEY: e2e_waha_key
+  WAHA_WEBHOOK_HMAC_KEY: e2e_webhook_hmac_key
+  WAHA_WEBHOOK_HMAC_ALGORITHM: sha512
+  OPENAI_API_KEY: e2e_openai_key
+  DEEPSEEK_API_KEY: e2e_deepseek_key
+  OPENAI_MODEL: gpt-e2e
+  WHISPER_URL: http://fake-llm:4013/audio
+  TRANSCRIBE_PROVIDER: openai
+  TRANSCRIBE_OPENAI_FALLBACK_LOCAL: "false"
+  ABACATEPAY_API_KEY: abc_dev_e2e
+  ABACATEPAY_BASE_URL: http://fake-abacatepay:4012
+  ABACATEPAY_WEBHOOK_QUERY_SECRET: e2e_abacate_query
+  ABACATEPAY_WEBHOOK_SECRET: e2e_abacate_hmac
+  GCAL_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  IDEMPOTENCY_DEDUP: "true"
+  IDEMPOTENCY_DEDUP_TTL_SECONDS: "300"
+  WEBHOOK_ASYNC: "true"
+  WEBHOOK_MAX_INFLIGHT: "1"
+  GATE_SILENCIO_TOTAL_ENABLED: "true"
+  BILLING_OVERDUE_SILENCE: "true"
+  MODO_ATENDENTE_SLOTS: "*"
+  HUMAN_REPLY_AGENDA_SLOTS: "*"
+  NODE_OPTIONS: --import=/e2e/support/egress-guard.mjs
+  E2E_ALLOWED_HOSTS: postgres,redis,fake-waha,fake-gcal,fake-abacatepay,fake-llm,api,worker,portal-api,portal-web
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  restart: "no"
+  user: node
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+  networks: [e2e]
+  volumes:
+    - ./support:/e2e/support:ro
+  depends_on:
+    migrator:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+    fake-waha:
+      condition: service_healthy
+    fake-gcal:
+      condition: service_healthy
+    fake-abacatepay:
+      condition: service_healthy
+    fake-llm:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+    environment:
+      POSTGRES_USER: e2e_app
+      POSTGRES_PASSWORD: e2e_app_password
+      POSTGRES_DB: startap_e2e
+    networks: [e2e]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U e2e_app -d startap_e2e]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+    command: [redis-server, --save, "", --appendonly, "no", --requirepass, e2e_redis_password]
+    networks: [e2e]
+    healthcheck:
+      test: [CMD, redis-cli, -a, e2e_redis_password, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrator:
+    image: postgres:16-alpine
+    restart: "no"
+    user: postgres
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment:
+      PGPASSWORD: e2e_app_password
+    networks: [e2e]
+    volumes:
+      - ../../scripts/fixtures/001_legacy_schema.sql:/migrations/001_legacy_schema.sql:ro
+      - ../../packages/db/migrations:/migrations/versioned:ro
+      - ./fixtures/seed.sql:/migrations/seed.sql:ro
+      - ./scripts/migrate-e2e.sh:/migrations/migrate-e2e.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: [sh, /migrations/migrate-e2e.sh]
+
+  fake-waha:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment:
+      FAKE_KIND: waha
+      PORT: "4010"
+      TARGET_API_URL: http://api:3040/webhooks/waha
+      WAHA_WEBHOOK_HMAC_KEY: e2e_webhook_hmac_key
+    networks: [e2e]
+    volumes:
+      - ./fakes/server.mjs:/fake/server.mjs:ro
+    command: [node, /fake/server.mjs]
+    healthcheck: &fake-health
+      test: [CMD, wget, -qO-, http://127.0.0.1:4010/health]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  fake-gcal:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment: { FAKE_KIND: gcal, PORT: "4011" }
+    networks: [e2e]
+    volumes:
+      - ./fakes/server.mjs:/fake/server.mjs:ro
+    command: [node, /fake/server.mjs]
+    healthcheck:
+      <<: *fake-health
+      test: [CMD, wget, -qO-, http://127.0.0.1:4011/health]
+
+  fake-abacatepay:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment: { FAKE_KIND: abacatepay, PORT: "4012" }
+    networks: [e2e]
+    volumes:
+      - ./fakes/server.mjs:/fake/server.mjs:ro
+    command: [node, /fake/server.mjs]
+    healthcheck:
+      <<: *fake-health
+      test: [CMD, wget, -qO-, http://127.0.0.1:4012/health]
+
+  fake-llm:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment: { FAKE_KIND: llm, PORT: "4013" }
+    networks: [e2e]
+    volumes:
+      - ./fakes/server.mjs:/fake/server.mjs:ro
+    command: [node, /fake/server.mjs]
+    healthcheck:
+      <<: *fake-health
+      test: [CMD, wget, -qO-, http://127.0.0.1:4013/health]
+
+  api:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args: { APP: api }
+    environment:
+      <<: *app-env
+      SERVICE_NAME: api
+      API_PORT: "3040"
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3040/health]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  worker:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args: { APP: worker }
+    environment:
+      <<: *app-env
+      SERVICE_NAME: worker
+      ALERTS_ENABLED: "false"
+      GCAL_HEALTHCHECK_ENABLED: "false"
+      GCAL_ATEND_SYNC_ENABLED: "false"
+      BILLING_DUE_DATE_MODEL: "false"
+      TRIAL_ORPHAN_CLEANUP_ENABLED: "false"
+    healthcheck:
+      test: [CMD-SHELL, pgrep -f 'node ./app/dist/worker.js' >/dev/null]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  portal-api:
+    build:
+      context: ../..
+      dockerfile: apps/portal-api/Dockerfile
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+    environment:
+      <<: *app-env
+      SERVICE_NAME: portal-api
+      PORTAL_API_PORT: "3051"
+      PORTAL_SESSION_SECRET: e2e_session_secret_32_chars_minimum_value
+      PORTAL_COOKIE_SECURE: "false"
+      PORTAL_SIGNUP: "true"
+      PORTAL_BOT_PAUSE: "true"
+      PORTAL_SIGNUP_MATRIZ_SLOT: e2e_matriz
+      PORTAL_SIGNUP_RATE_MAX: "20"
+      TRIAL_MAX_ATIVOS: "20"
+      TRIAL_PHONE_PEPPER: e2e_only_trial_pepper_value
+      TS_WEBHOOK_URL: http://api:3040/webhooks/waha
+      PORTAL_BCRYPT_COST: "8"
+      ESTABELECIMENTO_ENABLED: "true"
+      COLABORADOR_PORTAL_ENABLED: "true"
+    networks: [e2e]
+    volumes:
+      - ./support:/e2e/support:ro
+    depends_on:
+      migrator: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3051/health]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+
+  portal-web:
+    build:
+      context: ../..
+      dockerfile: apps/portal-web/Dockerfile
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+    environment:
+      NODE_ENV: test
+      NEXT_TELEMETRY_DISABLED: "1"
+      PORTAL_API_URL: http://portal-api:3051
+    networks: [e2e]
+    depends_on:
+      portal-api: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3050/]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  worker-once:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args: { APP: worker }
+    environment:
+      <<: *app-env
+      SERVICE_NAME: worker-once
+      CHAT_STALE_RUNNING_MAX_MINUTES: "1"
+    command:
+      - node
+      - -e
+      - import('./app/dist/jobs/close-stale-running.js').then(async (m) => { const r = await m.runCloseStaleRunning(); if (r.closed !== 1) throw new Error('worker-once expected one stale row'); })
+
+  integration-probe:
+    <<: *app
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args: { APP: worker }
+    environment:
+      <<: *app-env
+      SERVICE_NAME: integration-probe
+      E2E_PG_URL: postgres://e2e_app:e2e_app_password@postgres:5432/startap_e2e
+    command: [node, /e2e/support/integration-probe.mjs]
+
+  egress-probe:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    environment:
+      NODE_OPTIONS: --import=/e2e/support/egress-guard.mjs
+      E2E_ALLOWED_HOSTS: fake-waha
+    networks: [e2e]
+    volumes:
+      - ./support:/e2e/support:ro
+    command: [node, /e2e/support/egress-probe.mjs]
+
+  network-probe:
+    image: node:20-alpine
+    restart: "no"
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    networks: [e2e]
+    environment:
+      E2E_HOST_CANARY_IP: ${E2E_HOST_CANARY_IP:?E2E_HOST_CANARY_IP obrigatorio}
+    volumes:
+      - ./support:/e2e/support:ro
+    command: [node, /e2e/support/network-probe.mjs]
+
+  e2e:
+    profiles: [runner]
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    restart: "no"
+    user: pwuser
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:rw,noexec,nosuid,size=128m]
+    working_dir: /e2e
+    environment:
+      CI: "true"
+      E2E_API_URL: http://api:3040
+      E2E_PORTAL_API_URL: http://portal-api:3051
+      E2E_PORTAL_WEB_URL: http://portal-web:3050
+      E2E_WAHA_URL: http://fake-waha:4010
+      E2E_GCAL_URL: http://fake-gcal:4011
+      E2E_ABACATEPAY_URL: http://fake-abacatepay:4012
+      E2E_LLM_URL: http://fake-llm:4013
+      E2E_PG_URL: postgres://e2e_app:e2e_app_password@postgres:5432/startap_e2e
+      E2E_REDIS_URL: redis://:e2e_redis_password@redis:6379/0
+      E2E_ARTIFACT_DIR: /artifacts
+    networks: [e2e]
+    volumes:
+      - e2e_artifacts:/artifacts
+    depends_on:
+      api: { condition: service_healthy }
+      worker: { condition: service_healthy }
+      portal-api: { condition: service_healthy }
+      portal-web: { condition: service_healthy }
+      worker-once: { condition: service_completed_successfully }
+      integration-probe: { condition: service_completed_successfully }
+      egress-probe: { condition: service_completed_successfully }
+      network-probe: { condition: service_completed_successfully }
+    command: [sh, -c, "npx playwright test --config playwright.config.ts && node scripts/run-known-broken.mjs"]
+
+networks:
+  e2e:
+    driver: bridge
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+
+volumes:
+  pg_data:
+  e2e_artifacts:
