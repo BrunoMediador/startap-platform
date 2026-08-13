@@ -1495,6 +1495,83 @@ describe('handleWebhook — fromMe modo atendente (SCRUM-59)', () => {
     expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.addFlowPause).not.toHaveBeenCalled();
   });
+
+  // BUG P0 13/08/2026: fromMe de áudio (NOWEB nunca preenche payload.body) tinha que
+  // criar human-reply-pause igual a fromMe de texto — antes caía direto em ignored:fromMe.
+  describe('fromMe de áudio/mídia (BUG P0 13/08/2026)', () => {
+    function fromMeAudioBody(): WahaWebhookBody {
+      const body = makeBody('TESTE_STARTAP');
+      body.payload!.fromMe = true;
+      body.payload!.body = null; // NOWEB: payload.body vem null/vazio para áudio
+      body.payload!.hasMedia = true;
+      body.payload!._data = {
+        ...body.payload!._data,
+        message: {
+          audioMessage: { mimetype: 'audio/ogg; codecs=opus', url: 'https://waha/media/audio.ogg' },
+        },
+      };
+      return body;
+    }
+
+    function fromMeImageBody(): WahaWebhookBody {
+      const body = makeBody('TESTE_STARTAP');
+      body.payload!.fromMe = true;
+      body.payload!.body = null;
+      body.payload!.hasMedia = true;
+      body.payload!.media = { mimetype: 'image/jpeg', url: 'https://waha/media/foto.jpg' };
+      return body;
+    }
+
+    it('fromMe de ÁUDIO (payload.body vazio) → cria human-reply-pause (não ignored:fromMe)', async () => {
+      const result = await handleWebhook(fromMeAudioBody(), {
+        executionId: 'exec-audio-pause',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ok:human-reply-pause' });
+      expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+      // Anti-eco chamado com text='' — isBotEcho('') resolve 'human' por definição
+      // (o bot só envia texto via sendText, nunca há hash de eco pra mídia).
+      expect(mocks.isBotEcho).toHaveBeenCalledWith('TESTE_STARTAP', '553598877248', '');
+    });
+
+    it('fromMe de IMAGEM (payload.media, sem audioMessage) → também cria human-reply-pause', async () => {
+      const result = await handleWebhook(fromMeImageBody(), {
+        executionId: 'exec-image-pause',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ok:human-reply-pause' });
+      expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    });
+
+    it('fromMe de ÁUDIO cujo isBotEcho resolve "echo" → NÃO pausa (fail-safe preservado)', async () => {
+      mocks.isBotEcho.mockResolvedValue('echo');
+      const result = await handleWebhook(fromMeAudioBody(), {
+        executionId: 'exec-audio-echo',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ignored:fromMe' });
+      expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    });
+
+    it('fromMe TEXTO continua criando pausa (regressão) — não só áudio', async () => {
+      const result = await handleWebhook(fromMeBody('ja te ligo'), {
+        executionId: 'exec-text-regressao',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ok:human-reply-pause' });
+      expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    });
+
+    it('ECO de TEXTO do bot continua NÃO criando pausa (regressão)', async () => {
+      mocks.isBotEcho.mockResolvedValue('echo');
+      const result = await handleWebhook(fromMeBody('mensagem que o bot mesmo enviou'), {
+        executionId: 'exec-text-echo-regressao',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ignored:fromMe' });
+      expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1709,6 +1786,43 @@ describe('handleWebhook — fromMe ramo AGENDA / human-reply (SCRUM-68 Onda 4)',
     expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
     expect(mocks.isBotEcho).not.toHaveBeenCalled();
     expect(mocks.resolveFromMeIdentity).not.toHaveBeenCalled();
+  });
+
+  // BUG P0 13/08/2026 — mesmo bug do ramo modo atendente, aqui no ramo AGENDA
+  // (3º ponto de gate que caía direto em ignored:fromMe pra fromMe sem payload.body).
+  describe('fromMe de áudio/mídia (BUG P0 13/08/2026, ramo agenda)', () => {
+    function fromMeAudioBody(): WahaWebhookBody {
+      const body = makeBody('TESTE_STARTAP');
+      body.payload!.fromMe = true;
+      body.payload!.body = null;
+      body.payload!.hasMedia = true;
+      body.payload!._data = {
+        ...body.payload!._data,
+        message: {
+          audioMessage: { mimetype: 'audio/ogg; codecs=opus', url: 'https://waha/media/audio.ogg' },
+        },
+      };
+      return body;
+    }
+
+    it('fromMe de ÁUDIO no ramo agenda → cria human-reply-pause', async () => {
+      const result = await handleWebhook(fromMeAudioBody(), {
+        executionId: 'exec-agenda-audio-pause',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ok:human-reply-pause' });
+      expect(mocks.addHumanReplyPause).toHaveBeenCalledTimes(1);
+    });
+
+    it('fromMe de ÁUDIO com gate OFF → continua ignored:fromMe (flag continua a barreira)', async () => {
+      delete process.env[HR_ENV_KEY];
+      const result = await handleWebhook(fromMeAudioBody(), {
+        executionId: 'exec-agenda-audio-gate-off',
+        startedAt: 0,
+      });
+      expect(result).toEqual({ status: 'ignored:fromMe' });
+      expect(mocks.addHumanReplyPause).not.toHaveBeenCalled();
+    });
   });
 });
 
