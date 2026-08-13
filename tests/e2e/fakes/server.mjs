@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import http from 'node:http';
 import process from 'node:process';
 
@@ -33,6 +33,14 @@ function sanitize(value, depth = 0) {
     } else out[key] = sanitize(item, depth + 1);
   }
   return out;
+}
+
+function identityTag(value) {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+function sessionProjection(session) {
+  return { nameTag: session.nameTag, status: session.status };
 }
 
 function routeLabel(pathname) {
@@ -98,7 +106,7 @@ function journalBody(pathname, parsed) {
   if (kind === 'waha' && pathname === '/api/sessions') {
     const webhook = Array.isArray(body.config?.webhooks) ? body.config.webhooks[0] : null;
     return {
-      name: typeof body.name === 'string' ? sanitizeString(body.name) : null,
+      nameTag: typeof body.name === 'string' ? identityTag(body.name) : null,
       start: body.start === true,
       events: Array.isArray(webhook?.events) ? webhook.events.slice(0, 10).map(sanitizeString) : [],
       hasHmac: typeof webhook?.hmac?.key === 'string',
@@ -156,7 +164,7 @@ async function admin(req, res, url, parsed) {
       state: {
         charges: sanitize([...state.charges.values()]),
         events: sanitize([...state.events.values()]),
-        sessions: sanitize([...state.sessions.values()]),
+        sessions: [...state.sessions.values()].map(sessionProjection),
       },
       faults: [...faults.entries()].map(([pathname, fault]) => ({
         route: routeLabel(pathname),
@@ -223,15 +231,14 @@ async function waha(req, res, url, parsed) {
     return json(res, 200, { upstreamStatus: response.status, upstreamBody: await response.json() });
   }
   if (url.pathname === '/api/sessions' && req.method === 'GET') {
-    return json(res, 200, [...state.sessions.values()]);
+    return json(res, 200, [...state.sessions.values()].map(sessionProjection));
   }
   if (url.pathname === '/api/sessions' && req.method === 'POST') {
     const input = parsed && typeof parsed === 'object' ? parsed : {};
-    const name =
-      typeof input.name === 'string' ? sanitizeString(input.name) : `e2e_${randomUUID()}`;
-    const session = { name, status: 'STARTING' };
-    state.sessions.set(name, session);
-    return json(res, 201, session);
+    const rawName = typeof input.name === 'string' ? input.name : `e2e_${randomUUID()}`;
+    const session = { nameTag: identityTag(rawName), status: 'STARTING' };
+    state.sessions.set(rawName, session);
+    return json(res, 201, sessionProjection(session));
   }
   if (url.pathname.startsWith('/api/')) {
     if (url.pathname === '/api/sendText') {
@@ -350,4 +357,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, '0.0.0.0', () => process.stdout.write(`${kind} fake ready on ${port}\n`));
+server.listen(port, '0.0.0.0', () => {
+  const address = server.address();
+  const boundPort = typeof address === 'object' && address ? address.port : port;
+  process.stdout.write(`${kind} fake ready on ${boundPort}\n`);
+});

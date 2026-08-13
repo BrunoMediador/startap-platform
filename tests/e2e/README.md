@@ -101,6 +101,13 @@ Todos expõem:
 - `POST /__admin/reset` — limpa somente o fake
 - `POST /__admin/faults` — `{ "path": "/rota", "status": 503, "times": 1 }`
 
+O fake WAHA mantém o nome de sessão cru somente como chave interna do contrato. POST, listagem,
+journal e estado administrativo usam uma projeção allowlisted `{ nameTag, status }`; o nome nunca
+cruza a fronteira HTTP, mesmo quando é curto demais para a redação heurística. O `nameTag` SHA-256
+truncado permite provar unicidade e correspondência com os slots provisionados. Esta listagem
+tag-only é deliberadamente insuficiente para testar o monitor WAHA por nome; esse job fica desligado
+no Compose e exigirá um contrato isolado próprio se entrar no escopo futuro.
+
 O fake WAHA também expõe `POST /__admin/inbound`; ele assina o envelope e o envia à API,
 de modo que o teste não “finge” que o webhook foi aceito.
 

@@ -1,10 +1,74 @@
-import { execFile as execFileCallback } from 'node:child_process';
+import { execFile as execFileCallback, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 const root = process.cwd();
+
+async function probeFakeSessionSinks() {
+  const child = spawn(process.execPath, [path.join(root, 'tests/e2e/fakes/server.mjs')], {
+    env: { ...process.env, FAKE_KIND: 'waha', PORT: '0' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  let stderr = '';
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('fake WAHA não iniciou em 5s')), 5_000);
+      child.once('exit', (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`fake WAHA encerrou antes do probe: ${code}; ${stderr}`));
+      });
+      child.stdout.on('data', (chunk) => {
+        const match = String(chunk).match(/fake ready on (\d+)/u);
+        if (!match) return;
+        clearTimeout(timeout);
+        resolve(Number(match[1]));
+      });
+    });
+    const rawName = 'short-e2e-session';
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const createdResponse = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: rawName, start: true }),
+    });
+    const created = await createdResponse.json();
+    const listed = await fetch(`${baseUrl}/api/sessions`).then((response) => response.json());
+    const adminState = await fetch(`${baseUrl}/__admin/state`).then((response) => response.json());
+    const outputs = { created, listed, adminState };
+    const serialized = JSON.stringify(outputs);
+    if (serialized.includes(rawName)) {
+      throw new Error('fake WAHA expôs identidade curta em sink HTTP/journal');
+    }
+    const nameTag = createHash('sha256').update(rawName).digest('hex').slice(0, 16);
+    const expectedSession = { nameTag, status: 'STARTING' };
+    if (
+      !createdResponse.ok ||
+      JSON.stringify(created) !== JSON.stringify(expectedSession) ||
+      JSON.stringify(listed) !== JSON.stringify([expectedSession]) ||
+      JSON.stringify(adminState.state?.sessions) !== JSON.stringify([expectedSession]) ||
+      adminState.journal?.[0]?.body?.nameTag !== nameTag ||
+      Object.hasOwn(adminState.journal?.[0]?.body ?? {}, 'name')
+    ) {
+      throw new Error('fake WAHA não aplicou projeção tag-only em todos os sinks de sessão');
+    }
+  } finally {
+    const exited =
+      child.exitCode === null
+        ? new Promise((resolve) => child.once('exit', resolve))
+        : Promise.resolve();
+    child.kill('SIGTERM');
+    await exited;
+  }
+}
 const missionRelative = 'docs/missoes/030-e2e-compose-isolado.md';
 const workflowRelative = '.github/workflows/ci.yml';
 const required = [
@@ -248,6 +312,7 @@ const egressGuardSource = await readFile(
   path.join(root, 'tests/e2e/support/egress-guard.mjs'),
   'utf8',
 );
+const fakeServerSource = await readFile(path.join(root, 'tests/e2e/fakes/server.mjs'), 'utf8');
 const egressProbeSource = await readFile(
   path.join(root, 'tests/e2e/support/egress-probe.mjs'),
   'utf8',
@@ -280,10 +345,43 @@ for (const signupPromptContract of [
   /prompts\.map\(\(prompt\) => prompt\.slot\)\)\.toEqual\(provisionedSlots\)/u,
   /expect\(prompts\)\.toHaveLength\(4\)/u,
   /prompt\.prompt\.trim\(\)\)\.not\.toBe\(''\)/u,
+  /const expectedSessionTags = provisionedSlots\.map\(sessionNameTag\)\.sort\(\)/u,
+  /journalSessionTags\)\.toEqual\(expectedSessionTags\)/u,
+  /new Set\(journalSessionTags\)\)\.toHaveLength\(4\)/u,
+  /stateSessionTags\)\.toEqual\(expectedSessionTags\)/u,
+  /new Set\(stateSessionTags\)\)\.toHaveLength\(4\)/u,
 ]) {
   if (!signupPromptContract.test(verticalSpecSource)) {
     throw new Error(`signup não prova prompts exatos e não vazios: ${signupPromptContract}`);
   }
+}
+for (const fakeSessionContract of [
+  /function identityTag\(value\)/u,
+  /function sessionProjection\(session\)/u,
+  /nameTag: typeof body\.name === 'string' \? identityTag\(body\.name\) : null/u,
+  /const rawName = typeof input\.name === 'string' \? input\.name : `e2e_\$\{randomUUID\(\)\}`/u,
+  /state\.sessions\.set\(rawName, session\)/u,
+  /sessions: \[\.\.\.state\.sessions\.values\(\)\]\.map\(sessionProjection\)/u,
+  /return json\(res, 200, \[\.\.\.state\.sessions\.values\(\)\]\.map\(sessionProjection\)\)/u,
+  /return json\(res, 201, sessionProjection\(session\)\)/u,
+]) {
+  if (!fakeSessionContract.test(fakeServerSource)) {
+    throw new Error(
+      `fake WAHA não preserva identidade antes da sanitização: ${fakeSessionContract}`,
+    );
+  }
+}
+if (/typeof input\.name === 'string' \? sanitizeString\(input\.name\)/u.test(fakeServerSource)) {
+  throw new Error('fake WAHA não pode usar valor sanitizado como chave de sessão');
+}
+if (/\bname:\s*rawName\b/u.test(fakeServerSource)) {
+  throw new Error('fake WAHA não pode duplicar identidade crua no valor da sessão');
+}
+const wahaSessionJournalProjection = fakeServerSource.match(
+  /if \(kind === 'waha' && pathname === '\/api\/sessions'\) \{([\s\S]*?)\n {2}\}/u,
+)?.[1];
+if (!wahaSessionJournalProjection || /(?:^|\n)\s*name:/mu.test(wahaSessionJournalProjection)) {
+  throw new Error('journal WAHA deve projetar tag-only e nunca o nome da sessão');
 }
 for (const staleJournalContract of [
   /SELECT event_type, status[\s\S]*?WHERE execution_id = \$1[\s\S]*?ORDER BY id ASC/u,
@@ -431,6 +529,8 @@ if (
   throw new Error('autoteste dos detectores de host/telefone/segredo falhou');
 }
 
+await probeFakeSessionSinks();
+
 process.stdout.write(
-  `E2E harness estático: ${relevantFiles.length} arquivos relevantes + ${repoFiles.length} tracked/untracked inspecionados; sem dependência de diff HEAD.\n`,
+  `E2E harness estático + probe HTTP do fake: ${relevantFiles.length} arquivos relevantes + ${repoFiles.length} tracked/untracked inspecionados; sem dependência de diff HEAD.\n`,
 );

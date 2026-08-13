@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { expect, request as playwrightRequest, test } from '@playwright/test';
 import type { APIRequestContext } from '@playwright/test';
 import { Redis } from 'ioredis';
@@ -26,7 +26,11 @@ type JournalEntry = {
 
 type FakeState = {
   journal: JournalEntry[];
-  state: { charges: unknown[]; events: unknown[]; sessions: unknown[] };
+  state: {
+    charges: unknown[];
+    events: unknown[];
+    sessions: Array<{ nameTag: string; status: string }>;
+  };
   faults: unknown[];
 };
 
@@ -58,6 +62,10 @@ function envelope(
   if (!options.omitBody) payload.body = options.body ?? 'mensagem e2e';
   if (options.media) payload.media = options.media;
   return { event: 'message', session, payload };
+}
+
+function sessionNameTag(name: string) {
+  return createHash('sha256').update(name).digest('hex').slice(0, 16);
 }
 
 async function inbound(
@@ -786,7 +794,20 @@ test('P0 signup real provisiona os quatro formatos e valida PG, sessão WAHA e p
   for (const prompt of prompts) expect(prompt.prompt.trim()).not.toBe('');
 
   await waitForJournal(wahaUrl, (entry) => entry.path === '/api/sessions', 4);
-  expect((await fakeState(wahaUrl)).state.sessions).toHaveLength(4);
+  const expectedSessionTags = provisionedSlots.map(sessionNameTag).sort();
+  const wahaState = await fakeState(wahaUrl);
+  const journalSessionTags = wahaState.journal
+    .filter((entry) => entry.method === 'POST' && entry.path === '/api/sessions')
+    .map((entry) => entry.body.nameTag)
+    .filter((tag): tag is string => typeof tag === 'string')
+    .sort();
+  expect(journalSessionTags).toEqual(expectedSessionTags);
+  expect(new Set(journalSessionTags)).toHaveLength(4);
+  const stateSessionTags = wahaState.state.sessions.map((session) => session.nameTag).sort();
+  expect(stateSessionTags).toEqual(expectedSessionTags);
+  expect(new Set(stateSessionTags)).toHaveLength(4);
+  expect(wahaState.state.sessions).toHaveLength(4);
+  expect(wahaState.state.sessions.every((session) => session.status === 'STARTING')).toBe(true);
 
   const pix = await contexts[0]?.post('/portal/mensalidade/pix');
   expect(pix?.status()).toBe(200);
