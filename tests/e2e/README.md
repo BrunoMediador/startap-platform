@@ -80,7 +80,9 @@ Dois probes complementares falham se houver rota default/egress: um exercita
 `fetch`/HTTP/HTTPS/TCP/DNS e o guard test-only; o outro, sem guard, tenta IP público,
 metadados AWS/Azure, bridge padrão e canário HTTP do host, enquanto prova que o DNS
 interno de `postgres` segue funcionando. O guard redireciona OpenAI/DeepSeek/GCal aos
-fakes e bloqueia destinos fora da allowlist. O runtime não é alterado.
+fakes e bloqueia destinos fora da allowlist. O probe usa o mesmo OpenAI SDK e
+`node-fetch` da imagem da API para provar OpenAI e DeepSeek no journal do fake, além da
+contraprova externa pelo mesmo transporte. O runtime não é alterado.
 
 O runner é construído de um contexto limpo que contém só config/specs/lockfile; não
 monta o checkout, `.git` ou credenciais. Playwright não grava trace, vídeo ou screenshot.

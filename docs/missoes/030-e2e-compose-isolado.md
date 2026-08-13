@@ -46,6 +46,9 @@ preload montado somente no Compose intercepta `fetch`: hosts conhecidos são env
 fakes e os demais são rejeitados. O preload também barra HTTP/HTTPS/TCP/DNS; um probe sem
 preload prova a barreira de rede contra IP público, metadata, bridge e host. O migrator
 aplica a cadeia real antes dos apps. O runner Playwright fala apenas por DNS da rede.
+O egress-probe roda sobre a imagem compilada da API e chama OpenAI e DeepSeek pelo SDK real
+(`node-fetch`/`https.request`), exigindo duas entradas no journal do fake e mantendo a
+contraprova de bloqueio para destino HTTPS arbitrário pelo mesmo transporte.
 
 Os slots sintéticos em `flow_clones` mantêm o discriminador produtivo `clone_` e apontam
 para `teste_barbearia`; assim o dispatcher usa a factory real já registrada pela API, inclusive

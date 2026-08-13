@@ -93,7 +93,7 @@ const legacyBaseline = await readFile(
 for (const lifecycleContract of [
   /const longRunningServices = \['api', 'worker', 'portal-api', 'portal-web'\];/u,
   /const oneShotServices = \['worker-once', 'integration-probe', 'egress-probe', 'network-probe'\];/u,
-  /const locallyBuiltTestServices = \['worker-once', 'integration-probe', 'e2e'\];/u,
+  /const locallyBuiltTestServices = \['worker-once', 'integration-probe', 'egress-probe', 'e2e'\];/u,
   /'--wait-timeout',[\s\S]*?'180',[\s\S]*?\.\.\.longRunningServices/u,
   /docker\(\['--profile', 'runner', 'build', \.\.\.locallyBuiltTestServices\]\)/u,
   /for \(const service of oneShotServices\) \{\s*await docker\(\['run', '--rm', '--no-deps', service\]\);\s*\}/u,
@@ -252,6 +252,21 @@ const egressProbeSource = await readFile(
   path.join(root, 'tests/e2e/support/egress-probe.mjs'),
   'utf8',
 );
+const egressProbeService = compose.match(
+  /^ {2}egress-probe:\n([\s\S]*?)(?=^ {2}[a-z][\w-]*:|^networks:)/mu,
+)?.[1];
+for (const egressProbeComposeContract of [
+  /args:\s*\{ APP: api \}/u,
+  /\.\/support\/egress-probe\.mjs:\/app\/egress-probe\.mjs:ro/u,
+  /command:\s*\[node,\s*\/app\/egress-probe\.mjs\]/u,
+  /E2E_ALLOWED_HOSTS:\s*fake-waha,fake-llm/u,
+]) {
+  if (!egressProbeService || !egressProbeComposeContract.test(egressProbeService)) {
+    throw new Error(
+      `egress-probe não reproduz dependências da imagem da API: ${egressProbeComposeContract}`,
+    );
+  }
+}
 const networkProbeSource = await readFile(
   path.join(root, 'tests/e2e/support/network-probe.mjs'),
   'utf8',
@@ -301,6 +316,12 @@ for (const requiredGuardContract of [
   /normalized === '0\.0\.0\.0' \|\| normalized === '0\.0\.0'/u,
   /callback && allowedDnsLookupCallbackHost\(hostname\)/u,
   /dns\.promises\.lookup = async function guardedDnsPromisesLookup/u,
+  /\['api\.openai\.com', llmRedirect\]/u,
+  /\['api\.deepseek\.com', llmRedirect\]/u,
+  /function redirectedHttpRequest\(args, sourceUrl, targetBase\)/u,
+  /if \(!allowedHost\(target\.hostname\)\) throw blocked\(target\.hostname\)/u,
+  /return callback \? originalHttpRequest\(redirected, callback\) : originalHttpRequest\(redirected\)/u,
+  /if \(target\) return redirectedHttpRequest\(args, url, target\)/u,
 ]) {
   if (!requiredGuardContract.test(egressGuardSource)) {
     throw new Error(`contrato de bind sem ampliar egress ausente: ${requiredGuardContract}`);
@@ -315,6 +336,10 @@ for (const requiredEgressProbe of [
   /connect\('0\.0\.0'\)/u,
   /dns\.lookup\('0\.0\.0\.0'\)/u,
   /dns\.lookup\('0\.0\.0'\)/u,
+  /fetchWithNodeFetch\('https:\/\/example\.invalid\/'\)/u,
+  /new OpenAI\(\{ apiKey: 'e2e_openai_probe_key' \}\)/u,
+  /baseURL: 'https:\/\/api\.deepseek\.com\/v1'/u,
+  /\['egress-deepseek', 'egress-openai'\]/u,
 ]) {
   if (!requiredEgressProbe.test(egressProbeSource)) {
     throw new Error(`contraprova de wildcard ausente: ${requiredEgressProbe}`);

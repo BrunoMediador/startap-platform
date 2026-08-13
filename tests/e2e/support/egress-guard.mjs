@@ -4,6 +4,7 @@ import https from 'node:https';
 import { syncBuiltinESMExports } from 'node:module';
 import net from 'node:net';
 import process from 'node:process';
+import { urlToHttpOptions } from 'node:url';
 
 const originalFetch = globalThis.fetch.bind(globalThis);
 const originalHttpRequest = http.request.bind(http);
@@ -12,9 +13,10 @@ const originalNetConnect = net.connect.bind(net);
 const originalNetCreateConnection = net.createConnection.bind(net);
 const originalDnsLookup = dns.lookup.bind(dns);
 const originalDnsPromisesLookup = dns.promises.lookup.bind(dns.promises);
+const llmRedirect = process.env.E2E_LLM_REDIRECT_URL ?? 'http://fake-llm:4013';
 const redirects = new Map([
-  ['api.openai.com', 'http://fake-llm:4013'],
-  ['api.deepseek.com', 'http://fake-llm:4013'],
+  ['api.openai.com', llmRedirect],
+  ['api.deepseek.com', llmRedirect],
   ['oauth2.googleapis.com', 'http://fake-gcal:4011'],
   ['www.googleapis.com', 'http://fake-gcal:4011'],
   ['api.abacatepay.com', 'http://fake-abacatepay:4012'],
@@ -60,8 +62,15 @@ function asUrl(input) {
 
 function requestUrl(args, protocol) {
   const first = args[0];
-  if (first instanceof URL) return first;
-  if (typeof first === 'string') return new URL(first);
+  const second = args[1];
+  if (first instanceof URL || typeof first === 'string') {
+    const base = new URL(first instanceof URL ? first.href : first);
+    if (!second || typeof second !== 'object') return base;
+    const host = second.hostname ?? second.host ?? base.hostname;
+    return new URL(
+      `${second.protocol ?? base.protocol}//${host}:${second.port ?? base.port}${second.path ?? `${base.pathname}${base.search}`}`,
+    );
+  }
   if (first && typeof first === 'object') {
     const host = first.hostname ?? first.host ?? 'localhost';
     return new URL(
@@ -69,6 +78,59 @@ function requestUrl(args, protocol) {
     );
   }
   return new URL(`${protocol}//localhost/`);
+}
+
+function requestOptions(args) {
+  const first = args[0];
+  const second = args[1];
+  if (first instanceof URL || typeof first === 'string') {
+    const fromUrl = urlToHttpOptions(new URL(first instanceof URL ? first.href : first));
+    return { ...fromUrl, ...(second && typeof second === 'object' ? second : {}) };
+  }
+  return first && typeof first === 'object' ? { ...first } : {};
+}
+
+function requestCallback(args) {
+  return args.findLast((arg) => typeof arg === 'function');
+}
+
+function redirectedHeaders(headers, targetHost) {
+  if (!headers || typeof headers !== 'object') return headers;
+  if (Array.isArray(headers)) {
+    return headers.map((entry) =>
+      Array.isArray(entry) && String(entry[0]).toLowerCase() === 'host'
+        ? [entry[0], targetHost]
+        : entry,
+    );
+  }
+  const rewritten = { ...headers };
+  for (const key of Object.keys(rewritten)) {
+    if (key.toLowerCase() === 'host') rewritten[key] = targetHost;
+  }
+  return rewritten;
+}
+
+function redirectedHttpRequest(args, sourceUrl, targetBase) {
+  const target = new URL(`${sourceUrl.pathname}${sourceUrl.search}`, targetBase);
+  if (!allowedHost(target.hostname)) throw blocked(target.hostname);
+  const options = requestOptions(args);
+  const redirected = {
+    ...options,
+    protocol: 'http:',
+    hostname: target.hostname,
+    host: target.hostname,
+    port: target.port || '80',
+    path: `${target.pathname}${target.search}`,
+    pathname: target.pathname,
+    search: target.search,
+    href: target.href,
+    auth: undefined,
+    agent: undefined,
+    servername: undefined,
+    headers: redirectedHeaders(options.headers, target.host),
+  };
+  const callback = requestCallback(args);
+  return callback ? originalHttpRequest(redirected, callback) : originalHttpRequest(redirected);
 }
 
 globalThis.fetch = async (input, init) => {
@@ -95,6 +157,8 @@ http.get = function guardedHttpGet(...args) {
 
 https.request = function guardedHttpsRequest(...args) {
   const url = requestUrl(args, 'https:');
+  const target = redirects.get(url.hostname);
+  if (target) return redirectedHttpRequest(args, url, target);
   if (!allowedHost(url.hostname)) throw blocked(url.hostname);
   return originalHttpsRequest(...args);
 };

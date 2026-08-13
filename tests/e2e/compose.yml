@@ -320,7 +320,10 @@ services:
     command: [node, /app/integration-probe.mjs]
 
   egress-probe:
-    image: node:20-alpine
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args: { APP: api }
     restart: "no"
     user: node
     read_only: true
@@ -329,11 +332,12 @@ services:
     tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       NODE_OPTIONS: --import=/e2e/support/egress-guard.mjs
-      E2E_ALLOWED_HOSTS: fake-waha
+      E2E_ALLOWED_HOSTS: fake-waha,fake-llm
     networks: [e2e]
     volumes:
       - ./support:/e2e/support:ro
-    command: [node, /e2e/support/egress-probe.mjs]
+      - ./support/egress-probe.mjs:/app/egress-probe.mjs:ro
+    command: [node, /app/egress-probe.mjs]
 
   network-probe:
     image: node:20-alpine

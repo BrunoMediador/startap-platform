@@ -6,7 +6,7 @@ const action = process.argv[2] ?? 'run';
 const compose = ['compose', '-f', 'tests/e2e/compose.yml', '-p', 'startap-e2e'];
 const longRunningServices = ['api', 'worker', 'portal-api', 'portal-web'];
 const oneShotServices = ['worker-once', 'integration-probe', 'egress-probe', 'network-probe'];
-const locallyBuiltTestServices = ['worker-once', 'integration-probe', 'e2e'];
+const locallyBuiltTestServices = ['worker-once', 'integration-probe', 'egress-probe', 'e2e'];
 
 function assertLifecycleContract() {
   const uniqueLongRunning = new Set(longRunningServices);
