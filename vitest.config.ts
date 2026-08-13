@@ -10,6 +10,7 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
       'painel-admin/test/**',
+      'tests/e2e/**',
     ],
   },
 });

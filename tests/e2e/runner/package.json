@@ -1,0 +1,15 @@
+{
+  "name": "startap-e2e-runner",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@playwright/test": "1.55.1",
+    "ioredis": "5.11.1",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/pg": "8.20.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -2,8 +2,8 @@
  * billing_charges — ledger das cobrancas PIX geradas no gateway (ADR 0013, F1; ADR 0014).
  *
  * Modelo legado (flag BILLING_DUE_DATE_MODEL OFF): 1 cobranca por (slot, ciclo='YYYY-MM'),
- * idempotencia via UNIQUE (slot, cycle) no banco. Funcoes: getCharge,
- * insertPendingChargeIfAbsent, attachGatewayData, reissueGatewayData (por (slot,cycle)).
+ * idempotencia via advisory lock + recheck transacional. A migration 043 removeu o UNIQUE
+ * (slot, cycle), portanto o caminho legado tambem usa withBillingSlotLock e updates por id.
  *
  * Modelo por DATA DE VENCIMENTO (flag ON, ADR 0014): `cycle` guarda o due_period
  * 'YYYY-MM-DD'; o UNIQUE foi removido (migration 043); a "cobranca ativa do slot" e a
@@ -22,6 +22,14 @@ import type { PoolClient } from 'pg';
 import { pool, query } from '../client.js';
 
 export type ChargeStatus = 'pending' | 'paid' | 'expired' | 'cancelled';
+
+/** Outro processo ja gera uma cobranca para o slot; o caller deve tentar novamente. */
+export class BillingSlotBusyError extends Error {
+  constructor(readonly slot: string) {
+    super('billing slot busy');
+    this.name = 'BillingSlotBusyError';
+  }
+}
 
 export interface BillingChargeRow {
   id: string; // BIGSERIAL — pg retorna BIGINT como string
@@ -52,10 +60,18 @@ const COLUMNS = `id::text AS id, slot, cycle, external_id, abacate_charge_id,
   expires_at, paid_at, created_at, updated_at,
   COALESCE(superseded_charge_ids, '{}') AS superseded_charge_ids`;
 
-/** Le a cobranca de um (slot, ciclo). null se nao existe. */
-export async function getCharge(slot: string, cycle: string): Promise<BillingChargeRow | null> {
-  const r = await query<BillingChargeRow>(
-    `SELECT ${COLUMNS} FROM billing_charges WHERE slot = $1 AND cycle = $2`,
+/** Le deterministicamente a cobranca mais recente de um (slot, ciclo). */
+export async function getCharge(
+  slot: string,
+  cycle: string,
+  client?: PoolClient,
+): Promise<BillingChargeRow | null> {
+  const exec = client ? client.query.bind(client) : query;
+  const r = await exec<BillingChargeRow>(
+    `SELECT ${COLUMNS} FROM billing_charges
+      WHERE slot = $1 AND cycle = $2
+      ORDER BY id DESC
+      LIMIT 1`,
     [slot, cycle],
   );
   return r.rows[0] ?? null;
@@ -73,7 +89,9 @@ export async function listChargesBySlot(slot: string): Promise<BillingChargeRow[
 
 /**
  * Insere a linha da cobranca em estado 'pending' SE ainda nao existir (slot, cycle).
- * Retorna { row, created }: created=false quando o UNIQUE ja barrou (idempotencia).
+ * Compatibilidade para callers legados: serializa e faz recheck sem depender do UNIQUE
+ * removido pela migration 043. O fluxo completo de gateway deve preferir manter o mesmo
+ * withBillingSlotLock aberto ate a persistencia final (ensurePixChargeForCycle).
  *
  * amount_cents e o snapshot do ciclo (vem de client_billing.amount_cents no momento
  * da geracao). external_id = "{slot}-{cycle}".
@@ -84,29 +102,12 @@ export async function insertPendingChargeIfAbsent(input: {
   externalId: string;
   amountCents: number;
 }): Promise<{ row: BillingChargeRow; created: boolean }> {
-  // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
-  // resolve NULL sozinho p/ slot sem clone, nunca derruba o INSERT. Não-quente.
-  // Slot do subselect é parâmetro SEPARADO ($5) — não reusa $1 (evita
-  // "inconsistent types deduced for parameter $1" entre os varchars de slot).
-  const ins = await query<BillingChargeRow>(
-    `INSERT INTO billing_charges (slot, cycle, external_id, amount_cents, status, tenant_id)
-     VALUES ($1, $2, $3, $4, 'pending', (SELECT tenant_id FROM flow_clones WHERE slot = $5))
-     ON CONFLICT (slot, cycle) DO NOTHING
-     RETURNING ${COLUMNS}`,
-    [input.slot, input.cycle, input.externalId, input.amountCents, input.slot],
-  );
-  if (ins.rows[0]) {
-    return { row: ins.rows[0], created: true };
-  }
-  // Conflito: ja existe. Le e retorna a existente (idempotencia).
-  const existing = await getCharge(input.slot, input.cycle);
-  if (!existing) {
-    // Corrida rara: foi deletada entre o INSERT e o SELECT. Trata como falha clara.
-    throw new Error(
-      `billing_charges: ON CONFLICT mas linha ausente para ${input.slot}/${input.cycle}`,
-    );
-  }
-  return { row: existing, created: false };
+  return withBillingSlotLock(input.slot, async (client) => {
+    const existing = await getCharge(input.slot, input.cycle, client);
+    if (existing) return { row: existing, created: false };
+    const row = await insertPendingCharge(client, input);
+    return { row, created: true };
+  });
 }
 
 /**
@@ -200,9 +201,8 @@ export async function reissueGatewayData(input: {
 // "cobranca ativa do slot" passa a ser a `pending` NAO-EXPIRADA mais recente (id DESC).
 // A invariante "no maximo 1 pending valida por slot" e garantida por ADVISORY LOCK +
 // recheck na transacao de geracao (withBillingSlotLock), nao por indice de banco.
-// As funcoes abaixo chaveiam por `id` (nao por (slot, cycle)). As legadas acima
-// (getCharge/insertPendingChargeIfAbsent/attach/reissue por (slot,cycle)) ficam
-// INTACTAS para o caminho com a flag BILLING_DUE_DATE_MODEL OFF.
+// As funcoes abaixo chaveiam por `id` (nao por (slot, cycle)) e sao compartilhadas
+// pelos dois modelos para nunca atualizar ambiguamente duplicatas historicas.
 
 /**
  * Roda `fn` numa transacao segurando pg_advisory_xact_lock por slot. Serializa a
@@ -217,18 +217,29 @@ export async function withBillingSlotLock<T>(
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await pool.connect();
+  let discardClient = false;
   try {
     await client.query('BEGIN');
-    // Lock por slot (escopo da transacao). hashtext -> int4; bigint p/ caber sem warning.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('billing:' || $1)::bigint)", [slot]);
+    // Try-lock fail-fast: outra instancia nao pode ocupar uma conexao do pool aguardando
+    // o gateway da primeira. A single-flight local absorve concorrencia do mesmo processo.
+    const lock = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_xact_lock(hashtext('billing:' || $1)::bigint) AS locked",
+      [slot],
+    );
+    if (!lock.rows[0]?.locked) throw new BillingSlotBusyError(slot);
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Transacao/conexao de estado desconhecido nunca volta ao pool.
+      discardClient = true;
+    }
     throw e;
   } finally {
-    client.release();
+    client.release(discardClient);
   }
 }
 

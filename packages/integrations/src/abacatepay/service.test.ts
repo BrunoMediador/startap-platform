@@ -9,9 +9,7 @@ import type { BillingChargeRow } from '@startap/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  insertPendingChargeIfAbsent,
-  attachGatewayData,
-  reissueGatewayData,
+  getCharge,
   // ── ADR 0014: modelo por data ──
   withBillingSlotLock,
   getActivePendingCharge,
@@ -19,9 +17,7 @@ const {
   attachGatewayDataById,
   reissueGatewayDataById,
 } = vi.hoisted(() => ({
-  insertPendingChargeIfAbsent: vi.fn(),
-  attachGatewayData: vi.fn(),
-  reissueGatewayData: vi.fn(),
+  getCharge: vi.fn(),
   withBillingSlotLock: vi.fn(),
   getActivePendingCharge: vi.fn(),
   insertPendingCharge: vi.fn(),
@@ -31,9 +27,7 @@ const {
 
 vi.mock('@startap/db', () => ({
   billingCharges: {
-    insertPendingChargeIfAbsent,
-    attachGatewayData,
-    reissueGatewayData,
+    getCharge,
     withBillingSlotLock,
     getActivePendingCharge,
     insertPendingCharge,
@@ -85,9 +79,7 @@ const NEAR = new Date('2026-06-11T11:00:00.000Z');
 const AHEAD_2H_MS = 2 * 60 * 60 * 1000;
 
 beforeEach(() => {
-  insertPendingChargeIfAbsent.mockReset();
-  attachGatewayData.mockReset();
-  reissueGatewayData.mockReset();
+  getCharge.mockReset();
   withBillingSlotLock.mockReset();
   getActivePendingCharge.mockReset();
   insertPendingCharge.mockReset();
@@ -101,8 +93,9 @@ beforeEach(() => {
 
 describe('ensurePixChargeForCycle', () => {
   it('cria no gateway e persiste quando nao existe (created=true)', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({ row: makeRow(), created: true });
-    attachGatewayData.mockResolvedValueOnce(
+    getCharge.mockResolvedValueOnce(null);
+    insertPendingCharge.mockResolvedValueOnce(makeRow());
+    attachGatewayDataById.mockResolvedValueOnce(
       makeRow({
         abacate_charge_id: 'pix_char_new',
         br_code: '00020...',
@@ -128,14 +121,158 @@ describe('ensurePixChargeForCycle', () => {
     expect(createPixCharge).toHaveBeenCalledWith(
       expect.objectContaining({ amountCents: 19900, slot: 'barbearia-cirilo', cycle: '2026-06' }),
     );
-    expect(attachGatewayData).toHaveBeenCalledTimes(1);
+    expect(attachGatewayDataById).toHaveBeenCalledTimes(1);
+  });
+
+  it('mantem BEGIN -> lock -> recheck -> gateway -> attach -> COMMIT no mesmo client', async () => {
+    const events: string[] = [];
+    const lockClient = { marker: 'same-client' };
+    withBillingSlotLock.mockImplementationOnce(
+      async (_slot: string, fn: (client: unknown) => Promise<unknown>) => {
+        events.push('BEGIN', 'lock');
+        const result = await fn(lockClient);
+        events.push('COMMIT');
+        return result;
+      },
+    );
+    getCharge.mockImplementationOnce(async (_slot, _cycle, client) => {
+      expect(client).toBe(lockClient);
+      events.push('recheck');
+      return makeRow({ abacate_charge_id: null });
+    });
+    const createPixCharge = vi.fn().mockImplementationOnce(async () => {
+      events.push('gateway');
+      return {
+        id: 'pix_char_order',
+        brCode: 'x',
+        brCodeBase64: 'y',
+        status: 'pending',
+        expiresAt: null,
+        platformFee: null,
+      };
+    });
+    attachGatewayDataById.mockImplementationOnce(async (client) => {
+      expect(client).toBe(lockClient);
+      events.push('attach');
+      return makeRow({ abacate_charge_id: 'pix_char_order' });
+    });
+
+    await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
+
+    expect(events).toEqual(['BEGIN', 'lock', 'recheck', 'gateway', 'attach', 'COMMIT']);
+  });
+
+  it('faz ROLLBACK e nao persiste quando o gateway falha dentro do lock', async () => {
+    const events: string[] = [];
+    const lockClient = { marker: 'same-client' };
+    withBillingSlotLock.mockImplementationOnce(
+      async (_slot: string, fn: (client: unknown) => Promise<unknown>) => {
+        events.push('BEGIN', 'lock');
+        try {
+          const result = await fn(lockClient);
+          events.push('COMMIT');
+          return result;
+        } catch (error) {
+          events.push('ROLLBACK');
+          throw error;
+        }
+      },
+    );
+    getCharge.mockImplementationOnce(async (_slot, _cycle, client) => {
+      expect(client).toBe(lockClient);
+      events.push('recheck');
+      return makeRow({ abacate_charge_id: null });
+    });
+    const gatewayError = new Error('gateway down');
+    const createPixCharge = vi.fn().mockImplementationOnce(async () => {
+      events.push('gateway');
+      throw gatewayError;
+    });
+
+    const failedRequests = Array.from({ length: 10 }, () =>
+      ensurePixChargeForCycle(fakeClient(createPixCharge), input),
+    );
+    const failures = await Promise.allSettled(failedRequests);
+
+    expect(events).toEqual(['BEGIN', 'lock', 'recheck', 'gateway', 'ROLLBACK']);
+    expect(failures).toHaveLength(10);
+    expect(
+      failures.every((failure) => failure.status === 'rejected' && failure.reason === gatewayError),
+    ).toBe(true);
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(1);
+    expect(createPixCharge).toHaveBeenCalledTimes(1);
+    expect(attachGatewayDataById).not.toHaveBeenCalled();
+
+    // A Promise rejeitada nao pode permanecer no Map: retry do MESMO slot entra num
+    // novo lock, chama o gateway novamente e conclui normalmente.
+    getCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: null }));
+    createPixCharge.mockResolvedValueOnce({
+      id: 'pix_after_retry',
+      brCode: 'retry-code',
+      brCodeBase64: 'retry-base64',
+      status: 'pending',
+      expiresAt: null,
+      platformFee: null,
+    });
+    attachGatewayDataById.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_after_retry' }));
+
+    const retry = await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
+
+    expect(retry.charge.abacate_charge_id).toBe('pix_after_retry');
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(2);
+    expect(createPixCharge).toHaveBeenCalledTimes(2);
+    expect(attachGatewayDataById).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesce 10 chamadas locais do mesmo slot antes do pool e limpa o single-flight', async () => {
+    let releaseGateway: ((value: unknown) => void) | undefined;
+    const gatewayPending = new Promise((resolve) => {
+      releaseGateway = resolve;
+    });
+    getCharge.mockResolvedValueOnce(null);
+    insertPendingCharge.mockResolvedValueOnce(makeRow());
+    attachGatewayDataById.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_one' }));
+    const createPixCharge = vi.fn(() => gatewayPending);
+
+    const requests = Array.from({ length: 10 }, () =>
+      ensurePixChargeForCycle(fakeClient(createPixCharge), input),
+    );
+    await vi.waitFor(() => expect(withBillingSlotLock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(createPixCharge).toHaveBeenCalledTimes(1));
+    releaseGateway?.({
+      id: 'pix_one',
+      brCode: 'x',
+      brCodeBase64: 'y',
+      status: 'pending',
+      expiresAt: null,
+      platformFee: null,
+    });
+
+    const results = await Promise.all(requests);
+    expect(results.every((result) => result.charge.id === '1')).toBe(true);
+    expect(insertPendingCharge).toHaveBeenCalledTimes(1);
+
+    getCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_one' }));
+    await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(2);
+  });
+
+  it('lock cross-instance ocupado propaga busy sem chamar gateway', async () => {
+    withBillingSlotLock.mockRejectedValueOnce(new Error('billing slot busy'));
+    const createPixCharge = vi.fn();
+
+    await expect(ensurePixChargeForCycle(fakeClient(createPixCharge), input)).rejects.toThrow(
+      'billing slot busy',
+    );
+
+    expect(getCharge).not.toHaveBeenCalled();
+    expect(createPixCharge).not.toHaveBeenCalled();
   });
 
   it('idempotencia: ja existe com gateway -> NAO chama o gateway de novo (created=false)', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: 'pix_char_existing', br_code: '00020...' }),
-      created: false,
-    });
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_char_existing', br_code: '00020...' }),
+    );
     const createPixCharge = vi.fn();
 
     const res = await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
@@ -143,15 +280,12 @@ describe('ensurePixChargeForCycle', () => {
     expect(res.created).toBe(false);
     expect(res.charge.abacate_charge_id).toBe('pix_char_existing');
     expect(createPixCharge).not.toHaveBeenCalled();
-    expect(attachGatewayData).not.toHaveBeenCalled();
+    expect(attachGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('linha existe pending SEM gateway (falha anterior) -> completa a chamada', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: null }),
-      created: false,
-    });
-    attachGatewayData.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_char_retry' }));
+    getCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: null }));
+    attachGatewayDataById.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_char_retry' }));
     const createPixCharge = vi.fn().mockResolvedValue({
       id: 'pix_char_retry',
       brCode: 'x',
@@ -175,7 +309,7 @@ describe('ensurePixChargeForCycle', () => {
     await expect(
       ensurePixChargeForCycle(fakeClient(createPixCharge), { ...input, amountCents: -50 }),
     ).rejects.toThrow(/amountCents invalido/);
-    expect(insertPendingChargeIfAbsent).not.toHaveBeenCalled();
+    expect(withBillingSlotLock).not.toHaveBeenCalled();
   });
 });
 
@@ -184,10 +318,9 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
   const reissueInput = { ...input, reissueIfExpired: true };
 
   it('1) cobranca PAGA -> retorna paid, NAO chama gateway nem reescreve', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: 'pix_char_pago', status: 'paid', expires_at: PAST }),
-      created: false,
-    });
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_char_pago', status: 'paid', expires_at: PAST }),
+    );
     const createPixCharge = vi.fn();
 
     const res = await ensurePixChargeForCycle(fakeClient(createPixCharge), reissueInput, NOW);
@@ -196,15 +329,14 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     expect(res.created).toBe(false);
     expect(res.reissued).toBe(false);
     expect(createPixCharge).not.toHaveBeenCalled();
-    expect(reissueGatewayData).not.toHaveBeenCalled();
-    expect(attachGatewayData).not.toHaveBeenCalled();
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
+    expect(attachGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('2) pending VALIDA (validade no futuro) -> reusa, NAO chama gateway de novo', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: 'pix_char_valido', status: 'pending', expires_at: FUTURE }),
-      created: false,
-    });
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_char_valido', status: 'pending', expires_at: FUTURE }),
+    );
     const createPixCharge = vi.fn();
 
     const res = await ensurePixChargeForCycle(fakeClient(createPixCharge), reissueInput, NOW);
@@ -213,15 +345,14 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     expect(res.created).toBe(false);
     expect(res.reissued).toBe(false);
     expect(createPixCharge).not.toHaveBeenCalled();
-    expect(reissueGatewayData).not.toHaveBeenCalled();
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('3) pending EXPIRADA -> REEMITE no gateway e atualiza a MESMA linha (novo id/expires)', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: 'pix_char_velho', status: 'pending', expires_at: PAST }),
-      created: false,
-    });
-    reissueGatewayData.mockResolvedValueOnce(
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_char_velho', status: 'pending', expires_at: PAST }),
+    );
+    reissueGatewayDataById.mockResolvedValueOnce(
       makeRow({
         abacate_charge_id: 'pix_char_novo',
         status: 'pending',
@@ -247,28 +378,27 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     // Usa o SNAPSHOT da linha (19900), nao re-le client_billing.
     expect(createPixCharge).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 19900 }));
     // Reemissao REUSA a linha: nenhuma insercao nova; atualiza a existente via reissue.
-    expect(insertPendingChargeIfAbsent).toHaveBeenCalledTimes(1);
-    expect(reissueGatewayData).toHaveBeenCalledTimes(1);
-    expect(reissueGatewayData).toHaveBeenCalledWith(
+    expect(getCharge).toHaveBeenCalledTimes(1);
+    expect(reissueGatewayDataById).toHaveBeenCalledTimes(1);
+    expect(reissueGatewayDataById).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        slot: input.slot,
-        cycle: input.cycle,
+        id: '1',
         abacateChargeId: 'pix_char_novo',
       }),
     );
-    expect(attachGatewayData).not.toHaveBeenCalled();
+    expect(attachGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('3b) pending sem validade conhecida (expires_at null) com reissue -> reemite', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({
+    getCharge.mockResolvedValueOnce(
+      makeRow({
         abacate_charge_id: 'pix_char_sem_validade',
         status: 'pending',
         expires_at: null,
       }),
-      created: false,
-    });
-    reissueGatewayData.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_char_novo2' }));
+    );
+    reissueGatewayDataById.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_char_novo2' }));
     const createPixCharge = vi.fn().mockResolvedValue({
       id: 'pix_char_novo2',
       brCode: 'x',
@@ -281,12 +411,13 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     const res = await ensurePixChargeForCycle(fakeClient(createPixCharge), reissueInput, NOW);
 
     expect(res.reissued).toBe(true);
-    expect(reissueGatewayData).toHaveBeenCalledTimes(1);
+    expect(reissueGatewayDataById).toHaveBeenCalledTimes(1);
   });
 
   it('4) INEXISTENTE -> cria (insere + chama gateway + attach), nao reissue', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({ row: makeRow(), created: true });
-    attachGatewayData.mockResolvedValueOnce(
+    getCharge.mockResolvedValueOnce(null);
+    insertPendingCharge.mockResolvedValueOnce(makeRow());
+    attachGatewayDataById.mockResolvedValueOnce(
       makeRow({ abacate_charge_id: 'pix_char_criado', expires_at: FUTURE }),
     );
     const createPixCharge = vi.fn().mockResolvedValue({
@@ -304,15 +435,14 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     expect(res.reissued).toBe(false);
     expect(res.charge.abacate_charge_id).toBe('pix_char_criado');
     expect(createPixCharge).toHaveBeenCalledTimes(1);
-    expect(attachGatewayData).toHaveBeenCalledTimes(1);
-    expect(reissueGatewayData).not.toHaveBeenCalled();
+    expect(attachGatewayDataById).toHaveBeenCalledTimes(1);
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
   });
 
   it('expirada mas reissueIfExpired=false (default) -> reusa como esta, NAO chama gateway', async () => {
-    insertPendingChargeIfAbsent.mockResolvedValueOnce({
-      row: makeRow({ abacate_charge_id: 'pix_char_velho', status: 'pending', expires_at: PAST }),
-      created: false,
-    });
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_char_velho', status: 'pending', expires_at: PAST }),
+    );
     const createPixCharge = vi.fn();
 
     // input legado (sem reissueIfExpired) — comportamento preservado.
@@ -321,7 +451,7 @@ describe('ensurePixChargeForCycle — reissueIfExpired (sempre PIX pagavel)', ()
     expect(res.created).toBe(false);
     expect(res.reissued).toBe(false);
     expect(createPixCharge).not.toHaveBeenCalled();
-    expect(reissueGatewayData).not.toHaveBeenCalled();
+    expect(reissueGatewayDataById).not.toHaveBeenCalled();
   });
 });
 
