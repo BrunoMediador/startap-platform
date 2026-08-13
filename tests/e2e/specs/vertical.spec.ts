@@ -347,7 +347,7 @@ test('security: fake redige path normal/percent-encoded, fault e 404 por allowli
     expect.objectContaining({
       route: 'unmatched',
       status: 503,
-      body: { error: '[email-redacted]', token: '[redacted]' },
+      body: { error: '[email-redacted]', token: '[token-redacted]' },
     }),
   ]);
   const serialized = JSON.stringify(state);
