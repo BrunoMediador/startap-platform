@@ -118,6 +118,33 @@ describe('resolvePrecoCents (preço do catálogo flow_clones.servicos)', () => {
 });
 
 describe('upsertAtendimentoFromEvent — idempotência + origem/status', () => {
+  it('sync guard: locka flow_clones e condiciona o upsert ao modo atual na mesma statement', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const row = await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_guardado',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+      syncModeGuard: {
+        modoAtendenteSlots: ['clone_env'],
+        modoAtendenteWildcard: false,
+      },
+    });
+
+    expect(row).toBeNull();
+    const [sql, params] = lastCall();
+    expect(sql).toContain('WITH sync_scope AS MATERIALIZED');
+    expect(sql).toContain('FROM flow_clones fc');
+    expect(sql).toContain('FOR UPDATE');
+    expect(sql).toContain("COALESCE(fc.personalizacao->>'agenda_automatica' = 'false', FALSE)");
+    expect(sql).toContain('fc.modo_atendente_enabled = TRUE');
+    expect(sql).toContain('fc.slot = ANY($16::text[])');
+    expect(sql).toContain('$17::boolean = TRUE');
+    expect(sql).toContain('FROM sync_scope');
+    expect(params.slice(15)).toEqual([['clone_env'], false]);
+  });
+
   it('emite INSERT ... ON CONFLICT (slot, gcal_event_id) com origem=agenda, status=agendado', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [ROW], rowCount: 1 });
     await upsertAtendimentoFromEvent({
@@ -351,6 +378,34 @@ describe('getAtendimentoByEvent — escopa slot+tenant pelo gcal_event_id (anti-
 });
 
 describe('softDeleteAtendimentoByEvent (B2) — escopo + idempotência', () => {
+  it('sync guard: locka flow_clones e condiciona soft-delete ao modo atual na mesma statement', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const row = await softDeleteAtendimentoByEvent(
+      'clone_dragon',
+      'evt_guardado',
+      { reason: 'gcal_sync_absent', by: 'gcal-atend-sync' },
+      { modoAtendenteSlots: ['clone_env'], modoAtendenteWildcard: false },
+    );
+
+    expect(row).toBeNull();
+    const [sql, params] = lastCall();
+    expect(sql).toContain('WITH sync_scope AS MATERIALIZED');
+    expect(sql).toContain('FROM flow_clones fc');
+    expect(sql).toContain('FOR UPDATE');
+    expect(sql).toContain('UPDATE atendimentos');
+    expect(sql).toContain('FROM sync_scope');
+    expect(sql).toContain('atendimentos.slot = $1');
+    expect(sql).toContain("atendimentos.origem = 'agenda'");
+    expect(params).toEqual([
+      'clone_dragon',
+      'evt_guardado',
+      'gcal_sync_absent',
+      'gcal-atend-sync',
+      ['clone_env'],
+      false,
+    ]);
+  });
+
   it('UPDATE deleted_at escopado por slot+event, só ativo (deleted_at IS NULL); sem audit → reason/by NULL', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, deleted_at: '2026-06-23T01:00:00Z' }] });
     await softDeleteAtendimentoByEvent('clone_dragon', 'evt_1');

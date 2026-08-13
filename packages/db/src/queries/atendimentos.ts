@@ -619,6 +619,16 @@ export interface AtendimentoEventInput {
    * (preserva a marca/valor de pacote; não reabre o bug DOBRA). Default false.
    */
   reprecificarServico?: boolean;
+  /**
+   * Exclusivo do reconciler periódico: condiciona INSERT/UPDATE ao modo atual do clone na MESMA
+   * statement, com lock da linha de flow_clones. Elimina TOCTOU com agenda→atendente durante I/O.
+   */
+  syncModeGuard?: GcalSyncModeWriteGuard;
+}
+
+export interface GcalSyncModeWriteGuard {
+  modoAtendenteSlots: string[];
+  modoAtendenteWildcard: boolean;
 }
 
 const _RETURNING_COLS = `id, slot, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
@@ -754,9 +764,13 @@ export async function resolvePrecoCents(slot: string, servicoNome: string | null
  * Comissão NÃO é congelada aqui — o relatório calcula a comissão AO VIVO (getComissao); não
  * há snapshot de realização (split previsão×faturado é stateless por fim_at, sem cron).
  */
+export function upsertAtendimentoFromEvent(
+  input: AtendimentoEventInput & { syncModeGuard: GcalSyncModeWriteGuard },
+): Promise<AtendimentoRow | null>;
+export function upsertAtendimentoFromEvent(input: AtendimentoEventInput): Promise<AtendimentoRow>;
 export async function upsertAtendimentoFromEvent(
   input: AtendimentoEventInput,
-): Promise<AtendimentoRow> {
+): Promise<AtendimentoRow | null> {
   const isPacote = input.formaPagamento === 'pacote';
 
   // Pagamento INFORMADO neste call? (forma !== undefined). Distingue:
@@ -802,16 +816,60 @@ export async function upsertAtendimentoFromEvent(
   //   PACOTE (forma_pagamento='pacote' no banco): pacote vive com valor 0 (ADR 0027 bug DOBRA);
   //   o reprice só vale fora de pacote. forma_pagamento NÃO é tocada pelo reprice (trocar de
   //   serviço não muda a forma de pagamento). Sem reprice -> preserva (remarcação pura).
-  const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
-    `INSERT INTO atendimentos
-       (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
-        valor_cents, desconto_cents, forma_pagamento, colaborador_id,
-        status, origem, dirty_fields, inicio_at, fim_at, data)
-     VALUES
+  const syncModeGuard = input.syncModeGuard;
+  const guardedPrefix = syncModeGuard
+    ? `WITH sync_scope AS MATERIALIZED (
+         SELECT 1
+           FROM flow_clones fc
+          WHERE fc.slot = $1
+            AND NOT (
+              COALESCE(fc.personalizacao->>'agenda_automatica' = 'false', FALSE)
+              AND (
+                fc.modo_atendente_enabled = TRUE
+                OR fc.slot = ANY($16::text[])
+                OR $17::boolean = TRUE
+              )
+            )
+          FOR UPDATE
+       ) `
+    : '';
+  const insertSource = syncModeGuard
+    ? `SELECT $1, $2, $3, $4, $5, $6,
+              $7, $8, $9, $10,
+              'agendado', 'agenda', '[]'::jsonb, $11::timestamptz, $12::timestamptz,
+              COALESCE($13::date, now()::date)
+         FROM sync_scope`
+    : `VALUES
        ($1, $2, $3, $4, $5, $6,
         $7, $8, $9, $10,
         'agendado', 'agenda', '[]'::jsonb, $11::timestamptz, $12::timestamptz,
-        COALESCE($13::date, now()::date))
+        COALESCE($13::date, now()::date))`;
+  const params: unknown[] = [
+    input.slot,
+    input.tenantId,
+    input.gcalEventId,
+    input.clienteNome ?? null,
+    input.clienteContato ?? null,
+    input.servicoNome ?? null,
+    valorCents,
+    descontoCents,
+    input.formaPagamento ?? null,
+    colaboradorId,
+    inicioIso,
+    fimIso,
+    dataDay,
+    pagamentoInformado,
+    reprice,
+  ];
+  if (syncModeGuard) {
+    params.push(syncModeGuard.modoAtendenteSlots, syncModeGuard.modoAtendenteWildcard);
+  }
+  const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
+    `${guardedPrefix}INSERT INTO atendimentos
+       (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
+        valor_cents, desconto_cents, forma_pagamento, colaborador_id,
+        status, origem, dirty_fields, inicio_at, fim_at, data)
+     ${insertSource}
      ON CONFLICT (slot, gcal_event_id) WHERE gcal_event_id IS NOT NULL AND deleted_at IS NULL
      DO UPDATE SET
        cliente_nome     = CASE WHEN atendimentos.dirty_fields ? 'cliente_nome'
@@ -839,26 +897,10 @@ export async function upsertAtendimentoFromEvent(
        data             = EXCLUDED.data,
        updated_at       = now()
      RETURNING ${_RETURNING_COLS}`,
-    [
-      input.slot,
-      input.tenantId,
-      input.gcalEventId,
-      input.clienteNome ?? null,
-      input.clienteContato ?? null,
-      input.servicoNome ?? null,
-      valorCents,
-      descontoCents,
-      input.formaPagamento ?? null,
-      colaboradorId,
-      inicioIso,
-      fimIso,
-      dataDay,
-      pagamentoInformado,
-      reprice,
-    ],
+    params,
   );
-  const row = r.rows[0] as AtendimentoRow & { dirty_fields: unknown };
-  return { ...row, dirty_fields: asDirty(row.dirty_fields) };
+  const row = r.rows[0];
+  return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
 }
 
 /**
@@ -896,14 +938,39 @@ export async function softDeleteAtendimentoByEvent(
   slot: string,
   gcalEventId: string,
   audit?: SoftDeleteAudit,
+  syncModeGuard?: GcalSyncModeWriteGuard,
 ): Promise<AtendimentoRow | null> {
+  const guardedPrefix = syncModeGuard
+    ? `WITH sync_scope AS MATERIALIZED (
+         SELECT 1
+           FROM flow_clones fc
+          WHERE fc.slot = $1
+            AND NOT (
+              COALESCE(fc.personalizacao->>'agenda_automatica' = 'false', FALSE)
+              AND (
+                fc.modo_atendente_enabled = TRUE
+                OR fc.slot = ANY($5::text[])
+                OR $6::boolean = TRUE
+              )
+            )
+          FOR UPDATE
+       ) `
+    : '';
+  const guardedFrom = syncModeGuard ? ' FROM sync_scope' : '';
+  const scopedSlot = syncModeGuard ? 'atendimentos.slot' : 'slot';
+  const params: unknown[] = [slot, gcalEventId, audit?.reason ?? null, audit?.by ?? null];
+  if (syncModeGuard) {
+    params.push(syncModeGuard.modoAtendenteSlots, syncModeGuard.modoAtendenteWildcard);
+  }
   const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
-    `UPDATE atendimentos
+    `${guardedPrefix}UPDATE atendimentos
         SET deleted_at = now(), updated_at = now(),
             deleted_reason = $3, deleted_by = $4
-      WHERE slot = $1 AND gcal_event_id = $2 AND deleted_at IS NULL
+      ${guardedFrom}
+      WHERE ${scopedSlot} = $1 AND gcal_event_id = $2 AND deleted_at IS NULL
+        ${syncModeGuard ? "AND atendimentos.origem = 'agenda'" : ''}
       RETURNING ${_RETURNING_COLS}`,
-    [slot, gcalEventId, audit?.reason ?? null, audit?.by ?? null],
+    params,
   );
   const row = r.rows[0];
   return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;

@@ -64,11 +64,12 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => ({ info: logInfo, warn: logWarn, error: logError }) },
 }));
 
-async function loadJob() {
+async function loadJob(configOverrides: Record<string, unknown> = {}) {
   vi.resetModules();
   vi.doMock('../config.js', () => ({
     config: {
       ATEND_FROM_AGENDA_SLOTS: 'clone_x',
+      MODO_ATENDENTE_SLOTS: '',
       GCAL_ATEND_SYNC_ENABLED: true,
       GCAL_ATEND_SYNC_CRON: '37 * * * *',
       GCAL_ATEND_SYNC_LOOKBACK_DAYS: 62,
@@ -78,6 +79,7 @@ async function loadJob() {
       GCAL_ATEND_SYNC_TIMEOUT_MS: 15_000,
       GCAL_ATEND_SYNC_DELETE_GRACE_SEC: 120,
       GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN: 50,
+      ...configOverrides,
     },
   }));
   return import('./gcal-atend-sync.js');
@@ -269,10 +271,15 @@ describe('DELEÇÃO — só sobre listagem completa + auditoria', () => {
 
     expect(res.deleted).toBe(1);
     // SCRUM-90: carimba deleted_reason/deleted_by na linha (trilha durável no banco).
-    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'sumiu', {
-      reason: 'gcal_sync_absent',
-      by: 'gcal-atend-sync',
-    });
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith(
+      'clone_x',
+      'sumiu',
+      {
+        reason: 'gcal_sync_absent',
+        by: 'gcal-atend-sync',
+      },
+      expect.any(Object),
+    );
     // Warn de auditoria com valor/forma/data + paga=true; NUNCA telefone/nome.
     const auditCall = logWarn.mock.calls.find((c) =>
       String(c[1]).includes('agenda é fonte da verdade'),
@@ -374,10 +381,15 @@ describe('conjunto PRESENTE — filtros', () => {
     expect(upsertAtendimentoFromEvent.mock.calls[0][0].gcalEventId).toBe('ok');
     // 'cancel' está no banco mas ausente da agenda → deletado; 'ok' presente → mantido.
     expect(softDeleteAtendimentoByEvent).toHaveBeenCalledTimes(1);
-    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'cancel', {
-      reason: 'gcal_sync_absent',
-      by: 'gcal-atend-sync',
-    });
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith(
+      'clone_x',
+      'cancel',
+      {
+        reason: 'gcal_sync_absent',
+        by: 'gcal-atend-sync',
+      },
+      expect.any(Object),
+    );
   });
 });
 
@@ -574,14 +586,109 @@ describe('estabelecimento (N calendários)', () => {
     expect(res.deleted).toBe(1);
     expect(res.deletionsSkippedColabAbsent).toBe(0);
     expect(softDeleteAtendimentoByEvent).toHaveBeenCalledTimes(1);
-    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith('clone_x', 'sumiu20', {
-      reason: 'gcal_sync_absent',
-      by: 'gcal-atend-sync',
-    });
+    expect(softDeleteAtendimentoByEvent).toHaveBeenCalledWith(
+      'clone_x',
+      'sumiu20',
+      {
+        reason: 'gcal_sync_absent',
+        by: 'gcal-atend-sync',
+      },
+      expect.any(Object),
+    );
   });
 });
 
 describe('gate + tenant', () => {
+  it('troca agenda→atendente durante await do GCal não grava nem deleta (TOCTOU)', async () => {
+    let liberarSnapshot: (() => void) | undefined;
+    const snapshotPendente = new Promise<void>((resolve) => {
+      liberarSnapshot = resolve;
+    });
+    let modoAtual: 'agenda' | 'atendente' = 'agenda';
+    let escritasPersistidas = 0;
+    let deletesPersistidos = 0;
+
+    getGcalForSlot.mockResolvedValue({
+      listEventsPaged: vi.fn().mockImplementation(async () => {
+        await snapshotPendente;
+        return { pages: 1, events: [ev('presente')], complete: true };
+      }),
+    });
+    listAgendaAtendimentosInWindow.mockResolvedValue([
+      {
+        gcal_event_id: 'evento-pago-preservado',
+        valor_cents: 15_000,
+        desconto_cents: 0,
+        forma_pagamento: 'pix',
+        data: '2026-08-01',
+      },
+    ]);
+    upsertAtendimentoFromEvent.mockImplementation(async (input: Record<string, unknown>) => {
+      if (input.syncModeGuard && modoAtual === 'atendente') return null;
+      escritasPersistidas++;
+      return { id: 1 };
+    });
+    softDeleteAtendimentoByEvent.mockImplementation(
+      async (_slot: string, _eventId: string, _audit: unknown, syncModeGuard: unknown) => {
+        if (syncModeGuard && modoAtual === 'atendente') return null;
+        deletesPersistidos++;
+        return { id: 2 };
+      },
+    );
+
+    const { runGcalAtendSync } = await loadJob();
+    const ciclo = runGcalAtendSync();
+    await vi.waitFor(() => expect(getGcalForSlot).toHaveBeenCalledTimes(1));
+    modoAtual = 'atendente';
+    liberarSnapshot?.();
+    const res = await ciclo;
+
+    expect(escritasPersistidas).toBe(0);
+    expect(deletesPersistidos).toBe(0);
+    expect(res.upserted).toBe(0);
+    expect(res.deleted).toBe(0);
+  });
+
+  it('modo efetivo atendente não reconcilia nem soft-delete atendimento pago', async () => {
+    listAtendSyncSlots.mockResolvedValue([
+      slot({ modo_atendente_enabled: true, agenda_automatica: 'false' }),
+    ]);
+    listAgendaAtendimentosInWindow.mockResolvedValue([
+      {
+        gcal_event_id: 'evento-pago-preservado',
+        valor_cents: 15_000,
+        desconto_cents: 0,
+        forma_pagamento: 'pix',
+        data: '2026-08-01',
+      },
+    ]);
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(res.upserted).toBe(0);
+    expect(res.deleted).toBe(0);
+    expect(res.skippedEffectiveAtendente).toBe(1);
+    expect(getGcalForSlot).not.toHaveBeenCalled();
+    expect(loadSlotPricing).not.toHaveBeenCalled();
+    expect(listAgendaAtendimentosInWindow).not.toHaveBeenCalled();
+    expect(softDeleteAtendimentoByEvent).not.toHaveBeenCalled();
+  });
+
+  it('gate atendente vindo só da env também preserva e pula o slot', async () => {
+    listAtendSyncSlots.mockResolvedValue([
+      slot({ modo_atendente_enabled: false, agenda_automatica: false }),
+    ]);
+
+    const { runGcalAtendSync } = await loadJob({ MODO_ATENDENTE_SLOTS: 'clone_x' });
+    const res = await runGcalAtendSync();
+
+    expect(res.skippedEffectiveAtendente).toBe(1);
+    expect(getGcalForSlot).not.toHaveBeenCalled();
+    expect(upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+    expect(softDeleteAtendimentoByEvent).not.toHaveBeenCalled();
+  });
+
   it('gate reconfirmado false → slot pulado (zero upsert/delete)', async () => {
     resolveAtendFromAgendaEnabledForSlot.mockResolvedValue(false);
     getGcalForSlot.mockResolvedValue(pagedClient({ events: [ev('e1')], complete: true }));

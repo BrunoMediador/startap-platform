@@ -19,6 +19,7 @@
  *    forma/valor (bug DOBRA não reabre); soft-deletada + novo upsert = NOVA linha (índice parcial).
  *  - ux_atend_event_ativo: 2 ativos mesmo event/slot = violação; soft-deletado + novo ativo convivem.
  *  - loadSlotPricing sobre servicos JSONB real (uniforme).
+ *  - listAtendSyncSlots exclui modo efetivo atendente antes de o worker reconciliar.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -37,6 +38,7 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
   let pgPool: any;
   // biome-ignore lint/suspicious/noExplicitAny: módulo importado dinamicamente.
   let atend: any;
+  let flow: typeof import('./flow-clones.js');
 
   const SLOT = 'itest_slot_gcal_sync';
   // SCRUM-90: schema PRÓPRIO desta suíte — isola das outras integrações que rodam em paralelo no
@@ -58,6 +60,8 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       tenant_id UUID,
       timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
       product_type TEXT DEFAULT 'individual',
+      personalizacao JSONB NOT NULL DEFAULT '{}'::jsonb,
+      modo_atendente_enabled BOOLEAN NOT NULL DEFAULT FALSE,
       servicos JSONB,
       billing_from_agenda_enabled BOOLEAN NOT NULL DEFAULT FALSE)`);
     // atendimentos autocontido: sem as FKs externas (clone_colaboradores) — as funções sob teste
@@ -163,6 +167,7 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
     });
     await exec(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
     atend = await import('./atendimentos.js');
+    flow = await import('./flow-clones.js');
     await createSchema();
   }, 30_000);
 
@@ -382,5 +387,136 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
     const pricing = await atend.loadSlotPricing(SLOT);
     expect(pricing.uniformPriceCents).toBe(11000);
     expect(pricing.byNameLower.get('sessão')).toBe(11000);
+  });
+
+  it('listAtendSyncSlots: modo efetivo atendente é excluído e atendimento pago fica fora do reconciler', async () => {
+    const agendaSlot = `${SLOT}_agenda`;
+    const atendenteSlot = `${SLOT}_atendente`;
+    await exec(
+      `INSERT INTO flow_clones
+         (slot, tenant_id, personalizacao, modo_atendente_enabled, billing_from_agenda_enabled)
+       VALUES
+         ($1, $3, '{"agenda_automatica":"true"}'::jsonb, FALSE, TRUE),
+         ($2, $3, '{"agenda_automatica":"false"}'::jsonb, TRUE, TRUE)
+       ON CONFLICT (slot) DO UPDATE SET
+         personalizacao = EXCLUDED.personalizacao,
+         modo_atendente_enabled = EXCLUDED.modo_atendente_enabled,
+         billing_from_agenda_enabled = EXCLUDED.billing_from_agenda_enabled`,
+      [agendaSlot, atendenteSlot, TENANT],
+    );
+    await exec(
+      `INSERT INTO atendimentos
+         (slot, tenant_id, gcal_event_id, origem, forma_pagamento, valor_cents, status, data)
+       VALUES ($1, $2, 'evento-pago-preservado', 'agenda', 'pix', 15000, 'realizado', CURRENT_DATE)`,
+      [atendenteSlot, TENANT],
+    );
+
+    const rows = await flow.listAtendSyncSlots([], [], false);
+    expect(rows.map((row) => row.slot)).toContain(agendaSlot);
+    expect(rows.map((row) => row.slot)).not.toContain(atendenteSlot);
+
+    const pago = await exec(
+      `SELECT deleted_at FROM atendimentos
+        WHERE slot = $1 AND gcal_event_id = 'evento-pago-preservado'`,
+      [atendenteSlot],
+    );
+    expect(pago.rows[0].deleted_at).toBeNull();
+  });
+
+  it('TOCTOU: transição concorrente ganha o lock e bloqueia upsert + soft-delete guardados', async () => {
+    const slot = `${SLOT}_toctou`;
+    const guard = { modoAtendenteSlots: [], modoAtendenteWildcard: false };
+    await exec(
+      `INSERT INTO flow_clones
+         (slot, tenant_id, personalizacao, modo_atendente_enabled, billing_from_agenda_enabled)
+       VALUES ($1, $2, '{"agenda_automatica":"true"}'::jsonb, FALSE, TRUE)`,
+      [slot, TENANT],
+    );
+    await exec(
+      `INSERT INTO atendimentos
+         (slot, tenant_id, gcal_event_id, origem, forma_pagamento, valor_cents, status, data)
+       VALUES ($1, $2, 'evento-pago-preservado', 'agenda', 'pix', 15000, 'realizado', CURRENT_DATE),
+              ($1, $2, 'evento-manual-preservado', 'manual', 'pix', 20000, 'realizado', CURRENT_DATE)`,
+      [slot, TENANT],
+    );
+
+    const transitionUpsert = await pgPool.connect();
+    await transitionUpsert.query('BEGIN');
+    await transitionUpsert.query(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"false"'::jsonb),
+              modo_atendente_enabled = TRUE
+        WHERE slot = $1`,
+      [slot],
+    );
+    let upsertSettled = false;
+    const guardedUpsert = atend
+      .upsertAtendimentoFromEvent({
+        slot,
+        tenantId: TENANT,
+        gcalEventId: 'evento-novo-bloqueado',
+        servicoNome: 'Sessão',
+        valorCents: 11000,
+        syncModeGuard: guard,
+      })
+      .finally(() => {
+        upsertSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(upsertSettled).toBe(false); // aguardando o FOR UPDATE da transição.
+    await transitionUpsert.query('COMMIT');
+    transitionUpsert.release();
+    expect(await guardedUpsert).toBeNull();
+
+    await exec(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"true"'::jsonb),
+              modo_atendente_enabled = FALSE
+        WHERE slot = $1`,
+      [slot],
+    );
+    expect(
+      await atend.softDeleteAtendimentoByEvent(
+        slot,
+        'evento-manual-preservado',
+        { reason: 'gcal_sync_absent', by: 'gcal-atend-sync' },
+        guard,
+      ),
+    ).toBeNull();
+    const transitionDelete = await pgPool.connect();
+    await transitionDelete.query('BEGIN');
+    await transitionDelete.query(
+      `UPDATE flow_clones
+          SET personalizacao = jsonb_set(personalizacao, '{agenda_automatica}', '"false"'::jsonb),
+              modo_atendente_enabled = TRUE
+        WHERE slot = $1`,
+      [slot],
+    );
+    let deleteSettled = false;
+    const guardedDelete = atend
+      .softDeleteAtendimentoByEvent(
+        slot,
+        'evento-pago-preservado',
+        { reason: 'gcal_sync_absent', by: 'gcal-atend-sync' },
+        guard,
+      )
+      .finally(() => {
+        deleteSettled = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(deleteSettled).toBe(false); // mesma serialização no caminho destrutivo.
+    await transitionDelete.query('COMMIT');
+    transitionDelete.release();
+    expect(await guardedDelete).toBeNull();
+
+    const rows = await exec(
+      `SELECT gcal_event_id, deleted_at FROM atendimentos
+        WHERE slot = $1 ORDER BY gcal_event_id`,
+      [slot],
+    );
+    expect(rows.rows).toEqual([
+      { gcal_event_id: 'evento-manual-preservado', deleted_at: null },
+      { gcal_event_id: 'evento-pago-preservado', deleted_at: null },
+    ]);
   });
 });

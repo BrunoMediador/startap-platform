@@ -413,6 +413,10 @@ export const WorkerConfigSchema = z.object({
   // ⚠️ Passo de deploy: devops garante ATEND_FROM_AGENDA_SLOTS no container startap-worker (hoje só
   // existe no api/portal-api). OPCIONAL no boot (lição #247: ausente = ''  = nenhum slot por-env).
   ATEND_FROM_AGENDA_SLOTS: z.string().default(''),
+  // O worker precisa conhecer o MESMO gate de modo atendente do runtime para impedir que um estado
+  // parcial (atendente efetivo + billing-da-agenda ainda ON) alcance o reconciler. Opcional no boot:
+  // ausente = só a coluna `modo_atendente_enabled` decide, sem criar crash-loop por env nova.
+  MODO_ATENDENTE_SLOTS: z.string().default(''),
 
   // ── Sync periódico GCal→atendimentos (SCRUM-89 / ADR 0031 — Faturamento espelha a agenda) ─────
   // Reconcilia, por clone com o gate billing-da-agenda ON e agenda 'active', uma janela [-LOOKBACK,

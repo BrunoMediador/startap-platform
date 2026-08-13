@@ -930,6 +930,8 @@ export interface AtendSyncSlotRow {
   tenant_id: string | null;
   timezone: string;
   product_type: string;
+  modo_atendente_enabled: boolean;
+  agenda_automatica: unknown;
 }
 
 /**
@@ -944,28 +946,45 @@ export interface AtendSyncSlotRow {
  * e fora do contrato do reconciler); wildcard global de billing-da-agenda não é caso de hoje e, se
  * um dia for, entra por-clone via coluna. O caller reconfirma o gate por slot antes de agir.
  *
- * Retorna slot + tenant_id + timezone (migration 068) + product_type — o job pula slot sem
- * tenant_id (regra 5) e escolhe o caminho individual/estabelecimento por product_type.
+ * Contenção P0 (Missão 027): a própria seleção exclui modo efetivo atendente, mesmo quando o gate
+ * do billing ficou ligado por estado parcial. O worker repete o predicado antes de qualquer I/O.
+ * Retorna também os dois inputs do modo efetivo para essa defesa em profundidade.
  */
-export async function listAtendSyncSlots(explicitSlots: string[]): Promise<AtendSyncSlotRow[]> {
+export async function listAtendSyncSlots(
+  explicitSlots: string[],
+  modoAtendenteSlots: string[] = [],
+  modoAtendenteWildcard = false,
+): Promise<AtendSyncSlotRow[]> {
   const r = await query<{
     slot: string;
     tenant_id: string | null;
     timezone: string | null;
     product_type: string | null;
+    modo_atendente_enabled: boolean | null;
+    agenda_automatica: unknown;
   }>(
-    `SELECT slot, tenant_id, timezone, product_type
+    `SELECT slot, tenant_id, timezone, product_type, modo_atendente_enabled,
+            personalizacao->>'agenda_automatica' AS agenda_automatica
        FROM flow_clones
-      WHERE billing_from_agenda_enabled = TRUE
-         OR slot = ANY($1::text[])
+      WHERE (billing_from_agenda_enabled = TRUE OR slot = ANY($1::text[]))
+        AND NOT (
+          COALESCE(personalizacao->>'agenda_automatica' = 'false', FALSE)
+          AND (
+            modo_atendente_enabled = TRUE
+            OR slot = ANY($2::text[])
+            OR $3::boolean = TRUE
+          )
+        )
       ORDER BY slot ASC`,
-    [explicitSlots],
+    [explicitSlots, modoAtendenteSlots, modoAtendenteWildcard],
   );
   return r.rows.map((x) => ({
     slot: x.slot,
     tenant_id: x.tenant_id,
     timezone: x.timezone ?? 'America/Sao_Paulo',
     product_type: x.product_type === 'estabelecimento' ? 'estabelecimento' : 'individual',
+    modo_atendente_enabled: x.modo_atendente_enabled === true,
+    agenda_automatica: x.agenda_automatica,
   }));
 }
 
