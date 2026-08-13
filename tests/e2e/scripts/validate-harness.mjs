@@ -159,6 +159,10 @@ const legacyBaseline = await readFile(
   'utf8',
 );
 for (const lifecycleContract of [
+  /const projectName = 'startap-e2e';/u,
+  /const artifactVolumeName = `\$\{projectName\}_e2e_artifacts`;/u,
+  /const compose = \['compose', '-f', 'tests\/e2e\/compose\.yml', '-p', projectName\];/u,
+  /const canonicalRounds = \['round-1', 'round-2'\];/u,
   /const longRunningServices = \['api', 'worker', 'portal-api', 'portal-web'\];/u,
   /const oneShotServices = \['worker-once', 'integration-probe', 'egress-probe', 'network-probe'\];/u,
   /const locallyBuiltTestServices = \['worker-once', 'integration-probe', 'egress-probe', 'e2e'\];/u,
@@ -166,13 +170,22 @@ for (const lifecycleContract of [
   /docker\(\['--profile', 'runner', 'build', \.\.\.locallyBuiltTestServices\]\)/u,
   /for \(const service of oneShotServices\) \{\s*await docker\(\['run', '--rm', '--no-deps', service\]\);\s*\}/u,
   /docker\(\['--profile', 'runner', 'run', '--rm', '--no-deps', 'e2e'\]\)/u,
+  /dockerOutput\(\['volume', 'ls', '--format', '\{\{\.Name\}\}'\]\)/u,
+  /assertArtifactVolume\(true, stage\)/u,
+  /'--profile',[\s\S]*?'runner',[\s\S]*?'down',[\s\S]*?'--volumes'/u,
+  /async function down\(stage = 'manual'\) \{\s*assertLifecycleContract\(\);/u,
+  /assertArtifactVolume\(false, stage\)/u,
+  /await down\(`\$\{stage\}:pre-up`\);/u,
+  /for \(const \[index, round\] of canonicalRounds\.entries\(\)\)[\s\S]*?await up\(round\);[\s\S]*?await test\(round\);[\s\S]*?await down\(round\);/u,
+  /await down\('final'\)/u,
+  /E2E artifact volume \$\{expected \? 'created' : 'removed'\} \(\$\{stage\}\)/u,
 ]) {
   if (!lifecycleContract.test(composeScript)) {
     throw new Error(`lifecycle E2E long-running/one-shot incompleto: ${lifecycleContract}`);
   }
 }
 const testBody = composeScript.match(
-  /async function test\(\) \{([\s\S]*?)\n\}\n\nasync function main/u,
+  /async function test\(stage = 'manual'\) \{([\s\S]*?)\n\}\n\nasync function main/u,
 )?.[1];
 if (!testBody || /migrator|\['run', '--rm', (?!'--no-deps')/u.test(testBody)) {
   throw new Error(

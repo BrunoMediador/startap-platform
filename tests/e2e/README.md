@@ -21,10 +21,12 @@ npm run e2e:preflight
 npm run e2e
 ```
 
-`npm run e2e` é o caminho canônico: remove apenas o projeto Compose `startap-e2e`,
-cria volumes novos, faz build, aguarda readiness, executa Playwright com um worker e
-sempre executa teardown com remoção dos volumes. Depois do primeiro verde, recria a
-stack e repete a mesma suíte para provar o reset determinístico. Em falha, imprime
+`npm run e2e` é o caminho canônico: remove apenas o projeto Compose fixo `startap-e2e`,
+incluindo o profile `runner`, cria volumes novos, faz build, aguarda readiness, executa
+Playwright com um worker e sempre executa teardown com remoção dos volumes. O lifecycle
+inspeciona e registra `startap-e2e_e2e_artifacts` criado e removido em cada rodada e ausente
+no teardown final. Depois do primeiro verde, recria a stack e repete a mesma suíte para
+provar o reset determinístico. Em falha, imprime
 somente as últimas 120 linhas dos serviços.
 
 Para depuração controlada:

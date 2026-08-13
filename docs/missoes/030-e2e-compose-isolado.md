@@ -62,8 +62,10 @@ lockfile, configs, scripts de controle e specs. Containers compatíveis rodam no
 read-only, com tmpfs, `cap_drop: ALL` e `no-new-privileges`; PG/Redis preservam o usuário
 das imagens e recebem o hardening comprovadamente compatível.
 
-Reset é recriação de volumes (`down --volumes` + `up`), nunca limpeza parcial. O comando
-canônico executa a suíte, recria a stack e executa a mesma suíte novamente. Os fakes
+Reset é recriação de volumes (`--profile runner down --volumes` + `up`), nunca limpeza
+parcial. O project name é fixo e validado; o lifecycle inspeciona e registra o volume
+`startap-e2e_e2e_artifacts` criado/removido em cada rodada e ausente no teardown final.
+O comando canônico executa a suíte, recria a stack e executa a mesma suíte novamente. Os fakes
 mantêm estado em memória e fornecem reset administrativo para isolamento dentro de uma
 execução. Journals são ordenados e sanitizados na entrada.
 
@@ -125,7 +127,8 @@ faults e 404 usam somente labels de rota allowlisted, nunca path arbitrário ref
    ao fake AbacatePay sobre PG16 pós-migrations 001–080.
 10. Worker-once fecha uma execução stale; integration-probe usa clientes GCal e AbacatePay reais.
 11. Browser navega cadastro em móvel/desktop; portal equipe prova 0/1/N e cross-tenant.
-12. A stack e os volumes são recriados e a suíte completa repete o mesmo resultado.
+12. A stack e todos os volumes, inclusive artefatos do profile runner, são removidos em cada
+    rodada e no teardown final; a suíte completa repete o mesmo resultado.
 
 P1 de transição de formato e UI composta são testes expected-red reais, executados em
 config separada e validados por Jira, título, causeId e assertion específica no relatório.

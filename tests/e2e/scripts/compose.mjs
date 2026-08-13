@@ -3,7 +3,10 @@ import os from 'node:os';
 import process from 'node:process';
 
 const action = process.argv[2] ?? 'run';
-const compose = ['compose', '-f', 'tests/e2e/compose.yml', '-p', 'startap-e2e'];
+const projectName = 'startap-e2e';
+const artifactVolumeName = `${projectName}_e2e_artifacts`;
+const compose = ['compose', '-f', 'tests/e2e/compose.yml', '-p', projectName];
+const canonicalRounds = ['round-1', 'round-2'];
 const longRunningServices = ['api', 'worker', 'portal-api', 'portal-web'];
 const oneShotServices = ['worker-once', 'integration-probe', 'egress-probe', 'network-probe'];
 const locallyBuiltTestServices = ['worker-once', 'integration-probe', 'egress-probe', 'e2e'];
@@ -12,12 +15,29 @@ function assertLifecycleContract() {
   const uniqueLongRunning = new Set(longRunningServices);
   const uniqueOneShots = new Set(oneShotServices);
   if (
+    projectName !== 'startap-e2e' ||
+    !/^[a-z0-9][a-z0-9_-]*$/u.test(projectName) ||
+    artifactVolumeName !== 'startap-e2e_e2e_artifacts' ||
+    canonicalRounds.length !== 2 ||
     uniqueLongRunning.size !== longRunningServices.length ||
     uniqueOneShots.size !== oneShotServices.length ||
     longRunningServices.some((service) => uniqueOneShots.has(service))
   ) {
     throw new Error('contrato E2E inválido: serviços long-running e one-shot devem ser disjuntos');
   }
+}
+
+async function assertArtifactVolume(expected, stage) {
+  const output = await dockerOutput(['volume', 'ls', '--format', '{{.Name}}']);
+  const exists = output.split(/\r?\n/u).includes(artifactVolumeName);
+  if (exists !== expected) {
+    throw new Error(
+      `${stage}: volume ${artifactVolumeName} deveria estar ${expected ? 'criado' : 'removido'}`,
+    );
+  }
+  process.stdout.write(
+    `E2E artifact volume ${expected ? 'created' : 'removed'} (${stage}): ${artifactVolumeName}\n`,
+  );
 }
 
 function hostCanaryIp() {
@@ -165,49 +185,55 @@ async function inspectIsolation() {
   process.stdout.write('Compose isolation inspect: OK.\n');
 }
 
-async function down() {
-  await docker(['down', '--volumes', '--remove-orphans', '--timeout', '10']);
+async function down(stage = 'manual') {
+  assertLifecycleContract();
+  await docker(['--profile', 'runner', 'down', '--volumes', '--remove-orphans', '--timeout', '10']);
+  await assertArtifactVolume(false, stage);
 }
 
-async function up() {
+async function up(stage = 'manual') {
   assertLifecycleContract();
   await preflight();
-  await down().catch(() => undefined);
+  await down(`${stage}:pre-up`);
   await docker(['up', '--build', '--wait', '--wait-timeout', '180', ...longRunningServices]);
   await inspectIsolation();
 }
 
-async function test() {
+async function test(stage = 'manual') {
   await docker(['--profile', 'runner', 'build', ...locallyBuiltTestServices]);
   for (const service of oneShotServices) {
     await docker(['run', '--rm', '--no-deps', service]);
   }
   await docker(['--profile', 'runner', 'run', '--rm', '--no-deps', 'e2e']);
+  await assertArtifactVolume(true, stage);
 }
 
 async function main() {
-  if (action === 'up') return up();
+  if (action === 'up') return up('up');
   if (action === 'preflight') return preflight();
-  if (action === 'test') return test();
-  if (action === 'down') return down();
-  if (action === 'reset') return up();
+  if (action === 'test') return test('test');
+  if (action === 'down') return down('down');
+  if (action === 'reset') return up('reset');
   if (action !== 'run') throw new Error(`ação desconhecida: ${action}`);
 
   let failed = false;
   try {
-    await up();
-    await test();
-    process.stdout.write(
-      'E2E primeira execução verde; recriando volumes para prova de repetibilidade.\n',
-    );
-    await up();
-    await test();
+    for (const [index, round] of canonicalRounds.entries()) {
+      await up(round);
+      await test(round);
+      await down(round);
+      if (index === 0) {
+        process.stdout.write(
+          'E2E primeira execução verde; recriando volumes para prova de repetibilidade.\n',
+        );
+      }
+    }
   } catch (error) {
     failed = true;
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     await docker(['logs', '--no-color', '--tail', '120']).catch(() => undefined);
   } finally {
-    await down().catch((error) => {
+    await down('final').catch((error) => {
       process.stderr.write(
         `teardown falhou: ${error instanceof Error ? error.message : String(error)}\n`,
       );
