@@ -126,6 +126,16 @@ async function inspectIsolation() {
       const dropped = service.cap_drop ?? [];
       if (!dropped.includes('ALL')) throw new Error(`${name}: cap_drop ALL ausente`);
     }
+    if (service.tmpfs !== undefined) {
+      const tmpfs = Array.isArray(service.tmpfs) ? service.tmpfs : [];
+      if (
+        tmpfs.length !== 1 ||
+        typeof tmpfs[0] !== 'string' ||
+        !/^\/tmp:rw,noexec,nosuid,size=\d+m$/u.test(tmpfs[0])
+      ) {
+        throw new Error(`${name}: tmpfs renderizado deve conter um único mount /tmp`);
+      }
+    }
   }
   process.stdout.write('Compose isolation inspect: OK.\n');
 }

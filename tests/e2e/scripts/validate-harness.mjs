@@ -78,6 +78,18 @@ if (selectionSelfTest.length !== 3)
   throw new Error('autoteste da seleção tracked/untracked falhou');
 
 const compose = await readFile(path.join(root, 'tests/e2e/compose.yml'), 'utf8');
+const tmpfsDeclarations = compose
+  .split('\n')
+  .map((line, index) => ({ line: line.trim(), number: index + 1 }))
+  .filter(({ line }) => line.startsWith('tmpfs:'));
+if (tmpfsDeclarations.length === 0) throw new Error('compose sem tmpfs hardenizado');
+for (const declaration of tmpfsDeclarations) {
+  if (!/^tmpfs:\s*\["\/tmp:rw,noexec,nosuid,size=\d+m"\]$/u.test(declaration.line)) {
+    throw new Error(
+      `tmpfs deve ser lista com um único scalar quoted; linha ${declaration.number}: ${declaration.line}`,
+    );
+  }
+}
 for (const pattern of [
   /container_name\s*:/u,
   /env_file\s*:/u,

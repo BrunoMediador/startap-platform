@@ -46,7 +46,7 @@ x-app: &app
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
-  tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+  tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
   networks: [e2e]
   volumes:
     - ./support:/e2e/support:ro
@@ -101,7 +101,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       PGPASSWORD: e2e_app_password
     networks: [e2e]
@@ -122,7 +122,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       FAKE_KIND: waha
       PORT: "4010"
@@ -145,7 +145,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment: { FAKE_KIND: gcal, PORT: "4011" }
     networks: [e2e]
     volumes:
@@ -162,7 +162,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment: { FAKE_KIND: abacatepay, PORT: "4012" }
     networks: [e2e]
     volumes:
@@ -179,7 +179,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment: { FAKE_KIND: llm, PORT: "4013" }
     networks: [e2e]
     volumes:
@@ -234,7 +234,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
     environment:
       <<: *app-env
       SERVICE_NAME: portal-api
@@ -271,7 +271,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
     environment:
       NODE_ENV: test
       NEXT_TELEMETRY_DISABLED: "1"
@@ -319,7 +319,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     environment:
       NODE_OPTIONS: --import=/e2e/support/egress-guard.mjs
       E2E_ALLOWED_HOSTS: fake-waha
@@ -335,7 +335,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=32m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
     networks: [e2e]
     environment:
       E2E_HOST_CANARY_IP: ${E2E_HOST_CANARY_IP:?E2E_HOST_CANARY_IP obrigatorio}
@@ -353,7 +353,7 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    tmpfs: [/tmp:rw,noexec,nosuid,size=128m]
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=128m"]
     working_dir: /e2e
     environment:
       CI: "true"
