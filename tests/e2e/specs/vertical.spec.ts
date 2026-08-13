@@ -250,11 +250,17 @@ test('readiness: apps, worker real, integrações reais, migrations, Redis e fak
 
 test('P0 vertical: HMAC válido atravessa API async, runtime, LLM, WAHA, PG e Redis', async () => {
   const before = await withDb(async (client) => {
-    const result = await client.query<{ count: string }>(
+    const histories = await client.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM chat_histories
        WHERE session_id LIKE 'clone_e2e_tenant_a:e2e_session_a:%'`,
     );
-    return Number(result.rows[0]?.count ?? 0);
+    const flowLogs = await client.query<{ id: string }>(
+      'SELECT COALESCE(max(id), 0)::text AS id FROM flow_execution_logs',
+    );
+    return {
+      histories: Number(histories.rows[0]?.count ?? 0),
+      flowLogHighWatermark: flowLogs.rows[0]?.id ?? '0',
+    };
   });
   const first = await inbound(envelope('e2e_session_a', 'vertical-1'));
   expect(first).toEqual({ upstreamStatus: 200, upstreamBody: { status: 'accepted' } });
@@ -276,7 +282,34 @@ test('P0 vertical: HMAC válido atravessa API async, runtime, LLM, WAHA, PG e Re
         }),
       { timeout: 12_000 },
     )
-    .toBe(before + 2);
+    .toBe(before.histories + 2);
+
+  await expect
+    .poll(
+      () =>
+        withDb(async (client) => {
+          const result = await client.query<{ execution_id: string }>(
+            `SELECT received.execution_id::text AS execution_id
+               FROM flow_execution_logs AS received
+              WHERE received.id > $1::bigint
+                AND received.session = $2
+                AND received.event_type = 'webhook.received'
+                AND EXISTS (
+                  SELECT 1
+                    FROM flow_execution_logs AS terminal
+                   WHERE terminal.execution_id = received.execution_id
+                     AND terminal.event_type = 'bot.finished'
+                     AND terminal.status = 'success'
+                )
+              ORDER BY received.id ASC
+              LIMIT 1`,
+            [before.flowLogHighWatermark, 'e2e_session_a'],
+          );
+          return result.rows[0]?.execution_id ?? null;
+        }),
+      { timeout: 12_000 },
+    )
+    .not.toBeNull();
 
   const redis = new Redis(process.env.E2E_REDIS_URL ?? '');
   const keys = await redis.keys('*vertical-1*');
@@ -290,24 +323,18 @@ test('P0 WAHA rejeita assinatura ausente/inválida e body adulterado sem efeito'
   const ids = ['missing-hmac-1', 'invalid-hmac-1', 'tampered-hmac-1'];
   const snapshot = () =>
     withDb(async (client) => {
-      const [logs, histories, pauses] = await Promise.all([
-        client.query<{ count: string }>(
-          'SELECT count(*)::text AS count FROM flow_execution_logs WHERE session = $1',
-          ['e2e_session_a'],
-        ),
-        client.query<{ count: string }>(
-          'SELECT count(*)::text AS count FROM chat_histories WHERE session_id LIKE $1',
-          [`%${phone}%`],
-        ),
-        client.query<{ count: string }>(
-          'SELECT count(*)::text AS count FROM flow_pauses WHERE telefone = $1',
-          [phone],
-        ),
-      ]);
+      const result = await client.query<{ logs: string; histories: string; pauses: string }>(
+        `SELECT
+           (SELECT count(*) FROM flow_execution_logs WHERE session = $1)::text AS logs,
+           (SELECT count(*) FROM chat_histories WHERE session_id LIKE $2)::text AS histories,
+           (SELECT count(*) FROM flow_pauses WHERE telefone = $3)::text AS pauses`,
+        ['e2e_session_a', `%${phone}%`, phone],
+      );
+      const row = result.rows[0];
       return {
-        logs: Number(logs.rows[0]?.count ?? 0),
-        histories: Number(histories.rows[0]?.count ?? 0),
-        pauses: Number(pauses.rows[0]?.count ?? 0),
+        logs: Number(row?.logs ?? 0),
+        histories: Number(row?.histories ?? 0),
+        pauses: Number(row?.pauses ?? 0),
       };
     });
   const before = await snapshot();
@@ -328,7 +355,6 @@ test('P0 WAHA rejeita assinatura ausente/inválida e body adulterado sem efeito'
   expect(tampered.upstreamStatus).toBe(401);
   expect(await journalCount(wahaUrl, (entry) => entry.path === '/api/sendText')).toBe(0);
   expect(await journalCount(llmUrl, (entry) => entry.path.endsWith('/chat/completions'))).toBe(0);
-  await new Promise((resolve) => setTimeout(resolve, 250));
   const after = await snapshot();
   expect(after).toEqual(before);
   const redis = new Redis(process.env.E2E_REDIS_URL ?? '');

@@ -403,6 +403,36 @@ for (const staleJournalContract of [
     throw new Error(`readiness não prova transição append-only do worker: ${staleJournalContract}`);
   }
 }
+for (const asyncWebhookDrainContract of [
+  /SELECT COALESCE\(max\(id\), 0\)::text AS id FROM flow_execution_logs/u,
+  /received\.id > \$1::bigint/u,
+  /terminal\.execution_id = received\.execution_id/u,
+  /terminal\.event_type = 'bot\.finished'/u,
+  /terminal\.status = 'success'/u,
+  /\[before\.flowLogHighWatermark, 'e2e_session_a'\]/u,
+  /\.not\.toBeNull\(\)/u,
+]) {
+  if (!asyncWebhookDrainContract.test(verticalSpecSource)) {
+    throw new Error(
+      `vertical async não aguarda conclusão pelo mesmo execution_id: ${asyncWebhookDrainContract}`,
+    );
+  }
+}
+const hmacNegativeBody = verticalSpecSource.match(
+  /test\('P0 WAHA rejeita assinatura ausente\/inválida e body adulterado sem efeito',[\s\S]*?\n\}\);/u,
+)?.[0];
+if (!hmacNegativeBody) {
+  throw new Error('cenário HMAC negativo ausente');
+}
+if (/setTimeout\(/u.test(hmacNegativeBody)) {
+  throw new Error('cenário HMAC negativo não pode depender de sleep');
+}
+if (/Promise\.all\([\s\S]*?client\.query/u.test(hmacNegativeBody)) {
+  throw new Error('snapshot HMAC não pode executar queries concorrentes no mesmo pg.Client');
+}
+if (!/SELECT[\s\S]*?AS logs,[\s\S]*?AS histories,[\s\S]*?AS pauses/u.test(hmacNegativeBody)) {
+  throw new Error('snapshot HMAC deve medir efeitos em uma única consulta');
+}
 const allowedHostBody = egressGuardSource.match(
   /function allowedHost\(host\) \{([\s\S]*?)\n\}/u,
 )?.[1];
