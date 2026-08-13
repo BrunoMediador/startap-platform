@@ -198,6 +198,20 @@ const networkProbeSource = await readFile(
   path.join(root, 'tests/e2e/support/network-probe.mjs'),
   'utf8',
 );
+const verticalSpecSource = await readFile(
+  path.join(root, 'tests/e2e/specs/vertical.spec.ts'),
+  'utf8',
+);
+for (const staleJournalContract of [
+  /SELECT event_type, status[\s\S]*?WHERE execution_id = \$1[\s\S]*?ORDER BY id ASC/u,
+  /stale: staleEvents\.rows\.at\(-1\)\?\.status/u,
+  /event_type: 'e2e\.worker-stale', status: 'running'/u,
+  /event_type: 'system\.stale-closed', status: 'error'/u,
+]) {
+  if (!staleJournalContract.test(verticalSpecSource)) {
+    throw new Error(`readiness não prova transição append-only do worker: ${staleJournalContract}`);
+  }
+}
 const allowedHostBody = egressGuardSource.match(
   /function allowedHost\(host\) \{([\s\S]*?)\n\}/u,
 )?.[1];

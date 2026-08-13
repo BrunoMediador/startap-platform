@@ -202,8 +202,11 @@ test('readiness: apps, worker real, integrações reais, migrations, Redis e fak
     const migrations = await client.query<{ count: string }>(
       'SELECT count(*)::text AS count FROM schema_migrations',
     );
-    const stale = await client.query<{ status: string }>(
-      'SELECT status FROM flow_execution_logs WHERE execution_id = $1',
+    const staleEvents = await client.query<{ event_type: string; status: string }>(
+      `SELECT event_type, status
+         FROM flow_execution_logs
+        WHERE execution_id = $1
+        ORDER BY id ASC`,
       ['00000000-0000-4000-8000-000000000171'],
     );
     const integration = await client.query<{ count: string }>(
@@ -212,11 +215,20 @@ test('readiness: apps, worker real, integrações reais, migrations, Redis e fak
     );
     return {
       migrations: Number(migrations.rows[0]?.count ?? 0),
-      stale: stale.rows[0]?.status,
+      staleEvents: staleEvents.rows,
+      stale: staleEvents.rows.at(-1)?.status,
       integration: Number(integration.rows[0]?.count ?? 0),
     };
   });
-  expect(state).toEqual({ migrations: 80, stale: 'error', integration: 1 });
+  expect(state).toEqual({
+    migrations: 80,
+    staleEvents: [
+      { event_type: 'e2e.worker-stale', status: 'running' },
+      { event_type: 'system.stale-closed', status: 'error' },
+    ],
+    stale: 'error',
+    integration: 1,
+  });
   expect((await fakeState(gcalUrl)).journal.some((entry) => entry.kind === 'gcal')).toBeTruthy();
   expect(
     (await fakeState(abacateUrl)).journal.some((entry) => entry.kind === 'abacatepay'),
