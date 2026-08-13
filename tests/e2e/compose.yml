@@ -310,7 +310,10 @@ services:
       <<: *app-env
       SERVICE_NAME: integration-probe
       E2E_PG_URL: postgres://e2e_app:e2e_app_password@postgres:5432/startap_e2e
-    command: [node, /e2e/support/integration-probe.mjs]
+    volumes:
+      - ./support:/e2e/support:ro
+      - ./support/integration-probe.mjs:/app/integration-probe.mjs:ro
+    command: [node, /app/integration-probe.mjs]
 
   egress-probe:
     image: node:20-alpine

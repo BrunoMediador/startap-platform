@@ -113,6 +113,28 @@ for (const requiredNetwork of [
 }
 if (!/WEBHOOK_ASYNC:\s*"true"/u.test(compose)) throw new Error('WEBHOOK_ASYNC deve estar true');
 if (!/PORTAL_SIGNUP:\s*"true"/u.test(compose)) throw new Error('PORTAL_SIGNUP deve estar true');
+const integrationProbeSource = await readFile(
+  path.join(root, 'tests/e2e/support/integration-probe.mjs'),
+  'utf8',
+);
+for (const requiredProbeContract of [
+  /\.\/support\/integration-probe\.mjs:\/app\/integration-probe\.mjs:ro/u,
+  /command:\s*\[node,\s*\/app\/integration-probe\.mjs\]/u,
+]) {
+  if (!requiredProbeContract.test(compose)) {
+    throw new Error(
+      `integration-probe fora de /app; resolução ESM de /app/node_modules quebraria: ${requiredProbeContract}`,
+    );
+  }
+}
+for (const requiredImport of [
+  /from\s+['"]pg['"]/u,
+  /\/app\/packages\/integrations\/dist\/google-calendar\/index\.js/u,
+]) {
+  if (!requiredImport.test(integrationProbeSource)) {
+    throw new Error(`integration-probe deixou de exercitar dependência real: ${requiredImport}`);
+  }
+}
 if (
   !/mcr\.microsoft\.com\/playwright:v1\.55\.1-noble/u.test(
     await readFile(path.join(root, 'tests/e2e/runner/Dockerfile'), 'utf8'),

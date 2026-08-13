@@ -118,6 +118,16 @@ async function inspectIsolation() {
     if (mounts.some((mount) => JSON.stringify(mount).includes('docker.sock'))) {
       throw new Error(`${name}: montagem de docker.sock proibida`);
     }
+    if (name === 'integration-probe') {
+      const probeMount = mounts.find(
+        (mount) =>
+          mount?.target === '/app/integration-probe.mjs' ||
+          String(mount).includes(':/app/integration-probe.mjs'),
+      );
+      if (!probeMount || service.command?.[1] !== '/app/integration-probe.mjs') {
+        throw new Error('integration-probe deve executar sob /app para resolver /app/node_modules');
+      }
+    }
     const security = service.security_opt ?? [];
     if (!security.some((item) => String(item).startsWith('no-new-privileges'))) {
       throw new Error(`${name}: no-new-privileges ausente`);
