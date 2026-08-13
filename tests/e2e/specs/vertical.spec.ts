@@ -802,10 +802,10 @@ test('P0 signup real provisiona os quatro formatos e valida PG, sessão WAHA e p
     .filter((tag): tag is string => typeof tag === 'string')
     .sort();
   expect(journalSessionTags).toEqual(expectedSessionTags);
-  expect(new Set(journalSessionTags)).toHaveLength(4);
+  expect(new Set(journalSessionTags).size).toBe(4);
   const stateSessionTags = wahaState.state.sessions.map((session) => session.nameTag).sort();
   expect(stateSessionTags).toEqual(expectedSessionTags);
-  expect(new Set(stateSessionTags)).toHaveLength(4);
+  expect(new Set(stateSessionTags).size).toBe(4);
   expect(wahaState.state.sessions).toHaveLength(4);
   expect(wahaState.state.sessions.every((session) => session.status === 'STARTING')).toBe(true);
 

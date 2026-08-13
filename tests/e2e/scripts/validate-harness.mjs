@@ -347,9 +347,9 @@ for (const signupPromptContract of [
   /prompt\.prompt\.trim\(\)\)\.not\.toBe\(''\)/u,
   /const expectedSessionTags = provisionedSlots\.map\(sessionNameTag\)\.sort\(\)/u,
   /journalSessionTags\)\.toEqual\(expectedSessionTags\)/u,
-  /new Set\(journalSessionTags\)\)\.toHaveLength\(4\)/u,
+  /new Set\(journalSessionTags\)\.size\)\.toBe\(4\)/u,
   /stateSessionTags\)\.toEqual\(expectedSessionTags\)/u,
-  /new Set\(stateSessionTags\)\)\.toHaveLength\(4\)/u,
+  /new Set\(stateSessionTags\)\.size\)\.toBe\(4\)/u,
 ]) {
   if (!signupPromptContract.test(verticalSpecSource)) {
     throw new Error(`signup não prova prompts exatos e não vazios: ${signupPromptContract}`);
