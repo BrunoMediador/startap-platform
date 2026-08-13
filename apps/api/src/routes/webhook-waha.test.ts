@@ -409,6 +409,70 @@ describe('POST /webhooks/waha — auth por secret compartilhado', () => {
       }
     });
 
+    it('503 por saturação não consome o dedup: retry do mesmo messageId processa exatamente uma vez', async () => {
+      configState.maxInFlight = 4;
+      const app1 = await makeApp();
+      const blockers = Array.from({ length: 4 }, () => deferred<{ status: string }>());
+      const seen = new Set<string>();
+
+      checkAndMarkDuplicate.mockImplementation(async (session: string, messageId: string) => {
+        const key = `${session}:${messageId}`;
+        if (seen.has(key)) return { duplicate: true, degraded: false };
+        seen.add(key);
+        return { duplicate: false, degraded: false };
+      });
+      handleWebhook.mockImplementation(async (body: { payload?: { id?: string } }) => {
+        const id = body.payload?.id ?? '';
+        const blockerIndex = Number(id.slice(1)) - 1;
+        if (blockerIndex >= 0 && blockerIndex < blockers.length) {
+          return blockers[blockerIndex].promise;
+        }
+        return { status: 'ok' };
+      });
+
+      try {
+        for (let index = 1; index <= 4; index += 1) {
+          const accepted = await app1.inject({
+            method: 'POST',
+            url: '/webhooks/waha',
+            payload: wahaBody({
+              payload: { id: `m${index}`, from: '5535999998888@c.us', body: `${index}` },
+            }),
+          });
+          expect(accepted.statusCode).toBe(200);
+        }
+
+        const saturated = await app1.inject({
+          method: 'POST',
+          url: '/webhooks/waha',
+          payload: wahaBody({ payload: { id: 'm5', from: '5535999998888@c.us', body: '5' } }),
+        });
+        expect(saturated.statusCode).toBe(503);
+        expect(saturated.json()).toEqual({ status: 'busy:retry' });
+
+        blockers[0].resolve({ status: 'ok' });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const retry = await app1.inject({
+          method: 'POST',
+          url: '/webhooks/waha',
+          payload: wahaBody({ payload: { id: 'm5', from: '5535999998888@c.us', body: '5' } }),
+        });
+        expect(retry.statusCode).toBe(200);
+        expect(retry.json()).toEqual({ status: 'accepted' });
+        // 4 admitidas + retry admitido; a tentativa que recebeu 503 não tocou no Redis.
+        expect(checkAndMarkDuplicate).toHaveBeenCalledTimes(5);
+        await vi.waitFor(() => {
+          expect(
+            handleWebhook.mock.calls.filter(([body]) => body.payload?.id === 'm5'),
+          ).toHaveLength(1);
+        });
+      } finally {
+        for (const blocker of blockers) blocker.resolve({ status: 'ok' });
+        await app1.close();
+      }
+    });
+
     it('graceful drain: app.close() espera a tarefa em voo terminar', async () => {
       let release!: () => void;
       const handled = new Promise<void>((r) => {
