@@ -244,6 +244,9 @@ function Footer() {
         <div className={styles.footerBottom}>
           <p>© {new Date().getFullYear()} Startap</p>
           <nav className={styles.legalLinks} aria-label="Links legais e acesso">
+            <Link href={LANDING_CTAS.demo.href} className={styles.footerLink}>
+              {LANDING_CTAS.demo.label}
+            </Link>
             <Link href="/termos" className={styles.footerLink}>
               Termos de Uso
             </Link>

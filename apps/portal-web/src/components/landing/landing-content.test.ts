@@ -30,6 +30,7 @@ describe('landing CTAs', () => {
     expect(LANDING_CTAS.primary.href).toBe('/cadastro');
     expect(LANDING_CTAS.final.href).toBe('/cadastro');
     expect(LANDING_CTAS.login.href).toBe('/login');
+    expect(LANDING_CTAS.demo.href).toBe('/demo');
     expect(Object.values(LANDING_CTAS).every((cta) => cta.href.startsWith('/'))).toBe(true);
   });
 });

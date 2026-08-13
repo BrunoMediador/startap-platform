@@ -23,6 +23,7 @@ export const LANDING_CTAS = {
   primary: { label: 'Testar 7 dias no meu WhatsApp', href: '/cadastro' },
   login: { label: 'Entrar', href: '/login' },
   final: { label: 'Começar meu teste', href: '/cadastro' },
+  demo: { label: 'Demonstração', href: '/demo' },
 } as const;
 
 export const LANDING_SCENARIOS: readonly LandingScenario[] = [
