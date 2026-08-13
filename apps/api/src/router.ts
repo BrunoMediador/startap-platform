@@ -295,9 +295,10 @@ export async function handleWebhook(
   const sessionManualCommand =
     fromMe && sessionEntry ? sessionEntry.getManualCommand(body.payload?.body ?? '') : null;
 
-  // 2. Mensagens fromMe com texto podem ser comando manual por fluxo.
+  // 2. Mensagens fromMe com CONTEÚDO (texto OU mídia — ver hasSubstantiveFromMeContent,
+  // BUG P0 13/08/2026) podem ser comando manual por fluxo ou resposta humana à mão.
   // A decisão final vem depois de extrair o telefone e descobrir o fluxo.
-  if (fromMe && !sessionManualCommand && !body.payload?.body) {
+  if (fromMe && !sessionManualCommand && !hasSubstantiveFromMeContent(body.payload)) {
     await flowExecutionLog.logFlowEvent({
       ...baseLog,
       eventType: 'router.ignored',
@@ -441,6 +442,10 @@ export async function handleWebhook(
       ))
     ) {
       const text = body.payload?.body ?? '';
+      // BUG P0 13/08/2026: fromMe sem texto (áudio/mídia) ainda é conteúdo humano
+      // substantivo — só o BOT nunca manda mídia (ver isBotEcho abaixo), então
+      // tratamos como 'human' na decisão de pausa mesmo com text === ''.
+      const hasMediaContent = hasSubstantiveFromMeContent(body.payload) && !text;
 
       // (0) SCRUM-63 — CONTATO MIGRADO (LID): pós-migração LID do WhatsApp, o eco fromMe (e a
       // resposta manual do dono) a um contato migrado chega endereçado por `<lid>@lid`; o
@@ -536,10 +541,16 @@ export async function handleWebhook(
         return { status: `ok:manual-${flowManualCommand}` };
       }
 
-      // (4) RESPOSTA HUMANA À MÃO (fromMe, texto, não-keyword, não-eco): pausa AQUELE
-      // contato por TTL e o bot volta sozinho; cada resposta humana renova o expires_at.
-      // Fail-safe: só em 'human' CONFIRMADO — eco/degraded NÃO pausam.
-      if (echoState === 'human' && text.trim().length > 0) {
+      // (4) RESPOSTA HUMANA À MÃO (fromMe, texto OU áudio/mídia, não-keyword, não-eco):
+      // pausa AQUELE contato por TTL e o bot volta sozinho; cada resposta humana renova
+      // o expires_at. Fail-safe: só em 'human' CONFIRMADO — eco/degraded NÃO pausam.
+      // BUG P0 13/08/2026: `text.trim().length > 0` excluía fromMe de áudio (payload.body
+      // vem vazio no NOWEB). `hasMediaContent` cobre esse caso; NÃO transcrevemos o áudio
+      // aqui — a pausa só precisa saber que HOUVE conteúdo humano, não o conteúdo em si
+      // (transcrever seria custo de Whisper sem uso). isBotEcho(text='') já resolve
+      // 'human' por definição (linha 118 de human-reply-pause.ts) porque o bot só envia
+      // texto via sendText — nunca há hash de eco pra comparar num fromMe de mídia.
+      if (echoState === 'human' && (text.trim().length > 0 || hasMediaContent)) {
         // Guard defensivo (SCRUM-63, 2ª barreira): uma identidade de contato migrado (@lid)
         // sem resolução NUNCA vira linha em flow_pauses. O fail-safe no topo do ramo já
         // retorna nesse caso; este check protege contra regressão futura (se alguém remover
@@ -637,6 +648,10 @@ export async function handleWebhook(
       // 'ignored:fromMe' de sempre (nenhuma pausa, nenhuma leitura de identidade/eco).
       if (isHumanReplyAgendaEnabled(route.workflow_id, process.env.HUMAN_REPLY_AGENDA_SLOTS)) {
         const text = body.payload?.body ?? '';
+        // BUG P0 13/08/2026: fromMe sem texto (áudio/mídia) ainda é conteúdo humano
+        // substantivo — payload.body vem vazio no NOWEB para áudio. Ver raciocínio
+        // completo do anti-eco no ramo modo-atendente acima (mesma lógica aqui).
+        const hasMediaContent = hasSubstantiveFromMeContent(body.payload) && !text;
 
         // (0) CONTATO MIGRADO (LID, SCRUM-63): resolve `@lid`→E.164 ANTES de qualquer decisão
         // chaveada por identidade (self-chat / eco / pausa). FAIL-SAFE: não resolveu → nenhuma
@@ -683,7 +698,7 @@ export async function handleWebhook(
         // pausa em 'human' CONFIRMADO — 'echo'/'degraded' NÃO pausam (fail-safe: nunca auto-
         // pausar o próprio bot). Exige que base.ts registre o eco pros slots deste gate.
         const echoState = await isBotEcho(sessao, atendenteTelefone, text);
-        if (echoState === 'human' && text.trim().length > 0) {
+        if (echoState === 'human' && (text.trim().length > 0 || hasMediaContent)) {
           // SCRUM-144: snapshota o nome do CONTATO (store durável, pushName do INBOUND) — nunca
           // o pushName do evento fromMe (nome do DONO). Fail-safe: sem nome = NULL.
           const contactName = await contactNames
@@ -1406,4 +1421,33 @@ function getDataMessageKeys(payload: unknown): string[] {
   const msg = (_data as Record<string, unknown>).message;
   if (!msg || typeof msg !== 'object') return [];
   return Object.keys(msg);
+}
+
+/**
+ * BUG P0 13/08/2026 — fromMe de áudio nunca criava human-reply-pause.
+ *
+ * O WAHA/Baileys (engine NOWEB) NUNCA preenche `payload.body` para mensagens de
+ * áudio/PTT — o conteúdo mora em `_data.message.audioMessage`/`pttMessage` (mesmo
+ * lugar que `detectAudio`/`buildIncomingMessage` já sabiam ler, ver acima). Os 3
+ * gates de "fromMe sem conteúdo" abaixo (topo do router, ramo modo-atendente, ramo
+ * agenda) discriminavam só por `payload.body` truthy — todo fromMe de áudio (e
+ * qualquer outra mídia sem legenda: imagem, vídeo, documento, figurinha, localização)
+ * caía direto em 'ignored:fromMe' ANTES de chegar na lógica de human-reply-pause.
+ * Efeito em prod: dono que responde por ÁUDIO nunca pausa o bot — o bot atropela a
+ * conversa que o humano está conduzindo. Confirmado no D'manos 13/08 (dono usa áudio
+ * o tempo todo) com HUMAN_REPLY_AGENDA_SLOTS=* -> toda a base exposta.
+ *
+ * Fix: "tem conteúdo substantivo" passa a ser texto OU áudio OU qualquer mídia
+ * (`payload.hasMedia`), não só texto. Usado nos 3 gates em vez de `!!body.payload?.body`.
+ *
+ * Unificado num helper único (em vez de repetir a checagem 3x): um fix parcial nos
+ * 3 pontos é exatamente a classe de bug que causou isto (o texto já discriminava
+ * igual nos 3 lugares) — um helper único elimina a chance de esquecer um dos 3.
+ */
+function hasSubstantiveFromMeContent(payload: WahaWebhookBody['payload']): boolean {
+  if (payload?.body) return true;
+  if (payload?.hasMedia) return true;
+  if (detectAudio(payload).isAudio) return true;
+  if (hasAudioMessageNode(payload)) return true;
+  return false;
 }
