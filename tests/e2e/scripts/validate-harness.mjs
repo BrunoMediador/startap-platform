@@ -79,6 +79,46 @@ if (selectionSelfTest.length !== 3)
   throw new Error('autoteste da seleção tracked/untracked falhou');
 
 const compose = await readFile(path.join(root, 'tests/e2e/compose.yml'), 'utf8');
+const composeScript = await readFile(path.join(root, 'tests/e2e/scripts/compose.mjs'), 'utf8');
+const legacyBaseline = await readFile(
+  path.join(root, 'scripts/fixtures/001_legacy_schema.sql'),
+  'utf8',
+);
+for (const lifecycleContract of [
+  /const longRunningServices = \['api', 'worker', 'portal-api', 'portal-web'\];/u,
+  /const oneShotServices = \['worker-once', 'integration-probe', 'egress-probe', 'network-probe'\];/u,
+  /'--wait-timeout',[\s\S]*?'180',[\s\S]*?\.\.\.longRunningServices/u,
+  /docker\(\['--profile', 'runner', 'run', '--rm', 'e2e'\]\)/u,
+]) {
+  if (!lifecycleContract.test(composeScript)) {
+    throw new Error(`lifecycle E2E long-running/one-shot incompleto: ${lifecycleContract}`);
+  }
+}
+if (/docker\(\['--profile', 'runner', 'run', '--rm', '--no-deps'/u.test(composeScript)) {
+  throw new Error('runner E2E não pode omitir depends_on dos one-shots');
+}
+for (const oneShot of ['worker-once', 'integration-probe', 'egress-probe', 'network-probe']) {
+  const dependency = new RegExp(
+    `${oneShot}:\\s*\\{\\s*condition:\\s*service_completed_successfully\\s*\\}`,
+    'u',
+  );
+  if (!dependency.test(compose)) {
+    throw new Error(`${oneShot} deve ser dependência service_completed_successfully do runner`);
+  }
+}
+for (const legacyContract of [
+  /CREATE TABLE message_log \(/u,
+  /id SERIAL PRIMARY KEY/u,
+  /phone VARCHAR\(50\) NOT NULL/u,
+  /created_at TIMESTAMPTZ DEFAULT NOW\(\)/u,
+  /chat_id VARCHAR\(100\)/u,
+  /CREATE INDEX idx_message_log_phone_time ON message_log \(phone, created_at\)/u,
+  /CREATE INDEX idx_message_log_chat_created ON message_log \(chat_id, created_at\)/u,
+]) {
+  if (!legacyContract.test(legacyBaseline)) {
+    throw new Error(`baseline legado message_log divergente do schema medido: ${legacyContract}`);
+  }
+}
 const tmpfsDeclarations = compose
   .split('\n')
   .map((line, index) => ({ line: line.trim(), number: index + 1 }))

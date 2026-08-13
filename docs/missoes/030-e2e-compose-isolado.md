@@ -57,6 +57,12 @@ canônico executa a suíte, recria a stack e executa a mesma suíte novamente. O
 mantêm estado em memória e fornecem reset administrativo para isolamento dentro de uma
 execução. Journals são ordenados e sanitizados na entrada.
 
+Readiness espera somente `api`, `worker`, `portal-api` e `portal-web`; PG, Redis, fakes e
+migrator sobem como dependências transitivas. Os probes one-shot são dependências
+`service_completed_successfully` do runner e precisam concluir antes do Playwright. O baseline
+test-only 001 também reconstrói `public.message_log` conforme schema histórico medido em
+2026-08-13; ele não é migration nem altera produção.
+
 Playwright permanece serial por causa do semáforo global intencional
 `WEBHOOK_MAX_INFLIGHT=1`, necessário à prova de backpressure. A serialização não substitui
 isolamento de fixture: message IDs, chats e contas são exclusivos; cada caso fromMe exige

@@ -4,6 +4,20 @@ import process from 'node:process';
 
 const action = process.argv[2] ?? 'run';
 const compose = ['compose', '-f', 'tests/e2e/compose.yml', '-p', 'startap-e2e'];
+const longRunningServices = ['api', 'worker', 'portal-api', 'portal-web'];
+const oneShotServices = ['worker-once', 'integration-probe', 'egress-probe', 'network-probe'];
+
+function assertLifecycleContract() {
+  const uniqueLongRunning = new Set(longRunningServices);
+  const uniqueOneShots = new Set(oneShotServices);
+  if (
+    uniqueLongRunning.size !== longRunningServices.length ||
+    uniqueOneShots.size !== oneShotServices.length ||
+    longRunningServices.some((service) => uniqueOneShots.has(service))
+  ) {
+    throw new Error('contrato E2E inválido: serviços long-running e one-shot devem ser disjuntos');
+  }
+}
 
 function hostCanaryIp() {
   for (const addresses of Object.values(os.networkInterfaces())) {
@@ -155,9 +169,10 @@ async function down() {
 }
 
 async function up() {
+  assertLifecycleContract();
   await preflight();
   await down().catch(() => undefined);
-  await docker(['up', '--build', '--wait', '--wait-timeout', '180']);
+  await docker(['up', '--build', '--wait', '--wait-timeout', '180', ...longRunningServices]);
   await inspectIsolation();
 }
 
