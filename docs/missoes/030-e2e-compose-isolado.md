@@ -58,10 +58,18 @@ mantêm estado em memória e fornecem reset administrativo para isolamento dentr
 execução. Journals são ordenados e sanitizados na entrada.
 
 Readiness espera somente `api`, `worker`, `portal-api` e `portal-web`; PG, Redis, fakes e
-migrator sobem como dependências transitivas. Os probes one-shot são dependências
-`service_completed_successfully` do runner e precisam concluir antes do Playwright. O baseline
-test-only 001 também reconstrói `public.message_log` conforme schema histórico medido em
-2026-08-13; ele não é migration nem altera produção.
+migrator sobem como dependências transitivas. Depois da inspeção, o harness executa
+`worker-once`, `integration-probe`, `egress-probe` e `network-probe` explicitamente, nessa ordem,
+com `--no-deps`; somente então roda Playwright também com `--no-deps`. Assim nenhum one-shot
+reabre a árvore e tenta migrar novamente o volume já preparado. O runner não declara
+`depends_on`: existe uma única máquina de estados, no harness, e o integration-probe confirma
+que `schema_migrations` continua com 80 entradas depois do worker-once. O baseline test-only 001
+também reconstrói `public.message_log` conforme schema histórico medido em 2026-08-13; ele não é
+migration nem altera produção.
+
+A garantia zero-egress cobre processos em runtime dentro da rede E2E. Aquisição de imagens e
+dependências durante `docker build` ocorre antes desses processos e fica fora dessa fronteira;
+CI restringe esse estágio aos Dockerfiles e lockfile versionados.
 
 Playwright permanece serial por causa do semáforo global intencional
 `WEBHOOK_MAX_INFLIGHT=1`, necessário à prova de backpressure. A serialização não substitui

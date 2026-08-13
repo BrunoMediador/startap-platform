@@ -373,15 +373,6 @@ services:
     networks: [e2e]
     volumes:
       - e2e_artifacts:/artifacts
-    depends_on:
-      api: { condition: service_healthy }
-      worker: { condition: service_healthy }
-      portal-api: { condition: service_healthy }
-      portal-web: { condition: service_healthy }
-      worker-once: { condition: service_completed_successfully }
-      integration-probe: { condition: service_completed_successfully }
-      egress-probe: { condition: service_completed_successfully }
-      network-probe: { condition: service_completed_successfully }
     command: [sh, -c, "npx playwright test --config playwright.config.ts && node scripts/run-known-broken.mjs"]
 
 networks:

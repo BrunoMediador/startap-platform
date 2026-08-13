@@ -53,6 +53,14 @@ if (!abacatePaths.includes('/v2/transparents/create')) {
 const client = new Client({ connectionString: process.env.E2E_PG_URL });
 await client.connect();
 try {
+  const migrationResult = await client.query(
+    'SELECT count(*)::text AS count FROM schema_migrations',
+  );
+  if (migrationResult.rows[0]?.count !== '80') {
+    throw new Error(
+      `schema_migrations esperado=80 obtido=${migrationResult.rows[0]?.count ?? 'none'}`,
+    );
+  }
   await client.query(
     `INSERT INTO flow_execution_logs
        (execution_id, flow_id, flow_name, event_type, status, message, metadata)

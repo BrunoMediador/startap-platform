@@ -87,24 +87,32 @@ const legacyBaseline = await readFile(
 for (const lifecycleContract of [
   /const longRunningServices = \['api', 'worker', 'portal-api', 'portal-web'\];/u,
   /const oneShotServices = \['worker-once', 'integration-probe', 'egress-probe', 'network-probe'\];/u,
+  /const locallyBuiltTestServices = \['worker-once', 'integration-probe', 'e2e'\];/u,
   /'--wait-timeout',[\s\S]*?'180',[\s\S]*?\.\.\.longRunningServices/u,
-  /docker\(\['--profile', 'runner', 'run', '--rm', 'e2e'\]\)/u,
+  /docker\(\['--profile', 'runner', 'build', \.\.\.locallyBuiltTestServices\]\)/u,
+  /for \(const service of oneShotServices\) \{\s*await docker\(\['run', '--rm', '--no-deps', service\]\);\s*\}/u,
+  /docker\(\['--profile', 'runner', 'run', '--rm', '--no-deps', 'e2e'\]\)/u,
 ]) {
   if (!lifecycleContract.test(composeScript)) {
     throw new Error(`lifecycle E2E long-running/one-shot incompleto: ${lifecycleContract}`);
   }
 }
-if (/docker\(\['--profile', 'runner', 'run', '--rm', '--no-deps'/u.test(composeScript)) {
-  throw new Error('runner E2E não pode omitir depends_on dos one-shots');
+const testBody = composeScript.match(
+  /async function test\(\) \{([\s\S]*?)\n\}\n\nasync function main/u,
+)?.[1];
+if (!testBody || /migrator|\['run', '--rm', (?!'--no-deps')/u.test(testBody)) {
+  throw new Error(
+    'test lifecycle não pode reexecutar migrator nem iniciar dependências implícitas',
+  );
 }
 for (const oneShot of ['worker-once', 'integration-probe', 'egress-probe', 'network-probe']) {
-  const dependency = new RegExp(
-    `${oneShot}:\\s*\\{\\s*condition:\\s*service_completed_successfully\\s*\\}`,
-    'u',
-  );
-  if (!dependency.test(compose)) {
-    throw new Error(`${oneShot} deve ser dependência service_completed_successfully do runner`);
+  if (!new RegExp(`^  ${oneShot}:`, 'mu').test(compose)) {
+    throw new Error(`${oneShot} ausente do Compose`);
   }
+}
+const runnerService = compose.match(/^ {2}e2e:\n([\s\S]*?)(?=^ {2}[a-z][\w-]*:|^networks:)/mu)?.[1];
+if (!runnerService || /^ {4}depends_on:/mu.test(runnerService)) {
+  throw new Error('runner E2E deve depender somente da sequência explícita do harness');
 }
 for (const legacyContract of [
   /CREATE TABLE message_log \(/u,
@@ -171,6 +179,8 @@ for (const requiredProbeContract of [
 for (const requiredImport of [
   /from\s+['"]pg['"]/u,
   /\/app\/packages\/integrations\/dist\/google-calendar\/index\.js/u,
+  /SELECT count\(\*\)::text AS count FROM schema_migrations/u,
+  /migrationResult\.rows\[0\]\?\.count !== '80'/u,
 ]) {
   if (!requiredImport.test(integrationProbeSource)) {
     throw new Error(`integration-probe deixou de exercitar dependência real: ${requiredImport}`);
