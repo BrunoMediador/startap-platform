@@ -24,6 +24,15 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // mesmo bodyLimit do app (server.ts)
 // que não drenar a tempo, a WAHA retenta (nada foi ACKeado lá).
 const DRAIN_TIMEOUT_MS = 10_000;
 
+/** Promise controlável usada para separar admissão no runner do ACK HTTP. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /**
  * Auth em DUAS camadas, o máximo possível ANTES do parse (P0 security #268 +
  * spike 2026-06-11). Precedência: HMAC (plano A) > header estático (plano B) >
@@ -228,10 +237,15 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
 
       // ── Caminho ASSÍNCRONO (ADR 0021) ──────────────────────────────────────
       // ACK-early: responde 200 ao WAHA na hora e processa em background, fora do
-      // ciclo HTTP, sob o semáforo. Sequência obrigatória (ADR 0021): HMAC →
-      // parse → safeParse → DEDUP → ACK 200 → background.
+      // ciclo HTTP, sob o semáforo. Sequência obrigatória: HMAC → parse → safeParse
+      // → RESERVA DE CAPACIDADE → DEDUP → ACK 200 → background.
       //
-      // 1) DEDUP ANTES do ACK. Se a WAHA retentou (timeout/15×3s) e o evento já
+      // 1) RESERVA antes do DEDUP. O SET NX só pode significar "aceito para
+      //    processamento". Marcar antes de adquirir capacidade faria um 503
+      //    consumir o messageId e o retry seguinte sumir como duplicata.
+      //
+      // 2) DEDUP ANTES do ACK, já dentro do slot reservado. Se a WAHA retentou
+      //    (timeout/15×3s) e o evento já
       //    foi visto dentro do TTL, descartamos AQUI e respondemos 200 sem
       //    enfileirar de novo. É o que torna o ACK-early seguro: sem isto o ACK
       //    rápido amplia a janela em que o mesmo messageId entra 2x → 2 respostas
@@ -247,9 +261,36 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
       const isAckDelivery =
         parsed.data.event === 'message.ack' && process.env.MESSAGE_ACK_TRACKING_ENABLED === 'true';
       const messageId = parsed.data.payload?.id ?? '';
-      const dedup = isAckDelivery
-        ? { duplicate: false as const, degraded: false as const }
-        : await checkAndMarkDuplicate(parsed.data.session, messageId);
+      const admission = deferred<{ duplicate: boolean; degraded: boolean }>();
+
+      // A aquisição do semáforo é síncrona dentro de schedule(). Só a tarefa que
+      // recebeu slot chega ao Redis; se schedule=false, nenhuma chave foi criada.
+      const scheduled = asyncRunner.schedule(
+        async () => {
+          const dedup = isAckDelivery
+            ? { duplicate: false as const, degraded: false as const }
+            : await checkAndMarkDuplicate(parsed.data.session, messageId);
+          admission.resolve(dedup);
+          if (dedup.duplicate) return;
+          await handleWebhook(parsed.data, { executionId, startedAt, skipDedup: true });
+        },
+        (err) => {
+          // Roda fora do ciclo HTTP (request já respondida); crash só é logado.
+          if (err) void logWebhookCrash(err, parsed.data, { executionId, startedAt });
+        },
+      );
+
+      // SATURADO → 503 sem tocar no dedup. A WAHA pode retentar o mesmo ID
+      // quando houver vaga; só a tentativa efetivamente admitida o marcará.
+      if (!scheduled) {
+        log.warn(
+          { session: parsed.data.session, maxInFlight: config.WEBHOOK_MAX_INFLIGHT },
+          'Webhook saturado — 503 (WAHA retenta)',
+        );
+        return reply.code(503).send({ status: 'busy:retry' });
+      }
+
+      const dedup = await admission.promise;
       if (dedup.duplicate) {
         log.info(
           { session: parsed.data.session },
@@ -269,33 +310,7 @@ export const wahaWebhookRoute: FastifyPluginAsync = async (app) => {
         return reply.code(200).send({ status: 'ignored:dedup' });
       }
 
-      // 2) Tenta adquirir um slot no semáforo e agendar o processamento.
-      //    skipDedup=true: o dedup acima já marcou o evento.
-      const scheduled = asyncRunner.schedule(
-        () =>
-          handleWebhook(parsed.data, { executionId, startedAt, skipDedup: true }).then(
-            () => undefined,
-          ),
-        (err) => {
-          // Roda fora do ciclo HTTP (request já respondida); crash só é logado.
-          if (err) void logWebhookCrash(err, parsed.data, { executionId, startedAt });
-        },
-      );
-
-      // 3) SATURADO → política retry-503 (ADR 0021): responde 503 e a WAHA
-      //    retenta (15×3s); a mensagem volta quando houver capacidade e o dedup
-      //    evita duplicar. Nada se perde dentro da janela de retry. Se o pico
-      //    durar mais que isso, é sinal de capacity planning (shard/2ª instância),
-      //    não bug. NÃO enfileiramos em memória — o WAHA é a fila durável.
-      if (!scheduled) {
-        log.warn(
-          { session: parsed.data.session, maxInFlight: config.WEBHOOK_MAX_INFLIGHT },
-          'Webhook saturado — 503 (WAHA retenta)',
-        );
-        return reply.code(503).send({ status: 'busy:retry' });
-      }
-
-      // 4) ACK-early: 200 imediato. O processamento segue em background; bot.started
+      // 3) ACK-early: 200 imediato. O processamento segue em background; bot.started
       //    /bot.finished e crash são logados de lá. ORDENAÇÃO POR CONVERSA: mensagens
       //    do mesmo cliente podem ser processadas em paralelo e responder fora de
       //    ordem (trade-off aceito, ADR 0021 §Risco 3 — raro no volume atual).
