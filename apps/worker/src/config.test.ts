@@ -83,16 +83,19 @@ describe('WorkerConfigSchema', () => {
     expect(result.GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN).toBe(50);
     // ATEND_FROM_AGENDA_SLOTS reusado no worker: ausente = '' (só a coluna decide).
     expect(result.ATEND_FROM_AGENDA_SLOTS).toBe('');
+    expect(result.MODO_ATENDENTE_SLOTS).toBe('');
   });
 
   it('gcal-atend-sync ON + ATEND_FROM_AGENDA_SLOTS explícito (reuso do gate por-env)', () => {
     const result = WorkerConfigSchema.parse({
       GCAL_ATEND_SYNC_ENABLED: 'true',
       ATEND_FROM_AGENDA_SLOTS: 'clone_a,clone_b',
+      MODO_ATENDENTE_SLOTS: 'clone_atendente',
       GCAL_ATEND_SYNC_MAX_PAGES: '5',
     });
     expect(result.GCAL_ATEND_SYNC_ENABLED).toBe(true);
     expect(result.ATEND_FROM_AGENDA_SLOTS).toBe('clone_a,clone_b');
+    expect(result.MODO_ATENDENTE_SLOTS).toBe('clone_atendente');
     expect(result.GCAL_ATEND_SYNC_MAX_PAGES).toBe(5);
   });
 });

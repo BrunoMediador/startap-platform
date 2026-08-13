@@ -29,9 +29,11 @@
  * GATE MACRO: só é registrado com GCAL_ATEND_SYNC_ENABLED=true (worker.ts). Default OFF.
  * ISOLAMENTO: falha de 1 clone loga e segue — nunca derruba o ciclo dos outros (regra 7).
  */
+import { isAgendaAutomaticaIntent } from '@startap/core/agenda-degrade';
 import { parseEventSummary } from '@startap/core/agenda-summary';
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
+import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { atendimentos, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import { config } from '../config.js';
@@ -56,6 +58,8 @@ export { hashEventIdForLog };
 export interface GcalAtendSyncResult extends Record<string, unknown> {
   /** clones enumerados e efetivamente processados neste ciclo (sob o teto por ciclo). */
   slots: number;
+  /** slots preservados porque o modo efetivo é atendente, mesmo com o gate do sync ainda ligado. */
+  skippedEffectiveAtendente: number;
   /** eventos PRESENTES bilhetáveis considerados (somados sobre todos os slots). */
   scanned: number;
   /** linhas criadas/atualizadas via upsert. */
@@ -423,6 +427,7 @@ async function reconcileSlot(
 export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
   const result: GcalAtendSyncResult = {
     slots: 0,
+    skippedEffectiveAtendente: 0,
     scanned: 0,
     upserted: 0,
     deleted: 0,
@@ -434,7 +439,14 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
   };
 
   const explicitSlots = csvToArray(config.ATEND_FROM_AGENDA_SLOTS);
-  const allSlots = await flowClones.listAtendSyncSlots(explicitSlots);
+  const modoAtendenteEntries = csvToArray(config.MODO_ATENDENTE_SLOTS);
+  const modoAtendenteWildcard = modoAtendenteEntries.includes('*');
+  const modoAtendenteSlots = modoAtendenteEntries.filter((entry) => entry !== '*');
+  const allSlots = await flowClones.listAtendSyncSlots(
+    explicitSlots,
+    modoAtendenteSlots,
+    modoAtendenteWildcard,
+  );
   const maxSlots = config.GCAL_ATEND_SYNC_MAX_SLOTS_PER_RUN;
   const slots = allSlots.slice(0, maxSlots);
   if (allSlots.length > maxSlots) {
@@ -446,6 +458,20 @@ export async function runGcalAtendSync(): Promise<GcalAtendSyncResult> {
 
   for (const scope of slots) {
     result.slots++;
+    const modoAtendenteEfetivo =
+      resolveModoAtendenteEnabled(
+        scope.slot,
+        config.MODO_ATENDENTE_SLOTS,
+        scope.modo_atendente_enabled,
+      ) && !isAgendaAutomaticaIntent(scope.agenda_automatica);
+    if (modoAtendenteEfetivo) {
+      result.skippedEffectiveAtendente++;
+      log.warn(
+        { slot: scope.slot },
+        'gcal-atend-sync: modo efetivo atendente — reconciliação pulada (atendimentos preservados)',
+      );
+      continue;
+    }
     try {
       await reconcileSlot(scope, result);
     } catch (err: unknown) {

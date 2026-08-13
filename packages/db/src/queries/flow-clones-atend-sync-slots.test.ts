@@ -23,21 +23,25 @@ beforeEach(() => {
 });
 
 describe('listAtendSyncSlots', () => {
-  it('SQL: UNIÃO billing_from_agenda_enabled OR slot=ANY($1) — mesmo gate do hook', async () => {
-    await listAtendSyncSlots(['clone_a', 'clone_b']);
+  it('SQL: une billing env/coluna e exclui modo efetivo atendente por coluna/env', async () => {
+    await listAtendSyncSlots(['clone_a', 'clone_b'], ['clone_atendente'], false);
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('billing_from_agenda_enabled = TRUE');
     expect(sql).toContain('slot = ANY($1::text[])');
     expect(sql).toContain('FROM flow_clones');
     // projeta o escopo mínimo que o job usa.
-    expect(sql).toContain('SELECT slot, tenant_id, timezone, product_type');
-    expect(params).toEqual([['clone_a', 'clone_b']]);
+    expect(sql).toContain('SELECT slot, tenant_id, timezone, product_type, modo_atendente_enabled');
+    expect(sql).toContain("COALESCE(personalizacao->>'agenda_automatica' = 'false', FALSE)");
+    expect(sql).toContain('modo_atendente_enabled = TRUE');
+    expect(sql).toContain('slot = ANY($2::text[])');
+    expect(sql).toContain('$3::boolean = TRUE');
+    expect(params).toEqual([['clone_a', 'clone_b'], ['clone_atendente'], false]);
   });
 
   it('CSV vazio → só a coluna decide (ANY de array vazio)', async () => {
     await listAtendSyncSlots([]);
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-    expect(params).toEqual([[]]);
+    expect(params).toEqual([[], [], false]);
   });
 
   it('mapeia tenant_id null preservado, timezone default SP e product_type normalizado', async () => {
@@ -48,9 +52,25 @@ describe('listAtendSyncSlots', () => {
           tenant_id: 't1',
           timezone: 'America/Cuiaba',
           product_type: 'estabelecimento',
+          modo_atendente_enabled: false,
+          agenda_automatica: null,
         },
-        { slot: 'clone_ind', tenant_id: 't2', timezone: null, product_type: 'individual' },
-        { slot: 'clone_sem_tenant', tenant_id: null, timezone: null, product_type: null },
+        {
+          slot: 'clone_ind',
+          tenant_id: 't2',
+          timezone: null,
+          product_type: 'individual',
+          modo_atendente_enabled: true,
+          agenda_automatica: 'false',
+        },
+        {
+          slot: 'clone_sem_tenant',
+          tenant_id: null,
+          timezone: null,
+          product_type: null,
+          modo_atendente_enabled: null,
+          agenda_automatica: 'true',
+        },
       ],
       rowCount: 3,
     });
@@ -61,12 +81,16 @@ describe('listAtendSyncSlots', () => {
         tenant_id: 't1',
         timezone: 'America/Cuiaba',
         product_type: 'estabelecimento',
+        modo_atendente_enabled: false,
+        agenda_automatica: null,
       },
       {
         slot: 'clone_ind',
         tenant_id: 't2',
         timezone: 'America/Sao_Paulo',
         product_type: 'individual',
+        modo_atendente_enabled: true,
+        agenda_automatica: 'false',
       },
       // product_type != 'estabelecimento' (null) normaliza p/ 'individual'; tenant_id null preservado
       // (o job pula slot sem tenant_id, regra 5).
@@ -75,6 +99,8 @@ describe('listAtendSyncSlots', () => {
         tenant_id: null,
         timezone: 'America/Sao_Paulo',
         product_type: 'individual',
+        modo_atendente_enabled: false,
+        agenda_automatica: 'true',
       },
     ]);
   });
