@@ -44,6 +44,13 @@ function allowedHost(host) {
   );
 }
 
+function allowedDnsLookupCallbackHost(host) {
+  const normalized = String(host || 'localhost')
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  return allowedHost(normalized) || normalized === '0.0.0.0' || normalized === '0.0.0';
+}
+
 function asUrl(input) {
   if (input instanceof URL) return new URL(input.href);
   if (typeof input === 'string') return new URL(input);
@@ -119,6 +126,9 @@ net.createConnection = function guardedNetCreateConnection(...args) {
 dns.lookup = function guardedDnsLookup(hostname, ...args) {
   if (allowedHost(hostname)) return originalDnsLookup(hostname, ...args);
   const callback = args.findLast((item) => typeof item === 'function');
+  if (callback && allowedDnsLookupCallbackHost(hostname)) {
+    return originalDnsLookup(hostname, ...args);
+  }
   if (callback) {
     queueMicrotask(() => callback(blocked(hostname)));
     return undefined;

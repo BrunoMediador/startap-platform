@@ -53,6 +53,15 @@ await expectNetworkDenied('DNS externo', async () => {
   await dns.lookup('example.com');
   return true;
 });
+await expectNetworkDenied('DNS resolve4 externo', async () => {
+  await Promise.race([
+    dns.resolve4('example.com'),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timeout DNS resolve4')), TIMEOUT_MS),
+    ),
+  ]);
+  return true;
+});
 
 const ipv4Routes = await readFile('/proc/net/route', 'utf8');
 if (

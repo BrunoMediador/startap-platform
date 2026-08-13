@@ -25,10 +25,42 @@ const request = (module, url) =>
     }
   });
 
+const connect = (host) =>
+  new Promise((resolve, reject) => {
+    try {
+      const socket = net.connect(80, host, () => {
+        socket.destroy();
+        resolve();
+      });
+      socket.once('error', reject);
+    } catch (error) {
+      reject(error);
+    }
+  });
+
+const bindServer = net.createServer();
+try {
+  await new Promise((resolve, reject) => {
+    bindServer.once('error', reject);
+    bindServer.listen(0, '0.0.0.0', resolve);
+  });
+} finally {
+  if (bindServer.listening) {
+    await new Promise((resolve, reject) => {
+      bindServer.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
 await expectBlocked('fetch externo', () => fetch('http://example.invalid/'));
 await expectBlocked('fetch metadata', () => fetch('http://169.254.169.254/latest/meta-data/'));
+await expectBlocked('fetch wildcard IPv4', () => fetch('http://0.0.0.0/'));
 await expectBlocked('http externo', () => request(http, 'http://example.invalid/'));
+await expectBlocked('http wildcard IPv4', () => request(http, 'http://0.0.0.0/'));
 await expectBlocked('https externo', () => request(https, 'https://example.invalid/'));
+await expectBlocked('https wildcard IPv4', () => request(https, 'https://0.0.0.0/'));
+await expectBlocked('net.connect wildcard IPv4', () => connect('0.0.0.0'));
+await expectBlocked('net.connect wildcard IPv4 abreviado', () => connect('0.0.0'));
 await expectBlocked(
   'net externo',
   () =>
@@ -42,6 +74,8 @@ await expectBlocked(
     }),
 );
 await expectBlocked('dns externo', () => dns.lookup('example.invalid'));
+await expectBlocked('dns.promises wildcard IPv4', () => dns.lookup('0.0.0.0'));
+await expectBlocked('dns.promises wildcard IPv4 abreviado', () => dns.lookup('0.0.0'));
 await expectBlocked(
   'bridge host',
   () =>

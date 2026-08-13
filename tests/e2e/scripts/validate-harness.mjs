@@ -12,6 +12,7 @@ const required = [
   'tests/e2e/README.md',
   'tests/e2e/fakes/server.mjs',
   'tests/e2e/support/egress-guard.mjs',
+  'tests/e2e/support/egress-probe.mjs',
   'tests/e2e/support/network-probe.mjs',
   'tests/e2e/specs/vertical.spec.ts',
   'tests/e2e/known-broken/known-broken.spec.ts',
@@ -134,6 +135,61 @@ for (const requiredImport of [
   if (!requiredImport.test(integrationProbeSource)) {
     throw new Error(`integration-probe deixou de exercitar dependência real: ${requiredImport}`);
   }
+}
+const egressGuardSource = await readFile(
+  path.join(root, 'tests/e2e/support/egress-guard.mjs'),
+  'utf8',
+);
+const egressProbeSource = await readFile(
+  path.join(root, 'tests/e2e/support/egress-probe.mjs'),
+  'utf8',
+);
+const networkProbeSource = await readFile(
+  path.join(root, 'tests/e2e/support/network-probe.mjs'),
+  'utf8',
+);
+const allowedHostBody = egressGuardSource.match(
+  /function allowedHost\(host\) \{([\s\S]*?)\n\}/u,
+)?.[1];
+if (!allowedHostBody || /['"](?:0\.0\.0(?:\.0)?|::)['"]/u.test(allowedHostBody)) {
+  throw new Error('allowedHost não pode aceitar wildcard de bind');
+}
+const guardedDnsPromisesLookupBody = egressGuardSource.match(
+  /dns\.promises\.lookup = async function guardedDnsPromisesLookup\(hostname, options\) \{([\s\S]*?)\n\};/u,
+)?.[1];
+if (
+  !guardedDnsPromisesLookupBody ||
+  !/allowedHost\(hostname\)/u.test(guardedDnsPromisesLookupBody) ||
+  /allowedDnsLookupCallbackHost|['"](?:0\.0\.0(?:\.0)?|::)['"]/u.test(guardedDnsPromisesLookupBody)
+) {
+  throw new Error('dns.promises.lookup deve permanecer restrito a allowedHost');
+}
+for (const requiredGuardContract of [
+  /function allowedDnsLookupCallbackHost\(host\)/u,
+  /normalized === '0\.0\.0\.0' \|\| normalized === '0\.0\.0'/u,
+  /callback && allowedDnsLookupCallbackHost\(hostname\)/u,
+  /dns\.promises\.lookup = async function guardedDnsPromisesLookup/u,
+]) {
+  if (!requiredGuardContract.test(egressGuardSource)) {
+    throw new Error(`contrato de bind sem ampliar egress ausente: ${requiredGuardContract}`);
+  }
+}
+for (const requiredEgressProbe of [
+  /bindServer\.listen\(0, '0\.0\.0\.0', resolve\)/u,
+  /fetch\('http:\/\/0\.0\.0\.0\/'\)/u,
+  /request\(http, 'http:\/\/0\.0\.0\.0\/'\)/u,
+  /request\(https, 'https:\/\/0\.0\.0\.0\/'\)/u,
+  /connect\('0\.0\.0\.0'\)/u,
+  /connect\('0\.0\.0'\)/u,
+  /dns\.lookup\('0\.0\.0\.0'\)/u,
+  /dns\.lookup\('0\.0\.0'\)/u,
+]) {
+  if (!requiredEgressProbe.test(egressProbeSource)) {
+    throw new Error(`contraprova de wildcard ausente: ${requiredEgressProbe}`);
+  }
+}
+if (!/dns\.resolve4\('example\.com'\)/u.test(networkProbeSource)) {
+  throw new Error('network-probe deve provar bloqueio de dns.resolve4 externo sem guard');
 }
 if (
   !/mcr\.microsoft\.com\/playwright:v1\.55\.1-noble/u.test(
