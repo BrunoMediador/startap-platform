@@ -54,6 +54,10 @@ COPY painel-admin/public    ./public
 # Por isso os dists são copiados para /packages/, fora do /app.
 COPY --from=builder /monorepo/packages/integrations/dist /packages/integrations/dist
 COPY --from=builder /monorepo/packages/core/dist         /packages/core/dist
+COPY --from=builder /monorepo/packages/db/dist           /packages/db/dist
+# O import direto /packages/db/dist/*.js precisa do package scope ESM no runtime.
+# Sem este manifest, Node 20 interpreta os .js fora de /app como CommonJS.
+COPY --from=builder /monorepo/packages/db/package.json    /packages/db/package.json
 
 # client.js (de integrations) faz `import { logger } from '@startap/core/logger'`.
 # Node resolve esse import pelo node_modules — então plantamos @startap/core lá
@@ -69,6 +73,10 @@ COPY --from=builder /monorepo/packages/core/dist         /app/node_modules/@star
 # Sem o symlink no FS root, nada é encontrado. ESM ignora NODE_PATH, então
 # precisamos de um node_modules real no caminho de resolução.
 RUN ln -s /app/node_modules /node_modules
+
+# Smoke de build da imagem: valida o package scope ESM, resolução das dependências
+# runtime e a exportação exata consumida por server.js. Não abre conexão nem toca prod.
+RUN node --input-type=module -e "const db = await import('/packages/db/dist/index.js'); if (typeof db.billingPayments?.registerManualPayment !== 'function') throw new Error('missing billingPayments.registerManualPayment')"
 
 EXPOSE 3030
 

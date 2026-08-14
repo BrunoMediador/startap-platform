@@ -1,21 +1,32 @@
-/**
- * Unit de pauseBotByOwner / resumeBotByOwner — pausa SELF-SERVICE do bot pelo DONO.
- *
- * O pool pg é MOCKADO (client fake roteado por substring da query) — nada bate em DB real.
- * Cobre o contrato estrito:
- *  - pause seta suspended_kind='owner_request' (NUNCA 'billing') só quando flow_enabled=true;
- *  - pause NÃO sobrescreve suspensão da Startap (UPDATE não casa o WHERE -> changed:false);
- *  - resume só destrava owner_request (WHERE suspended_kind='owner_request');
- *  - resume com 0 linhas (suspenso pela Startap) -> changed:false (o caller responde 409);
- *  - log de auditoria só quando rowCount>0 (idempotência: retry não duplica efeito);
- *  - invalidateCloneCache só na mudança real.
- */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+type OwnerState = {
+  exists?: boolean;
+  flowEnabled: boolean;
+  suspendedKind: string | null;
+  nextDueDate: string | null;
+  amountCents: number | null;
+};
 
 const calls: { sql: string; params: unknown[] }[] = [];
 
-/** rowCountUpdate = quantas linhas o UPDATE flow_clones afetou (0 = WHERE não casou). */
-function makeClient(rowCountUpdate: number, sessao: string | null = 'sess_x') {
+function snapshotRow(state: OwnerState, flowEnabled = state.flowEnabled) {
+  return {
+    slot: 'clone_x',
+    tenant_id: 'tenant-x',
+    clone_status: 'conectado',
+    atendimento_configured: true,
+    waha_sessao: 'sess_x',
+    flow_enabled: flowEnabled,
+    suspended_reason: flowEnabled ? null : 'pausa',
+    suspended_kind: flowEnabled ? null : state.suspendedKind,
+    suspended_at: flowEnabled ? null : new Date('2026-08-01T00:00:00Z'),
+    next_due_date: state.nextDueDate,
+    billing_amount_cents: state.amountCents,
+  };
+}
+
+function makeClient(updateRows: number, state: OwnerState) {
   return {
     query: vi.fn(async (sql: string, params?: unknown[]) => {
       calls.push({ sql, params: params ?? [] });
@@ -23,13 +34,34 @@ function makeClient(rowCountUpdate: number, sessao: string | null = 'sess_x') {
       if (q.includes('BEGIN') || q.includes('COMMIT') || q.includes('ROLLBACK')) {
         return { rows: [], rowCount: 0 };
       }
+      if (q.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 };
+      if (q.includes('FROM flow_clones') && q.includes('FOR UPDATE')) {
+        return state.exists === false
+          ? { rows: [], rowCount: 0 }
+          : { rows: [snapshotRow(state)], rowCount: 1 };
+      }
+      if (q.includes('FROM client_billing') && q.includes('FOR UPDATE')) {
+        return {
+          rows:
+            state.nextDueDate == null && state.amountCents == null
+              ? []
+              : [
+                  {
+                    next_due_date: state.nextDueDate,
+                    billing_amount_cents: state.amountCents,
+                  },
+                ],
+          rowCount: state.nextDueDate == null && state.amountCents == null ? 0 : 1,
+        };
+      }
       if (q.includes('UPDATE flow_clones')) {
-        return rowCountUpdate > 0
-          ? { rows: [{ slot: params?.[0], waha_sessao: sessao }], rowCount: rowCountUpdate }
+        return updateRows > 0
+          ? { rows: [{ slot: 'clone_x', waha_sessao: 'sess_x' }], rowCount: updateRows }
           : { rows: [], rowCount: 0 };
       }
-      if (q.includes('INSERT INTO flow_suspension_log')) {
-        return { rows: [], rowCount: 1 };
+      if (q.includes('INSERT INTO flow_suspension_log')) return { rows: [], rowCount: 1 };
+      if (q.includes('FROM flow_clones fc') && q.includes('LEFT JOIN client_billing')) {
+        return { rows: [snapshotRow(state, updateRows > 0)], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     }),
@@ -38,10 +70,11 @@ function makeClient(rowCountUpdate: number, sessao: string | null = 'sess_x') {
 }
 
 let currentClient: ReturnType<typeof makeClient>;
+const queryMock = vi.fn();
 
 vi.mock('../client.js', () => ({
   pool: { connect: vi.fn(async () => currentClient) },
-  query: vi.fn(),
+  query: (...args: unknown[]) => queryMock(...args),
 }));
 
 const {
@@ -51,133 +84,172 @@ const {
   getCloneBySlot,
   invalidateCloneCache,
 } = await import('./flow-clones.js');
-
-// Import DIRETO da fonte única (@startap/core/silence-gate) — prova real de anti-divergência
-// (achado do security 31/07: comparar 2 literais digitados à mão não pega divergência; só
-// comparar o REEXPORT com o import direto do módulo original prova que são o MESMO binding).
 const { OWNER_PAUSE_KIND: OWNER_PAUSE_KIND_SOURCE } = await import('@startap/core/silence-gate');
 
-describe('OWNER_PAUSE_KIND — reexport de @startap/core/silence-gate (fonte única)', () => {
-  it('flow-clones.ts REEXPORTA o mesmo binding de @startap/core/silence-gate, não duplica o literal', () => {
-    expect(OWNER_PAUSE_KIND).toBe(OWNER_PAUSE_KIND_SOURCE);
-  });
-});
+const OWNER_IN_DAY: OwnerState = {
+  flowEnabled: false,
+  suspendedKind: 'owner_request',
+  nextDueDate: '2099-01-01',
+  amountCents: 8500,
+};
 
-function setup(rowCountUpdate: number, sessao: string | null = 'sess_x') {
+function setup(updateRows: number, state: OwnerState = OWNER_IN_DAY) {
   calls.length = 0;
-  currentClient = makeClient(rowCountUpdate, sessao);
+  currentClient = makeClient(updateRows, state);
 }
 
-function sqlsRun(): string[] {
-  return calls.map((c) => c.sql.replace(/\s+/g, ' ').trim());
+function normalizedSql(): string[] {
+  return calls.map(({ sql }) => sql.replace(/\s+/g, ' ').trim());
 }
-function findCall(needle: string) {
-  return calls.find((c) => c.sql.replace(/\s+/g, ' ').includes(needle));
+
+function findCall(fragment: string) {
+  return calls.find(({ sql }) => sql.replace(/\s+/g, ' ').includes(fragment));
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  queryMock.mockReset();
+  invalidateCloneCache();
 });
 
-// ── pauseBotByOwner ────────────────────────────────────────────────────────────
-describe('pauseBotByOwner — pausa do dono (owner_request)', () => {
-  it('flow_enabled=true -> seta owner_request, loga suspend, changed:true', async () => {
+describe('OWNER_PAUSE_KIND', () => {
+  it('reexporta o binding canônico de @startap/core', () => {
+    expect(OWNER_PAUSE_KIND).toBe(OWNER_PAUSE_KIND_SOURCE);
+  });
+});
+
+describe('pauseBotByOwner', () => {
+  it('pausa somente clone ativo, grava owner_request e loga uma vez', async () => {
     setup(1);
-    const res = await pauseBotByOwner('clone_x', 'portal:7');
-
-    expect(res).toEqual({ changed: true, flow_enabled: false });
-
-    // UPDATE condicional: só pausa quem está ATIVO (WHERE flow_enabled = TRUE).
-    const upd = findCall('UPDATE flow_clones');
-    expect(upd?.sql.replace(/\s+/g, ' ')).toContain('flow_enabled = TRUE');
-    // kind canônico = owner_request (NUNCA billing).
-    expect(upd?.params).toEqual(['clone_x', OWNER_PAUSE_KIND, 'Pausado pelo cliente no portal']);
-    expect(upd?.sql).not.toContain('billing');
-    expect(OWNER_PAUSE_KIND).toBe('owner_request');
-
-    // Log de auditoria (suspend, actor do portal).
-    const logCall = findCall('INSERT INTO flow_suspension_log');
-    expect(logCall?.params).toEqual(['clone_x', 'Pausado pelo cliente no portal', 'portal:7']);
-    expect(logCall?.sql).toContain("'suspend'");
-
-    // COMMIT (não ROLLBACK).
-    expect(sqlsRun()).toContain('COMMIT');
-    expect(currentClient.release).toHaveBeenCalled();
+    const result = await pauseBotByOwner('clone_x', 'portal:7');
+    expect(result).toEqual({ changed: true, flow_enabled: false });
+    const update = findCall('UPDATE flow_clones');
+    expect(update?.params).toEqual(['clone_x', OWNER_PAUSE_KIND, 'Pausado pelo cliente no portal']);
+    expect(update?.sql).toContain('flow_enabled = TRUE');
+    expect(findCall('INSERT INTO flow_suspension_log')?.params).toEqual([
+      'clone_x',
+      'Pausado pelo cliente no portal',
+      'portal:7',
+    ]);
+    expect(normalizedSql()).toContain('COMMIT');
   });
 
-  it('NÃO sobrescreve suspensão da Startap: 0 linhas -> changed:false, SEM log', async () => {
-    // Já suspenso (flow_enabled=false) -> WHERE flow_enabled=TRUE não casa.
+  it('não sobrescreve suspensão existente nem duplica log', async () => {
     setup(0);
-    const res = await pauseBotByOwner('clone_x', 'portal:7');
-
-    // Estado já era pausado: devolve flow_enabled=false (correto), mas changed=false.
-    expect(res).toEqual({ changed: false, flow_enabled: false });
-    // NÃO loga nem reescreve o kind da Startap.
+    expect(await pauseBotByOwner('clone_x', 'portal:7')).toEqual({
+      changed: false,
+      flow_enabled: false,
+    });
     expect(findCall('INSERT INTO flow_suspension_log')).toBeUndefined();
-    expect(sqlsRun()).toContain('COMMIT');
   });
 
-  it('invalidateCloneCache: a pausa derruba o cache do slot (TTL 60s não atrasa)', async () => {
-    // Semeia o cache com flow_enabled=true via getCloneBySlot.
-    const queryMod = await import('../client.js');
-    const queryMock = vi.mocked(queryMod.query);
-    queryMock.mockResolvedValueOnce({
-      rows: [{ id: 1, slot: 'clone_cache', flow_enabled: true, suspended_kind: null }],
-      rowCount: 1,
-    } as never);
-    const before = await getCloneBySlot('clone_cache');
-    expect(before?.flow_enabled).toBe(true);
+  it('invalida estrutura local somente depois de mudança/commit', async () => {
+    const structural = { id: 1, slot: 'clone_cache', flow_enabled: true };
+    const operationalBefore = snapshotRow({ ...OWNER_IN_DAY, flowEnabled: true });
+    queryMock.mockResolvedValueOnce({ rows: [structural], rowCount: 1 });
+    queryMock.mockResolvedValueOnce({ rows: [operationalBefore], rowCount: 1 });
+    expect((await getCloneBySlot('clone_cache'))?.flow_enabled).toBe(true);
 
-    // Pausa: deve invalidar o cache do slot.
     setup(1);
     await pauseBotByOwner('clone_cache', 'portal:7');
-
-    // Próximo getCloneBySlot re-consulta o DB (cache invalidado), pega flow_enabled=false.
+    queryMock.mockResolvedValueOnce({ rows: [structural], rowCount: 1 });
     queryMock.mockResolvedValueOnce({
-      rows: [{ id: 1, slot: 'clone_cache', flow_enabled: false, suspended_kind: 'owner_request' }],
+      rows: [snapshotRow(OWNER_IN_DAY)],
       rowCount: 1,
-    } as never);
-    const after = await getCloneBySlot('clone_cache');
-    expect(after?.flow_enabled).toBe(false);
-    expect(after?.suspended_kind).toBe('owner_request');
-
-    invalidateCloneCache(); // limpa p/ não vazar entre testes
+    });
+    expect((await getCloneBySlot('clone_cache'))?.flow_enabled).toBe(false);
   });
 });
 
-// ── resumeBotByOwner ───────────────────────────────────────────────────────────
-describe('resumeBotByOwner — retoma só a própria pausa', () => {
-  it('owner_request -> reativa (flow_enabled=true, kind/reason/at=NULL), loga resume', async () => {
+describe('resumeBotByOwner gate-aware', () => {
+  it('owner em dia: advisory antes de row lock, limpa owner, loga e relê antes do commit', async () => {
     setup(1);
-    const res = await resumeBotByOwner('clone_x', 'portal:7');
+    const result = await resumeBotByOwner('clone_x', 'portal:7', {
+      billingOverdueSilenceOn: true,
+    });
+    expect(result).toMatchObject({ changed: true, flow_enabled: true, outcome: 'resumed' });
+    expect(result.operational?.suspended_kind).toBeNull();
 
-    expect(res).toEqual({ changed: true, flow_enabled: true });
-
-    const upd = findCall('UPDATE flow_clones');
-    const sql = upd?.sql.replace(/\s+/g, ' ') ?? '';
-    // WHERE estrito: só destrava owner_request E quando está suspenso.
-    expect(sql).toContain('flow_enabled = FALSE');
-    expect(sql).toContain('suspended_kind = $2');
-    expect(upd?.params).toEqual(['clone_x', OWNER_PAUSE_KIND]);
-    // Limpa o estado de suspensão.
-    expect(sql).toContain('suspended_kind = NULL');
-    expect(sql).toContain('suspended_reason = NULL');
-    expect(sql).toContain('suspended_at = NULL');
-
-    const logCall = findCall('INSERT INTO flow_suspension_log');
-    expect(logCall?.sql).toContain("'resume'");
-    expect(logCall?.params).toEqual(['clone_x', 'portal:7']);
-    expect(sqlsRun()).toContain('COMMIT');
+    const sql = normalizedSql();
+    const advisory = sql.findIndex((q) => q.includes('pg_advisory_xact_lock'));
+    const rowLock = sql.findIndex(
+      (q) => q.includes('FROM flow_clones') && q.includes('FOR UPDATE'),
+    );
+    const update = sql.findIndex((q) => q.includes('UPDATE flow_clones'));
+    const finalRead = sql.findIndex((q) => q.includes('FROM flow_clones fc'));
+    const commit = sql.findIndex((q) => q === 'COMMIT');
+    expect(advisory).toBeGreaterThan(-1);
+    expect(advisory).toBeLessThan(rowLock);
+    expect(rowLock).toBeLessThan(update);
+    expect(update).toBeLessThan(finalRead);
+    expect(finalRead).toBeLessThan(commit);
+    expect(findCall('INSERT INTO flow_suspension_log')?.params).toEqual(['clone_x', 'portal:7']);
   });
 
-  it('suspenso pela Startap (kind != owner_request): 0 linhas -> changed:false, SEM log', async () => {
-    // billing/manual_other/abuse NÃO casam o WHERE suspended_kind='owner_request'.
-    setup(0);
-    const res = await resumeBotByOwner('clone_x', 'portal:7');
-
-    // O cliente NÃO levanta suspensão da Startap — caller usa changed=false p/ 409.
-    expect(res).toEqual({ changed: false, flow_enabled: false });
+  it('owner overdue além da carência: 409 lógico, zero update/log', async () => {
+    setup(1, { ...OWNER_IN_DAY, nextDueDate: '2020-01-01' });
+    const result = await resumeBotByOwner('clone_x', 'portal:7', {
+      billingOverdueSilenceOn: true,
+    });
+    expect(result).toMatchObject({
+      changed: false,
+      flow_enabled: false,
+      outcome: 'billing_overdue',
+      startap_kind: null,
+    });
+    expect(findCall('UPDATE flow_clones')).toBeUndefined();
     expect(findCall('INSERT INTO flow_suspension_log')).toBeUndefined();
-    expect(sqlsRun()).toContain('COMMIT');
+  });
+
+  it('já ativo overdue também reflete billing_overdue sem escrever', async () => {
+    setup(0, {
+      ...OWNER_IN_DAY,
+      flowEnabled: true,
+      suspendedKind: null,
+      nextDueDate: '2020-01-01',
+    });
+    const result = await resumeBotByOwner('clone_x', 'portal:7', {
+      billingOverdueSilenceOn: true,
+    });
+    expect(result.outcome).toBe('billing_overdue');
+    expect(findCall('UPDATE flow_clones')).toBeUndefined();
+  });
+
+  it.each(['billing', 'manual_other', 'abuse'] as const)(
+    'suspensão Startap %s é classificada e preservada',
+    async (kind) => {
+      setup(0, { ...OWNER_IN_DAY, suspendedKind: kind });
+      const result = await resumeBotByOwner('clone_x', 'portal:7', {
+        billingOverdueSilenceOn: true,
+      });
+      expect(result).toMatchObject({
+        changed: false,
+        flow_enabled: false,
+        outcome: 'startap_suspension',
+        startap_kind: kind,
+      });
+      expect(findCall('UPDATE flow_clones')).toBeUndefined();
+      expect(findCall('INSERT INTO flow_suspension_log')).toBeUndefined();
+    },
+  );
+
+  it('já ativo em dia é idempotente, sem update/log', async () => {
+    setup(0, { ...OWNER_IN_DAY, flowEnabled: true, suspendedKind: null });
+    const result = await resumeBotByOwner('clone_x', 'portal:7', {
+      billingOverdueSilenceOn: true,
+    });
+    expect(result).toMatchObject({ changed: false, flow_enabled: true, outcome: 'already_active' });
+    expect(findCall('UPDATE flow_clones')).toBeUndefined();
+    expect(findCall('INSERT INTO flow_suspension_log')).toBeUndefined();
+  });
+
+  it('slot inexistente retorna not_found sem qualquer escrita', async () => {
+    setup(0, { ...OWNER_IN_DAY, exists: false });
+    const result = await resumeBotByOwner('clone_missing', 'portal:7', {
+      billingOverdueSilenceOn: true,
+    });
+    expect(result).toMatchObject({ outcome: 'not_found', operational: null });
+    expect(findCall('UPDATE flow_clones')).toBeUndefined();
+    expect(findCall('INSERT INTO flow_suspension_log')).toBeUndefined();
   });
 });

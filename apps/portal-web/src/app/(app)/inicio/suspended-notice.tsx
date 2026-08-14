@@ -1,66 +1,47 @@
-/**
- * Aviso quando o atendimento está pausado (flow_enabled=false). A copy varia POR
- * MOTIVO (lib/suspensao) pra NUNCA pedir "regularize a mensalidade" quando foi o
- * próprio dono que pausou (owner_request) ou a conta está em dia — só a
- * inadimplência REAL fala em cobrança. Sem dark pattern; reativação por billing/
- * suporte conforme o caso (regra de negócio: só o Bruno reativa suspensão da Startap).
- */
 import { IconAlert } from '@/components/icons';
 import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
-import type { MotivoPausa } from '@/lib/suspensao';
+import type { AvisoSuspensao } from '@/lib/suspensao';
 import Link from 'next/link';
 
-const COPY: Record<MotivoPausa, { title: string; body: string }> = {
-  owner: {
-    title: 'Você pausou o atendimento',
-    body: 'O assistente não responde no WhatsApp até você retomar. Pode retomar quando quiser — o WhatsApp segue conectado.',
-  },
-  inadimplencia: {
-    title: 'Atendimento pausado',
-    body: 'Para reativar o assistente, regularize a mensalidade. Assim que o pagamento for confirmado, o atendimento volta automaticamente.',
-  },
-  startap_outro: {
-    title: 'Atendimento pausado pela administração',
-    body: 'Para reativar o assistente, fale com o suporte. A reativação é feita pela nossa equipe.',
-  },
-};
-
-export function SuspendedNotice({ motivo }: { motivo: MotivoPausa }) {
-  const copy = COPY[motivo];
-  // Tom de alerta só pra inadimplência/admin; pausa do dono é informativa (sem alarme).
-  const tone =
-    motivo === 'owner' ? 'border-line-strong bg-surface-sunken' : 'border-warn/30 bg-warn-soft';
-  const iconCls = motivo === 'owner' ? 'text-ink-soft' : 'text-warn';
+/** Aviso persistente dos eixos que impedem resposta/processamento. */
+export function SuspendedNotice({ aviso }: { aviso: AvisoSuspensao }) {
+  const owner = aviso.motivo === 'owner';
+  const billing = aviso.motivo === 'inadimplencia';
+  const tone = owner
+    ? 'border-line-strong bg-surface-sunken'
+    : billing
+      ? 'border-danger/35 bg-danger-soft'
+      : 'border-warn/35 bg-warn-soft';
+  const iconCls = owner ? 'text-ink-soft' : billing ? 'text-danger' : 'text-warn';
+  const actionClass =
+    'mt-2 inline-flex min-h-11 items-center rounded-btn px-1 font-display text-[13px] font-semibold text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg';
 
   return (
-    <div className={`mb-3.5 flex items-start gap-3 rounded-card border px-4 py-4 ${tone}`}>
+    <section
+      className={`mb-3.5 flex items-start gap-3 rounded-card border px-4 py-4 ${tone}`}
+      role={owner ? 'status' : 'alert'}
+      aria-labelledby="suspensao-titulo"
+    >
       <IconAlert size={22} className={`mt-0.5 shrink-0 ${iconCls}`} />
-      <div>
-        <h2 className="font-display text-[15px] font-semibold text-ink">{copy.title}</h2>
-        <p className="mt-1 text-[13px] leading-normal text-ink-soft">{copy.body}</p>
-        {motivo === 'owner' ? (
-          <Link
-            href="/conectar"
-            className="mt-2 inline-block font-display text-[13px] font-semibold text-brand outline-none focus-visible:underline"
-          >
-            Retomar atendimento
+      <div className="min-w-0">
+        <h2 id="suspensao-titulo" className="font-display text-[15px] font-semibold text-ink">
+          {aviso.title}
+        </h2>
+        <p className="mt-1 text-[13px] leading-normal text-ink-soft">{aviso.body}</p>
+        {aviso.action === 'resume' ? (
+          <Link href="/conectar" className={actionClass}>
+            {aviso.actionLabel}
           </Link>
-        ) : motivo === 'inadimplencia' ? (
-          <Link
-            href="/mensalidade"
-            className="mt-2 inline-block font-display text-[13px] font-semibold text-brand outline-none focus-visible:underline"
-          >
-            Ver mensalidade
+        ) : aviso.action === 'billing' ? (
+          <Link href="/mensalidade" className={actionClass}>
+            {aviso.actionLabel}
           </Link>
         ) : (
-          <a
-            href={SUPORTE_WHATSAPP_URL}
-            className="mt-2 inline-block font-display text-[13px] font-semibold text-brand outline-none focus-visible:underline"
-          >
-            Falar com o suporte
+          <a href={SUPORTE_WHATSAPP_URL} className={actionClass}>
+            {aviso.actionLabel}
           </a>
         )}
       </div>
-    </div>
+    </section>
   );
 }

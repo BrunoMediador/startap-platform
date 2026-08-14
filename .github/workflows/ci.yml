@@ -47,6 +47,10 @@ jobs:
         run: npm run test:migrations
       - name: Tests (painel admin legado)
         run: npm run test:panel
+      - name: Build painel image + runtime import smoke
+        # O Dockerfile importa /packages/db/dist/index.js durante o build. Assim o CI
+        # barra package scope ESM/dependência runtime quebrados sem publicar imagem.
+        run: docker build --file painel-admin/Dockerfile --tag startap-painel-ci:${{ github.sha }} .
       - name: Tests (suíte Vitest na raiz)
         # SCRUM-50: o comando antigo `npm test --workspaces --if-present` PULAVA
         # 92/149 test files (~62%): apps/* (api, portal-api, portal-web, worker) NÃO

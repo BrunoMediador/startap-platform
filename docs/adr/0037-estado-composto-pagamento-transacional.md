@@ -101,9 +101,16 @@ protocolo de entrada, mas chamam o mesmo núcleo:
 O painel importará o `dist` compartilhado de `@startap/db` e passará seu próprio pool ao adaptador
 manual. Não haverá uma cópia da SQL dentro de `painel-admin/server.js`.
 
-### D4 — Ordem global de locks
+Se a chamada de `COMMIT` falhar, o adaptador não afirma rollback: a resposta do servidor pode ter
+se perdido depois da confirmação. Ele descarta a conexão, lança outcome `unknown` e obriga o
+caller a reler billing antes de qualquer retry. Criar exactly-once para esse intervalo continua
+fora do escopo (SCRUM-173).
 
-Toda operação concorrente que possa alterar billing ou liberar `owner_request` usa a mesma ordem:
+### D4 — Ordem de locks nos caminhos correctness-critical desta missão
+
+Os caminhos correctness-critical abrangidos por esta decisão — pagamento manual, webhook,
+geração/reemissão de cobrança via `withBillingSlotLock` e owner resume — usam o mesmo namespace
+`billing:<slot>` e respeitam a seguinte ordem:
 
 1. `BEGIN`;
 2. resolver o `slot` sem row lock, quando ele ainda não é conhecido;
@@ -117,9 +124,10 @@ O webhook resolve a cobrança candidata sem lock apenas para descobrir o `slot`.
 lock, ele repete o `SELECT ... FOR UPDATE` e toma todas as decisões sobre esse resultado revalidado.
 O primeiro SELECT nunca autoriza crédito nem resume.
 
-O advisory lock usa o mesmo namespace do fluxo de criação de PIX existente. Nenhum caminho pode
-tomar row lock de cobrança/clone antes dele. A ordem fixa evita deadlock manual×webhook e impede
-lost update. Locks são por slot: operações de tenants diferentes não se bloqueiam.
+O advisory lock usa o mesmo namespace do fluxo de criação de PIX existente. Esses caminhos não
+tomam row lock de cobrança/clone antes dele. A ordem fixa evita deadlock manual×webhook e impede
+lost update. Locks são por slot: operações de tenants diferentes não se bloqueiam. Este ADR não
+afirma que todo writer legado fora da missão já participa desse protocolo.
 
 ### D5 — Retomada do dono é uma decisão transacional do gate
 
@@ -206,6 +214,30 @@ WAHA. O estado efetivo é derivado no ato.
 Rejeitada. Resolver timeout gateway→attach e exactly-once manual×gateway é o SCRUM-173. Não é
 necessário para corrigir o falso resume e compartilhar a transição local.
 
+## Implementação registrada em 2026-08-13
+
+A decisão foi materializada sem schema, flag ou infraestrutura nova:
+
+- `packages/core/src/operational-state.ts` contém a projeção pública pura e delega a decisão de
+  silêncio a `resolveSilenceGate`; sua matriz vive em `operational-state.test.ts`;
+- `packages/db/src/queries/operational-state.ts` fornece a leitura uncached e a variante de lock;
+  `getCloneBySlot`/`getCloneBySession` preservam o contrato legado mesclando esse snapshot ao cache
+  apenas estrutural;
+- `packages/db/src/queries/billing-payments.ts` implementa advisory por slot, núcleo
+  in-transaction e adaptador manual; `flow-clones.ts` usa a mesma ordem no owner resume;
+- `billing-webhook-events.ts` agora descobre o slot sem row lock, toma o advisory, revalida a
+  cobrança `FOR UPDATE` e delega a transição aplicada ao núcleo compartilhado;
+- `painel-admin/server.js` passa seu próprio pool ao adaptador do DB; o Dockerfile compila e copia
+  o `dist` e o `package.json` de `@startap/db`, sem SQL manual duplicada no ramo
+  `register_payment`; o build da imagem importa o dist real como smoke antes de publicar;
+- portal status/conexão/resume, router e worker usam snapshot autoritativo nos pontos em que
+  staleness mudaria a decisão; o contrato HTTP recebeu apenas `operational_state` aditivo;
+- `billing-state.integration.test.ts` executa a matriz e as corridas reais sob PostgreSQL 16;
+  SCRUM-170 saiu do known-broken e manteve suas assertions no aceite normal.
+
+O painel/webhook conservam adaptadores distintos porque seus protocolos são diferentes. O que é
+compartilhado de verdade é a mutação comum dentro da mesma transação e do mesmo `PoolClient`.
+
 ## Consequências
 
 ### Positivas
@@ -225,14 +257,18 @@ necessário para corrigir o falso resume e compartilhar a transição local.
 
 ## Observabilidade
 
-Logs estruturados usam `slot` e `request_id` quando disponível, sem telefone, PII, valor livre de
-`suspended_reason` ou payload de gateway. Eventos mínimos:
+Logs estruturados usam `slot` e `request_id` quando o protocolo o fornece, sem telefone, PII,
+`suspended_reason` livre ou payload de gateway. O painel registra sucesso manual com `resumed` e
+duração. Falha antes de `COMMIT` é `not_applied`; falha ao confirmar `COMMIT` é `unknown`, retorna
+503 com `requires_reread=true`/`retry_safe=false` e nunca é descrita como revertida. O webhook
+mantém outcomes/dedupe/underpaid e o portal mantém os eventos de mutação. Negações são observáveis
+por códigos HTTP/enum estáveis e pela ausência de `flow_suspension_log`. Espera/contenda de
+advisory fica observável pelas visões padrão do PostgreSQL; não foi criado um segundo mecanismo de
+lock nem métrica process-local.
 
-- retomada negada, com enum `denied_reason` e sem log de mutação;
-- pagamento aplicado, origem `manual|webhook`, `resumed` e duração;
-- lock contention/timeout por operação e slot;
-- rollback, com etapa e código PG sanitizado;
-- divergência impossível entre resultado do núcleo e releitura final como erro fail-closed.
+Uma releitura final ausente é erro fail-closed e causa rollback. O teste PG16 injeta rollback,
+prova liberação do advisory e verifica que cache estrutural não antecipa commit nem deixa o eixo
+operacional stale após ele.
 
 Não serão logados payload, brCode, CPF, telefone, e-mail ou credenciais.
 

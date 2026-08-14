@@ -302,6 +302,48 @@ export interface StatusBilling {
 /** PORQUÊ da pausa (flow_enabled=false). null quando ativo OU pausa legada sem categoria. */
 export type SuspendedKind = 'billing' | 'owner_request' | 'manual_other' | 'abuse';
 
+/** Eixos públicos do estado operacional composto (ADR 0037 / SCRUM-170). */
+export type WahaOperationalState = 'working' | 'disconnected' | 'failed' | 'unknown';
+export type StartapSuspensionKind = 'billing' | 'manual_other' | 'abuse';
+export type EffectiveOperationalState =
+  | 'working'
+  | 'disconnected'
+  | 'paused_by_owner'
+  | 'blocked_billing'
+  | 'blocked_startap'
+  | 'unknown';
+export type ResumeOwnerDeniedReason =
+  | 'billing_overdue'
+  | 'startap_billing'
+  | 'startap_manual_other'
+  | 'startap_abuse';
+
+/**
+ * Projeção autoritativa retornada pela portal-api. O frontend só apresenta estes
+ * eixos: não recalcula carência, vencimento efetivo nem precedência de bloqueios.
+ */
+export interface OperationalState {
+  waha: { state: WahaOperationalState };
+  atendimento: {
+    configured: boolean;
+    processing: boolean;
+    responding: boolean;
+  };
+  owner_pause: { active: boolean };
+  billing: { blocking: boolean; dias_restantes: number | null };
+  startap_suspension: {
+    active: boolean;
+    kind: StartapSuspensionKind | null;
+  };
+  effective: EffectiveOperationalState;
+  actions: {
+    resume_owner: {
+      allowed: boolean;
+      denied_reason: ResumeOwnerDeniedReason | null;
+    };
+  };
+}
+
 export interface StatusResponse {
   slot: string;
   display_name: string | null;
@@ -311,6 +353,8 @@ export interface StatusResponse {
   waha: { session: string | null; status: string };
   pausas_ativas: number;
   billing: StatusBilling | null;
+  /** Aditivo durante rollout. Ausente = UI fail-closed, sem declarar falso ativo. */
+  operational_state?: OperationalState;
   /**
    * Fuso IANA do clone (ex.: "America/Sao_Paulo", "America/Cuiaba"). Usado pra exibir
    * datas/horas da agenda no fuso da barbearia. Backend grava em flow_clones.timezone
@@ -662,16 +706,21 @@ export interface ConexaoResponse {
   bot_paused?: boolean;
   pause_self?: boolean;
   pause_locked?: boolean;
+  /** Aditivo durante rollout. As ações continuam gated pelos campos legados acima. */
+  operational_state?: OperationalState;
 }
 
 /** POST /portal/bot/pause -> 200. Atendimento pausado pelo cliente. */
 export interface BotPauseResponse {
-  bot_paused: true;
+  bot_paused: boolean;
+  /** Opcional por retrocompatibilidade; o endpoint atual é reconciliado por refetch. */
+  operational_state?: OperationalState;
 }
 
 /** POST /portal/bot/resume -> 200. Atendimento retomado pelo cliente. */
 export interface BotResumeResponse {
-  bot_paused: false;
+  bot_paused: boolean;
+  operational_state?: OperationalState;
 }
 
 /** POST /portal/conexao/reconectar -> 202. Inicia o restart da sessao. */
@@ -707,6 +756,7 @@ export interface StatusConexaoResponse {
   status: string;
   connected: boolean;
   terminal: boolean;
+  operational_state?: OperationalState;
 }
 
 // ── Perfil do negocio (portal-perfil.ts — Missão 023 W13) ─────────────────────

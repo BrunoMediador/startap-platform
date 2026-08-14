@@ -5,30 +5,38 @@
  * BANCO (C1, C2, C4). O handler HTTP (apps/api) faz a validacao de assinatura (C3/C6)
  * e a redacao de PII (C5), e chama applyPaidWebhook() — que roda TUDO numa transacao:
  *
- *   1. INSERT billing_webhook_events ON CONFLICT (event_id) DO NOTHING  (C4 dedupe)
+ *   1. Descobre o slot candidato SEM row lock; essa leitura nunca autoriza credito.
+ *   2. Adquire o advisory transaction lock `billing:<slot>` (ADR 0037).
+ *   3. INSERT billing_webhook_events ON CONFLICT (event_id) DO NOTHING  (C4 dedupe)
  *      -> 0 linhas = replay -> retorna { outcome:'duplicate' } e sai (sem reprocessar).
- *   2. SELECT ... FROM billing_charges WHERE abacate_charge_id = $ FOR UPDATE  (C4 race)
+ *   4. Repete SELECT da cobranca FOR UPDATE e revalida slot/status sob o advisory
  *      -> nao achou = orfao -> { outcome:'orphan' }.
- *   3. Se charge.status='paid' ja -> { outcome:'already_paid' } (idempotente).
- *   4. Reconciliacao de valor (C2): se paidAmountCents < charge.amount_cents (SNAPSHOT)
+ *   5. Se charge.status='paid' ja -> { outcome:'already_paid' } (idempotente).
+ *   6. Reconciliacao de valor (C2): se paidAmountCents < charge.amount_cents (SNAPSHOT)
  *      -> marca pago, NAO avanca vencimento, NAO reativa -> { outcome:'underpaid' }.
  *      NOTA: no caso PIX o paidAmountCents pode chegar DERIVADO de `amount` (o gateway
  *      omite paidAmount no transparent.completed do PIX/simulate; o parser faz fallback
  *      fail-closed so pra PIX — ver integrations/abacatepay/webhook.ts). A reconciliacao
  *      aqui e INALTERADA: continua comparando o valor recebido contra o snapshot
  *      amount_cents; pago a menos -> underpaid, independentemente da origem do valor.
- *   5. UPDATE billing_charges SET status='paid', paid_at, paid_amount_cents.
- *   6. Avanca client_billing.next_due_date +1 mes (mesma logica do register_payment).
- *   7. Auto-resume (C1): SO se flow_enabled=false E suspended_kind='billing'
+ *   7. UPDATE billing_charges SET status='paid', paid_at, paid_amount_cents.
+ *   8. Chama o mesmo nucleo in-transaction do pagamento manual: avanca billing a partir
+ *      de max(vencimento, hoje) e faz auto-resume (C1) SO para kind='billing'
  *      -> flow_enabled=true, limpa suspended_reason/at/kind, loga resume.
  *      NUNCA reativa outros suspended_kind nem NULL.
  *
- * Tudo na MESMA transacao, guardado pela transicao de status (5) — idempotente sob
- * retry. `slot` vem SEMPRE do registro de billing_charges casado, nunca de campo
- * livre do payload (anti-spoof do slot).
+ * Tudo na MESMA transacao; advisory, dedupe e transicao de status preservam atomicidade
+ * e idempotencia sob retry. `slot` vem SEMPRE do registro de billing_charges casado,
+ * nunca de campo livre do payload (anti-spoof do slot).
  */
+import type { PoolClient } from 'pg';
 import { pool, query } from '../client.js';
-import { advanceDueDate, advanceFromMaxDue } from './client-billing.js';
+import {
+  acquireBillingSlotAdvisoryLock,
+  applyPaymentTransitionInTransaction,
+} from './billing-payments.js';
+import type { ClientBillingRow } from './client-billing.js';
+import { type OperationalSnapshot, getOperationalSnapshotBySlot } from './operational-state.js';
 
 export interface BillingWebhookEventRow {
   event_id: string;
@@ -63,6 +71,9 @@ export interface PaidWebhookResult {
    * Consumido pelo alerta de "cliente NOVO pagou" (NAO alerta renovacao).
    */
   firstPayment: boolean;
+  /** Releitura final da transição aplicada; null/ausente nos outcomes sem avanço. */
+  billing?: ClientBillingRow | null;
+  operational?: OperationalSnapshot | null;
 }
 
 export interface ApplyPaidWebhookInput {
@@ -88,15 +99,57 @@ export interface ApplyPaidWebhookInput {
   actor?: string;
   /** meses a avancar (default 1). */
   cycleMonths?: number;
-  /**
-   * Modelo por DATA DE VENCIMENTO (ADR 0014). Default false (legado).
-   *   - false: avanca a partir de next_due_date puro (comportamento ATUAL — flag OFF).
-   *   - true : avanca max(next_due_date, hoje) + cycleMonths (nao renova pro passado em
-   *            re-cobranca/vencido). Vem de config.BILLING_DUE_DATE_MODEL no handler.
-   * NAO muda nada alem do calculo do novo vencimento — dedupe/underpaid/auto-resume
-   * permanecem identicos.
-   */
+  /** @deprecated Mantido apenas por compatibilidade de caller; ADR 0037 usa sempre max(due, hoje). */
   dueDateModel?: boolean;
+}
+
+type ChargeRow = { id: string; slot: string; amount_cents: number; status: string };
+
+async function discoverChargeSlot(
+  client: PoolClient,
+  input: Pick<ApplyPaidWebhookInput, 'abacateChargeId' | 'externalId'>,
+): Promise<string | null> {
+  const primary = await client.query<{ slot: string }>(
+    'SELECT slot FROM billing_charges WHERE abacate_charge_id = $1 LIMIT 1',
+    [input.abacateChargeId],
+  );
+  if (primary.rows[0]) return primary.rows[0].slot;
+  if (!input.externalId) return null;
+  const fallback = await client.query<{ slot: string }>(
+    `SELECT slot
+       FROM billing_charges
+      WHERE external_id = $1 AND status = 'pending'
+      ORDER BY id DESC
+      LIMIT 1`,
+    [input.externalId],
+  );
+  return fallback.rows[0]?.slot ?? null;
+}
+
+async function revalidateCharge(
+  client: PoolClient,
+  input: Pick<ApplyPaidWebhookInput, 'abacateChargeId' | 'externalId'>,
+): Promise<ChargeRow | null> {
+  const primary = await client.query<ChargeRow>(
+    `SELECT id::text AS id, slot, amount_cents, status
+       FROM billing_charges
+      WHERE abacate_charge_id = $1
+      FOR UPDATE`,
+    [input.abacateChargeId],
+  );
+  if (primary.rows[0]) return primary.rows[0];
+  if (!input.externalId) return null;
+  const fallback = await client.query<ChargeRow>(
+    `SELECT id::text AS id, slot, amount_cents, status
+       FROM billing_charges
+      WHERE external_id = $1
+        AND status = 'pending'
+      ORDER BY id DESC
+      LIMIT 1
+      FOR UPDATE`,
+    [input.externalId],
+  );
+  return fallback.rows[0] ?? null;
 }
 
 /**
@@ -113,7 +166,15 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
   try {
     await client.query('BEGIN');
 
-    // ── (1) Dedupe atomico (C4). 0 linhas = replay -> sai. ──────────────────────
+    // Descoberta sem row lock: serve SOMENTE para obter a chave do advisory. Toda decisão
+    // de crédito usa a releitura FOR UPDATE feita depois do lock.
+    const discoveredSlot = await discoverChargeSlot(client, input);
+    if (discoveredSlot) {
+      await acquireBillingSlotAdvisoryLock(client, discoveredSlot);
+    }
+
+    // ── (1) Dedupe atomico (C4). Fica depois do advisory quando há slot conhecido,
+    // preservando uma ordem global de locks entre manual/webhook/owner resume.
     const dedupe = await client.query<{ event_id: string }>(
       `INSERT INTO billing_webhook_events (event_id, event, payload, received_at)
        VALUES ($1, $2, $3::jsonb, NOW())
@@ -134,42 +195,10 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
       };
     }
 
-    // ── (2) Casa a cobranca por abacate_charge_id, com FOR UPDATE (C4 race). ─────
-    type ChargeRow = { id: string; slot: string; amount_cents: number; status: string };
-    const chargeRes = await client.query<ChargeRow>(
-      `SELECT id::text AS id, slot, amount_cents, status
-         FROM billing_charges
-        WHERE abacate_charge_id = $1
-        FOR UPDATE`,
-      [input.abacateChargeId],
-    );
-    let charge = chargeRes.rows[0];
-
-    // ── (2b) FALLBACK por external_id (SCRUM-139) ────────────────────────────────
-    // O match primario nao achou. Uma reemissao (reissueGatewayDataById) pode ter
-    // SOBRESCRITO o abacate_charge_id na linha — o id do QR VELHO pago some do match
-    // primario. external_id ("{slot}-{ciclo}") e ESTAVEL entre reemissoes (indice
-    // idx_billing_charges_external_id, migration 041) e casa a mesma cobranca.
-    //
-    // DESEMPATE DETERMINISTICO (migration 043 permite 2+ linhas por (slot,ciclo) via
-    // expira->regenera): SO status='pending' e a MAIS RECENTE (ORDER BY id DESC LIMIT 1),
-    // sob FOR UPDATE (serializa como o match primario). O filtro status='pending' e a
-    // trava anti-duplo-credito: uma linha JA 'paid' NUNCA e selecionada aqui — logo o
-    // fallback nunca reescreve/credita duas vezes uma cobranca paga (idempotencia
-    // preservada). A reconciliacao de valor (C2) roda igual abaixo, contra o snapshot
-    // amount_cents da linha casada. Sem external_id no input -> pula o fallback.
-    if (!charge && input.externalId) {
-      const byExternal = await client.query<ChargeRow>(
-        `SELECT id::text AS id, slot, amount_cents, status
-           FROM billing_charges
-          WHERE external_id = $1
-            AND status = 'pending'
-          ORDER BY id DESC
-          LIMIT 1
-          FOR UPDATE`,
-        [input.externalId],
-      );
-      charge = byExternal.rows[0];
+    // ── (2) Revalida a cobrança sob advisory + FOR UPDATE (C4 race). ─────────────
+    const charge = discoveredSlot ? await revalidateCharge(client, input) : null;
+    if (charge && charge.slot !== discoveredSlot) {
+      throw new Error('billing charge slot changed during revalidation');
     }
 
     if (!charge) {
@@ -234,6 +263,7 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
 
     if (underpaid) {
       // C2: pago a menos. NAO avanca vencimento, NAO reativa. Handler alerta o Bruno.
+      const operational = await getOperationalSnapshotBySlot(charge.slot, client);
       await client.query(
         'UPDATE billing_webhook_events SET processed_at = NOW() WHERE event_id = $1',
         [input.eventId],
@@ -246,78 +276,19 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
         amountCents,
         paidAmountCents: input.paidAmountCents,
         firstPayment: false,
+        operational,
       };
     }
 
-    // ── (6) Avanca o vencimento (mesma logica do register_payment). ─────────────
-    // Le o vencimento atual DENTRO da transacao e avanca +cycleMonths. Se nao havia
-    // next_due_date, parte de hoje (UTC). Calculo deterministico via advanceDueDate.
-    const billingRes = await client.query<{
-      next_due_date: string | null;
-      first_payment: boolean;
-    }>(
-      `SELECT to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
-              (last_payment_at IS NULL) AS first_payment
-         FROM client_billing WHERE slot = $1 FOR UPDATE`,
-      [charge.slot],
-    );
-    const currentDue = billingRes.rows[0]?.next_due_date ?? null;
-    // PRIMEIRO pagamento = cliente novo virou pagante. last_payment_at so e
-    // preenchido por applyPaidWebhook/registerPayment; ANTES deste webhook
-    // estar NULL significa que nunca pagou (signup/trial deixam NULL). Se nao ha
-    // linha de billing (caso teorico — sempre ha pra charge casada), trata como
-    // primeiro pagamento (default true do COALESCE).
-    const firstPayment = billingRes.rows[0]?.first_payment ?? true;
-    // Modelo novo (ADR 0014): max(due, hoje) + cycleMonths — vencido/re-cobranca NUNCA
-    // renova pro passado. Legado (flag OFF): a partir de next_due_date puro (ou hoje se
-    // ausente) — comportamento ATUAL preservado byte-a-byte quando dueDateModel=false.
-    const newDue = input.dueDateModel
-      ? advanceFromMaxDue(currentDue, new Date(), cycleMonths)
-      : advanceDueDate(currentDue ?? new Date().toISOString().slice(0, 10), cycleMonths);
-
-    // Dual-write tenant_id (ADR 0018, Fase 2): subselect inline em flow_clones —
-    // resolve NULL sozinho p/ slot sem clone, nunca derruba o upsert.
-    // Slot do subselect é parâmetro SEPARADO ($3) — não reusa $1 (evita
-    // "inconsistent types deduced for parameter $1" entre os varchars de slot).
-    await client.query(
-      `INSERT INTO client_billing (slot, next_due_date, status, last_payment_at, created_at, updated_at, tenant_id)
-       VALUES ($1, $2, 'active', NOW(), NOW(), NOW(),
-         (SELECT tenant_id FROM flow_clones WHERE slot = $3))
-       ON CONFLICT (slot) DO UPDATE SET
-         next_due_date   = $2,
-         status          = 'active',
-         last_payment_at = NOW(),
-         updated_at      = NOW(),
-         tenant_id       = COALESCE(client_billing.tenant_id, EXCLUDED.tenant_id)`,
-      [charge.slot, newDue, charge.slot],
-    );
-
-    // ── (7) Auto-resume (C1): SO se suspenso por billing. ───────────────────────
-    // UPDATE condicional: flow_enabled=false E suspended_kind='billing'. Qualquer
-    // outro kind (owner_request/manual_other/abuse) ou NULL nao casa o WHERE — 0
-    // linhas, nenhuma reativacao. Anti-falso-resume na propria query (sem string-match).
-    const resumeRes = await client.query<{ slot: string }>(
-      `UPDATE flow_clones
-          SET flow_enabled     = true,
-              suspended_reason = NULL,
-              suspended_at     = NULL,
-              suspended_kind   = NULL,
-              updated_at       = NOW()
-        WHERE slot = $1
-          AND flow_enabled = false
-          AND suspended_kind = 'billing'
-        RETURNING slot`,
-      [charge.slot],
-    );
-    const resumed = (resumeRes.rowCount ?? 0) > 0;
-
-    if (resumed) {
-      await client.query(
-        `INSERT INTO flow_suspension_log (slot, action, reason, actor)
-         VALUES ($1, 'resume', 'pagamento PIX confirmado', $2)`,
-        [charge.slot, actor],
-      );
-    }
+    // ── (6-7) Núcleo compartilhado: max(due, hoje), billing ativo, resume só billing,
+    // log condicional e releitura final na mesma transação.
+    const transition = await applyPaymentTransitionInTransaction(client, {
+      slot: charge.slot,
+      actor,
+      cycleMonths,
+      resumeReason: 'pagamento PIX confirmado',
+    });
+    if (!transition) throw new Error('paid charge references missing flow clone');
 
     await client.query(
       'UPDATE billing_webhook_events SET processed_at = NOW() WHERE event_id = $1',
@@ -328,10 +299,12 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
     return {
       outcome: 'applied',
       slot: charge.slot,
-      resumed,
+      resumed: transition.resumed,
       amountCents,
       paidAmountCents: input.paidAmountCents,
-      firstPayment,
+      firstPayment: transition.firstPayment,
+      billing: transition.billing,
+      operational: transition.operational,
     };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

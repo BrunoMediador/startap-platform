@@ -4,7 +4,7 @@
  * Prova:
  *  - CURTO-CIRCUITO no env: quando o env cobre o slot (ou é '*'), retorna true SEM tocar o banco
  *    (byte-idêntico + zero leitura extra pra quem já roda hoje).
- *  - LEITURA da coluna: quando o env NÃO cobre, lê o clone (cache getCloneBySlot) e devolve a coluna.
+ *  - LEITURA da coluna: quando o env NÃO cobre, lê só a estrutura cacheada e devolve a coluna.
  *  - AMBOS OFF -> off; clone ausente -> off (fail-safe).
  *  - BYTE-IDENTIDADE dos 4 clones vivos com os envs atuais.
  *

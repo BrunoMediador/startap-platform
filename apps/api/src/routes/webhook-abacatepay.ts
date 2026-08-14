@@ -189,9 +189,6 @@ export const abacatePayWebhookRoute: FastifyPluginAsync = async (app) => {
         paidAmountCents: evt.paidAmountCents,
         redactedPayload,
         actor: 'abacatepay-webhook',
-        // ADR 0014: flag OFF (default) = avanco legado (a partir de next_due_date puro);
-        // ON = max(due, hoje)+1mes (nao renova pro passado). So muda o calculo da data.
-        dueDateModel: config.BILLING_DUE_DATE_MODEL,
       });
 
       if (result.resumed && result.slot) {

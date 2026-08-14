@@ -7,7 +7,8 @@
  *   (next_due_date / dias restantes / status).
  */
 import { logger } from '@startap/core/logger';
-import { clientBilling, flowClones, portalConfig } from '@startap/db';
+import { projectOperationalState } from '@startap/core/operational-state';
+import { clientBilling, flowClones, operationalState, portalConfig } from '@startap/db';
 import { waha } from '@startap/integrations';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -42,8 +43,11 @@ export const portalStatusRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/portal/status', { preHandler: withTenant }, async (req, reply) => {
     const { slot } = requireTenant(req);
-    const clone = await flowClones.getCloneBySlot(slot);
-    if (!clone) return reply.code(404).send({ error: 'fluxo nao encontrado' });
+    const [clone, operational] = await Promise.all([
+      flowClones.getCloneBySlot(slot),
+      operationalState.getOperationalSnapshotBySlot(slot),
+    ]);
+    if (!clone || !operational) return reply.code(404).send({ error: 'fluxo nao encontrado' });
 
     const session = clone.waha_sessao;
 
@@ -72,11 +76,11 @@ export const portalStatusRoutes: FastifyPluginAsync = async (app) => {
       // Fuso (IANA) do clone (migration 068) — o frontend usa pra rotular horários no
       // relógio da barbearia. Default 'America/Sao_Paulo' (clone sem fuso declarado).
       timezone: clone.timezone,
-      flow_enabled: clone.flow_enabled,
+      flow_enabled: operational.flow_enabled,
       // PORQUÊ da pausa (∈ billing|owner_request|manual_other|abuse|null). A Home
       // usa isto pra NÃO confundir pausa do dono (owner_request) com inadimplência:
       // só mostra "regularize a mensalidade" quando é cobrança de verdade.
-      suspended_kind: clone.suspended_kind,
+      suspended_kind: operational.suspended_kind,
       waha: { session, status: wahaStatus },
       pausas_ativas: pausasAtivas,
       billing: billing
@@ -86,6 +90,21 @@ export const portalStatusRoutes: FastifyPluginAsync = async (app) => {
             status: billing.status,
           }
         : null,
+      operational_state: projectOperationalState(
+        {
+          atendimentoConfigured: operational.atendimento_configured,
+          wahaStatus,
+          flow_enabled: operational.flow_enabled,
+          suspended_kind: operational.suspended_kind,
+          next_due_date: operational.next_due_date,
+          billing_amount_cents: operational.billing_amount_cents,
+        },
+        {
+          graceDays: clientBilling.GRACE_DAYS,
+          daysUntilDue: (nextDueDate) => clientBilling.daysUntilDue(nextDueDate),
+          billingOverdueSilenceOn: process.env.BILLING_OVERDUE_SILENCE === 'true',
+        },
+      ),
     });
   });
 };

@@ -1,7 +1,7 @@
 {
   "jira": "SCRUM-171",
   "notAcceptance": true,
-  "expectedFailures": 2,
+  "expectedFailures": 1,
   "report": "/artifacts/known-broken-results.json",
   "items": [
     {
@@ -12,15 +12,6 @@
       "causeId": "missing-transactional-format-endpoint",
       "expectedErrorFragments": ["Expected: 200", "Received: 404"],
       "reason": "A operação transacional completa das oito variáveis do ADR 0034 ainda não existe no runtime. O harness não mascara isso nem altera produção."
-    },
-    {
-      "jira": "SCRUM-170",
-      "priority": "P1",
-      "area": "composite-state-ui",
-      "test": "SCRUM-170 expected-red: overdue não comunica retomada efetiva de owner_request",
-      "causeId": "owner-resume-ignores-overdue-silence",
-      "expectedErrorFragments": ["Expected: 409", "Received: 200"],
-      "reason": "Retomar owner_request enquanto overdue ainda pode comunicar falso sucesso. A matriz E2E prova o gate e o pagamento, mas não conta essa UX/API como aceita."
     }
   ]
 }

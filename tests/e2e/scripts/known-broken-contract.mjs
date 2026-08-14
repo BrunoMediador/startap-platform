@@ -29,8 +29,8 @@ export function validateKnownBrokenRun({ manifest, report, processResult, report
   if (!Array.isArray(report?.errors) || report.errors.length !== 0) {
     errors.push('report contém erro global ou campo errors inválido');
   }
-  if (manifest?.expectedFailures !== 2 || manifestItems.length !== 2) {
-    errors.push('known-broken exige exatamente dois casos manifestados');
+  if (manifest?.expectedFailures !== 1 || manifestItems.length !== 1) {
+    errors.push('known-broken exige exatamente um caso manifestado');
   }
   if (manifest?.expectedFailures !== manifestItems.length) {
     errors.push('manifest expectedFailures diverge do número de items');
