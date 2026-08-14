@@ -1,0 +1,348 @@
+name: Backup resilience detector
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Restricted status, anchor bootstrap, or local disposable drill
+        required: true
+        default: status
+        type: choice
+        options:
+          - status
+          - anchor-bootstrap
+          - drill
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: backup-resilience-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'status' }}
+  cancel-in-progress: false
+
+jobs:
+  status:
+    name: Freshness plus independent append-only anchor
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'schedule' && vars.BACKUP_RESILIENCE_DETECTOR_ENABLED == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.operation == 'status'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # These secrets exist only in this branch-restricted Environment. The `if`
+    # is defense in depth; branch YAML cannot grant itself Environment access.
+    environment: backup-status-main
+    steps:
+      - name: Checkout pinned detector code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Configure pinned restricted and read-only SSH identities
+        shell: bash
+        env:
+          STATUS_SSH_KEY: ${{ secrets.BACKUP_STATUS_SSH_KEY }}
+          BACKUP_READONLY_KEY: ${{ secrets.BACKUP_REPO_READONLY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "$STATUS_SSH_KEY"
+          test -n "$BACKUP_READONLY_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/backup-ssh"
+          printf '%s\n' "$STATUS_SSH_KEY" > "$RUNNER_TEMP/backup-ssh/status_ed25519"
+          printf '%s\n' "$BACKUP_READONLY_KEY" > "$RUNNER_TEMP/backup-ssh/readonly_ed25519"
+          install -m 0600 .github/backup-known_hosts "$RUNNER_TEMP/backup-ssh/known_hosts"
+          chmod 0600 "$RUNNER_TEMP/backup-ssh/"*_ed25519 "$RUNNER_TEMP/backup-ssh/known_hosts"
+          ssh-keygen -F 187.77.242.220 -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh-keygen -F github.com -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh-keygen -l -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 > "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'hostname 187.77.242.220' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/status.effective"
+
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/readonly_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            git@github.com > "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'hostname github.com' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'user git' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+
+      - name: Read sanitized recovery status
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=5s 30s ssh -F /dev/null \
+            -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 status \
+            > backup-health.json 2> "$RUNNER_TEMP/backup-ssh/status.err"
+          ssh_exit=$?
+          set -e
+          test -s backup-health.json
+          jq -e '.schema_version == 1 and .state == "healthy" and
+            .offsite.state == "healthy" and .automation_identity.available == true and
+            .recovery_tuple_coherent == true and
+            .external_anchor_required == true and
+            .alert_delivery_affects_validity == false' backup-health.json >/dev/null
+          if grep -Eqi '"(phone|telefone|cpf|chat|prompt|token|credential|secret)"[[:space:]]*:' backup-health.json; then
+            echo 'sanitization gate rejected status payload' >&2
+            exit 1
+          fi
+          test "$ssh_exit" -eq 0
+
+      - name: Recover previous anchor from Startap workflow artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts?name=backup-anchor&per_page=100"
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' "$api" \
+            -o "$RUNNER_TEMP/artifacts.json"
+          artifact_id="$(jq -r --argjson current "$GITHUB_RUN_ID" '
+            [.artifacts[] | select(.expired == false) |
+              select(.workflow_run.head_branch == "main") |
+              select((.workflow_run.id // 0) != $current)] |
+            sort_by(.created_at) | last | .id // empty
+          ' "$RUNNER_TEMP/artifacts.json")"
+          test -n "$artifact_id"
+          previous_run_id="$(jq -r --argjson artifact "$artifact_id" '
+            .artifacts[] | select(.id == $artifact) | .workflow_run.id
+          ' "$RUNNER_TEMP/artifacts.json")"
+          printf '%s' "$previous_run_id" | grep -Eq '^[1-9][0-9]*$'
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$previous_run_id" \
+            -o "$RUNNER_TEMP/previous-run.json"
+          jq -e '.path == ".github/workflows/backup-resilience-detector.yml" and
+            .head_branch == "main" and .conclusion == "success" and
+            (.event == "schedule" or .event == "workflow_dispatch")' \
+            "$RUNNER_TEMP/previous-run.json" >/dev/null
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+            -o "$RUNNER_TEMP/previous-anchor.zip"
+          test "$(unzip -Z1 "$RUNNER_TEMP/previous-anchor.zip" | grep -Fxc anchor.json)" -eq 1
+          unzip -p "$RUNNER_TEMP/previous-anchor.zip" anchor.json > previous-anchor.json
+          jq -e '.schema_version == 2' previous-anchor.json >/dev/null
+
+      - name: Clone offsite repository through read-only deploy key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false
+          export GIT_SSH_COMMAND="ssh -F /dev/null -i $RUNNER_TEMP/backup-ssh/readonly_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/backup-ssh/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -o ConnectionAttempts=1"
+          timeout --signal=TERM --kill-after=10s 15m git clone \
+            --filter=blob:none --single-branch --branch main \
+            git@github.com:BrunoMediador/startap-backups.git "$RUNNER_TEMP/startap-backups"
+
+      - name: Verify ancestry and anchored recovery tuple
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scripts/backup-resilience/anchor-verify.sh verify \
+            "$RUNNER_TEMP/startap-backups" backup-health.json previous-anchor.json anchor.json
+          printf '### Backup recovery proof\n\n- state: `healthy`\n- external anchor: `verified`\n- local age (s): `%s`\n- offsite age (s): `%s`\n' \
+            "$(jq -r '.local.age_seconds' backup-health.json)" \
+            "$(jq -r '.offsite.age_seconds' backup-health.json)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish new append-only anchor
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backup-anchor
+          path: |
+            anchor.json
+            backup-health.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove restricted SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/backup-ssh/status_ed25519" "$RUNNER_TEMP/backup-ssh/readonly_ed25519"
+
+  anchor-bootstrap:
+    name: One-time reviewed external anchor bootstrap
+    if: >-
+      github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'anchor-bootstrap' &&
+      vars.BACKUP_ANCHOR_BOOTSTRAP_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: backup-recovery-main
+    steps:
+      - name: Checkout pinned detector code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Refuse bootstrap when any prior anchor artifact exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts?name=backup-anchor&per_page=1" \
+            -o "$RUNNER_TEMP/artifacts.json"
+          test "$(jq -r '.total_count' "$RUNNER_TEMP/artifacts.json")" -eq 0
+      - name: Configure restricted read-only identities and fetch tuple
+        shell: bash
+        env:
+          STATUS_SSH_KEY: ${{ secrets.BACKUP_STATUS_SSH_KEY }}
+          BACKUP_READONLY_KEY: ${{ secrets.BACKUP_REPO_READONLY_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "$STATUS_SSH_KEY"; test -n "$BACKUP_READONLY_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/backup-ssh"
+          printf '%s\n' "$STATUS_SSH_KEY" > "$RUNNER_TEMP/backup-ssh/status_ed25519"
+          printf '%s\n' "$BACKUP_READONLY_KEY" > "$RUNNER_TEMP/backup-ssh/readonly_ed25519"
+          install -m 0600 .github/backup-known_hosts "$RUNNER_TEMP/backup-ssh/known_hosts"
+          ssh-keygen -F 187.77.242.220 -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh-keygen -F github.com -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 > "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'hostname 187.77.242.220' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/status.effective"
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/readonly_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            git@github.com > "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'hostname github.com' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'user git' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/readonly.effective"
+          timeout --signal=TERM --kill-after=5s 30s ssh -F /dev/null \
+            -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 status > backup-health.json
+          jq -e '.state == "healthy" and .offsite.state == "healthy" and
+            .automation_identity.available == true and
+            .recovery_tuple_coherent == true' backup-health.json >/dev/null
+          export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false
+          export GIT_SSH_COMMAND="ssh -F /dev/null -i $RUNNER_TEMP/backup-ssh/readonly_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/backup-ssh/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -o ConnectionAttempts=1"
+          timeout --signal=TERM --kill-after=10s 15m git clone \
+            --filter=blob:none --single-branch --branch main \
+            git@github.com:BrunoMediador/startap-backups.git "$RUNNER_TEMP/startap-backups"
+          scripts/backup-resilience/anchor-verify.sh bootstrap \
+            "$RUNNER_TEMP/startap-backups" backup-health.json - anchor.json
+      - name: Publish initial reviewed anchor
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backup-anchor
+          path: |
+            anchor.json
+            backup-health.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove restricted SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/backup-ssh/status_ed25519" "$RUNNER_TEMP/backup-ssh/readonly_ed25519"
+
+  drill:
+    name: Controlled local real-artifact restore drill
+    if: >-
+      github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'drill' &&
+      vars.BACKUP_RESTORE_DRILL_DISPATCH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    environment: backup-recovery-main
+    steps:
+      - name: Checkout pinned detector code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Configure pinned restricted SSH
+        shell: bash
+        env:
+          STATUS_SSH_KEY: ${{ secrets.BACKUP_STATUS_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test -n "$STATUS_SSH_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/backup-ssh"
+          printf '%s\n' "$STATUS_SSH_KEY" > "$RUNNER_TEMP/backup-ssh/status_ed25519"
+          install -m 0600 .github/backup-known_hosts "$RUNNER_TEMP/backup-ssh/known_hosts"
+          ssh-keygen -F 187.77.242.220 -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 > "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'hostname 187.77.242.220' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/status.effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/status.effective"
+      - name: Dispatch isolated VPS drill and read sanitized proof
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          timeout --signal=TERM --kill-after=30s 90m ssh -F /dev/null \
+            -i "$RUNNER_TEMP/backup-ssh/status_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+            startap-backup-status@187.77.242.220 drill > backup-drill.json
+          jq -e '.schema_version == 1 and .status == "success" and
+            .postgres_major == 16 and .production_target == false and
+            .teardown_complete == true and .critical_tables == true and
+            .primary_keys == true and .foreign_keys == true and
+            .critical_indexes == true and .sanitized_invariants == true' backup-drill.json >/dev/null
+          if grep -Eqi '"(phone|telefone|cpf|chat|prompt|token|credential|secret)"[[:space:]]*:' backup-drill.json; then
+            echo 'sanitization gate rejected drill payload' >&2
+            exit 1
+          fi
+          printf '### Restore drill\n\n- PG: `16`\n- RTO end-to-end (s): `%s`\n- teardown: `complete`\n' \
+            "$(jq -r '.rto_seconds' backup-drill.json)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve sanitized drill evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: backup-drill-${{ github.run_id }}
+          path: backup-drill.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove restricted SSH material
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/backup-ssh/status_ed25519"

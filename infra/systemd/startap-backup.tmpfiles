@@ -1,0 +1,24 @@
+# Backups are never removed by tmpfiles. There are intentionally no age/retention rules here.
+d /var/lib/startap-backup                     0711 root                      root                      -
+d /var/lib/startap-backup/incoming            0700 startap-backup-producer   startap-backup-producer   -
+d /var/lib/startap-backup/sealed              0750 root                      startap-backup-validator  -
+d /var/lib/startap-backup/generations         0750 root                      startap-backup-readers    -
+d /var/lib/startap-backup/drills              0700 root                      root                      -
+d /var/lib/startap-backup/drill-journal       0700 root                      root                      -
+d /var/lib/startap-backup-attestations        0700 startap-backup-validator  startap-backup-validator  -
+d /var/lib/startap-backup-uploader            0700 startap-backup-upload     startap-backup-upload     -
+d /var/lib/startap-backup-status              0755 root                      root                      -
+d /var/lib/startap-backup-status/offsite      0700 startap-backup-upload     startap-backup-upload     -
+d /var/lib/startap-backup-status/local        0700 root                      root                      -
+d /var/lib/startap-backup-status-ssh          0700 startap-backup-status     startap-backup-status     -
+d /var/lib/startap-backup-status-ssh/.ssh     0700 startap-backup-status     startap-backup-status     -
+d /var/lib/startap-backup-legacy-ssh          0700 startap-backup-legacy-dump startap-backup-legacy-dump -
+d /var/lib/startap-backup-legacy-ssh/.ssh     0700 startap-backup-legacy-dump startap-backup-legacy-dump -
+d /run/startap-backup-legacy-dump             0700 root                      root                      -
+d /run/startap-backup-dump-helper             0700 root                      root                      -
+d /run/startap-backup-dump-helper/quarantine  0700 root                      root                      -
+d /run/startap-backup-bridge                  0755 root                      root                      -
+d /run/startap-backup-bridge/producer         0750 startap-backup-producer   startap-backup-bridge     -
+d /run/startap-backup-bridge/root             0750 root                      startap-backup-bridge     -
+d /run/startap-backup-drill-query             0700 root                      root                      -
+d /var/lib/startap-backup-drill               0700 startap-backup-drill      startap-backup-drill      -

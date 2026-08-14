@@ -1,0 +1,14 @@
+[Unit]
+Description=Stop fixed dump helper and clean its FIFO runtime on request
+ConditionPathExists=/etc/startap-backup/ENABLED
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Path]
+PathExists=/run/startap-backup-producer/cleanup-request
+Unit=startap-backup-dump-cleanup.service
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

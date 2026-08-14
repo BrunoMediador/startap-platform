@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Startap backup freshness check
+
+[Timer]
+OnBootSec=10m
+OnUnitInactiveSec=1h
+RandomizedDelaySec=3m
+Persistent=true
+Unit=startap-backup-freshness.service
+
+[Install]
+WantedBy=timers.target
+

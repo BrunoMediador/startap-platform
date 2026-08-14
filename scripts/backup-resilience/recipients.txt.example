@@ -1,0 +1,6 @@
+# Exactly two public recipients are required before activation:
+# 1) Bruno's existing offline recovery recipient (public half only)
+# 2) the approved dedicated automation recipient (public half only)
+REPLACE_WITH_BRUNO_PUBLIC_AGE_RECIPIENT
+REPLACE_WITH_AUTOMATION_PUBLIC_AGE_RECIPIENT_AFTER_GO_A
+

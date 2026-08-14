@@ -1,0 +1,2 @@
+# Replace only the public-key field. The private key belongs exclusively to GitHub Environment backup-legacy-main.
+restrict,command="/usr/local/libexec/startap-backup/legacy-dump-command.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 REPLACE_WITH_LEGACY_DUMP_PUBLIC_KEY

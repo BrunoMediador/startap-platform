@@ -1,0 +1,38 @@
+[Unit]
+Description=Seal Startap incoming backup into immutable root-owned quarantine
+ConditionPathExists=/etc/startap-backup/ENABLED
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/startap-backup/seal.sh
+UMask=0077
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/startap-backup-bridge/producer /var/lib/startap-backup
+InaccessiblePaths=/run/startap-backup-producer /var/lib/startap-backup/drill-journal /var/run/docker.sock /opt/automacoes/code/.env /etc/startap-backup/credentials
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-seal

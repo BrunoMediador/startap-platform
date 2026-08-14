@@ -1,0 +1,14 @@
+[Unit]
+Description=Reconcile producer tmpfs after every start/stop, including SIGKILL
+ConditionPathExists=/etc/startap-backup/ENABLED
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Path]
+PathExists=/run/startap-backup-bridge/producer/reconcile-request
+Unit=startap-backup-producer-reconcile.service
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=6
+
+[Install]
+WantedBy=multi-user.target

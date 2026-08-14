@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "key_id": "replace-with-approved-vps-only-key-id",
+  "repository": "BrunoMediador/startap-backups",
+  "scope": "single-repository-write",
+  "vps_only": true,
+  "reused_existing_key": false,
+  "approved_go_b": false
+}
+

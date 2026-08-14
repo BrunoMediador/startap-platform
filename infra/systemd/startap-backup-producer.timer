@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Startap encrypted PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 America/Sao_Paulo
+RandomizedDelaySec=15m
+Persistent=true
+AccuracySec=1m
+Unit=startap-backup-cycle.service
+
+[Install]
+WantedBy=timers.target

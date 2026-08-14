@@ -1,307 +1,206 @@
-# Runbook: Backup Postgres → startap-backups
+# Runbook — backup PostgreSQL resiliente
 
-## Visão geral
+> Status em 14/08/2026: implementação versionada, **não ativada**. O workflow
+> legado continua sendo o produtor agendado até o rollout controlado provar o
+> timer local. GO A (custódia age) e GO B (deploy key VPS-only) são obrigatórios.
 
-O backup diário do banco `startap_database` é feito via GitHub Actions:
-1. `pg_dump` executa **dentro** do container `automacoes-postgres-1` no VPS
-2. O dump é comprimido com `gzip` no runner do GitHub Actions (não consome disco do VPS)
-3. O arquivo é commitado no repositório privado `BrunoMediador/startap-backups` com path `dumps/YYYY/MM/YYYY-MM-DD-HHMMSS.sql.gz`
-4. Um cleanup semanal remove dumps diários > 30 dias, mantendo 1 por semana (cobertura de ~6 meses)
+## Resultado esperado
 
-## Secrets GitHub necessárias
+Uma execução saudável produz, nesta ordem:
 
-Configurar em **github.com/BrunoMediador/startap-platform → Settings → Secrets → Actions**:
+1. dump PostgreSQL 16 em tmpfs `/run`, com `umask 077`, limite de tamanho e
+   `LimitCORE=0`/`MemorySwapMax=0`;
+2. gzip validado e cifrado obrigatoriamente com **dois** recipients age;
+3. `manifest.json`, `SHA256SUMS`, `PREPARED` e decrypt real pela identidade de
+   automação em unit sem rede;
+4. geração root-owned promovida atomicamente em
+   `/var/lib/startap-backup/generations/<run_id>/`, com `COMPLETE` por último;
+5. uploader separado lê essa geração somente após `COMPLETE`, sem cópia/spool;
+6. push offsite com host key pinada e até quatro tentativas totais;
+7. estado sanitizado de freshness e evidência externa em GitHub Actions.
 
-| Secret | Valor | Observação |
+Não existe retenção nem exclusão automática nesta missão. O workflow de
+retenção é somente auditoria read-only e publica apenas a quantidade proposta;
+não possui write key, `git rm`, commit, push ou gate de ativação. Os dumps
+históricos de `/opt/backups` e `/opt/automacoes/backups` ficam intocados.
+
+## Failure domains
+
+| Domínio | Proteção | Limite explícito |
 |---|---|---|
-| `SSH_PRIVATE_KEY` | Chave privada SSH (ed25519) do root@187.77.242.220 | Usada pelo `backup-postgres.yml` pra rodar o `pg_dump` no VPS (mesma família do deploy.yml) |
-| `BACKUP_REPO_SSH_KEY` | Chave privada da **deploy key** com acesso de escrita ao repo `BrunoMediador/startap-backups` | Autentica clone/push via `git@github.com`. **Não é PAT.** Ambos os workflows (backup e cleanup) usam esta chave |
+| GitHub indisponível | fallback cifrado na VPS | não protege perda total da VPS |
+| VPS indisponível | cópia offsite | depende do último upload concluído |
+| chave de automação perdida | recipient offline do Bruno | prova assistida periódica ainda é necessária |
+| deploy key comprometida | chave VPS-only/single-repo, sem force | checksum não é autenticidade; âncora externa detecta alteração |
+| `ALERTAS` indisponível | systemd vermelho + detector GitHub | nenhum resultado depende de WhatsApp |
 
-> **Histórico:** versões antigas usavam um PAT `BACKUP_REPO_TOKEN` com `actions/checkout`. O projeto migrou para **deploy key SSH** (`BACKUP_REPO_SSH_KEY`) e o secret do PAT foi removido. Se algum workflow ainda referenciar `BACKUP_REPO_TOKEN`, ele falhará com `Input required and not supplied: token` — corrija para o fluxo SSH.
+## Componentes e separação de poderes
 
-### Como criar/rotacionar a BACKUP_REPO_SSH_KEY (deploy key)
+| Componente | Pode acessar | Não recebe |
+|---|---|---|
+| producer não-root | recipients públicos, FIFO do helper, tmpfs, incoming | socket Docker, `.env`, identidade privada, deploy key |
+| cycle capless | marker 0640 no bridge dedicado + status local | RuntimeDirectory/plaintext do producer, Docker, credenciais |
+| dump helper root | comando/args fixos do container/DB e FIFO root:producer; marker reclamado antes da leitura | recipients, identities, deploy key, offsite |
+| reconciler producer root | somente tmpfs do producer, bridge e claims, com limites | fallback/ciphertext, credentials, Docker |
+| seal/promoter root | transição same-FS e revalidação da attestation | rede, DB, credenciais |
+| validator | sealed read-only + identidade via `LoadCredential=`; attestation externa | rede, DB, deploy key, Docker |
+| uploader | generation read-only + deploy key via `LoadCredential=` | DB, identity age, Docker |
+| drill prepare | generation read-only + identidade | rede e Docker |
+| restore helper | dump já decifrado em tmpfs + Docker | identidade, `.env` de produção, volume de produção |
+| reconciler drill root | journal durável mínimo + Docker por nome/label exatos | generations, attestation, credentials, `.env` |
+| detector GitHub | JSON sanitizado via usuário SSH forçado | root, dump, chaves de recuperação |
 
-A deploy key é um par de chaves SSH dedicado: a **pública** vai no repo `startap-backups`, a **privada** vira o secret no `startap-platform`.
+Producer/validator/uploader/drill não têm login e não pertencem ao grupo
+`docker`. O usuário de status usa shell restrito compatível com `sshd -c`; seu
+`authorized_keys` força um único wrapper. Helpers aceitam somente comandos
+literais e usam container, banco e argumentos fixos. O producer não usa
+`sudo`: markers 0600 sob `/run/startap-backup-producer` acionam units `.path`
+separadas. O helper move atomicamente o marker para o diretório root-only
+`/run/startap-backup-dump-helper` antes de stat/leitura; symlink, hardlink ou
+conteúdo inválido é consumido/quarentenado e não retriggera. Diretórios vazios
+ou aninhados, FIFO e socket também são reclamados sob nome único e removidos sem
+abrir ou seguir seu conteúdo. Antes de ler um marker regular, o helper limita o
+tamanho a 64 bytes. Entradas inválidas são renomeadas, sem cópia, para
+`/run/startap-backup-dump-helper/quarantine` root:root 0700; a origem fica livre
+imediatamente. A recuperação não usa delete recursivo: processa no máximo 256
+operações por helper e 512 pelo reconciler, achata um nível por vez e continua
+explicitamente na próxima ativação se restar fila. Assim, o cap limita trabalho
+sem bloquear a request válida seguinte.
+Paths/services têm limite 3/60 s. Somente a unit root do dump vê o socket Docker.
 
-1. Gere um par dedicado (sem passphrase, para uso não-interativo no CI):
-   ```bash
-   ssh-keygen -t ed25519 -C "startap-backups-deploy" -f ./startap_backups_deploy -N ""
-   ```
-2. Registre a **pública** como deploy key COM escrita:
-   - github.com/BrunoMediador/**startap-backups** → Settings → Deploy keys → Add deploy key
-   - Title: `startap-platform CI (backup+cleanup)`
-   - Key: conteúdo de `startap_backups_deploy.pub`
-   - **Marcar "Allow write access"** (push do backup e do cleanup depende disso)
-3. Registre a **privada** como secret no repo de workflows:
-   - github.com/BrunoMediador/**startap-platform** → Settings → Secrets → Actions → New repository secret
-   - Name: `BACKUP_REPO_SSH_KEY`
-   - Value: conteúdo completo de `startap_backups_deploy` (incluindo as linhas `BEGIN/END`)
-4. Apague o par local após colar nos dois lugares:
-   ```bash
-   shred -u startap_backups_deploy startap_backups_deploy.pub  # ou rm -f
-   ```
+O `cycle` não recebe capability para atravessar o RuntimeDirectory 0700 do
+producer: lê somente `ready-run` pelo grupo `startap-backup-bridge`. Um
+reconciler root separado, com paths, inode cap do runtime e trabalho de
+quarantine limitados, é acionado no
+startup e `ExecStopPost`; ele para/conflita com o helper e limpa somente
+plaintext/FIFO/claims em `/run`, sem acesso ao fallback cifrado.
 
-### Como o SSH é montado nos workflows
+O reconciler Docker usa journal dedicado em
+`/var/lib/startap-backup/drill-journal` root:root 0700/0600. O tuple é
+persistido e recebe `fsync` antes da primeira criação e depois de cada fase;
+uma unit habilitada no boot o consome mesmo quando `/run` foi perdido. Somente
+nome + label exata autorizam remoção. Label reservada sem journal causa falha
+fechada após inventário read-only, sem scan/removal amplo. Markers e claims,
+inclusive symlinks quebrados, são reclamados/removidos no-follow e não mantêm o
+slot ocupado nem alteram o alvo externo.
 
-Ambos os workflows fazem o mesmo setup antes de clonar/push:
-```bash
-mkdir -p ~/.ssh
-echo "${{ secrets.BACKUP_REPO_SSH_KEY }}" > ~/.ssh/backup_deploy
-chmod 600 ~/.ssh/backup_deploy
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-cat >> ~/.ssh/config <<'EOF'
-Host github.com
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/backup_deploy
-  IdentitiesOnly yes
-EOF
-chmod 600 ~/.ssh/config
-# ...
-git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
-# (commit/push usam git puro, autenticado pela deploy key acima)
-```
-A chave é apagada no fim com um passo `if: always()` (`rm -f ~/.ssh/backup_deploy ~/.ssh/config`).
+## Estados de saúde
 
-## Schedules
+Os limiares versionados são 30 h para `healthy` e 36 h para `stale`:
 
-| Workflow | Cron | BRT equivalente | Ação |
-|---|---|---|---|
-| `backup-postgres.yml` | `0 6 * * *` | 03:00 todo dia | Dump + commit |
-| `backup-postgres-cleanup.yml` | `0 7 * * 0` | 04:00 domingos | Remove diários > 30 dias |
+| Estado | Significado |
+|---|---|
+| `healthy` | local e offsite válidos, dentro de 30 h e tuple run/SHA/manifest/tamanho coerente |
+| `degraded` | cópia válida, mas entre 30–36 h ou somente um destino saudável |
+| `stale` | backup válido mais recente acima de 36 h |
+| `invalid` | marker/manifest/checksum/tamanho inconsistente |
+| `none` | nenhum destino com geração reconhecida |
 
-## Como disparar manualmente
+O JSON registra somente run ID opaco, timestamp UTC, idade, SHA-256, tamanho e
+as tentativas local/offsite (`started_at`, `ended_at`, classe e sucesso). Falha
+posterior degrada imediatamente o subsistema sem apagar o recovery point/RPO
+anterior. Entrega de alerta nunca muda a validade do backup.
 
-### Backup
+## Retry offsite
 
-Via GitHub UI:
-1. github.com/BrunoMediador/startap-platform → Actions → "Backup Postgres → startap-backups"
-2. "Run workflow" → "Run workflow" (branch main)
+- máximo: quatro tentativas totais;
+- connect timeout: 10 s;
+- transfer timeout: 15 min;
+- backoff: 5/10/20 s, teto 30 s, jitter 0–3 s;
+- retry: timeout, DNS/rede transitória, reset, 429 e 5xx;
+- terminal: autenticação, host key divergente, configuração, checksum, age,
+  corrupção, destino inseguro e histórico Git divergente/non-fast-forward;
+- nunca usa `--force` e nunca executa `ssh-keyscan` em runtime.
 
-Via CLI:
-```bash
-gh workflow run backup-postgres.yml --repo BrunoMediador/startap-platform
-```
+## Pré-requisitos de ativação
 
-### Cleanup (com dry-run)
+Não prossiga apenas porque os scripts estão no servidor. O preflight exige:
 
-O cleanup manual tem um input `dry_run` (**default `true`** = seguro). Em dry-run ele só
-**lista** o que seria removido (`WOULD-REMOVE ...`) sem rodar `git rm` nem `git push`.
+- `APPROVED_GO_A` e `APPROVED_GO_B`, criados manualmente após a decisão do Bruno;
+- age v1.3.1 e age-keygen v1.3.1 nos hashes pinados;
+- exatamente dois recipients públicos: Bruno offline + automação dedicada;
+- identidade de automação root:root 0400, compatível com um dos recipients;
+- deploy key **nova**, VPS-only e write somente em `startap-backups`;
+- attestation da deploy key com `reused_existing_key=false`;
+- `github_known_hosts` root:root 0644 obtido e conferido fora da execução;
+- checkout offsite com remote exato, sem histórico divergente;
+- security e QA verdes.
+- conta SSH legado dump-only e GitHub Environments limitados à `main`, provados
+  por `GITHUB_ENVIRONMENT_PROOF.json`; nenhuma chave root no GitHub.
 
-Via GitHub UI:
-1. Actions → "Cleanup Backups Antigos" → "Run workflow"
-2. Deixe `dry_run` marcado (true) para inspecionar; veja os logs (`KEEP` / `WOULD-REMOVE`)
-3. Só depois de revisar, rode de novo com `dry_run` desmarcado (false) para aplicar
+Detalhes de custódia e arquivos: [backup-resilience-setup.md](backup-resilience-setup.md).
 
-Via CLI:
-```bash
-# Dry-run (só lista)
-gh workflow run backup-postgres-cleanup.yml --repo BrunoMediador/startap-platform -f dry_run=true
+## Rollout sem gap
 
-# Aplicar de verdade (remove + push)
-gh workflow run backup-postgres-cleanup.yml --repo BrunoMediador/startap-platform -f dry_run=false
-```
+0. Antes do merge, prove conta/chave dump-only + Environments `*-main`; sem isso,
+   mantenha o workflow atual e o card aberto para não criar gap.
+1. `install.sh stage` instala somente arquivos/users/units e mantém tudo OFF.
+2. Após os GOs, configure credenciais e rode `install.sh preflight`.
+3. `install.sh arm` cria somente o marker para execuções manuais, sem timer e
+   mantém `OFFSITE_WRITER_ENABLED` ausente.
+4. Rode manualmente duas cadeias `startap-backup-cycle.service` e os drills; o
+   legado continua o único writer offsite.
+5. Confirme generations `COMPLETE`, decrypt real, heartbeat, freshness e
+   teardown; grave provas sanitizadas.
+6. `install.sh activate` valida as provas e habilita producer/freshness/drill em
+   shadow; uploader continua OFF e o legado continua único writer.
+7. Para o cutover, habilite `BACKUP_RESILIENCE_PRODUCER_ENABLED=true` para o
+   schedule legado pular, mantendo `workflow_dispatch` disponível; grave
+   `LEGACY_WRITER_DISABLED_PROOF.json`.
+8. Imediatamente rode `install.sh activate-uploader`, dispare um upload e valide
+   `recovery-point.json` + `last-attempt.json`. Dois writers nunca coexistem.
+9. Execute uma única vez `anchor-bootstrap` no environment protegido; depois
+   habilite `BACKUP_RESILIENCE_DETECTOR_ENABLED=true` e valide ancestry/tuple.
+10. O dispatch remoto do drill exige, adicionalmente, prova real registrada,
+   marker local e environment GitHub `backup-recovery-main` protegido.
 
-> O schedule de domingo (07:00 UTC) sempre roda em **modo real** — o dry-run só existe no disparo manual, para revisão da primeira execução confiável.
+Nenhum passo reconecta `ALERTAS`, reinicia aplicação, ou toca dados/sessões de
+clientes.
 
-## Como rodar localmente (teste)
-
-Requer: clone local de `startap-backups` e SSH key configurada.
-
-```bash
-# Dry-run (não faz SSH nem dump)
-bash scripts/backup-postgres.sh --dry-run
-
-# Execução real (requer SSH key em ~/.ssh/hostinger_codex_ed25519)
-BACKUP_REPO_PATH=../startap-backups bash scripts/backup-postgres.sh
-```
-
-## Como restaurar um backup
-
-1. Clone ou atualize o repo `startap-backups`:
-   ```bash
-   git clone git@github.com:BrunoMediador/startap-backups.git
-   ```
-
-2. Localize o arquivo desejado:
-   ```bash
-   ls startap-backups/dumps/2026/05/
-   # 2026-05-19-060001.sql.gz
-   ```
-
-3. Restaure no banco (ajuste credenciais conforme necessário):
-   ```bash
-   # Restaurar em ambiente local
-   gunzip -c startap-backups/dumps/2026/05/2026-05-19-060001.sql.gz \
-     | psql -U startap_user -d startap_database
-
-   # Restaurar direto no VPS (via SSH)
-   gunzip -c startap-backups/dumps/2026/05/2026-05-19-060001.sql.gz \
-     | ssh -i ~/.ssh/hostinger_codex_ed25519 root@187.77.242.220 \
-       "docker exec -i automacoes-postgres-1 psql -U startap_user -d startap_database"
-   ```
-
-   Flags `--no-owner --no-acl` no dump garantem que o restore funcione sem precisar recriar roles.
-
-## Restore drill (validação SEGURA — prova que o dump restaura)
-
-> **Objetivo:** provar que o dump mais recente restaura de verdade, sem nunca tocar produção.
-> Hoje o backup é "de Schrödinger" — nunca foi restaurado. Este drill fecha esse gap.
->
-> **REGRAS DE SEGURANÇA INEGOCIÁVEIS:**
-> - **NUNCA** toca o container de produção `automacoes-postgres-1`.
-> - **NUNCA** toca o banco de produção `startap_database`.
-> - Sobe um Postgres **efêmero e descartável** (`docker run --rm postgres:16`) numa porta
->   que não conflita (`55432`), restaura ali, valida e se autodestrói.
-> - É **idempotente**: remove qualquer container de drill anterior antes de começar.
-> - **NÃO** usa `docker pull devlikeapro/waha-plus` nem `docker system prune` (imagem WAHA é
->   congelada). `postgres:16` já está presente no host (é a imagem do PG de prod); o `docker run`
->   reusa a imagem local, sem pull.
->
-> Este drill é **mudança de estado no servidor** → roda só com aprovação do Bruno.
-> O DevOps/SRE entrega os comandos; **quem executa é o Bruno**.
-
-### Comandos do drill (rodar no VPS, com OK do Bruno)
+## Checagem operacional sanitizada
 
 ```bash
-set -euo pipefail
-
-# --- Config do drill (tudo descartável, isolado de prod) ---
-DRILL_CONTAINER="startap_restore_drill"
-DRILL_DB="startap_restore_drill"
-DRILL_PORT="55432"          # porta no host, fora do 5432 de prod
-DRILL_PW="drill_$(date +%s)"  # senha throwaway, só vive no container efêmero
-BACKUPS_DIR="/root/startap-backups"   # ajustar se o clone estiver em outro path
-
-# --- Passo 0: idempotência — derruba drill anterior se existir ---
-docker rm -f "${DRILL_CONTAINER}" 2>/dev/null || true
-
-# --- Passo 1: localiza o dump mais recente (off-site, repo já clonado no host) ---
-# Se o repo de backups não estiver no host, clonar antes (read-only basta):
-#   git clone git@github.com:BrunoMediador/startap-backups.git "${BACKUPS_DIR}"
-# ou atualizar:  git -C "${BACKUPS_DIR}" pull --ff-only
-LATEST_DUMP=$(find "${BACKUPS_DIR}/dumps" -name '*.sql.gz' | sort | tail -n1)
-echo ">> Dump mais recente: ${LATEST_DUMP}"
-test -s "${LATEST_DUMP}"   # falha se vazio/inexistente
-
-# --- Passo 2: sobe Postgres EFÊMERO (--rm = some ao parar) ---
-# postgres:16 = mesma major do prod; imagem já existe no host (sem pull).
-docker run -d --rm \
-  --name "${DRILL_CONTAINER}" \
-  -e POSTGRES_PASSWORD="${DRILL_PW}" \
-  -e POSTGRES_DB="${DRILL_DB}" \
-  -p 127.0.0.1:${DRILL_PORT}:5432 \
-  postgres:16
-
-# --- Passo 3: espera o PG efêmero ficar pronto (timeout ~30s) ---
-for i in $(seq 1 30); do
-  if docker exec "${DRILL_CONTAINER}" pg_isready -U postgres -d "${DRILL_DB}" >/dev/null 2>&1; then
-    echo ">> PG efêmero pronto."
-    break
-  fi
-  sleep 1
-  [ "$i" = "30" ] && { echo "ERRO: PG efêmero não subiu"; docker rm -f "${DRILL_CONTAINER}"; exit 1; }
-done
-
-# --- Passo 4: restaura o dump no DB efêmero (NUNCA no prod) ---
-# O dump foi feito com --no-owner --no-acl → restaura como 'postgres' sem recriar roles.
-gunzip -c "${LATEST_DUMP}" \
-  | docker exec -i "${DRILL_CONTAINER}" psql -v ON_ERROR_STOP=1 -U postgres -d "${DRILL_DB}"
-
-# --- Passo 5: sanity checks (schema presente + contagem de linhas em tabelas-chave) ---
-echo ">> Tabelas restauradas:"
-docker exec "${DRILL_CONTAINER}" psql -U postgres -d "${DRILL_DB}" -c \
-  "SELECT count(*) AS n_tabelas FROM information_schema.tables WHERE table_schema='public';"
-
-echo ">> Contagem em tabelas-chave (ajuste a lista conforme o schema real):"
-docker exec "${DRILL_CONTAINER}" psql -U postgres -d "${DRILL_DB}" -c \
-  "SELECT 'bot_config' AS tabela, count(*) FROM bot_config
-   UNION ALL SELECT 'schema_migrations', count(*) FROM schema_migrations;"
-
-# Falha o drill se o schema veio vazio (restore silenciosamente falho)
-N_TABELAS=$(docker exec "${DRILL_CONTAINER}" psql -tAU postgres -d "${DRILL_DB}" -c \
-  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';")
-if [ "${N_TABELAS}" -lt 1 ]; then
-  echo "ERRO: nenhuma tabela no schema public — restore FALHOU"
-  docker rm -f "${DRILL_CONTAINER}"
-  exit 1
-fi
-echo ">> OK: ${N_TABELAS} tabela(s) no schema public."
-
-# --- Passo 6: autodestruição (--rm já remove ao parar) ---
-docker rm -f "${DRILL_CONTAINER}"
-echo ">> Drill concluído. Container efêmero removido. Prod intocado."
+sudo systemctl status startap-backup-producer.timer --no-pager
+sudo systemctl status startap-backup-upload.timer --no-pager
+sudo systemctl status startap-backup-freshness.timer --no-pager
+sudo systemctl status startap-backup-drill.timer --no-pager
+sudo journalctl -u startap-backup-producer.service --since '-2 days' --no-pager
+sudo jq '{state,local,offsite,alert_delivery_affects_validity}' \
+  /var/lib/startap-backup-status/health.json
 ```
 
-### O que o drill prova (e o que NÃO prova)
+Não use `cat` em dump, identity, deploy key, recipients ou stderr privado do
+uploader. Não publique paths de credential nem conteúdo SQL.
 
-- **Prova:** o dump mais recente é um SQL válido que recria o schema e popula tabelas-chave
-  num Postgres 16 limpo. Se passar, o backup é restaurável.
-- **NÃO prova:** integridade lógica de cada linha, nem que a app sobe contra esse restore.
-  Para isso seria preciso um ambiente de staging completo (fora do escopo deste drill).
-- **Tabelas-chave:** ajustar a lista do Passo 5 ao schema real (ex.: incluir tabelas de
-  clientes/sessões). `schema_migrations` é um bom canário — se ela veio, o migrate histórico
-  está no dump.
+## Incidente
 
-## Estrutura do repositório de backups
+1. Preserve o workflow/run vermelho e o journal sanitizado.
+2. Leia `health.json`: valide idade do **último backup válido**, não apenas o
+   status da automação.
+3. Se offsite falhou e local está `healthy`, declare `degraded`; não invalide o
+   fallback.
+4. Se local está `invalid`, não promova/copie manualmente a geração incompleta.
+5. Autenticação ou host mismatch são terminais: não repita cegamente.
+6. Não apague incoming, sealed, generations ou backup histórico na investigação.
+7. Para provar recuperabilidade, siga o drill descartável do runbook de restore.
 
-```
-startap-backups/
-  dumps/
-    2026/
-      05/
-        2026-05-19-060001.sql.gz   ← backup diário
-        2026-05-20-060001.sql.gz
-        ...
-      06/
-        ...
-```
+## Rollback
 
-## Politica de retenção
+`rollback.sh begin` desliga primeiro uploader/marker e mantém generation local.
+Então volte `BACKUP_RESILIENCE_PRODUCER_ENABLED=false`, prove um dispatch legado
+que gerou `.sql.gz.age` e grave `LEGACY_MANUAL_ROLLBACK_PROOF.json`.
+`rollback.sh complete` só então desliga producer/freshness/drill. Nenhuma etapa
+remove scripts, credenciais, generations, relatórios ou backups offsite. Desligue
+o detector novo com `BACKUP_RESILIENCE_DETECTOR_ENABLED=false`.
 
-Implementada em `backup-postgres-cleanup.yml`. Lógica exata (descrita por inspeção):
+## Evidência histórica do incidente SCRUM-167
 
-1. Lista todos os `dumps/**/*.sql.gz` ordenados por nome (ISO8601 = ordem cronológica).
-2. Calcula `CUTOFF = hoje - 30 dias`.
-3. **Dumps com data >= cutoff** (dentro da janela de 30 dias): mantidos TODOS, intocados.
-4. **Dumps com data < cutoff** (mais antigos que 30 dias): agrupados por **semana ISO**
-   (`%G-W%V`). O **primeiro** dump de cada semana (cronologicamente) é mantido como o
-   "semanal" daquela semana; os demais dumps da mesma semana são removidos com `git rm`.
-5. Se algo foi removido (e não é dry-run), commita e dá push no repo de backups.
-
-Resultado prático:
-- **Diários**: cobertura completa nos últimos 30 dias.
-- **Semanais**: além de 30 dias, o histórico colapsa para 1 dump por semana ISO, mantido
-  indefinidamente (não há expiração de semanais hoje).
-- **Cleanup**: roda todo domingo 07:00 UTC via `backup-postgres-cleanup.yml`.
-
-> Nota sobre a comparação de datas: o cleanup compara `FILE_DATE` com `CUTOFF` como **strings**
-> (`[[ "$FILE_DATE" > "$CUTOFF" ]]`). Isso é correto **porque** o formato `YYYY-MM-DD` ordena
-> lexicograficamente na mesma ordem cronológica. Não trocar o formato de nome dos dumps sem
-> revisar essa comparação.
-
-## Tamanho esperado
-
-- DB em produção: ~18 MB (dump comprimido: ~3-8 MB por arquivo)
-- 30 diários + 26 semanais ≈ ~180-460 MB no repo de backups
-- Git puro (sem LFS) — adequado para este volume
-
-## Alertas de falha
-
-O backup falha visivelmente se:
-- SSH no VPS falhar (timeout, chave inválida)
-- `pg_dump` retornar erro
-- Arquivo gerado for menor que 1 KB (suspeita de dump vazio)
-- Push no repo `startap-backups` falhar (deploy key sem escrita, chave inválida ou known_hosts ausente)
-
-O cleanup falha visivelmente se:
-- A deploy key `BACKUP_REPO_SSH_KEY` estiver ausente/inválida (clone via SSH falha)
-- `git rm`/`git push` falhar (deploy key sem "Allow write access")
-
-> **Falha histórica resolvida:** o cleanup falhava em todo run com
-> `##[error]Input required and not supplied: token` porque usava `actions/checkout` com
-> `token: secrets.BACKUP_REPO_TOKEN`, secret que não existe mais. Corrigido para o mesmo
-> fluxo deploy-key SSH do backup (clone `git@github.com`). Se reaparecer, confirme que o
-> workflow NÃO referencia `BACKUP_REPO_TOKEN`.
-
-GitHub Actions notifica o dono do repo por e-mail em caso de falha no schedule.
+- run: `31466784443`, job `93701222801`, 11/08/2026;
+- comando exato: `ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts`;
+- resultado: exit 1, sem banner após ~5 s; runner havia sido adquirido;
+- dump/artefato: passo não iniciou, portanto nenhum plaintext ou parcial;
+- alerta: job `93701256412` conectou por SSH e a API WAHA aceitou duas chamadas;
+  entrega final não é demonstrável;
+- próximo backup: `2026-08-12-071337.sql.gz.age`;
+- RPO observado: **47 h 56 min 48 s** entre os backups offsite válidos de 10/08
+  e 12/08.

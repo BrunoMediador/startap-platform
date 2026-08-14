@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "approved_go_a": false,
+  "approved_by": "Bruno",
+  "recipient_set_id": "replace-with-approved-opaque-epoch",
+  "recipient_epoch": 1
+}

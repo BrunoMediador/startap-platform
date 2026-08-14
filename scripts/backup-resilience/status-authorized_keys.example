@@ -1,0 +1,2 @@
+# Replace only the public key fields after GO. Every restriction is mandatory.
+restrict,command="/usr/local/libexec/startap-backup/external-command.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ssh-ed25519 REPLACE_WITH_STATUS_PUBLIC_KEY

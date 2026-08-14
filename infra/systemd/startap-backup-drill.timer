@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly Startap real-artifact restore drill
+
+[Timer]
+OnCalendar=Sun *-*-* 06:30:00 America/Sao_Paulo
+RandomizedDelaySec=30m
+Persistent=true
+Unit=startap-backup-drill.service
+
+[Install]
+WantedBy=timers.target
+

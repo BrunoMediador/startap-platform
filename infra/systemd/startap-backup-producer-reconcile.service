@@ -1,0 +1,47 @@
+[Unit]
+Description=Root-only bounded reconciliation of producer tmpfs
+ConditionPathExists=/etc/startap-backup/ENABLED
+Conflicts=startap-backup-dump.service startap-backup-dump-cleanup.service
+After=startap-backup-dump.service startap-backup-dump-cleanup.service
+StartLimitIntervalSec=60
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/startap-backup/producer-reconcile.sh
+UMask=0077
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/startap-backup-producer /run/startap-backup-bridge/producer /run/startap-backup-bridge/root /run/startap-backup-dump-helper
+InaccessiblePaths=/var/run/docker.sock
+InaccessiblePaths=/var/lib/startap-backup /var/lib/startap-backup-attestations
+InaccessiblePaths=/opt/automacoes/code/.env /etc/startap-backup/credentials
+LimitCORE=0
+LimitNOFILE=64
+TasksMax=16
+MemoryMax=134217728
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-producer-reconcile
