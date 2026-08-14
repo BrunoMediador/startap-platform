@@ -18,6 +18,7 @@
     "./modo-atendente-gate": "./dist/modo-atendente-gate.js",
     "./human-reply-agenda-gate": "./dist/human-reply-agenda-gate.js",
     "./silence-gate": "./dist/silence-gate.js",
+    "./operational-state": "./dist/operational-state.js",
     "./faq-personalizado-gate": "./dist/faq-personalizado-gate.js",
     "./faq-block-marker": "./dist/faq-block-marker.js",
     "./pause-keyword": "./dist/pause-keyword.js",

@@ -71,6 +71,7 @@ vi.mock('@startap/db', () => ({
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
   },
+  operationalState: { getOperationalSnapshotBySlot: mocks.getCloneBySlot },
   outboundMessages: { applyAck: mocks.applyAck },
   contactNames: {
     upsertContactName: mocks.upsertContactName,

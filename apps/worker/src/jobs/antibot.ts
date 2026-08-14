@@ -12,7 +12,15 @@
 import { logger } from '@startap/core/logger';
 import { phoneHint } from '@startap/core/phone';
 import { resolveSilenceGate } from '@startap/core/silence-gate';
-import { antibot, clientBilling, contactNames, flowClones, pausa, routing } from '@startap/db';
+import {
+  antibot,
+  clientBilling,
+  contactNames,
+  flowClones,
+  operationalState,
+  pausa,
+  routing,
+} from '@startap/db';
 
 const log = logger.child({ job: 'antibot' });
 
@@ -62,13 +70,15 @@ export async function runAntibot(
       // inclusive a pausa que o PRÓPRIO antibot grava. Mesma função pura do router
       // (@startap/core/silence-gate), fonte única. Flag-gated (GATE_SILENCIO_TOTAL_ENABLED,
       // default OFF): OFF = pula esta checagem, comportamento byte-idêntico ao de hoje.
-      // Só clones (slot "clone_"); getCloneBySlot traz next_due_date/billing_amount_cents
-      // via LEFT JOIN (getCloneBySession, usado na etapa 2 acima, NÃO traz billing).
+      // Só clones (slot "clone_"); a decisão abaixo sempre usa o snapshot operacional
+      // autoritativo, mesmo quando a resolução estrutural da etapa 2 veio por sessão/cache.
       if (process.env.GATE_SILENCIO_TOTAL_ENABLED === 'true' && flowId.startsWith('clone_')) {
-        const cloneForGate = await flowClones.getCloneBySlot(flowId).catch((e: unknown) => {
-          log.warn({ err: e, slot: flowId }, 'antibot: erro ao buscar clone para gate — segue');
-          return null;
-        });
+        const cloneForGate = await operationalState
+          .getOperationalSnapshotBySlot(flowId)
+          .catch((e: unknown) => {
+            log.warn({ err: e, slot: flowId }, 'antibot: erro ao buscar clone para gate — segue');
+            return null;
+          });
         if (cloneForGate) {
           const gate = resolveSilenceGate(cloneForGate, {
             graceDays: clientBilling.GRACE_DAYS,

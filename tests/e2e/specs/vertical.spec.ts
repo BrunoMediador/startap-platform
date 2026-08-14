@@ -712,6 +712,51 @@ test('P0 pagamento remove billing, preserva owner_request e mantém silêncio do
   ).toBe(0);
 });
 
+test('P0 SCRUM-170 overdue não comunica retomada efetiva de owner_request', async () => {
+  const phone = '880000000092';
+  const context = await signupPortal({
+    phone,
+    name: 'Resume Billing Gate',
+    password: 'E2e-Scrum-170-1!',
+    type: 'individual',
+    mode: 'atendente',
+  });
+  const slot = await withDb(async (client) => {
+    const slotResult = await client.query<{ slot: string }>(
+      'SELECT slot FROM portal_users WHERE username = $1',
+      [phone],
+    );
+    const resolved = slotResult.rows[0]?.slot;
+    expect(resolved).toBeTruthy();
+    await client.query(
+      `UPDATE flow_clones
+       SET flow_enabled = FALSE, suspended_kind = 'owner_request', suspended_reason = 'E2E'
+       WHERE slot = $1`,
+      [resolved],
+    );
+    await client.query(
+      `UPDATE client_billing
+       SET next_due_date = CURRENT_DATE - INTERVAL '10 days', status = 'overdue'
+       WHERE slot = $1`,
+      [resolved],
+    );
+    return resolved;
+  });
+
+  const response = await context.post('/portal/bot/resume');
+  const state = await withDb(async (client) => {
+    const result = await client.query<{ flow_enabled: boolean; suspended_kind: string | null }>(
+      'SELECT flow_enabled, suspended_kind FROM flow_clones WHERE slot = $1',
+      [slot],
+    );
+    return result.rows[0];
+  });
+  await context.dispose();
+
+  expect(response.status()).toBe(409);
+  expect(state).toEqual({ flow_enabled: false, suspended_kind: 'owner_request' });
+});
+
 test('P0 signup real provisiona os quatro formatos e valida PG, sessão WAHA e portal', async () => {
   const formats = [
     {

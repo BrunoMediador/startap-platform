@@ -9,6 +9,7 @@
  * mudam e nada vaza. Logout faz queryClient.clear() (ver use-logout).
  */
 import {
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
   keepPreviousData,
@@ -76,7 +77,7 @@ import type {
   StatusResponse,
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
-import { pausaFromResposta } from './bot-pausa';
+import { conexaoFromBotActionResponse } from './bot-pausa';
 import {
   type CartaoConfigState,
   type CartaoEmojis,
@@ -896,22 +897,54 @@ export function useQrConexao(): UseMutationResult<QrResponse, Error, void> {
 // Eixo SEPARADO da reconexao WAHA: flow_enabled (pausa) vs status WAHA (conexao).
 // Gated por PORTAL_BOT_PAUSE no backend (404 se OFF — a tela ja esconde o card
 // quando o GET nao expoe os campos). Slot SEMPRE da sessao (withTenant) — o front
-// nunca envia slot. Atualiza otimista o cache da conexao e invalida conexao+status
-// (mesmo padrao do useAddPausa/useReconectar) pra o badge/banner reagirem.
+// nunca envia slot. Não há update otimista: a UI usa operational_state da resposta
+// ou um GET /portal/conexao final antes de anunciar o resultado.
+
+export interface BotActionMutationResult<T extends BotPauseResponse | BotResumeResponse> {
+  action: T;
+  final: ConexaoResponse | null;
+  syncFailed: boolean;
+}
+
+async function fetchFinalConexao(
+  client: QueryClient,
+  slot: string,
+): Promise<ConexaoResponse | null> {
+  try {
+    const final = await apiFetch<ConexaoResponse>('/portal/conexao');
+    client.setQueryData(qk.conexao(slot), final);
+    return final;
+  } catch {
+    // A ação já pode ter sido confirmada. Não convertemos falha de reconciliação
+    // em falsa "falha total"; mantemos o snapshot anterior e oferecemos retry.
+    await client.invalidateQueries({ queryKey: qk.conexao(slot) });
+    return null;
+  }
+}
+
+function botResponseFromError(error: unknown): BotResumeResponse | null {
+  if (!(error instanceof Error) || !('body' in error)) return null;
+  const body = (error as { body?: unknown }).body;
+  if (!body || typeof body !== 'object') return null;
+  const record = body as Record<string, unknown>;
+  if (typeof record.bot_paused !== 'boolean' || !record.operational_state) return null;
+  return {
+    bot_paused: record.bot_paused,
+    operational_state: record.operational_state as BotResumeResponse['operational_state'],
+  };
+}
 
 /** POST /portal/bot/pause — pausa o atendimento do proprio cliente (owner_request). */
-export function usePausarBot(slot: string): UseMutationResult<BotPauseResponse, Error, void> {
+export function usePausarBot(
+  slot: string,
+): UseMutationResult<BotActionMutationResult<BotPauseResponse>, Error, void> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => apiFetch<BotPauseResponse>('/portal/bot/pause', { method: 'POST' }),
-    onSuccess: (data) => {
-      // Reflete o estado REPORTADO pelo servidor (data.bot_paused), nunca um
-      // palpite local. O invalidate logo abaixo re-deriva tudo do backend.
-      client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
-        prev ? pausaFromResposta(prev, data) : prev,
-      );
-      client.invalidateQueries({ queryKey: qk.conexao(slot) });
-      client.invalidateQueries({ queryKey: qk.status(slot) });
+    mutationFn: async () => {
+      const action = await apiFetch<BotPauseResponse>('/portal/bot/pause', { method: 'POST' });
+      const final = await fetchFinalConexao(client, slot);
+      await client.invalidateQueries({ queryKey: qk.status(slot) });
+      return { action, final, syncFailed: final?.operational_state == null };
     },
   });
 }
@@ -922,24 +955,39 @@ export function usePausarBot(slot: string): UseMutationResult<BotPauseResponse, 
  * pausou (billing/manual_other/abuse) — nesse caso a tela mostra a `message` e o
  * cache fica intacto (o estado segue travado).
  */
-export function useRetomarBot(slot: string): UseMutationResult<BotResumeResponse, Error, void> {
+export function useRetomarBot(
+  slot: string,
+): UseMutationResult<BotActionMutationResult<BotResumeResponse>, Error, void> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => apiFetch<BotResumeResponse>('/portal/bot/resume', { method: 'POST' }),
-    onSuccess: (data) => {
-      // Reflete o estado REPORTADO pelo servidor (data.bot_paused), nunca um
-      // palpite local "ativo": se o resume nao destravou, a UI nao mente. O
-      // invalidate logo abaixo re-deriva tudo do backend (fonte da verdade).
-      client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
-        prev ? pausaFromResposta(prev, data) : prev,
-      );
-      client.invalidateQueries({ queryKey: qk.conexao(slot) });
-      client.invalidateQueries({ queryKey: qk.status(slot) });
+    mutationFn: async () => {
+      const action = await apiFetch<BotResumeResponse>('/portal/bot/resume', { method: 'POST' });
+      if (action.operational_state) {
+        client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
+          prev ? conexaoFromBotActionResponse(prev, action) : prev,
+        );
+      }
+      const final = await fetchFinalConexao(client, slot);
+      await client.invalidateQueries({ queryKey: qk.status(slot) });
+      return {
+        action,
+        final,
+        syncFailed: final?.operational_state == null && !action.operational_state,
+      };
     },
-    onError: () => {
-      // 409 suspensao_startap (ou qualquer erro): ressincroniza o estado real do
-      // backend — a tela trata a message no onError do componente.
-      client.invalidateQueries({ queryKey: qk.conexao(slot) });
+    onError: async (error) => {
+      // 409 traz o snapshot final da transação. Aplicamos esse resultado antes
+      // do refetch; nunca limpamos owner_request por hipótese local.
+      const response = botResponseFromError(error);
+      if (response) {
+        client.setQueryData<ConexaoResponse>(qk.conexao(slot), (prev) =>
+          prev ? conexaoFromBotActionResponse(prev, response) : prev,
+        );
+      }
+      await Promise.all([
+        client.invalidateQueries({ queryKey: qk.conexao(slot) }),
+        client.invalidateQueries({ queryKey: qk.status(slot) }),
+      ]);
     },
   });
 }

@@ -2273,6 +2273,44 @@ textarea { resize: vertical; min-height: 120px; font-family: var(--font-mono); f
 .cli-access__user { font-family: var(--font-mono); font-size: .75rem; color: var(--text-muted); }
 .cli-sub { color: var(--text-muted); font-family: var(--font-mono); font-size: .72rem; }
 
+/* Resultado transacional do registro manual de pagamento (SCRUM-170).
+   Fica persistente no modal: pagamento, remoção de billing e preservação de
+   outra pausa são linhas separadas, nunca um toast ambíguo de "bot reativado". */
+.pa-payment-result {
+  border: 1px solid var(--border-light); border-radius: var(--radius-lg);
+  background: var(--surface-2); padding: 1rem; outline: none;
+}
+.pa-payment-result:focus-visible { box-shadow: 0 0 0 2px var(--primary); }
+.pa-payment-result__title {
+  display: flex; align-items: center; gap: .5rem;
+  margin: 0 0 .75rem; color: var(--success); font-size: 1rem;
+}
+.pa-payment-result__grid { display: grid; gap: .5rem; margin: 0; }
+.pa-payment-result__row {
+  display: grid; grid-template-columns: minmax(145px, .8fr) minmax(0, 1.7fr);
+  gap: .75rem; padding: .625rem .75rem; border-radius: var(--radius-md);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.pa-payment-result__row dt {
+  color: var(--text-muted); font-size: .75rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.pa-payment-result__row dd { margin: 0; color: var(--text); font-size: .8125rem; line-height: 1.45; }
+.pa-payment-result__note { margin: .75rem 0 0; color: var(--text-muted); font-size: .75rem; line-height: 1.45; }
+.pa-payment-result__actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
+.pa-payment-result__actions .btn { min-height: 44px; }
+.pa-payment-error {
+  display: none; margin-bottom: .5rem; padding: .625rem .75rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  border-radius: var(--radius-md); background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger); font-size: .8125rem; line-height: 1.45; outline: none;
+}
+.pa-payment-error:focus-visible { box-shadow: 0 0 0 2px var(--danger); }
+@media (max-width: 480px) {
+  .pa-payment-result__row { grid-template-columns: 1fr; gap: .25rem; }
+  .pa-payment-result__actions .btn { width: 100%; }
+}
+
 /* Clientes — cards empilhados no mobile (sem scroll horizontal de tabela) */
 @media (max-width: 767px) {
   .cli-table-wrap { border: none; }
@@ -12024,6 +12062,95 @@ window.PortalAdmin = (() => {
     return `${d}/${m}/${y}`;
   }
 
+  function _manualPaymentOutcome(result) {
+    const final = result && typeof result.final_state === 'object' ? result.final_state : null;
+    const rawKind = final && (final.suspended_kind || final.suspension_preserved);
+    const kind = ['billing', 'owner_request', 'manual_other', 'abuse'].includes(rawKind)
+      ? rawKind : null;
+    const stateConfirmed = final && typeof final.flow_enabled === 'boolean';
+    const flowEnabled = stateConfirmed && final.flow_enabled === true;
+    const billingRemoved = result?.resumed === true && flowEnabled && kind === null;
+
+    let billingSuspension = 'Não confirmado — atualize a lista antes de registrar novamente.';
+    if (stateConfirmed) {
+      if (billingRemoved) {
+        billingSuspension = 'Sim — a suspensão de cobrança foi removida na mesma transação.';
+      } else if (kind === 'billing') {
+        billingSuspension = 'Não — a suspensão de cobrança ainda consta no estado final.';
+      } else {
+        billingSuspension = 'Não — não havia uma suspensão ativa de cobrança para remover.';
+      }
+    }
+
+    let otherPause = 'Não confirmado — o estado final não veio na resposta.';
+    if (stateConfirmed && kind === 'owner_request') {
+      otherPause = 'Sim — a pausa solicitada pelo cliente continua ativa após o pagamento.';
+    } else if (stateConfirmed && kind === 'manual_other') {
+      otherPause = 'Sim — a suspensão administrativa da Startap continua ativa.';
+    } else if (stateConfirmed && kind === 'abuse') {
+      otherPause = 'Sim — a suspensão de revisão da Startap continua ativa.';
+    } else if (stateConfirmed && kind === 'billing') {
+      otherPause = 'Não identificada; a própria suspensão de cobrança ainda consta ativa.';
+    } else if (stateConfirmed) {
+      otherPause = 'Não — nenhuma outra pausa ficou ativa no estado final.';
+    }
+
+    let atendimento = 'Estado não confirmado; atualize a lista antes de qualquer nova ação.';
+    if (stateConfirmed && flowEnabled) {
+      atendimento = 'Habilitado no fluxo. A conexão do WhatsApp não foi verificada por esta ação.';
+    } else if (stateConfirmed && kind === 'owner_request') {
+      atendimento = 'Continua pausado pelo cliente; o pagamento não remove essa escolha.';
+    } else if (stateConfirmed && (kind === 'manual_other' || kind === 'abuse')) {
+      atendimento = 'Continua suspenso pela Startap; requer revisão pelo suporte.';
+    } else if (stateConfirmed) {
+      atendimento = 'Continua bloqueado; confira o estado antes de concluir o atendimento.';
+    }
+
+    return {
+      payment: result?.ok === true ? 'Registrado com sucesso.' : 'Resposta inesperada; confirme na lista.',
+      billingSuspension,
+      otherPause,
+      atendimento,
+      nextDueDate: result?.billing?.next_due_date || null,
+      requiresReview: !stateConfirmed || kind === 'billing' || (result?.resumed === true && !billingRemoved),
+    };
+  }
+
+  function _renderManualPaymentOutcome(result) {
+    const outcome = _manualPaymentOutcome(result);
+    const due = outcome.nextDueDate ? ` Próximo vencimento: ${_fmtDueDate(outcome.nextDueDate)}.` : '';
+    return `<div id="pa-pay-result" class="pa-payment-result" role="status" aria-live="polite" tabindex="-1">
+      <h3 class="pa-payment-result__title">${icon('check-circle-2', 17)} Pagamento registrado</h3>
+      <dl class="pa-payment-result__grid">
+        <div class="pa-payment-result__row"><dt>Pagamento</dt><dd>${escapeHtml(outcome.payment + due)}</dd></div>
+        <div class="pa-payment-result__row"><dt>Suspensão de cobrança removida</dt><dd>${escapeHtml(outcome.billingSuspension)}</dd></div>
+        <div class="pa-payment-result__row"><dt>Outra pausa preservada</dt><dd>${escapeHtml(outcome.otherPause)}</dd></div>
+        <div class="pa-payment-result__row"><dt>Estado do atendimento</dt><dd>${escapeHtml(outcome.atendimento)}</dd></div>
+      </dl>
+      <p class="pa-payment-result__note">O registro não verifica a conexão do WhatsApp e nunca remove pausa do cliente ou outra suspensão da Startap.</p>
+      <div class="pa-payment-result__actions">
+        <button type="button" class="btn btn--sm btn--primary" id="pa-pay-done">Fechar</button>
+      </div>
+    </div>`;
+  }
+
+  function _manualPaymentFailurePolicy(err) {
+    const status = Number.isInteger(err?.status) ? err.status : null;
+    const retrySafe = status != null && status >= 400 && status < 500;
+    if (retrySafe) {
+      return {
+        retrySafe: true,
+        requiresReread: false,
+        message: 'Pagamento não registrado. A solicitação foi recusada antes do registro. Corrija os dados ou o estado indicado e tente novamente.',
+      };
+    }
+    return {
+      retrySafe: false,
+      requiresReread: true,
+      message: 'Resultado não confirmado. Não foi possível saber se o pagamento foi registrado. A lista está sendo relida; feche esta janela e confira o vencimento antes de repetir.',
+    };
+  }
+
   function _openRegisterPayment(slot, billing, labels) {
     const cliente = (labels && labels[slot]) || slot;
     const curAmount = billing && billing.amount_cents != null ? (billing.amount_cents / 100).toFixed(2) : '';
@@ -12047,13 +12174,29 @@ window.PortalAdmin = (() => {
         <label for="pa-pay-notes">Notas (opcional)</label>
         <input type="text" id="pa-pay-notes" maxlength="500" placeholder="ex: PIX recebido" />
       </div>
-      <div id="pa-pay-error" class="muted" style="color:var(--danger);font-size:.8125rem;margin-bottom:.5rem;display:none"></div>
+      <div id="pa-pay-error" class="pa-payment-error" role="alert" aria-live="assertive" tabindex="-1"></div>
       <div style="display:flex;gap:.5rem;justify-content:flex-end">
         <button type="button" class="btn btn--sm" id="pa-pay-cancel">Cancelar</button>
         <button type="button" class="btn btn--sm btn--success" id="pa-pay-submit">${icon('check-circle-2', 13)} Confirmar pagamento</button>
       </div>`);
-    document.getElementById('pa-pay-cancel')?.addEventListener('click', closeModal);
+    let submitting = false;
+    let retryBlocked = false;
+    const submitDefaultHtml = document.getElementById('pa-pay-submit')?.innerHTML || 'Confirmar pagamento';
+    const setBusy = (busy) => {
+      document.querySelectorAll('#pa-modal-body input, #pa-pay-cancel').forEach(el => { el.disabled = busy; });
+      const submit = document.getElementById('pa-pay-submit');
+      if (submit) {
+        submit.disabled = busy;
+        submit.setAttribute('aria-busy', busy ? 'true' : 'false');
+      }
+      const close = document.getElementById('pa-modal-close');
+      if (close) close.disabled = busy;
+    };
+    document.getElementById('pa-pay-cancel')?.addEventListener('click', () => {
+      if (!submitting) closeModal();
+    });
     document.getElementById('pa-pay-submit')?.addEventListener('click', async () => {
+      if (submitting || retryBlocked) return;
       const errEl = document.getElementById('pa-pay-error');
       const submitBtn = document.getElementById('pa-pay-submit');
       errEl.style.display = 'none';
@@ -12071,22 +12214,43 @@ window.PortalAdmin = (() => {
       const notes = document.getElementById('pa-pay-notes').value.trim();
       if (notes) body.notes = notes;
 
-      submitBtn.disabled = true;
+      submitting = true;
+      setBusy(true);
       submitBtn.textContent = 'Registrando…';
       try {
-        await api(`/api/billing/${encodeURIComponent(slot)}`, {
+        const result = await api(`/api/billing/${encodeURIComponent(slot)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        closeModal();
-        toast('Pagamento registrado', 'success');
-        renderClientes();
+        const modalBody = document.getElementById('pa-modal-body');
+        if (modalBody) modalBody.innerHTML = _renderManualPaymentOutcome(result);
+        const closeBtn = document.getElementById('pa-modal-close');
+        if (closeBtn) closeBtn.disabled = false;
+        document.getElementById('pa-pay-done')?.addEventListener('click', closeModal);
+        requestAnimationFrame(() => document.getElementById('pa-pay-result')?.focus());
+        toast('Pagamento registrado — confira o estado final', 'success');
+        void renderClientes();
       } catch (err) {
-        errEl.textContent = err.message || 'Erro ao registrar pagamento';
+        const failure = _manualPaymentFailurePolicy(err);
+        errEl.textContent = failure.message;
         errEl.style.display = 'block';
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Confirmar pagamento';
+        requestAnimationFrame(() => errEl.focus());
+        if (failure.requiresReread) {
+          submitting = false;
+          retryBlocked = true;
+          const cancelBtn = document.getElementById('pa-pay-cancel');
+          if (cancelBtn) cancelBtn.disabled = false;
+          const closeBtn = document.getElementById('pa-modal-close');
+          if (closeBtn) closeBtn.disabled = false;
+          submitBtn.setAttribute('aria-busy', 'false');
+          submitBtn.textContent = 'Feche e confira a lista atualizada';
+          void renderClientes();
+        } else {
+          submitting = false;
+          setBusy(false);
+          submitBtn.innerHTML = submitDefaultHtml;
+        }
       }
     });
   }

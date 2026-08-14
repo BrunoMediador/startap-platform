@@ -1,129 +1,110 @@
 'use client';
 
-/**
- * Status-hero da Home (spec 6.4 + 3.1). Mapeia o estado do bot a partir do
- * /portal/status:
- *   - flow_enabled=false                  -> "Atendimento pausado" (inadimplencia,
- *                                            warn). SEM botao de reativar (D3).
- *   - waha.status WORKING                 -> "Bot ativo" (ok, pulse animado).
- *   - waha.status SCAN_QR/FAILED/...      -> "Bot desconectado" (danger).
- *   - waha.status unknown e sem sessao    -> "Bot desconectado" generico.
- *
- * Sem botao de refresh manual: o auto-refresh de 60s em foco (useStatus) e o
- * reload da pagina ja recarregam tudo — o botao era redundante (feedback Bruno).
- */
 import { useTenant } from '@/components/shell/session-context';
 import { Badge } from '@/components/ui/badge';
 import type { StatusResponse } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { useConexao } from '@/lib/queries';
-import { type MotivoPausa, resolveMotivoPausa } from '@/lib/suspensao';
+import {
+  type StatusHeroTone,
+  type StatusHeroView,
+  resolveStatusHeroView,
+} from '@/lib/status-operacional';
 import Link from 'next/link';
 
-type BotState = 'ativo' | 'desconectado' | 'pausado';
-
-function resolveState(status: StatusResponse): BotState {
-  if (!status.flow_enabled) return 'pausado';
-  const w = (status.waha.status ?? '').toUpperCase();
-  if (w === 'WORKING') return 'ativo';
-  return 'desconectado';
-}
-
-const COPY: Record<'ativo' | 'desconectado', { title: string; sub: string }> = {
-  ativo: { title: 'Assistente ativo', sub: 'Atendendo no WhatsApp agora' },
-  desconectado: {
-    title: 'Assistente desconectado',
-    // Fallback quando a reconexao self-service esta OFF (sem rota /conectar).
-    sub: 'Fale com o suporte para reconectar',
-  },
+const PULSE_TONE: Record<StatusHeroTone, { bg: string; core: string }> = {
+  ok: { bg: 'bg-ok-soft', core: 'bg-ok' },
+  danger: { bg: 'bg-danger-soft', core: 'bg-danger' },
+  warn: { bg: 'bg-warn-soft', core: 'bg-warn' },
+  amber: { bg: 'bg-amber-soft', core: 'bg-amber' },
+  info: { bg: 'bg-brand-soft', core: 'bg-brand' },
 };
 
-// Copy da pausa POR MOTIVO (corrige o "regularize a mensalidade" falso): só
-// `inadimplencia` fala em mensalidade; pausa do dono manda retomar; o resto, suporte.
-const COPY_PAUSADO: Record<MotivoPausa, { title: string; sub: string }> = {
-  owner: { title: 'Atendimento pausado por você', sub: 'Retome quando quiser, em Conectar' },
-  inadimplencia: {
-    title: 'Atendimento pausado',
-    sub: 'Regularize a mensalidade para reativar',
-  },
-  startap_outro: {
-    title: 'Atendimento pausado',
-    sub: 'Fale com o suporte para reativar',
-  },
-};
-
-function Pulse({ state }: { state: BotState }) {
-  const tone =
-    state === 'ativo'
-      ? { bg: 'bg-ok-soft', core: 'bg-ok' }
-      : state === 'pausado'
-        ? { bg: 'bg-warn-soft', core: 'bg-warn' }
-        : { bg: 'bg-danger-soft', core: 'bg-danger' };
+function Pulse({ view }: { view: StatusHeroView }) {
+  const tone = PULSE_TONE[view.tone];
   return (
     <span
+      aria-hidden
       className={cn(
         'relative flex size-[46px] shrink-0 items-center justify-center rounded-full',
         tone.bg,
-        state === 'ativo' && 'animate-ring',
+        view.trulyActive && 'animate-ring',
       )}
     >
       <span
-        className={cn('size-[13px] rounded-full', tone.core, state === 'ativo' && 'pulse-glow')}
+        className={cn('size-[13px] rounded-full', tone.core, view.trulyActive && 'pulse-glow')}
       />
     </span>
   );
 }
 
+function withAvailableAction(
+  view: StatusHeroView,
+  conexao: { enabled?: boolean; bot_paused?: boolean } | undefined,
+): StatusHeroView {
+  if (view.href !== '/conectar') return view;
+
+  const ownerAction = view.kind === 'owner_pause';
+  const available =
+    conexao?.enabled === true && (!ownerAction || typeof conexao.bot_paused === 'boolean');
+  if (available) return view;
+
+  return {
+    ...view,
+    href: null,
+    ariaLabel: null,
+    description: ownerAction
+      ? 'A pausa continua ativa. Fale com o suporte se precisar retomar agora.'
+      : 'Fale com o suporte para restabelecer a conexão.',
+  };
+}
+
 export function StatusHero({ status }: { status: StatusResponse }) {
   const { slot } = useTenant();
-  const state = resolveState(status);
-  // Reconexao self-service (gated): so com a flag ON o card desconectado vira um
-  // link "Toque pra reconectar" pra /conectar. Off -> fallback "fale com o suporte".
   const conexao = useConexao(slot);
-  const reconectavel = state === 'desconectado' && conexao.data?.enabled === true;
-  // Pausa do dono: o card vira link pra /conectar (lá ele retoma). Inadimplência/
-  // outros NÃO viram link aqui (a ação é pagar/suporte, em outras telas).
-  const motivo = state === 'pausado' ? resolveMotivoPausa(status) : null;
-  const linkavel = reconectavel || motivo === 'owner';
-  const copy = reconectavel
-    ? { title: 'Assistente desconectado', sub: 'Toque pra reconectar' }
-    : state === 'pausado'
-      ? COPY_PAUSADO[motivo ?? 'startap_outro']
-      : COPY[state];
+  const view = withAvailableAction(resolveStatusHeroView(status), conexao.data);
 
   const inner = (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-3.5">
-        <Pulse state={state} />
-        <div className="min-w-0">
-          <h2 className="font-display text-[17px] font-semibold text-ink">{copy.title}</h2>
-          <p className="mt-0.5 text-[13px] text-ink-soft">{copy.sub}</p>
+    <div>
+      <div className="flex min-w-0 items-start gap-3.5">
+        <Pulse view={view} />
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-[17px] font-semibold leading-snug text-ink">
+            {view.title}
+          </h2>
+          <p className="mt-0.5 text-[13px] leading-normal text-ink-soft">{view.description}</p>
+          <div className="mt-2">
+            <Badge tone={view.tone}>{view.badge}</Badge>
+          </div>
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {state === 'ativo' && <Badge tone="ok">Conectado</Badge>}
-        {state === 'desconectado' && <Badge tone="danger">Desconectado</Badge>}
-        {state === 'pausado' && <Badge tone="warn">Pausado</Badge>}
+
+      <div className="mt-3 flex flex-wrap gap-2 text-[11.5px] font-medium text-ink-soft">
+        <span className="rounded-pill border border-line bg-surface-sunken px-2.5 py-1.5">
+          {view.wahaLabel}
+        </span>
+        <span className="rounded-pill border border-line bg-surface-sunken px-2.5 py-1.5">
+          {view.atendimentoLabel}
+        </span>
+        {view.ownerPauseAlsoActive && view.kind === 'billing_block' && (
+          <span className="rounded-pill border border-amber/35 bg-amber-soft px-2.5 py-1.5 text-amber">
+            Sua pausa está preservada
+          </span>
+        )}
       </div>
     </div>
   );
 
-  // Card-heroi E1 (1.D.4): borda line-strong + relevo preto (sem cor) pra
-  // descolar da hero-zone viva. Margem fica por conta do grid do hero.
-  const cardCls =
-    'hero-e1 relative block h-full overflow-hidden rounded-card border border-line-strong bg-surface p-[18px]';
+  const cardClass =
+    'hero-e1 relative block min-h-[148px] h-full overflow-hidden rounded-card border border-line-strong bg-surface p-[18px]';
 
-  if (linkavel) {
+  if (view.href && view.ariaLabel) {
     return (
       <Link
-        href="/conectar"
-        aria-label={
-          reconectavel
-            ? 'Assistente desconectado — toque pra reconectar'
-            : 'Atendimento pausado por você — toque pra retomar'
-        }
+        href={view.href}
+        aria-label={view.ariaLabel}
         className={cn(
-          cardCls,
+          cardClass,
           'transition-colors hover:bg-surface-hover active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
         )}
       >
@@ -132,5 +113,5 @@ export function StatusHero({ status }: { status: StatusResponse }) {
     );
   }
 
-  return <div className={cardCls}>{inner}</div>;
+  return <div className={cardClass}>{inner}</div>;
 }

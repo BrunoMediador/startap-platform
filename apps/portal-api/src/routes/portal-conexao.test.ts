@@ -31,6 +31,18 @@ vi.mock('@startap/core/logger', () => ({
 }));
 
 vi.mock('@startap/db', () => ({
+  clientBilling: {
+    GRACE_DAYS: 3,
+    daysUntilDue: (nextDueDate: string | null): number | null => {
+      if (!nextDueDate) return null;
+      const due = Date.parse(`${nextDueDate}T00:00:00Z`);
+      const today = new Date();
+      return Math.round(
+        (due - Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())) /
+          86_400_000,
+      );
+    },
+  },
   flowClones: {
     getCloneBySlot: vi.fn(),
     pauseBotByOwner: vi.fn(),
@@ -40,6 +52,7 @@ vi.mock('@startap/db', () => ({
     // Constante real reusada pela derivação de pause_self/pause_locked nas rotas.
     OWNER_PAUSE_KIND: 'owner_request',
   },
+  operationalState: { getOperationalSnapshotBySlot: vi.fn() },
 }));
 
 // Integrations: classes de erro REAIS (instanceof importa nas rotas) + helpers mockados.
@@ -110,7 +123,7 @@ vi.mock('../lib/tenant.js', async () => {
   };
 });
 
-import { flowClones } from '@startap/db';
+import { flowClones, operationalState } from '@startap/db';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { portalConexaoRoutes } from './portal-conexao.js';
 
@@ -118,6 +131,10 @@ const getCloneMock = vi.mocked(flowClones.getCloneBySlot);
 const pauseMock = vi.mocked(flowClones.pauseBotByOwner);
 const resumeMock = vi.mocked(flowClones.resumeBotByOwner);
 const bindSessionMock = vi.mocked(flowClones.bindSessionIfUnset);
+const operationalMock = vi.mocked(operationalState.getOperationalSnapshotBySlot);
+type OperationalFixture = NonNullable<
+  Awaited<ReturnType<typeof operationalState.getOperationalSnapshotBySlot>>
+>;
 
 async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
@@ -138,6 +155,23 @@ function makeClone(over: Partial<Record<string, unknown>> = {}) {
   } as any;
 }
 
+function makeOperational(over: Partial<OperationalFixture> = {}): OperationalFixture {
+  return {
+    slot: 'clone_x',
+    tenant_id: 'tenant-x',
+    clone_status: 'conectado',
+    atendimento_configured: true,
+    waha_sessao: 'sess_x',
+    flow_enabled: true,
+    suspended_reason: null,
+    suspended_kind: null,
+    suspended_at: null,
+    next_due_date: '2099-01-01',
+    billing_amount_cents: 8500,
+    ...over,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   injectedSlot = 'clone_x';
@@ -155,6 +189,8 @@ beforeEach(() => {
   );
   // Default do reparo: vinculação vence a corrida.
   bindSessionMock.mockResolvedValue(true);
+  operationalMock.mockResolvedValue(makeOperational());
+  process.env.BILLING_OVERDUE_SILENCE = 'true';
 });
 
 // ── Flag OFF ──────────────────────────────────────────────────────────────────
@@ -674,7 +710,7 @@ describe('GET /portal/conexao/status', () => {
 
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/conexao/status' });
-    expect(res.json()).toEqual({
+    expect(res.json()).toMatchObject({
       session: 'sess_x',
       status: 'WORKING',
       connected: true,
@@ -713,6 +749,9 @@ describe('GET /portal/conexao — campos de pausa derivados', () => {
     getCloneMock.mockResolvedValue(
       makeClone({ flow_enabled: false, suspended_kind: 'owner_request' }),
     );
+    operationalMock.mockResolvedValue(
+      makeOperational({ flow_enabled: false, suspended_kind: 'owner_request' }),
+    );
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
     const app = await buildApp();
@@ -725,6 +764,9 @@ describe('GET /portal/conexao — campos de pausa derivados', () => {
 
   it('billing -> bot_paused:true, pause_self:false, pause_locked:true (suspenso pela Startap)', async () => {
     getCloneMock.mockResolvedValue(makeClone({ flow_enabled: false, suspended_kind: 'billing' }));
+    operationalMock.mockResolvedValue(
+      makeOperational({ flow_enabled: false, suspended_kind: 'billing' }),
+    );
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
     const app = await buildApp();
@@ -739,6 +781,9 @@ describe('GET /portal/conexao — campos de pausa derivados', () => {
     mockConfig.PORTAL_BOT_PAUSE = false;
     getCloneMock.mockResolvedValue(
       makeClone({ flow_enabled: false, suspended_kind: 'owner_request' }),
+    );
+    operationalMock.mockResolvedValue(
+      makeOperational({ flow_enabled: false, suspended_kind: 'owner_request' }),
     );
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
@@ -809,33 +854,53 @@ describe('POST /portal/bot/resume', () => {
   });
 
   it('owner_request -> 200 { bot_paused:false }; actor=portal:<userId>', async () => {
-    resumeMock.mockResolvedValue({ changed: true, flow_enabled: true });
+    resumeMock.mockResolvedValue({
+      changed: true,
+      flow_enabled: true,
+      outcome: 'resumed',
+      operational: makeOperational(),
+      startap_kind: null,
+    });
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/portal/bot/resume' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ bot_paused: false });
+    expect(res.json()).toMatchObject({ bot_paused: false });
     expect(resumeMock).toHaveBeenCalledWith('clone_x', 'portal:7');
     await app.close();
   });
 
   it('suspenso pela Startap (billing) -> 409 suspensao_startap (cliente NÃO levanta)', async () => {
     // resume não destrava (changed:false); o estado atual é pause_locked -> 409.
-    resumeMock.mockResolvedValue({ changed: false, flow_enabled: false });
+    resumeMock.mockResolvedValue({
+      changed: false,
+      flow_enabled: false,
+      outcome: 'startap_suspension',
+      operational: makeOperational({ flow_enabled: false, suspended_kind: 'billing' }),
+      startap_kind: 'billing',
+    });
     getCloneMock.mockResolvedValue(makeClone({ flow_enabled: false, suspended_kind: 'billing' }));
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/portal/bot/resume' });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({
+    expect(res.json()).toMatchObject({
       error: 'suspensao_startap',
-      message: 'Seu atendimento foi pausado pela Startap. Fale com o suporte.',
+      message: 'Seu atendimento está pausado por cobrança. Regularize o pagamento para retomar.',
+      suspension_kind: 'billing',
+      denied_reason: 'startap_billing',
     });
     await app.close();
   });
 
   it('manual_other -> 409 suspensao_startap', async () => {
-    resumeMock.mockResolvedValue({ changed: false, flow_enabled: false });
+    resumeMock.mockResolvedValue({
+      changed: false,
+      flow_enabled: false,
+      outcome: 'startap_suspension',
+      operational: makeOperational({ flow_enabled: false, suspended_kind: 'manual_other' }),
+      startap_kind: 'manual_other',
+    });
     getCloneMock.mockResolvedValue(
       makeClone({ flow_enabled: false, suspended_kind: 'manual_other' }),
     );
@@ -849,7 +914,13 @@ describe('POST /portal/bot/resume', () => {
   });
 
   it('abuse -> 409 suspensao_startap', async () => {
-    resumeMock.mockResolvedValue({ changed: false, flow_enabled: false });
+    resumeMock.mockResolvedValue({
+      changed: false,
+      flow_enabled: false,
+      outcome: 'startap_suspension',
+      operational: makeOperational({ flow_enabled: false, suspended_kind: 'abuse' }),
+      startap_kind: 'abuse',
+    });
     getCloneMock.mockResolvedValue(makeClone({ flow_enabled: false, suspended_kind: 'abuse' }));
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
@@ -861,14 +932,51 @@ describe('POST /portal/bot/resume', () => {
   });
 
   it('já ativo (nada a fazer) -> 200 bot_paused:false (idempotente)', async () => {
-    resumeMock.mockResolvedValue({ changed: false, flow_enabled: false });
+    resumeMock.mockResolvedValue({
+      changed: false,
+      flow_enabled: true,
+      outcome: 'already_active',
+      operational: makeOperational(),
+      startap_kind: null,
+    });
     getCloneMock.mockResolvedValue(makeClone({ flow_enabled: true, suspended_kind: null }));
     wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
 
     const app = await buildApp();
     const res = await app.inject({ method: 'POST', url: '/portal/bot/resume' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ bot_paused: false });
+    expect(res.json()).toMatchObject({ bot_paused: false });
+    await app.close();
+  });
+
+  it('owner_request overdue -> 409 billing_overdue, preserva pausa no snapshot final', async () => {
+    const overdue = makeOperational({
+      flow_enabled: false,
+      suspended_kind: 'owner_request',
+      next_due_date: '2020-01-01',
+    });
+    resumeMock.mockResolvedValue({
+      changed: false,
+      flow_enabled: false,
+      outcome: 'billing_overdue',
+      operational: overdue,
+      startap_kind: null,
+    });
+    wahaMocks.getSessionStatus.mockResolvedValue({ status: 'WORKING' });
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url: '/portal/bot/resume' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      error: 'billing_overdue',
+      bot_paused: true,
+      operational_state: {
+        owner_pause: { active: true },
+        billing: { blocking: true },
+        actions: { resume_owner: { allowed: false, denied_reason: 'billing_overdue' } },
+      },
+    });
+    expect(resumeMock).toHaveBeenCalledWith('clone_x', 'portal:7');
     await app.close();
   });
 });

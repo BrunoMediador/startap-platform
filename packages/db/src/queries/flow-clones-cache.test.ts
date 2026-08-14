@@ -12,7 +12,9 @@ vi.mock('../client.js', () => ({
 }));
 
 // Importação dinâmica após mock para garantir que o módulo usa o mock
-const { getCloneBySession, getCloneBySlot, invalidateCloneCache } = await import('./flow-clones.js');
+const { getCloneBySession, getCloneBySlot, invalidateCloneCache } = await import(
+  './flow-clones.js'
+);
 
 const FAKE_ROW = {
   id: '1',
@@ -39,13 +41,13 @@ describe('flow-clones cache TTL', () => {
     vi.useRealTimers();
   });
 
-  it('getCloneBySession: segunda chamada usa cache sem query', async () => {
+  it('getCloneBySession: segunda chamada cacheia estrutura e relê operacional', async () => {
     mockQuery.mockResolvedValue({ rows: [FAKE_ROW] });
 
     await getCloneBySession('sessao_teste');
     await getCloneBySession('sessao_teste');
 
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(3);
   });
 
   it('getCloneBySession: cache expira após 60s e recarrega', async () => {
@@ -55,16 +57,17 @@ describe('flow-clones cache TTL', () => {
     vi.advanceTimersByTime(61_000);
     await getCloneBySession('sessao_teste');
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(4);
   });
 
-  it('getCloneBySlot: segunda chamada usa cache sem query', async () => {
+  it('getCloneBySlot: segunda chamada cacheia só estrutura e relê estado operacional', async () => {
     mockQuery.mockResolvedValue({ rows: [FAKE_ROW] });
 
     await getCloneBySlot('clone_test_abc123');
     await getCloneBySlot('clone_test_abc123');
 
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // 1 query estrutural cacheada + 1 snapshot operacional por chamada.
+    expect(mockQuery).toHaveBeenCalledTimes(3);
   });
 
   it('getCloneBySlot: cache expira após 60s e recarrega', async () => {
@@ -74,7 +77,8 @@ describe('flow-clones cache TTL', () => {
     vi.advanceTimersByTime(61_000);
     await getCloneBySlot('clone_test_abc123');
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    // estrutura e snapshot na primeira; ambos novamente após expirar.
+    expect(mockQuery).toHaveBeenCalledTimes(4);
   });
 
   it('invalidateCloneCache por slot força nova query', async () => {
@@ -84,7 +88,8 @@ describe('flow-clones cache TTL', () => {
     invalidateCloneCache({ slot: 'clone_test_abc123' });
     await getCloneBySlot('clone_test_abc123');
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    // invalidação derruba estrutura; snapshot já era uncached.
+    expect(mockQuery).toHaveBeenCalledTimes(4);
   });
 
   it('invalidateCloneCache por sessao força nova query', async () => {
@@ -94,7 +99,7 @@ describe('flow-clones cache TTL', () => {
     invalidateCloneCache({ sessao: 'sessao_teste' });
     await getCloneBySession('sessao_teste');
 
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(4);
   });
 
   it('getCloneBySession retorna null e faz cache de null', async () => {

@@ -21,6 +21,7 @@ import {
   contactNames,
   flowClones,
   flowExecutionLog,
+  operationalState,
   outboundMessages,
   pausa,
   routing,
@@ -108,7 +109,9 @@ async function checkSilenceGate(input: {
   const { route, source, phoneLog, startedAt } = input;
   if (!route || !route.workflow_id.startsWith('clone_')) return null;
 
-  const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
+  const cloneForGate = await operationalState
+    .getOperationalSnapshotBySlot(route.workflow_id)
+    .catch(() => null);
   if (!cloneForGate) return null;
 
   const result = resolveSilenceGate(cloneForGate, {
@@ -931,7 +934,9 @@ export async function handleWebhook(
   // de `bot.handle` (early-return ali, DEPOIS de sendSeen — ver comentário no ponto de uso).
   let ownerPausedNoRespond = false;
   if (route.workflow_id.startsWith('clone_')) {
-    const cloneForGate = await flowClones.getCloneBySlot(route.workflow_id).catch(() => null);
+    const cloneForGate = await operationalState
+      .getOperationalSnapshotBySlot(route.workflow_id)
+      .catch(() => null);
 
     if (cloneForGate) {
       const overdueSilenceOn = process.env.BILLING_OVERDUE_SILENCE === 'true';

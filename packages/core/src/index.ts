@@ -15,6 +15,7 @@ export {
 } from './atend-from-agenda-gate.js';
 export { isModoAtendenteEnabled, resolveModoAtendenteEnabled } from './modo-atendente-gate.js';
 export { isHumanReplyAgendaEnabled } from './human-reply-agenda-gate.js';
+export * from './operational-state.js';
 export { normalizePauseKeyword } from './pause-keyword.js';
 export { hashEventIdForLog } from './gcal-event-log.js';
 export { resolveNomeNegocio } from './nome-negocio.js';

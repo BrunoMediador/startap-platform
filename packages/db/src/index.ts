@@ -21,6 +21,8 @@ export * as portalUsers from './queries/portal-users.js';
 export * as clientBilling from './queries/client-billing.js';
 export * as billingCharges from './queries/billing-charges.js';
 export * as billingWebhookEvents from './queries/billing-webhook-events.js';
+export * as billingPayments from './queries/billing-payments.js';
+export * as operationalState from './queries/operational-state.js';
 export * as trialLedger from './queries/trial-ledger.js';
 export * as alerts from './queries/alerts.js';
 export * as tenant from './queries/tenant.js';
@@ -84,6 +86,11 @@ export type {
   PaidWebhookResult,
   ApplyPaidWebhookInput,
 } from './queries/billing-webhook-events.js';
+export type {
+  PaymentTransitionInput,
+  PaymentTransitionResult,
+} from './queries/billing-payments.js';
+export type { OperationalSnapshot } from './queries/operational-state.js';
 export type {
   TrialLedgerRow,
   TrialLedgerStatus,

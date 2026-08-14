@@ -26,10 +26,12 @@
  */
 import rateLimit from '@fastify/rate-limit';
 import { logger } from '@startap/core/logger';
+import { projectOperationalState } from '@startap/core/operational-state';
 // Importa do subpath /phone (não da raiz @startap/core) para NÃO arrastar crypto.ts,
 // que valida GCAL_ENCRYPTION_KEY no load e quebraria o boot/teste sem a env.
 import { ensureDddBr } from '@startap/core/phone';
-import { flowClones } from '@startap/db';
+import { clientBilling, flowClones, operationalState } from '@startap/db';
+import type { OperationalSnapshot } from '@startap/db';
 import { provisioning, waha } from '@startap/integrations';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from '../config.js';
@@ -274,7 +276,9 @@ async function resolveClone(tenant: TenantContext) {
  *  - pause_locked = pausado E NÃO é pause_self (suspenso pela Startap: billing/
  *                  manual_other/abuse) -> o cliente NÃO retoma (UI mostra "fale com suporte").
  */
-function derivePauseState(clone: flowClones.CloneRow | null): {
+function derivePauseState(
+  clone: Pick<OperationalSnapshot, 'flow_enabled' | 'suspended_kind'> | null,
+): {
   bot_paused: boolean;
   pause_self: boolean;
   pause_locked: boolean;
@@ -286,6 +290,24 @@ function derivePauseState(clone: flowClones.CloneRow | null): {
     pause_self: pauseSelf,
     pause_locked: botPaused && !pauseSelf,
   };
+}
+
+function composedState(snapshot: OperationalSnapshot | null, wahaStatus: string) {
+  return projectOperationalState(
+    {
+      atendimentoConfigured: snapshot?.atendimento_configured ?? false,
+      wahaStatus,
+      flow_enabled: snapshot?.flow_enabled ?? true,
+      suspended_kind: snapshot?.suspended_kind ?? null,
+      next_due_date: snapshot?.next_due_date ?? null,
+      billing_amount_cents: snapshot?.billing_amount_cents ?? null,
+    },
+    {
+      graceDays: clientBilling.GRACE_DAYS,
+      daysUntilDue: (nextDueDate) => clientBilling.daysUntilDue(nextDueDate),
+      billingOverdueSilenceOn: process.env.BILLING_OVERDUE_SILENCE === 'true',
+    },
+  );
 }
 
 /** Quando a flag está OFF, rotas de ação respondem 404 (front esconde tudo). */
@@ -314,6 +336,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
       }
       const tenant = requireTenant(req);
       const { clone, session, phoneDigits, phoneMasked } = await resolveClone(tenant);
+      const operational = await operationalState.getOperationalSnapshotBySlot(tenant.slot);
 
       const status = await readWahaStatus(session, tenant.slot);
       const connected = status === 'WORKING';
@@ -321,7 +344,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
 
       // Estado da pausa do bot (só exposto com a flag PORTAL_BOT_PAUSE ON; OFF -> campos
       // omitidos e o front esconde a UI — produção byte-a-byte como antes da feature).
-      const pause = config.PORTAL_BOT_PAUSE ? derivePauseState(clone) : {};
+      const pause = config.PORTAL_BOT_PAUSE ? derivePauseState(operational) : {};
 
       return reply.code(200).send({
         enabled: true,
@@ -341,6 +364,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         // Só pode reconectar se não está conectado e não há lock vigente.
         can_reconnect: !connected && cooldown === 0,
         reconnect_cooldown_seconds: cooldown,
+        operational_state: composedState(operational, status),
         ...pause,
       });
     },
@@ -538,6 +562,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
       if (!config.PORTAL_RECONEXAO_WAHA) return featureDisabled(reply);
       const tenant = requireTenant(req);
       const { session } = await resolveClone(tenant);
+      const operational = await operationalState.getOperationalSnapshotBySlot(tenant.slot);
       const status = await readWahaStatus(session, tenant.slot);
       return reply.code(200).send({
         session,
@@ -545,6 +570,7 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
         connected: status === 'WORKING',
         // terminal: o front pode parar o polling (sucesso ou falha definitiva).
         terminal: status === 'WORKING' || status === 'FAILED',
+        operational_state: composedState(operational, status),
       });
     },
   );
@@ -582,22 +608,37 @@ export const portalConexaoRoutes: FastifyPluginAsync = async (app) => {
       const tenant = requireTenant(req);
       const actor = `portal:${tenant.userId}`;
       const res = await flowClones.resumeBotByOwner(tenant.slot, actor);
+      if (res.outcome === 'not_found') {
+        return reply.code(404).send({ error: 'fluxo_nao_encontrado' });
+      }
+      const status = await readWahaStatus(res.operational?.waha_sessao ?? null, tenant.slot);
+      const state = composedState(res.operational, status);
       if (res.changed) {
         log.info({ slot: tenant.slot }, 'bot retomado pelo cliente no portal');
-        return reply.code(200).send({ bot_paused: false });
+        return reply.code(200).send({ bot_paused: false, operational_state: state });
       }
-      // Não destravou. Distingue 2 casos lendo o estado atual:
-      //  - suspenso pela Startap (flow_enabled=false, kind != owner_request) -> 409.
-      //  - já ativo (nada a fazer) -> 200 bot_paused:false (idempotente).
-      const { clone } = await resolveClone(tenant);
-      const { bot_paused, pause_locked } = derivePauseState(clone);
-      if (pause_locked) {
+      if (res.outcome === 'billing_overdue') {
         return reply.code(409).send({
-          error: 'suspensao_startap',
-          message: 'Seu atendimento foi pausado pela Startap. Fale com o suporte.',
+          error: 'billing_overdue',
+          message: 'Sua mensalidade está vencida. Regularize o pagamento para retomar.',
+          bot_paused: !res.flow_enabled,
+          operational_state: state,
         });
       }
-      return reply.code(200).send({ bot_paused });
+      if (res.outcome === 'startap_suspension') {
+        return reply.code(409).send({
+          error: 'suspensao_startap',
+          message:
+            res.startap_kind === 'billing'
+              ? 'Seu atendimento está pausado por cobrança. Regularize o pagamento para retomar.'
+              : 'Seu atendimento foi pausado pela Startap. Fale com o suporte.',
+          suspension_kind: res.startap_kind,
+          denied_reason: state.actions.resume_owner.denied_reason,
+          bot_paused: !res.flow_enabled,
+          operational_state: state,
+        });
+      }
+      return reply.code(200).send({ bot_paused: !res.flow_enabled, operational_state: state });
     },
   );
 };

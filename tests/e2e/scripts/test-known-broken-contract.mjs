@@ -2,19 +2,13 @@ import assert from 'node:assert/strict';
 import { validateKnownBrokenRun } from './known-broken-contract.mjs';
 
 const manifest = {
-  expectedFailures: 2,
+  expectedFailures: 1,
   items: [
     {
       jira: 'SCRUM-A',
       test: 'SCRUM-A expected-red: contrato A',
       causeId: 'cause-a',
       expectedErrorFragments: ['Expected: 200', 'Received: 404'],
-    },
-    {
-      jira: 'SCRUM-B',
-      test: 'SCRUM-B expected-red: contrato B',
-      causeId: 'cause-b',
-      expectedErrorFragments: ['Expected: 409', 'Received: 200'],
     },
   ],
 };
@@ -45,11 +39,11 @@ function validReport() {
   return {
     suites: [
       {
-        specs: [failedSpec(manifest.items[0], 200, 404), failedSpec(manifest.items[1], 409, 200)],
+        specs: [failedSpec(manifest.items[0], 200, 404)],
       },
     ],
     errors: [],
-    stats: { unexpected: 2 },
+    stats: { unexpected: 1 },
   };
 }
 

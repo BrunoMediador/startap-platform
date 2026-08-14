@@ -11,8 +11,13 @@ import morgan from 'morgan';
 import multer from 'multer';
 import fetch from 'node-fetch';
 import pg from 'pg';
+import pino from 'pino';
+import { billingPayments } from '../packages/db/dist/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const panelAuditLog = pino({ level: process.env.LOG_LEVEL ?? 'info' }).child({
+  service: 'painel-admin',
+});
 
 const {
   PG_HOST = 'postgres',
@@ -6242,9 +6247,6 @@ app.put('/api/billing/:slot', async (req, res) => {
     const slot = String(req.params.slot ?? '').trim();
     if (!slot) return res.status(400).json({ error: 'slot invalido' });
 
-    const cloneRow = await pool.query(`SELECT slot FROM flow_clones WHERE slot = $1`, [slot]);
-    if (cloneRow.rowCount === 0) return res.status(404).json({ error: 'slot (fluxo) nao encontrado' });
-
     const operator = req.session?.userId || 'unknown';
     const registerPayment = req.body?.register_payment === true || req.body?.register_payment === 'true';
 
@@ -6270,42 +6272,78 @@ app.put('/api/billing/:slot', async (req, res) => {
     }
 
     if (registerPayment) {
-      // Avanca o vencimento em cycle_months (default 1) a partir de MAX(vencimento, hoje).
-      // Espelha advanceFromMaxDue (packages/db client-billing.ts) e o avanco do webhook
-      // (billing-webhook-events.applyPaidWebhook §6 no modelo por data): o GREATEST garante
-      // que registrar pagamento de um cliente VENCIDO (due no passado) NUNCA renova pro
-      // passado — o novo vencimento parte de hoje. Aplicado INCONDICIONALMENTE: o painel
-      // nao le a flag BILLING_DUE_DATE_MODEL, e GREATEST(due, hoje) e seguro/correto nos
-      // DOIS modelos (em dia: parte de due; vencido: parte de hoje). Logica em SQL para
-      // nao depender de helpers TS aqui.
-      let cycleMonths = req.body?.cycle_months != null ? Number(req.body.cycle_months) : 1;
-      if (!Number.isInteger(cycleMonths) || cycleMonths < 1 || cycleMonths > 36) cycleMonths = 1;
+      const paymentStartedAt = Date.now();
+      const paymentRequestId = crypto.randomUUID();
+      const cycleMonths = req.body?.cycle_months != null ? Number(req.body.cycle_months) : 1;
+      if (!Number.isInteger(cycleMonths) || cycleMonths < 1 || cycleMonths > 36) {
+        return res.status(400).json({ error: 'cycle_months deve ser inteiro entre 1 e 36' });
+      }
 
-      const r = await pool.query(
-        `INSERT INTO client_billing (slot, next_due_date, amount_cents, status, notes,
-                                     last_payment_at, created_at, updated_at)
-         VALUES (
-           $1,
-           (GREATEST(COALESCE($2::date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
-           $4, 'active', $5, NOW(), NOW(), NOW()
-         )
-         ON CONFLICT (slot) DO UPDATE SET
-           next_due_date   = (GREATEST(COALESCE(client_billing.next_due_date, CURRENT_DATE), CURRENT_DATE) + ($3 || ' months')::interval)::date,
-           amount_cents    = COALESCE($4, client_billing.amount_cents),
-           status          = 'active',
-           notes           = COALESCE($5, client_billing.notes),
-           last_payment_at = NOW(),
-           updated_at      = NOW()
-         RETURNING slot, to_char(next_due_date, 'YYYY-MM-DD') AS next_due_date,
-                   amount_cents, last_payment_at, status, notes, updated_at`,
-        [slot, nextDueDate, String(cycleMonths), amountCents, notes],
-      );
-      console.log(JSON.stringify({
-        audit: 'billing-payment-registered', operator, slot,
-        cycle_months: cycleMonths, at: new Date().toISOString(),
-      }));
-      return res.json({ ok: true, billing: r.rows[0] });
+      // Núcleo canônico compartilhado com o webhook: uma transação, advisory billing:<slot>,
+      // avanço max(due, hoje), resume somente kind=billing e releitura final intra-tx.
+      // O pool do painel é passado explicitamente; @startap/db não abre um segundo pool.
+      let payment;
+      try {
+        payment = await billingPayments.registerManualPayment({
+          slot,
+          actor: `painel:${operator}`,
+          cycleMonths,
+          initialDueDate: nextDueDate,
+          amountCents,
+          notes,
+          resumeReason: 'pagamento manual confirmado',
+        }, pool);
+      } catch (error) {
+        const outcomeUncertain = billingPayments.isManualPaymentOutcomeUncertainError(error);
+        panelAuditLog.error({
+          request_id: paymentRequestId,
+          slot,
+          operator,
+          error_code: error?.code,
+          outcome: outcomeUncertain ? 'unknown' : 'not_applied',
+          requires_reread: outcomeUncertain,
+          duration_ms: Date.now() - paymentStartedAt,
+        }, outcomeUncertain
+          ? 'pagamento manual com resultado não confirmado; releitura obrigatória antes de retry'
+          : 'pagamento manual falhou antes da confirmação');
+        if (outcomeUncertain) {
+          return res.status(503).json({
+            error: 'pagamento_resultado_desconhecido',
+            message: 'O banco não confirmou o resultado. Recarregue o billing antes de tentar novamente.',
+            outcome: 'unknown',
+            requires_reread: true,
+            retry_safe: false,
+          });
+        }
+        throw error;
+      }
+      if (!payment) return res.status(404).json({ error: 'slot (fluxo) nao encontrado' });
+      panelAuditLog.info({
+        audit: 'billing-payment-registered',
+        request_id: paymentRequestId,
+        operator,
+        slot,
+        cycle_months: cycleMonths,
+        resumed: payment.resumed,
+        duration_ms: Date.now() - paymentStartedAt,
+      }, 'pagamento manual confirmado');
+      return res.json({
+        ok: true,
+        billing: payment.billing,
+        resumed: payment.resumed,
+        final_state: {
+          flow_enabled: payment.operational.flow_enabled,
+          suspended_kind: payment.operational.suspended_kind,
+          suspension_preserved:
+            payment.operational.flow_enabled === false
+              ? payment.operational.suspended_kind
+              : null,
+        },
+      });
     }
+
+    const cloneRow = await pool.query(`SELECT slot FROM flow_clones WHERE slot = $1`, [slot]);
+    if (cloneRow.rowCount === 0) return res.status(404).json({ error: 'slot (fluxo) nao encontrado' });
 
     // Sem pagamento: upsert dos campos informados (COALESCE preserva existentes).
     const r = await pool.query(

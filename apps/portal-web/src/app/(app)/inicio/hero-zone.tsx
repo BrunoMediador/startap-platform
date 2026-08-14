@@ -18,38 +18,15 @@
  */
 import type { StatusResponse } from '@/lib/api-types';
 import { dataPorExtenso, saudacao } from '@/lib/format';
-import { resolveMotivoPausa } from '@/lib/suspensao';
+import { resolveStatusHeroView } from '@/lib/status-operacional';
 import { BillingCard } from './billing-card';
 import { StatusHero } from './status-hero';
-
-type BotState = 'ativo' | 'desconectado' | 'pausado';
-
-function resolveState(status: StatusResponse): BotState {
-  if (!status.flow_enabled) return 'pausado';
-  return (status.waha.status ?? '').toUpperCase() === 'WORKING' ? 'ativo' : 'desconectado';
-}
-
-/** Frase de contexto calorosa (1.D.3). Sem emoji. A pausa varia POR MOTIVO pra
- *  não dizer "regularize" quando foi o próprio dono que pausou / está em dia. */
-const CONTEXTO_BASE: Record<'ativo' | 'desconectado', string> = {
-  ativo: 'tudo rodando por aqui.',
-  desconectado: 'seu assistente precisa de você — toque no status.',
-};
-const CONTEXTO_PAUSADO = {
-  owner: 'você pausou o atendimento — retome quando quiser.',
-  inadimplencia: 'atendimento pausado, regularize pra voltar.',
-  startap_outro: 'atendimento pausado, fale com o suporte.',
-} as const;
 
 export function HeroZone({
   status,
   businessName,
 }: { status: StatusResponse; businessName: string }) {
-  const state = resolveState(status);
-  const contexto =
-    state === 'pausado'
-      ? CONTEXTO_PAUSADO[resolveMotivoPausa(status) ?? 'startap_outro']
-      : CONTEXTO_BASE[state];
+  const contexto = resolveStatusHeroView(status).context;
 
   return (
     // Sem wrappers de stacking: o fundo vivo (constelacao) vem do shell

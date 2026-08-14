@@ -51,12 +51,11 @@ import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
 import type { ConexaoResponse } from '@/lib/api-types';
 import {
-  MSG_SUSPENSAO_STARTAP,
-  type PausaEstado,
-  isAtendimentoLigado,
+  focusPausaErrorFeedbackAfterCommit,
   isPausaFeatureOff,
-  isPausaTravada,
-  resolvePausaEstado,
+  resolvePausaPresentation,
+  resolveResumeError,
+  resumeSuccessMessage,
 } from '@/lib/bot-pausa';
 import { cn } from '@/lib/cn';
 import { isPrimeiraConexao, resolveConexaoCardCopy } from '@/lib/conexao-copy';
@@ -80,7 +79,7 @@ import { SUPORTE_WHATSAPP_URL } from '@/lib/suporte';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 
 const PAGE_SUBTITLE =
   'Reconecte o WhatsApp do seu assistente sem precisar do suporte. Deixe esta tela aberta durante o processo.';
@@ -500,69 +499,148 @@ function ConexaoMachine({ initial, slot }: { initial: ConexaoResponse; slot: str
 
 /**
  * Card de pausar/retomar o atendimento automatico. SEPARADO da maquina de
- * reconexao WAHA (sao eixos diferentes: WAHA=conexao; flow_enabled=pausa). Aparece
- * independente do estado de conexao. 3 estados (do GET /portal/conexao):
- *   ativo            -> "Pausar atendimento" (ConfirmDialog -> POST /bot/pause).
- *   pausado_self     -> "Retomar atendimento" (POST /bot/resume).
- *   pausado_startap  -> toggle TRAVADO + badge "Pausado pela Startap" + suporte.
+ * reconexao WAHA (sao eixos diferentes: WAHA=conexao; pausa/billing/suspensao
+ * vem do operational_state). Aparece independente do estado de conexao e deixa
+ * explícitos ativo real, WhatsApp sem conexão, owner pause, billing e Startap.
  * Com a flag PORTAL_BOT_PAUSE OFF (campos ausentes no GET) o card NAO renderiza.
  *
  * "atendimento"/"robo" na copy de proposito (PME nao fala "bot").
  */
+type PausaFeedback = {
+  kind: 'success' | 'error';
+  message: string;
+  action: 'pause' | 'resume' | 'refresh' | 'billing' | 'support' | null;
+};
+
 function PausaCard({ slot, conexao }: { slot: string; conexao: ConexaoResponse }) {
   const toast = useToast();
+  const conexaoAtual = useConexao(slot);
   const pausar = usePausarBot(slot);
   const retomar = useRetomarBot(slot);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [feedback, setFeedback] = useState<PausaFeedback | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  const snapshot = conexaoAtual.data ?? conexao;
+
+  useEffect(() => {
+    focusPausaErrorFeedbackAfterCommit(feedback?.kind, feedbackRef.current);
+  }, [feedback]);
 
   // Flag OFF -> backend nao expoe os campos -> esconde o card (degrada limpo).
-  if (isPausaFeatureOff(conexao)) return null;
+  if (isPausaFeatureOff(snapshot)) return null;
 
-  const estado = resolvePausaEstado(conexao);
-  const ligado = isAtendimentoLigado(estado);
-  const travado = isPausaTravada(estado);
-  const ocupado = pausar.isPending || retomar.isPending;
+  const presentation = resolvePausaPresentation(snapshot);
+  const ocupado = pausar.isPending || retomar.isPending || refreshing;
+
+  function showError(message: string, action: PausaFeedback['action']) {
+    setFeedback({ kind: 'error', message, action });
+  }
+
+  function executarRetomada() {
+    if (!presentation.canResume || ocupado) return;
+    setFeedback(null);
+    retomar.mutate(undefined, {
+      onSuccess: (result) => {
+        const state = result.final?.operational_state ?? result.action.operational_state;
+        const message = resumeSuccessMessage(state);
+        if (!state) {
+          showError(message, 'refresh');
+          return;
+        }
+        setFeedback({ kind: 'success', message, action: null });
+        toast.success('Estado do atendimento atualizado');
+      },
+      onError: (error) => {
+        const view = resolveResumeError(error);
+        showError(view.message, view.action === 'retry' ? 'resume' : view.action);
+        toast.error(view.message);
+      },
+    });
+  }
 
   function onToggle(next: boolean) {
-    if (travado || ocupado) return;
-    if (!next) {
-      // Ligado -> desligar: confirma antes (acao com efeito no WhatsApp do cliente).
-      setConfirmOpen(true);
+    if (ocupado) return;
+    if (next && presentation.canResume) {
+      executarRetomada();
       return;
     }
-    // Desligado -> ligar: retoma direto.
-    retomar.mutate(undefined, {
-      onSuccess: () => toast.success('Atendimento retomado'),
-      onError: (err) => toast.error(mensagemResume(err)),
-    });
+    if (!next && presentation.canPause) setConfirmOpen(true);
   }
 
   function confirmarPausa() {
+    if (!presentation.canPause || ocupado) return;
+    setFeedback(null);
     pausar.mutate(undefined, {
-      onSuccess: () => {
+      onSuccess: (result) => {
         setConfirmOpen(false);
-        toast.success('Atendimento pausado');
+        const finalPresentation = result.final ? resolvePausaPresentation(result.final) : null;
+        if (finalPresentation?.estado === 'pausado_self') {
+          const message = 'Atendimento pausado por você. Retome quando quiser.';
+          setFeedback({ kind: 'success', message, action: null });
+          toast.success('Pausa confirmada');
+          return;
+        }
+        if (finalPresentation?.action === 'billing') {
+          showError(finalPresentation.body, 'billing');
+          return;
+        }
+        if (finalPresentation?.action === 'support') {
+          showError(finalPresentation.body, 'support');
+          return;
+        }
+        showError(
+          'A solicitação foi recebida, mas não foi possível confirmar o estado final. Atualize e confira antes de tentar novamente.',
+          'refresh',
+        );
       },
-      onError: (err) => {
+      onError: (error) => {
         setConfirmOpen(false);
-        toast.error(mensagemErro(err));
+        const message =
+          error instanceof ApiError && error.status === 0
+            ? 'Sem conexão. Não foi possível confirmar a pausa.'
+            : 'Não foi possível pausar o atendimento. Tente novamente.';
+        showError(message, 'pause');
+        toast.error(message);
       },
     });
   }
 
+  async function refreshFinalState() {
+    if (ocupado) return;
+    setRefreshing(true);
+    setFeedback(null);
+    const result = await conexaoAtual.refetch();
+    setRefreshing(false);
+    if (result.isError || !result.data?.operational_state) {
+      showError('Ainda não foi possível confirmar o estado. Tente novamente.', 'refresh');
+      return;
+    }
+    setFeedback({
+      kind: 'success',
+      message: 'Estado do atendimento atualizado.',
+      action: null,
+    });
+  }
+
+  const retry =
+    feedback?.action === 'pause'
+      ? () => setConfirmOpen(true)
+      : feedback?.action === 'resume'
+        ? executarRetomada
+        : feedback?.action === 'refresh'
+          ? () => void refreshFinalState()
+          : undefined;
+
   return (
     <PausaCardView
-      estado={estado}
-      ligado={ligado}
-      travado={travado}
+      presentation={presentation}
       ocupado={ocupado}
       onToggle={onToggle}
-      onRetomar={() =>
-        retomar.mutate(undefined, {
-          onSuccess: () => toast.success('Atendimento retomado'),
-          onError: (err) => toast.error(mensagemResume(err)),
-        })
-      }
+      onRetomar={executarRetomada}
+      feedback={feedback}
+      feedbackRef={feedbackRef}
+      onRetry={retry}
       confirmOpen={confirmOpen}
       onConfirm={confirmarPausa}
       onCancelConfirm={() => setConfirmOpen(false)}
@@ -576,84 +654,143 @@ function PausaCard({ slot, conexao }: { slot: string; conexao: ConexaoResponse }
  * reusar. Recebe o estado ja resolvido por @/lib/bot-pausa.
  */
 function PausaCardView({
-  estado,
-  ligado,
-  travado,
+  presentation,
   ocupado,
   onToggle,
   onRetomar,
+  feedback,
+  feedbackRef,
+  onRetry,
   confirmOpen,
   onConfirm,
   onCancelConfirm,
   confirmando,
 }: {
-  estado: PausaEstado;
-  ligado: boolean;
-  travado: boolean;
+  presentation: ReturnType<typeof resolvePausaPresentation>;
   ocupado: boolean;
   onToggle: (next: boolean) => void;
   onRetomar: () => void;
+  feedback: PausaFeedback | null;
+  feedbackRef: RefObject<HTMLDivElement | null>;
+  onRetry?: () => void;
   confirmOpen: boolean;
   onConfirm: () => void;
   onCancelConfirm: () => void;
   confirmando: boolean;
 }) {
+  const trulyActive = presentation.estado === 'ativo';
+  const showSwitch = presentation.canPause || presentation.canResume;
   return (
     <section
       className="rounded-card border border-line bg-surface p-5 shadow-card"
       aria-labelledby="pausa-titulo"
+      aria-busy={ocupado || undefined}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={cn(
               'flex size-7 items-center justify-center rounded-full',
-              ligado ? 'bg-ok-soft text-ok' : 'bg-amber-soft text-amber',
+              trulyActive ? 'bg-ok-soft text-ok' : 'bg-amber-soft text-amber',
             )}
           >
-            {ligado ? <IconPlay size={15} /> : <IconPause size={15} />}
+            {trulyActive ? <IconPlay size={15} /> : <IconPause size={15} />}
           </span>
           <h2 id="pausa-titulo" className="font-display text-[17px] font-semibold text-ink">
             Atendimento automático
           </h2>
         </div>
 
-        {travado ? (
-          <Badge tone="amber">
-            <IconLock size={12} />
-            Pausado pela Startap
-          </Badge>
-        ) : (
+        {showSwitch ? (
           <Switch
-            checked={ligado}
+            checked={presentation.switchChecked}
             onChange={onToggle}
             disabled={ocupado}
-            label="Atendimento automático ligado"
+            label={
+              trulyActive
+                ? 'Atendimento automático ativo'
+                : presentation.canResume
+                  ? 'Atendimento pausado por você'
+                  : 'Atendimento automático habilitado'
+            }
           />
+        ) : (
+          <Badge tone={presentation.tone}>
+            <IconLock size={12} />
+            {presentation.badge}
+          </Badge>
         )}
       </div>
 
-      <p className="mt-2.5 text-[14px] leading-normal text-ink-soft">
-        {estado === 'ativo' && 'O assistente está respondendo no WhatsApp.'}
-        {estado === 'pausado_self' &&
-          'O assistente não responde até você retomar. O WhatsApp continua conectado.'}
-        {estado === 'pausado_startap' &&
-          'O atendimento está pausado pela Startap. Fale com o suporte pra reativar.'}
-      </p>
+      <p className="mt-2.5 text-[14px] leading-normal text-ink-soft">{presentation.body}</p>
 
       {/* Acao por estado: pausado-por-voce -> "Retomar"; travado -> suporte. */}
-      {estado === 'pausado_self' && (
+      {presentation.action === 'resume' && (
         <div className="mt-4">
-          <Button onClick={onRetomar} loading={ocupado} loadingLabel="Retomando…">
+          <Button
+            onClick={onRetomar}
+            loading={ocupado}
+            loadingLabel="Retomando…"
+            disabled={!presentation.canResume}
+          >
             <IconPlay size={18} />
             Retomar atendimento
           </Button>
         </div>
       )}
 
-      {estado === 'pausado_startap' && (
+      {presentation.action === 'billing' && (
+        <Link
+          href="/mensalidade"
+          className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-btn border border-line-strong bg-surface px-5 font-display text-[15px] font-semibold text-brand outline-none hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg sm:w-auto"
+        >
+          Ver mensalidade
+        </Link>
+      )}
+
+      {presentation.action === 'support' && (
         <div className="mt-4">
           <SuporteLink variant="secondary" />
+        </div>
+      )}
+
+      {feedback && (
+        <div
+          ref={feedbackRef}
+          tabIndex={feedback.kind === 'error' ? -1 : undefined}
+          role={feedback.kind === 'error' ? 'alert' : 'status'}
+          aria-live={feedback.kind === 'error' ? 'assertive' : 'polite'}
+          className={cn(
+            'mt-4 rounded-card-sm border px-3.5 py-3 text-[13px] leading-normal outline-none focus-visible:ring-2',
+            feedback.kind === 'error'
+              ? 'border-danger/35 bg-danger-soft text-ink focus-visible:ring-danger'
+              : 'border-ok/35 bg-ok-soft text-ink focus-visible:ring-ok',
+          )}
+        >
+          <p>{feedback.message}</p>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={ocupado}
+              className="mt-2 inline-flex min-h-11 items-center font-display font-semibold text-brand underline-offset-2 outline-none hover:underline focus-visible:underline disabled:opacity-50"
+            >
+              {feedback.action === 'refresh' ? 'Atualizar estado' : 'Tentar novamente'}
+            </button>
+          )}
+          {feedback.action === 'billing' && (
+            <Link
+              href="/mensalidade"
+              className="mt-2 inline-flex min-h-11 items-center font-display font-semibold text-brand outline-none focus-visible:underline"
+            >
+              Ver mensalidade
+            </Link>
+          )}
+          {feedback.action === 'support' && (
+            <div className="mt-2">
+              <SuporteLink variant="ghost" />
+            </div>
+          )}
         </div>
       )}
 
@@ -693,7 +830,7 @@ function ConectadoCard({
         <h2 className="font-display text-[17px] font-semibold text-ink">WhatsApp</h2>
       </div>
       <p className="mt-1.5 text-[14px] leading-normal text-ink-soft">
-        O assistente está conectado e atendendo.
+        O WhatsApp do assistente está conectado.
       </p>
       <MaskedPhone phoneMasked={phoneMasked} className="mt-3" />
       <div className="mt-4">
@@ -1458,22 +1595,6 @@ function retryAfter(err: ApiError): number {
     if (typeof v === 'number' && v > 0) return Math.ceil(v);
   }
   return 30;
-}
-
-/**
- * Mensagem do erro do POST /bot/resume. 409 { error:'suspensao_startap', message }
- * = a Startap pausou (billing/manual_other/abuse): mostra a `message` do backend
- * (com fallback fixo) sem expor o motivo cru. Outros erros caem no generico.
- */
-function mensagemResume(err: unknown): string {
-  if (err instanceof ApiError && err.status === 409 && isErr(err, 'suspensao_startap')) {
-    if (typeof err.body === 'object' && err.body !== null) {
-      const msg = (err.body as { message?: unknown }).message;
-      if (typeof msg === 'string' && msg.trim()) return msg;
-    }
-    return MSG_SUSPENSAO_STARTAP;
-  }
-  return mensagemErro(err);
 }
 
 /** Mensagem amigavel (sem jargao) pra erros gerais das rotas de conexao. */

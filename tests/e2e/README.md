@@ -115,10 +115,10 @@ de modo que o teste não “finge” que o webhook foi aceito.
 
 ## Limites explícitos
 
-`known-broken.json` lista comportamentos de SCRUM-137/170 que a fundação não conta como
-aceite. Eles não são skips: depois da suíte de aceite, o runner executa duas expectativas
-vermelhas em configuração separada, valida Jira, título, causa anotada e fragments exatos
-da assertion de cada item, e publica JSON
+`known-broken.json` lista o comportamento de SCRUM-137 que a fundação ainda não conta como
+aceite. Ele não é skip: depois da suíte de aceite, o runner executa uma expectativa
+vermelha em configuração separada, valida Jira, título, causa anotada e fragments exatos
+da assertion manifestada, e publica JSON
 sanitizado em `/artifacts/known-broken-results.json`. Se uma passar ou surgir outra falha,
 o wrapper falha e exige atualização explícita do manifest/report.
 

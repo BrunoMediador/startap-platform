@@ -86,6 +86,8 @@ describeIf(
       await exec(`CREATE TABLE IF NOT EXISTS flow_clones (
       slot VARCHAR(80) PRIMARY KEY,
       tenant_id UUID,
+      status VARCHAR(24) NOT NULL DEFAULT 'rascunho',
+      waha_sessao VARCHAR(120),
       flow_enabled BOOLEAN NOT NULL DEFAULT true,
       suspended_reason TEXT,
       suspended_at TIMESTAMPTZ,
@@ -133,8 +135,11 @@ describeIf(
     /** Estado inicial: clone SUSPENSO por billing (prova o auto-resume C1), sem pagamento anterior. */
     async function seedSlot() {
       await exec(
-        `INSERT INTO flow_clones (slot, tenant_id, flow_enabled, suspended_reason, suspended_at, suspended_kind)
-       VALUES ($1, $2, false, 'inadimplente', now(), 'billing')`,
+        `INSERT INTO flow_clones
+           (slot, tenant_id, status, waha_sessao, flow_enabled,
+            suspended_reason, suspended_at, suspended_kind)
+         VALUES ($1, $2, 'conectado', 'itest_reissue_session', false,
+                 'inadimplente', now(), 'billing')`,
         [SLOT, TENANT],
       );
       await exec(

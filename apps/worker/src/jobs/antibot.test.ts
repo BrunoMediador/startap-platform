@@ -29,6 +29,7 @@ vi.mock('@startap/db', () => ({
   antibot: { findSuspects, pruneOldLogs, hasScheduledHistory },
   routing: { findRouting },
   flowClones: { getCloneBySession, getCloneBySlot },
+  operationalState: { getOperationalSnapshotBySlot: getCloneBySlot },
   pausa: { addFlowPause },
   contactNames: { getContactName },
   // clientBilling: reimplementação fiel das funções PURAS (mesmo padrão do router.test.ts).

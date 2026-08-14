@@ -390,7 +390,7 @@ for (const reportContract of [
   /processResult\?\.status !== 1/u,
   /reportCurrent !== true/u,
   /report\.errors\.length !== 0/u,
-  /manifest\?\.expectedFailures !== 2 \|\| manifestItems\.length !== 2/u,
+  /manifest\?\.expectedFailures !== 1 \|\| manifestItems\.length !== 1/u,
   /spec\.title === item\.test/u,
   /tests\.length !== 1 \|\| tests\[0\]\?\.status !== 'unexpected'/u,
   /annotation\.type === 'known-broken-cause' && annotation\.description === item\.causeId/u,

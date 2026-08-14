@@ -8,9 +8,16 @@ import { isAgendaAutomaticaIntent } from '@startap/core/agenda-degrade';
 import { resolveAtendFromAgendaEnabled } from '@startap/core/atend-from-agenda-gate';
 import { resolveModoAtendenteEnabled } from '@startap/core/modo-atendente-gate';
 import { meIdToDigits } from '@startap/core/phone';
-import { OWNER_PAUSE_KIND } from '@startap/core/silence-gate';
+import { OWNER_PAUSE_KIND, resolveSilenceGate } from '@startap/core/silence-gate';
 import { DEFAULT_TIMEZONE, isValidIanaTimezone } from '@startap/core/timezones';
 import { pool, query } from '../client.js';
+import { acquireBillingSlotAdvisoryLock } from './billing-payments.js';
+import { GRACE_DAYS, daysUntilDue } from './client-billing.js';
+import {
+  type OperationalSnapshot,
+  getOperationalSnapshotBySlot,
+  getOperationalSnapshotForUpdate,
+} from './operational-state.js';
 import { invalidateTenantCache } from './tenant.js';
 
 export type CloneStatus =
@@ -139,7 +146,7 @@ export interface CloneSummary extends CloneRow {
 }
 
 // ---------------------------------------------------------------------------
-// Cache TTL — reduz queries por webhook (hot path: getCloneBySession/BySlot)
+// Cache TTL — somente configuração estrutural. Estado operacional nunca depende dele.
 // ---------------------------------------------------------------------------
 
 const CACHE_TTL_MS = 60_000;
@@ -837,50 +844,58 @@ export async function deleteClone(
 /**
  * Retorna o clone associado a uma sessão WAHA dedicada.
  * Retorna null se nenhum clone estiver vinculado à sessão; lança apenas em falha de DB.
- * Cache TTL de 60s — hot path do router (chamada por webhook).
+ * Cache TTL de 60s somente para a configuração estrutural. Suspensão/billing são
+ * relidos pelo snapshot operacional em toda chamada.
  */
 export async function getCloneBySession(sessao: string): Promise<CloneRow | null> {
   const cached = bySessionCache.get(sessao);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  let structural = cached && cached.expiresAt > Date.now() ? cached.value : undefined;
+  if (structural === undefined) {
+    const r = await query<CloneRow & { id: string }>(
+      `SELECT id, slot, tenant_id, matriz_slot, display_name, cliente_nome, cliente_telefone,
+              personalizacao, waha_sessao, waha_shard_id, status,
+              horarios_funcionamento, servicos, timezone, prompt_custom,
+              modo_atendente_enabled, billing_from_agenda_enabled, first_connected_at,
+              created_at, updated_at
+       FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
+      [sessao],
+    );
+    structural = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
+    bySessionCache.set(sessao, { value: structural, expiresAt: Date.now() + CACHE_TTL_MS });
+  }
+  if (!structural) return null;
 
-  const r = await query<CloneRow & { id: string }>(
-    `SELECT id, slot, matriz_slot, display_name, cliente_nome, cliente_telefone,
-            personalizacao, waha_sessao, waha_shard_id, status,
-            flow_enabled, suspended_reason, suspended_at,
-            horarios_funcionamento, servicos, timezone,
-            modo_atendente_enabled, billing_from_agenda_enabled,
-            created_at, updated_at
-     FROM flow_clones WHERE waha_sessao = $1 LIMIT 1`,
-    [sessao],
-  );
-  const value = r.rows[0] ? normalizeCloneRow(r.rows[0]) : null;
-  bySessionCache.set(sessao, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-  return value;
+  const operational = await getOperationalSnapshotBySlot(structural.slot);
+  if (!operational) return null;
+  return {
+    ...structural,
+    flow_enabled: operational.flow_enabled,
+    suspended_reason: operational.suspended_reason,
+    suspended_kind: operational.suspended_kind,
+    suspended_at: operational.suspended_at,
+    next_due_date: operational.next_due_date,
+    billing_amount_cents: operational.billing_amount_cents,
+  };
 }
 
 /**
  * Retorna o clone pelo slot (usado pelo dispatcher).
- * Cache TTL de 60s — hot path do router ao resolver clone dinamicamente.
+ * A parte estrutural usa cache TTL; o estado operacional é sempre relido sem cache e
+ * mesclado ao retorno por compatibilidade com callers antigos.
  */
-export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
+async function getStructuralCloneBySlot(slot: string): Promise<CloneRow | null> {
   const cached = bySlotCache.get(slot);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  // LEFT JOIN client_billing (1 linha por slot) no MESMO SELECT — alimenta o gate de
-  // silencio por cobranca (ADR 0016) sem query extra no hot path. Cache TTL 60s ja cobre
-  // (vencimento muda 1x/dia). billing.next_due_date -> 'YYYY-MM-DD' via to_char.
   const r = await query<CloneRow & { id: string }>(
-    `SELECT fc.id, fc.slot, fc.matriz_slot, fc.display_name, fc.cliente_nome, fc.cliente_telefone,
+    `SELECT fc.id, fc.slot, fc.tenant_id, fc.matriz_slot, fc.display_name,
+            fc.cliente_nome, fc.cliente_telefone,
             fc.personalizacao, fc.waha_sessao, fc.waha_shard_id, fc.status,
-            fc.flow_enabled, fc.suspended_reason, fc.suspended_kind, fc.suspended_at,
             fc.horarios_funcionamento, fc.servicos, fc.timezone,
-            fc.modo_atendente_enabled, fc.billing_from_agenda_enabled,
-            to_char(cb.next_due_date, 'YYYY-MM-DD') AS next_due_date,
-            cb.amount_cents AS billing_amount_cents,
+            fc.prompt_custom, fc.modo_atendente_enabled, fc.billing_from_agenda_enabled,
             fc.first_connected_at,
             fc.created_at, fc.updated_at
      FROM flow_clones fc
-     LEFT JOIN client_billing cb ON cb.slot = fc.slot
      WHERE fc.slot = $1`,
     [slot],
   );
@@ -889,13 +904,31 @@ export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
   return value;
 }
 
+export async function getCloneBySlot(slot: string): Promise<CloneRow | null> {
+  const [structural, operational] = await Promise.all([
+    getStructuralCloneBySlot(slot),
+    getOperationalSnapshotBySlot(slot),
+  ]);
+  if (!structural || !operational) return null;
+  return {
+    ...structural,
+    flow_enabled: operational.flow_enabled,
+    suspended_reason: operational.suspended_reason,
+    suspended_kind: operational.suspended_kind,
+    suspended_at: operational.suspended_at,
+    next_due_date: operational.next_due_date,
+    billing_amount_cents: operational.billing_amount_cents,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Resolução env→coluna dos gates de produtização (ADR 0030 D1, migration 072)
 //
 // efetivo(feature, slot) = isEnabledFromCsv(slot, envCsv)  OR  flow_clones.<coluna>
 //
-// Estes helpers async fazem a UNIÃO usando o clone JÁ CARREGADO no hot path (getCloneBySlot,
-// cache 60s) — NÃO abrem query nova por-turno na prática. Curto-circuitam no env ANTES de
+// Estes helpers async fazem a UNIÃO usando somente a configuração estrutural cacheada
+// (getStructuralCloneBySlot, TTL 60s). Não leem o snapshot operacional porque esses gates
+// não dependem de billing/suspensão. Curto-circuitam no env ANTES de
 // qualquer leitura: se o env já cobre o slot (ou é '*'), retornam true sem tocar o banco (que é
 // o caso de TODOS os clones vivos hoje -> byte-idêntico + zero leitura extra). Só quando o env
 // NÃO cobre é que consultam a coluna (self-service: ligar por-clone sem env).
@@ -910,7 +943,7 @@ export async function resolveModoAtendenteEnabledForSlot(
 ): Promise<boolean> {
   // Curto-circuito no env (kill-switch global) — evita leitura pra quem já está no CSV/'*'.
   if (resolveModoAtendenteEnabled(slot, envCsv, false)) return true;
-  const clone = await getCloneBySlot(slot);
+  const clone = await getStructuralCloneBySlot(slot);
   return resolveModoAtendenteEnabled(slot, envCsv, clone?.modo_atendente_enabled);
 }
 
@@ -920,7 +953,7 @@ export async function resolveAtendFromAgendaEnabledForSlot(
   envCsv: string | undefined | null,
 ): Promise<boolean> {
   if (resolveAtendFromAgendaEnabled(slot, envCsv, false)) return true;
-  const clone = await getCloneBySlot(slot);
+  const clone = await getStructuralCloneBySlot(slot);
   return resolveAtendFromAgendaEnabled(slot, envCsv, clone?.billing_from_agenda_enabled);
 }
 
@@ -1409,10 +1442,11 @@ export async function resumeClone(opts: {
 // suspended_kind). O contrato é estrito: o cliente só mexe na PRÓPRIA pausa.
 //   - pauseBotByOwner: só pausa se HOJE flow_enabled=true. Se já suspenso pela Startap
 //     (billing/manual_other/abuse), NÃO sobrescreve o kind — devolve {changed:false}.
-//   - resumeBotByOwner: só destrava se suspended_kind='owner_request'. Suspensão da
-//     Startap não casa o WHERE -> {changed:false} -> o caller responde 409.
+//   - resumeBotByOwner: serializa por billing:<slot>, decide pelo gate canônico e só
+//     destrava owner_request quando billing/suspensão Startap permitem.
 // NUNCA usa suspended_kind='billing' aqui (senão o PIX reativaria a pausa do dono).
-// invalidateCloneCache é IMPRESCINDÍVEL (cache TTL 60s; senão a pausa demora a valer).
+// O snapshot operacional nunca usa cache. Invalidação local após commit preserva a
+// compatibilidade do cache estrutural, mas não participa da coerência do gate.
 // ---------------------------------------------------------------------------
 
 /**
@@ -1429,6 +1463,21 @@ export interface OwnerPauseResult {
   changed: boolean;
   /** estado de flow_enabled APÓS a operação (refletido para o caller responder). */
   flow_enabled: boolean;
+}
+
+export type OwnerResumeOutcome =
+  | 'resumed'
+  | 'already_active'
+  | 'billing_overdue'
+  | 'startap_suspension'
+  | 'not_found';
+
+export type OwnerResumeStartapKind = 'billing' | 'manual_other' | 'abuse';
+
+export interface OwnerResumeResult extends OwnerPauseResult {
+  outcome: OwnerResumeOutcome;
+  operational: OperationalSnapshot | null;
+  startap_kind: OwnerResumeStartapKind | null;
 }
 
 /**
@@ -1485,38 +1534,75 @@ export async function pauseBotByOwner(slot: string, actor: string): Promise<Owne
 }
 
 /**
- * Retoma o bot a pedido do DONO: SÓ destrava a PRÓPRIA pausa (owner_request).
- *
- * UPDATE condicional WHERE flow_enabled=FALSE AND suspended_kind='owner_request':
- *  - Suspensão da Startap (billing/manual_other/abuse) NÃO casa -> 0 linhas ->
- *    changed:false -> o caller responde 409 suspensao_startap (o cliente NÃO levanta).
- *  - Já ativo -> 0 linhas -> changed:false; o caller trata como "nada a fazer" (200).
- *  - Idempotente em retry (2ª chamada não casa após reativar).
- * Limpa kind/reason/at ao reativar. Loga 'resume' apenas quando rowCount>0.
+ * Retoma o bot a pedido do DONO: SÓ destrava a PRÓPRIA pausa (owner_request) quando
+ * `resolveSilenceGate` permite. Advisory antes dos row locks serializa a decisão com
+ * pagamento manual/webhook. Overdue além da carência e suspensão Startap retornam um
+ * outcome estável sem escrita/log/cache; retry ativo em dia é idempotente. Quando muda,
+ * limpa kind/reason/at, loga uma vez e responde somente após releitura intra-transação.
  */
-export async function resumeBotByOwner(slot: string, actor: string): Promise<OwnerPauseResult> {
+export async function resumeBotByOwner(
+  slot: string,
+  actor: string,
+  options: { billingOverdueSilenceOn?: boolean } = {},
+): Promise<OwnerResumeResult> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await acquireBillingSlotAdvisoryLock(client, slot);
+    const before = await getOperationalSnapshotForUpdate(client, slot);
+    if (!before) {
+      await client.query('COMMIT');
+      return {
+        changed: false,
+        flow_enabled: false,
+        outcome: 'not_found',
+        operational: null,
+        startap_kind: null,
+      };
+    }
 
-    const r = await client.query<{ slot: string; waha_sessao: string | null }>(
-      `UPDATE flow_clones
-          SET flow_enabled     = TRUE,
-              suspended_kind   = NULL,
-              suspended_reason = NULL,
-              suspended_at     = NULL,
-              updated_at       = NOW()
-        WHERE slot = $1
-          AND flow_enabled = FALSE
-          AND suspended_kind = $2
-        RETURNING slot, waha_sessao`,
-      [slot, OWNER_PAUSE_KIND],
-    );
+    const gate = resolveSilenceGate(before, {
+      graceDays: GRACE_DAYS,
+      daysUntilDue: (nextDueDate) => daysUntilDue(nextDueDate),
+      billingOverdueSilenceOn:
+        options.billingOverdueSilenceOn ?? process.env.BILLING_OVERDUE_SILENCE === 'true',
+    });
+    if (gate.silenced) {
+      const startapKind: OwnerResumeStartapKind | null =
+        before.suspended_kind === 'billing' ||
+        before.suspended_kind === 'manual_other' ||
+        before.suspended_kind === 'abuse'
+          ? before.suspended_kind
+          : null;
+      await client.query('COMMIT');
+      return {
+        changed: false,
+        flow_enabled: before.flow_enabled,
+        outcome: gate.reason === 'billing-overdue' ? 'billing_overdue' : 'startap_suspension',
+        operational: before,
+        startap_kind: startapKind,
+      };
+    }
 
-    const changed = (r.rowCount ?? 0) > 0;
-    let sessao: string | null = null;
+    let changed = false;
+    if (before.flow_enabled === false && before.suspended_kind === OWNER_PAUSE_KIND) {
+      const update = await client.query<{ slot: string }>(
+        `UPDATE flow_clones
+            SET flow_enabled     = TRUE,
+                suspended_kind   = NULL,
+                suspended_reason = NULL,
+                suspended_at     = NULL,
+                updated_at       = NOW()
+          WHERE slot = $1
+            AND flow_enabled = FALSE
+            AND suspended_kind = $2
+          RETURNING slot`,
+        [slot, OWNER_PAUSE_KIND],
+      );
+      changed = (update.rowCount ?? 0) > 0;
+    }
+
     if (changed) {
-      sessao = r.rows[0].waha_sessao;
       await client.query(
         `INSERT INTO flow_suspension_log (slot, action, reason, actor)
          VALUES ($1, 'resume', NULL, $2)`,
@@ -1524,9 +1610,19 @@ export async function resumeBotByOwner(slot: string, actor: string): Promise<Own
       );
     }
 
+    const finalSnapshot = changed ? await getOperationalSnapshotBySlot(slot, client) : before;
+    if (!finalSnapshot) throw new Error('owner resume final reread missing');
     await client.query('COMMIT');
-    if (changed) invalidateCloneCache({ slot, sessao: sessao ?? undefined });
-    return { changed, flow_enabled: changed };
+    if (changed) {
+      invalidateCloneCache({ slot, sessao: finalSnapshot.waha_sessao ?? undefined });
+    }
+    return {
+      changed,
+      flow_enabled: finalSnapshot.flow_enabled,
+      outcome: changed ? 'resumed' : 'already_active',
+      operational: finalSnapshot,
+      startap_kind: null,
+    };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
