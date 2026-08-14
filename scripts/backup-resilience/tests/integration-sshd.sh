@@ -13,15 +13,55 @@ if [ ! -x /usr/sbin/sshd ]; then
   exit 0
 fi
 
+# Produção nunca autentica como root nesta fronteira (contas dedicadas
+# startap-backup-status/startap-backup-legacy-dump, ver sysusers). Quando o
+# runner do gate É root (VPS root-only), testar a autenticação sob root
+# contradiz 'PermitRootLogin no' e mascararia a fronteira real medida em
+# produção. Cria um usuário de sistema descartável para autenticar como não-root,
+# preservando 'PermitRootLogin no' com o mesmo significado que em produção.
+test_user=""
+if [ "$(id -u)" = 0 ]; then
+  if ! command -v useradd >/dev/null 2>&1 || ! command -v userdel >/dev/null 2>&1 ||
+    ! command -v runuser >/dev/null 2>&1; then
+    printf 'Bail out! root runner requires useradd/userdel/runuser to test as non-root\n' >&2
+    exit 1
+  fi
+  test_user="startap-sshd-it-$$"
+fi
+
 root="$(mktemp -d /tmp/startap-sshd-integration.XXXXXX)"
 sshd_pid=""
 cleanup() {
   set +e
   [ -z "$sshd_pid" ] || kill -TERM "$sshd_pid" 2>/dev/null
   [ -z "$sshd_pid" ] || wait "$sshd_pid" 2>/dev/null
+  [ -z "$test_user" ] || userdel "$test_user" 2>/dev/null
   case "$root" in /tmp/startap-sshd-integration.*) find "$root" -depth -delete 2>/dev/null ;; esac
 }
 trap cleanup EXIT INT TERM HUP
+
+if [ -n "$test_user" ]; then
+  # Shell /usr/sbin/nologin recusa a sessão ANTES do ForceCommand do
+  # authorized_keys rodar ("This account is currently not available"),
+  # mascarando os 4 asserts. A conta real de produção evita nologin pelo
+  # mesmo motivo (ver docs/runbooks/backup-resilience-setup.md, seção
+  # "Usuário SSH de status"): usa /bin/sh só como login shell válido — o
+  # forced command="..." do authorized_keys é o único caminho de execução
+  # em todos os casos exercitados (nunca cai no shell interativo).
+  useradd --system --no-create-home --home-dir "$root" --shell /bin/sh "$test_user"
+  # useradd deixa a senha travada (shadow '!') por padrão; sshd recusa
+  # qualquer método de auth (inclusive pubkey) para conta trancada mesmo com
+  # PasswordAuthentication no. passwd -d zera a senha (NULL) sem travar a
+  # conta; PasswordAuthentication/KbdInteractiveAuthentication no já barram
+  # auth por senha, então NULL nunca é alcançável via rede — só desbloqueia
+  # o pubkey.
+  passwd -d "$test_user" >/dev/null
+  chown "$test_user" "$root"
+fi
+sshd_user="${test_user:-$(id -un)}"
+as_test_user() {
+  if [ -n "$test_user" ]; then runuser -u "$test_user" -- "$@"; else "$@"; fi
+}
 
 port=$((22000 + $$ % 20000))
 ssh-keygen -q -t ed25519 -N '' -f "$root/host_key"
@@ -41,6 +81,10 @@ printf 'restrict,command="%s",no-agent-forwarding,no-port-forwarding,no-pty,no-u
 printf '[127.0.0.1]:%s %s\n' "$port" "$(awk '{print $1 " " $2}' "$root/host_key.pub")" \
   >"$root/known_hosts"
 chmod 0600 "$root/authorized_keys" "$root/known_hosts" "$root/client_key" "$root/legacy_key" "$root/host_key"
+if [ -n "$test_user" ]; then
+  chown "$test_user" "$root/authorized_keys" "$root/known_hosts" \
+    "$root/client_key" "$root/client_key.pub" "$root/legacy_key" "$root/legacy_key.pub"
+fi
 
 printf '%s\n' \
   "Port $port" \
@@ -48,7 +92,7 @@ printf '%s\n' \
   "HostKey $root/host_key" \
   "PidFile $root/sshd.pid" \
   "AuthorizedKeysFile $root/authorized_keys" \
-  "AllowUsers $(id -un)" \
+  "AllowUsers $sshd_user" \
   'StrictModes no' \
   'PubkeyAuthentication yes' \
   'PasswordAuthentication no' \
@@ -76,16 +120,16 @@ done
 [ "$ready" = 1 ] || { sed -n '1,5p' "$root/sshd.log" >&2; exit 1; }
 
 ssh_fixture() {
-  ssh -F /dev/null -p "$port" -i "$root/client_key" \
+  as_test_user ssh -F /dev/null -p "$port" -i "$root/client_key" \
     -o UserKnownHostsFile="$root/known_hosts" -o StrictHostKeyChecking=yes \
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=2 \
-    "$(id -un)@127.0.0.1" "$@"
+    "$sshd_user@127.0.0.1" "$@"
 }
 legacy_ssh_fixture() {
-  ssh -F /dev/null -p "$port" -i "$root/legacy_key" \
+  as_test_user ssh -F /dev/null -p "$port" -i "$root/legacy_key" \
     -o UserKnownHostsFile="$root/known_hosts" -o StrictHostKeyChecking=yes \
     -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=2 \
-    "$(id -un)@127.0.0.1" "$@"
+    "$sshd_user@127.0.0.1" "$@"
 }
 
 printf 'TAP version 13\n'
