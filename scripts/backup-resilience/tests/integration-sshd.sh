@@ -3,6 +3,71 @@ set -Eeuo pipefail
 TEST_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 SCRIPT_DIR="$(CDPATH='' cd -- "$TEST_DIR/.." && pwd)"
 
+# Reconciliação de órfãos do próprio gate. O trap EXIT/INT/TERM/HUP não cobre
+# SIGKILL (ex.: matar o gate no meio de uma execução anterior) — sobra sshd
+# root vivo em LISTEN em porta de loopback, além de tmpdir/conta órfãos.
+# Roda ANTES de qualquer trabalho novo, mesmo padrão do docker-reconcile.sh:
+# probe primeiro, mata só o que casa a forma exata deste gate, nunca um match
+# largo. Lê /proc/<pid>/cmdline (NUL-delimited) em vez de `ps`/`grep -f` sobre
+# a lista de processos do shell atual — grep sobre `ps aux` casa o próprio
+# comando de busca (foi o erro do QA que relatou "0 residuais" errado).
+#
+# OpenSSH reescreve o proctitle assim que o processo assume o papel de
+# listener: /proc/<pid>/cmdline deixa de ser o argv exec original
+# (["/usr/sbin/sshd","-D","-e","-f",path]) e vira UM ÚNICO elemento
+# "sshd: /usr/sbin/sshd -D -e -f <path> [listener] N of M startups"
+# (confirmado ao vivo na VPS, inclusive no sshd real de produção). Por isso
+# casamos a STRING BRUTA (join dos argv por espaço) com um prefixo fixo e
+# extraímos o path do -f por glob — nunca por argv[N] posicional, que
+# depende de qual dos dois formatos o kernel expõe no instante da checagem.
+reconcile_sshd_orphan_pid() {
+  local pid="$1" raw has_dash_f=0 config_path=""
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  raw="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" || return 1
+  case "$raw" in
+    '/usr/sbin/sshd -D -e -f '*|'sshd: /usr/sbin/sshd -D -e -f '*) ;;
+    *) return 1 ;;
+  esac
+  config_path="${raw#*-f }"
+  config_path="${config_path%% *}"
+  case "$config_path" in
+    /tmp/startap-sshd-integration.*/sshd_config) has_dash_f=1 ;;
+  esac
+  [ "$has_dash_f" = 1 ]
+}
+reconcile_orphans() {
+  [ "$(id -u)" = 0 ] || return 0
+  local pid killed=0
+  for pid_path in /proc/[0-9]*; do
+    pid="${pid_path#/proc/}"
+    [ "$pid" != "$$" ] || continue
+    reconcile_sshd_orphan_pid "$pid" || continue
+    kill -TERM "$pid" 2>/dev/null && killed=1
+  done
+  if [ "$killed" = 1 ]; then
+    for _ in $(seq 1 50); do
+      still=0
+      for pid_path in /proc/[0-9]*; do
+        pid="${pid_path#/proc/}"
+        [ "$pid" != "$$" ] || continue
+        reconcile_sshd_orphan_pid "$pid" || continue
+        still=1
+      done
+      [ "$still" = 0 ] && break
+      sleep 0.02
+    done
+  fi
+  if command -v getent >/dev/null 2>&1 && command -v userdel >/dev/null 2>&1; then
+    getent passwd | awk -F: '$1 ~ /^startap-sshd-it-[0-9]+$/ { print $1 }' |
+      while IFS= read -r orphan_user; do userdel "$orphan_user" 2>/dev/null || true; done
+  fi
+  for dir in /tmp/startap-sshd-integration.*; do
+    [ -e "$dir" ] || continue
+    case "$dir" in /tmp/startap-sshd-integration.*) find "$dir" -depth -delete 2>/dev/null ;; esac
+  done
+}
+reconcile_orphans
+
 if [ ! -x /usr/sbin/sshd ]; then
   printf 'TAP version 13\n'
   printf 'ok 1 - restricted forced-command login # SKIP sshd unavailable\n'

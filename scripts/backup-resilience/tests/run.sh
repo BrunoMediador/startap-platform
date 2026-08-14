@@ -1418,6 +1418,19 @@ test_dac_fixture_traversal_and_denials_are_explicit() {
   grep -Fq 'test ! -r "$1/credentials/automation.agekey"' "$fixture"
   grep -Fq 'test ! -w "$1/cycle-bridge/reconcile-complete"' "$fixture"
 }
+test_sshd_gate_reconciles_orphans_before_running() {
+  local gate="$TEST_DIR/integration-sshd.sh" drill="$TEST_DIR/integration-sshd-reconcile.sh"
+  grep -Fq 'reconcile_orphans' "$gate"
+  grep -Fq '/proc/$pid/cmdline' "$gate"
+  grep -Fq "'sshd: /usr/sbin/sshd -D -e -f '" "$gate"
+  grep -Fq '/tmp/startap-sshd-integration.*/sshd_config' "$gate"
+  grep -Fq 'startap-sshd-it-[0-9]+' "$gate"
+  ! rg -n 'pkill|killall' "$gate"
+  [ -x "$drill" ]
+  grep -Fq 'guard-rail never matches the real production sshd' "$drill"
+  grep -Fq 'guard-rail never matches an sshd with a foreign -f path' "$drill"
+  grep -Fq 'orphan reconciliation cleans previous SIGKILL and next run passes 4/4' "$drill"
+}
 test_workflow_anchor_permissions_and_pins() {
   workflow="$REPO_ROOT/.github/workflows/backup-resilience-detector.yml"
   grep -Fq 'contents: read' "$workflow"; grep -Fq 'actions: read' "$workflow"
@@ -1567,6 +1580,7 @@ run_test 'custody, writer cutover, and rollback guards are explicit' test_custod
 run_test 'systemd privilege separation and independent cleanup are present' test_systemd_separation_and_cleanup_contract
 run_test 'Docker recovery journal is durable, fsynced, root-only, and boot-consumed' test_durable_docker_journal_boot_contract
 run_test 'DAC fixture parent is traversable while secret and cycle bridge writes stay denied' test_dac_fixture_traversal_and_denials_are_explicit
+run_test 'SSHD gate reconciles orphans before running and ships a guard-railed SIGKILL proof' test_sshd_gate_reconciles_orphans_before_running
 run_test 'detector uses read-only key, prior artifact anchor, pins, and minimum permissions' test_workflow_anchor_permissions_and_pins
 run_test 'captured logs contain no fixture secret or PII pattern' test_logs_have_no_secret_or_pii
 
