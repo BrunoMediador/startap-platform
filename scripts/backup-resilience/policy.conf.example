@@ -1,0 +1,22 @@
+# Public, non-secret policy. install.sh refuses placeholder recipients/credentials.
+EXPECTED_HOSTNAME=srv1504052
+PG_CONTAINER=automacoes-postgres-1
+PG_DATABASE=startap_database
+PG_USER=startap_user
+PG_MAJOR=16
+PG_IMAGE=postgres:16@sha256:ce5c12ac6952df86affd04ade354cfcb9a0aa1171cd7912e6dbd81578a989a63
+AGE_BIN=/usr/local/bin/age
+AGE_KEYGEN_BIN=/usr/local/bin/age-keygen
+AGE_VERSION=v1.3.1
+AGE_BINARY_SHA256=2e305637f2a0555305e21c17fb74446acbb39b53135d43d4b744e50c287133a5
+AGE_KEYGEN_BINARY_SHA256=c56ef69834e18ca4d3b953117f4481522c35fb6862a5d2871685aa4685893664
+AGE_ORIGIN=https://github.com/FiloSottile/age/releases/tag/v1.3.1
+AGE_ARCHIVE_SHA256=bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377
+RECIPIENT_SET_ID=replace-with-approved-opaque-epoch
+RECIPIENT_EPOCH=1
+PLAINTEXT_CAP_BYTES=2147483648
+FRESHNESS_HEALTHY_SECONDS=108000
+FRESHNESS_STALE_SECONDS=129600
+OFFSITE_REPOSITORY=BrunoMediador/startap-backups
+OFFSITE_BRANCH=main
+DEPLOY_KEY_ID=replace-with-approved-vps-only-key-id

@@ -1,0 +1,39 @@
+[Unit]
+Description=Promote attested Startap backup generation atomically
+ConditionPathExists=/etc/startap-backup/ENABLED
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/startap-backup/promote.sh
+UMask=0077
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/var/lib/startap-backup-attestations
+ReadWritePaths=/var/lib/startap-backup
+InaccessiblePaths=/var/lib/startap-backup/drill-journal /var/run/docker.sock /opt/automacoes/code/.env /etc/startap-backup/credentials
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-promote

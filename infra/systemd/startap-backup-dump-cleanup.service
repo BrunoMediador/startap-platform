@@ -1,0 +1,43 @@
+[Unit]
+Description=Fixed root cleanup for Startap backup dump FIFO runtime
+ConditionPathExists=/etc/startap-backup/ENABLED
+Conflicts=startap-backup-dump.service
+After=startap-backup-dump.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/startap-backup/dump-helper.sh cleanup
+UMask=0077
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/etc/startap-backup
+ReadWritePaths=/run/startap-backup-producer /run/startap-backup-dump-helper
+InaccessiblePaths=/var/run/docker.sock /opt/automacoes/code/.env /etc/startap-backup/credentials /var/lib/startap-backup
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-dump-cleanup

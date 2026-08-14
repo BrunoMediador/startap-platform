@@ -1,0 +1,45 @@
+[Unit]
+Description=Startap offsite encrypted backup uploader
+ConditionPathExists=/etc/startap-backup/ENABLED
+ConditionPathExists=/etc/startap-backup/OFFSITE_WRITER_ENABLED
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=startap-backup-upload
+Group=startap-backup-upload
+SupplementaryGroups=startap-backup-readers
+ExecStart=/usr/local/libexec/startap-backup/uploader.sh
+LoadCredential=offsite_deploy_key:/etc/startap-backup/credentials/offsite_deploy_key
+RuntimeDirectory=startap-backup-uploader
+RuntimeDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=75min
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/startap-backup-uploader /var/lib/startap-backup-uploader /var/lib/startap-backup-status/offsite
+ReadOnlyPaths=/etc/startap-backup /var/lib/startap-backup/generations
+InaccessiblePaths=/var/lib/startap-backup/incoming /var/lib/startap-backup/sealed /var/lib/startap-backup-attestations /var/run/docker.sock /opt/automacoes/code/.env
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-uploader

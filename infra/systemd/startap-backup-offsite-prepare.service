@@ -1,0 +1,41 @@
+[Unit]
+Description=Prepare fixed Startap offsite checkout with uploader-only credential
+ConditionPathExists=/etc/startap-backup/APPROVED_GO_B
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=startap-backup-upload
+Group=startap-backup-upload
+ExecStart=/usr/local/libexec/startap-backup/offsite-prepare.sh
+LoadCredential=offsite_deploy_key:/etc/startap-backup/credentials/offsite_deploy_key
+UMask=0077
+TimeoutStartSec=20min
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/startap-backup
+ReadWritePaths=/var/lib/startap-backup-uploader
+InaccessiblePaths=/var/lib/startap-backup /var/lib/startap-backup-attestations /var/run/docker.sock /opt/automacoes/code/.env
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-offsite-prepare

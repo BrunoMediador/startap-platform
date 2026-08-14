@@ -1,0 +1,42 @@
+[Unit]
+Description=Startap backup privilege-separated cycle orchestrator
+ConditionPathExists=/etc/startap-backup/ENABLED
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+SupplementaryGroups=startap-backup-bridge
+ExecStart=/usr/local/libexec/startap-backup/cycle.sh
+RuntimeDirectory=startap-backup-orchestrator
+RuntimeDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=55min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/run/startap-backup-bridge/producer
+ReadWritePaths=/run/startap-backup-orchestrator /var/lib/startap-backup-status/local
+InaccessiblePaths=/run/startap-backup-producer /var/run/docker.sock /opt/automacoes/code/.env /etc/startap-backup/credentials
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-cycle

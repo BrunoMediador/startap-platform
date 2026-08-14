@@ -1,0 +1,6 @@
+# Only the restricted external status account may request the fixed drill unit.
+startap-backup-status ALL=(root) NOPASSWD: /usr/bin/systemctl start --wait startap-backup-drill.service
+# The legacy workflow key can stream exactly one fixed pg_dump command. It has
+# no shell, Docker group, arguments, environment, or other sudo capability.
+Defaults!/usr/local/libexec/startap-backup/legacy-dump-helper.sh env_reset,secure_path=/usr/sbin\:/usr/bin\:/sbin\:/bin,!setenv
+startap-backup-legacy-dump ALL=(root) NOPASSWD: /usr/local/libexec/startap-backup/legacy-dump-helper.sh ""

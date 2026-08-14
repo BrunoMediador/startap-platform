@@ -1,0 +1,43 @@
+[Unit]
+Description=Startap backup decrypt validator (sealed input, no network)
+ConditionPathExists=/etc/startap-backup/ENABLED
+
+[Service]
+Type=oneshot
+User=startap-backup-validator
+Group=startap-backup-validator
+SupplementaryGroups=startap-backup-readers
+ExecStart=/usr/local/libexec/startap-backup/validate.sh
+LoadCredential=automation.agekey:/etc/startap-backup/credentials/automation.agekey
+RuntimeDirectory=startap-backup-validation
+RuntimeDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=20min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/var/lib/startap-backup/sealed /var/lib/startap-backup/pending-run /etc/startap-backup
+ReadWritePaths=/run/startap-backup-validation /var/lib/startap-backup-attestations
+InaccessiblePaths=/var/lib/startap-backup/incoming /var/lib/startap-backup/generations /var/run/docker.sock /opt/automacoes/code/.env
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-validator

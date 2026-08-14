@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "repository": "BrunoMediador/startap-platform",
+  "captured_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "captured_from_github_api": true,
+  "repository_secrets_endpoint_checked": true,
+  "environment_deployment_policies_endpoint_checked": true,
+  "root_ssh_secret_absent": true,
+  "repository_level_backup_secrets_absent": true,
+  "environments": [
+    {
+      "name": "backup-legacy-main",
+      "protected_branches_only": true,
+      "allowed_refs": ["refs/heads/main"],
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "secret_names": [
+        "BACKUP_AGE_PUBKEY",
+        "BACKUP_LEGACY_DUMP_SSH_KEY",
+        "BACKUP_REPO_SSH_KEY"
+      ]
+    },
+    {
+      "name": "backup-status-main",
+      "protected_branches_only": true,
+      "allowed_refs": ["refs/heads/main"],
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "secret_names": ["BACKUP_REPO_READONLY_SSH_KEY", "BACKUP_STATUS_SSH_KEY"]
+    },
+    {
+      "name": "backup-recovery-main",
+      "protected_branches_only": true,
+      "allowed_refs": ["refs/heads/main"],
+      "deployment_branch_policy": {
+        "protected_branches": false,
+        "custom_branch_policies": true
+      },
+      "secret_names": ["BACKUP_REPO_READONLY_SSH_KEY", "BACKUP_STATUS_SSH_KEY"]
+    }
+  ]
+}

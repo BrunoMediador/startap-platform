@@ -1,0 +1,48 @@
+[Unit]
+Description=Startap disposable PG16 restore drill orchestrator
+ConditionPathExists=/etc/startap-backup/ENABLED
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStartPre=/usr/bin/systemctl start --wait startap-backup-drill-reconcile.service
+ExecStart=/usr/local/libexec/startap-backup/drill-cycle.sh
+# If the orchestrator is killed between prepare and restore, stop the retained
+# prepare unit first so its own ExecStopPost erases plaintext and resets state.
+ExecStopPost=/usr/bin/systemctl stop startap-backup-drill-prepare.service
+ExecStopPost=/usr/bin/systemctl start --wait startap-backup-drill-reconcile.service
+ExecStopPost=/usr/local/libexec/startap-backup/drill-cleanup.sh
+RuntimeDirectory=startap-backup-orchestrator
+RuntimeDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=90min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/startap-backup-orchestrator /run/startap-backup-drill
+InaccessiblePaths=/var/run/docker.sock /var/lib/startap-backup/drill-journal /etc/startap-backup/credentials
+LimitCORE=0
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-drill-orchestrator

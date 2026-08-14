@@ -1,0 +1,46 @@
+[Unit]
+Description=Reconcile only labelled disposable drill resources after SIGKILL
+ConditionPathExists=/etc/startap-backup/ENABLED
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/startap-backup/docker-reconcile.sh reconcile
+UMask=0077
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/startap-backup-drill /run/startap-backup-drill-query /var/lib/startap-backup/drill-journal
+InaccessiblePaths=/var/lib/startap-backup/incoming /var/lib/startap-backup/sealed /var/lib/startap-backup/generations /var/lib/startap-backup/drills /var/lib/startap-backup-attestations /etc/startap-backup/credentials /opt/automacoes/code/.env
+LimitCORE=0
+LimitNOFILE=64
+TasksMax=32
+MemoryMax=134217728
+MemorySwapMax=0
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=startap-backup-drill-reconcile
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Start fixed root dump helper when producer requests a run
+ConditionPathExists=/etc/startap-backup/ENABLED
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Path]
+PathExists=/run/startap-backup-producer/request-run
+Unit=startap-backup-dump.service
+TriggerLimitIntervalSec=60
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

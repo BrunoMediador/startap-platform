@@ -1,0 +1,6 @@
+# Deliberately no sampled key here. After an out-of-band verification, install
+# the pinned github.com host key as root:root 0644 at:
+#   /etc/startap-backup/github_known_hosts
+# Runtime ssh-keyscan is forbidden. A changed host key must fail closed.
+REPLACE_WITH_OUT_OF_BAND_VERIFIED_GITHUB_COM_KNOWN_HOSTS_LINE
+

@@ -1,0 +1,13 @@
+# Type Name                       ID GECOS                              Home                                  Shell
+g startap-backup-readers          -
+g startap-backup-bridge           -
+u startap-backup-producer         -  "Startap backup producer"         /var/lib/startap-backup-producer      /usr/sbin/nologin
+u startap-backup-validator        -  "Startap backup decrypt validator" /var/lib/startap-backup-validator     /usr/sbin/nologin
+u startap-backup-upload           -  "Startap backup uploader"         /var/lib/startap-backup-uploader      /usr/sbin/nologin
+u startap-backup-drill            -  "Startap backup drill"            /var/lib/startap-backup-drill         /usr/sbin/nologin
+u startap-backup-status           -  "Startap backup status SSH"       /var/lib/startap-backup-status-ssh    /usr/local/libexec/startap-backup/ssh-shell.sh
+u startap-backup-legacy-dump      -  "Startap legacy dump-only SSH"    /var/lib/startap-backup-legacy-ssh    /usr/local/libexec/startap-backup/legacy-dump-shell.sh
+m startap-backup-validator startap-backup-readers
+m startap-backup-upload    startap-backup-readers
+m startap-backup-drill     startap-backup-readers
+m startap-backup-producer  startap-backup-bridge

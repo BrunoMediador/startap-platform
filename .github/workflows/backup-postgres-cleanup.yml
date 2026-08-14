@@ -1,121 +1,86 @@
-name: Cleanup Backups Antigos
+name: Backup retention audit (dry-run only)
 
 on:
   schedule:
-    # Domingos 07:00 UTC — logo após o backup das 06:00
     - cron: '0 7 * * 0'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Dry-run: só lista o que SERIA removido (sem git rm/push)'
-        type: boolean
-        default: true
+
+permissions:
+  contents: read
 
 concurrency:
-  group: backup-postgres-cleanup
+  group: backup-postgres-retention-audit
   cancel-in-progress: false
 
 jobs:
-  cleanup:
-    name: Remove dumps > 30 dias (mantém 1 semanal/semana)
-    runs-on: ubuntu-latest
-
+  audit:
+    name: List encrypted retention candidates without deleting
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Read-only deploy key, externally limited to main.  This workflow has no
+    # write key, git rm, commit, push, or deletion activation variable.
+    environment: backup-status-main
     steps:
-      - name: Setup SSH (deploy key startap-backups)
-        run: |
-          mkdir -p ~/.ssh
-
-          # Deploy key do repo startap-backups (mesmo mecanismo do backup-postgres.yml)
-          echo "${{ secrets.BACKUP_REPO_SSH_KEY }}" > ~/.ssh/backup_deploy
-          chmod 600 ~/.ssh/backup_deploy
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
-
-          # Config SSH pra rotear host github.com→backup_deploy
-          cat >> ~/.ssh/config <<'EOF'
-          Host github.com
-            HostName github.com
-            User git
-            IdentityFile ~/.ssh/backup_deploy
-            IdentitiesOnly yes
-          EOF
-          chmod 600 ~/.ssh/config
-
-      - name: Checkout startap-backups (via SSH)
-        run: |
-          # Clone completo: o cleanup precisa de TODO o histórico de dumps
-          git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
-
-      - name: Identifica e remove dumps elegíveis
-        id: cleanup
+      - name: Checkout pinned known_hosts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Configure read-only offsite identity
+        shell: bash
         env:
-          # Schedule sempre roda em modo real (dry-run só existe no disparo manual).
-          # workflow_dispatch: respeita o input (default true = seguro).
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          BACKUP_READONLY_KEY: ${{ secrets.BACKUP_REPO_READONLY_SSH_KEY }}
         run: |
-          cd startap-backups
-
-          echo "Modo: DRY_RUN=${DRY_RUN}"
-
-          # Lista todos os arquivos de dump ordenados por nome (ISO8601 = ordem cronológica)
-          mapfile -t ALL_DUMPS < <(find dumps/ -name '*.sql.gz' | sort)
-
-          # Cutoff = 30 dias atrás. Dumps MAIS NOVOS que o cutoff são mantidos integralmente.
-          # Dumps MAIS ANTIGOS que o cutoff colapsam para 1 por semana ISO (o primeiro da semana).
-          CUTOFF=$(date -u -d '30 days ago' '+%Y-%m-%d')
-          echo "Cutoff (30 dias atrás): ${CUTOFF}"
-
-          DELETED=0
-          declare -A WEEKLY_KEPT  # chave = YYYY-WW (ano-semana ISO) → primeiro dump mantido
-
-          for f in "${ALL_DUMPS[@]}"; do
-            # Extrai YYYY-MM-DD do nome do arquivo: dumps/YYYY/MM/YYYY-MM-DD-HHMMSS.sql.gz
-            BASENAME=$(basename "${f}" .sql.gz)
-            FILE_DATE="${BASENAME:0:10}"   # primeiros 10 chars = YYYY-MM-DD
-
-            # Comparação lexicográfica é válida porque YYYY-MM-DD ordena cronologicamente.
-            # Mantém TUDO que é >= cutoff (dentro da janela de 30 dias).
-            if [[ "${FILE_DATE}" > "${CUTOFF}" || "${FILE_DATE}" == "${CUTOFF}" ]]; then
-              continue
-            fi
-
-            # Semana ISO (ex: 2026-W20). %G/%V casam ano-da-semana com número-da-semana ISO.
-            WEEK=$(date -u -d "${FILE_DATE}" '+%G-W%V')
-
-            if [[ -z "${WEEKLY_KEPT[$WEEK]}" ]]; then
-              # Primeiro dump da semana (cronologicamente) → mantém como backup semanal
-              WEEKLY_KEPT[$WEEK]="${f}"
-              echo "KEEP (semanal ${WEEK}): ${f}"
-            else
-              # Dump extra desta semana → candidato a remoção
-              if [[ "${DRY_RUN}" == "true" ]]; then
-                echo "WOULD-REMOVE (semana ${WEEK}, já tem semanal): ${f}"
-              else
-                echo "REMOVE (semana ${WEEK}, já tem semanal): ${f}"
-                git rm "${f}"
-              fi
-              DELETED=$((DELETED + 1))
-            fi
-          done
-
-          echo "----------------------------------------"
-          if [[ "${DRY_RUN}" == "true" ]]; then
-            echo "DRY-RUN: ${DELETED} dump(s) SERIAM removidos. Nada foi alterado."
-          else
-            echo "Removidos: ${DELETED} dump(s)."
-          fi
-
-          echo "deleted=${DELETED}" >> "$GITHUB_OUTPUT"
-          echo "dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
-
-      - name: Commit e push (se removeu algo e não for dry-run)
-        if: steps.cleanup.outputs.deleted != '0' && steps.cleanup.outputs.dry_run == 'false'
+          set -Eeuo pipefail
+          umask 077
+          test -n "$BACKUP_READONLY_KEY"
+          install -d -m 0700 "$RUNNER_TEMP/backup-ssh"
+          printf '%s\n' "$BACKUP_READONLY_KEY" >"$RUNNER_TEMP/backup-ssh/readonly_ed25519"
+          install -m 0600 .github/backup-known_hosts "$RUNNER_TEMP/backup-ssh/known_hosts"
+          ssh-keygen -F github.com -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh-keygen -l -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          ssh -G -F /dev/null -i "$RUNNER_TEMP/backup-ssh/readonly_ed25519" \
+            -o UserKnownHostsFile="$RUNNER_TEMP/backup-ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=10 -o ConnectionAttempts=1 git@github.com \
+            >"$RUNNER_TEMP/backup-ssh/effective"
+          grep -Fxq 'hostname github.com' "$RUNNER_TEMP/backup-ssh/effective"
+          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/effective"
+          grep -Fxq 'user git' "$RUNNER_TEMP/backup-ssh/effective"
+          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/effective"
+          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/effective"
+          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/effective"
+      - name: Clone offsite read-only
+        shell: bash
         run: |
-          cd startap-backups
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "cleanup: remove ${{ steps.cleanup.outputs.deleted }} dump(s) > 30 dias (mantém semanais)"
-          git push
-
-      - name: Limpa chaves SSH
+          set -Eeuo pipefail
+          export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false
+          export GIT_SSH_COMMAND="ssh -F /dev/null -i $RUNNER_TEMP/backup-ssh/readonly_ed25519 -o UserKnownHostsFile=$RUNNER_TEMP/backup-ssh/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -o ConnectTimeout=10 -o ConnectionAttempts=1"
+          timeout --signal=TERM --kill-after=10s 15m git clone \
+            --filter=blob:none --single-branch --branch main \
+            git@github.com:BrunoMediador/startap-backups.git "$RUNNER_TEMP/startap-backups"
+      - name: Compute proposal without mutation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/startap-backups"
+          cutoff="$(date -u -d '30 days ago' '+%Y%m%d')"
+          candidates=0
+          while IFS= read -r path; do
+            name="$(basename "$path")"
+            stamp="${name#backup-}"
+            day="${stamp:0:8}"
+            printf '%s' "$day" | grep -Eq '^[0-9]{8}$'
+            if [[ "$day" < "$cutoff" ]]; then
+              candidates=$((candidates + 1))
+            fi
+          done < <(find dumps -type f -name '*.sql.gz.age' -print | sort)
+          printf '### Retention proposal (no deletion)\n\n- encrypted candidates older than 30d: `%s`\n- mutation: `disabled`\n' \
+            "$candidates" >>"$GITHUB_STEP_SUMMARY"
+      - name: Remove ephemeral identity
         if: always()
-        run: rm -f ~/.ssh/backup_deploy ~/.ssh/config
+        shell: bash
+        run: |
+          rm -f -- "$RUNNER_TEMP/backup-ssh/readonly_ed25519" \
+            "$RUNNER_TEMP/backup-ssh/known_hosts" "$RUNNER_TEMP/backup-ssh/effective"
+          rmdir -- "$RUNNER_TEMP/backup-ssh" 2>/dev/null || true

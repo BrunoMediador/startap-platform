@@ -1,191 +1,167 @@
-# Runbook: Restore do Postgres (`startap-backups` → banco novo)
+# Runbook — restore drill PostgreSQL 16 descartável
 
-> Companion de `docs/runbooks/backup-postgres.md`. Escrito depois do primeiro
-> teste de restore REAL (SCRUM-133, 25/07/2026) — antes disso, 38+ backups
-> verdes nunca tinham sido provados restauráveis.
+> Nunca use este fluxo sobre produção. O drill não aceita host, volume, banco,
+> `.env` ou porta fornecidos pelo operador. A execução real permanece OFF até
+> GO A, security, QA e um preflight verde.
 
-## Passo 0 — já foi aplicado / você já sabe disto?
+## O que o drill prova
 
-- Se você está aqui em pânico às 3h, respire: o restore **funciona** e leva
-  **poucos minutos** (dominado por logística humana, não pelo comando em si).
-- **NUNCA restaure sobre `automacoes-postgres-1` (produção).** Sempre um
-  container Postgres 16 **novo e descartável**. Se em dúvida sobre onde está
-  restaurando, PARE.
+O drill periódico usa o artefato `.age` real mais recente e testa a cadeia:
 
-## ⚠️ A ARMADILHA (motivo deste card)
+`ciphertext → checksum/manifest → decrypt age real → gzip → SQL → PG16 → invariantes`
 
-Desde o SCRUM-45 a aplicação roda com o role `startap_app` (CRUD-only, sem
-DDL). **O dump é gerado com `pg_dump -U startap_user --no-owner --no-acl`**
-(ver `scripts/backup-postgres.sh`) — por isso o `.sql` **não contém nenhum
-`OWNER TO` nem `GRANT`**. Isso significa que o restore não precisa
-necessariamente do role `startap_user`, mas **precisa de um role com
-privilégio de `CREATE` no database/schema** (na prática: o superuser do
-container novo, ex. `postgres`).
+Um restore antes da criptografia não satisfaz este runbook. A identidade é
+entregue somente ao processo `drill-prepare` via `LoadCredential=`; o processo
+Docker não a recebe.
 
-**Provado em laboratório (25/07):** restaurar o mesmo dump com um role
-CRUD-only (equivalente a `startap_app` em produção) falha com **98.277
-erros**, começando por:
-```
-ERROR: permission denied to create extension "pgcrypto"
-ERROR: permission denied for schema public
-```
-Resultado: **0 tabelas criadas**. Se alguém tentar restaurar usando as
-credenciais de runtime da aplicação (as que estão no `.env` do app), o
-restore falha silenciosamente feio — e a hora errada de descobrir isso é
-no meio de um incidente real.
+## Isolamento obrigatório
 
-**Regra:** restore sempre com o superuser do Postgres do container de
-destino (`postgres`, ou equivalente), nunca com `startap_app`.
+- imagem exata:
+  `postgres:16@sha256:ce5c12ac6952df86affd04ade354cfcb9a0aa1171cd7912e6dbd81578a989a63`;
+- nomes `startap-backup-drill-<8 hex>` derivados do run ID validado;
+- container, volume e network têm label `tech.startap.backup-drill=<run_id>`;
+- network `--internal`, sem porta publicada;
+- um único volume novo e nomeado; nenhum bind mount;
+- database obrigatório `startap_drill_<8 hex>` e role `postgres`;
+- destino deve ter zero tabelas públicas antes do restore;
+- nenhum `.env` de produção é carregado;
+- SQL entra por `psql -v ON_ERROR_STOP=1 --no-psqlrc`;
+- teardown verifica explicitamente ausência de container, volume e network e
+  propaga qualquer falha; sucesso só é publicado depois dessa verificação;
+- plaintext vive somente no RuntimeDirectory tmpfs e é truncado/removido por
+  trap e `ExecStopPost`, inclusive na janela entre prepare e restore;
+- um reconciler root independente roda antes/depois do orchestrator e no boot:
+  lê o journal durável root:root 0600 em
+  `/var/lib/startap-backup/drill-journal` (separado do input read-only), deriva
+  nomes do run ID e remove somente recursos cujo nome
+  **e** label exata coincidem; conflito alheio falha fechado e é preservado;
+- o journal inicial é publicado e sincronizado antes do primeiro recurso; cada
+  fronteira (`network`, `volume`, `container`, restore e teardown) é atualizada
+  duravelmente. O temporário nasce root-only no mesmo diretório/device do
+  destino, tem link count 1, é promovido por rename e recebe `fsync` de arquivo
+  e diretório; o tuple anterior já basta para reconciliar uma queda entre a
+  operação Docker e essa atualização. Symlink, hardlink ou conflito
+  final/temporário aborta;
+- inspect é trivalente: `present`, `absent` ou `query-error`. Somente um
+  not-found textual exato por tipo comprova ausência; timeout, daemon/socket,
+  permissão ou autenticação mantêm o state e impedem teardown/sucesso. O stderr
+  capturado não vai ao journal;
+- após `SIGKILL`, o reconciler confirma ausência de container, volume e network,
+  remove o input plaintext e permite o próximo drill; nenhum sucesso/RTO é
+  publicado antes de `teardown_complete=true`;
+- após reboot, a perda esperada de `/run` não afeta o journal em `/var/lib`; se
+  ele estiver ausente e houver recurso com a label reservada, o inventário
+  read-only deixa a unit vermelha e não executa remoção sem tuple confiável;
+- symlink, inclusive quebrado, em `pending-run`, run dir ou journal é removido
+  no-follow; os diretórios de run permitidos são limpos com allowlist e caps,
+  sem tocar o alvo externo ou manter o slot bloqueado.
 
-## Pré-requisitos
+Qualquer divergência de nome, label, digest, versão, mount, porta, banco ou
+identidade aborta antes do restore.
 
-- Docker no host onde for restaurar (não precisa ser o VPS de produção —
-  pode ser qualquer máquina com Docker; o teste de referência rodou direto
-  no VPS, num container isolado, rede própria, porta só em `127.0.0.1`).
-- Chave privada age (`AGE-SECRET-KEY-...`) — está no cofre
-  `~/Documents/STARTAP-CREDENCIAIS.md` (2ª cópia em `~/Documents/backup-key.txt`).
-  Backups a partir de ~24/07 estão cifrados (`.sql.gz.age`); antes disso, só `.sql.gz`.
-- Acesso de leitura ao repo `BrunoMediador/startap-backups` (auth via
-  `git credential fill` — nunca varrer o Keychain).
-- `age` instalado (`brew install age`).
+## Execução automatizada
 
-## Passo a passo
-
-### 1. Escolher o dump
-
-```bash
-git clone git@github.com:BrunoMediador/startap-backups.git
-cd startap-backups
-git log --oneline | grep "^[a-f0-9]* backup:" | head -20   # escolher o commit/data
-```
-
-### 2. Decifrar (se `.sql.gz.age`) e descomprimir
-
-```bash
-age -d -i /path/para/age-key.txt dumps/2026/07/<TIMESTAMP>.sql.gz.age > dump.sql.gz
-gunzip -k dump.sql.gz     # gera dump.sql
-```
-
-Dumps antigos (pré cifra, `.sql.gz` sem `.age`) pulam o passo `age -d`.
-
-### 3. Subir um Postgres 16 **efêmero e isolado**
+Após ativação aprovada:
 
 ```bash
-docker network create restore-test-net
-docker run -d --name pg-restore-test \
-  --network restore-test-net \
-  -e POSTGRES_PASSWORD=<qualquer-senha-de-teste> \
-  -e POSTGRES_DB=restoretest \
-  -p 127.0.0.1:55432:5432 \
-  postgres:16
+sudo systemctl start --wait startap-backup-drill.service
+sudo systemctl status startap-backup-drill.service --no-pager
+sudo jq '{status,postgres_major,table_count,migration_count,rto_seconds,production_target,teardown_complete}' \
+  /var/lib/startap-backup-status/drill.json
 ```
 
-Confirme que é um container novo (`docker ps` mostra o nome distinto,
-porta só em `127.0.0.1`, nunca a mesma rede/volume de `automacoes-postgres-1`).
+O dispatch GitHub usa o mesmo serviço local por usuário SSH com comando forçado,
+environment `backup-recovery-main`, limitado externamente à `main`, e secrets
+exclusivos de status. A chave age nunca
+vai ao GitHub.
 
-### 4. Restaurar — com o role certo (`postgres`, superuser do container novo)
+## Validações executadas
+
+1. checksum/tamanho/marker e freshness até 36 h;
+2. decrypt real com a identidade de automação;
+3. gzip íntegro e markers de `pg_dump`;
+4. PostgreSQL major 16 por digest pinado;
+5. banco correto, role `postgres` e destino vazio;
+6. 50–120 tabelas públicas e ao menos 79 migrations;
+7. tabelas `schema_migrations`, `flow_clones`, `bot_config`, `client_billing` e
+   `atendimentos`;
+8. PKs das quatro tabelas de domínio;
+9. FKs `client_billing→flow_clones` e `atendimentos→flow_clones`;
+10. índices `idx_flow_clones_status`, `idx_client_billing_next_due` e
+    `ix_atend_slot_tenant_data`;
+11. extensão `pgcrypto`;
+12. inexistência de órfãos nas duas FKs, retornada apenas como booleano;
+13. RTO end-to-end desde aquisição/decrypt até teardown confirmado.
+
+Não são impressos contagens de clientes, telefones, CPF, mensagens, prompts ou
+SQL. `table_count` e `migration_count` são metadados de schema, não dados de
+cliente.
+
+## Prova assistida do recipient offline
+
+A automação prova diariamente o recipient dedicado. Separadamente, o Bruno deve
+participar de uma prova periódica em host descartável/controlado, usando sua
+identidade offline sem copiá-la para VPS, GitHub ou repositório. Registre somente:
+
+- run ID e SHA-256 do artefato;
+- sucesso/falha do decrypt;
+- PG major, RTO e invariantes sanitizados;
+- operador/data e confirmação de teardown.
+
+Nunca registre a identity, recipient completo, conteúdo decifrado ou comando de
+cofre. A primeira prova assistida é condição para encerrar SCRUM-167.
+
+## Teste manual somente em laboratório descartável
+
+Este exemplo usa nomes fixos de laboratório, network interna e nenhum mount de
+produção. Ajustes para apontar a um host/banco existente são proibidos.
 
 ```bash
-docker cp dump.sql pg-restore-test:/tmp/dump.sql
-docker exec pg-restore-test psql -U postgres -d restoretest -f /tmp/dump.sql
+docker network create --internal scrum167-lab-net
+docker volume create scrum167-lab-data
+docker run -d --name scrum167-lab-pg16 \
+  --network scrum167-lab-net \
+  --mount type=volume,src=scrum167-lab-data,dst=/var/lib/postgresql/data \
+  --tmpfs /run/postgresql:rw,noexec,nosuid,nodev,size=16m \
+  --security-opt no-new-privileges \
+  -e POSTGRES_HOST_AUTH_METHOD=trust \
+  postgres:16@sha256:ce5c12ac6952df86affd04ade354cfcb9a0aa1171cd7912e6dbd81578a989a63
+docker exec scrum167-lab-pg16 createdb -U postgres scrum167_lab
+gzip -dc /run/scrum167-lab/dump.sql.gz | \
+  docker exec -i scrum167-lab-pg16 \
+    psql -U postgres -d scrum167_lab -v ON_ERROR_STOP=1 --no-psqlrc
 ```
 
-Tempo esperado: **segundos** para um banco deste tamanho (~3-4 MB
-comprimido / ~25 MB de SQL puro). Se demorar minutos, algo está errado
-(disco lento, contenção) — investigar antes de confiar no restore.
+Antes desse bloco, o dump deve ter sido decifrado em tmpfs a partir de uma
+fixture ou artefato autorizado. Nunca use `/opt/automacoes/code/.env`,
+`automacoes-postgres-1`, `startap`, `startap_database` ou qualquer volume
+existente como destino.
 
-**Confirme zero erros:**
-```bash
-docker exec pg-restore-test psql -U postgres -d restoretest -f /tmp/dump.sql 2>&1 | grep -ic error
-# esperado: 0
-```
-
-### 5. Validar com contagens (nunca confiar só no "rodou sem erro")
-
-```bash
-docker exec pg-restore-test psql -U postgres -d restoretest -t -c "
-SELECT 'flow_clones', count(*) FROM flow_clones
-UNION ALL SELECT 'client_billing', count(*) FROM client_billing
-UNION ALL SELECT 'atendimentos', count(*) FROM atendimentos
-UNION ALL SELECT 'chat_histories', count(*) FROM chat_histories
-UNION ALL SELECT 'alert_states', count(*) FROM alert_states
-UNION ALL SELECT 'billing_charges', count(*) FROM billing_charges;
-"
-```
-
-Compare com produção (`docker exec automacoes-postgres-1 psql -U startap_user
--d startap_database -c "SELECT count(*) FROM <tabela>;"`). Diferença pequena
-(poucas linhas) em tabelas de atividade contínua (`chat_histories`,
-`alert_states`) é esperada — reflete o intervalo entre o dump e agora.
-Diferença grande é achado e trava o restore até investigar.
-
-### 6. Destruir o ambiente de teste (sempre)
+Teardown do laboratório (somente após conferir os três nomes exatos):
 
 ```bash
-docker rm -f pg-restore-test
-docker network rm restore-test-net
-rm -f dump.sql dump.sql.gz
-# se copiou algo pro host (scp/cat), apagar também o arquivo intermediário e a chave age local
+docker rm -f scrum167-lab-pg16
+docker volume rm scrum167-lab-data
+docker network rm scrum167-lab-net
 ```
 
-## Resultado do teste de referência (SCRUM-133, 25/07/2026)
+## Falhas esperadas e resposta
 
-- **Restore funcionou: SIM**, com role `postgres` (superuser do container
-  novo) — 0 erros, 0 divergência relevante de contagem.
-- **Restore com role CRUD-only: FALHOU** (98.277 erros, 0 tabelas criadas) —
-  prova da armadilha acima.
-- **Tempo do `psql -f` isolado**: ~2s (dump de ~26 MB de SQL puro, 60 tabelas).
-  Decifrar (`age -d`) e `gunzip`: também subsegundo cada, no dump testado
-  (~3,2 MB comprimido). RTO ponta a ponta dominado por logística humana
-  (achar o commit, montar o ambiente), não pelo processamento.
-- **Dump testado**: commit `b63244c7` do `startap-backups`
-  (`2026-07-25-195852.sql.gz.age`, 3.2 MB).
-- **Contagens batido 1:1** contra produção nas 6 tabelas-chave
-  (`flow_clones`, `client_billing`, `atendimentos`, `billing_charges` exatos;
-  `chat_histories` e `alert_states` com diferença de 1-2 linhas, esperado
-  por atividade contínua entre o dump e a comparação).
+| Falha | Resultado obrigatório |
+|---|---|
+| identity errada | `drill_decrypt_failed`, nenhum container criado |
+| `.age`/checksum corrompido | aborta antes do decrypt/restore |
+| gzip truncado | aborta antes do Docker |
+| SQL inválido | `ON_ERROR_STOP=1`, job vermelho e teardown |
+| banco não vazio | recusa antes do restore |
+| nome parecido com produção | recusa antes do Docker |
+| PG diferente de 16/digest divergente | recusa antes do restore |
+| falha após criar recurso | remove somente recursos com label/run ID exatos |
+| `SIGKILL` após restaurar SQL | reconciler independente remove tuple exata + volume e o próximo drill pode iniciar |
+| reboot após qualquer criação/restore/teardown | journal `/var/lib` sobrevive à perda de `/run`; reconciler de boot converge |
+| label reservada sem journal | falha fechado após inventário read-only; não remove nem faz scan destrutivo |
+| marker/journal é symlink quebrado | unlink no-follow, alvo externo intacto e slot recuperável |
+| nome igual com label alheio | recusa e preserva o recurso, sem `docker rm` |
 
-## RPO real (não o nominal)
-
-O cron do `backup-postgres.yml` é `0 6 * * *` **UTC** = **03:00 BRT**
-(não "06:00 BRT" — checar sempre o fuso do cron do GitHub Actions, que é
-sempre UTC). Analisando os últimos ~60 runs (`git log` do `startap-backups`):
-
-- Concentração real de execução: **07h-11h UTC** (grande maioria 08h-10h UTC),
-  isto é, **4 a 8 horas de atraso** sobre o horário agendado — atribuído a
-  fila/scheduling do GitHub Actions (cron do GH não é preciso, principalmente
-  em runners hospedados).
-- Outliers observados: runs isolados às 13h58 UTC e 19h59 UTC (24-25/07) —
-  provavelmente disparos manuais/reruns durante o incidente do SCRUM-146.
-- **RPO real na prática: até ~24-30h** no pior caso (se o run de um dia
-  atrasar ou falhar e o próximo só rodar no dia seguinte pela manhã) — não
-  os "24h" nominais do cron diário, e certamente não a janela estreita
-  "08:04-08:45" citada informalmente; a variância real é maior
-  (07h-11h UTC, com outliers fora dessa faixa).
-
-## Armadilhas encontradas neste exercício (valor do card)
-
-1. **Role do dump ≠ role do restore, e ninguém tinha testado isso.** O dump
-   sai limpo de owner/ACL (`--no-owner --no-acl`), então o restore não
-   *precisa* do `startap_user` — mas precisa de um role com `CREATE`.
-   Tentar restaurar com o role de runtime da app (`startap_app`) falha 100%,
-   silenciosamente feio (mensagens de erro por linha, sem abortar o script
-   se não houver `set -e`/`ON_ERROR_STOP`). **Ação futura**: rodar o
-   restore sempre com `psql -v ON_ERROR_STOP=1` para abortar no primeiro
-   erro em vez de despejar milhares de erros.
-2. **Card citava "06:00 BRT" para o cron** — na verdade é `0 6 * * *` UTC
-   (03:00 BRT). Fácil de confundir; sempre conferir o YAML do workflow, não
-   assumir fuso.
-3. **Sem Docker local disponível** neste exercício — o teste de restore
-   precisou rodar no próprio VPS (isolado: rede/nome/porta distintos do
-   Postgres de produção). Puder rodar em qualquer máquina com Docker é
-   melhor (zero risco de vizinhança com produção); documentar isso como
-   preferência para a próxima vez que alguém repetir este teste.
-4. **`\restrict` no topo do dump**: `pg_dump` do PG 16.13 recente emite uma
-   diretiva `\restrict <token>` (feature nova de `psql`/`pg_dump` contra
-   execução parcial acidental) — não é erro, é esperado; scripts antigos de
-   restore que não reconheçam `\restrict`/`\unrestrict` podem se confundir.
-5. **Nenhum teste de restore automatizado existe ainda.** Este runbook é
-   manual. Uma extensão natural (não feita agora — decisão de escopo/custo
-   do PM) seria um job periódico que roda exatamente estes passos e falha o
-   CI se o restore ou as contagens divergirem.
+Uma falha do drill não toca aplicação nem PostgreSQL de produção. Não reinicie
+serviços para “tentar de novo”; preserve o relatório sanitizado e investigue.
