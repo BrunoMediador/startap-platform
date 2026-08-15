@@ -26,7 +26,10 @@ vi.mock('../client.js', () => ({
 
 import {
   BillingSlotBusyError,
+  claimGatewayCall,
+  GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS,
   getActivePendingCharge,
+  getResumableChargeForSlot,
   insertPendingCharge,
   reissueGatewayData,
   withBillingSlotLock,
@@ -145,6 +148,68 @@ function makeLockClient(s: LockScenario) {
 function sqls(): string[] {
   return lockCalls.map((c) => c.sql.replace(/\s+/g, ' ').trim());
 }
+
+// ── SCRUM-173/ADR 0039 F1: leitura de PRODUTO vs leitura de GERACAO ──────────────
+// getActivePendingCharge (produto/portal) exige br_code IS NOT NULL; getResumableChargeForSlot
+// (geracao) NAO exige — reaproveita ate linha orfa presa em gateway_call_state='calling'.
+describe('F1 — getActivePendingCharge (produto) vs getResumableChargeForSlot (geracao)', () => {
+  it('getActivePendingCharge (leitura de PRODUTO) filtra br_code IS NOT NULL — linha travada em calling NUNCA aparece pro portal', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await getActivePendingCharge('clone_x', new Date('2026-06-09T00:00:00Z'));
+    const [sql] = queryMock.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, ' ');
+    expect(flat).toContain("status = 'pending'");
+    expect(flat).toContain('br_code IS NOT NULL');
+  });
+
+  it('getResumableChargeForSlot (leitura de GERACAO) NAO filtra br_code — reaproveita linha orfa em vez de duplicar', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await getResumableChargeForSlot('clone_x', new Date('2026-06-09T00:00:00Z'));
+    const [sql] = queryMock.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, ' ');
+    expect(flat).toContain("status = 'pending'");
+    expect(flat).not.toContain('br_code IS NOT NULL');
+  });
+});
+
+// ── SCRUM-173/ADR 0039 F2 (+ P2 do QA) — claim atomico com relogio do BANCO ──────
+describe('claimGatewayCall — UPDATE condicional atomico (F2), relogio do banco (P2)', () => {
+  it('UPDATE de UMA UNICA statement: WHERE checa status<>paid + (nao-calling OU sem timestamp OU expirado) usando NOW() do banco', async () => {
+    queryMock.mockResolvedValueOnce({
+      rows: [{ id: '1', gateway_call_state: 'calling' }],
+      rowCount: 1,
+    });
+
+    const row = await claimGatewayCall({ query: queryMock } as unknown as PoolClient, '1');
+
+    expect(row).toMatchObject({ id: '1' });
+    const [sql, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    const flat = sql.replace(/\s+/g, ' ');
+    // Clausula obrigatoria 1 (arquiteto): nunca rechama gateway pra cobranca ja paga.
+    expect(flat).toContain("status <> 'paid'");
+    // Clausula obrigatoria 2 (arquiteto): sem timestamp NUNCA trava pra sempre.
+    expect(flat).toContain('gateway_call_started_at IS NULL');
+    expect(flat).toContain("gateway_call_state <> 'calling'");
+    // Relogio do BANCO (P2 do QA) — NOW() dentro do SQL, nao Date do processo Node.
+    expect(flat).toContain('gateway_call_started_at < NOW() - ($2::int * INTERVAL');
+    expect(flat).toContain('gateway_call_started_at = NOW()');
+    // O timeout de ambiguidade e PARAMETRO (fonte unica GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS).
+    expect(params).toEqual(['1', GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS]);
+  });
+
+  it('0 linhas afetadas (claim perdido) -> retorna null, SEM lancar', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const row = await claimGatewayCall({ query: queryMock } as unknown as PoolClient, '1');
+    expect(row).toBeNull();
+  });
+
+  it('aceita ambiguousTimeoutMs customizado como parametro (fonte unica testavel)', async () => {
+    queryMock.mockResolvedValueOnce({ rows: [{ id: '1' }], rowCount: 1 });
+    await claimGatewayCall({ query: queryMock } as unknown as PoolClient, '1', 60_000);
+    const [, params] = queryMock.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual(['1', 60_000]);
+  });
+});
 
 describe('withBillingSlotLock — transacao + advisory lock por slot (ADR 0014)', () => {
   beforeEach(() => {

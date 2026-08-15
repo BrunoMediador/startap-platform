@@ -29,6 +29,7 @@
  * e idempotencia sob retry. `slot` vem SEMPRE do registro de billing_charges casado,
  * nunca de campo livre do payload (anti-spoof do slot).
  */
+import { logger } from '@startap/core/logger';
 import type { PoolClient } from 'pg';
 import { pool, query } from '../client.js';
 import {
@@ -37,6 +38,8 @@ import {
 } from './billing-payments.js';
 import type { ClientBillingRow } from './client-billing.js';
 import { type OperationalSnapshot, getOperationalSnapshotBySlot } from './operational-state.js';
+
+const log = logger.child({ module: 'billing-webhook-events' });
 
 export interface BillingWebhookEventRow {
   event_id: string;
@@ -204,6 +207,23 @@ export async function applyPaidWebhook(input: ApplyPaidWebhookInput): Promise<Pa
     if (!charge) {
       // Orfao: evento sem cobranca casada. Registra (ja inserido) com charge_id NULL
       // e marca processado pra nao reprocessar. 200 no handler (evita retry infinito).
+      //
+      // WARN, nao info (SCRUM-173/ADR 0039 — condicao do security pra aceitar o risco
+      // residual do outbox): se o cliente pagar os DOIS QR codes gerados por uma corrida
+      // rara (timeout ambiguo + processo morto antes do timeout de seguranca reabrir a
+      // linha), o segundo pagamento cai aqui como orphan e, sem este log, some do nosso
+      // lado sem ninguem saber (o canal de alertas pode estar indisponivel). paidAmountCents
+      // ajuda a priorizar a revisao manual; SEM PII, SEM br_code, SEM QR — so o valor e o
+      // evento (ja redigido pelo handler antes de chegar aqui).
+      log.warn(
+        {
+          alert: 'billing-webhook-orphan',
+          event: input.event,
+          eventId: input.eventId,
+          paidAmountCents: input.paidAmountCents,
+        },
+        'webhook PIX sem cobranca casada (orphan) — revisar manualmente se houve pagamento duplicado',
+      );
       await client.query(
         'UPDATE billing_webhook_events SET processed_at = NOW() WHERE event_id = $1',
         [input.eventId],

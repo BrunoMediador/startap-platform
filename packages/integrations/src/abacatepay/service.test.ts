@@ -12,27 +12,94 @@ const {
   getCharge,
   // ── ADR 0014: modelo por data ──
   withBillingSlotLock,
-  getActivePendingCharge,
+  getResumableChargeForSlot,
   insertPendingCharge,
   attachGatewayDataById,
   reissueGatewayDataById,
-} = vi.hoisted(() => ({
-  getCharge: vi.fn(),
-  withBillingSlotLock: vi.fn(),
-  getActivePendingCharge: vi.fn(),
-  insertPendingCharge: vi.fn(),
-  attachGatewayDataById: vi.fn(),
-  reissueGatewayDataById: vi.fn(),
-}));
+  // ── SCRUM-173/ADR 0039: claim atomico da chamada ao gateway (F2) ──
+  claimGatewayCall,
+  PixChargeGatewayInFlightError,
+  BillingSlotBusyError,
+} = vi.hoisted(() => {
+  class PixChargeGatewayInFlightErrorImpl extends Error {
+    slot: string;
+    chargeId: string;
+    constructor(slot: string, chargeId: string) {
+      super('pix charge gateway call in flight');
+      this.name = 'PixChargeGatewayInFlightError';
+      this.slot = slot;
+      this.chargeId = chargeId;
+    }
+  }
+  class BillingSlotBusyErrorImpl extends Error {
+    slot: string;
+    constructor(slot: string) {
+      super('billing slot busy');
+      this.name = 'BillingSlotBusyError';
+      this.slot = slot;
+    }
+  }
+  // Fixture MINIMA porem COMPLETA (todo campo NOT NULL da coluna real preenchido — a
+  // coluna e NOT NULL DEFAULT 'idle', 'undefined' nunca acontece em runtime). Vive aqui
+  // dentro do vi.hoisted (nao pode importar makeRow de fora, que so existe apos o hoist;
+  // mas TIPOS sobrevivem ao apagamento de runtime do hoisting — import type funciona).
+  function makeClaimedRow(): import('@startap/db').BillingChargeRow {
+    return {
+      id: '1',
+      slot: 'barbearia-cirilo',
+      cycle: '2026-06',
+      external_id: 'barbearia-cirilo-2026-06',
+      abacate_charge_id: null,
+      amount_cents: 19900,
+      paid_amount_cents: null,
+      status: 'pending',
+      br_code: null,
+      br_code_base64: null,
+      expires_at: null,
+      paid_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      superseded_charge_ids: [],
+      gateway_call_state: 'calling',
+      gateway_call_started_at: new Date(),
+    };
+  }
+  return {
+    getCharge: vi.fn(),
+    withBillingSlotLock: vi.fn(),
+    getResumableChargeForSlot: vi.fn(),
+    insertPendingCharge: vi.fn(),
+    attachGatewayDataById: vi.fn(),
+    reissueGatewayDataById: vi.fn(),
+    // Default: claim sempre concedido (retorna uma row COMPLETA, marcada 'calling'). O
+    // caller (callGatewayWithOutbox) so faz truthy-check (`if (!claimed)`) — nunca le
+    // campo a campo — mas o mock fica fiel ao shape real de BillingChargeRow (NOT NULL).
+    // Tipado explicitamente como Promise<BillingChargeRow | null> pra aceitar tanto a
+    // fixture completa quanto `null` (claim perdido) SEM afrouxar BillingChargeRow.
+    // Os testes de corrida sobrescrevem com mockResolvedValueOnce(null) pra simular "outro
+    // processo ja reivindicou" (0 linhas afetadas pelo UPDATE condicional real).
+    claimGatewayCall: vi.fn(
+      async (
+        _client: unknown,
+        _id: string,
+      ): Promise<import('@startap/db').BillingChargeRow | null> => makeClaimedRow(),
+    ),
+    PixChargeGatewayInFlightError: PixChargeGatewayInFlightErrorImpl,
+    BillingSlotBusyError: BillingSlotBusyErrorImpl,
+  };
+});
 
 vi.mock('@startap/db', () => ({
   billingCharges: {
     getCharge,
     withBillingSlotLock,
-    getActivePendingCharge,
+    getResumableChargeForSlot,
     insertPendingCharge,
     attachGatewayDataById,
     reissueGatewayDataById,
+    claimGatewayCall,
+    PixChargeGatewayInFlightError,
+    BillingSlotBusyError,
   },
 }));
 
@@ -60,6 +127,10 @@ function makeRow(over: Partial<BillingChargeRow> = {}): BillingChargeRow {
     created_at: new Date(),
     updated_at: new Date(),
     superseded_charge_ids: [],
+    // Coluna real e NOT NULL DEFAULT 'idle' (migration 081) — o default da fixture
+    // reflete o que o banco SEMPRE devolve; 'undefined' nunca acontece em runtime.
+    gateway_call_state: 'idle',
+    gateway_call_started_at: null,
     ...over,
   };
 }
@@ -81,13 +152,23 @@ const AHEAD_2H_MS = 2 * 60 * 60 * 1000;
 beforeEach(() => {
   getCharge.mockReset();
   withBillingSlotLock.mockReset();
-  getActivePendingCharge.mockReset();
+  getResumableChargeForSlot.mockReset();
   insertPendingCharge.mockReset();
   attachGatewayDataById.mockReset();
   reissueGatewayDataById.mockReset();
-  // withBillingSlotLock so executa o callback com um client fake (sem banco real).
+  claimGatewayCall.mockReset();
+  // withBillingSlotLock so executa o callback com um client fake (sem banco real). E
+  // chamado MULTIPLAS vezes por operacao completa desde o SCRUM-173 (fase 1: recheck/
+  // insert; fase 2: claim atomico; fase 3: persiste resultado) — cada chamada reabre o
+  // "lock" (mock simplifica: sempre concede).
   withBillingSlotLock.mockImplementation((_slot: string, fn: (c: unknown) => Promise<unknown>) =>
     fn({}),
+  );
+  // Default: claim sempre concedido (fixture COMPLETA, fiel ao shape NOT NULL real).
+  // Sobrescrito nos testes de corrida com mockResolvedValueOnce(null) pra simular "outro
+  // processo ja reivindicou".
+  claimGatewayCall.mockImplementation(async (_client: unknown, _id: string) =>
+    makeRow({ gateway_call_state: 'calling' }),
   );
 });
 
@@ -124,21 +205,23 @@ describe('ensurePixChargeForCycle', () => {
     expect(attachGatewayDataById).toHaveBeenCalledTimes(1);
   });
 
-  it('mantem BEGIN -> lock -> recheck -> gateway -> attach -> COMMIT no mesmo client', async () => {
+  it('OUTBOX (SCRUM-173): marca calling e COMMITA ANTES do POST, so ai chama o gateway, so ai persiste (3 transacoes)', async () => {
     const events: string[] = [];
-    const lockClient = { marker: 'same-client' };
-    withBillingSlotLock.mockImplementationOnce(
+    withBillingSlotLock.mockImplementation(
       async (_slot: string, fn: (client: unknown) => Promise<unknown>) => {
-        events.push('BEGIN', 'lock');
-        const result = await fn(lockClient);
+        events.push('BEGIN');
+        const result = await fn({});
         events.push('COMMIT');
         return result;
       },
     );
-    getCharge.mockImplementationOnce(async (_slot, _cycle, client) => {
-      expect(client).toBe(lockClient);
+    getCharge.mockImplementationOnce(async () => {
       events.push('recheck');
       return makeRow({ abacate_charge_id: null });
+    });
+    claimGatewayCall.mockImplementationOnce(async () => {
+      events.push('claim');
+      return makeRow({ gateway_call_state: 'calling' });
     });
     const createPixCharge = vi.fn().mockImplementationOnce(async () => {
       events.push('gateway');
@@ -151,41 +234,109 @@ describe('ensurePixChargeForCycle', () => {
         platformFee: null,
       };
     });
-    attachGatewayDataById.mockImplementationOnce(async (client) => {
-      expect(client).toBe(lockClient);
+    attachGatewayDataById.mockImplementationOnce(async () => {
       events.push('attach');
-      return makeRow({ abacate_charge_id: 'pix_char_order' });
+      return makeRow({ abacate_charge_id: 'pix_char_order', gateway_call_state: 'done' });
     });
 
     await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
 
-    expect(events).toEqual(['BEGIN', 'lock', 'recheck', 'gateway', 'attach', 'COMMIT']);
+    // 3 transacoes distintas (BEGIN/COMMIT em par): recheck+insert, claim atomico, attach.
+    // O COMMIT do claim acontece ANTES do POST ao gateway — e o nucleo do fix: a intencao
+    // de chamar fica persistida e sobrevive a um crash durante o POST.
+    expect(events).toEqual([
+      'BEGIN',
+      'recheck',
+      'COMMIT',
+      'BEGIN',
+      'claim',
+      'COMMIT',
+      'gateway',
+      'BEGIN',
+      'attach',
+      'COMMIT',
+    ]);
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(3);
   });
 
-  it('faz ROLLBACK e nao persiste quando o gateway falha dentro do lock', async () => {
-    const events: string[] = [];
+  it('SCRUM-173/F2: timeout no gateway NAO desfaz o INSERT — linha fica calling, retry perde o claim atomico (0 linhas afetadas)', async () => {
     const lockClient = { marker: 'same-client' };
-    withBillingSlotLock.mockImplementationOnce(
-      async (_slot: string, fn: (client: unknown) => Promise<unknown>) => {
-        events.push('BEGIN', 'lock');
-        try {
-          const result = await fn(lockClient);
-          events.push('COMMIT');
-          return result;
-        } catch (error) {
-          events.push('ROLLBACK');
-          throw error;
-        }
-      },
+    withBillingSlotLock.mockImplementation(
+      async (_slot: string, fn: (client: unknown) => Promise<unknown>) => fn(lockClient),
+    );
+    // Linha NOVA (nao existe ainda) — reproduz o cenario do card: gateway CONFIRMA mas a
+    // resposta se perde. Antes do fix, o INSERT desta linha seria desfeito pelo rollback.
+    getCharge.mockResolvedValueOnce(null);
+    insertPendingCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: null }));
+    claimGatewayCall.mockResolvedValueOnce(
+      makeRow({ gateway_call_state: 'calling', gateway_call_started_at: new Date() }),
+    );
+    const gatewayError = new Error('gateway timeout');
+    const createPixCharge = vi.fn().mockImplementationOnce(async () => {
+      throw gatewayError;
+    });
+
+    // A chamada falha (timeout) — mas o INSERT ja tinha sido commitado na fase 1, e o
+    // claim atomico da fase 2 tambem ja foi commitado. NADA disso e desfeito (nao ha
+    // transacao guarda-chuva pra dar ROLLBACK) — e exatamente essa persistencia que
+    // resolve a causa raiz do card.
+    await expect(ensurePixChargeForCycle(fakeClient(createPixCharge), input)).rejects.toThrow(
+      gatewayError,
+    );
+    expect(insertPendingCharge).toHaveBeenCalledTimes(1);
+    expect(claimGatewayCall).toHaveBeenCalledTimes(1);
+    expect(attachGatewayDataById).not.toHaveBeenCalled();
+
+    // Retry IMEDIATO (mesma janela de ambiguidade): o UPDATE condicional real retornaria 0
+    // linhas (mock simula com null) -> claim PERDIDO -> nao chama createPixCharge de novo,
+    // nao cria 2a cobranca. Esta e a asserção central do card: numero de chamadas ao gateway.
+    claimGatewayCall.mockResolvedValueOnce(null);
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: null, gateway_call_state: 'calling' }),
+    );
+    await expect(ensurePixChargeForCycle(fakeClient(createPixCharge), input)).rejects.toThrow(
+      /gateway call in flight/,
+    );
+    expect(createPixCharge).toHaveBeenCalledTimes(1); // AINDA 1 — retry nao chamou de novo.
+    expect(insertPendingCharge).toHaveBeenCalledTimes(1); // AINDA 1 — nao criou 2a linha.
+
+    // So DEPOIS do timeout de ambiguidade passar (avaliado com NOW() do banco, nao Date do
+    // processo — o mock so precisa devolver a linha), o claim e concedido de novo e o retry
+    // conclui normalmente pela MESMA linha.
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: null, gateway_call_state: 'calling' }),
+    );
+    claimGatewayCall.mockResolvedValueOnce(makeRow({ gateway_call_state: 'calling' }));
+    createPixCharge.mockResolvedValueOnce({
+      id: 'pix_after_timeout',
+      brCode: 'retry-code',
+      brCodeBase64: 'retry-base64',
+      status: 'pending',
+      expiresAt: null,
+      platformFee: null,
+    });
+    attachGatewayDataById.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_after_timeout', gateway_call_state: 'done' }),
+    );
+
+    const retry = await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
+    expect(retry.charge.abacate_charge_id).toBe('pix_after_timeout');
+    expect(createPixCharge).toHaveBeenCalledTimes(2); // so agora incrementa.
+    expect(insertPendingCharge).toHaveBeenCalledTimes(1); // NUNCA criou 2a linha.
+  });
+
+  it('gateway falha (sem outro processo disputando o claim) — 10 chamadas coalescidas propagam o mesmo erro, retry cria/completa e conclui', async () => {
+    const lockClient = { marker: 'same-client' };
+    withBillingSlotLock.mockImplementation(
+      async (_slot: string, fn: (client: unknown) => Promise<unknown>) => fn(lockClient),
     );
     getCharge.mockImplementationOnce(async (_slot, _cycle, client) => {
       expect(client).toBe(lockClient);
-      events.push('recheck');
       return makeRow({ abacate_charge_id: null });
     });
+    claimGatewayCall.mockResolvedValueOnce(makeRow({ gateway_call_state: 'calling' }));
     const gatewayError = new Error('gateway down');
     const createPixCharge = vi.fn().mockImplementationOnce(async () => {
-      events.push('gateway');
       throw gatewayError;
     });
 
@@ -194,18 +345,25 @@ describe('ensurePixChargeForCycle', () => {
     );
     const failures = await Promise.allSettled(failedRequests);
 
-    expect(events).toEqual(['BEGIN', 'lock', 'recheck', 'gateway', 'ROLLBACK']);
     expect(failures).toHaveLength(10);
     expect(
       failures.every((failure) => failure.status === 'rejected' && failure.reason === gatewayError),
     ).toBe(true);
-    expect(withBillingSlotLock).toHaveBeenCalledTimes(1);
+    // 2 transacoes rodaram (recheck, claim atomico) antes do gateway falhar; NENHUMA foi
+    // desfeita (nao ha ROLLBACK que apague o claim — e o proprio fix).
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(2);
     expect(createPixCharge).toHaveBeenCalledTimes(1);
+    expect(insertPendingCharge).not.toHaveBeenCalled();
     expect(attachGatewayDataById).not.toHaveBeenCalled();
 
-    // A Promise rejeitada nao pode permanecer no Map: retry do MESMO slot entra num
-    // novo lock, chama o gateway novamente e conclui normalmente.
-    getCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: null }));
+    // A Promise rejeitada nao pode permanecer no Map: retry do MESMO slot entra de novo.
+    // claimGatewayCall segue default concedendo (o teste de corrida acima ja cobre o caso
+    // perdido) -> completa a chamada ao gateway pela MESMA linha (fluxo "pending sem
+    // gateway -> completa").
+    getCharge.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: null, gateway_call_state: 'calling' }),
+    );
+    claimGatewayCall.mockResolvedValueOnce(makeRow({ gateway_call_state: 'calling' }));
     createPixCharge.mockResolvedValueOnce({
       id: 'pix_after_retry',
       brCode: 'retry-code',
@@ -214,14 +372,17 @@ describe('ensurePixChargeForCycle', () => {
       expiresAt: null,
       platformFee: null,
     });
-    attachGatewayDataById.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_after_retry' }));
+    attachGatewayDataById.mockResolvedValueOnce(
+      makeRow({ abacate_charge_id: 'pix_after_retry', gateway_call_state: 'done' }),
+    );
 
     const retry = await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
 
     expect(retry.charge.abacate_charge_id).toBe('pix_after_retry');
-    expect(withBillingSlotLock).toHaveBeenCalledTimes(2);
     expect(createPixCharge).toHaveBeenCalledTimes(2);
     expect(attachGatewayDataById).toHaveBeenCalledTimes(1);
+    // NUNCA criou linha nova — sempre a mesma (id '1' default do makeRow).
+    expect(insertPendingCharge).not.toHaveBeenCalled();
   });
 
   it('coalesce 10 chamadas locais do mesmo slot antes do pool e limpa o single-flight', async () => {
@@ -254,7 +415,9 @@ describe('ensurePixChargeForCycle', () => {
 
     getCharge.mockResolvedValueOnce(makeRow({ abacate_charge_id: 'pix_one' }));
     await ensurePixChargeForCycle(fakeClient(createPixCharge), input);
-    expect(withBillingSlotLock).toHaveBeenCalledTimes(2);
+    // 1a rodada (10 chamadas coalescidas em 1 operacao real): recheck+insert, mark-calling,
+    // attach = 3 chamadas ao lock. 2a rodada (linha ja com gateway -> reuso, so recheck) = +1.
+    expect(withBillingSlotLock).toHaveBeenCalledTimes(4);
   });
 
   it('lock cross-instance ocupado propaga busy sem chamar gateway', async () => {
@@ -472,7 +635,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
   });
 
   it('REUSA quando ja ha pending VALIDA (nao chama gateway, nao insere)', async () => {
-    getActivePendingCharge.mockResolvedValueOnce(
+    getResumableChargeForSlot.mockResolvedValueOnce(
       makeRow({ id: '7', abacate_charge_id: 'pix_char_valido', expires_at: FUTURE }),
     );
     const createPixCharge = vi.fn();
@@ -490,7 +653,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
   });
 
   it('REEMITE (mesma linha, por id) quando a pending ativa esta EXPIRADA', async () => {
-    getActivePendingCharge.mockResolvedValueOnce(
+    getResumableChargeForSlot.mockResolvedValueOnce(
       makeRow({ id: '7', abacate_charge_id: 'pix_char_velho', expires_at: PAST }),
     );
     reissueGatewayDataById.mockResolvedValueOnce(
@@ -525,7 +688,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
     // Pending ainda valida AGORA (expira daqui 1h) mas DENTRO da janela de 2h -> reemite
     // a proxima ANTES do vencimento, sem deixar buraco. REGRESSAO: sem o fix o service
     // ignora reissueAheadMs, considera valida (1h > margem) e REUSA (created=false) -> RED.
-    getActivePendingCharge.mockResolvedValueOnce(
+    getResumableChargeForSlot.mockResolvedValueOnce(
       makeRow({ id: '7', abacate_charge_id: 'pix_char_expira_logo', expires_at: NEAR }),
     );
     reissueGatewayDataById.mockResolvedValueOnce(
@@ -562,7 +725,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
   it('SCRUM-124: NAO reemite quando a pending e valida ALEM da janela (reusa, sem 2a cobranca)', async () => {
     // Expira daqui 3 dias (>> janela 2h) -> reusa. Prova que a reemissao antecipada NAO e
     // "gerar mais agressivo": nada de churn de gateway nem cobranca duplicada.
-    getActivePendingCharge.mockResolvedValueOnce(
+    getResumableChargeForSlot.mockResolvedValueOnce(
       makeRow({ id: '7', abacate_charge_id: 'pix_char_valido_longe', expires_at: FUTURE }),
     );
     const createPixCharge = vi.fn();
@@ -584,7 +747,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
   it('SCRUM-124: SEM reissueAheadMs (portal/legado) a pending que expira em 1h ainda e REUSADA', async () => {
     // Portal (geracao sob demanda) nao passa a janela -> horizonte == agora -> so reemite se
     // JA expirada. Garante que o fix nao muda o caminho on-demand (nem risco de duplicar QR).
-    getActivePendingCharge.mockResolvedValueOnce(
+    getResumableChargeForSlot.mockResolvedValueOnce(
       makeRow({ id: '7', abacate_charge_id: 'pix_char_valido', expires_at: NEAR }),
     );
     const createPixCharge = vi.fn();
@@ -598,7 +761,7 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
   });
 
   it('GERA linha NOVA quando NAO ha pending valida (insere + gateway + attach por id)', async () => {
-    getActivePendingCharge.mockResolvedValueOnce(null);
+    getResumableChargeForSlot.mockResolvedValueOnce(null);
     insertPendingCharge.mockResolvedValueOnce(makeRow({ id: '99', cycle: '2026-06-10' }));
     attachGatewayDataById.mockResolvedValueOnce(
       makeRow({ id: '99', cycle: '2026-06-10', abacate_charge_id: 'pix_char_criado' }),
@@ -637,8 +800,8 @@ describe('ensurePixChargeForSlot (modelo por data de vencimento)', () => {
 
   it('RE-COBRANCA: duePeriod no passado -> gera nova linha (nao reaproveita paga antiga)', async () => {
     // Cenario re-cobranca: nenhuma pending valida (a antiga esta 'paid', fora do filtro de
-    // getActivePendingCharge). Gera uma linha NOVA com o due_period passado.
-    getActivePendingCharge.mockResolvedValueOnce(null);
+    // getResumableChargeForSlot). Gera uma linha NOVA com o due_period passado.
+    getResumableChargeForSlot.mockResolvedValueOnce(null);
     insertPendingCharge.mockResolvedValueOnce(makeRow({ id: '120', cycle: '2026-05-01' }));
     attachGatewayDataById.mockResolvedValueOnce(
       makeRow({ id: '120', abacate_charge_id: 'pix_char_recobranca' }),

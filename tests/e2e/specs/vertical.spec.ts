@@ -229,15 +229,26 @@ test('readiness: apps, worker real, integrações reais, migrations, Redis e fak
       integration: Number(integration.rows[0]?.count ?? 0),
     };
   });
-  expect(state).toEqual({
-    migrations: 80,
-    staleEvents: [
-      { event_type: 'e2e.worker-stale', status: 'running' },
-      { event_type: 'system.stale-closed', status: 'error' },
-    ],
-    stale: 'error',
-    integration: 1,
-  });
+  // migrations: NAO fixa um numero exato (SCRUM-173/181 — terceiro ponto com "80"
+  // hardcoded encontrado; migrate-e2e.sh e integration-probe.mjs ja corrigidos na mesma
+  // leva). O runtime do container `e2e` (Playwright) tambem nao tem acesso aos .sql fonte
+  // de packages/db/migrations pra derivar a contagem EXATA aqui — a garantia forte
+  // (baseline + contagem REAL) ja e feita em migrate-e2e.sh, que roda ANTES via
+  // depends_on: migrator: { condition: service_completed_successfully }. Aqui so
+  // confirmamos a PROPRIEDADE que interessa pra este teste: o schema foi migrado e nao
+  // esta vazio/incompleto (>=2 = baseline + pelo menos 1 migration versionada). Numero
+  // exato nunca mais precisa ser editado aqui a cada migration nova.
+  expect(state.migrations).toBeGreaterThanOrEqual(2);
+  expect(state).toEqual(
+    expect.objectContaining({
+      staleEvents: [
+        { event_type: 'e2e.worker-stale', status: 'running' },
+        { event_type: 'system.stale-closed', status: 'error' },
+      ],
+      stale: 'error',
+      integration: 1,
+    }),
+  );
   expect((await fakeState(gcalUrl)).journal.some((entry) => entry.kind === 'gcal')).toBeTruthy();
   expect(
     (await fakeState(abacateUrl)).journal.some((entry) => entry.kind === 'abacatepay'),

@@ -318,8 +318,12 @@ for (const requiredProbeContract of [
 for (const requiredImport of [
   /from\s+['"]pg['"]/u,
   /\/app\/packages\/integrations\/dist\/google-calendar\/index\.js/u,
-  /SELECT count\(\*\)::text AS count FROM schema_migrations/u,
-  /migrationResult\.rows\[0\]\?\.count !== '80'/u,
+  /SELECT count\(\*\)::int AS count FROM schema_migrations/u,
+  // SCRUM-173/181: o guard forte (contagem EXATA, derivada dos .sql reais) vive em
+  // migrate-e2e.sh — este probe só prova que o schema não ficou vazio/incompleto
+  // (>=2 = baseline + pelo menos 1 migration versionada), sem reintroduzir um número
+  // hardcoded que quebraria a cada migration nova.
+  /migrationCount < 2/u,
 ]) {
   if (!requiredImport.test(integrationProbeSource)) {
     throw new Error(`integration-probe deixou de exercitar dependência real: ${requiredImport}`);

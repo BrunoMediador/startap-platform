@@ -116,7 +116,10 @@ describeIf(
       tenant_id UUID,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      superseded_charge_ids TEXT[] NOT NULL DEFAULT '{}')`);
+      superseded_charge_ids TEXT[] NOT NULL DEFAULT '{}',
+      gateway_call_state TEXT NOT NULL DEFAULT 'idle'
+        CHECK (gateway_call_state IN ('idle','calling','done')),
+      gateway_call_started_at TIMESTAMPTZ)`);
       await exec(`CREATE INDEX IF NOT EXISTS idx_billing_charges_external_id
       ON billing_charges (external_id)`);
       await exec(`CREATE TABLE IF NOT EXISTS billing_webhook_events (

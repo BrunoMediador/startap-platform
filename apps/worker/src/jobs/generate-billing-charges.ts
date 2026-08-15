@@ -151,6 +151,28 @@ export async function runGenerateBillingCharges(
         );
       }
     } catch (err) {
+      // Ocupado (SCRUM-173, ADR 0039) — NAO e erro, e o mecanismo de anti-duplicacao
+      // funcionando. Trata os DOIS casos como skip nao-fatal, sem incrementar
+      // result.errors (poluiria a metrica de erro operacional com telemetria esperada):
+      //   - PixChargeGatewayInFlightError: outro processo/tentativa reivindicou o claim
+      //     atomico do outbox ha pouco tempo (< GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS).
+      //   - BillingSlotBusyError: o advisory lock do slot esta ocupado por outra
+      //     operacao concorrente (fase de recheck/insert ou de persistencia final).
+      // NAO EXISTE JOB DE RESGATE separado: uma linha travada em 'calling' so destrava
+      // porque o proprio claimGatewayCall, ao ser chamado de novo (proxima vez que este
+      // MESMO slot entrar na janela de geracao — cron horario ou clique no portal),
+      // encontra gateway_call_started_at mais velho que o timeout de ambiguidade e libera
+      // uma nova tentativa. Se o slot nunca mais for revisitado, a linha fica presa
+      // indefinidamente (aceitavel: o portal ja nao a exibe como pagavel — F1 — entao o
+      // pior efeito e o slot ficar sem PIX novo ate a proxima geracao, nao um cliente
+      // travado vendo QR quebrado).
+      if (
+        err instanceof billingCharges.PixChargeGatewayInFlightError ||
+        err instanceof billingCharges.BillingSlotBusyError
+      ) {
+        log.info({ slot }, 'billing ocupado (outbox/lock em voo) — pulado nesta execucao');
+        continue;
+      }
       result.errors += 1;
       log.error(
         { slot, err: err instanceof Error ? err.message : 'erro' },

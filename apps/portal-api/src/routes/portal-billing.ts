@@ -55,9 +55,21 @@ function isDevKey(): boolean {
  * is_expired: true SO quando a cobranca esta 'pending' e a validade ja passou (relativo a
  * `now`). Da ao front um sinal explicito de "esse QR nao vale mais" sem ele precisar
  * comparar datas no cliente (relogio do navegador). 'paid' nunca e expirada.
+ *
+ * LEITURA DE PRODUTO (ADR 0039, SCRUM-173 F1): uma cobranca 'pending' SEM br_code (outbox
+ * em voo/travado — gateway_call_state='calling', ou geracao anterior que falhou antes do
+ * attach) NAO e exibida ao cliente. Sem isso, o portal mostraria "cobranca pendente" sem
+ * QR pagavel — um estado sem saida que, com BILLING_OVERDUE_SILENCE + GRACE_DAYS=3, cala o
+ * bot do cliente no 4o dia sem ele conseguir pagar. Trata como null (front cai no fluxo
+ * "gerar PIX"), NUNCA como is_expired=true (a linha nao esta expirada, so nao pagavel AINDA
+ * — is_expired=true sinalizaria "gere de novo" quando na verdade o outbox pode completar
+ * sozinho no proximo request). O caminho legado (getCharge, sem status filter) usa a MESMA
+ * protecao aqui — nao precisou duplicar a query de geracao (essa fica em getCharge/
+ * getResumableChargeForSlot, usadas SO pela fase de geracao, nunca por esta view).
  */
 function chargeView(charge: BillingChargeRow | null, now = new Date()) {
   if (!charge) return null;
+  if (charge.status === 'pending' && !charge.br_code) return null;
   const isExpired =
     charge.status === 'pending' &&
     charge.expires_at != null &&
@@ -73,8 +85,16 @@ function chargeView(charge: BillingChargeRow | null, now = new Date()) {
   };
 }
 
+/**
+ * 503 + Retry-After pros dois casos de "ocupado" (nao gera 2a cobranca as cegas):
+ * advisory lock do slot ocupado (BillingSlotBusyError) ou chamada ao gateway em voo por
+ * outra tentativa recente (PixChargeGatewayInFlightError, SCRUM-173 outbox).
+ */
 function replyBillingBusy(reply: FastifyReply, err: unknown): FastifyReply | null {
-  if (!(err instanceof billingCharges.BillingSlotBusyError)) return null;
+  const busy =
+    err instanceof billingCharges.BillingSlotBusyError ||
+    err instanceof billingCharges.PixChargeGatewayInFlightError;
+  if (!busy) return null;
   reply.header('Retry-After', '1');
   return reply.code(503).send({ error: 'billing_busy', retry_after_seconds: 1 });
 }

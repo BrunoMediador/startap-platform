@@ -6,16 +6,47 @@
  * (F4 cron, scripts de smoke, testes). O portal do cliente e F3.
  *
  * Idempotencia (controle do threat-model): advisory lock por slot + recheck exato do
- * ciclo no mesmo PoolClient. A migration 043 removeu o UNIQUE (slot, cycle); o lock
- * abrange recheck, gateway e persistencia para duas chamadas concorrentes gerarem 1 PIX.
+ * ciclo. A migration 043 removeu o UNIQUE (slot, cycle); o lock (reobtido em duas fases
+ * curtas — ver OUTBOX abaixo) serializa recheck e persistencia para duas chamadas
+ * concorrentes gerarem 1 PIX.
  *
  * Snapshot do valor: amountCents vem de client_billing.amount_cents NO MOMENTO da
  * geracao e e congelado em billing_charges.amount_cents. Pagamento (F2) confere
  * contra o snapshot, nunca contra client_billing em tempo de pagamento.
+ *
+ * OUTBOX DE CHAMADA AO GATEWAY (SCRUM-173, ADR 0039, migration 081): antes desta versao,
+ * o INSERT da linha 'pending' e o POST ao gateway rodavam na MESMA transacao do advisory
+ * lock. Se o gateway CONFIRMAVA mas a resposta se perdia (timeout), o throw abortava a
+ * transacao, desfazia o INSERT, e o retry seguinte criava uma SEGUNDA cobranca real (sem
+ * nenhum rastro local do que aconteceu). Agora `callGatewayWithOutbox` faz: (1) CLAIM
+ * ATOMICO — UPDATE condicional de uma unica statement (`claimGatewayCall`) marca
+ * gateway_call_state='calling' e COMMITA antes do POST, so se a linha estiver livre
+ * (WHERE checa e seta na MESMA operacao — sem check-then-act, sem TOCTOU entre processos
+ * distintos); (2) chama o gateway FORA de transacao; (3) reabre o lock numa transacao
+ * NOVA pra persistir o resultado (attach/reissue) e fechar o estado em 'done'. Claim
+ * perdido (0 linhas afetadas) -> PixChargeGatewayInFlightError, SEM chamar o gateway —
+ * trata como ocupado, igual ao advisory lock. A comparacao de timeout de ambiguidade
+ * (GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS) roda com NOW() do POSTGRES dentro do UPDATE, nao
+ * com Date do processo Node — elimina dependencia de relogio sincronizado entre
+ * portal-api e worker (podem rodar em instancias distintas). LIMITACAO ACEITA: a
+ * AbacatePay nao expoe busca por externalId (so create/check-by-id/simulate — ver README
+ * "Endpoints confirmados"), entao apos o timeout de ambiguidade nao ha como CONFIRMAR se
+ * a tentativa anterior de fato criou uma cobranca no gateway; o pior caso residual e uma
+ * cobranca 'pending' orfa la (sem duplo-credito: o webhook casa por external_id/SCRUM-139
+ * e nunca reescreve 'paid'; o outcome 'orphan' loga em WARN com o valor pago pra permitir
+ * deteccao manual — ver billing-webhook-events.ts).
+ *
+ * LEITURA DE PRODUTO vs LEITURA DE GERACAO (F1, achado do security): uma linha presa em
+ * 'calling' (outbox em voo/orfao, sem br_code) NAO pode aparecer como "cobranca ativa" pro
+ * PORTAL (o cliente veria um estado sem QR, sem conseguir pagar — pior que a duplicacao
+ * rara que este outbox evita). Mas a fase de GERACAO precisa enxergar essa MESMA linha pra
+ * REAPROVEITAR (reissue) em vez de inserir uma linha nova. Por isso duas funcoes de leitura
+ * distintas em billing-charges.ts: `getActivePendingCharge` (produto, exige br_code IS NOT
+ * NULL) e `getResumableChargeForSlot` (geracao, sem essa exigencia).
  */
 import { logger } from '@startap/core/logger';
 import { type BillingChargeRow, billingCharges } from '@startap/db';
-import type { AbacatePayClient } from './client.js';
+import type { AbacatePayClient, PixCharge } from './client.js';
 
 const log = logger.child({ module: 'abacatepay-service' });
 
@@ -107,77 +138,86 @@ export async function ensurePixChargeForCycle(
     );
   }
 
-  return withBillingSingleFlight(input.slot, () =>
-    billingCharges.withBillingSlotLock(input.slot, async (client) => {
-      const existing = await billingCharges.getCharge(input.slot, input.cycle, client);
-      const created = existing === null;
-      const row =
-        existing ??
-        (await billingCharges.insertPendingCharge(client, {
-          slot: input.slot,
-          cycle: input.cycle,
-          externalId: `${input.slot}-${input.cycle}`,
-          amountCents: input.amountCents,
-        }));
+  return withBillingSingleFlight(input.slot, async () => {
+    // Fase 1 (transacao propria, sob o lock): recheck + insere-se-ausente. Retorna so a
+    // linha e a decisao — NENHUMA chamada ao gateway acontece aqui (SCRUM-173: o POST sai
+    // da transacao do INSERT, ver callGatewayWithOutbox).
+    const { row, created } = await billingCharges.withBillingSlotLock(
+      input.slot,
+      async (client) => {
+        const existing = await billingCharges.getCharge(input.slot, input.cycle, client);
+        const isNew = existing === null;
+        const r =
+          existing ??
+          (await billingCharges.insertPendingCharge(client, {
+            slot: input.slot,
+            cycle: input.cycle,
+            externalId: `${input.slot}-${input.cycle}`,
+            amountCents: input.amountCents,
+          }));
+        return { row: r, created: isNew };
+      },
+    );
 
-      // Linha ja existente com cobranca no gateway: decide reuso / reemissao / paga.
-      if (!created && row.abacate_charge_id) {
-        // Paga: nunca mexe. O portal mostra "pago".
-        if (row.status === 'paid') {
-          log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca ja paga — reuso');
-          return { charge: row, created: false, reissued: false };
-        }
+    // Linha ja existente com cobranca no gateway: decide reuso / reemissao / paga.
+    if (!created && row.abacate_charge_id) {
+      // Paga: nunca mexe. O portal mostra "pago".
+      if (row.status === 'paid') {
+        log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca ja paga — reuso');
+        return { charge: row, created: false, reissued: false };
+      }
 
-        // Pendente e AINDA valida (validade no futuro com margem): reusa, nao chama gateway.
-        if (isChargeStillValid(row, now)) {
-          log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca pendente valida — reuso');
-          return { charge: row, created: false, reissued: false };
-        }
+      // Pendente e AINDA valida (validade no futuro com margem): reusa, nao chama gateway.
+      if (isChargeStillValid(row, now)) {
+        log.info({ slot: input.slot, cycle: input.cycle }, 'cobranca pendente valida — reuso');
+        return { charge: row, created: false, reissued: false };
+      }
 
-        // Pendente porem EXPIRADA. Sem reissue: mantem o comportamento legado (reusa como esta).
-        if (!input.reissueIfExpired) {
-          log.info(
-            { slot: input.slot, cycle: input.cycle },
-            'cobranca expirada mas reissue desligado — reuso',
-          );
-          return { charge: row, created: false, reissued: false };
-        }
+      // Pendente porem EXPIRADA. Sem reissue: mantem o comportamento legado (reusa como esta).
+      if (!input.reissueIfExpired) {
+        log.info(
+          { slot: input.slot, cycle: input.cycle },
+          'cobranca expirada mas reissue desligado — reuso',
+        );
+        return { charge: row, created: false, reissued: false };
+      }
 
-        // Pendente EXPIRADA + reissue: reemite no gateway e sobrescreve a MESMA linha.
-        const pix = await callGateway(abacate, input, row);
-        const reissuedRow = await billingCharges.reissueGatewayDataById(client, {
+      // Pendente EXPIRADA + reissue: reemite no gateway e sobrescreve a MESMA linha (outbox).
+      const reissuedRow = await callGatewayWithOutbox(abacate, input, row, (client, pix) =>
+        billingCharges.reissueGatewayDataById(client, {
           id: row.id,
           abacateChargeId: pix.id,
           brCode: pix.brCode,
           brCodeBase64: pix.brCodeBase64,
           expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
-        });
-        log.info(
-          { slot: input.slot, cycle: input.cycle, abacateChargeId: pix.id },
-          'cobranca PIX expirada — reemitida no gateway (mesma linha)',
-        );
-        return { charge: reissuedRow ?? row, created: true, reissued: true };
-      }
+        }),
+      );
+      log.info(
+        { slot: input.slot, cycle: input.cycle, abacateChargeId: reissuedRow.abacate_charge_id },
+        'cobranca PIX expirada — reemitida no gateway (mesma linha)',
+      );
+      return { charge: reissuedRow, created: true, reissued: true };
+    }
 
-      // Linha existe mas sem dados do gateway (nova, ou geracao anterior falhou na API):
-      // completa a chamada ao AbacatePay dentro do lock e persiste pela identidade imutavel `id`.
-      const pix = await callGateway(abacate, input, row);
-      const updated = await billingCharges.attachGatewayDataById(client, {
+    // Linha existe mas sem dados do gateway (nova, ou geracao anterior falhou na API):
+    // completa a chamada ao AbacatePay via outbox e persiste pela identidade imutavel `id`.
+    const updated = await callGatewayWithOutbox(abacate, input, row, (client, pix) =>
+      billingCharges.attachGatewayDataById(client, {
         id: row.id,
         abacateChargeId: pix.id,
         brCode: pix.brCode,
         brCodeBase64: pix.brCodeBase64,
         expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
-      });
+      }),
+    );
 
-      log.info(
-        { slot: input.slot, cycle: input.cycle, abacateChargeId: pix.id },
-        'cobranca PIX gerada no gateway',
-      );
+    log.info(
+      { slot: input.slot, cycle: input.cycle, abacateChargeId: updated.abacate_charge_id },
+      'cobranca PIX gerada no gateway',
+    );
 
-      return { charge: updated ?? row, created: true, reissued: false };
-    }),
-  );
+    return { charge: updated, created: true, reissued: false };
+  });
 }
 
 /**
@@ -194,6 +234,59 @@ function callGateway(abacate: AbacatePayClient, input: EnsureChargeInput, row: B
     description,
     expiresInSec: input.expiresInSec ?? DEFAULT_EXPIRES_IN_SEC,
   });
+}
+
+/**
+ * OUTBOX (SCRUM-173, ADR 0039): chama o gateway e persiste o resultado SEM manter o
+ * INSERT pendente na mesma transacao do POST. Ver comentario de topo do arquivo.
+ *
+ * Pre-condicao: `row` foi lida/criada DENTRO da transacao do advisory lock atual (o
+ * caller esta em `withBillingSlotLock`), mas este helper faz o proprio commit
+ * intermediario ANTES do gateway — por isso reabre o lock de novo para a fase de
+ * persistencia final.
+ *
+ * ⚠️ CORRECAO DE COMENTARIO FALSO (F2, achado do security): uma versao anterior deste
+ * comentario afirmava que o claim rodava "sob o MESMO advisory lock, serializando com
+ * outras tentativas do slot". ISSO E FALSO. `withBillingSlotLock` usa
+ * `pg_try_advisory_xact_lock`, que e liberado no COMMIT — entre o commit da fase 1 (que
+ * trouxe `row`) e a chamada a este helper, o slot esta DESTRAVADO. O advisory lock aqui
+ * SERVE PRA OUTRA COISA (serializar o par recheck+insert da fase 1, invariante "1
+ * pending/slot"), NAO pra impedir duas chamadas concorrentes ao gateway. Quem impede a
+ * corrida real e o CLAIM ATOMICO abaixo (`claimGatewayCall`, UPDATE condicional de uma
+ * unica statement — Postgres serializa por row-level lock implicito do proprio UPDATE,
+ * nao pelo advisory lock). portal-api e worker sao processos separados; o
+ * `withBillingSingleFlight` (Map in-process) NAO os coordena.
+ */
+async function callGatewayWithOutbox(
+  abacate: AbacatePayClient,
+  input: EnsureChargeInput,
+  row: BillingChargeRow,
+  persist: (client: import('pg').PoolClient, pix: PixCharge) => Promise<BillingChargeRow | null>,
+): Promise<BillingChargeRow> {
+  // Passo 1: CLAIM ATOMICO — marca 'calling' e COMMITA numa transacao propria, ANTES do
+  // POST. 0 linhas afetadas = outro processo/tentativa ja reivindicou (ou a cobranca ja
+  // esta 'paid') -> PixChargeGatewayInFlightError SEM chamar o gateway. O relogio usado
+  // e o do BANCO (NOW() dentro do UPDATE), nao o do processo Node — elimina dependencia
+  // de clock sincronizado entre instancias (P2 do QA).
+  const claimed = await billingCharges.withBillingSlotLock(input.slot, (client) =>
+    billingCharges.claimGatewayCall(client, row.id),
+  );
+  if (!claimed) {
+    throw new billingCharges.PixChargeGatewayInFlightError(input.slot, row.id);
+  }
+
+  // Passo 2: chama o gateway FORA de qualquer transacao de banco. Se lancar (timeout,
+  // erro), a linha PERMANECE 'calling' — e o rastro que o retry seguinte usa para nao
+  // criar uma segunda cobranca as cegas.
+  const pix = await callGateway(abacate, input, row);
+
+  // Passo 3: reabre o lock numa transacao NOVA so pra persistir o resultado e fechar o
+  // outbox ('done', dentro de attachGatewayDataById/reissueGatewayDataById).
+  const updated = await billingCharges.withBillingSlotLock(input.slot, (client) =>
+    persist(client, pix),
+  );
+
+  return updated ?? row;
 }
 
 // ─── Modelo por DATA DE VENCIMENTO (ADR 0014) ──────────────────────────────────
@@ -236,8 +329,9 @@ export interface EnsureChargeForSlotInput {
  * Pre-condicao: o chamador (portal/cron) JA checou a janela (computeBillingState) e o
  * valor > 0. Este servico NAO decide janela — so materializa a cobranca ativa.
  *
- * O gateway (rede) e chamado DENTRO da transacao do lock — o lock dura no maximo o
- * timeout do client (15s). Decisao do ADR 0014 (advisory lock > indice unico parcial).
+ * O gateway (rede) e chamado FORA da transacao do lock (SCRUM-173, outbox — ver
+ * callGatewayWithOutbox no topo do arquivo): o lock e reobtido em duas transacoes curtas
+ * (marca 'calling' / persiste resultado), nunca segura uma conexao do pool durante o POST.
  */
 export async function ensurePixChargeForSlot(
   abacate: AbacatePayClient,
@@ -250,12 +344,20 @@ export async function ensurePixChargeForSlot(
     );
   }
 
-  return withBillingSingleFlight(input.slot, () =>
-    billingCharges.withBillingSlotLock(input.slot, async (client) => {
-      // 1) Recheck sob o lock: ja existe uma pending nao-expirada? Reusa (idempotencia).
-      // O filtro do read usa o `now` REAL (expires_at > now): idempotencia intacta, nunca
+  return withBillingSingleFlight(input.slot, async () => {
+    // Fase 1 (transacao propria, sob o lock): recheck + decisao + insere-se-preciso. NENHUMA
+    // chamada ao gateway acontece aqui (SCRUM-173: o POST sai da transacao, ver
+    // callGatewayWithOutbox).
+    const phase1 = await billingCharges.withBillingSlotLock(input.slot, async (client) => {
+      // 1) Recheck sob o lock: ja existe uma pending nao-expirada RESUMIVEL? LEITURA DE
+      // GERACAO (ADR 0039, SCRUM-173 F1) — usa getResumableChargeForSlot (SEM exigir
+      // br_code), nunca getActivePendingCharge (essa e a leitura de PRODUTO do portal).
+      // Isso garante que uma linha orfa presa em gateway_call_state='calling' (outbox em
+      // voo/travado, sem br_code) seja REAPROVEITADA aqui em vez de gerar uma linha NOVA —
+      // e exatamente essa reutilizacao que evita a segunda cobranca real no gateway. O
+      // filtro do read usa o `now` REAL (expires_at > now): idempotencia intacta, nunca
       // enxerga uma linha ja-expirada como ativa.
-      const active = await billingCharges.getActivePendingCharge(input.slot, now, client);
+      const active = await billingCharges.getResumableChargeForSlot(input.slot, now, client);
 
       if (active) {
         // Horizonte da decisao de validade: agora + janela de reemissao antecipada. Uma
@@ -266,32 +368,14 @@ export async function ensurePixChargeForSlot(
         const decisionAt = aheadMs > 0 ? new Date(now.getTime() + aheadMs) : now;
         if (isChargeStillValid(active, decisionAt)) {
           log.info({ slot: input.slot, chargeId: active.id }, 'cobranca ativa valida — reuso');
-          return { charge: active, created: false, reissued: false };
+          return { kind: 'reuse' as const, row: active };
         }
-        // Pending porem expirada/sem validade: reemite REUSANDO a mesma linha (por id).
-        const legacyInput: EnsureChargeInput = {
-          slot: input.slot,
-          cycle: active.cycle,
-          amountCents: active.amount_cents,
-          description: input.description,
-          expiresInSec: input.expiresInSec,
-        };
-        const pix = await callGateway(abacate, legacyInput, active);
-        const reissued = await billingCharges.reissueGatewayDataById(client, {
-          id: active.id,
-          abacateChargeId: pix.id,
-          brCode: pix.brCode,
-          brCodeBase64: pix.brCodeBase64,
-          expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
-        });
-        log.info(
-          { slot: input.slot, chargeId: active.id, abacateChargeId: pix.id },
-          'cobranca ativa expirada — reemitida (mesma linha)',
-        );
-        return { charge: reissued ?? active, created: true, reissued: true };
+        // Pending porem expirada/sem validade: precisa reemitir (fase 2, fora daqui).
+        return { kind: 'reissue' as const, row: active };
       }
 
-      // 2) Sem pending valida: insere linha NOVA (cycle = due_period) e chama o gateway.
+      // 2) Sem pending valida: insere linha NOVA (cycle = due_period). Chamada ao gateway
+      // acontece na fase 2.
       const externalId = `${input.slot}-${input.duePeriod}`;
       const row = await billingCharges.insertPendingCharge(client, {
         slot: input.slot,
@@ -299,26 +383,53 @@ export async function ensurePixChargeForSlot(
         externalId,
         amountCents: input.amountCents,
       });
-      const legacyInput: EnsureChargeInput = {
-        slot: input.slot,
-        cycle: input.duePeriod,
-        amountCents: input.amountCents,
-        description: input.description,
-        expiresInSec: input.expiresInSec,
-      };
-      const pix = await callGateway(abacate, legacyInput, row);
-      const updated = await billingCharges.attachGatewayDataById(client, {
-        id: row.id,
+      return { kind: 'create' as const, row };
+    });
+
+    if (phase1.kind === 'reuse') {
+      return { charge: phase1.row, created: false, reissued: false };
+    }
+
+    const active = phase1.row;
+    const legacyInput: EnsureChargeInput = {
+      slot: input.slot,
+      cycle: active.cycle,
+      amountCents: active.amount_cents,
+      description: input.description,
+      expiresInSec: input.expiresInSec,
+    };
+
+    if (phase1.kind === 'reissue') {
+      const reissued = await callGatewayWithOutbox(abacate, legacyInput, active, (client, pix) =>
+        billingCharges.reissueGatewayDataById(client, {
+          id: active.id,
+          abacateChargeId: pix.id,
+          brCode: pix.brCode,
+          brCodeBase64: pix.brCodeBase64,
+          expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
+        }),
+      );
+      log.info(
+        { slot: input.slot, chargeId: active.id, abacateChargeId: reissued.abacate_charge_id },
+        'cobranca ativa expirada — reemitida (mesma linha)',
+      );
+      return { charge: reissued, created: true, reissued: true };
+    }
+
+    // phase1.kind === 'create'
+    const updated = await callGatewayWithOutbox(abacate, legacyInput, active, (client, pix) =>
+      billingCharges.attachGatewayDataById(client, {
+        id: active.id,
         abacateChargeId: pix.id,
         brCode: pix.brCode,
         brCodeBase64: pix.brCodeBase64,
         expiresAt: pix.expiresAt ? new Date(pix.expiresAt) : null,
-      });
-      log.info(
-        { slot: input.slot, chargeId: row.id, abacateChargeId: pix.id },
-        'cobranca PIX gerada (modelo por data)',
-      );
-      return { charge: updated ?? row, created: true, reissued: false };
-    }),
-  );
+      }),
+    );
+    log.info(
+      { slot: input.slot, chargeId: active.id, abacateChargeId: updated.abacate_charge_id },
+      'cobranca PIX gerada (modelo por data)',
+    );
+    return { charge: updated, created: true, reissued: false };
+  });
 }
