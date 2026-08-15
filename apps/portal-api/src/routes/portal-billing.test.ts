@@ -62,6 +62,7 @@ vi.mock('@startap/db', () => ({
   },
   billingCharges: {
     BillingSlotBusyError: class BillingSlotBusyError extends Error {},
+    PixChargeGatewayInFlightError: class PixChargeGatewayInFlightError extends Error {},
     getCharge: vi.fn(),
     getActivePendingCharge: vi.fn(),
   },
@@ -449,6 +450,50 @@ describe('GET /portal/mensalidade (flag ON — modelo por data)', () => {
     expect(body.state).toBe('sem_config');
     expect(body.charge).toBeNull();
     expect(getActivePendingChargeMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  // SCRUM-173/ADR 0039 F1 (achado do security): uma linha 'pending' SEM br_code (outbox em
+  // voo/travado — gateway_call_state='calling') NUNCA pode aparecer como cobranca pagavel
+  // pro cliente. Sem isso, o portal mostraria "cobranca pendente" sem QR — estado sem saida
+  // que, com BILLING_OVERDUE_SILENCE + GRACE_DAYS=3, cala o bot no 4o dia sem o cliente
+  // conseguir pagar.
+  it('F1: cobranca pending SEM br_code (outbox travado) vira charge=null pro cliente, NAO is_expired', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(3), amount_cents: 19900 }),
+    );
+    // Mesmo que a query real (getActivePendingCharge, F1) ja filtre br_code IS NOT NULL,
+    // este teste garante defesa em profundidade na CAMADA DE VIEW: se por qualquer motivo
+    // uma linha sem br_code chegar ate aqui, o portal NUNCA a expõe como pagavel.
+    getActivePendingChargeMock.mockResolvedValue(
+      makeCharge({ br_code: null, br_code_base64: null }),
+    );
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    const body = res.json();
+    expect(body.charge).toBeNull();
+    // NAO e is_expired=true — a linha nao esta expirada, so ainda nao pagavel. Sinal
+    // errado levaria o front a tratar como "gere de novo" quando o outbox pode
+    // completar sozinho no proximo request.
+    await app.close();
+  });
+
+  it('cobranca pending COM br_code (caminho normal) continua exposta ao cliente', async () => {
+    mockConfig.BILLING_DUE_DATE_MODEL = true;
+    getBillingMock.mockResolvedValue(
+      makeBilling({ next_due_date: dueInDays(3), amount_cents: 19900 }),
+    );
+    getActivePendingChargeMock.mockResolvedValue(makeCharge({ br_code: '00020126...PIX' }));
+
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/mensalidade' });
+
+    const body = res.json();
+    expect(body.charge).not.toBeNull();
+    expect(body.charge.br_code).toBe('00020126...PIX');
     await app.close();
   });
 });

@@ -32,7 +32,7 @@ describe('migration 081 — billing_charges.gateway_call_state (outbox SCRUM-173
     expect(SQL).toMatch(/gateway_call_state TEXT NOT NULL DEFAULT 'idle'/i);
   });
 
-  it('gateway_call_started_at e nullable (sem timestamp -> nao ambiguo, decisao do outboxCallAllowed)', () => {
+  it('gateway_call_started_at e nullable (sem timestamp -> claimGatewayCall trata como livre pra reivindicar)', () => {
     expect(SQL).toMatch(/gateway_call_started_at TIMESTAMPTZ;/i);
     expect(SQL).not.toMatch(/gateway_call_started_at TIMESTAMPTZ NOT NULL/i);
   });

@@ -32,9 +32,31 @@ class FakeAbacatePayClient {
   }
 }
 
+// ── SCRUM-173/ADR 0039 F3: classes de erro "ocupado" que o job trata como skip nao-fatal.
+class FakePixChargeGatewayInFlightError extends Error {
+  constructor(
+    public slot: string,
+    public chargeId: string,
+  ) {
+    super('pix charge gateway call in flight');
+    this.name = 'PixChargeGatewayInFlightError';
+  }
+}
+class FakeBillingSlotBusyError extends Error {
+  constructor(public slot: string) {
+    super('billing slot busy');
+    this.name = 'BillingSlotBusyError';
+  }
+}
+
 vi.mock('@startap/db', () => ({
   clientBilling: { listBilling, computeBillingState },
-  billingCharges: { listPendingChargesWithGateway, markChargeExpired },
+  billingCharges: {
+    listPendingChargesWithGateway,
+    markChargeExpired,
+    PixChargeGatewayInFlightError: FakePixChargeGatewayInFlightError,
+    BillingSlotBusyError: FakeBillingSlotBusyError,
+  },
   billingWebhookEvents: { applyPaidWebhook },
 }));
 
@@ -196,6 +218,56 @@ describe('runGenerateBillingCharges — GERACAO (so na janela)', () => {
 
     expect(r.generated).toBe(0);
     expect(ensurePixChargeForSlot).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── SCRUM-173/ADR 0039 F3 (achado do QA): "ocupado" e telemetria esperada do outbox,
+// nao erro operacional — os DOIS tipos de erro tratados como skip nao-fatal, sem poluir
+// result.errors (a metrica que se usaria pra detectar F1/F2 se eles reaparecessem).
+describe('runGenerateBillingCharges — F3: erros "ocupado" nao contam como result.errors', () => {
+  it('PixChargeGatewayInFlightError -> skip silencioso (nao incrementa errors, demais slots seguem)', async () => {
+    listBilling.mockResolvedValue([
+      { slot: 'em_voo', next_due_date: '2026-06-15', amount_cents: 19900 },
+      { slot: 'ok_depois', next_due_date: '2026-06-16', amount_cents: 9900 },
+    ]);
+    computeBillingState.mockReturnValue({ state: 'a_vencer', podeGerarPix: true });
+    ensurePixChargeForSlot
+      .mockRejectedValueOnce(new FakePixChargeGatewayInFlightError('em_voo', '1'))
+      .mockResolvedValueOnce({ charge: { id: '2' }, created: true, reissued: false });
+
+    const { runGenerateBillingCharges } = await loadJob(true);
+    const r = await runGenerateBillingCharges(NOW);
+
+    expect(r.errors).toBe(0); // NAO polui a metrica de erro operacional.
+    expect(r.generated).toBe(1); // so o slot que nao estava em voo conta.
+    expect(ensurePixChargeForSlot).toHaveBeenCalledTimes(2); // ambos os slots foram tentados.
+  });
+
+  it('BillingSlotBusyError (advisory lock ocupado) -> MESMO tratamento: skip nao-fatal, sem incrementar errors', async () => {
+    listBilling.mockResolvedValue([
+      { slot: 'lock_ocupado', next_due_date: '2026-06-15', amount_cents: 19900 },
+    ]);
+    computeBillingState.mockReturnValue({ state: 'a_vencer', podeGerarPix: true });
+    ensurePixChargeForSlot.mockRejectedValueOnce(new FakeBillingSlotBusyError('lock_ocupado'));
+
+    const { runGenerateBillingCharges } = await loadJob(true);
+    const r = await runGenerateBillingCharges(NOW);
+
+    expect(r.errors).toBe(0);
+    expect(r.generated).toBe(0);
+  });
+
+  it('erro GENUINO (nao "ocupado") continua incrementando result.errors — F3 nao esconde falha real', async () => {
+    listBilling.mockResolvedValue([
+      { slot: 'falha_real', next_due_date: '2026-06-15', amount_cents: 19900 },
+    ]);
+    computeBillingState.mockReturnValue({ state: 'a_vencer', podeGerarPix: true });
+    ensurePixChargeForSlot.mockRejectedValueOnce(new Error('gateway 500'));
+
+    const { runGenerateBillingCharges } = await loadJob(true);
+    const r = await runGenerateBillingCharges(NOW);
+
+    expect(r.errors).toBe(1);
   });
 });
 

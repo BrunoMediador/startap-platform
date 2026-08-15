@@ -254,14 +254,53 @@ export async function withBillingSlotLock<T>(
 }
 
 /**
- * Cobranca ATIVA do slot (ADR 0014): a `pending` NAO-EXPIRADA mais recente. "Nao
- * expirada" = expires_at NULL (validade desconhecida — pode precisar reemitir) OU no
- * futuro relativo a `now`. ORDER BY id DESC LIMIT 1. null se nao houver.
+ * Cobranca ATIVA do slot (ADR 0014): a `pending` NAO-EXPIRADA mais recente **e efetivamente
+ * PAGAVEL** (`br_code IS NOT NULL`). ORDER BY id DESC LIMIT 1. null se nao houver.
+ *
+ * LEITURA DE PRODUTO (ADR 0039, SCRUM-173 F1): esta e a funcao que o PORTAL usa pra decidir
+ * o que mostrar ao cliente (GET /mensalidade). Antes do fix, uma linha presa em
+ * gateway_call_state='calling' (outbox em voo/orfao — sem br_code, sem QR) casava aqui e
+ * era devolvida como "cobranca pendente" sem QR: o cliente via um estado sem saida, sem
+ * conseguir pagar, e com BILLING_OVERDUE_SILENCE + GRACE_DAYS=3 o bot dele calava no 4o
+ * dia — regressao liquida pior que a duplicacao rara que o outbox resolve. `br_code IS NOT
+ * NULL` restringe a leitura de produto a cobranca REALMENTE pagavel. A leitura usada pela
+ * GERACAO (que precisa enxergar a linha orfa pra reaproveitar em vez de duplicar) e outra
+ * funcao: `getResumableChargeForSlot`.
  *
  * Aceita um PoolClient opcional pra rodar DENTRO da transacao do advisory lock (recheck
  * sob o lock). Sem client, usa o pool global (leitura fora de lock, ex.: GET /mensalidade).
  */
 export async function getActivePendingCharge(
+  slot: string,
+  now: Date = new Date(),
+  client?: PoolClient,
+): Promise<BillingChargeRow | null> {
+  const exec = client ? client.query.bind(client) : query;
+  const r = await exec<BillingChargeRow>(
+    `SELECT ${COLUMNS} FROM billing_charges
+      WHERE slot = $1
+        AND status = 'pending'
+        AND br_code IS NOT NULL
+        AND (expires_at IS NULL OR expires_at > $2)
+      ORDER BY id DESC
+      LIMIT 1`,
+    [slot, now],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Cobranca RESUMIVEL do slot (ADR 0039, SCRUM-173 F1): a `pending` NAO-EXPIRADA mais
+ * recente, SEM exigir `br_code` (predicado ANTIGO de getActivePendingCharge, antes do
+ * F1). LEITURA DE GERACAO — usada pela fase 1 de ensurePixChargeForSlot (sob o lock) pra
+ * decidir se reaproveita uma linha existente (inclusive uma orfa presa em
+ * gateway_call_state='calling', sem br_code) em vez de inserir uma linha NOVA. E
+ * exatamente essa reutilizacao que evita a segunda cobranca real no gateway — a mesma
+ * linha e completada/reemitida, nunca duplicada.
+ *
+ * NUNCA usar esta funcao pra decidir o que mostrar ao cliente (isso e getActivePendingCharge).
+ */
+export async function getResumableChargeForSlot(
   slot: string,
   now: Date = new Date(),
   client?: PoolClient,
@@ -382,33 +421,6 @@ export async function attachGatewayDataById(
 }
 
 /**
- * OUTBOX (SCRUM-173): marca a linha como 'calling' e COMMITA numa transacao PROPRIA,
- * ANTES do POST ao gateway. E o nucleo do fix — a INTENCAO de chamar o gateway fica
- * persistida e sobrevive a um rollback/crash que aconteca DEPOIS deste commit (ex.:
- * timeout na resposta do POST). Roda sob o advisory lock do slot (chamador usa
- * withBillingSlotLock) mas em transacao separada da que fara o attach depois.
- *
- * Idempotente: sempre seguro chamar de novo (so atualiza timestamp) — o CALLER decide
- * se deve chamar com base em outboxDecision().
- */
-export async function markGatewayCalling(
-  client: PoolClient,
-  id: string,
-  now: Date = new Date(),
-): Promise<BillingChargeRow | null> {
-  const r = await client.query<BillingChargeRow>(
-    `UPDATE billing_charges
-        SET gateway_call_state      = 'calling',
-            gateway_call_started_at = $2,
-            updated_at              = NOW()
-      WHERE id = $1
-      RETURNING ${COLUMNS}`,
-    [id, now],
-  );
-  return r.rows[0] ?? null;
-}
-
-/**
  * Outra chamada ao gateway ja esta em curso (timeout ambiguo) e ainda nao passou do
  * timeout de seguranca — o caller deve tratar como ocupado (mesmo contrato de
  * BillingSlotBusyError: 503 + Retry-After no portal, log+skip no cron).
@@ -428,26 +440,62 @@ export class PixChargeGatewayInFlightError extends Error {
  * REQUEST_TIMEOUT_MS em client.ts) com margem de seguranca — se passou disso desde
  * gateway_call_started_at, a chamada anterior esta DEFINITIVAMENTE morta (nunca mais
  * vai responder nesse processo) e uma nova tentativa e liberada. Constante compilada
- * (nao env), no padrao de GRACE_DAYS em client-billing.ts — mudar exige deploy.
+ * (nao env), no padrao de GRACE_DAYS em client-billing.ts — mudar exige deploy. Passada
+ * como PARAMETRO pro SQL de claimGatewayCall (fonte unica do numero), nunca hardcoded
+ * no statement.
  */
 export const GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS = 30_000;
 
 /**
- * Decide o que fazer com uma linha existente antes de (re)chamar o gateway (SCRUM-173).
- *   - 'idle'/'done' -> livre pra chamar (ou ja tem dado do gateway, tratado por quem chama).
- *   - 'calling' + dentro do timeout de ambiguidade -> BLOQUEIA (BillingSlotBusyError-like):
- *     pode ainda estar em voo noutro processo/retry, nao cria 2a cobranca as cegas.
- *   - 'calling' + PASSOU do timeout -> considera a tentativa anterior morta; libera nova
- *     chamada (aceita o risco raro de 2 POSTs no gateway se a 1a tentativa reviver depois
- *     do timeout — sem endpoint de busca por externalId na AbacatePay nao ha como
- *     confirmar; ver README do pacote "Endpoints confirmados"). A reconciliacao por
- *     external_id no webhook (SCRUM-139) impede DUPLO CREDITO mesmo nesse caso raro.
+ * CLAIM ATOMICO da chamada ao gateway (ADR 0039, SCRUM-173 F2 — corrige TOCTOU real do
+ * design anterior). O advisory lock (`withBillingSlotLock`) e `xact`-scoped: libera no
+ * COMMIT da fase 1, ANTES do POST ao gateway. Entre um caller avaliar "posso chamar?" e
+ * de fato marcar 'calling', o slot NAO esta protegido por lock nenhum — portal-api e
+ * worker sao PROCESSOS SEPARADOS (o single-flight local e um Map in-process, nao os
+ * coordena). Duas tentativas concorrentes (ex.: cron na hora cheia + clique do cliente)
+ * podiam as duas passar um check "outboxCallAllowed" e as duas chamar o gateway —
+ * reintroduzindo a duplicacao que o outbox existe pra evitar.
+ *
+ * O fix e um UPDATE condicional de UMA UNICA STATEMENT: o WHERE decide atomicamente se
+ * a linha esta livre pra reivindicar, e o SET so aplica se a condicao bateu — Postgres
+ * nao intercala duas UPDATE na MESMA linha (row-level lock implicito do proprio UPDATE).
+ * 0 linhas afetadas = outro processo ja reivindicou (ou a linha esta 'paid') -> o CALLER
+ * lanca PixChargeGatewayInFlightError.
+ *
+ * RELOGIO DO BANCO, nao do processo (P2 do QA): a comparacao de "passou do timeout de
+ * ambiguidade" roda dentro do SQL com NOW() do Postgres — o UNICO relogio compartilhado
+ * entre portal-api e worker (processos/instancias distintas podem ter clock skew entre
+ * si). `GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS` continua sendo a fonte unica do numero, so que
+ * passado como parametro pro SQL em vez de comparado em JS.
+ *
+ * Duas clausulas OBRIGATORIAS no WHERE (nao sao apenas otimizacao):
+ *   - `gateway_call_started_at IS NULL` -> sem isso, uma linha que virou 'calling' sem
+ *     timestamp gravado (nunca deveria acontecer, mas e estado alcancavel por bug futuro)
+ *     trava PARA SEMPRE — a comparacao com NOW() nunca "vence" contra NULL.
+ *   - `status <> 'paid'` -> nunca reivindica uma chamada ao gateway pra uma cobranca JA
+ *     PAGA (nao ha por que rechamar o gateway pra uma linha que ja foi creditada).
+ *
+ * Retorna a linha atualizada (claim conseguido) ou null (perdeu a corrida).
  */
-export function outboxCallAllowed(row: BillingChargeRow, now: Date = new Date()): boolean {
-  if (row.gateway_call_state !== 'calling') return true;
-  if (!row.gateway_call_started_at) return true; // defensivo: 'calling' sem timestamp -> nao trava
-  const elapsedMs = now.getTime() - row.gateway_call_started_at.getTime();
-  return elapsedMs > GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS;
+export async function claimGatewayCall(
+  client: PoolClient,
+  id: string,
+  ambiguousTimeoutMs: number = GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS,
+): Promise<BillingChargeRow | null> {
+  const r = await client.query<BillingChargeRow>(
+    `UPDATE billing_charges
+        SET gateway_call_state      = 'calling',
+            gateway_call_started_at = NOW(),
+            updated_at              = NOW()
+      WHERE id = $1
+        AND status <> 'paid'
+        AND (gateway_call_state <> 'calling'
+             OR gateway_call_started_at IS NULL
+             OR gateway_call_started_at < NOW() - ($2::int * INTERVAL '1 millisecond'))
+      RETURNING ${COLUMNS}`,
+    [id, ambiguousTimeoutMs],
+  );
+  return r.rows[0] ?? null;
 }
 
 /**
