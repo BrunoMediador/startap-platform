@@ -6,9 +6,6 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 # Nunca cancela backup em andamento; enfileira se houver sobreposição.
 concurrency:
   group: backup-postgres
@@ -16,171 +13,199 @@ concurrency:
 
 jobs:
   backup:
-    name: Restricted pg_dump → encrypted offsite
-    # Esta condição é só defesa em profundidade. O controle de confiança é o
-    # environment GitHub configurado externamente para aceitar apenas main.
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       vars.BACKUP_RESILIENCE_PRODUCER_ENABLED != 'true')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    environment: backup-legacy-main
+    name: pg_dump → startap-backups
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout pinned workflow inputs
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-
-      - name: Configure dump-only VPS identity and offsite deploy key
-        shell: bash
-        env:
-          LEGACY_DUMP_SSH_KEY: ${{ secrets.BACKUP_LEGACY_DUMP_SSH_KEY }}
-          BACKUP_DEPLOY_KEY: ${{ secrets.BACKUP_REPO_SSH_KEY }}
+      - name: Setup SSH (servidor VPS + deploy key startap-backups)
         run: |
-          set -Eeuo pipefail
-          umask 077
-          test -n "$LEGACY_DUMP_SSH_KEY"
-          test -n "$BACKUP_DEPLOY_KEY"
-          install -d -m 0700 "$RUNNER_TEMP/backup-ssh"
-          printf '%s\n' "$LEGACY_DUMP_SSH_KEY" > "$RUNNER_TEMP/backup-ssh/legacy_dump_ed25519"
-          printf '%s\n' "$BACKUP_DEPLOY_KEY" > "$RUNNER_TEMP/backup-ssh/offsite_write_ed25519"
-          install -m 0600 .github/backup-known_hosts "$RUNNER_TEMP/backup-ssh/known_hosts"
-          chmod 0600 "$RUNNER_TEMP/backup-ssh/"*_ed25519 "$RUNNER_TEMP/backup-ssh/known_hosts"
-          ssh-keygen -F 187.77.242.220 -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
-          ssh-keygen -F github.com -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
-          ssh-keygen -l -f "$RUNNER_TEMP/backup-ssh/known_hosts" >/dev/null
+          mkdir -p ~/.ssh
 
-          printf '%s\n' \
-            'Host backup-vps' \
-            '  HostName 187.77.242.220' \
-            '  Port 22' \
-            '  User startap-backup-legacy-dump' \
-            "  IdentityFile $RUNNER_TEMP/backup-ssh/legacy_dump_ed25519" \
-            '  BatchMode yes' \
-            '  IdentitiesOnly yes' \
-            '  StrictHostKeyChecking yes' \
-            "  UserKnownHostsFile $RUNNER_TEMP/backup-ssh/known_hosts" \
-            '  ConnectTimeout 10' \
-            '  ConnectionAttempts 1' \
-            'Host github.com' \
-            '  User git' \
-            "  IdentityFile $RUNNER_TEMP/backup-ssh/offsite_write_ed25519" \
-            '  BatchMode yes' \
-            '  IdentitiesOnly yes' \
-            '  StrictHostKeyChecking yes' \
-            "  UserKnownHostsFile $RUNNER_TEMP/backup-ssh/known_hosts" \
-            '  ConnectTimeout 10' \
-            '  ConnectionAttempts 1' > "$RUNNER_TEMP/backup-ssh/config"
-          chmod 0600 "$RUNNER_TEMP/backup-ssh/config"
+          # Chave do servidor VPS (pg_dump)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts
 
-          ssh -G -F "$RUNNER_TEMP/backup-ssh/config" backup-vps \
-            > "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Fxq 'hostname 187.77.242.220' "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Fxq 'user startap-backup-legacy-dump' "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Fxq 'port 22' "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/vps.effective"
-          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/vps.effective"
+          # Deploy key do repo startap-backups (push)
+          echo "${{ secrets.BACKUP_REPO_SSH_KEY }}" > ~/.ssh/backup_deploy
+          chmod 600 ~/.ssh/backup_deploy
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-          ssh -G -F "$RUNNER_TEMP/backup-ssh/config" github.com \
-            > "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          grep -Fxq 'hostname github.com' "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          grep -Fxq 'user git' "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          grep -Fxq 'batchmode yes' "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          grep -Fxq 'identitiesonly yes' "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          grep -Eq '^stricthostkeychecking (yes|true)$' "$RUNNER_TEMP/backup-ssh/offsite.effective"
+          # Config SSH pra rotear host github.com→backup_deploy
+          cat >> ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/backup_deploy
+            IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
 
-      - name: Checkout startap-backups with the single-repository key
-        shell: bash
+      - name: Checkout startap-backups (via SSH)
         run: |
-          set -Eeuo pipefail
-          export GIT_SSH_COMMAND="ssh -F $RUNNER_TEMP/backup-ssh/config"
-          timeout --signal=TERM --kill-after=10s 15m git clone \
-            --single-branch --branch main \
-            git@github.com:BrunoMediador/startap-backups.git startap-backups
+          git clone git@github.com:BrunoMediador/startap-backups.git startap-backups
 
-      - name: Fixed remote dump, integrity validation, and mandatory age encryption
+      - name: Dump + compress (+ cifra opcional com age)
         id: dump
-        shell: bash
         env:
+          # Chave PÚBLICA age (cifra assimétrica). GUARD:
+          #   - AUSENTE/vazia → gzip puro (.sql.gz), byte-idêntico ao histórico.
+          #   - presente      → cifra o dump ANTES do commit (.sql.gz.age); só a
+          #                     chave PRIVADA (offline, com o Bruno) decifra.
+          # Ligar a cripto = só cadastrar este secret no repo (sem deploy).
+          # Passo a passo: docs/empresa/backup-cripto-SETUP.md (repo time-empresa-automacao).
           BACKUP_AGE_PUBKEY: ${{ secrets.BACKUP_AGE_PUBKEY }}
         run: |
-          set -Eeuo pipefail
-          umask 077
-          AGE_VERSION='1.3.1'
-          AGE_ARCHIVE_SHA256='bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377'
-          AGE_BINARY_SHA256='2e305637f2a0555305e21c17fb74446acbb39b53135d43d4b744e50c287133a5'
-          TIMESTAMP="$(date -u '+%Y-%m-%d-%H%M%S')"
-          YEAR="$(date -u '+%Y')"
-          MONTH="$(date -u '+%m')"
+          TIMESTAMP=$(date -u '+%Y-%m-%d-%H%M%S')
+          YEAR=$(date -u '+%Y')
+          MONTH=$(date -u '+%m')
           OUTDIR="startap-backups/dumps/${YEAR}/${MONTH}"
+
+          mkdir -p "${OUTDIR}"
+
+          # Dump + gzip para arquivo TEMPORÁRIO fora do repo. A validação de
+          # integridade (SCRUM-70) roda SEMPRE sobre o .gz em CLARO — depois de
+          # cifrado, gzip -t e o grep do marcador não conseguem inspecionar o .age.
           TMPGZ="${RUNNER_TEMP}/${TIMESTAMP}.sql.gz"
-          RECIPIENT_FILE="${RUNNER_TEMP}/age-recipient"
-          AGE_STDERR="${RUNNER_TEMP}/age.stderr"
-          ARCHIVE="${RUNNER_TEMP}/age.tar.gz"
-          cleanup_sensitive() {
-            rm -f -- "$TMPGZ" "$RECIPIENT_FILE" "$AGE_STDERR" "$ARCHIVE"
-          }
-          trap cleanup_sensitive EXIT INT TERM HUP
 
-          test -n "$BACKUP_AGE_PUBKEY"
-          printf '%s\n' "$BACKUP_AGE_PUBKEY" > "$RECIPIENT_FILE"
-          mkdir -p "$OUTDIR"
+          # pg_dump roda dentro do container; falha visível se SSH cair
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes root@187.77.242.220 \
+            "docker exec automacoes-postgres-1 pg_dump \
+              -U startap_user \
+              -d startap_database \
+              --no-owner --no-acl" \
+            | gzip > "${TMPGZ}"
 
-          curl --fail --silent --show-error --location \
-            "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz" \
-            -o "$ARCHIVE"
-          printf '%s  %s\n' "$AGE_ARCHIVE_SHA256" "$ARCHIVE" | sha256sum -c -
-          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP"
-          AGE_BIN="$RUNNER_TEMP/age/age"
-          printf '%s  %s\n' "$AGE_BINARY_SHA256" "$AGE_BIN" | sha256sum -c -
-          test "$("$AGE_BIN" --version)" = "v${AGE_VERSION}"
-
-          # A chave SSH só pode alcançar o forced command `dump`; container,
-          # database, role e argumentos são definidos no helper root da VPS.
-          timeout --signal=TERM --kill-after=30s 32m \
-            ssh -F "$RUNNER_TEMP/backup-ssh/config" backup-vps dump | gzip -n > "$TMPGZ"
-          test "$(stat -c%s "$TMPGZ")" -ge 1024
-          gzip -t "$TMPGZ"
-          gzip -dc "$TMPGZ" | sed -n '1,20p' | grep -Fq 'PostgreSQL database dump'
-          gzip -dc "$TMPGZ" | tail -n 20 | grep -Fq 'PostgreSQL database dump complete'
-
-          OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz.age"
-          if ! "$AGE_BIN" -R "$RECIPIENT_FILE" -o "$OUTFILE" "$TMPGZ" 2>"$AGE_STDERR"; then
-            rm -f -- "$OUTFILE" "$AGE_STDERR"
-            echo 'age encryption failed; detail withheld' >&2
+          # Confirma que o arquivo não está vazio
+          SIZE=$(stat -c%s "${TMPGZ}")
+          if [ "${SIZE}" -lt 1024 ]; then
+            echo "ERRO: dump gerado é menor que 1 KB (${SIZE} bytes) — suspeito de falha silenciosa"
             exit 1
           fi
-          rm -f -- "$TMPGZ" "$RECIPIENT_FILE" "$AGE_STDERR"
-          test -s "$OUTFILE"
-          FINAL_SIZE="$(stat -c%s "$OUTFILE")"
+
+          # Integridade do gzip: pega stream corrompido/truncado no transporte SSH.
+          if ! gzip -t "${TMPGZ}"; then
+            echo "ERRO: gzip corrompido — dump inválido"
+            exit 1
+          fi
+
+          # Marcador de conclusão do pg_dump: garante dump COMPLETO (não truncado no meio)
+          # e que o conteúdo é mesmo um dump — não uma mensagem de erro do docker/ssh
+          # que passou pelo pipe e ainda assim ficou >1 KB.
+          COMPLETE=$(gzip -dc "${TMPGZ}" | grep -c "PostgreSQL database dump complete" || true)
+          if [ "${COMPLETE}" -lt 1 ]; then
+            echo "ERRO: dump sem marcador de conclusão do pg_dump — truncado ou conteúdo inválido"
+            exit 1
+          fi
+
+          # GUARD de criptografia — só APÓS o dump validado.
+          if [ -n "${BACKUP_AGE_PUBKEY}" ]; then
+            # age só é necessário quando a cripto está ligada; instala sob demanda.
+            if ! command -v age >/dev/null 2>&1; then
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends age
+            fi
+            OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz.age"
+            age -r "${BACKUP_AGE_PUBKEY}" -o "${OUTFILE}" "${TMPGZ}"
+            rm -f "${TMPGZ}"
+            echo "backup CIFRADO com age → ${OUTFILE}"
+          else
+            # Sem secret → comportamento histórico: gzip puro em claro.
+            # mv preserva os bytes do stream gzip (idêntico a 'gzip > OUTFILE').
+            OUTFILE="${OUTDIR}/${TIMESTAMP}.sql.gz"
+            mv "${TMPGZ}" "${OUTFILE}"
+            echo "backup NÃO cifrado (secret BACKUP_AGE_PUBKEY ausente) → ${OUTFILE}"
+          fi
+
+          # Tamanho do arquivo FINAL que vai ao commit (gz ou age).
+          FINAL_SIZE=$(stat -c%s "${OUTFILE}")
+
           echo "timestamp=${TIMESTAMP}" >> "$GITHUB_OUTPUT"
           echo "outfile=${OUTFILE}" >> "$GITHUB_OUTPUT"
-          echo "relative=${OUTFILE#startap-backups/}" >> "$GITHUB_OUTPUT"
           echo "size=${FINAL_SIZE}" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push encrypted artifact only
-        shell: bash
+      - name: Commit e push
         run: |
-          set -Eeuo pipefail
           cd startap-backups
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add -- "${{ steps.dump.outputs.relative }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dumps/
           git commit -m "backup: ${{ steps.dump.outputs.timestamp }} UTC ($(numfmt --to=iec ${{ steps.dump.outputs.size }}))"
-          export GIT_SSH_COMMAND="ssh -F $RUNNER_TEMP/backup-ssh/config"
-          timeout --signal=TERM --kill-after=10s 15m git push origin HEAD:main
+          git push
 
-      - name: Remove ephemeral SSH material
+      - name: Limpa chaves SSH
         if: always()
-        shell: bash
+        run: rm -f ~/.ssh/id_ed25519 ~/.ssh/backup_deploy ~/.ssh/config
+
+  # ── Alerta de falha (SCRUM-70) ──────────────────────────────────────────────
+  # JOB SEPARADO de propósito. Quando o runner GitHub-hosted não é adquirido, o
+  # job `backup` é CANCELADO sem rodar NENHUM step (foi o caso de 09/07:
+  # "job was not acquired by Runner of type hosted even after multiple attempts").
+  # Um `if: failure()` DENTRO do job backup nunca rodaria nesse cenário — sem
+  # runner, nenhum step existe. Um job separado re-solicita runner e cobre tanto
+  # falha de step quanto job cancelado por falta de runner.
+  # `always() && result != 'success'` cobre failure, cancelled E skipped.
+  # Transporte = sessão ALERTAS, disparada SERVER-SIDE na VPS pelo SSH que este
+  # workflow já usa → a chave WAHA e os números internos (PII) NUNCA entram em
+  # secret do GitHub nem no YAML; ficam só dentro da VPS.
+  notify-failure:
+    name: Alerta de falha via ALERTAS
+    needs: backup
+    if: ${{ always() && needs.backup.result != 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispara alerta ALERTAS (server-side na VPS)
         run: |
-          rm -f -- "$RUNNER_TEMP/backup-ssh/legacy_dump_ed25519" \
-            "$RUNNER_TEMP/backup-ssh/offsite_write_ed25519" \
-            "$RUNNER_TEMP/backup-ssh/known_hosts" \
-            "$RUNNER_TEMP/backup-ssh/config" \
-            "$RUNNER_TEMP/backup-ssh/vps.effective" \
-            "$RUNNER_TEMP/backup-ssh/offsite.effective"
-          rmdir -- "$RUNNER_TEMP/backup-ssh" 2>/dev/null || true
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 187.77.242.220 >> ~/.ssh/known_hosts 2>/dev/null
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RESULT="${{ needs.backup.result }}"
+
+          # Tudo abaixo roda DENTRO da VPS: resolve o remetente (ALERTAS via
+          # alert_config.sender_slot) e os destinatários internos (alert_recipients
+          # habilitados) no Postgres, e envia pelo worker — que já tem WAHA_URL e
+          # WAHA_API_KEY no próprio env. Número e chave não saem da VPS.
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes root@187.77.242.220 \
+            "RUN_URL='${RUN_URL}' RESULT='${RESULT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          MSG=$(printf '%s\n' \
+            "🔴 BACKUP POSTGRES FALHOU (${RESULT})" \
+            "O backup diário do Postgres NÃO completou hoje — sem dump novo no repo startap-backups." \
+            "Sem ponto de restauração de hoje. Rodar backup manual e checar o runner do GitHub Actions." \
+            "Run: ${RUN_URL}")
+
+          PSQL="docker exec automacoes-postgres-1 psql -U startap_user -d startap_database -tAc"
+          SESSION=$($PSQL "SELECT bc.waha_sessao FROM alert_config ac JOIN bot_config bc ON bc.slot = ac.sender_slot WHERE ac.id = 1" | tr -d '[:space:]')
+          PHONES=$($PSQL "SELECT phone FROM alert_recipients WHERE enabled = TRUE")
+
+          if [ -z "${SESSION}" ] || [ -z "${PHONES}" ]; then
+            echo "ABORT: remetente ('${SESSION}') ou destinatarios internos ausentes"
+            exit 1
+          fi
+
+          SENT=0
+          for P in ${PHONES}; do
+            if docker exec \
+                -e ALERT_CHAT="${P}@c.us" \
+                -e ALERT_TEXT="${MSG}" \
+                -e ALERT_SESSION="${SESSION}" \
+                startap-worker node -e 'const u=process.env.WAHA_URL,k=process.env.WAHA_API_KEY;fetch(u+"/api/sendText",{method:"POST",headers:{"Content-Type":"application/json","X-Api-Key":k},body:JSON.stringify({session:process.env.ALERT_SESSION,chatId:process.env.ALERT_CHAT,text:process.env.ALERT_TEXT})}).then(r=>{if(!r.ok){console.error("waha-status",r.status);process.exit(1)}process.exit(0)}).catch(e=>{console.error(e.code||e.message);process.exit(1)})'; then
+              SENT=$((SENT+1))
+            else
+              echo "falha ao enviar alerta para 1 destinatario"
+            fi
+          done
+
+          echo "alertas ALERTAS enviados: ${SENT}"
+          # Falha o step (visibilidade nativa + e-mail) se NENHUM alerta saiu.
+          [ "${SENT}" -ge 1 ]
+          REMOTE
+
+      - name: Limpa chave SSH
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
