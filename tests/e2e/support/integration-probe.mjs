@@ -53,12 +53,25 @@ if (!abacatePaths.includes('/v2/transparents/create')) {
 const client = new Client({ connectionString: process.env.E2E_PG_URL });
 await client.connect();
 try {
+  // NAO reimplementa a contagem EXATA de migrations aqui (SCRUM-173/181): esse guard
+  // forte e derivado (baseline + contagem real de packages/db/migrations/*.sql) ja roda
+  // em migrate-e2e.sh, ANTES deste probe (compose.yml: depends_on migrator com
+  // service_completed_successfully — se o guard do migrator falhar, este container nem
+  // inicia). Um numero hardcoded AQUI TAMBEM quebraria a cada migration nova (foi
+  // exatamente o que aconteceu com a 081 do SCRUM-173) e a imagem runtime deste container
+  // nem tem os .sql fonte pra contar de novo (o Dockerfile so copia dist/, nao
+  // packages/db/migrations/). Esta checagem prova so que o schema FOI migrado (nao
+  // esta vazio/incompleto por algum motivo o migrator nao pegou) — a garantia forte de
+  // "= N migrations exatas" e do guard derivado em migrate-e2e.sh.
   const migrationResult = await client.query(
-    'SELECT count(*)::text AS count FROM schema_migrations',
+    'SELECT count(*)::int AS count FROM schema_migrations',
   );
-  if (migrationResult.rows[0]?.count !== '80') {
+  const migrationCount = migrationResult.rows[0]?.count ?? 0;
+  if (migrationCount < 2) {
+    // < 2 = nem o baseline (001) + alguma migration versionada aplicaram — schema vazio
+    // ou o migrator não rodou de fato (o depends_on deveria ter impedido isso).
     throw new Error(
-      `schema_migrations esperado=80 obtido=${migrationResult.rows[0]?.count ?? 'none'}`,
+      `schema_migrations vazio/incompleto: esperado >=2 (baseline+versionadas), obtido=${migrationCount}`,
     );
   }
   await client.query(
