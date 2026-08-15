@@ -73,8 +73,16 @@ function chargeView(charge: BillingChargeRow | null, now = new Date()) {
   };
 }
 
+/**
+ * 503 + Retry-After pros dois casos de "ocupado" (nao gera 2a cobranca as cegas):
+ * advisory lock do slot ocupado (BillingSlotBusyError) ou chamada ao gateway em voo por
+ * outra tentativa recente (PixChargeGatewayInFlightError, SCRUM-173 outbox).
+ */
 function replyBillingBusy(reply: FastifyReply, err: unknown): FastifyReply | null {
-  if (!(err instanceof billingCharges.BillingSlotBusyError)) return null;
+  const busy =
+    err instanceof billingCharges.BillingSlotBusyError ||
+    err instanceof billingCharges.PixChargeGatewayInFlightError;
+  if (!busy) return null;
   reply.header('Retry-After', '1');
   return reply.code(503).send({ error: 'billing_busy', retry_after_seconds: 1 });
 }

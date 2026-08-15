@@ -53,12 +53,22 @@ export interface BillingChargeRow {
    * (getChargeStatus) pra fechar o caso "QR velho pago + webhook PERDIDO". '{}' por padrao.
    */
   superseded_charge_ids: string[];
+  /**
+   * Estado da chamada ao gateway (SCRUM-173, migration 081): 'idle' (nenhuma chamada em
+   * curso ou nunca iniciada), 'calling' (POST em voo — commitado ANTES do efeito externo,
+   * sobrevive a um rollback se o processo morrer/perder a resposta), 'done' (attach
+   * concluido). Ve outboxState() no service pra decisao de reuso/bloqueio.
+   */
+  gateway_call_state: 'idle' | 'calling' | 'done';
+  /** Quando a chamada 'calling' comecou. null se 'idle'/'done'. Base do timeout de ambiguidade. */
+  gateway_call_started_at: Date | null;
 }
 
 const COLUMNS = `id::text AS id, slot, cycle, external_id, abacate_charge_id,
   amount_cents, paid_amount_cents, status, br_code, br_code_base64,
   expires_at, paid_at, created_at, updated_at,
-  COALESCE(superseded_charge_ids, '{}') AS superseded_charge_ids`;
+  COALESCE(superseded_charge_ids, '{}') AS superseded_charge_ids,
+  gateway_call_state, gateway_call_started_at`;
 
 /** Le deterministicamente a cobranca mais recente de um (slot, ciclo). */
 export async function getCharge(
@@ -343,7 +353,8 @@ export async function markChargeExpired(
 /**
  * Preenche os dados do gateway numa linha ja criada, chaveando por `id` (modelo novo).
  * Espelha attachGatewayData mas por id (a identidade nao e mais (slot,cycle)).
- * Recebe o client da transacao do lock.
+ * Recebe o client da transacao do lock. Fecha o outbox (SCRUM-173): volta
+ * gateway_call_state para 'done' — a chamada em curso terminou com sucesso.
  */
 export async function attachGatewayDataById(
   client: PoolClient,
@@ -357,16 +368,86 @@ export async function attachGatewayDataById(
 ): Promise<BillingChargeRow | null> {
   const r = await client.query<BillingChargeRow>(
     `UPDATE billing_charges
-        SET abacate_charge_id = $2,
-            br_code           = $3,
-            br_code_base64    = $4,
-            expires_at        = $5,
-            updated_at        = NOW()
+        SET abacate_charge_id  = $2,
+            br_code            = $3,
+            br_code_base64     = $4,
+            expires_at         = $5,
+            gateway_call_state = 'done',
+            updated_at         = NOW()
       WHERE id = $1
       RETURNING ${COLUMNS}`,
     [input.id, input.abacateChargeId, input.brCode, input.brCodeBase64, input.expiresAt],
   );
   return r.rows[0] ?? null;
+}
+
+/**
+ * OUTBOX (SCRUM-173): marca a linha como 'calling' e COMMITA numa transacao PROPRIA,
+ * ANTES do POST ao gateway. E o nucleo do fix — a INTENCAO de chamar o gateway fica
+ * persistida e sobrevive a um rollback/crash que aconteca DEPOIS deste commit (ex.:
+ * timeout na resposta do POST). Roda sob o advisory lock do slot (chamador usa
+ * withBillingSlotLock) mas em transacao separada da que fara o attach depois.
+ *
+ * Idempotente: sempre seguro chamar de novo (so atualiza timestamp) — o CALLER decide
+ * se deve chamar com base em outboxDecision().
+ */
+export async function markGatewayCalling(
+  client: PoolClient,
+  id: string,
+  now: Date = new Date(),
+): Promise<BillingChargeRow | null> {
+  const r = await client.query<BillingChargeRow>(
+    `UPDATE billing_charges
+        SET gateway_call_state      = 'calling',
+            gateway_call_started_at = $2,
+            updated_at              = NOW()
+      WHERE id = $1
+      RETURNING ${COLUMNS}`,
+    [id, now],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Outra chamada ao gateway ja esta em curso (timeout ambiguo) e ainda nao passou do
+ * timeout de seguranca — o caller deve tratar como ocupado (mesmo contrato de
+ * BillingSlotBusyError: 503 + Retry-After no portal, log+skip no cron).
+ */
+export class PixChargeGatewayInFlightError extends Error {
+  constructor(
+    readonly slot: string,
+    readonly chargeId: string,
+  ) {
+    super('pix charge gateway call in flight');
+    this.name = 'PixChargeGatewayInFlightError';
+  }
+}
+
+/**
+ * Timeout de ambiguidade (SCRUM-173): acima do timeout HTTP do client AbacatePay (15s,
+ * REQUEST_TIMEOUT_MS em client.ts) com margem de seguranca — se passou disso desde
+ * gateway_call_started_at, a chamada anterior esta DEFINITIVAMENTE morta (nunca mais
+ * vai responder nesse processo) e uma nova tentativa e liberada. Constante compilada
+ * (nao env), no padrao de GRACE_DAYS em client-billing.ts — mudar exige deploy.
+ */
+export const GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS = 30_000;
+
+/**
+ * Decide o que fazer com uma linha existente antes de (re)chamar o gateway (SCRUM-173).
+ *   - 'idle'/'done' -> livre pra chamar (ou ja tem dado do gateway, tratado por quem chama).
+ *   - 'calling' + dentro do timeout de ambiguidade -> BLOQUEIA (BillingSlotBusyError-like):
+ *     pode ainda estar em voo noutro processo/retry, nao cria 2a cobranca as cegas.
+ *   - 'calling' + PASSOU do timeout -> considera a tentativa anterior morta; libera nova
+ *     chamada (aceita o risco raro de 2 POSTs no gateway se a 1a tentativa reviver depois
+ *     do timeout — sem endpoint de busca por externalId na AbacatePay nao ha como
+ *     confirmar; ver README do pacote "Endpoints confirmados"). A reconciliacao por
+ *     external_id no webhook (SCRUM-139) impede DUPLO CREDITO mesmo nesse caso raro.
+ */
+export function outboxCallAllowed(row: BillingChargeRow, now: Date = new Date()): boolean {
+  if (row.gateway_call_state !== 'calling') return true;
+  if (!row.gateway_call_started_at) return true; // defensivo: 'calling' sem timestamp -> nao trava
+  const elapsedMs = now.getTime() - row.gateway_call_started_at.getTime();
+  return elapsedMs > GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS;
 }
 
 /**
@@ -398,12 +479,13 @@ export async function reissueGatewayDataById(
               THEN array_append(COALESCE(superseded_charge_ids, '{}'), abacate_charge_id)
               ELSE COALESCE(superseded_charge_ids, '{}')
             END,
-            abacate_charge_id = $2,
-            br_code           = $3,
-            br_code_base64    = $4,
-            expires_at        = $5,
-            status            = 'pending',
-            updated_at        = NOW()
+            abacate_charge_id  = $2,
+            br_code            = $3,
+            br_code_base64     = $4,
+            expires_at         = $5,
+            status             = 'pending',
+            gateway_call_state = 'done',
+            updated_at         = NOW()
       WHERE id = $1 AND status <> 'paid'
       RETURNING ${COLUMNS}`,
     [input.id, input.abacateChargeId, input.brCode, input.brCodeBase64, input.expiresAt],

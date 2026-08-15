@@ -35,6 +35,24 @@ validado no uso; segredo de feature ativa = obrigatorio.*
 - Migration `042_billing_webhook_events.sql`: tabela `billing_webhook_events` (dedupe, payload redigido) + coluna `flow_clones.suspended_kind`.
 - Config (opcional no boot, C9): `ABACATEPAY_WEBHOOK_QUERY_SECRET`, `ABACATEPAY_WEBHOOK_SECRET` em `apps/api/src/config.schema.ts`.
 
+## Outbox da chamada ao gateway (SCRUM-173)
+
+Antes: o INSERT da linha `pending` e o `POST /v2/transparents/create` rodavam na MESMA
+transação (advisory lock). Um timeout na resposta (gateway já tinha CONFIRMADO) abortava a
+transação, desfazia o INSERT, e o retry criava uma SEGUNDA cobrança real — sem rastro local
+do que aconteceu (201 linhas em prod, ZERO órfãs, era o SINTOMA da perda, não saúde).
+
+Agora `service.ts` usa `callGatewayWithOutbox`: (1) marca `billing_charges.gateway_call_state
+= 'calling'` numa transação PRÓPRIA que COMMITA antes do POST; (2) chama o gateway FORA de
+transação; (3) reabre o lock numa transação NOVA pra persistir o resultado e fechar em
+`'done'`. Um retry que encontre `'calling'` recente (dentro de `GATEWAY_CALL_AMBIGUOUS_TIMEOUT_MS`,
+30s) recebe `PixChargeGatewayInFlightError` — NÃO chama o gateway de novo. Migration 081.
+
+**Limitação aceita:** a AbacatePay não expõe busca por `externalId` (só create/check-by-id/
+simulate). Depois do timeout de ambiguidade não há como confirmar se a tentativa anterior
+criou de fato uma cobrança — o pior caso residual é um PIX `pending` órfão no gateway (sem
+duplo-crédito: o webhook casa por `external_id`, SCRUM-139, e nunca reescreve `paid`).
+
 ## O que NAO tem aqui (fases seguintes)
 
 - Endpoint do portal (`GET /portal/billing/current`) + UI → **F3**.

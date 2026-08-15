@@ -151,6 +151,14 @@ export async function runGenerateBillingCharges(
         );
       }
     } catch (err) {
+      // Outbox em voo (SCRUM-173): outra tentativa recente ainda pode confirmar no
+      // gateway — nao e erro, e o mecanismo de anti-duplicacao funcionando. Loga em
+      // nivel mais baixo e NAO conta como erro operacional (a proxima execucao horaria
+      // resolve sozinha).
+      if (err instanceof billingCharges.PixChargeGatewayInFlightError) {
+        log.info({ slot }, 'chamada ao gateway em voo (outbox) — pulado nesta execucao');
+        continue;
+      }
       result.errors += 1;
       log.error(
         { slot, err: err instanceof Error ? err.message : 'erro' },
