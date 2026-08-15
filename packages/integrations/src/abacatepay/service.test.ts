@@ -39,6 +39,31 @@ const {
       this.slot = slot;
     }
   }
+  // Fixture MINIMA porem COMPLETA (todo campo NOT NULL da coluna real preenchido — a
+  // coluna e NOT NULL DEFAULT 'idle', 'undefined' nunca acontece em runtime). Vive aqui
+  // dentro do vi.hoisted (nao pode importar makeRow de fora, que so existe apos o hoist;
+  // mas TIPOS sobrevivem ao apagamento de runtime do hoisting — import type funciona).
+  function makeClaimedRow(): import('@startap/db').BillingChargeRow {
+    return {
+      id: '1',
+      slot: 'barbearia-cirilo',
+      cycle: '2026-06',
+      external_id: 'barbearia-cirilo-2026-06',
+      abacate_charge_id: null,
+      amount_cents: 19900,
+      paid_amount_cents: null,
+      status: 'pending',
+      br_code: null,
+      br_code_base64: null,
+      expires_at: null,
+      paid_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      superseded_charge_ids: [],
+      gateway_call_state: 'calling',
+      gateway_call_started_at: new Date(),
+    };
+  }
   return {
     getCharge: vi.fn(),
     withBillingSlotLock: vi.fn(),
@@ -46,12 +71,19 @@ const {
     insertPendingCharge: vi.fn(),
     attachGatewayDataById: vi.fn(),
     reissueGatewayDataById: vi.fn(),
-    // Default: claim sempre concedido (retorna a propria row recebida, marcada 'calling').
+    // Default: claim sempre concedido (retorna uma row COMPLETA, marcada 'calling'). O
+    // caller (callGatewayWithOutbox) so faz truthy-check (`if (!claimed)`) — nunca le
+    // campo a campo — mas o mock fica fiel ao shape real de BillingChargeRow (NOT NULL).
+    // Tipado explicitamente como Promise<BillingChargeRow | null> pra aceitar tanto a
+    // fixture completa quanto `null` (claim perdido) SEM afrouxar BillingChargeRow.
     // Os testes de corrida sobrescrevem com mockResolvedValueOnce(null) pra simular "outro
     // processo ja reivindicou" (0 linhas afetadas pelo UPDATE condicional real).
-    claimGatewayCall: vi.fn(async (_client: unknown, _id: string) => ({
-      gateway_call_state: 'calling',
-    })),
+    claimGatewayCall: vi.fn(
+      async (
+        _client: unknown,
+        _id: string,
+      ): Promise<import('@startap/db').BillingChargeRow | null> => makeClaimedRow(),
+    ),
     PixChargeGatewayInFlightError: PixChargeGatewayInFlightErrorImpl,
     BillingSlotBusyError: BillingSlotBusyErrorImpl,
   };
@@ -95,6 +127,10 @@ function makeRow(over: Partial<BillingChargeRow> = {}): BillingChargeRow {
     created_at: new Date(),
     updated_at: new Date(),
     superseded_charge_ids: [],
+    // Coluna real e NOT NULL DEFAULT 'idle' (migration 081) — o default da fixture
+    // reflete o que o banco SEMPRE devolve; 'undefined' nunca acontece em runtime.
+    gateway_call_state: 'idle',
+    gateway_call_started_at: null,
     ...over,
   };
 }
@@ -128,11 +164,12 @@ beforeEach(() => {
   withBillingSlotLock.mockImplementation((_slot: string, fn: (c: unknown) => Promise<unknown>) =>
     fn({}),
   );
-  // Default: claim sempre concedido. Sobrescrito nos testes de corrida com
-  // mockResolvedValueOnce(null) pra simular "outro processo ja reivindicou".
-  claimGatewayCall.mockImplementation(async (_client: unknown, _id: string) => ({
-    gateway_call_state: 'calling',
-  }));
+  // Default: claim sempre concedido (fixture COMPLETA, fiel ao shape NOT NULL real).
+  // Sobrescrito nos testes de corrida com mockResolvedValueOnce(null) pra simular "outro
+  // processo ja reivindicou".
+  claimGatewayCall.mockImplementation(async (_client: unknown, _id: string) =>
+    makeRow({ gateway_call_state: 'calling' }),
+  );
 });
 
 describe('ensurePixChargeForCycle', () => {
