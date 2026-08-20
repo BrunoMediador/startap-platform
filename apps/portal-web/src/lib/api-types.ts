@@ -127,6 +127,49 @@ export interface ColaboradorAgendaResponse {
   agendamentos: Agendamento[];
 }
 
+export type AgendaBloqueioTipo = 'almoco' | 'ausencia' | 'ferias' | 'indisponivel';
+export type AgendaBloqueioStatus = 'active' | 'gcal_cleanup_failed';
+
+export interface AgendaBloqueio {
+  id: string;
+  colaborador_id: number | null;
+  gcal_event_id: string | null;
+  inicio_at: string;
+  fim_at: string;
+  timezone: string;
+  tipo: AgendaBloqueioTipo;
+  motivo: string | null;
+  status: AgendaBloqueioStatus;
+  created_by_role: 'owner' | 'colaborador';
+  created_by_user_id: number | null;
+  created_by_colaborador_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgendaBloqueiosResponse {
+  count: number;
+  bloqueios: AgendaBloqueio[];
+}
+
+export interface AgendaBloqueioInput {
+  inicio_at: string;
+  fim_at: string;
+  timezone: string;
+  tipo: AgendaBloqueioTipo;
+  motivo?: string;
+  colaborador_id?: number;
+}
+
+export interface CriarAgendaBloqueioResponse {
+  ok: true;
+  bloqueio: AgendaBloqueio;
+}
+
+export interface RemoverAgendaBloqueioResponse {
+  ok: true;
+}
+
 /** Um balde do relatório de comissão do colaborador (faturado OU previsão). */
 export interface ColaboradorComissaoBalde {
   /** Faturamento bruto dele no período (base da comissão), em centavos. */

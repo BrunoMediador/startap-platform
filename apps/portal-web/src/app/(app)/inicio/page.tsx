@@ -11,6 +11,7 @@ import { useTenant } from '@/components/shell/session-context';
 import { MetricCard } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
+import { separarAgendamentosDeBloqueios } from '@/lib/agenda-bloqueios';
 import { agruparAgendamentos } from '@/lib/agendamentos';
 import { useAgendamentos, useStatus } from '@/lib/queries';
 import { resolveAvisoSuspensao } from '@/lib/suspensao';
@@ -60,7 +61,7 @@ export default function InicioPage() {
   const ag = agendamentos.data;
   let proximosCount: number | string = '—';
   if (ag?.gcal_configured) {
-    const g = agruparAgendamentos(ag.agendamentos);
+    const g = agruparAgendamentos(separarAgendamentosDeBloqueios(ag.agendamentos).agendamentos);
     proximosCount = g.hoje.length + g.proximos.length;
   }
 

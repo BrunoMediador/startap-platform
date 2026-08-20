@@ -305,6 +305,21 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── Bloqueios de agenda (almoço, ausência, férias, indisponível) ───────────
+  // Kill-switch GLOBAL das rotas /portal/agenda/bloqueios e /portal/colaborador/
+  // bloqueios. OPCIONAL no boot (ausente = OFF, lição #247): OFF -> 404 antes de
+  // qualquer DB/GCal mutante; produção byte-a-byte como hoje. O evento GCal nasce
+  // com extendedProperties.private.kind='bloqueio' para o reconciler financeiro
+  // ignorar e nunca virar atendimento.
+  AGENDA_BLOQUEIOS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // Allowlist por slot para canário seguro. Só tem efeito quando
+  // AGENDA_BLOQUEIOS_ENABLED=true. Default vazio = OFF para todos; '*' libera geral
+  // explicitamente para rollout amplo.
+  AGENDA_BLOQUEIOS_SLOTS: z.string().optional().default(''),
+
   // ── Builder conversacional de persona (SCRUM-92, ADR 0032) ─────────────────
   // Kill-switch das rotas /portal/prompt-builder/*. OPCIONAL no boot (ausente = OFF,
   // lição #247: feature dormente nunca derruba o portal-api). OFF -> as rotas respondem

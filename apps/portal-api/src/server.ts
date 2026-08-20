@@ -21,6 +21,7 @@ import { demoChatRoutes } from './routes/demo-chat.js';
 import { healthRoute } from './routes/health.js';
 import { portalAceiteRoutes } from './routes/portal-aceite.js';
 import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
+import { portalAgendaBloqueiosRoutes } from './routes/portal-agenda-bloqueios.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
@@ -128,6 +129,10 @@ async function main() {
   // o gate é exigência LGPD pra TODO cliente logado.
   await app.register(portalAceiteRoutes);
   await app.register(portalAgendamentosRoutes);
+  // Bloqueios de agenda (almoço/ausência/férias/indisponível). Gated por
+  // AGENDA_BLOQUEIOS_ENABLED (404 se OFF); eventos GCal marcados como kind='bloqueio'
+  // são ignorados pelo reconciler financeiro.
+  await app.register(portalAgendaBloqueiosRoutes);
   // Grade de horarios livres pro agendamento manual (Missao 020 F4).
   await app.register(portalAgendaSlotsRoutes);
   await app.register(portalBillingRoutes);

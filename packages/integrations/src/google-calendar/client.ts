@@ -434,6 +434,7 @@ export class GoogleCalendarClient {
   }
 
   async createEvent(opts: {
+    eventId?: string;
     summary: string;
     description?: string;
     startISO: string;
@@ -453,6 +454,7 @@ export class GoogleCalendarClient {
       {
         method: 'POST',
         body: JSON.stringify({
+          ...(opts.eventId ? { id: opts.eventId } : {}),
           summary: opts.summary,
           description: opts.description,
           start: { dateTime: opts.startISO, timeZone: tz },
