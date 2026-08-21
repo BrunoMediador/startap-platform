@@ -6,13 +6,16 @@ vi.mock('../client.js', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-const { create, list, softDeleteById } = await import('./agenda-bloqueios.js');
+const { create, list, listFutureActiveBySerieId, softDeleteById } = await import(
+  './agenda-bloqueios.js'
+);
 
 const RAW_ROW = {
   id: '11111111-1111-4111-8111-111111111111',
   tenant_id: '00000000-0000-4000-8000-000000000001',
   slot: 'clone_x',
   colaborador_id: '7',
+  serie_id: '99999999-9999-4999-8999-999999999999',
   gcal_event_id: 'gcal-1',
   inicio_at: '2026-08-21T12:00:00.000Z',
   fim_at: '2026-08-21T13:00:00.000Z',
@@ -39,6 +42,7 @@ describe('agenda-bloqueios queries', () => {
       tenantId: '00000000-0000-4000-8000-000000000001',
       slot: 'clone_x',
       colaboradorId: 7,
+      serieId: '99999999-9999-4999-8999-999999999999',
       gcalEventId: 'bloq11111111111141118111111111111111',
       inicioAt: '2026-08-21T12:00:00-03:00',
       fimAt: '2026-08-21T13:00:00-03:00',
@@ -50,7 +54,9 @@ describe('agenda-bloqueios queries', () => {
     });
 
     expect(row.colaborador_id).toBe(7);
+    expect(row.serie_id).toBe('99999999-9999-4999-8999-999999999999');
     const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toContain('serie_id');
     expect(String(sql)).toContain("status, created_by_role");
     expect(String(sql)).toContain("'creating'");
     expect(params).toEqual([
@@ -58,6 +64,7 @@ describe('agenda-bloqueios queries', () => {
       '00000000-0000-4000-8000-000000000001',
       'clone_x',
       7,
+      '99999999-9999-4999-8999-999999999999',
       'bloq11111111111141118111111111111111',
       '2026-08-21T12:00:00-03:00',
       '2026-08-21T13:00:00-03:00',
@@ -70,11 +77,12 @@ describe('agenda-bloqueios queries', () => {
     ]);
   });
 
-  it('list filtra por tenant_id + slot + status ativo + colaborador', async () => {
+  it('list filtra por tenant_id + slot + status ativo + colaborador + serie_id', async () => {
     await list({
       tenantId: '00000000-0000-4000-8000-000000000001',
       slot: 'clone_x',
       colaboradorId: 7,
+      serieId: '99999999-9999-4999-8999-999999999999',
       inicioAt: '2026-08-21T00:00:00-03:00',
       fimAt: '2026-08-22T00:00:00-03:00',
     });
@@ -85,12 +93,36 @@ describe('agenda-bloqueios queries', () => {
     expect(String(sql)).toContain("status IN ('active', 'gcal_cleanup_failed')");
     expect(String(sql)).toContain('deleted_at IS NULL');
     expect(String(sql)).toContain('colaborador_id = $3');
+    expect(String(sql)).toContain('serie_id = $4');
     expect(params).toEqual([
       '00000000-0000-4000-8000-000000000001',
       'clone_x',
       7,
+      '99999999-9999-4999-8999-999999999999',
       '2026-08-21T00:00:00-03:00',
       '2026-08-22T00:00:00-03:00',
+    ]);
+  });
+
+  it('listFutureActiveBySerieId filtra série futura ativa por tenant/slot/colaborador', async () => {
+    await listFutureActiveBySerieId({
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      slot: 'clone_x',
+      serieId: '99999999-9999-4999-8999-999999999999',
+      colaboradorId: 7,
+    });
+
+    const [sql, params] = mockQuery.mock.calls[0];
+    expect(String(sql)).toContain('serie_id = $3');
+    expect(String(sql)).toContain("status IN ('active', 'gcal_cleanup_failed')");
+    expect(String(sql)).toContain('deleted_at IS NULL');
+    expect(String(sql)).toContain('inicio_at > now()');
+    expect(String(sql)).toContain('colaborador_id = $4');
+    expect(params).toEqual([
+      '00000000-0000-4000-8000-000000000001',
+      'clone_x',
+      '99999999-9999-4999-8999-999999999999',
+      7,
     ]);
   });
 

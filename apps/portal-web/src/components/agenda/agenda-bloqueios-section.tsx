@@ -1,28 +1,61 @@
 'use client';
 
-import { IconAlert, IconCalendar, IconClock, IconPause, IconTrash } from '@/components/icons';
+import {
+  IconAlert,
+  IconCalendar,
+  IconCheck,
+  IconClock,
+  IconPause,
+  IconRefresh,
+  IconTrash,
+} from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/states';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
 import {
+  BLOQUEIO_PERIODICIDADE_LABELS,
   BLOQUEIO_TIPO_LABEL,
+  type RevisaoAgendaBloqueioRecorrencia,
+  buildAgendaBloqueioRecorrenciaKey,
+  buildCriarAgendaBloqueioSerieBody,
+  buildPreviewAgendaBloqueioRecorrenciaBody,
+  countRemovidosAgendaBloqueioSerie,
   defaultBloqueioFormValues,
+  falhaAgendaBloqueioSerieLabel,
+  initRevisaoAgendaBloqueioRecorrencia,
+  isAgendaBloqueioRecorrenciaLivre,
+  resumoResultadoAgendaBloqueioSerie,
+  statusAgendaBloqueioRecorrenciaLabel,
   zonedDateTimeToUtcIso,
 } from '@/lib/agenda-bloqueios';
 import { ApiError } from '@/lib/api';
-import type { AgendaBloqueio, AgendaBloqueioInput, AgendaBloqueioTipo } from '@/lib/api-types';
+import { OCORRENCIAS_MAX, OCORRENCIAS_MIN } from '@/lib/api-types';
+import type {
+  AgendaBloqueio,
+  AgendaBloqueioInput,
+  AgendaBloqueioTipo,
+  CriarAgendaBloqueioSerieResponse,
+  Periodicidade,
+} from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
 import {
   useAgendaBloqueios,
   useColaboradorBloqueios,
   useCriarAgendaBloqueio,
+  useCriarAgendaBloqueioSerie,
   useCriarColaboradorBloqueio,
+  useCriarColaboradorBloqueioSerie,
   useEquipe,
+  usePreviewAgendaBloqueioRecorrencia,
+  usePreviewColaboradorBloqueioRecorrencia,
   useRemoverAgendaBloqueio,
+  useRemoverAgendaBloqueioSerie,
   useRemoverColaboradorBloqueio,
+  useRemoverColaboradorBloqueioSerie,
 } from '@/lib/queries';
 import { useId, useMemo, useState } from 'react';
 
@@ -57,7 +90,14 @@ interface ProfissionalOption {
   nome: string;
 }
 
+interface RemoveSerieState {
+  serieId: string;
+  referencia: string;
+}
+
 const DEFAULT_TIPO: AgendaBloqueioTipo = 'almoco';
+const DEFAULT_PERIODICIDADE: Periodicidade = 'semanal';
+const DEFAULT_OCORRENCIAS = 4;
 
 function buildFormState(timeZone: string, defaultColaboradorId = ''): FormState {
   const defaults = defaultBloqueioFormValues(timeZone);
@@ -79,42 +119,99 @@ function tipoTone(tipo: AgendaBloqueioTipo): string {
   return 'border-danger/35 bg-danger/12 text-danger';
 }
 
-function blockRangeLabel(bloqueio: AgendaBloqueio, timeZone: string): string {
-  const inicioDia = formatAgendamentoDia(bloqueio.inicio_at, undefined, timeZone);
-  const inicioHora = formatAgendamentoHora(bloqueio.inicio_at, timeZone);
-  const fimDia = formatAgendamentoDia(bloqueio.fim_at, undefined, timeZone);
-  const fimHora = formatAgendamentoHora(bloqueio.fim_at, timeZone);
+function blockRangeLabel(inicioAt: string, fimAt: string, timeZone: string): string {
+  const inicioDia = formatAgendamentoDia(inicioAt, undefined, timeZone);
+  const inicioHora = formatAgendamentoHora(inicioAt, timeZone);
+  const fimDia = formatAgendamentoDia(fimAt, undefined, timeZone);
+  const fimHora = formatAgendamentoHora(fimAt, timeZone);
   if (inicioDia === fimDia) return `${inicioDia} · ${inicioHora} - ${fimHora}`;
   return `${inicioDia} ${inicioHora} ate ${fimDia} ${fimHora}`;
 }
 
+function apiErrorCode(error: unknown): string | null {
+  if (!(error instanceof ApiError) || !error.body || typeof error.body !== 'object') return null;
+  if (!('error' in error.body)) return null;
+  const code = (error.body as { error?: unknown }).error;
+  return typeof code === 'string' ? code : null;
+}
+
 function createErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    const code =
-      error.body && typeof error.body === 'object' && 'error' in error.body
-        ? (error.body as { error?: unknown }).error
-        : null;
-    if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
-    if (code === 'gcal_nao_configurado') return 'A agenda ainda nao esta conectada.';
-    if (code === 'colaborador_nao_encontrado') return 'Escolha um profissional valido.';
-    if (code === 'payload_invalido') return 'Confira as datas e tente de novo.';
-    return 'Nao foi possivel salvar o bloqueio. Tente de novo.';
-  }
-  return 'Nao foi possivel salvar o bloqueio. Tente de novo.';
+  const code = apiErrorCode(error);
+  if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
+  if (code === 'gcal_nao_configurado') return 'A Agenda Google ainda nao esta conectada.';
+  if (code === 'colaborador_nao_encontrado') return 'Escolha um profissional valido.';
+  if (code === 'payload_invalido') return 'Confira as datas e tente de novo.';
+  return 'Nao foi possivel salvar o bloqueio na Agenda Google. Tente de novo.';
+}
+
+function previewErrorMessage(error: unknown): string {
+  const code = apiErrorCode(error);
+  if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
+  if (code === 'gcal_nao_configurado') return 'A Agenda Google ainda nao esta conectada.';
+  if (code === 'colaborador_nao_encontrado') return 'Escolha um profissional valido.';
+  if (code === 'payload_invalido') return 'Confira as datas e gere a previa de novo.';
+  return 'Nao foi possivel gerar a previa na Agenda Google. Tente de novo.';
 }
 
 function removeErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    const code =
-      error.body && typeof error.body === 'object' && 'error' in error.body
-        ? (error.body as { error?: unknown }).error
-        : null;
-    if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
-    if (code === 'bloqueio_nao_encontrado') return 'Esse bloqueio ja nao esta mais aqui.';
-    if (code === 'gcal_nao_configurado') return 'A agenda ainda nao esta conectada.';
-    return 'Nao foi possivel remover o bloqueio. Tente de novo.';
+  const code = apiErrorCode(error);
+  if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
+  if (code === 'bloqueio_nao_encontrado') return 'Esse bloqueio ja nao esta mais aqui.';
+  if (code === 'gcal_nao_configurado') return 'A Agenda Google ainda nao esta conectada.';
+  return 'Nao foi possivel remover o bloqueio da Agenda Google. Tente de novo.';
+}
+
+function removeSerieErrorMessage(error: unknown): string {
+  const code = apiErrorCode(error);
+  if (code === 'feature_off') return 'Bloqueio de agenda indisponivel agora.';
+  if (code === 'serie_nao_encontrada') return 'Essa serie ja nao tem mais bloqueios futuros.';
+  if (code === 'gcal_nao_configurado') return 'A Agenda Google ainda nao esta conectada.';
+  return 'Nao foi possivel remover a serie futura da Agenda Google. Tente de novo.';
+}
+
+function buildInputFromForm(args: {
+  canPickProfissional: boolean;
+  form: FormState;
+  timeZone: string;
+}): { ok: true; body: AgendaBloqueioInput } | { ok: false; errors: FormErrors } {
+  const errors: FormErrors = {};
+  if (args.canPickProfissional && !args.form.colaboradorId) {
+    errors.colaborador = 'Escolha um profissional.';
   }
-  return 'Nao foi possivel remover o bloqueio. Tente de novo.';
+  if (!args.form.inicioData || !args.form.inicioHora) {
+    errors.inicio = 'Preencha o inicio.';
+  }
+  if (!args.form.fimData || !args.form.fimHora) {
+    errors.fim = 'Preencha o fim.';
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
+
+  const inicioAt = zonedDateTimeToUtcIso(args.form.inicioData, args.form.inicioHora, args.timeZone);
+  const fimAt = zonedDateTimeToUtcIso(args.form.fimData, args.form.fimHora, args.timeZone);
+  if (!inicioAt || !fimAt) {
+    return {
+      ok: false,
+      errors: {
+        inicio: !inicioAt ? 'Horario invalido.' : undefined,
+        fim: !fimAt ? 'Horario invalido.' : undefined,
+      },
+    };
+  }
+  if (new Date(fimAt).getTime() <= new Date(inicioAt).getTime()) {
+    return { ok: false, errors: { fim: 'O fim precisa ficar depois do inicio.' } };
+  }
+
+  return {
+    ok: true,
+    body: {
+      inicio_at: inicioAt,
+      fim_at: fimAt,
+      timezone: args.timeZone,
+      tipo: args.form.tipo,
+      motivo: args.form.motivo.trim() || undefined,
+      colaborador_id: args.canPickProfissional ? Number(args.form.colaboradorId) : undefined,
+    },
+  };
 }
 
 export function AgendaBloqueiosSection({
@@ -147,17 +244,37 @@ export function AgendaBloqueiosSection({
 
   const ownerCreate = useCriarAgendaBloqueio(slot);
   const ownerRemove = useRemoverAgendaBloqueio(slot);
+  const ownerPreviewSerie = usePreviewAgendaBloqueioRecorrencia();
+  const ownerCreateSerie = useCriarAgendaBloqueioSerie(slot);
+  const ownerRemoveSerie = useRemoverAgendaBloqueioSerie(slot);
+
   const colaboradorCreate = useCriarColaboradorBloqueio(slot, colaboradorId ?? 0);
   const colaboradorRemove = useRemoverColaboradorBloqueio(slot, colaboradorId ?? 0);
+  const colaboradorPreviewSerie = usePreviewColaboradorBloqueioRecorrencia();
+  const colaboradorCreateSerie = useCriarColaboradorBloqueioSerie(slot, colaboradorId ?? 0);
+  const colaboradorRemoveSerie = useRemoverColaboradorBloqueioSerie(slot, colaboradorId ?? 0);
+
   const createMutation = mode === 'colaborador' ? colaboradorCreate : ownerCreate;
   const removeMutation = mode === 'colaborador' ? colaboradorRemove : ownerRemove;
+  const previewSerieMutation = mode === 'colaborador' ? colaboradorPreviewSerie : ownerPreviewSerie;
+  const createSerieMutation = mode === 'colaborador' ? colaboradorCreateSerie : ownerCreateSerie;
+  const removeSerieMutation = mode === 'colaborador' ? colaboradorRemoveSerie : ownerRemoveSerie;
 
   const [openForm, setOpenForm] = useState(false);
   const [form, setForm] = useState<FormState>(() =>
     buildFormState(timeZone, defaultProfissionalId),
   );
   const [errors, setErrors] = useState<FormErrors>({});
+  const [repetir, setRepetir] = useState(false);
+  const [periodicidade, setPeriodicidade] = useState<Periodicidade>(DEFAULT_PERIODICIDADE);
+  const [ocorrencias, setOcorrencias] = useState(DEFAULT_OCORRENCIAS);
+  const [revisaoSerie, setRevisaoSerie] = useState<RevisaoAgendaBloqueioRecorrencia[] | null>(null);
+  const [resultadoSerie, setResultadoSerie] = useState<CriarAgendaBloqueioSerieResponse | null>(
+    null,
+  );
+  const [previewKey, setPreviewKey] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<AgendaBloqueio | null>(null);
+  const [confirmRemoveSerie, setConfirmRemoveSerie] = useState<RemoveSerieState | null>(null);
   const motivoId = useId();
 
   const nomeByProfissionalId = useMemo(
@@ -165,9 +282,19 @@ export function AgendaBloqueiosSection({
     [profissionais],
   );
 
+  function limparRecorrencia() {
+    setRevisaoSerie(null);
+    setResultadoSerie(null);
+    setPreviewKey(null);
+  }
+
   function resetForm() {
     setForm(buildFormState(timeZone, defaultProfissionalId));
     setErrors({});
+    setRepetir(false);
+    setPeriodicidade(DEFAULT_PERIODICIDADE);
+    setOcorrencias(DEFAULT_OCORRENCIAS);
+    limparRecorrencia();
   }
 
   function abrirFormulario() {
@@ -177,67 +304,136 @@ export function AgendaBloqueiosSection({
 
   function fecharFormulario() {
     setOpenForm(false);
-    setErrors({});
+    resetForm();
   }
 
+  function updateForm(patch: Partial<FormState>) {
+    setForm((current) => ({ ...current, ...patch }));
+    limparRecorrencia();
+  }
+
+  const currentInput = buildInputFromForm({ canPickProfissional, form, timeZone });
+  const currentPreviewKey =
+    repetir && currentInput.ok
+      ? buildAgendaBloqueioRecorrenciaKey({
+          base: currentInput.body,
+          periodicidade,
+          ocorrencias,
+        })
+      : null;
+  const totalSerie = revisaoSerie?.length ?? 0;
+  const previewAtual = Boolean(
+    !resultadoSerie &&
+      revisaoSerie &&
+      previewKey &&
+      currentPreviewKey &&
+      previewKey === currentPreviewKey,
+  );
+  const podeCriarSerie = previewAtual && totalSerie > 0;
+
   function submit() {
-    const nextErrors: FormErrors = {};
-    if (canPickProfissional && !form.colaboradorId) {
-      nextErrors.colaborador = 'Escolha um profissional.';
-    }
-    if (!form.inicioData || !form.inicioHora) {
-      nextErrors.inicio = 'Preencha o inicio.';
-    }
-    if (!form.fimData || !form.fimHora) {
-      nextErrors.fim = 'Preencha o fim.';
-    }
-    if (Object.keys(nextErrors).length > 0) {
-      setErrors(nextErrors);
+    if (!currentInput.ok) {
+      setErrors(currentInput.errors);
       return;
     }
 
-    const inicioAt = zonedDateTimeToUtcIso(form.inicioData, form.inicioHora, timeZone);
-    const fimAt = zonedDateTimeToUtcIso(form.fimData, form.fimHora, timeZone);
-    if (!inicioAt || !fimAt) {
-      setErrors({
-        inicio: !inicioAt ? 'Horario invalido.' : undefined,
-        fim: !fimAt ? 'Horario invalido.' : undefined,
-      });
-      return;
-    }
-    if (new Date(fimAt).getTime() <= new Date(inicioAt).getTime()) {
-      setErrors({ fim: 'O fim precisa ficar depois do inicio.' });
-      return;
-    }
-
-    const body: AgendaBloqueioInput = {
-      inicio_at: inicioAt,
-      fim_at: fimAt,
-      timezone: timeZone,
-      tipo: form.tipo,
-      motivo: form.motivo.trim() || undefined,
-      colaborador_id: canPickProfissional ? Number(form.colaboradorId) : undefined,
-    };
-
-    createMutation.mutate(body, {
+    createMutation.mutate(currentInput.body, {
       onSuccess: () => {
-        toast.success('Bloqueio criado');
-        resetForm();
-        setOpenForm(false);
+        toast.success('Bloqueio criado na Agenda Google');
+        fecharFormulario();
       },
       onError: (error) => toast.error(createErrorMessage(error)),
     });
   }
 
+  function gerarPreviaSerie() {
+    if (!currentInput.ok) {
+      setErrors(currentInput.errors);
+      return;
+    }
+
+    const nextKey = buildAgendaBloqueioRecorrenciaKey({
+      base: currentInput.body,
+      periodicidade,
+      ocorrencias,
+    });
+
+    previewSerieMutation.mutate(
+      buildPreviewAgendaBloqueioRecorrenciaBody({
+        base: currentInput.body,
+        periodicidade,
+        ocorrencias,
+      }),
+      {
+        onSuccess: (response) => {
+          setRevisaoSerie(initRevisaoAgendaBloqueioRecorrencia(response.previews));
+          setResultadoSerie(null);
+          setPreviewKey(nextKey);
+        },
+        onError: (error) => toast.error(previewErrorMessage(error)),
+      },
+    );
+  }
+
+  function confirmarSerie() {
+    if (!currentInput.ok) {
+      setErrors(currentInput.errors);
+      return;
+    }
+    if (!revisaoSerie || !currentPreviewKey || previewKey !== currentPreviewKey) {
+      toast.error('Atualize a previa antes de criar a serie na Agenda Google.');
+      return;
+    }
+
+    createSerieMutation.mutate(
+      buildCriarAgendaBloqueioSerieBody({
+        base: currentInput.body,
+        periodicidade,
+        ocorrencias,
+      }),
+      {
+        onSuccess: (response) => {
+          setResultadoSerie(response);
+          if (response.falhas.length === 0) {
+            toast.success(
+              response.criados.length === 1
+                ? '1 bloqueio criado na Agenda Google'
+                : 'Serie criada na Agenda Google',
+            );
+          }
+        },
+        onError: (error) => toast.error(createErrorMessage(error)),
+      },
+    );
+  }
+
   function removeBloqueio(id: string) {
     removeMutation.mutate(id, {
       onSuccess: () => {
-        toast.success('Bloqueio removido');
+        toast.success('Bloqueio removido da Agenda Google');
         setConfirmRemove(null);
       },
       onError: (error) => {
         setConfirmRemove(null);
         toast.error(removeErrorMessage(error));
+      },
+    });
+  }
+
+  function removeSerie(serieId: string) {
+    removeSerieMutation.mutate(serieId, {
+      onSuccess: (response) => {
+        setConfirmRemoveSerie(null);
+        const totalRemovidos = countRemovidosAgendaBloqueioSerie(response);
+        toast.success(
+          totalRemovidos === 1
+            ? '1 bloqueio futuro removido da Agenda Google'
+            : `${totalRemovidos} bloqueios futuros removidos da Agenda Google`,
+        );
+      },
+      onError: (error) => {
+        setConfirmRemoveSerie(null);
+        toast.error(removeSerieErrorMessage(error));
       },
     });
   }
@@ -283,6 +479,8 @@ export function AgendaBloqueiosSection({
   if (!bloqueiosQ.data?.available) return null;
 
   const bloqueios = bloqueiosQ.data.bloqueios;
+  const loadingForm =
+    createMutation.isPending || previewSerieMutation.isPending || createSerieMutation.isPending;
 
   return (
     <section className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
@@ -301,9 +499,10 @@ export function AgendaBloqueiosSection({
                 label="Profissional"
                 value={form.colaboradorId}
                 onChange={(value) => {
-                  setForm((current) => ({ ...current, colaboradorId: value }));
-                  if (errors.colaborador)
+                  updateForm({ colaboradorId: value });
+                  if (errors.colaborador) {
                     setErrors((current) => ({ ...current, colaborador: undefined }));
+                  }
                 }}
                 error={errors.colaborador}
               >
@@ -319,9 +518,7 @@ export function AgendaBloqueiosSection({
             <SelectField
               label="Tipo"
               value={form.tipo}
-              onChange={(value) =>
-                setForm((current) => ({ ...current, tipo: value as AgendaBloqueioTipo }))
-              }
+              onChange={(value) => updateForm({ tipo: value as AgendaBloqueioTipo })}
             >
               <option value="almoco">Almoco</option>
               <option value="ausencia">Ausencia</option>
@@ -333,8 +530,8 @@ export function AgendaBloqueiosSection({
               label="Inicio"
               dateValue={form.inicioData}
               timeValue={form.inicioHora}
-              onDateChange={(value) => setForm((current) => ({ ...current, inicioData: value }))}
-              onTimeChange={(value) => setForm((current) => ({ ...current, inicioHora: value }))}
+              onDateChange={(value) => updateForm({ inicioData: value })}
+              onTimeChange={(value) => updateForm({ inicioHora: value })}
               error={errors.inicio}
             />
 
@@ -342,8 +539,8 @@ export function AgendaBloqueiosSection({
               label="Fim"
               dateValue={form.fimData}
               timeValue={form.fimHora}
-              onDateChange={(value) => setForm((current) => ({ ...current, fimData: value }))}
-              onTimeChange={(value) => setForm((current) => ({ ...current, fimHora: value }))}
+              onDateChange={(value) => updateForm({ fimData: value })}
+              onTimeChange={(value) => updateForm({ fimHora: value })}
               error={errors.fim}
             />
 
@@ -357,9 +554,7 @@ export function AgendaBloqueiosSection({
               <textarea
                 id={motivoId}
                 value={form.motivo}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, motivo: event.target.value }))
-                }
+                onChange={(event) => updateForm({ motivo: event.target.value })}
                 maxLength={240}
                 rows={3}
                 placeholder="Opcional"
@@ -368,18 +563,196 @@ export function AgendaBloqueiosSection({
             </div>
           </div>
 
+          <div className="mt-4 border-t border-line-soft pt-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-display text-[15px] font-semibold text-ink">
+                  Repetir este bloqueio
+                </h3>
+                <p className="mt-0.5 text-[12.5px] leading-snug text-ink-soft">
+                  Cada ocorrencia vira um evento de bloqueio na Agenda Google do profissional.
+                </p>
+              </div>
+              <Switch
+                checked={repetir}
+                onChange={(checked) => {
+                  setRepetir(checked);
+                  limparRecorrencia();
+                }}
+                label="Repetir este bloqueio"
+                disabled={loadingForm}
+              />
+            </div>
+
+            {repetir && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <span className="mb-2 block text-[13px] font-semibold text-ink">
+                    Com que frequencia?
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(Object.keys(BLOQUEIO_PERIODICIDADE_LABELS) as Periodicidade[]).map(
+                      (value) => {
+                        const ativo = value === periodicidade;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            aria-pressed={ativo}
+                            onClick={() => {
+                              setPeriodicidade(value);
+                              limparRecorrencia();
+                            }}
+                            className={cn(
+                              'min-h-11 rounded-field border px-3 py-2 font-display text-[13.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+                              ativo
+                                ? 'border-brand bg-brand-soft text-brand'
+                                : 'border-line bg-surface-sunken text-ink hover:bg-surface-hover',
+                            )}
+                          >
+                            {BLOQUEIO_PERIODICIDADE_LABELS[value]}
+                          </button>
+                        );
+                      },
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="mb-2 block text-[13px] font-semibold text-ink">
+                    Quantas ocorrencias?
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-label="Diminuir ocorrencias"
+                      disabled={ocorrencias <= OCORRENCIAS_MIN || loadingForm}
+                      onClick={() => {
+                        setOcorrencias((current) => Math.max(OCORRENCIAS_MIN, current - 1));
+                        limparRecorrencia();
+                      }}
+                      className="flex size-11 shrink-0 items-center justify-center rounded-field border border-line-strong bg-surface font-display text-[18px] font-semibold text-ink outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      −
+                    </button>
+                    <span className="min-w-[72px] text-center font-display text-[20px] font-bold tabular-nums text-ink">
+                      {ocorrencias}×
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Aumentar ocorrencias"
+                      disabled={ocorrencias >= OCORRENCIAS_MAX || loadingForm}
+                      onClick={() => {
+                        setOcorrencias((current) => Math.min(OCORRENCIAS_MAX, current + 1));
+                        limparRecorrencia();
+                      }}
+                      className="flex size-11 shrink-0 items-center justify-center rounded-field border border-line-strong bg-surface font-display text-[18px] font-semibold text-ink outline-none transition-colors hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[12.5px] leading-snug text-ink-faint">
+                    De {OCORRENCIAS_MIN} a {OCORRENCIAS_MAX}. A criacao so libera com a previa
+                    atualizada da Agenda Google.
+                  </p>
+                </div>
+
+                {revisaoSerie && (
+                  <div className="border-t border-line-soft pt-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h4 className="font-display text-[15px] font-semibold text-ink">
+                          {resultadoSerie
+                            ? 'Resultado na Agenda Google'
+                            : 'Revise a serie antes de confirmar'}
+                        </h4>
+                        <p className="mt-0.5 text-[12.5px] leading-snug text-ink-soft">
+                          {resultadoSerie
+                            ? 'Cada linha abaixo mostra o que entrou ou falhou na Agenda Google do profissional.'
+                            : 'A confirmacao usara esta previa para inserir a serie na Agenda Google do profissional.'}
+                        </p>
+                      </div>
+                      {!resultadoSerie && (
+                        <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
+                          {totalSerie} ocorrencias na previa
+                        </Pill>
+                      )}
+                    </div>
+
+                    {resultadoSerie && (
+                      <p
+                        role="status"
+                        className={cn(
+                          'mt-3 rounded-field border px-3 py-2 text-[13px] font-medium leading-snug',
+                          resultadoSerie.falhas.length === 0
+                            ? 'border-brand/40 bg-brand-soft text-brand'
+                            : resultadoSerie.criados.length === 0
+                              ? 'border-danger/40 bg-danger/10 text-danger'
+                              : 'border-amber-400/35 bg-amber-400/12 text-amber-200',
+                        )}
+                      >
+                        {resumoResultadoAgendaBloqueioSerie(resultadoSerie)}
+                      </p>
+                    )}
+
+                    {!resultadoSerie && (
+                      <p className="mt-3 text-[12.5px] leading-snug text-ink-faint">
+                        A previa separa o que esta livre do que ja esta ocupado ou indisponivel na
+                        Agenda Google. A serie sera recalculada no servidor na confirmacao, entao o
+                        resultado ainda pode voltar parcial se a agenda mudar.
+                      </p>
+                    )}
+
+                    <ReviewList ocorrencias={revisaoSerie} resultado={resultadoSerie} timeZone={timeZone} />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
             <Button
               variant="secondary"
               size="inline"
               onClick={fecharFormulario}
-              disabled={createMutation.isPending}
+              disabled={loadingForm}
             >
               Cancelar
             </Button>
-            <Button size="inline" loading={createMutation.isPending} onClick={submit}>
-              Criar bloqueio
-            </Button>
+
+            {repetir ? (
+              <>
+                <Button
+                  variant={revisaoSerie ? 'secondary' : 'primary'}
+                  size="inline"
+                  loading={previewSerieMutation.isPending}
+                  loadingLabel="Montando previa…"
+                  onClick={gerarPreviaSerie}
+                  disabled={createSerieMutation.isPending}
+                >
+                  {revisaoSerie ? 'Atualizar previa' : 'Ver previa'}
+                </Button>
+                {resultadoSerie ? (
+                  <Button size="inline" onClick={fecharFormulario}>
+                    Concluir
+                  </Button>
+                ) : (
+                  <Button
+                    size="inline"
+                    loading={createSerieMutation.isPending}
+                    loadingLabel="Criando serie…"
+                    onClick={confirmarSerie}
+                    disabled={!podeCriarSerie || previewSerieMutation.isPending}
+                  >
+                    Criar serie
+                  </Button>
+                )}
+              </>
+            ) : (
+              <Button size="inline" loading={createMutation.isPending} onClick={submit}>
+                Criar bloqueio
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -401,7 +774,7 @@ export function AgendaBloqueiosSection({
               <div
                 key={bloqueio.id}
                 className={cn(
-                  'flex flex-col gap-3 border-b border-line-soft px-4 py-4 last:border-b-0 sm:px-5',
+                  'border-b border-line-soft px-4 py-4 last:border-b-0 sm:px-5',
                   bloqueio.status === 'gcal_cleanup_failed' && 'bg-amber-400/8',
                 )}
               >
@@ -424,7 +797,7 @@ export function AgendaBloqueiosSection({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="font-display text-[15px] font-semibold text-ink">
-                        Bloqueio de agenda
+                        Bloqueio na Agenda Google
                       </p>
                       <Pill className={tipoTone(bloqueio.tipo)}>
                         {BLOQUEIO_TIPO_LABEL[bloqueio.tipo]}
@@ -432,6 +805,11 @@ export function AgendaBloqueiosSection({
                       {profissionalNome && (
                         <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
                           {profissionalNome}
+                        </Pill>
+                      )}
+                      {bloqueio.serie_id && (
+                        <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
+                          Serie
                         </Pill>
                       )}
                       {bloqueio.status === 'gcal_cleanup_failed' && (
@@ -444,9 +822,13 @@ export function AgendaBloqueiosSection({
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-soft">
                       <span className="inline-flex items-center gap-1.5">
                         <IconClock size={15} />
-                        {blockRangeLabel(bloqueio, timeZone)}
+                        {blockRangeLabel(bloqueio.inicio_at, bloqueio.fim_at, timeZone)}
                       </span>
                     </div>
+
+                    <p className="mt-2 text-[12.5px] leading-snug text-ink-faint">
+                      Evento de bloqueio na Agenda Google do profissional.
+                    </p>
 
                     {bloqueio.motivo && (
                       <p className="mt-2 text-[13px] leading-normal text-ink-soft">
@@ -457,19 +839,42 @@ export function AgendaBloqueiosSection({
                     {bloqueio.status === 'gcal_cleanup_failed' && (
                       <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-amber-200">
                         <IconAlert size={14} />
-                        Remova daqui para tentar limpar de novo.
+                        Remova daqui para tentar limpar de novo na Agenda Google.
                       </p>
                     )}
-                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setConfirmRemove(bloqueio)}
-                    className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-pill border border-line-strong bg-surface px-3 font-display text-[13px] font-semibold text-ink-soft outline-none transition-colors hover:bg-surface-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-                  >
-                    <IconTrash size={15} />
-                    Remover
-                  </button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {bloqueio.serie_id && (
+                        <Button
+                          variant="secondary"
+                          size="inline"
+                          className="h-10 px-3 text-[13px]"
+                          onClick={() =>
+                            setConfirmRemoveSerie({
+                              serieId: bloqueio.serie_id ?? '',
+                              referencia: blockRangeLabel(
+                                bloqueio.inicio_at,
+                                bloqueio.fim_at,
+                                timeZone,
+                              ),
+                            })
+                          }
+                        >
+                          <IconRefresh size={15} />
+                          Remover serie
+                        </Button>
+                      )}
+                      <Button
+                        variant="destructive"
+                        size="inline"
+                        className="h-10 px-3 text-[13px]"
+                        onClick={() => setConfirmRemove(bloqueio)}
+                      >
+                        <IconTrash size={15} />
+                        Remover este
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
             );
@@ -479,14 +884,30 @@ export function AgendaBloqueiosSection({
 
       <ConfirmDialog
         open={Boolean(confirmRemove)}
-        title="Remover bloqueio?"
-        description="Esse horario volta a ficar livre na agenda."
+        title="Remover este bloqueio?"
+        description="Esse horario volta a ficar livre na Agenda Google do profissional."
         confirmLabel="Remover"
         confirmVariant="destructive"
         loading={removeMutation.isPending}
         icon={<IconTrash size={20} />}
         onCancel={() => setConfirmRemove(null)}
         onConfirm={() => confirmRemove && removeBloqueio(confirmRemove.id)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(confirmRemoveSerie)}
+        title="Remover a serie futura?"
+        description={
+          confirmRemoveSerie
+            ? `Os proximos bloqueios desta serie serao removidos da Agenda Google a partir de ${confirmRemoveSerie.referencia}.`
+            : ''
+        }
+        confirmLabel="Remover serie"
+        confirmVariant="destructive"
+        loading={removeSerieMutation.isPending}
+        icon={<IconRefresh size={20} />}
+        onCancel={() => setConfirmRemoveSerie(null)}
+        onConfirm={() => confirmRemoveSerie && removeSerie(confirmRemoveSerie.serieId)}
       />
     </section>
   );
@@ -519,8 +940,8 @@ function SectionHeader({
         </div>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
           {mode === 'colaborador'
-            ? 'Reserve almoco, ausencia, ferias ou indisponibilidade.'
-            : 'Trave horarios sem cliente nem servico.'}
+            ? 'Reserve almoco, ausencia, ferias ou indisponibilidade na sua Agenda Google.'
+            : 'Trave horarios sem cliente e, se quiser, repita a serie com revisao antes de gravar na Agenda Google.'}
         </p>
       </div>
       <Button
@@ -532,6 +953,131 @@ function SectionHeader({
         {openForm ? 'Cancelar' : 'Novo bloqueio'}
       </Button>
     </div>
+  );
+}
+
+function ReviewList({
+  ocorrencias,
+  resultado,
+  timeZone,
+}: {
+  ocorrencias: RevisaoAgendaBloqueioRecorrencia[];
+  resultado: CriarAgendaBloqueioSerieResponse | null;
+  timeZone: string;
+}) {
+  const falhasPorChave = useMemo(() => {
+    const map = new Map<string, { error: string; reason?: string | null }>();
+    for (const falha of resultado?.falhas ?? []) {
+      map.set(`${falha.inicio_at}|${falha.fim_at}`, {
+        error: falha.error,
+        reason: falha.reason,
+      });
+    }
+    return map;
+  }, [resultado]);
+
+  const criadosSet = useMemo(
+    () => new Set((resultado?.criados ?? []).map((item) => `${item.inicio_at}|${item.fim_at}`)),
+    [resultado],
+  );
+
+  return (
+    <ul className="mt-3 divide-y divide-line-soft border-t border-line-soft">
+      {ocorrencias.map((ocorrencia) => {
+        const chave = `${ocorrencia.inicio_at}|${ocorrencia.fim_at}`;
+        const falha = falhasPorChave.get(chave);
+        const criada = criadosSet.has(chave);
+        const livre = isAgendaBloqueioRecorrenciaLivre(ocorrencia.status);
+        const statusBase = statusAgendaBloqueioRecorrenciaLabel(ocorrencia.status);
+        return (
+          <li
+            key={chave}
+            className={cn(
+              'flex gap-3 py-3',
+              falha && 'bg-danger/6',
+              criada && 'bg-brand/6',
+              !resultado && !livre && 'bg-amber-400/6',
+            )}
+          >
+            {resultado ? (
+              <span
+                className={cn(
+                  'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
+                  criada
+                    ? 'border-brand/40 bg-brand-soft text-brand'
+                    : falha
+                      ? 'border-danger/40 bg-danger/10 text-danger'
+                      : 'border-line-strong bg-surface-sunken text-ink-soft',
+                )}
+              >
+                {criada ? <IconCheck size={12} /> : <IconAlert size={12} />}
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
+                  livre
+                    ? 'border-brand/40 bg-brand-soft text-brand'
+                    : 'border-amber-400/35 bg-amber-400/12 text-amber-200',
+                )}
+              >
+                {livre ? <IconCheck size={12} /> : <IconAlert size={12} />}
+              </span>
+            )}
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-display text-[14px] font-semibold text-ink">
+                  {blockRangeLabel(ocorrencia.inicio_at, ocorrencia.fim_at, timeZone)}
+                </p>
+                {resultado ? (
+                  criada ? (
+                    <Pill className="border-brand/40 bg-brand-soft text-brand">
+                      Criado na agenda
+                    </Pill>
+                  ) : falha ? (
+                    <Pill className="border-danger/40 bg-danger/10 text-danger">
+                      Falhou na agenda
+                    </Pill>
+                  ) : (
+                    <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
+                      Nao enviado
+                    </Pill>
+                  )
+                ) : livre ? (
+                  <Pill className="border-brand/40 bg-brand-soft text-brand">
+                    Livre na agenda
+                  </Pill>
+                ) : (
+                  <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
+                    Ocupado ou indisponivel
+                  </Pill>
+                )}
+              </div>
+
+              <p className="mt-1 text-[12.5px] leading-snug text-ink-soft">
+                {resultado
+                  ? criada
+                    ? 'Inserido como bloqueio na Agenda Google do profissional.'
+                    : falha
+                      ? falhaAgendaBloqueioSerieLabel(falha.reason)
+                      : 'Nao foi enviado para a Agenda Google.'
+                  : livre
+                    ? 'Se nada mudar, este bloqueio sera inserido na Agenda Google do profissional.'
+                    : statusBase}
+              </p>
+
+              {!resultado && !livre && (
+                <p className="mt-1 text-[12px] leading-snug text-amber-200">
+                  O backend recalcula a serie na confirmacao. Se esse conflito continuar, esta
+                  ocorrencia pode voltar como falha parcial.
+                </p>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

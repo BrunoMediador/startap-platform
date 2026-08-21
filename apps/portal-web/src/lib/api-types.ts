@@ -132,6 +132,7 @@ export type AgendaBloqueioStatus = 'active' | 'gcal_cleanup_failed';
 
 export interface AgendaBloqueio {
   id: string;
+  serie_id?: string | null;
   colaborador_id: number | null;
   gcal_event_id: string | null;
   inicio_at: string;
@@ -168,6 +169,16 @@ export interface CriarAgendaBloqueioResponse {
 
 export interface RemoverAgendaBloqueioResponse {
   ok: true;
+}
+
+export interface RemoverAgendaBloqueioSerieResponse {
+  ok: true;
+  serie_id: string;
+  /**
+   * O backend atual devolve a lista de bloqueios futuros afetados. O front só
+   * depende da contagem; por isso o shape interno segue opaco aqui.
+   */
+  removidos: unknown[];
 }
 
 /** Um balde do relatório de comissão do colaborador (faturado OU previsão). */
@@ -596,6 +607,68 @@ export interface CriarSerieResponse {
   serie_id: string;
   criados: SerieOcorrenciaCriada[];
   falhas: SerieOcorrenciaFalha[];
+}
+
+// ── Recorrência de bloqueios (preview + revisão + /serie) ────────────────────
+
+/**
+ * Body do POST /portal/agenda/bloqueios/recorrencia/preview — mesmo payload do
+ * bloqueio simples, mais periodicidade e número de ocorrências. Só calcula; não
+ * grava nada. O colaborador usa o MESMO shape, mas sem `colaborador_id` vindo do
+ * client (a identidade continua na sessão).
+ */
+export interface PreviewAgendaBloqueioRecorrenciaBody extends AgendaBloqueioInput {
+  periodicidade: Periodicidade;
+  ocorrencias: number; // 2..24
+}
+
+/** Uma ocorrência candidata da série de bloqueios, com faixa completa e estado. */
+export interface PreviewAgendaBloqueioRecorrencia {
+  inicio_at: string;
+  fim_at: string;
+  status?: PreviewOcorrenciaStatus | null;
+}
+
+export interface PreviewAgendaBloqueioRecorrenciaResponse {
+  ok: true;
+  previews: PreviewAgendaBloqueioRecorrencia[];
+}
+
+/**
+ * Body do POST /portal/agenda/bloqueios/serie — reenviamos os MESMOS parâmetros
+ * canônicos que geraram a prévia. O backend recalcula a série server-side antes
+ * de gravar na Agenda Google.
+ */
+export interface CriarAgendaBloqueioSerieBody extends AgendaBloqueioInput {
+  periodicidade: Periodicidade;
+  ocorrencias: number; // 2..24
+}
+
+export interface AgendaBloqueioSerieCriado {
+  id: string;
+  serie_id?: string | null;
+  inicio_at: string;
+  fim_at: string;
+}
+
+export interface AgendaBloqueioSerieFalha {
+  serie_id?: string | null;
+  inicio_at: string;
+  fim_at: string;
+  error: string;
+  reason?: string | null;
+}
+
+/**
+ * Resposta do POST /portal/agenda/bloqueios/serie. Status HTTP conta a história:
+ *   201 = tudo criado · 207 = parcial · 409 = nenhum criado (mas a resposta ainda
+ *   traz as listas completas, então a UI revisa o resultado sem inventar estado).
+ */
+export interface CriarAgendaBloqueioSerieResponse {
+  ok: boolean;
+  serie_id: string;
+  criados: AgendaBloqueioSerieCriado[];
+  falhas: AgendaBloqueioSerieFalha[];
 }
 
 /**

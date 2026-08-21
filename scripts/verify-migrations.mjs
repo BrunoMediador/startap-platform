@@ -83,7 +83,7 @@ function parseManifest(rawManifest, manifestPath, expectedRange) {
 export async function loadMigrationPlan(
   migrationsDir,
   manifestPath,
-  expectedRange = { first: 1, last: 82 },
+  expectedRange = { first: 1, last: 83 },
   baselinePath = undefined,
 ) {
   if (!manifestPath) throw new Error('manifest de migrations ausente');
@@ -324,7 +324,7 @@ export async function runMigrationGate({
   const inventory = await loadMigrationPlan(
     migrationsDir,
     manifestPath,
-    { first: 1, last: 82 },
+    { first: 1, last: 83 },
     legacyBaselinePath,
   );
   const [baseline, ...plan] = inventory;
