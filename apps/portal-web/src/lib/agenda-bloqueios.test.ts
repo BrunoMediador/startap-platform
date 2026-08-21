@@ -4,11 +4,13 @@ import {
   buildAgendaBloqueioRecorrenciaKey,
   buildCriarAgendaBloqueioSerieBody,
   buildPreviewAgendaBloqueioRecorrenciaBody,
+  countRemovidosAgendaBloqueioSerie,
   defaultBloqueioFormValues,
   falhaAgendaBloqueioSerieLabel,
   formatDateInputInTimeZone,
   formatTimeInputInTimeZone,
   initRevisaoAgendaBloqueioRecorrencia,
+  isAgendaBloqueioRecorrenciaLivre,
   isAgendaBloqueio,
   resumoResultadoAgendaBloqueioSerie,
   separarAgendamentosDeBloqueios,
@@ -20,6 +22,7 @@ import type {
   Agendamento,
   CriarAgendaBloqueioSerieResponse,
   PreviewAgendaBloqueioRecorrencia,
+  RemoverAgendaBloqueioSerieResponse,
 } from './api-types';
 
 describe('isAgendaBloqueio', () => {
@@ -166,7 +169,10 @@ describe('recorrencia de bloqueios', () => {
 });
 
 describe('statusAgendaBloqueioRecorrenciaLabel / falhaAgendaBloqueioSerieLabel', () => {
-  it('traduz os status e os reasons extras do backend', () => {
+  it('traduz os status e os reasons extras do backend com fallback seguro', () => {
+    expect(isAgendaBloqueioRecorrenciaLivre('livre')).toBe(true);
+    expect(isAgendaBloqueioRecorrenciaLivre('ocupado')).toBe(false);
+    expect(isAgendaBloqueioRecorrenciaLivre(undefined)).toBe(false);
     expect(statusAgendaBloqueioRecorrenciaLabel('livre')).toBe('Livre');
     expect(statusAgendaBloqueioRecorrenciaLabel('ocupado')).toBe('Ja existe algo marcado');
     expect(statusAgendaBloqueioRecorrenciaLabel('fora_do_horario')).toBe(
@@ -183,6 +189,26 @@ describe('statusAgendaBloqueioRecorrenciaLabel / falhaAgendaBloqueioSerieLabel',
     expect(falhaAgendaBloqueioSerieLabel('erro_gcal')).toBe(
       'Nao foi possivel confirmar com a agenda',
     );
+    expect(statusAgendaBloqueioRecorrenciaLabel(undefined)).toBe(
+      'Ocupado ou indisponivel nesse horario',
+    );
+    expect(falhaAgendaBloqueioSerieLabel('motivo_desconhecido')).toBe(
+      'Nao foi possivel confirmar essa ocorrencia na Agenda Google.',
+    );
+    expect(falhaAgendaBloqueioSerieLabel(null)).toBe(
+      'Nao foi possivel confirmar essa ocorrencia na Agenda Google.',
+    );
+  });
+});
+
+describe('countRemovidosAgendaBloqueioSerie', () => {
+  it('conta a lista de bloqueios futuros removidos devolvida pelo backend', () => {
+    const response: RemoverAgendaBloqueioSerieResponse = {
+      ok: true,
+      serie_id: 'serie-123',
+      removidos: [{ id: 'a' }, { id: 'b' }],
+    };
+    expect(countRemovidosAgendaBloqueioSerie(response)).toBe(2);
   });
 });
 

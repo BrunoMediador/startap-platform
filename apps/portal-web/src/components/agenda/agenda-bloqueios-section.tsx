@@ -22,9 +22,11 @@ import {
   buildAgendaBloqueioRecorrenciaKey,
   buildCriarAgendaBloqueioSerieBody,
   buildPreviewAgendaBloqueioRecorrenciaBody,
+  countRemovidosAgendaBloqueioSerie,
   defaultBloqueioFormValues,
   falhaAgendaBloqueioSerieLabel,
   initRevisaoAgendaBloqueioRecorrencia,
+  isAgendaBloqueioRecorrenciaLivre,
   resumoResultadoAgendaBloqueioSerie,
   statusAgendaBloqueioRecorrenciaLabel,
   zonedDateTimeToUtcIso,
@@ -422,10 +424,11 @@ export function AgendaBloqueiosSection({
     removeSerieMutation.mutate(serieId, {
       onSuccess: (response) => {
         setConfirmRemoveSerie(null);
+        const totalRemovidos = countRemovidosAgendaBloqueioSerie(response);
         toast.success(
-          response.removidos === 1
+          totalRemovidos === 1
             ? '1 bloqueio futuro removido da Agenda Google'
-            : `${response.removidos} bloqueios futuros removidos da Agenda Google`,
+            : `${totalRemovidos} bloqueios futuros removidos da Agenda Google`,
         );
       },
       onError: (error) => {
@@ -694,8 +697,9 @@ export function AgendaBloqueiosSection({
 
                     {!resultadoSerie && (
                       <p className="mt-3 text-[12.5px] leading-snug text-ink-faint">
-                        A serie sera recalculada no servidor com esta mesma ancora. Se a agenda
-                        mudar ate a confirmacao, o resultado pode voltar parcial.
+                        A previa separa o que esta livre do que ja esta ocupado ou indisponivel na
+                        Agenda Google. A serie sera recalculada no servidor na confirmacao, entao o
+                        resultado ainda pode voltar parcial se a agenda mudar.
                       </p>
                     )}
 
@@ -962,7 +966,7 @@ function ReviewList({
   timeZone: string;
 }) {
   const falhasPorChave = useMemo(() => {
-    const map = new Map<string, { error: string; reason: string }>();
+    const map = new Map<string, { error: string; reason?: string | null }>();
     for (const falha of resultado?.falhas ?? []) {
       map.set(`${falha.inicio_at}|${falha.fim_at}`, {
         error: falha.error,
@@ -983,6 +987,7 @@ function ReviewList({
         const chave = `${ocorrencia.inicio_at}|${ocorrencia.fim_at}`;
         const falha = falhasPorChave.get(chave);
         const criada = criadosSet.has(chave);
+        const livre = isAgendaBloqueioRecorrenciaLivre(ocorrencia.status);
         const statusBase = statusAgendaBloqueioRecorrenciaLabel(ocorrencia.status);
         return (
           <li
@@ -991,7 +996,7 @@ function ReviewList({
               'flex gap-3 py-3',
               falha && 'bg-danger/6',
               criada && 'bg-brand/6',
-              !resultado && ocorrencia.status !== 'livre' && 'bg-amber-400/6',
+              !resultado && !livre && 'bg-amber-400/6',
             )}
           >
             {resultado ? (
@@ -1011,12 +1016,12 @@ function ReviewList({
               <span
                 className={cn(
                   'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
-                  ocorrencia.status === 'livre'
+                  livre
                     ? 'border-brand/40 bg-brand-soft text-brand'
                     : 'border-amber-400/35 bg-amber-400/12 text-amber-200',
                 )}
               >
-                {ocorrencia.status === 'livre' ? <IconCheck size={12} /> : <IconAlert size={12} />}
+                {livre ? <IconCheck size={12} /> : <IconAlert size={12} />}
               </span>
             )}
 
@@ -1039,13 +1044,13 @@ function ReviewList({
                       Nao enviado
                     </Pill>
                   )
-                ) : ocorrencia.status === 'livre' ? (
+                ) : livre ? (
                   <Pill className="border-brand/40 bg-brand-soft text-brand">
-                    Previsto na serie
+                    Livre na agenda
                   </Pill>
                 ) : (
                   <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
-                    Requer atencao
+                    Ocupado ou indisponivel
                   </Pill>
                 )}
               </div>
@@ -1057,12 +1062,12 @@ function ReviewList({
                     : falha
                       ? falhaAgendaBloqueioSerieLabel(falha.reason)
                       : 'Nao foi enviado para a Agenda Google.'
-                  : ocorrencia.status === 'livre'
+                  : livre
                     ? 'Se nada mudar, este bloqueio sera inserido na Agenda Google do profissional.'
                     : statusBase}
               </p>
 
-              {!resultado && ocorrencia.status !== 'livre' && (
+              {!resultado && !livre && (
                 <p className="mt-1 text-[12px] leading-snug text-amber-200">
                   O backend recalcula a serie na confirmacao. Se esse conflito continuar, esta
                   ocorrencia pode voltar como falha parcial.

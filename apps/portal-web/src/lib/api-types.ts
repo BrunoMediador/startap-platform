@@ -174,7 +174,11 @@ export interface RemoverAgendaBloqueioResponse {
 export interface RemoverAgendaBloqueioSerieResponse {
   ok: true;
   serie_id: string;
-  removidos: number;
+  /**
+   * O backend atual devolve a lista de bloqueios futuros afetados. O front só
+   * depende da contagem; por isso o shape interno segue opaco aqui.
+   */
+  removidos: unknown[];
 }
 
 /** Um balde do relatório de comissão do colaborador (faturado OU previsão). */
@@ -622,7 +626,7 @@ export interface PreviewAgendaBloqueioRecorrenciaBody extends AgendaBloqueioInpu
 export interface PreviewAgendaBloqueioRecorrencia {
   inicio_at: string;
   fim_at: string;
-  status: PreviewOcorrenciaStatus;
+  status?: PreviewOcorrenciaStatus | null;
 }
 
 export interface PreviewAgendaBloqueioRecorrenciaResponse {
@@ -652,7 +656,7 @@ export interface AgendaBloqueioSerieFalha {
   inicio_at: string;
   fim_at: string;
   error: string;
-  reason: string;
+  reason?: string | null;
 }
 
 /**

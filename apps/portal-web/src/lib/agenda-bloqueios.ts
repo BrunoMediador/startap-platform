@@ -3,6 +3,7 @@ import type {
   CriarAgendaBloqueioSerieBody,
   CriarAgendaBloqueioSerieResponse,
   Periodicidade,
+  RemoverAgendaBloqueioSerieResponse,
   PreviewAgendaBloqueioRecorrencia,
   PreviewAgendaBloqueioRecorrenciaBody,
   PreviewOcorrenciaStatus,
@@ -141,7 +142,15 @@ export function buildAgendaBloqueioRecorrenciaKey(args: {
   });
 }
 
-export function statusAgendaBloqueioRecorrenciaLabel(status: PreviewOcorrenciaStatus): string {
+export function isAgendaBloqueioRecorrenciaLivre(
+  status: PreviewOcorrenciaStatus | null | undefined,
+): boolean {
+  return status === 'livre';
+}
+
+export function statusAgendaBloqueioRecorrenciaLabel(
+  status: PreviewOcorrenciaStatus | null | undefined,
+): string {
   switch (status) {
     case 'livre':
       return 'Livre';
@@ -156,16 +165,31 @@ export function statusAgendaBloqueioRecorrenciaLabel(status: PreviewOcorrenciaSt
     case 'passado':
       return 'Esse horario ja passou';
     default:
-      return status;
+      return 'Ocupado ou indisponivel nesse horario';
   }
 }
 
-export function falhaAgendaBloqueioSerieLabel(reason: string): string {
+export function falhaAgendaBloqueioSerieLabel(reason?: string | null): string {
+  if (!reason) return 'Nao foi possivel confirmar essa ocorrencia na Agenda Google.';
   if (reason === 'gcal_rate_limit') return 'A agenda ficou sobrecarregada nesse momento';
   if (reason === 'erro_gcal') return 'Nao foi possivel confirmar com a agenda';
-  return statusAgendaBloqueioRecorrenciaLabel(
-    reason as Parameters<typeof statusAgendaBloqueioRecorrenciaLabel>[0],
-  );
+  if (
+    reason === 'livre' ||
+    reason === 'ocupado' ||
+    reason === 'fora_do_horario' ||
+    reason === 'fechado' ||
+    reason === 'fora_da_janela' ||
+    reason === 'passado'
+  ) {
+    return statusAgendaBloqueioRecorrenciaLabel(reason);
+  }
+  return 'Nao foi possivel confirmar essa ocorrencia na Agenda Google.';
+}
+
+export function countRemovidosAgendaBloqueioSerie(
+  resposta: RemoverAgendaBloqueioSerieResponse,
+): number {
+  return resposta.removidos.length;
 }
 
 export function resumoResultadoAgendaBloqueioSerie(
