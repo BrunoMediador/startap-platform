@@ -38,6 +38,9 @@ case "${1:-}:${2:-}" in
     [ "${3:-}" = --services ] || unsupported
     cat "$state_root/services"
     ;;
+  compose:up)
+    [ "${3:-}" = -d ] || unsupported
+    ;;
   ps:-a)
     [ "${3:-}" = --filter ] && [ "${4:-}" = status=created ] &&
       [ "${5:-}" = --format ] && [ "${6:-}" = '{{.ID}}' ] || unsupported

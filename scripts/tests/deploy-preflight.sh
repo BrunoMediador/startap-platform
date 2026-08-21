@@ -104,9 +104,26 @@ test_ambiguous_created_container_aborts() {
   ! grep -Fq "rm c3" "$SANDBOX/docker-state/calls.log"
 }
 
+test_rollback_continues_even_with_ambiguous_created_container() {
+  local output_file output
+  setup_sandbox
+  write_container c4 created /startap-api project api /tmp/wrong "$SANDBOX/project/docker-compose.yml"
+  output_file="$SANDBOX/rollback.log"
+  # shellcheck disable=SC1090
+  . "$REPO_ROOT/scripts/deploy.sh"
+  deploy_run_rollback >"$output_file" 2>&1
+  output="$(cat "$output_file")"
+  printf '%s\n' "$output" | grep -Fq 'rollback encontrou container created ambiguo'
+  printf '%s\n' "$output" | grep -Fq 'seguindo com docker compose up -d para priorizar a recuperacao'
+  grep -Fq "compose up -d" "$SANDBOX/docker-state/calls.log"
+  [ -f "$SANDBOX/docker-state/container-c4" ]
+  ! grep -Fq "rm c4" "$SANDBOX/docker-state/calls.log"
+}
+
 run_test 'remove created orphan only with full compose proof' test_safe_created_orphan_is_removed
 run_test 'ignore created container from another compose project' test_foreign_created_container_is_ignored
 run_test 'abort on ambiguous created container without safe proof' test_ambiguous_created_container_aborts
+run_test 'rollback keeps recovery path even with ambiguous created container' test_rollback_continues_even_with_ambiguous_created_container
 
 printf '1..%d\n' "$test_number"
 printf '# pass=%d fail=%d\n' "$pass" "$fail"
