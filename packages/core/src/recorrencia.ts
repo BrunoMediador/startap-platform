@@ -11,15 +11,15 @@
  * do portal-api), nunca aqui.
  */
 
-export const PERIODICIDADES = ['semanal', 'mensal', 'trimestral', 'semestral'] as const;
+export const PERIODICIDADES = ['diaria', 'semanal', 'mensal', 'trimestral', 'semestral'] as const;
 export type Periodicidade = (typeof PERIODICIDADES)[number];
 
 /** Cap duro de ocorrências por lote — risco de rate-limit do GCal (N chamadas events.insert). */
 export const OCORRENCIAS_MIN = 2;
 export const OCORRENCIAS_MAX = 24;
 
-/** Meses a somar por periodicidade (semanal usa dias, tratado à parte). */
-const MESES_POR_PERIODICIDADE: Record<Exclude<Periodicidade, 'semanal'>, number> = {
+/** Meses a somar por periodicidade (diaria/semanal usam dias, tratados à parte). */
+const MESES_POR_PERIODICIDADE: Record<Exclude<Periodicidade, 'diaria' | 'semanal'>, number> = {
   mensal: 1,
   trimestral: 3,
   semestral: 6,
@@ -103,7 +103,9 @@ export function expandirDatas(
 
   const datas: string[] = [dataAncora];
   for (let i = 1; i < ocorrencias; i++) {
-    if (periodicidade === 'semanal') {
+    if (periodicidade === 'diaria') {
+      datas.push(addDias(dataAncora, i));
+    } else if (periodicidade === 'semanal') {
       datas.push(addDias(dataAncora, i * 7));
     } else {
       datas.push(addMeses(dataAncora, i * MESES_POR_PERIODICIDADE[periodicidade]));

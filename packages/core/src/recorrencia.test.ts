@@ -2,6 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { OCORRENCIAS_MAX, OCORRENCIAS_MIN, expandirDatas } from './recorrencia.js';
 
 describe('expandirDatas', () => {
+  it('diaria: soma 1 dia corrido por ocorrencia, inclui a ancora como 1a', () => {
+    expect(expandirDatas('2026-08-03', 'diaria', 4)).toEqual([
+      '2026-08-03',
+      '2026-08-04',
+      '2026-08-05',
+      '2026-08-06',
+    ]);
+  });
+
+  it('diaria: atravessa virada de mes/ano e ano bissexto sem semantica de dias uteis', () => {
+    expect(expandirDatas('2027-12-30', 'diaria', 4)).toEqual([
+      '2027-12-30',
+      '2027-12-31',
+      '2028-01-01',
+      '2028-01-02',
+    ]);
+    expect(expandirDatas('2028-02-28', 'diaria', 3)).toEqual([
+      '2028-02-28',
+      '2028-02-29',
+      '2028-03-01',
+    ]);
+  });
+
   it('semanal: soma 7 dias por ocorrencia, inclui a ancora como 1a', () => {
     expect(expandirDatas('2026-08-03', 'semanal', 4)).toEqual([
       '2026-08-03',
