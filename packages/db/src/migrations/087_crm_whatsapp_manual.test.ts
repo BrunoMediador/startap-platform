@@ -8,7 +8,7 @@ const SQL = readFileSync(
 );
 const SQL_STMTS = SQL.replace(/--[^\n]*/g, '');
 
-describe('migration 086 — CRM WhatsApp manual', () => {
+describe('migration 087 — CRM WhatsApp manual', () => {
   it('cria guarda atomica por slot, tenant, cliente e operador', () => {
     expect(SQL).toMatch(/CREATE TABLE IF NOT EXISTS crm_whatsapp_manual_send_guards/i);
     expect(SQL).toMatch(/PRIMARY KEY \(slot, tenant_id, cliente_id, operator_user_id\)/i);
