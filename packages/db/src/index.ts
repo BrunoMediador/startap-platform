@@ -29,6 +29,7 @@ export * as tenant from './queries/tenant.js';
 export * as tenantReadRollup from './queries/tenant-read-rollup.js';
 export * as packages from './queries/packages.js';
 export * as atendimentos from './queries/atendimentos.js';
+export * as agendaBloqueios from './queries/agenda-bloqueios.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
 export * as botDetect from './queries/bot-detect.js';
@@ -145,6 +146,11 @@ export type {
   ComissaoPorProfissionalRow,
   ComissaoColaboradorReport,
 } from './queries/atendimentos.js';
+export type {
+  AgendaBloqueioRow,
+  AgendaBloqueioTipo,
+  AgendaBloqueioStatus,
+} from './queries/agenda-bloqueios.js';
 export type {
   ReminderConfigRow,
   SetReminderConfigInput,

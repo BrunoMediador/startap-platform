@@ -1,5 +1,6 @@
 'use client';
 
+import { AgendaBloqueiosSection } from '@/components/agenda/agenda-bloqueios-section';
 /**
  * Agenda do colaborador (read-only — SCRUM-32). Estados remotos completos:
  *   - pending              -> skeleton.
@@ -19,15 +20,22 @@ import { IconCalendar } from '@/components/icons';
 import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
+import { separarAgendamentosDeBloqueios } from '@/lib/agenda-bloqueios';
 import { agendaPeriodoPadrao, periodoParaPastAhead } from '@/lib/colaborador-agenda-periodo';
 import { useColaboradorAgenda } from '@/lib/queries';
 import { useMemo, useState } from 'react';
 
 export default function ColaboradorAgendaPage() {
-  const { slot, colaboradorId } = useColaborador();
+  const { slot, colaboradorId, timezone } = useColaborador();
   const [periodo, setPeriodo] = useState(() => agendaPeriodoPadrao());
   const { past, ahead } = useMemo(() => periodoParaPastAhead(periodo), [periodo]);
   const q = useColaboradorAgenda(slot, colaboradorId, past, ahead);
+  const agendaSemBloqueios = q.data
+    ? {
+        ...q.data,
+        agendamentos: separarAgendamentosDeBloqueios(q.data.agendamentos).agendamentos,
+      }
+    : null;
 
   return (
     <>
@@ -47,7 +55,21 @@ export default function ColaboradorAgendaPage() {
           description="Quando sua agenda do Google estiver ligada, os horários aparecem aqui pra você acompanhar."
         />
       ) : (
-        <ColaboradorAgendaClient data={q.data} periodo={periodo} onPeriodoChange={setPeriodo} />
+        <div className="flex flex-col gap-4">
+          <AgendaBloqueiosSection
+            mode="colaborador"
+            slot={slot}
+            colaboradorId={colaboradorId}
+            timeZone={timezone ?? 'America/Sao_Paulo'}
+          />
+          {agendaSemBloqueios ? (
+            <ColaboradorAgendaClient
+              data={agendaSemBloqueios}
+              periodo={periodo}
+              onPeriodoChange={setPeriodo}
+            />
+          ) : null}
+        </div>
       )}
     </>
   );

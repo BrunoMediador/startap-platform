@@ -21,6 +21,8 @@ import { isAgendaConfigurada } from './agenda-config';
 import { atualizarAgendamento, removerAgendamento } from './agendamentos';
 import { apiFetch } from './api';
 import type {
+  AgendaBloqueioInput,
+  AgendaBloqueiosResponse,
   AgendaConfig,
   AgendaSlotsResponse,
   AgendamentosResponse,
@@ -39,6 +41,7 @@ import type {
   ComissaoReport,
   ConexaoResponse,
   ContatosResponse,
+  CriarAgendaBloqueioResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
   CriarAtendimentoBody,
@@ -68,6 +71,7 @@ import type {
   PreviewRecorrenciaResponse,
   QrResponse,
   ReconectarResponse,
+  RemoverAgendaBloqueioResponse,
   SaveColaboradorResponse,
   SavePerfilResponse,
   Servico,
@@ -115,6 +119,9 @@ export const qk = {
   googleConta: (slot: string) => ['google-conta', slot] as const,
   contatos: (slot: string) => ['contatos', slot] as const,
   agendamentos: (slot: string) => ['agendamentos', slot] as const,
+  agendaBloqueiosBase: (slot: string) => ['agenda-bloqueios', slot] as const,
+  agendaBloqueios: (slot: string, colaboradorId: number | null) =>
+    ['agenda-bloqueios', slot, colaboradorId ?? 'todos'] as const,
   /** Prefixo por tenant — usar pra invalidar TODAS as grades de slots de uma vez. */
   agendaSlotsBase: (slot: string) => ['agenda-slots', slot] as const,
   // `colaborador` no fim distingue a grade por profissional (estabelecimento); '' = individual.
@@ -140,6 +147,10 @@ export const qk = {
   // pra isolar o cache do barbeiro — nunca colide com o do dono nem de outro colab.
   colaboradorAgenda: (slot: string, colaboradorId: number, past: number, ahead: number) =>
     ['colaborador-agenda', slot, colaboradorId, past, ahead] as const,
+  colaboradorBloqueiosBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-bloqueios', slot, colaboradorId] as const,
+  colaboradorBloqueios: (slot: string, colaboradorId: number) =>
+    ['colaborador-bloqueios', slot, colaboradorId] as const,
   colaboradorComissao: (slot: string, colaboradorId: number, de: string, ate: string) =>
     ['colaborador-comissao', slot, colaboradorId, de, ate] as const,
   /** Frases de comando (modo atendente) — GET/PUT /portal/frases-pausa. */
@@ -183,6 +194,84 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
   });
 }
 
+export interface AgendaBloqueiosQueryData extends AgendaBloqueiosResponse {
+  available: boolean;
+}
+
+function isFeatureOff(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'status' in error &&
+    (error as { status?: unknown }).status === 404 &&
+    'body' in error &&
+    typeof (error as { body?: unknown }).body === 'object' &&
+    (error as { body?: { error?: unknown } }).body?.error === 'feature_off'
+  );
+}
+
+export function useAgendaBloqueios(
+  slot: string,
+  colaboradorId: number | null,
+  enabled = true,
+): UseQueryResult<AgendaBloqueiosQueryData> {
+  return useQuery({
+    queryKey: qk.agendaBloqueios(slot, colaboradorId),
+    queryFn: async ({ signal }) => {
+      const params = new URLSearchParams();
+      if (colaboradorId != null) params.set('colaborador_id', String(colaboradorId));
+      try {
+        const data = await apiFetch<AgendaBloqueiosResponse>(
+          `/portal/agenda/bloqueios${params.size ? `?${params.toString()}` : ''}`,
+          { signal },
+        );
+        return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) return { available: false, count: 0, bloqueios: [] };
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+  });
+}
+
+export function useCriarAgendaBloqueio(
+  slot: string,
+): UseMutationResult<CriarAgendaBloqueioResponse, Error, AgendaBloqueioInput> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarAgendaBloqueioResponse>('/portal/agenda/bloqueios', { method: 'POST', body }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.agendaBloqueiosBase(slot) });
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot] });
+      client.invalidateQueries({ queryKey: ['colaborador-bloqueios', slot] });
+    },
+  });
+}
+
+export function useRemoverAgendaBloqueio(
+  slot: string,
+): UseMutationResult<RemoverAgendaBloqueioResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id) =>
+      apiFetch<RemoverAgendaBloqueioResponse>(
+        `/portal/agenda/bloqueios/${encodeURIComponent(id)}`,
+        {
+          method: 'DELETE',
+        },
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.agendaBloqueiosBase(slot) });
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot] });
+      client.invalidateQueries({ queryKey: ['colaborador-bloqueios', slot] });
+    },
+  });
+}
+
 // ── Colaborador (painel READ-ONLY — SCRUM-32) ────────────────────────────────
 //
 // O backend escopa TUDO por (slot + tenant + colaboradorId) DA SESSÃO; o front
@@ -215,6 +304,67 @@ export function useColaboradorAgenda(
         { signal },
       ),
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useColaboradorBloqueios(
+  slot: string,
+  colaboradorId: number,
+  enabled = true,
+): UseQueryResult<AgendaBloqueiosQueryData> {
+  return useQuery({
+    queryKey: qk.colaboradorBloqueios(slot, colaboradorId),
+    queryFn: async ({ signal }) => {
+      try {
+        const data = await apiFetch<AgendaBloqueiosResponse>('/portal/colaborador/bloqueios', {
+          signal,
+        });
+        return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) return { available: false, count: 0, bloqueios: [] };
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+  });
+}
+
+export function useCriarColaboradorBloqueio(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<CriarAgendaBloqueioResponse, Error, AgendaBloqueioInput> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarAgendaBloqueioResponse>('/portal/colaborador/bloqueios', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.colaboradorBloqueiosBase(slot, colaboradorId) });
+      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot, colaboradorId] });
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+    },
+  });
+}
+
+export function useRemoverColaboradorBloqueio(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<RemoverAgendaBloqueioResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id) =>
+      apiFetch<RemoverAgendaBloqueioResponse>(
+        `/portal/colaborador/bloqueios/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.colaboradorBloqueiosBase(slot, colaboradorId) });
+      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot, colaboradorId] });
+      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+    },
   });
 }
 
@@ -1002,7 +1152,7 @@ export function useRetomarBot(
 // carrega o slot pra isolar o cache por tenant. A mutation invalida a lista
 // (refetch): o backend é a fonte de verdade do seat_cap/uso (usados/seat_cap).
 
-export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
+export function useEquipe(slot: string, enabled = true): UseQueryResult<EquipeResponse> {
   return useQuery({
     queryKey: qk.equipe(slot),
     // Normaliza id (BIGSERIAL -> string) e comissao_pct (NUMERIC) pra number no
@@ -1011,6 +1161,7 @@ export function useEquipe(slot: string): UseQueryResult<EquipeResponse> {
       const res = await apiFetch<EquipeResponse>('/portal/equipe', { signal });
       return { ...res, colaboradores: res.colaboradores.map(mapColaboradorRow) };
     },
+    enabled,
     retry: false,
   });
 }

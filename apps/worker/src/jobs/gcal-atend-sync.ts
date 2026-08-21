@@ -170,6 +170,7 @@ export function resolvePreco(pricing: atendimentos.SlotPricing, servico: string)
 function isBillableEvent(
   ev: gcal.CalendarEvent,
 ): ev is gcal.CalendarEvent & { id: string; start: { dateTime: string } } {
+  if (ev.extendedProperties?.private?.kind === 'bloqueio') return false;
   const status = ev.status ?? 'confirmed';
   if (status !== 'confirmed' && status !== 'tentative') return false;
   if (!ev.id) return false;

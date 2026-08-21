@@ -251,6 +251,27 @@ describe('UPSERT — preço', () => {
       logWarn.mock.calls.find((c) => String(c[1]).includes('não reconhecido')),
     ).toBeUndefined();
   });
+
+  it("ignora evento GCal marcado como bloqueio (extendedProperties.private.kind='bloqueio') antes de upsert", async () => {
+    getGcalForSlot.mockResolvedValue(
+      pagedClient({
+        events: [
+          {
+            ...ev('block-1', { summary: 'Bloqueio: Almoço' }),
+            extendedProperties: { private: { kind: 'bloqueio', bloqueioId: 'b-1' } },
+          },
+        ],
+        complete: true,
+      }),
+    );
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(res.scanned).toBe(0);
+    expect(res.upserted).toBe(0);
+    expect(upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('DELEÇÃO — só sobre listagem completa + auditoria', () => {
