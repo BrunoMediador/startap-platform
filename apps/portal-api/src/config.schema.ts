@@ -263,6 +263,16 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── CRM Ranking "Sem Retorno" (Missão 035, backend) ───────────────────────
+  // Kill-switch das rotas /portal/clientes/sem-retorno e /portal/colaborador/
+  // clientes/sem-retorno. OPCIONAL no boot (ausente = OFF, lição #247): OFF -> 404
+  // feature_off antes de consulta pesada. Depende do CRM canônico já ligado, mas nasce
+  // separado para rollout conservador desta leitura read-only, sem WhatsApp/export.
+  RANKING_SEM_RETORNO_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
   // Gate POR-CLONE da camada que DERIVA atendimentos dos eventos do GCal (split
   // previsão×faturado, sticky de edição). Lista de slots separada por vírgula; o gate é

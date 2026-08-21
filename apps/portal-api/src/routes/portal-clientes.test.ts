@@ -14,6 +14,8 @@ const {
   seedClientesMock,
   listClientesOwnerMock,
   listClientesColaboradorMock,
+  listSemRetornoOwnerMock,
+  listSemRetornoColaboradorMock,
   getClienteOwnerMock,
   getClienteColaboradorMock,
   listHistoricoOwnerMock,
@@ -23,11 +25,14 @@ const {
   configMock: {
     CRM_CLIENTES_ENABLED: true,
     COLABORADOR_PORTAL_ENABLED: true,
+    RANKING_SEM_RETORNO_ENABLED: true,
   } as Record<string, unknown>,
   getScopeBySlotMock: vi.fn(),
   seedClientesMock: vi.fn(),
   listClientesOwnerMock: vi.fn(),
   listClientesColaboradorMock: vi.fn(),
+  listSemRetornoOwnerMock: vi.fn(),
+  listSemRetornoColaboradorMock: vi.fn(),
   getClienteOwnerMock: vi.fn(),
   getClienteColaboradorMock: vi.fn(),
   listHistoricoOwnerMock: vi.fn(),
@@ -44,6 +49,8 @@ vi.mock('@startap/db', () => ({
     seedClientesFromAtendimentos: (...a: unknown[]) => seedClientesMock(...a),
     listClientesForOwner: (...a: unknown[]) => listClientesOwnerMock(...a),
     listClientesForColaborador: (...a: unknown[]) => listClientesColaboradorMock(...a),
+    listClientesSemRetornoForOwner: (...a: unknown[]) => listSemRetornoOwnerMock(...a),
+    listClientesSemRetornoForColaborador: (...a: unknown[]) => listSemRetornoColaboradorMock(...a),
     getClienteProfileForOwner: (...a: unknown[]) => getClienteOwnerMock(...a),
     getClienteProfileForColaborador: (...a: unknown[]) => getClienteColaboradorMock(...a),
     listClienteHistoricoForOwner: (...a: unknown[]) => listHistoricoOwnerMock(...a),
@@ -124,6 +131,22 @@ const COLAB_PROFILE = {
   updated_at: '2026-08-20T10:00:00.000Z',
 };
 
+const SEM_RETORNO_LIST = {
+  clientes: [
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      nome: 'Maria',
+      telefone_masked: '+55 31 •••••-••88',
+      ultimo_atendimento_at: '2026-08-01T13:00:00.000Z',
+      dias_sem_retorno: 20,
+      ultimo_profissional_nome: 'Bene',
+    },
+  ],
+  total: 1,
+  limit: 20,
+  offset: 0,
+};
+
 const HISTORICO = [
   {
     atendimento_id: 91,
@@ -146,6 +169,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   configMock.CRM_CLIENTES_ENABLED = true;
   configMock.COLABORADOR_PORTAL_ENABLED = true;
+  configMock.RANKING_SEM_RETORNO_ENABLED = true;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'estabelecimento',
     seat_cap: 2,
@@ -154,6 +178,21 @@ beforeEach(() => {
   });
   listClientesOwnerMock.mockResolvedValue(OWNER_LIST);
   listClientesColaboradorMock.mockResolvedValue(OWNER_LIST);
+  listSemRetornoOwnerMock.mockImplementation(({ limit, offset }: { limit?: number; offset?: number }) =>
+    Promise.resolve({
+      ...SEM_RETORNO_LIST,
+      limit: limit ?? SEM_RETORNO_LIST.limit,
+      offset: offset ?? SEM_RETORNO_LIST.offset,
+    }),
+  );
+  listSemRetornoColaboradorMock.mockImplementation(
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      Promise.resolve({
+        ...SEM_RETORNO_LIST,
+        limit: limit ?? SEM_RETORNO_LIST.limit,
+        offset: offset ?? SEM_RETORNO_LIST.offset,
+      }),
+  );
   getClienteOwnerMock.mockResolvedValue(OWNER_PROFILE);
   getClienteColaboradorMock.mockResolvedValue(COLAB_PROFILE);
   listHistoricoOwnerMock.mockResolvedValue(HISTORICO);
@@ -181,6 +220,26 @@ describe('gating', () => {
     expect(res.json()).toEqual({ error: 'feature_off' });
     expect(seedClientesMock).not.toHaveBeenCalled();
     expect(listClientesColaboradorMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 ranking owner quando RANKING_SEM_RETORNO_ENABLED está OFF', async () => {
+    configMock.RANKING_SEM_RETORNO_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/clientes/sem-retorno' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
+    expect(listSemRetornoOwnerMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 ranking colaborador quando RANKING_SEM_RETORNO_ENABLED está OFF', async () => {
+    configMock.RANKING_SEM_RETORNO_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/colaborador/clientes/sem-retorno' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
+    expect(listSemRetornoColaboradorMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
@@ -225,6 +284,42 @@ describe('owner', () => {
       '11111111-1111-4111-8111-111111111111',
     );
     expect(res.json()).toEqual({ cliente: OWNER_PROFILE, historico: HISTORICO });
+    await app.close();
+  });
+
+  it('ranking sem retorno aceita limit=50 e usa slot+tenant+timezone da sessão', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/sem-retorno?limit=50&offset=100',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(seedClientesMock).not.toHaveBeenCalled();
+    expect(listSemRetornoOwnerMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      limit: 50,
+      offset: 100,
+    });
+    const body = res.json();
+    expect(body).toEqual({ ...SEM_RETORNO_LIST, limit: 50, offset: 100 });
+    expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••88');
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('553199998842');
+    await app.close();
+  });
+
+  it('ranking sem retorno rejeita limit=51 e parâmetros forjados de escopo', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/sem-retorno?slot=outro&tenant_id=forjado&limit=51',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(listSemRetornoOwnerMock).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -323,6 +418,42 @@ describe('colaborador', () => {
 
     expect(res.statusCode).toBe(404);
     expect(listHistoricoColaboradorMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('ranking sem retorno do colaborador usa colaboradorId da sessão e mascara PII', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/sem-retorno?limit=7&offset=2',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(seedClientesMock).not.toHaveBeenCalled();
+    expect(getScopeBySlotMock).toHaveBeenCalledWith('clone_owner');
+    expect(listSemRetornoColaboradorMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+      limit: 7,
+      offset: 2,
+    });
+    const body = res.json();
+    expect(body).toEqual({ ...SEM_RETORNO_LIST, limit: 7, offset: 2 });
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    await app.close();
+  });
+
+  it('ranking sem retorno do colaborador rejeita tentativa de mini-idor por query', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/sem-retorno?colaborador_id=77',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(listSemRetornoColaboradorMock).not.toHaveBeenCalled();
     await app.close();
   });
 });

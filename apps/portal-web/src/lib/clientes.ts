@@ -1,7 +1,8 @@
-import type { ClientePerfil, SaveClienteBody } from './api-types';
+import type { ClientePerfil, ClienteSemRetornoApiItem, SaveClienteBody } from './api-types';
 import { formatDueDate } from './format';
 
 export const CLIENTES_PAGE_SIZE = 10;
+export const CLIENTES_SEM_RETORNO_PAGE_SIZE = 5;
 
 export function sanitizeClientesSearch(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ').slice(0, 80);
@@ -31,9 +32,29 @@ export function buildClientesListSearchParams({
   return params.toString();
 }
 
+export function buildClientesSemRetornoSearchParams({
+  page,
+  pageSize,
+}: {
+  page: number;
+  pageSize: number;
+}): string {
+  const safePage = clampClientesPage(page);
+  const limit = clampClientesSemRetornoLimit(pageSize);
+  return new URLSearchParams({
+    limit: String(limit),
+    offset: String(clientesOffsetFromPage(safePage, limit)),
+  }).toString();
+}
+
 export function clampClientesLimit(limit: number): number {
   if (!Number.isFinite(limit)) return CLIENTES_PAGE_SIZE;
   return Math.max(1, Math.min(100, Math.trunc(limit)));
+}
+
+export function clampClientesSemRetornoLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return CLIENTES_SEM_RETORNO_PAGE_SIZE;
+  return Math.max(1, Math.min(50, Math.trunc(limit)));
 }
 
 export function clientesOffsetFromPage(page: number, pageSize: number): number {
@@ -67,6 +88,60 @@ export function clientePhoneMasked(raw: string | null): string {
     return `${hasDdi ? '+55 ' : ''}(${local.slice(0, 2)}) ••••-${local.slice(6)}`;
   }
   return `••••${digits.slice(-4)}`;
+}
+
+export interface ClienteSemRetornoItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  ultimo_atendimento_at: string | null;
+  dias_sem_retorno: number;
+  ultimo_profissional_nome: string | null;
+}
+
+export function clienteSemRetornoFromApi(
+  item: ClienteSemRetornoApiItem,
+): ClienteSemRetornoItem {
+  return {
+    id: item.cliente_id,
+    nome: item.nome,
+    telefone_masked: item.telefone_masked,
+    ultimo_atendimento_at: item.ultimo_atendimento_at,
+    dias_sem_retorno: item.dias_sem_retorno,
+    ultimo_profissional_nome: item.ultimo_profissional_nome,
+  };
+}
+
+export function semRetornoMatchesSearch(
+  item: ClienteSemRetornoItem,
+  search: string,
+): boolean {
+  const token = sanitizeClientesSearch(search).toLowerCase();
+  if (!token) return true;
+  const tokenDigits = token.replace(/\D/g, '');
+  const nome = (item.nome ?? '').toLowerCase();
+  const telefone = item.telefone_masked.toLowerCase();
+  const telefoneDigits = telefone.replace(/\D/g, '');
+  return (
+    nome.includes(token) ||
+    telefone.includes(token) ||
+    (tokenDigits.length > 0 && telefoneDigits.includes(tokenDigits))
+  );
+}
+
+export function semRetornoDiasLabel(dias: number): string {
+  if (dias <= 0) return 'Hoje';
+  if (dias === 1) return '1 dia';
+  return `${dias} dias`;
+}
+
+export function semRetornoFaixaLabel(dias: number): string {
+  if (dias <= 0) return 'Atendido hoje';
+  if (dias <= 6) return 'Até 7 dias';
+  if (dias <= 14) return '8 a 14 dias';
+  if (dias <= 30) return '15 a 30 dias';
+  if (dias <= 60) return '31 a 60 dias';
+  return 'Mais de 60 dias';
 }
 
 export function birthdayToDateInput(aniversarioMmdd: string | null): string {

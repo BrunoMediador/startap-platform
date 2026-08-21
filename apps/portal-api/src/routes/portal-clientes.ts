@@ -24,6 +24,13 @@ const listQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 });
 
+const semRetornoQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    offset: z.coerce.number().int().min(0).max(100).optional(),
+  })
+  .strict();
+
 const clienteIdParamSchema = z.object({
   id: z.string().uuid('id invalido'),
 });
@@ -53,7 +60,7 @@ function formatIssues(error: z.ZodError) {
 async function gateClientesOwner(
   req: FastifyRequest,
   reply: FastifyReply,
-): Promise<{ slot: string; tenantId: string } | null> {
+) : Promise<{ slot: string; tenantId: string; timezone: string } | null> {
   if (!config.CRM_CLIENTES_ENABLED) {
     await reply.code(404).send({ error: 'feature_off' });
     return null;
@@ -64,7 +71,18 @@ async function gateClientesOwner(
     await reply.code(409).send({ error: 'cliente sem tenant_id (dado inconsistente)' });
     return null;
   }
-  return { slot, tenantId: scope.tenant_id };
+  return { slot, tenantId: scope.tenant_id, timezone: scope.timezone };
+}
+
+async function gateRankingOwner(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ slot: string; tenantId: string; timezone: string } | null> {
+  if (!config.CRM_CLIENTES_ENABLED || !config.RANKING_SEM_RETORNO_ENABLED) {
+    await reply.code(404).send({ error: 'feature_off' });
+    return null;
+  }
+  return gateClientesOwner(req, reply);
 }
 
 async function gateClientesColaborador(
@@ -77,6 +95,24 @@ async function gateClientesColaborador(
   }
   const c = requireColaborador(req);
   return { slot: c.slot, tenantId: c.tenantId, colaboradorId: c.colaboradorId };
+}
+
+async function gateRankingColaborador(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ slot: string; tenantId: string; colaboradorId: number; timezone: string } | null> {
+  if (
+    !config.CRM_CLIENTES_ENABLED ||
+    !config.COLABORADOR_PORTAL_ENABLED ||
+    !config.RANKING_SEM_RETORNO_ENABLED
+  ) {
+    await reply.code(404).send({ error: 'feature_off' });
+    return null;
+  }
+  const gate = await gateClientesColaborador(req, reply);
+  if (!gate) return null;
+  const scope = await cloneColaboradores.getScopeBySlot(gate.slot);
+  return { ...gate, timezone: scope.timezone };
 }
 
 export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
@@ -95,6 +131,27 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       slot: gate.slot,
       tenantId: gate.tenantId,
       search: parsed.data.q,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+    });
+    return reply.code(200).send(result);
+  });
+
+  app.get('/portal/clientes/sem-retorno', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateRankingOwner(req, reply);
+    if (!gate) return reply;
+
+    const parsed = semRetornoQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
+    }
+
+    const result = await clientes.listClientesSemRetornoForOwner({
+      slot: gate.slot,
+      tenantId: gate.tenantId,
+      timezone: gate.timezone,
       limit: parsed.data.limit,
       offset: parsed.data.offset,
     });
@@ -182,6 +239,32 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     });
     return reply.code(200).send(result);
   });
+
+  app.get(
+    '/portal/colaborador/clientes/sem-retorno',
+    { preHandler: withColaborador },
+    async (req, reply) => {
+      const gate = await gateRankingColaborador(req, reply);
+      if (!gate) return reply;
+
+      const parsed = semRetornoQuerySchema.safeParse(req.query ?? {});
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
+      }
+
+      const result = await clientes.listClientesSemRetornoForColaborador({
+        slot: gate.slot,
+        tenantId: gate.tenantId,
+        colaboradorId: gate.colaboradorId,
+        timezone: gate.timezone,
+        limit: parsed.data.limit,
+        offset: parsed.data.offset,
+      });
+      return reply.code(200).send(result);
+    },
+  );
 
   app.get(
     '/portal/colaborador/clientes/:id',

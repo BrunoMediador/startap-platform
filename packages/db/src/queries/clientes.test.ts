@@ -16,6 +16,8 @@ vi.mock('../client.js', () => ({
 const {
   upsertClienteFromSnapshot,
   seedClientesFromAtendimentos,
+  listClientesSemRetornoForOwner,
+  listClientesSemRetornoForColaborador,
   listClientesForColaborador,
 } = await import('./clientes.js');
 
@@ -150,5 +152,95 @@ describe('listClientesForColaborador', () => {
     expect(result.total).toBe(1);
     expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
     expect((result.clientes[0] as { telefone?: string }).telefone).toBeUndefined();
+  });
+});
+
+describe('listClientesSemRetornoForOwner', () => {
+  it('usa apenas clientes canônicos elegíveis, filtra futuro/cancelado/deletado, limita em 50 e ordena mais antigos primeiro', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: '22222222-2222-4222-8222-222222222222',
+          nome: 'Maria',
+          telefone_canonico: '553199998888',
+          ultimo_atendimento_at: '2026-08-01T13:00:00.000Z',
+          dias_sem_retorno: '20',
+          ultimo_profissional_nome: 'Bene',
+          total_count: '1',
+        },
+      ],
+      rowCount: 1,
+    });
+
+    const result = await listClientesSemRetornoForOwner({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      limit: 51,
+      offset: 3,
+    });
+
+    const [sql, params] = lastQueryCall();
+    expect(sql).toContain('JOIN atendimentos a');
+    expect(sql).toContain("a.deleted_at IS NULL");
+    expect(sql).toContain("a.status <> 'cancelado'");
+    expect(sql).toContain("a.cliente_telefone_canonico = c.telefone_canonico");
+    expect(sql).toContain("AND a.origem = 'agenda'");
+    expect(sql).toContain("AND COALESCE(a.fim_at, a.inicio_at) <= NOW()");
+    expect(sql).toContain("UNION ALL");
+    expect(sql).toContain("AND a.origem = 'manual'");
+    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $3)::date");
+    expect(sql).toContain("ORDER BY ultimo_atendimento_at ASC, id ASC");
+    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 50, 3]);
+    expect(result.total).toBe(1);
+    expect(result.clientes[0]).toEqual({
+      id: '22222222-2222-4222-8222-222222222222',
+      nome: 'Maria',
+      telefone_masked: '+55 31 •••••-••88',
+      ultimo_atendimento_at: '2026-08-01T13:00:00.000Z',
+      dias_sem_retorno: 20,
+      ultimo_profissional_nome: 'Bene',
+    });
+    expect((result.clientes[0] as { telefone?: string }).telefone).toBeUndefined();
+  });
+});
+
+describe('listClientesSemRetornoForColaborador', () => {
+  it('restringe o ranking ao colaborador da sessão e aceita limit=50', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          nome: 'Carlos',
+          telefone_canonico: '553199997777',
+          ultimo_atendimento_at: '2026-08-05T16:00:00.000Z',
+          dias_sem_retorno: '16',
+          ultimo_profissional_nome: 'Barbeiro',
+          total_count: '1',
+        },
+      ],
+      rowCount: 1,
+    });
+
+    const result = await listClientesSemRetornoForColaborador({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+      limit: 50,
+      offset: 2,
+    });
+
+    const [sql, params] = lastQueryCall();
+    expect(sql).toContain('a.colaborador_id = $3');
+    expect(sql).toContain("AND a.origem = 'agenda'");
+    expect(sql).toContain("AND a.origem = 'manual'");
+    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $4)::date");
+    expect(sql).toContain('UNION ALL');
+    expect(sql).toContain('ROW_NUMBER() OVER');
+    expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 50, 2]);
+    expect(result.total).toBe(1);
+    expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••77');
+    expect((result.clientes[0] as { telefone_raw?: string }).telefone_raw).toBeUndefined();
   });
 });

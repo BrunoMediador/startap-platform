@@ -419,6 +419,27 @@ export interface SaveClienteResponse {
   cliente: ClientePerfil;
 }
 
+// ── CRM Ranking Sem Retorno (Missão 035) ────────────────────────────────────
+//
+// Ranking read-only dentro do CRM. O backend continua autoritativo: a rota
+// ordena por maior tempo sem retorno e expõe PII mínima (telefone mascarado).
+
+export interface ClienteSemRetornoApiItem {
+  cliente_id: string;
+  nome: string | null;
+  telefone_masked: string;
+  ultimo_atendimento_at: string | null;
+  dias_sem_retorno: number;
+  ultimo_profissional_nome: string | null;
+}
+
+export interface ClientesSemRetornoResponse {
+  clientes: ClienteSemRetornoApiItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ── Status / Home ────────────────────────────────────────────────────────────
 
 export type BillingStatus = 'active' | 'overdue' | 'suspended';
