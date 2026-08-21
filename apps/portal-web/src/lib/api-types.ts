@@ -96,7 +96,7 @@ export interface AuthMe {
    * CRM de clientes (Missão 034). Default OFF no backend; ausente = tratar como
    * false e manter o portal byte-idêntico aos tenants sem rollout.
    */
-  crm_clientes_enabled?: boolean;
+  crm_clientes_enabled: boolean;
 }
 
 // ── Colaborador (painel READ-ONLY do barbeiro — SCRUM-32, portal-colaborador.ts) ──
@@ -120,7 +120,7 @@ export interface ColaboradorMe {
    */
   timezone?: string;
   /** Mesmo gate do owner: ausente = OFF/fail-closed. */
-  crm_clientes_enabled?: boolean;
+  crm_clientes_enabled: boolean;
 }
 
 /**
@@ -356,25 +356,22 @@ export interface ContatosResponse {
 // minimiza PII (telefone mascarado); o perfil autorizado pode trazer o telefone
 // completo e, para o dono, os campos opcionais editáveis.
 
-/** Aniversário sem ano civil — serializado como "MM-DD". */
-export type ClienteAniversario = string;
-
 export interface ClienteListItem {
-  id: number;
-  nome_preferido: string | null;
-  telefone_masked: string | null;
+  id: string;
+  nome: string | null;
+  telefone: string;
+  aniversario_mmdd: string | null;
   cidade: string | null;
   total_atendimentos: number;
-  ultimo_atendimento_at: string | null;
+  ultima_interacao_at: string | null;
   ultimo_profissional_nome: string | null;
 }
 
 export interface ClientesListResponse {
-  items: ClienteListItem[];
+  clientes: ClienteListItem[];
   total: number;
-  page: number;
-  per_page: number;
-  pages: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ClienteHistoricoItem {
@@ -382,32 +379,37 @@ export interface ClienteHistoricoItem {
   data: string;
   inicio_at: string | null;
   fim_at: string | null;
+  cliente_nome: string | null;
   servico_nome: string | null;
+  valor_cents: number;
+  desconto_cents: number;
+  forma_pagamento: string | null;
   profissional_nome: string | null;
-  status: string | null;
+  status: string;
+  origem: string;
+  colaborador_id: number | null;
 }
 
 export interface ClientePerfil {
-  id: number;
-  nome_preferido: string | null;
-  telefone: string | null;
-  telefone_masked: string | null;
-  aniversario: ClienteAniversario | null;
+  id: string;
+  nome: string | null;
+  telefone: string;
+  aniversario_mmdd: string | null;
   cidade: string | null;
-  nota_interna: string | null;
+  nota_interna?: string | null;
   total_atendimentos: number;
-  ultimo_atendimento_at: string | null;
+  ultima_interacao_at: string | null;
   created_at: string;
   updated_at: string;
-  historico: ClienteHistoricoItem[];
 }
 
 export interface ClientePerfilResponse {
   cliente: ClientePerfil;
+  historico: ClienteHistoricoItem[];
 }
 
 export interface SaveClienteBody {
-  aniversario?: ClienteAniversario | null;
+  aniversario_mmdd?: string | null;
   cidade?: string | null;
   nota_interna?: string | null;
 }

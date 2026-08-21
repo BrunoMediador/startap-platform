@@ -22,10 +22,16 @@ import { ApiError } from '@/lib/api';
 import type { ClientePerfil, ClienteListItem, SaveClienteBody } from '@/lib/api-types';
 import {
   CLIENTES_PAGE_SIZE,
-  birthdayFromDateInput,
   birthdayLabel,
   birthdayToDateInput,
+  birthdayFromDateInput,
+  buildClientePatchBody,
+  clienteDraftChanged,
+  clienteDraftFromPerfil,
   clienteDisplayName,
+  clientePhoneMasked,
+  clientesPageFromOffset,
+  clientesTotalPages,
   sanitizeClientesSearch,
 } from '@/lib/clientes';
 import { cn } from '@/lib/cn';
@@ -49,12 +55,6 @@ interface ClientesSectionProps {
   colaboradorId?: number;
 }
 
-interface ClienteDraft {
-  aniversario: string | null;
-  cidade: string;
-  nota_interna: string;
-}
-
 const OWNER_SUBTITLE =
   'Sua carteira de clientes em um só lugar, com histórico e campos opcionais para completar o perfil.';
 const COLABORADOR_SUBTITLE =
@@ -71,31 +71,6 @@ function isFeatureOffApiError(error: unknown): boolean {
   );
 }
 
-function draftFromCliente(cliente: ClientePerfil): ClienteDraft {
-  return {
-    aniversario: cliente.aniversario,
-    cidade: cliente.cidade ?? '',
-    nota_interna: cliente.nota_interna ?? '',
-  };
-}
-
-function buildSaveBody(draft: ClienteDraft): SaveClienteBody {
-  return {
-    aniversario: draft.aniversario,
-    cidade: draft.cidade.trim() || null,
-    nota_interna: draft.nota_interna.trim() || null,
-  };
-}
-
-function draftChanged(cliente: ClientePerfil, draft: ClienteDraft): boolean {
-  const current = draftFromCliente(cliente);
-  return (
-    current.aniversario !== draft.aniversario ||
-    current.cidade !== draft.cidade ||
-    current.nota_interna !== draft.nota_interna
-  );
-}
-
 export function ClientesSection({
   mode,
   slot,
@@ -107,7 +82,7 @@ export function ClientesSection({
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(sanitizeClientesSearch(search));
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceUnavailable, setForceUnavailable] = useState(false);
 
   const ownerListQ = useClientes(
@@ -155,9 +130,12 @@ export function ClientesSection({
   const unavailable = !crmEnabled || forceUnavailable || listQ.data?.available === false;
 
   const data = listQ.data;
-  const items = data?.items ?? [];
+  const items = data?.clientes ?? [];
   const total = data?.total ?? 0;
-  const totalPages = Math.max(1, data?.pages ?? 1);
+  const totalPages = clientesTotalPages(total, data?.limit ?? CLIENTES_PAGE_SIZE);
+  const currentPage = clientesPageFromOffset(data?.offset ?? 0, data?.limit ?? CLIENTES_PAGE_SIZE);
+  const de = total === 0 ? 0 : (data?.offset ?? 0) + 1;
+  const ate = (data?.offset ?? 0) + items.length;
   const buscaAtiva = deferredSearch.length > 0;
 
   return (
@@ -218,7 +196,7 @@ export function ClientesSection({
             <>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <span className="text-[12.5px] tabular-nums text-ink-soft">
-                  {items.length} de {total} cliente{total === 1 ? '' : 's'}
+                  {de}–{ate} de {total} cliente{total === 1 ? '' : 's'}
                 </span>
                 {listQ.isFetching && <span className="text-[12px] text-ink-faint">Atualizando…</span>}
               </div>
@@ -238,19 +216,19 @@ export function ClientesSection({
               {totalPages > 1 && (
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <span className="text-[12.5px] tabular-nums text-ink-soft">
-                    Página {data.page} de {totalPages}
+                    Página {currentPage} de {totalPages}
                   </span>
                   <div className="flex items-center gap-2">
                     <PageBtn
                       label="Página anterior"
-                      disabled={page <= 1}
+                      disabled={currentPage <= 1}
                       onClick={() => setPage((current) => Math.max(1, current - 1))}
                     >
                       <IconChevronLeft size={18} />
                     </PageBtn>
                     <PageBtn
                       label="Próxima página"
-                      disabled={page >= totalPages}
+                      disabled={currentPage >= totalPages}
                       onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
                     >
                       <IconChevronRight size={18} />
@@ -308,11 +286,11 @@ function ClienteRow({
   mode: Mode;
   onOpen: () => void;
 }) {
-  const nome = clienteDisplayName(item.nome_preferido);
-  const ultimaData = item.ultimo_atendimento_at
-    ? `${formatAgendamentoDia(item.ultimo_atendimento_at, undefined, timezone)}${
-        formatAgendamentoHora(item.ultimo_atendimento_at, timezone)
-          ? ` · ${formatAgendamentoHora(item.ultimo_atendimento_at, timezone)}`
+  const nome = clienteDisplayName(item.nome);
+  const ultimaData = item.ultima_interacao_at
+    ? `${formatAgendamentoDia(item.ultima_interacao_at, undefined, timezone)}${
+        formatAgendamentoHora(item.ultima_interacao_at, timezone)
+          ? ` · ${formatAgendamentoHora(item.ultima_interacao_at, timezone)}`
           : ''
       }`
     : 'Sem histórico';
@@ -331,7 +309,7 @@ function ClienteRow({
           <div className="min-w-0">
             <div className="truncate font-display text-[15px] font-semibold text-ink">{nome}</div>
             <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
-              {item.telefone_masked ?? 'Telefone protegido'}
+              {clientePhoneMasked(item.telefone)}
             </div>
           </div>
           <span className="shrink-0 rounded-pill border border-line bg-surface-sunken px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft">
@@ -367,17 +345,18 @@ function ClienteDetailSheet({
   onSave: (cliente: ClientePerfil, body: SaveClienteBody) => void;
   saving: boolean;
 }) {
-  const [draft, setDraft] = useState<ClienteDraft | null>(null);
+  const [draft, setDraft] = useState<ReturnType<typeof clienteDraftFromPerfil> | null>(null);
 
   useEffect(() => {
-    if (query.data?.cliente) setDraft(draftFromCliente(query.data.cliente));
+    if (query.data?.cliente) setDraft(clienteDraftFromPerfil(query.data.cliente));
     if (!open) setDraft(null);
   }, [query.data?.cliente, open]);
 
   const cliente = query.data?.cliente ?? null;
   const canEdit = mode === 'owner' && cliente != null && draft != null;
-  const dirty = cliente && draft ? draftChanged(cliente, draft) : false;
-  const body = draft ? buildSaveBody(draft) : null;
+  const historico = query.data?.historico ?? [];
+  const dirty = cliente && draft ? clienteDraftChanged(cliente, draft) : false;
+  const body = draft ? buildClientePatchBody(draft) : null;
 
   return (
     <Overlay open={open} onClose={onClose} variant="detail" ariaLabel="Perfil do cliente">
@@ -423,29 +402,27 @@ function ClienteDetailSheet({
           <>
             <div className="pb-4">
               <p className="font-display text-[20px] font-bold leading-tight tracking-[-0.01em] text-ink">
-                {clienteDisplayName(cliente.nome_preferido)}
+                {clienteDisplayName(cliente.nome)}
               </p>
               <dl className="mt-3 space-y-2.5">
                 <InfoRow
                   icon={<IconUser size={16} />}
                   label="Telefone"
-                  value={
-                    cliente.telefone ? formatPhoneDisplay(cliente.telefone) : cliente.telefone_masked || 'Protegido'
-                  }
+                  value={formatPhoneDisplay(cliente.telefone)}
                 />
                 <InfoRow
                   icon={<IconCalendar size={16} />}
                   label="Aniversário"
-                  value={birthdayLabel(cliente.aniversario) ?? 'Não informado'}
+                  value={birthdayLabel(cliente.aniversario_mmdd) ?? 'Não informado'}
                 />
                 <InfoRow
                   icon={<IconClock size={16} />}
                   label="Último atendimento"
                   value={
-                    cliente.ultimo_atendimento_at
-                      ? `${formatAgendamentoDia(cliente.ultimo_atendimento_at, undefined, timezone)}${
-                          formatAgendamentoHora(cliente.ultimo_atendimento_at, timezone)
-                            ? ` · ${formatAgendamentoHora(cliente.ultimo_atendimento_at, timezone)}`
+                    cliente.ultima_interacao_at
+                      ? `${formatAgendamentoDia(cliente.ultima_interacao_at, undefined, timezone)}${
+                          formatAgendamentoHora(cliente.ultima_interacao_at, timezone)
+                            ? ` · ${formatAgendamentoHora(cliente.ultima_interacao_at, timezone)}`
                             : ''
                         }`
                       : 'Sem histórico'
@@ -465,11 +442,14 @@ function ClienteDetailSheet({
                       label="Aniversário"
                       type="date"
                       className="[color-scheme:dark]"
-                      value={birthdayToDateInput(draft.aniversario)}
+                      value={birthdayToDateInput(draft.aniversario_mmdd)}
                       onChange={(event) =>
                         setDraft((current) =>
                           current
-                            ? { ...current, aniversario: birthdayFromDateInput(event.target.value) }
+                            ? {
+                                ...current,
+                                aniversario_mmdd: birthdayFromDateInput(event.target.value),
+                              }
                             : current,
                         )
                       }
@@ -488,7 +468,7 @@ function ClienteDetailSheet({
                     <TextArea
                       label="Nota interna"
                       value={draft.nota_interna}
-                      maxLength={500}
+                      maxLength={2000}
                       placeholder="Observações internas sobre esse cliente"
                       onChange={(value) =>
                         setDraft((current) =>
@@ -502,7 +482,7 @@ function ClienteDetailSheet({
                     <StaticField label="Cidade" value={cliente.cidade || 'Não informada'} />
                     <StaticField
                       label="Aniversário"
-                      value={birthdayLabel(cliente.aniversario) ?? 'Não informado'}
+                      value={birthdayLabel(cliente.aniversario_mmdd) ?? 'Não informado'}
                     />
                   </>
                 )}
@@ -517,13 +497,13 @@ function ClienteDetailSheet({
                 </span>
               </div>
 
-              {cliente.historico.length === 0 ? (
+              {historico.length === 0 ? (
                 <p className="mt-3 text-[13.5px] leading-snug text-ink-soft">
                   Ainda não há atendimentos para mostrar nesse perfil.
                 </p>
               ) : (
                 <div className="mt-3 divide-y divide-line border-t border-line">
-                  {cliente.historico.map((item) => {
+                  {historico.map((item) => {
                     const quando = item.inicio_at
                       ? `${formatAgendamentoDia(item.inicio_at, undefined, timezone)}${
                           formatAgendamentoHora(item.inicio_at, timezone)

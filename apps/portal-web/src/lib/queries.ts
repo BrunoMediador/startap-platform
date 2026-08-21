@@ -177,7 +177,7 @@ export const qk = {
   clientesBase: (slot: string) => ['clientes', slot] as const,
   clientes: (slot: string, page: number, pageSize: number, search: string) =>
     ['clientes', slot, page, pageSize, search] as const,
-  clientePerfil: (slot: string, id: number) => ['cliente-perfil', slot, id] as const,
+  clientePerfil: (slot: string, id: string) => ['cliente-perfil', slot, id] as const,
   colaboradorClientesBase: (slot: string, colaboradorId: number) =>
     ['colaborador-clientes', slot, colaboradorId] as const,
   colaboradorClientes: (
@@ -187,7 +187,7 @@ export const qk = {
     pageSize: number,
     search: string,
   ) => ['colaborador-clientes', slot, colaboradorId, page, pageSize, search] as const,
-  colaboradorClientePerfil: (slot: string, colaboradorId: number, id: number) =>
+  colaboradorClientePerfil: (slot: string, colaboradorId: number, id: string) =>
     ['colaborador-cliente-perfil', slot, colaboradorId, id] as const,
 };
 
@@ -231,6 +231,7 @@ export interface ClientesListQueryData extends ClientesListResponse {
 export interface ClientePerfilQueryData {
   available: boolean;
   cliente: ClientePerfil | null;
+  historico: ClientePerfilResponse['historico'];
 }
 
 function isFeatureOff(error: unknown): boolean {
@@ -423,7 +424,7 @@ export function useColaboradorClientes(
         return { ...data, available: true };
       } catch (error) {
         if (isFeatureOff(error)) {
-          return { available: false, items: [], total: 0, page: 1, per_page: pageSize, pages: 1 };
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
         }
         throw error;
       }
@@ -437,20 +438,20 @@ export function useColaboradorClientes(
 export function useColaboradorClientePerfil(
   slot: string,
   colaboradorId: number,
-  id: number | null,
+  id: string | null,
   enabled = true,
 ): UseQueryResult<ClientePerfilQueryData> {
   return useQuery({
-    queryKey: qk.colaboradorClientePerfil(slot, colaboradorId, id ?? 0),
+    queryKey: qk.colaboradorClientePerfil(slot, colaboradorId, id ?? ''),
     queryFn: async ({ signal }) => {
-      if (id == null) return { available: true, cliente: null };
+      if (id == null) return { available: true, cliente: null, historico: [] };
       try {
         const data = await apiFetch<ClientePerfilResponse>(`/portal/colaborador/clientes/${id}`, {
           signal,
         });
-        return { available: true, cliente: data.cliente };
+        return { available: true, cliente: data.cliente, historico: data.historico };
       } catch (error) {
-        if (isFeatureOff(error)) return { available: false, cliente: null };
+        if (isFeatureOff(error)) return { available: false, cliente: null, historico: [] };
         throw error;
       }
     },
@@ -1033,7 +1034,7 @@ export function useClientes(
         return { ...data, available: true };
       } catch (error) {
         if (isFeatureOff(error)) {
-          return { available: false, items: [], total: 0, page: 1, per_page: pageSize, pages: 1 };
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
         }
         throw error;
       }
@@ -1046,18 +1047,18 @@ export function useClientes(
 
 export function useClientePerfil(
   slot: string,
-  id: number | null,
+  id: string | null,
   enabled = true,
 ): UseQueryResult<ClientePerfilQueryData> {
   return useQuery({
-    queryKey: qk.clientePerfil(slot, id ?? 0),
+    queryKey: qk.clientePerfil(slot, id ?? ''),
     queryFn: async ({ signal }) => {
-      if (id == null) return { available: true, cliente: null };
+      if (id == null) return { available: true, cliente: null, historico: [] };
       try {
         const data = await apiFetch<ClientePerfilResponse>(`/portal/clientes/${id}`, { signal });
-        return { available: true, cliente: data.cliente };
+        return { available: true, cliente: data.cliente, historico: data.historico };
       } catch (error) {
-        if (isFeatureOff(error)) return { available: false, cliente: null };
+        if (isFeatureOff(error)) return { available: false, cliente: null, historico: [] };
         throw error;
       }
     },
@@ -1068,16 +1069,20 @@ export function useClientePerfil(
 
 export function useSaveCliente(
   slot: string,
-): UseMutationResult<ClientePerfil, Error, { id: number; body: SaveClienteBody }> {
+): UseMutationResult<ClientePerfil, Error, { id: string; body: SaveClienteBody }> {
   const client = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }) =>
       apiFetch<SaveClienteResponse>(`/portal/clientes/${id}`, {
-        method: 'PUT',
+        method: 'PATCH',
         body,
       }).then((r) => r.cliente),
     onSuccess: (cliente) => {
-      client.setQueryData(qk.clientePerfil(slot, cliente.id), { available: true, cliente });
+      client.setQueryData<ClientePerfilQueryData>(qk.clientePerfil(slot, cliente.id), (prev) => ({
+        available: true,
+        cliente,
+        historico: prev?.historico ?? [],
+      }));
       client.invalidateQueries({ queryKey: qk.clientesBase(slot) });
       client.invalidateQueries({ queryKey: ['colaborador-clientes', slot] });
       client.invalidateQueries({ queryKey: ['colaborador-cliente-perfil', slot] });
