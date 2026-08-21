@@ -15,9 +15,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockQuery = vi.fn();
+const releaseMock = vi.fn();
+const connectMock = vi.fn(async () => ({ query: mockQuery, release: releaseMock }));
 
 vi.mock('../client.js', () => ({
-  pool: { connect: vi.fn() },
+  pool: { connect: connectMock },
   query: (...a: unknown[]) => mockQuery(...a),
 }));
 
@@ -35,11 +37,21 @@ const {
 beforeEach(() => {
   mockQuery.mockReset();
   mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+  releaseMock.mockReset();
+  connectMock.mockClear();
 });
 
 function lastCall(): [string, unknown[]] {
-  const calls = mockQuery.mock.calls;
+  const calls = mockQuery.mock.calls.filter(
+    ([sql]) => typeof sql === 'string' && !/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql),
+  );
   return calls[calls.length - 1] as [string, unknown[]];
+}
+
+function nonTxCalls(): Array<[string, unknown[]]> {
+  return mockQuery.mock.calls.filter(
+    ([sql]) => typeof sql === 'string' && !/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql),
+  ) as Array<[string, unknown[]]>;
 }
 
 // Linha mínima devolvida pelo RETURNING (com dirty_fields como array já parseado pelo pg).
@@ -139,10 +151,10 @@ describe('upsertAtendimentoFromEvent — idempotência + origem/status', () => {
     expect(sql).toContain('FOR UPDATE');
     expect(sql).toContain("COALESCE(fc.personalizacao->>'agenda_automatica' = 'false', FALSE)");
     expect(sql).toContain('fc.modo_atendente_enabled = TRUE');
-    expect(sql).toContain('fc.slot = ANY($16::text[])');
-    expect(sql).toContain('$17::boolean = TRUE');
+    expect(sql).toContain('fc.slot = ANY($17::text[])');
+    expect(sql).toContain('$18::boolean = TRUE');
     expect(sql).toContain('FROM sync_scope');
-    expect(params.slice(15)).toEqual([['clone_env'], false]);
+    expect(params.slice(16)).toEqual([['clone_env'], false]);
   });
 
   it('emite INSERT ... ON CONFLICT (slot, gcal_event_id) com origem=agenda, status=agendado', async () => {
@@ -163,7 +175,7 @@ describe('upsertAtendimentoFromEvent — idempotência + origem/status', () => {
     expect(params[0]).toBe('clone_dragon'); // slot
     expect(params[1]).toBe('tid-2'); // tenant_id parâmetro próprio
     expect(params[2]).toBe('evt_1'); // gcal_event_id
-    expect(params[6]).toBe(5000); // valor explícito
+    expect(params[7]).toBe(5000); // valor explícito
   });
 
   it('preço AUSENTE -> resolve do catálogo (2 queries: SELECT servicos + UPSERT)', async () => {
@@ -177,9 +189,9 @@ describe('upsertAtendimentoFromEvent — idempotência + origem/status', () => {
       servicoNome: 'Corte',
       // valorCents ausente -> catálogo
     });
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(nonTxCalls()).toHaveLength(2);
     const [, params] = lastCall();
-    expect(params[6]).toBe(4500); // veio do catálogo
+    expect(params[7]).toBe(4500); // veio do catálogo
   });
 
   it('PACOTE -> valor_cents=0 e desconto=0 (receita vive na venda do pacote)', async () => {
@@ -194,11 +206,28 @@ describe('upsertAtendimentoFromEvent — idempotência + origem/status', () => {
       formaPagamento: 'pacote',
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(0); // valor zerado
-    expect(params[7]).toBe(0); // desconto zerado
-    expect(params[8]).toBe('pacote'); // forma preservada
+    expect(params[7]).toBe(0); // valor zerado
+    expect(params[8]).toBe(0); // desconto zerado
+    expect(params[9]).toBe('pacote'); // forma preservada
     // Pacote NÃO consulta catálogo (valor já é 0).
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(nonTxCalls()).toHaveLength(1);
+  });
+
+  it('abre transação e libera o client no caminho feliz', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW }], rowCount: 1 });
+
+    await upsertAtendimentoFromEvent({
+      slot: 'clone_dragon',
+      tenantId: 'tid-2',
+      gcalEventId: 'evt_release',
+      servicoNome: 'Corte',
+      valorCents: 5000,
+    });
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenNthCalledWith(1, 'BEGIN');
+    expect(mockQuery).toHaveBeenNthCalledWith(3, 'COMMIT');
+    expect(releaseMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -225,22 +254,22 @@ describe('STICKY — o UPDATE do ON CONFLICT preserva colunas pinadas', () => {
       expect(sql).toContain(`atendimentos.dirty_fields ? '${col}'`);
     }
     // Sticky comprovado: valor_cents só é trocado quando NÃO está pinado E (o pagamento foi
-    // informado $14 OU é reprice de troca de serviço $15 fora de pacote). Colunas de pagamento
+    // informado $15 OU é reprice de troca de serviço $16 fora de pacote). Colunas de pagamento
     // são preservadas quando a remarcação pura não traz info de pagamento (ADR 0027 bug DOBRA).
     expect(sql).toMatch(
-      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$14::boolean\s+AND NOT \(\$15::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'\)\)\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
+      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$15::boolean\s+AND NOT \(\$16::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'\)\)\s+THEN atendimentos\.valor_cents ELSE EXCLUDED\.valor_cents END/,
     );
     // valor_cents/desconto_cents: pinado OU (sem pagamento informado E sem reprice-não-pacote).
     for (const col of ['valor_cents', 'desconto_cents']) {
       expect(sql).toContain(`atendimentos.dirty_fields ? '${col}'`);
       expect(sql).toMatch(
         new RegExp(
-          `${col}\\s*=\\s*CASE WHEN atendimentos\\.dirty_fields \\? '${col}'\\s+OR \\(NOT \\$14::boolean\\s+AND NOT \\(\\$15::boolean\\s+AND atendimentos\\.forma_pagamento IS DISTINCT FROM 'pacote'\\)\\)`,
+          `${col}\\s*=\\s*CASE WHEN atendimentos\\.dirty_fields \\? '${col}'\\s+OR \\(NOT \\$15::boolean\\s+AND NOT \\(\\$16::boolean\\s+AND atendimentos\\.forma_pagamento IS DISTINCT FROM 'pacote'\\)\\)`,
         ),
       );
     }
     // forma_pagamento: pinado OU sem pagamento informado (reprice NÃO toca a forma).
-    expect(sql).toContain("atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $14::boolean");
+    expect(sql).toContain("atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $15::boolean");
   });
 
   it('syncAtendimentoFromEvent é o mesmo caminho do upsert (alias B2)', async () => {
@@ -265,7 +294,7 @@ describe('STICKY — o UPDATE do ON CONFLICT preserva colunas pinadas', () => {
 describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
   it('reprecificarServico=true (não-pacote): IGNORA valorCents, resolve do catálogo do NOVO serviço, $15=true', async () => {
     // Catálogo do novo serviço "Barba" = 3000. mesmo passando valorCents=5000 (antigo), reprice
-    // resolve do catálogo -> 3000 e zera desconto. $15 (reprice) = true no UPDATE.
+    // resolve do catálogo -> 3000 e zera desconto. $16 (reprice) = true no UPDATE.
     mockQuery
       .mockResolvedValueOnce({ rows: [{ servicos: [{ nome: 'Barba', preco_cents: 3000 }] }] })
       .mockResolvedValueOnce({ rows: [{ ...ROW, servico_nome: 'Barba', valor_cents: 3000 }] });
@@ -279,17 +308,17 @@ describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
       reprecificarServico: true,
     });
     // 2 queries: SELECT do catálogo (reprice resolve sempre) + UPSERT.
-    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(nonTxCalls()).toHaveLength(2);
     const [sql, params] = lastCall();
-    expect(params[6]).toBe(3000); // preço do NOVO serviço (catálogo), não o antigo (5000)
-    expect(params[7]).toBe(0); // desconto zerado no reprice
-    expect(params[13]).toBe(false); // pagamento NÃO informado (sync)
-    expect(params[14]).toBe(true); // reprice ($15) = true
+    expect(params[7]).toBe(3000); // preço do NOVO serviço (catálogo), não o antigo (5000)
+    expect(params[8]).toBe(0); // desconto zerado no reprice
+    expect(params[14]).toBe(false); // pagamento NÃO informado (sync)
+    expect(params[15]).toBe(true); // reprice ($16) = true
     // O CASE usa EXCLUDED quando reprice e a coluna não está pinada (e não é pacote).
     expect(sql).toContain("IS DISTINCT FROM 'pacote'");
   });
 
-  it("PACOTE: reprice NÃO reprecifica (forma='pacote' -> valor/desconto 0, $15 irrelevante)", async () => {
+  it("PACOTE: reprice NÃO reprecifica (forma='pacote' -> valor/desconto 0, $16 irrelevante)", async () => {
     // Pacote força valor 0 ANTES do CASE; reprice (no helper) é desligado quando isPacote.
     mockQuery.mockResolvedValueOnce({ rows: [{ ...ROW, valor_cents: 0 }], rowCount: 1 });
     await upsertAtendimentoFromEvent({
@@ -302,11 +331,11 @@ describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
       reprecificarServico: true, // pedido, mas pacote o desliga
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(0); // pacote -> valor 0 (não conta 2×)
-    expect(params[7]).toBe(0); // desconto 0
-    expect(params[14]).toBe(false); // reprice desligado em pacote ($15=false)
+    expect(params[7]).toBe(0); // pacote -> valor 0 (não conta 2×)
+    expect(params[8]).toBe(0); // desconto 0
+    expect(params[15]).toBe(false); // reprice desligado em pacote ($16=false)
     // Pacote não consulta catálogo (valor já é 0).
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(nonTxCalls()).toHaveLength(1);
   });
 
   it("o SQL nunca reprecifica linha PACOTE no banco (guard forma_pagamento IS DISTINCT FROM 'pacote')", async () => {
@@ -323,11 +352,11 @@ describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
     const [sql] = lastCall();
     // A cláusula de reprice no CASE de valor/desconto é gateada pelo NÃO-pacote da linha do banco.
     expect(sql).toMatch(
-      /\$15::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'/,
+      /\$16::boolean\s+AND atendimentos\.forma_pagamento IS DISTINCT FROM 'pacote'/,
     );
   });
 
-  it('SEM reprice (remarcação pura, $15=false): preserva valor/desconto antigos quando não informado', async () => {
+  it('SEM reprice (remarcação pura, $16=false): preserva valor/desconto antigos quando não informado', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ servicos: [{ nome: 'Corte', preco_cents: 5000 }] }] })
       .mockResolvedValueOnce({ rows: [{ ...ROW }] });
@@ -339,8 +368,8 @@ describe('upsertAtendimentoFromEvent — reprice ao trocar serviço', () => {
       // sem formaPagamento (sync) e sem reprecificarServico -> remarcação pura
     });
     const [, params] = lastCall();
-    expect(params[13]).toBe(false); // pagamento não informado
-    expect(params[14]).toBe(false); // SEM reprice -> CASE preserva valor/desconto antigos
+    expect(params[14]).toBe(false); // pagamento não informado
+    expect(params[15]).toBe(false); // SEM reprice -> CASE preserva valor/desconto antigos
   });
 });
 

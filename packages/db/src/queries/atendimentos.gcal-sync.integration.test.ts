@@ -22,6 +22,8 @@
  *  - listAtendSyncSlots exclui modo efetivo atendente antes de o worker reconciliar.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const PG_TEST_URL = process.env.PG_TEST_URL;
 const describeIf = PG_TEST_URL ? describe : describe.skip;
@@ -32,6 +34,11 @@ if (!PG_TEST_URL) {
       '(SQL real não exercitado). Defina PG_TEST_URL para rodar.',
   );
 }
+
+const MIGRATION_084_SQL = readFileSync(
+  fileURLToPath(new URL('../../migrations/084_crm_clientes.sql', import.meta.url)),
+  'utf8',
+);
 
 describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
   // biome-ignore lint/suspicious/noExplicitAny: pg importado dinamicamente.
@@ -55,6 +62,7 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
   }
 
   async function createSchema() {
+    await exec('CREATE EXTENSION IF NOT EXISTS pgcrypto');
     await exec(`CREATE TABLE IF NOT EXISTS flow_clones (
       slot TEXT PRIMARY KEY,
       tenant_id UUID,
@@ -91,6 +99,9 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       deleted_at TIMESTAMPTZ,
       deleted_reason TEXT,
       deleted_by TEXT)`);
+    // A suíte mantém o bootstrap base de 058/059, mas aplica a migration 084 REAL para não
+    // divergir do contrato vigente de CRM (clientes + cliente_telefone_canonico).
+    await exec(MIGRATION_084_SQL);
     await exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_atend_event_ativo
       ON atendimentos (slot, gcal_event_id)
       WHERE gcal_event_id IS NOT NULL AND deleted_at IS NULL`);
@@ -186,6 +197,7 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
 
   beforeEach(async () => {
     await exec('DELETE FROM atendimentos WHERE slot = $1', [SLOT]);
+    await exec('DELETE FROM clientes WHERE slot = $1', [SLOT]);
   });
 
   const delFrom = () => iso(-62 * DAY);
@@ -349,6 +361,44 @@ describeIf('reconciler GCal→atendimentos contra Postgres REAL', () => {
       [SLOT, 'ev_up'],
     );
     expect(cnt.rows[0].n).toBe(2); // 1 deletada + 1 ativa
+  });
+
+  it('upsert com contato canônico preenche atendimento e lazy-upsert em clientes sob o schema pós-084', async () => {
+    const row = await atend.upsertAtendimentoFromEvent({
+      slot: SLOT,
+      tenantId: TENANT,
+      gcalEventId: 'ev_cliente',
+      servicoNome: 'Sessão',
+      valorCents: 11000,
+      clienteNome: 'Joao',
+      clienteContato: '(31) 99999-8842',
+      inicioAt: iso(3 * DAY),
+      fimAt: iso(3 * DAY + 1800_000),
+      timezone: 'America/Sao_Paulo',
+    });
+
+    expect(row.cliente_contato).toBe('(31) 99999-8842');
+    const atendRow = await exec(
+      `SELECT cliente_telefone_canonico
+         FROM atendimentos
+        WHERE slot = $1 AND gcal_event_id = $2`,
+      [SLOT, 'ev_cliente'],
+    );
+    expect(atendRow.rows[0].cliente_telefone_canonico).toBe('553199998842');
+
+    const clienteRow = await exec(
+      `SELECT nome, telefone_canonico, telefone_raw
+         FROM clientes
+        WHERE slot = $1 AND tenant_id = $2`,
+      [SLOT, TENANT],
+    );
+    expect(clienteRow.rows).toEqual([
+      {
+        nome: 'Joao',
+        telefone_canonico: '553199998842',
+        telefone_raw: '31999998842',
+      },
+    ]);
   });
 
   it('ux_atend_event_ativo: 2 ativos mesmo event/slot = violação; deletado + ativo convivem', async () => {
