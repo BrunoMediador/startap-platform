@@ -10,6 +10,13 @@ const log = logger.child({ service: 'portal-api', module: 'crm-whatsapp-manual-c
 const FAILURE_WINDOW_SECONDS = 60;
 const OPEN_SECONDS = 60;
 const FAILURE_LIMIT = 3;
+const SLOT_RATE_LIMIT_SCRIPT = `
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+`;
 
 function openKey(slot: string): string {
   return `portal:crm:whatsapp-manual:circuit:open:${slot}`;
@@ -17,6 +24,43 @@ function openKey(slot: string): string {
 
 function failuresKey(slot: string): string {
   return `portal:crm:whatsapp-manual:circuit:failures:${slot}`;
+}
+
+function sendsKey(slot: string): string {
+  return `portal:crm:whatsapp-manual:sends:${slot}`;
+}
+
+function asPositiveInteger(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * Reserva atômica por slot numa janela fixa. Redis indisponível ou resposta fora do
+ * contrato fecham o envio para impedir fan-out quando a proteção não pode ser provada.
+ */
+export async function reserveCrmWhatsAppManualSlotSend(
+  slot: string,
+  maxSends: number,
+  windowSeconds: number,
+): Promise<boolean> {
+  try {
+    const result: unknown = await getRedis().eval(
+      SLOT_RATE_LIMIT_SCRIPT,
+      1,
+      sendsKey(slot),
+      String(windowSeconds),
+    );
+    const count = asPositiveInteger(result);
+    return count !== null && count <= maxSends;
+  } catch {
+    log.error({ slot }, 'limite CRM WhatsApp indisponivel; envio negado');
+    return false;
+  }
 }
 
 export async function isCrmWhatsAppManualCircuitClosed(slot: string): Promise<boolean> {

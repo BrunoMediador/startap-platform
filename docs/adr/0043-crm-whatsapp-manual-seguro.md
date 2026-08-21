@@ -12,12 +12,18 @@ eram deliberadamente read-only quanto a contato. Um envio manual reduz a friccao
 
 ## Decisao
 
-Criar uma unica rota owner-only, `POST /portal/clientes/:id/whatsapp`, atras de duas flags:
+Criar uma unica rota owner-only, `POST /portal/clientes/:id/whatsapp-manual`, atras de duas flags:
 `CRM_CLIENTES_ENABLED` e `CRM_WHATSAPP_MANUAL_ENABLED`, ambas OFF por ausencia.
 
-O texto e o unico campo aceito. O backend revalida a sessao, resolve `slot`, `tenant_id` e owner,
-busca o cliente no mesmo escopo e resolve a sessao exclusivamente por `flow_clones.waha_sessao`.
-O slot nunca e usado como nome de sessao WAHA.
+A mensagem confirmada explicitamente (`{ mensagem, confirmed: true }`) e o unico conteúdo aceito.
+O backend revalida a sessao, resolve `slot`, `tenant_id` e owner, busca o cliente no mesmo escopo
+e resolve a sessao e o shard exclusivamente por `flow_clones.waha_sessao` e
+`flow_clones.waha_shard_id`. O slot nunca e usado como nome de sessao WAHA, nem o shard default
+substitui o shard do clone.
+
+Antes do claim, a rota busca o estado operacional pelo slot e chama o `resolveSilenceGate`
+canônico, com `BILLING_OVERDUE_SILENCE`. Suspensão da Startap e billing vencido além da carência
+bloqueiam o envio; `owner_request` não é silêncio total e mantém o significado do gate canônico.
 
 Todo envio aplica `startTyping`, espera fixa de 12 segundos e `sendText`; a chamada recebe
 `AbortSignal.timeout`. Falha de envio encerra o typing em best effort e retorna erro generico.
@@ -40,6 +46,11 @@ da mensagem nao sao persistidos nem logados. Logs estruturados incluem `slot` e 
 
 Circuit breaker Redis e compartilhado por slot: tres falhas em 60 segundos abrem por 60 segundos.
 Falha do Redis nega novo envio, preservando comportamento fail-closed.
+
+Depois do claim e antes da WAHA, uma reserva Redis Lua (`INCR` + `EXPIRE` no primeiro incremento)
+limita envios por slot numa janela curta. A operação é atômica entre instâncias; resposta inválida,
+Redis indisponível ou exceder a janela falham fechados. O claim é encerrado com reason code
+`slot_rate_limited`, sem mensagem ou telefone.
 
 ## Consequencias
 

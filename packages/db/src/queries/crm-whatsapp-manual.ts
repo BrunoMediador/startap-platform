@@ -8,11 +8,13 @@ import { query } from '../client.js';
 interface SendTargetRow {
   telefone_raw: string;
   waha_sessao: string | null;
+  waha_shard_id: number;
 }
 
 export interface ClienteWhatsAppManualTarget {
   telefone: string;
   wahaSessao: string | null;
+  wahaShardId: number;
 }
 
 export interface ClaimClienteWhatsAppManualInput {
@@ -35,7 +37,7 @@ export async function getClienteWhatsAppManualTargetForOwner(
   clienteId: string,
 ): Promise<ClienteWhatsAppManualTarget | null> {
   const result = await query<SendTargetRow>(
-    `SELECT c.telefone_raw, fc.waha_sessao
+    `SELECT c.telefone_raw, fc.waha_sessao, fc.waha_shard_id
        FROM clientes c
        JOIN flow_clones fc
          ON fc.slot = c.slot
@@ -47,7 +49,13 @@ export async function getClienteWhatsAppManualTargetForOwner(
     [clienteId, slot, tenantId],
   );
   const row = result.rows[0];
-  return row ? { telefone: row.telefone_raw, wahaSessao: row.waha_sessao } : null;
+  return row
+    ? {
+        telefone: row.telefone_raw,
+        wahaSessao: row.waha_sessao,
+        wahaShardId: row.waha_shard_id,
+      }
+    : null;
 }
 
 /**
@@ -92,7 +100,7 @@ export async function completeClienteWhatsAppManualSend(input: {
   tenantId: string;
   sendId: string;
   outcome: 'sent' | 'failed';
-  failureCode?: 'circuit_open' | 'timeout_or_waha_error';
+  failureCode?: 'circuit_open' | 'slot_rate_limited' | 'timeout_or_waha_error';
 }): Promise<void> {
   await query(
     `UPDATE crm_whatsapp_manual_send_audit

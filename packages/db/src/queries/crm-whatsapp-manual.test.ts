@@ -26,16 +26,23 @@ beforeEach(() => {
 describe('CRM WhatsApp manual queries', () => {
   it('resolve alvo somente por cliente + slot + tenant e retorna sessao WAHA do flow clone', async () => {
     mockQuery.mockResolvedValue({
-      rows: [{ telefone_raw: '553199998842', waha_sessao: 'sessao-real-do-clone' }],
+      rows: [
+        { telefone_raw: '553199998842', waha_sessao: 'sessao-real-do-clone', waha_shard_id: 4 },
+      ],
     });
 
     await expect(
       getClienteWhatsAppManualTargetForOwner(SCOPE.slot, SCOPE.tenantId, SCOPE.clienteId),
-    ).resolves.toEqual({ telefone: '553199998842', wahaSessao: 'sessao-real-do-clone' });
+    ).resolves.toEqual({
+      telefone: '553199998842',
+      wahaSessao: 'sessao-real-do-clone',
+      wahaShardId: 4,
+    });
 
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain('JOIN flow_clones fc');
     expect(sql).toContain('fc.waha_sessao');
+    expect(sql).toContain('fc.waha_shard_id');
     expect(sql).toContain('c.id = $1');
     expect(sql).toContain('c.slot = $2');
     expect(sql).toContain('c.tenant_id = $3');

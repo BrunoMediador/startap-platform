@@ -4,32 +4,44 @@ const {
   configMock,
   getScopeMock,
   getTargetMock,
+  getCloneMock,
   claimMock,
   completeMock,
   sendTextMock,
   circuitClosedMock,
   circuitFailureMock,
   circuitSuccessMock,
+  slotSendReservationMock,
 } = vi.hoisted(() => ({
   configMock: {
     CRM_CLIENTES_ENABLED: true,
     CRM_WHATSAPP_MANUAL_ENABLED: true,
     CRM_WHATSAPP_MANUAL_TIMEOUT_MS: 20_000,
     CRM_WHATSAPP_MANUAL_COOLDOWN_MS: 30_000,
+    CRM_WHATSAPP_MANUAL_SLOT_MAX_SENDS: 3,
+    CRM_WHATSAPP_MANUAL_SLOT_WINDOW_SECONDS: 60,
+    BILLING_OVERDUE_SILENCE: false,
   } as Record<string, unknown>,
   getScopeMock: vi.fn(),
   getTargetMock: vi.fn(),
+  getCloneMock: vi.fn(),
   claimMock: vi.fn(),
   completeMock: vi.fn(),
   sendTextMock: vi.fn(),
   circuitClosedMock: vi.fn(),
   circuitFailureMock: vi.fn(),
   circuitSuccessMock: vi.fn(),
+  slotSendReservationMock: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({ config: configMock }));
 vi.mock('@startap/db', () => ({
   cloneColaboradores: { getScopeBySlot: (...args: unknown[]) => getScopeMock(...args) },
+  clientBilling: {
+    GRACE_DAYS: 3,
+    daysUntilDue: (_nextDueDate: string | null) => -4,
+  },
+  flowClones: { getCloneBySlot: (...args: unknown[]) => getCloneMock(...args) },
   crmWhatsAppManual: {
     getClienteWhatsAppManualTargetForOwner: (...args: unknown[]) => getTargetMock(...args),
     claimClienteWhatsAppManualSend: (...args: unknown[]) => claimMock(...args),
@@ -43,6 +55,7 @@ vi.mock('../lib/crm-whatsapp-manual-circuit.js', () => ({
   isCrmWhatsAppManualCircuitClosed: (...args: unknown[]) => circuitClosedMock(...args),
   recordCrmWhatsAppManualFailure: (...args: unknown[]) => circuitFailureMock(...args),
   recordCrmWhatsAppManualSuccess: (...args: unknown[]) => circuitSuccessMock(...args),
+  reserveCrmWhatsAppManualSlotSend: (...args: unknown[]) => slotSendReservationMock(...args),
 }));
 vi.mock('../lib/tenant.js', () => ({
   withTenant: vi.fn(
@@ -82,8 +95,20 @@ beforeEach(() => {
   vi.clearAllMocks();
   configMock.CRM_CLIENTES_ENABLED = true;
   configMock.CRM_WHATSAPP_MANUAL_ENABLED = true;
+  configMock.BILLING_OVERDUE_SILENCE = false;
   getScopeMock.mockResolvedValue({ tenant_id: '00000000-0000-4000-8000-000000000001' });
-  getTargetMock.mockResolvedValue({ telefone: '553199998842', wahaSessao: 'sessao-clone-real' });
+  getTargetMock.mockResolvedValue({
+    telefone: '553199998842',
+    wahaSessao: 'sessao-clone-real',
+    wahaShardId: 4,
+  });
+  getCloneMock.mockResolvedValue({
+    tenant_id: '00000000-0000-4000-8000-000000000001',
+    flow_enabled: true,
+    suspended_kind: null,
+    next_due_date: null,
+    billing_amount_cents: null,
+  });
   claimMock.mockResolvedValue({
     sendId: '22222222-2222-4222-8222-222222222222',
     cooldownUntil: '2026-08-21T12:00:30Z',
@@ -93,15 +118,16 @@ beforeEach(() => {
   circuitClosedMock.mockResolvedValue(true);
   circuitFailureMock.mockResolvedValue(undefined);
   circuitSuccessMock.mockResolvedValue(undefined);
+  slotSendReservationMock.mockResolvedValue(true);
 });
 
-describe('POST /portal/clientes/:id/whatsapp', () => {
-  it('envia um unico texto validado pelo owner usando sessao WAHA do flow clone e humanizacao obrigatoria', async () => {
+describe('POST /portal/clientes/:id/whatsapp-manual', () => {
+  it('alinha o contrato da UI, usa shard do clone e humanizacao obrigatoria', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
-      payload: { texto: '  Oi, tudo bem?  ' },
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: '  Oi, tudo bem?  ', confirmed: true },
     });
 
     expect(res.statusCode).toBe(202);
@@ -117,9 +143,12 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
       operatorUserId: 7,
       cooldownMs: 30_000,
     });
+    expect(getCloneMock).toHaveBeenCalledWith('clone_owner');
+    expect(slotSendReservationMock).toHaveBeenCalledWith('clone_owner', 3, 60);
     expect(sendTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessao: 'sessao-clone-real',
+        shardId: 4,
         chatId: '553199998842@c.us',
         texto: 'Oi, tudo bem?',
         typing: true,
@@ -133,13 +162,13 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
     await app.close();
   });
 
-  it('rejeita feature OFF e texto invalido antes de criar claim ou chamar WAHA', async () => {
+  it('rejeita feature OFF e contrato nao confirmado antes de criar claim ou chamar WAHA', async () => {
     configMock.CRM_WHATSAPP_MANUAL_ENABLED = false;
     const app = await buildApp();
     const off = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
-      payload: { texto: 'oi' },
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
     });
     expect(off.statusCode).toBe(404);
     expect(getTargetMock).not.toHaveBeenCalled();
@@ -147,11 +176,84 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
     configMock.CRM_WHATSAPP_MANUAL_ENABLED = true;
     const invalid = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
-      payload: { texto: ' ' },
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: false },
     });
     expect(invalid.statusCode).toBe(400);
     expect(claimMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('nao mantem a rota e o body legados', async () => {
+    const app = await buildApp();
+    const oldRoute = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
+      payload: { texto: 'oi' },
+    });
+    expect(oldRoute.statusCode).toBe(404);
+
+    const oldBody = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { texto: 'oi', confirmed: true },
+    });
+    expect(oldBody.statusCode).toBe(400);
+    expect(claimMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('bloqueia suspensao Startap e silencio financeiro antes do claim', async () => {
+    const app = await buildApp();
+    getCloneMock.mockResolvedValueOnce({
+      tenant_id: '00000000-0000-4000-8000-000000000001',
+      flow_enabled: false,
+      suspended_kind: 'manual_other',
+      next_due_date: null,
+      billing_amount_cents: null,
+    });
+    const suspended = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
+    });
+    expect(suspended.statusCode).toBe(409);
+    expect(suspended.json()).toEqual({ error: 'fluxo_silenciado' });
+
+    configMock.BILLING_OVERDUE_SILENCE = true;
+    getCloneMock.mockResolvedValueOnce({
+      tenant_id: '00000000-0000-4000-8000-000000000001',
+      flow_enabled: true,
+      suspended_kind: null,
+      next_due_date: '2026-08-01',
+      billing_amount_cents: 9_700,
+    });
+    const overdue = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
+    });
+    expect(overdue.statusCode).toBe(409);
+    expect(overdue.json()).toEqual({ error: 'fluxo_silenciado' });
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('encerra o claim quando a reserva atomica por slot nega fan-out', async () => {
+    slotSendReservationMock.mockResolvedValueOnce(false);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toEqual({ error: 'limite_envios_atingido' });
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed', failureCode: 'slot_rate_limited' }),
+    );
     expect(sendTextMock).not.toHaveBeenCalled();
     await app.close();
   });
@@ -160,9 +262,9 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
     const app = await buildApp();
     const denied = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
       headers: { 'x-role': 'colaborador' },
-      payload: { texto: 'oi' },
+      payload: { mensagem: 'oi', confirmed: true },
     });
     expect(denied.statusCode).toBe(403);
     expect(getTargetMock).not.toHaveBeenCalled();
@@ -170,8 +272,8 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
     claimMock.mockResolvedValueOnce(null);
     const cooldown = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
-      payload: { texto: 'oi' },
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
     });
     expect(cooldown.statusCode).toBe(409);
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -179,8 +281,8 @@ describe('POST /portal/clientes/:id/whatsapp', () => {
     sendTextMock.mockRejectedValueOnce(new Error('WAHA HTTP 500'));
     const failed = await app.inject({
       method: 'POST',
-      url: `/portal/clientes/${CLIENTE_ID}/whatsapp`,
-      payload: { texto: 'oi' },
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'oi', confirmed: true },
     });
     expect(failed.statusCode).toBe(503);
     expect(failed.json()).toEqual({ error: 'envio_indisponivel' });
