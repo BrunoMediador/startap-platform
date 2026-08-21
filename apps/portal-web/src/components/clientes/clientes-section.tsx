@@ -22,16 +22,21 @@ import { ApiError } from '@/lib/api';
 import type { ClientePerfil, ClienteListItem, SaveClienteBody } from '@/lib/api-types';
 import {
   CLIENTES_PAGE_SIZE,
+  CLIENTES_SEM_RETORNO_PAGE_SIZE,
   birthdayLabel,
   birthdayToDateInput,
   birthdayFromDateInput,
   buildClientePatchBody,
+  type ClienteSemRetornoItem,
   clienteDraftChanged,
   clienteDraftFromPerfil,
   clienteDisplayName,
   clientePhoneMasked,
   clientesPageFromOffset,
   clientesTotalPages,
+  semRetornoDiasLabel,
+  semRetornoFaixaLabel,
+  semRetornoMatchesSearch,
   sanitizeClientesSearch,
 } from '@/lib/clientes';
 import { cn } from '@/lib/cn';
@@ -39,8 +44,10 @@ import { formatAgendamentoDia, formatAgendamentoHora, formatPhoneDisplay, initia
 import {
   useClientePerfil,
   useClientes,
+  useClientesSemRetorno,
   useColaboradorClientePerfil,
   useColaboradorClientes,
+  useColaboradorClientesSemRetorno,
   useSaveCliente,
 } from '@/lib/queries';
 import { useDeferredValue, useEffect, useState } from 'react';
@@ -59,6 +66,10 @@ const OWNER_SUBTITLE =
   'Sua carteira de clientes em um só lugar, com histórico e campos opcionais para completar o perfil.';
 const COLABORADOR_SUBTITLE =
   'Clientes que já atenderam com você, com histórico para consulta rápida.';
+const OWNER_RANKING_SUBTITLE =
+  'Fila priorizada por maior tempo sem retorno, sem disparo automático e com telefone mascarado.';
+const COLABORADOR_RANKING_SUBTITLE =
+  'Fila pessoal baseada só nos seus atendimentos elegíveis, também com telefone mascarado.';
 
 function isFeatureOffApiError(error: unknown): boolean {
   return (
@@ -82,6 +93,7 @@ export function ClientesSection({
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(sanitizeClientesSearch(search));
   const [page, setPage] = useState(1);
+  const [rankingPage, setRankingPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceUnavailable, setForceUnavailable] = useState(false);
 
@@ -101,6 +113,20 @@ export function ClientesSection({
     mode === 'colaborador' && crmEnabled && !forceUnavailable,
   );
   const listQ = mode === 'owner' ? ownerListQ : colaboradorListQ;
+  const ownerRankingQ = useClientesSemRetorno(
+    slot,
+    rankingPage,
+    CLIENTES_SEM_RETORNO_PAGE_SIZE,
+    mode === 'owner' && crmEnabled,
+  );
+  const colaboradorRankingQ = useColaboradorClientesSemRetorno(
+    slot,
+    colaboradorId ?? 0,
+    rankingPage,
+    CLIENTES_SEM_RETORNO_PAGE_SIZE,
+    mode === 'colaborador' && crmEnabled,
+  );
+  const rankingQ = mode === 'owner' ? ownerRankingQ : colaboradorRankingQ;
 
   const ownerProfileQ = useClientePerfil(
     slot,
@@ -118,6 +144,7 @@ export function ClientesSection({
 
   useEffect(() => {
     setPage(1);
+    setRankingPage(1);
   }, [deferredSearch]);
 
   useEffect(() => {
@@ -137,6 +164,22 @@ export function ClientesSection({
   const de = total === 0 ? 0 : (data?.offset ?? 0) + 1;
   const ate = (data?.offset ?? 0) + items.length;
   const buscaAtiva = deferredSearch.length > 0;
+  const rankingData = rankingQ.data;
+  const rankingItems = (rankingData?.clientes ?? []).filter((item) =>
+    semRetornoMatchesSearch(item, deferredSearch),
+  );
+  const rankingTotal = rankingData?.total ?? 0;
+  const rankingTotalPages = clientesTotalPages(
+    rankingTotal,
+    rankingData?.limit ?? CLIENTES_SEM_RETORNO_PAGE_SIZE,
+  );
+  const rankingCurrentPage = clientesPageFromOffset(
+    rankingData?.offset ?? 0,
+    rankingData?.limit ?? CLIENTES_SEM_RETORNO_PAGE_SIZE,
+  );
+  const rankingDe = rankingTotal === 0 ? 0 : (rankingData?.offset ?? 0) + 1;
+  const rankingAte = (rankingData?.offset ?? 0) + (rankingData?.clientes.length ?? 0);
+  const rankingAvailable = rankingData?.available !== false;
 
   return (
     <>
@@ -163,6 +206,26 @@ export function ClientesSection({
               className="h-[46px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken pl-[42px] pr-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint hover:border-[var(--c-input-hover-border)] focus:border-brand focus:shadow-focus focus:ring-[3px] focus:ring-brand/35"
             />
           </div>
+
+          {rankingAvailable && (
+            <SemRetornoSection
+              mode={mode}
+              timezone={timezone}
+              search={deferredSearch}
+              query={rankingQ}
+              items={rankingItems}
+              total={rankingTotal}
+              de={rankingDe}
+              ate={rankingAte}
+              currentPage={rankingCurrentPage}
+              totalPages={rankingTotalPages}
+              onPrevPage={() => setRankingPage((current) => Math.max(1, current - 1))}
+              onNextPage={() =>
+                setRankingPage((current) => Math.min(rankingTotalPages, current + 1))
+              }
+              onOpen={(id) => setSelectedId(id)}
+            />
+          )}
 
           {listQ.isPending ? (
             <>
@@ -275,6 +338,127 @@ export function ClientesSection({
   );
 }
 
+function SemRetornoSection({
+  mode,
+  timezone,
+  search,
+  query,
+  items,
+  total,
+  de,
+  ate,
+  currentPage,
+  totalPages,
+  onPrevPage,
+  onNextPage,
+  onOpen,
+}: {
+  mode: Mode;
+  timezone: string;
+  search: string;
+  query: ReturnType<typeof useClientesSemRetorno> | ReturnType<typeof useColaboradorClientesSemRetorno>;
+  items: ClienteSemRetornoItem[];
+  total: number;
+  de: number;
+  ate: number;
+  currentPage: number;
+  totalPages: number;
+  onPrevPage: () => void;
+  onNextPage: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const buscaAtiva = search.length > 0;
+
+  return (
+    <section className="mb-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-[17px] font-semibold text-ink">Ranking sem retorno</h2>
+          <p className="mt-1 max-w-[46rem] text-[13px] leading-snug text-ink-soft">
+            {mode === 'owner' ? OWNER_RANKING_SUBTITLE : COLABORADOR_RANKING_SUBTITLE}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-pill border border-line bg-surface px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft">
+          Maior tempo primeiro
+        </span>
+      </div>
+
+      {query.isPending ? (
+        <>
+          <span className="sr-only">Carregando ranking sem retorno…</span>
+          <SkeletonList rows={4} />
+        </>
+      ) : query.isError || !query.data ? (
+        <ErrorState
+          title="Não foi possível carregar o ranking sem retorno"
+          onRetry={() => query.refetch()}
+        />
+      ) : total === 0 ? (
+        <EmptyState
+          icon={<IconClock size={26} />}
+          title="Nenhum cliente entrou nessa fila ainda"
+          description="Quando houver atendimentos concluídos sem retorno, eles aparecem aqui em ordem de prioridade."
+        />
+      ) : items.length === 0 ? (
+        <div className="rounded-card border border-line bg-surface px-6 py-8 text-center shadow-card">
+          <h3 className="font-display text-[15px] font-semibold text-ink">
+            Nenhum cliente desta página combina com "{search}"
+          </h3>
+          <p className="mt-1 text-[13px] text-ink-soft">
+            A busca está filtrando a fila carregada agora. Limpe o termo ou avance a paginação.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-[12.5px] tabular-nums text-ink-soft">
+              {de}–{ate} de {total} cliente{total === 1 ? '' : 's'}
+              {buscaAtiva ? ` · ${items.length} visível${items.length === 1 ? '' : 'is'} na busca` : ''}
+            </span>
+            {query.isFetching && <span className="text-[12px] text-ink-faint">Atualizando…</span>}
+          </div>
+
+          <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
+            {items.map((item) => (
+              <SemRetornoRow
+                key={item.id}
+                item={item}
+                timezone={timezone}
+                mode={mode}
+                onOpen={() => onOpen(item.id)}
+              />
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-[12.5px] tabular-nums text-ink-soft">
+                Página {currentPage} de {totalPages}
+              </span>
+              <div className="flex items-center gap-2">
+                <PageBtn
+                  label="Página anterior do ranking sem retorno"
+                  disabled={currentPage <= 1}
+                  onClick={onPrevPage}
+                >
+                  <IconChevronLeft size={18} />
+                </PageBtn>
+                <PageBtn
+                  label="Próxima página do ranking sem retorno"
+                  disabled={currentPage >= totalPages}
+                  onClick={onNextPage}
+                >
+                  <IconChevronRight size={18} />
+                </PageBtn>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function ClienteRow({
   item,
   timezone,
@@ -319,6 +503,59 @@ function ClienteRow({
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12.5px] text-ink-soft">
           <span>{ultimaData}</span>
           {item.cidade && <span>{item.cidade}</span>}
+          {mode === 'owner' && item.ultimo_profissional_nome && (
+            <span>Último com {item.ultimo_profissional_nome}</span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function SemRetornoRow({
+  item,
+  timezone,
+  mode,
+  onOpen,
+}: {
+  item: ClienteSemRetornoItem;
+  timezone: string;
+  mode: Mode;
+  onOpen: () => void;
+}) {
+  const nome = clienteDisplayName(item.nome);
+  const ultimoAtendimento = item.ultimo_atendimento_at
+    ? `${formatAgendamentoDia(item.ultimo_atendimento_at, undefined, timezone)}${
+        formatAgendamentoHora(item.ultimo_atendimento_at, timezone)
+          ? ` · ${formatAgendamentoHora(item.ultimo_atendimento_at, timezone)}`
+          : ''
+      }`
+    : 'Data indisponível';
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-start gap-3.5 border-b border-line-soft px-[15px] py-3.5 text-left transition-colors last:border-b-0 hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+    >
+      <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-brand-soft font-display text-[14px] font-bold text-brand">
+        {initials(nome)}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate font-display text-[15px] font-semibold text-ink">{nome}</div>
+            <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
+              {item.telefone_masked}
+            </div>
+          </div>
+          <span className="shrink-0 rounded-pill border border-line bg-surface-sunken px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft">
+            {semRetornoDiasLabel(item.dias_sem_retorno)}
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12.5px] text-ink-soft">
+          <span>{semRetornoFaixaLabel(item.dias_sem_retorno)}</span>
+          <span>Último atendimento {ultimoAtendimento}</span>
           {mode === 'owner' && item.ultimo_profissional_nome && (
             <span>Último com {item.ultimo_profissional_nome}</span>
           )}

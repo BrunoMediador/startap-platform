@@ -37,6 +37,7 @@ import type {
   ClientePerfil,
   ClientePerfilResponse,
   ClientesListResponse,
+  ClientesSemRetornoResponse,
   CodigoResponse,
   ColaboradorAgendaResponse,
   ColaboradorComissaoResponse,
@@ -92,7 +93,11 @@ import type {
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { conexaoFromBotActionResponse } from './bot-pausa';
-import { buildClientesListSearchParams } from './clientes';
+import {
+  buildClientesListSearchParams,
+  buildClientesSemRetornoSearchParams,
+  clienteSemRetornoFromApi,
+} from './clientes';
 import {
   type CartaoConfigState,
   type CartaoEmojis,
@@ -177,6 +182,9 @@ export const qk = {
   clientesBase: (slot: string) => ['clientes', slot] as const,
   clientes: (slot: string, page: number, pageSize: number, search: string) =>
     ['clientes', slot, page, pageSize, search] as const,
+  clientesSemRetornoBase: (slot: string) => ['clientes-sem-retorno', slot] as const,
+  clientesSemRetorno: (slot: string, page: number, pageSize: number) =>
+    ['clientes-sem-retorno', slot, page, pageSize] as const,
   clientePerfil: (slot: string, id: string) => ['cliente-perfil', slot, id] as const,
   colaboradorClientesBase: (slot: string, colaboradorId: number) =>
     ['colaborador-clientes', slot, colaboradorId] as const,
@@ -187,6 +195,14 @@ export const qk = {
     pageSize: number,
     search: string,
   ) => ['colaborador-clientes', slot, colaboradorId, page, pageSize, search] as const,
+  colaboradorClientesSemRetornoBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-clientes-sem-retorno', slot, colaboradorId] as const,
+  colaboradorClientesSemRetorno: (
+    slot: string,
+    colaboradorId: number,
+    page: number,
+    pageSize: number,
+  ) => ['colaborador-clientes-sem-retorno', slot, colaboradorId, page, pageSize] as const,
   colaboradorClientePerfil: (slot: string, colaboradorId: number, id: string) =>
     ['colaborador-cliente-perfil', slot, colaboradorId, id] as const,
 };
@@ -226,6 +242,14 @@ export interface AgendaBloqueiosQueryData extends AgendaBloqueiosResponse {
 
 export interface ClientesListQueryData extends ClientesListResponse {
   available: boolean;
+}
+
+export interface ClientesSemRetornoQueryData {
+  available: boolean;
+  clientes: ReturnType<typeof clienteSemRetornoFromApi>[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface ClientePerfilQueryData {
@@ -422,6 +446,42 @@ export function useColaboradorClientes(
           signal,
         });
         return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useColaboradorClientesSemRetorno(
+  slot: string,
+  colaboradorId: number,
+  page: number,
+  pageSize: number,
+  enabled = true,
+): UseQueryResult<ClientesSemRetornoQueryData> {
+  return useQuery({
+    queryKey: qk.colaboradorClientesSemRetorno(slot, colaboradorId, page, pageSize),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesSemRetornoSearchParams({ page, pageSize });
+      try {
+        const data = await apiFetch<ClientesSemRetornoResponse>(
+          `/portal/colaborador/clientes/sem-retorno?${qs}`,
+          { signal },
+        );
+        return {
+          available: true,
+          clientes: data.clientes.map(clienteSemRetornoFromApi),
+          total: data.total,
+          limit: data.limit,
+          offset: data.offset,
+        };
       } catch (error) {
         if (isFeatureOff(error)) {
           return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
@@ -1032,6 +1092,41 @@ export function useClientes(
       try {
         const data = await apiFetch<ClientesListResponse>(`/portal/clientes?${qs}`, { signal });
         return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useClientesSemRetorno(
+  slot: string,
+  page: number,
+  pageSize: number,
+  enabled = true,
+): UseQueryResult<ClientesSemRetornoQueryData> {
+  return useQuery({
+    queryKey: qk.clientesSemRetorno(slot, page, pageSize),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesSemRetornoSearchParams({ page, pageSize });
+      try {
+        const data = await apiFetch<ClientesSemRetornoResponse>(
+          `/portal/clientes/sem-retorno?${qs}`,
+          { signal },
+        );
+        return {
+          available: true,
+          clientes: data.clientes.map(clienteSemRetornoFromApi),
+          total: data.total,
+          limit: data.limit,
+          offset: data.offset,
+        };
       } catch (error) {
         if (isFeatureOff(error)) {
           return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
