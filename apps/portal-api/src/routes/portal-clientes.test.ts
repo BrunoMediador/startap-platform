@@ -404,7 +404,7 @@ describe('owner', () => {
     await app.close();
   });
 
-  it('aniversariantes owner aplica default server-side modo=proximos&dias=7 quando query vem vazia', async () => {
+  it('aniversariantes owner aplica default server-side modo=proximos&dias=30 quando query vem vazia', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
@@ -417,7 +417,7 @@ describe('owner', () => {
       tenantId: 'tid-owner',
       timezone: 'America/Sao_Paulo',
       mode: 'proximos',
-      dias: 7,
+      dias: 30,
       limit: undefined,
       offset: undefined,
     });
@@ -658,7 +658,7 @@ describe('colaborador', () => {
     await app.close();
   });
 
-  it('aniversariantes do colaborador também aplica default server-side modo=proximos&dias=7', async () => {
+  it('aniversariantes do colaborador também aplica default server-side modo=proximos&dias=30', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
@@ -673,7 +673,7 @@ describe('colaborador', () => {
       colaboradorId: 9,
       timezone: 'America/Sao_Paulo',
       mode: 'proximos',
-      dias: 7,
+      dias: 30,
       limit: undefined,
       offset: undefined,
     });

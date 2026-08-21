@@ -31,7 +31,7 @@ const semRetornoQuerySchema = z
   })
   .strict();
 
-const DEFAULT_ANIVERSARIANTES_DIAS = 7;
+const DEFAULT_ANIVERSARIANTES_DIAS = 30;
 const aniversariantesQuerySchema = z.discriminatedUnion('modo', [
   z
     .object({
