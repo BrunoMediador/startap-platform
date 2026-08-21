@@ -963,6 +963,7 @@ export class TesteBarbeariaBot extends BotBase {
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
               summary: finalSummary,
+              clienteContato: telefone,
               servicoArg,
               start: startISO,
               end: endISO,
@@ -1016,6 +1017,7 @@ export class TesteBarbeariaBot extends BotBase {
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary: finalSummary,
+            clienteContato: telefone,
             servicoArg,
             start: startISO,
             end: endISO,
@@ -1325,6 +1327,8 @@ export class TesteBarbeariaBot extends BotBase {
   private async maybeRegistrarAtendimento(input: {
     eventId: string | undefined;
     summary: string;
+    /** Telefone autoritativo do remetente, nunca extraído do argumento do LLM. */
+    clienteContato: string;
     servicoArg: unknown;
     start: string;
     end: string;
@@ -1382,6 +1386,7 @@ export class TesteBarbeariaBot extends BotBase {
         servicoNome: servicoNome || null,
         colaboradorId: input.colaboradorId ?? null,
         clienteNome: clienteNome || null,
+        clienteContato: input.clienteContato,
         inicioAt: input.start,
         fimAt: input.end,
         formaPagamento: input.formaPagamento ?? null,
@@ -1872,6 +1877,7 @@ export class TesteBarbeariaBot extends BotBase {
             await this.maybeRegistrarAtendimento({
               eventId: ev.id,
               summary: finalSummary,
+              clienteContato: telefone,
               servicoArg,
               start: startISO,
               end: endISO,
@@ -1928,6 +1934,7 @@ export class TesteBarbeariaBot extends BotBase {
           await this.maybeRegistrarAtendimento({
             eventId: ev.id,
             summary: finalSummary,
+            clienteContato: telefone,
             servicoArg,
             start: startISO,
             end: endISO,

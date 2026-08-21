@@ -1064,7 +1064,7 @@ describe('TesteBarbeariaBot — pacotes no estabelecimento (BLOCO 2a, SCRUM-68)'
     };
     const res = await inserir.run({
       colaborador_id: 'C1',
-      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887778',
       start: '2026-07-10T10:00:00-03:00',
       end: '2026-07-10T10:30:00-03:00',
       servico: 'Corte',
@@ -1330,6 +1330,8 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
         gcalEventId: 'evt-ind',
         servicoNome: 'Corte',
         clienteNome: 'Fulano',
+        // Identidade vem do remetente da conversa, não do telefone alucinado no summary do LLM.
+        clienteContato: '5511988887777',
         colaboradorId: null,
         // Reancorado no fuso do clone (SP): 13:00−03:00 == 16:00Z — MESMO instante, forma ISO
         // normalizada (prova de igualdade do clone SP; migration 068).
@@ -1454,7 +1456,7 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
       [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
       {
         colaborador_id: 'C1',
-        summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+        summary: 'Fulano - Corte | WhatsApp: 5511988887778',
         servico: 'Corte',
         start: '2026-06-16T13:00:00-03:00',
         end: '2026-06-16T13:30:00-03:00',
@@ -1497,6 +1499,8 @@ describe('TesteBarbeariaBot — atendimento derivado da agenda (Fase D, gancho d
         tenantId: 't-estab',
         gcalEventId: 'evt-cal-bruno',
         servicoNome: 'Corte',
+        // Mesmo contrato no caminho de estabelecimento: o CRM recebe a conversa real.
+        clienteContato: '5511988887777',
         colaboradorId: 10, // o colaborador que recebeu o evento (não null)
       }),
     );
@@ -1645,6 +1649,7 @@ describe('TesteBarbeariaBot — atendimento sob action-lock + fuso por clone (fi
     expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         gcalEventId: 'evt-cba',
+        clienteContato: '5511988887777',
         inicioAt: '2026-07-01T02:00:00.000Z',
         fimAt: '2026-07-01T03:00:00.000Z',
       }),
@@ -1724,6 +1729,7 @@ describe('TesteBarbeariaBot — atendimento sob action-lock + fuso por clone (fi
     expect(mocks.upsertAtendimentoFromEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         colaboradorId: 10,
+        clienteContato: '5511988887777',
         inicioAt: '2026-07-01T02:00:00.000Z',
         fimAt: '2026-07-01T03:00:00.000Z',
       }),
