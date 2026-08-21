@@ -26,7 +26,7 @@ const listQuerySchema = z.object({
 
 const semRetornoQuerySchema = z
   .object({
-    limit: z.coerce.number().int().min(1).max(100).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
     offset: z.coerce.number().int().min(0).max(100).optional(),
   })
   .strict();

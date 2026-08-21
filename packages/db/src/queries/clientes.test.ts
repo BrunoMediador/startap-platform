@@ -156,7 +156,7 @@ describe('listClientesForColaborador', () => {
 });
 
 describe('listClientesSemRetornoForOwner', () => {
-  it('usa apenas clientes canônicos elegíveis, filtra futuro/cancelado/deletado e ordena mais antigos primeiro', async () => {
+  it('usa apenas clientes canônicos elegíveis, filtra futuro/cancelado/deletado, limita em 50 e ordena mais antigos primeiro', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -176,7 +176,7 @@ describe('listClientesSemRetornoForOwner', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       timezone: 'America/Sao_Paulo',
-      limit: 10,
+      limit: 51,
       offset: 3,
     });
 
@@ -188,7 +188,7 @@ describe('listClientesSemRetornoForOwner', () => {
     expect(sql).toContain("(a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())");
     expect(sql).toContain("(a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $3)::date)");
     expect(sql).toContain("ORDER BY ultimo_atendimento_at ASC, id ASC");
-    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 10, 3]);
+    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 50, 3]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]).toEqual({
       id: '22222222-2222-4222-8222-222222222222',
@@ -203,7 +203,7 @@ describe('listClientesSemRetornoForOwner', () => {
 });
 
 describe('listClientesSemRetornoForColaborador', () => {
-  it('restringe o ranking ao colaborador da sessão e usa timezone do produto para manuais', async () => {
+  it('restringe o ranking ao colaborador da sessão e aceita limit=50', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -224,7 +224,7 @@ describe('listClientesSemRetornoForColaborador', () => {
       tenantId: 'tid-owner',
       colaboradorId: 9,
       timezone: 'America/Sao_Paulo',
-      limit: 7,
+      limit: 50,
       offset: 2,
     });
 
@@ -232,7 +232,7 @@ describe('listClientesSemRetornoForColaborador', () => {
     expect(sql).toContain('a.colaborador_id = $3');
     expect(sql).toContain("(a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $4)::date)");
     expect(sql).toContain('ROW_NUMBER() OVER');
-    expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 7, 2]);
+    expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 50, 2]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••77');
     expect((result.clientes[0] as { telefone_raw?: string }).telefone_raw).toBeUndefined();

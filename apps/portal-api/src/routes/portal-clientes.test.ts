@@ -287,11 +287,11 @@ describe('owner', () => {
     await app.close();
   });
 
-  it('ranking sem retorno usa slot+tenant+timezone da sessão e não expõe telefone cru', async () => {
+  it('ranking sem retorno aceita limit=50 e usa slot+tenant+timezone da sessão', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/clientes/sem-retorno?limit=10&offset=100',
+      url: '/portal/clientes/sem-retorno?limit=50&offset=100',
     });
 
     expect(res.statusCode).toBe(200);
@@ -300,22 +300,22 @@ describe('owner', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       timezone: 'America/Sao_Paulo',
-      limit: 10,
+      limit: 50,
       offset: 100,
     });
     const body = res.json();
-    expect(body).toEqual({ ...SEM_RETORNO_LIST, limit: 10, offset: 100 });
+    expect(body).toEqual({ ...SEM_RETORNO_LIST, limit: 50, offset: 100 });
     expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••88');
     expect(body.clientes[0]?.telefone).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('553199998842');
     await app.close();
   });
 
-  it('ranking sem retorno rejeita parâmetros forjados de escopo', async () => {
+  it('ranking sem retorno rejeita limit=51 e parâmetros forjados de escopo', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/clientes/sem-retorno?slot=outro&tenant_id=forjado&offset=101',
+      url: '/portal/clientes/sem-retorno?slot=outro&tenant_id=forjado&limit=51',
     });
 
     expect(res.statusCode).toBe(400);

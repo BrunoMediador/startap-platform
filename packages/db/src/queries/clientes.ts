@@ -9,6 +9,7 @@ import { pool, query } from '../client.js';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+const MAX_RANKING_LIMIT = 50;
 const DEFAULT_HISTORY_LIMIT = 50;
 
 interface SeedAtendimentoRow {
@@ -183,6 +184,15 @@ function normalizePaging(limit?: number, offset?: number): { limit: number; offs
   const safeOffset = Number.isFinite(offset) ? Math.trunc(offset as number) : 0;
   return {
     limit: Math.min(MAX_LIMIT, Math.max(1, safeLimit)),
+    offset: Math.max(0, safeOffset),
+  };
+}
+
+function normalizeRankingPaging(limit?: number, offset?: number): { limit: number; offset: number } {
+  const safeLimit = Number.isFinite(limit) ? Math.trunc(limit as number) : DEFAULT_LIMIT;
+  const safeOffset = Number.isFinite(offset) ? Math.trunc(offset as number) : 0;
+  return {
+    limit: Math.min(MAX_RANKING_LIMIT, Math.max(1, safeLimit)),
     offset: Math.max(0, safeOffset),
   };
 }
@@ -529,7 +539,7 @@ export async function listClientesSemRetornoForOwner(input: {
   limit?: number;
   offset?: number;
 }): Promise<ClienteSemRetornoResult> {
-  const { limit, offset } = normalizePaging(input.limit, input.offset);
+  const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
   const rows = await query<SemRetornoRowRaw>(
     `WITH elegiveis AS (
        SELECT c.id,
@@ -600,7 +610,7 @@ export async function listClientesSemRetornoForColaborador(input: {
   limit?: number;
   offset?: number;
 }): Promise<ClienteSemRetornoResult> {
-  const { limit, offset } = normalizePaging(input.limit, input.offset);
+  const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
   const rows = await query<SemRetornoRowRaw>(
     `WITH elegiveis AS (
        SELECT c.id,
