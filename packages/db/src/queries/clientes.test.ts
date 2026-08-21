@@ -185,8 +185,11 @@ describe('listClientesSemRetornoForOwner', () => {
     expect(sql).toContain("a.deleted_at IS NULL");
     expect(sql).toContain("a.status <> 'cancelado'");
     expect(sql).toContain("a.cliente_telefone_canonico = c.telefone_canonico");
-    expect(sql).toContain("(a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())");
-    expect(sql).toContain("(a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $3)::date)");
+    expect(sql).toContain("AND a.origem = 'agenda'");
+    expect(sql).toContain("AND COALESCE(a.fim_at, a.inicio_at) <= NOW()");
+    expect(sql).toContain("UNION ALL");
+    expect(sql).toContain("AND a.origem = 'manual'");
+    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $3)::date");
     expect(sql).toContain("ORDER BY ultimo_atendimento_at ASC, id ASC");
     expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 50, 3]);
     expect(result.total).toBe(1);
@@ -230,7 +233,10 @@ describe('listClientesSemRetornoForColaborador', () => {
 
     const [sql, params] = lastQueryCall();
     expect(sql).toContain('a.colaborador_id = $3');
-    expect(sql).toContain("(a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $4)::date)");
+    expect(sql).toContain("AND a.origem = 'agenda'");
+    expect(sql).toContain("AND a.origem = 'manual'");
+    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $4)::date");
+    expect(sql).toContain('UNION ALL');
     expect(sql).toContain('ROW_NUMBER() OVER');
     expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 50, 2]);
     expect(result.total).toBe(1);

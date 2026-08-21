@@ -531,6 +531,9 @@ export async function listClientesForColaborador(input: {
  * Ranking read-only "sem retorno" da carteira do tenant. A lista nunca expõe telefone
  * cru/canônico e considera elegível apenas atendimento ativo, não cancelado e já
  * concluído/passado. Manual usa a data local do produto; agenda usa fim_at/inicio_at.
+ *
+ * A consulta é separada em ramos agenda/manual via UNION ALL para que o planner consiga
+ * usar os dois índices parciais do ranking sem depender de heurística sobre um OR misto.
  */
 export async function listClientesSemRetornoForOwner(input: {
   slot: string;
@@ -545,40 +548,59 @@ export async function listClientesSemRetornoForOwner(input: {
        SELECT c.id,
               c.nome,
               c.telefone_canonico,
-              CASE
-                WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
-                ELSE (a.data::timestamp AT TIME ZONE $3)
-              END AS ultimo_atendimento_at,
-              CASE
-                WHEN a.origem = 'agenda' THEN (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $3)::date
-                ELSE a.data
-              END AS referencia_local_date,
+              COALESCE(a.fim_at, a.inicio_at) AS ultimo_atendimento_at,
+              (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $3)::date AS referencia_local_date,
               cc.nome AS ultimo_profissional_nome,
-              ROW_NUMBER() OVER (
-                PARTITION BY c.id
-                ORDER BY
-                  CASE
-                    WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
-                    ELSE (a.data::timestamp AT TIME ZONE $3)
-                  END DESC,
-                  a.id DESC
-              ) AS rn
+              a.id AS atendimento_id
          FROM clientes c
          JOIN atendimentos a
            ON a.slot = c.slot
           AND a.tenant_id = c.tenant_id
           AND a.deleted_at IS NULL
           AND a.status <> 'cancelado'
+          AND a.origem = 'agenda'
           AND a.cliente_telefone_canonico = c.telefone_canonico
-          AND (
-            (a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())
-            OR
-            (a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $3)::date)
-          )
+          AND COALESCE(a.fim_at, a.inicio_at) <= NOW()
          LEFT JOIN clone_colaboradores cc
            ON cc.id = a.colaborador_id AND cc.slot = a.slot
         WHERE c.slot = $1
           AND c.tenant_id = $2
+
+       UNION ALL
+
+       SELECT c.id,
+              c.nome,
+              c.telefone_canonico,
+              (a.data::timestamp AT TIME ZONE $3) AS ultimo_atendimento_at,
+              a.data AS referencia_local_date,
+              cc.nome AS ultimo_profissional_nome,
+              a.id AS atendimento_id
+         FROM clientes c
+         JOIN atendimentos a
+           ON a.slot = c.slot
+          AND a.tenant_id = c.tenant_id
+          AND a.deleted_at IS NULL
+          AND a.status <> 'cancelado'
+          AND a.origem = 'manual'
+          AND a.cliente_telefone_canonico = c.telefone_canonico
+          AND a.data <= (NOW() AT TIME ZONE $3)::date
+         LEFT JOIN clone_colaboradores cc
+           ON cc.id = a.colaborador_id AND cc.slot = a.slot
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+     ),
+     ranqueados AS (
+       SELECT id,
+              nome,
+              telefone_canonico,
+              ultimo_atendimento_at,
+              referencia_local_date,
+              ultimo_profissional_nome,
+              ROW_NUMBER() OVER (
+                PARTITION BY id
+                ORDER BY ultimo_atendimento_at DESC, atendimento_id DESC
+              ) AS rn
+         FROM elegiveis
      )
      SELECT id,
             nome,
@@ -587,7 +609,7 @@ export async function listClientesSemRetornoForOwner(input: {
             GREATEST(0, ((NOW() AT TIME ZONE $3)::date - referencia_local_date))::int AS dias_sem_retorno,
             ultimo_profissional_nome,
             COUNT(*) OVER()::bigint AS total_count
-       FROM elegiveis
+       FROM ranqueados
       WHERE rn = 1
       ORDER BY ultimo_atendimento_at ASC, id ASC
       LIMIT $4 OFFSET $5`,
@@ -616,24 +638,10 @@ export async function listClientesSemRetornoForColaborador(input: {
        SELECT c.id,
               c.nome,
               c.telefone_canonico,
-              CASE
-                WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
-                ELSE (a.data::timestamp AT TIME ZONE $4)
-              END AS ultimo_atendimento_at,
-              CASE
-                WHEN a.origem = 'agenda' THEN (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $4)::date
-                ELSE a.data
-              END AS referencia_local_date,
+              COALESCE(a.fim_at, a.inicio_at) AS ultimo_atendimento_at,
+              (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $4)::date AS referencia_local_date,
               cc.nome AS ultimo_profissional_nome,
-              ROW_NUMBER() OVER (
-                PARTITION BY c.id
-                ORDER BY
-                  CASE
-                    WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
-                    ELSE (a.data::timestamp AT TIME ZONE $4)
-                  END DESC,
-                  a.id DESC
-              ) AS rn
+              a.id AS atendimento_id
          FROM clientes c
          JOIN atendimentos a
            ON a.slot = c.slot
@@ -641,16 +649,50 @@ export async function listClientesSemRetornoForColaborador(input: {
           AND a.deleted_at IS NULL
           AND a.status <> 'cancelado'
           AND a.colaborador_id = $3
+          AND a.origem = 'agenda'
           AND a.cliente_telefone_canonico = c.telefone_canonico
-          AND (
-            (a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())
-            OR
-            (a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $4)::date)
-          )
+          AND COALESCE(a.fim_at, a.inicio_at) <= NOW()
          LEFT JOIN clone_colaboradores cc
            ON cc.id = a.colaborador_id AND cc.slot = a.slot
         WHERE c.slot = $1
           AND c.tenant_id = $2
+
+       UNION ALL
+
+       SELECT c.id,
+              c.nome,
+              c.telefone_canonico,
+              (a.data::timestamp AT TIME ZONE $4) AS ultimo_atendimento_at,
+              a.data AS referencia_local_date,
+              cc.nome AS ultimo_profissional_nome,
+              a.id AS atendimento_id
+         FROM clientes c
+         JOIN atendimentos a
+           ON a.slot = c.slot
+          AND a.tenant_id = c.tenant_id
+          AND a.deleted_at IS NULL
+          AND a.status <> 'cancelado'
+          AND a.colaborador_id = $3
+          AND a.origem = 'manual'
+          AND a.cliente_telefone_canonico = c.telefone_canonico
+          AND a.data <= (NOW() AT TIME ZONE $4)::date
+         LEFT JOIN clone_colaboradores cc
+           ON cc.id = a.colaborador_id AND cc.slot = a.slot
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+     ),
+     ranqueados AS (
+       SELECT id,
+              nome,
+              telefone_canonico,
+              ultimo_atendimento_at,
+              referencia_local_date,
+              ultimo_profissional_nome,
+              ROW_NUMBER() OVER (
+                PARTITION BY id
+                ORDER BY ultimo_atendimento_at DESC, atendimento_id DESC
+              ) AS rn
+         FROM elegiveis
      )
      SELECT id,
             nome,
@@ -659,7 +701,7 @@ export async function listClientesSemRetornoForColaborador(input: {
             GREATEST(0, ((NOW() AT TIME ZONE $4)::date - referencia_local_date))::int AS dias_sem_retorno,
             ultimo_profissional_nome,
             COUNT(*) OVER()::bigint AS total_count
-       FROM elegiveis
+       FROM ranqueados
       WHERE rn = 1
       ORDER BY ultimo_atendimento_at ASC, id ASC
       LIMIT $5 OFFSET $6`,
