@@ -143,11 +143,18 @@ type RemoveOccurrenceResult =
       error: 'rate_limit' | 'gcal_falhou' | 'gcal_nao_configurado' | 'bloqueio_nao_encontrado';
     };
 
+type CreateOccurrenceError = Extract<CreateOccurrenceResult, { ok: false }>['error'];
+type RemoveOccurrenceError = Extract<RemoveOccurrenceResult, { ok: false }>['error'];
+
 type SerieFailureReason =
   | 'gcal_rate_limit'
   | 'erro_gcal'
   | 'gcal_nao_configurado'
   | 'bloqueio_nao_encontrado';
+
+function assertNever(value: never): never {
+  throw new Error(`unsupported value: ${String(value)}`);
+}
 
 function slotAllowed(slot: string, slotsConfig: string): boolean {
   const entries = slotsConfig
@@ -214,13 +221,11 @@ function blockSummary(tipo: agendaBloqueios.AgendaBloqueioTipo, motivo?: string 
   return cleanMotivo ? `${base} - ${cleanMotivo.slice(0, 80)}` : base;
 }
 
-function mapCreateFailureReason(error: CreateOccurrenceResult extends { ok: false; error: infer E } ? E : never): SerieFailureReason {
+function mapCreateFailureReason(error: CreateOccurrenceError): SerieFailureReason {
   return error === 'rate_limit' ? 'gcal_rate_limit' : 'erro_gcal';
 }
 
-function mapRemoveFailureReason(
-  error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never,
-): SerieFailureReason {
+function mapRemoveFailureReason(error: RemoveOccurrenceError): SerieFailureReason {
   switch (error) {
     case 'rate_limit':
       return 'gcal_rate_limit';
@@ -230,6 +235,8 @@ function mapRemoveFailureReason(
       return 'gcal_nao_configurado';
     case 'bloqueio_nao_encontrado':
       return 'bloqueio_nao_encontrado';
+    default:
+      return assertNever(error);
   }
 }
 
@@ -651,7 +658,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
     const falhas: Array<{
       inicio_at: string;
       fim_at: string;
-      error: 'rate_limit' | 'gcal_falhou';
+      error: CreateOccurrenceError;
       reason: SerieFailureReason;
     }> = [];
       for (const ocorrencia of ocorrenciasSerie) {
@@ -714,7 +721,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         id: string;
         inicio_at: string;
         fim_at: string;
-        error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never;
+        error: RemoveOccurrenceError;
         reason: SerieFailureReason;
       }> = [];
 
@@ -856,7 +863,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
     const falhas: Array<{
       inicio_at: string;
       fim_at: string;
-      error: 'rate_limit' | 'gcal_falhou';
+      error: CreateOccurrenceError;
       reason: SerieFailureReason;
     }> = [];
       for (const ocorrencia of ocorrenciasSerie) {
@@ -935,7 +942,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         id: string;
         inicio_at: string;
         fim_at: string;
-        error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never;
+        error: RemoveOccurrenceError;
         reason: SerieFailureReason;
       }> = [];
       for (const row of rows) {
