@@ -1,3 +1,13 @@
+import type {
+  AgendaBloqueioInput,
+  AgendaBloqueioSerieFaixa,
+  CriarAgendaBloqueioSerieBody,
+  CriarAgendaBloqueioSerieResponse,
+  Periodicidade,
+  PreviewAgendaBloqueioRecorrencia,
+  PreviewAgendaBloqueioRecorrenciaBody,
+  PreviewOcorrenciaStatus,
+} from './api-types';
 import type { Agendamento } from './api-types';
 
 export const BLOQUEIO_PREFIX = 'Bloqueio:';
@@ -11,6 +21,17 @@ export const BLOQUEIO_TIPO_LABEL: Record<
   ferias: 'Ferias',
   indisponivel: 'Indisponivel',
 };
+
+export const BLOQUEIO_PERIODICIDADE_LABELS: Record<Periodicidade, string> = {
+  semanal: 'Toda semana',
+  mensal: 'Todo mes',
+  trimestral: 'A cada 3 meses',
+  semestral: 'A cada 6 meses',
+};
+
+export interface RevisaoAgendaBloqueioRecorrencia extends PreviewAgendaBloqueioRecorrencia {
+  marcado: boolean;
+}
 
 function zonedParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -77,6 +98,112 @@ export function defaultBloqueioFormValues(timeZone: string, now: Date = new Date
     fimData: formatDateInputInTimeZone(timeZone, fim),
     fimHora: formatTimeInputInTimeZone(timeZone, fim),
   };
+}
+
+export function buildPreviewAgendaBloqueioRecorrenciaBody(args: {
+  base: AgendaBloqueioInput;
+  periodicidade: Periodicidade;
+  ocorrencias: number;
+}): PreviewAgendaBloqueioRecorrenciaBody {
+  return {
+    ...args.base,
+    periodicidade: args.periodicidade,
+    ocorrencias: args.ocorrencias,
+  };
+}
+
+export function initRevisaoAgendaBloqueioRecorrencia(
+  previews: PreviewAgendaBloqueioRecorrencia[],
+): RevisaoAgendaBloqueioRecorrencia[] {
+  return previews.map((preview) => ({ ...preview, marcado: preview.status === 'livre' }));
+}
+
+export function contarMarcadosAgendaBloqueioRecorrencia(
+  ocorrencias: RevisaoAgendaBloqueioRecorrencia[],
+): {
+  marcados: number;
+  total: number;
+} {
+  return {
+    marcados: ocorrencias.filter((ocorrencia) => ocorrencia.marcado).length,
+    total: ocorrencias.length,
+  };
+}
+
+export function ocorrenciasMarcadasAgendaBloqueioRecorrencia(
+  ocorrencias: RevisaoAgendaBloqueioRecorrencia[],
+): AgendaBloqueioSerieFaixa[] {
+  return ocorrencias
+    .filter((ocorrencia) => ocorrencia.marcado)
+    .map((ocorrencia) => ({
+      inicio_at: ocorrencia.inicio_at,
+      fim_at: ocorrencia.fim_at,
+    }));
+}
+
+export function buildCriarAgendaBloqueioSerieBody(args: {
+  base: AgendaBloqueioInput;
+  ocorrencias: RevisaoAgendaBloqueioRecorrencia[];
+}): CriarAgendaBloqueioSerieBody {
+  return {
+    ...args.base,
+    ocorrencias: ocorrenciasMarcadasAgendaBloqueioRecorrencia(args.ocorrencias),
+  };
+}
+
+export function buildAgendaBloqueioRecorrenciaKey(args: {
+  base: AgendaBloqueioInput;
+  periodicidade: Periodicidade;
+  ocorrencias: number;
+}): string {
+  return JSON.stringify({
+    ...args.base,
+    motivo: args.base.motivo?.trim() ?? '',
+    colaborador_id: args.base.colaborador_id ?? null,
+    periodicidade: args.periodicidade,
+    ocorrencias: args.ocorrencias,
+  });
+}
+
+export function statusAgendaBloqueioRecorrenciaLabel(status: PreviewOcorrenciaStatus): string {
+  switch (status) {
+    case 'livre':
+      return 'Livre';
+    case 'ocupado':
+      return 'Ja existe algo marcado';
+    case 'fora_do_horario':
+      return 'Fora do horario de funcionamento';
+    case 'fechado':
+      return 'Fechado nesse dia';
+    case 'fora_da_janela':
+      return 'Fora do periodo permitido';
+    case 'passado':
+      return 'Esse horario ja passou';
+    default:
+      return status;
+  }
+}
+
+export function falhaAgendaBloqueioSerieLabel(reason: string): string {
+  if (reason === 'gcal_rate_limit') return 'A agenda ficou sobrecarregada nesse momento';
+  if (reason === 'erro_gcal') return 'Nao foi possivel confirmar com a agenda';
+  return statusAgendaBloqueioRecorrenciaLabel(
+    reason as Parameters<typeof statusAgendaBloqueioRecorrenciaLabel>[0],
+  );
+}
+
+export function resumoResultadoAgendaBloqueioSerie(
+  resposta: CriarAgendaBloqueioSerieResponse,
+): string {
+  const { criados, falhas } = resposta;
+  if (falhas.length === 0) {
+    return criados.length === 1 ? '1 bloqueio criado.' : `${criados.length} bloqueios criados.`;
+  }
+  if (criados.length === 0) {
+    return 'Nenhum bloqueio foi criado. Revise a serie e tente de novo.';
+  }
+  const total = criados.length + falhas.length;
+  return `${criados.length} de ${total} bloqueios criados — ${falhas.length} nao entrou porque a agenda mudou.`;
 }
 
 export function zonedDateTimeToUtcIso(date: string, time: string, timeZone: string): string | null {

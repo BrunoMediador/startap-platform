@@ -19,7 +19,7 @@ import {
 } from '@tanstack/react-query';
 import { isAgendaConfigurada } from './agenda-config';
 import { atualizarAgendamento, removerAgendamento } from './agendamentos';
-import { apiFetch } from './api';
+import { ApiError, apiFetch } from './api';
 import type {
   AgendaBloqueioInput,
   AgendaBloqueiosResponse,
@@ -42,6 +42,8 @@ import type {
   ConexaoResponse,
   ContatosResponse,
   CriarAgendaBloqueioResponse,
+  CriarAgendaBloqueioSerieBody,
+  CriarAgendaBloqueioSerieResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
   CriarAtendimentoBody,
@@ -67,11 +69,14 @@ import type {
   PausasResponse,
   PerfilNegocio,
   PerfilResponse,
+  PreviewAgendaBloqueioRecorrenciaBody,
+  PreviewAgendaBloqueioRecorrenciaResponse,
   PreviewRecorrenciaBody,
   PreviewRecorrenciaResponse,
   QrResponse,
   ReconectarResponse,
   RemoverAgendaBloqueioResponse,
+  RemoverAgendaBloqueioSerieResponse,
   SaveColaboradorResponse,
   SavePerfilResponse,
   Servico,
@@ -209,6 +214,26 @@ function isFeatureOff(error: unknown): boolean {
   );
 }
 
+function invalidateAgendaBloqueioCaches(client: QueryClient, slot: string) {
+  client.invalidateQueries({ queryKey: qk.agendaBloqueiosBase(slot) });
+  client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+  client.invalidateQueries({ queryKey: ['colaborador-agenda', slot] });
+  client.invalidateQueries({ queryKey: ['colaborador-bloqueios', slot] });
+}
+
+function isAgendaBloqueioSerie409(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409;
+}
+
+function agendaBloqueioSerieFrom409(error: unknown): CriarAgendaBloqueioSerieResponse | null {
+  if (!isAgendaBloqueioSerie409(error) || !error.body || typeof error.body !== 'object')
+    return null;
+  if (!('serie_id' in error.body) || !('criados' in error.body) || !('falhas' in error.body)) {
+    return null;
+  }
+  return error.body as CriarAgendaBloqueioSerieResponse;
+}
+
 export function useAgendaBloqueios(
   slot: string,
   colaboradorId: number | null,
@@ -242,12 +267,7 @@ export function useCriarAgendaBloqueio(
   return useMutation({
     mutationFn: (body) =>
       apiFetch<CriarAgendaBloqueioResponse>('/portal/agenda/bloqueios', { method: 'POST', body }),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: qk.agendaBloqueiosBase(slot) });
-      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
-      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot] });
-      client.invalidateQueries({ queryKey: ['colaborador-bloqueios', slot] });
-    },
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
   });
 }
 
@@ -263,12 +283,59 @@ export function useRemoverAgendaBloqueio(
           method: 'DELETE',
         },
       ),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: qk.agendaBloqueiosBase(slot) });
-      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
-      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot] });
-      client.invalidateQueries({ queryKey: ['colaborador-bloqueios', slot] });
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
+  });
+}
+
+export function usePreviewAgendaBloqueioRecorrencia(): UseMutationResult<
+  PreviewAgendaBloqueioRecorrenciaResponse,
+  Error,
+  PreviewAgendaBloqueioRecorrenciaBody
+> {
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<PreviewAgendaBloqueioRecorrenciaResponse>(
+        '/portal/agenda/bloqueios/recorrencia/preview',
+        {
+          method: 'POST',
+          body,
+        },
+      ),
+  });
+}
+
+export function useCriarAgendaBloqueioSerie(
+  slot: string,
+): UseMutationResult<CriarAgendaBloqueioSerieResponse, Error, CriarAgendaBloqueioSerieBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      try {
+        return await apiFetch<CriarAgendaBloqueioSerieResponse>('/portal/agenda/bloqueios/serie', {
+          method: 'POST',
+          body,
+        });
+      } catch (error) {
+        const fallback = agendaBloqueioSerieFrom409(error);
+        if (fallback) return fallback;
+        throw error;
+      }
     },
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
+  });
+}
+
+export function useRemoverAgendaBloqueioSerie(
+  slot: string,
+): UseMutationResult<RemoverAgendaBloqueioSerieResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (serieId) =>
+      apiFetch<RemoverAgendaBloqueioSerieResponse>(
+        `/portal/agenda/bloqueios/serie/${encodeURIComponent(serieId)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
   });
 }
 
@@ -341,11 +408,7 @@ export function useCriarColaboradorBloqueio(
         method: 'POST',
         body,
       }),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: qk.colaboradorBloqueiosBase(slot, colaboradorId) });
-      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot, colaboradorId] });
-      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
-    },
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
   });
 }
 
@@ -360,10 +423,69 @@ export function useRemoverColaboradorBloqueio(
         `/portal/colaborador/bloqueios/${encodeURIComponent(id)}`,
         { method: 'DELETE' },
       ),
+    onSuccess: () => invalidateAgendaBloqueioCaches(client, slot),
+  });
+}
+
+export function usePreviewColaboradorBloqueioRecorrencia(): UseMutationResult<
+  PreviewAgendaBloqueioRecorrenciaResponse,
+  Error,
+  PreviewAgendaBloqueioRecorrenciaBody
+> {
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<PreviewAgendaBloqueioRecorrenciaResponse>(
+        '/portal/colaborador/bloqueios/recorrencia/preview',
+        {
+          method: 'POST',
+          body,
+        },
+      ),
+  });
+}
+
+export function useCriarColaboradorBloqueioSerie(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<CriarAgendaBloqueioSerieResponse, Error, CriarAgendaBloqueioSerieBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      try {
+        return await apiFetch<CriarAgendaBloqueioSerieResponse>(
+          '/portal/colaborador/bloqueios/serie',
+          {
+            method: 'POST',
+            body,
+          },
+        );
+      } catch (error) {
+        const fallback = agendaBloqueioSerieFrom409(error);
+        if (fallback) return fallback;
+        throw error;
+      }
+    },
     onSuccess: () => {
       client.invalidateQueries({ queryKey: qk.colaboradorBloqueiosBase(slot, colaboradorId) });
-      client.invalidateQueries({ queryKey: ['colaborador-agenda', slot, colaboradorId] });
-      client.invalidateQueries({ queryKey: qk.agendamentos(slot) });
+      invalidateAgendaBloqueioCaches(client, slot);
+    },
+  });
+}
+
+export function useRemoverColaboradorBloqueioSerie(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<RemoverAgendaBloqueioSerieResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (serieId) =>
+      apiFetch<RemoverAgendaBloqueioSerieResponse>(
+        `/portal/colaborador/bloqueios/serie/${encodeURIComponent(serieId)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: qk.colaboradorBloqueiosBase(slot, colaboradorId) });
+      invalidateAgendaBloqueioCaches(client, slot);
     },
   });
 }
