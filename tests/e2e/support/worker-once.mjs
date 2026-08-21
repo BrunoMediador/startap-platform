@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { runCloseStaleRunning } from '/app/dist/jobs/close-stale-running.js';
+import { runCloseStaleRunning } from '/app/app/dist/jobs/close-stale-running.js';
 
 const { Client } = pg;
 
