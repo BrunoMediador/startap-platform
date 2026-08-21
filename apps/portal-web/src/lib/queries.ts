@@ -36,6 +36,8 @@ import type {
   ChargeView,
   ClientePerfil,
   ClientePerfilResponse,
+  ClientesAniversariantesModo,
+  ClientesAniversariantesResponse,
   ClientesListResponse,
   ClientesSemRetornoResponse,
   CodigoResponse,
@@ -94,8 +96,10 @@ import type {
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { conexaoFromBotActionResponse } from './bot-pausa';
 import {
+  buildClientesAniversariantesSearchParams,
   buildClientesListSearchParams,
   buildClientesSemRetornoSearchParams,
+  clienteAniversarianteFromApi,
   clienteSemRetornoFromApi,
 } from './clientes';
 import {
@@ -182,6 +186,14 @@ export const qk = {
   clientesBase: (slot: string) => ['clientes', slot] as const,
   clientes: (slot: string, page: number, pageSize: number, search: string) =>
     ['clientes', slot, page, pageSize, search] as const,
+  clientesAniversariantesBase: (slot: string) => ['clientes-aniversariantes', slot] as const,
+  clientesAniversariantes: (
+    slot: string,
+    mode: ClientesAniversariantesModo,
+    monthOrDays: number,
+    page: number,
+    pageSize: number,
+  ) => ['clientes-aniversariantes', slot, mode, monthOrDays, page, pageSize] as const,
   clientesSemRetornoBase: (slot: string) => ['clientes-sem-retorno', slot] as const,
   clientesSemRetorno: (slot: string, page: number, pageSize: number) =>
     ['clientes-sem-retorno', slot, page, pageSize] as const,
@@ -195,6 +207,17 @@ export const qk = {
     pageSize: number,
     search: string,
   ) => ['colaborador-clientes', slot, colaboradorId, page, pageSize, search] as const,
+  colaboradorClientesAniversariantesBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-clientes-aniversariantes', slot, colaboradorId] as const,
+  colaboradorClientesAniversariantes: (
+    slot: string,
+    colaboradorId: number,
+    mode: ClientesAniversariantesModo,
+    monthOrDays: number,
+    page: number,
+    pageSize: number,
+  ) =>
+    ['colaborador-clientes-aniversariantes', slot, colaboradorId, mode, monthOrDays, page, pageSize] as const,
   colaboradorClientesSemRetornoBase: (slot: string, colaboradorId: number) =>
     ['colaborador-clientes-sem-retorno', slot, colaboradorId] as const,
   colaboradorClientesSemRetorno: (
@@ -247,6 +270,14 @@ export interface ClientesListQueryData extends ClientesListResponse {
 export interface ClientesSemRetornoQueryData {
   available: boolean;
   clientes: ReturnType<typeof clienteSemRetornoFromApi>[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ClientesAniversariantesQueryData {
+  available: boolean;
+  clientes: ReturnType<typeof clienteAniversarianteFromApi>[];
   total: number;
   limit: number;
   offset: number;
@@ -446,6 +477,57 @@ export function useColaboradorClientes(
           signal,
         });
         return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useColaboradorClientesAniversariantes(
+  slot: string,
+  colaboradorId: number,
+  mode: ClientesAniversariantesModo,
+  monthOrDays: number,
+  page: number,
+  pageSize: number,
+  enabled = true,
+): UseQueryResult<ClientesAniversariantesQueryData> {
+  return useQuery({
+    queryKey: qk.colaboradorClientesAniversariantes(
+      slot,
+      colaboradorId,
+      mode,
+      monthOrDays,
+      page,
+      pageSize,
+    ),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesAniversariantesSearchParams({
+        page,
+        pageSize,
+        modo: mode,
+        dias: monthOrDays,
+        mes: monthOrDays,
+      });
+      try {
+        const data = await apiFetch<ClientesAniversariantesResponse>(
+          `/portal/colaborador/clientes/aniversariantes?${qs}`,
+          { signal },
+        );
+        return {
+          available: true,
+          clientes: data.clientes.map(clienteAniversarianteFromApi),
+          total: data.total,
+          limit: data.limit,
+          offset: data.offset,
+        };
       } catch (error) {
         if (isFeatureOff(error)) {
           return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
@@ -1092,6 +1174,49 @@ export function useClientes(
       try {
         const data = await apiFetch<ClientesListResponse>(`/portal/clientes?${qs}`, { signal });
         return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useClientesAniversariantes(
+  slot: string,
+  mode: ClientesAniversariantesModo,
+  monthOrDays: number,
+  page: number,
+  pageSize: number,
+  enabled = true,
+): UseQueryResult<ClientesAniversariantesQueryData> {
+  return useQuery({
+    queryKey: qk.clientesAniversariantes(slot, mode, monthOrDays, page, pageSize),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesAniversariantesSearchParams({
+        page,
+        pageSize,
+        modo: mode,
+        dias: monthOrDays,
+        mes: monthOrDays,
+      });
+      try {
+        const data = await apiFetch<ClientesAniversariantesResponse>(
+          `/portal/clientes/aniversariantes?${qs}`,
+          { signal },
+        );
+        return {
+          available: true,
+          clientes: data.clientes.map(clienteAniversarianteFromApi),
+          total: data.total,
+          limit: data.limit,
+          offset: data.offset,
+        };
       } catch (error) {
         if (isFeatureOff(error)) {
           return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };

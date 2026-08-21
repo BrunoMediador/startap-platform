@@ -440,6 +440,24 @@ export interface ClientesSemRetornoResponse {
   offset: number;
 }
 
+export type ClientesAniversariantesModo = 'proximos' | 'mes';
+
+export interface ClienteAniversarianteApiItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  aniversario_mmdd: string;
+  proxima_ocorrencia_local_date?: string | null;
+  dias_ate_aniversario?: number | null;
+}
+
+export interface ClientesAniversariantesResponse {
+  clientes: ClienteAniversarianteApiItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // ── Status / Home ────────────────────────────────────────────────────────────
 
 export type BillingStatus = 'active' | 'overdue' | 'suspended';

@@ -1,8 +1,30 @@
-import type { ClientePerfil, ClienteSemRetornoApiItem, SaveClienteBody } from './api-types';
+import type {
+  ClienteAniversarianteApiItem,
+  ClientePerfil,
+  ClientesAniversariantesModo,
+  ClienteSemRetornoApiItem,
+  SaveClienteBody,
+} from './api-types';
 import { formatDueDate } from './format';
 
 export const CLIENTES_PAGE_SIZE = 10;
 export const CLIENTES_SEM_RETORNO_PAGE_SIZE = 5;
+export const CLIENTES_ANIVERSARIANTES_PAGE_SIZE = 5;
+
+const MESES = [
+  'janeiro',
+  'fevereiro',
+  'março',
+  'abril',
+  'maio',
+  'junho',
+  'julho',
+  'agosto',
+  'setembro',
+  'outubro',
+  'novembro',
+  'dezembro',
+] as const;
 
 export function sanitizeClientesSearch(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ').slice(0, 80);
@@ -47,6 +69,31 @@ export function buildClientesSemRetornoSearchParams({
   }).toString();
 }
 
+export function buildClientesAniversariantesSearchParams({
+  page,
+  pageSize,
+  modo,
+  dias,
+  mes,
+}: {
+  page: number;
+  pageSize: number;
+  modo: ClientesAniversariantesModo;
+  dias: number;
+  mes: number;
+}): string {
+  const safePage = clampClientesPage(page);
+  const limit = clampClientesAniversariantesLimit(pageSize);
+  const params = new URLSearchParams({
+    modo,
+    limit: String(limit),
+    offset: String(clientesOffsetFromPage(safePage, limit)),
+  });
+  if (modo === 'mes') params.set('mes', String(clampMonthNumber(mes)));
+  if (modo === 'proximos') params.set('dias', String(clampBirthdayWindowDays(dias)));
+  return params.toString();
+}
+
 export function clampClientesLimit(limit: number): number {
   if (!Number.isFinite(limit)) return CLIENTES_PAGE_SIZE;
   return Math.max(1, Math.min(100, Math.trunc(limit)));
@@ -54,6 +101,11 @@ export function clampClientesLimit(limit: number): number {
 
 export function clampClientesSemRetornoLimit(limit: number): number {
   if (!Number.isFinite(limit)) return CLIENTES_SEM_RETORNO_PAGE_SIZE;
+  return Math.max(1, Math.min(50, Math.trunc(limit)));
+}
+
+export function clampClientesAniversariantesLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return CLIENTES_ANIVERSARIANTES_PAGE_SIZE;
   return Math.max(1, Math.min(50, Math.trunc(limit)));
 }
 
@@ -142,6 +194,90 @@ export function semRetornoFaixaLabel(dias: number): string {
   if (dias <= 30) return '15 a 30 dias';
   if (dias <= 60) return '31 a 60 dias';
   return 'Mais de 60 dias';
+}
+
+export interface ClienteAniversarianteItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  aniversario_mmdd: string;
+  proxima_ocorrencia_local_date: string | null;
+  dias_ate_aniversario: number | null;
+}
+
+export function clienteAniversarianteFromApi(
+  item: ClienteAniversarianteApiItem,
+): ClienteAniversarianteItem {
+  return {
+    id: item.id,
+    nome: item.nome,
+    telefone_masked: item.telefone_masked,
+    aniversario_mmdd: item.aniversario_mmdd,
+    proxima_ocorrencia_local_date: item.proxima_ocorrencia_local_date ?? null,
+    dias_ate_aniversario: item.dias_ate_aniversario ?? null,
+  };
+}
+
+export function aniversarianteMatchesSearch(
+  item: ClienteAniversarianteItem,
+  search: string,
+): boolean {
+  const token = sanitizeClientesSearch(search).toLowerCase();
+  if (!token) return true;
+  const tokenDigits = token.replace(/\D/g, '');
+  const nome = (item.nome ?? '').toLowerCase();
+  const telefone = item.telefone_masked.toLowerCase();
+  const telefoneDigits = telefone.replace(/\D/g, '');
+  return (
+    nome.includes(token) ||
+    telefone.includes(token) ||
+    (tokenDigits.length > 0 && telefoneDigits.includes(tokenDigits))
+  );
+}
+
+export function clampBirthdayWindowDays(days: number): number {
+  if (!Number.isFinite(days)) return 30;
+  return Math.max(1, Math.min(31, Math.trunc(days)));
+}
+
+export function clampMonthNumber(month: number): number {
+  if (!Number.isFinite(month)) return 1;
+  return Math.max(1, Math.min(12, Math.trunc(month)));
+}
+
+export function monthName(month: number): string {
+  return MESES[clampMonthNumber(month) - 1];
+}
+
+export function currentMonthInTimezone(timezone: string, now = new Date()): number {
+  const month = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    month: 'numeric',
+  }).format(now);
+  return clampMonthNumber(Number(month));
+}
+
+export function aniversarianteDiasLabel(dias: number | null): string {
+  if (dias == null) return 'Neste mês';
+  if (dias <= 0) return 'Hoje';
+  if (dias === 1) return 'Amanhã';
+  return `${dias} dias`;
+}
+
+export function aniversarianteFaixaLabel(
+  modo: ClientesAniversariantesModo,
+  dias: number | null,
+  mes: number,
+): string {
+  if (modo === 'mes') return `Aniversários de ${monthName(mes)}`;
+  if (dias == null || dias <= 0) return 'Próximo aniversário hoje';
+  if (dias <= 7) return 'Próximos 7 dias';
+  if (dias <= 15) return 'Próximos 15 dias';
+  return 'Próximos 30 dias';
+}
+
+export function aniversarianteOccurrenceLabel(item: ClienteAniversarianteItem): string {
+  return formatDueDate(item.proxima_ocorrencia_local_date) ?? birthdayLabel(item.aniversario_mmdd) ?? 'Data inválida';
 }
 
 export function birthdayToDateInput(aniversarioMmdd: string | null): string {

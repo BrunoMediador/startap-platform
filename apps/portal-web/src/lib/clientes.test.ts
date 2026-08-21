@@ -1,20 +1,32 @@
-import type { ClientePerfil, ClienteSemRetornoApiItem } from './api-types';
+import type {
+  ClienteAniversarianteApiItem,
+  ClientePerfil,
+  ClienteSemRetornoApiItem,
+} from './api-types';
 import { describe, expect, it } from 'vitest';
 import {
+  aniversarianteDiasLabel,
+  aniversarianteFaixaLabel,
+  aniversarianteMatchesSearch,
+  aniversarianteOccurrenceLabel,
   birthdayFromDateInput,
   birthdayLabel,
   birthdayToDateInput,
+  buildClientesAniversariantesSearchParams,
   buildClientesListSearchParams,
   buildClientesSemRetornoSearchParams,
   buildClientePatchBody,
   clampClientesPage,
+  clienteAniversarianteFromApi,
   clienteSemRetornoFromApi,
+  currentMonthInTimezone,
   clienteDraftChanged,
   clienteDraftFromPerfil,
   clienteDisplayName,
   clientePhoneMasked,
   clientesPageFromOffset,
   clientesTotalPages,
+  monthName,
   semRetornoDiasLabel,
   semRetornoFaixaLabel,
   semRetornoMatchesSearch,
@@ -30,6 +42,24 @@ describe('clientes helpers', () => {
     expect(buildClientesSemRetornoSearchParams({ page: 3, pageSize: 5 })).toBe(
       'limit=5&offset=10',
     );
+    expect(
+      buildClientesAniversariantesSearchParams({
+        page: 2,
+        pageSize: 5,
+        modo: 'proximos',
+        dias: 15,
+        mes: 8,
+      }),
+    ).toBe('modo=proximos&limit=5&offset=5&dias=15');
+    expect(
+      buildClientesAniversariantesSearchParams({
+        page: 3,
+        pageSize: 5,
+        modo: 'mes',
+        dias: 15,
+        mes: 8,
+      }),
+    ).toBe('modo=mes&limit=5&offset=10&mes=8');
   });
 
   it('defende a paginação contra páginas inválidas', () => {
@@ -97,6 +127,49 @@ describe('clientes helpers', () => {
     expect(semRetornoFaixaLabel(30)).toBe('15 a 30 dias');
     expect(semRetornoFaixaLabel(42)).toBe('31 a 60 dias');
     expect(semRetornoFaixaLabel(90)).toBe('Mais de 60 dias');
+  });
+
+  it('normaliza e descreve aniversariantes read-only', () => {
+    const apiItem: ClienteAniversarianteApiItem = {
+      id: '33333333-3333-4333-8333-333333333333',
+      nome: 'Maria Souza',
+      telefone_masked: '+55 31 •••••-••77',
+      aniversario_mmdd: '08-25',
+      proxima_ocorrencia_local_date: '2026-08-25',
+      dias_ate_aniversario: 4,
+    };
+
+    const item = clienteAniversarianteFromApi(apiItem);
+    expect(item).toEqual({
+      id: '33333333-3333-4333-8333-333333333333',
+      nome: 'Maria Souza',
+      telefone_masked: '+55 31 •••••-••77',
+      aniversario_mmdd: '08-25',
+      proxima_ocorrencia_local_date: '2026-08-25',
+      dias_ate_aniversario: 4,
+    });
+    expect(aniversarianteMatchesSearch(item, 'maria')).toBe(true);
+    expect(aniversarianteMatchesSearch(item, '3177')).toBe(true);
+    expect(aniversarianteMatchesSearch(item, 'joao')).toBe(false);
+    expect(aniversarianteOccurrenceLabel(item)).toBe('25 de agosto');
+  });
+
+  it('resume labels de faixa dos aniversariantes', () => {
+    expect(aniversarianteDiasLabel(0)).toBe('Hoje');
+    expect(aniversarianteDiasLabel(1)).toBe('Amanhã');
+    expect(aniversarianteDiasLabel(4)).toBe('4 dias');
+    expect(aniversarianteDiasLabel(null)).toBe('Neste mês');
+    expect(aniversarianteFaixaLabel('proximos', 0, 8)).toBe('Próximo aniversário hoje');
+    expect(aniversarianteFaixaLabel('proximos', 5, 8)).toBe('Próximos 7 dias');
+    expect(aniversarianteFaixaLabel('proximos', 14, 8)).toBe('Próximos 15 dias');
+    expect(aniversarianteFaixaLabel('proximos', 30, 8)).toBe('Próximos 30 dias');
+    expect(aniversarianteFaixaLabel('mes', null, 8)).toBe('Aniversários de agosto');
+    expect(monthName(12)).toBe('dezembro');
+  });
+
+  it('resolve o mês atual no timezone do tenant', () => {
+    expect(currentMonthInTimezone('America/Sao_Paulo', new Date('2026-08-21T01:00:00.000Z'))).toBe(8);
+    expect(currentMonthInTimezone('America/Sao_Paulo', new Date('2026-01-02T03:00:00.000Z'))).toBe(1);
   });
 
   it('normaliza detail+patch do contrato real do backend', () => {
