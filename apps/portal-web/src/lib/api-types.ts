@@ -523,6 +523,7 @@ export type ConflitoReason = 'ocupado' | 'horario_passado' | 'fora_do_horario';
 
 /** Espelha PERIODICIDADES de packages/core/src/recorrencia.ts. */
 export type Periodicidade = 'semanal' | 'mensal' | 'trimestral' | 'semestral';
+export type AgendaBloqueioPeriodicidade = Periodicidade | 'diaria';
 
 /** Espelha OCORRENCIAS_MIN/MAX de packages/core/src/recorrencia.ts — cap duro (rate-limit GCal). */
 export const OCORRENCIAS_MIN = 2;
@@ -618,7 +619,7 @@ export interface CriarSerieResponse {
  * client (a identidade continua na sessão).
  */
 export interface PreviewAgendaBloqueioRecorrenciaBody extends AgendaBloqueioInput {
-  periodicidade: Periodicidade;
+  periodicidade: AgendaBloqueioPeriodicidade;
   ocorrencias: number; // 2..24
 }
 
@@ -640,7 +641,7 @@ export interface PreviewAgendaBloqueioRecorrenciaResponse {
  * de gravar na Agenda Google.
  */
 export interface CriarAgendaBloqueioSerieBody extends AgendaBloqueioInput {
-  periodicidade: Periodicidade;
+  periodicidade: AgendaBloqueioPeriodicidade;
   ocorrencias: number; // 2..24
 }
 

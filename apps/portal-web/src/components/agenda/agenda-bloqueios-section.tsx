@@ -34,11 +34,11 @@ import {
 import { ApiError } from '@/lib/api';
 import { OCORRENCIAS_MAX, OCORRENCIAS_MIN } from '@/lib/api-types';
 import type {
+  AgendaBloqueioPeriodicidade,
   AgendaBloqueio,
   AgendaBloqueioInput,
   AgendaBloqueioTipo,
   CriarAgendaBloqueioSerieResponse,
-  Periodicidade,
 } from '@/lib/api-types';
 import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
@@ -96,7 +96,7 @@ interface RemoveSerieState {
 }
 
 const DEFAULT_TIPO: AgendaBloqueioTipo = 'almoco';
-const DEFAULT_PERIODICIDADE: Periodicidade = 'semanal';
+const DEFAULT_PERIODICIDADE: AgendaBloqueioPeriodicidade = 'semanal';
 const DEFAULT_OCORRENCIAS = 4;
 
 function buildFormState(timeZone: string, defaultColaboradorId = ''): FormState {
@@ -266,7 +266,9 @@ export function AgendaBloqueiosSection({
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [repetir, setRepetir] = useState(false);
-  const [periodicidade, setPeriodicidade] = useState<Periodicidade>(DEFAULT_PERIODICIDADE);
+  const [periodicidade, setPeriodicidade] = useState<AgendaBloqueioPeriodicidade>(
+    DEFAULT_PERIODICIDADE,
+  );
   const [ocorrencias, setOcorrencias] = useState(DEFAULT_OCORRENCIAS);
   const [revisaoSerie, setRevisaoSerie] = useState<RevisaoAgendaBloqueioRecorrencia[] | null>(null);
   const [resultadoSerie, setResultadoSerie] = useState<CriarAgendaBloqueioSerieResponse | null>(
@@ -591,7 +593,7 @@ export function AgendaBloqueiosSection({
                     Com que frequencia?
                   </span>
                   <div className="grid grid-cols-2 gap-2">
-                    {(Object.keys(BLOQUEIO_PERIODICIDADE_LABELS) as Periodicidade[]).map(
+                    {(Object.keys(BLOQUEIO_PERIODICIDADE_LABELS) as AgendaBloqueioPeriodicidade[]).map(
                       (value) => {
                         const ativo = value === periodicidade;
                         return (
