@@ -421,6 +421,32 @@ describe('POST /portal/agenda/bloqueios — dono', () => {
 });
 
 describe('recorrência de bloqueios', () => {
+  it('preview diaria recalcula dias corridos consecutivos e consulta o GCal por ocorrência', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/recorrencia/preview',
+      payload: {
+        ...BASE_BODY,
+        colaborador_id: 8,
+        periodicidade: 'diaria',
+        ocorrencias: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.previews).toEqual([
+      expect.objectContaining({ inicio_at: '2026-08-21T15:00:00.000Z', status: 'livre' }),
+      expect.objectContaining({ inicio_at: '2026-08-22T15:00:00.000Z', status: 'livre' }),
+      expect.objectContaining({ inicio_at: '2026-08-23T15:00:00.000Z', status: 'livre' }),
+    ]);
+    const colab8 = (await getGcalsForSlot.mock.results[0].value)[1];
+    expect(colab8.client.listEvents).toHaveBeenCalledTimes(3);
+    expect(colab8.client.createEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('preview expande datas, marca ocorrência livre e respeita cap de 24', async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -640,6 +666,110 @@ describe('recorrência de bloqueios', () => {
       '00000000-0000-4000-8000-000000000001',
       'clone_owner',
       agendaCreate.mock.calls[1][0].id,
+    );
+    await app.close();
+  });
+
+  it('POST /portal/agenda/bloqueios/serie com periodicidade diaria cria evento GCal para cada dia corrido', async () => {
+    agendaCreate
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa1-1111-4111-8111-111111111111',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      })
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa2-2222-4222-8222-222222222222',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      })
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa3-3333-4333-8333-333333333333',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      });
+    agendaAttach
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa1-1111-4111-8111-111111111111',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        gcal_event_id: 'bloqaaaaaaa1111141118111111111111111',
+        status: 'active',
+        inicio_at: '2026-08-21T15:00:00.000Z',
+        fim_at: '2026-08-21T16:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa2-2222-4222-8222-222222222222',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        gcal_event_id: 'bloqaaaaaaa2222242228222222222222222',
+        status: 'active',
+        inicio_at: '2026-08-22T15:00:00.000Z',
+        fim_at: '2026-08-22T16:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'aaaaaaa3-3333-4333-8333-333333333333',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        gcal_event_id: 'bloqaaaaaaa3333343338333333333333333',
+        status: 'active',
+        inicio_at: '2026-08-23T15:00:00.000Z',
+        fim_at: '2026-08-23T16:00:00.000Z',
+      });
+    const createEvent = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'evt-1' })
+      .mockResolvedValueOnce({ id: 'evt-2' })
+      .mockResolvedValueOnce({ id: 'evt-3' });
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { createEvent, deleteEvent: vi.fn().mockResolvedValue(undefined) },
+        servicos: [],
+      },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: {
+        ...BASE_SERIE_BODY,
+        colaborador_id: 8,
+        periodicidade: 'diaria',
+        ocorrencias: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(createEvent).toHaveBeenCalledTimes(3);
+    expect(createEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-08-21T15:00:00.000Z', endISO: '2026-08-21T16:00:00.000Z' }),
+    );
+    expect(createEvent.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-08-22T15:00:00.000Z', endISO: '2026-08-22T16:00:00.000Z' }),
+    );
+    expect(createEvent.mock.calls[2][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-08-23T15:00:00.000Z', endISO: '2026-08-23T16:00:00.000Z' }),
     );
     await app.close();
   });

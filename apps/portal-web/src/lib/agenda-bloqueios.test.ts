@@ -82,8 +82,9 @@ describe('defaults de formulario', () => {
 });
 
 describe('BLOQUEIO_PERIODICIDADE_LABELS', () => {
-  it('cobre os 4 valores com copy igual ao fluxo de recorrencia existente', () => {
+  it('cobre os 5 valores do fluxo de bloqueios com português claro', () => {
     expect(BLOQUEIO_PERIODICIDADE_LABELS).toEqual({
+      diaria: 'Todos os dias',
       semanal: 'Toda semana',
       mensal: 'Todo mes',
       trimestral: 'A cada 3 meses',
@@ -124,12 +125,12 @@ describe('recorrencia de bloqueios', () => {
     expect(
       buildPreviewAgendaBloqueioRecorrenciaBody({
         base,
-        periodicidade: 'mensal',
+        periodicidade: 'diaria',
         ocorrencias: 4,
       }),
     ).toEqual({
       ...base,
-      periodicidade: 'mensal',
+      periodicidade: 'diaria',
       ocorrencias: 4,
     });
   });

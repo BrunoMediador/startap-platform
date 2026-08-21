@@ -1,8 +1,8 @@
 import type {
+  AgendaBloqueioPeriodicidade,
   AgendaBloqueioInput,
   CriarAgendaBloqueioSerieBody,
   CriarAgendaBloqueioSerieResponse,
-  Periodicidade,
   RemoverAgendaBloqueioSerieResponse,
   PreviewAgendaBloqueioRecorrencia,
   PreviewAgendaBloqueioRecorrenciaBody,
@@ -22,7 +22,8 @@ export const BLOQUEIO_TIPO_LABEL: Record<
   indisponivel: 'Indisponivel',
 };
 
-export const BLOQUEIO_PERIODICIDADE_LABELS: Record<Periodicidade, string> = {
+export const BLOQUEIO_PERIODICIDADE_LABELS: Record<AgendaBloqueioPeriodicidade, string> = {
+  diaria: 'Todos os dias',
   semanal: 'Toda semana',
   mensal: 'Todo mes',
   trimestral: 'A cada 3 meses',
@@ -100,7 +101,7 @@ export function defaultBloqueioFormValues(timeZone: string, now: Date = new Date
 
 export function buildPreviewAgendaBloqueioRecorrenciaBody(args: {
   base: AgendaBloqueioInput;
-  periodicidade: Periodicidade;
+  periodicidade: AgendaBloqueioPeriodicidade;
   ocorrencias: number;
 }): PreviewAgendaBloqueioRecorrenciaBody {
   return {
@@ -118,7 +119,7 @@ export function initRevisaoAgendaBloqueioRecorrencia(
 
 export function buildCriarAgendaBloqueioSerieBody(args: {
   base: AgendaBloqueioInput;
-  periodicidade: Periodicidade;
+  periodicidade: AgendaBloqueioPeriodicidade;
   ocorrencias: number;
 }): CriarAgendaBloqueioSerieBody {
   return {
@@ -130,7 +131,7 @@ export function buildCriarAgendaBloqueioSerieBody(args: {
 
 export function buildAgendaBloqueioRecorrenciaKey(args: {
   base: AgendaBloqueioInput;
-  periodicidade: Periodicidade;
+  periodicidade: AgendaBloqueioPeriodicidade;
   ocorrencias: number;
 }): string {
   return JSON.stringify({
