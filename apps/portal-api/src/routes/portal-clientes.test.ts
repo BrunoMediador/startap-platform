@@ -3,7 +3,7 @@
  *
  * Cobertura principal:
  *  - flag OFF -> 404 sem tocar data layer;
- *  - owner usa slot/tenant da sessão, semeia e lista/perfila/edita no escopo correto;
+ *  - owner usa slot/tenant da sessão e lista/perfila/edita no escopo correto;
  *  - colaborador só lê sob /portal/colaborador/clientes, no próprio escopo, sem nota interna.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,7 +86,7 @@ const OWNER_LIST = {
     {
       id: '11111111-1111-4111-8111-111111111111',
       nome: 'Joao',
-      telefone: '553199998842',
+      telefone_masked: '+55 31 •••••-••42',
       aniversario_mmdd: '08-21',
       cidade: 'Belo Horizonte',
       total_atendimentos: 3,
@@ -152,7 +152,6 @@ beforeEach(() => {
     tenant_id: 'tid-owner',
     timezone: 'America/Sao_Paulo',
   });
-  seedClientesMock.mockResolvedValue({ clientesSeeded: 1, atendimentosUpdated: 2 });
   listClientesOwnerMock.mockResolvedValue(OWNER_LIST);
   listClientesColaboradorMock.mockResolvedValue(OWNER_LIST);
   getClienteOwnerMock.mockResolvedValue(OWNER_PROFILE);
@@ -168,6 +167,7 @@ describe('gating', () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/clientes' });
     expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
     expect(seedClientesMock).not.toHaveBeenCalled();
     expect(listClientesOwnerMock).not.toHaveBeenCalled();
     await app.close();
@@ -178,6 +178,7 @@ describe('gating', () => {
     const app = await buildApp();
     const res = await app.inject({ method: 'GET', url: '/portal/colaborador/clientes' });
     expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
     expect(seedClientesMock).not.toHaveBeenCalled();
     expect(listClientesColaboradorMock).not.toHaveBeenCalled();
     await app.close();
@@ -185,7 +186,7 @@ describe('gating', () => {
 });
 
 describe('owner', () => {
-  it('lista no escopo da sessão e semeia clientes antes da leitura', async () => {
+  it('lista no escopo da sessão sem expor telefone raw nem semear no GET', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
@@ -194,7 +195,7 @@ describe('owner', () => {
 
     expect(res.statusCode).toBe(200);
     expect(getScopeBySlotMock).toHaveBeenCalledWith('clone_owner');
-    expect(seedClientesMock).toHaveBeenCalledWith('clone_owner', 'tid-owner');
+    expect(seedClientesMock).not.toHaveBeenCalled();
     expect(listClientesOwnerMock).toHaveBeenCalledWith({
       slot: 'clone_owner',
       tenantId: 'tid-owner',
@@ -202,7 +203,11 @@ describe('owner', () => {
       limit: 10,
       offset: 5,
     });
-    expect(res.json()).toEqual(OWNER_LIST);
+    const body = res.json();
+    expect(body).toEqual(OWNER_LIST);
+    expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('553199998842');
     await app.close();
   });
 
@@ -271,7 +276,7 @@ describe('colaborador', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(seedClientesMock).toHaveBeenCalledWith('clone_owner', 'tid-owner');
+    expect(seedClientesMock).not.toHaveBeenCalled();
     expect(listClientesColaboradorMock).toHaveBeenCalledWith({
       slot: 'clone_owner',
       tenantId: 'tid-owner',
@@ -280,6 +285,10 @@ describe('colaborador', () => {
       limit: undefined,
       offset: undefined,
     });
+    const body = res.json();
+    expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('553199998842');
     await app.close();
   });
 

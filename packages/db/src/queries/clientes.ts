@@ -3,7 +3,7 @@
  * (tenant_id + telefone canônico). Os snapshots em `atendimentos` continuam
  * imutáveis; aqui vivem só o perfil canônico e as consultas de CRM.
  */
-import { canonicalE164 } from '@startap/core/phone';
+import { canonicalE164, phoneHint } from '@startap/core/phone';
 import type pg from 'pg';
 import { pool, query } from '../client.js';
 
@@ -28,7 +28,7 @@ interface SqlExecutor {
 interface ListRowRaw {
   id: string;
   nome: string | null;
-  telefone_raw: string;
+  telefone_canonico: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
   total_atendimentos: string;
@@ -76,7 +76,7 @@ export interface UpsertClienteFromSnapshotInput {
 export interface ClienteListItem {
   id: string;
   nome: string | null;
-  telefone: string;
+  telefone_masked: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
   total_atendimentos: number;
@@ -181,7 +181,7 @@ function mapListRow(row: ListRowRaw): ClienteListItem {
   return {
     id: row.id,
     nome: row.nome,
-    telefone: row.telefone_raw,
+    telefone_masked: phoneHint(row.telefone_canonico),
     aniversario_mmdd: row.aniversario_mmdd,
     cidade: row.cidade,
     total_atendimentos: Number(row.total_atendimentos),
@@ -258,8 +258,9 @@ export async function upsertClienteFromSnapshot(
 }
 
 /**
- * Semeia o CRM deste tenant sob demanda a partir dos snapshots já existentes de
- * `atendimentos`, sem mutar nome/telefone nos próprios snapshots.
+ * Semeia o CRM deste tenant a partir dos snapshots já existentes de `atendimentos`,
+ * sem mutar nome/telefone nos próprios snapshots. Mantido FORA do hot path de GET:
+ * serve para backfill one-shot futuro, não para leitura online.
  */
 export async function seedClientesFromAtendimentos(
   slot: string,
@@ -357,7 +358,7 @@ export async function listClientesForOwner(input: {
        FROM (
          SELECT c.id,
                 c.nome,
-                c.telefone_raw,
+                c.telefone_canonico,
                 c.aniversario_mmdd,
                 c.cidade,
                 COALESCE(stats.total_atendimentos, 0)::bigint AS total_atendimentos,
@@ -416,7 +417,7 @@ export async function listClientesForColaborador(input: {
        FROM (
          SELECT c.id,
                 c.nome,
-                c.telefone_raw,
+                c.telefone_canonico,
                 c.aniversario_mmdd,
                 c.cidade,
                 COALESCE(stats.total_atendimentos, 0)::bigint AS total_atendimentos,

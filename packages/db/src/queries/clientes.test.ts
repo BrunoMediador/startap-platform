@@ -113,7 +113,7 @@ describe('listClientesForColaborador', () => {
         {
           id: '11111111-1111-4111-8111-111111111111',
           nome: 'Joao',
-          telefone_raw: '553199998842',
+          telefone_canonico: '553199998842',
           aniversario_mmdd: null,
           cidade: null,
           total_atendimentos: '2',
@@ -148,6 +148,7 @@ describe('listClientesForColaborador', () => {
       5,
     ]);
     expect(result.total).toBe(1);
-    expect(result.clientes[0]?.telefone).toBe('553199998842');
+    expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
+    expect((result.clientes[0] as { telefone?: string }).telefone).toBeUndefined();
   });
 });

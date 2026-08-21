@@ -5,7 +5,7 @@
  *  - identidade canônica = tenant_id + telefone canônico, nunca corpo do cliente;
  *  - owner vê lista/perfil/histórico e edita só aniversário/cidade/nota interna;
  *  - colaborador só lê clientes com atendimento próprio, nunca nota interna;
- *  - snapshots em `atendimentos` seguem imutáveis; o CRM semeia o canônico sob demanda.
+ *  - snapshots em `atendimentos` seguem imutáveis; backfill histórico fica fora do GET.
  */
 import { clientes, cloneColaboradores } from '@startap/db';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -55,7 +55,7 @@ async function gateClientesOwner(
   reply: FastifyReply,
 ): Promise<{ slot: string; tenantId: string } | null> {
   if (!config.CRM_CLIENTES_ENABLED) {
-    await reply.code(404).send({ error: 'recurso indisponivel' });
+    await reply.code(404).send({ error: 'feature_off' });
     return null;
   }
   const { slot } = requireTenant(req);
@@ -72,7 +72,7 @@ async function gateClientesColaborador(
   reply: FastifyReply,
 ): Promise<{ slot: string; tenantId: string; colaboradorId: number } | null> {
   if (!config.CRM_CLIENTES_ENABLED || !config.COLABORADOR_PORTAL_ENABLED) {
-    await reply.code(404).send({ error: 'recurso indisponivel' });
+    await reply.code(404).send({ error: 'feature_off' });
     return null;
   }
   const c = requireColaborador(req);
@@ -91,7 +91,6 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
     }
 
-    await clientes.seedClientesFromAtendimentos(gate.slot, gate.tenantId);
     const result = await clientes.listClientesForOwner({
       slot: gate.slot,
       tenantId: gate.tenantId,
@@ -111,7 +110,6 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'id invalido' });
     }
 
-    await clientes.seedClientesFromAtendimentos(gate.slot, gate.tenantId);
     const cliente = await clientes.getClienteProfileForOwner(
       gate.slot,
       gate.tenantId,
@@ -174,7 +172,6 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
     }
 
-    await clientes.seedClientesFromAtendimentos(gate.slot, gate.tenantId);
     const result = await clientes.listClientesForColaborador({
       slot: gate.slot,
       tenantId: gate.tenantId,
@@ -198,7 +195,6 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'id invalido' });
       }
 
-      await clientes.seedClientesFromAtendimentos(gate.slot, gate.tenantId);
       const cliente = await clientes.getClienteProfileForColaborador(
         gate.slot,
         gate.tenantId,
