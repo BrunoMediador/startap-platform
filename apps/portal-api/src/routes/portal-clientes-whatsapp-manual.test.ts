@@ -12,6 +12,8 @@ const {
   circuitFailureMock,
   circuitSuccessMock,
   slotSendReservationMock,
+  loggerWarnMock,
+  loggerInfoMock,
 } = vi.hoisted(() => ({
   configMock: {
     CRM_CLIENTES_ENABLED: true,
@@ -32,9 +34,19 @@ const {
   circuitFailureMock: vi.fn(),
   circuitSuccessMock: vi.fn(),
   slotSendReservationMock: vi.fn(),
+  loggerWarnMock: vi.fn(),
+  loggerInfoMock: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({ config: configMock }));
+vi.mock('@startap/core/logger', () => ({
+  logger: {
+    child: () => ({
+      warn: (...args: unknown[]) => loggerWarnMock(...args),
+      info: (...args: unknown[]) => loggerInfoMock(...args),
+    }),
+  },
+}));
 vi.mock('@startap/db', () => ({
   cloneColaboradores: { getScopeBySlot: (...args: unknown[]) => getScopeMock(...args) },
   clientBilling: {
@@ -159,6 +171,55 @@ describe('POST /portal/clientes/:id/whatsapp-manual', () => {
     expect(completeMock).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'sent', sendId: '22222222-2222-4222-8222-222222222222' }),
     );
+    expect(loggerWarnMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('registra somente diagnostico estrutural quando body ou params sao invalidos', async () => {
+    const app = await buildApp();
+
+    const invalidBody = await app.inject({
+      method: 'POST',
+      url: `/portal/clientes/${CLIENTE_ID}/whatsapp-manual`,
+      payload: { mensagem: 'conteudo nao deve ir ao log', confirmed: false, extra: true },
+    });
+    expect(invalidBody.statusCode).toBe(400);
+    expect(loggerWarnMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request_id: expect.any(String),
+        body_is_object: true,
+        expected_fields_present: { mensagem: true, confirmed: true },
+        unexpected_key_count: 1,
+        id_type: 'string',
+        params_valid: true,
+        body_valid: false,
+      }),
+      'CRM WhatsApp manual rejeitado por contrato invalido',
+    );
+    expect(JSON.stringify(loggerWarnMock.mock.lastCall?.[0])).not.toContain(
+      'conteudo nao deve ir ao log',
+    );
+
+    const invalidParams = await app.inject({
+      method: 'POST',
+      url: '/portal/clientes/id-invalido/whatsapp-manual',
+      payload: { mensagem: 'conteudo nao deve ir ao log', confirmed: true },
+    });
+    expect(invalidParams.statusCode).toBe(400);
+    expect(loggerWarnMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        request_id: expect.any(String),
+        body_is_object: true,
+        expected_fields_present: { mensagem: true, confirmed: true },
+        unexpected_key_count: 0,
+        id_type: 'string',
+        params_valid: false,
+        body_valid: true,
+      }),
+      'CRM WhatsApp manual rejeitado por contrato invalido',
+    );
+    expect(claimMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
     await app.close();
   });
 
