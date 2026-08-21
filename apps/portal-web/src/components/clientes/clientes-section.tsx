@@ -7,7 +7,6 @@ import {
   IconClock,
   IconPencil,
   IconSearch,
-  IconSend,
   IconUser,
   IconUsers,
   IconX,
@@ -19,10 +18,6 @@ import { PageHead } from '@/components/ui/page-head';
 import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
-import {
-  WhatsAppManualDialog,
-  type WhatsAppManualTarget,
-} from '@/components/clientes/whatsapp-manual-dialog';
 import { ApiError } from '@/lib/api';
 import type {
   ClientePerfil,
@@ -58,12 +53,7 @@ import {
   sanitizeClientesSearch,
 } from '@/lib/clientes';
 import { cn } from '@/lib/cn';
-import {
-  formatAgendamentoDia,
-  formatAgendamentoHora,
-  formatPhoneDisplay,
-  initials,
-} from '@/lib/format';
+import { formatAgendamentoDia, formatAgendamentoHora, formatPhoneDisplay, initials } from '@/lib/format';
 import {
   useClientePerfil,
   useClientesAniversariantes,
@@ -74,7 +64,6 @@ import {
   useColaboradorClientes,
   useColaboradorClientesSemRetorno,
   useSaveCliente,
-  useEnviarWhatsappManual,
 } from '@/lib/queries';
 import { useDeferredValue, useEffect, useState } from 'react';
 
@@ -85,7 +74,6 @@ interface ClientesSectionProps {
   slot: string;
   timezone: string;
   crmEnabled: boolean;
-  whatsappManualEnabled?: boolean;
   colaboradorId?: number;
 }
 
@@ -121,7 +109,6 @@ export function ClientesSection({
   slot,
   timezone,
   crmEnabled,
-  whatsappManualEnabled = false,
   colaboradorId,
 }: ClientesSectionProps) {
   const toast = useToast();
@@ -134,7 +121,6 @@ export function ClientesSection({
   const [birthdayMonth, setBirthdayMonth] = useState<number>(() => currentMonthInTimezone(timezone));
   const [rankingPage, setRankingPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [whatsAppTarget, setWhatsAppTarget] = useState<WhatsAppManualTarget | null>(null);
   const [forceUnavailable, setForceUnavailable] = useState(false);
 
   const ownerListQ = useClientes(
@@ -186,10 +172,6 @@ export function ClientesSection({
     mode === 'colaborador' && crmEnabled,
   );
   const rankingQ = mode === 'owner' ? ownerRankingQ : colaboradorRankingQ;
-  const aniversariantesQ = useClientesAniversariantes(
-    slot,
-    mode === 'owner' && crmEnabled && whatsappManualEnabled && !forceUnavailable,
-  );
 
   const ownerProfileQ = useClientePerfil(
     slot,
@@ -204,7 +186,6 @@ export function ClientesSection({
   );
   const profileQ = mode === 'owner' ? ownerProfileQ : colaboradorProfileQ;
   const saveCliente = useSaveCliente(slot);
-  const sendWhatsApp = useEnviarWhatsappManual(slot);
 
   useEffect(() => {
     setPage(1);
@@ -334,19 +315,8 @@ export function ClientesSection({
                 setRankingPage((current) => Math.min(rankingTotalPages, current + 1))
               }
               onOpen={(id) => setSelectedId(id)}
-              manualWhatsAppEnabled={mode === 'owner' && whatsappManualEnabled}
-              onSend={(target) => setWhatsAppTarget(target)}
             />
           )}
-
-          {mode === 'owner' &&
-            whatsappManualEnabled &&
-            aniversariantesQ.data?.available !== false && (
-              <AniversariantesSection
-                query={aniversariantesQ}
-                onSend={(target) => setWhatsAppTarget(target)}
-              />
-            )}
 
           {listQ.isPending ? (
             <>
@@ -354,10 +324,7 @@ export function ClientesSection({
               <SkeletonList rows={6} />
             </>
           ) : listQ.isError || !data ? (
-            <ErrorState
-              title="Não foi possível carregar os clientes"
-              onRetry={() => listQ.refetch()}
-            />
+            <ErrorState title="Não foi possível carregar os clientes" onRetry={() => listQ.refetch()} />
           ) : items.length === 0 ? (
             buscaAtiva ? (
               <div className="rounded-card border border-line bg-surface px-6 py-10 text-center shadow-card">
@@ -371,9 +338,7 @@ export function ClientesSection({
             ) : (
               <EmptyState
                 icon={<IconUsers size={26} />}
-                title={
-                  mode === 'owner' ? 'Nenhum cliente por aqui ainda' : 'Nenhum cliente encontrado'
-                }
+                title={mode === 'owner' ? 'Nenhum cliente por aqui ainda' : 'Nenhum cliente encontrado'}
                 description={
                   mode === 'owner'
                     ? 'Assim que os atendimentos forem entrando, os perfis aparecem aqui para consulta e organização.'
@@ -387,9 +352,7 @@ export function ClientesSection({
                 <span className="text-[12.5px] tabular-nums text-ink-soft">
                   {de}–{ate} de {total} cliente{total === 1 ? '' : 's'}
                 </span>
-                {listQ.isFetching && (
-                  <span className="text-[12px] text-ink-faint">Atualizando…</span>
-                )}
+                {listQ.isFetching && <span className="text-[12px] text-ink-faint">Atualizando…</span>}
               </div>
 
               <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
@@ -461,26 +424,6 @@ export function ClientesSection({
           );
         }}
         saving={saveCliente.isPending}
-        manualWhatsAppEnabled={mode === 'owner' && whatsappManualEnabled}
-        onSend={(cliente) =>
-          setWhatsAppTarget({
-            id: cliente.id,
-            nome: clienteDisplayName(cliente.nome),
-            telefoneMasked: clientePhoneMasked(cliente.telefone),
-          })
-        }
-      />
-      <WhatsAppManualDialog
-        key={whatsAppTarget?.id ?? 'closed'}
-        target={whatsAppTarget}
-        onClose={() => setWhatsAppTarget(null)}
-        onFeatureOff={() => {
-          setWhatsAppTarget(null);
-          toast.error('Envio manual indisponível agora.');
-        }}
-        onSend={async (id, mensagem) => {
-          await sendWhatsApp.mutateAsync({ id, body: { mensagem, confirmed: true } });
-        }}
       />
     </>
   );
@@ -500,15 +443,11 @@ function SemRetornoSection({
   onPrevPage,
   onNextPage,
   onOpen,
-  manualWhatsAppEnabled,
-  onSend,
 }: {
   mode: Mode;
   timezone: string;
   search: string;
-  query:
-    | ReturnType<typeof useClientesSemRetorno>
-    | ReturnType<typeof useColaboradorClientesSemRetorno>;
+  query: ReturnType<typeof useClientesSemRetorno> | ReturnType<typeof useColaboradorClientesSemRetorno>;
   items: ClienteSemRetornoItem[];
   total: number;
   de: number;
@@ -518,8 +457,6 @@ function SemRetornoSection({
   onPrevPage: () => void;
   onNextPage: () => void;
   onOpen: (id: string) => void;
-  manualWhatsAppEnabled: boolean;
-  onSend: (target: WhatsAppManualTarget) => void;
 }) {
   const buscaAtiva = search.length > 0;
 
@@ -567,9 +504,7 @@ function SemRetornoSection({
           <div className="mb-3 flex items-center justify-between gap-3">
             <span className="text-[12.5px] tabular-nums text-ink-soft">
               {de}–{ate} de {total} cliente{total === 1 ? '' : 's'}
-              {buscaAtiva
-                ? ` · ${items.length} visível${items.length === 1 ? '' : 'is'} na busca`
-                : ''}
+              {buscaAtiva ? ` · ${items.length} visível${items.length === 1 ? '' : 'is'} na busca` : ''}
             </span>
             {query.isFetching && <span className="text-[12px] text-ink-faint">Atualizando…</span>}
           </div>
@@ -582,14 +517,6 @@ function SemRetornoSection({
                 timezone={timezone}
                 mode={mode}
                 onOpen={() => onOpen(item.id)}
-                manualWhatsAppEnabled={manualWhatsAppEnabled}
-                onSend={() =>
-                  onSend({
-                    id: item.id,
-                    nome: clienteDisplayName(item.nome),
-                    telefoneMasked: item.telefone_masked,
-                  })
-                }
               />
             ))}
           </div>
@@ -928,15 +855,11 @@ function SemRetornoRow({
   timezone,
   mode,
   onOpen,
-  manualWhatsAppEnabled,
-  onSend,
 }: {
   item: ClienteSemRetornoItem;
   timezone: string;
   mode: Mode;
   onOpen: () => void;
-  manualWhatsAppEnabled: boolean;
-  onSend: () => void;
 }) {
   const nome = clienteDisplayName(item.nome);
   const ultimoAtendimento = item.ultimo_atendimento_at
@@ -948,15 +871,15 @@ function SemRetornoRow({
     : 'Data indisponível';
 
   return (
-    <div className="group flex items-start gap-3.5 border-b border-line-soft px-[15px] py-3.5 last:border-b-0">
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-start gap-3.5 border-b border-line-soft px-[15px] py-3.5 text-left transition-colors last:border-b-0 hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+    >
       <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-brand-soft font-display text-[14px] font-bold text-brand">
         {initials(nome)}
       </span>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="min-w-0 flex-1 text-left outline-none transition-colors group-hover:text-brand focus-visible:rounded-field focus-visible:ring-2 focus-visible:ring-brand"
-      >
+      <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate font-display text-[15px] font-semibold text-ink">{nome}</div>
@@ -975,93 +898,8 @@ function SemRetornoRow({
             <span>Último com {item.ultimo_profissional_nome}</span>
           )}
         </div>
-      </button>
-      {manualWhatsAppEnabled && (
-        <button
-          type="button"
-          onClick={onSend}
-          aria-label={`Enviar WhatsApp para ${nome}`}
-          className="flex size-11 shrink-0 items-center justify-center self-center rounded-btn border border-line-strong text-brand hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-        >
-          <IconSend size={18} />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function AniversariantesSection({
-  query,
-  onSend,
-}: {
-  query: ReturnType<typeof useClientesAniversariantes>;
-  onSend: (target: WhatsAppManualTarget) => void;
-}) {
-  return (
-    <section className="mb-4" aria-labelledby="aniversariantes-title">
-      <div className="mb-3">
-        <h2 id="aniversariantes-title" className="font-display text-[17px] font-semibold text-ink">
-          Aniversariantes
-        </h2>
-        <p className="mt-1 text-[13px] leading-snug text-ink-soft">
-          Clientes com aniversário informado. O envio é sempre individual e manual.
-        </p>
       </div>
-      {query.isPending ? (
-        <>
-          <span className="sr-only">Carregando aniversariantes…</span>
-          <SkeletonList rows={2} />
-        </>
-      ) : query.isError || !query.data ? (
-        <ErrorState
-          title="Não foi possível carregar os aniversariantes"
-          onRetry={() => query.refetch()}
-        />
-      ) : query.data.clientes.length === 0 ? (
-        <EmptyState
-          icon={<IconCalendar size={26} />}
-          title="Nenhum aniversariante para mostrar"
-          description="Quando houver aniversários informados, os clientes aparecem aqui para contato manual."
-        />
-      ) : (
-        <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
-          {query.data.clientes.map((cliente) => {
-            const nome = clienteDisplayName(cliente.nome);
-            return (
-              <div
-                key={cliente.cliente_id}
-                className="flex items-center gap-3 border-b border-line-soft px-[15px] py-3.5 last:border-b-0"
-              >
-                <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-brand-soft font-display text-[14px] font-bold text-brand">
-                  {initials(nome)}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-display text-[15px] font-semibold text-ink">{nome}</p>
-                  <p className="mt-0.5 truncate text-[12.5px] text-ink-soft">
-                    {birthdayLabel(cliente.aniversario_mmdd) ?? 'Aniversário informado'} ·{' '}
-                    {cliente.telefone_masked}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onSend({
-                      id: cliente.cliente_id,
-                      nome,
-                      telefoneMasked: cliente.telefone_masked,
-                    })
-                  }
-                  aria-label={`Enviar WhatsApp para ${nome}`}
-                  className="flex size-11 shrink-0 items-center justify-center rounded-btn border border-line-strong text-brand hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                >
-                  <IconSend size={18} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
+    </button>
   );
 }
 
@@ -1073,8 +911,6 @@ function ClienteDetailSheet({
   onClose,
   onSave,
   saving,
-  manualWhatsAppEnabled,
-  onSend,
 }: {
   open: boolean;
   mode: Mode;
@@ -1083,8 +919,6 @@ function ClienteDetailSheet({
   onClose: () => void;
   onSave: (cliente: ClientePerfil, body: SaveClienteBody) => void;
   saving: boolean;
-  manualWhatsAppEnabled: boolean;
-  onSend: (cliente: ClientePerfil) => void;
 }) {
   const [draft, setDraft] = useState<ReturnType<typeof clienteDraftFromPerfil> | null>(null);
 
@@ -1170,14 +1004,6 @@ function ClienteDetailSheet({
                   }
                 />
               </dl>
-              {manualWhatsAppEnabled && mode === 'owner' && (
-                <div className="mt-4">
-                  <Button variant="secondary" size="inline" onClick={() => onSend(cliente)}>
-                    <IconSend size={17} />
-                    Enviar WhatsApp
-                  </Button>
-                </div>
-              )}
             </div>
 
             <div className="border-t border-line pt-4">
@@ -1242,8 +1068,7 @@ function ClienteDetailSheet({
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-display text-[15px] font-semibold text-ink">Histórico</h3>
                 <span className="text-[12.5px] text-ink-soft">
-                  {cliente.total_atendimentos} atendimento
-                  {cliente.total_atendimentos === 1 ? '' : 's'}
+                  {cliente.total_atendimentos} atendimento{cliente.total_atendimentos === 1 ? '' : 's'}
                 </span>
               </div>
 
