@@ -12,6 +12,7 @@ const { configMock, getScopeBySlotMock, csvGateMock } = vi.hoisted(() => ({
     PORTAL_SESSION_TTL_SECONDS: 3600,
     PORTAL_COOKIE_SECURE: false,
     ATENDIMENTOS_ENABLED: false,
+    CRM_CLIENTES_ENABLED: false,
     ATEND_FROM_AGENDA_SLOTS: '',
     ESTABELECIMENTO_ENABLED: false,
   } as Record<string, unknown>,
@@ -111,6 +112,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Estado padrão entre testes: flags OFF; scope individual sem tenant.
   configMock.ATENDIMENTOS_ENABLED = false;
+  configMock.CRM_CLIENTES_ENABLED = false;
   configMock.ATEND_FROM_AGENDA_SLOTS = '';
   configMock.ESTABELECIMENTO_ENABLED = false;
   getScopeBySlotMock.mockResolvedValue({
@@ -151,6 +153,26 @@ describe('GET /auth/me — atendimentos_enabled', () => {
     expect(body.atendimentos_enabled).toBe(true);
     expect(body.product_type).toBeUndefined();
     expect(body.seat_cap).toBeUndefined();
+    await app.close();
+  });
+});
+
+describe('GET /auth/me — crm_clientes_enabled', () => {
+  it('crm_clientes_enabled=false quando a flag está OFF (sempre presente)', async () => {
+    configMock.CRM_CLIENTES_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().crm_clientes_enabled).toBe(false);
+    await app.close();
+  });
+
+  it('crm_clientes_enabled=true quando a flag está ON', async () => {
+    configMock.CRM_CLIENTES_ENABLED = true;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().crm_clientes_enabled).toBe(true);
     await app.close();
   });
 });

@@ -13,9 +13,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockQuery = vi.fn();
+const releaseMock = vi.fn();
+const connectMock = vi.fn(async () => ({ query: mockQuery, release: releaseMock }));
 
 vi.mock('../client.js', () => ({
-  pool: { connect: vi.fn() },
+  pool: { connect: connectMock },
   query: (...a: unknown[]) => mockQuery(...a),
 }));
 
@@ -35,13 +37,14 @@ const {
 } = await import('./atendimentos.js');
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mockQuery.mockReset();
   mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 });
 
 /** Devolve [sql, params] da última chamada a query. */
 function lastCall(): [string, unknown[]] {
-  const calls = mockQuery.mock.calls;
+  const calls = mockQuery.mock.calls.filter(([sql]) => typeof sql === 'string' && !/^(BEGIN|COMMIT|ROLLBACK)$/i.test(sql));
   return calls[calls.length - 1] as [string, unknown[]];
 }
 
@@ -82,18 +85,18 @@ describe('createAtendimento — cenários', () => {
       colaboradorId: null,
       formaPagamento: 'pix',
     });
-    // Uma única query (o INSERT) — SOLO não consulta clone_colaboradores.
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // SOLO não consulta clone_colaboradores. Hoje há BEGIN + INSERT + COMMIT.
+    expect(mockQuery).toHaveBeenCalledTimes(3);
     const [sql, params] = lastCall();
     expect(sql).toContain('INSERT INTO atendimentos');
-    // params: [slot, tenant, gcal, cliente_nome, contato, servico, valor, desconto, forma,
-    //          colaborador, comissao_pct, comissao_cents, data]
+    // params: [slot, tenant, gcal, cliente_nome, contato, contato_canonico, servico, valor,
+    //          desconto, forma, colaborador, comissao_pct, comissao_cents, data]
     expect(params[0]).toBe('clone_cirilo'); // slot
     expect(params[1]).toBe('tid-1'); // tenant_id parâmetro PRÓPRIO (não reusa $1)
-    expect(params[6]).toBe(5000); // valor_cents cheio (não é pacote)
-    expect(params[9]).toBe(null); // colaborador_id
-    expect(params[10]).toBe(null); // comissao_pct
-    expect(params[11]).toBe(0); // comissao_cents
+    expect(params[7]).toBe(5000); // valor_cents cheio (não é pacote)
+    expect(params[10]).toBe(null); // colaborador_id
+    expect(params[11]).toBe(null); // comissao_pct
+    expect(params[12]).toBe(0); // comissao_cents
   });
 
   it('EMPRESA: lê pct do colaborador no slot e congela snapshot de pct + cents', async () => {
@@ -110,9 +113,9 @@ describe('createAtendimento — cenários', () => {
     });
     const [sql, params] = lastCall();
     expect(sql).toContain('INSERT INTO atendimentos');
-    expect(params[9]).toBe(9); // colaborador_id
-    expect(params[10]).toBe(40); // comissao_pct snapshot
-    expect(params[11]).toBe(1600); // comissao_cents = 40% de (5000-1000)
+    expect(params[10]).toBe(9); // colaborador_id
+    expect(params[11]).toBe(40); // comissao_pct snapshot
+    expect(params[12]).toBe(1600); // comissao_cents = 40% de (5000-1000)
   });
 
   it('PACOTE: forma_pagamento=pacote -> valor_cents=0 (não conta receita 2×)', async () => {
@@ -126,9 +129,9 @@ describe('createAtendimento — cenários', () => {
       formaPagamento: 'pacote',
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(0); // valor_cents zerado
-    expect(params[7]).toBe(0); // desconto_cents zerado
-    expect(params[8]).toBe('pacote'); // forma_pagamento preservada
+    expect(params[7]).toBe(0); // valor_cents zerado
+    expect(params[8]).toBe(0); // desconto_cents zerado
+    expect(params[9]).toBe('pacote'); // forma_pagamento preservada
   });
 
   it('PACOTE + colaborador: comissão calcula sobre valor 0 -> 0 cents', async () => {
@@ -142,9 +145,9 @@ describe('createAtendimento — cenários', () => {
       formaPagamento: 'pacote',
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(0); // valor zerado (pacote)
-    expect(params[10]).toBe(40); // pct congelado
-    expect(params[11]).toBe(0); // comissão sobre valor 0 -> 0
+    expect(params[7]).toBe(0); // valor zerado (pacote)
+    expect(params[11]).toBe(40); // pct congelado
+    expect(params[12]).toBe(0); // comissão sobre valor 0 -> 0
   });
 });
 
@@ -154,8 +157,9 @@ describe('createAtendimento — cenários', () => {
 // gancho (bot/portal) passar formaPagamento='pacote' -> upsertAtendimentoFromEvent zera o
 // valor_cents (e desconto). Sem pacote (forma undefined/null), a previsão segue com o valor.
 describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', () => {
-  // params do INSERT: [slot, tenant, eventId, clienteNome, clienteContato, servicoNome,
-  //                    valor_cents, desconto_cents, forma_pagamento, colaboradorId, inicio, fim, data]
+  // params do INSERT: [slot, tenant, eventId, clienteNome, clienteContato, contato_canonico,
+  //                    servicoNome, valor_cents, desconto_cents, forma_pagamento, colaboradorId,
+  //                    inicio, fim, data, pagamentoInformado, reprice]
   it('PACOTE: forma=pacote -> valor_cents=0 e desconto=0 (receita já entrou na venda do pacote)', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, dirty_fields: [] }], rowCount: 1 });
     await upsertAtendimentoFromEvent({
@@ -171,9 +175,9 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-06-23T13:30:00.000Z',
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(0); // valor_cents zerado (não conta 2×)
-    expect(params[7]).toBe(0); // desconto_cents zerado
-    expect(params[8]).toBe('pacote'); // forma_pagamento marcada
+    expect(params[7]).toBe(0); // valor_cents zerado (não conta 2×)
+    expect(params[8]).toBe(0); // desconto_cents zerado
+    expect(params[9]).toBe('pacote'); // forma_pagamento marcada
   });
 
   it('SEM pacote (forma null): valor do catálogo/explícito é PRESERVADO (previsão normal)', async () => {
@@ -190,9 +194,9 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-06-23T13:30:00.000Z',
     });
     const [, params] = lastCall();
-    expect(params[6]).toBe(5000); // valor preservado (conta a receita 1×)
-    expect(params[8]).toBeNull(); // sem forma definida
-    expect(params[13]).toBe(true); // pagamento INFORMADO (forma=null explícito) -> aplica no UPDATE
+    expect(params[7]).toBe(5000); // valor preservado (conta a receita 1×)
+    expect(params[9]).toBeNull(); // sem forma definida
+    expect(params[14]).toBe(true); // pagamento INFORMADO (forma=null explícito) -> aplica no UPDATE
   });
 
   // ── BUG de dinheiro: coluna `data` derivada em UTC, não BRT ────────────────────────
@@ -215,10 +219,10 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-06-24T01:30:00.000Z',
     });
     const [, params] = lastCall();
-    // data (13º param, índice 12) = dia BRT (23), NÃO o dia UTC (24).
-    expect(params[12]).toBe('2026-06-23');
+    // data (14º param, índice 13) = dia BRT (23), NÃO o dia UTC (24).
+    expect(params[13]).toBe('2026-06-23');
     // O instante absoluto (inicio_at) segue em UTC, intacto.
-    expect(params[10]).toBe('2026-06-24T01:00:00.000Z');
+    expect(params[11]).toBe('2026-06-24T01:00:00.000Z');
   });
 
   it('data derivada em BRT: booking 09:00 BRT (=12:00Z, mesmo dia) → data = o dia BRT', async () => {
@@ -235,7 +239,7 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-06-23T12:30:00.000Z',
     });
     const [, params] = lastCall();
-    expect(params[12]).toBe('2026-06-23');
+    expect(params[13]).toBe('2026-06-23');
   });
 
   // FUSO POR CLONE (migration 068) — Mato Grosso (America/Cuiaba, UTC-4). O MESMO instante
@@ -260,9 +264,9 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
     const [, params] = lastCall();
     // Cuiabá: data = 30/06 (NÃO 01/07). Em SP daria 30/06 também aqui — mas a borda Cuiabá
     // pega 1h antes; ver o teste de borda abaixo onde SP e Cuiabá DIVERGEM no dia.
-    expect(params[12]).toBe('2026-06-30');
+    expect(params[13]).toBe('2026-06-30');
     // O instante absoluto (inicio_at) segue em UTC, intacto.
-    expect(params[10]).toBe('2026-07-01T01:00:00.000Z');
+    expect(params[11]).toBe('2026-07-01T01:00:00.000Z');
   });
 
   it('data em Cuiabá DIVERGE de SP na borda: 03:00Z → 30/06 (Cuiabá) vs 01/07 (SP)', async () => {
@@ -282,7 +286,7 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       timezone: 'America/Cuiaba',
     });
     const [, paramsCuiaba] = lastCall();
-    expect(paramsCuiaba[12]).toBe('2026-06-30');
+    expect(paramsCuiaba[13]).toBe('2026-06-30');
 
     // MESMO instante, default SP (sem timezone) → 01/07 (byte-idêntico ao de hoje).
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 13, dirty_fields: [] }], rowCount: 1 });
@@ -298,12 +302,12 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-07-01T03:30:00.000Z',
     });
     const [, paramsSp] = lastCall();
-    expect(paramsSp[12]).toBe('2026-07-01');
+    expect(paramsSp[13]).toBe('2026-07-01');
   });
 
-  // REMARCAÇÃO sem info de pagamento (sync) NÃO pode reverter a marca de pacote -> $14 FALSE
+  // REMARCAÇÃO sem info de pagamento (sync) NÃO pode reverter a marca de pacote -> $15 FALSE
   // faz o UPDATE preservar forma_pagamento/valor/desconto antigos (senão a receita dobrava).
-  it('REMARCAR (formaPagamento undefined): UPDATE preserva forma/valor antigos ($14=false)', async () => {
+  it('REMARCAR (formaPagamento undefined): UPDATE preserva forma/valor antigos ($15=false)', async () => {
     // sem valorCents -> upsert resolve o preço do catálogo (1ª query), depois faz o INSERT (2ª).
     mockQuery.mockResolvedValueOnce({
       rows: [{ servicos: [{ nome: 'Corte', preco_cents: 5000 }] }],
@@ -320,13 +324,13 @@ describe('upsertAtendimentoFromEvent — pacote NÃO dobra a receita (Bug 2)', (
       fimAt: '2026-06-23T14:30:00.000Z',
     });
     const [sql, params] = lastCall();
-    expect(params[13]).toBe(false); // pagamento NÃO informado -> preserva no UPDATE
-    expect(params[14]).toBe(false); // SEM reprice (remarcação pura, sem troca de serviço)
-    // O SQL guarda a forma antiga quando $14 é false; valor/desconto preservados quando NÃO há
+    expect(params[14]).toBe(false); // pagamento NÃO informado -> preserva no UPDATE
+    expect(params[15]).toBe(false); // SEM reprice (remarcação pura, sem troca de serviço)
+    // O SQL guarda a forma antiga quando $15 é false; valor/desconto preservados quando NÃO há
     // pagamento informado E NÃO há reprice-fora-de-pacote (remarcação pura preserva o valor).
-    expect(sql).toContain("dirty_fields ? 'forma_pagamento' OR NOT $14::boolean");
+    expect(sql).toContain("dirty_fields ? 'forma_pagamento' OR NOT $15::boolean");
     expect(sql).toMatch(
-      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$14::boolean\s+AND NOT \(\$15::boolean/,
+      /valor_cents\s*=\s*CASE WHEN atendimentos\.dirty_fields \? 'valor_cents'\s+OR \(NOT \$15::boolean\s+AND NOT \(\$16::boolean/,
     );
   });
 });

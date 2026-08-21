@@ -252,6 +252,17 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── CRM de clientes finais do negócio (Missão 034, backend) ───────────────
+  // Kill-switch GLOBAL das rotas /portal/clientes e /portal/colaborador/clientes.
+  // OPCIONAL no boot (ausente = OFF, lição #247): OFF -> 404 antes de tocar DB e o
+  // portal segue byte-a-byte como hoje. ON habilita o CRM canônico por tenant+telefone,
+  // com owner full-access e colaborador READ-ONLY só dos próprios clientes. NUNCA
+  // hardcoded; Bruno pediu default OFF até rollout explícito.
+  CRM_CLIENTES_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
   // Gate POR-CLONE da camada que DERIVA atendimentos dos eventos do GCal (split
   // previsão×faturado, sticky de edição). Lista de slots separada por vírgula; o gate é
