@@ -24,6 +24,7 @@ export default async function ColaboradorLayout({ children }: { children: React.
       displayName={colaborador.display_name}
       username={colaborador.username}
       timezone={colaborador.timezone ?? null}
+      crmClientesEnabled={colaborador.crm_clientes_enabled ?? false}
     >
       <ParticleField variant="appbg" />
       <div className="app-vignette pointer-events-none fixed inset-0 z-[-1]" aria-hidden />

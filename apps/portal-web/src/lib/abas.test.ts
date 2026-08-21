@@ -22,6 +22,7 @@ const BASE: NavGateContext = {
   conexaoEnabled: false,
   isEstabelecimento: false,
   atendimentosEnabled: false,
+  crmClientesEnabled: false,
 };
 
 describe('abas — completude do mapa seção -> aba (herdado da extinta perfil-grupos.ts)', () => {
@@ -144,6 +145,7 @@ describe('abas — cenário combinado (estabelecimento com tudo ligado)', () => 
       conexaoEnabled: true,
       isEstabelecimento: true,
       atendimentosEnabled: true,
+      crmClientesEnabled: true,
       negocioAgenda: true,
       atendentePersonalidade: true,
       atendenteMensagens: true,

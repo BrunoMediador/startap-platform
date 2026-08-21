@@ -18,6 +18,7 @@ export type NavGate =
   | 'conexao'
   | 'estabelecimento'
   | 'atendimentos'
+  | 'crmClientes'
   // Gates abaixo são usados só por `@/lib/abas` (sub-abas de "Meu negócio" e
   // "Meu atendente"). São ORs JÁ RESOLVIDOS pelo chamador que monta o
   // `NavGateContext` — `filterByGates` só sabe fazer AND entre gates de um
@@ -46,9 +47,10 @@ export interface NavItemSpec {
   label: string;
   icon: NavIconKey;
   /** Item GATED (pode combinar mais de um — TODOS precisam passar):
-   *  - 'conexao'         -> só aparece com GET /portal/conexao.enabled true.
-   *  - 'estabelecimento' -> só quando product_type === 'estabelecimento'.
-   *  - 'atendimentos'    -> só quando atendimentos_enabled (flag do backend). */
+ *  - 'conexao'         -> só aparece com GET /portal/conexao.enabled true.
+ *  - 'estabelecimento' -> só quando product_type === 'estabelecimento'.
+ *  - 'atendimentos'    -> só quando atendimentos_enabled (flag do backend).
+ *  - 'crmClientes'     -> só quando crm_clientes_enabled (flag do backend). */
   gated?: NavGate[];
 }
 
@@ -63,6 +65,7 @@ export interface NavItemSpec {
 export const NAV_SPEC: NavItemSpec[] = [
   { href: '/inicio', label: 'Início', icon: 'home' },
   { href: '/agenda', label: 'Agenda', icon: 'calendar' },
+  { href: '/clientes', label: 'Clientes', icon: 'users', gated: ['crmClientes'] },
   { href: '/conectar', label: 'Conectar', icon: 'whatsapp', gated: ['conexao'] },
   // App de gestão (Fase 1): tela ÚNICA Billing (faturamento + comissão consolidados,
   // Previsão|Faturado). "Registrar" virou um botão DENTRO da tela Billing. Gated pela flag.
@@ -81,6 +84,7 @@ export interface NavGateContext {
   conexaoEnabled: boolean;
   isEstabelecimento: boolean;
   atendimentosEnabled: boolean;
+  crmClientesEnabled: boolean;
   /** Sub-abas de "Meu negócio"/"Meu atendente" (opcionais: o menu de topo nunca
    * usa esses gates hoje — só `@/lib/abas` os popula). Undefined = trata como
    * false (fail-closed), nunca faz a aba aparecer por engano. Cada campo já é
@@ -109,6 +113,8 @@ export function filterByGates<T extends { gated?: NavGate[] }>(
         return ctx.isEstabelecimento;
       case 'atendimentos':
         return ctx.atendimentosEnabled;
+      case 'crmClientes':
+        return ctx.crmClientesEnabled;
       case 'negocioAgenda':
         return ctx.negocioAgenda === true;
       case 'atendentePersonalidade':

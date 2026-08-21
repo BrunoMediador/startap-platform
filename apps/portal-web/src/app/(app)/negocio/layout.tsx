@@ -34,6 +34,7 @@ export default function NegocioLayout({ children }: { children: React.ReactNode 
     conexaoEnabled: false,
     isEstabelecimento,
     atendimentosEnabled: false,
+    crmClientesEnabled: false,
     negocioAgenda,
   });
 

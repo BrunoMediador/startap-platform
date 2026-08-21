@@ -14,17 +14,19 @@ const TUDO_LIGADO: NavGateContext = {
   conexaoEnabled: true,
   isEstabelecimento: true,
   atendimentosEnabled: true,
+  crmClientesEnabled: true,
 };
 
-describe('nav — 8 itens, na ordem canônica', () => {
-  it('tem exatamente 8 itens', () => {
-    expect(NAV_SPEC.length).toBe(8);
+describe('nav — 9 itens, na ordem canônica', () => {
+  it('tem exatamente 9 itens', () => {
+    expect(NAV_SPEC.length).toBe(9);
   });
 
-  it('ordem: início, agenda, conectar, faturamento, meu negócio, meu atendente, pausas, mensalidade', () => {
+  it('ordem: início, agenda, clientes, conectar, faturamento, meu negócio, meu atendente, pausas, mensalidade', () => {
     expect(NAV_SPEC.map((i) => i.href)).toEqual([
       '/inicio',
       '/agenda',
+      '/clientes',
       '/conectar',
       '/billing',
       '/negocio',
@@ -70,6 +72,7 @@ describe('nav — Agenda com entrada fixa', () => {
       conexaoEnabled: false,
       isEstabelecimento: false,
       atendimentosEnabled: false,
+      crmClientesEnabled: false,
     };
     expect(hrefs(nenhumGate)).toContain('/agenda');
     expect(hrefs(TUDO_LIGADO)).toContain('/agenda');
@@ -82,10 +85,12 @@ describe('nav — filtragem por formato', () => {
       conexaoEnabled: true,
       isEstabelecimento: false,
       atendimentosEnabled: true,
+      crmClientesEnabled: true,
     };
     expect(hrefs(individual)).toEqual([
       '/inicio',
       '/agenda',
+      '/clientes',
       '/conectar',
       '/billing',
       '/negocio',
@@ -99,6 +104,7 @@ describe('nav — filtragem por formato', () => {
     expect(hrefs(TUDO_LIGADO)).toEqual([
       '/inicio',
       '/agenda',
+      '/clientes',
       '/conectar',
       '/billing',
       '/negocio',
@@ -108,13 +114,15 @@ describe('nav — filtragem por formato', () => {
     ]);
   });
 
-  it('conexão OFF esconde Conectar; atendimentos OFF esconde Faturamento', () => {
+  it('conexão OFF esconde Conectar; atendimentos OFF esconde Faturamento; CRM OFF esconde Clientes', () => {
     const enxuto: NavGateContext = {
       conexaoEnabled: false,
       isEstabelecimento: false,
       atendimentosEnabled: false,
+      crmClientesEnabled: false,
     };
     const lista = hrefs(enxuto);
+    expect(lista).not.toContain('/clientes');
     expect(lista).not.toContain('/conectar');
     expect(lista).not.toContain('/billing');
     // Itens sempre-presentes (byte-idêntico ao de antes, menos os que viraram sub-aba):
@@ -158,6 +166,7 @@ describe('nav — ordem byte-idêntica dos itens de sempre', () => {
     const semAgenda = NAV_SPEC.filter((i) => i.href !== '/agenda').map((i) => i.href);
     expect(semAgenda).toEqual([
       '/inicio',
+      '/clientes',
       '/conectar',
       '/billing',
       '/negocio',

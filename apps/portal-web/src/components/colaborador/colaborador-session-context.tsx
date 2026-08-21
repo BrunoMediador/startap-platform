@@ -16,6 +16,8 @@ interface ColaboradorCtx {
   username: string;
   /** Fuso IANA do clone (do /auth/colaborador/me). null = ausente -> display cai no default SP. */
   timezone: string | null;
+  /** Mesmo gate do owner: ausente = OFF/fail-closed. */
+  crmClientesEnabled: boolean;
 }
 
 const Ctx = createContext<ColaboradorCtx | null>(null);
@@ -26,10 +28,13 @@ export function ColaboradorSessionProvider({
   displayName,
   username,
   timezone,
+  crmClientesEnabled,
   children,
 }: ColaboradorCtx & { children: React.ReactNode }) {
   return (
-    <Ctx.Provider value={{ slot, colaboradorId, displayName, username, timezone }}>
+    <Ctx.Provider
+      value={{ slot, colaboradorId, displayName, username, timezone, crmClientesEnabled }}
+    >
       {children}
     </Ctx.Provider>
   );

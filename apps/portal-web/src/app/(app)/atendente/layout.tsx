@@ -41,6 +41,7 @@ export default function AtendenteLayout({ children }: { children: React.ReactNod
     conexaoEnabled: false,
     isEstabelecimento: false,
     atendimentosEnabled: false,
+    crmClientesEnabled: false,
     ...gates,
   });
 
