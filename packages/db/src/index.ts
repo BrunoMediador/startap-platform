@@ -151,6 +151,8 @@ export type {
   UpsertClienteFromSnapshotInput,
   ClienteListItem,
   ClienteListResult,
+  ClienteSemRetornoItem,
+  ClienteSemRetornoResult,
   ClienteProfile,
   ClienteProfileColaborador,
   ClienteHistoricoRow,

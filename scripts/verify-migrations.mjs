@@ -83,7 +83,7 @@ function parseManifest(rawManifest, manifestPath, expectedRange) {
 export async function loadMigrationPlan(
   migrationsDir,
   manifestPath,
-  expectedRange = { first: 1, last: 84 },
+  expectedRange = { first: 1, last: 85 },
   baselinePath = undefined,
 ) {
   if (!manifestPath) throw new Error('manifest de migrations ausente');

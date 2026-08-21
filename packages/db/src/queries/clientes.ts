@@ -37,6 +37,16 @@ interface ListRowRaw {
   total_count: string;
 }
 
+interface SemRetornoRowRaw {
+  id: string;
+  nome: string | null;
+  telefone_canonico: string;
+  ultimo_atendimento_at: string;
+  dias_sem_retorno: string | number;
+  ultimo_profissional_nome: string | null;
+  total_count: string;
+}
+
 interface ProfileRowRaw {
   id: string;
   nome: string | null;
@@ -106,6 +116,22 @@ export interface ClienteProfile {
 
 export interface ClienteProfileColaborador
   extends Omit<ClienteProfile, 'nota_interna'> {}
+
+export interface ClienteSemRetornoItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  ultimo_atendimento_at: string;
+  dias_sem_retorno: number;
+  ultimo_profissional_nome: string | null;
+}
+
+export interface ClienteSemRetornoResult {
+  clientes: ClienteSemRetornoItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
 
 export interface ClienteHistoricoRow {
   atendimento_id: number;
@@ -186,6 +212,17 @@ function mapListRow(row: ListRowRaw): ClienteListItem {
     cidade: row.cidade,
     total_atendimentos: Number(row.total_atendimentos),
     ultima_interacao_at: row.ultima_interacao_at,
+    ultimo_profissional_nome: row.ultimo_profissional_nome,
+  };
+}
+
+function mapSemRetornoRow(row: SemRetornoRowRaw): ClienteSemRetornoItem {
+  return {
+    id: row.id,
+    nome: row.nome,
+    telefone_masked: phoneHint(row.telefone_canonico),
+    ultimo_atendimento_at: row.ultimo_atendimento_at,
+    dias_sem_retorno: Number(row.dias_sem_retorno),
     ultimo_profissional_nome: row.ultimo_profissional_nome,
   };
 }
@@ -474,6 +511,153 @@ export async function listClientesForColaborador(input: {
 
   return {
     clientes: rows.rows.map(mapListRow),
+    total: Number(rows.rows[0]?.total_count ?? 0),
+    limit,
+    offset,
+  };
+}
+
+/**
+ * Ranking read-only "sem retorno" da carteira do tenant. A lista nunca expõe telefone
+ * cru/canônico e considera elegível apenas atendimento ativo, não cancelado e já
+ * concluído/passado. Manual usa a data local do produto; agenda usa fim_at/inicio_at.
+ */
+export async function listClientesSemRetornoForOwner(input: {
+  slot: string;
+  tenantId: string;
+  timezone: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ClienteSemRetornoResult> {
+  const { limit, offset } = normalizePaging(input.limit, input.offset);
+  const rows = await query<SemRetornoRowRaw>(
+    `WITH elegiveis AS (
+       SELECT c.id,
+              c.nome,
+              c.telefone_canonico,
+              CASE
+                WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
+                ELSE (a.data::timestamp AT TIME ZONE $3)
+              END AS ultimo_atendimento_at,
+              CASE
+                WHEN a.origem = 'agenda' THEN (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $3)::date
+                ELSE a.data
+              END AS referencia_local_date,
+              cc.nome AS ultimo_profissional_nome,
+              ROW_NUMBER() OVER (
+                PARTITION BY c.id
+                ORDER BY
+                  CASE
+                    WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
+                    ELSE (a.data::timestamp AT TIME ZONE $3)
+                  END DESC,
+                  a.id DESC
+              ) AS rn
+         FROM clientes c
+         JOIN atendimentos a
+           ON a.slot = c.slot
+          AND a.tenant_id = c.tenant_id
+          AND a.deleted_at IS NULL
+          AND a.status <> 'cancelado'
+          AND a.cliente_telefone_canonico = c.telefone_canonico
+          AND (
+            (a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())
+            OR
+            (a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $3)::date)
+          )
+         LEFT JOIN clone_colaboradores cc
+           ON cc.id = a.colaborador_id AND cc.slot = a.slot
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+     )
+     SELECT id,
+            nome,
+            telefone_canonico,
+            ultimo_atendimento_at,
+            GREATEST(0, ((NOW() AT TIME ZONE $3)::date - referencia_local_date))::int AS dias_sem_retorno,
+            ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM elegiveis
+      WHERE rn = 1
+      ORDER BY ultimo_atendimento_at ASC, id ASC
+      LIMIT $4 OFFSET $5`,
+    [input.slot, input.tenantId, input.timezone, limit, offset],
+  );
+
+  return {
+    clientes: rows.rows.map(mapSemRetornoRow),
+    total: Number(rows.rows[0]?.total_count ?? 0),
+    limit,
+    offset,
+  };
+}
+
+export async function listClientesSemRetornoForColaborador(input: {
+  slot: string;
+  tenantId: string;
+  colaboradorId: number;
+  timezone: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ClienteSemRetornoResult> {
+  const { limit, offset } = normalizePaging(input.limit, input.offset);
+  const rows = await query<SemRetornoRowRaw>(
+    `WITH elegiveis AS (
+       SELECT c.id,
+              c.nome,
+              c.telefone_canonico,
+              CASE
+                WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
+                ELSE (a.data::timestamp AT TIME ZONE $4)
+              END AS ultimo_atendimento_at,
+              CASE
+                WHEN a.origem = 'agenda' THEN (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $4)::date
+                ELSE a.data
+              END AS referencia_local_date,
+              cc.nome AS ultimo_profissional_nome,
+              ROW_NUMBER() OVER (
+                PARTITION BY c.id
+                ORDER BY
+                  CASE
+                    WHEN a.origem = 'agenda' THEN COALESCE(a.fim_at, a.inicio_at)
+                    ELSE (a.data::timestamp AT TIME ZONE $4)
+                  END DESC,
+                  a.id DESC
+              ) AS rn
+         FROM clientes c
+         JOIN atendimentos a
+           ON a.slot = c.slot
+          AND a.tenant_id = c.tenant_id
+          AND a.deleted_at IS NULL
+          AND a.status <> 'cancelado'
+          AND a.colaborador_id = $3
+          AND a.cliente_telefone_canonico = c.telefone_canonico
+          AND (
+            (a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())
+            OR
+            (a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $4)::date)
+          )
+         LEFT JOIN clone_colaboradores cc
+           ON cc.id = a.colaborador_id AND cc.slot = a.slot
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+     )
+     SELECT id,
+            nome,
+            telefone_canonico,
+            ultimo_atendimento_at,
+            GREATEST(0, ((NOW() AT TIME ZONE $4)::date - referencia_local_date))::int AS dias_sem_retorno,
+            ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM elegiveis
+      WHERE rn = 1
+      ORDER BY ultimo_atendimento_at ASC, id ASC
+      LIMIT $5 OFFSET $6`,
+    [input.slot, input.tenantId, input.colaboradorId, input.timezone, limit, offset],
+  );
+
+  return {
+    clientes: rows.rows.map(mapSemRetornoRow),
     total: Number(rows.rows[0]?.total_count ?? 0),
     limit,
     offset,
