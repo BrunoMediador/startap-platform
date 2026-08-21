@@ -16,7 +16,9 @@
  * reusado entre contextos de tipo distintos. Aqui não há dual-write subselect — o
  * tenant_id já chega resolvido como parâmetro próprio.
  */
+import { canonicalE164 } from '@startap/core/phone';
 import { pool, query } from '../client.js';
+import { upsertClienteFromSnapshot } from './clientes.js';
 
 /** Status do atendimento (validado no app; sem CHECK no banco). */
 export type AtendimentoStatus = 'agendado' | 'realizado' | 'cancelado';
@@ -135,36 +137,57 @@ export async function createAtendimento(input: CreateAtendimentoInput): Promise<
     }
   }
 
-  const r = await query<AtendimentoRow>(
-    `INSERT INTO atendimentos
-       (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
-        valor_cents, desconto_cents, forma_pagamento, colaborador_id,
-        comissao_pct, comissao_cents, status, data)
-     VALUES
-       ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10,
-        $11, $12, 'realizado', COALESCE($13::date, now()::date))
-     RETURNING id, slot, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
-               valor_cents, desconto_cents, forma_pagamento, colaborador_id,
-               comissao_pct, comissao_cents, status, data, created_at, updated_at,
-               origem, dirty_fields, inicio_at, fim_at, deleted_at`,
-    [
-      input.slot,
-      input.tenantId,
-      input.gcalEventId ?? null,
-      input.clienteNome ?? null,
-      input.clienteContato ?? null,
-      input.servicoNome ?? null,
-      valorCents,
-      descontoCents,
-      input.formaPagamento ?? null,
-      colaboradorId,
-      comissaoPct,
-      comissaoCents,
-      input.data ?? null,
-    ],
-  );
-  return r.rows[0] as AtendimentoRow;
+  const clienteTelefoneCanonico = canonicalE164(input.clienteContato ?? '');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query<AtendimentoRow>(
+      `INSERT INTO atendimentos
+         (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, cliente_telefone_canonico,
+          servico_nome, valor_cents, desconto_cents, forma_pagamento, colaborador_id,
+          comissao_pct, comissao_cents, status, data)
+       VALUES
+         ($1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11,
+          $12, $13, 'realizado', COALESCE($14::date, now()::date))
+       RETURNING id, slot, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
+                 valor_cents, desconto_cents, forma_pagamento, colaborador_id,
+                 comissao_pct, comissao_cents, status, data, created_at, updated_at,
+                 origem, dirty_fields, inicio_at, fim_at, deleted_at`,
+      [
+        input.slot,
+        input.tenantId,
+        input.gcalEventId ?? null,
+        input.clienteNome ?? null,
+        input.clienteContato ?? null,
+        clienteTelefoneCanonico,
+        input.servicoNome ?? null,
+        valorCents,
+        descontoCents,
+        input.formaPagamento ?? null,
+        colaboradorId,
+        comissaoPct,
+        comissaoCents,
+        input.data ?? null,
+      ],
+    );
+    await upsertClienteFromSnapshot(
+      {
+        slot: input.slot,
+        tenantId: input.tenantId,
+        clienteNome: input.clienteNome ?? null,
+        clienteContato: input.clienteContato ?? null,
+      },
+      client,
+    );
+    await client.query('COMMIT');
+    return r.rows[0] as AtendimentoRow;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // ── Relatórios ─────────────────────────────────────────────────────────────────────
@@ -804,13 +827,14 @@ export async function upsertAtendimentoFromEvent(
   const inicioIso = toIso(input.inicioAt);
   const fimIso = toIso(input.fimAt);
   const dataDay = isoToDateOnly(inicioIso, input.timezone ?? TZ_SAO_PAULO);
+  const clienteTelefoneCanonico = canonicalE164(input.clienteContato ?? '');
 
   // INSERT ... ON CONFLICT (slot, gcal_event_id) WHERE ... DO UPDATE. O coalesce com
   // dirty_fields é a chave do sticky: para cada coluna derivável, só atualiza se a coluna
   // NÃO estiver pinada (atendimentos.dirty_fields = a linha ANTIGA, via EXCLUDED é a nova).
   // `a.dirty_fields ? 'coluna'` (operador jsonb ?) testa pertença no array de strings.
-  // $14 = pagamentoInformado: quando FALSE, o UPDATE preserva forma/valor/desconto antigos.
-  // $15 = reprice (troca de serviço): quando TRUE, valor/desconto vão pro catálogo do NOVO
+  // $15 = pagamentoInformado: quando FALSE, o UPDATE preserva forma/valor/desconto antigos.
+  // $16 = reprice (troca de serviço): quando TRUE, valor/desconto vão pro catálogo do NOVO
   //   serviço (EXCLUDED) MESMO sem pagamentoInformado — desde que a coluna NÃO esteja pinada
   //   (edição manual da /billing vence o reprice). NUNCA reprecifica linha já marcada como
   //   PACOTE (forma_pagamento='pacote' no banco): pacote vive com valor 0 (ADR 0027 bug DOBRA);
@@ -826,8 +850,8 @@ export async function upsertAtendimentoFromEvent(
               COALESCE(fc.personalizacao->>'agenda_automatica' = 'false', FALSE)
               AND (
                 fc.modo_atendente_enabled = TRUE
-                OR fc.slot = ANY($16::text[])
-                OR $17::boolean = TRUE
+                OR fc.slot = ANY($17::text[])
+                OR $18::boolean = TRUE
               )
             )
           FOR UPDATE
@@ -835,21 +859,22 @@ export async function upsertAtendimentoFromEvent(
     : '';
   const insertSource = syncModeGuard
     ? `SELECT $1, $2, $3, $4, $5, $6,
-              $7, $8, $9, $10,
-              'agendado', 'agenda', '[]'::jsonb, $11::timestamptz, $12::timestamptz,
-              COALESCE($13::date, now()::date)
+              $7, $8, $9, $10, $11,
+              'agendado', 'agenda', '[]'::jsonb, $12::timestamptz, $13::timestamptz,
+              COALESCE($14::date, now()::date)
          FROM sync_scope`
     : `VALUES
        ($1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10,
-        'agendado', 'agenda', '[]'::jsonb, $11::timestamptz, $12::timestamptz,
-        COALESCE($13::date, now()::date))`;
+        $7, $8, $9, $10, $11,
+        'agendado', 'agenda', '[]'::jsonb, $12::timestamptz, $13::timestamptz,
+        COALESCE($14::date, now()::date))`;
   const params: unknown[] = [
     input.slot,
     input.tenantId,
     input.gcalEventId,
     input.clienteNome ?? null,
     input.clienteContato ?? null,
+    clienteTelefoneCanonico,
     input.servicoNome ?? null,
     valorCents,
     descontoCents,
@@ -864,43 +889,69 @@ export async function upsertAtendimentoFromEvent(
   if (syncModeGuard) {
     params.push(syncModeGuard.modoAtendenteSlots, syncModeGuard.modoAtendenteWildcard);
   }
-  const r = await query<AtendimentoRow & { dirty_fields: unknown }>(
-    `${guardedPrefix}INSERT INTO atendimentos
-       (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, servico_nome,
-        valor_cents, desconto_cents, forma_pagamento, colaborador_id,
-        status, origem, dirty_fields, inicio_at, fim_at, data)
-     ${insertSource}
-     ON CONFLICT (slot, gcal_event_id) WHERE gcal_event_id IS NOT NULL AND deleted_at IS NULL
-     DO UPDATE SET
-       cliente_nome     = CASE WHEN atendimentos.dirty_fields ? 'cliente_nome'
-                               THEN atendimentos.cliente_nome ELSE EXCLUDED.cliente_nome END,
-       cliente_contato  = CASE WHEN atendimentos.dirty_fields ? 'cliente_contato'
-                               THEN atendimentos.cliente_contato ELSE EXCLUDED.cliente_contato END,
-       servico_nome     = CASE WHEN atendimentos.dirty_fields ? 'servico_nome'
-                               THEN atendimentos.servico_nome ELSE EXCLUDED.servico_nome END,
-       valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents'
-                                 OR (NOT $14::boolean
-                                     AND NOT ($15::boolean
-                                              AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
-                               THEN atendimentos.valor_cents ELSE EXCLUDED.valor_cents END,
-       desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents'
-                                 OR (NOT $14::boolean
-                                     AND NOT ($15::boolean
-                                              AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
-                               THEN atendimentos.desconto_cents ELSE EXCLUDED.desconto_cents END,
-       forma_pagamento  = CASE WHEN atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $14::boolean
-                               THEN atendimentos.forma_pagamento ELSE EXCLUDED.forma_pagamento END,
-       colaborador_id   = CASE WHEN atendimentos.dirty_fields ? 'colaborador_id'
-                               THEN atendimentos.colaborador_id ELSE EXCLUDED.colaborador_id END,
-       inicio_at        = EXCLUDED.inicio_at,
-       fim_at           = EXCLUDED.fim_at,
-       data             = EXCLUDED.data,
-       updated_at       = now()
-     RETURNING ${_RETURNING_COLS}`,
-    params,
-  );
-  const row = r.rows[0];
-  return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query<AtendimentoRow & { dirty_fields: unknown }>(
+      `${guardedPrefix}INSERT INTO atendimentos
+         (slot, tenant_id, gcal_event_id, cliente_nome, cliente_contato, cliente_telefone_canonico,
+          servico_nome, valor_cents, desconto_cents, forma_pagamento, colaborador_id,
+          status, origem, dirty_fields, inicio_at, fim_at, data)
+       ${insertSource}
+       ON CONFLICT (slot, gcal_event_id) WHERE gcal_event_id IS NOT NULL AND deleted_at IS NULL
+       DO UPDATE SET
+         cliente_nome     = CASE WHEN atendimentos.dirty_fields ? 'cliente_nome'
+                                 THEN atendimentos.cliente_nome ELSE EXCLUDED.cliente_nome END,
+         cliente_contato  = CASE WHEN atendimentos.dirty_fields ? 'cliente_contato'
+                                 THEN atendimentos.cliente_contato ELSE EXCLUDED.cliente_contato END,
+         cliente_telefone_canonico = CASE
+           WHEN atendimentos.dirty_fields ? 'cliente_contato'
+           THEN atendimentos.cliente_telefone_canonico
+           ELSE EXCLUDED.cliente_telefone_canonico
+         END,
+         servico_nome     = CASE WHEN atendimentos.dirty_fields ? 'servico_nome'
+                                 THEN atendimentos.servico_nome ELSE EXCLUDED.servico_nome END,
+         valor_cents      = CASE WHEN atendimentos.dirty_fields ? 'valor_cents'
+                                   OR (NOT $15::boolean
+                                       AND NOT ($16::boolean
+                                                AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
+                                 THEN atendimentos.valor_cents ELSE EXCLUDED.valor_cents END,
+         desconto_cents   = CASE WHEN atendimentos.dirty_fields ? 'desconto_cents'
+                                   OR (NOT $15::boolean
+                                       AND NOT ($16::boolean
+                                                AND atendimentos.forma_pagamento IS DISTINCT FROM 'pacote'))
+                                 THEN atendimentos.desconto_cents ELSE EXCLUDED.desconto_cents END,
+         forma_pagamento  = CASE WHEN atendimentos.dirty_fields ? 'forma_pagamento' OR NOT $15::boolean
+                                 THEN atendimentos.forma_pagamento ELSE EXCLUDED.forma_pagamento END,
+         colaborador_id   = CASE WHEN atendimentos.dirty_fields ? 'colaborador_id'
+                                 THEN atendimentos.colaborador_id ELSE EXCLUDED.colaborador_id END,
+         inicio_at        = EXCLUDED.inicio_at,
+         fim_at           = EXCLUDED.fim_at,
+         data             = EXCLUDED.data,
+         updated_at       = now()
+       RETURNING ${_RETURNING_COLS}`,
+      params,
+    );
+    const row = r.rows[0];
+    if (row) {
+      await upsertClienteFromSnapshot(
+        {
+          slot: input.slot,
+          tenantId: input.tenantId,
+          clienteNome: input.clienteNome ?? null,
+          clienteContato: input.clienteContato ?? null,
+        },
+        client,
+      );
+    }
+    await client.query('COMMIT');
+    return row ? { ...row, dirty_fields: asDirty(row.dirty_fields) } : null;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { COLABORADOR_HOME, OWNER_HOME, loginRedirectPath } from './colaborador';
+import {
+  COLABORADOR_HOME,
+  OWNER_HOME,
+  getColaboradorNav,
+  loginRedirectPath,
+} from './colaborador';
 
 describe('loginRedirectPath', () => {
   it('manda colaborador pra agenda read-only', () => {
@@ -20,5 +25,22 @@ describe('loginRedirectPath', () => {
     expect(loginRedirectPath('admin')).toBe(OWNER_HOME);
     expect(loginRedirectPath('')).toBe(OWNER_HOME);
     expect(loginRedirectPath('Colaborador')).toBe(OWNER_HOME); // case-sensitive de proposito
+  });
+});
+
+describe('getColaboradorNav', () => {
+  it('esconde Clientes enquanto o CRM estiver OFF', () => {
+    expect(getColaboradorNav(false).map((item) => item.href)).toEqual([
+      '/colaborador/agenda',
+      '/colaborador/comissao',
+    ]);
+  });
+
+  it('inclui Clientes entre Agenda e Faturamento quando o CRM estiver ON', () => {
+    expect(getColaboradorNav(true).map((item) => item.href)).toEqual([
+      '/colaborador/agenda',
+      '/colaborador/clientes',
+      '/colaborador/comissao',
+    ]);
   });
 });

@@ -24,6 +24,8 @@ interface SessionCtx {
    * hoje (SOLO Cirilo/Samuel não regride). Vem da sessão (READ-only).
    */
   atendFromAgenda: boolean;
+  /** CRM Clientes (Missão 034). Acesso fail-closed: false/ausente esconde menu e rota. */
+  crmClientesEnabled: boolean;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -35,11 +37,20 @@ export function SessionProvider({
   seatCap,
   atendimentosEnabled,
   atendFromAgenda,
+  crmClientesEnabled,
   children,
 }: SessionCtx & { children: React.ReactNode }) {
   return (
     <Ctx.Provider
-      value={{ slot, username, productType, seatCap, atendimentosEnabled, atendFromAgenda }}
+      value={{
+        slot,
+        username,
+        productType,
+        seatCap,
+        atendimentosEnabled,
+        atendFromAgenda,
+        crmClientesEnabled,
+      }}
     >
       {children}
     </Ctx.Provider>

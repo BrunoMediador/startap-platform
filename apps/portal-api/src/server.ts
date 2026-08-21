@@ -27,6 +27,7 @@ import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalBotDetectRoutes } from './routes/portal-bot-detect.js';
 import { portalCartaoConfigRoutes } from './routes/portal-cartao-config.js';
+import { portalClientesRoutes } from './routes/portal-clientes.js';
 import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
 import { portalConfigRoutes } from './routes/portal-config.js';
@@ -147,6 +148,9 @@ async function main() {
   // Gated por ATENDIMENTOS_ENABLED (404 se OFF) — feature dormente, não toca fluxo atual.
   // Cobre os dois cenários: individual (SOLO, sem comissão) e estabelecimento (EMPRESA).
   await app.register(portalAtendimentosRoutes);
+  // CRM de clientes finais do negócio (Missão 034). Gated por CRM_CLIENTES_ENABLED (404 se
+  // OFF). Owner vê/edita o perfil canônico; colaborador só lê clientes com atendimento próprio.
+  await app.register(portalClientesRoutes);
   // Painel do COLABORADOR (barbeiro de estabelecimento) — visão READ-ONLY escopada só aos
   // dados dele (SCRUM-32). Gated por COLABORADOR_PORTAL_ENABLED (404 se OFF). As rotas usam
   // withColaborador (role='colaborador'); withTenant barra colaborador em TODA rota do dono.

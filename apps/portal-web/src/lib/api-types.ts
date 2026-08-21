@@ -92,6 +92,11 @@ export interface AuthMe {
    * de faturamento fica IDÊNTICA à de hoje (SOLO Cirilo/Samuel não regride).
    */
   atend_from_agenda?: boolean;
+  /**
+   * CRM de clientes (Missão 034). Default OFF no backend; ausente = tratar como
+   * false e manter o portal byte-idêntico aos tenants sem rollout.
+   */
+  crm_clientes_enabled: boolean;
 }
 
 // ── Colaborador (painel READ-ONLY do barbeiro — SCRUM-32, portal-colaborador.ts) ──
@@ -114,6 +119,8 @@ export interface ColaboradorMe {
    * neste fuso. Opcional: undefined enquanto a portal-api não devolve -> default São Paulo.
    */
   timezone?: string;
+  /** Mesmo gate do owner: ausente = OFF/fail-closed. */
+  crm_clientes_enabled: boolean;
 }
 
 /**
@@ -341,6 +348,75 @@ export interface ContatosResponse {
   count: number;
   contacts: RecentContact[];
   source?: 'waha' | 'db';
+}
+
+// ── CRM Clientes (Missão 034) ────────────────────────────────────────────────
+//
+// Contrato frontend esperado para a base canônica por tenant+telefone. A lista
+// minimiza PII (telefone mascarado); o perfil autorizado pode trazer o telefone
+// completo e, para o dono, os campos opcionais editáveis.
+
+export interface ClienteListItem {
+  id: string;
+  nome: string | null;
+  telefone: string;
+  aniversario_mmdd: string | null;
+  cidade: string | null;
+  total_atendimentos: number;
+  ultima_interacao_at: string | null;
+  ultimo_profissional_nome: string | null;
+}
+
+export interface ClientesListResponse {
+  clientes: ClienteListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ClienteHistoricoItem {
+  atendimento_id: number;
+  data: string;
+  inicio_at: string | null;
+  fim_at: string | null;
+  cliente_nome: string | null;
+  servico_nome: string | null;
+  valor_cents: number;
+  desconto_cents: number;
+  forma_pagamento: string | null;
+  profissional_nome: string | null;
+  status: string;
+  origem: string;
+  colaborador_id: number | null;
+}
+
+export interface ClientePerfil {
+  id: string;
+  nome: string | null;
+  telefone: string;
+  aniversario_mmdd: string | null;
+  cidade: string | null;
+  nota_interna?: string | null;
+  total_atendimentos: number;
+  ultima_interacao_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ClientePerfilResponse {
+  cliente: ClientePerfil;
+  historico: ClienteHistoricoItem[];
+}
+
+export interface SaveClienteBody {
+  aniversario_mmdd?: string | null;
+  cidade?: string | null;
+  nota_interna?: string | null;
+}
+
+export interface SaveClienteResponse {
+  ok: true;
+  cliente: ClientePerfil;
 }
 
 // ── Status / Home ────────────────────────────────────────────────────────────

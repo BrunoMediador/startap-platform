@@ -299,10 +299,11 @@ services:
       <<: *app-env
       SERVICE_NAME: worker-once
       CHAT_STALE_RUNNING_MAX_MINUTES: "1"
-    command:
-      - node
-      - -e
-      - import('./app/dist/jobs/close-stale-running.js').then(async (m) => { const r = await m.runCloseStaleRunning(); if (r.closed !== 1) throw new Error('worker-once expected one stale row'); })
+      E2E_PG_URL: postgres://e2e_app:e2e_app_password@postgres:5432/startap_e2e
+    volumes:
+      - ./support:/e2e/support:ro
+      - ./support/worker-once.mjs:/app/worker-once.mjs:ro
+    command: [node, /app/worker-once.mjs]
 
   integration-probe:
     <<: *app

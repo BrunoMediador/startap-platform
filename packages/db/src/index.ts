@@ -29,6 +29,7 @@ export * as tenant from './queries/tenant.js';
 export * as tenantReadRollup from './queries/tenant-read-rollup.js';
 export * as packages from './queries/packages.js';
 export * as atendimentos from './queries/atendimentos.js';
+export * as clientes from './queries/clientes.js';
 export * as agendaBloqueios from './queries/agenda-bloqueios.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
@@ -146,6 +147,16 @@ export type {
   ComissaoPorProfissionalRow,
   ComissaoColaboradorReport,
 } from './queries/atendimentos.js';
+export type {
+  UpsertClienteFromSnapshotInput,
+  ClienteListItem,
+  ClienteListResult,
+  ClienteProfile,
+  ClienteProfileColaborador,
+  ClienteHistoricoRow,
+  UpdateClienteProfileInput,
+  SeedClientesResult,
+} from './queries/clientes.js';
 export type {
   AgendaBloqueioRow,
   AgendaBloqueioTipo,

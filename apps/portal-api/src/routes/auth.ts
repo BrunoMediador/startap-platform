@@ -316,6 +316,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // presente (boolean), independente de product_type — o front liga/desliga o
       // menu por ele. !! garante boolean mesmo se a config vier indefinida.
       atendimentos_enabled: !!config.ATENDIMENTOS_ENABLED,
+      crm_clientes_enabled: !!config.CRM_CLIENTES_ENABLED,
       // Flag do billing derivado da agenda (ADR 0027). SEMPRE presente (boolean) — o
       // front gateia as ABAS previsão/faturado por ela (criar-no-agendamento da Fase B2
       // também). Gate POR-CLONE: reflete se o SLOT DESTA sessão está na lista
@@ -407,6 +408,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       colaborador_id: c.colaboradorId,
       slot: c.slot,
       timezone: scope.timezone,
+      crm_clientes_enabled: !!config.CRM_CLIENTES_ENABLED,
     });
   });
 };

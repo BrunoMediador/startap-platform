@@ -34,6 +34,9 @@ import type {
   BotPauseResponse,
   BotResumeResponse,
   ChargeView,
+  ClientePerfil,
+  ClientePerfilResponse,
+  ClientesListResponse,
   CodigoResponse,
   ColaboradorAgendaResponse,
   ColaboradorComissaoResponse,
@@ -78,6 +81,8 @@ import type {
   RemoverAgendaBloqueioResponse,
   RemoverAgendaBloqueioSerieResponse,
   SaveColaboradorResponse,
+  SaveClienteBody,
+  SaveClienteResponse,
   SavePerfilResponse,
   Servico,
   ServicosResponse,
@@ -87,6 +92,7 @@ import type {
 } from './api-types';
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { conexaoFromBotActionResponse } from './bot-pausa';
+import { buildClientesListSearchParams } from './clientes';
 import {
   type CartaoConfigState,
   type CartaoEmojis,
@@ -168,6 +174,21 @@ export const qk = {
   cartaoConfig: (slot: string) => ['cartao-config', slot] as const,
   /** Prévia FIEL ao vivo do cartão (SCRUM-99) — GET /portal/cartao-config/preview, por emojis. */
   cartaoPreview: (slot: string, emojis: CartaoEmojis) => ['cartao-preview', slot, emojis] as const,
+  clientesBase: (slot: string) => ['clientes', slot] as const,
+  clientes: (slot: string, page: number, pageSize: number, search: string) =>
+    ['clientes', slot, page, pageSize, search] as const,
+  clientePerfil: (slot: string, id: string) => ['cliente-perfil', slot, id] as const,
+  colaboradorClientesBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-clientes', slot, colaboradorId] as const,
+  colaboradorClientes: (
+    slot: string,
+    colaboradorId: number,
+    page: number,
+    pageSize: number,
+    search: string,
+  ) => ['colaborador-clientes', slot, colaboradorId, page, pageSize, search] as const,
+  colaboradorClientePerfil: (slot: string, colaboradorId: number, id: string) =>
+    ['colaborador-cliente-perfil', slot, colaboradorId, id] as const,
 };
 
 // ── Sessao ───────────────────────────────────────────────────────────────────
@@ -201,6 +222,16 @@ export function useAgendamentos(slot: string): UseQueryResult<AgendamentosRespon
 
 export interface AgendaBloqueiosQueryData extends AgendaBloqueiosResponse {
   available: boolean;
+}
+
+export interface ClientesListQueryData extends ClientesListResponse {
+  available: boolean;
+}
+
+export interface ClientePerfilQueryData {
+  available: boolean;
+  cliente: ClientePerfil | null;
+  historico: ClientePerfilResponse['historico'];
 }
 
 function isFeatureOff(error: unknown): boolean {
@@ -371,6 +402,61 @@ export function useColaboradorAgenda(
         { signal },
       ),
     placeholderData: keepPreviousData,
+  });
+}
+
+export function useColaboradorClientes(
+  slot: string,
+  colaboradorId: number,
+  page: number,
+  pageSize: number,
+  search: string,
+  enabled = true,
+): UseQueryResult<ClientesListQueryData> {
+  return useQuery({
+    queryKey: qk.colaboradorClientes(slot, colaboradorId, page, pageSize, search),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesListSearchParams({ page, pageSize, search });
+      try {
+        const data = await apiFetch<ClientesListResponse>(`/portal/colaborador/clientes?${qs}`, {
+          signal,
+        });
+        return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useColaboradorClientePerfil(
+  slot: string,
+  colaboradorId: number,
+  id: string | null,
+  enabled = true,
+): UseQueryResult<ClientePerfilQueryData> {
+  return useQuery({
+    queryKey: qk.colaboradorClientePerfil(slot, colaboradorId, id ?? ''),
+    queryFn: async ({ signal }) => {
+      if (id == null) return { available: true, cliente: null, historico: [] };
+      try {
+        const data = await apiFetch<ClientePerfilResponse>(`/portal/colaborador/clientes/${id}`, {
+          signal,
+        });
+        return { available: true, cliente: data.cliente, historico: data.historico };
+      } catch (error) {
+        if (isFeatureOff(error)) return { available: false, cliente: null, historico: [] };
+        throw error;
+      }
+    },
+    enabled: enabled && id != null,
+    retry: false,
   });
 }
 
@@ -927,6 +1013,80 @@ export function useContatos(slot: string, enabled: boolean): UseQueryResult<Cont
     queryFn: ({ signal }) => apiFetch<ContatosResponse>('/portal/contatos', { signal }),
     enabled,
     staleTime: 30_000,
+  });
+}
+
+// ── CRM Clientes (Missão 034) ────────────────────────────────────────────────
+
+export function useClientes(
+  slot: string,
+  page: number,
+  pageSize: number,
+  search: string,
+  enabled = true,
+): UseQueryResult<ClientesListQueryData> {
+  return useQuery({
+    queryKey: qk.clientes(slot, page, pageSize, search),
+    queryFn: async ({ signal }) => {
+      const qs = buildClientesListSearchParams({ page, pageSize, search });
+      try {
+        const data = await apiFetch<ClientesListResponse>(`/portal/clientes?${qs}`, { signal });
+        return { ...data, available: true };
+      } catch (error) {
+        if (isFeatureOff(error)) {
+          return { available: false, clientes: [], total: 0, limit: pageSize, offset: 0 };
+        }
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useClientePerfil(
+  slot: string,
+  id: string | null,
+  enabled = true,
+): UseQueryResult<ClientePerfilQueryData> {
+  return useQuery({
+    queryKey: qk.clientePerfil(slot, id ?? ''),
+    queryFn: async ({ signal }) => {
+      if (id == null) return { available: true, cliente: null, historico: [] };
+      try {
+        const data = await apiFetch<ClientePerfilResponse>(`/portal/clientes/${id}`, { signal });
+        return { available: true, cliente: data.cliente, historico: data.historico };
+      } catch (error) {
+        if (isFeatureOff(error)) return { available: false, cliente: null, historico: [] };
+        throw error;
+      }
+    },
+    enabled: enabled && id != null,
+    retry: false,
+  });
+}
+
+export function useSaveCliente(
+  slot: string,
+): UseMutationResult<ClientePerfil, Error, { id: string; body: SaveClienteBody }> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }) =>
+      apiFetch<SaveClienteResponse>(`/portal/clientes/${id}`, {
+        method: 'PATCH',
+        body,
+      }).then((r) => r.cliente),
+    onSuccess: (cliente) => {
+      client.setQueryData<ClientePerfilQueryData>(qk.clientePerfil(slot, cliente.id), (prev) => ({
+        available: true,
+        cliente,
+        historico: prev?.historico ?? [],
+      }));
+      client.invalidateQueries({ queryKey: qk.clientesBase(slot) });
+      client.invalidateQueries({ queryKey: ['colaborador-clientes', slot] });
+      client.invalidateQueries({ queryKey: ['colaborador-cliente-perfil', slot] });
+    },
   });
 }
 

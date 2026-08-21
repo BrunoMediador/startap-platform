@@ -23,7 +23,14 @@ export function loginRedirectPath(role: LoginRole | string | undefined | null): 
 }
 
 /** Itens de navegação do shell read-only do colaborador (sem ações do dono). */
-export const COLABORADOR_NAV = [
-  { href: '/colaborador/agenda', label: 'Agenda' },
-  { href: '/colaborador/comissao', label: 'Faturamento' },
-] as const;
+export function getColaboradorNav(crmClientesEnabled: boolean) {
+  return [
+    { href: '/colaborador/agenda', label: 'Agenda' },
+    ...(crmClientesEnabled
+      ? ([{ href: '/colaborador/clientes', label: 'Clientes' }] as const)
+      : []),
+    { href: '/colaborador/comissao', label: 'Faturamento' },
+  ] as const;
+}
+
+export const COLABORADOR_NAV = getColaboradorNav(false);

@@ -10,15 +10,23 @@
  * isolamento no backend, ADR/SCRUM-32). O que saiu foi só o RÓTULO "Somente leitura"
  * (decisão do Bruno: profissionalismo) — a função read-only NÃO mudou.
  */
-import { Brandmark, IconCalendar, IconLogout, IconWallet } from '@/components/icons';
+import {
+  Brandmark,
+  IconCalendar,
+  IconLogout,
+  IconUsers,
+  IconWallet,
+} from '@/components/icons';
+import { useColaborador } from '@/components/colaborador/colaborador-session-context';
 import { cn } from '@/lib/cn';
-import { COLABORADOR_NAV } from '@/lib/colaborador';
+import { getColaboradorNav } from '@/lib/colaborador';
 import { useLogout } from '@/lib/use-logout';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const NAV_ICON: Record<string, React.ReactNode> = {
   '/colaborador/agenda': <IconCalendar size={17} />,
+  '/colaborador/clientes': <IconUsers size={17} />,
   '/colaborador/comissao': <IconWallet size={17} />,
 };
 
@@ -30,7 +38,9 @@ export function ColaboradorShell({
   children: React.ReactNode;
 }) {
   const { logout, pending } = useLogout();
+  const { crmClientesEnabled } = useColaborador();
   const pathname = usePathname();
+  const navItems = getColaboradorNav(crmClientesEnabled);
 
   return (
     <div className="flex min-h-dvh flex-col">
@@ -67,7 +77,7 @@ export function ColaboradorShell({
           aria-label="Seções do colaborador"
           className="mx-auto flex w-full max-w-[720px] gap-1 pt-2"
         >
-          {COLABORADOR_NAV.map((item) => {
+          {navItems.map((item) => {
             const ativo = pathname === item.href;
             return (
               <Link

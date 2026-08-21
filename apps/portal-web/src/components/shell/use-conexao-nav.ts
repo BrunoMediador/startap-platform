@@ -27,7 +27,7 @@ export function useConexaoNav(): {
   visibleItems: NavItem[];
   showDot: (item: NavItem) => boolean;
 } {
-  const { slot, productType, atendimentosEnabled } = useTenant();
+  const { slot, productType, atendimentosEnabled, crmClientesEnabled } = useTenant();
   const conexao = useConexao(slot);
   const enabled = conexao.data?.enabled === true;
   const needsAction = conexao.data?.needs_action === true;
@@ -38,6 +38,7 @@ export function useConexaoNav(): {
     conexaoEnabled: enabled,
     isEstabelecimento,
     atendimentosEnabled,
+    crmClientesEnabled,
   });
 
   const showDot = (item: NavItem) =>

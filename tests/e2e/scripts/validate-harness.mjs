@@ -78,6 +78,7 @@ const required = [
   'tests/e2e/support/egress-guard.mjs',
   'tests/e2e/support/egress-probe.mjs',
   'tests/e2e/support/network-probe.mjs',
+  'tests/e2e/support/worker-once.mjs',
   'tests/e2e/support/api-entrypoint.mjs',
   'tests/e2e/specs/vertical.spec.ts',
   'tests/e2e/known-broken/known-broken.spec.ts',
@@ -154,6 +155,8 @@ const apiEntrypoint = await readFile(
   path.join(root, 'tests/e2e/support/api-entrypoint.mjs'),
   'utf8',
 );
+const workerOnceScript = await readFile(path.join(root, 'tests/e2e/support/worker-once.mjs'), 'utf8');
+const dockerfile = await readFile(path.join(root, 'Dockerfile'), 'utf8');
 const legacyBaseline = await readFile(
   path.join(root, 'scripts/fixtures/001_legacy_schema.sql'),
   'utf8',
@@ -196,6 +199,19 @@ for (const oneShot of ['worker-once', 'integration-probe', 'egress-probe', 'netw
   if (!new RegExp(`^  ${oneShot}:`, 'mu').test(compose)) {
     throw new Error(`${oneShot} ausente do Compose`);
   }
+}
+if (
+  !/worker-once:[\s\S]*?\.\/support\/worker-once\.mjs:\/app\/worker-once\.mjs:ro[\s\S]*?command:\s*\[node, \/app\/worker-once\.mjs\]/u.test(
+    compose,
+  )
+) {
+  throw new Error('worker-once deve semear e validar uma stale row isolada via /app/worker-once.mjs');
+}
+if (
+  !/COPY --from=build \/repo\/apps\/\$\{APP\}\/dist \.\/app\/dist/u.test(dockerfile) ||
+  !workerOnceScript.includes("from '/app/app/dist/jobs/close-stale-running.js'")
+) {
+  throw new Error('worker-once deve importar runCloseStaleRunning do path real /app/app/dist da imagem runtime');
 }
 const runnerService = compose.match(/^ {2}e2e:\n([\s\S]*?)(?=^ {2}[a-z][\w-]*:|^networks:)/mu)?.[1];
 if (!runnerService || /^ {4}depends_on:/mu.test(runnerService)) {
