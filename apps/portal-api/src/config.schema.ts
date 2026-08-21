@@ -273,6 +273,16 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── CRM Aniversariantes read-only (Missão 036, backend) ──────────────────
+  // Kill-switch das rotas /portal/clientes/aniversariantes e /portal/colaborador/
+  // clientes/aniversariantes. OPCIONAL no boot (ausente = OFF, lição #247):
+  // OFF -> 404 feature_off antes de consultar o CRM. Depende do CRM canônico já
+  // ligado, mas nasce separado para rollout conservador desta leitura read-only.
+  CRM_ANIVERSARIANTES_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
   // Gate POR-CLONE da camada que DERIVA atendimentos dos eventos do GCal (split
   // previsão×faturado, sticky de edição). Lista de slots separada por vírgula; o gate é

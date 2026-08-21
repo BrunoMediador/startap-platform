@@ -14,6 +14,8 @@ const {
   seedClientesMock,
   listClientesOwnerMock,
   listClientesColaboradorMock,
+  listAniversariantesOwnerMock,
+  listAniversariantesColaboradorMock,
   listSemRetornoOwnerMock,
   listSemRetornoColaboradorMock,
   getClienteOwnerMock,
@@ -26,11 +28,14 @@ const {
     CRM_CLIENTES_ENABLED: true,
     COLABORADOR_PORTAL_ENABLED: true,
     RANKING_SEM_RETORNO_ENABLED: true,
+    CRM_ANIVERSARIANTES_ENABLED: true,
   } as Record<string, unknown>,
   getScopeBySlotMock: vi.fn(),
   seedClientesMock: vi.fn(),
   listClientesOwnerMock: vi.fn(),
   listClientesColaboradorMock: vi.fn(),
+  listAniversariantesOwnerMock: vi.fn(),
+  listAniversariantesColaboradorMock: vi.fn(),
   listSemRetornoOwnerMock: vi.fn(),
   listSemRetornoColaboradorMock: vi.fn(),
   getClienteOwnerMock: vi.fn(),
@@ -49,6 +54,9 @@ vi.mock('@startap/db', () => ({
     seedClientesFromAtendimentos: (...a: unknown[]) => seedClientesMock(...a),
     listClientesForOwner: (...a: unknown[]) => listClientesOwnerMock(...a),
     listClientesForColaborador: (...a: unknown[]) => listClientesColaboradorMock(...a),
+    listClientesAniversariantesForOwner: (...a: unknown[]) => listAniversariantesOwnerMock(...a),
+    listClientesAniversariantesForColaborador: (...a: unknown[]) =>
+      listAniversariantesColaboradorMock(...a),
     listClientesSemRetornoForOwner: (...a: unknown[]) => listSemRetornoOwnerMock(...a),
     listClientesSemRetornoForColaborador: (...a: unknown[]) => listSemRetornoColaboradorMock(...a),
     getClienteProfileForOwner: (...a: unknown[]) => getClienteOwnerMock(...a),
@@ -147,6 +155,22 @@ const SEM_RETORNO_LIST = {
   offset: 0,
 };
 
+const ANIVERSARIANTES_LIST = {
+  clientes: [
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      nome: 'Ana',
+      telefone_masked: '+55 31 •••••-••55',
+      aniversario_mmdd: '02-29',
+      dias_para_aniversario: 3,
+      ultimo_profissional_nome: 'Bene',
+    },
+  ],
+  total: 1,
+  limit: 20,
+  offset: 0,
+};
+
 const HISTORICO = [
   {
     atendimento_id: 91,
@@ -170,6 +194,7 @@ beforeEach(() => {
   configMock.CRM_CLIENTES_ENABLED = true;
   configMock.COLABORADOR_PORTAL_ENABLED = true;
   configMock.RANKING_SEM_RETORNO_ENABLED = true;
+  configMock.CRM_ANIVERSARIANTES_ENABLED = true;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'estabelecimento',
     seat_cap: 2,
@@ -178,6 +203,22 @@ beforeEach(() => {
   });
   listClientesOwnerMock.mockResolvedValue(OWNER_LIST);
   listClientesColaboradorMock.mockResolvedValue(OWNER_LIST);
+  listAniversariantesOwnerMock.mockImplementation(
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      Promise.resolve({
+        ...ANIVERSARIANTES_LIST,
+        limit: limit ?? ANIVERSARIANTES_LIST.limit,
+        offset: offset ?? ANIVERSARIANTES_LIST.offset,
+      }),
+  );
+  listAniversariantesColaboradorMock.mockImplementation(
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      Promise.resolve({
+        ...ANIVERSARIANTES_LIST,
+        limit: limit ?? ANIVERSARIANTES_LIST.limit,
+        offset: offset ?? ANIVERSARIANTES_LIST.offset,
+      }),
+  );
   listSemRetornoOwnerMock.mockImplementation(({ limit, offset }: { limit?: number; offset?: number }) =>
     Promise.resolve({
       ...SEM_RETORNO_LIST,
@@ -240,6 +281,29 @@ describe('gating', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'feature_off' });
     expect(listSemRetornoColaboradorMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 aniversariantes owner quando CRM_ANIVERSARIANTES_ENABLED está OFF', async () => {
+    configMock.CRM_ANIVERSARIANTES_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/portal/clientes/aniversariantes' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
+    expect(listAniversariantesOwnerMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('404 aniversariantes colaborador quando CRM_ANIVERSARIANTES_ENABLED está OFF', async () => {
+    configMock.CRM_ANIVERSARIANTES_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes',
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'feature_off' });
+    expect(listAniversariantesColaboradorMock).not.toHaveBeenCalled();
     await app.close();
   });
 });
@@ -311,6 +375,41 @@ describe('owner', () => {
     await app.close();
   });
 
+  it('aniversariantes usa slot+tenant+timezone da sessão e mantém PII mascarada', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?limit=50&offset=100',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(listAniversariantesOwnerMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      limit: 50,
+      offset: 100,
+    });
+    const body = res.json();
+    expect(body).toEqual({ ...ANIVERSARIANTES_LIST, limit: 50, offset: 100 });
+    expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••55');
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('553199998855');
+    await app.close();
+  });
+
+  it('aniversariantes rejeita limit=51 e parâmetros forjados de escopo', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?slot=outro&tenant_id=forjado&limit=51',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(listAniversariantesOwnerMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('ranking sem retorno rejeita limit=51 e parâmetros forjados de escopo', async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -329,7 +428,7 @@ describe('owner', () => {
       method: 'PATCH',
       url: '/portal/clientes/11111111-1111-4111-8111-111111111111',
       payload: {
-        aniversario_mmdd: '09-15',
+        aniversario_mmdd: '02-29',
         cidade: 'Contagem',
         nota_interna: 'Voltou ao plano VIP',
       },
@@ -341,11 +440,23 @@ describe('owner', () => {
       'tid-owner',
       '11111111-1111-4111-8111-111111111111',
       {
-        aniversario_mmdd: '09-15',
+        aniversario_mmdd: '02-29',
         cidade: 'Contagem',
         nota_interna: 'Voltou ao plano VIP',
       },
     );
+    await app.close();
+  });
+
+  it('patch owner rejeita aniversario_mmdd impossível mesmo no formato MM-DD', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/clientes/11111111-1111-4111-8111-111111111111',
+      payload: { aniversario_mmdd: '02-30' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(updateClienteOwnerMock).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -442,6 +553,41 @@ describe('colaborador', () => {
     const body = res.json();
     expect(body).toEqual({ ...SEM_RETORNO_LIST, limit: 7, offset: 2 });
     expect(body.clientes[0]?.telefone).toBeUndefined();
+    await app.close();
+  });
+
+  it('aniversariantes do colaborador usa colaboradorId da sessão, timezone server-side e máscara PII', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes?limit=7&offset=2',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(getScopeBySlotMock).toHaveBeenCalledWith('clone_owner');
+    expect(listAniversariantesColaboradorMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+      limit: 7,
+      offset: 2,
+    });
+    const body = res.json();
+    expect(body).toEqual({ ...ANIVERSARIANTES_LIST, limit: 7, offset: 2 });
+    expect(body.clientes[0]?.telefone).toBeUndefined();
+    await app.close();
+  });
+
+  it('aniversariantes do colaborador rejeita tentativa de mini-idor por query', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes?colaborador_id=77',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(listAniversariantesColaboradorMock).not.toHaveBeenCalled();
     await app.close();
   });
 

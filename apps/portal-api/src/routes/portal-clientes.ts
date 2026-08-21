@@ -31,15 +31,38 @@ const semRetornoQuerySchema = z
   })
   .strict();
 
+const aniversariantesQuerySchema = semRetornoQuerySchema;
+
 const clienteIdParamSchema = z.object({
   id: z.string().uuid('id invalido'),
 });
 
 const mmddSchema = /^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+
+function isValidBirthdayMmdd(value: string): boolean {
+  if (!mmddSchema.test(value)) return false;
+  const [monthStr, dayStr] = value.split('-');
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const date = new Date(Date.UTC(2000, month - 1, day));
+  return (
+    date.getUTCFullYear() === 2000 &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
 const patchSchema = z
   .object({
     aniversario_mmdd: z
-      .union([z.string().regex(mmddSchema, 'aniversario_mmdd deve ser MM-DD'), z.literal(''), z.null()])
+      .union([
+        z
+          .string()
+          .regex(mmddSchema, 'aniversario_mmdd deve ser MM-DD')
+          .refine(isValidBirthdayMmdd, 'aniversario_mmdd deve ser uma data real'),
+        z.literal(''),
+        z.null(),
+      ])
       .optional(),
     cidade: z
       .union([z.string().trim().max(80), z.literal(''), z.null()])
@@ -85,6 +108,17 @@ async function gateRankingOwner(
   return gateClientesOwner(req, reply);
 }
 
+async function gateAniversariantesOwner(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ slot: string; tenantId: string; timezone: string } | null> {
+  if (!config.CRM_CLIENTES_ENABLED || !config.CRM_ANIVERSARIANTES_ENABLED) {
+    await reply.code(404).send({ error: 'feature_off' });
+    return null;
+  }
+  return gateClientesOwner(req, reply);
+}
+
 async function gateClientesColaborador(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -105,6 +139,24 @@ async function gateRankingColaborador(
     !config.CRM_CLIENTES_ENABLED ||
     !config.COLABORADOR_PORTAL_ENABLED ||
     !config.RANKING_SEM_RETORNO_ENABLED
+  ) {
+    await reply.code(404).send({ error: 'feature_off' });
+    return null;
+  }
+  const gate = await gateClientesColaborador(req, reply);
+  if (!gate) return null;
+  const scope = await cloneColaboradores.getScopeBySlot(gate.slot);
+  return { ...gate, timezone: scope.timezone };
+}
+
+async function gateAniversariantesColaborador(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<{ slot: string; tenantId: string; colaboradorId: number; timezone: string } | null> {
+  if (
+    !config.CRM_CLIENTES_ENABLED ||
+    !config.COLABORADOR_PORTAL_ENABLED ||
+    !config.CRM_ANIVERSARIANTES_ENABLED
   ) {
     await reply.code(404).send({ error: 'feature_off' });
     return null;
@@ -149,6 +201,27 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const result = await clientes.listClientesSemRetornoForOwner({
+      slot: gate.slot,
+      tenantId: gate.tenantId,
+      timezone: gate.timezone,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+    });
+    return reply.code(200).send(result);
+  });
+
+  app.get('/portal/clientes/aniversariantes', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateAniversariantesOwner(req, reply);
+    if (!gate) return reply;
+
+    const parsed = aniversariantesQuerySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
+    }
+
+    const result = await clientes.listClientesAniversariantesForOwner({
       slot: gate.slot,
       tenantId: gate.tenantId,
       timezone: gate.timezone,
@@ -255,6 +328,32 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const result = await clientes.listClientesSemRetornoForColaborador({
+        slot: gate.slot,
+        tenantId: gate.tenantId,
+        colaboradorId: gate.colaboradorId,
+        timezone: gate.timezone,
+        limit: parsed.data.limit,
+        offset: parsed.data.offset,
+      });
+      return reply.code(200).send(result);
+    },
+  );
+
+  app.get(
+    '/portal/colaborador/clientes/aniversariantes',
+    { preHandler: withColaborador },
+    async (req, reply) => {
+      const gate = await gateAniversariantesColaborador(req, reply);
+      if (!gate) return reply;
+
+      const parsed = aniversariantesQuerySchema.safeParse(req.query ?? {});
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
+      }
+
+      const result = await clientes.listClientesAniversariantesForColaborador({
         slot: gate.slot,
         tenantId: gate.tenantId,
         colaboradorId: gate.colaboradorId,

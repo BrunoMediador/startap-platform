@@ -48,6 +48,16 @@ interface SemRetornoRowRaw {
   total_count: string;
 }
 
+interface AniversarianteRowRaw {
+  id: string;
+  nome: string | null;
+  telefone_canonico: string;
+  aniversario_mmdd: string;
+  dias_para_aniversario: string | number;
+  ultimo_profissional_nome: string | null;
+  total_count: string;
+}
+
 interface ProfileRowRaw {
   id: string;
   nome: string | null;
@@ -129,6 +139,22 @@ export interface ClienteSemRetornoItem {
 
 export interface ClienteSemRetornoResult {
   clientes: ClienteSemRetornoItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ClienteAniversarianteItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  aniversario_mmdd: string;
+  dias_para_aniversario: number;
+  ultimo_profissional_nome: string | null;
+}
+
+export interface ClienteAniversariantesResult {
+  clientes: ClienteAniversarianteItem[];
   total: number;
   limit: number;
   offset: number;
@@ -233,6 +259,17 @@ function mapSemRetornoRow(row: SemRetornoRowRaw): ClienteSemRetornoItem {
     telefone_masked: phoneHint(row.telefone_canonico),
     ultimo_atendimento_at: row.ultimo_atendimento_at,
     dias_sem_retorno: Number(row.dias_sem_retorno),
+    ultimo_profissional_nome: row.ultimo_profissional_nome,
+  };
+}
+
+function mapAniversarianteRow(row: AniversarianteRowRaw): ClienteAniversarianteItem {
+  return {
+    id: row.id,
+    nome: row.nome,
+    telefone_masked: phoneHint(row.telefone_canonico),
+    aniversario_mmdd: row.aniversario_mmdd,
+    dias_para_aniversario: Number(row.dias_para_aniversario),
     ultimo_profissional_nome: row.ultimo_profissional_nome,
   };
 }
@@ -710,6 +747,164 @@ export async function listClientesSemRetornoForColaborador(input: {
 
   return {
     clientes: rows.rows.map(mapSemRetornoRow),
+    total: Number(rows.rows[0]?.total_count ?? 0),
+    limit,
+    offset,
+  };
+}
+
+/**
+ * Usa o ano bissexto 2000 como calendário sintético para validar/ordenar MM-DD
+ * sem perder clientes de 29/02 nos anos não bissextos. O payload segue mínimo:
+ * aniversário original + distância em dias, sempre com telefone mascarado.
+ */
+export async function listClientesAniversariantesForOwner(input: {
+  slot: string;
+  tenantId: string;
+  timezone: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ClienteAniversariantesResult> {
+  const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
+  const rows = await query<AniversarianteRowRaw>(
+    `WITH contexto AS (
+       SELECT EXTRACT(
+                DOY FROM make_date(
+                  2000,
+                  EXTRACT(MONTH FROM (NOW() AT TIME ZONE $3))::int,
+                  EXTRACT(DAY FROM (NOW() AT TIME ZONE $3))::int
+                )
+              )::int AS hoje_doy
+     )
+     SELECT c.id,
+            c.nome,
+            c.telefone_canonico,
+            c.aniversario_mmdd,
+            CASE
+              WHEN aniversario_doy >= ctx.hoje_doy THEN aniversario_doy - ctx.hoje_doy
+              ELSE 366 - ctx.hoje_doy + aniversario_doy
+            END::int AS dias_para_aniversario,
+            stats.ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM clientes c
+       CROSS JOIN contexto ctx
+       CROSS JOIN LATERAL (
+         SELECT EXTRACT(
+                  DOY FROM make_date(
+                    2000,
+                    split_part(c.aniversario_mmdd, '-', 1)::int,
+                    split_part(c.aniversario_mmdd, '-', 2)::int
+                  )
+                )::int AS aniversario_doy
+       ) AS birthday
+       LEFT JOIN LATERAL (
+         SELECT (
+                  ARRAY_AGG(
+                    cc.nome
+                    ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC
+                  )
+                )[1] AS ultimo_profissional_nome
+           FROM atendimentos a
+           LEFT JOIN clone_colaboradores cc
+             ON cc.id = a.colaborador_id AND cc.slot = a.slot
+          WHERE a.slot = c.slot
+            AND a.tenant_id = c.tenant_id
+            AND a.deleted_at IS NULL
+            AND a.cliente_telefone_canonico = c.telefone_canonico
+       ) AS stats ON TRUE
+      WHERE c.slot = $1
+        AND c.tenant_id = $2
+        AND c.aniversario_mmdd IS NOT NULL
+        AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
+      ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC
+      LIMIT $4 OFFSET $5`,
+    [input.slot, input.tenantId, input.timezone, limit, offset],
+  );
+
+  return {
+    clientes: rows.rows.map(mapAniversarianteRow),
+    total: Number(rows.rows[0]?.total_count ?? 0),
+    limit,
+    offset,
+  };
+}
+
+export async function listClientesAniversariantesForColaborador(input: {
+  slot: string;
+  tenantId: string;
+  colaboradorId: number;
+  timezone: string;
+  limit?: number;
+  offset?: number;
+}): Promise<ClienteAniversariantesResult> {
+  const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
+  const rows = await query<AniversarianteRowRaw>(
+    `WITH contexto AS (
+       SELECT EXTRACT(
+                DOY FROM make_date(
+                  2000,
+                  EXTRACT(MONTH FROM (NOW() AT TIME ZONE $4))::int,
+                  EXTRACT(DAY FROM (NOW() AT TIME ZONE $4))::int
+                )
+              )::int AS hoje_doy
+     )
+     SELECT c.id,
+            c.nome,
+            c.telefone_canonico,
+            c.aniversario_mmdd,
+            CASE
+              WHEN aniversario_doy >= ctx.hoje_doy THEN aniversario_doy - ctx.hoje_doy
+              ELSE 366 - ctx.hoje_doy + aniversario_doy
+            END::int AS dias_para_aniversario,
+            stats.ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM clientes c
+       CROSS JOIN contexto ctx
+       CROSS JOIN LATERAL (
+         SELECT EXTRACT(
+                  DOY FROM make_date(
+                    2000,
+                    split_part(c.aniversario_mmdd, '-', 1)::int,
+                    split_part(c.aniversario_mmdd, '-', 2)::int
+                  )
+                )::int AS aniversario_doy
+       ) AS birthday
+       LEFT JOIN LATERAL (
+         SELECT (
+                  ARRAY_AGG(
+                    cc.nome
+                    ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC
+                  )
+                )[1] AS ultimo_profissional_nome
+           FROM atendimentos a
+           LEFT JOIN clone_colaboradores cc
+             ON cc.id = a.colaborador_id AND cc.slot = a.slot
+          WHERE a.slot = c.slot
+            AND a.tenant_id = c.tenant_id
+            AND a.deleted_at IS NULL
+            AND a.colaborador_id = $3
+            AND a.cliente_telefone_canonico = c.telefone_canonico
+       ) AS stats ON TRUE
+      WHERE c.slot = $1
+        AND c.tenant_id = $2
+        AND c.aniversario_mmdd IS NOT NULL
+        AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
+        AND EXISTS (
+          SELECT 1
+            FROM atendimentos own_a
+           WHERE own_a.slot = c.slot
+             AND own_a.tenant_id = c.tenant_id
+             AND own_a.deleted_at IS NULL
+             AND own_a.colaborador_id = $3
+             AND own_a.cliente_telefone_canonico = c.telefone_canonico
+        )
+      ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC
+      LIMIT $5 OFFSET $6`,
+    [input.slot, input.tenantId, input.colaboradorId, input.timezone, limit, offset],
+  );
+
+  return {
+    clientes: rows.rows.map(mapAniversarianteRow),
     total: Number(rows.rows[0]?.total_count ?? 0),
     limit,
     offset,
