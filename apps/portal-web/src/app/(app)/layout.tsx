@@ -46,6 +46,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       atendimentosEnabled={session.atendimentos_enabled ?? false}
       atendFromAgenda={session.atend_from_agenda ?? false}
       crmClientesEnabled={session.crm_clientes_enabled ?? false}
+      whatsappManualEnabled={session.whatsapp_manual_enabled ?? false}
     >
       {/* Fuso do clone (default São Paulo) pros formatadores da agenda — lê /portal/status
           (dedup do React Query). Mato Grosso (America/Cuiaba, UTC-4) deixa de ver +1h. */}

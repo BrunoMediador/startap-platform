@@ -47,6 +47,13 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // Gate canônico de silêncio financeiro (ADR 0016). O envio humano consulta este
+  // mesmo gate para não furar suspensão financeira; ausente preserva OFF.
+  BILLING_OVERDUE_SILENCE: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+
   // ── Reconexão self-service da sessão WAHA no Portal (ADR 0015) ─────────────
   // Flag da feature. OPCIONAL no boot (ausente = OFF) — NUNCA crasha o boot (lição do
   // postmortem P0 2026-06-09: segredo/flag de feature INATIVA = opcional, validado no
@@ -282,6 +289,24 @@ export const ConfigSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+
+  // ── CRM WhatsApp manual (Missão 037, backend) ───────────────────────────
+  // Envio humano pontual a UM cliente por requisição. Ausente/OFF fecha a rota
+  // antes de consultar CRM, Redis ou WAHA; nunca habilitar junto do CRM por acaso.
+  CRM_WHATSAPP_MANUAL_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // O envio inclui typing + humanização de 12s. Este teto cobre essa espera e a
+  // chamada externa; é opcional para a feature dormente não quebrar o boot.
+  CRM_WHATSAPP_MANUAL_TIMEOUT_MS: z.coerce.number().int().min(20_000).max(60_000).default(20_000),
+  // Guarda server-side contra duplo clique. Não vem do cliente e se aplica ao
+  // mesmo owner + cliente em todas as instâncias da API.
+  CRM_WHATSAPP_MANUAL_COOLDOWN_MS: z.coerce.number().int().min(10_000).max(300_000).default(30_000),
+  // Limite por slot em Redis, independente do cliente, para conter fan-out manual.
+  // Sem Redis a reserva falha fechada e nenhum envio alcança a WAHA.
+  CRM_WHATSAPP_MANUAL_SLOT_MAX_SENDS: z.coerce.number().int().min(1).max(10).default(3),
+  CRM_WHATSAPP_MANUAL_SLOT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
 
   // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
   // Gate POR-CLONE da camada que DERIVA atendimentos dos eventos do GCal (split

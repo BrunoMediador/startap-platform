@@ -30,6 +30,7 @@ export * as tenantReadRollup from './queries/tenant-read-rollup.js';
 export * as packages from './queries/packages.js';
 export * as atendimentos from './queries/atendimentos.js';
 export * as clientes from './queries/clientes.js';
+export * as crmWhatsAppManual from './queries/crm-whatsapp-manual.js';
 export * as agendaBloqueios from './queries/agenda-bloqueios.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';

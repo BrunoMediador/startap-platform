@@ -49,6 +49,8 @@ import type {
   ContatosResponse,
   CriarAgendaBloqueioResponse,
   CriarAgendaBloqueioSerieBody,
+  EnviarWhatsappManualBody,
+  EnviarWhatsappManualResponse,
   CriarAgendaBloqueioSerieResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
@@ -1307,6 +1309,27 @@ export function useSaveCliente(
       client.invalidateQueries({ queryKey: ['colaborador-clientes', slot] });
       client.invalidateQueries({ queryKey: ['colaborador-cliente-perfil', slot] });
     },
+  });
+}
+
+/**
+ * Contrato assumido: POST /portal/clientes/:id/whatsapp-manual com
+ * { mensagem, confirmed: true }. O portal-api deve revalidar flag/RBAC/escopo,
+ * resolver o telefone e fazer o envio humanizado sem aceitar slot ou telefone.
+ */
+export function useEnviarWhatsappManual(
+  slot: string,
+): UseMutationResult<
+  EnviarWhatsappManualResponse,
+  Error,
+  { id: string; body: EnviarWhatsappManualBody }
+> {
+  return useMutation({
+    mutationFn: ({ id, body }) =>
+      apiFetch<EnviarWhatsappManualResponse>(`/portal/clientes/${id}/whatsapp-manual`, {
+        method: 'POST',
+        body,
+      }),
   });
 }
 

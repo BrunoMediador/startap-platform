@@ -97,6 +97,11 @@ export interface AuthMe {
    * false e manter o portal byte-idêntico aos tenants sem rollout.
    */
   crm_clientes_enabled: boolean;
+  /**
+   * WhatsApp manual do CRM. Ausente e false mantem toda a superficie de envio
+   * escondida; o backend continua sendo a autoridade para flag, RBAC e destino.
+   */
+  whatsapp_manual_enabled?: boolean;
 }
 
 // ── Colaborador (painel READ-ONLY do barbeiro — SCRUM-32, portal-colaborador.ts) ──
@@ -406,6 +411,20 @@ export interface ClientePerfil {
 export interface ClientePerfilResponse {
   cliente: ClientePerfil;
   historico: ClienteHistoricoItem[];
+}
+
+// ── CRM WhatsApp manual (contrato a implementar no portal-api) ─────────────
+// O browser envia somente `mensagem` e o id técnico já visível no CRM. Slot,
+// tenant, telefone canônico e sessão WAHA são derivados no servidor; nunca
+// entram em body/query/cache do cliente.
+export interface EnviarWhatsappManualBody {
+  mensagem: string;
+  confirmed: true;
+}
+
+export interface EnviarWhatsappManualResponse {
+  ok: true;
+  message_id: string;
 }
 
 export interface SaveClienteBody {

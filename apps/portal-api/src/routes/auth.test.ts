@@ -13,6 +13,7 @@ const { configMock, getScopeBySlotMock, csvGateMock } = vi.hoisted(() => ({
     PORTAL_COOKIE_SECURE: false,
     ATENDIMENTOS_ENABLED: false,
     CRM_CLIENTES_ENABLED: false,
+    CRM_WHATSAPP_MANUAL_ENABLED: false,
     ATEND_FROM_AGENDA_SLOTS: '',
     ESTABELECIMENTO_ENABLED: false,
   } as Record<string, unknown>,
@@ -113,6 +114,7 @@ beforeEach(() => {
   // Estado padrão entre testes: flags OFF; scope individual sem tenant.
   configMock.ATENDIMENTOS_ENABLED = false;
   configMock.CRM_CLIENTES_ENABLED = false;
+  configMock.CRM_WHATSAPP_MANUAL_ENABLED = false;
   configMock.ATEND_FROM_AGENDA_SLOTS = '';
   configMock.ESTABELECIMENTO_ENABLED = false;
   getScopeBySlotMock.mockResolvedValue({
@@ -173,6 +175,28 @@ describe('GET /auth/me — crm_clientes_enabled', () => {
     const res = await app.inject({ method: 'GET', url: '/auth/me' });
     expect(res.statusCode).toBe(200);
     expect(res.json().crm_clientes_enabled).toBe(true);
+    await app.close();
+  });
+});
+
+describe('GET /auth/me — whatsapp_manual_enabled', () => {
+  it('so habilita quando CRM e WhatsApp manual estao ON', async () => {
+    configMock.CRM_CLIENTES_ENABLED = true;
+    configMock.CRM_WHATSAPP_MANUAL_ENABLED = true;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().whatsapp_manual_enabled).toBe(true);
+    await app.close();
+  });
+
+  it('permanece OFF quando a flag especifica esta desligada', async () => {
+    configMock.CRM_CLIENTES_ENABLED = true;
+    configMock.CRM_WHATSAPP_MANUAL_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({ method: 'GET', url: '/auth/me' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().whatsapp_manual_enabled).toBe(false);
     await app.close();
   });
 });

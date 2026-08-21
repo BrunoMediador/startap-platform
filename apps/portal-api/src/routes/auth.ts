@@ -317,6 +317,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // menu por ele. !! garante boolean mesmo se a config vier indefinida.
       atendimentos_enabled: !!config.ATENDIMENTOS_ENABLED,
       crm_clientes_enabled: !!config.CRM_CLIENTES_ENABLED,
+      whatsapp_manual_enabled:
+        !!config.CRM_CLIENTES_ENABLED && !!config.CRM_WHATSAPP_MANUAL_ENABLED,
       // Flag do billing derivado da agenda (ADR 0027). SEMPRE presente (boolean) — o
       // front gateia as ABAS previsão/faturado por ela (criar-no-agendamento da Fase B2
       // também). Gate POR-CLONE: reflete se o SLOT DESTA sessão está na lista

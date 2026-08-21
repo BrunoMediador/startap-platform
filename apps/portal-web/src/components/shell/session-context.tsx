@@ -26,6 +26,8 @@ interface SessionCtx {
   atendFromAgenda: boolean;
   /** CRM Clientes (Missão 034). Acesso fail-closed: false/ausente esconde menu e rota. */
   crmClientesEnabled: boolean;
+  /** WhatsApp manual do CRM: ausente/false não monta nenhuma ação de envio. */
+  whatsappManualEnabled: boolean;
 }
 
 const Ctx = createContext<SessionCtx | null>(null);
@@ -38,6 +40,7 @@ export function SessionProvider({
   atendimentosEnabled,
   atendFromAgenda,
   crmClientesEnabled,
+  whatsappManualEnabled,
   children,
 }: SessionCtx & { children: React.ReactNode }) {
   return (
@@ -50,6 +53,7 @@ export function SessionProvider({
         atendimentosEnabled,
         atendFromAgenda,
         crmClientesEnabled,
+        whatsappManualEnabled,
       }}
     >
       {children}
