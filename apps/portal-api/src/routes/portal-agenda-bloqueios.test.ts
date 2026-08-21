@@ -87,19 +87,13 @@ const BASE_BODY = {
   motivo: 'intervalo',
 };
 const BASE_SERIE_BODY = {
+  inicio_at: '2026-08-21T12:00:00-03:00',
+  fim_at: '2026-08-21T13:00:00-03:00',
   timezone: 'America/Sao_Paulo',
   tipo: 'almoco',
   motivo: 'intervalo',
-  ocorrencias: [
-    {
-      inicio_at: '2026-08-21T12:00:00-03:00',
-      fim_at: '2026-08-21T13:00:00-03:00',
-    },
-    {
-      inicio_at: '2026-08-28T12:00:00-03:00',
-      fim_at: '2026-08-28T13:00:00-03:00',
-    },
-  ],
+  periodicidade: 'semanal',
+  ocorrencias: 2,
 };
 
 async function buildApp() {
@@ -535,13 +529,7 @@ describe('recorrência de bloqueios', () => {
       payload: {
         ...BASE_SERIE_BODY,
         colaborador_id: 8,
-        ocorrencias: [
-          ...BASE_SERIE_BODY.ocorrencias,
-          {
-            inicio_at: '2026-09-04T12:00:00-03:00',
-            fim_at: '2026-09-04T13:00:00-03:00',
-          },
-        ],
+        ocorrencias: 3,
       },
     });
 
@@ -550,7 +538,7 @@ describe('recorrência de bloqueios', () => {
     expect(body.criados).toHaveLength(2);
     expect(body.falhas).toEqual([
       expect.objectContaining({
-        inicio_at: '2026-08-28T12:00:00-03:00',
+        inicio_at: '2026-08-28T15:00:00.000Z',
         error: 'gcal_falhou',
       }),
     ]);
@@ -575,11 +563,49 @@ describe('recorrência de bloqueios', () => {
         }),
       );
     }
+    expect(createEvent.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-08-21T15:00:00.000Z', endISO: '2026-08-21T16:00:00.000Z' }),
+    );
+    expect(createEvent.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-08-28T15:00:00.000Z', endISO: '2026-08-28T16:00:00.000Z' }),
+    );
+    expect(createEvent.mock.calls[2][0]).toEqual(
+      expect.objectContaining({ startISO: '2026-09-04T15:00:00.000Z', endISO: '2026-09-04T16:00:00.000Z' }),
+    );
     expect(agendaMarkFailed).toHaveBeenCalledWith(
       '00000000-0000-4000-8000-000000000001',
       'clone_owner',
       agendaCreate.mock.calls[1][0].id,
     );
+    await app.close();
+  });
+
+  it('POST /portal/agenda/bloqueios/serie rejeita payload legado com datas arbitrárias e não cria nada', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: {
+        timezone: 'America/Sao_Paulo',
+        tipo: 'almoco',
+        motivo: 'intervalo',
+        colaborador_id: 8,
+        periodicidade: 'semanal',
+        inicio_at: '2026-08-21T12:00:00-03:00',
+        fim_at: '2026-08-21T13:00:00-03:00',
+        ocorrencias: [
+          {
+            inicio_at: '2027-12-01T08:00:00-03:00',
+            fim_at: '2027-12-01T10:00:00-03:00',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(agendaCreate).not.toHaveBeenCalled();
+    expect(agendaAttach).not.toHaveBeenCalled();
+    expect(getGcalsForSlot).not.toHaveBeenCalled();
     await app.close();
   });
 

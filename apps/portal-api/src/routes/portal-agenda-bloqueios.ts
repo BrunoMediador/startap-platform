@@ -80,34 +80,10 @@ const previewRecorrenciaSchema = criarBloqueioBaseSchema
     path: ['fim_at'],
   });
 
-const criarSerieSchema = z
-  .object({
-    timezone: z.string().trim().min(1).max(80).default('America/Sao_Paulo'),
-    tipo: tipoSchema,
-    motivo: z
-      .preprocess((v) => (v == null || v === '' ? undefined : v), z.string().trim().max(240))
-      .optional(),
-    colaborador_id: z.preprocess(
-      (v) => (v == null || v === '' ? undefined : v),
-      z.coerce.number().int().positive().optional(),
-    ),
-    ocorrencias: z
-      .array(
-        z
-          .object({
-            inicio_at: z.string().datetime({ offset: true }),
-            fim_at: z.string().datetime({ offset: true }),
-          })
-          .strict()
-          .refine((b) => new Date(b.fim_at).getTime() > new Date(b.inicio_at).getTime(), {
-            message: 'fim_at deve ser depois de inicio_at',
-            path: ['fim_at'],
-          }),
-      )
-      .min(OCORRENCIAS_MIN, `informe ao menos ${OCORRENCIAS_MIN} ocorrencias`)
-      .max(OCORRENCIAS_MAX, `máximo de ${OCORRENCIAS_MAX} ocorrencias por série`),
-  })
-  .strict();
+// Contrato canônico do POST /serie:
+// o cliente reenvia a âncora + periodicidade + quantidade, e o servidor RECALCULA a
+// série inteira. Não aceitamos lista arbitrária de datas/ocorrências no body final.
+const criarSerieSchema = previewRecorrenciaSchema;
 
 const listQuerySchema = z
   .object({
@@ -588,17 +564,30 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado' });
     }
 
-    const serieId = randomUUID();
-    const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
-    const falhas: Array<{
-      inicio_at: string;
+      let ocorrenciasSerie: BloqueioSerieOccurrence[];
+      try {
+        ocorrenciasSerie = expandirOcorrenciasSerie({
+          inicioAt: parsed.data.inicio_at,
+          fimAt: parsed.data.fim_at,
+          timeZone: parsed.data.timezone || scope.timezone,
+          periodicidade: parsed.data.periodicidade,
+          ocorrencias: parsed.data.ocorrencias,
+        });
+      } catch {
+        return reply.code(400).send({ error: 'payload_invalido' });
+      }
+
+      const serieId = randomUUID();
+      const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
+      const falhas: Array<{
+        inicio_at: string;
       fim_at: string;
       error: 'rate_limit' | 'gcal_falhou';
     }> = [];
-    for (const ocorrencia of parsed.data.ocorrencias) {
-      const created = await createOccurrence({
-        scope,
-        target,
+      for (const ocorrencia of ocorrenciasSerie) {
+        const created = await createOccurrence({
+          scope,
+          target,
         input: {
           inicio_at: ocorrencia.inicio_at,
           fim_at: ocorrencia.fim_at,
@@ -763,16 +752,29 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
     const target = await resolveTarget(slot, colaboradorId);
     if (!target) return reply.code(422).send({ error: 'gcal_nao_configurado' });
 
-    const serieId = randomUUID();
-    const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
-    const falhas: Array<{
-      inicio_at: string;
+      let ocorrenciasSerie: BloqueioSerieOccurrence[];
+      try {
+        ocorrenciasSerie = expandirOcorrenciasSerie({
+          inicioAt: parsed.data.inicio_at,
+          fimAt: parsed.data.fim_at,
+          timeZone: parsed.data.timezone || 'America/Sao_Paulo',
+          periodicidade: parsed.data.periodicidade,
+          ocorrencias: parsed.data.ocorrencias,
+        });
+      } catch {
+        return reply.code(400).send({ error: 'payload_invalido' });
+      }
+
+      const serieId = randomUUID();
+      const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
+      const falhas: Array<{
+        inicio_at: string;
       fim_at: string;
       error: 'rate_limit' | 'gcal_falhou';
     }> = [];
-    for (const ocorrencia of parsed.data.ocorrencias) {
-      const created = await createOccurrence({
-        scope: { slot, tenantId, timezone: parsed.data.timezone || 'America/Sao_Paulo' },
+      for (const ocorrencia of ocorrenciasSerie) {
+        const created = await createOccurrence({
+          scope: { slot, tenantId, timezone: parsed.data.timezone || 'America/Sao_Paulo' },
         target,
         input: {
           inicio_at: ocorrencia.inicio_at,
