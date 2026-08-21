@@ -630,15 +630,14 @@ export interface PreviewAgendaBloqueioRecorrenciaResponse {
   previews: PreviewAgendaBloqueioRecorrencia[];
 }
 
-/** Uma faixa já confirmada pelo dono na revisão da série. */
-export interface AgendaBloqueioSerieFaixa {
-  inicio_at: string;
-  fim_at: string;
-}
-
-/** Body do POST /portal/agenda/bloqueios/serie — grava só as faixas revisadas. */
+/**
+ * Body do POST /portal/agenda/bloqueios/serie — reenviamos os MESMOS parâmetros
+ * canônicos que geraram a prévia. O backend recalcula a série server-side antes
+ * de gravar na Agenda Google.
+ */
 export interface CriarAgendaBloqueioSerieBody extends AgendaBloqueioInput {
-  ocorrencias: AgendaBloqueioSerieFaixa[]; // 2..24
+  periodicidade: Periodicidade;
+  ocorrencias: number; // 2..24
 }
 
 export interface AgendaBloqueioSerieCriado {

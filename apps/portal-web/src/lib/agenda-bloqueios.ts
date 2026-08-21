@@ -1,6 +1,5 @@
 import type {
   AgendaBloqueioInput,
-  AgendaBloqueioSerieFaixa,
   CriarAgendaBloqueioSerieBody,
   CriarAgendaBloqueioSerieResponse,
   Periodicidade,
@@ -29,9 +28,7 @@ export const BLOQUEIO_PERIODICIDADE_LABELS: Record<Periodicidade, string> = {
   semestral: 'A cada 6 meses',
 };
 
-export interface RevisaoAgendaBloqueioRecorrencia extends PreviewAgendaBloqueioRecorrencia {
-  marcado: boolean;
-}
+export interface RevisaoAgendaBloqueioRecorrencia extends PreviewAgendaBloqueioRecorrencia {}
 
 function zonedParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -115,39 +112,18 @@ export function buildPreviewAgendaBloqueioRecorrenciaBody(args: {
 export function initRevisaoAgendaBloqueioRecorrencia(
   previews: PreviewAgendaBloqueioRecorrencia[],
 ): RevisaoAgendaBloqueioRecorrencia[] {
-  return previews.map((preview) => ({ ...preview, marcado: preview.status === 'livre' }));
-}
-
-export function contarMarcadosAgendaBloqueioRecorrencia(
-  ocorrencias: RevisaoAgendaBloqueioRecorrencia[],
-): {
-  marcados: number;
-  total: number;
-} {
-  return {
-    marcados: ocorrencias.filter((ocorrencia) => ocorrencia.marcado).length,
-    total: ocorrencias.length,
-  };
-}
-
-export function ocorrenciasMarcadasAgendaBloqueioRecorrencia(
-  ocorrencias: RevisaoAgendaBloqueioRecorrencia[],
-): AgendaBloqueioSerieFaixa[] {
-  return ocorrencias
-    .filter((ocorrencia) => ocorrencia.marcado)
-    .map((ocorrencia) => ({
-      inicio_at: ocorrencia.inicio_at,
-      fim_at: ocorrencia.fim_at,
-    }));
+  return previews.map((preview) => ({ ...preview }));
 }
 
 export function buildCriarAgendaBloqueioSerieBody(args: {
   base: AgendaBloqueioInput;
-  ocorrencias: RevisaoAgendaBloqueioRecorrencia[];
+  periodicidade: Periodicidade;
+  ocorrencias: number;
 }): CriarAgendaBloqueioSerieBody {
   return {
     ...args.base,
-    ocorrencias: ocorrenciasMarcadasAgendaBloqueioRecorrencia(args.ocorrencias),
+    periodicidade: args.periodicidade,
+    ocorrencias: args.ocorrencias,
   };
 }
 

@@ -4,14 +4,12 @@ import {
   buildAgendaBloqueioRecorrenciaKey,
   buildCriarAgendaBloqueioSerieBody,
   buildPreviewAgendaBloqueioRecorrenciaBody,
-  contarMarcadosAgendaBloqueioRecorrencia,
   defaultBloqueioFormValues,
   falhaAgendaBloqueioSerieLabel,
   formatDateInputInTimeZone,
   formatTimeInputInTimeZone,
   initRevisaoAgendaBloqueioRecorrencia,
   isAgendaBloqueio,
-  ocorrenciasMarcadasAgendaBloqueioRecorrencia,
   resumoResultadoAgendaBloqueioSerie,
   separarAgendamentosDeBloqueios,
   statusAgendaBloqueioRecorrenciaLabel,
@@ -133,28 +131,23 @@ describe('recorrencia de bloqueios', () => {
     });
   });
 
-  it('livre vem marcado por padrao; conflitos ja nascem desmarcados', () => {
+  it('preserva a previa para revisao explicita antes da confirmacao', () => {
     const revisao = initRevisaoAgendaBloqueioRecorrencia(previews);
-    expect(revisao.map((ocorrencia) => ocorrencia.marcado)).toEqual([true, false, false]);
-    expect(contarMarcadosAgendaBloqueioRecorrencia(revisao)).toEqual({ marcados: 1, total: 3 });
+    expect(revisao).toEqual(previews);
   });
 
-  it('so envia inicio/fim das ocorrencias marcadas pelo dono', () => {
-    const revisao = initRevisaoAgendaBloqueioRecorrencia(previews);
-    revisao[1].marcado = true;
-    expect(ocorrenciasMarcadasAgendaBloqueioRecorrencia(revisao)).toEqual([
-      {
-        inicio_at: '2026-08-28T15:00:00.000Z',
-        fim_at: '2026-08-28T16:00:00.000Z',
-      },
-      {
-        inicio_at: '2026-09-04T15:00:00.000Z',
-        fim_at: '2026-09-04T16:00:00.000Z',
-      },
-    ]);
+  it('envia no POST /serie os mesmos parametros canonicos da previa', () => {
     expect(
-      buildCriarAgendaBloqueioSerieBody({ base, ocorrencias: revisao }).ocorrencias,
-    ).toHaveLength(2);
+      buildCriarAgendaBloqueioSerieBody({
+        base,
+        periodicidade: 'mensal',
+        ocorrencias: 4,
+      }),
+    ).toEqual({
+      ...base,
+      periodicidade: 'mensal',
+      ocorrencias: 4,
+    });
   });
 
   it('a chave da previa muda quando qualquer dado relevante muda', () => {

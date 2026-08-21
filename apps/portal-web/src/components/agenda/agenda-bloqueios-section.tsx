@@ -22,7 +22,6 @@ import {
   buildAgendaBloqueioRecorrenciaKey,
   buildCriarAgendaBloqueioSerieBody,
   buildPreviewAgendaBloqueioRecorrenciaBody,
-  contarMarcadosAgendaBloqueioRecorrencia,
   defaultBloqueioFormValues,
   falhaAgendaBloqueioSerieLabel,
   initRevisaoAgendaBloqueioRecorrencia,
@@ -320,7 +319,7 @@ export function AgendaBloqueiosSection({
           ocorrencias,
         })
       : null;
-  const contagemSerie = contarMarcadosAgendaBloqueioRecorrencia(revisaoSerie ?? []);
+  const totalSerie = revisaoSerie?.length ?? 0;
   const previewAtual = Boolean(
     !resultadoSerie &&
       revisaoSerie &&
@@ -328,7 +327,7 @@ export function AgendaBloqueiosSection({
       currentPreviewKey &&
       previewKey === currentPreviewKey,
   );
-  const podeCriarSerie = previewAtual && contagemSerie.marcados > 0;
+  const podeCriarSerie = previewAtual && totalSerie > 0;
 
   function submit() {
     if (!currentInput.ok) {
@@ -383,15 +382,12 @@ export function AgendaBloqueiosSection({
       toast.error('Atualize a previa antes de criar a serie na Agenda Google.');
       return;
     }
-    if (contagemSerie.marcados === 0) {
-      toast.error('Marque pelo menos uma ocorrencia para enviar a Agenda Google.');
-      return;
-    }
 
     createSerieMutation.mutate(
       buildCriarAgendaBloqueioSerieBody({
         base: currentInput.body,
-        ocorrencias: revisaoSerie,
+        periodicidade,
+        ocorrencias,
       }),
       {
         onSuccess: (response) => {
@@ -406,17 +402,6 @@ export function AgendaBloqueiosSection({
         },
         onError: (error) => toast.error(createErrorMessage(error)),
       },
-    );
-  }
-
-  function toggleRevisao(index: number) {
-    if (resultadoSerie) return;
-    setRevisaoSerie((current) =>
-      current
-        ? current.map((ocorrencia, currentIndex) =>
-            currentIndex === index ? { ...ocorrencia, marcado: !ocorrencia.marcado } : ocorrencia,
-          )
-        : current,
     );
   }
 
@@ -681,12 +666,12 @@ export function AgendaBloqueiosSection({
                         <p className="mt-0.5 text-[12.5px] leading-snug text-ink-soft">
                           {resultadoSerie
                             ? 'Cada linha abaixo mostra o que entrou ou falhou na Agenda Google do profissional.'
-                            : 'Cada ocorrencia marcada sera enviada para a Agenda Google do profissional.'}
+                            : 'A confirmacao usara esta previa para inserir a serie na Agenda Google do profissional.'}
                         </p>
                       </div>
                       {!resultadoSerie && (
                         <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
-                          {contagemSerie.marcados} de {contagemSerie.total} marcados
+                          {totalSerie} ocorrencias na previa
                         </Pill>
                       )}
                     </div>
@@ -709,17 +694,12 @@ export function AgendaBloqueiosSection({
 
                     {!resultadoSerie && (
                       <p className="mt-3 text-[12.5px] leading-snug text-ink-faint">
-                        O que estiver desmarcado nao sera enviado para a Agenda Google.
+                        A serie sera recalculada no servidor com esta mesma ancora. Se a agenda
+                        mudar ate a confirmacao, o resultado pode voltar parcial.
                       </p>
                     )}
 
-                    <ReviewList
-                      ocorrencias={revisaoSerie}
-                      resultado={resultadoSerie}
-                      timeZone={timeZone}
-                      loading={createSerieMutation.isPending}
-                      onToggle={toggleRevisao}
-                    />
+                    <ReviewList ocorrencias={revisaoSerie} resultado={resultadoSerie} timeZone={timeZone} />
                   </div>
                 )}
               </div>
@@ -976,14 +956,10 @@ function ReviewList({
   ocorrencias,
   resultado,
   timeZone,
-  loading,
-  onToggle,
 }: {
   ocorrencias: RevisaoAgendaBloqueioRecorrencia[];
   resultado: CriarAgendaBloqueioSerieResponse | null;
   timeZone: string;
-  loading: boolean;
-  onToggle: (index: number) => void;
 }) {
   const falhasPorChave = useMemo(() => {
     const map = new Map<string, { error: string; reason: string }>();
@@ -1003,7 +979,7 @@ function ReviewList({
 
   return (
     <ul className="mt-3 divide-y divide-line-soft border-t border-line-soft">
-      {ocorrencias.map((ocorrencia, index) => {
+      {ocorrencias.map((ocorrencia) => {
         const chave = `${ocorrencia.inicio_at}|${ocorrencia.fim_at}`;
         const falha = falhasPorChave.get(chave);
         const criada = criadosSet.has(chave);
@@ -1018,16 +994,7 @@ function ReviewList({
               !resultado && ocorrencia.status !== 'livre' && 'bg-amber-400/6',
             )}
           >
-            {!resultado ? (
-              <input
-                type="checkbox"
-                aria-label={`Enviar ${blockRangeLabel(ocorrencia.inicio_at, ocorrencia.fim_at, timeZone)} para a Agenda Google`}
-                checked={ocorrencia.marcado}
-                disabled={loading}
-                onChange={() => onToggle(index)}
-                className="mt-0.5 size-[18px] shrink-0 rounded border-[1.5px] border-line-strong bg-surface-sunken text-brand outline-none focus-visible:ring-2 focus-visible:ring-brand"
-              />
-            ) : (
+            {resultado ? (
               <span
                 className={cn(
                   'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
@@ -1039,6 +1006,17 @@ function ReviewList({
                 )}
               >
                 {criada ? <IconCheck size={12} /> : <IconAlert size={12} />}
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  'mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full border',
+                  ocorrencia.status === 'livre'
+                    ? 'border-brand/40 bg-brand-soft text-brand'
+                    : 'border-amber-400/35 bg-amber-400/12 text-amber-200',
+                )}
+              >
+                {ocorrencia.status === 'livre' ? <IconCheck size={12} /> : <IconAlert size={12} />}
               </span>
             )}
 
@@ -1061,13 +1039,13 @@ function ReviewList({
                       Nao enviado
                     </Pill>
                   )
-                ) : ocorrencia.marcado ? (
+                ) : ocorrencia.status === 'livre' ? (
                   <Pill className="border-brand/40 bg-brand-soft text-brand">
-                    Vai para a agenda
+                    Previsto na serie
                   </Pill>
                 ) : (
-                  <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
-                    Fora da serie
+                  <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
+                    Requer atencao
                   </Pill>
                 )}
               </div>
@@ -1080,17 +1058,14 @@ function ReviewList({
                       ? falhaAgendaBloqueioSerieLabel(falha.reason)
                       : 'Nao foi enviado para a Agenda Google.'
                   : ocorrencia.status === 'livre'
-                    ? ocorrencia.marcado
-                      ? 'Livre para inserir na Agenda Google do profissional.'
-                      : 'Livre, mas nao sera enviado para a Agenda Google.'
+                    ? 'Se nada mudar, este bloqueio sera inserido na Agenda Google do profissional.'
                     : statusBase}
               </p>
 
               {!resultado && ocorrencia.status !== 'livre' && (
                 <p className="mt-1 text-[12px] leading-snug text-amber-200">
-                  {ocorrencia.marcado
-                    ? 'Marcado mesmo com conflito. O resultado final depende da Agenda Google no instante da criacao.'
-                    : 'Desmarcado por padrao para nao tentar gravar esse conflito na Agenda Google.'}
+                  O backend recalcula a serie na confirmacao. Se esse conflito continuar, esta
+                  ocorrencia pode voltar como falha parcial.
                 </p>
               )}
             </div>
