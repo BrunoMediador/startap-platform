@@ -34,6 +34,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { isGcalForbiddenOrAuthError, isGcalRateLimitError } from '../lib/gcal-rate-limit.js';
+import type { AvaliarSlotConflito } from '../lib/avaliar-slot.js';
 import {
   requireColaborador,
   requireTenant,
@@ -130,6 +131,7 @@ interface BloqueioSerieOccurrence {
   fim_at: string;
 }
 
+type BloqueioPreviewStatus = 'livre' | 'ocupado';
 type CreateOccurrenceResult =
   | { ok: true; bloqueio: agendaBloqueios.AgendaBloqueioRow }
   | { ok: false; error: 'rate_limit' | 'gcal_falhou' };
@@ -140,6 +142,12 @@ type RemoveOccurrenceResult =
       ok: false;
       error: 'rate_limit' | 'gcal_falhou' | 'gcal_nao_configurado' | 'bloqueio_nao_encontrado';
     };
+
+type SerieFailureReason =
+  | 'gcal_rate_limit'
+  | 'erro_gcal'
+  | 'gcal_nao_configurado'
+  | 'bloqueio_nao_encontrado';
 
 function slotAllowed(slot: string, slotsConfig: string): boolean {
   const entries = slotsConfig
@@ -206,6 +214,25 @@ function blockSummary(tipo: agendaBloqueios.AgendaBloqueioTipo, motivo?: string 
   return cleanMotivo ? `${base} - ${cleanMotivo.slice(0, 80)}` : base;
 }
 
+function mapCreateFailureReason(error: CreateOccurrenceResult extends { ok: false; error: infer E } ? E : never): SerieFailureReason {
+  return error === 'rate_limit' ? 'gcal_rate_limit' : 'erro_gcal';
+}
+
+function mapRemoveFailureReason(
+  error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never,
+): SerieFailureReason {
+  switch (error) {
+    case 'rate_limit':
+      return 'gcal_rate_limit';
+    case 'gcal_falhou':
+      return 'erro_gcal';
+    case 'gcal_nao_configurado':
+      return 'gcal_nao_configurado';
+    case 'bloqueio_nao_encontrado':
+      return 'bloqueio_nao_encontrado';
+  }
+}
+
 function formatDateKeyInTimeZone(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -257,6 +284,35 @@ function expandirOcorrenciasSerie(input: {
       fim_at: new Date(startUtc.getTime() + durationMs).toISOString(),
     };
   });
+}
+
+async function avaliarPreviewOcorrencia(args: {
+  target: GcalTarget;
+  occurrence: BloqueioSerieOccurrence;
+}): Promise<{ status: BloqueioPreviewStatus; conflito?: AvaliarSlotConflito }> {
+  // Compatível com o bloqueio simples: o preview só INFORMA conflito de agenda já ocupado;
+  // não veta a criação da série. O create simples continua podendo sobrepor horários.
+  const existing = await args.target.client.listEvents({
+    timeMin: args.occurrence.inicio_at,
+    timeMax: args.occurrence.fim_at,
+  });
+  const conflito = existing.find((ev) => {
+    const evStart = new Date(ev.start.dateTime ?? `${ev.start.date}T00:00:00`).getTime();
+    const evEnd = new Date(ev.end.dateTime ?? `${ev.end.date}T00:00:00`).getTime();
+    return (
+      evStart < new Date(args.occurrence.fim_at).getTime() &&
+      evEnd > new Date(args.occurrence.inicio_at).getTime()
+    );
+  });
+  if (!conflito) return { status: 'livre' };
+  return {
+    status: 'ocupado',
+    // Privacidade: expõe só a janela ocupada, nunca título/descrição/telefone.
+    conflito: {
+      inicio: conflito.start.dateTime ?? conflito.start.date ?? null,
+      fim: conflito.end.dateTime ?? conflito.end.date ?? null,
+    },
+  };
 }
 
 async function createOccurrence(args: {
@@ -529,21 +585,34 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       }
       let previews;
       try {
-        previews = expandirOcorrenciasSerie({
+        const occurrences = expandirOcorrenciasSerie({
           inicioAt: parsed.data.inicio_at,
           fimAt: parsed.data.fim_at,
           timeZone: parsed.data.timezone || scope.timezone,
           periodicidade: parsed.data.periodicidade,
           ocorrencias: parsed.data.ocorrencias,
-        }).map((item) => ({
-          ...item,
-          timezone: parsed.data.timezone || scope.timezone,
-          tipo: parsed.data.tipo,
-          motivo: parsed.data.motivo ?? null,
-          colaborador_id: target.colaboradorId,
-        }));
-      } catch {
-        return reply.code(400).send({ error: 'payload_invalido' });
+        });
+        previews = [];
+        for (const occurrence of occurrences) {
+          const avaliacao = await avaliarPreviewOcorrencia({ target, occurrence });
+          previews.push({
+            ...occurrence,
+            timezone: parsed.data.timezone || scope.timezone,
+            tipo: parsed.data.tipo,
+            motivo: parsed.data.motivo ?? null,
+            colaborador_id: target.colaboradorId,
+            status: avaliacao.status,
+            ...(avaliacao.conflito ? { conflito: avaliacao.conflito } : {}),
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'erro';
+        if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+        return reply.code(/nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg) ? 400 : 502).send({
+          error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
+            ? 'payload_invalido'
+            : 'nao foi possivel avaliar a serie agora',
+        });
       }
       return reply.code(200).send({ ok: true, previews });
     },
@@ -579,10 +648,11 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
 
       const serieId = randomUUID();
       const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
-      const falhas: Array<{
-        inicio_at: string;
+    const falhas: Array<{
+      inicio_at: string;
       fim_at: string;
       error: 'rate_limit' | 'gcal_falhou';
+      reason: SerieFailureReason;
     }> = [];
       for (const ocorrencia of ocorrenciasSerie) {
         const created = await createOccurrence({
@@ -604,6 +674,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
           inicio_at: ocorrencia.inicio_at,
           fim_at: ocorrencia.fim_at,
           error: created.error,
+          reason: mapCreateFailureReason(created.error),
         });
         if (created.error === 'rate_limit') break;
         continue;
@@ -644,6 +715,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         inicio_at: string;
         fim_at: string;
         error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never;
+        reason: SerieFailureReason;
       }> = [];
 
       for (const row of rows) {
@@ -654,6 +726,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
             inicio_at: row.inicio_at,
             fim_at: row.fim_at,
             error: removed.error,
+            reason: mapRemoveFailureReason(removed.error),
           });
           if (removed.error === 'rate_limit') break;
           continue;
@@ -724,21 +797,34 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       if (!target) return reply.code(422).send({ error: 'gcal_nao_configurado' });
       let previews;
       try {
-        previews = expandirOcorrenciasSerie({
+        const occurrences = expandirOcorrenciasSerie({
           inicioAt: parsed.data.inicio_at,
           fimAt: parsed.data.fim_at,
           timeZone: parsed.data.timezone || 'America/Sao_Paulo',
           periodicidade: parsed.data.periodicidade,
           ocorrencias: parsed.data.ocorrencias,
-        }).map((item) => ({
-          ...item,
-          timezone: parsed.data.timezone || 'America/Sao_Paulo',
-          tipo: parsed.data.tipo,
-          motivo: parsed.data.motivo ?? null,
-          colaborador_id: colaboradorId,
-        }));
-      } catch {
-        return reply.code(400).send({ error: 'payload_invalido' });
+        });
+        previews = [];
+        for (const occurrence of occurrences) {
+          const avaliacao = await avaliarPreviewOcorrencia({ target, occurrence });
+          previews.push({
+            ...occurrence,
+            timezone: parsed.data.timezone || 'America/Sao_Paulo',
+            tipo: parsed.data.tipo,
+            motivo: parsed.data.motivo ?? null,
+            colaborador_id: colaboradorId,
+            status: avaliacao.status,
+            ...(avaliacao.conflito ? { conflito: avaliacao.conflito } : {}),
+          });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'erro';
+        if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
+        return reply.code(/nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg) ? 400 : 502).send({
+          error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
+            ? 'payload_invalido'
+            : 'nao foi possivel avaliar a serie agora',
+        });
       }
       return reply.code(200).send({ ok: true, previews });
     },
@@ -767,10 +853,11 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
 
       const serieId = randomUUID();
       const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
-      const falhas: Array<{
-        inicio_at: string;
+    const falhas: Array<{
+      inicio_at: string;
       fim_at: string;
       error: 'rate_limit' | 'gcal_falhou';
+      reason: SerieFailureReason;
     }> = [];
       for (const ocorrencia of ocorrenciasSerie) {
         const created = await createOccurrence({
@@ -792,6 +879,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
           inicio_at: ocorrencia.inicio_at,
           fim_at: ocorrencia.fim_at,
           error: created.error,
+          reason: mapCreateFailureReason(created.error),
         });
         if (created.error === 'rate_limit') break;
         continue;
@@ -848,6 +936,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         inicio_at: string;
         fim_at: string;
         error: RemoveOccurrenceResult extends { ok: false; error: infer E } ? E : never;
+        reason: SerieFailureReason;
       }> = [];
       for (const row of rows) {
         const removed = await removeOccurrence({
@@ -860,6 +949,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
             inicio_at: row.inicio_at,
             fim_at: row.fim_at,
             error: removed.error,
+            reason: mapRemoveFailureReason(removed.error),
           });
           if (removed.error === 'rate_limit') break;
           continue;

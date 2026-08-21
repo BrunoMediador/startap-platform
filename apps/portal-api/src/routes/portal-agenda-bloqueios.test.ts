@@ -138,6 +138,7 @@ beforeEach(() => {
   getGcalForSlot.mockResolvedValue({
     createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-single' }),
     deleteEvent: vi.fn().mockResolvedValue(undefined),
+    listEvents: vi.fn().mockResolvedValue([]),
   });
   getGcalsForSlot.mockResolvedValue([
     {
@@ -147,6 +148,7 @@ beforeEach(() => {
       client: {
         createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-7' }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
+        listEvents: vi.fn().mockResolvedValue([]),
       },
       servicos: [],
     },
@@ -157,6 +159,7 @@ beforeEach(() => {
       client: {
         createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-1' }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
+        listEvents: vi.fn().mockResolvedValue([]),
       },
       servicos: [],
     },
@@ -418,7 +421,7 @@ describe('POST /portal/agenda/bloqueios — dono', () => {
 });
 
 describe('recorrência de bloqueios', () => {
-  it('preview expande datas sem fanout de consulta ao GCal e respeita cap de 24', async () => {
+  it('preview expande datas, marca ocorrência livre e respeita cap de 24', async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'POST',
@@ -434,12 +437,13 @@ describe('recorrência de bloqueios', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.previews).toEqual([
-      expect.objectContaining({ inicio_at: '2026-08-21T15:00:00.000Z' }),
-      expect.objectContaining({ inicio_at: '2026-08-28T15:00:00.000Z' }),
-      expect.objectContaining({ inicio_at: '2026-09-04T15:00:00.000Z' }),
+      expect.objectContaining({ inicio_at: '2026-08-21T15:00:00.000Z', status: 'livre' }),
+      expect.objectContaining({ inicio_at: '2026-08-28T15:00:00.000Z', status: 'livre' }),
+      expect.objectContaining({ inicio_at: '2026-09-04T15:00:00.000Z', status: 'livre' }),
     ]);
     const colab8 = (await getGcalsForSlot.mock.results[0].value)[1];
     expect(colab8.client.createEvent).not.toHaveBeenCalled();
+    expect(colab8.client.listEvents).toHaveBeenCalledTimes(3);
 
     const invalid = await app.inject({
       method: 'POST',
@@ -451,6 +455,65 @@ describe('recorrência de bloqueios', () => {
       },
     });
     expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('preview marca ocorrência ocupada e expõe só inicio/fim do conflito', async () => {
+    const listEvents = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 'evt-ocupado',
+          summary: 'Nao deve vazar',
+          start: { dateTime: '2026-08-28T15:15:00.000Z' },
+          end: { dateTime: '2026-08-28T15:45:00.000Z' },
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: {
+          createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-1' }),
+          deleteEvent: vi.fn().mockResolvedValue(undefined),
+          listEvents,
+        },
+        servicos: [],
+      },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/recorrencia/preview',
+      payload: {
+        ...BASE_BODY,
+        colaborador_id: 8,
+        periodicidade: 'semanal',
+        ocorrencias: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.previews[0]).toEqual(expect.objectContaining({ status: 'livre' }));
+    expect(body.previews[1]).toEqual({
+      inicio_at: '2026-08-28T15:00:00.000Z',
+      fim_at: '2026-08-28T16:00:00.000Z',
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      colaborador_id: 8,
+      status: 'ocupado',
+      conflito: {
+        inicio: '2026-08-28T15:15:00.000Z',
+        fim: '2026-08-28T15:45:00.000Z',
+      },
+    });
+    expect(body.previews[1].conflito.summary).toBeUndefined();
     await app.close();
   });
 
@@ -540,6 +603,7 @@ describe('recorrência de bloqueios', () => {
       expect.objectContaining({
         inicio_at: '2026-08-28T15:00:00.000Z',
         error: 'gcal_falhou',
+        reason: 'erro_gcal',
       }),
     ]);
     expect(body.serie_id).toMatch(
@@ -648,6 +712,18 @@ describe('recorrência de bloqueios', () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      serie_id: '55555555-5555-4555-8555-555555555555',
+      removidos: [
+        {
+          id: '44444444-4444-4444-8444-444444444444',
+          inicio_at: '2026-08-29T12:00:00.000Z',
+          fim_at: '2026-08-29T13:00:00.000Z',
+        },
+      ],
+      falhas: [],
+    });
     expect(agendaListFutureBySerieId).toHaveBeenCalledWith({
       tenantId: '00000000-0000-4000-8000-000000000001',
       slot: 'clone_owner',
