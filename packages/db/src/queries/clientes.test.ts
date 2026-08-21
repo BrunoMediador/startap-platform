@@ -276,13 +276,16 @@ describe('listClientesAniversariantesForOwner', () => {
     });
 
     const [sql, params] = lastQueryCall();
+    expect(sql).toContain('aniversarios_candidatos AS');
     expect(sql).toContain('aniversarios_validos AS');
     expect(sql).toContain('generate_series(ctx.ano_atual, ctx.ano_atual + 8)');
-    expect(sql).toContain("to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd");
+    expect(sql).toContain('ac.aniversario_dia <=');
+    expect(sql).toContain('((gs % 4 = 0 AND gs % 100 <> 0) OR gs % 400 = 0)');
     expect(sql).toContain('candidate_date >= ctx.hoje_local_date');
     expect(sql).toContain('base.dias_ate_aniversario <= $4');
     expect(sql).toContain('ORDER BY base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC');
     expect(sql).not.toContain('make_date(');
+    expect(sql).not.toContain('to_date(');
     expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 7, 50, 4]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]).toEqual({
@@ -312,7 +315,8 @@ describe('listClientesAniversariantesForOwner', () => {
 
     const [sql, params] = lastQueryCall();
     expect(sql).toContain("c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'");
-    expect(sql).toContain("to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd");
+    expect(sql).toContain('ac.aniversario_dia <=');
+    expect(sql).not.toContain('to_date(');
     expect(sql).toContain('base.aniversario_mes = $4');
     expect(sql).toContain("split_part(base.aniversario_mmdd, '-', 2)::int ASC");
     expect(sql).not.toContain('make_date(');
@@ -356,6 +360,7 @@ describe('listClientesAniversariantesForColaborador', () => {
     expect(sql).toContain('own_a.colaborador_id = $3');
     expect(sql).toContain("NOW() AT TIME ZONE $4");
     expect(sql).toContain('base.aniversario_mes = $5');
+    expect(sql).not.toContain('to_date(');
     expect(sql).toContain("split_part(base.aniversario_mmdd, '-', 2)::int ASC");
     expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 8, 50, 2]);
     expect(result.total).toBe(1);

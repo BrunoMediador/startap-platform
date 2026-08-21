@@ -404,6 +404,26 @@ describe('owner', () => {
     await app.close();
   });
 
+  it('aniversariantes owner aplica default server-side modo=proximos&dias=7 quando query vem vazia', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(listAniversariantesOwnerMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      mode: 'proximos',
+      dias: 7,
+      limit: undefined,
+      offset: undefined,
+    });
+    await app.close();
+  });
+
   it('aniversariantes rejeita limit=51 e parâmetros forjados de escopo', async () => {
     const app = await buildApp();
     const res = await app.inject({
@@ -438,11 +458,18 @@ describe('owner', () => {
 
   it('aniversariantes owner rejeita combinações inválidas do schema específico', async () => {
     const app = await buildApp();
-    const missingDias = await app.inject({
+    const missingMes = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=mes',
+    });
+    expect(missingMes.statusCode).toBe(400);
+
+    const defaultDias = await app.inject({
       method: 'GET',
       url: '/portal/clientes/aniversariantes?modo=proximos',
     });
-    expect(missingDias.statusCode).toBe(400);
+    expect(defaultDias.statusCode).toBe(200);
+    listAniversariantesOwnerMock.mockClear();
 
     const extraMes = await app.inject({
       method: 'GET',
@@ -628,6 +655,28 @@ describe('colaborador', () => {
     const body = res.json();
     expect(body).toEqual({ ...ANIVERSARIANTES_LIST, limit: 7, offset: 2 });
     expect(body.clientes[0]?.telefone).toBeUndefined();
+    await app.close();
+  });
+
+  it('aniversariantes do colaborador também aplica default server-side modo=proximos&dias=7', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(getScopeBySlotMock).toHaveBeenCalledWith('clone_owner');
+    expect(listAniversariantesColaboradorMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+      mode: 'proximos',
+      dias: 7,
+      limit: undefined,
+      offset: undefined,
+    });
     await app.close();
   });
 

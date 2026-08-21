@@ -233,6 +233,61 @@ export interface SeedClientesResult {
   atendimentosUpdated: number;
 }
 
+const VALID_MMDD_REGEX = "^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$";
+const MONTH_MAX_DAY_SQL = `CASE %MONTH_EXPR%
+             WHEN 2 THEN 29
+             WHEN 4 THEN 30
+             WHEN 6 THEN 30
+             WHEN 9 THEN 30
+             WHEN 11 THEN 30
+             ELSE 31
+           END`;
+const CANDIDATE_MAX_DAY_SQL = `CASE av.aniversario_mes
+                  WHEN 2 THEN CASE
+                                  WHEN ((gs % 4 = 0 AND gs % 100 <> 0) OR gs % 400 = 0) THEN 29
+                                  ELSE 28
+                                END
+                  WHEN 4 THEN 30
+                  WHEN 6 THEN 30
+                  WHEN 9 THEN 30
+                  WHEN 11 THEN 30
+                  ELSE 31
+                END`;
+
+function buildMonthMaxDaySql(monthExpr: string): string {
+  return MONTH_MAX_DAY_SQL.replace('%MONTH_EXPR%', monthExpr);
+}
+
+const VALID_BIRTHDAY_CTES_SQL = `
+     aniversarios_candidatos AS (
+       SELECT c.id,
+              c.slot,
+              c.tenant_id,
+              c.nome,
+              c.telefone_canonico,
+              c.aniversario_mmdd,
+              split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes,
+              split_part(c.aniversario_mmdd, '-', 2)::int AS aniversario_dia
+         FROM clientes c
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+          AND c.aniversario_mmdd IS NOT NULL
+          AND c.aniversario_mmdd ~ '${VALID_MMDD_REGEX}'
+     ),
+     aniversarios_validos AS (
+       SELECT ac.id,
+              ac.slot,
+              ac.tenant_id,
+              ac.nome,
+              ac.telefone_canonico,
+              ac.aniversario_mmdd,
+              ac.aniversario_mes,
+              ac.aniversario_dia
+         FROM aniversarios_candidatos ac
+        WHERE ac.aniversario_dia <= ${buildMonthMaxDaySql('ac.aniversario_mes')}
+     ),
+`;
+
 function trimOrNull(value: string | null | undefined): string | null {
   const trimmed = (value ?? '').trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -822,21 +877,7 @@ export async function listClientesAniversariantesForOwner(
        SELECT (NOW() AT TIME ZONE $3)::date AS hoje_local_date,
               EXTRACT(YEAR FROM (NOW() AT TIME ZONE $3))::int AS ano_atual
      ),
-     aniversarios_validos AS (
-       SELECT c.id,
-              c.slot,
-              c.tenant_id,
-              c.nome,
-              c.telefone_canonico,
-              c.aniversario_mmdd,
-              split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes
-         FROM clientes c
-        WHERE c.slot = $1
-          AND c.tenant_id = $2
-          AND c.aniversario_mmdd IS NOT NULL
-          AND c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-          AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
-     ),
+     ${VALID_BIRTHDAY_CTES_SQL}
      base AS (
        SELECT av.id,
               av.nome,
@@ -851,10 +892,20 @@ export async function listClientesAniversariantesForOwner(
          JOIN LATERAL (
            SELECT candidate_date AS proxima_ocorrencia_local_date
              FROM (
-               SELECT to_date(gs::text || '-' || av.aniversario_mmdd, 'YYYY-MM-DD') AS candidate_date
+               SELECT CASE
+                        WHEN av.aniversario_dia <= ${CANDIDATE_MAX_DAY_SQL}
+                        THEN concat(
+                          gs::text,
+                          '-',
+                          lpad(av.aniversario_mes::text, 2, '0'),
+                          '-',
+                          lpad(av.aniversario_dia::text, 2, '0')
+                        )::date
+                        ELSE NULL
+                      END AS candidate_date
                  FROM generate_series(ctx.ano_atual, ctx.ano_atual + 8) AS gs
              ) years
-            WHERE to_char(candidate_date, 'MM-DD') = av.aniversario_mmdd
+            WHERE candidate_date IS NOT NULL
               AND candidate_date >= ctx.hoje_local_date
             ORDER BY candidate_date ASC
             LIMIT 1
@@ -923,21 +974,7 @@ export async function listClientesAniversariantesForColaborador(
        SELECT (NOW() AT TIME ZONE $4)::date AS hoje_local_date,
               EXTRACT(YEAR FROM (NOW() AT TIME ZONE $4))::int AS ano_atual
      ),
-     aniversarios_validos AS (
-       SELECT c.id,
-              c.slot,
-              c.tenant_id,
-              c.nome,
-              c.telefone_canonico,
-              c.aniversario_mmdd,
-              split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes
-         FROM clientes c
-        WHERE c.slot = $1
-          AND c.tenant_id = $2
-          AND c.aniversario_mmdd IS NOT NULL
-          AND c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
-          AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
-     ),
+     ${VALID_BIRTHDAY_CTES_SQL}
      base AS (
        SELECT av.id,
               av.nome,
@@ -952,10 +989,20 @@ export async function listClientesAniversariantesForColaborador(
          JOIN LATERAL (
            SELECT candidate_date AS proxima_ocorrencia_local_date
              FROM (
-               SELECT to_date(gs::text || '-' || av.aniversario_mmdd, 'YYYY-MM-DD') AS candidate_date
+               SELECT CASE
+                        WHEN av.aniversario_dia <= ${CANDIDATE_MAX_DAY_SQL}
+                        THEN concat(
+                          gs::text,
+                          '-',
+                          lpad(av.aniversario_mes::text, 2, '0'),
+                          '-',
+                          lpad(av.aniversario_dia::text, 2, '0')
+                        )::date
+                        ELSE NULL
+                      END AS candidate_date
                  FROM generate_series(ctx.ano_atual, ctx.ano_atual + 8) AS gs
              ) years
-            WHERE to_char(candidate_date, 'MM-DD') = av.aniversario_mmdd
+            WHERE candidate_date IS NOT NULL
               AND candidate_date >= ctx.hoje_local_date
             ORDER BY candidate_date ASC
             LIMIT 1

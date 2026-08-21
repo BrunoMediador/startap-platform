@@ -31,11 +31,12 @@ const semRetornoQuerySchema = z
   })
   .strict();
 
+const DEFAULT_ANIVERSARIANTES_DIAS = 7;
 const aniversariantesQuerySchema = z.discriminatedUnion('modo', [
   z
     .object({
       modo: z.literal('proximos'),
-      dias: z.coerce.number().int().min(1).max(31),
+      dias: z.coerce.number().int().min(1).max(31).default(DEFAULT_ANIVERSARIANTES_DIAS),
       limit: z.coerce.number().int().min(1).max(50).optional(),
       offset: z.coerce.number().int().min(0).max(100).optional(),
     })
@@ -95,6 +96,22 @@ function formatIssues(error: z.ZodError) {
     path: issue.path.join('.'),
     message: issue.message,
   }));
+}
+
+function normalizeAniversariantesQuery(query: unknown): unknown {
+  if (!query || typeof query !== 'object' || Array.isArray(query)) return query;
+  const raw = query as Record<string, unknown>;
+  if (raw.modo === undefined) {
+    return {
+      ...raw,
+      modo: 'proximos',
+      dias: raw.dias ?? DEFAULT_ANIVERSARIANTES_DIAS,
+    };
+  }
+  if (raw.modo === 'proximos' && raw.dias === undefined) {
+    return { ...raw, dias: DEFAULT_ANIVERSARIANTES_DIAS };
+  }
+  return raw;
 }
 
 async function gateClientesOwner(
@@ -231,7 +248,7 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     const gate = await gateAniversariantesOwner(req, reply);
     if (!gate) return reply;
 
-    const parsed = aniversariantesQuerySchema.safeParse(req.query ?? {});
+    const parsed = aniversariantesQuerySchema.safeParse(normalizeAniversariantesQuery(req.query));
     if (!parsed.success) {
       return reply
         .code(400)
@@ -376,7 +393,7 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       const gate = await gateAniversariantesColaborador(req, reply);
       if (!gate) return reply;
 
-      const parsed = aniversariantesQuerySchema.safeParse(req.query ?? {});
+      const parsed = aniversariantesQuerySchema.safeParse(normalizeAniversariantesQuery(req.query));
       if (!parsed.success) {
         return reply
           .code(400)
