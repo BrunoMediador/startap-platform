@@ -150,6 +150,7 @@ if (selectionSelfTest.length !== 3)
 
 const compose = await readFile(path.join(root, 'tests/e2e/compose.yml'), 'utf8');
 const composeScript = await readFile(path.join(root, 'tests/e2e/scripts/compose.mjs'), 'utf8');
+const migratorScript = await readFile(path.join(root, 'tests/e2e/scripts/migrate-e2e.sh'), 'utf8');
 const seed = await readFile(path.join(root, 'tests/e2e/fixtures/seed.sql'), 'utf8');
 const apiEntrypoint = await readFile(
   path.join(root, 'tests/e2e/support/api-entrypoint.mjs'),
@@ -206,6 +207,25 @@ if (
   )
 ) {
   throw new Error('worker-once deve semear e validar uma stale row isolada via /app/worker-once.mjs');
+}
+if (
+  !/healthcheck:\s*[\s\S]*?test:\s*\[CMD-SHELL,\s*pg_isready -h 127\.0\.0\.1 -p 5432 -U e2e_app -d startap_e2e\]/u.test(
+    compose,
+  )
+) {
+  throw new Error('postgres healthcheck do E2E deve provar listener TCP local, nao socket unix');
+}
+for (const migratorContract of [
+  /PG_HOST="\$\{E2E_PG_HOST:-postgres\}"/u,
+  /PG_PORT="\$\{E2E_PG_PORT:-5432\}"/u,
+  /pg_ready_cmd="pg_isready -h \$PG_HOST -p \$PG_PORT -U \$PG_USER -d \$PG_DB"/u,
+  /until \$pg_ready_cmd >\/dev\/null 2>&1; do/u,
+  /READY_MAX_ATTEMPTS="\$\{E2E_PG_READY_MAX_ATTEMPTS:-30\}"/u,
+  /psql_cmd="psql -h \$PG_HOST -p \$PG_PORT -U \$PG_USER -d \$PG_DB -v ON_ERROR_STOP=1"/u,
+]) {
+  if (!migratorContract.test(migratorScript)) {
+    throw new Error(`migrator E2E sem retry TCP determinístico: ${migratorContract}`);
+  }
 }
 if (
   !/COPY --from=build \/repo\/apps\/\$\{APP\}\/dist \.\/app\/dist/u.test(dockerfile) ||
