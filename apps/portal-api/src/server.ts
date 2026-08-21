@@ -20,13 +20,14 @@ import { authRoutes } from './routes/auth.js';
 import { demoChatRoutes } from './routes/demo-chat.js';
 import { healthRoute } from './routes/health.js';
 import { portalAceiteRoutes } from './routes/portal-aceite.js';
-import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendaBloqueiosRoutes } from './routes/portal-agenda-bloqueios.js';
+import { portalAgendaSlotsRoutes } from './routes/portal-agenda-slots.js';
 import { portalAgendamentosRoutes } from './routes/portal-agendamentos.js';
 import { portalAtendimentosRoutes } from './routes/portal-atendimentos.js';
 import { portalBillingRoutes } from './routes/portal-billing.js';
 import { portalBotDetectRoutes } from './routes/portal-bot-detect.js';
 import { portalCartaoConfigRoutes } from './routes/portal-cartao-config.js';
+import { portalClientesWhatsAppManualRoutes } from './routes/portal-clientes-whatsapp-manual.js';
 import { portalClientesRoutes } from './routes/portal-clientes.js';
 import { portalColaboradorRoutes } from './routes/portal-colaborador.js';
 import { portalConexaoRoutes } from './routes/portal-conexao.js';
@@ -151,6 +152,8 @@ async function main() {
   // CRM de clientes finais do negócio (Missão 034). Gated por CRM_CLIENTES_ENABLED (404 se
   // OFF). Owner vê/edita o perfil canônico; colaborador só lê clientes com atendimento próprio.
   await app.register(portalClientesRoutes);
+  // WhatsApp manual do CRM: owner-only, um cliente por request, flag OFF por padrão.
+  await app.register(portalClientesWhatsAppManualRoutes);
   // Painel do COLABORADOR (barbeiro de estabelecimento) — visão READ-ONLY escopada só aos
   // dados dele (SCRUM-32). Gated por COLABORADOR_PORTAL_ENABLED (404 se OFF). As rotas usam
   // withColaborador (role='colaborador'); withTenant barra colaborador em TODA rota do dono.

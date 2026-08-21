@@ -283,6 +283,20 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // ── CRM WhatsApp manual (Missão 037, backend) ───────────────────────────
+  // Envio humano pontual a UM cliente por requisição. Ausente/OFF fecha a rota
+  // antes de consultar CRM, Redis ou WAHA; nunca habilitar junto do CRM por acaso.
+  CRM_WHATSAPP_MANUAL_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  // O envio inclui typing + humanização de 12s. Este teto cobre essa espera e a
+  // chamada externa; é opcional para a feature dormente não quebrar o boot.
+  CRM_WHATSAPP_MANUAL_TIMEOUT_MS: z.coerce.number().int().min(20_000).max(60_000).default(20_000),
+  // Guarda server-side contra duplo clique. Não vem do cliente e se aplica ao
+  // mesmo owner + cliente em todas as instâncias da API.
+  CRM_WHATSAPP_MANUAL_COOLDOWN_MS: z.coerce.number().int().min(10_000).max(300_000).default(30_000),
+
   // ── Billing DERIVADO DA AGENDA (ADR 0027) ──────────────────────────────────
   // Gate POR-CLONE da camada que DERIVA atendimentos dos eventos do GCal (split
   // previsão×faturado, sticky de edição). Lista de slots separada por vírgula; o gate é

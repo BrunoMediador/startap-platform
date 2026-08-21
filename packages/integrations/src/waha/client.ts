@@ -36,19 +36,22 @@ async function wahaPost<T = unknown>(
   path: string,
   body: unknown,
   shardId: number = DEFAULT_WAHA_SHARD_ID,
+  signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(`${wahaUrl(shardId)}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': WAHA_API_KEY },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    // A resposta pode ecoar chatId/texto. Não lemos nem registramos o corpo para
+    // evitar PII de mensagens outbound em todo caller deste cliente compartilhado.
     // Endpoints cosméticos (visto/presença) não merecem nível error — o callsite
     // já trata como best-effort. Envios reais (sendText/sendMedia) seguem error.
     const level = BEST_EFFORT_PATHS.has(path) ? 'debug' : 'error';
-    log[level]({ path, status: res.status, body: text }, 'WAHA error');
-    throw new Error(`WAHA ${path} -> HTTP ${res.status}: ${text}`);
+    log[level]({ path, status: res.status }, 'WAHA error');
+    throw new Error(`WAHA ${path} -> HTTP ${res.status}`);
   }
   return (await res.json()) as T;
 }
@@ -67,6 +70,8 @@ export interface SendTextOpts {
    * ignorado — sempre a WAHA_URL única de hoje.
    */
   shardId?: number;
+  /** AbortSignal do caller para impor deadline explícito ao fetch WAHA. */
+  signal?: AbortSignal;
 }
 
 /** Resultado do envio. `messageId` = id serializado do WAHA da mensagem enviada, quando extraível
@@ -77,6 +82,25 @@ export interface SendTextResult {
   messageId: string | null;
 }
 
+function waitForDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  if (signal.aborted) return Promise.reject(signal.reason);
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function sendText(opts: SendTextOpts): Promise<SendTextResult> {
   const {
     sessao,
@@ -85,37 +109,46 @@ export async function sendText(opts: SendTextOpts): Promise<SendTextResult> {
     typing = true,
     delayMs = 0,
     shardId = DEFAULT_WAHA_SHARD_ID,
+    signal,
   } = opts;
-  if (typing) await startTyping(sessao, chatId, shardId);
-  if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
-  const res = await wahaPost<unknown>(
-    '/api/sendText',
-    {
-      session: sessao,
-      chatId,
-      text: texto,
-    },
-    shardId,
-  );
-  if (typing) await stopTyping(sessao, chatId, shardId);
-  // Extração best-effort do id (rastreio de entrega). NUNCA lança — se não achar, messageId=null.
-  return { messageId: extractSentMessageId(res) };
+  if (typing) await startTyping(sessao, chatId, shardId, signal);
+  try {
+    await waitForDelay(delayMs, signal);
+    const res = await wahaPost<unknown>(
+      '/api/sendText',
+      {
+        session: sessao,
+        chatId,
+        text: texto,
+      },
+      shardId,
+      signal,
+    );
+    // Extração best-effort do id (rastreio de entrega). NUNCA lança — se não achar, messageId=null.
+    return { messageId: extractSentMessageId(res) };
+  } finally {
+    // Mesmo se sendText abortar/falhar, não deixamos o cliente preso em typing.
+    // O stop é best-effort, mas nunca fica pendurado após o deadline principal.
+    if (typing) await stopTyping(sessao, chatId, shardId, AbortSignal.timeout(3_000));
+  }
 }
 
 export async function startTyping(
   sessao: string,
   chatId: string,
   shardId: number = DEFAULT_WAHA_SHARD_ID,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await wahaPost('/api/startTyping', { session: sessao, chatId }, shardId).catch(() => {});
+  await wahaPost('/api/startTyping', { session: sessao, chatId }, shardId, signal).catch(() => {});
 }
 
 export async function stopTyping(
   sessao: string,
   chatId: string,
   shardId: number = DEFAULT_WAHA_SHARD_ID,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await wahaPost('/api/stopTyping', { session: sessao, chatId }, shardId).catch(() => {});
+  await wahaPost('/api/stopTyping', { session: sessao, chatId }, shardId, signal).catch(() => {});
 }
 
 export async function sendSeen(
