@@ -14,6 +14,7 @@ export interface AgendaBloqueioRow {
   tenant_id: string;
   slot: string;
   colaborador_id: number | null;
+  serie_id: string | null;
   gcal_event_id: string | null;
   inicio_at: string;
   fim_at: string;
@@ -38,6 +39,7 @@ export interface CreateAgendaBloqueioInput {
   tenantId: string;
   slot: string;
   colaboradorId: number | null;
+  serieId?: string | null;
   gcalEventId: string;
   inicioAt: string;
   fimAt: string;
@@ -53,6 +55,7 @@ export interface ListAgendaBloqueiosInput {
   tenantId: string;
   slot: string;
   colaboradorId?: number | null;
+  serieId?: string | null;
   inicioAt?: string;
   fimAt?: string;
 }
@@ -67,16 +70,17 @@ function mapRow(row: AgendaBloqueioRaw): AgendaBloqueioRow {
 export async function create(input: CreateAgendaBloqueioInput): Promise<AgendaBloqueioRow> {
   const r = await query<AgendaBloqueioRaw>(
     `INSERT INTO agenda_bloqueios (
-       id, tenant_id, slot, colaborador_id, gcal_event_id, inicio_at, fim_at, timezone, tipo, motivo,
+       id, tenant_id, slot, colaborador_id, serie_id, gcal_event_id, inicio_at, fim_at, timezone, tipo, motivo,
        status, created_by_role, created_by_user_id, created_by_colaborador_id
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'creating',$11,$12,$13)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'creating',$12,$13,$14)
      RETURNING *`,
     [
       input.id,
       input.tenantId,
       input.slot,
       input.colaboradorId,
+      input.serieId ?? null,
       input.gcalEventId,
       input.inicioAt,
       input.fimAt,
@@ -163,6 +167,14 @@ export async function list(input: ListAgendaBloqueiosInput): Promise<AgendaBloqu
         : `colaborador_id = $${args.length}`,
     );
   }
+  if (input.serieId !== undefined) {
+    args.push(input.serieId);
+    where.push(
+      input.serieId === null
+        ? `serie_id IS NULL`
+        : `serie_id = $${args.length}`,
+    );
+  }
   if (input.inicioAt) {
     args.push(input.inicioAt);
     where.push(`fim_at > $${args.length}`);
@@ -172,6 +184,39 @@ export async function list(input: ListAgendaBloqueiosInput): Promise<AgendaBloqu
     where.push(`inicio_at < $${args.length}`);
   }
 
+  const r = await query<AgendaBloqueioRaw>(
+    `SELECT *
+       FROM agenda_bloqueios
+      WHERE ${where.join(' AND ')}
+      ORDER BY inicio_at ASC, created_at ASC`,
+    args,
+  );
+  return r.rows.map(mapRow);
+}
+
+export async function listFutureActiveBySerieId(input: {
+  tenantId: string;
+  slot: string;
+  serieId: string;
+  colaboradorId?: number | null;
+}): Promise<AgendaBloqueioRow[]> {
+  const args: unknown[] = [input.tenantId, input.slot, input.serieId];
+  const where = [
+    'tenant_id = $1',
+    'slot = $2',
+    'serie_id = $3',
+    "status IN ('active', 'gcal_cleanup_failed')",
+    'deleted_at IS NULL',
+    'inicio_at > now()',
+  ];
+  if (input.colaboradorId !== undefined) {
+    if (input.colaboradorId === null) {
+      where.push('colaborador_id IS NULL');
+    } else {
+      args.push(input.colaboradorId);
+      where.push(`colaborador_id = $${args.length}`);
+    }
+  }
   const r = await query<AgendaBloqueioRaw>(
     `SELECT *
        FROM agenda_bloqueios

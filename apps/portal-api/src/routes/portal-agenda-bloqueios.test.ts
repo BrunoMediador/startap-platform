@@ -7,6 +7,7 @@ const {
   agendaMarkFailed,
   agendaMarkCleanupFailed,
   agendaList,
+  agendaListFutureBySerieId,
   agendaGetActive,
   agendaSoftDelete,
   getScopeBySlot,
@@ -24,6 +25,7 @@ const {
   agendaMarkFailed: vi.fn(),
   agendaMarkCleanupFailed: vi.fn(),
   agendaList: vi.fn(),
+  agendaListFutureBySerieId: vi.fn(),
   agendaGetActive: vi.fn(),
   agendaSoftDelete: vi.fn(),
   getScopeBySlot: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock('@startap/db', () => ({
     markCreateFailed: agendaMarkFailed,
     markCreateCleanupFailed: agendaMarkCleanupFailed,
     list: agendaList,
+    listFutureActiveBySerieId: agendaListFutureBySerieId,
     getActiveById: agendaGetActive,
     softDeleteById: agendaSoftDelete,
   },
@@ -83,6 +86,21 @@ const BASE_BODY = {
   tipo: 'almoco',
   motivo: 'intervalo',
 };
+const BASE_SERIE_BODY = {
+  timezone: 'America/Sao_Paulo',
+  tipo: 'almoco',
+  motivo: 'intervalo',
+  ocorrencias: [
+    {
+      inicio_at: '2026-08-21T12:00:00-03:00',
+      fim_at: '2026-08-21T13:00:00-03:00',
+    },
+    {
+      inicio_at: '2026-08-28T12:00:00-03:00',
+      fim_at: '2026-08-28T13:00:00-03:00',
+    },
+  ],
+};
 
 async function buildApp() {
   const app = Fastify({ logger: false });
@@ -115,10 +133,12 @@ beforeEach(() => {
     slot: 'clone_owner',
     tenant_id: '00000000-0000-4000-8000-000000000001',
     colaborador_id: 8,
+    serie_id: null,
     gcal_event_id: 'gcal-block-1',
     status: 'active',
   });
   agendaList.mockResolvedValue([]);
+  agendaListFutureBySerieId.mockResolvedValue([]);
   agendaGetActive.mockResolvedValue(null);
   agendaSoftDelete.mockResolvedValue(null);
   getGcalForSlot.mockResolvedValue({
@@ -399,6 +419,221 @@ describe('POST /portal/agenda/bloqueios — dono', () => {
       created.id,
     );
     expect(agendaMarkFailed).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('recorrência de bloqueios', () => {
+  it('preview expande datas sem fanout de consulta ao GCal e respeita cap de 24', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/recorrencia/preview',
+      payload: {
+        ...BASE_BODY,
+        colaborador_id: 8,
+        periodicidade: 'semanal',
+        ocorrencias: 3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.previews).toEqual([
+      expect.objectContaining({ inicio_at: '2026-08-21T15:00:00.000Z' }),
+      expect.objectContaining({ inicio_at: '2026-08-28T15:00:00.000Z' }),
+      expect.objectContaining({ inicio_at: '2026-09-04T15:00:00.000Z' }),
+    ]);
+    const colab8 = (await getGcalsForSlot.mock.results[0].value)[1];
+    expect(colab8.client.createEvent).not.toHaveBeenCalled();
+
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/recorrencia/preview',
+      payload: {
+        ...BASE_BODY,
+        periodicidade: 'semanal',
+        ocorrencias: 25,
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('POST /portal/agenda/bloqueios/serie retorna 207 parcial e carimba o mesmo serie_id nas ocorrências criadas', async () => {
+    agendaCreate
+      .mockResolvedValueOnce({
+        id: '11111111-1111-4111-8111-111111111111',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      })
+      .mockResolvedValueOnce({
+        id: '22222222-2222-4222-8222-222222222222',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      })
+      .mockResolvedValueOnce({
+        id: '33333333-3333-4333-8333-333333333333',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: null,
+        gcal_event_id: null,
+        status: 'creating',
+      });
+    agendaAttach
+      .mockResolvedValueOnce({
+        id: '11111111-1111-4111-8111-111111111111',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        gcal_event_id: 'bloq11111111111141118111111111111111',
+        status: 'active',
+        inicio_at: '2026-08-21T15:00:00.000Z',
+        fim_at: '2026-08-21T16:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: '33333333-3333-4333-8333-333333333333',
+        slot: 'clone_owner',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        colaborador_id: 8,
+        serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        gcal_event_id: 'bloq33333333333343338333333333333333',
+        status: 'active',
+        inicio_at: '2026-09-04T15:00:00.000Z',
+        fim_at: '2026-09-04T16:00:00.000Z',
+      });
+    const createEvent = vi
+      .fn()
+      .mockResolvedValueOnce({ id: 'evt-1' })
+      .mockRejectedValueOnce(new Error('HTTP 503: downstream'))
+      .mockResolvedValueOnce({ id: 'evt-3' });
+    const deleteEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { createEvent, deleteEvent },
+        servicos: [],
+      },
+    ]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: {
+        ...BASE_SERIE_BODY,
+        colaborador_id: 8,
+        ocorrencias: [
+          ...BASE_SERIE_BODY.ocorrencias,
+          {
+            inicio_at: '2026-09-04T12:00:00-03:00',
+            fim_at: '2026-09-04T13:00:00-03:00',
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(207);
+    const body = res.json();
+    expect(body.criados).toHaveLength(2);
+    expect(body.falhas).toEqual([
+      expect.objectContaining({
+        inicio_at: '2026-08-28T12:00:00-03:00',
+        error: 'gcal_falhou',
+      }),
+    ]);
+    expect(body.serie_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    for (const call of agendaCreate.mock.calls) {
+      expect(call[0]).toEqual(expect.objectContaining({ serieId: body.serie_id }));
+    }
+    expect(createEvent).toHaveBeenCalledTimes(3);
+    for (const [index, call] of createEvent.mock.calls.entries()) {
+      const bloqueioId = agendaCreate.mock.calls[index]?.[0]?.id;
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          eventId: `bloq${String(bloqueioId).replaceAll('-', '')}`,
+          extendedPropertiesPrivate: {
+            kind: 'bloqueio',
+            bloqueioId,
+            colaboradorId: '8',
+            serie_id: body.serie_id,
+          },
+        }),
+      );
+    }
+    expect(agendaMarkFailed).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      'clone_owner',
+      agendaCreate.mock.calls[1][0].id,
+    );
+    await app.close();
+  });
+
+  it('DELETE /portal/colaborador/bloqueios/serie escopa por colaboradorId da sessão e remove só a série futura retornada pelo DB', async () => {
+    agendaListFutureBySerieId.mockResolvedValueOnce([
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        tenant_id: '00000000-0000-4000-8000-000000000001',
+        slot: 'clone_owner',
+        colaborador_id: 7,
+        serie_id: '55555555-5555-4555-8555-555555555555',
+        gcal_event_id: 'gcal-block-7',
+        inicio_at: '2026-08-29T12:00:00.000Z',
+        fim_at: '2026-08-29T13:00:00.000Z',
+        timezone: 'America/Sao_Paulo',
+        tipo: 'almoco',
+        motivo: 'intervalo',
+        status: 'active',
+        created_by_role: 'colaborador',
+        created_by_user_id: null,
+        created_by_colaborador_id: 7,
+        deleted_at: null,
+        created_at: '2026-08-20T00:00:00.000Z',
+        updated_at: '2026-08-20T00:00:00.000Z',
+      },
+    ]);
+    agendaSoftDelete.mockResolvedValueOnce({
+      id: '44444444-4444-4444-8444-444444444444',
+      inicio_at: '2026-08-29T12:00:00.000Z',
+      fim_at: '2026-08-29T13:00:00.000Z',
+      colaborador_id: 7,
+      serie_id: '55555555-5555-4555-8555-555555555555',
+      gcal_event_id: 'gcal-block-7',
+    });
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/colaborador/bloqueios/serie/55555555-5555-4555-8555-555555555555',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(agendaListFutureBySerieId).toHaveBeenCalledWith({
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      slot: 'clone_owner',
+      serieId: '55555555-5555-4555-8555-555555555555',
+      colaboradorId: 7,
+    });
+    expect(agendaSoftDelete).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      'clone_owner',
+      '44444444-4444-4444-8444-444444444444',
+      7,
+    );
     await app.close();
   });
 });
