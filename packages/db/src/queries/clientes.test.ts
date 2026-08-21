@@ -248,7 +248,7 @@ describe('listClientesSemRetornoForColaborador', () => {
 });
 
 describe('listClientesAniversariantesForOwner', () => {
-  it('usa slot+tenant+timezone server-side, limita em 50 e mascara PII', async () => {
+  it('usa slot+tenant+timezone server-side em modo=proximos, limita em 50 e mascara PII', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -256,7 +256,8 @@ describe('listClientesAniversariantesForOwner', () => {
           nome: 'Ana',
           telefone_canonico: '553199998855',
           aniversario_mmdd: '02-29',
-          dias_para_aniversario: '3',
+          dias_ate_aniversario: '3',
+          proxima_ocorrencia_local_date: '2028-02-29',
           ultimo_profissional_nome: 'Bene',
           total_count: '1',
         },
@@ -268,33 +269,60 @@ describe('listClientesAniversariantesForOwner', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       timezone: 'America/Sao_Paulo',
+      mode: 'proximos',
+      dias: 7,
       limit: 51,
       offset: 4,
     });
 
     const [sql, params] = lastQueryCall();
-    expect(sql).toContain("c.aniversario_mmdd IS NOT NULL");
+    expect(sql).toContain('aniversarios_validos AS');
+    expect(sql).toContain('generate_series(ctx.ano_atual, ctx.ano_atual + 8)');
     expect(sql).toContain("to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd");
-    expect(sql).toContain('EXTRACT(');
-    expect(sql).toContain('make_date(');
-    expect(sql).toContain("NOW() AT TIME ZONE $3");
-    expect(sql).toContain('ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC');
-    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 50, 4]);
+    expect(sql).toContain('candidate_date >= ctx.hoje_local_date');
+    expect(sql).toContain('base.dias_ate_aniversario <= $4');
+    expect(sql).toContain('ORDER BY base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC');
+    expect(sql).not.toContain('make_date(');
+    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 7, 50, 4]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]).toEqual({
       id: '44444444-4444-4444-8444-444444444444',
       nome: 'Ana',
       telefone_masked: '+55 31 •••••-••55',
       aniversario_mmdd: '02-29',
-      dias_para_aniversario: 3,
+      dias_ate_aniversario: 3,
+      proxima_ocorrencia_local_date: '2028-02-29',
       ultimo_profissional_nome: 'Bene',
     });
     expect((result.clientes[0] as { telefone?: string }).telefone).toBeUndefined();
   });
+
+  it('modo=mes filtra pelo mês sem confiar em make_date para legado inválido 02-31', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+
+    const result = await listClientesAniversariantesForOwner({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      mode: 'mes',
+      mes: 2,
+      limit: 10,
+      offset: 0,
+    });
+
+    const [sql, params] = lastQueryCall();
+    expect(sql).toContain("c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'");
+    expect(sql).toContain("to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd");
+    expect(sql).toContain('base.aniversario_mes = $4');
+    expect(sql).toContain("split_part(base.aniversario_mmdd, '-', 2)::int ASC");
+    expect(sql).not.toContain('make_date(');
+    expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 2, 10, 0]);
+    expect(result).toEqual({ clientes: [], total: 0, limit: 10, offset: 0 });
+  });
 });
 
 describe('listClientesAniversariantesForColaborador', () => {
-  it('restringe a leitura ao colaborador da sessão e aceita paginação read-only', async () => {
+  it('restringe a leitura ao colaborador da sessão e aceita modo=mes read-only', async () => {
     mockQuery.mockResolvedValueOnce({
       rows: [
         {
@@ -302,7 +330,8 @@ describe('listClientesAniversariantesForColaborador', () => {
           nome: 'Carlos',
           telefone_canonico: '553199997777',
           aniversario_mmdd: '08-25',
-          dias_para_aniversario: '4',
+          dias_ate_aniversario: '4',
+          proxima_ocorrencia_local_date: '2026-08-25',
           ultimo_profissional_nome: 'Barbeiro',
           total_count: '1',
         },
@@ -315,6 +344,8 @@ describe('listClientesAniversariantesForColaborador', () => {
       tenantId: 'tid-owner',
       colaboradorId: 9,
       timezone: 'America/Sao_Paulo',
+      mode: 'mes',
+      mes: 8,
       limit: 50,
       offset: 2,
     });
@@ -324,11 +355,12 @@ describe('listClientesAniversariantesForColaborador', () => {
     expect(sql).toContain('EXISTS');
     expect(sql).toContain('own_a.colaborador_id = $3');
     expect(sql).toContain("NOW() AT TIME ZONE $4");
-    expect(sql).toContain("c.aniversario_mmdd IS NOT NULL");
-    expect(sql).toContain('ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC');
-    expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 50, 2]);
+    expect(sql).toContain('base.aniversario_mes = $5');
+    expect(sql).toContain("split_part(base.aniversario_mmdd, '-', 2)::int ASC");
+    expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 8, 50, 2]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••77');
+    expect(result.clientes[0]?.proxima_ocorrencia_local_date).toBe('2026-08-25');
     expect((result.clientes[0] as { telefone_raw?: string }).telefone_raw).toBeUndefined();
   });
 });

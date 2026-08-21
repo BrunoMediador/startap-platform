@@ -31,7 +31,24 @@ const semRetornoQuerySchema = z
   })
   .strict();
 
-const aniversariantesQuerySchema = semRetornoQuerySchema;
+const aniversariantesQuerySchema = z.discriminatedUnion('modo', [
+  z
+    .object({
+      modo: z.literal('proximos'),
+      dias: z.coerce.number().int().min(1).max(31),
+      limit: z.coerce.number().int().min(1).max(50).optional(),
+      offset: z.coerce.number().int().min(0).max(100).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      modo: z.literal('mes'),
+      mes: z.coerce.number().int().min(1).max(12),
+      limit: z.coerce.number().int().min(1).max(50).optional(),
+      offset: z.coerce.number().int().min(0).max(100).optional(),
+    })
+    .strict(),
+]);
 
 const clienteIdParamSchema = z.object({
   id: z.string().uuid('id invalido'),
@@ -221,13 +238,26 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
     }
 
-    const result = await clientes.listClientesAniversariantesForOwner({
-      slot: gate.slot,
-      tenantId: gate.tenantId,
-      timezone: gate.timezone,
-      limit: parsed.data.limit,
-      offset: parsed.data.offset,
-    });
+    const result =
+      parsed.data.modo === 'proximos'
+        ? await clientes.listClientesAniversariantesForOwner({
+            slot: gate.slot,
+            tenantId: gate.tenantId,
+            timezone: gate.timezone,
+            mode: 'proximos',
+            dias: parsed.data.dias,
+            limit: parsed.data.limit,
+            offset: parsed.data.offset,
+          })
+        : await clientes.listClientesAniversariantesForOwner({
+            slot: gate.slot,
+            tenantId: gate.tenantId,
+            timezone: gate.timezone,
+            mode: 'mes',
+            mes: parsed.data.mes,
+            limit: parsed.data.limit,
+            offset: parsed.data.offset,
+          });
     return reply.code(200).send(result);
   });
 
@@ -353,14 +383,28 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'parametros invalidos', issues: formatIssues(parsed.error) });
       }
 
-      const result = await clientes.listClientesAniversariantesForColaborador({
-        slot: gate.slot,
-        tenantId: gate.tenantId,
-        colaboradorId: gate.colaboradorId,
-        timezone: gate.timezone,
-        limit: parsed.data.limit,
-        offset: parsed.data.offset,
-      });
+      const result =
+        parsed.data.modo === 'proximos'
+          ? await clientes.listClientesAniversariantesForColaborador({
+              slot: gate.slot,
+              tenantId: gate.tenantId,
+              colaboradorId: gate.colaboradorId,
+              timezone: gate.timezone,
+              mode: 'proximos',
+              dias: parsed.data.dias,
+              limit: parsed.data.limit,
+              offset: parsed.data.offset,
+            })
+          : await clientes.listClientesAniversariantesForColaborador({
+              slot: gate.slot,
+              tenantId: gate.tenantId,
+              colaboradorId: gate.colaboradorId,
+              timezone: gate.timezone,
+              mode: 'mes',
+              mes: parsed.data.mes,
+              limit: parsed.data.limit,
+              offset: parsed.data.offset,
+            });
       return reply.code(200).send(result);
     },
   );

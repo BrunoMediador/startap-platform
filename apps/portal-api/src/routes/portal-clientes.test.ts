@@ -162,7 +162,8 @@ const ANIVERSARIANTES_LIST = {
       nome: 'Ana',
       telefone_masked: '+55 31 •••••-••55',
       aniversario_mmdd: '02-29',
-      dias_para_aniversario: 3,
+      dias_ate_aniversario: 3,
+      proxima_ocorrencia_local_date: '2028-02-29',
       ultimo_profissional_nome: 'Bene',
     },
   ],
@@ -287,7 +288,10 @@ describe('gating', () => {
   it('404 aniversariantes owner quando CRM_ANIVERSARIANTES_ENABLED está OFF', async () => {
     configMock.CRM_ANIVERSARIANTES_ENABLED = false;
     const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/portal/clientes/aniversariantes' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=proximos&dias=7',
+    });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'feature_off' });
     expect(listAniversariantesOwnerMock).not.toHaveBeenCalled();
@@ -299,7 +303,7 @@ describe('gating', () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/colaborador/clientes/aniversariantes',
+      url: '/portal/colaborador/clientes/aniversariantes?modo=proximos&dias=7',
     });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'feature_off' });
@@ -379,7 +383,7 @@ describe('owner', () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/clientes/aniversariantes?limit=50&offset=100',
+      url: '/portal/clientes/aniversariantes?modo=proximos&dias=7&limit=50&offset=100',
     });
 
     expect(res.statusCode).toBe(200);
@@ -387,6 +391,8 @@ describe('owner', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       timezone: 'America/Sao_Paulo',
+      mode: 'proximos',
+      dias: 7,
       limit: 50,
       offset: 100,
     });
@@ -402,10 +408,54 @@ describe('owner', () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/clientes/aniversariantes?slot=outro&tenant_id=forjado&limit=51',
+      url: '/portal/clientes/aniversariantes?modo=proximos&dias=7&slot=outro&tenant_id=forjado&limit=51',
     });
 
     expect(res.statusCode).toBe(400);
+    expect(listAniversariantesOwnerMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('aniversariantes owner aceita modo=mes com mes 1..12', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=mes&mes=2&limit=5&offset=10',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(listAniversariantesOwnerMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+      mode: 'mes',
+      mes: 2,
+      limit: 5,
+      offset: 10,
+    });
+    await app.close();
+  });
+
+  it('aniversariantes owner rejeita combinações inválidas do schema específico', async () => {
+    const app = await buildApp();
+    const missingDias = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=proximos',
+    });
+    expect(missingDias.statusCode).toBe(400);
+
+    const extraMes = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=proximos&dias=7&mes=2',
+    });
+    expect(extraMes.statusCode).toBe(400);
+
+    const outOfRange = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=mes&mes=13',
+    });
+    expect(outOfRange.statusCode).toBe(400);
+
     expect(listAniversariantesOwnerMock).not.toHaveBeenCalled();
     await app.close();
   });
@@ -560,7 +610,7 @@ describe('colaborador', () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/colaborador/clientes/aniversariantes?limit=7&offset=2',
+      url: '/portal/colaborador/clientes/aniversariantes?modo=mes&mes=2&limit=7&offset=2',
     });
 
     expect(res.statusCode).toBe(200);
@@ -570,6 +620,8 @@ describe('colaborador', () => {
       tenantId: 'tid-owner',
       colaboradorId: 9,
       timezone: 'America/Sao_Paulo',
+      mode: 'mes',
+      mes: 2,
       limit: 7,
       offset: 2,
     });
@@ -583,7 +635,7 @@ describe('colaborador', () => {
     const app = await buildApp();
     const res = await app.inject({
       method: 'GET',
-      url: '/portal/colaborador/clientes/aniversariantes?colaborador_id=77',
+      url: '/portal/colaborador/clientes/aniversariantes?modo=proximos&dias=7&colaborador_id=77',
     });
 
     expect(res.statusCode).toBe(400);

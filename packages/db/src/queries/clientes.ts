@@ -53,7 +53,8 @@ interface AniversarianteRowRaw {
   nome: string | null;
   telefone_canonico: string;
   aniversario_mmdd: string;
-  dias_para_aniversario: string | number;
+  dias_ate_aniversario: string | number;
+  proxima_ocorrencia_local_date: string;
   ultimo_profissional_nome: string | null;
   total_count: string;
 }
@@ -149,7 +150,8 @@ export interface ClienteAniversarianteItem {
   nome: string | null;
   telefone_masked: string;
   aniversario_mmdd: string;
-  dias_para_aniversario: number;
+  dias_ate_aniversario: number;
+  proxima_ocorrencia_local_date: string;
   ultimo_profissional_nome: string | null;
 }
 
@@ -159,6 +161,50 @@ export interface ClienteAniversariantesResult {
   limit: number;
   offset: number;
 }
+
+export type ClienteAniversariantesModo = 'proximos' | 'mes';
+
+export type ListClientesAniversariantesInput =
+  | {
+      slot: string;
+      tenantId: string;
+      timezone: string;
+      mode: 'proximos';
+      dias: number;
+      limit?: number;
+      offset?: number;
+    }
+  | {
+      slot: string;
+      tenantId: string;
+      timezone: string;
+      mode: 'mes';
+      mes: number;
+      limit?: number;
+      offset?: number;
+    };
+
+export type ListClientesAniversariantesColaboradorInput =
+  | {
+      slot: string;
+      tenantId: string;
+      colaboradorId: number;
+      timezone: string;
+      mode: 'proximos';
+      dias: number;
+      limit?: number;
+      offset?: number;
+    }
+  | {
+      slot: string;
+      tenantId: string;
+      colaboradorId: number;
+      timezone: string;
+      mode: 'mes';
+      mes: number;
+      limit?: number;
+      offset?: number;
+    };
 
 export interface ClienteHistoricoRow {
   atendimento_id: number;
@@ -269,7 +315,8 @@ function mapAniversarianteRow(row: AniversarianteRowRaw): ClienteAniversarianteI
     nome: row.nome,
     telefone_masked: phoneHint(row.telefone_canonico),
     aniversario_mmdd: row.aniversario_mmdd,
-    dias_para_aniversario: Number(row.dias_para_aniversario),
+    dias_ate_aniversario: Number(row.dias_ate_aniversario),
+    proxima_ocorrencia_local_date: row.proxima_ocorrencia_local_date,
     ultimo_profissional_nome: row.ultimo_profissional_nome,
   };
 }
@@ -754,50 +801,65 @@ export async function listClientesSemRetornoForColaborador(input: {
 }
 
 /**
- * Usa o ano bissexto 2000 como calendário sintético para validar/ordenar MM-DD
- * sem perder clientes de 29/02 nos anos não bissextos. O payload segue mínimo:
- * aniversário original + distância em dias, sempre com telefone mascarado.
+ * Lista read-only de aniversariantes do CRM. A consulta valida MM-DD legado
+ * antes de gerar a próxima ocorrência real, então `02-31` nunca explode em 500
+ * e `02-29` segue válido com a próxima data bissexta correspondente.
  */
-export async function listClientesAniversariantesForOwner(input: {
-  slot: string;
-  tenantId: string;
-  timezone: string;
-  limit?: number;
-  offset?: number;
-}): Promise<ClienteAniversariantesResult> {
+export async function listClientesAniversariantesForOwner(
+  input: ListClientesAniversariantesInput,
+): Promise<ClienteAniversariantesResult> {
   const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
+  const filterSql =
+    input.mode === 'proximos'
+      ? 'AND base.dias_ate_aniversario <= $4'
+      : 'AND base.aniversario_mes = $4';
+  const orderSql =
+    input.mode === 'proximos'
+      ? 'base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC'
+      : "split_part(base.aniversario_mmdd, '-', 2)::int ASC, base.id ASC";
   const rows = await query<AniversarianteRowRaw>(
     `WITH contexto AS (
-       SELECT EXTRACT(
-                DOY FROM make_date(
-                  2000,
-                  EXTRACT(MONTH FROM (NOW() AT TIME ZONE $3))::int,
-                  EXTRACT(DAY FROM (NOW() AT TIME ZONE $3))::int
-                )
-              )::int AS hoje_doy
-     )
-     SELECT c.id,
-            c.nome,
-            c.telefone_canonico,
-            c.aniversario_mmdd,
-            CASE
-              WHEN aniversario_doy >= ctx.hoje_doy THEN aniversario_doy - ctx.hoje_doy
-              ELSE 366 - ctx.hoje_doy + aniversario_doy
-            END::int AS dias_para_aniversario,
-            stats.ultimo_profissional_nome,
-            COUNT(*) OVER()::bigint AS total_count
-       FROM clientes c
-       CROSS JOIN contexto ctx
-       CROSS JOIN LATERAL (
-         SELECT EXTRACT(
-                  DOY FROM make_date(
-                    2000,
-                    split_part(c.aniversario_mmdd, '-', 1)::int,
-                    split_part(c.aniversario_mmdd, '-', 2)::int
-                  )
-                )::int AS aniversario_doy
-       ) AS birthday
-       LEFT JOIN LATERAL (
+       SELECT (NOW() AT TIME ZONE $3)::date AS hoje_local_date,
+              EXTRACT(YEAR FROM (NOW() AT TIME ZONE $3))::int AS ano_atual
+     ),
+     aniversarios_validos AS (
+       SELECT c.id,
+              c.slot,
+              c.tenant_id,
+              c.nome,
+              c.telefone_canonico,
+              c.aniversario_mmdd,
+              split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes
+         FROM clientes c
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+          AND c.aniversario_mmdd IS NOT NULL
+          AND c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+          AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
+     ),
+     base AS (
+       SELECT av.id,
+              av.nome,
+              av.telefone_canonico,
+              av.aniversario_mmdd,
+              av.aniversario_mes,
+              (next_occ.proxima_ocorrencia_local_date - ctx.hoje_local_date)::int AS dias_ate_aniversario,
+              to_char(next_occ.proxima_ocorrencia_local_date, 'YYYY-MM-DD') AS proxima_ocorrencia_local_date,
+              stats.ultimo_profissional_nome
+         FROM aniversarios_validos av
+         CROSS JOIN contexto ctx
+         JOIN LATERAL (
+           SELECT candidate_date AS proxima_ocorrencia_local_date
+             FROM (
+               SELECT to_date(gs::text || '-' || av.aniversario_mmdd, 'YYYY-MM-DD') AS candidate_date
+                 FROM generate_series(ctx.ano_atual, ctx.ano_atual + 8) AS gs
+             ) years
+            WHERE to_char(candidate_date, 'MM-DD') = av.aniversario_mmdd
+              AND candidate_date >= ctx.hoje_local_date
+            ORDER BY candidate_date ASC
+            LIMIT 1
+         ) AS next_occ ON TRUE
+         LEFT JOIN LATERAL (
          SELECT (
                   ARRAY_AGG(
                     cc.nome
@@ -807,18 +869,33 @@ export async function listClientesAniversariantesForOwner(input: {
            FROM atendimentos a
            LEFT JOIN clone_colaboradores cc
              ON cc.id = a.colaborador_id AND cc.slot = a.slot
-          WHERE a.slot = c.slot
-            AND a.tenant_id = c.tenant_id
+          WHERE a.slot = av.slot
+            AND a.tenant_id = av.tenant_id
             AND a.deleted_at IS NULL
-            AND a.cliente_telefone_canonico = c.telefone_canonico
+            AND a.cliente_telefone_canonico = av.telefone_canonico
        ) AS stats ON TRUE
-      WHERE c.slot = $1
-        AND c.tenant_id = $2
-        AND c.aniversario_mmdd IS NOT NULL
-        AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
-      ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC
-      LIMIT $4 OFFSET $5`,
-    [input.slot, input.tenantId, input.timezone, limit, offset],
+     )
+     SELECT base.id,
+            base.nome,
+            base.telefone_canonico,
+            base.aniversario_mmdd,
+            base.dias_ate_aniversario,
+            base.proxima_ocorrencia_local_date,
+            base.ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM base
+      WHERE 1 = 1
+        ${filterSql}
+      ORDER BY ${orderSql}
+      LIMIT $5 OFFSET $6`,
+    [
+      input.slot,
+      input.tenantId,
+      input.timezone,
+      input.mode === 'proximos' ? input.dias : input.mes,
+      limit,
+      offset,
+    ],
   );
 
   return {
@@ -829,47 +906,61 @@ export async function listClientesAniversariantesForOwner(input: {
   };
 }
 
-export async function listClientesAniversariantesForColaborador(input: {
-  slot: string;
-  tenantId: string;
-  colaboradorId: number;
-  timezone: string;
-  limit?: number;
-  offset?: number;
-}): Promise<ClienteAniversariantesResult> {
+export async function listClientesAniversariantesForColaborador(
+  input: ListClientesAniversariantesColaboradorInput,
+): Promise<ClienteAniversariantesResult> {
   const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
+  const filterSql =
+    input.mode === 'proximos'
+      ? 'AND base.dias_ate_aniversario <= $5'
+      : 'AND base.aniversario_mes = $5';
+  const orderSql =
+    input.mode === 'proximos'
+      ? 'base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC'
+      : "split_part(base.aniversario_mmdd, '-', 2)::int ASC, base.id ASC";
   const rows = await query<AniversarianteRowRaw>(
     `WITH contexto AS (
-       SELECT EXTRACT(
-                DOY FROM make_date(
-                  2000,
-                  EXTRACT(MONTH FROM (NOW() AT TIME ZONE $4))::int,
-                  EXTRACT(DAY FROM (NOW() AT TIME ZONE $4))::int
-                )
-              )::int AS hoje_doy
-     )
-     SELECT c.id,
-            c.nome,
-            c.telefone_canonico,
-            c.aniversario_mmdd,
-            CASE
-              WHEN aniversario_doy >= ctx.hoje_doy THEN aniversario_doy - ctx.hoje_doy
-              ELSE 366 - ctx.hoje_doy + aniversario_doy
-            END::int AS dias_para_aniversario,
-            stats.ultimo_profissional_nome,
-            COUNT(*) OVER()::bigint AS total_count
-       FROM clientes c
-       CROSS JOIN contexto ctx
-       CROSS JOIN LATERAL (
-         SELECT EXTRACT(
-                  DOY FROM make_date(
-                    2000,
-                    split_part(c.aniversario_mmdd, '-', 1)::int,
-                    split_part(c.aniversario_mmdd, '-', 2)::int
-                  )
-                )::int AS aniversario_doy
-       ) AS birthday
-       LEFT JOIN LATERAL (
+       SELECT (NOW() AT TIME ZONE $4)::date AS hoje_local_date,
+              EXTRACT(YEAR FROM (NOW() AT TIME ZONE $4))::int AS ano_atual
+     ),
+     aniversarios_validos AS (
+       SELECT c.id,
+              c.slot,
+              c.tenant_id,
+              c.nome,
+              c.telefone_canonico,
+              c.aniversario_mmdd,
+              split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes
+         FROM clientes c
+        WHERE c.slot = $1
+          AND c.tenant_id = $2
+          AND c.aniversario_mmdd IS NOT NULL
+          AND c.aniversario_mmdd ~ '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
+          AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
+     ),
+     base AS (
+       SELECT av.id,
+              av.nome,
+              av.telefone_canonico,
+              av.aniversario_mmdd,
+              av.aniversario_mes,
+              (next_occ.proxima_ocorrencia_local_date - ctx.hoje_local_date)::int AS dias_ate_aniversario,
+              to_char(next_occ.proxima_ocorrencia_local_date, 'YYYY-MM-DD') AS proxima_ocorrencia_local_date,
+              stats.ultimo_profissional_nome
+         FROM aniversarios_validos av
+         CROSS JOIN contexto ctx
+         JOIN LATERAL (
+           SELECT candidate_date AS proxima_ocorrencia_local_date
+             FROM (
+               SELECT to_date(gs::text || '-' || av.aniversario_mmdd, 'YYYY-MM-DD') AS candidate_date
+                 FROM generate_series(ctx.ano_atual, ctx.ano_atual + 8) AS gs
+             ) years
+            WHERE to_char(candidate_date, 'MM-DD') = av.aniversario_mmdd
+              AND candidate_date >= ctx.hoje_local_date
+            ORDER BY candidate_date ASC
+            LIMIT 1
+         ) AS next_occ ON TRUE
+         LEFT JOIN LATERAL (
          SELECT (
                   ARRAY_AGG(
                     cc.nome
@@ -879,28 +970,44 @@ export async function listClientesAniversariantesForColaborador(input: {
            FROM atendimentos a
            LEFT JOIN clone_colaboradores cc
              ON cc.id = a.colaborador_id AND cc.slot = a.slot
-          WHERE a.slot = c.slot
-            AND a.tenant_id = c.tenant_id
+          WHERE a.slot = av.slot
+            AND a.tenant_id = av.tenant_id
             AND a.deleted_at IS NULL
             AND a.colaborador_id = $3
-            AND a.cliente_telefone_canonico = c.telefone_canonico
+            AND a.cliente_telefone_canonico = av.telefone_canonico
        ) AS stats ON TRUE
-      WHERE c.slot = $1
-        AND c.tenant_id = $2
-        AND c.aniversario_mmdd IS NOT NULL
-        AND to_char(to_date('2000-' || c.aniversario_mmdd, 'YYYY-MM-DD'), 'MM-DD') = c.aniversario_mmdd
-        AND EXISTS (
+      WHERE EXISTS (
           SELECT 1
             FROM atendimentos own_a
-           WHERE own_a.slot = c.slot
-             AND own_a.tenant_id = c.tenant_id
+           WHERE own_a.slot = av.slot
+             AND own_a.tenant_id = av.tenant_id
              AND own_a.deleted_at IS NULL
              AND own_a.colaborador_id = $3
-             AND own_a.cliente_telefone_canonico = c.telefone_canonico
+             AND own_a.cliente_telefone_canonico = av.telefone_canonico
         )
-      ORDER BY dias_para_aniversario ASC, c.aniversario_mmdd ASC, c.id ASC
-      LIMIT $5 OFFSET $6`,
-    [input.slot, input.tenantId, input.colaboradorId, input.timezone, limit, offset],
+     )
+     SELECT base.id,
+            base.nome,
+            base.telefone_canonico,
+            base.aniversario_mmdd,
+            base.dias_ate_aniversario,
+            base.proxima_ocorrencia_local_date,
+            base.ultimo_profissional_nome,
+            COUNT(*) OVER()::bigint AS total_count
+       FROM base
+      WHERE 1 = 1
+        ${filterSql}
+      ORDER BY ${orderSql}
+      LIMIT $6 OFFSET $7`,
+    [
+      input.slot,
+      input.tenantId,
+      input.colaboradorId,
+      input.timezone,
+      input.mode === 'proximos' ? input.dias : input.mes,
+      limit,
+      offset,
+    ],
   );
 
   return {
