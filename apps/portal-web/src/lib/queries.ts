@@ -49,6 +49,8 @@ import type {
   ContatosResponse,
   CriarAgendaBloqueioResponse,
   CriarAgendaBloqueioSerieBody,
+  EnviarWhatsappManualBody,
+  EnviarWhatsappManualResponse,
   CriarAgendaBloqueioSerieResponse,
   CriarAgendamentoBody,
   CriarAgendamentoResponse,
@@ -197,6 +199,7 @@ export const qk = {
   clientesSemRetornoBase: (slot: string) => ['clientes-sem-retorno', slot] as const,
   clientesSemRetorno: (slot: string, page: number, pageSize: number) =>
     ['clientes-sem-retorno', slot, page, pageSize] as const,
+  clientesAniversariantes: (slot: string) => ['clientes-aniversariantes', slot] as const,
   clientePerfil: (slot: string, id: string) => ['cliente-perfil', slot, id] as const,
   colaboradorClientesBase: (slot: string, colaboradorId: number) =>
     ['colaborador-clientes', slot, colaboradorId] as const,
@@ -287,6 +290,10 @@ export interface ClientePerfilQueryData {
   available: boolean;
   cliente: ClientePerfil | null;
   historico: ClientePerfilResponse['historico'];
+}
+
+export interface ClientesAniversariantesQueryData extends ClientesAniversariantesResponse {
+  available: boolean;
 }
 
 function isFeatureOff(error: unknown): boolean {
@@ -1265,6 +1272,34 @@ export function useClientesSemRetorno(
   });
 }
 
+/**
+ * Contrato assumido: GET /portal/clientes/aniversariantes. A rota é owner-only,
+ * derivada da sessão e responde 404 { error: 'feature_off' } quando a flag está
+ * OFF. Não há fallback que tente reconstruir aniversariantes no browser.
+ */
+export function useClientesAniversariantes(
+  slot: string,
+  enabled = true,
+): UseQueryResult<ClientesAniversariantesQueryData> {
+  return useQuery({
+    queryKey: qk.clientesAniversariantes(slot),
+    queryFn: async ({ signal }) => {
+      try {
+        const data = await apiFetch<ClientesAniversariantesResponse>(
+          '/portal/clientes/aniversariantes',
+          { signal },
+        );
+        return { available: true, ...data };
+      } catch (error) {
+        if (isFeatureOff(error)) return { available: false, clientes: [] };
+        throw error;
+      }
+    },
+    enabled,
+    retry: false,
+  });
+}
+
 export function useClientePerfil(
   slot: string,
   id: string | null,
@@ -1307,6 +1342,27 @@ export function useSaveCliente(
       client.invalidateQueries({ queryKey: ['colaborador-clientes', slot] });
       client.invalidateQueries({ queryKey: ['colaborador-cliente-perfil', slot] });
     },
+  });
+}
+
+/**
+ * Contrato assumido: POST /portal/clientes/:id/whatsapp-manual com
+ * { mensagem, confirmed: true }. O portal-api deve revalidar flag/RBAC/escopo,
+ * resolver o telefone e fazer o envio humanizado sem aceitar slot ou telefone.
+ */
+export function useEnviarWhatsappManual(
+  slot: string,
+): UseMutationResult<
+  EnviarWhatsappManualResponse,
+  Error,
+  { id: string; body: EnviarWhatsappManualBody }
+> {
+  return useMutation({
+    mutationFn: ({ id, body }) =>
+      apiFetch<EnviarWhatsappManualResponse>(`/portal/clientes/${id}/whatsapp-manual`, {
+        method: 'POST',
+        body,
+      }),
   });
 }
 

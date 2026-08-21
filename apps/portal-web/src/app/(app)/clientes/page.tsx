@@ -5,7 +5,7 @@ import { useTenant } from '@/components/shell/session-context';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 
 export default function ClientesPage() {
-  const { slot, crmClientesEnabled } = useTenant();
+  const { slot, crmClientesEnabled, whatsappManualEnabled } = useTenant();
   const timezone = useTenantTz();
 
   return (
@@ -14,6 +14,7 @@ export default function ClientesPage() {
       slot={slot}
       timezone={timezone}
       crmEnabled={crmClientesEnabled}
+      whatsappManualEnabled={whatsappManualEnabled}
     />
   );
 }
