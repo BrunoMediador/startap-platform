@@ -19,14 +19,26 @@ import { SkeletonList } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api';
-import type { ClientePerfil, ClienteListItem, SaveClienteBody } from '@/lib/api-types';
+import type {
+  ClientePerfil,
+  ClienteListItem,
+  ClientesAniversariantesModo,
+  SaveClienteBody,
+} from '@/lib/api-types';
 import {
+  CLIENTES_ANIVERSARIANTES_PAGE_SIZE,
   CLIENTES_PAGE_SIZE,
   CLIENTES_SEM_RETORNO_PAGE_SIZE,
+  aniversarianteDiasLabel,
+  aniversarianteFaixaLabel,
+  aniversarianteMatchesSearch,
+  aniversarianteOccurrenceLabel,
   birthdayLabel,
   birthdayToDateInput,
   birthdayFromDateInput,
   buildClientePatchBody,
+  currentMonthInTimezone,
+  type ClienteAniversarianteItem,
   type ClienteSemRetornoItem,
   clienteDraftChanged,
   clienteDraftFromPerfil,
@@ -34,6 +46,7 @@ import {
   clientePhoneMasked,
   clientesPageFromOffset,
   clientesTotalPages,
+  monthName,
   semRetornoDiasLabel,
   semRetornoFaixaLabel,
   semRetornoMatchesSearch,
@@ -43,9 +56,11 @@ import { cn } from '@/lib/cn';
 import { formatAgendamentoDia, formatAgendamentoHora, formatPhoneDisplay, initials } from '@/lib/format';
 import {
   useClientePerfil,
+  useClientesAniversariantes,
   useClientes,
   useClientesSemRetorno,
   useColaboradorClientePerfil,
+  useColaboradorClientesAniversariantes,
   useColaboradorClientes,
   useColaboradorClientesSemRetorno,
   useSaveCliente,
@@ -66,10 +81,17 @@ const OWNER_SUBTITLE =
   'Sua carteira de clientes em um só lugar, com histórico e campos opcionais para completar o perfil.';
 const COLABORADOR_SUBTITLE =
   'Clientes que já atenderam com você, com histórico para consulta rápida.';
+const OWNER_BIRTHDAY_SUBTITLE =
+  'Fila read-only de aniversários com telefone mascarado, sem WhatsApp, automação ou exportação.';
+const COLABORADOR_BIRTHDAY_SUBTITLE =
+  'Aniversários dos clientes que já passaram com você, em leitura simples e com PII mínima.';
 const OWNER_RANKING_SUBTITLE =
   'Fila priorizada por maior tempo sem retorno, sem disparo automático e com telefone mascarado.';
 const COLABORADOR_RANKING_SUBTITLE =
   'Fila pessoal baseada só nos seus atendimentos elegíveis, também com telefone mascarado.';
+
+const ANIVERSARIANTE_DAY_OPTIONS = [7, 15, 30] as const;
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
 
 function isFeatureOffApiError(error: unknown): boolean {
   return (
@@ -93,6 +115,10 @@ export function ClientesSection({
   const [search, setSearch] = useState('');
   const deferredSearch = useDeferredValue(sanitizeClientesSearch(search));
   const [page, setPage] = useState(1);
+  const [birthdayPage, setBirthdayPage] = useState(1);
+  const [birthdayMode, setBirthdayMode] = useState<ClientesAniversariantesModo>('proximos');
+  const [birthdayDays, setBirthdayDays] = useState<number>(30);
+  const [birthdayMonth, setBirthdayMonth] = useState<number>(() => currentMonthInTimezone(timezone));
   const [rankingPage, setRankingPage] = useState(1);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [forceUnavailable, setForceUnavailable] = useState(false);
@@ -113,6 +139,25 @@ export function ClientesSection({
     mode === 'colaborador' && crmEnabled && !forceUnavailable,
   );
   const listQ = mode === 'owner' ? ownerListQ : colaboradorListQ;
+  const birthdayWindowValue = birthdayMode === 'proximos' ? birthdayDays : birthdayMonth;
+  const ownerBirthdaysQ = useClientesAniversariantes(
+    slot,
+    birthdayMode,
+    birthdayWindowValue,
+    birthdayPage,
+    CLIENTES_ANIVERSARIANTES_PAGE_SIZE,
+    mode === 'owner' && crmEnabled,
+  );
+  const colaboradorBirthdaysQ = useColaboradorClientesAniversariantes(
+    slot,
+    colaboradorId ?? 0,
+    birthdayMode,
+    birthdayWindowValue,
+    birthdayPage,
+    CLIENTES_ANIVERSARIANTES_PAGE_SIZE,
+    mode === 'colaborador' && crmEnabled,
+  );
+  const birthdaysQ = mode === 'owner' ? ownerBirthdaysQ : colaboradorBirthdaysQ;
   const ownerRankingQ = useClientesSemRetorno(
     slot,
     rankingPage,
@@ -144,8 +189,13 @@ export function ClientesSection({
 
   useEffect(() => {
     setPage(1);
+    setBirthdayPage(1);
     setRankingPage(1);
   }, [deferredSearch]);
+
+  useEffect(() => {
+    setBirthdayPage(1);
+  }, [birthdayMode, birthdayDays, birthdayMonth]);
 
   useEffect(() => {
     if (listQ.data?.available === false || profileQ.data?.available === false) {
@@ -164,6 +214,22 @@ export function ClientesSection({
   const de = total === 0 ? 0 : (data?.offset ?? 0) + 1;
   const ate = (data?.offset ?? 0) + items.length;
   const buscaAtiva = deferredSearch.length > 0;
+  const birthdaysData = birthdaysQ.data;
+  const birthdayItems = (birthdaysData?.clientes ?? []).filter((item) =>
+    aniversarianteMatchesSearch(item, deferredSearch),
+  );
+  const birthdayTotal = birthdaysData?.total ?? 0;
+  const birthdayTotalPages = clientesTotalPages(
+    birthdayTotal,
+    birthdaysData?.limit ?? CLIENTES_ANIVERSARIANTES_PAGE_SIZE,
+  );
+  const birthdayCurrentPage = clientesPageFromOffset(
+    birthdaysData?.offset ?? 0,
+    birthdaysData?.limit ?? CLIENTES_ANIVERSARIANTES_PAGE_SIZE,
+  );
+  const birthdayDe = birthdayTotal === 0 ? 0 : (birthdaysData?.offset ?? 0) + 1;
+  const birthdayAte = (birthdaysData?.offset ?? 0) + (birthdaysData?.clientes.length ?? 0);
+  const birthdaysAvailable = birthdaysData?.available !== false;
   const rankingData = rankingQ.data;
   const rankingItems = (rankingData?.clientes ?? []).filter((item) =>
     semRetornoMatchesSearch(item, deferredSearch),
@@ -206,6 +272,31 @@ export function ClientesSection({
               className="h-[46px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken pl-[42px] pr-3.5 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint hover:border-[var(--c-input-hover-border)] focus:border-brand focus:shadow-focus focus:ring-[3px] focus:ring-brand/35"
             />
           </div>
+
+          {birthdaysAvailable && (
+            <AniversariantesSection
+              mode={mode}
+              search={deferredSearch}
+              birthdayMode={birthdayMode}
+              birthdayDays={birthdayDays}
+              birthdayMonth={birthdayMonth}
+              query={birthdaysQ}
+              items={birthdayItems}
+              total={birthdayTotal}
+              de={birthdayDe}
+              ate={birthdayAte}
+              currentPage={birthdayCurrentPage}
+              totalPages={birthdayTotalPages}
+              onModeChange={setBirthdayMode}
+              onDaysChange={setBirthdayDays}
+              onMonthChange={setBirthdayMonth}
+              onPrevPage={() => setBirthdayPage((current) => Math.max(1, current - 1))}
+              onNextPage={() =>
+                setBirthdayPage((current) => Math.min(birthdayTotalPages, current + 1))
+              }
+              onOpen={(id) => setSelectedId(id)}
+            />
+          )}
 
           {rankingAvailable && (
             <SemRetornoSection
@@ -459,6 +550,209 @@ function SemRetornoSection({
   );
 }
 
+function AniversariantesSection({
+  mode,
+  search,
+  birthdayMode,
+  birthdayDays,
+  birthdayMonth,
+  query,
+  items,
+  total,
+  de,
+  ate,
+  currentPage,
+  totalPages,
+  onModeChange,
+  onDaysChange,
+  onMonthChange,
+  onPrevPage,
+  onNextPage,
+  onOpen,
+}: {
+  mode: Mode;
+  search: string;
+  birthdayMode: ClientesAniversariantesModo;
+  birthdayDays: number;
+  birthdayMonth: number;
+  query:
+    | ReturnType<typeof useClientesAniversariantes>
+    | ReturnType<typeof useColaboradorClientesAniversariantes>;
+  items: ClienteAniversarianteItem[];
+  total: number;
+  de: number;
+  ate: number;
+  currentPage: number;
+  totalPages: number;
+  onModeChange: (mode: ClientesAniversariantesModo) => void;
+  onDaysChange: (days: number) => void;
+  onMonthChange: (month: number) => void;
+  onPrevPage: () => void;
+  onNextPage: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const buscaAtiva = search.length > 0;
+
+  return (
+    <section className="mb-4">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-[17px] font-semibold text-ink">Aniversariantes</h2>
+          <p className="mt-1 max-w-[46rem] text-[13px] leading-snug text-ink-soft">
+            {mode === 'owner' ? OWNER_BIRTHDAY_SUBTITLE : COLABORADOR_BIRTHDAY_SUBTITLE}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-pill border border-line bg-surface px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft">
+          Read-only
+        </span>
+      </div>
+
+      <div className="mb-3 rounded-card border border-line bg-surface px-3.5 py-3 shadow-card">
+        <div className="flex flex-wrap gap-2">
+          <ModeBtn
+            active={birthdayMode === 'proximos'}
+            onClick={() => onModeChange('proximos')}
+            label="Próximos dias"
+          />
+          <ModeBtn
+            active={birthdayMode === 'mes'}
+            onClick={() => onModeChange('mes')}
+            label="Por mês"
+          />
+        </div>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          {birthdayMode === 'proximos' ? (
+            <div className="flex min-w-0 flex-1 flex-col gap-[7px]">
+              <label className="text-[13px] font-semibold text-ink">Janela</label>
+              <select
+                value={birthdayDays}
+                onChange={(event) => onDaysChange(Number(event.target.value))}
+                className="h-[44px] rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35"
+              >
+                {ANIVERSARIANTE_DAY_OPTIONS.map((days) => (
+                  <option key={days} value={days}>
+                    Próximos {days} dias
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-1 flex-col gap-[7px]">
+              <label className="text-[13px] font-semibold text-ink">Mês</label>
+              <select
+                value={birthdayMonth}
+                onChange={(event) => onMonthChange(Number(event.target.value))}
+                className="h-[44px] rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35"
+              >
+                {MONTH_OPTIONS.map((month) => (
+                  <option key={month} value={month}>
+                    {monthName(month)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {query.isPending ? (
+        <>
+          <span className="sr-only">Carregando aniversariantes…</span>
+          <SkeletonList rows={4} />
+        </>
+      ) : query.isError || !query.data ? (
+        <ErrorState title="Não foi possível carregar os aniversariantes" onRetry={() => query.refetch()} />
+      ) : total === 0 ? (
+        <EmptyState
+          icon={<IconCalendar size={26} />}
+          title="Nenhum aniversário cadastrado nessa faixa"
+          description="Os aniversários preenchidos no perfil CRM aparecem aqui, sem envio automático nem exportação."
+        />
+      ) : items.length === 0 ? (
+        <div className="rounded-card border border-line bg-surface px-6 py-8 text-center shadow-card">
+          <h3 className="font-display text-[15px] font-semibold text-ink">
+            Nenhum aniversariante desta página combina com "{search}"
+          </h3>
+          <p className="mt-1 text-[13px] text-ink-soft">
+            A busca está filtrando a página carregada agora. Limpe o termo ou avance a paginação.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-[12.5px] tabular-nums text-ink-soft">
+              {de}–{ate} de {total} cliente{total === 1 ? '' : 's'}
+              {buscaAtiva ? ` · ${items.length} visível${items.length === 1 ? '' : 'is'} na busca` : ''}
+            </span>
+            {query.isFetching && <span className="text-[12px] text-ink-faint">Atualizando…</span>}
+          </div>
+
+          <div className="overflow-hidden rounded-card border border-line bg-surface shadow-card">
+            {items.map((item) => (
+              <AniversarianteRow
+                key={item.id}
+                item={item}
+                mode={birthdayMode}
+                selectedMonth={birthdayMonth}
+                onOpen={() => onOpen(item.id)}
+              />
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-[12.5px] tabular-nums text-ink-soft">
+                Página {currentPage} de {totalPages}
+              </span>
+              <div className="flex items-center gap-2">
+                <PageBtn
+                  label="Página anterior dos aniversariantes"
+                  disabled={currentPage <= 1}
+                  onClick={onPrevPage}
+                >
+                  <IconChevronLeft size={18} />
+                </PageBtn>
+                <PageBtn
+                  label="Próxima página dos aniversariantes"
+                  disabled={currentPage >= totalPages}
+                  onClick={onNextPage}
+                >
+                  <IconChevronRight size={18} />
+                </PageBtn>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ModeBtn({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-pill border px-3 py-1.5 text-[12.5px] font-semibold transition-colors',
+        active
+          ? 'border-brand bg-brand-soft text-brand'
+          : 'border-line bg-surface text-ink-soft hover:bg-surface-hover hover:text-ink',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
 function ClienteRow({
   item,
   timezone,
@@ -506,6 +800,50 @@ function ClienteRow({
           {mode === 'owner' && item.ultimo_profissional_nome && (
             <span>Último com {item.ultimo_profissional_nome}</span>
           )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function AniversarianteRow({
+  item,
+  mode,
+  selectedMonth,
+  onOpen,
+}: {
+  item: ClienteAniversarianteItem;
+  mode: ClientesAniversariantesModo;
+  selectedMonth: number;
+  onOpen: () => void;
+}) {
+  const nome = clienteDisplayName(item.nome);
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-start gap-3.5 border-b border-line-soft px-[15px] py-3.5 text-left transition-colors last:border-b-0 hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+    >
+      <span className="flex size-[42px] shrink-0 items-center justify-center rounded-[12px] bg-brand-soft font-display text-[14px] font-bold text-brand">
+        {initials(nome)}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate font-display text-[15px] font-semibold text-ink">{nome}</div>
+            <div className="mt-0.5 truncate text-[12.5px] text-ink-soft">
+              {item.telefone_masked}
+            </div>
+          </div>
+          <span className="shrink-0 rounded-pill border border-line bg-surface-sunken px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft">
+            {aniversarianteDiasLabel(item.dias_ate_aniversario)}
+          </span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12.5px] text-ink-soft">
+          <span>{aniversarianteFaixaLabel(mode, item.dias_ate_aniversario, selectedMonth)}</span>
+          <span>Aniversário em {aniversarianteOccurrenceLabel(item)}</span>
+          <span>{birthdayLabel(item.aniversario_mmdd) ?? 'Data inválida'}</span>
         </div>
       </div>
     </button>
