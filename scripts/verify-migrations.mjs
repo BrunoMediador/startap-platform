@@ -83,7 +83,7 @@ function parseManifest(rawManifest, manifestPath, expectedRange) {
 export async function loadMigrationPlan(
   migrationsDir,
   manifestPath,
-  expectedRange = { first: 1, last: 85 },
+  expectedRange = undefined,
   baselinePath = undefined,
 ) {
   if (!manifestPath) throw new Error('manifest de migrations ausente');
@@ -93,12 +93,18 @@ export async function loadMigrationPlan(
   if (filenames.length === 0) {
     throw new Error(`nenhuma migration encontrada em ${migrationsDir}.`);
   }
-  const manifest = parseManifest(await readFile(manifestPath, 'utf8'), manifestPath, expectedRange);
+  const derivedFirst = baselinePath ? 1 : Number(filenames[0]?.slice(0, 3));
+  const derivedLast = Number(filenames[filenames.length - 1]?.slice(0, 3));
+  const effectiveRange = expectedRange ?? { first: derivedFirst, last: derivedLast };
+  if (!Number.isInteger(effectiveRange.first) || !Number.isInteger(effectiveRange.last)) {
+    throw new Error(`nao foi possivel inferir o range de migrations em ${migrationsDir}`);
+  }
+  const checkedManifest = parseManifest(await readFile(manifestPath, 'utf8'), manifestPath, effectiveRange);
   const sourcePaths = new Map(
     filenames.map((filename) => [filename, path.join(migrationsDir, filename)]),
   );
   if (baselinePath) sourcePaths.set(path.basename(baselinePath), baselinePath);
-  const expectedFilenames = manifest.map((entry) => entry.filename);
+  const expectedFilenames = checkedManifest.map((entry) => entry.filename);
   const actualFilenames = [...sourcePaths.keys()];
   const missing = expectedFilenames.filter((filename) => !actualFilenames.includes(filename));
   const extra = actualFilenames.filter((filename) => !expectedFilenames.includes(filename));
@@ -111,7 +117,7 @@ export async function loadMigrationPlan(
   }
 
   return Promise.all(
-    manifest.map(async (expected) => {
+    checkedManifest.map(async (expected) => {
       const sql = await readFile(sourcePaths.get(expected.filename), 'utf8');
       const actualHash = createHash('sha256').update(sql).digest('hex');
       if (actualHash !== expected.sha256) {
@@ -321,12 +327,7 @@ export async function runMigrationGate({
   const migrationsDir = path.join(repoRoot, 'packages', 'db', 'migrations');
   const legacyBaselinePath = path.join(repoRoot, 'scripts', 'fixtures', '001_legacy_schema.sql');
   const manifestPath = path.join(repoRoot, 'scripts', 'fixtures', 'migrations-manifest.sha256');
-  const inventory = await loadMigrationPlan(
-    migrationsDir,
-    manifestPath,
-    { first: 1, last: 84 },
-    legacyBaselinePath,
-  );
+  const inventory = await loadMigrationPlan(migrationsDir, manifestPath, undefined, legacyBaselinePath);
   const [baseline, ...plan] = inventory;
   if (baseline?.filename !== '001_legacy_schema.sql') {
     throw new Error('manifest deve iniciar pelo baseline 001_legacy_schema.sql');

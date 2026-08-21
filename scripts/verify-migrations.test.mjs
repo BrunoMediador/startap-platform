@@ -99,6 +99,37 @@ describe('verify-migrations — banco realmente vazio', () => {
 });
 
 describe('verify-migrations — manifest imutável', () => {
+  it('infere o range pelo diretório+baseline quando o caller não passa last hardcoded', async () => {
+    const baseline = 'CREATE TABLE legacy (id integer);\n';
+    const sql002 = 'SELECT 2;\n';
+    const sql003 = 'SELECT 3;\n';
+    const root = await mkdtemp(path.join(os.tmpdir(), 'startap-range-gate-'));
+    const migrationsDir = path.join(root, 'migrations');
+    await mkdir(migrationsDir);
+    const baselinePath = path.join(root, '001_legacy_schema.sql');
+    const manifestPath = path.join(root, 'manifest.sha256');
+    await writeFile(baselinePath, baseline, 'utf8');
+    await writeFile(path.join(migrationsDir, '002_first.sql'), sql002, 'utf8');
+    await writeFile(path.join(migrationsDir, '003_second.sql'), sql003, 'utf8');
+    await writeFile(
+      manifestPath,
+      [
+        `${sha256(baseline)}  001_legacy_schema.sql`,
+        `${sha256(sql002)}  002_first.sql`,
+        `${sha256(sql003)}  003_second.sql`,
+      ].join('\n') + '\n',
+      'utf8',
+    );
+
+    await expect(
+      loadMigrationPlan(migrationsDir, manifestPath, undefined, baselinePath),
+    ).resolves.toMatchObject([
+      { filename: '001_legacy_schema.sql' },
+      { filename: '002_first.sql' },
+      { filename: '003_second.sql' },
+    ]);
+  });
+
   it('falha quando uma migration esperada foi removida', async () => {
     const sql002 = 'SELECT 2;\n';
     const sql003 = 'SELECT 3;\n';
