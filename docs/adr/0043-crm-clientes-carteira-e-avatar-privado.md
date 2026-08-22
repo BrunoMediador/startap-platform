@@ -1,8 +1,8 @@
 # ADR 0043 — CRM Clientes: carteira filtrável e avatar privado
 
-**Status:** Proposto  
-**Data:** 2026-08-21  
-**Missão:** [037 — CRM Clientes: evolução de carteira](../missoes/037-crm-clientes-evolucao.md)  
+**Status:** Proposto
+**Data:** 2026-08-21
+**Missão:** [037 — CRM Clientes: evolução de carteira](../missoes/037-crm-clientes-evolucao.md)
 **Relacionado:** ADR 0040, ADR 0041, ADR 0042
 
 ## Decisão

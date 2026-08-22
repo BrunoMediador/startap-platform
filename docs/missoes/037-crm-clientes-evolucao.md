@@ -1,7 +1,7 @@
 # Missão 037 — CRM Clientes: evolução de carteira
 
-**DRI:** backend-senior + frontend-engineer  
-**Apetite:** médio  
+**DRI:** backend-senior + frontend-engineer
+**Apetite:** médio
 **ADR:** [0043](../adr/0043-crm-clientes-carteira-e-avatar-privado.md)
 
 ## Resultado
