@@ -718,7 +718,7 @@ async function listClientes(
            )`
       : '',
   );
-  const rows = await query<ListRowRaw>(sql, [
+  const params: unknown[] = [
     input.slot,
     input.tenantId,
     input.timezone,
@@ -734,8 +734,10 @@ async function listClientes(
     filters.ordem,
     limit,
     offset,
-    input.colaboradorId ?? null,
-  ]);
+  ];
+  if (isColaborador) params.push(input.colaboradorId);
+
+  const rows = await query<ListRowRaw>(sql, params);
   return {
     clientes: rows.rows.map(mapListRow),
     total: Number(rows.rows[0]?.total_count ?? 0),

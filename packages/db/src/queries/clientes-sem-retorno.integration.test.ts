@@ -338,6 +338,33 @@ describeIf('ranking sem retorno contra Postgres REAL', () => {
     expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••88');
   });
 
+  it('executa a listagem real para dono e colaborador sem divergência de parâmetros', async () => {
+    const owner = await clientes.listClientesForOwner({
+      slot: SLOT,
+      tenantId: TENANT,
+      timezone: TZ,
+      limit: 20,
+      offset: 0,
+    });
+    const colaborador = await clientes.listClientesForColaborador({
+      slot: SLOT,
+      tenantId: TENANT,
+      colaboradorId: 9,
+      timezone: TZ,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(owner.clientes.map((cliente: { nome: string }) => cliente.nome)).toEqual([
+      'Carlos',
+      'Maria',
+    ]);
+    expect(colaborador.clientes.map((cliente: { nome: string }) => cliente.nome)).toEqual([
+      'Carlos',
+      'Maria',
+    ]);
+  });
+
   it('EXPLAIN usa os índices tenant+slot do ranking no plano normal da query real', async () => {
     const plan = await explainOwnerPlan();
     const nodes = collectNodes(plan);
