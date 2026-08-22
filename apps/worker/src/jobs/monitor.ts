@@ -16,7 +16,7 @@
  *
  * Para cada check aplica a máquina de estado anti-spam (spec §4):
  *   up→down   => alerta DOWN, grava down_since/last_alert_at, alert_count=1;
- *   down→down => re-alerta SÓ se passou MONITOR_REALERT_HOURS (default 24h — anti-spam);
+ *   down→down => silêncio (a queda já foi alertada neste episódio);
  *   down→up   => alerta RECUPERADO, limpa down_since/last_alert_at;
  *   up→up     => silêncio.
  *   Debounce (api:health E waha:<sessao>): exige 2 observações down seguidas
@@ -103,7 +103,7 @@ export interface MonitorResult extends Record<string, unknown> {
   checked: number;
   /** quantos checks estão DOWN no fim do ciclo. */
   down: number;
-  /** mensagens efetivamente enviadas (DOWN + re-alerta + RECUPERADO). */
+  /** mensagens efetivamente enviadas (DOWN + RECUPERADO). */
   sent: number;
   /** mensagens suprimidas pelo hard cap global. */
   suppressed: number;
@@ -451,26 +451,16 @@ function minutesSince(d: Date | null): number {
   return Math.round((Date.now() - d.getTime()) / 60_000);
 }
 
-/** Formata minutos de indisponibilidade pra mensagem: "45 min", "3h", "26h10min". */
-function formatDowntime(mins: number): string {
-  if (mins < 60) return `${mins} min`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m > 0 ? `${h}h${m}min` : `${h}h`;
-}
-
 /**
  * Aplica a transição de UM check e (talvez) enfileira uma mensagem. Toda a
  * persistência de estado acontece aqui (upsertState); o envio é delegado ao
  * `send` callback (que aplica o hard cap). Retorna se ficou DOWN no fim e se ESTE
  * ciclo foi a transição up→down CONFIRMADA (`justWentDown`) — gatilho EXATO (1 vez
- * por episódio) do auto-aviso ao dono do clone. Re-alertas down→down NÃO marcam
- * justWentDown (o cooldown por-clone do aviso já protege, mas o sinal fica preciso).
+ * por episódio) do auto-aviso ao dono do clone. Checks que seguem down ficam em silêncio.
  */
 async function applyTransition(
   obsItem: CheckObservation,
   prev: alerts.AlertStateRow | null,
-  realertMin: number,
   send: (texto: string) => Promise<SendOutcome>,
 ): Promise<{ isDown: boolean; justWentDown: boolean }> {
   const prevState: alerts.AlertState = prev?.state ?? 'up';
@@ -580,38 +570,8 @@ async function applyTransition(
     return { isDown: true, justWentDown: true };
   }
 
-  // down → down: re-alerta só se passou o intervalo de re-alerta (MONITOR_REALERT_HOURS, default
-  // 24h). Anti-spam: uma sessão caída não gera mais 1 alerta a cada ciclo/30 min (flood noturno que
-  // arriscava BAN do número remetente) — só 1 lembrete por dia enquanto seguir down.
-  const sinceLast = minutesSince(prev?.last_alert_at ?? prev?.down_since ?? null);
-  if (sinceLast >= realertMin) {
-    const downMins = minutesSince(prev?.down_since ?? null);
-    const realertHours = Math.round(realertMin / 60);
-    const stampedAt = new Date();
-    const expectCount = (prev?.alert_count ?? 0) + 1;
-    await alerts.upsertState({
-      checkKey: obsItem.key,
-      state: 'down',
-      downSince: prev?.down_since ?? stampedAt,
-      lastAlertAt: stampedAt,
-      alertCount: expectCount,
-      pendingDownCount: 0,
-    });
-    // Mensagem inclui HÁ QUANTO tempo (down_since) e QUANDO vem o próximo lembrete — explica o
-    // silêncio entre um re-alerta e outro (barato, evita a pergunta "por que parou de avisar?").
-    const outcome = await send(
-      `🔴 AINDA CAÍDO: ${obsItem.label} há ${formatDowntime(downMins)} — ${obsItem.detail}. ` +
-        `Próximo lembrete em ~${realertHours}h se seguir caído.`,
-    );
-    if (outcome === 'failed-definitive') {
-      // Só em falha DEFINITIVA restaura o last_alert_at anterior: o re-alerta que comprovadamente
-      // não saiu NÃO reinicia o relógio do re-alerta, então o próximo ciclo (ainda ≥ intervalo)
-      // re-tenta (SCRUM-53). Ambíguo (timeout/5xx) mantém o carimbo (P2 do security — pode ter saído).
-      await rollbackStamp(stampedAt, expectCount);
-    }
-    return { isDown: true, justWentDown: false };
-  }
-  // Dentro do intervalo de re-alerta: silêncio (estado já é down; nada a gravar).
+  // down → down: a mensagem de queda já saiu neste episódio. O monitor continua
+  // observando a sessão e preserva o estado para emitir RECUPERADO, mas não reenvia.
   return { isDown: true, justWentDown: false };
 }
 
@@ -653,12 +613,6 @@ export async function runMonitor(): Promise<MonitorResult> {
   const states = await alerts.listStates();
   const stateByKey = new Map(states.map((s) => [s.check_key, s]));
 
-  // Intervalo de RE-alerta enquanto down (anti-spam): env MONITOR_REALERT_HOURS -> minutos.
-  // Supersede o antigo alert_config.cooldown_min (~30 min), que floodava o número remetente.
-  // Aplica-se POR check_key; NÃO toca a transição up→down (avisa na hora) nem __global__/__heartbeat__
-  // (que nunca passam por applyTransition).
-  const realertMin = Math.round(config.MONITOR_REALERT_HOURS * 60);
-
   for (const obsItem of observations) {
     try {
       const send = async (texto: string): Promise<SendOutcome> => {
@@ -677,7 +631,6 @@ export async function runMonitor(): Promise<MonitorResult> {
       const { isDown, justWentDown } = await applyTransition(
         obsItem,
         stateByKey.get(obsItem.key) ?? null,
-        realertMin,
         send,
       );
       if (isDown) result.down += 1;

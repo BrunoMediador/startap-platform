@@ -4,7 +4,7 @@
  * otimista contra ciclos concorrentes; se o send falha (sessão remetente ALERTAS caída etc.),
  * `applyTransition` DESFAZ o carimbo (restoreStateIfUnchanged) pra o próximo ciclo re-tentar —
  * sem pisar numa reserva mais nova de outro ciclo (o predicado do restore é o valor que ESTE
- * ciclo gravou). Cobre up->down e down->down (re-alerta).
+ * ciclo gravou). Cobre a transição up->down; checks já down permanecem silenciosos.
  *
  * Mesma fiação de mocks do monitor.test.ts + `restoreStateIfUnchanged`.
  */
@@ -53,7 +53,6 @@ vi.mock('../config.js', () => ({
     ALERTS_API_HEALTH_URL: 'http://startap-api:3040/health',
     ALERTS_MAX_PER_WINDOW: 50,
     ALERTS_WINDOW_MIN: 30,
-    MONITOR_REALERT_HOURS: 24,
     // Flag ON: torna a checagem "up→down falho NÃO avisa o dono" LOAD-BEARING (senão o bloco de
     // notify nunca roda e a asserção clientNotified===0 seria vácua).
     CLIENT_DISCONNECT_ALERT_ENABLED: true,
@@ -225,13 +224,13 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
   });
 
-  it('down->down (re-alerta) + send FALHA -> restaura o last_alert_at ANTERIOR (relógio de re-alerta não reinicia)', async () => {
+  it('down->down, mesmo após 25h: não tenta novo envio nem mexe no carimbo do episódio', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
     const downSince = new Date(Date.now() - 26 * 60 * 60_000); // caído há 26h
-    const prevAlertAt = new Date(Date.now() - 25 * 60 * 60_000); // último aviso 25h atrás (>24h -> re-alerta)
+    const prevAlertAt = new Date(Date.now() - 25 * 60 * 60_000);
     mocks.listStates.mockResolvedValue([
       stateRow('waha:clone_seven_7', {
         state: 'down',
@@ -240,18 +239,11 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
         alert_count: 2,
       }),
     ]);
-    mocks.sendText.mockRejectedValue(DEFINITIVE);
-
     const r = await runMonitor();
 
     expect(r.sent).toBe(0);
-    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
-    const comp = mocks.restoreStateIfUnchanged.mock.calls[0][0];
-    // Restaura o carimbo anterior: um re-alerta que não saiu NÃO adianta o relógio de re-alerta,
-    // então o próximo ciclo (ainda >= intervalo) re-tenta.
-    expect(comp.restore.lastAlertAt).toBe(prevAlertAt);
-    expect(comp.restore.alertCount).toBe(2);
-    expect(comp.restore.state).toBe('down');
+    expect(mocks.sendText).not.toHaveBeenCalled();
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 });
 
