@@ -30,10 +30,10 @@ import {
   weekdayOfDateKey,
   zonedWallTimeToUtc,
 } from '@startap/integrations/scheduling';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { requireTenant, withTenant } from '../lib/tenant.js';
-import { isEstabelecimentoSlot } from './portal-agendamentos.js';
+import { requireColaborador, requireTenant, withTenant } from '../lib/tenant.js';
+import { isEstabelecimentoSlot, withColaboradorAgendamentos } from './portal-agendamentos.js';
 
 const log = logger.child({ service: 'portal-api', module: 'agenda-slots' });
 
@@ -44,9 +44,12 @@ const log = logger.child({ service: 'portal-api', module: 'agenda-slots' });
  */
 const MAX_AHEAD_DAYS = 365;
 
+const dataSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD');
+const servicoSchema = z.string().trim().min(1, 'servico obrigatorio').max(80);
+
 const querySchema = z.object({
-  data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
-  servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+  data: dataSchema,
+  servico: servicoSchema,
   // ESTABELECIMENTO (multi-profissional): qual colaborador/agenda a grade consulta.
   // É clone_colaboradores.id (numérico). OPCIONAL no schema porque o INDIVIDUAL não
   // usa (single-agenda) — a obrigatoriedade no estabelecimento é validada no handler
@@ -56,6 +59,10 @@ const querySchema = z.object({
     z.coerce.number().int().positive().optional(),
   ),
 });
+
+// O colaborador não escolhe agenda por query. Rejeitar o campo em vez de ignorá-lo impede
+// que uma alteração futura reutilize acidentalmente esse valor na resolução do GCal.
+const colaboradorQuerySchema = z.object({ data: dataSchema, servico: servicoSchema }).strict();
 
 /** Agrupa slots 'HH:mm' em manhã (<12h), tarde (12h–17h59) e noite (>=18h). */
 export function groupSlots(slots: string[]): {
@@ -74,18 +81,12 @@ export function groupSlots(slots: string[]): {
 }
 
 export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/portal/agenda/slots', { preHandler: withTenant }, async (req, reply) => {
-    const { slot } = requireTenant(req);
-
-    const parsed = querySchema.safeParse(req.query ?? {});
-    if (!parsed.success) {
-      return reply.code(400).send({
-        error: 'parametros_invalidos',
-        detalhe: parsed.error.issues[0]?.message ?? 'query invalida',
-      });
-    }
-    const { data, servico, colaborador_id } = parsed.data;
-
+  const handleSlots = async (
+    slot: string,
+    colaboradorId: number | undefined,
+    { data, servico }: { data: string; servico: string },
+    reply: FastifyReply,
+  ) => {
     // Config do tenant (horários + serviços) — mesma fonte do bot. Carregada ANTES da
     // checagem de janela porque "passado/futuro" precisa do FUSO do clone (migration 068).
     // REORDENADO: o window-check usava nowPartsInTz() (SP fixo) antes do load; agora usa
@@ -141,7 +142,7 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
 
     if (await isEstabelecimentoSlot(slot)) {
       // Estabelecimento exige escolher o profissional (qual agenda a grade consulta).
-      if (colaborador_id === undefined) {
+      if (colaboradorId === undefined) {
         return reply.code(422).send({ error: 'colaborador_obrigatorio' });
       }
       const colaboradores = await gcal.getGcalsForSlot(slot);
@@ -151,14 +152,11 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
           .code(200)
           .send({ gcal_configured: false, data, servico: servicoOut, aberto, ...vazio });
       }
-      const alvo = colaboradores.find((c) => c.colaboradorId === colaborador_id);
+      const alvo = colaboradores.find((c) => c.colaboradorId === colaboradorId);
       if (!alvo) {
         // colaborador_id não pertence a ESTE slot/tenant (ou sem agenda ativa).
         // Anti-IDOR: a lista só contém colaboradores deste tenant — alheio cai aqui.
-        log.warn(
-          { slot, colaboradorId: colaborador_id },
-          'slots: colaborador fora do tenant ou sem agenda ativa',
-        );
+        log.warn({ slot, colaboradorId }, 'slots: colaborador fora do tenant ou sem agenda ativa');
         return reply.code(404).send({ error: 'colaborador_nao_encontrado' });
       }
       client = alvo.client;
@@ -208,5 +206,33 @@ export const portalAgendaSlotsRoutes: FastifyPluginAsync = async (app) => {
       );
       return reply.code(502).send({ error: 'nao foi possivel consultar a agenda agora' });
     }
+  };
+
+  app.get('/portal/agenda/slots', { preHandler: withTenant }, async (req, reply) => {
+    const { slot } = requireTenant(req);
+    const parsed = querySchema.safeParse(req.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'parametros_invalidos',
+        detalhe: parsed.error.issues[0]?.message ?? 'query invalida',
+      });
+    }
+    return handleSlots(slot, parsed.data.colaborador_id, parsed.data, reply);
   });
+
+  app.get(
+    '/portal/colaborador/agendamentos/slots',
+    { preHandler: withColaboradorAgendamentos },
+    async (req, reply) => {
+      const parsed = colaboradorQuerySchema.safeParse(req.query ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'parametros_invalidos',
+          detalhe: parsed.error.issues[0]?.message ?? 'query invalida',
+        });
+      }
+      const { slot, colaboradorId } = requireColaborador(req);
+      return handleSlots(slot, colaboradorId, parsed.data, reply);
+    },
+  );
 };

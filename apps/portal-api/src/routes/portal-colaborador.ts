@@ -29,6 +29,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { requireColaborador, withColaborador } from '../lib/tenant.js';
+import { isColaboradorAgendamentosEnabled } from './portal-agendamentos.js';
 
 const log = logger.child({ service: 'portal-api', module: 'colaborador' });
 
@@ -69,6 +70,7 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/colaborador/agenda', { preHandler: withColaborador }, async (req, reply) => {
     if (!gateEnabled(reply)) return reply;
     const { slot, colaboradorId } = requireColaborador(req);
+    const agendaWriteEnabled = isColaboradorAgendamentosEnabled(slot);
 
     const q = req.query as { past?: unknown; ahead?: unknown };
     const pastDays = pastDaysQuery.safeParse(q?.past).success
@@ -100,7 +102,12 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
     if (!alvo) {
       // Sem agenda ativa pra este colaborador (pré-setup / agenda não conectada).
       // Estado esperado, não erro: lista vazia + flag.
-      return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+      return reply.code(200).send({
+        gcal_configured: false,
+        count: 0,
+        agendamentos: [],
+        agenda_write_enabled: agendaWriteEnabled,
+      });
     }
 
     try {
@@ -115,9 +122,12 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
         }))
         .sort((a, b) => (a.inicio ?? '￿').localeCompare(b.inicio ?? '￿'))
         .slice(0, MAX_EVENTS);
-      return reply
-        .code(200)
-        .send({ gcal_configured: true, count: agendamentos.length, agendamentos });
+      return reply.code(200).send({
+        gcal_configured: true,
+        count: agendamentos.length,
+        agendamentos,
+        agenda_write_enabled: agendaWriteEnabled,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);

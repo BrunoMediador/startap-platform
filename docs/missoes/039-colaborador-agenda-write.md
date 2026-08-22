@@ -36,6 +36,8 @@ distinta e nasce OFF em `COLABORADOR_AGENDAMENTOS_ENABLED`; a allowlist
 ## Escopo
 
 - POST, PATCH e DELETE em `/portal/colaborador/agendamentos[/:eventId]`.
+- GET de serviços, horários e slots sob `/portal/colaborador/agendamentos/*`, mais o sinal
+  explícito `agenda_write_enabled` na leitura da agenda.
 - Agenda e profissional derivados somente da sessão do colaborador.
 - Reuso do núcleo de comandos do dono: fuso, serviço, conflito, event ID e espelho total.
 - Flag global e allowlist por slot, ambas fail-closed.
@@ -54,6 +56,8 @@ distinta e nasce OFF em `COLABORADOR_AGENDAMENTOS_ENABLED`; a allowlist
 - [x] Owner preserva o comportamento e a auditoria legada.
 - [x] Colaborador preserva conflito, event ID e espelho para faturamento.
 - [x] Flag e allowlist retornam 404 antes de GCal.
+- [x] Leituras de suporte usam a mesma capability; slots rejeitam `colaborador_id` e consultam
+  exclusivamente a agenda da sessão.
 - [ ] Frontend adiciona controles e smoke humano em navegador.
 - [ ] PM/DevOps mede env no container e liga os gates globais após merge.
 

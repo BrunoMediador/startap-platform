@@ -85,6 +85,10 @@ vi.mock('@startap/db', () => ({
   },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
+  portalConfig: {
+    getServicosBySlot: vi.fn(),
+    getHorariosBySlot: vi.fn(),
+  },
   cloneColaboradores: { getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a) },
   atendimentos: {
     upsertAtendimentoFromEvent: (...a: unknown[]) => upsertAtendimentoFromEventMock(...a),
@@ -133,6 +137,7 @@ vi.mock('../lib/tenant.js', async () => {
   };
 });
 
+import { portalConfig } from '@startap/db';
 // O mock acima só troca loadScheduleConfig — estas helpers são as REAIS.
 import { nowPartsInTz, zonedWallTimeToUtc } from '@startap/integrations/scheduling';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -204,6 +209,16 @@ beforeEach(() => {
     product_type: 'individual',
     seat_cap: null,
     tenant_id: null,
+  });
+  vi.mocked(portalConfig.getServicosBySlot).mockResolvedValue([
+    { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
+  ]);
+  vi.mocked(portalConfig.getHorariosBySlot).mockResolvedValue({
+    segunda: { abre: '09:00', fecha: '18:00', fechado: false },
+    terca: { abre: '09:00', fecha: '18:00', fechado: false },
+    quarta: { abre: '09:00', fecha: '18:00', fechado: false },
+    quinta: { abre: '09:00', fecha: '18:00', fechado: false },
+    sexta: { abre: '09:00', fecha: '18:00', fechado: false },
   });
   // Defaults benignos dos helpers de atendimento (só usados quando o slot está na lista).
   upsertAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
@@ -2045,6 +2060,42 @@ describe('POST/PATCH/DELETE /portal/colaborador/agendamentos — agenda própria
       reason: 'portal_cancel',
       by: 'portal:colaborador:7',
     });
+    await app.close();
+  });
+});
+
+describe('GET /portal/colaborador/agendamentos/{servicos,horarios}', () => {
+  it('gate OFF -> 404 antes de consultar configuração', async () => {
+    estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_ENABLED = false;
+    const app = await buildApp();
+
+    const [servicos, horarios] = await Promise.all([
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/servicos' }),
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/horarios' }),
+    ]);
+
+    expect(servicos.statusCode).toBe(404);
+    expect(horarios.statusCode).toBe(404);
+    expect(portalConfig.getServicosBySlot).not.toHaveBeenCalled();
+    expect(portalConfig.getHorariosBySlot).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('deriva o slot da sessão e expõe o mesmo catálogo/horários do estabelecimento', async () => {
+    const app = await buildApp();
+
+    const [servicos, horarios] = await Promise.all([
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/servicos?slot=forjado' }),
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/horarios?slot=forjado' }),
+    ]);
+
+    expect(servicos.statusCode).toBe(200);
+    expect(horarios.statusCode).toBe(200);
+    expect(servicos.json().servicos).toEqual([
+      { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
+    ]);
+    expect(portalConfig.getServicosBySlot).toHaveBeenCalledWith(injectedSlot);
+    expect(portalConfig.getHorariosBySlot).toHaveBeenCalledWith(injectedSlot);
     await app.close();
   });
 });

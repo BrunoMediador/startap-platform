@@ -34,7 +34,7 @@ import {
   type Periodicidade,
   expandirDatas,
 } from '@startap/core/recorrencia';
-import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
+import { atendimentos, cloneColaboradores, flowClones, portalConfig } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import {
   TZ,
@@ -68,15 +68,15 @@ type AgendaActor =
   | { role: 'owner'; slot: string; userId: number; auditBy: string }
   | { role: 'colaborador'; slot: string; colaboradorId: number; auditBy: string };
 
-function slotAllowed(slot: string, slotsConfig: string): boolean {
-  const entries = slotsConfig
+function slotAllowed(slot: string, slotsConfig: string | undefined): boolean {
+  const entries = (slotsConfig ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   return entries.includes('*') || entries.includes(slot);
 }
 
-function isColaboradorAgendamentosEnabled(slot: string): boolean {
+export function isColaboradorAgendamentosEnabled(slot: string): boolean {
   return (
     config.COLABORADOR_PORTAL_ENABLED &&
     config.COLABORADOR_AGENDAMENTOS_ENABLED &&
@@ -84,7 +84,7 @@ function isColaboradorAgendamentosEnabled(slot: string): boolean {
   );
 }
 
-async function withColaboradorAgendamentos(
+export async function withColaboradorAgendamentos(
   req: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
@@ -766,6 +766,31 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(502).send({ error: 'nao foi possivel buscar agendamentos agora' });
     }
   });
+
+  // Leituras que alimentam a escrita do colaborador. O catálogo e os horários são os mesmos
+  // do estabelecimento (paridade com o owner); a agenda consultada nos slots, porém, é sempre
+  // a dele e é resolvida no módulo portal-agenda-slots.
+  app.get(
+    '/portal/colaborador/agendamentos/servicos',
+    { preHandler: withColaboradorAgendamentos },
+    async (req, reply) => {
+      const { slot } = requireColaborador(req);
+      const servicos = await portalConfig.getServicosBySlot(slot);
+      if (servicos === null) return reply.code(404).send({ error: 'fluxo nao encontrado' });
+      return reply.code(200).send({ servicos });
+    },
+  );
+
+  app.get(
+    '/portal/colaborador/agendamentos/horarios',
+    { preHandler: withColaboradorAgendamentos },
+    async (req, reply) => {
+      const { slot } = requireColaborador(req);
+      const horarios = await portalConfig.getHorariosBySlot(slot);
+      if (horarios === null) return reply.code(404).send({ error: 'fluxo nao encontrado' });
+      return reply.code(200).send({ horarios });
+    },
+  );
 
   const createAgendamentoHandler = async (req: FastifyRequest, reply: FastifyReply) => {
     const actor = requireAgendaActor(req);

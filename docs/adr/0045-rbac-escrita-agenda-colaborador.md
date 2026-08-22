@@ -24,8 +24,15 @@ colega/outro tenant. O cancelamento preserva `portal:<ownerId>` para owner e gra
 A capability nasce protegida por `COLABORADOR_AGENDAMENTOS_ENABLED` e
 `COLABORADOR_AGENDAMENTOS_SLOTS`; ausência de qualquer um falha fechada com 404.
 
+As leituras que suportam a escrita (serviços, horários e slots) usam a mesma capability. Serviços
+e horários preservam o catálogo compartilhado do estabelecimento, por paridade com o owner; a
+resolução de slots força a agenda da sessão e rejeita `colaborador_id` no query string. O GET da
+agenda expõe `agenda_write_enabled` calculado no servidor para que a UI nunca infira permissão.
+
 ## Consequências
 
 - Não há migration: o vínculo agenda-colaborador e a trilha `deleted_by` já existem.
 - As rotas do dono seguem com `withTenant`, que continua bloqueando sessão de colaborador.
 - Recorrência e transferência de profissional permanecem fora da fatia.
+- A atribuição de serviços por colaborador permanece fora da fatia; o catálogo global é uma
+  decisão de produto explícita e não uma concessão de acesso à agenda de colegas.
