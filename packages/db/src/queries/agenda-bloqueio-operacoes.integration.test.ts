@@ -21,10 +21,12 @@ if (!PG_TEST_URL) {
 }
 
 type AgendaBloqueioOperacoesModule = typeof import('./agenda-bloqueio-operacoes.js');
+type AgendaBloqueiosModule = typeof import('./agenda-bloqueios.js');
 
 describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
   let pgPool: Pool;
   let agendaBloqueioOperacoes: AgendaBloqueioOperacoesModule;
+  let agendaBloqueios: AgendaBloqueiosModule;
 
   async function exec<T extends QueryResultRow = QueryResultRow>(
     sql: string,
@@ -119,10 +121,32 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
       gcal_event_id TEXT NOT NULL UNIQUE,
       status TEXT NOT NULL DEFAULT 'planned',
       error_code TEXT,
+      attempt_version INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (operation_id, ordinal)
     )`);
+    await exec(`CREATE TABLE agenda_bloqueios (
+      id UUID PRIMARY KEY,
+      tenant_id UUID NOT NULL,
+      slot TEXT NOT NULL,
+      colaborador_id BIGINT,
+      serie_id UUID,
+      gcal_event_id TEXT,
+      inicio_at TIMESTAMPTZ NOT NULL,
+      fim_at TIMESTAMPTZ NOT NULL,
+      timezone TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      motivo TEXT,
+      status TEXT NOT NULL,
+      created_by_role TEXT NOT NULL,
+      created_by_user_id BIGINT,
+      created_by_colaborador_id BIGINT,
+      deleted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
     agendaBloqueioOperacoes = await import('./agenda-bloqueio-operacoes.js');
+    agendaBloqueios = await import('./agenda-bloqueios.js');
   }, 30_000);
 
   afterAll(async () => {
@@ -470,5 +494,201 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
         ordinal: 1,
       }),
     ).resolves.toEqual(expect.objectContaining({ status: 'gcal_dispatch_started' }));
+  });
+
+  it('detecta serie_id legada no escopo certo e ignora uma operação já durável', async () => {
+    const scope = {
+      tenantId: '00000000-0000-4000-8000-000000000001',
+      slot: 'clone_legacy',
+      colaboradorId: 7,
+      inicioAt: '2026-10-01T12:00:00.000Z',
+      fimAt: '2026-10-01T13:00:00.000Z',
+      tipo: 'almoco' as const,
+      motivo: 'intervalo',
+    };
+    await exec(
+      `INSERT INTO agenda_bloqueios (
+        id, tenant_id, slot, colaborador_id, serie_id, gcal_event_id,
+        inicio_at, fim_at, timezone, tipo, motivo, status, created_by_role
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active','owner')`,
+      [
+        'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        scope.tenantId,
+        scope.slot,
+        scope.colaboradorId,
+        'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        'legacy-event',
+        scope.inicioAt,
+        scope.fimAt,
+        'America/Sao_Paulo',
+        scope.tipo,
+        scope.motivo,
+      ],
+    );
+    await expect(agendaBloqueios.hasLegacySerieMatchingCreate(scope)).resolves.toBe(true);
+    await expect(
+      agendaBloqueios.hasLegacySerieMatchingCreate({ ...scope, slot: 'outro_slot' }),
+    ).resolves.toBe(false);
+    await expect(
+      agendaBloqueios.hasLegacySerieMatchingCreate({ ...scope, colaboradorId: 8 }),
+    ).resolves.toBe(false);
+
+    const durable = input({
+      operationId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      tenantId: scope.tenantId,
+      slot: 'clone_duravel',
+      colaboradorId: scope.colaboradorId,
+      sessionHash: 'k'.repeat(64),
+      payloadHash: 'l'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-duravel-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(durable);
+    await exec(
+      `INSERT INTO agenda_bloqueios (
+        id, tenant_id, slot, colaborador_id, serie_id, gcal_event_id,
+        inicio_at, fim_at, timezone, tipo, motivo, status, created_by_role
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'creating','owner')`,
+      [
+        'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        durable.tenantId,
+        durable.slot,
+        durable.colaboradorId,
+        durable.operationId,
+        'durable-event',
+        scope.inicioAt,
+        scope.fimAt,
+        'America/Sao_Paulo',
+        scope.tipo,
+        scope.motivo,
+      ],
+    );
+    await expect(
+      agendaBloqueios.hasLegacySerieMatchingCreate({ ...scope, slot: durable.slot }),
+    ).resolves.toBe(false);
+  });
+
+  it('fencing impede executor vencido de anexar, confirmar ou persistir resultado após takeover', async () => {
+    const plan = input({
+      operationId: '12121212-1212-4212-8212-121212121212',
+      sessionHash: 'm'.repeat(64),
+      payloadHash: 'n'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-fencing-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(plan);
+    const oldAttempt = await agendaBloqueioOperacoes.claimDispatch({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+    expect(oldAttempt).toEqual(expect.objectContaining({ attempt_version: 1 }));
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET updated_at=now() - interval '61 seconds'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    const newAttempt = await agendaBloqueioOperacoes.claimRecovery({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+    expect(newAttempt).toEqual(expect.objectContaining({ attempt_version: 2 }));
+    if (!oldAttempt || !newAttempt) throw new Error('claim de fencing inconsistente');
+    await exec(
+      `INSERT INTO agenda_bloqueios (
+        id, tenant_id, slot, colaborador_id, serie_id, gcal_event_id,
+        inicio_at, fim_at, timezone, tipo, motivo, status, created_by_role
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'creating','owner')`,
+      [
+        oldAttempt.bloqueio_id,
+        plan.tenantId,
+        plan.slot,
+        plan.colaboradorId,
+        plan.operationId,
+        oldAttempt.gcal_event_id,
+        oldAttempt.inicio_at,
+        oldAttempt.fim_at,
+        plan.timezone,
+        plan.tipo,
+        plan.motivo,
+      ],
+    );
+    await expect(
+      agendaBloqueios.attachGcalEventIdForDispatch({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        bloqueioId: oldAttempt.bloqueio_id,
+        gcalEventId: oldAttempt.gcal_event_id,
+        operationId: plan.operationId,
+        ordinal: 1,
+        attemptVersion: oldAttempt.attempt_version,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+        status: 'recovery_required',
+        expectedStatus: 'gcal_dispatch_started',
+        attemptVersion: oldAttempt.attempt_version,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      agendaBloqueioOperacoes.markOperationResult({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        colaboradorId: plan.colaboradorId,
+        status: 'recovery_required',
+        responseStatus: 207,
+        responseBody: { ok: false },
+        expectedAttemptVersion: oldAttempt.attempt_version,
+      }),
+    ).resolves.toBe(false);
+
+    await expect(
+      agendaBloqueios.attachGcalEventIdForDispatch({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        bloqueioId: newAttempt.bloqueio_id,
+        gcalEventId: newAttempt.gcal_event_id,
+        operationId: plan.operationId,
+        ordinal: 1,
+        attemptVersion: newAttempt.attempt_version,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ status: 'active' }));
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+        status: 'active',
+        expectedStatus: 'gcal_dispatch_started',
+        attemptVersion: newAttempt.attempt_version,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      agendaBloqueioOperacoes.markOperationResult({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        colaboradorId: plan.colaboradorId,
+        status: 'complete',
+        responseStatus: 201,
+        responseBody: { ok: true },
+        expectedAttemptVersion: newAttempt.attempt_version,
+      }),
+    ).resolves.toBe(true);
   });
 });

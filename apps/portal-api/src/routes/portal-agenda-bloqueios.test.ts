@@ -4,6 +4,7 @@ const {
   configMock,
   agendaCreate,
   agendaAttach,
+  agendaAttachForDispatch,
   agendaGetForRecovery,
   agendaHasSerieForRecovery,
   agendaHasLegacySerieMatchingCreate,
@@ -13,8 +14,6 @@ const {
   agendaListFutureBySerieId,
   agendaGetActive,
   agendaSoftDelete,
-  agendaSeriesClaim,
-  agendaSeriesMarkResult,
   agendaOperationCreatePlan,
   agendaOperationGet,
   agendaOperationList,
@@ -34,6 +33,7 @@ const {
   } as Record<string, unknown>,
   agendaCreate: vi.fn(),
   agendaAttach: vi.fn(),
+  agendaAttachForDispatch: vi.fn(),
   agendaGetForRecovery: vi.fn(),
   agendaHasSerieForRecovery: vi.fn(),
   agendaHasLegacySerieMatchingCreate: vi.fn(),
@@ -43,8 +43,6 @@ const {
   agendaListFutureBySerieId: vi.fn(),
   agendaGetActive: vi.fn(),
   agendaSoftDelete: vi.fn(),
-  agendaSeriesClaim: vi.fn(),
-  agendaSeriesMarkResult: vi.fn(),
   agendaOperationCreatePlan: vi.fn(),
   agendaOperationGet: vi.fn(),
   agendaOperationList: vi.fn(),
@@ -63,6 +61,7 @@ vi.mock('@startap/db', () => ({
   agendaBloqueios: {
     create: agendaCreate,
     attachGcalEventId: agendaAttach,
+    attachGcalEventIdForDispatch: agendaAttachForDispatch,
     getByIdForRecovery: agendaGetForRecovery,
     hasSerieForRecovery: agendaHasSerieForRecovery,
     hasLegacySerieMatchingCreate: agendaHasLegacySerieMatchingCreate,
@@ -72,10 +71,6 @@ vi.mock('@startap/db', () => ({
     listFutureActiveBySerieId: agendaListFutureBySerieId,
     getActiveById: agendaGetActive,
     softDeleteById: agendaSoftDelete,
-  },
-  agendaBloqueioSeries: {
-    claimCreate: agendaSeriesClaim,
-    markCreateResult: agendaSeriesMarkResult,
   },
   agendaBloqueioOperacoes: {
     createPlan: agendaOperationCreatePlan,
@@ -144,6 +139,7 @@ let durablePlan: Array<{
   gcal_event_id: string;
   status: 'planned' | 'gcal_dispatch_started' | 'recovery_required' | 'active';
   error_code: string | null;
+  attempt_version: number;
 }> = [];
 
 async function buildApp() {
@@ -181,6 +177,15 @@ beforeEach(() => {
     gcal_event_id: 'gcal-block-1',
     status: 'active',
   });
+  agendaAttachForDispatch.mockResolvedValue({
+    id: '11111111-1111-4111-8111-111111111111',
+    slot: 'clone_owner',
+    tenant_id: '00000000-0000-4000-8000-000000000001',
+    colaborador_id: 8,
+    serie_id: null,
+    gcal_event_id: 'gcal-block-1',
+    status: 'active',
+  });
   agendaGetForRecovery.mockResolvedValue(null);
   agendaHasSerieForRecovery.mockResolvedValue(false);
   agendaHasLegacySerieMatchingCreate.mockResolvedValue(false);
@@ -188,15 +193,6 @@ beforeEach(() => {
   agendaListFutureBySerieId.mockResolvedValue([]);
   agendaGetActive.mockResolvedValue(null);
   agendaSoftDelete.mockResolvedValue(null);
-  agendaSeriesClaim.mockResolvedValue({
-    claimed: true,
-    serie: {
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      status: 'creating',
-      response_status: null,
-      response_body: null,
-    },
-  });
   agendaOperationCreatePlan.mockImplementation(
     async (input: {
       occurrences: Array<{
@@ -216,6 +212,7 @@ beforeEach(() => {
         gcal_event_id: occurrence.gcalEventId,
         status: 'planned',
         error_code: null,
+        attempt_version: 0,
       }));
       return {
         created: true,
@@ -240,14 +237,17 @@ beforeEach(() => {
     const occurrence = durablePlan.find((candidate) => candidate.ordinal === input.ordinal);
     if (!occurrence || occurrence.status !== 'planned') return null;
     occurrence.status = 'gcal_dispatch_started';
+    occurrence.attempt_version += 1;
     return occurrence;
   });
   agendaOperationClaimRecovery.mockImplementation(async (input: { ordinal: number }) => {
     const occurrence = durablePlan.find((candidate) => candidate.ordinal === input.ordinal);
     if (!occurrence || occurrence.status !== 'recovery_required') return null;
     occurrence.status = 'gcal_dispatch_started';
+    occurrence.attempt_version += 1;
     return occurrence;
   });
+  agendaOperationMarkResult.mockResolvedValue(true);
   getGcalForSlot.mockResolvedValue({
     createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-single' }),
     deleteEvent: vi.fn().mockResolvedValue(undefined),
@@ -927,203 +927,6 @@ describe('recorrência de bloqueios', () => {
     await app.close();
   });
 
-  it.skip('legado: claim da série anterior não duplica GCal', async () => {
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: false,
-      serie: {
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        status: 'creating',
-        response_status: null,
-        response_body: null,
-      },
-    });
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ error: 'serie_em_processamento' });
-    expect(agendaCreate).not.toHaveBeenCalled();
-    const claim = agendaSeriesClaim.mock.calls[0][0];
-    expect(claim).toEqual(
-      expect.objectContaining({
-        tenantId: '00000000-0000-4000-8000-000000000001',
-        slot: 'clone_owner',
-        colaboradorId: 8,
-      }),
-    );
-    expect(claim.sessionHash).not.toBe('sid-owner');
-    await app.close();
-  });
-
-  it.skip('legado: claim creating fail-closed', async () => {
-    const createEvent = vi.fn();
-    getGcalsForSlot.mockResolvedValueOnce([
-      {
-        colaboradorId: 8,
-        nome: 'Outro',
-        calendarId: 'cal-8',
-        client: { createEvent, deleteEvent: vi.fn() },
-        servicos: [],
-      },
-    ]);
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: false,
-      serie: {
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        status: 'creating',
-        response_status: null,
-        response_body: null,
-      },
-    });
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-    expect(res.statusCode).toBe(409);
-    expect(createEvent).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it.skip('legado: replay concluído da tabela agenda_bloqueio_series', async () => {
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: false,
-      serie: {
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        status: 'complete',
-        response_status: 201,
-        response_body: {
-          ok: true,
-          serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          criados: [
-            {
-              id: '11111111-1111-4111-8111-111111111111',
-              inicio_at: '2026-08-21T15:00:00.000Z',
-              fim_at: '2026-08-21T16:00:00.000Z',
-            },
-          ],
-          falhas: [],
-        },
-      },
-    });
-    const app = await buildApp();
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-
-    expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({
-      ok: true,
-      idempotent: true,
-      serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      criados: [
-        {
-          id: '11111111-1111-4111-8111-111111111111',
-          inicio_at: '2026-08-21T15:00:00.000Z',
-          fim_at: '2026-08-21T16:00:00.000Z',
-        },
-      ],
-      falhas: [],
-    });
-    expect(agendaCreate).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it.skip('legado: replay partial da tabela agenda_bloqueio_series', async () => {
-    const body = {
-      ok: true,
-      serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      criados: [{ id: '11111111-1111-4111-8111-111111111111', inicio_at: 'a', fim_at: 'b' }],
-      falhas: [{ inicio_at: 'c', fim_at: 'd', error: 'gcal_falhou', reason: 'erro_gcal' }],
-    };
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: false,
-      serie: {
-        id: body.serie_id,
-        status: 'partial',
-        response_status: 207,
-        response_body: body,
-      },
-    });
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-    expect(res.statusCode).toBe(207);
-    expect(res.json()).toEqual({ ...body, idempotent: true });
-    expect(agendaCreate).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it.skip('legado: replay failed da tabela agenda_bloqueio_series', async () => {
-    const body = {
-      ok: false,
-      serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      criados: [],
-      falhas: [{ inicio_at: 'a', fim_at: 'b', error: 'erro_interno', reason: 'erro_interno' }],
-    };
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: false,
-      serie: { id: body.serie_id, status: 'failed', response_status: 502, response_body: body },
-    });
-    const app = await buildApp();
-    const res = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-    expect(res.statusCode).toBe(502);
-    expect(res.json()).toEqual({ ...body, idempotent: true });
-    expect(agendaCreate).not.toHaveBeenCalled();
-    await app.close();
-  });
-
-  it.skip('legado: retry seguro da tabela agenda_bloqueio_series', async () => {
-    agendaCreate.mockRejectedValueOnce(new Error('db unavailable'));
-    const app = await buildApp();
-
-    const first = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-    expect(first.statusCode).toBe(502);
-    expect(first.json()).toMatchObject({ ok: false, falhas: [{ error: 'erro_interno' }] });
-    expect(agendaSeriesMarkResult).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'failed', responseStatus: 502 }),
-    );
-
-    agendaSeriesClaim.mockResolvedValueOnce({
-      claimed: true,
-      serie: {
-        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-        status: 'creating',
-        response_status: null,
-        response_body: null,
-      },
-    });
-    const second = await app.inject({
-      method: 'POST',
-      url: '/portal/agenda/bloqueios/serie',
-      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
-    });
-    expect(second.statusCode).toBe(201);
-    // O 1º INSERT falhou antes do GCal; o retry seguro cria só as 2 ocorrências da série nova.
-    expect(agendaCreate).toHaveBeenCalledTimes(3);
-    await app.close();
-  });
-
   it('DELETE /portal/colaborador/bloqueios/serie escopa por colaboradorId da sessão e remove só a série futura retornada pelo DB', async () => {
     agendaListFutureBySerieId.mockResolvedValueOnce([
       {
@@ -1478,6 +1281,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       gcal_event_id: eventId,
       status: 'gcal_dispatch_started' as const,
       error_code: null,
+      attempt_version: 1,
     };
     agendaOperationList.mockResolvedValueOnce([occurrence]);
     agendaOperationClaimRecovery.mockResolvedValueOnce(occurrence);
@@ -1491,11 +1295,12 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
     expect(res.statusCode).toBe(201);
     expect(getEvent).toHaveBeenCalledTimes(1);
     expect(createEvent).not.toHaveBeenCalled();
-    expect(agendaAttach).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-000000000001',
-      'clone_owner',
-      occurrence.bloqueio_id,
-      eventId,
+    expect(agendaAttachForDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bloqueioId: occurrence.bloqueio_id,
+        gcalEventId: eventId,
+        attemptVersion: occurrence.attempt_version,
+      }),
     );
     await app.close();
   });
@@ -1534,6 +1339,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       gcal_event_id: eventId,
       status: 'recovery_required' as const,
       error_code: 'gcal_ambiguous',
+      attempt_version: 0,
     };
     agendaOperationList.mockResolvedValueOnce([occurrence]);
     agendaOperationClaimRecovery.mockResolvedValueOnce({
@@ -1652,6 +1458,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       gcal_event_id: eventId,
       status: 'recovery_required' as const,
       error_code: 'gcal_ambiguous',
+      attempt_version: 0,
     };
     durablePlan = [occurrence];
     agendaOperationGet.mockResolvedValue({

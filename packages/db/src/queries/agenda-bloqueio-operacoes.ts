@@ -43,6 +43,7 @@ export interface AgendaBloqueioOperacaoOcorrencia {
   gcal_event_id: string;
   status: AgendaBloqueioOcorrenciaStatus;
   error_code: string | null;
+  attempt_version: number;
 }
 
 export async function createPlan(input: {
@@ -132,7 +133,8 @@ export async function claimDispatch(input: {
   ordinal: number;
 }): Promise<AgendaBloqueioOperacaoOcorrencia | null> {
   const r = await query<AgendaBloqueioOperacaoOcorrencia>(
-    `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status='gcal_dispatch_started', updated_at=now()
+    `UPDATE agenda_bloqueio_operacao_ocorrencias o
+        SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
        FROM agenda_bloqueio_operacoes op
       WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4 AND o.status='planned'
       RETURNING o.*`,
@@ -152,7 +154,8 @@ export async function claimRecovery(input: {
   ordinal: number;
 }): Promise<AgendaBloqueioOperacaoOcorrencia | null> {
   const r = await query<AgendaBloqueioOperacaoOcorrencia>(
-    `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status='gcal_dispatch_started', updated_at=now()
+    `UPDATE agenda_bloqueio_operacao_ocorrencias o
+        SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
        FROM agenda_bloqueio_operacoes op
       WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
         AND (
@@ -174,11 +177,13 @@ export async function markOccurrence(input: {
   status: Extract<AgendaBloqueioOcorrenciaStatus, 'active' | 'recovery_required'>;
   errorCode?: string | null;
   expectedStatus?: 'gcal_dispatch_started';
+  attemptVersion?: number;
 }): Promise<boolean> {
   const result = await query(
     `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status=$5, error_code=$6, updated_at=now()
        FROM agenda_bloqueio_operacoes op WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
-         AND ($7::text IS NULL OR o.status=$7)`,
+         AND ($7::text IS NULL OR o.status=$7)
+         AND ($8::integer IS NULL OR o.attempt_version=$8)`,
     [
       input.tenantId,
       input.slot,
@@ -187,6 +192,7 @@ export async function markOccurrence(input: {
       input.status,
       input.errorCode ?? null,
       input.expectedStatus ?? null,
+      input.attemptVersion ?? null,
     ],
   );
   return result.rowCount === 1;
@@ -244,11 +250,17 @@ export async function markOperationResult(input: {
   status: Exclude<AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
   responseStatus: number;
   responseBody: Record<string, unknown>;
-}): Promise<void> {
-  await query(
+  expectedAttemptVersion?: number;
+}): Promise<boolean> {
+  const result = await query(
     `UPDATE agenda_bloqueio_operacoes
         SET status=$5, response_status=$6, response_body=$7::jsonb, updated_at=now()
-      WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND colaborador_key=$4`,
+      WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND colaborador_key=$4
+        AND ($8::integer IS NULL OR $8=(
+          SELECT max(o.attempt_version)
+            FROM agenda_bloqueio_operacao_ocorrencias o
+           WHERE o.operation_id=agenda_bloqueio_operacoes.id
+        ))`,
     [
       input.tenantId,
       input.slot,
@@ -257,6 +269,8 @@ export async function markOperationResult(input: {
       input.status,
       input.responseStatus,
       JSON.stringify(input.responseBody),
+      input.expectedAttemptVersion ?? null,
     ],
   );
+  return result.rowCount === 1;
 }

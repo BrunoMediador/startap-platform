@@ -656,8 +656,9 @@ async function persistOperationResult(args: {
   status: Exclude<agendaBloqueioOperacoes.AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
   responseStatus: number;
   responseBody: Record<string, unknown>;
-}): Promise<void> {
-  await agendaBloqueioOperacoes.markOperationResult({
+  expectedAttemptVersion?: number;
+}): Promise<boolean> {
+  return agendaBloqueioOperacoes.markOperationResult({
     tenantId: args.scope.tenantId,
     slot: args.scope.slot,
     operationId: args.operationId,
@@ -665,6 +666,7 @@ async function persistOperationResult(args: {
     status: args.status,
     responseStatus: args.responseStatus,
     responseBody: args.responseBody,
+    expectedAttemptVersion: args.expectedAttemptVersion,
   });
 }
 
@@ -721,12 +723,15 @@ async function createDurableGcalEvent(args: {
         serie_id: args.operation.id,
       },
     });
-    const attached = await agendaBloqueios.attachGcalEventId(
-      args.scope.tenantId,
-      args.scope.slot,
-      args.occurrence.bloqueio_id,
-      args.occurrence.gcal_event_id,
-    );
+    const attached = await agendaBloqueios.attachGcalEventIdForDispatch({
+      tenantId: args.scope.tenantId,
+      slot: args.scope.slot,
+      bloqueioId: args.occurrence.bloqueio_id,
+      gcalEventId: args.occurrence.gcal_event_id,
+      operationId: args.operation.id,
+      ordinal: args.occurrence.ordinal,
+      attemptVersion: args.occurrence.attempt_version,
+    });
     if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
     await agendaBloqueioOperacoes.markOccurrence({
       tenantId: args.scope.tenantId,
@@ -735,6 +740,7 @@ async function createDurableGcalEvent(args: {
       ordinal: args.occurrence.ordinal,
       status: 'active',
       expectedStatus: 'gcal_dispatch_started',
+      attemptVersion: args.occurrence.attempt_version,
     });
     return true;
   } catch (err) {
@@ -748,6 +754,7 @@ async function createDurableGcalEvent(args: {
       status: 'recovery_required',
       errorCode: isGcalRateLimitError(message) ? 'gcal_rate_limit' : 'gcal_ambiguous',
       expectedStatus: 'gcal_dispatch_started',
+      attemptVersion: args.occurrence.attempt_version,
     });
     log.error(
       {
@@ -803,6 +810,7 @@ async function runDurableSerie(args: {
   const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
   const falhas: DurableSerieFailure[] = [];
   let recoveryClaimUnavailable = false;
+  let latestAttemptVersion: number | undefined;
   for (const occurrence of pending) {
     try {
       if (occurrence.status === 'planned') {
@@ -814,6 +822,7 @@ async function runDurableSerie(args: {
           ordinal: occurrence.ordinal,
         });
         if (!claimed) break;
+        latestAttemptVersion = claimed.attempt_version;
         if (await createDurableGcalEvent({ ...args, occurrence: claimed })) {
           criados.push({
             id: occurrence.bloqueio_id,
@@ -850,6 +859,7 @@ async function runDurableSerie(args: {
         recoveryClaimUnavailable = true;
         break;
       }
+      latestAttemptVersion = claimed.attempt_version;
       let rebuildingLocalOccurrence = false;
       try {
         const absent = await isGcalEventAbsentAfterConsistencyWindow({
@@ -857,12 +867,15 @@ async function runDurableSerie(args: {
           eventId: claimed.gcal_event_id,
         });
         if (!absent) {
-          const attached = await agendaBloqueios.attachGcalEventId(
-            args.scope.tenantId,
-            args.scope.slot,
-            claimed.bloqueio_id,
-            claimed.gcal_event_id,
-          );
+          const attached = await agendaBloqueios.attachGcalEventIdForDispatch({
+            tenantId: args.scope.tenantId,
+            slot: args.scope.slot,
+            bloqueioId: claimed.bloqueio_id,
+            gcalEventId: claimed.gcal_event_id,
+            operationId: args.operation.id,
+            ordinal: claimed.ordinal,
+            attemptVersion: claimed.attempt_version,
+          });
           if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
           await agendaBloqueioOperacoes.markOccurrence({
             tenantId: args.scope.tenantId,
@@ -871,6 +884,7 @@ async function runDurableSerie(args: {
             ordinal: claimed.ordinal,
             status: 'active',
             expectedStatus: 'gcal_dispatch_started',
+            attemptVersion: claimed.attempt_version,
           });
           criados.push({
             id: claimed.bloqueio_id,
@@ -908,6 +922,7 @@ async function runDurableSerie(args: {
           status: 'recovery_required',
           errorCode: rebuildingLocalOccurrence ? 'local_write_failed' : 'gcal_ambiguous',
           expectedStatus: 'gcal_dispatch_started',
+          attemptVersion: claimed.attempt_version,
         });
         falhas.push({
           inicio_at: claimed.inicio_at,
@@ -953,14 +968,21 @@ async function runDurableSerie(args: {
   }
   const responseBody = durableSerieResponse({ operationId: args.operation.id, criados, falhas });
   const responseStatus = falhas.length === 0 ? 201 : 207;
-  await persistOperationResult({
+  const persisted = await persistOperationResult({
     scope: args.scope,
     colaboradorId: args.colaboradorId,
     operationId: args.operation.id,
     status: falhas.length === 0 ? 'complete' : 'recovery_required',
     responseStatus,
     responseBody,
+    expectedAttemptVersion: latestAttemptVersion,
   });
+  if (!persisted) {
+    return {
+      responseStatus: 409,
+      responseBody: { error: 'serie_recovery_em_andamento', serie_id: args.operation.id },
+    };
+  }
   return { responseStatus, responseBody };
 }
 

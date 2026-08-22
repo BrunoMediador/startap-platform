@@ -131,6 +131,14 @@ export interface ListEventsPagedResult {
 /** Sentinela de timeout de PÁGINA do listEventsPaged (não é mensagem do Google) — o caller o trata como incompleto. */
 export const GCAL_LIST_TIMEOUT_SENTINEL = '__gcal_list_timeout__';
 
+/**
+ * Limite de toda chamada ao Calendar, inclusive POST/GET de evento. Precisa
+ * ficar abaixo da lease de dispatch (60s, ADR 0044) para um executor pendurado
+ * ser abortado antes de uma recovery poder reassumir a tentativa cercada.
+ */
+export const GCAL_REQUEST_TIMEOUT_MS = 15_000;
+export const GCAL_REQUEST_TIMEOUT_SENTINEL = '__gcal_request_timeout__';
+
 // ─── Per-clone (Service Account) ─────────────────────────────────────────────
 
 async function gcalFetch<T = unknown>(
@@ -140,14 +148,25 @@ async function gcalFetch<T = unknown>(
 ): Promise<T> {
   const token = await tokenFn();
   const url = `https://www.googleapis.com/calendar/v3${path}`;
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(opts.headers ?? {}),
-    },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GCAL_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...opts,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(opts.headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) throw new Error(GCAL_REQUEST_TIMEOUT_SENTINEL);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois

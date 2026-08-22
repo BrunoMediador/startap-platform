@@ -22,7 +22,11 @@ vi.mock('@startap/core/logger', () => ({
 }));
 
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
-import { GoogleCalendarClient } from './client.js';
+import {
+  GCAL_REQUEST_TIMEOUT_MS,
+  GCAL_REQUEST_TIMEOUT_SENTINEL,
+  GoogleCalendarClient,
+} from './client.js';
 
 const SA_JSON = JSON.stringify({
   type: 'service_account',
@@ -156,5 +160,40 @@ describe('SCRUM-148 — a redação não estraga o diagnóstico', () => {
     // Nada a redigir aqui: a mensagem do Google chega inteira pro debug.
     expect(err?.message).toContain('Backend Error');
     expect(err?.message).toContain('500');
+  });
+});
+
+describe('ADR 0044 — timeout de request cercado pela lease de dispatch', () => {
+  it('aborta POST pendurado antes de uma lease de 60 segundos poder expirar', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            signal?.addEventListener('abort', () => reject(new Error('AbortError')), {
+              once: true,
+            });
+          }),
+      );
+      const client = makeClient();
+      const pending = client.createEvent({
+        eventId: RAW_EVENT_ID,
+        summary: 'Bloqueio',
+        startISO: '2026-07-01T14:00:00-03:00',
+        endISO: '2026-07-01T14:30:00-03:00',
+      });
+      const timeoutExpectation = expect(pending).rejects.toThrow(GCAL_REQUEST_TIMEOUT_SENTINEL);
+
+      await vi.advanceTimersByTimeAsync(GCAL_REQUEST_TIMEOUT_MS);
+
+      await timeoutExpectation;
+      expect(GCAL_REQUEST_TIMEOUT_MS).toBeLessThan(60_000);
+      expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

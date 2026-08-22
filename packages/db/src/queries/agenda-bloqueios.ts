@@ -116,6 +116,39 @@ export async function attachGcalEventId(
   return r.rows[0] ? mapRow(r.rows[0]) : null;
 }
 
+/** Anexa somente enquanto a tentativa cercada ainda é dona da ocorrência. */
+export async function attachGcalEventIdForDispatch(input: {
+  tenantId: string;
+  slot: string;
+  bloqueioId: string;
+  gcalEventId: string;
+  operationId: string;
+  ordinal: number;
+  attemptVersion: number;
+}): Promise<AgendaBloqueioRow | null> {
+  const r = await query<AgendaBloqueioRaw>(
+    `UPDATE agenda_bloqueios b
+        SET gcal_event_id=$4, status='active', updated_at=now()
+       FROM agenda_bloqueio_operacao_ocorrencias o
+       JOIN agenda_bloqueio_operacoes op ON op.id=o.operation_id
+      WHERE b.tenant_id=$1 AND b.slot=$2 AND b.id=$3 AND b.deleted_at IS NULL
+        AND o.operation_id=$5 AND o.ordinal=$6 AND o.bloqueio_id=b.id
+        AND o.status='gcal_dispatch_started' AND o.attempt_version=$7
+        AND op.tenant_id=$1 AND op.slot=$2
+      RETURNING b.*`,
+    [
+      input.tenantId,
+      input.slot,
+      input.bloqueioId,
+      input.gcalEventId,
+      input.operationId,
+      input.ordinal,
+      input.attemptVersion,
+    ],
+  );
+  return r.rows[0] ? mapRow(r.rows[0]) : null;
+}
+
 /** Leitura interna de recuperação: inclui linhas `creating` ainda sem efeito GCal confirmado. */
 export async function getByIdForRecovery(
   tenantId: string,
