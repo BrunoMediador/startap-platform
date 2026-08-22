@@ -31,12 +31,13 @@ import {
   statusAgendaBloqueioRecorrenciaLabel,
   zonedDateTimeToUtcIso,
 } from '@/lib/agenda-bloqueios';
+import { BLOQUEIO_TIPO_OPTIONS, bloqueioEtapaAtual } from '@/lib/agenda-bloqueios-ui';
 import { ApiError } from '@/lib/api';
 import { OCORRENCIAS_MAX, OCORRENCIAS_MIN } from '@/lib/api-types';
 import type {
-  AgendaBloqueioPeriodicidade,
   AgendaBloqueio,
   AgendaBloqueioInput,
+  AgendaBloqueioPeriodicidade,
   AgendaBloqueioTipo,
   CriarAgendaBloqueioSerieResponse,
 } from '@/lib/api-types';
@@ -266,9 +267,8 @@ export function AgendaBloqueiosSection({
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [repetir, setRepetir] = useState(false);
-  const [periodicidade, setPeriodicidade] = useState<AgendaBloqueioPeriodicidade>(
-    DEFAULT_PERIODICIDADE,
-  );
+  const [periodicidade, setPeriodicidade] =
+    useState<AgendaBloqueioPeriodicidade>(DEFAULT_PERIODICIDADE);
   const [ocorrencias, setOcorrencias] = useState(DEFAULT_OCORRENCIAS);
   const [revisaoSerie, setRevisaoSerie] = useState<RevisaoAgendaBloqueioRecorrencia[] | null>(null);
   const [resultadoSerie, setResultadoSerie] = useState<CriarAgendaBloqueioSerieResponse | null>(
@@ -495,10 +495,19 @@ export function AgendaBloqueiosSection({
 
       {openForm && (
         <div className="border-t border-line-soft px-4 py-4 sm:px-5">
+          <BloqueioFlowSteps
+            current={bloqueioEtapaAtual({ repetir, temPrevia: Boolean(revisaoSerie) })}
+            canPickProfissional={canPickProfissional}
+          />
+          <div className="mb-4 rounded-field border border-brand/25 bg-brand-soft/50 px-3 py-2.5 text-[12.5px] leading-snug text-ink-soft">
+            {canPickProfissional
+              ? 'Escolha primeiro quem ficará indisponível. O bloqueio será enviado apenas para a Agenda Google desse profissional.'
+              : 'Você está bloqueando apenas a sua própria agenda. Seus colegas não serão afetados.'}
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {canPickProfissional && (
               <SelectField
-                label="Profissional"
+                label="1. Quem ficará indisponível?"
                 value={form.colaboradorId}
                 onChange={(value) => {
                   updateForm({ colaboradorId: value });
@@ -517,19 +526,16 @@ export function AgendaBloqueiosSection({
               </SelectField>
             )}
 
-            <SelectField
-              label="Tipo"
-              value={form.tipo}
-              onChange={(value) => updateForm({ tipo: value as AgendaBloqueioTipo })}
-            >
-              <option value="almoco">Almoco</option>
-              <option value="ausencia">Ausencia</option>
-              <option value="ferias">Ferias</option>
-              <option value="indisponivel">Indisponivel</option>
-            </SelectField>
+            <div className={cn('sm:col-span-2', !canPickProfissional && 'sm:col-span-2')}>
+              <TipoChooser
+                value={form.tipo}
+                onChange={(tipo) => updateForm({ tipo })}
+                disabled={loadingForm}
+              />
+            </div>
 
             <DateTimeField
-              label="Inicio"
+              label="2. Começa em"
               dateValue={form.inicioData}
               timeValue={form.inicioHora}
               onDateChange={(value) => updateForm({ inicioData: value })}
@@ -538,7 +544,7 @@ export function AgendaBloqueiosSection({
             />
 
             <DateTimeField
-              label="Fim"
+              label="Termina em"
               dateValue={form.fimData}
               timeValue={form.fimHora}
               onDateChange={(value) => updateForm({ fimData: value })}
@@ -551,7 +557,7 @@ export function AgendaBloqueiosSection({
                 htmlFor={motivoId}
                 className="mb-[7px] block text-[13px] font-semibold text-ink"
               >
-                Motivo
+                Motivo (opcional)
               </label>
               <textarea
                 id={motivoId}
@@ -559,7 +565,7 @@ export function AgendaBloqueiosSection({
                 onChange={(event) => updateForm({ motivo: event.target.value })}
                 maxLength={240}
                 rows={3}
-                placeholder="Opcional"
+                placeholder="Ex.: treinamento interno"
                 className="w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 py-3 text-[15px] text-ink outline-none transition-[border-color,box-shadow] duration-[120ms] placeholder:text-ink-faint hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus"
               />
             </div>
@@ -593,30 +599,30 @@ export function AgendaBloqueiosSection({
                     Com que frequencia?
                   </span>
                   <div className="grid grid-cols-2 gap-2">
-                    {(Object.keys(BLOQUEIO_PERIODICIDADE_LABELS) as AgendaBloqueioPeriodicidade[]).map(
-                      (value) => {
-                        const ativo = value === periodicidade;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            aria-pressed={ativo}
-                            onClick={() => {
-                              setPeriodicidade(value);
-                              limparRecorrencia();
-                            }}
-                            className={cn(
-                              'min-h-11 rounded-field border px-3 py-2 font-display text-[13.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
-                              ativo
-                                ? 'border-brand bg-brand-soft text-brand'
-                                : 'border-line bg-surface-sunken text-ink hover:bg-surface-hover',
-                            )}
-                          >
-                            {BLOQUEIO_PERIODICIDADE_LABELS[value]}
-                          </button>
-                        );
-                      },
-                    )}
+                    {(
+                      Object.keys(BLOQUEIO_PERIODICIDADE_LABELS) as AgendaBloqueioPeriodicidade[]
+                    ).map((value) => {
+                      const ativo = value === periodicidade;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={ativo}
+                          onClick={() => {
+                            setPeriodicidade(value);
+                            limparRecorrencia();
+                          }}
+                          className={cn(
+                            'min-h-11 rounded-field border px-3 py-2 font-display text-[13.5px] font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+                            ativo
+                              ? 'border-brand bg-brand-soft text-brand'
+                              : 'border-line bg-surface-sunken text-ink hover:bg-surface-hover',
+                          )}
+                        >
+                          {BLOQUEIO_PERIODICIDADE_LABELS[value]}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -705,7 +711,11 @@ export function AgendaBloqueiosSection({
                       </p>
                     )}
 
-                    <ReviewList ocorrencias={revisaoSerie} resultado={resultadoSerie} timeZone={timeZone} />
+                    <ReviewList
+                      ocorrencias={revisaoSerie}
+                      resultado={resultadoSerie}
+                      timeZone={timeZone}
+                    />
                   </div>
                 )}
               </div>
@@ -759,159 +769,307 @@ export function AgendaBloqueiosSection({
         </div>
       )}
 
-      <div className="border-t border-line-soft">
-        {bloqueios.length === 0 ? (
-          <div className="px-4 py-4 text-[13.5px] text-ink-soft sm:px-5">
-            Nenhum bloqueio de agenda agora.
-          </div>
-        ) : (
-          bloqueios.map((bloqueio) => {
-            const profissionalNome =
-              bloqueio.colaborador_id == null
-                ? null
-                : (nomeByProfissionalId.get(bloqueio.colaborador_id) ??
-                  `Profissional #${bloqueio.colaborador_id}`);
-
-            return (
-              <div
-                key={bloqueio.id}
-                className={cn(
-                  'border-b border-line-soft px-4 py-4 last:border-b-0 sm:px-5',
-                  bloqueio.status === 'gcal_cleanup_failed' && 'bg-amber-400/8',
-                )}
-              >
-                <div className="flex items-start gap-3">
-                  <span
-                    className={cn(
-                      'mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-[12px] border text-ink',
-                      bloqueio.status === 'gcal_cleanup_failed'
-                        ? 'border-amber-400/35 bg-amber-400/12 text-amber-200'
-                        : 'border-danger/20 bg-danger/10 text-danger',
-                    )}
-                  >
-                    {bloqueio.tipo === 'almoco' ? (
-                      <IconPause size={18} />
-                    ) : (
-                      <IconCalendar size={18} />
-                    )}
-                  </span>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-display text-[15px] font-semibold text-ink">
-                        Bloqueio na Agenda Google
-                      </p>
-                      <Pill className={tipoTone(bloqueio.tipo)}>
-                        {BLOQUEIO_TIPO_LABEL[bloqueio.tipo]}
-                      </Pill>
-                      {profissionalNome && (
-                        <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
-                          {profissionalNome}
-                        </Pill>
-                      )}
-                      {bloqueio.serie_id && (
-                        <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
-                          Serie
-                        </Pill>
-                      )}
-                      {bloqueio.status === 'gcal_cleanup_failed' && (
-                        <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
-                          Limpeza pendente
-                        </Pill>
-                      )}
-                    </div>
-
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-soft">
-                      <span className="inline-flex items-center gap-1.5">
-                        <IconClock size={15} />
-                        {blockRangeLabel(bloqueio.inicio_at, bloqueio.fim_at, timeZone)}
-                      </span>
-                    </div>
-
-                    <p className="mt-2 text-[12.5px] leading-snug text-ink-faint">
-                      Evento de bloqueio na Agenda Google do profissional.
-                    </p>
-
-                    {bloqueio.motivo && (
-                      <p className="mt-2 text-[13px] leading-normal text-ink-soft">
-                        {bloqueio.motivo}
-                      </p>
-                    )}
-
-                    {bloqueio.status === 'gcal_cleanup_failed' && (
-                      <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-amber-200">
-                        <IconAlert size={14} />
-                        Remova daqui para tentar limpar de novo na Agenda Google.
-                      </p>
-                    )}
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {bloqueio.serie_id && (
-                        <Button
-                          variant="secondary"
-                          size="inline"
-                          className="h-10 px-3 text-[13px]"
-                          onClick={() =>
-                            setConfirmRemoveSerie({
-                              serieId: bloqueio.serie_id ?? '',
-                              referencia: blockRangeLabel(
-                                bloqueio.inicio_at,
-                                bloqueio.fim_at,
-                                timeZone,
-                              ),
-                            })
-                          }
-                        >
-                          <IconRefresh size={15} />
-                          Remover serie
-                        </Button>
-                      )}
-                      <Button
-                        variant="destructive"
-                        size="inline"
-                        className="h-10 px-3 text-[13px]"
-                        onClick={() => setConfirmRemove(bloqueio)}
-                      >
-                        <IconTrash size={15} />
-                        Remover este
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      <ConfirmDialog
-        open={Boolean(confirmRemove)}
-        title="Remover este bloqueio?"
-        description="Esse horario volta a ficar livre na Agenda Google do profissional."
-        confirmLabel="Remover"
-        confirmVariant="destructive"
-        loading={removeMutation.isPending}
-        icon={<IconTrash size={20} />}
-        onCancel={() => setConfirmRemove(null)}
-        onConfirm={() => confirmRemove && removeBloqueio(confirmRemove.id)}
+      <BloqueiosList
+        bloqueios={bloqueios}
+        timeZone={timeZone}
+        nomeByProfissionalId={nomeByProfissionalId}
+        onRemove={setConfirmRemove}
+        onRemoveSerie={setConfirmRemoveSerie}
       />
 
-      <ConfirmDialog
-        open={Boolean(confirmRemoveSerie)}
-        title="Remover a serie futura?"
-        description={
-          confirmRemoveSerie
-            ? `Os proximos bloqueios desta serie serao removidos da Agenda Google a partir de ${confirmRemoveSerie.referencia}.`
-            : ''
-        }
-        confirmLabel="Remover serie"
-        confirmVariant="destructive"
-        loading={removeSerieMutation.isPending}
-        icon={<IconRefresh size={20} />}
-        onCancel={() => setConfirmRemoveSerie(null)}
-        onConfirm={() => confirmRemoveSerie && removeSerie(confirmRemoveSerie.serieId)}
+      <BloqueioRemoveDialogs
+        bloqueio={confirmRemove}
+        serie={confirmRemoveSerie}
+        removing={removeMutation.isPending}
+        removingSerie={removeSerieMutation.isPending}
+        onCancelBloqueio={() => setConfirmRemove(null)}
+        onCancelSerie={() => setConfirmRemoveSerie(null)}
+        onRemoveBloqueio={() => confirmRemove && removeBloqueio(confirmRemove.id)}
+        onRemoveSerie={() => confirmRemoveSerie && removeSerie(confirmRemoveSerie.serieId)}
       />
     </section>
+  );
+}
+
+function BloqueiosList({
+  bloqueios,
+  timeZone,
+  nomeByProfissionalId,
+  onRemove,
+  onRemoveSerie,
+}: {
+  bloqueios: AgendaBloqueio[];
+  timeZone: string;
+  nomeByProfissionalId: Map<number, string>;
+  onRemove: (bloqueio: AgendaBloqueio) => void;
+  onRemoveSerie: (serie: RemoveSerieState) => void;
+}) {
+  const grupos = new Map<string, AgendaBloqueio[]>();
+  for (const bloqueio of bloqueios) {
+    const nome =
+      bloqueio.colaborador_id == null
+        ? 'Agenda principal'
+        : (nomeByProfissionalId.get(bloqueio.colaborador_id) ??
+          `Profissional #${bloqueio.colaborador_id}`);
+    grupos.set(nome, [...(grupos.get(nome) ?? []), bloqueio]);
+  }
+
+  if (bloqueios.length === 0) {
+    return (
+      <div className="border-t border-line-soft px-4 py-5 sm:px-5">
+        <p className="font-display text-[14px] font-semibold text-ink">Equipe disponível</p>
+        <p className="mt-1 text-[13px] leading-snug text-ink-soft">
+          Nenhuma indisponibilidade cadastrada agora.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-line-soft">
+      <div className="border-b border-line-soft px-4 py-3 sm:px-5">
+        <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+          Disponibilidade cadastrada por profissional
+        </p>
+      </div>
+      {[...grupos.entries()].map(([nome, itens]) => (
+        <section key={nome} aria-label={`Indisponibilidades de ${nome}`}>
+          <div className="border-b border-line-soft bg-surface-sunken px-4 py-2.5 sm:px-5">
+            <p className="font-display text-[14px] font-semibold text-ink">{nome}</p>
+          </div>
+          {itens.map((bloqueio) => (
+            <BloqueioListItem
+              key={bloqueio.id}
+              bloqueio={bloqueio}
+              timeZone={timeZone}
+              onRemove={onRemove}
+              onRemoveSerie={onRemoveSerie}
+            />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function BloqueioListItem({
+  bloqueio,
+  timeZone,
+  onRemove,
+  onRemoveSerie,
+}: {
+  bloqueio: AgendaBloqueio;
+  timeZone: string;
+  onRemove: (bloqueio: AgendaBloqueio) => void;
+  onRemoveSerie: (serie: RemoveSerieState) => void;
+}) {
+  return (
+    <div
+      className={cn(
+        'border-b border-line-soft px-4 py-4 last:border-b-0 sm:px-5',
+        bloqueio.status === 'gcal_cleanup_failed' && 'bg-amber-400/8',
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            'mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-[12px] border text-ink',
+            bloqueio.status === 'gcal_cleanup_failed'
+              ? 'border-amber-400/35 bg-amber-400/12 text-amber-200'
+              : 'border-danger/20 bg-danger/10 text-danger',
+          )}
+        >
+          {bloqueio.tipo === 'almoco' ? <IconPause size={18} /> : <IconCalendar size={18} />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-display text-[15px] font-semibold text-ink">
+              {BLOQUEIO_TIPO_LABEL[bloqueio.tipo]}
+            </p>
+            {bloqueio.serie_id && (
+              <Pill className="border-line-strong bg-surface-sunken text-ink-soft">Série</Pill>
+            )}
+            {bloqueio.status === 'gcal_cleanup_failed' && (
+              <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
+                Limpeza pendente
+              </Pill>
+            )}
+          </div>
+          <p className="mt-2 inline-flex items-center gap-1.5 text-[13px] text-ink-soft">
+            <IconClock size={15} />
+            {blockRangeLabel(bloqueio.inicio_at, bloqueio.fim_at, timeZone)}
+          </p>
+          {bloqueio.motivo && (
+            <p className="mt-2 text-[13px] leading-normal text-ink-soft">{bloqueio.motivo}</p>
+          )}
+          {bloqueio.status === 'gcal_cleanup_failed' && (
+            <p className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-amber-200">
+              <IconAlert size={14} /> Remova para tentar limpar de novo na Agenda Google.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {bloqueio.serie_id && (
+              <Button
+                variant="secondary"
+                size="inline"
+                className="h-10 px-3 text-[13px]"
+                onClick={() =>
+                  onRemoveSerie({
+                    serieId: bloqueio.serie_id ?? '',
+                    referencia: blockRangeLabel(bloqueio.inicio_at, bloqueio.fim_at, timeZone),
+                  })
+                }
+              >
+                <IconRefresh size={15} /> Remover futuras da série
+              </Button>
+            )}
+            <Button
+              variant="destructive"
+              size="inline"
+              className="h-10 px-3 text-[13px]"
+              onClick={() => onRemove(bloqueio)}
+            >
+              <IconTrash size={15} /> Remover este horário
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BloqueioRemoveDialogs({
+  bloqueio,
+  serie,
+  removing,
+  removingSerie,
+  onCancelBloqueio,
+  onCancelSerie,
+  onRemoveBloqueio,
+  onRemoveSerie,
+}: {
+  bloqueio: AgendaBloqueio | null;
+  serie: RemoveSerieState | null;
+  removing: boolean;
+  removingSerie: boolean;
+  onCancelBloqueio: () => void;
+  onCancelSerie: () => void;
+  onRemoveBloqueio: () => void;
+  onRemoveSerie: () => void;
+}) {
+  return (
+    <>
+      <ConfirmDialog
+        open={Boolean(bloqueio)}
+        title="Remover este horário?"
+        description="Somente esta ocorrência volta a ficar livre na Agenda Google. As outras datas da série continuam protegidas."
+        confirmLabel="Remover este horário"
+        confirmVariant="destructive"
+        loading={removing}
+        icon={<IconTrash size={20} />}
+        onCancel={onCancelBloqueio}
+        onConfirm={onRemoveBloqueio}
+      />
+      <ConfirmDialog
+        open={Boolean(serie)}
+        title="Remover futuras da série?"
+        description={
+          serie
+            ? `Os próximos bloqueios desta série serão removidos a partir de ${serie.referencia}. Os bloqueios passados permanecem no histórico.`
+            : ''
+        }
+        confirmLabel="Remover futuras"
+        confirmVariant="destructive"
+        loading={removingSerie}
+        icon={<IconRefresh size={20} />}
+        onCancel={onCancelSerie}
+        onConfirm={onRemoveSerie}
+      />
+    </>
+  );
+}
+
+function BloqueioFlowSteps({
+  current,
+  canPickProfissional,
+}: {
+  current: number;
+  canPickProfissional: boolean;
+}) {
+  const steps = canPickProfissional
+    ? ['Quem', 'Quando', 'Tipo', 'Repetir', 'Revisar']
+    : ['Quando', 'Tipo', 'Repetir', 'Revisar'];
+  const currentStep = canPickProfissional ? current + 1 : current;
+  return (
+    <ol
+      aria-label="Etapas para declarar indisponibilidade"
+      className="mb-4 flex items-center gap-1.5"
+    >
+      {steps.map((step, index) => {
+        const stepNumber = index + 1;
+        return (
+          <li key={step} className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span
+              className={cn(
+                'flex size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold',
+                stepNumber <= currentStep
+                  ? 'border-brand bg-brand text-white'
+                  : 'border-line-strong bg-surface-sunken text-ink-faint',
+              )}
+            >
+              {stepNumber}
+            </span>
+            <span className="truncate text-[11px] font-semibold text-ink-soft sm:text-[12px]">
+              {step}
+            </span>
+            {index < steps.length - 1 && <span className="h-px min-w-1 flex-1 bg-line-soft" />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function TipoChooser({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: AgendaBloqueioTipo;
+  onChange: (tipo: AgendaBloqueioTipo) => void;
+  disabled: boolean;
+}) {
+  return (
+    <fieldset>
+      <legend className="mb-2 text-[13px] font-semibold text-ink">
+        3. Qual indisponibilidade?
+      </legend>
+      <div className="grid grid-cols-2 gap-2">
+        {BLOQUEIO_TIPO_OPTIONS.map((option) => {
+          const selected = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={selected}
+              disabled={disabled}
+              onClick={() => onChange(option.value)}
+              className={cn(
+                'min-h-[68px] rounded-field border px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-50',
+                selected
+                  ? 'border-brand bg-brand-soft text-brand'
+                  : 'border-line-strong bg-surface-sunken text-ink hover:bg-surface-hover',
+              )}
+            >
+              <span className="block font-display text-[13.5px] font-semibold">{option.label}</span>
+              <span className="mt-0.5 block text-[11.5px] leading-snug text-ink-soft">
+                {option.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
   );
 }
 
@@ -935,15 +1093,17 @@ function SectionHeader({
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="font-display text-[17px] font-semibold text-ink">Bloqueio de agenda</h2>
+          <h2 className="font-display text-[17px] font-semibold text-ink">
+            Disponibilidade da equipe
+          </h2>
           <Pill className="border-line-strong bg-surface-sunken text-ink-soft">
             {count} {count === 1 ? 'ativo' : 'ativos'}
           </Pill>
         </div>
         <p className="mt-0.5 text-[13px] leading-snug text-ink-soft">
           {mode === 'colaborador'
-            ? 'Reserve almoco, ausencia, ferias ou indisponibilidade na sua Agenda Google.'
-            : 'Trave horarios sem cliente e, se quiser, repita a serie com revisao antes de gravar na Agenda Google.'}
+            ? 'Declare quando você não atende. Só a sua agenda será bloqueada.'
+            : 'Veja quem está indisponível e declare períodos sem atendimento.'}
         </p>
       </div>
       <Button
@@ -952,7 +1112,7 @@ function SectionHeader({
         onClick={onToggle}
         disabled={disabled}
       >
-        {openForm ? 'Cancelar' : 'Novo bloqueio'}
+        {openForm ? 'Cancelar' : 'Declarar indisponibilidade'}
       </Button>
     </div>
   );
@@ -1047,9 +1207,7 @@ function ReviewList({
                     </Pill>
                   )
                 ) : livre ? (
-                  <Pill className="border-brand/40 bg-brand-soft text-brand">
-                    Livre na agenda
-                  </Pill>
+                  <Pill className="border-brand/40 bg-brand-soft text-brand">Livre na agenda</Pill>
                 ) : (
                   <Pill className="border-amber-400/35 bg-amber-400/12 text-amber-200">
                     Ocupado ou indisponivel
