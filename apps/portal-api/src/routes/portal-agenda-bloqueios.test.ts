@@ -6,6 +6,7 @@ const {
   agendaAttach,
   agendaGetForRecovery,
   agendaHasSerieForRecovery,
+  agendaHasLegacySerieMatchingCreate,
   agendaMarkFailed,
   agendaMarkCleanupFailed,
   agendaList,
@@ -35,6 +36,7 @@ const {
   agendaAttach: vi.fn(),
   agendaGetForRecovery: vi.fn(),
   agendaHasSerieForRecovery: vi.fn(),
+  agendaHasLegacySerieMatchingCreate: vi.fn(),
   agendaMarkFailed: vi.fn(),
   agendaMarkCleanupFailed: vi.fn(),
   agendaList: vi.fn(),
@@ -63,6 +65,7 @@ vi.mock('@startap/db', () => ({
     attachGcalEventId: agendaAttach,
     getByIdForRecovery: agendaGetForRecovery,
     hasSerieForRecovery: agendaHasSerieForRecovery,
+    hasLegacySerieMatchingCreate: agendaHasLegacySerieMatchingCreate,
     markCreateFailed: agendaMarkFailed,
     markCreateCleanupFailed: agendaMarkCleanupFailed,
     list: agendaList,
@@ -180,6 +183,7 @@ beforeEach(() => {
   });
   agendaGetForRecovery.mockResolvedValue(null);
   agendaHasSerieForRecovery.mockResolvedValue(false);
+  agendaHasLegacySerieMatchingCreate.mockResolvedValue(false);
   agendaList.mockResolvedValue([]);
   agendaListFutureBySerieId.mockResolvedValue([]);
   agendaGetActive.mockResolvedValue(null);
@@ -1373,7 +1377,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
     await app.close();
   });
 
-  it('recovery consulta evento determinístico e só reenvia após 404 confirmado', async () => {
+  it('recovery de lease expirada consulta duas vezes antes de reenviar o evento determinístico', async () => {
     const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
     const getEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
     const createEvent = vi.fn().mockResolvedValue({ id: eventId });
@@ -1406,7 +1410,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
         fim_at: '2026-08-21T16:00:00.000Z',
         bloqueio_id: '11111111-1111-4111-8111-111111111111',
         gcal_event_id: eventId,
-        status: 'recovery_required',
+        status: 'gcal_dispatch_started',
         error_code: 'gcal_ambiguous',
       },
     ]);
@@ -1436,6 +1440,62 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
     expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({ eventId }));
     expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'active', ordinal: 1 }),
+    );
+    await app.close();
+  });
+
+  it('recovery de dispatch normal órfão anexa evento encontrado sem segundo POST', async () => {
+    const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const getEvent = vi.fn().mockResolvedValue({ id: eventId });
+    const createEvent = vi.fn();
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'planned',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    const occurrence = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: eventId,
+      status: 'gcal_dispatch_started' as const,
+      error_code: null,
+    };
+    agendaOperationList.mockResolvedValueOnce([occurrence]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce(occurrence);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(getEvent).toHaveBeenCalledTimes(1);
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(agendaAttach).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      'clone_owner',
+      occurrence.bloqueio_id,
+      eventId,
     );
     await app.close();
   });
@@ -1653,6 +1713,25 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
     expect(getGcalsForSlot).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    {
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    },
+    { url: '/portal/colaborador/bloqueios/serie', payload: BASE_SERIE_BODY },
+  ])('recusa retry legado no POST $url sem chamar o GCal', async ({ url, payload }) => {
+    agendaHasLegacySerieMatchingCreate.mockResolvedValueOnce(true);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'serie_legada_sem_replay' });
+    expect(agendaOperationCreatePlan).not.toHaveBeenCalled();
+    const createEvent = (await getGcalsForSlot.mock.results[0]?.value)?.[0]?.client.createEvent;
+    expect(createEvent).not.toHaveBeenCalled();
     await app.close();
   });
 });

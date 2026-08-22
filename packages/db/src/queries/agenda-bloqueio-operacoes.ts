@@ -13,6 +13,13 @@ export type AgendaBloqueioOcorrenciaStatus =
   | 'active'
   | 'recovery_required';
 
+/**
+ * O marcador `gcal_dispatch_started` é uma lease persistida em `updated_at`.
+ * Sessenta segundos evita reclaim de uma chamada normal em andamento e, após
+ * crash, torna a ocorrência recuperável sem worker automático.
+ */
+export const GCAL_DISPATCH_LEASE_SECONDS = 60;
+
 export interface AgendaBloqueioOperacao {
   id: string;
   status: AgendaBloqueioOperacaoStatus;
@@ -135,8 +142,8 @@ export async function claimDispatch(input: {
 }
 
 /**
- * Reivindica exclusivamente uma ocorrência ambígua antes de a reconciliar.
- * Quem perde o CAS não pode consultar/recriar o evento remoto.
+ * Reivindica exclusivamente uma ocorrência ambígua (ou lease expirada) antes
+ * de a reconciliar. Quem perde o CAS não pode consultar/recriar o evento remoto.
  */
 export async function claimRecovery(input: {
   tenantId: string;
@@ -148,9 +155,13 @@ export async function claimRecovery(input: {
     `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status='gcal_dispatch_started', updated_at=now()
        FROM agenda_bloqueio_operacoes op
       WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
-        AND o.status='recovery_required'
+        AND (
+          o.status='recovery_required'
+          OR (o.status='gcal_dispatch_started'
+              AND o.updated_at <= now() - make_interval(secs => $5))
+        )
       RETURNING o.*`,
-    [input.tenantId, input.slot, input.operationId, input.ordinal],
+    [input.tenantId, input.slot, input.operationId, input.ordinal, GCAL_DISPATCH_LEASE_SECONDS],
   );
   return r.rows[0] ?? null;
 }

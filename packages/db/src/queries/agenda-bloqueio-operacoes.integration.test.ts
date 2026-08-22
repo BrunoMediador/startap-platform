@@ -381,4 +381,94 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
     );
     expect(persisted.rows[0]?.status).toBe('active');
   });
+
+  it('dispatch normal órfão só pode ser recuperado depois da expiração da lease', async () => {
+    const plan = input({
+      operationId: 'abababab-abab-4bab-8bab-abababababab',
+      sessionHash: 'g'.repeat(64),
+      payloadHash: 'h'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-normal-crash-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(plan);
+    await agendaBloqueioOperacoes.claimDispatch({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+
+    await expect(
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+    ).resolves.toBeNull();
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET updated_at=now() - interval '61 seconds'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    await expect(
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ status: 'gcal_dispatch_started' }));
+  });
+
+  it('dispatch de recovery órfão também volta a ser recuperável só após a lease', async () => {
+    const plan = input({
+      operationId: 'bcbcbcbc-bcbc-4bcc-8bcc-bcbcbcbcbcbc',
+      sessionHash: 'i'.repeat(64),
+      payloadHash: 'j'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-recovery-crash-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(plan);
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET status='recovery_required'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    await agendaBloqueioOperacoes.claimRecovery({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+
+    await expect(
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+    ).resolves.toBeNull();
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET updated_at=now() - interval '61 seconds'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    await expect(
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ status: 'gcal_dispatch_started' }));
+  });
 });

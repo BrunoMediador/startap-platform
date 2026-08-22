@@ -254,6 +254,48 @@ export async function hasSerieForRecovery(input: {
   return r.rows[0]?.exists ?? false;
 }
 
+/**
+ * Retry de POST pré-ADR não possui chave de replay própria. A primeira
+ * ocorrência canônica permite detectar a série legada já materializada e
+ * falhar fechada, em vez de iniciar uma operação durável paralela.
+ */
+export async function hasLegacySerieMatchingCreate(input: {
+  tenantId: string;
+  slot: string;
+  colaboradorId: number | null;
+  inicioAt: string;
+  fimAt: string;
+  tipo: AgendaBloqueioTipo;
+  motivo: string | null;
+}): Promise<boolean> {
+  const r = await query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM agenda_bloqueios
+        WHERE tenant_id=$1 AND slot=$2
+          AND colaborador_id IS NOT DISTINCT FROM $3
+          AND inicio_at=$4 AND fim_at=$5 AND tipo=$6
+          AND motivo IS NOT DISTINCT FROM $7
+          AND serie_id IS NOT NULL AND deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM agenda_bloqueio_operacoes op
+             WHERE op.id=agenda_bloqueios.serie_id
+               AND op.tenant_id=agenda_bloqueios.tenant_id
+               AND op.slot=agenda_bloqueios.slot
+          )
+     ) AS exists`,
+    [
+      input.tenantId,
+      input.slot,
+      input.colaboradorId,
+      input.inicioAt,
+      input.fimAt,
+      input.tipo,
+      input.motivo,
+    ],
+  );
+  return r.rows[0]?.exists ?? false;
+}
+
 export async function getActiveById(
   tenantId: string,
   slot: string,

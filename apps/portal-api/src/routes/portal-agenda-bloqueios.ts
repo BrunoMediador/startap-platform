@@ -763,7 +763,8 @@ async function createDurableGcalEvent(args: {
   }
 }
 
-const GCAL_RECOVERY_CONSISTENCY_WINDOW_MS = 100;
+/** Segunda leitura após propagação eventual do GCal; só então o POST é permitido. */
+const GCAL_RECOVERY_CONSISTENCY_WINDOW_MS = 2_000;
 
 async function isGcalEventAbsentAfterConsistencyWindow(args: {
   client: GcalTarget['client'];
@@ -980,6 +981,20 @@ async function createDurableSerie(args: {
     periodicidade: args.input.periodicidade,
     ocorrencias: args.input.ocorrencias,
   });
+  const firstOccurrence = occurrences[0];
+  if (!firstOccurrence) throw new Error('agenda_bloqueio_operacao_sem_ocorrencias');
+  const legacyExists = await agendaBloqueios.hasLegacySerieMatchingCreate({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    colaboradorId: args.colaboradorId,
+    inicioAt: firstOccurrence.inicio_at,
+    fimAt: firstOccurrence.fim_at,
+    tipo: args.input.tipo,
+    motivo: args.input.motivo ?? null,
+  });
+  if (legacyExists) {
+    return args.reply.code(409).send({ error: 'serie_legada_sem_replay' });
+  }
   const claim = await agendaBloqueioOperacoes.createPlan({
     operationId,
     tenantId: args.scope.tenantId,
