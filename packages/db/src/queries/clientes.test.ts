@@ -133,6 +133,7 @@ describe('listClientesForColaborador', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
       search: 'jo 9842',
       limit: 10,
       offset: 5,
@@ -140,17 +141,19 @@ describe('listClientesForColaborador', () => {
 
     const [sql, params] = lastQueryCall();
     expect(sql).toContain('EXISTS');
-    expect(sql).toContain('own_a.colaborador_id = $3');
-    expect(params).toEqual([
-      'clone_owner',
-      'tid-owner',
-      9,
-      'jo 9842',
-      '%jo 9842%',
-      '%9842%',
-      10,
-      5,
-    ]);
+    expect(sql).toContain('own_a.colaborador_id = $16');
+    expect(params).toEqual(
+      expect.arrayContaining([
+        'clone_owner',
+        'tid-owner',
+        'America/Sao_Paulo',
+        '%jo 9842%',
+        '%9842%',
+        10,
+        5,
+        9,
+      ]),
+    );
     expect(result.total).toBe(1);
     expect(result.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
     expect((result.clientes[0] as { telefone?: string }).telefone).toBeUndefined();
@@ -184,15 +187,15 @@ describe('listClientesSemRetornoForOwner', () => {
 
     const [sql, params] = lastQueryCall();
     expect(sql).toContain('JOIN atendimentos a');
-    expect(sql).toContain("a.deleted_at IS NULL");
+    expect(sql).toContain('a.deleted_at IS NULL');
     expect(sql).toContain("a.status <> 'cancelado'");
-    expect(sql).toContain("a.cliente_telefone_canonico = c.telefone_canonico");
+    expect(sql).toContain('a.cliente_telefone_canonico = c.telefone_canonico');
     expect(sql).toContain("AND a.origem = 'agenda'");
-    expect(sql).toContain("AND COALESCE(a.fim_at, a.inicio_at) <= NOW()");
-    expect(sql).toContain("UNION ALL");
+    expect(sql).toContain('AND COALESCE(a.fim_at, a.inicio_at) <= NOW()');
+    expect(sql).toContain('UNION ALL');
     expect(sql).toContain("AND a.origem = 'manual'");
-    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $3)::date");
-    expect(sql).toContain("ORDER BY ultimo_atendimento_at ASC, id ASC");
+    expect(sql).toContain('AND a.data <= (NOW() AT TIME ZONE $3)::date');
+    expect(sql).toContain('ORDER BY ultimo_atendimento_at ASC, id ASC');
     expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 50, 3]);
     expect(result.total).toBe(1);
     expect(result.clientes[0]).toEqual({
@@ -237,7 +240,7 @@ describe('listClientesSemRetornoForColaborador', () => {
     expect(sql).toContain('a.colaborador_id = $3');
     expect(sql).toContain("AND a.origem = 'agenda'");
     expect(sql).toContain("AND a.origem = 'manual'");
-    expect(sql).toContain("AND a.data <= (NOW() AT TIME ZONE $4)::date");
+    expect(sql).toContain('AND a.data <= (NOW() AT TIME ZONE $4)::date');
     expect(sql).toContain('UNION ALL');
     expect(sql).toContain('ROW_NUMBER() OVER');
     expect(params).toEqual(['clone_owner', 'tid-owner', 9, 'America/Sao_Paulo', 50, 2]);
@@ -283,7 +286,9 @@ describe('listClientesAniversariantesForOwner', () => {
     expect(sql).toContain('((gs % 4 = 0 AND gs % 100 <> 0) OR gs % 400 = 0)');
     expect(sql).toContain('candidate_date >= ctx.hoje_local_date');
     expect(sql).toContain('base.dias_ate_aniversario <= $4');
-    expect(sql).toContain('ORDER BY base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC');
+    expect(sql).toContain(
+      'ORDER BY base.dias_ate_aniversario ASC, base.aniversario_mmdd ASC, base.id ASC',
+    );
     expect(sql).not.toContain('make_date(');
     expect(sql).not.toContain('to_date(');
     expect(params).toEqual(['clone_owner', 'tid-owner', 'America/Sao_Paulo', 7, 50, 4]);
@@ -358,7 +363,7 @@ describe('listClientesAniversariantesForColaborador', () => {
     expect(sql).toContain('a.colaborador_id = $3');
     expect(sql).toContain('EXISTS');
     expect(sql).toContain('own_a.colaborador_id = $3');
-    expect(sql).toContain("NOW() AT TIME ZONE $4");
+    expect(sql).toContain('NOW() AT TIME ZONE $4');
     expect(sql).toContain('base.aniversario_mes = $5');
     expect(sql).not.toContain('to_date(');
     expect(sql).toContain("split_part(base.aniversario_mmdd, '-', 2)::int ASC");

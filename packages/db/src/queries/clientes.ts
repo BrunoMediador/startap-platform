@@ -29,6 +29,7 @@ interface SqlExecutor {
 interface ListRowRaw {
   id: string;
   nome: string | null;
+  nome_personalizado: string | null;
   telefone_canonico: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
@@ -62,6 +63,7 @@ interface AniversarianteRowRaw {
 interface ProfileRowRaw {
   id: string;
   nome: string | null;
+  nome_personalizado: string | null;
   telefone_raw: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
@@ -116,6 +118,7 @@ export interface ClienteListResult {
 export interface ClienteProfile {
   id: string;
   nome: string | null;
+  nome_personalizado: string | null;
   telefone: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
@@ -127,7 +130,7 @@ export interface ClienteProfile {
 }
 
 export interface ClienteProfileColaborador
-  extends Omit<ClienteProfile, 'nota_interna'> {}
+  extends Omit<ClienteProfile, 'nota_interna' | 'nome_personalizado'> {}
 
 export interface ClienteSemRetornoItem {
   id: string;
@@ -160,6 +163,24 @@ export interface ClienteAniversariantesResult {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface ClienteAniversariantesCalendarioItem {
+  id: string;
+  nome: string | null;
+  telefone_masked: string;
+  aniversario_mmdd: string;
+  ocorrencia_local_date: string;
+  ultimo_profissional_nome: string | null;
+}
+
+export interface ClienteAniversariantesCalendarioResult {
+  clientes: ClienteAniversariantesCalendarioItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  periodo_inicio: string;
+  periodo_fim: string;
 }
 
 export type ClienteAniversariantesModo = 'proximos' | 'mes';
@@ -223,9 +244,49 @@ export interface ClienteHistoricoRow {
 }
 
 export interface UpdateClienteProfileInput {
+  nome_personalizado?: string | null;
   aniversario_mmdd?: string | null;
   cidade?: string | null;
   nota_interna?: string | null;
+}
+
+export type ClienteUltimoAtendimentoFiltro =
+  | 'todos'
+  | 'hoje'
+  | 'ultimos_7_dias'
+  | 'ultimos_30_dias'
+  | 'sem_historico'
+  | 'periodo';
+
+export type ClienteVisitasFiltro = 'todas' | 'uma' | 'duas_a_cinco' | 'seis_a_dez' | 'onze_ou_mais';
+export type ClienteOrdenarPor = 'ultimo_atendimento' | 'visitas';
+export type ClienteOrdem = 'asc' | 'desc';
+
+export interface ListClientesFilters {
+  /** `search` é legado; novos clientes HTTP devem usar nome e telefone separadamente. */
+  search?: string | null;
+  nome?: string | null;
+  telefone?: string | null;
+  ultimoAtendimento?: ClienteUltimoAtendimentoFiltro;
+  periodoInicio?: string | null;
+  periodoFim?: string | null;
+  visitas?: ClienteVisitasFiltro;
+  ordenarPor?: ClienteOrdenarPor;
+  ordem?: ClienteOrdem;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ClientesResumo {
+  total_clientes: number;
+  aniversariantes_hoje: number;
+  sem_retorno: number;
+}
+
+export interface ClienteAvatarTarget {
+  telefoneCanonico: string;
+  wahaSessao: string;
+  wahaShardId: number;
 }
 
 export interface SeedClientesResult {
@@ -233,7 +294,7 @@ export interface SeedClientesResult {
   atendimentosUpdated: number;
 }
 
-const VALID_MMDD_REGEX = "^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$";
+const VALID_MMDD_REGEX = '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$';
 const MONTH_MAX_DAY_SQL = `CASE %MONTH_EXPR%
              WHEN 2 THEN 29
              WHEN 4 THEN 30
@@ -263,7 +324,7 @@ const VALID_BIRTHDAY_CTES_SQL = `
        SELECT c.id,
               c.slot,
               c.tenant_id,
-              c.nome,
+              COALESCE(c.nome_personalizado, c.nome) AS nome,
               c.telefone_canonico,
               c.aniversario_mmdd,
               split_part(c.aniversario_mmdd, '-', 1)::int AS aniversario_mes,
@@ -293,6 +354,11 @@ function trimOrNull(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function trimNfcOrNull(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').normalize('NFC').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function digitsOnly(value: string | null | undefined): string {
   return (value ?? '').replace(/\D/g, '');
 }
@@ -315,7 +381,10 @@ function normalizePaging(limit?: number, offset?: number): { limit: number; offs
   };
 }
 
-function normalizeRankingPaging(limit?: number, offset?: number): { limit: number; offset: number } {
+function normalizeRankingPaging(
+  limit?: number,
+  offset?: number,
+): { limit: number; offset: number } {
   const safeLimit = Number.isFinite(limit) ? Math.trunc(limit as number) : DEFAULT_LIMIT;
   const safeOffset = Number.isFinite(offset) ? Math.trunc(offset as number) : 0;
   return {
@@ -338,6 +407,23 @@ function normalizeSearch(search?: string | null): {
     likeText: `%${lower}%`,
     likeDigits: digits.length > 0 ? `%${digits}%` : null,
   };
+}
+
+function normalizeListFilters(input: ListClientesFilters) {
+  const legacy = normalizeSearch(input.search);
+  const nome = normalizeSearch(input.nome);
+  const telefone = normalizeSearch(input.telefone);
+  return {
+    legacy,
+    nomeLike: nome.likeText,
+    telefoneLike: telefone.likeDigits,
+    ultimoAtendimento: input.ultimoAtendimento ?? 'todos',
+    periodoInicio: input.periodoInicio ?? null,
+    periodoFim: input.periodoFim ?? null,
+    visitas: input.visitas ?? 'todas',
+    ordenarPor: input.ordenarPor ?? 'ultimo_atendimento',
+    ordem: input.ordem ?? 'desc',
+  } as const;
 }
 
 function mapListRow(row: ListRowRaw): ClienteListItem {
@@ -376,10 +462,24 @@ function mapAniversarianteRow(row: AniversarianteRowRaw): ClienteAniversarianteI
   };
 }
 
+function mapCalendarioAniversarianteRow(
+  row: AniversarianteRowRaw,
+): ClienteAniversariantesCalendarioItem {
+  return {
+    id: row.id,
+    nome: row.nome,
+    telefone_masked: phoneHint(row.telefone_canonico),
+    aniversario_mmdd: row.aniversario_mmdd,
+    ocorrencia_local_date: row.proxima_ocorrencia_local_date,
+    ultimo_profissional_nome: row.ultimo_profissional_nome,
+  };
+}
+
 function mapProfileRow(row: ProfileRowRaw): ClienteProfile {
   return {
     id: row.id,
     nome: row.nome,
+    nome_personalizado: row.nome_personalizado,
     telefone: row.telefone_raw,
     aniversario_mmdd: row.aniversario_mmdd,
     cidade: row.cidade,
@@ -424,13 +524,7 @@ async function upsertClienteFromSnapshotWithExecutor(
            telefone_raw = COALESCE(NULLIF(EXCLUDED.telefone_raw, ''), clientes.telefone_raw),
            nome = COALESCE(NULLIF(EXCLUDED.nome, ''), clientes.nome),
            updated_at = NOW()`,
-    [
-      input.tenantId,
-      input.slot,
-      phone.canonical,
-      phone.rawDigits,
-      trimOrNull(input.clienteNome),
-    ],
+    [input.tenantId, input.slot, phone.canonical, phone.rawDigits, trimOrNull(input.clienteNome)],
   );
 
   return phone.canonical;
@@ -487,7 +581,9 @@ export async function seedClientesFromAtendimentos(
 
     if (byCanonical.size > 0) {
       const canonicals = [...byCanonical.keys()];
-      const raws = canonicals.map((canonical) => byCanonical.get(canonical)?.rawDigits ?? canonical);
+      const raws = canonicals.map(
+        (canonical) => byCanonical.get(canonical)?.rawDigits ?? canonical,
+      );
       const nomes = canonicals.map((canonical) => byCanonical.get(canonical)?.nome ?? null);
 
       await client.query(
@@ -530,56 +626,116 @@ export async function seedClientesFromAtendimentos(
   }
 }
 
-export async function listClientesForOwner(input: {
-  slot: string;
-  tenantId: string;
-  search?: string | null;
-  limit?: number;
-  offset?: number;
-}): Promise<ClienteListResult> {
-  const { limit, offset } = normalizePaging(input.limit, input.offset);
-  const search = normalizeSearch(input.search);
-  const rows = await query<ListRowRaw>(
-    `SELECT *
-       FROM (
-         SELECT c.id,
-                c.nome,
-                c.telefone_canonico,
-                c.aniversario_mmdd,
-                c.cidade,
-                COALESCE(stats.total_atendimentos, 0)::bigint AS total_atendimentos,
-                stats.ultima_interacao_at,
-                stats.ultimo_profissional_nome,
-                COUNT(*) OVER()::bigint AS total_count
-           FROM clientes c
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*)::bigint AS total_atendimentos,
-                    MAX(COALESCE(a.inicio_at, a.data::timestamptz)) AS ultima_interacao_at,
-                    (
-                      ARRAY_AGG(cc.nome ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC)
-                    )[1] AS ultimo_profissional_nome
-               FROM atendimentos a
-               LEFT JOIN clone_colaboradores cc
-                 ON cc.id = a.colaborador_id AND cc.slot = a.slot
-              WHERE a.slot = c.slot
-                AND a.tenant_id = c.tenant_id
-                AND a.deleted_at IS NULL
-                AND a.cliente_telefone_canonico = c.telefone_canonico
-           ) AS stats ON TRUE
-          WHERE c.slot = $1
-            AND c.tenant_id = $2
-            AND (
-              $3::text IS NULL
-              OR lower(COALESCE(c.nome, '')) LIKE $4
-              OR lower(COALESCE(c.cidade, '')) LIKE $4
-              OR ($5::text IS NOT NULL AND (c.telefone_raw LIKE $5 OR c.telefone_canonico LIKE $5))
-            )
-          ORDER BY stats.ultima_interacao_at DESC NULLS LAST, c.updated_at DESC, c.id DESC
-       ) AS page
-      LIMIT $6 OFFSET $7`,
-    [input.slot, input.tenantId, search.token, search.likeText, search.likeDigits, limit, offset],
-  );
+const LIST_CLIENTES_SQL = `
+  SELECT *
+    FROM (
+       SELECT c.id,
+              COALESCE(c.nome_personalizado, c.nome) AS nome,
+              c.telefone_canonico,
+             c.aniversario_mmdd,
+             c.cidade,
+             COALESCE(stats.total_atendimentos, 0)::bigint AS total_atendimentos,
+             stats.ultima_interacao_at,
+             stats.ultimo_profissional_nome,
+             COUNT(*) OVER()::bigint AS total_count
+        FROM clientes c
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::bigint AS total_atendimentos,
+                 MAX(e.atendimento_at) AS ultima_interacao_at,
+                 (ARRAY_AGG(cc.nome ORDER BY e.atendimento_at DESC, e.id DESC))[1]
+                   AS ultimo_profissional_nome
+            FROM (
+              SELECT a.id, a.colaborador_id, COALESCE(a.fim_at, a.inicio_at) AS atendimento_at
+                FROM atendimentos a
+               WHERE a.slot = c.slot AND a.tenant_id = c.tenant_id
+                 AND a.deleted_at IS NULL AND a.status <> 'cancelado'
+                 AND a.origem = 'agenda' AND a.cliente_telefone_canonico = c.telefone_canonico
+                 AND COALESCE(a.fim_at, a.inicio_at) <= NOW()
+              UNION ALL
+              SELECT a.id, a.colaborador_id, (a.data::timestamp AT TIME ZONE $3) AS atendimento_at
+                FROM atendimentos a
+               WHERE a.slot = c.slot AND a.tenant_id = c.tenant_id
+                 AND a.deleted_at IS NULL AND a.status <> 'cancelado'
+                 AND a.origem = 'manual' AND a.cliente_telefone_canonico = c.telefone_canonico
+                 AND a.data <= (NOW() AT TIME ZONE $3)::date
+              /* COLABORADOR_ATENDIMENTOS */
+            ) e
+            LEFT JOIN clone_colaboradores cc ON cc.id = e.colaborador_id AND cc.slot = c.slot
+        ) stats ON TRUE
+       WHERE c.slot = $1 AND c.tenant_id = $2
+         /* COLABORADOR_CARTEIRA */
+         AND ($4::text IS NULL OR lower(COALESCE(c.nome_personalizado, c.nome, '')) LIKE $4)
+         AND ($5::text IS NULL OR (c.telefone_raw LIKE $5 OR c.telefone_canonico LIKE $5))
+         AND ($6::text IS NULL OR lower(COALESCE(c.nome_personalizado, c.nome, '')) LIKE $6
+              OR ($7::text IS NOT NULL AND (c.telefone_raw LIKE $7 OR c.telefone_canonico LIKE $7)))
+         AND (
+           $8 = 'todos'
+           OR ($8 = 'hoje' AND (stats.ultima_interacao_at AT TIME ZONE $3)::date = (NOW() AT TIME ZONE $3)::date)
+           OR ($8 = 'ultimos_7_dias' AND (stats.ultima_interacao_at AT TIME ZONE $3)::date BETWEEN (NOW() AT TIME ZONE $3)::date - 6 AND (NOW() AT TIME ZONE $3)::date)
+           OR ($8 = 'ultimos_30_dias' AND (stats.ultima_interacao_at AT TIME ZONE $3)::date BETWEEN (NOW() AT TIME ZONE $3)::date - 29 AND (NOW() AT TIME ZONE $3)::date)
+           OR ($8 = 'sem_historico' AND COALESCE(stats.total_atendimentos, 0) = 0)
+           OR ($8 = 'periodo' AND (stats.ultima_interacao_at AT TIME ZONE $3)::date BETWEEN $9::date AND $10::date)
+         )
+         AND (
+           $11 = 'todas'
+           OR ($11 = 'uma' AND COALESCE(stats.total_atendimentos, 0) = 1)
+           OR ($11 = 'duas_a_cinco' AND COALESCE(stats.total_atendimentos, 0) BETWEEN 2 AND 5)
+           OR ($11 = 'seis_a_dez' AND COALESCE(stats.total_atendimentos, 0) BETWEEN 6 AND 10)
+           OR ($11 = 'onze_ou_mais' AND COALESCE(stats.total_atendimentos, 0) >= 11)
+         )
+       ORDER BY
+         CASE WHEN $12 = 'ultimo_atendimento' AND $13 = 'desc' THEN stats.ultima_interacao_at END DESC NULLS LAST,
+         CASE WHEN $12 = 'ultimo_atendimento' AND $13 = 'asc' THEN stats.ultima_interacao_at END ASC NULLS LAST,
+         CASE WHEN $12 = 'visitas' AND $13 = 'desc' THEN COALESCE(stats.total_atendimentos, 0) END DESC,
+         CASE WHEN $12 = 'visitas' AND $13 = 'asc' THEN COALESCE(stats.total_atendimentos, 0) END ASC,
+         c.updated_at DESC, c.id DESC
+    ) page
+   LIMIT $14 OFFSET $15`;
 
+async function listClientes(
+  input: ListClientesFilters & {
+    slot: string;
+    tenantId: string;
+    timezone: string;
+    colaboradorId?: number;
+  },
+): Promise<ClienteListResult> {
+  const { limit, offset } = normalizePaging(input.limit, input.offset);
+  const filters = normalizeListFilters(input);
+  const isColaborador = input.colaboradorId !== undefined;
+  const sql = LIST_CLIENTES_SQL.replaceAll(
+    '/* COLABORADOR_ATENDIMENTOS */',
+    isColaborador ? 'AND a.colaborador_id = $16' : '',
+  ).replace(
+    '/* COLABORADOR_CARTEIRA */',
+    isColaborador
+      ? `AND EXISTS (
+             SELECT 1 FROM atendimentos own_a
+              WHERE own_a.slot = c.slot AND own_a.tenant_id = c.tenant_id
+                AND own_a.deleted_at IS NULL AND own_a.status <> 'cancelado'
+                AND own_a.colaborador_id = $16
+                AND own_a.cliente_telefone_canonico = c.telefone_canonico
+           )`
+      : '',
+  );
+  const rows = await query<ListRowRaw>(sql, [
+    input.slot,
+    input.tenantId,
+    input.timezone,
+    filters.nomeLike,
+    filters.telefoneLike,
+    filters.legacy.likeText,
+    filters.legacy.likeDigits,
+    filters.ultimoAtendimento,
+    filters.periodoInicio,
+    filters.periodoFim,
+    filters.visitas,
+    filters.ordenarPor,
+    filters.ordem,
+    limit,
+    offset,
+    input.colaboradorId ?? null,
+  ]);
   return {
     clientes: rows.rows.map(mapListRow),
     total: Number(rows.rows[0]?.total_count ?? 0),
@@ -588,81 +744,77 @@ export async function listClientesForOwner(input: {
   };
 }
 
-export async function listClientesForColaborador(input: {
+export async function listClientesForOwner(
+  input: ListClientesFilters & {
+    slot: string;
+    tenantId: string;
+    timezone: string;
+  },
+): Promise<ClienteListResult> {
+  return listClientes(input);
+}
+
+export async function listClientesForColaborador(
+  input: ListClientesFilters & {
+    slot: string;
+    tenantId: string;
+    colaboradorId: number;
+    timezone: string;
+  },
+): Promise<ClienteListResult> {
+  return listClientes(input);
+}
+
+interface ResumoRowRaw {
+  total_clientes: string | number;
+  aniversariantes_hoje: string | number;
+  sem_retorno: string | number;
+}
+
+export async function getClientesResumo(input: {
   slot: string;
   tenantId: string;
-  colaboradorId: number;
-  search?: string | null;
-  limit?: number;
-  offset?: number;
-}): Promise<ClienteListResult> {
-  const { limit, offset } = normalizePaging(input.limit, input.offset);
-  const search = normalizeSearch(input.search);
-  const rows = await query<ListRowRaw>(
-    `SELECT *
-       FROM (
-         SELECT c.id,
-                c.nome,
-                c.telefone_canonico,
-                c.aniversario_mmdd,
-                c.cidade,
-                COALESCE(stats.total_atendimentos, 0)::bigint AS total_atendimentos,
-                stats.ultima_interacao_at,
-                stats.ultimo_profissional_nome,
-                COUNT(*) OVER()::bigint AS total_count
-           FROM clientes c
-           LEFT JOIN LATERAL (
-             SELECT COUNT(*)::bigint AS total_atendimentos,
-                    MAX(COALESCE(a.inicio_at, a.data::timestamptz)) AS ultima_interacao_at,
-                    (
-                      ARRAY_AGG(cc.nome ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC)
-                    )[1] AS ultimo_profissional_nome
-               FROM atendimentos a
-               LEFT JOIN clone_colaboradores cc
-                 ON cc.id = a.colaborador_id AND cc.slot = a.slot
-              WHERE a.slot = c.slot
-                AND a.tenant_id = c.tenant_id
-                AND a.deleted_at IS NULL
-                AND a.colaborador_id = $3
-                AND a.cliente_telefone_canonico = c.telefone_canonico
-           ) AS stats ON TRUE
-          WHERE c.slot = $1
-            AND c.tenant_id = $2
-            AND EXISTS (
-              SELECT 1
-                FROM atendimentos own_a
-               WHERE own_a.slot = c.slot
-                 AND own_a.tenant_id = c.tenant_id
-                 AND own_a.deleted_at IS NULL
-                 AND own_a.colaborador_id = $3
-                 AND own_a.cliente_telefone_canonico = c.telefone_canonico
-            )
-            AND (
-              $4::text IS NULL
-              OR lower(COALESCE(c.nome, '')) LIKE $5
-              OR lower(COALESCE(c.cidade, '')) LIKE $5
-              OR ($6::text IS NOT NULL AND (c.telefone_raw LIKE $6 OR c.telefone_canonico LIKE $6))
-            )
-          ORDER BY stats.ultima_interacao_at DESC NULLS LAST, c.updated_at DESC, c.id DESC
-       ) AS page
-      LIMIT $7 OFFSET $8`,
-    [
-      input.slot,
-      input.tenantId,
-      input.colaboradorId,
-      search.token,
-      search.likeText,
-      search.likeDigits,
-      limit,
-      offset,
-    ],
+  timezone: string;
+  colaboradorId?: number;
+}): Promise<ClientesResumo> {
+  const isColaborador = input.colaboradorId !== undefined;
+  const carteiraSql = isColaborador
+    ? `AND EXISTS (
+         SELECT 1 FROM atendimentos own_a
+          WHERE own_a.slot = c.slot AND own_a.tenant_id = c.tenant_id
+            AND own_a.deleted_at IS NULL AND own_a.colaborador_id = $4
+            AND own_a.cliente_telefone_canonico = c.telefone_canonico
+       )`
+    : '';
+  const atendimentoScopeSql = isColaborador ? 'AND a.colaborador_id = $4' : '';
+  const rows = await query<ResumoRowRaw>(
+    `SELECT COUNT(*)::bigint AS total_clientes,
+            COUNT(*) FILTER (
+              WHERE c.aniversario_mmdd = to_char((NOW() AT TIME ZONE $3)::date, 'MM-DD')
+            )::bigint AS aniversariantes_hoje,
+            COUNT(*) FILTER (
+              WHERE EXISTS (
+                SELECT 1 FROM atendimentos a
+                 WHERE a.slot = c.slot AND a.tenant_id = c.tenant_id
+                   AND a.deleted_at IS NULL AND a.status <> 'cancelado'
+                   AND a.cliente_telefone_canonico = c.telefone_canonico
+                   ${atendimentoScopeSql}
+                   AND (
+                     (a.origem = 'agenda' AND COALESCE(a.fim_at, a.inicio_at) <= NOW())
+                     OR (a.origem = 'manual' AND a.data <= (NOW() AT TIME ZONE $3)::date)
+                   )
+              )
+            )::bigint AS sem_retorno
+       FROM clientes c
+      WHERE c.slot = $1 AND c.tenant_id = $2
+        ${carteiraSql}`,
+    [input.slot, input.tenantId, input.timezone, input.colaboradorId ?? null],
   );
-
+  const row = rows.rows[0];
   return {
-    clientes: rows.rows.map(mapListRow),
-    total: Number(rows.rows[0]?.total_count ?? 0),
-    limit,
-    offset,
+    total_clientes: Number(row?.total_clientes ?? 0),
+    aniversariantes_hoje: Number(row?.aniversariantes_hoje ?? 0),
+    sem_retorno: Number(row?.sem_retorno ?? 0),
   };
 }
 
@@ -685,7 +837,7 @@ export async function listClientesSemRetornoForOwner(input: {
   const rows = await query<SemRetornoRowRaw>(
     `WITH elegiveis AS (
        SELECT c.id,
-              c.nome,
+              COALESCE(c.nome_personalizado, c.nome) AS nome,
               c.telefone_canonico,
               COALESCE(a.fim_at, a.inicio_at) AS ultimo_atendimento_at,
               (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $3)::date AS referencia_local_date,
@@ -708,7 +860,7 @@ export async function listClientesSemRetornoForOwner(input: {
        UNION ALL
 
        SELECT c.id,
-              c.nome,
+            COALESCE(c.nome_personalizado, c.nome) AS nome,
               c.telefone_canonico,
               (a.data::timestamp AT TIME ZONE $3) AS ultimo_atendimento_at,
               a.data AS referencia_local_date,
@@ -775,7 +927,7 @@ export async function listClientesSemRetornoForColaborador(input: {
   const rows = await query<SemRetornoRowRaw>(
     `WITH elegiveis AS (
        SELECT c.id,
-              c.nome,
+              COALESCE(c.nome_personalizado, c.nome) AS nome,
               c.telefone_canonico,
               COALESCE(a.fim_at, a.inicio_at) AS ultimo_atendimento_at,
               (COALESCE(a.fim_at, a.inicio_at) AT TIME ZONE $4)::date AS referencia_local_date,
@@ -799,7 +951,7 @@ export async function listClientesSemRetornoForColaborador(input: {
        UNION ALL
 
        SELECT c.id,
-              c.nome,
+              COALESCE(c.nome_personalizado, c.nome) AS nome,
               c.telefone_canonico,
               (a.data::timestamp AT TIME ZONE $4) AS ultimo_atendimento_at,
               a.data AS referencia_local_date,
@@ -1065,6 +1217,112 @@ export async function listClientesAniversariantesForColaborador(
   };
 }
 
+interface CalendarioAniversarioRowRaw extends AniversarianteRowRaw {
+  periodo_inicio: string;
+  periodo_fim: string;
+}
+
+/**
+ * Calendário ancorado em data local já validada na rota. A âncora não carrega fuso:
+ * o timezone do tenant só é resolvido antes, no servidor; isto evita o navegador
+ * deslocar um aniversário ao serializar meia-noite em UTC.
+ */
+export async function listClientesAniversariantesCalendario(input: {
+  slot: string;
+  tenantId: string;
+  timezone: string;
+  anchor: string;
+  view: 'semana' | 'mes';
+  colaboradorId?: number;
+  limit?: number;
+  offset?: number;
+}): Promise<ClienteAniversariantesCalendarioResult> {
+  const { limit, offset } = normalizeRankingPaging(input.limit, input.offset);
+  const rows = await query<CalendarioAniversarioRowRaw>(
+    `WITH contexto AS (
+       SELECT CASE WHEN $5 = 'semana' THEN date_trunc('week', $4::date)::date
+                   ELSE date_trunc('month', $4::date)::date END AS periodo_inicio,
+              CASE WHEN $5 = 'semana' THEN (date_trunc('week', $4::date)::date + 6)
+                   ELSE (date_trunc('month', $4::date) + INTERVAL '1 month - 1 day')::date END AS periodo_fim
+     ),
+     ${VALID_BIRTHDAY_CTES_SQL}
+     ocorrencias AS (
+       SELECT av.id, av.slot, av.tenant_id, av.nome, av.telefone_canonico,
+              av.aniversario_mmdd,
+              candidate.ocorrencia_local_date,
+              ctx.periodo_inicio, ctx.periodo_fim
+         FROM aniversarios_validos av
+         CROSS JOIN contexto ctx
+         CROSS JOIN LATERAL (
+           SELECT concat(gs::text, '-', lpad(av.aniversario_mes::text, 2, '0'), '-',
+                         lpad(av.aniversario_dia::text, 2, '0'))::date AS ocorrencia_local_date
+             FROM generate_series(
+                    EXTRACT(YEAR FROM ctx.periodo_inicio)::int - 1,
+                    EXTRACT(YEAR FROM ctx.periodo_fim)::int + 1
+                  ) gs
+            WHERE av.aniversario_dia <= ${CANDIDATE_MAX_DAY_SQL}
+         ) candidate
+        WHERE candidate.ocorrencia_local_date BETWEEN ctx.periodo_inicio AND ctx.periodo_fim
+     ),
+     base AS (
+       SELECT o.id, o.nome, o.telefone_canonico, o.aniversario_mmdd,
+              to_char(o.ocorrencia_local_date, 'YYYY-MM-DD') AS proxima_ocorrencia_local_date,
+              to_char(o.periodo_inicio, 'YYYY-MM-DD') AS periodo_inicio,
+              to_char(o.periodo_fim, 'YYYY-MM-DD') AS periodo_fim,
+              stats.ultimo_profissional_nome
+         FROM ocorrencias o
+         LEFT JOIN LATERAL (
+           SELECT (ARRAY_AGG(cc.nome ORDER BY COALESCE(a.inicio_at, a.data::timestamptz) DESC, a.id DESC))[1]
+                    AS ultimo_profissional_nome
+             FROM atendimentos a
+             LEFT JOIN clone_colaboradores cc ON cc.id = a.colaborador_id AND cc.slot = a.slot
+            WHERE a.slot = o.slot AND a.tenant_id = o.tenant_id
+              AND a.deleted_at IS NULL AND a.cliente_telefone_canonico = o.telefone_canonico
+              AND ($6::bigint IS NULL OR a.colaborador_id = $6)
+         ) stats ON TRUE
+        WHERE ($6::bigint IS NULL OR EXISTS (
+          SELECT 1 FROM atendimentos own_a
+           WHERE own_a.slot = o.slot AND own_a.tenant_id = o.tenant_id
+             AND own_a.deleted_at IS NULL AND own_a.colaborador_id = $6
+             AND own_a.cliente_telefone_canonico = o.telefone_canonico
+        ))
+     )
+     SELECT base.*, 0::int AS dias_ate_aniversario, COUNT(*) OVER()::bigint AS total_count
+       FROM base
+      ORDER BY proxima_ocorrencia_local_date ASC, nome ASC NULLS LAST, id ASC
+      LIMIT $7 OFFSET $8`,
+    [
+      input.slot,
+      input.tenantId,
+      input.timezone,
+      input.anchor,
+      input.view,
+      input.colaboradorId ?? null,
+      limit,
+      offset,
+    ],
+  );
+  const first = rows.rows[0];
+  const anchor = new Date(`${input.anchor}T12:00:00Z`);
+  const fallbackStart =
+    input.view === 'semana'
+      ? new Date(anchor.valueOf() - ((anchor.getUTCDay() + 6) % 7) * 86_400_000)
+      : new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1));
+  const fallbackEnd =
+    input.view === 'semana'
+      ? new Date(fallbackStart.valueOf() + 6 * 86_400_000)
+      : new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0));
+  const formatDate = (value: Date) => value.toISOString().slice(0, 10);
+  return {
+    clientes: rows.rows.map(mapCalendarioAniversarianteRow),
+    total: Number(first?.total_count ?? 0),
+    limit,
+    offset,
+    periodo_inicio: first?.periodo_inicio ?? formatDate(fallbackStart),
+    periodo_fim: first?.periodo_fim ?? formatDate(fallbackEnd),
+  };
+}
+
 export async function getClienteProfileForOwner(
   slot: string,
   tenantId: string,
@@ -1072,7 +1330,8 @@ export async function getClienteProfileForOwner(
 ): Promise<ClienteProfile | null> {
   const rows = await query<ProfileRowRaw>(
     `SELECT c.id,
-            c.nome,
+            COALESCE(c.nome_personalizado, c.nome) AS nome,
+            c.nome_personalizado,
             c.telefone_raw,
             c.aniversario_mmdd,
             c.cidade,
@@ -1099,6 +1358,34 @@ export async function getClienteProfileForOwner(
   return row ? mapProfileRow(row) : null;
 }
 
+/** Resolve o alvo internamente; telefone/sessão nunca atravessam a resposta HTTP. */
+export async function getClienteAvatarTargetForOwner(
+  slot: string,
+  tenantId: string,
+  clienteId: string,
+): Promise<ClienteAvatarTarget | null> {
+  const rows = await query<{
+    telefone_canonico: string;
+    waha_sessao: string | null;
+    waha_shard_id: number | string | null;
+  }>(
+    `SELECT c.telefone_canonico, fc.waha_sessao, fc.waha_shard_id
+       FROM clientes c
+       JOIN flow_clones fc ON fc.slot = c.slot
+      WHERE c.slot = $1 AND c.tenant_id = $2 AND c.id = $3
+        AND fc.tenant_id = c.tenant_id
+      LIMIT 1`,
+    [slot, tenantId, clienteId],
+  );
+  const row = rows.rows[0];
+  if (!row?.waha_sessao) return null;
+  return {
+    telefoneCanonico: row.telefone_canonico,
+    wahaSessao: row.waha_sessao,
+    wahaShardId: Number(row.waha_shard_id ?? 0),
+  };
+}
+
 export async function getClienteProfileForColaborador(
   slot: string,
   tenantId: string,
@@ -1107,7 +1394,8 @@ export async function getClienteProfileForColaborador(
 ): Promise<ClienteProfileColaborador | null> {
   const rows = await query<ProfileRowRaw>(
     `SELECT c.id,
-            c.nome,
+            COALESCE(c.nome_personalizado, c.nome) AS nome,
+            c.nome_personalizado,
             c.telefone_raw,
             c.aniversario_mmdd,
             c.cidade,
@@ -1144,7 +1432,11 @@ export async function getClienteProfileForColaborador(
   const row = rows.rows[0];
   if (!row) return null;
   const profile = mapProfileRow(row);
-  const { nota_interna: _ignored, ...withoutNote } = profile;
+  const {
+    nota_interna: _ignored,
+    nome_personalizado: _personalizadoIgnored,
+    ...withoutNote
+  } = profile;
   return withoutNote;
 }
 
@@ -1247,6 +1539,10 @@ export async function updateClienteProfileForOwner(
   if (patch.aniversario_mmdd !== undefined) {
     params.push(trimOrNull(patch.aniversario_mmdd));
     sets.push(`aniversario_mmdd = $${params.length}`);
+  }
+  if (patch.nome_personalizado !== undefined) {
+    params.push(trimNfcOrNull(patch.nome_personalizado));
+    sets.push(`nome_personalizado = $${params.length}`);
   }
   if (patch.cidade !== undefined) {
     params.push(trimOrNull(patch.cidade));

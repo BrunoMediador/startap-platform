@@ -18,6 +18,11 @@ const {
   listAniversariantesColaboradorMock,
   listSemRetornoOwnerMock,
   listSemRetornoColaboradorMock,
+  getClientesResumoMock,
+  listAniversariantesCalendarioMock,
+  getClienteAvatarTargetMock,
+  getProfilePictureMock,
+  redisMock,
   getClienteOwnerMock,
   getClienteColaboradorMock,
   listHistoricoOwnerMock,
@@ -38,6 +43,11 @@ const {
   listAniversariantesColaboradorMock: vi.fn(),
   listSemRetornoOwnerMock: vi.fn(),
   listSemRetornoColaboradorMock: vi.fn(),
+  getClientesResumoMock: vi.fn(),
+  listAniversariantesCalendarioMock: vi.fn(),
+  getClienteAvatarTargetMock: vi.fn(),
+  getProfilePictureMock: vi.fn(),
+  redisMock: { get: vi.fn(), set: vi.fn() },
   getClienteOwnerMock: vi.fn(),
   getClienteColaboradorMock: vi.fn(),
   listHistoricoOwnerMock: vi.fn(),
@@ -59,6 +69,10 @@ vi.mock('@startap/db', () => ({
       listAniversariantesColaboradorMock(...a),
     listClientesSemRetornoForOwner: (...a: unknown[]) => listSemRetornoOwnerMock(...a),
     listClientesSemRetornoForColaborador: (...a: unknown[]) => listSemRetornoColaboradorMock(...a),
+    getClientesResumo: (...a: unknown[]) => getClientesResumoMock(...a),
+    listClientesAniversariantesCalendario: (...a: unknown[]) =>
+      listAniversariantesCalendarioMock(...a),
+    getClienteAvatarTargetForOwner: (...a: unknown[]) => getClienteAvatarTargetMock(...a),
     getClienteProfileForOwner: (...a: unknown[]) => getClienteOwnerMock(...a),
     getClienteProfileForColaborador: (...a: unknown[]) => getClienteColaboradorMock(...a),
     listClienteHistoricoForOwner: (...a: unknown[]) => listHistoricoOwnerMock(...a),
@@ -66,6 +80,10 @@ vi.mock('@startap/db', () => ({
     updateClienteProfileForOwner: (...a: unknown[]) => updateClienteOwnerMock(...a),
   },
 }));
+vi.mock('@startap/integrations/waha', () => ({
+  getProfilePicture: (...a: unknown[]) => getProfilePictureMock(...a),
+}));
+vi.mock('../lib/session.js', () => ({ getRedis: () => redisMock }));
 vi.mock('../lib/tenant.js', async () => {
   const actual = await vi.importActual<typeof import('../lib/tenant.js')>('../lib/tenant.js');
   return {
@@ -220,12 +238,13 @@ beforeEach(() => {
         offset: offset ?? ANIVERSARIANTES_LIST.offset,
       }),
   );
-  listSemRetornoOwnerMock.mockImplementation(({ limit, offset }: { limit?: number; offset?: number }) =>
-    Promise.resolve({
-      ...SEM_RETORNO_LIST,
-      limit: limit ?? SEM_RETORNO_LIST.limit,
-      offset: offset ?? SEM_RETORNO_LIST.offset,
-    }),
+  listSemRetornoOwnerMock.mockImplementation(
+    ({ limit, offset }: { limit?: number; offset?: number }) =>
+      Promise.resolve({
+        ...SEM_RETORNO_LIST,
+        limit: limit ?? SEM_RETORNO_LIST.limit,
+        offset: offset ?? SEM_RETORNO_LIST.offset,
+      }),
   );
   listSemRetornoColaboradorMock.mockImplementation(
     ({ limit, offset }: { limit?: number; offset?: number }) =>
@@ -240,6 +259,36 @@ beforeEach(() => {
   listHistoricoOwnerMock.mockResolvedValue(HISTORICO);
   listHistoricoColaboradorMock.mockResolvedValue(HISTORICO);
   updateClienteOwnerMock.mockResolvedValue(OWNER_PROFILE);
+  getClientesResumoMock.mockResolvedValue({
+    total_clientes: 1,
+    aniversariantes_hoje: 0,
+    sem_retorno: 1,
+  });
+  listAniversariantesCalendarioMock.mockResolvedValue({
+    clientes: [
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        nome: 'Ana',
+        telefone_masked: '+55 31 •••••-••55',
+        aniversario_mmdd: '08-21',
+        ocorrencia_local_date: '2026-08-21',
+        ultimo_profissional_nome: 'Bene',
+      },
+    ],
+    total: 1,
+    limit: 20,
+    offset: 0,
+    periodo_inicio: '2026-08-17',
+    periodo_fim: '2026-08-23',
+  });
+  redisMock.get.mockResolvedValue(null);
+  redisMock.set.mockResolvedValue('OK');
+  getClienteAvatarTargetMock.mockResolvedValue({
+    telefoneCanonico: '553199998842',
+    wahaSessao: 'sess_owner',
+    wahaShardId: 0,
+  });
+  getProfilePictureMock.mockResolvedValue(null);
 });
 
 describe('gating', () => {
@@ -278,7 +327,10 @@ describe('gating', () => {
   it('404 ranking colaborador quando RANKING_SEM_RETORNO_ENABLED está OFF', async () => {
     configMock.RANKING_SEM_RETORNO_ENABLED = false;
     const app = await buildApp();
-    const res = await app.inject({ method: 'GET', url: '/portal/colaborador/clientes/sem-retorno' });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/sem-retorno',
+    });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: 'feature_off' });
     expect(listSemRetornoColaboradorMock).not.toHaveBeenCalled();
@@ -326,7 +378,16 @@ describe('owner', () => {
     expect(listClientesOwnerMock).toHaveBeenCalledWith({
       slot: 'clone_owner',
       tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
       search: 'joao',
+      nome: undefined,
+      telefone: undefined,
+      ultimoAtendimento: undefined,
+      periodoInicio: undefined,
+      periodoFim: undefined,
+      visitas: undefined,
+      ordenarPor: undefined,
+      ordem: undefined,
       limit: 10,
       offset: 5,
     });
@@ -335,6 +396,114 @@ describe('owner', () => {
     expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
     expect(body.clientes[0]?.telefone).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('553199998842');
+    await app.close();
+  });
+
+  it('aplica filtros de coluna E, período e ordenação somente no servidor', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes?nome=maria&telefone=3199&ultimo_atendimento=periodo&periodo_inicio=2026-08-01&periodo_fim=2026-08-20&visitas=duas_a_cinco&ordenar_por=visitas&ordem=asc',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(listClientesOwnerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        timezone: 'America/Sao_Paulo',
+        nome: 'maria',
+        telefone: '3199',
+        ultimoAtendimento: 'periodo',
+        periodoInicio: '2026-08-01',
+        periodoFim: '2026-08-20',
+        visitas: 'duas_a_cinco',
+        ordenarPor: 'visitas',
+        ordem: 'asc',
+      }),
+    );
+    await app.close();
+  });
+
+  it('rejeita filtros de período incompletos e escopo forjado', async () => {
+    const app = await buildApp();
+    const incomplete = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes?ultimo_atendimento=periodo&periodo_inicio=2026-08-01',
+    });
+    const forged = await app.inject({ method: 'GET', url: '/portal/clientes?slot=outro' });
+    expect(incomplete.statusCode).toBe(400);
+    expect(forged.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('retorna resumo escopado e calendário navegável ancorado em data', async () => {
+    const app = await buildApp();
+    const resumo = await app.inject({ method: 'GET', url: '/portal/clientes/resumo' });
+    const calendario = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/aniversariantes?modo=calendario&visao=semana&ancora=2026-08-21',
+    });
+    expect(resumo.statusCode).toBe(200);
+    expect(getClientesResumoMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      timezone: 'America/Sao_Paulo',
+    });
+    expect(calendario.statusCode).toBe(200);
+    expect(listAniversariantesCalendarioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        timezone: 'America/Sao_Paulo',
+        anchor: '2026-08-21',
+        view: 'semana',
+      }),
+    );
+    expect(calendario.json().clientes[0]?.ocorrencia_local_date).toBe('2026-08-21');
+    await app.close();
+  });
+
+  it('proxy de avatar reautoriza owner, não expõe URL e retorna 204 no fallback', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/11111111-1111-4111-8111-111111111111/avatar',
+    });
+    expect(res.statusCode).toBe(204);
+    expect(getClienteAvatarTargetMock).toHaveBeenCalledWith(
+      'clone_owner',
+      'tid-owner',
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(getProfilePictureMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessao: 'sess_owner',
+        telefoneCanonico: '553199998842',
+        shardId: 0,
+      }),
+    );
+    expect(res.body).not.toContain('http');
+    await app.close();
+  });
+
+  it('não consulta cache de avatar quando id não pertence mais ao slot+tenant', async () => {
+    getClienteAvatarTargetMock.mockResolvedValueOnce(null);
+    redisMock.get.mockResolvedValueOnce(
+      JSON.stringify({ mime: 'image/png', base64: 'iVBORw0KGgo=' }),
+    );
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/11111111-1111-4111-8111-111111111111/avatar',
+    });
+    expect(res.statusCode).toBe(204);
+    expect(getClienteAvatarTargetMock).toHaveBeenCalledWith(
+      'clone_owner',
+      'tid-owner',
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(redisMock.get).not.toHaveBeenCalled();
+    expect(getProfilePictureMock).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -564,7 +733,16 @@ describe('colaborador', () => {
       slot: 'clone_owner',
       tenantId: 'tid-owner',
       colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
       search: 'jo',
+      nome: undefined,
+      telefone: undefined,
+      ultimoAtendimento: undefined,
+      periodoInicio: undefined,
+      periodoFim: undefined,
+      visitas: undefined,
+      ordenarPor: undefined,
+      ordem: undefined,
       limit: undefined,
       offset: undefined,
     });
@@ -572,6 +750,62 @@ describe('colaborador', () => {
     expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
     expect(body.clientes[0]?.telefone).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('553199998842');
+    await app.close();
+  });
+
+  it('aplica os mesmos filtros, período e ordenação no escopo próprio do colaborador', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes?nome=ana&telefone=3199&ultimo_atendimento=periodo&periodo_inicio=2026-08-01&periodo_fim=2026-08-20&visitas=seis_a_dez&ordenar_por=visitas&ordem=desc',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(listClientesColaboradorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        colaboradorId: 9,
+        timezone: 'America/Sao_Paulo',
+        nome: 'ana',
+        telefone: '3199',
+        ultimoAtendimento: 'periodo',
+        periodoInicio: '2026-08-01',
+        periodoFim: '2026-08-20',
+        visitas: 'seis_a_dez',
+        ordenarPor: 'visitas',
+        ordem: 'desc',
+      }),
+    );
+    await app.close();
+  });
+
+  it('retorna resumo exato e calendário do colaborador com ocorrência explícita', async () => {
+    const app = await buildApp();
+    const resumo = await app.inject({ method: 'GET', url: '/portal/colaborador/clientes/resumo' });
+    const calendario = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes?modo=calendario&visao=mes&ancora=2026-08-21',
+    });
+    expect(resumo.statusCode).toBe(200);
+    expect(resumo.json()).toEqual({ total_clientes: 1, aniversariantes_hoje: 0, sem_retorno: 1 });
+    expect(getClientesResumoMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+    });
+    expect(calendario.statusCode).toBe(200);
+    expect(listAniversariantesCalendarioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        colaboradorId: 9,
+        timezone: 'America/Sao_Paulo',
+        anchor: '2026-08-21',
+        view: 'mes',
+      }),
+    );
+    expect(calendario.json().clientes[0]?.ocorrencia_local_date).toBe('2026-08-21');
     await app.close();
   });
 

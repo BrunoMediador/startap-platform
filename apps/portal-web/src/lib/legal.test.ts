@@ -72,11 +72,11 @@ describe.each(DOCS)('conteúdo legal limpo: %s', (_name, doc) => {
   });
 });
 
-describe('versões sincronizadas (Termos v1, Política v2)', () => {
+describe('versões sincronizadas (Termos v1, Política v3)', () => {
   it('cada doc bate com sua constante de versão', () => {
-    // Política foi pra v2 no append da finalidade (SCRUM-59); Termos seguem v1.
+    // Política foi pra v3 com a foto de perfil no CRM; Termos seguem v1.
     expect(TERMS_VERSION).toBe('v1');
-    expect(PRIVACY_VERSION).toBe('v2');
+    expect(PRIVACY_VERSION).toBe('v3');
     expect(TERMOS_DE_USO.version).toBe(TERMS_VERSION);
     expect(POLITICA_PRIVACIDADE.version).toBe(PRIVACY_VERSION);
   });

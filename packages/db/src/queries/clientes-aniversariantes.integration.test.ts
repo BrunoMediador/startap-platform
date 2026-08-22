@@ -46,6 +46,7 @@ describeIf('aniversariantes contra Postgres REAL', () => {
       telefone_canonico TEXT NOT NULL,
       telefone_raw TEXT NOT NULL,
       nome TEXT,
+      nome_personalizado TEXT,
       aniversario_mmdd TEXT,
       cidade TEXT,
       nota_interna TEXT,

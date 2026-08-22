@@ -364,6 +364,8 @@ export interface ContatosResponse {
 export interface ClienteListItem {
   id: string;
   nome: string | null;
+  /** Nome escolhido pelo dono; prevalece visualmente sobre o nome detectado. */
+  nome_personalizado?: string | null;
   telefone: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
@@ -377,6 +379,12 @@ export interface ClientesListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+export interface ClientesResumoResponse {
+  total_clientes: number;
+  aniversariantes_hoje: number;
+  sem_retorno: number;
 }
 
 export interface ClienteHistoricoItem {
@@ -398,6 +406,7 @@ export interface ClienteHistoricoItem {
 export interface ClientePerfil {
   id: string;
   nome: string | null;
+  nome_personalizado?: string | null;
   telefone: string;
   aniversario_mmdd: string | null;
   cidade: string | null;
@@ -428,6 +437,7 @@ export interface EnviarWhatsappManualResponse {
 }
 
 export interface SaveClienteBody {
+  nome_personalizado?: string | null;
   aniversario_mmdd?: string | null;
   cidade?: string | null;
   nota_interna?: string | null;
@@ -459,7 +469,7 @@ export interface ClientesSemRetornoResponse {
   offset: number;
 }
 
-export type ClientesAniversariantesModo = 'proximos' | 'mes';
+export type ClientesAniversariantesModo = 'proximos' | 'mes' | 'calendario';
 
 export interface ClienteAniversarianteApiItem {
   id: string;
@@ -467,6 +477,8 @@ export interface ClienteAniversarianteApiItem {
   telefone_masked: string;
   aniversario_mmdd: string;
   proxima_ocorrencia_local_date?: string | null;
+  /** Data da ocorrência retornada na visão calendário (YYYY-MM-DD). */
+  ocorrencia_local_date?: string | null;
   dias_ate_aniversario?: number | null;
 }
 

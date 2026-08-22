@@ -66,6 +66,7 @@ describeIf('ranking sem retorno contra Postgres REAL', () => {
       telefone_canonico TEXT NOT NULL,
       telefone_raw TEXT NOT NULL,
       nome TEXT,
+      nome_personalizado TEXT,
       aniversario_mmdd TEXT,
       cidade TEXT,
       nota_interna TEXT,
@@ -344,7 +345,9 @@ describeIf('ranking sem retorno contra Postgres REAL', () => {
     expect(planUsesIndex(plan, 'ix_atendimentos_cliente_sem_retorno_agenda')).toBe(true);
     expect(planUsesIndex(plan, 'ix_atendimentos_cliente_sem_retorno_manual')).toBe(true);
     expect(
-      nodes.some((node) => node['Relation Name'] === 'atendimentos' && node['Node Type'] === 'Seq Scan'),
+      nodes.some(
+        (node) => node['Relation Name'] === 'atendimentos' && node['Node Type'] === 'Seq Scan',
+      ),
     ).toBe(false);
   });
 });

@@ -82,13 +82,13 @@ describe('canonicalizeLegalDoc + computeLegalDocHash', () => {
   });
 });
 
-describe('hashes v1 server-authoritative (golden — pino contra alteração silenciosa)', () => {
+describe('hashes server-authoritative (golden — pino contra alteração silenciosa)', () => {
   it('TERMS_HASH/PRIVACY_HASH são sha256 hex de 64 chars', () => {
     expect(TERMS_HASH).toMatch(/^[0-9a-f]{64}$/);
     expect(PRIVACY_HASH).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('TERMS_HASH e PRIVACY_HASH são distintos e batem com o publicado (Termos v1, Política v2)', () => {
+  it('TERMS_HASH e PRIVACY_HASH são distintos e batem com o publicado (Termos v1, Política v3)', () => {
     expect(TERMS_HASH).not.toBe(PRIVACY_HASH);
     // Golden: derivados do conteúdo de portal-web/src/lib/legal.ts via canonicalizeLegalDoc.
     // Se o texto legal mudar, RECOMPUTE e BUMPE a versão (ver legal-version.ts).
@@ -96,6 +96,6 @@ describe('hashes v1 server-authoritative (golden — pino contra alteração sil
     // conteúdo do portal-web (decouple de build cross-app). Uma edição de texto SEM bump
     // não é pega aqui — a proteção real vem de bumpar a versão + este pino manual.
     expect(TERMS_HASH).toBe('214f5c8e5230edd9a9b483458ec03ce851ae49b24bb1ce57fc5e414f0db9a7bd');
-    expect(PRIVACY_HASH).toBe('0f1397643d353680ca26681af24af8059e481170947cce8d3ffa8c3fb5322610');
+    expect(PRIVACY_HASH).toBe('135b542e9e999a8c8f297fe3780dcc93c0a1137b40c2d25db2536f4962e76361');
   });
 });

@@ -36,7 +36,7 @@ function sendErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 429) {
     return 'Aguarde um momento antes de tentar outro envio.';
   }
-  return 'Não foi possível enviar agora. Nenhuma confirmação de envio foi recebida.';
+  return 'Não foi possível confirmar o envio. Aguarde antes de tentar novamente.';
 }
 
 export function WhatsAppManualDialog({
@@ -104,7 +104,7 @@ export function WhatsAppManualDialog({
           </span>
           <div className="min-w-0">
             <h2 className="truncate font-display text-[17px] font-semibold text-ink">
-              {step === 'success' ? 'Mensagem enviada' : 'Enviar WhatsApp'}
+              {step === 'success' ? 'Mensagem enviada ao WhatsApp' : 'Enviar WhatsApp'}
             </h2>
             {target && (
               <p className="truncate text-[12.5px] text-ink-soft">
@@ -127,7 +127,8 @@ export function WhatsAppManualDialog({
       {step === 'success' ? (
         <>
           <p className="mt-4 text-[14px] leading-snug text-ink-soft">
-            O envio foi confirmado pelo servidor. Não envie novamente para esta conversa agora.
+            O envio foi confirmado pelo servidor. Isso não confirma entrega ou leitura. Não envie
+            novamente para esta conversa agora.
           </p>
           <div className="mt-5">
             <Button onClick={close}>Concluir</Button>
@@ -190,7 +191,7 @@ export function WhatsAppManualDialog({
             >
               Editar
             </Button>
-            <Button size="inline" loading={sending} loadingLabel="Enviando…" onClick={send}>
+            <Button size="inline" loading={sending} loadingLabel="Preparando envio…" onClick={send}>
               <IconSend size={17} />
               Confirmar envio
             </Button>
