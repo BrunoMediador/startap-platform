@@ -16,7 +16,6 @@ import { useColaborador } from '@/components/colaborador/colaborador-session-con
 import { PeriodSelector } from '@/components/relatorios/period-selector';
 import { TenantTzValueProvider, useTenantTz } from '@/components/shell/tenant-tz-context';
 import { inicialDoTitulo } from '@/lib/agenda-titulo';
-import { podeGerenciarAgendaColaborador } from '@/lib/colaborador-agenda-write';
 import type { Agendamento, ColaboradorAgendaResponse } from '@/lib/api-types';
 import type { Periodo } from '@/lib/billing-periodo';
 import {
@@ -24,6 +23,7 @@ import {
   agendaPeriodoPresets,
   filtrarPorPeriodo,
 } from '@/lib/colaborador-agenda-periodo';
+import { podeGerenciarAgendaColaborador } from '@/lib/colaborador-agenda-write';
 import { formatAgendamentoDia, formatAgendamentoHora } from '@/lib/format';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
@@ -79,7 +79,11 @@ export function ColaboradorAgendaClient({
         ) : (
           <div className="overflow-hidden rounded-card-sm border border-line bg-surface">
             {filtradas.map((ag) => (
-              <AgendaRow key={ag.id} ag={ag} onOpen={podeGerenciar ? () => setAberto(ag) : undefined} />
+              <AgendaRow
+                key={ag.id}
+                ag={ag}
+                onOpen={podeGerenciar ? () => setAberto(ag) : undefined}
+              />
             ))}
           </div>
         )}

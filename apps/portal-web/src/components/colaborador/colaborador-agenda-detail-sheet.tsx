@@ -2,7 +2,14 @@
 
 import { SlotPicker } from '@/components/agenda/slot-picker';
 import { useColaborador } from '@/components/colaborador/colaborador-session-context';
-import { IconCalendar, IconClock, IconPencil, IconTrash, IconWhatsapp, IconX } from '@/components/icons';
+import {
+  IconCalendar,
+  IconClock,
+  IconPencil,
+  IconTrash,
+  IconWhatsapp,
+  IconX,
+} from '@/components/icons';
 import { useTenantTz } from '@/components/shell/tenant-tz-context';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -13,18 +20,18 @@ import { ApiError } from '@/lib/api';
 import type { Agendamento } from '@/lib/api-types';
 import { formatAgendamentoDia, formatAgendamentoHora, formatPhoneDisplay } from '@/lib/format';
 import { formatDiaCurto } from '@/lib/novo-agendamento';
-import {
-  useEditarAgendamentoColaborador,
-  useExcluirAgendamentoColaborador,
-} from '@/lib/queries';
+import { useEditarAgendamentoColaborador, useExcluirAgendamentoColaborador } from '@/lib/queries';
 import { useId, useState } from 'react';
 
 type Modo = 'detalhe' | 'remarcar';
 
 function mensagemErro(error: unknown): string {
-  if (error instanceof ApiError && error.status === 409) return 'Esse horário acabou de ser ocupado. Escolha outro.';
-  if (error instanceof ApiError && error.status === 404) return 'Esse horário não está mais na sua agenda.';
-  if (error instanceof ApiError && error.status === 422) return 'Sua agenda ainda não está pronta para alterar horários.';
+  if (error instanceof ApiError && error.status === 409)
+    return 'Esse horário acabou de ser ocupado. Escolha outro.';
+  if (error instanceof ApiError && error.status === 404)
+    return 'Esse horário não está mais na sua agenda.';
+  if (error instanceof ApiError && error.status === 422)
+    return 'Sua agenda ainda não está pronta para alterar horários.';
   return 'Não foi possível salvar agora. Tente de novo.';
 }
 
@@ -89,7 +96,9 @@ export function ColaboradorAgendaDetailSheet({
     if (!agendamento || excluir.isPending) return;
     excluir.mutate(agendamento.id, {
       onSuccess: (res) => {
-        toast.success(res.already_gone ? 'Esse horário já não estava na agenda.' : 'Horário cancelado.');
+        toast.success(
+          res.already_gone ? 'Esse horário já não estava na agenda.' : 'Horário cancelado.',
+        );
         fechar();
       },
       onError: (error) => toast.error(mensagemErro(error)),
@@ -106,8 +115,15 @@ export function ColaboradorAgendaDetailSheet({
           <div className="flex min-h-0 flex-1 flex-col px-5 pb-2 pt-3 sm:px-6">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-ink-faint">Meu horário</p>
-                <h2 id={titleId} className="mt-1 font-display text-[21px] font-bold leading-tight text-ink">{titulo.nome}</h2>
+                <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-ink-faint">
+                  Meu horário
+                </p>
+                <h2
+                  id={titleId}
+                  className="mt-1 font-display text-[21px] font-bold leading-tight text-ink"
+                >
+                  {titulo.nome}
+                </h2>
               </div>
               <button
                 type="button"
@@ -122,17 +138,31 @@ export function ColaboradorAgendaDetailSheet({
             {modo === 'detalhe' ? (
               <>
                 <dl className="mt-6 space-y-3 text-[14px]">
-                  {titulo.servico ? <Linha icon={<IconPencil size={17} />} label="Serviço" value={titulo.servico} /> : null}
+                  {titulo.servico ? (
+                    <Linha icon={<IconPencil size={17} />} label="Serviço" value={titulo.servico} />
+                  ) : null}
                   <Linha icon={<IconCalendar size={17} />} label="Dia" value={dia || 'Sem data'} />
-                  {horario ? <Linha icon={<IconClock size={17} />} label="Horário" value={horario} /> : null}
-                  {titulo.telefone ? <Linha icon={<IconWhatsapp size={17} />} label="WhatsApp" value={formatPhoneDisplay(titulo.telefone)} /> : null}
+                  {horario ? (
+                    <Linha icon={<IconClock size={17} />} label="Horário" value={horario} />
+                  ) : null}
+                  {titulo.telefone ? (
+                    <Linha
+                      icon={<IconWhatsapp size={17} />}
+                      label="WhatsApp"
+                      value={formatPhoneDisplay(titulo.telefone)}
+                    />
+                  ) : null}
                 </dl>
                 <div className="mt-7 space-y-2.5">
                   <Button disabled={!podeRemarcar} onClick={abrirRemarcar}>
                     <IconPencil size={17} />
                     Remarcar
                   </Button>
-                  {!podeRemarcar ? <p className="text-center text-[12px] text-ink-soft">Esse evento não informa o serviço e não pode ser remarcado por aqui.</p> : null}
+                  {!podeRemarcar ? (
+                    <p className="text-center text-[12px] text-ink-soft">
+                      Esse evento não informa o serviço e não pode ser remarcado por aqui.
+                    </p>
+                  ) : null}
                   <Button variant="destructive" onClick={() => setConfirmarCancelar(true)}>
                     <IconTrash size={17} />
                     Cancelar horário
@@ -167,7 +197,12 @@ export function ColaboradorAgendaDetailSheet({
                   }}
                 />
                 <div className="mt-6">
-                  <Button loading={editar.isPending} loadingLabel="Remarcando…" disabled={!data || !hora} onClick={salvarRemarcacao}>
+                  <Button
+                    loading={editar.isPending}
+                    loadingLabel="Remarcando…"
+                    disabled={!data || !hora}
+                    onClick={salvarRemarcacao}
+                  >
                     Confirmar remarcação
                   </Button>
                 </div>
@@ -196,9 +231,14 @@ export function ColaboradorAgendaDetailSheet({
 function Linha({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
     <div className="flex items-center gap-3 text-ink-soft">
-      <span className="text-brand" aria-hidden>{icon}</span>
+      <span className="text-brand" aria-hidden>
+        {icon}
+      </span>
       <dt className="sr-only">{label}</dt>
-      <dd><span className="font-medium text-ink">{label}: </span>{value}</dd>
+      <dd>
+        <span className="font-medium text-ink">{label}: </span>
+        {value}
+      </dd>
     </div>
   );
 }

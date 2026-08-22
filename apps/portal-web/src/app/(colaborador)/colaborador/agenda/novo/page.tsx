@@ -90,7 +90,9 @@ export default function NovoAgendamentoColaboradorPage() {
     return <SkeletonList rows={5} />;
   }
   if (agendaQ.isError || !agendaQ.data) {
-    return <ErrorState title="Não foi possível verificar sua agenda" onRetry={() => agendaQ.refetch()} />;
+    return (
+      <ErrorState title="Não foi possível verificar sua agenda" onRetry={() => agendaQ.refetch()} />
+    );
   }
   if (!habilitado) {
     return (
@@ -98,7 +100,10 @@ export default function NovoAgendamentoColaboradorPage() {
         icon={<IconCalendar size={26} />}
         title="Marcação de horários indisponível"
         description="Você continua vendo sua agenda. A empresa libera a marcação quando este recurso estiver pronto."
-        action={{ label: 'Voltar para minha agenda', onClick: () => router.replace('/colaborador/agenda') }}
+        action={{
+          label: 'Voltar para minha agenda',
+          onClick: () => router.replace('/colaborador/agenda'),
+        }}
       />
     );
   }
@@ -108,7 +113,10 @@ export default function NovoAgendamentoColaboradorPage() {
         icon={<IconCalendar size={26} />}
         title="Agenda ainda não conectada"
         description="Assim que sua agenda do Google estiver ligada, você poderá marcar horários por aqui."
-        action={{ label: 'Voltar para minha agenda', onClick: () => router.replace('/colaborador/agenda') }}
+        action={{
+          label: 'Voltar para minha agenda',
+          onClick: () => router.replace('/colaborador/agenda'),
+        }}
       />
     );
   }
@@ -122,13 +130,22 @@ export default function NovoAgendamentoColaboradorPage() {
       >
         ← Minha agenda
       </button>
-      <h1 className="font-display text-[24px] font-bold tracking-[-0.02em] text-ink">Novo horário</h1>
+      <h1 className="font-display text-[24px] font-bold tracking-[-0.02em] text-ink">
+        Novo horário
+      </h1>
       <p className="mt-1 text-[14px] text-ink-soft">Marque um cliente somente na sua agenda.</p>
 
       {servicosQ.isPending ? (
-        <div className="mt-6"><SkeletonList rows={4} /></div>
+        <div className="mt-6">
+          <SkeletonList rows={4} />
+        </div>
       ) : servicosQ.isError ? (
-        <div className="mt-6"><ErrorState title="Não foi possível carregar seus serviços" onRetry={() => servicosQ.refetch()} /></div>
+        <div className="mt-6">
+          <ErrorState
+            title="Não foi possível carregar seus serviços"
+            onRetry={() => servicosQ.refetch()}
+          />
+        </div>
       ) : (servicosQ.data?.length ?? 0) === 0 ? (
         <div className="mt-6">
           <EmptyState
@@ -140,8 +157,14 @@ export default function NovoAgendamentoColaboradorPage() {
       ) : (
         <div className="mt-6 space-y-7 rounded-card border border-line bg-surface p-4 sm:p-6">
           <section aria-labelledby="servico-titulo">
-            <h2 id="servico-titulo" className="font-display text-[15px] font-semibold text-ink">Serviço</h2>
-            <div role="radiogroup" aria-label="Escolha o serviço" className="mt-3 grid gap-2 sm:grid-cols-2">
+            <h2 id="servico-titulo" className="font-display text-[15px] font-semibold text-ink">
+              Serviço
+            </h2>
+            <div
+              role="radiogroup"
+              aria-label="Escolha o serviço"
+              className="mt-3 grid gap-2 sm:grid-cols-2"
+            >
               {servicosQ.data?.map((item) => {
                 const ativo = item.nome === servico;
                 return (
@@ -153,8 +176,12 @@ export default function NovoAgendamentoColaboradorPage() {
                     onClick={() => selecionarServico(item.nome)}
                     className={`min-h-11 rounded-card-sm border px-3.5 py-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand ${ativo ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-surface-sunken text-ink hover:bg-surface-hover'}`}
                   >
-                    <span className="block font-display text-[14px] font-semibold">{item.nome}</span>
-                    <span className="mt-0.5 block text-[12px] opacity-75">{item.duracao_min} min</span>
+                    <span className="block font-display text-[14px] font-semibold">
+                      {item.nome}
+                    </span>
+                    <span className="mt-0.5 block text-[12px] opacity-75">
+                      {item.duracao_min} min
+                    </span>
                   </button>
                 );
               })}
@@ -162,7 +189,9 @@ export default function NovoAgendamentoColaboradorPage() {
           </section>
 
           <section aria-labelledby="horario-titulo">
-            <h2 id="horario-titulo" className="sr-only">Data e horário</h2>
+            <h2 id="horario-titulo" className="sr-only">
+              Data e horário
+            </h2>
             <SlotPicker
               slot={slot}
               colaboradorId={colaboradorId}
@@ -184,7 +213,9 @@ export default function NovoAgendamentoColaboradorPage() {
           </section>
 
           <section className="space-y-3" aria-labelledby="cliente-titulo">
-            <h2 id="cliente-titulo" className="font-display text-[15px] font-semibold text-ink">Cliente</h2>
+            <h2 id="cliente-titulo" className="font-display text-[15px] font-semibold text-ink">
+              Cliente
+            </h2>
             <Input
               label="Nome"
               value={nome}
@@ -209,8 +240,12 @@ export default function NovoAgendamentoColaboradorPage() {
                 label="Não tenho o WhatsApp deste cliente"
               />
               <div className="pt-1">
-                <p className="text-[13px] font-semibold text-ink">Não tenho o WhatsApp deste cliente</p>
-                <p className="mt-0.5 text-[12px] text-ink-soft">Sem número, o cliente não recebe lembrete automático.</p>
+                <p className="text-[13px] font-semibold text-ink">
+                  Não tenho o WhatsApp deste cliente
+                </p>
+                <p className="mt-0.5 text-[12px] text-ink-soft">
+                  Sem número, o cliente não recebe lembrete automático.
+                </p>
               </div>
             </div>
           </section>
