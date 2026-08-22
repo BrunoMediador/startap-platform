@@ -56,6 +56,7 @@ import type {
   CriarAgendaBloqueioSerieBody,
   CriarAgendaBloqueioSerieResponse,
   CriarAgendamentoBody,
+  CriarAgendamentoColaboradorBody,
   CriarAgendamentoResponse,
   CriarAtendimentoBody,
   CriarAtendimentoResponse,
@@ -175,6 +176,16 @@ export const qk = {
   // pra isolar o cache do barbeiro — nunca colide com o do dono nem de outro colab.
   colaboradorAgenda: (slot: string, colaboradorId: number, past: number, ahead: number) =>
     ['colaborador-agenda', slot, colaboradorId, past, ahead] as const,
+  colaboradorAgendaBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-agenda', slot, colaboradorId] as const,
+  colaboradorAgendaServicos: (slot: string, colaboradorId: number) =>
+    ['colaborador-agenda-servicos', slot, colaboradorId] as const,
+  colaboradorAgendaHorarios: (slot: string, colaboradorId: number) =>
+    ['colaborador-agenda-horarios', slot, colaboradorId] as const,
+  colaboradorAgendaSlotsBase: (slot: string, colaboradorId: number) =>
+    ['colaborador-agenda-slots', slot, colaboradorId] as const,
+  colaboradorAgendaSlots: (slot: string, colaboradorId: number, data: string, servico: string) =>
+    ['colaborador-agenda-slots', slot, colaboradorId, data, servico] as const,
   colaboradorBloqueiosBase: (slot: string, colaboradorId: number) =>
     ['colaborador-bloqueios', slot, colaboradorId] as const,
   colaboradorBloqueios: (slot: string, colaboradorId: number) =>
@@ -482,6 +493,118 @@ export function useColaboradorAgenda(
         { signal },
       ),
     placeholderData: keepPreviousData,
+  });
+}
+
+/** Serviços que o colaborador autenticado pode marcar na própria agenda. */
+export function useColaboradorAgendaServicos(
+  slot: string,
+  colaboradorId: number,
+  enabled = true,
+): UseQueryResult<Servico[]> {
+  return useQuery({
+    queryKey: qk.colaboradorAgendaServicos(slot, colaboradorId),
+    queryFn: ({ signal }) =>
+      apiFetch<ServicosResponse>('/portal/colaborador/agendamentos/servicos', { signal }).then(
+        (r) => r.servicos,
+      ),
+    enabled,
+  });
+}
+
+/** Grade de funcionamento própria, retornada sem expor a configuração dos pares. */
+export function useColaboradorAgendaHorarios(
+  slot: string,
+  colaboradorId: number,
+  enabled = true,
+): UseQueryResult<Horarios> {
+  return useQuery({
+    queryKey: qk.colaboradorAgendaHorarios(slot, colaboradorId),
+    queryFn: ({ signal }) =>
+      apiFetch<HorariosResponse>('/portal/colaborador/agendamentos/horarios', { signal }).then(
+        (r) => r.horarios,
+      ),
+    enabled,
+  });
+}
+
+/** Slots livres da agenda do colaborador autenticado; não aceita colaborador_id. */
+export function useColaboradorAgendaSlots(
+  slot: string,
+  colaboradorId: number,
+  data: string | null,
+  servico: string | null,
+  enabled = true,
+): UseQueryResult<AgendaSlotsResponse> {
+  return useQuery({
+    queryKey: qk.colaboradorAgendaSlots(slot, colaboradorId, data ?? '', servico ?? ''),
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ data: data ?? '', servico: servico ?? '' });
+      return apiFetch<AgendaSlotsResponse>(`/portal/colaborador/agendamentos/slots?${params}`, {
+        signal,
+      });
+    },
+    enabled: enabled && Boolean(data && servico),
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+function invalidateColaboradorAgendaCaches(
+  client: QueryClient,
+  slot: string,
+  colaboradorId: number,
+) {
+  client.invalidateQueries({ queryKey: qk.colaboradorAgendaBase(slot, colaboradorId) });
+  client.invalidateQueries({ queryKey: qk.colaboradorAgendaSlotsBase(slot, colaboradorId) });
+}
+
+export function useCriarAgendamentoColaborador(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<CriarAgendamentoResponse, Error, CriarAgendamentoColaboradorBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body) =>
+      apiFetch<CriarAgendamentoResponse>('/portal/colaborador/agendamentos', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => invalidateColaboradorAgendaCaches(client, slot, colaboradorId),
+  });
+}
+
+export function useEditarAgendamentoColaborador(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<
+  EditarAgendamentoResponse,
+  Error,
+  { eventId: string; patch: EditarAgendamentoBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ eventId, patch }) =>
+      apiFetch<EditarAgendamentoResponse>(
+        `/portal/colaborador/agendamentos/${encodeURIComponent(eventId)}`,
+        { method: 'PATCH', body: patch },
+      ),
+    onSuccess: () => invalidateColaboradorAgendaCaches(client, slot, colaboradorId),
+  });
+}
+
+export function useExcluirAgendamentoColaborador(
+  slot: string,
+  colaboradorId: number,
+): UseMutationResult<ExcluirAgendamentoResponse, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (eventId) =>
+      apiFetch<ExcluirAgendamentoResponse>(
+        `/portal/colaborador/agendamentos/${encodeURIComponent(eventId)}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => invalidateColaboradorAgendaCaches(client, slot, colaboradorId),
   });
 }
 
@@ -851,6 +974,7 @@ export function useAgendaSlots(
   // null no INDIVIDUAL (single-agenda) — não vai na query. No estabelecimento o backend
   // exige (422 'colaborador_obrigatorio'), então só habilitamos a query com ele escolhido.
   colaboradorId: number | null = null,
+  enabled = true,
 ): UseQueryResult<AgendaSlotsResponse> {
   return useQuery({
     queryKey: qk.agendaSlots(slot, data ?? '', servico ?? '', colaboradorId),
@@ -859,7 +983,7 @@ export function useAgendaSlots(
       if (colaboradorId != null) params.set('colaborador_id', String(colaboradorId));
       return apiFetch<AgendaSlotsResponse>(`/portal/agenda/slots?${params.toString()}`, { signal });
     },
-    enabled: Boolean(data && servico),
+    enabled: enabled && Boolean(data && servico),
     staleTime: 0,
     retry: false,
   });
@@ -1218,11 +1342,12 @@ export function useAtendenteFeatures(slot: string): UseQueryResult<AtendenteFeat
 
 // ── Horarios ─────────────────────────────────────────────────────────────────
 
-export function useHorarios(slot: string): UseQueryResult<Horarios> {
+export function useHorarios(slot: string, enabled = true): UseQueryResult<Horarios> {
   return useQuery({
     queryKey: qk.horarios(slot),
     queryFn: ({ signal }) =>
       apiFetch<HorariosResponse>('/portal/horarios', { signal }).then((r) => r.horarios),
+    enabled,
   });
 }
 
