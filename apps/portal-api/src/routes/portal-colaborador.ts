@@ -1,5 +1,5 @@
 /**
- * Painel do COLABORADOR (barbeiro de estabelecimento) — visão READ-ONLY e ESCOPADA
+ * Painel do COLABORADOR (barbeiro de estabelecimento) — visão escopada à própria agenda
  * (SCRUM-32). O colaborador loga no portal com username (nome) + senha gerada pelo dono
  * no gestão e vê SÓ os dados DELE: a agenda dele e a comissão/faturamento dele.
  *
@@ -13,9 +13,10 @@
  *   - COMISSÃO/FATURAMENTO: getComissaoColaborador escopa por cc.id = colaboradorId DA
  *     SESSÃO; outro colaborador/tenant não casa o WHERE -> 404 (não vaza existência).
  *
- * READ-ONLY: só GET. Nenhuma escrita (sem criar/editar/cancelar agendamento, sem editar
- * atendimento, sem billing). A visão do DONO (todos os colaboradores) vive em rotas que
- * passam por withTenant — barradas a colaborador no chokepoint (403).
+ * ESCRITA DE AGENDA: POST/PATCH/DELETE vivem em portal-agendamentos.ts para reutilizar o
+ * mesmo núcleo de comandos do dono. Exigem COLABORADOR_AGENDAMENTOS_ENABLED + allowlist e
+ * derivam a agenda exclusivamente da sessão; billing, equipe, perfil e demais rotas do dono
+ * continuam barrados por withTenant.
  *
  * GATING: flag COLABORADOR_PORTAL_ENABLED OFF -> TODAS as rotas respondem 404 (feature
  * dormente; não vaza). Defesa em profundidade — o acesso real ainda exige credencial

@@ -44,7 +44,7 @@ import {
   weekdayOfDateKey,
   zonedWallTimeToUtc,
 } from '@startap/integrations/scheduling';
-import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import {
@@ -56,13 +56,71 @@ import {
 } from '../lib/avaliar-slot.js';
 import { isGcalForbiddenOrAuthError, isGcalRateLimitError } from '../lib/gcal-rate-limit.js';
 import { maskPhone } from '../lib/mask.js';
-import { requireTenant, withTenant } from '../lib/tenant.js';
+import { requireColaborador, requireTenant, withColaborador, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'agendamentos' });
 
 const DEFAULT_PAST = 7;
 const DEFAULT_AHEAD = 14;
 const MAX_EVENTS = 50;
+
+type AgendaActor =
+  | { role: 'owner'; slot: string; userId: number; auditBy: string }
+  | { role: 'colaborador'; slot: string; colaboradorId: number; auditBy: string };
+
+function slotAllowed(slot: string, slotsConfig: string): boolean {
+  const entries = slotsConfig
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return entries.includes('*') || entries.includes(slot);
+}
+
+function isColaboradorAgendamentosEnabled(slot: string): boolean {
+  return (
+    config.COLABORADOR_PORTAL_ENABLED &&
+    config.COLABORADOR_AGENDAMENTOS_ENABLED &&
+    slotAllowed(slot, config.COLABORADOR_AGENDAMENTOS_SLOTS)
+  );
+}
+
+async function withColaboradorAgendamentos(
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  await withColaborador(req, reply);
+  if (reply.sent) return;
+  const { slot } = requireColaborador(req);
+  if (!isColaboradorAgendamentosEnabled(slot)) {
+    await reply.code(404).send({ error: 'feature_off' });
+  }
+}
+
+function requireAgendaActor(req: FastifyRequest): AgendaActor {
+  if (req.tenant) {
+    return {
+      role: 'owner',
+      slot: req.tenant.slot,
+      userId: req.tenant.userId,
+      auditBy: `portal:${req.tenant.userId}`,
+    };
+  }
+  if (req.colaborador) {
+    return {
+      role: 'colaborador',
+      slot: req.colaborador.slot,
+      colaboradorId: req.colaborador.colaboradorId,
+      auditBy: `portal:colaborador:${req.colaborador.colaboradorId}`,
+    };
+  }
+  throw new Error('contexto de agenda ausente — bug de configuracao');
+}
+
+function actorLogFields(actor: AgendaActor): Record<string, string | number> {
+  return actor.role === 'owner'
+    ? { actorRole: actor.role, userId: actor.userId }
+    : { actorRole: actor.role, colaboradorId: actor.colaboradorId };
+}
 
 const pastDaysQuery = z.coerce.number().int().min(0).max(30).default(DEFAULT_PAST);
 const aheadDaysQuery = z.coerce.number().int().min(1).max(365).default(DEFAULT_AHEAD);
@@ -155,6 +213,36 @@ const criarAgendamentoSchema = z
     message: 'telefone obrigatorio (ou marque sem_whatsapp)',
     path: ['cliente_telefone'],
   });
+
+// O colaborador jamais escolhe agenda: ela vem do colaboradorId re-derivado da
+// sessão. Schema estrito transforma tentativa de `colaborador_id` em 400, em vez
+// de silenciosamente aceitar input que nunca pode autorizar uma ação.
+const criarAgendamentoColaboradorSchema = z
+  .object({
+    servico: z.string().trim().min(1, 'servico obrigatorio').max(80),
+    data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD'),
+    hora: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'hora deve ser HH:mm'),
+    cliente_nome: z.string().trim().min(1, 'nome do cliente obrigatorio').max(80),
+    cliente_telefone: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      telefoneSchema.optional(),
+    ),
+    sem_whatsapp: z.boolean().optional().default(false),
+  })
+  .strict()
+  .refine((b) => b.sem_whatsapp === true || b.cliente_telefone !== undefined, {
+    message: 'telefone obrigatorio (ou marque sem_whatsapp)',
+    path: ['cliente_telefone'],
+  });
+
+type CriarAgendamentoInput = z.infer<typeof criarAgendamentoSchema>;
+type CriarAgendamentoColaboradorInput = z.infer<typeof criarAgendamentoColaboradorSchema>;
+
+function hasColaboradorId(
+  input: CriarAgendamentoInput | CriarAgendamentoColaboradorInput,
+): input is CriarAgendamentoInput {
+  return 'colaborador_id' in input;
+}
 
 // ---- POST /portal/agendamentos/recorrencia/preview (SÓ LÊ) -------------------
 //
@@ -331,8 +419,12 @@ async function resolveEventClient(
   eventId: string,
   timeMin: string,
   timeMax: string,
+  actor: AgendaActor,
 ): Promise<ResolveResult> {
   if (!isEstabelecimento) {
+    // Credencial de colaborador só é válida no estabelecimento. Falhar fechado
+    // evita que uma inconsistência de cadastro conceda a agenda single do clone.
+    if (actor.role === 'colaborador') return { kind: 'not_found' };
     const client = await gcal.getGcalForSlot(slot);
     if (!client) return { kind: 'unconfigured' };
     try {
@@ -349,15 +441,23 @@ async function resolveEventClient(
   const colaboradores = await gcal.getGcalsForSlot(slot);
   if (colaboradores.length === 0) return { kind: 'unconfigured' };
 
+  const agendasAutorizadas =
+    actor.role === 'colaborador'
+      ? colaboradores.filter((c) => c.colaboradorId === actor.colaboradorId)
+      : colaboradores;
+  // Resposta indistinguível de evento ausente: não informa se o colaborador foi
+  // removido da agenda, nem tenta listar as agendas dos colegas.
+  if (agendasAutorizadas.length === 0) return { kind: 'not_found' };
+
   const settled = await Promise.allSettled(
-    colaboradores.map((c) => c.client.listEvents({ timeMin, timeMax })),
+    agendasAutorizadas.map((c) => c.client.listEvents({ timeMin, timeMax })),
   );
 
   let houveSucesso = false;
   let ultimaFalha = '';
   for (let i = 0; i < settled.length; i++) {
     const res = settled[i];
-    const colab = colaboradores[i];
+    const colab = agendasAutorizadas[i];
     if (res.status !== 'fulfilled') {
       ultimaFalha = res.reason instanceof Error ? res.reason.message : 'erro';
       log.warn(
@@ -399,27 +499,30 @@ type ResolveAgendaAlvoResult =
 
 async function resolveAgendaAlvo(
   slot: string,
-  userId: number | string,
+  actor: AgendaActor,
   colaboradorId: number | undefined,
 ): Promise<ResolveAgendaAlvoResult> {
   if (await isEstabelecimentoSlot(slot)) {
-    if (colaboradorId === undefined) {
+    const agendaId = actor.role === 'colaborador' ? actor.colaboradorId : colaboradorId;
+    if (agendaId === undefined) {
       return { kind: 'colaborador_obrigatorio' };
     }
     const colaboradores = await gcal.getGcalsForSlot(slot);
     if (colaboradores.length === 0) {
       return { kind: 'gcal_nao_configurado' };
     }
-    const alvo = colaboradores.find((c) => c.colaboradorId === colaboradorId);
+    const alvo = colaboradores.find((c) => c.colaboradorId === agendaId);
     if (!alvo) {
       log.warn(
-        { slot, userId, colaboradorId },
+        { slot, ...actorLogFields(actor), colaboradorId: agendaId },
         'agendamento manual negado: colaborador fora do tenant ou sem agenda ativa',
       );
       return { kind: 'colaborador_nao_encontrado' };
     }
     return { kind: 'found', client: alvo.client, colaboradorId: alvo.colaboradorId };
   }
+
+  if (actor.role === 'colaborador') return { kind: 'colaborador_nao_encontrado' };
 
   const single = await gcal.getGcalForSlot(slot);
   if (!single) {
@@ -561,19 +664,19 @@ async function hookUpsertAtendimento(args: {
 async function hookSoftDeleteAtendimento(
   slot: string,
   eventId: string,
-  ownerId: number | string,
+  deletedBy: string,
 ): Promise<void> {
   if (
     !(await flowClones.resolveAtendFromAgendaEnabledForSlot(slot, config.ATEND_FROM_AGENDA_SLOTS))
   )
     return;
   try {
-    // SCRUM-90/91: carimba a origem da deleção na trilha durável. `by` inclui o dono que disparou
-    // o cancelamento (portal:<ownerId>) — atribuição de responsabilidade sem PII (id interno do
-    // usuário do portal, nunca telefone/CPF).
+    // SCRUM-90/91: carimba a origem da deleção na trilha durável. O owner preserva o formato
+    // legado `portal:<id>`; o colaborador precisa do prefixo explícito para não ser atribuído
+    // falsamente ao dono. Ambos carregam somente identificador interno, nunca PII.
     const row = await atendimentos.softDeleteAtendimentoByEvent(slot, eventId, {
       reason: 'portal_cancel',
-      by: `portal:${ownerId}`,
+      by: deletedBy,
     });
     log.info(
       { slot, eventId: hashEventIdForLog(eventId), removido: row != null },
@@ -664,17 +767,24 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.post('/portal/agendamentos', { preHandler: withTenant }, async (req, reply) => {
-    const { slot, userId } = requireTenant(req);
+  const createAgendamentoHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const actor = requireAgendaActor(req);
+    const { slot } = actor;
 
-    const parsed = criarAgendamentoSchema.safeParse(req.body ?? {});
+    const parsed = (
+      actor.role === 'colaborador' ? criarAgendamentoColaboradorSchema : criarAgendamentoSchema
+    ).safeParse(req.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({
         error: 'payload_invalido',
         detalhe: parsed.error.issues[0]?.message ?? 'payload invalido',
       });
     }
-    const { servico, data, hora, cliente_nome, cliente_telefone, colaborador_id } = parsed.data;
+    const { servico, data, hora, cliente_nome, cliente_telefone } = parsed.data;
+    const colaboradorIdDoBody = hasColaboradorId(parsed.data)
+      ? parsed.data.colaborador_id
+      : undefined;
+    const colaborador_id = actor.role === 'colaborador' ? actor.colaboradorId : colaboradorIdDoBody;
 
     // Config do tenant (horários + serviços) — mesma fonte que o bot e o GET /slots.
     let config: Awaited<ReturnType<typeof loadScheduleConfig>>;
@@ -732,7 +842,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // ── Resolução da agenda DONA do evento (individual + estabelecimento) ──────
-    const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+    const resolved = await resolveAgendaAlvo(slot, actor, colaborador_id);
     if (resolved.kind === 'colaborador_obrigatorio') {
       return reply.code(422).send({ error: 'colaborador_obrigatorio' });
     }
@@ -753,7 +863,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       const conflitoCheck = await avaliarConflito({ client, startUtc, endUtc });
       if (conflitoCheck.status === 'ocupado') {
         log.warn(
-          { slot, userId, servico: svc.name, data, hora },
+          { slot, ...actorLogFields(actor), servico: svc.name, data, hora },
           'agendamento manual bloqueado: slot ocupado entre a grade e o submit',
         );
         return reply.code(409).send({
@@ -783,7 +893,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       log.info(
         {
           slot,
-          userId,
+          ...actorLogFields(actor),
           eventId: hashEventIdForLog(ev.id),
           colaboradorId,
           servico: svc.name,
@@ -825,10 +935,17 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
-      log.error({ slot, userId, err: msg }, 'agendamento manual: falha no GCal');
+      log.error({ slot, ...actorLogFields(actor), err: msg }, 'agendamento manual: falha no GCal');
       return reply.code(502).send({ error: 'nao foi possivel criar o agendamento agora' });
     }
-  });
+  };
+
+  app.post('/portal/agendamentos', { preHandler: withTenant }, createAgendamentoHandler);
+  app.post(
+    '/portal/colaborador/agendamentos',
+    { preHandler: withColaboradorAgendamentos },
+    createAgendamentoHandler,
+  );
 
   // ---- POST /portal/agendamentos/recorrencia/preview (SÓ LÊ) -------------------
   //
@@ -872,7 +989,16 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'servico_nao_encontrado' });
       }
 
-      const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+      const resolved = await resolveAgendaAlvo(
+        slot,
+        {
+          role: 'owner',
+          slot,
+          userId,
+          auditBy: `portal:${userId}`,
+        },
+        colaborador_id,
+      );
       if (resolved.kind === 'colaborador_obrigatorio') {
         return reply.code(422).send({ error: 'colaborador_obrigatorio' });
       }
@@ -991,7 +1117,16 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'servico_nao_encontrado' });
     }
 
-    const resolved = await resolveAgendaAlvo(slot, userId, colaborador_id);
+    const resolved = await resolveAgendaAlvo(
+      slot,
+      {
+        role: 'owner',
+        slot,
+        userId,
+        auditBy: `portal:${userId}`,
+      },
+      colaborador_id,
+    );
     if (resolved.kind === 'colaborador_obrigatorio') {
       return reply.code(422).send({ error: 'colaborador_obrigatorio' });
     }
@@ -1158,8 +1293,9 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       .regex(/^[a-z0-9_-]+$/i, 'eventId invalido'),
   });
 
-  app.delete('/portal/agendamentos/:eventId', { preHandler: withTenant }, async (req, reply) => {
-    const { slot, userId } = requireTenant(req);
+  const cancelAgendamentoHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const actor = requireAgendaActor(req);
+    const { slot } = actor;
 
     const parsed = eventIdParam.safeParse(req.params ?? {});
     if (!parsed.success) {
@@ -1177,11 +1313,11 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const estab = await isEstabelecimentoSlot(slot);
     let resolved: ResolveResult;
     try {
-      resolved = await resolveEventClient(slot, estab, eventId, timeMin, timeMax);
+      resolved = await resolveEventClient(slot, estab, eventId, timeMin, timeMax, actor);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: msg },
         'cancelamento: falha ao resolver agenda',
       );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
@@ -1193,14 +1329,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     if (resolved.kind === 'error') {
       if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: resolved.msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: resolved.msg },
         'cancelamento: falha no GCal',
       );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
     if (resolved.kind === 'not_found') {
       log.warn(
-        { slot, userId, eventId: hashEventIdForLog(eventId) },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId) },
         'cancelamento negado: eventId fora da agenda do tenant',
       );
       return reply.code(404).send({ error: 'evento_nao_encontrado' });
@@ -1211,9 +1347,9 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     try {
       await client.deleteEvent(eventId);
       // Gancho ADR 0027: some do faturamento. Gated + ISOLADO (não derruba o cancelamento).
-      await hookSoftDeleteAtendimento(slot, eventId, userId);
+      await hookSoftDeleteAtendimento(slot, eventId, actor.auditBy);
       log.info(
-        { slot, userId, eventId: hashEventIdForLog(eventId), colaboradorId },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), colaboradorId },
         'agendamento cancelado via portal',
       );
       return reply.code(200).send({ ok: true });
@@ -1224,21 +1360,28 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       // final desejado (evento ausente) foi atingido.
       if (/HTTP 4(0[49]|10)/.test(msg)) {
         // Estado final = evento ausente: garante que a previsão derivada também suma.
-        await hookSoftDeleteAtendimento(slot, eventId, userId);
+        await hookSoftDeleteAtendimento(slot, eventId, actor.auditBy);
         log.info(
-          { slot, userId, eventId: hashEventIdForLog(eventId) },
+          { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId) },
           'cancelamento idempotente: evento ja ausente no GCal',
         );
         return reply.code(200).send({ ok: true });
       }
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: msg },
         'cancelamento: falha no GCal',
       );
       return reply.code(502).send({ error: 'nao foi possivel cancelar o agendamento agora' });
     }
-  });
+  };
+
+  app.delete('/portal/agendamentos/:eventId', { preHandler: withTenant }, cancelAgendamentoHandler);
+  app.delete(
+    '/portal/colaborador/agendamentos/:eventId',
+    { preHandler: withColaboradorAgendamentos },
+    cancelAgendamentoHandler,
+  );
 
   // ---- PATCH /portal/agendamentos/:eventId (editar/remarcar) -----------------
   //
@@ -1260,8 +1403,9 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
   // ledger). v1 NÃO move evento entre colaboradores — trocar de profissional é
   // FOLLOW-UP; o body atual não expõe isso, então não há caso a recusar aqui.
 
-  app.patch('/portal/agendamentos/:eventId', { preHandler: withTenant }, async (req, reply) => {
-    const { slot, userId } = requireTenant(req);
+  const patchAgendamentoHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const actor = requireAgendaActor(req);
+    const { slot } = actor;
 
     const paramParsed = eventIdParam.safeParse(req.params ?? {});
     if (!paramParsed.success) {
@@ -1307,11 +1451,11 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     const estab = await isEstabelecimentoSlot(slot);
     let resolved: ResolveResult;
     try {
-      resolved = await resolveEventClient(slot, estab, eventId, timeMinGuard, timeMaxGuard);
+      resolved = await resolveEventClient(slot, estab, eventId, timeMinGuard, timeMaxGuard, actor);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: msg },
         'edicao: falha ao resolver agenda',
       );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
@@ -1323,14 +1467,14 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
     if (resolved.kind === 'error') {
       if (/40[13]/.test(resolved.msg)) gcal.invalidateGcalCache(slot);
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: resolved.msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: resolved.msg },
         'edicao: falha no GCal',
       );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
     }
     if (resolved.kind === 'not_found') {
       log.warn(
-        { slot, userId, eventId: hashEventIdForLog(eventId) },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId) },
         'edicao negada: eventId fora da agenda do tenant',
       );
       return reply.code(404).send({ error: 'evento_nao_encontrado' });
@@ -1454,7 +1598,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
           log.warn(
             {
               slot,
-              userId,
+              ...actorLogFields(actor),
               eventId: hashEventIdForLog(eventId),
               data: dataAlvo,
               hora: minsToHHmm(startMins),
@@ -1533,7 +1677,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       log.info(
         {
           slot,
-          userId,
+          ...actorLogFields(actor),
           eventId: hashEventIdForLog(eventId),
           colaboradorId,
           reagenda,
@@ -1556,19 +1700,26 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
       // Idempotência: evento sumiu entre a re-listagem e o patch → 404/410 do Google.
       if (/HTTP 4(0[49]|10)/.test(msg)) {
         log.info(
-          { slot, userId, eventId: hashEventIdForLog(eventId) },
+          { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId) },
           'edicao: evento ja ausente no GCal',
         );
         return reply.code(404).send({ error: 'evento_nao_encontrado' });
       }
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);
       log.error(
-        { slot, userId, eventId: hashEventIdForLog(eventId), err: msg },
+        { slot, ...actorLogFields(actor), eventId: hashEventIdForLog(eventId), err: msg },
         'edicao: falha no GCal',
       );
       return reply.code(502).send({ error: 'nao foi possivel editar o agendamento agora' });
     }
-  });
+  };
+
+  app.patch('/portal/agendamentos/:eventId', { preHandler: withTenant }, patchAgendamentoHandler);
+  app.patch(
+    '/portal/colaborador/agendamentos/:eventId',
+    { preHandler: withColaboradorAgendamentos },
+    patchAgendamentoHandler,
+  );
 };
 
 /**

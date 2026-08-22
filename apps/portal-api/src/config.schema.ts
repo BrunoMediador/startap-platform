@@ -247,6 +247,15 @@ export const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === 'true'),
 
+  // Escrita de agenda pelo colaborador. Separada do painel/read-only porque uma
+  // rota mutante fica acessível por chamada direta mesmo antes da UI. Ausente =
+  // OFF; a allowlist limita o rollout e '*' exige intenção explícita do operador.
+  COLABORADOR_AGENDAMENTOS_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  COLABORADOR_AGENDAMENTOS_SLOTS: z.string().optional().default(''),
+
   // ── Atendimentos / financeiro do negócio do cliente (ADR 0026, Fase 1 MVP) ──
   // Kill-switch da camada de atendimentos (POST /portal/atendimentos + relatórios de
   // faturamento e comissão). OPCIONAL no boot (ausente = OFF, lição #247: feature
