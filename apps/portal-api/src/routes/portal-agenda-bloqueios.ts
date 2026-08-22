@@ -734,6 +734,7 @@ async function createDurableGcalEvent(args: {
       operationId: args.operation.id,
       ordinal: args.occurrence.ordinal,
       status: 'active',
+      expectedStatus: 'gcal_dispatch_started',
     });
     return true;
   } catch (err) {
@@ -746,6 +747,7 @@ async function createDurableGcalEvent(args: {
       ordinal: args.occurrence.ordinal,
       status: 'recovery_required',
       errorCode: isGcalRateLimitError(message) ? 'gcal_rate_limit' : 'gcal_ambiguous',
+      expectedStatus: 'gcal_dispatch_started',
     });
     log.error(
       {
@@ -759,6 +761,29 @@ async function createDurableGcalEvent(args: {
     );
     return false;
   }
+}
+
+const GCAL_RECOVERY_CONSISTENCY_WINDOW_MS = 100;
+
+async function isGcalEventAbsentAfterConsistencyWindow(args: {
+  client: GcalTarget['client'];
+  eventId: string;
+}): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await args.client.getEvent(args.eventId);
+      return false;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/HTTP 404/.test(message)) throw err;
+    }
+    if (attempt === 0) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, GCAL_RECOVERY_CONSISTENCY_WINDOW_MS),
+      );
+    }
+  }
+  return true;
 }
 
 async function runDurableSerie(args: {
@@ -776,6 +801,7 @@ async function runDurableSerie(args: {
   });
   const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
   const falhas: DurableSerieFailure[] = [];
+  let recoveryClaimUnavailable = false;
   for (const occurrence of pending) {
     try {
       if (occurrence.status === 'planned') {
@@ -786,7 +812,7 @@ async function runDurableSerie(args: {
           operationId: args.operation.id,
           ordinal: occurrence.ordinal,
         });
-        if (!claimed) continue;
+        if (!claimed) break;
         if (await createDurableGcalEvent({ ...args, occurrence: claimed })) {
           criados.push({
             id: occurrence.bloqueio_id,
@@ -800,6 +826,7 @@ async function runDurableSerie(args: {
             error: 'gcal_falhou',
             reason: 'erro_gcal',
           });
+          break;
         }
         continue;
       }
@@ -810,55 +837,84 @@ async function runDurableSerie(args: {
           error: 'gcal_falhou',
           reason: 'erro_gcal',
         });
-        continue;
+        break;
       }
+      const claimed = await agendaBloqueioOperacoes.claimRecovery({
+        tenantId: args.scope.tenantId,
+        slot: args.scope.slot,
+        operationId: args.operation.id,
+        ordinal: occurrence.ordinal,
+      });
+      if (!claimed) {
+        recoveryClaimUnavailable = true;
+        break;
+      }
+      let rebuildingLocalOccurrence = false;
       try {
-        await args.target.client.getEvent(occurrence.gcal_event_id);
-        const attached = await agendaBloqueios.attachGcalEventId(
-          args.scope.tenantId,
-          args.scope.slot,
-          occurrence.bloqueio_id,
-          occurrence.gcal_event_id,
-        );
-        if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
+        const absent = await isGcalEventAbsentAfterConsistencyWindow({
+          client: args.target.client,
+          eventId: claimed.gcal_event_id,
+        });
+        if (!absent) {
+          const attached = await agendaBloqueios.attachGcalEventId(
+            args.scope.tenantId,
+            args.scope.slot,
+            claimed.bloqueio_id,
+            claimed.gcal_event_id,
+          );
+          if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
+          await agendaBloqueioOperacoes.markOccurrence({
+            tenantId: args.scope.tenantId,
+            slot: args.scope.slot,
+            operationId: args.operation.id,
+            ordinal: claimed.ordinal,
+            status: 'active',
+            expectedStatus: 'gcal_dispatch_started',
+          });
+          criados.push({
+            id: claimed.bloqueio_id,
+            inicio_at: claimed.inicio_at,
+            fim_at: claimed.fim_at,
+          });
+        } else {
+          rebuildingLocalOccurrence = true;
+          await ensureLocalDurableOccurrence({ ...args, occurrence: claimed });
+          rebuildingLocalOccurrence = false;
+          if (await createDurableGcalEvent({ ...args, occurrence: claimed })) {
+            criados.push({
+              id: claimed.bloqueio_id,
+              inicio_at: claimed.inicio_at,
+              fim_at: claimed.fim_at,
+            });
+          } else {
+            falhas.push({
+              inicio_at: claimed.inicio_at,
+              fim_at: claimed.fim_at,
+              error: 'gcal_falhou',
+              reason: 'erro_gcal',
+            });
+            break;
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isGcalForbiddenOrAuthError(message)) gcal.invalidateGcalCache(args.scope.slot);
         await agendaBloqueioOperacoes.markOccurrence({
           tenantId: args.scope.tenantId,
           slot: args.scope.slot,
           operationId: args.operation.id,
-          ordinal: occurrence.ordinal,
-          status: 'active',
+          ordinal: claimed.ordinal,
+          status: 'recovery_required',
+          errorCode: rebuildingLocalOccurrence ? 'local_write_failed' : 'gcal_ambiguous',
+          expectedStatus: 'gcal_dispatch_started',
         });
-        criados.push({
-          id: occurrence.bloqueio_id,
-          inicio_at: occurrence.inicio_at,
-          fim_at: occurrence.fim_at,
+        falhas.push({
+          inicio_at: claimed.inicio_at,
+          fim_at: claimed.fim_at,
+          error: 'gcal_falhou',
+          reason: 'erro_gcal',
         });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!/HTTP 404/.test(message)) {
-          if (isGcalForbiddenOrAuthError(message)) gcal.invalidateGcalCache(args.scope.slot);
-          falhas.push({
-            inicio_at: occurrence.inicio_at,
-            fim_at: occurrence.fim_at,
-            error: 'gcal_falhou',
-            reason: 'erro_gcal',
-          });
-          continue;
-        }
-        if (await createDurableGcalEvent({ ...args, occurrence })) {
-          criados.push({
-            id: occurrence.bloqueio_id,
-            inicio_at: occurrence.inicio_at,
-            fim_at: occurrence.fim_at,
-          });
-        } else {
-          falhas.push({
-            inicio_at: occurrence.inicio_at,
-            fim_at: occurrence.fim_at,
-            error: 'gcal_falhou',
-            reason: 'erro_gcal',
-          });
-        }
+        break;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -885,7 +941,14 @@ async function runDurableSerie(args: {
         error: 'erro_interno',
         reason: 'erro_interno',
       });
+      break;
     }
+  }
+  if (recoveryClaimUnavailable) {
+    return {
+      responseStatus: 409,
+      responseBody: { error: 'serie_recovery_em_andamento', serie_id: args.operation.id },
+    };
   }
   const responseBody = durableSerieResponse({ operationId: args.operation.id, criados, falhas });
   const responseStatus = falhas.length === 0 ? 201 : 207;
@@ -962,7 +1025,19 @@ async function recoverDurableSerie(args: {
     operationId: args.operationId,
     colaboradorId: args.colaboradorId,
   });
-  if (!operation) return args.reply.code(404).send({ error: 'serie_nao_encontrada' });
+  if (!operation) {
+    const legacyExists = await agendaBloqueios.hasSerieForRecovery({
+      tenantId: args.scope.tenantId,
+      slot: args.scope.slot,
+      serieId: args.operationId,
+      colaboradorId: args.colaboradorId,
+    });
+    return legacyExists
+      ? args.reply
+          .code(409)
+          .send({ error: 'serie_legada_sem_recovery', serie_id: args.operationId })
+      : args.reply.code(404).send({ error: 'serie_nao_encontrada' });
+  }
   if (
     operation.status === 'complete' ||
     operation.status === 'partial' ||

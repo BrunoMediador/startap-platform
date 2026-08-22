@@ -232,6 +232,28 @@ export async function listFutureActiveBySerieId(input: {
   return r.rows.map(mapRow);
 }
 
+/**
+ * Séries anteriores à operação durável não possuem plano/event_id canônico para
+ * recovery. Esta consulta serve para recusá-las de forma explícita e escopada.
+ */
+export async function hasSerieForRecovery(input: {
+  tenantId: string;
+  slot: string;
+  serieId: string;
+  colaboradorId: number | null;
+}): Promise<boolean> {
+  const r = await query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM agenda_bloqueios
+        WHERE tenant_id=$1 AND slot=$2 AND serie_id=$3
+          AND colaborador_id IS NOT DISTINCT FROM $4
+          AND deleted_at IS NULL
+     ) AS exists`,
+    [input.tenantId, input.slot, input.serieId, input.colaboradorId],
+  );
+  return r.rows[0]?.exists ?? false;
+}
+
 export async function getActiveById(
   tenantId: string,
   slot: string,

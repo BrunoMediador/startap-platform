@@ -134,6 +134,27 @@ export async function claimDispatch(input: {
   return r.rows[0] ?? null;
 }
 
+/**
+ * Reivindica exclusivamente uma ocorrência ambígua antes de a reconciliar.
+ * Quem perde o CAS não pode consultar/recriar o evento remoto.
+ */
+export async function claimRecovery(input: {
+  tenantId: string;
+  slot: string;
+  operationId: string;
+  ordinal: number;
+}): Promise<AgendaBloqueioOperacaoOcorrencia | null> {
+  const r = await query<AgendaBloqueioOperacaoOcorrencia>(
+    `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status='gcal_dispatch_started', updated_at=now()
+       FROM agenda_bloqueio_operacoes op
+      WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
+        AND o.status='recovery_required'
+      RETURNING o.*`,
+    [input.tenantId, input.slot, input.operationId, input.ordinal],
+  );
+  return r.rows[0] ?? null;
+}
+
 export async function markOccurrence(input: {
   tenantId: string;
   slot: string;
@@ -141,10 +162,12 @@ export async function markOccurrence(input: {
   ordinal: number;
   status: Extract<AgendaBloqueioOcorrenciaStatus, 'active' | 'recovery_required'>;
   errorCode?: string | null;
-}): Promise<void> {
-  await query(
+  expectedStatus?: 'gcal_dispatch_started';
+}): Promise<boolean> {
+  const result = await query(
     `UPDATE agenda_bloqueio_operacao_ocorrencias o SET status=$5, error_code=$6, updated_at=now()
-       FROM agenda_bloqueio_operacoes op WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4`,
+       FROM agenda_bloqueio_operacoes op WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
+         AND ($7::text IS NULL OR o.status=$7)`,
     [
       input.tenantId,
       input.slot,
@@ -152,8 +175,10 @@ export async function markOccurrence(input: {
       input.ordinal,
       input.status,
       input.errorCode ?? null,
+      input.expectedStatus ?? null,
     ],
   );
+  return result.rowCount === 1;
 }
 
 export async function listForRecovery(input: {

@@ -319,4 +319,66 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
       occurrences: String(first.occurrences.length),
     });
   });
+
+  it('duas recoveries concorrentes só reivindicam uma ocorrência e não rebaixam active', async () => {
+    const plan = input({
+      operationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionHash: 'e'.repeat(64),
+      payloadHash: 'f'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-recovery-claim-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(plan);
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET status='recovery_required'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+
+    const claims = await Promise.all([
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+      agendaBloqueioOperacoes.claimRecovery({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+      }),
+    ]);
+    expect(claims.filter((claim) => claim != null)).toHaveLength(1);
+
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+        status: 'active',
+        expectedStatus: 'gcal_dispatch_started',
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+        status: 'recovery_required',
+        expectedStatus: 'gcal_dispatch_started',
+      }),
+    ).resolves.toBe(false);
+    const persisted = await exec<{ status: string }>(
+      `SELECT status FROM agenda_bloqueio_operacao_ocorrencias
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    expect(persisted.rows[0]?.status).toBe('active');
+  });
 });
