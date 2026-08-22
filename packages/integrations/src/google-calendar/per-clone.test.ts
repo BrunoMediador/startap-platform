@@ -118,6 +118,34 @@ describe('getGcalForSlot — individual (inalterado)', () => {
 
     expect(await getGcalForSlot('clone_indiv_a')).toBeNull();
   });
+
+  it('troca calendar ou credencial invalida o client quente antes do TTL', async () => {
+    mockQuery
+      .mockResolvedValueOnce(
+        qResult([
+          {
+            gcal_credentials_json: SA_JSON,
+            gcal_calendar_id: 'cal-antigo',
+            gcal_status: 'active',
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        qResult([
+          {
+            gcal_credentials_json: SA_JSON.replace('fake', 'new'),
+            gcal_calendar_id: 'cal-novo',
+            gcal_status: 'active',
+          },
+        ]),
+      );
+
+    const antigo = await getGcalForSlot('clone_indiv_a');
+    const novo = await getGcalForSlot('clone_indiv_a');
+
+    expect(novo).not.toBe(antigo);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -416,5 +444,41 @@ describe('getGcalsForSlot — isolamento cross-tenant', () => {
 
     // O client é a MESMA instância no hit legítimo (veio do cache, não reconstruído).
     expect(second[0].client).toBe(first[0].client);
+  });
+
+  it('troca calendar ou credencial do colaborador invalida o client quente antes do TTL', async () => {
+    mockQuery
+      .mockResolvedValueOnce(
+        qResult([
+          {
+            product_type: 'estabelecimento',
+            tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            clone_credentials_json: SA_JSON,
+            colaborador_id: '10',
+            nome: 'João S.',
+            gcal_calendar_id: 'cal-antigo',
+            gcal_status: 'active',
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        qResult([
+          {
+            product_type: 'estabelecimento',
+            tenant_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            clone_credentials_json: SA_JSON.replace('fake', 'new'),
+            colaborador_id: '10',
+            nome: 'João S.',
+            gcal_calendar_id: 'cal-novo',
+            gcal_status: 'active',
+          },
+        ]),
+      );
+
+    const antigo = await getGcalsForSlot('clone_estab_x');
+    const novo = await getGcalsForSlot('clone_estab_x');
+
+    expect(novo[0].client).not.toBe(antigo[0].client);
+    expect(novo[0].calendarId).toBe('cal-novo');
   });
 });

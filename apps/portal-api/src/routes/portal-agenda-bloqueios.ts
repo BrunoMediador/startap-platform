@@ -17,7 +17,9 @@
  *   - evento GCal nasce com marker privado kind='bloqueio' para o reconciler ignorar.
  *   - gcal_event_id é determinístico por bloqueio, fechando timeout ambíguo no insert.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { hashEventIdForLog } from '@startap/core/gcal-event-log';
+import { logger } from '@startap/core/logger';
 import {
   OCORRENCIAS_MAX,
   OCORRENCIAS_MIN,
@@ -25,22 +27,15 @@ import {
   type Periodicidade,
   expandirDatas,
 } from '@startap/core/recorrencia';
-import { hashEventIdForLog } from '@startap/core/gcal-event-log';
-import { logger } from '@startap/core/logger';
-import { agendaBloqueios, cloneColaboradores } from '@startap/db';
+import { agendaBloqueioSeries, agendaBloqueios, cloneColaboradores } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import { zonedWallTimeToUtc } from '@startap/integrations/scheduling';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { isGcalForbiddenOrAuthError, isGcalRateLimitError } from '../lib/gcal-rate-limit.js';
 import type { AvaliarSlotConflito } from '../lib/avaliar-slot.js';
-import {
-  requireColaborador,
-  requireTenant,
-  withColaborador,
-  withTenant,
-} from '../lib/tenant.js';
+import { isGcalForbiddenOrAuthError, isGcalRateLimitError } from '../lib/gcal-rate-limit.js';
+import { requireColaborador, requireTenant, withColaborador, withTenant } from '../lib/tenant.js';
 
 const log = logger.child({ service: 'portal-api', module: 'agenda-bloqueios' });
 
@@ -65,11 +60,13 @@ const criarBloqueioBaseSchema = z
   })
   .strict();
 
-const criarBloqueioSchema = criarBloqueioBaseSchema
-  .refine((b) => new Date(b.fim_at).getTime() > new Date(b.inicio_at).getTime(), {
+const criarBloqueioSchema = criarBloqueioBaseSchema.refine(
+  (b) => new Date(b.fim_at).getTime() > new Date(b.inicio_at).getTime(),
+  {
     message: 'fim_at deve ser depois de inicio_at',
     path: ['fim_at'],
-  });
+  },
+);
 
 const previewRecorrenciaSchema = criarBloqueioBaseSchema
   .extend({
@@ -98,9 +95,7 @@ const listQuerySchema = z
   .strict()
   .refine(
     (q) =>
-      !q.inicio_at ||
-      !q.fim_at ||
-      new Date(q.fim_at).getTime() > new Date(q.inicio_at).getTime(),
+      !q.inicio_at || !q.fim_at || new Date(q.fim_at).getTime() > new Date(q.inicio_at).getTime(),
     { message: 'fim_at deve ser depois de inicio_at', path: ['fim_at'] },
   );
 
@@ -132,6 +127,14 @@ interface BloqueioSerieOccurrence {
 }
 
 type BloqueioPreviewStatus = 'livre' | 'ocupado';
+type BloqueioSeriePreview = BloqueioSerieOccurrence & {
+  timezone: string;
+  tipo: agendaBloqueios.AgendaBloqueioTipo;
+  motivo: string | null;
+  colaborador_id: number | null;
+  status: BloqueioPreviewStatus;
+  conflito?: AvaliarSlotConflito;
+};
 type CreateOccurrenceResult =
   | { ok: true; bloqueio: agendaBloqueios.AgendaBloqueioRow }
   | { ok: false; error: 'rate_limit' | 'gcal_falhou' };
@@ -143,14 +146,17 @@ type RemoveOccurrenceResult =
       error: 'rate_limit' | 'gcal_falhou' | 'gcal_nao_configurado' | 'bloqueio_nao_encontrado';
     };
 
-type CreateOccurrenceError = Extract<CreateOccurrenceResult, { ok: false }>['error'];
+type CreateOccurrenceError =
+  | Extract<CreateOccurrenceResult, { ok: false }>['error']
+  | 'erro_interno';
 type RemoveOccurrenceError = Extract<RemoveOccurrenceResult, { ok: false }>['error'];
 
 type SerieFailureReason =
   | 'gcal_rate_limit'
   | 'erro_gcal'
   | 'gcal_nao_configurado'
-  | 'bloqueio_nao_encontrado';
+  | 'bloqueio_nao_encontrado'
+  | 'erro_interno';
 
 function assertNever(value: never): never {
   throw new Error(`unsupported value: ${String(value)}`);
@@ -222,7 +228,8 @@ function blockSummary(tipo: agendaBloqueios.AgendaBloqueioTipo, motivo?: string 
 }
 
 function mapCreateFailureReason(error: CreateOccurrenceError): SerieFailureReason {
-  return error === 'rate_limit' ? 'gcal_rate_limit' : 'erro_gcal';
+  if (error === 'rate_limit') return 'gcal_rate_limit';
+  return error === 'erro_interno' ? 'erro_interno' : 'erro_gcal';
 }
 
 function mapRemoveFailureReason(error: RemoveOccurrenceError): SerieFailureReason {
@@ -238,6 +245,75 @@ function mapRemoveFailureReason(error: RemoveOccurrenceError): SerieFailureReaso
     default:
       return assertNever(error);
   }
+}
+
+function hashReplayPart(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function serieReplayPayload(
+  input: z.infer<typeof criarSerieSchema>,
+  colaboradorId: number | null,
+): string {
+  return JSON.stringify({
+    inicio_at: input.inicio_at,
+    fim_at: input.fim_at,
+    timezone: input.timezone,
+    tipo: input.tipo,
+    motivo: input.motivo ?? null,
+    colaborador_id: colaboradorId,
+    periodicidade: input.periodicidade,
+    ocorrencias: input.ocorrencias,
+  });
+}
+
+async function claimSerieReplay(args: {
+  scope: TenantScope;
+  colaboradorId: number | null;
+  sid: string;
+  input: z.infer<typeof criarSerieSchema>;
+}) {
+  return agendaBloqueioSeries.claimCreate({
+    id: randomUUID(),
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    colaboradorId: args.colaboradorId,
+    sessionHash: hashReplayPart(args.sid),
+    payloadHash: hashReplayPart(serieReplayPayload(args.input, args.colaboradorId)),
+  });
+}
+
+function replayStoredSerie(
+  reply: FastifyReply,
+  serie: agendaBloqueioSeries.AgendaBloqueioSerieClaim,
+) {
+  // Nunca reabre `creating`: uma queda pode ter ocorrido imediatamente após o
+  // evento GCal. Recuperação é operacional, conferindo linha local + evento antes
+  // de concluir o claim; retry HTTP não pode assumir ausência de efeito externo.
+  if (serie.status === 'creating') {
+    return reply.code(409).send({ error: 'serie_em_processamento' });
+  }
+  if (serie.response_status == null || serie.response_body == null) {
+    return reply.code(409).send({ error: 'serie_resultado_indisponivel' });
+  }
+  return reply.code(serie.response_status).send({ ...serie.response_body, idempotent: true });
+}
+
+async function persistSerieResult(args: {
+  scope: TenantScope;
+  serieId: string;
+  status: Exclude<agendaBloqueioSeries.AgendaBloqueioSerieStatus, 'creating'>;
+  responseStatus: number;
+  responseBody: Record<string, unknown>;
+}): Promise<void> {
+  await agendaBloqueioSeries.markCreateResult({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    serieId: args.serieId,
+    status: args.status,
+    responseStatus: args.responseStatus,
+    responseBody: args.responseBody,
+  });
 }
 
 function formatDateKeyInTimeZone(date: Date, timeZone: string): string {
@@ -360,8 +436,7 @@ async function createOccurrence(args: {
       extendedPropertiesPrivate: {
         kind: 'bloqueio',
         bloqueioId,
-        colaboradorId:
-          args.target.colaboradorId == null ? '' : String(args.target.colaboradorId),
+        colaboradorId: args.target.colaboradorId == null ? '' : String(args.target.colaboradorId),
         ...(args.serieId ? { serie_id: args.serieId } : {}),
       },
     });
@@ -406,7 +481,11 @@ async function createOccurrence(args: {
       }
     }
     if (cleanupFailed) {
-      await agendaBloqueios.markCreateCleanupFailed(args.scope.tenantId, args.scope.slot, bloqueioId);
+      await agendaBloqueios.markCreateCleanupFailed(
+        args.scope.tenantId,
+        args.scope.slot,
+        bloqueioId,
+      );
     } else {
       await agendaBloqueios.markCreateFailed(args.scope.tenantId, args.scope.slot, bloqueioId);
     }
@@ -487,9 +566,9 @@ async function handleCreate(args: {
   const colaboradorId = args.forcedColaboradorId ?? args.input.colaborador_id ?? null;
   const target = await resolveTarget(args.scope.slot, colaboradorId);
   if (!target) {
-    return args.reply
-      .code(colaboradorId == null ? 422 : 404)
-      .send({ error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado' });
+    return args.reply.code(colaboradorId == null ? 422 : 404).send({
+      error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado',
+    });
   }
 
   const created = await createOccurrence({
@@ -502,8 +581,7 @@ async function handleCreate(args: {
   });
   if (!created.ok) {
     return args.reply.code(502).send({
-      error:
-        created.error === 'rate_limit' ? 'gcal_rate_limit' : 'nao_foi_possivel_criar_bloqueio',
+      error: created.error === 'rate_limit' ? 'gcal_rate_limit' : 'nao_foi_possivel_criar_bloqueio',
     });
   }
   return args.reply.code(201).send({ ok: true, bloqueio: created.bloqueio });
@@ -586,11 +664,11 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       const colaboradorId = parsed.data.colaborador_id ?? null;
       const target = await resolveTarget(slot, colaboradorId);
       if (!target) {
-        return reply
-          .code(colaboradorId == null ? 422 : 404)
-          .send({ error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado' });
+        return reply.code(colaboradorId == null ? 422 : 404).send({
+          error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado',
+        });
       }
-      let previews;
+      let previews: BloqueioSeriePreview[];
       try {
         const occurrences = expandirOcorrenciasSerie({
           inicioAt: parsed.data.inicio_at,
@@ -615,18 +693,26 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'erro';
         if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
-        return reply.code(/nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg) ? 400 : 502).send({
-          error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
-            ? 'payload_invalido'
-            : 'nao foi possivel avaliar a serie agora',
-        });
+        return reply
+          .code(
+            /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
+              ? 400
+              : 502,
+          )
+          .send({
+            error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(
+              msg,
+            )
+              ? 'payload_invalido'
+              : 'nao foi possivel avaliar a serie agora',
+          });
       }
       return reply.code(200).send({ ok: true, previews });
     },
   );
 
   app.post('/portal/agenda/bloqueios/serie', { preHandler: withTenant }, async (req, reply) => {
-    const { slot, userId } = requireTenant(req);
+    const { slot, userId, sid } = requireTenant(req);
     if (!gateEnabled(slot, reply)) return reply;
     const scope = await resolveOwnerScope(slot, reply);
     if (!scope) return reply;
@@ -635,47 +721,81 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
     const colaboradorId = parsed.data.colaborador_id ?? null;
     const target = await resolveTarget(slot, colaboradorId);
     if (!target) {
-      return reply
-        .code(colaboradorId == null ? 422 : 404)
-        .send({ error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado' });
+      return reply.code(colaboradorId == null ? 422 : 404).send({
+        error: colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado',
+      });
     }
 
-      let ocorrenciasSerie: BloqueioSerieOccurrence[];
-      try {
-        ocorrenciasSerie = expandirOcorrenciasSerie({
-          inicioAt: parsed.data.inicio_at,
-          fimAt: parsed.data.fim_at,
-          timeZone: parsed.data.timezone || scope.timezone,
-          periodicidade: parsed.data.periodicidade,
-          ocorrencias: parsed.data.ocorrencias,
-        });
-      } catch {
-        return reply.code(400).send({ error: 'payload_invalido' });
-      }
+    let ocorrenciasSerie: BloqueioSerieOccurrence[];
+    try {
+      ocorrenciasSerie = expandirOcorrenciasSerie({
+        inicioAt: parsed.data.inicio_at,
+        fimAt: parsed.data.fim_at,
+        timeZone: parsed.data.timezone || scope.timezone,
+        periodicidade: parsed.data.periodicidade,
+        ocorrencias: parsed.data.ocorrencias,
+      });
+    } catch {
+      return reply.code(400).send({ error: 'payload_invalido' });
+    }
 
-      const serieId = randomUUID();
-      const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
+    const claim = await claimSerieReplay({
+      scope,
+      colaboradorId,
+      sid,
+      input: parsed.data,
+    });
+    if (!claim.claimed) {
+      return replayStoredSerie(reply, claim.serie);
+    }
+    const serieId = claim.serie.id;
+    const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
     const falhas: Array<{
       inicio_at: string;
       fim_at: string;
       error: CreateOccurrenceError;
       reason: SerieFailureReason;
     }> = [];
-      for (const ocorrencia of ocorrenciasSerie) {
-        const created = await createOccurrence({
+    for (const ocorrencia of ocorrenciasSerie) {
+      let created: CreateOccurrenceResult;
+      try {
+        created = await createOccurrence({
           scope,
           target,
-        input: {
+          input: {
+            inicio_at: ocorrencia.inicio_at,
+            fim_at: ocorrencia.fim_at,
+            timezone: parsed.data.timezone || scope.timezone,
+            tipo: parsed.data.tipo,
+            motivo: parsed.data.motivo ?? null,
+          },
+          createdByRole: 'owner',
+          createdByUserId: userId,
+          serieId,
+        });
+      } catch {
+        falhas.push({
           inicio_at: ocorrencia.inicio_at,
           fim_at: ocorrencia.fim_at,
-          timezone: parsed.data.timezone || scope.timezone,
-          tipo: parsed.data.tipo,
-          motivo: parsed.data.motivo ?? null,
-        },
-        createdByRole: 'owner',
-        createdByUserId: userId,
-        serieId,
-      });
+          error: 'erro_interno',
+          reason: 'erro_interno',
+        });
+        const resposta = { serie_id: serieId, criados, falhas };
+        const hasCreated = criados.length > 0;
+        const outcome = hasCreated
+          ? {
+              status: 'partial' as const,
+              responseStatus: 207,
+              responseBody: { ok: true, ...resposta },
+            }
+          : {
+              status: 'failed' as const,
+              responseStatus: 502,
+              responseBody: { ok: false, ...resposta },
+            };
+        await persistSerieResult({ scope, serieId, ...outcome });
+        return reply.code(outcome.responseStatus).send(outcome.responseBody);
+      }
       if (!created.ok) {
         falhas.push({
           inicio_at: ocorrencia.inicio_at,
@@ -694,9 +814,26 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const resposta = { serie_id: serieId, criados, falhas };
-    if (criados.length === 0) return reply.code(409).send({ ok: false, ...resposta });
-    if (falhas.length > 0) return reply.code(207).send({ ok: true, ...resposta });
-    return reply.code(201).send({ ok: true, ...resposta });
+    const outcome =
+      criados.length === 0
+        ? {
+            status: 'failed' as const,
+            responseStatus: 409,
+            responseBody: { ok: false, ...resposta },
+          }
+        : falhas.length > 0
+          ? {
+              status: 'partial' as const,
+              responseStatus: 207,
+              responseBody: { ok: true, ...resposta },
+            }
+          : {
+              status: 'complete' as const,
+              responseStatus: 201,
+              responseBody: { ok: true, ...resposta },
+            };
+    await persistSerieResult({ scope, serieId, ...outcome });
+    return reply.code(outcome.responseStatus).send(outcome.responseBody);
   });
 
   app.delete(
@@ -802,7 +939,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       if (!parsed.success) return reply.code(400).send({ error: 'payload_invalido' });
       const target = await resolveTarget(slot, colaboradorId);
       if (!target) return reply.code(422).send({ error: 'gcal_nao_configurado' });
-      let previews;
+      let previews: BloqueioSeriePreview[];
       try {
         const occurrences = expandirOcorrenciasSerie({
           inicioAt: parsed.data.inicio_at,
@@ -827,23 +964,34 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'erro';
         if (isGcalForbiddenOrAuthError(msg)) gcal.invalidateGcalCache(slot);
-        return reply.code(/nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg) ? 400 : 502).send({
-          error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
-            ? 'payload_invalido'
-            : 'nao foi possivel avaliar a serie agora',
-        });
+        return reply
+          .code(
+            /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(msg)
+              ? 400
+              : 502,
+          )
+          .send({
+            error: /nao foi possivel formatar|nao foi possivel resolver|intervalo invalido/.test(
+              msg,
+            )
+              ? 'payload_invalido'
+              : 'nao foi possivel avaliar a serie agora',
+          });
       }
       return reply.code(200).send({ ok: true, previews });
     },
   );
 
-  app.post('/portal/colaborador/bloqueios/serie', { preHandler: withColaborador }, async (req, reply) => {
-    const { slot, tenantId, colaboradorId } = requireColaborador(req);
-    if (!gateColaboradorEnabled(slot, reply)) return reply;
-    const parsed = criarSerieSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'payload_invalido' });
-    const target = await resolveTarget(slot, colaboradorId);
-    if (!target) return reply.code(422).send({ error: 'gcal_nao_configurado' });
+  app.post(
+    '/portal/colaborador/bloqueios/serie',
+    { preHandler: withColaborador },
+    async (req, reply) => {
+      const { slot, tenantId, colaboradorId, sid } = requireColaborador(req);
+      if (!gateColaboradorEnabled(slot, reply)) return reply;
+      const parsed = criarSerieSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: 'payload_invalido' });
+      const target = await resolveTarget(slot, colaboradorId);
+      if (!target) return reply.code(422).send({ error: 'gcal_nao_configurado' });
 
       let ocorrenciasSerie: BloqueioSerieOccurrence[];
       try {
@@ -858,51 +1006,104 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'payload_invalido' });
       }
 
-      const serieId = randomUUID();
-      const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
-    const falhas: Array<{
-      inicio_at: string;
-      fim_at: string;
-      error: CreateOccurrenceError;
-      reason: SerieFailureReason;
-    }> = [];
-      for (const ocorrencia of ocorrenciasSerie) {
-        const created = await createOccurrence({
-          scope: { slot, tenantId, timezone: parsed.data.timezone || 'America/Sao_Paulo' },
-        target,
-        input: {
-          inicio_at: ocorrencia.inicio_at,
-          fim_at: ocorrencia.fim_at,
-          timezone: parsed.data.timezone || 'America/Sao_Paulo',
-          tipo: parsed.data.tipo,
-          motivo: parsed.data.motivo ?? null,
-        },
-        createdByRole: 'colaborador',
-        createdByColaboradorId: colaboradorId,
-        serieId,
+      const scope = { slot, tenantId, timezone: parsed.data.timezone || 'America/Sao_Paulo' };
+      const claim = await claimSerieReplay({
+        scope,
+        colaboradorId,
+        sid,
+        input: parsed.data,
       });
-      if (!created.ok) {
-        falhas.push({
-          inicio_at: ocorrencia.inicio_at,
-          fim_at: ocorrencia.fim_at,
-          error: created.error,
-          reason: mapCreateFailureReason(created.error),
-        });
-        if (created.error === 'rate_limit') break;
-        continue;
+      if (!claim.claimed) {
+        return replayStoredSerie(reply, claim.serie);
       }
-      criados.push({
-        id: created.bloqueio.id,
-        inicio_at: created.bloqueio.inicio_at,
-        fim_at: created.bloqueio.fim_at,
-      });
-    }
+      const serieId = claim.serie.id;
+      const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
+      const falhas: Array<{
+        inicio_at: string;
+        fim_at: string;
+        error: CreateOccurrenceError;
+        reason: SerieFailureReason;
+      }> = [];
+      for (const ocorrencia of ocorrenciasSerie) {
+        let created: CreateOccurrenceResult;
+        try {
+          created = await createOccurrence({
+            scope,
+            target,
+            input: {
+              inicio_at: ocorrencia.inicio_at,
+              fim_at: ocorrencia.fim_at,
+              timezone: parsed.data.timezone || 'America/Sao_Paulo',
+              tipo: parsed.data.tipo,
+              motivo: parsed.data.motivo ?? null,
+            },
+            createdByRole: 'colaborador',
+            createdByColaboradorId: colaboradorId,
+            serieId,
+          });
+        } catch {
+          falhas.push({
+            inicio_at: ocorrencia.inicio_at,
+            fim_at: ocorrencia.fim_at,
+            error: 'erro_interno',
+            reason: 'erro_interno',
+          });
+          const resposta = { serie_id: serieId, criados, falhas };
+          const outcome =
+            criados.length > 0
+              ? {
+                  status: 'partial' as const,
+                  responseStatus: 207,
+                  responseBody: { ok: true, ...resposta },
+                }
+              : {
+                  status: 'failed' as const,
+                  responseStatus: 502,
+                  responseBody: { ok: false, ...resposta },
+                };
+          await persistSerieResult({ scope, serieId, ...outcome });
+          return reply.code(outcome.responseStatus).send(outcome.responseBody);
+        }
+        if (!created.ok) {
+          falhas.push({
+            inicio_at: ocorrencia.inicio_at,
+            fim_at: ocorrencia.fim_at,
+            error: created.error,
+            reason: mapCreateFailureReason(created.error),
+          });
+          if (created.error === 'rate_limit') break;
+          continue;
+        }
+        criados.push({
+          id: created.bloqueio.id,
+          inicio_at: created.bloqueio.inicio_at,
+          fim_at: created.bloqueio.fim_at,
+        });
+      }
 
-    const resposta = { serie_id: serieId, criados, falhas };
-    if (criados.length === 0) return reply.code(409).send({ ok: false, ...resposta });
-    if (falhas.length > 0) return reply.code(207).send({ ok: true, ...resposta });
-    return reply.code(201).send({ ok: true, ...resposta });
-  });
+      const resposta = { serie_id: serieId, criados, falhas };
+      const outcome =
+        criados.length === 0
+          ? {
+              status: 'failed' as const,
+              responseStatus: 409,
+              responseBody: { ok: false, ...resposta },
+            }
+          : falhas.length > 0
+            ? {
+                status: 'partial' as const,
+                responseStatus: 207,
+                responseBody: { ok: true, ...resposta },
+              }
+            : {
+                status: 'complete' as const,
+                responseStatus: 201,
+                responseBody: { ok: true, ...resposta },
+              };
+      await persistSerieResult({ scope, serieId, ...outcome });
+      return reply.code(outcome.responseStatus).send(outcome.responseBody);
+    },
+  );
 
   app.delete(
     '/portal/colaborador/bloqueios/:id',

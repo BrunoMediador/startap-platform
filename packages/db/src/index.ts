@@ -32,6 +32,7 @@ export * as atendimentos from './queries/atendimentos.js';
 export * as clientes from './queries/clientes.js';
 export * as crmWhatsAppManual from './queries/crm-whatsapp-manual.js';
 export * as agendaBloqueios from './queries/agenda-bloqueios.js';
+export * as agendaBloqueioSeries from './queries/agenda-bloqueio-series.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
 export * as botDetect from './queries/bot-detect.js';
