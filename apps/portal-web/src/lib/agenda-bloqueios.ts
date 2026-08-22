@@ -1,12 +1,12 @@
 import type {
-  AgendaBloqueioPeriodicidade,
   AgendaBloqueioInput,
+  AgendaBloqueioPeriodicidade,
   CriarAgendaBloqueioSerieBody,
   CriarAgendaBloqueioSerieResponse,
-  RemoverAgendaBloqueioSerieResponse,
   PreviewAgendaBloqueioRecorrencia,
   PreviewAgendaBloqueioRecorrenciaBody,
   PreviewOcorrenciaStatus,
+  RemoverAgendaBloqueioSerieResponse,
 } from './api-types';
 import type { Agendamento } from './api-types';
 
@@ -191,6 +191,19 @@ export function countRemovidosAgendaBloqueioSerie(
   resposta: RemoverAgendaBloqueioSerieResponse,
 ): number {
   return resposta.removidos.length;
+}
+
+export function resumoRemocaoAgendaBloqueioSerie(
+  resposta: RemoverAgendaBloqueioSerieResponse,
+): string {
+  const removidos = resposta.removidos.length;
+  const falhas = resposta.falhas.length;
+  if (falhas === 0) {
+    return removidos === 1
+      ? '1 próxima ocorrência removida.'
+      : `${removidos} próximas ocorrências removidas.`;
+  }
+  return `Remoção parcial: ${removidos} removidos e ${falhas} falha${falhas === 1 ? '' : 's'}. A lista foi atualizada.`;
 }
 
 export function resumoResultadoAgendaBloqueioSerie(
