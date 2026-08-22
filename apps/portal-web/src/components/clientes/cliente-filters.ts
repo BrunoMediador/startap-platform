@@ -14,6 +14,27 @@ export interface ClientesFilters {
   ordem: SortOrder;
 }
 
+export interface ClientesPeriodDraft {
+  ativo: boolean;
+  inicio: string;
+  fim: string;
+  erro: string | null;
+}
+
+export const initialClientesPeriodDraft: ClientesPeriodDraft = {
+  ativo: false,
+  inicio: '',
+  fim: '',
+  erro: null,
+};
+
+export function resetClientesFilters(): {
+  filters: ClientesFilters;
+  draft: ClientesPeriodDraft;
+} {
+  return { filters: initialClientesFilters, draft: initialClientesPeriodDraft };
+}
+
 export const initialClientesFilters: ClientesFilters = {
   nome: '',
   telefone: '',
@@ -42,7 +63,9 @@ export function activeClientesFilters(
   const active: Array<{ key: string; label: string }> = [];
   if (safe.nome) active.push({ key: 'nome', label: `Cliente: ${safe.nome}` });
   if (safe.telefone) active.push({ key: 'telefone', label: `WhatsApp: ${safe.telefone}` });
-  if (safe.ultimoAtendimento) {
+  if (safe.ultimoAtendimento === 'periodo' && safe.periodoInicio && safe.periodoFim) {
+    active.push({ key: 'periodo', label: `Período: ${safe.periodoInicio} até ${safe.periodoFim}` });
+  } else if (safe.ultimoAtendimento) {
     const labels: Record<UltimoAtendimentoFilter, string> = {
       hoje: 'Hoje',
       '7d': 'Últimos 7 dias',
@@ -52,9 +75,6 @@ export function activeClientesFilters(
     };
     active.push({ key: 'ultimoAtendimento', label: labels[safe.ultimoAtendimento] });
   }
-  if (safe.periodoInicio)
-    active.push({ key: 'periodoInicio', label: `A partir de ${safe.periodoInicio}` });
-  if (safe.periodoFim) active.push({ key: 'periodoFim', label: `Até ${safe.periodoFim}` });
   if (safe.visitas !== 'todas') {
     const labels: Record<Exclude<VisitasFilter, 'todas'>, string> = {
       uma: '1 visita',
@@ -85,7 +105,7 @@ export function clientesFiltersSearchParams(
   const hasCompleteCustomPeriod = Boolean(safe.periodoInicio && safe.periodoFim);
   if (hasCompleteCustomPeriod) {
     params.set('ultimo_atendimento', 'periodo');
-  } else if (safe.ultimoAtendimento) {
+  } else if (safe.ultimoAtendimento && safe.ultimoAtendimento !== 'periodo') {
     params.set('ultimo_atendimento', safe.ultimoAtendimento);
   }
   if (hasCompleteCustomPeriod) {
@@ -95,10 +115,76 @@ export function clientesFiltersSearchParams(
   return params.toString();
 }
 
-/** A API só aceita período com as duas pontas; enquanto falta uma, a lista aguarda. */
-export function hasIncompleteClientesPeriod(filters: ClientesFilters): boolean {
-  const safe = normalizeClientesFilters(filters);
-  return Boolean(safe.periodoInicio) !== Boolean(safe.periodoFim);
+export type ClientesPeriodDraftStatus = 'idle' | 'pending' | 'invalid' | 'ready';
+
+/** Fonte única para copy e transições: só um intervalo completo e ordenado pode aplicar. */
+export function clientesPeriodDraftStatus(draft: ClientesPeriodDraft): ClientesPeriodDraftStatus {
+  if (!draft.ativo) return 'idle';
+  if (!draft.inicio || !draft.fim) return 'pending';
+  return draft.inicio <= draft.fim ? 'ready' : 'invalid';
+}
+
+type ClientesPeriodAction =
+  | { type: 'selectCustom' }
+  | { type: 'edit'; field: 'inicio' | 'fim'; value: string }
+  | { type: 'preset'; value: Exclude<UltimoAtendimentoFilter, 'periodo'> | null }
+  | { type: 'clear' };
+
+/** Mantém o filtro aplicado válido e aplica período apenas quando suas datas formam intervalo. */
+export function transitionClientesPeriod(
+  filters: ClientesFilters,
+  draft: ClientesPeriodDraft,
+  action: ClientesPeriodAction,
+): { filters: ClientesFilters; draft: ClientesPeriodDraft } {
+  if (action.type === 'preset') {
+    return {
+      filters: { ...filters, ultimoAtendimento: action.value, periodoInicio: '', periodoFim: '' },
+      draft: initialClientesPeriodDraft,
+    };
+  }
+  if (action.type === 'clear') {
+    return {
+      filters: { ...filters, ultimoAtendimento: null, periodoInicio: '', periodoFim: '' },
+      draft: initialClientesPeriodDraft,
+    };
+  }
+  if (action.type === 'selectCustom') {
+    const applied = filters.ultimoAtendimento === 'periodo';
+    return {
+      filters,
+      draft: {
+        ativo: true,
+        inicio: applied ? filters.periodoInicio : '',
+        fim: applied ? filters.periodoFim : '',
+        erro: null,
+      },
+    };
+  }
+  const nextDraft: ClientesPeriodDraft = {
+    ...draft,
+    ativo: true,
+    [action.field]: action.value,
+    erro: null,
+  };
+  const status = clientesPeriodDraftStatus(nextDraft);
+  if (status === 'ready') {
+    return {
+      filters: {
+        ...filters,
+        ultimoAtendimento: 'periodo',
+        periodoInicio: nextDraft.inicio,
+        periodoFim: nextDraft.fim,
+      },
+      draft: { ...nextDraft, ativo: false },
+    };
+  }
+  return {
+    filters,
+    draft: {
+      ...nextDraft,
+      erro: status === 'invalid' ? 'A data final deve ser igual ou posterior à inicial.' : null,
+    },
+  };
 }
 
 export function shouldFetchClienteAvatar(mode: 'owner' | 'colaborador'): boolean {
@@ -112,11 +198,8 @@ export function clearClientesFilter(filters: ClientesFilters, key: string): Clie
     case 'telefone':
       return { ...filters, telefone: '' };
     case 'ultimoAtendimento':
-      return { ...filters, ultimoAtendimento: null };
-    case 'periodoInicio':
-      return { ...filters, periodoInicio: '' };
-    case 'periodoFim':
-      return { ...filters, periodoFim: '' };
+    case 'periodo':
+      return { ...filters, ultimoAtendimento: null, periodoInicio: '', periodoFim: '' };
     case 'visitas':
       return { ...filters, visitas: 'todas' };
     default:

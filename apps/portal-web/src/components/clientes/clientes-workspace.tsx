@@ -51,9 +51,12 @@ import {
   type ClientesFilters,
   activeClientesFilters,
   clearClientesFilter,
-  hasIncompleteClientesPeriod,
+  clientesPeriodDraftStatus,
   initialClientesFilters,
+  initialClientesPeriodDraft,
+  resetClientesFilters,
   shouldFetchClienteAvatar,
+  transitionClientesPeriod,
 } from './cliente-filters';
 
 type Mode = 'owner' | 'colaborador';
@@ -78,6 +81,7 @@ export function ClientesWorkspace({
 }: ClientesWorkspaceProps) {
   const toast = useToast();
   const [filters, setFilters] = useState<ClientesFilters>(initialClientesFilters);
+  const [periodDraft, setPeriodDraft] = useState(initialClientesPeriodDraft);
   const deferredFilters = useDeferredValue(filters);
   const [page, setPage] = useState(1);
   const [openFilter, setOpenFilter] = useState<string | null>(null);
@@ -86,22 +90,14 @@ export function ClientesWorkspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [target, setTarget] = useState<WhatsAppManualTarget | null>(null);
-  const waitingForPeriodEnd = hasIncompleteClientesPeriod(deferredFilters);
-
-  const ownerList = useClientes(
-    slot,
-    page,
-    20,
-    deferredFilters,
-    mode === 'owner' && crmEnabled && !waitingForPeriodEnd,
-  );
+  const ownerList = useClientes(slot, page, 20, deferredFilters, mode === 'owner' && crmEnabled);
   const collaboratorList = useColaboradorClientes(
     slot,
     colaboradorId ?? 0,
     page,
     20,
     deferredFilters,
-    mode === 'colaborador' && crmEnabled && !waitingForPeriodEnd,
+    mode === 'colaborador' && crmEnabled,
   );
   const list = mode === 'owner' ? ownerList : collaboratorList;
   const summary = useClientesResumo(slot, mode === 'owner' && crmEnabled);
@@ -127,12 +123,48 @@ export function ClientesWorkspace({
   const totalPages = clientesTotalPages(total, data?.limit ?? 20);
   const currentPage = clientesPageFromOffset(data?.offset ?? 0, data?.limit ?? 20);
   const active = activeClientesFilters(filters);
+  const periodDraftStatus = clientesPeriodDraftStatus(periodDraft);
+  const editorFilters = periodDraft.ativo
+    ? {
+        ...filters,
+        ultimoAtendimento: 'periodo' as const,
+        periodoInicio: periodDraft.inicio,
+        periodoFim: periodDraft.fim,
+      }
+    : filters;
   const canSend = mode === 'owner' && whatsappManualEnabled;
   const unavailable = !crmEnabled || data?.available === false;
 
   const update = (patch: Partial<ClientesFilters>) => {
     setPage(1);
     setFilters((current) => ({ ...current, ...patch }));
+  };
+  const applyPeriodAction = (
+    action:
+      | { type: 'selectCustom' }
+      | { type: 'edit'; field: 'inicio' | 'fim'; value: string }
+      | { type: 'preset'; value: Exclude<ClientesFilters['ultimoAtendimento'], 'periodo'> }
+      | { type: 'clear' },
+  ) => {
+    const next = transitionClientesPeriod(filters, periodDraft, action);
+    setPeriodDraft(next.draft);
+    if (next.filters !== filters) {
+      setPage(1);
+      setFilters(next.filters);
+    }
+  };
+  const clearActiveFilter = (key: string) => {
+    if (key === 'periodo') {
+      applyPeriodAction({ type: 'clear' });
+      return;
+    }
+    update(clearClientesFilter(filters, key));
+  };
+  const clearAllFilters = () => {
+    const reset = resetClientesFilters();
+    setPage(1);
+    setFilters(reset.filters);
+    setPeriodDraft(reset.draft);
   };
   const openProfile = (id: string) => {
     setMenuId(null);
@@ -185,7 +217,7 @@ export function ClientesWorkspace({
                 <button
                   key={chip.key}
                   type="button"
-                  onClick={() => update(clearClientesFilter(filters, chip.key))}
+                  onClick={() => clearActiveFilter(chip.key)}
                   className="inline-flex min-h-8 items-center gap-1 rounded-pill border border-brand/35 bg-brand-soft px-2.5 text-[12px] font-medium text-ink outline-none hover:bg-brand/20 focus-visible:ring-2 focus-visible:ring-brand"
                   aria-label={`Remover filtro ${chip.label}`}
                 >
@@ -195,7 +227,7 @@ export function ClientesWorkspace({
               ))}
               <button
                 type="button"
-                onClick={() => update(initialClientesFilters)}
+                onClick={clearAllFilters}
                 className="min-h-8 px-1 text-[12px] font-semibold text-brand outline-none hover:underline focus-visible:ring-2 focus-visible:ring-brand"
               >
                 Limpar todos
@@ -203,14 +235,20 @@ export function ClientesWorkspace({
             </div>
           )}
 
-          {waitingForPeriodEnd ? (
+          {periodDraftStatus !== 'idle' && (
             <div
               role="status"
-              className="rounded-card border border-line bg-surface px-4 py-5 text-[13px] text-ink-soft shadow-card"
+              className={`mb-3 rounded-card border px-4 py-3 text-[13px] shadow-card ${periodDraftStatus === 'invalid' ? 'border-danger/50 bg-danger/10 text-danger' : 'border-line bg-surface text-ink-soft'}`}
             >
-              Escolha a data inicial e a data final para aplicar o período personalizado.
+              {periodDraftStatus === 'invalid'
+                ? periodDraft.erro
+                : periodDraftStatus === 'pending'
+                  ? 'Escolha a data inicial e a data final para aplicar o período personalizado.'
+                  : null}
             </div>
-          ) : list.isPending ? (
+          )}
+
+          {list.isPending ? (
             <ClientesLoading />
           ) : list.isError || !data ? (
             <ErrorState
@@ -226,7 +264,7 @@ export function ClientesWorkspace({
                 description="Ajuste ou limpe os filtros para ver a carteira completa."
                 action={{
                   label: 'Limpar filtros',
-                  onClick: () => update(initialClientesFilters),
+                  onClick: clearAllFilters,
                 }}
               />
             ) : (
@@ -250,10 +288,11 @@ export function ClientesWorkspace({
                 items={items}
                 mode={mode}
                 timezone={timezone}
-                filters={filters}
+                filters={editorFilters}
                 openFilter={openFilter}
                 setOpenFilter={setOpenFilter}
                 update={update}
+                onPeriodAction={applyPeriodAction}
                 onOpen={openProfile}
                 canSend={canSend}
                 onSend={(item) => setTarget(targetFor(item))}
@@ -285,11 +324,12 @@ export function ClientesWorkspace({
 
       <MobileFilterSheet
         open={mobileFiltersOpen}
-        filters={filters}
+        filters={editorFilters}
         total={total}
         onClose={() => setMobileFiltersOpen(false)}
         onChange={update}
-        onClear={() => update(initialClientesFilters)}
+        onPeriodAction={applyPeriodAction}
+        onClear={clearAllFilters}
       />
       <InsightsPanel
         panel={panel}
@@ -414,6 +454,7 @@ function ClientesDesktopTable({
   openFilter,
   setOpenFilter,
   update,
+  onPeriodAction,
   onOpen,
   canSend,
   onSend,
@@ -427,6 +468,13 @@ function ClientesDesktopTable({
   openFilter: string | null;
   setOpenFilter: (value: string | null) => void;
   update: (value: Partial<ClientesFilters>) => void;
+  onPeriodAction: (
+    action:
+      | { type: 'selectCustom' }
+      | { type: 'edit'; field: 'inicio' | 'fim'; value: string }
+      | { type: 'preset'; value: Exclude<ClientesFilters['ultimoAtendimento'], 'periodo'> }
+      | { type: 'clear' },
+  ) => void;
   onOpen: (id: string) => void;
   canSend: boolean;
   onSend: (item: ClienteListItem) => void;
@@ -482,10 +530,15 @@ function ClientesDesktopTable({
                 <FilterSelect
                   value={filters.ultimoAtendimento ?? ''}
                   onChange={(value) =>
-                    update({
-                      ultimoAtendimento: (value || null) as ClientesFilters['ultimoAtendimento'],
-                      ...(value === 'periodo' ? {} : { periodoInicio: '', periodoFim: '' }),
-                    })
+                    value === 'periodo'
+                      ? onPeriodAction({ type: 'selectCustom' })
+                      : onPeriodAction({
+                          type: 'preset',
+                          value: (value || null) as Exclude<
+                            ClientesFilters['ultimoAtendimento'],
+                            'periodo'
+                          >,
+                        })
                   }
                   label="Período"
                   options={[
@@ -501,14 +554,12 @@ function ClientesDesktopTable({
                   <DateInput
                     label="De"
                     value={filters.periodoInicio}
-                    onChange={(periodoInicio) =>
-                      update({ periodoInicio, ultimoAtendimento: 'periodo' })
-                    }
+                    onChange={(value) => onPeriodAction({ type: 'edit', field: 'inicio', value })}
                   />
                   <DateInput
                     label="Até"
                     value={filters.periodoFim}
-                    onChange={(periodoFim) => update({ periodoFim, ultimoAtendimento: 'periodo' })}
+                    onChange={(value) => onPeriodAction({ type: 'edit', field: 'fim', value })}
                   />
                 </div>
                 <SortButtons
@@ -919,6 +970,7 @@ function MobileFilterSheet({
   total,
   onClose,
   onChange,
+  onPeriodAction,
   onClear,
 }: {
   open: boolean;
@@ -926,6 +978,13 @@ function MobileFilterSheet({
   total: number;
   onClose: () => void;
   onChange: (patch: Partial<ClientesFilters>) => void;
+  onPeriodAction: (
+    action:
+      | { type: 'selectCustom' }
+      | { type: 'edit'; field: 'inicio' | 'fim'; value: string }
+      | { type: 'preset'; value: Exclude<ClientesFilters['ultimoAtendimento'], 'periodo'> }
+      | { type: 'clear' },
+  ) => void;
   onClear: () => void;
 }) {
   return (
@@ -965,12 +1024,16 @@ function MobileFilterSheet({
           <FilterSelect
             label="Último atendimento"
             value={filters.ultimoAtendimento ?? ''}
-            onChange={(ultimoAtendimento) =>
-              onChange({
-                ultimoAtendimento: (ultimoAtendimento ||
-                  null) as ClientesFilters['ultimoAtendimento'],
-                ...(ultimoAtendimento === 'periodo' ? {} : { periodoInicio: '', periodoFim: '' }),
-              })
+            onChange={(value) =>
+              value === 'periodo'
+                ? onPeriodAction({ type: 'selectCustom' })
+                : onPeriodAction({
+                    type: 'preset',
+                    value: (value || null) as Exclude<
+                      ClientesFilters['ultimoAtendimento'],
+                      'periodo'
+                    >,
+                  })
             }
             options={[
               ['', 'Todos'],
@@ -985,14 +1048,12 @@ function MobileFilterSheet({
             <DateInput
               label="Período inicial"
               value={filters.periodoInicio}
-              onChange={(periodoInicio) =>
-                onChange({ periodoInicio, ultimoAtendimento: 'periodo' })
-              }
+              onChange={(value) => onPeriodAction({ type: 'edit', field: 'inicio', value })}
             />
             <DateInput
               label="Período final"
               value={filters.periodoFim}
-              onChange={(periodoFim) => onChange({ periodoFim, ultimoAtendimento: 'periodo' })}
+              onChange={(value) => onPeriodAction({ type: 'edit', field: 'fim', value })}
             />
           </div>
           <FilterSelect
