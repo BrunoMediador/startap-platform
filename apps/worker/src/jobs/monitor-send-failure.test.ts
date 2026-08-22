@@ -209,7 +209,7 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 
-  it('sem sessão remetente -> send é falha -> compensa (quando o remetente voltar, o alerta re-sai)', async () => {
+  it('sem sessão remetente -> suprime terminalmente sem compensar para a reconexão', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.getSenderSession.mockResolvedValue(null); // remetente ALERTAS não mapeado
     mocks.listMonitoredSessions.mockResolvedValue([
@@ -221,7 +221,7 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
 
     expect(r.sent).toBe(0);
     expect(mocks.sendText).not.toHaveBeenCalled();
-    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 
   it('down->down, mesmo após 25h: não tenta novo envio nem mexe no carimbo do episódio', async () => {

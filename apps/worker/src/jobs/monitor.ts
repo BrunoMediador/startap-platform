@@ -363,10 +363,17 @@ function toChatId(phone: string): string {
  *                          conexão recusada) — temos certeza de que não saiu;
  *  - `failed-ambiguous`  = tentou e nenhum recebeu, mas ao menos uma falha é AMBÍGUA (timeout/5xx/
  *                          desconhecido) — pode ter entregue.
+ *  - `suppressed-channel-unavailable` = o remetente já estava indisponível na observação do ciclo;
+ *                          a ocorrência fica terminalmente suprimida, sem retry após reconexão.
  * SÓ `failed-definitive` dispara a compensação do carimbo (SCRUM-53 + P2 do security). `noop` e
- * `failed-ambiguous` MANTÊM o carimbo (anti-flood/anti-duplicata; comportamento pré-PR pra ambíguo).
+ * `failed-ambiguous` e `suppressed-channel-unavailable` MANTÊM o carimbo.
  */
-export type SendOutcome = 'delivered' | 'noop' | 'failed-definitive' | 'failed-ambiguous';
+export type SendOutcome =
+  | 'delivered'
+  | 'noop'
+  | 'failed-definitive'
+  | 'failed-ambiguous'
+  | 'suppressed-channel-unavailable';
 
 /**
  * Envia `texto` a todos os destinatários habilitados pela Lola. Consome 1 unidade
@@ -499,7 +506,11 @@ async function applyTransition(
 
   if (obsItem.obs === 'up') {
     if (prevState === 'down') {
-      // down → up: RECUPERADO.
+      // down → up: RECUPERADO. Episódio cujo remetente estava indisponível fica
+      // com alert_count=0/last_alert_at=NULL; ele é auditável no log de supressão,
+      // mas não gera uma recuperação tardia ao ALERTAS voltar.
+      const wasSuppressedForUnavailableChannel =
+        (prev?.alert_count ?? 0) === 0 && prev?.last_alert_at === null;
       const mins = minutesSince(prev?.down_since ?? null);
       await alerts.upsertState({
         checkKey: obsItem.key,
@@ -509,6 +520,9 @@ async function applyTransition(
         alertCount: 0,
         pendingDownCount: 0,
       });
+      if (wasSuppressedForUnavailableChannel) {
+        return { isDown: false, justWentDown: false };
+      }
       await send(`🟢 RECUPERADO: ${obsItem.label} voltou após ${mins} min.`);
       return { isDown: false, justWentDown: false };
     }
@@ -565,6 +579,24 @@ async function applyTransition(
       await rollbackStamp(stampedAt, 1);
       return { isDown: true, justWentDown: false };
     }
+    if (outcome === 'suppressed-channel-unavailable') {
+      // Registra que a queda foi OBSERVADA, mas não entregue: `down` preserva a
+      // telemetria, enquanto count=0/last_alert_at=NULL distingue este episódio de
+      // um alerta enviado e impede uma recuperação histórica após a reconexão.
+      await alerts.upsertState({
+        checkKey: obsItem.key,
+        state: 'down',
+        downSince: stampedAt,
+        lastAlertAt: null,
+        alertCount: 0,
+        pendingDownCount: 0,
+      });
+      log.warn(
+        { checkKey: obsItem.key, alertDisposition: 'suppressed_channel_unavailable' },
+        'monitor: alerta suprimido porque o remetente estava indisponível neste episódio',
+      );
+      return { isDown: true, justWentDown: false };
+    }
     // Transição CONFIRMADA up→down (entregue OU ambígua = possivelmente avisada): instante do aviso
     // ao dono do clone (o notify tem cooldown+taxonomia próprios que evitam duplicar).
     return { isDown: true, justWentDown: true };
@@ -607,6 +639,16 @@ export async function runMonitor(): Promise<MonitorResult> {
     );
   }
 
+  // Uma queda observada do próprio remetente significa que não há canal para entregar
+  // este ciclo. Carimbamos o episódio como DOWN, mas o suprimimos terminalmente: reconectar
+  // ALERTAS não pode drenar alertas históricos em rajada. Se o check WAHA estiver desligado,
+  // só o remetente ausente é conhecido como indisponível; não inferimos estado da rede.
+  const senderUnavailable =
+    !senderSession ||
+    observations.some(
+      (obsItem) => obsItem.key === `waha:${senderSession}` && obsItem.obs === 'down',
+    );
+
   result.checked = observations.length;
 
   // Estados persistidos (1 query, vira Map por chave).
@@ -616,16 +658,10 @@ export async function runMonitor(): Promise<MonitorResult> {
   for (const obsItem of observations) {
     try {
       const send = async (texto: string): Promise<SendOutcome> => {
-        if (!senderSession) {
-          // sender_slot sem waha_sessao mapeado — degradação graciosa (spec §3). Sem remetente a
-          // mensagem DEFINITIVAMENTE não saiu -> 'failed-definitive' aciona a compensação (SCRUM-53):
-          // quando o remetente for configurado, o alerta re-sai.
-          log.error(
-            { senderSlot: cfg.sender_slot },
-            'monitor: sender_slot sem waha_sessao — alerta NÃO enviado (configurar remetente)',
-          );
-          return 'failed-definitive';
+        if (!senderSession || senderUnavailable) {
+          return 'suppressed-channel-unavailable';
         }
+        // Sem backlog: só uma transição observada com remetente disponível chega ao transporte.
         return broadcast(senderSession, texto, recipients, result);
       };
       const { isDown, justWentDown } = await applyTransition(

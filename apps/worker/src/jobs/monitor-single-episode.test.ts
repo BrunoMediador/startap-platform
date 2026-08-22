@@ -49,9 +49,9 @@ import { runMonitor } from './monitor.js';
 
 const SESSION = 'clone_meduzza';
 
-function state(overrides: Record<string, unknown> = {}) {
+function stateFor(session: string, overrides: Record<string, unknown> = {}) {
   return {
-    check_key: `waha:${SESSION}`,
+    check_key: `waha:${session}`,
     state: 'up' as const,
     down_since: null,
     last_alert_at: null,
@@ -62,13 +62,19 @@ function state(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setWahaStatus(status: 'FAILED' | 'WORKING') {
+function state(overrides: Record<string, unknown> = {}) {
+  return stateFor(SESSION, overrides);
+}
+
+function setWahaStatuses(statuses: Array<{ name: string; status: 'FAILED' | 'WORKING' }>) {
   vi.stubGlobal(
     'fetch',
-    vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => [{ name: SESSION, status }] }),
+    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => statuses }),
   );
+}
+
+function setWahaStatus(status: 'FAILED' | 'WORKING') {
+  setWahaStatuses([{ name: SESSION, status }]);
 }
 
 beforeEach(() => {
@@ -148,5 +154,80 @@ describe('monitor — alerta único por episódio de queda', () => {
     expect(texts.filter((text) => text.startsWith('🔴 CAIU:'))).toHaveLength(2);
     expect(texts.filter((text) => text.startsWith('🟢 RECUPERADO:'))).toHaveLength(1);
     expect(texts.some((text) => text.includes('AINDA CAÍDO'))).toBe(false);
+  });
+
+  it('remetente indisponível suprime a queda e a reconexão não drena o episódio histórico', async () => {
+    mocks.listMonitoredSessions.mockResolvedValue([
+      { sessao: SESSION, label: 'Barbearia Meduzza', slot: SESSION },
+      { sessao: 'ALERTAS', label: 'Sessão de alertas', slot: null },
+    ]);
+
+    setWahaStatuses([
+      { name: SESSION, status: 'FAILED' },
+      { name: 'ALERTAS', status: 'FAILED' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([
+      state({ pending_down_count: 1 }),
+      stateFor('ALERTAS', { pending_down_count: 1 }),
+    ]);
+    await runMonitor();
+    expect(mocks.sendText).not.toHaveBeenCalled();
+    expect(mocks.upsertState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkKey: `waha:${SESSION}`,
+        state: 'down',
+        lastAlertAt: null,
+        alertCount: 0,
+      }),
+    );
+
+    vi.advanceTimersByTime(2 * 60_000);
+    setWahaStatuses([
+      { name: SESSION, status: 'FAILED' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([
+      state({
+        state: 'down',
+        down_since: new Date('2026-08-21T12:00:00.000Z'),
+        last_alert_at: null,
+        alert_count: 0,
+      }),
+      stateFor('ALERTAS', {
+        state: 'down',
+        down_since: new Date('2026-08-21T12:00:00.000Z'),
+        last_alert_at: null,
+        alert_count: 0,
+      }),
+    ]);
+    await runMonitor();
+    expect(mocks.sendText).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(2 * 60_000);
+    setWahaStatuses([
+      { name: SESSION, status: 'WORKING' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([
+      state({
+        state: 'down',
+        down_since: new Date('2026-08-21T12:00:00.000Z'),
+        last_alert_at: null,
+        alert_count: 0,
+      }),
+      stateFor('ALERTAS'),
+    ]);
+    await runMonitor();
+
+    vi.advanceTimersByTime(2 * 60_000);
+    setWahaStatuses([
+      { name: SESSION, status: 'FAILED' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([state({ pending_down_count: 1 }), stateFor('ALERTAS')]);
+    await runMonitor();
+
+    const texts = mocks.sendText.mock.calls.map(([input]) => (input as { texto: string }).texto);
+    expect(texts.filter((text) => text.startsWith('🔴 CAIU:'))).toHaveLength(1);
   });
 });
