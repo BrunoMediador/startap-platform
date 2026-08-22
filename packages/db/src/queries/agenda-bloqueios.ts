@@ -116,11 +116,55 @@ export async function attachGcalEventId(
   return r.rows[0] ? mapRow(r.rows[0]) : null;
 }
 
-export async function markCreateFailed(
+/** Anexa somente enquanto a tentativa cercada ainda é dona da ocorrência. */
+export async function attachGcalEventIdForDispatch(input: {
+  tenantId: string;
+  slot: string;
+  bloqueioId: string;
+  gcalEventId: string;
+  operationId: string;
+  ordinal: number;
+  attemptVersion: number;
+}): Promise<AgendaBloqueioRow | null> {
+  const r = await query<AgendaBloqueioRaw>(
+    `UPDATE agenda_bloqueios b
+        SET gcal_event_id=$4, status='active', updated_at=now()
+       FROM agenda_bloqueio_operacao_ocorrencias o
+       JOIN agenda_bloqueio_operacoes op ON op.id=o.operation_id
+      WHERE b.tenant_id=$1 AND b.slot=$2 AND b.id=$3 AND b.deleted_at IS NULL
+        AND o.operation_id=$5 AND o.ordinal=$6 AND o.bloqueio_id=b.id
+        AND o.status='gcal_dispatch_started' AND o.attempt_version=$7
+        AND op.tenant_id=$1 AND op.slot=$2
+      RETURNING b.*`,
+    [
+      input.tenantId,
+      input.slot,
+      input.bloqueioId,
+      input.gcalEventId,
+      input.operationId,
+      input.ordinal,
+      input.attemptVersion,
+    ],
+  );
+  return r.rows[0] ? mapRow(r.rows[0]) : null;
+}
+
+/** Leitura interna de recuperação: inclui linhas `creating` ainda sem efeito GCal confirmado. */
+export async function getByIdForRecovery(
   tenantId: string,
   slot: string,
   id: string,
-): Promise<void> {
+): Promise<AgendaBloqueioRow | null> {
+  const r = await query<AgendaBloqueioRaw>(
+    `SELECT * FROM agenda_bloqueios
+      WHERE tenant_id=$1 AND slot=$2 AND id=$3
+      LIMIT 1`,
+    [tenantId, slot, id],
+  );
+  return r.rows[0] ? mapRow(r.rows[0]) : null;
+}
+
+export async function markCreateFailed(tenantId: string, slot: string, id: string): Promise<void> {
   await query(
     `UPDATE agenda_bloqueios
         SET status = 'gcal_failed',
@@ -162,18 +206,12 @@ export async function list(input: ListAgendaBloqueiosInput): Promise<AgendaBloqu
   if (input.colaboradorId !== undefined) {
     args.push(input.colaboradorId);
     where.push(
-      input.colaboradorId === null
-        ? `colaborador_id IS NULL`
-        : `colaborador_id = $${args.length}`,
+      input.colaboradorId === null ? 'colaborador_id IS NULL' : `colaborador_id = $${args.length}`,
     );
   }
   if (input.serieId !== undefined) {
     args.push(input.serieId);
-    where.push(
-      input.serieId === null
-        ? `serie_id IS NULL`
-        : `serie_id = $${args.length}`,
-    );
+    where.push(input.serieId === null ? 'serie_id IS NULL' : `serie_id = $${args.length}`);
   }
   if (input.inicioAt) {
     args.push(input.inicioAt);
@@ -225,6 +263,70 @@ export async function listFutureActiveBySerieId(input: {
     args,
   );
   return r.rows.map(mapRow);
+}
+
+/**
+ * Séries anteriores à operação durável não possuem plano/event_id canônico para
+ * recovery. Esta consulta serve para recusá-las de forma explícita e escopada.
+ */
+export async function hasSerieForRecovery(input: {
+  tenantId: string;
+  slot: string;
+  serieId: string;
+  colaboradorId: number | null;
+}): Promise<boolean> {
+  const r = await query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM agenda_bloqueios
+        WHERE tenant_id=$1 AND slot=$2 AND serie_id=$3
+          AND colaborador_id IS NOT DISTINCT FROM $4
+          AND deleted_at IS NULL
+     ) AS exists`,
+    [input.tenantId, input.slot, input.serieId, input.colaboradorId],
+  );
+  return r.rows[0]?.exists ?? false;
+}
+
+/**
+ * Retry de POST pré-ADR não possui chave de replay própria. A primeira
+ * ocorrência canônica permite detectar a série legada já materializada e
+ * falhar fechada, em vez de iniciar uma operação durável paralela.
+ */
+export async function hasLegacySerieMatchingCreate(input: {
+  tenantId: string;
+  slot: string;
+  colaboradorId: number | null;
+  inicioAt: string;
+  fimAt: string;
+  tipo: AgendaBloqueioTipo;
+  motivo: string | null;
+}): Promise<boolean> {
+  const r = await query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM agenda_bloqueios
+        WHERE tenant_id=$1 AND slot=$2
+          AND colaborador_id IS NOT DISTINCT FROM $3
+          AND inicio_at=$4 AND fim_at=$5 AND tipo=$6
+          AND motivo IS NOT DISTINCT FROM $7
+          AND serie_id IS NOT NULL AND deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM agenda_bloqueio_operacoes op
+             WHERE op.id=agenda_bloqueios.serie_id
+               AND op.tenant_id=agenda_bloqueios.tenant_id
+               AND op.slot=agenda_bloqueios.slot
+          )
+     ) AS exists`,
+    [
+      input.tenantId,
+      input.slot,
+      input.colaboradorId,
+      input.inicioAt,
+      input.fimAt,
+      input.tipo,
+      input.motivo,
+    ],
+  );
+  return r.rows[0]?.exists ?? false;
 }
 
 export async function getActiveById(

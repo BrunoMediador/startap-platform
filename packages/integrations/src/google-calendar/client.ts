@@ -131,6 +131,14 @@ export interface ListEventsPagedResult {
 /** Sentinela de timeout de PÁGINA do listEventsPaged (não é mensagem do Google) — o caller o trata como incompleto. */
 export const GCAL_LIST_TIMEOUT_SENTINEL = '__gcal_list_timeout__';
 
+/**
+ * Limite de toda chamada ao Calendar, inclusive POST/GET de evento. Precisa
+ * ficar abaixo da lease de dispatch (60s, ADR 0044) para um executor pendurado
+ * ser abortado antes de uma recovery poder reassumir a tentativa cercada.
+ */
+export const GCAL_REQUEST_TIMEOUT_MS = 15_000;
+export const GCAL_REQUEST_TIMEOUT_SENTINEL = '__gcal_request_timeout__';
+
 // ─── Per-clone (Service Account) ─────────────────────────────────────────────
 
 async function gcalFetch<T = unknown>(
@@ -138,29 +146,58 @@ async function gcalFetch<T = unknown>(
   opts: RequestInit,
   tokenFn: () => Promise<string>,
 ): Promise<T> {
-  const token = await tokenFn();
-  const url = `https://www.googleapis.com/calendar/v3${path}`;
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(opts.headers ?? {}),
-    },
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(GCAL_REQUEST_TIMEOUT_SENTINEL));
+    }, GCAL_REQUEST_TIMEOUT_MS);
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
-    // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
-    const eventId = eventIdFromPath(path);
-    const safePath = redactEventId(path, eventId);
-    const safeBody = redactEventId(text, eventId);
-    log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
-    throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
+  const withinDeadline = <Result>(promise: Promise<Result>): Promise<Result> =>
+    Promise.race([promise, timeout]);
+  try {
+    // O prazo cobre token, request e leitura do body. Sem isso um executor pode
+    // ultrapassar a lease mesmo se o fetch em si já tiver retornado headers.
+    const token = await withinDeadline(tokenFn());
+    const url = `https://www.googleapis.com/calendar/v3${path}`;
+    const res = await withinDeadline(
+      fetch(url, {
+        ...opts,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(opts.headers ?? {}),
+        },
+        signal: controller.signal,
+      }),
+    );
+    if (!res.ok) {
+      let text = '';
+      try {
+        text = await withinDeadline(res.text());
+      } catch (err) {
+        if (timedOut) throw err;
+      }
+      // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
+      // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
+      const eventId = eventIdFromPath(path);
+      const safePath = redactEventId(path, eventId);
+      const safeBody = redactEventId(text, eventId);
+      log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
+      throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
+    }
+    // DELETE retorna 204 sem corpo
+    if (res.status === 204) return undefined as unknown as T;
+    return (await withinDeadline(res.json())) as T;
+  } catch (err) {
+    if (timedOut || controller.signal.aborted) throw new Error(GCAL_REQUEST_TIMEOUT_SENTINEL);
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  // DELETE retorna 204 sem corpo
-  if (res.status === 204) return undefined as unknown as T;
-  return (await res.json()) as T;
 }
 
 /**
@@ -464,6 +501,15 @@ export class GoogleCalendarClient {
             : {}),
         }),
       },
+      () => this.getAccessToken(),
+    );
+  }
+
+  /** Consulta uma ocorrência determinística durante recuperação, sem listar janelas amplas. */
+  async getEvent(eventId: string): Promise<CalendarEvent> {
+    return gcalFetch<CalendarEvent>(
+      `/calendars/${encodeURIComponent(this.calendarId)}/events/${eventId}`,
+      { method: 'GET' },
       () => this.getAccessToken(),
     );
   }

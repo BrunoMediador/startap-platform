@@ -39,10 +39,13 @@ import { GoogleCalendarClient } from './client.js';
 
 interface CacheEntry {
   client: GoogleCalendarClient | null;
+  fingerprint: string | null;
   expiresAt: number;
 }
 
-// Chave: slot → entry. null significa "slot sem gcal configurado".
+// Chave: slot → entry. A consulta ao banco continua necessária em toda resolução
+// para detectar imediatamente troca de calendar/credencial; o TTL só reaproveita
+// a instância já construída quando a configuração ainda é byte-idêntica.
 const cache = new Map<string, CacheEntry>();
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
@@ -63,10 +66,6 @@ interface GcalRow {
  */
 export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient | null> {
   const now = Date.now();
-  const cached = cache.get(slot);
-  if (cached && cached.expiresAt > now) {
-    return cached.client;
-  }
 
   const isClone = slot.startsWith('clone_');
 
@@ -96,8 +95,16 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
     row = result.rows[0];
   }
 
+  const fingerprint = row
+    ? `${row.gcal_status ?? ''}\u0000${row.gcal_calendar_id ?? ''}\u0000${row.gcal_credentials_json ?? ''}`
+    : null;
+  const cached = cache.get(slot);
+  if (cached && cached.expiresAt > now && cached.fingerprint === fingerprint) {
+    return cached.client;
+  }
+
   if (!row || row.gcal_status !== 'active' || !row.gcal_credentials_json || !row.gcal_calendar_id) {
-    cache.set(slot, { client: null, expiresAt: now + CACHE_TTL_MS });
+    cache.set(slot, { client: null, fingerprint, expiresAt: now + CACHE_TTL_MS });
     return null;
   }
 
@@ -106,7 +113,7 @@ export async function getGcalForSlot(slot: string): Promise<GoogleCalendarClient
     calendarId: row.gcal_calendar_id,
   });
 
-  cache.set(slot, { client, expiresAt: now + CACHE_TTL_MS });
+  cache.set(slot, { client, fingerprint, expiresAt: now + CACHE_TTL_MS });
   return client;
 }
 
@@ -162,6 +169,7 @@ interface ColabCacheEntry {
   tenantId: string;
   nome: string;
   servicos: string[];
+  fingerprint: string;
   client: GoogleCalendarClient;
   expiresAt: number;
 }
@@ -279,6 +287,7 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
 
     const colaboradorId = Number(row.colaborador_id);
     const servicos = parseColaboradorServicos(row.servicos);
+    const fingerprint = `${cloneCreds}\u0000${row.gcal_calendar_id}`;
     const key = colabCacheKey(slot, colaboradorId);
     const cached = colabCache.get(key);
 
@@ -289,7 +298,8 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
       cached.expiresAt > now &&
       cached.slot === slot &&
       cached.tenantId === tenantId &&
-      cached.colaboradorId === colaboradorId
+      cached.colaboradorId === colaboradorId &&
+      cached.fingerprint === fingerprint
     ) {
       out.push({
         colaboradorId,
@@ -315,6 +325,7 @@ export async function getGcalsForSlot(slot: string): Promise<ColaboradorGcal[]> 
       tenantId,
       nome: row.nome,
       servicos,
+      fingerprint,
       client,
       expiresAt: now + CACHE_TTL_MS,
     });

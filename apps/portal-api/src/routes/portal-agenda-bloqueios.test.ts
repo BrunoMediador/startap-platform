@@ -4,12 +4,23 @@ const {
   configMock,
   agendaCreate,
   agendaAttach,
+  agendaAttachForDispatch,
+  agendaGetForRecovery,
+  agendaHasSerieForRecovery,
+  agendaHasLegacySerieMatchingCreate,
   agendaMarkFailed,
   agendaMarkCleanupFailed,
   agendaList,
   agendaListFutureBySerieId,
   agendaGetActive,
   agendaSoftDelete,
+  agendaOperationCreatePlan,
+  agendaOperationGet,
+  agendaOperationList,
+  agendaOperationClaimDispatch,
+  agendaOperationClaimRecovery,
+  agendaOperationMarkOccurrence,
+  agendaOperationMarkResult,
   getScopeBySlot,
   getGcalForSlot,
   getGcalsForSlot,
@@ -22,12 +33,23 @@ const {
   } as Record<string, unknown>,
   agendaCreate: vi.fn(),
   agendaAttach: vi.fn(),
+  agendaAttachForDispatch: vi.fn(),
+  agendaGetForRecovery: vi.fn(),
+  agendaHasSerieForRecovery: vi.fn(),
+  agendaHasLegacySerieMatchingCreate: vi.fn(),
   agendaMarkFailed: vi.fn(),
   agendaMarkCleanupFailed: vi.fn(),
   agendaList: vi.fn(),
   agendaListFutureBySerieId: vi.fn(),
   agendaGetActive: vi.fn(),
   agendaSoftDelete: vi.fn(),
+  agendaOperationCreatePlan: vi.fn(),
+  agendaOperationGet: vi.fn(),
+  agendaOperationList: vi.fn(),
+  agendaOperationClaimDispatch: vi.fn(),
+  agendaOperationClaimRecovery: vi.fn(),
+  agendaOperationMarkOccurrence: vi.fn(),
+  agendaOperationMarkResult: vi.fn(),
   getScopeBySlot: vi.fn(),
   getGcalForSlot: vi.fn(),
   getGcalsForSlot: vi.fn(),
@@ -39,12 +61,25 @@ vi.mock('@startap/db', () => ({
   agendaBloqueios: {
     create: agendaCreate,
     attachGcalEventId: agendaAttach,
+    attachGcalEventIdForDispatch: agendaAttachForDispatch,
+    getByIdForRecovery: agendaGetForRecovery,
+    hasSerieForRecovery: agendaHasSerieForRecovery,
+    hasLegacySerieMatchingCreate: agendaHasLegacySerieMatchingCreate,
     markCreateFailed: agendaMarkFailed,
     markCreateCleanupFailed: agendaMarkCleanupFailed,
     list: agendaList,
     listFutureActiveBySerieId: agendaListFutureBySerieId,
     getActiveById: agendaGetActive,
     softDeleteById: agendaSoftDelete,
+  },
+  agendaBloqueioOperacoes: {
+    createPlan: agendaOperationCreatePlan,
+    getOperationForRecovery: agendaOperationGet,
+    listForRecovery: agendaOperationList,
+    claimDispatch: agendaOperationClaimDispatch,
+    claimRecovery: agendaOperationClaimRecovery,
+    markOccurrence: agendaOperationMarkOccurrence,
+    markOperationResult: agendaOperationMarkResult,
   },
   cloneColaboradores: { getScopeBySlot },
 }));
@@ -95,6 +130,19 @@ const BASE_SERIE_BODY = {
   periodicidade: 'semanal',
   ocorrencias: 2,
 };
+let durablePlan: Array<{
+  operation_id: string;
+  ordinal: number;
+  inicio_at: string;
+  fim_at: string;
+  bloqueio_id: string;
+  gcal_event_id: string;
+  status: 'planned' | 'gcal_dispatch_started' | 'recovery_required' | 'active';
+  error_code: string | null;
+  attempt_version: number;
+  operation_attempt_version: number;
+}> = [];
+let durableOperationAttemptVersion = 0;
 
 async function buildApp() {
   const app = Fastify({ logger: false });
@@ -105,6 +153,7 @@ async function buildApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  durableOperationAttemptVersion = 0;
   configMock.AGENDA_BLOQUEIOS_ENABLED = true;
   configMock.AGENDA_BLOQUEIOS_SLOTS = 'clone_owner';
   configMock.COLABORADOR_PORTAL_ENABLED = true;
@@ -131,13 +180,86 @@ beforeEach(() => {
     gcal_event_id: 'gcal-block-1',
     status: 'active',
   });
+  agendaAttachForDispatch.mockResolvedValue({
+    id: '11111111-1111-4111-8111-111111111111',
+    slot: 'clone_owner',
+    tenant_id: '00000000-0000-4000-8000-000000000001',
+    colaborador_id: 8,
+    serie_id: null,
+    gcal_event_id: 'gcal-block-1',
+    status: 'active',
+  });
+  agendaGetForRecovery.mockResolvedValue(null);
+  agendaHasSerieForRecovery.mockResolvedValue(false);
+  agendaHasLegacySerieMatchingCreate.mockResolvedValue(false);
   agendaList.mockResolvedValue([]);
   agendaListFutureBySerieId.mockResolvedValue([]);
   agendaGetActive.mockResolvedValue(null);
   agendaSoftDelete.mockResolvedValue(null);
+  agendaOperationCreatePlan.mockImplementation(
+    async (input: {
+      occurrences: Array<{
+        ordinal: number;
+        inicioAt: string;
+        fimAt: string;
+        bloqueioId: string;
+        gcalEventId: string;
+      }>;
+    }) => {
+      durablePlan = input.occurrences.map((occurrence) => ({
+        operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        ordinal: occurrence.ordinal,
+        inicio_at: occurrence.inicioAt,
+        fim_at: occurrence.fimAt,
+        bloqueio_id: occurrence.bloqueioId,
+        gcal_event_id: occurrence.gcalEventId,
+        status: 'planned',
+        error_code: null,
+        attempt_version: 0,
+        operation_attempt_version: 0,
+      }));
+      return {
+        created: true,
+        operation: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status: 'planned' },
+      };
+    },
+  );
+  agendaOperationGet.mockResolvedValue({
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    status: 'planned',
+    actor_role: 'owner',
+    actor_user_id: 22,
+    actor_colaborador_id: null,
+    timezone: 'America/Sao_Paulo',
+    tipo: 'almoco',
+    motivo: 'intervalo',
+    response_status: null,
+    response_body: null,
+  });
+  agendaOperationList.mockImplementation(async () => durablePlan);
+  agendaOperationClaimDispatch.mockImplementation(async (input: { ordinal: number }) => {
+    const occurrence = durablePlan.find((candidate) => candidate.ordinal === input.ordinal);
+    if (!occurrence || occurrence.status !== 'planned') return null;
+    occurrence.status = 'gcal_dispatch_started';
+    occurrence.attempt_version += 1;
+    durableOperationAttemptVersion += 1;
+    occurrence.operation_attempt_version = durableOperationAttemptVersion;
+    return occurrence;
+  });
+  agendaOperationClaimRecovery.mockImplementation(async (input: { ordinal: number }) => {
+    const occurrence = durablePlan.find((candidate) => candidate.ordinal === input.ordinal);
+    if (!occurrence || occurrence.status !== 'recovery_required') return null;
+    occurrence.status = 'gcal_dispatch_started';
+    occurrence.attempt_version += 1;
+    durableOperationAttemptVersion += 1;
+    occurrence.operation_attempt_version = durableOperationAttemptVersion;
+    return occurrence;
+  });
+  agendaOperationMarkResult.mockResolvedValue(true);
   getGcalForSlot.mockResolvedValue({
     createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-single' }),
     deleteEvent: vi.fn().mockResolvedValue(undefined),
+    getEvent: vi.fn(),
     listEvents: vi.fn().mockResolvedValue([]),
   });
   getGcalsForSlot.mockResolvedValue([
@@ -148,6 +270,7 @@ beforeEach(() => {
       client: {
         createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-7' }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
+        getEvent: vi.fn(),
         listEvents: vi.fn().mockResolvedValue([]),
       },
       servicos: [],
@@ -159,6 +282,7 @@ beforeEach(() => {
       client: {
         createEvent: vi.fn().mockResolvedValue({ id: 'gcal-block-1' }),
         deleteEvent: vi.fn().mockResolvedValue(undefined),
+        getEvent: vi.fn(),
         listEvents: vi.fn().mockResolvedValue([]),
       },
       servicos: [],
@@ -225,9 +349,7 @@ describe('AGENDA_BLOQUEIOS_ENABLED', () => {
     const res = await app.inject({ method: 'GET', url: '/portal/agenda/bloqueios' });
 
     expect(res.statusCode).toBe(200);
-    expect(agendaList).toHaveBeenCalledWith(
-      expect.objectContaining({ slot: 'clone_owner' }),
-    );
+    expect(agendaList).toHaveBeenCalledWith(expect.objectContaining({ slot: 'clone_owner' }));
     await app.close();
   });
 
@@ -624,7 +746,7 @@ describe('recorrência de bloqueios', () => {
 
     expect(res.statusCode).toBe(207);
     const body = res.json();
-    expect(body.criados).toHaveLength(2);
+    expect(body.criados).toHaveLength(1);
     expect(body.falhas).toEqual([
       expect.objectContaining({
         inicio_at: '2026-08-28T15:00:00.000Z',
@@ -638,12 +760,12 @@ describe('recorrência de bloqueios', () => {
     for (const call of agendaCreate.mock.calls) {
       expect(call[0]).toEqual(expect.objectContaining({ serieId: body.serie_id }));
     }
-    expect(createEvent).toHaveBeenCalledTimes(3);
+    expect(createEvent).toHaveBeenCalledTimes(2);
     for (const [index, call] of createEvent.mock.calls.entries()) {
       const bloqueioId = agendaCreate.mock.calls[index]?.[0]?.id;
       expect(call[0]).toEqual(
         expect.objectContaining({
-          eventId: `bloq${String(bloqueioId).replaceAll('-', '')}`,
+          eventId: expect.stringMatching(/^bloqop[0-9a-f]{33,}$/),
           extendedPropertiesPrivate: {
             kind: 'bloqueio',
             bloqueioId,
@@ -654,18 +776,19 @@ describe('recorrência de bloqueios', () => {
       );
     }
     expect(createEvent.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-08-21T15:00:00.000Z', endISO: '2026-08-21T16:00:00.000Z' }),
+      expect.objectContaining({
+        startISO: '2026-08-21T15:00:00.000Z',
+        endISO: '2026-08-21T16:00:00.000Z',
+      }),
     );
     expect(createEvent.mock.calls[1][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-08-28T15:00:00.000Z', endISO: '2026-08-28T16:00:00.000Z' }),
+      expect.objectContaining({
+        startISO: '2026-08-28T15:00:00.000Z',
+        endISO: '2026-08-28T16:00:00.000Z',
+      }),
     );
-    expect(createEvent.mock.calls[2][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-09-04T15:00:00.000Z', endISO: '2026-09-04T16:00:00.000Z' }),
-    );
-    expect(agendaMarkFailed).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-000000000001',
-      'clone_owner',
-      agendaCreate.mock.calls[1][0].id,
+    expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
+      expect.objectContaining({ ordinal: 2, status: 'recovery_required' }),
     );
     await app.close();
   });
@@ -763,13 +886,22 @@ describe('recorrência de bloqueios', () => {
     expect(res.statusCode).toBe(201);
     expect(createEvent).toHaveBeenCalledTimes(3);
     expect(createEvent.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-08-21T15:00:00.000Z', endISO: '2026-08-21T16:00:00.000Z' }),
+      expect.objectContaining({
+        startISO: '2026-08-21T15:00:00.000Z',
+        endISO: '2026-08-21T16:00:00.000Z',
+      }),
     );
     expect(createEvent.mock.calls[1][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-08-22T15:00:00.000Z', endISO: '2026-08-22T16:00:00.000Z' }),
+      expect.objectContaining({
+        startISO: '2026-08-22T15:00:00.000Z',
+        endISO: '2026-08-22T16:00:00.000Z',
+      }),
     );
     expect(createEvent.mock.calls[2][0]).toEqual(
-      expect.objectContaining({ startISO: '2026-08-23T15:00:00.000Z', endISO: '2026-08-23T16:00:00.000Z' }),
+      expect.objectContaining({
+        startISO: '2026-08-23T15:00:00.000Z',
+        endISO: '2026-08-23T16:00:00.000Z',
+      }),
     );
     await app.close();
   });
@@ -937,6 +1069,559 @@ describe('colaborador — anti-IDOR por sessão', () => {
       '33333333-3333-4333-8333-333333333333',
       7,
     );
+    await app.close();
+  });
+});
+
+describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
+  it('commita operação e plano antes da primeira chamada ao GCal', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const planCall = agendaOperationCreatePlan.mock.calls[0]?.[0];
+    expect(planCall).toEqual(
+      expect.objectContaining({
+        tenantId: '00000000-0000-4000-8000-000000000001',
+        slot: 'clone_owner',
+        colaboradorId: 8,
+        actorRole: 'owner',
+        occurrences: expect.arrayContaining([
+          expect.objectContaining({ ordinal: 1, gcalEventId: expect.stringMatching(/^bloqop/) }),
+        ]),
+      }),
+    );
+    const colab8 = (await getGcalsForSlot.mock.results[0].value)[1];
+    expect(agendaOperationCreatePlan.mock.invocationCallOrder[0]).toBeLessThan(
+      colab8.client.createEvent.mock.invocationCallOrder[0],
+    );
+    await app.close();
+  });
+
+  it('timeout após dispatch marca recovery_required e replay HTTP não reenvia o GCal', async () => {
+    const createEvent = vi.fn().mockRejectedValue(new Error('network timeout'));
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { createEvent },
+        servicos: [],
+      },
+    ]);
+    const app = await buildApp();
+    const first = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    });
+
+    expect(first.statusCode).toBe(207);
+    expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'recovery_required', errorCode: 'gcal_ambiguous' }),
+    );
+    expect(agendaOperationMarkResult).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'recovery_required', responseStatus: 207 }),
+    );
+
+    agendaOperationCreatePlan.mockResolvedValueOnce({
+      created: false,
+      operation: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', status: 'recovery_required' },
+    });
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: {
+        ok: false,
+        serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        criados: [],
+        falhas: [],
+      },
+    });
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toEqual({
+      error: 'serie_recovery_necessaria',
+      serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+    expect(createEvent).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it('interrompe a série no primeiro timeout e mantém as próximas ocorrências planejadas', async () => {
+    const createEvent = vi.fn().mockRejectedValueOnce(new Error('network timeout'));
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { createEvent },
+        servicos: [],
+      },
+    ]);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(207);
+    expect(createEvent).toHaveBeenCalledTimes(1);
+    expect(agendaOperationClaimDispatch).toHaveBeenCalledTimes(1);
+    expect(durablePlan[1]?.status).toBe('planned');
+    await app.close();
+  });
+
+  it('recovery de lease expirada consulta duas vezes antes de reenviar o evento determinístico', async () => {
+    const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const getEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
+    const createEvent = vi.fn().mockResolvedValue({ id: eventId });
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    agendaOperationList.mockResolvedValueOnce([
+      {
+        operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        ordinal: 1,
+        inicio_at: '2026-08-21T15:00:00.000Z',
+        fim_at: '2026-08-21T16:00:00.000Z',
+        bloqueio_id: '11111111-1111-4111-8111-111111111111',
+        gcal_event_id: eventId,
+        status: 'gcal_dispatch_started',
+        error_code: 'gcal_ambiguous',
+      },
+    ]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce({
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: eventId,
+      status: 'gcal_dispatch_started',
+      error_code: 'gcal_ambiguous',
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(getEvent).toHaveBeenCalledTimes(2);
+    expect(getEvent).toHaveBeenCalledWith(eventId);
+    expect(agendaCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      createEvent.mock.invocationCallOrder[0],
+    );
+    expect(createEvent).toHaveBeenCalledWith(expect.objectContaining({ eventId }));
+    expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'active', ordinal: 1 }),
+    );
+    await app.close();
+  });
+
+  it('recovery de dispatch normal órfão anexa evento encontrado sem segundo POST', async () => {
+    const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const getEvent = vi.fn().mockResolvedValue({ id: eventId });
+    const createEvent = vi.fn();
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'planned',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    const occurrence = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: eventId,
+      status: 'gcal_dispatch_started' as const,
+      error_code: null,
+      attempt_version: 1,
+    };
+    agendaOperationList.mockResolvedValueOnce([occurrence]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce(occurrence);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(getEvent).toHaveBeenCalledTimes(1);
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(agendaAttachForDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bloqueioId: occurrence.bloqueio_id,
+        gcalEventId: eventId,
+        attemptVersion: occurrence.attempt_version,
+      }),
+    );
+    await app.close();
+  });
+
+  it('conclui operação quando recovery v2 é seguido de dispatch v1 e usa o fencing da operação', async () => {
+    const firstEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const secondEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2';
+    const recovered = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: firstEventId,
+      status: 'gcal_dispatch_started' as const,
+      error_code: null,
+      attempt_version: 2,
+      operation_attempt_version: 2,
+    };
+    const dispatchedSecond = {
+      ...recovered,
+      ordinal: 2,
+      bloqueio_id: '22222222-2222-4222-8222-222222222222',
+      gcal_event_id: secondEventId,
+      inicio_at: '2026-08-28T15:00:00.000Z',
+      fim_at: '2026-08-28T16:00:00.000Z',
+      attempt_version: 1,
+      operation_attempt_version: 3,
+    };
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: {
+          getEvent: vi.fn().mockResolvedValue({ id: firstEventId }),
+          createEvent: vi.fn().mockResolvedValue({ id: secondEventId }),
+        },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: recovered.operation_id,
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    agendaOperationList.mockResolvedValueOnce([
+      { ...recovered, status: 'recovery_required' as const },
+      { ...dispatchedSecond, status: 'planned' as const },
+    ]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce(recovered);
+    agendaOperationClaimDispatch.mockResolvedValueOnce(dispatchedSecond);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/portal/agenda/bloqueios/serie/${recovered.operation_id}/recovery`,
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(agendaOperationMarkResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'complete',
+        expectedOperationAttemptVersion: dispatchedSecond.operation_attempt_version,
+      }),
+    );
+    await app.close();
+  });
+
+  it('não chama o GCal quando a reconstrução local da recovery falha', async () => {
+    const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const getEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
+    const createEvent = vi.fn().mockResolvedValue({ id: eventId });
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    const occurrence = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: eventId,
+      status: 'recovery_required' as const,
+      error_code: 'gcal_ambiguous',
+      attempt_version: 0,
+      operation_attempt_version: 0,
+    };
+    agendaOperationList.mockResolvedValueOnce([occurrence]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce({
+      ...occurrence,
+      status: 'gcal_dispatch_started',
+    });
+    agendaCreate.mockRejectedValueOnce(new Error('db unavailable'));
+    agendaGetForRecovery.mockResolvedValueOnce(null);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(207);
+    expect(getEvent).toHaveBeenCalledTimes(2);
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'recovery_required', errorCode: 'local_write_failed' }),
+    );
+    await app.close();
+  });
+
+  it('só processa a próxima ocorrência após reconciliar a anterior na recovery', async () => {
+    const firstEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const secondEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2';
+    const getEvent = vi.fn().mockResolvedValue({ id: firstEventId });
+    const createEvent = vi.fn().mockResolvedValue({ id: secondEventId });
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    const first = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: firstEventId,
+      status: 'recovery_required' as const,
+      error_code: 'gcal_ambiguous',
+    };
+    const second = {
+      ...first,
+      ordinal: 2,
+      bloqueio_id: '22222222-2222-4222-8222-222222222222',
+      gcal_event_id: secondEventId,
+      inicio_at: '2026-08-28T15:00:00.000Z',
+      fim_at: '2026-08-28T16:00:00.000Z',
+      status: 'planned' as const,
+      error_code: null,
+    };
+    agendaOperationList.mockResolvedValueOnce([first, second]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce({
+      ...first,
+      status: 'gcal_dispatch_started',
+    });
+    agendaOperationClaimDispatch.mockResolvedValueOnce({
+      ...second,
+      status: 'gcal_dispatch_started',
+    });
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(getEvent.mock.invocationCallOrder[0]).toBeLessThan(
+      createEvent.mock.invocationCallOrder[0],
+    );
+    expect(agendaOperationClaimDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ ordinal: 2 }),
+    );
+    await app.close();
+  });
+
+  it('recovery concorrente reivindica a ocorrência antes de consultar ou postar no GCal', async () => {
+    const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const getEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
+    const createEvent = vi.fn().mockResolvedValue({ id: eventId });
+    getGcalsForSlot.mockResolvedValue([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: { getEvent, createEvent },
+        servicos: [],
+      },
+    ]);
+    const occurrence = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: eventId,
+      status: 'recovery_required' as const,
+      error_code: 'gcal_ambiguous',
+      attempt_version: 0,
+      operation_attempt_version: 0,
+    };
+    durablePlan = [occurrence];
+    agendaOperationGet.mockResolvedValue({
+      id: occurrence.operation_id,
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    agendaOperationList.mockImplementation(async () => durablePlan);
+    agendaOperationMarkOccurrence.mockImplementation(
+      async (input: { ordinal: number; status: 'active' | 'recovery_required' }) => {
+        const current = durablePlan.find((candidate) => candidate.ordinal === input.ordinal);
+        if (current) current.status = input.status;
+        return Boolean(current);
+      },
+    );
+    const app = await buildApp();
+    const [first, second] = await Promise.all([
+      app.inject({
+        method: 'POST',
+        url: `/portal/agenda/bloqueios/serie/${occurrence.operation_id}/recovery`,
+        payload: { colaborador_id: 8 },
+      }),
+      app.inject({
+        method: 'POST',
+        url: `/portal/agenda/bloqueios/serie/${occurrence.operation_id}/recovery`,
+        payload: { colaborador_id: 8 },
+      }),
+    ]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([201, 409]);
+    expect(createEvent).toHaveBeenCalledTimes(1);
+    expect(agendaOperationMarkOccurrence).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'active', expectedStatus: 'gcal_dispatch_started' }),
+    );
+    expect(durablePlan[0]?.status).toBe('active');
+    await app.close();
+  });
+
+  it('recusa recovery de serie_id legada sem chamar o GCal', async () => {
+    agendaOperationGet.mockResolvedValueOnce(null);
+    agendaHasSerieForRecovery.mockResolvedValueOnce(true);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/agenda/bloqueios/serie/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/recovery',
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'serie_legada_sem_recovery',
+      serie_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    });
+    expect(getGcalsForSlot).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    {
+      url: '/portal/agenda/bloqueios/serie',
+      payload: { ...BASE_SERIE_BODY, colaborador_id: 8 },
+    },
+    { url: '/portal/colaborador/bloqueios/serie', payload: BASE_SERIE_BODY },
+  ])('recusa retry legado no POST $url sem chamar o GCal', async ({ url, payload }) => {
+    agendaHasLegacySerieMatchingCreate.mockResolvedValueOnce(true);
+    const app = await buildApp();
+    const res = await app.inject({ method: 'POST', url, payload });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'serie_legada_sem_replay' });
+    expect(agendaOperationCreatePlan).not.toHaveBeenCalled();
+    const createEvent = (await getGcalsForSlot.mock.results[0]?.value)?.[0]?.client.createEvent;
+    expect(createEvent).not.toHaveBeenCalled();
     await app.close();
   });
 });
