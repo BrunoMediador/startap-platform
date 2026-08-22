@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   servicoFromSummary: vi.fn(),
   clienteFromSummary: vi.fn(),
   getCloneBySlot: vi.fn(),
+  getCloneReceptionAlertTarget: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
   withActionLock: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock('@startap/db', () => ({
   },
   flowClones: {
     getCloneBySlot: mocks.getCloneBySlot,
+    getCloneReceptionAlertTarget: mocks.getCloneReceptionAlertTarget,
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
     resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
@@ -173,6 +175,7 @@ function setupCommon(): void {
   mocks.loadHistory.mockResolvedValue([{ role: 'user', content: 'oi' }]);
   mocks.resolveClientPackages.mockResolvedValue([]);
   mocks.buildSeuPacoteBlock.mockReturnValue('');
+  mocks.getCloneReceptionAlertTarget.mockResolvedValue(null);
 }
 
 function setupIndividual(cartao: {
@@ -274,6 +277,19 @@ describe('cartão em runtime — caminho INDIVIDUAL (gate ON + cartao_mode=runti
     expect(sp).not.toContain(BLOCO_ESTRUTURAL_MARKER);
     // Barbearia baked → override legado devolve '' → systemPrompt = persona + contexto (byte-a-byte).
     expect(sp).toBe(`${PERSONA_RUNTIME}\n\n${CONTEXT_FIXTURE}`);
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).not.toContain('escalar_para_humano');
+  });
+
+  it('com recepção válida, injeta guardrail e expõe a tool de transbordo', async () => {
+    setupIndividual({ area: 'barbearia', cartaoMode: 'runtime' });
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
+
+    const sp = await systemPromptFor('clone_runtime_com_recepcao');
+
+    expect(sp).toContain('[TRANSBORDO PARA A RECEPCAO]');
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toContain('escalar_para_humano');
   });
 });
 
@@ -329,5 +345,16 @@ describe('cartão em runtime — caminho ESTABELECIMENTO (gate ON + cartao_mode=
     // não tocado por esta PR. Segue com o rótulo velho (CAIXA ALTA), 1 vez, com 👤.
     expect(count(sp, '[CARTAO DE CONFIRMACAO - ESTABELECIMENTO')).toBe(1);
     expect(count(sp, '👤 PROFISSIONAL:')).toBe(1);
+  });
+
+  it('estabelecimento com recepção válida também expõe o guardrail e a tool', async () => {
+    setupEstabelecimento({ area: 'barbearia', cartaoMode: 'runtime' });
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
+
+    const sp = await systemPromptFor('clone_estab_runtime_com_recepcao');
+
+    expect(sp).toContain('[TRANSBORDO PARA A RECEPCAO]');
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toContain('escalar_para_humano');
   });
 });

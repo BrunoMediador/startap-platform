@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   servicoFromSummary: vi.fn(),
   clienteFromSummary: vi.fn(),
   getCloneBySlot: vi.fn(),
+  getCloneReceptionAlertTarget: vi.fn(),
   getScopeBySlot: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
@@ -92,6 +93,7 @@ vi.mock('@startap/db', () => ({
   },
   flowClones: {
     getCloneBySlot: mocks.getCloneBySlot,
+    getCloneReceptionAlertTarget: mocks.getCloneReceptionAlertTarget,
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
     resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
@@ -162,6 +164,12 @@ vi.mock('@startap/integrations/scheduling', async () => {
   };
 });
 
+// Estado padrão do produto: sem recepção válida não há alteração de prompt/tool de agenda.
+// `clearAllMocks` limpa chamadas, não implementations; restaura explicitamente a cada teste.
+beforeEach(() => {
+  mocks.getCloneReceptionAlertTarget.mockResolvedValue(null);
+});
+
 const { TesteBarbeariaBot } = await import('./teste_barbearia.js');
 
 function makeCtx(texto: string): BotContext {
@@ -230,6 +238,7 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
   });
 
   it('agenda individual expõe transbordo e o prompt obriga não inventar dado ausente', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
     const tools = await toolsPassedFor('qual a regra especial?');
     expect(tools.map((t) => t.name)).toContain('escalar_para_humano');
     const prompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
@@ -238,6 +247,7 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
   });
 
   it('transbordo da agenda individual usa só a recepção e falha fechada no erro', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
     mocks.sendOwnerAlert.mockResolvedValue({ ok: false, escalado: false, reason: 'error' });
     const tools = await toolsPassedFor('preciso falar com alguém');
     const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
@@ -445,6 +455,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
   });
 
   it('agenda de estabelecimento expõe o mesmo transbordo explícito e guardrail', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
     const c1 = colabClientStub('cal-joao');
     const tools = await estabToolsFor('tenho uma dúvida fora do contexto', [
       { colaboradorId: 10, nome: 'João', shortId: 'C1', client: c1 },
@@ -751,9 +762,9 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
       makeCtx('quero marcar um corte'),
     );
     const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
-    // Cartão individual intocado: o guardrail de transbordo é a adição comum da agenda.
+    // Sem recepção configurada, o caminho individual permanece byte-a-byte sem transbordo.
     expect(systemPrompt).toContain('PERSONA\n\nCONTEXT');
-    expect(systemPrompt).toContain('[TRANSBORDO PARA A RECEPCAO]');
+    expect(systemPrompt).not.toContain('[TRANSBORDO PARA A RECEPCAO]');
     expect(systemPrompt).not.toContain('PROFISSIONAL');
     expect(systemPrompt).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
   });
@@ -875,7 +886,7 @@ describe('TesteBarbeariaBot — override de emoji por área (ADR 0035 §2.1, ex-
     const sp = await systemPromptForArea('outro', PERSONA_COM_CARTAO_PROPRIO);
     expect(sp).not.toContain('EMOJIS DESTE NEGOCIO');
     expect(sp).toContain(`${PERSONA_COM_CARTAO_PROPRIO}\n\nCONTEXT`);
-    expect(sp).toContain('[TRANSBORDO PARA A RECEPCAO]');
+    expect(sp).not.toContain('[TRANSBORDO PARA A RECEPCAO]');
   });
 
   it('SEM cartão próprio (persona de template) + área "outro" → bloco de override injetado (comportamento intocado)', async () => {
@@ -2228,10 +2239,10 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     setupSchedule(); // caminho individual completo (com agenda)
     const tools = await atendenteToolsFor('quanto é o corte?');
     const names = tools.map((t) => t.name);
-    // tools de AGENDA presentes; transbordo também protege o caminho agenda.
+    // tools de agenda presentes; sem recepção, transbordo não é exposto inutilmente.
     expect(names).toContain('inserir_agendamento');
     expect(names).toContain('consultar_agendamento');
-    expect(names).toContain('escalar_para_humano');
+    expect(names).not.toContain('escalar_para_humano');
     expect(names).not.toContain('registrar_interesse');
     // gate OFF short-circuita ANTES de ler o clone pro modo (byte-a-byte: 0 leitura extra).
     expect(mocks.getGcalForSlot).toHaveBeenCalled();
@@ -2280,7 +2291,7 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     const tools = await atendenteToolsFor('quanto é o corte?');
     const names = tools.map((t) => t.name);
     expect(names).toContain('inserir_agendamento');
-    expect(names).toContain('escalar_para_humano');
+    expect(names).not.toContain('escalar_para_humano');
     expect(mocks.getGcalForSlot).toHaveBeenCalled();
   });
 
@@ -2296,7 +2307,7 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     const tools = await atendenteToolsFor('quanto é o corte?');
     const names = tools.map((t) => t.name);
     expect(names).toContain('inserir_agendamento');
-    expect(names).toContain('escalar_para_humano');
+    expect(names).not.toContain('escalar_para_humano');
     expect(names).not.toContain('registrar_interesse');
     expect(mocks.getGcalForSlot).toHaveBeenCalled();
   });
@@ -2467,7 +2478,7 @@ describe('TesteBarbeariaBot — DEGRADE ELEGANTE agenda→atendente (ADR 0030 D3
     const names = tools.map((t) => t.name);
     expect(names).toContain('inserir_agendamento');
     expect(names).toContain('consultar_agendamento');
-    expect(names).toContain('escalar_para_humano');
+    expect(names).not.toContain('escalar_para_humano');
     expect(names).not.toContain('registrar_interesse');
   });
 });

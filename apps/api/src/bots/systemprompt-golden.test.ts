@@ -112,6 +112,7 @@ const mocks = vi.hoisted(() => ({
   servicoFromSummary: vi.fn(),
   clienteFromSummary: vi.fn(),
   getCloneBySlot: vi.fn(),
+  getCloneReceptionAlertTarget: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
   withActionLock: vi.fn(),
@@ -138,6 +139,7 @@ vi.mock('@startap/db', () => ({
   },
   flowClones: {
     getCloneBySlot: mocks.getCloneBySlot,
+    getCloneReceptionAlertTarget: mocks.getCloneReceptionAlertTarget,
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
     resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
@@ -284,6 +286,7 @@ describe('systemPrompt golden — clones BAKED de barbearia (SCRUM-92 inc.2, T1)
     cfg.ATEND_FROM_AGENDA_SLOTS = '';
     cfg.MODO_ATENDENTE_SLOTS = '';
     cfg.CARTAO_RUNTIME_ENABLED = false;
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue(null);
   });
 
   it('Cirilo (clone_cirilobarbearia_c8w2f0) → systemPrompt byte-a-byte o golden congelado', async () => {
@@ -299,15 +302,15 @@ describe('systemPrompt golden — clones BAKED de barbearia (SCRUM-92 inc.2, T1)
     assertGolden('systemprompt-baked-barbearia.golden.txt', sp);
   });
 
-  it('o golden preserva o cartão baked e inclui somente o guardrail intencional de transbordo', async () => {
+  it('sem recepção válida, o golden baked preserva o prompt base sem transbordo', async () => {
     const sp = await systemPromptFor(SLOTS_BAKED_BARBEARIA.cirilo);
     // Guardas semânticas anti-regressão do increment 2: se a injeção em runtime vazar pro
     // caminho baked, um destes marcadores aparece e o teste quebra (defesa além do byte-a-byte).
     expect(sp).not.toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
     expect(sp).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO');
     expect(sp).not.toContain('[SEU PACOTE]');
-    const { buildAgendaEscalationBlock } = await import('../lib/modo-atendente.js');
-    expect(sp).toBe(`${PERSONA_FIXTURE}\n\n${CONTEXT_FIXTURE}\n\n${buildAgendaEscalationBlock()}`);
+    expect(sp).not.toContain('[TRANSBORDO PARA A RECEPCAO]');
+    expect(sp).toBe(`${PERSONA_FIXTURE}\n\n${CONTEXT_FIXTURE}`);
   });
 
   it('buildCartaoEmojiOverrideBlock (peça pura que o inc.2 vai encostar) devolve "" no baked barbearia', async () => {

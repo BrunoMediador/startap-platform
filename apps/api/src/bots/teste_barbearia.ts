@@ -836,13 +836,20 @@ export class TesteBarbeariaBot extends BotBase {
         : '';
     const cartaoBlock =
       runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, temCartaoProprio);
+    // O transbordo só é parte do contrato do prompt quando existe uma recepção canônica,
+    // habilitada e resolvida server-side. Sem ela, preservar prompt/tools byte-a-byte evita
+    // a promessa inútil de atendimento humano e uma query/ação de saída sem destino.
+    const receptionTarget = await Promise.resolve(
+      flowClones.getCloneReceptionAlertTarget(this.slot),
+    ).catch(() => null);
+    const transbordoRecepcaoDisponivel = Boolean(receptionTarget?.enabled && receptionTarget.phone);
 
     const systemPrompt = [
       promptPersona,
       contextBlock,
       pacoteBlock,
       cartaoBlock,
-      buildAgendaEscalationBlock(),
+      transbordoRecepcaoDisponivel ? buildAgendaEscalationBlock() : '',
     ]
       .filter((b) => b !== '')
       .join('\n\n');
@@ -1109,7 +1116,9 @@ export class TesteBarbeariaBot extends BotBase {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
 
-    tools.push(this.buildEscalarParaHumanoTool(telefone));
+    if (transbordoRecepcaoDisponivel) {
+      tools.push(this.buildEscalarParaHumanoTool(telefone));
+    }
 
     // ── consultar_pacote (ADR 0025 BLOCO 2a — DORMENTE por flag) ─────────────────
     // Tool READ-ONLY: SÓ é exposta com PACOTES_ENABLED=ON. Com a flag OFF a lista de
@@ -1682,6 +1691,12 @@ export class TesteBarbeariaBot extends BotBase {
       runtimeCartao !== ''
         ? runtimeCartao
         : buildCartaoEstabelecimentoBlock(area, temCartaoProprio);
+    // Mesma regra do ramo individual: só expõe o transbordo quando o clone tem
+    // recepção válida/habilitada; falha do reader fecha a feature sem alterar o prompt base.
+    const receptionTarget = await Promise.resolve(
+      flowClones.getCloneReceptionAlertTarget(this.slot),
+    ).catch(() => null);
+    const transbordoRecepcaoDisponivel = Boolean(receptionTarget?.enabled && receptionTarget.phone);
 
     // ── Bloco [SEU PACOTE] no ESTABELECIMENTO (ADR 0025 — DORMENTE por flag; SCRUM-68) ──
     // Fecha o "pacote cego ao saldo" no estab: o bot já DEDUZ pacote (maybeDeduzirPacote,
@@ -1713,7 +1728,7 @@ export class TesteBarbeariaBot extends BotBase {
       '',
       cartaoEstabelecimentoBlock,
       '',
-      buildAgendaEscalationBlock(),
+      transbordoRecepcaoDisponivel ? buildAgendaEscalationBlock() : '',
       // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
       // systemPrompt byte-a-byte o de hoje. Com pacote: '' (separador) + o bloco.
       ...(pacoteBlock ? ['', pacoteBlock] : []),
@@ -2062,7 +2077,9 @@ export class TesteBarbeariaBot extends BotBase {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
 
-    tools.push(this.buildEscalarParaHumanoTool(telefone));
+    if (transbordoRecepcaoDisponivel) {
+      tools.push(this.buildEscalarParaHumanoTool(telefone));
+    }
 
     // ── consultar_pacote no ESTABELECIMENTO (ADR 0025 BLOCO 2a — DORMENTE por flag; SCRUM-68) ──
     // MESMA tool read-only do individual (buildConsultarPacoteTool): SÓ exposta com
