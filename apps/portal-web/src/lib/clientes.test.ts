@@ -32,6 +32,7 @@ import {
   semRetornoMatchesSearch,
   sanitizeClientesSearch,
 } from './clientes';
+import { whatsappManualPath } from './whatsapp-manual';
 
 describe('clientes helpers', () => {
   it('normaliza a busca antes de montar a query string', () => {
@@ -95,7 +96,7 @@ describe('clientes helpers', () => {
 
   it('normaliza e filtra a fila sem retorno sem expor telefone cru', () => {
     const apiItem: ClienteSemRetornoApiItem = {
-      cliente_id: '11111111-1111-4111-8111-111111111111',
+      id: '11111111-1111-4111-8111-111111111111',
       nome: 'Joao Silva',
       telefone_masked: '+55 31 •••••-••42',
       ultimo_atendimento_at: '2026-07-10T14:00:00.000Z',
@@ -112,6 +113,9 @@ describe('clientes helpers', () => {
       dias_sem_retorno: 42,
       ultimo_profissional_nome: 'Bene',
     });
+    expect(whatsappManualPath(item.id)).toBe(
+      '/portal/clientes/11111111-1111-4111-8111-111111111111/whatsapp-manual',
+    );
     expect(semRetornoMatchesSearch(item, 'joao')).toBe(true);
     expect(semRetornoMatchesSearch(item, '3142')).toBe(true);
     expect(semRetornoMatchesSearch(item, 'maria')).toBe(false);

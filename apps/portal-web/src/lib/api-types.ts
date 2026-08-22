@@ -444,7 +444,7 @@ export interface SaveClienteResponse {
 // ordena por maior tempo sem retorno e expõe PII mínima (telefone mascarado).
 
 export interface ClienteSemRetornoApiItem {
-  cliente_id: string;
+  id: string;
   nome: string | null;
   telefone_masked: string;
   ultimo_atendimento_at: string | null;

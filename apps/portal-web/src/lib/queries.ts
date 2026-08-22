@@ -104,6 +104,7 @@ import {
   clienteAniversarianteFromApi,
   clienteSemRetornoFromApi,
 } from './clientes';
+import { whatsappManualPath } from './whatsapp-manual';
 import {
   type CartaoConfigState,
   type CartaoEmojis,
@@ -1326,7 +1327,7 @@ export function useEnviarWhatsappManual(
 > {
   return useMutation({
     mutationFn: ({ id, body }) =>
-      apiFetch<EnviarWhatsappManualResponse>(`/portal/clientes/${id}/whatsapp-manual`, {
+      apiFetch<EnviarWhatsappManualResponse>(whatsappManualPath(id), {
         method: 'POST',
         body,
       }),

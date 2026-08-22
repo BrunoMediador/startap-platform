@@ -8,3 +8,7 @@ export function canReviewWhatsAppManualMessage(message: string): boolean {
   const normalized = normalizeWhatsAppManualMessage(message);
   return normalized.length > 0 && normalized.length <= WHATSAPP_MANUAL_MESSAGE_MAX_LENGTH;
 }
+
+export function whatsappManualPath(clienteId: string): string {
+  return `/portal/clientes/${encodeURIComponent(clienteId)}/whatsapp-manual`;
+}
