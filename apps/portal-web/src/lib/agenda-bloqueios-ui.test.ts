@@ -3,6 +3,8 @@ import {
   BLOQUEIO_TIPO_OPTIONS,
   bloqueioEtapaAtual,
   bloqueioResumoAcao,
+  bloqueioUsaDiaInteiroPorPadrao,
+  remocaoSerieProximasDescricao,
 } from './agenda-bloqueios-ui';
 
 describe('fluxo visual de bloqueios', () => {
@@ -31,5 +33,17 @@ describe('fluxo visual de bloqueios', () => {
     expect(bloqueioResumoAcao({ repetir: true, temPrevia: true, resultado: false })).toBe(
       'Criar série',
     );
+  });
+
+  it('oferece dia inteiro por padrão para ausência e férias, sem mudar almoço', () => {
+    expect(bloqueioUsaDiaInteiroPorPadrao('ausencia')).toBe(true);
+    expect(bloqueioUsaDiaInteiroPorPadrao('ferias')).toBe(true);
+    expect(bloqueioUsaDiaInteiroPorPadrao('almoco')).toBe(false);
+    expect(bloqueioUsaDiaInteiroPorPadrao('indisponivel')).toBe(false);
+  });
+
+  it('não promete corte por data ao remover as próximas ocorrências de uma série', () => {
+    expect(remocaoSerieProximasDescricao()).toContain('Todas as próximas ocorrências');
+    expect(remocaoSerieProximasDescricao()).toContain('Não há escolha de data inicial');
   });
 });

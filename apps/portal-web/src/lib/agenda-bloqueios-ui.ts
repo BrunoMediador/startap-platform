@@ -18,6 +18,14 @@ export function bloqueioEtapaAtual(args: { repetir: boolean; temPrevia: boolean 
   return args.temPrevia ? 4 : 3;
 }
 
+export function bloqueioUsaDiaInteiroPorPadrao(tipo: AgendaBloqueioTipo): boolean {
+  return tipo === 'ausencia' || tipo === 'ferias';
+}
+
+export function remocaoSerieProximasDescricao(): string {
+  return 'Todas as próximas ocorrências desta série serão removidas da Agenda Google. Não há escolha de data inicial; as ocorrências passadas permanecem no histórico.';
+}
+
 export function bloqueioResumoAcao(args: {
   repetir: boolean;
   temPrevia: boolean;

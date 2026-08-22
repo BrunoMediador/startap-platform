@@ -31,7 +31,12 @@ import {
   statusAgendaBloqueioRecorrenciaLabel,
   zonedDateTimeToUtcIso,
 } from '@/lib/agenda-bloqueios';
-import { BLOQUEIO_TIPO_OPTIONS, bloqueioEtapaAtual } from '@/lib/agenda-bloqueios-ui';
+import {
+  BLOQUEIO_TIPO_OPTIONS,
+  bloqueioEtapaAtual,
+  bloqueioUsaDiaInteiroPorPadrao,
+  remocaoSerieProximasDescricao,
+} from '@/lib/agenda-bloqueios-ui';
 import { ApiError } from '@/lib/api';
 import { OCORRENCIAS_MAX, OCORRENCIAS_MIN } from '@/lib/api-types';
 import type {
@@ -93,7 +98,6 @@ interface ProfissionalOption {
 
 interface RemoveSerieState {
   serieId: string;
-  referencia: string;
 }
 
 const DEFAULT_TIPO: AgendaBloqueioTipo = 'almoco';
@@ -266,6 +270,7 @@ export function AgendaBloqueiosSection({
     buildFormState(timeZone, defaultProfissionalId),
   );
   const [errors, setErrors] = useState<FormErrors>({});
+  const [diaInteiro, setDiaInteiro] = useState(false);
   const [repetir, setRepetir] = useState(false);
   const [periodicidade, setPeriodicidade] =
     useState<AgendaBloqueioPeriodicidade>(DEFAULT_PERIODICIDADE);
@@ -293,6 +298,7 @@ export function AgendaBloqueiosSection({
   function resetForm() {
     setForm(buildFormState(timeZone, defaultProfissionalId));
     setErrors({});
+    setDiaInteiro(false);
     setRepetir(false);
     setPeriodicidade(DEFAULT_PERIODICIDADE);
     setOcorrencias(DEFAULT_OCORRENCIAS);
@@ -312,6 +318,20 @@ export function AgendaBloqueiosSection({
   function updateForm(patch: Partial<FormState>) {
     setForm((current) => ({ ...current, ...patch }));
     limparRecorrencia();
+  }
+
+  function selecionarTipo(tipo: AgendaBloqueioTipo) {
+    const proximoDiaInteiro = bloqueioUsaDiaInteiroPorPadrao(tipo);
+    setDiaInteiro(proximoDiaInteiro);
+    updateForm({
+      tipo,
+      ...(proximoDiaInteiro ? { inicioHora: '00:00', fimHora: '23:59' } : {}),
+    });
+  }
+
+  function alterarDiaInteiro(checked: boolean) {
+    setDiaInteiro(checked);
+    if (checked) updateForm({ inicioHora: '00:00', fimHora: '23:59' });
   }
 
   const currentInput = buildInputFromForm({ canPickProfissional, form, timeZone });
@@ -527,12 +547,25 @@ export function AgendaBloqueiosSection({
             )}
 
             <div className={cn('sm:col-span-2', !canPickProfissional && 'sm:col-span-2')}>
-              <TipoChooser
-                value={form.tipo}
-                onChange={(tipo) => updateForm({ tipo })}
-                disabled={loadingForm}
-              />
+              <TipoChooser value={form.tipo} onChange={selecionarTipo} disabled={loadingForm} />
             </div>
+
+            {bloqueioUsaDiaInteiroPorPadrao(form.tipo) && (
+              <div className="flex items-start justify-between gap-3 rounded-field border border-line-soft bg-surface-sunken px-3 py-3 sm:col-span-2">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-ink">Dia inteiro</p>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-ink-soft">
+                    Bloqueia das 00:00 às 23:59. Desative para definir um intervalo por horário.
+                  </p>
+                </div>
+                <Switch
+                  checked={diaInteiro}
+                  onChange={alterarDiaInteiro}
+                  label="Bloquear o dia inteiro"
+                  disabled={loadingForm}
+                />
+              </div>
+            )}
 
             <DateTimeField
               label="2. Começa em"
@@ -541,6 +574,7 @@ export function AgendaBloqueiosSection({
               onDateChange={(value) => updateForm({ inicioData: value })}
               onTimeChange={(value) => updateForm({ inicioHora: value })}
               error={errors.inicio}
+              dayOnly={diaInteiro}
             />
 
             <DateTimeField
@@ -550,6 +584,7 @@ export function AgendaBloqueiosSection({
               onDateChange={(value) => updateForm({ fimData: value })}
               onTimeChange={(value) => updateForm({ fimHora: value })}
               error={errors.fim}
+              dayOnly={diaInteiro}
             />
 
             <div className="sm:col-span-2">
@@ -916,11 +951,10 @@ function BloqueioListItem({
                 onClick={() =>
                   onRemoveSerie({
                     serieId: bloqueio.serie_id ?? '',
-                    referencia: blockRangeLabel(bloqueio.inicio_at, bloqueio.fim_at, timeZone),
                   })
                 }
               >
-                <IconRefresh size={15} /> Remover futuras da série
+                <IconRefresh size={15} /> Remover próximas ocorrências
               </Button>
             )}
             <Button
@@ -972,13 +1006,9 @@ function BloqueioRemoveDialogs({
       />
       <ConfirmDialog
         open={Boolean(serie)}
-        title="Remover futuras da série?"
-        description={
-          serie
-            ? `Os próximos bloqueios desta série serão removidos a partir de ${serie.referencia}. Os bloqueios passados permanecem no histórico.`
-            : ''
-        }
-        confirmLabel="Remover futuras"
+        title="Remover todas as próximas ocorrências?"
+        description={serie ? remocaoSerieProximasDescricao() : ''}
+        confirmLabel="Remover próximas ocorrências"
         confirmVariant="destructive"
         loading={removingSerie}
         icon={<IconRefresh size={20} />}
@@ -997,8 +1027,8 @@ function BloqueioFlowSteps({
   canPickProfissional: boolean;
 }) {
   const steps = canPickProfissional
-    ? ['Quem', 'Quando', 'Tipo', 'Repetir', 'Revisar']
-    : ['Quando', 'Tipo', 'Repetir', 'Revisar'];
+    ? ['Quem', 'Tipo', 'Quando', 'Repetir', 'Revisar']
+    : ['Tipo', 'Quando', 'Repetir', 'Revisar'];
   const currentStep = canPickProfissional ? current + 1 : current;
   return (
     <ol
@@ -1296,6 +1326,7 @@ function DateTimeField({
   onDateChange,
   onTimeChange,
   error,
+  dayOnly = false,
 }: {
   label: string;
   dateValue: string;
@@ -1303,6 +1334,7 @@ function DateTimeField({
   onDateChange: (value: string) => void;
   onTimeChange: (value: string) => void;
   error?: string;
+  dayOnly?: boolean;
 }) {
   const dateId = useId();
   return (
@@ -1310,7 +1342,7 @@ function DateTimeField({
       <label htmlFor={dateId} className="text-[13px] font-semibold text-ink">
         {label}
       </label>
-      <div className="grid grid-cols-[1fr_116px] gap-2">
+      <div className={cn('grid gap-2', dayOnly ? 'grid-cols-1' : 'grid-cols-[1fr_116px]')}>
         <input
           id={dateId}
           type="date"
@@ -1321,16 +1353,18 @@ function DateTimeField({
             error && 'border-danger',
           )}
         />
-        <input
-          type="time"
-          aria-label={`${label} hora`}
-          value={timeValue}
-          onChange={(event) => onTimeChange(event.target.value)}
-          className={cn(
-            'h-[50px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 text-[15px] text-ink outline-none transition-colors hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus',
-            error && 'border-danger',
-          )}
-        />
+        {!dayOnly && (
+          <input
+            type="time"
+            aria-label={`${label} hora`}
+            value={timeValue}
+            onChange={(event) => onTimeChange(event.target.value)}
+            className={cn(
+              'h-[50px] w-full rounded-field border-[1.5px] border-line-strong bg-surface-sunken px-3.5 text-[15px] text-ink outline-none transition-colors hover:border-[var(--c-input-hover-border)] focus:border-brand focus:ring-[3px] focus:ring-brand/35 focus:shadow-focus',
+              error && 'border-danger',
+            )}
+          />
+        )}
       </div>
       {error && <p className="text-[13px] text-danger">{error}</p>}
     </div>
