@@ -411,6 +411,22 @@ describe('sendOwnerAlert — recepção explícita (fail-closed)', () => {
     const r = await sendOwnerAlert(escalation);
     expect(r).toEqual({ ok: false, escalado: false, reason: 'error' });
   });
+
+  it('falha WAHA com telefone/texto externo não vaza nos logs', async () => {
+    const providerPhone = '5511987654321';
+    const providerText = 'SENTINELA_TEXTO_EXTERNO_NAO_LOGAR';
+    mocks.sendText.mockRejectedValue(
+      new Error(`WAHA /api/sendText -> HTTP 422: ${providerPhone} ${providerText}`),
+    );
+
+    const r = await sendOwnerAlert(escalation);
+
+    expect(r).toEqual({ ok: false, escalado: false, reason: 'error' });
+    const logged = JSON.stringify(mocks.logCalls);
+    expect(logged).not.toContain(providerPhone);
+    expect(logged).not.toContain(providerText);
+    expect(logged).toContain('definitive_non_delivery');
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
