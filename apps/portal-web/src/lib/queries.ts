@@ -103,14 +103,6 @@ import type {
 import { patchRowNaLista, removerRowDaLista } from './atendimentos-balde';
 import { conexaoFromBotActionResponse } from './bot-pausa';
 import {
-  buildClientesAniversariantesSearchParams,
-  buildClientesListSearchParams,
-  buildClientesSemRetornoSearchParams,
-  clienteAniversarianteFromApi,
-  clienteSemRetornoFromApi,
-} from './clientes';
-import { whatsappManualPath } from './whatsapp-manual';
-import {
   type CartaoConfigState,
   type CartaoEmojis,
   type CartaoPreviewLive,
@@ -119,6 +111,13 @@ import {
   fetchCartaoPreview,
   putCartaoConfig,
 } from './cartao-config';
+import {
+  buildClientesAniversariantesSearchParams,
+  buildClientesListSearchParams,
+  buildClientesSemRetornoSearchParams,
+  clienteAniversarianteFromApi,
+  clienteSemRetornoFromApi,
+} from './clientes';
 import { mapColaboradorRow } from './equipe';
 import { type BuilderDraft, fetchBuilderDraft } from './prompt-builder';
 import {
@@ -128,6 +127,7 @@ import {
   fetchTomAssistente,
   putTomAssistente,
 } from './tom-assistente';
+import { whatsappManualPath } from './whatsapp-manual';
 
 // ── Query keys (escopadas por slot da sessao) ────────────────────────────────
 
