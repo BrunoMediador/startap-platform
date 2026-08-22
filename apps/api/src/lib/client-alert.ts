@@ -76,6 +76,9 @@ export type OwnerAlertKind = 'cancelamento' | 'escalonamento' | 'lead';
 /** Como o alerta chega ao dono. Ver nota de cabeçalho (por que é explícito). */
 export type OwnerAlertTransport = 'alertas' | 'clone_session';
 
+/** Como resolver o destinatário: transbordo humano exige a recepção configurada. */
+export type OwnerAlertRecipient = 'owner_with_fallback' | 'reception_only';
+
 /** Payload do kind `cancelamento` (comportamento legado). */
 export interface CancelamentoPayload {
   motivo: string;
@@ -109,6 +112,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'cancelamento';
       payload: CancelamentoPayload;
     }
@@ -116,6 +120,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'escalonamento';
       payload: EscalonamentoPayload;
     }
@@ -123,6 +128,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'lead';
       payload: LeadPayload;
     };
@@ -249,6 +255,21 @@ type CooldownReservation =
       prevCount: number;
     };
 
+/** Campos de observabilidade sem conteúdo do provedor. O erro em si pode carregar
+ * body/chatId/texto; nunca deve atravessar a fronteira do log. */
+function classifyAlertFailure(err: unknown): {
+  operation: 'owner_alert_send';
+  errorCode: 'definitive_non_delivery' | 'ambiguous_send_failure';
+  httpStatus?: number;
+} {
+  const status = (err as { status?: unknown } | null)?.status;
+  return {
+    operation: 'owner_alert_send',
+    errorCode: isDefinitiveNonDelivery(err) ? 'definitive_non_delivery' : 'ambiguous_send_failure',
+    ...(typeof status === 'number' && Number.isInteger(status) ? { httpStatus: status } : {}),
+  };
+}
+
 async function reserveCooldown(
   checkKey: string,
   cooldownMin: number,
@@ -269,9 +290,9 @@ async function reserveCooldown(
       alertCount: reservedCount,
     });
     return { allowed: true, reservedAt, reservedCount, prevAlertAt: last, prevCount };
-  } catch (e) {
+  } catch {
     log.warn(
-      { err: e instanceof Error ? e.message : String(e) },
+      { operation: 'owner_alert_cooldown_reserve', errorCode: 'storage_failure' },
       'client-alert: cooldown check falhou — fail-open (envia mesmo assim)',
     );
     // Fail-open: nada carimbado de forma confiável -> reservedAt=null (sem reserva a reverter).
@@ -311,9 +332,9 @@ async function revertCooldownReservation(
         pendingDownCount: 0,
       },
     });
-  } catch (e) {
+  } catch {
     log.warn(
-      { err: e instanceof Error ? e.message : String(e) },
+      { operation: 'owner_alert_cooldown_revert', errorCode: 'storage_failure' },
       'owner-alert: revert do cooldown falhou (best-effort)',
     );
   }
@@ -351,7 +372,10 @@ async function resolveTransportSession(
 export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlertResult> {
   const { slot, clienteTelefone, kind, transport } = input;
   try {
-    const owner = await flowClones.getCloneAlertOwner(slot);
+    const owner =
+      input.recipient === 'reception_only'
+        ? await flowClones.getCloneReceptionAlertTarget(slot)
+        : await flowClones.getCloneAlertOwner(slot);
     if (!owner || !owner.enabled) {
       log.info({ slot, kind, reason: 'disabled' }, 'owner-alert: alerta desabilitado p/ clone');
       return { ok: true, escalado: false, reason: 'disabled' };
@@ -456,12 +480,7 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
           prevCount: reservation.prevCount,
         });
         log.warn(
-          {
-            slot,
-            kind,
-            transport,
-            err: sendErr instanceof Error ? sendErr.message : String(sendErr),
-          },
+          classifyAlertFailure(sendErr),
           'owner-alert: envio falhou (definitivo) — cooldown revertido p/ o próximo retry enviar',
         );
       }
@@ -483,10 +502,7 @@ export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlert
     return { ok: true, escalado: true };
   } catch (e) {
     // Fail-safe absoluto: falha do alerta NUNCA quebra o atendimento.
-    log.error(
-      { slot, kind, err: e instanceof Error ? e.message : String(e) },
-      'owner-alert: falha ao escalar — atendimento segue normal',
-    );
+    log.error(classifyAlertFailure(e), 'owner-alert: falha ao escalar — atendimento segue normal');
     return { ok: false, escalado: false, reason: 'error' };
   }
 }

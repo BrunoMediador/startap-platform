@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   servicoFromSummary: vi.fn(),
   clienteFromSummary: vi.fn(),
   getCloneBySlot: vi.fn(),
+  getCloneReceptionAlertTarget: vi.fn(),
   getScopeBySlot: vi.fn(),
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
@@ -92,6 +93,7 @@ vi.mock('@startap/db', () => ({
   },
   flowClones: {
     getCloneBySlot: mocks.getCloneBySlot,
+    getCloneReceptionAlertTarget: mocks.getCloneReceptionAlertTarget,
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
     resolveAtendFromAgendaEnabledForSlot: (slot: string, csv?: string | null) =>
@@ -162,6 +164,12 @@ vi.mock('@startap/integrations/scheduling', async () => {
   };
 });
 
+// Estado padrão do produto: sem recepção válida não há alteração de prompt/tool de agenda.
+// `clearAllMocks` limpa chamadas, não implementations; restaura explicitamente a cada teste.
+beforeEach(() => {
+  mocks.getCloneReceptionAlertTarget.mockResolvedValue(null);
+});
+
 const { TesteBarbeariaBot } = await import('./teste_barbearia.js');
 
 function makeCtx(texto: string): BotContext {
@@ -227,6 +235,35 @@ describe('TesteBarbeariaBot — cancelamento escalado (W5)', () => {
     expect(names).toContain('inserir_agendamento');
     expect(names).toContain('consultar_agendamento');
     expect(names).not.toContain('escalar_cancelamento');
+  });
+
+  it('agenda individual expõe transbordo e o prompt obriga não inventar dado ausente', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
+    const tools = await toolsPassedFor('qual a regra especial?');
+    expect(tools.map((t) => t.name)).toContain('escalar_para_humano');
+    const prompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('[TRANSBORDO PARA A RECEPCAO]');
+    expect(prompt).toContain('nao invente resposta');
+  });
+
+  it('transbordo da agenda individual usa só a recepção e falha fechada no erro', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
+    mocks.sendOwnerAlert.mockResolvedValue({ ok: false, escalado: false, reason: 'error' });
+    const tools = await toolsPassedFor('preciso falar com alguém');
+    const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
+    };
+    await expect(tool.run({ motivo: 'pediu_humano', resumo: 'pediu pessoa' })).resolves.toEqual({
+      ok: false,
+      escalado: false,
+    });
+    expect(mocks.sendOwnerAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'escalonamento',
+        transport: 'clone_session',
+        recipient: 'reception_only',
+      }),
+    );
   });
 
   it('flag OFF: botão "Cancelar" responde como hoje e NÃO escala', async () => {
@@ -415,6 +452,28 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     // Defaults inertes: sem pacote / bloco vazio (cliente sem pacote).
     mocks.resolveClientPackages.mockResolvedValue([]);
     mocks.buildSeuPacoteBlock.mockReturnValue('');
+  });
+
+  it('agenda de estabelecimento expõe o mesmo transbordo explícito e guardrail', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({ phone: '5511999998888', enabled: true });
+    const c1 = colabClientStub('cal-joao');
+    const tools = await estabToolsFor('tenho uma dúvida fora do contexto', [
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client: c1 },
+    ]);
+    expect(tools.map((t) => t.name)).toContain('escalar_para_humano');
+    const prompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('[TRANSBORDO PARA A RECEPCAO]');
+
+    mocks.sendOwnerAlert.mockResolvedValue({ ok: true, escalado: true });
+    const tool = tools.find((t) => t.name === 'escalar_para_humano') as unknown as {
+      run: (a: unknown) => Promise<{ ok: boolean; escalado: boolean }>;
+    };
+    await expect(
+      tool.run({ motivo: 'fora_do_padrao', resumo: 'precisa de equipe' }),
+    ).resolves.toEqual({ ok: true, escalado: true });
+    expect(mocks.sendOwnerAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ recipient: 'reception_only', transport: 'clone_session' }),
+    );
   });
 
   // (a) individual byte-a-byte inalterado mesmo com a flag LIGADA, se product_type=individual.
@@ -703,8 +762,9 @@ describe('TesteBarbeariaBot — cartão com profissional (estabelecimento, runti
       makeCtx('quero marcar um corte'),
     );
     const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
-    // Cartão individual intocado: persona + contexto, SEM bloco de profissional.
-    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT');
+    // Sem recepção configurada, o caminho individual permanece byte-a-byte sem transbordo.
+    expect(systemPrompt).toContain('PERSONA\n\nCONTEXT');
+    expect(systemPrompt).not.toContain('[TRANSBORDO PARA A RECEPCAO]');
     expect(systemPrompt).not.toContain('PROFISSIONAL');
     expect(systemPrompt).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
   });
@@ -825,7 +885,8 @@ describe('TesteBarbeariaBot — override de emoji por área (ADR 0035 §2.1, ex-
     // bug a evitar. Este teste prova que o fix por fato-do-dado também resolve o caso dela.
     const sp = await systemPromptForArea('outro', PERSONA_COM_CARTAO_PROPRIO);
     expect(sp).not.toContain('EMOJIS DESTE NEGOCIO');
-    expect(sp).toBe(`${PERSONA_COM_CARTAO_PROPRIO}\n\nCONTEXT`);
+    expect(sp).toContain(`${PERSONA_COM_CARTAO_PROPRIO}\n\nCONTEXT`);
+    expect(sp).not.toContain('[TRANSBORDO PARA A RECEPCAO]');
   });
 
   it('SEM cartão próprio (persona de template) + área "outro" → bloco de override injetado (comportamento intocado)', async () => {
@@ -834,8 +895,8 @@ describe('TesteBarbeariaBot — override de emoji por área (ADR 0035 §2.1, ex-
   });
 
   it('barbearia (Cirilo/Samuel) → nunca recebe bloco, mesmo com cartão próprio (regressão pagante protegida)', async () => {
-    expect(await systemPromptForArea('barbearia', 'PERSONA')).toBe('PERSONA\n\nCONTEXT');
-    expect(await systemPromptForArea('barbearia', PERSONA_COM_CARTAO_PROPRIO)).toBe(
+    expect(await systemPromptForArea('barbearia', 'PERSONA')).toContain('PERSONA\n\nCONTEXT');
+    expect(await systemPromptForArea('barbearia', PERSONA_COM_CARTAO_PROPRIO)).toContain(
       `${PERSONA_COM_CARTAO_PROPRIO}\n\nCONTEXT`,
     );
   });
@@ -867,8 +928,8 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
     // Nunca toca a camada de pacotes com a flag OFF — Cirilo/Samuel intactos.
     expect(mocks.resolveClientPackages).not.toHaveBeenCalled();
     expect(mocks.buildSeuPacoteBlock).not.toHaveBeenCalled();
-    // systemPrompt = persona + contexto, SEM bloco de pacote.
-    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT');
+    // systemPrompt mantém persona+contexto sem bloco de pacote.
+    expect(systemPrompt).toContain('PERSONA\n\nCONTEXT');
   });
 
   it('flag ON, cliente SEM pacote: tool exposta, mas systemPrompt sem bloco (block vazio)', async () => {
@@ -878,7 +939,7 @@ describe('TesteBarbeariaBot — pacotes (BLOCO 2a)', () => {
     const { tools, systemPrompt } = await runIndividual('quero marcar um corte');
     expect(tools.map((t) => t.name)).toContain('consultar_pacote');
     expect(mocks.resolveClientPackages).toHaveBeenCalled();
-    expect(systemPrompt).toBe('PERSONA\n\nCONTEXT'); // bloco vazio não é concatenado
+    expect(systemPrompt).toContain('PERSONA\n\nCONTEXT'); // bloco vazio não é concatenado
   });
 
   it('flag ON, cliente COM pacote: injeta o bloco [SEU PACOTE] no systemPrompt', async () => {
@@ -2178,7 +2239,7 @@ describe('TesteBarbeariaBot — MODO ATENDENTE (SCRUM-59)', () => {
     setupSchedule(); // caminho individual completo (com agenda)
     const tools = await atendenteToolsFor('quanto é o corte?');
     const names = tools.map((t) => t.name);
-    // tools de AGENDA presentes (caminho individual), nenhuma tool de atendente.
+    // tools de agenda presentes; sem recepção, transbordo não é exposto inutilmente.
     expect(names).toContain('inserir_agendamento');
     expect(names).toContain('consultar_agendamento');
     expect(names).not.toContain('escalar_para_humano');

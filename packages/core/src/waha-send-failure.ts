@@ -42,7 +42,7 @@ export function isDefinitiveNonDelivery(err: unknown): boolean {
 
   // HTTP do WAHA no /api/sendText: 404 (sessão/chat inexistente) e 422 (sessão não-WORKING/FAILED)
   // provam que não saiu. 5xx e demais status → AMBÍGUO (pode ter processado). O client.ts formata
-  // a mensagem como "WAHA /api/sendText -> HTTP <status>: <body>".
+  // a mensagem como "WAHA /api/sendText -> HTTP <status>" (sem body do provedor).
   if (/HTTP 404\b/.test(msg)) return true;
   if (/HTTP 422\b/.test(msg)) return true;
 
