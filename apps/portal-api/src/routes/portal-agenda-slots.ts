@@ -7,7 +7,7 @@
  * A duração do serviço (sempre múltiplo de 5 — PR #266) define o passo da
  * grade. O cálculo é o MESMO que o bot usa (computeFreeSlotsForDay, extraído
  * de free-slots): horário de funcionamento do tenant − eventos do GCal −
- * passado (piso de 10min pra hoje). Só horários livres saem na resposta —
+ * passado (sem antecedência mínima). Só horários livres saem na resposta —
  * ocupado nem aparece (decisão de UX, doc 020 B3).
  *
  * Escopado por request.tenant.slot (withTenant) — cliente A jamais enxerga

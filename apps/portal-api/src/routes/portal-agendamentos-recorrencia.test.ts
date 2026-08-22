@@ -199,6 +199,38 @@ describe('POST /portal/agendamentos/recorrencia/preview', () => {
     await app.close();
   });
 
+  it('200: preview aceita a primeira ocorrência às 19:35, sem antecedência mínima', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-13T22:32:00Z')); // 19:32 em São Paulo.
+    loadScheduleConfigMock.mockResolvedValue({
+      ...CONFIG_OK,
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte', min: 25 }],
+    });
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    try {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/agendamentos/recorrencia/preview',
+        payload: {
+          ...PREVIEW_PAYLOAD_OK,
+          data: '2026-06-13',
+          hora: '19:35',
+          ocorrencias: 2,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().previews[0].status).toBe('livre');
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('200: marca ocorrência como ocupado quando bate com evento existente', async () => {
     // Avaliação é SEQUENCIAL (1 listEvents por ocorrência, na ordem) — a 2a chamada
     // (2a ocorrencia semanal) devolve conflito; as demais, livre.

@@ -6,7 +6,7 @@ import type { gcal } from '@startap/integrations';
  * (POST /portal/agendamentos/recorrencia/preview, SCRUM — agenda recorrente).
  *
  * 🔴 Fonte ÚNICA das validações: janela de aceitação (hoje..+POST_MAX_AHEAD_DAYS),
- * piso de 10min para HOJE, horário de funcionamento do dia, e double-check anti-corrida
+ * início não-passado para HOJE, horário de funcionamento do dia, e double-check anti-corrida
  * contra o GCal. O POST atual foi refatorado para usar ESTES MESMOS helpers — nunca
  * duplicar a lógica aqui, senão as duas checagens (agendamento único vs preview de
  * série) divergem com o tempo (é exatamente o bug que este módulo existe para evitar).
@@ -26,9 +26,6 @@ import {
   weekdayOfDateKey,
   zonedWallTimeToUtc,
 } from '@startap/integrations/scheduling';
-
-/** Piso pra HOJE: não aceitar slot que começa em menos de 10min (regra do bot). */
-export const AVALIAR_SLOT_TODAY_FLOOR_MIN = 10;
 
 export type AvaliarSlotStatus =
   | 'livre'
@@ -81,7 +78,7 @@ interface AvaliarJanelaInput {
  *                         num 400 separado ANTES de sequer chamar esta validação; o preview
  *                         (que só tem este helper) devolve 'fechado' pro caller decidir.
  *  - 'fora_da_janela'   : data > hoje+maxAheadDays.
- *  - 'passado'          : data no passado, ou hoje com hora dentro do piso de 10min.
+ *  - 'passado'          : data no passado, ou hoje com hora anterior ao relógio atual.
  *  - 'fora_do_horario'  : dia SEM janela de funcionamento (dia fechado da semana, ex.
  *                         domingo) OU horário/duração que não cabe na janela do dia —
  *                         mesma condição única (`!janela || ...`) do POST original,
@@ -107,10 +104,7 @@ export function avaliarJanela(input: AvaliarJanelaInput): AvaliarSlotResult {
   const startMins = hhmmToMins(hora);
   const endMins = startMins + duracaoMin;
 
-  if (
-    data < agora.dateKey ||
-    (data === agora.dateKey && startMins < agora.mins + AVALIAR_SLOT_TODAY_FLOOR_MIN)
-  ) {
+  if (data < agora.dateKey || (data === agora.dateKey && startMins < agora.mins)) {
     return { status: 'passado' };
   }
 

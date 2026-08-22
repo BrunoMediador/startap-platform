@@ -721,6 +721,38 @@ describe('POST /portal/agendamentos — conflito (409 estruturado)', () => {
     expect(res.json().reason).toBe('fora_do_horario');
     await app.close();
   });
+
+  it('201: hoje às 19:32 aceita Corte de 25min às 19:35 antes do fechamento às 20:00', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-13T22:32:00Z')); // 19:32 em São Paulo.
+    loadScheduleConfigMock.mockResolvedValue({
+      ...CONFIG_OK,
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte', min: 25 }],
+    });
+    const client = gcalClientLivre();
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    try {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/portal/agendamentos',
+        payload: { ...PAYLOAD_OK, data: '2026-06-13', hora: '19:35' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(client.createEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startISO: '2026-06-13T22:35:00.000Z',
+          endISO: '2026-06-13T23:00:00.000Z',
+        }),
+      );
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('POST /portal/agendamentos — validação e erros', () => {
@@ -1062,6 +1094,35 @@ describe('PATCH /portal/agendamentos/:eventId — caminho feliz', () => {
     expect(fields.summary).toBeUndefined();
     expect(getGcalForSlotMock).toHaveBeenCalledWith(injectedSlot);
     await app.close();
+  });
+
+  it('200: hoje às 19:32 permite remarcar para 19:35 quando Corte de 25min cabe até 20:00', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-13T22:32:00Z')); // 19:32 em São Paulo.
+    loadScheduleConfigMock.mockResolvedValue({
+      ...CONFIG_OK,
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte', min: 25 }],
+    });
+    const client = gcalClientPatch([evtAtual()]);
+    getGcalForSlotMock.mockResolvedValue(client);
+
+    try {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/portal/agendamentos/evt_atual',
+        payload: { data: '2026-06-13', hora: '19:35', servico: 'Corte' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [, fields] = client.patchEvent.mock.calls[0];
+      expect(fields.startISO).toBe('2026-06-13T22:35:00.000Z');
+      expect(fields.endISO).toBe('2026-06-13T23:00:00.000Z');
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('200: muda serviço recompõe o título preservando nome e telefone do título atual', async () => {

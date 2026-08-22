@@ -13,14 +13,17 @@ import type { ToolDefinition } from '@startap/integrations/openai';
 import { buildCartaoRuntimeBlock, extractBakedCartao } from '@startap/integrations/prompt-builder';
 import {
   type ColaboradorAgenda,
+  type ScheduleConfig,
   buildContextBlock,
   buildEstabelecimentoContext,
   colaboradorFazServico,
   formatarAgendaComConfig,
   loadScheduleConfig,
+  nowPartsInTz,
   reanchorWallTimeToTz,
   resolveColaboradorByShortId,
   servicosDoColaborador,
+  weekdayOfDateKey,
 } from '@startap/integrations/scheduling';
 import { config } from '../config.js';
 import { gcalActionLockKey, withActionLock } from '../lib/action-lock.js';
@@ -47,6 +50,82 @@ import { BotBase } from './base.js';
 
 const SLOT = 'teste_barbearia';
 
+type AgendaWriteValidation =
+  | { ok: true }
+  | { ok: false; error: 'SERVICO_INVALIDO' | 'HORARIO_INDISPONIVEL'; message: string };
+
+/**
+ * Defesa final antes de qualquer escrita no GCal. A chamada da ferramenta vem do LLM,
+ * portanto horário e duração nunca podem ser aceitos só porque apareceram no cartão.
+ */
+function validateAgendaWrite(input: {
+  scheduleConfig: ScheduleConfig;
+  servico: string;
+  startISO: string;
+  endISO: string;
+  now?: Date;
+}): AgendaWriteValidation {
+  if (typeof input.servico !== 'string' || !input.servico.trim()) {
+    return {
+      ok: false,
+      error: 'SERVICO_INVALIDO',
+      message: 'Não encontrei esse serviço no cadastro. Consulte os serviços disponíveis.',
+    };
+  }
+
+  const service = input.scheduleConfig.services.find(
+    (candidate) => candidate.name.toLocaleLowerCase() === input.servico.toLocaleLowerCase(),
+  );
+  if (!service) {
+    return {
+      ok: false,
+      error: 'SERVICO_INVALIDO',
+      message: 'Não encontrei esse serviço no cadastro. Consulte os serviços disponíveis.',
+    };
+  }
+
+  const startAt = new Date(input.startISO);
+  const endAt = new Date(input.endISO);
+  if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+    return {
+      ok: false,
+      error: 'HORARIO_INDISPONIVEL',
+      message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+    };
+  }
+
+  const now = input.now ?? new Date();
+  if (startAt.getTime() < now.getTime()) {
+    return {
+      ok: false,
+      error: 'HORARIO_INDISPONIVEL',
+      message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+    };
+  }
+
+  if (endAt.getTime() - startAt.getTime() !== service.min * 60_000) {
+    return {
+      ok: false,
+      error: 'HORARIO_INDISPONIVEL',
+      message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+    };
+  }
+
+  const startParts = nowPartsInTz(startAt, input.scheduleConfig.timezone);
+  const weekday = weekdayOfDateKey(startParts.dateKey, input.scheduleConfig.timezone);
+  const window = weekday === null ? null : input.scheduleConfig.work[weekday];
+  const endMins = startParts.mins + service.min;
+  if (!window || startParts.mins < window[0] || endMins > window[1]) {
+    return {
+      ok: false,
+      error: 'HORARIO_INDISPONIVEL',
+      message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+    };
+  }
+
+  return { ok: true };
+}
+
 /**
  * Resultado da resolução do evento a remarcar (buildRemarcarTool). O caller injeta um
  * resolver que encontra o agendamento DO PRÓPRIO cliente: individual = a agenda única do
@@ -59,6 +138,8 @@ type RemarcarResolve =
       kind: 'found';
       client: gcal.GoogleCalendarClient;
       colaboradorId: number | null;
+      /** Presente apenas no estabelecimento, para revalidar serviço×profissional no PATCH. */
+      colaborador?: ColaboradorAgenda;
       event: gcal.CalendarEvent;
     }
   | { kind: 'not_found' }
@@ -467,11 +548,13 @@ export class TesteBarbeariaBot extends BotBase {
    */
   private buildRemarcarTool(args: {
     telefone: string;
+    /** Configuração autoritativa: serviço, duração e horário de funcionamento. */
+    scheduleConfig: ScheduleConfig;
     resolveEvent: (startAtualISO: string) => Promise<RemarcarResolve>;
     /** Fuso (IANA) do clone (default SP). Reancora SÓ a NOVA janela; start_atual fica intacto. */
     cloneTz: string;
   }): ToolDefinition {
-    const { telefone, resolveEvent, cloneTz } = args;
+    const { telefone, scheduleConfig, resolveEvent, cloneTz } = args;
     return {
       name: 'remarcar_agendamento',
       description:
@@ -548,8 +631,53 @@ export class TesteBarbeariaBot extends BotBase {
           };
         }
 
-        const { client, colaboradorId, event } = resolved;
+        const { client, colaboradorId, colaborador, event } = resolved;
         const eventId = event.id;
+
+        // A remarcação também é uma escrita originada pelo LLM. O serviço vem do evento
+        // resolvido server-side (nunca do argumento da tool), portanto não permite trocar
+        // duração/serviço nem mover para fora do expediente ou para o passado.
+        const servicoAtual = servicoFromSummary(event.summary ?? '');
+        const validation = validateAgendaWrite({
+          scheduleConfig,
+          servico: servicoAtual,
+          startISO: novoStart,
+          endISO: novoEnd,
+        });
+        if (!validation.ok) {
+          this.log.warn(
+            {
+              slot: this.slot,
+              fone: phoneLogTag(telefone),
+              eventId: hashEventIdForLog(eventId),
+              colaboradorId,
+              error: validation.error,
+            },
+            'remarcar_agendamento bloqueado: serviço, duração ou janela inválidos',
+          );
+          return validation;
+        }
+
+        // No estabelecimento, o evento deve continuar na agenda do profissional que ainda
+        // executa esse serviço. A agenda encontrada é autoritativa; não aceitamos trocar o
+        // profissional nem usar apenas o catálogo global para liberar o PATCH.
+        if (colaborador && !colaboradorFazServico(colaborador, scheduleConfig, servicoAtual)) {
+          this.log.warn(
+            {
+              slot: this.slot,
+              fone: phoneLogTag(telefone),
+              eventId: hashEventIdForLog(eventId),
+              colaboradorId,
+            },
+            'remarcar_agendamento bloqueado: profissional não executa mais o serviço',
+          );
+          return {
+            ok: false,
+            error: 'SERVICO_NAO_OFERECIDO',
+            message:
+              'Esse profissional não realiza mais esse serviço. Consulte as opções disponíveis.',
+          };
+        }
 
         // Anti-corrida: recheca a NOVA janela NA MESMA agenda, IGNORANDO o proprio evento
         // (mesma regra server-side do inserir_agendamento — o GCal e a fonte de verdade).
@@ -904,12 +1032,38 @@ export class TesteBarbeariaBot extends BotBase {
             usa_pacote?: unknown;
           };
 
+          if (typeof summary !== 'string' || typeof start !== 'string' || typeof end !== 'string') {
+            return {
+              ok: false,
+              error: 'HORARIO_INDISPONIVEL',
+              message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+            };
+          }
+
           // Reancora o horário-de-parede do LLM no fuso do clone ANTES de tudo (conflito,
           // criação, atendimento). O LLM emite start/end com o offset errado chumbado (−03 de
           // SP); reinterpretamos a hora-de-parede no relógio da barbearia. Clone SP = no-op
           // (byte-idêntico ao de hoje). startISO/endISO viram a fonte de verdade do instante.
           const startISO = reanchorWallTimeToTz(start, cloneTz) ?? start;
           const endISO = reanchorWallTimeToTz(end, cloneTz) ?? end;
+
+          const servicoPedido =
+            typeof servicoArg === 'string' && servicoArg.trim()
+              ? servicoArg.trim()
+              : servicoFromSummary(summary);
+          const validation = validateAgendaWrite({
+            scheduleConfig,
+            servico: servicoPedido,
+            startISO,
+            endISO,
+          });
+          if (!validation.ok) {
+            this.log.warn(
+              { slot: this.slot, fone: phoneLogTag(telefone), error: validation.error },
+              'inserir_agendamento bloqueado: horario ou duracao invalido',
+            );
+            return validation;
+          }
 
           // Validação server-side: impede criação de evento com overlap real no Calendar.
           // O LLM pode alucinar disponibilidade — esta verificação é a fonte de verdade.
@@ -1088,6 +1242,7 @@ export class TesteBarbeariaBot extends BotBase {
     tools.push(
       this.buildRemarcarTool({
         telefone,
+        scheduleConfig,
         cloneTz,
         resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
           const tMin = new Date().toISOString();
@@ -1790,6 +1945,14 @@ export class TesteBarbeariaBot extends BotBase {
             usa_pacote?: unknown;
           };
 
+          if (typeof summary !== 'string' || typeof start !== 'string' || typeof end !== 'string') {
+            return {
+              ok: false,
+              error: 'HORARIO_INDISPONIVEL',
+              message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
+            };
+          }
+
           // Reancora o horário-de-parede do LLM no fuso do clone (mesmo do individual). O LLM
           // emite start/end com offset errado chumbado (−03 de SP); reinterpretamos no relógio
           // da barbearia. Clone SP = no-op (byte-idêntico). startISO/endISO = fonte do instante.
@@ -1846,6 +2009,25 @@ export class TesteBarbeariaBot extends BotBase {
                 `Ele(a) faz: ${oferece}. Ofereça um desses ou pergunte com qual profissional ` +
                 `o cliente quer fazer "${servicoPedido}".`,
             };
+          }
+
+          const validation = validateAgendaWrite({
+            scheduleConfig,
+            servico: servicoPedido,
+            startISO,
+            endISO,
+          });
+          if (!validation.ok) {
+            this.log.warn(
+              {
+                slot: this.slot,
+                fone: phoneLogTag(telefone),
+                colaboradorId: colaborador.colaboradorId,
+                error: validation.error,
+              },
+              'inserir_agendamento (estab) bloqueado: horario ou duracao invalido',
+            );
+            return validation;
           }
 
           const colabClient = colaborador.client;
@@ -2033,6 +2215,7 @@ export class TesteBarbeariaBot extends BotBase {
     tools.push(
       this.buildRemarcarTool({
         telefone,
+        scheduleConfig,
         cloneTz,
         resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
           const tMin = new Date().toISOString();
@@ -2041,6 +2224,7 @@ export class TesteBarbeariaBot extends BotBase {
           const matches: Array<{
             client: gcal.GoogleCalendarClient;
             colaboradorId: number;
+            colaborador: ColaboradorAgenda;
             event: gcal.CalendarEvent;
           }> = [];
           for (const c of decorados) {
@@ -2051,7 +2235,12 @@ export class TesteBarbeariaBot extends BotBase {
                 e.start.dateTime != null &&
                 new Date(e.start.dateTime).getTime() === targetMs
               ) {
-                matches.push({ client: c.client, colaboradorId: c.colaboradorId, event: e });
+                matches.push({
+                  client: c.client,
+                  colaboradorId: c.colaboradorId,
+                  colaborador: c,
+                  event: e,
+                });
               }
             }
           }
@@ -2062,6 +2251,7 @@ export class TesteBarbeariaBot extends BotBase {
             kind: 'found',
             client: m.client,
             colaboradorId: m.colaboradorId,
+            colaborador: m.colaborador,
             event: m.event,
           };
         },

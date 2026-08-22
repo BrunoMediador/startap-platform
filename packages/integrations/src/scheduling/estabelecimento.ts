@@ -17,7 +17,7 @@
  *     clone_colaboradores.servicos — migration 057; vazio = faz todos os globais) e o
  *     [HORARIOS DISPONIVEIS]
  *     ROTULADO POR COLABORADOR, reusando a MESMA grade do bot individual
- *     (formatarAgendaComConfig — step = duração, piso de 10min pra hoje, overlap).
+ *     (formatarAgendaComConfig — step = duração, próximo slot da grade hoje, overlap).
  *  5. Inclui a REGRA DE DESAMBIGUAÇÃO obrigatória pra homônimos.
  *
  * O LLM recebe apenas os nomes dos profissionais. O servidor resolve o nome
