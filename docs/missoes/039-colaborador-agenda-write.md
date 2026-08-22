@@ -24,7 +24,7 @@ colaborador nunca deve poder nomear esse alvo; as novas rotas derivam-no da cred
 **A:** Não. PATCH e DELETE consultam apenas o calendário associado ao `colaboradorId` da sessão.
 Um identificador de colega ou de outro tenant retorna o mesmo 404 de evento ausente.
 
-**Q: O faturamento acompanha as mudanças?
+**Q: O faturamento acompanha as mudanças?**
 **A:** Sim. Criar e remarcar mantêm o upsert/sync de `atendimentos`; cancelar mantém o soft-delete
 idempotente. A auditoria diferencia `portal:<ownerId>` de `portal:colaborador:<colaboradorId>`.
 
