@@ -468,6 +468,15 @@ export class GoogleCalendarClient {
     );
   }
 
+  /** Consulta uma ocorrência determinística durante recuperação, sem listar janelas amplas. */
+  async getEvent(eventId: string): Promise<CalendarEvent> {
+    return gcalFetch<CalendarEvent>(
+      `/calendars/${encodeURIComponent(this.calendarId)}/events/${eventId}`,
+      { method: 'GET' },
+      () => this.getAccessToken(),
+    );
+  }
+
   async deleteEvent(eventId: string): Promise<void> {
     await gcalFetch(
       `/calendars/${encodeURIComponent(this.calendarId)}/events/${eventId}`,

@@ -46,6 +46,9 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
       actorRole: 'owner' as const,
       actorUserId: 22,
       actorColaboradorId: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco' as const,
+      motivo: 'intervalo',
       occurrences: [
         {
           ordinal: 1,
@@ -97,7 +100,12 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
       actor_role TEXT NOT NULL,
       actor_user_id BIGINT,
       actor_colaborador_id BIGINT,
+      timezone TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      motivo TEXT,
       status TEXT NOT NULL DEFAULT 'planned',
+      response_status INTEGER,
+      response_body JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (tenant_id, slot, colaborador_key, session_hash, payload_hash)

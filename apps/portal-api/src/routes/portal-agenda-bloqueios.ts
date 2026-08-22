@@ -27,7 +27,12 @@ import {
   type Periodicidade,
   expandirDatas,
 } from '@startap/core/recorrencia';
-import { agendaBloqueioSeries, agendaBloqueios, cloneColaboradores } from '@startap/db';
+import {
+  agendaBloqueioOperacoes,
+  agendaBloqueioSeries,
+  agendaBloqueios,
+  cloneColaboradores,
+} from '@startap/db';
 import { gcal } from '@startap/integrations';
 import { zonedWallTimeToUtc } from '@startap/integrations/scheduling';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
@@ -101,6 +106,14 @@ const listQuerySchema = z
 
 const paramsSchema = z.object({ id: z.string().uuid() });
 const serieParamsSchema = z.object({ serieId: z.string().uuid() });
+const recoveryBodySchema = z
+  .object({
+    colaborador_id: z.preprocess(
+      (v) => (v == null || v === '' ? undefined : v),
+      z.coerce.number().int().positive().optional(),
+    ),
+  })
+  .strict();
 
 interface TenantScope {
   slot: string;
@@ -191,6 +204,10 @@ function gateColaboradorEnabled(slot: string, reply: FastifyReply): boolean {
 
 function gcalEventIdForBloqueio(bloqueioId: string): string {
   return `bloq${bloqueioId.replaceAll('-', '').toLowerCase()}`;
+}
+
+function gcalEventIdForOperation(operationId: string, ordinal: number): string {
+  return `bloqop${operationId.replaceAll('-', '').toLowerCase()}${ordinal}`;
 }
 
 async function resolveOwnerScope(slot: string, reply: FastifyReply): Promise<TenantScope | null> {
@@ -587,6 +604,388 @@ async function handleCreate(args: {
   return args.reply.code(201).send({ ok: true, bloqueio: created.bloqueio });
 }
 
+type DurableSerieActor = {
+  role: agendaBloqueios.AgendaBloqueioCreatedByRole;
+  userId?: number | null;
+  colaboradorId?: number | null;
+};
+
+type DurableSerieFailure = {
+  inicio_at: string;
+  fim_at: string;
+  error: CreateOccurrenceError;
+  reason: SerieFailureReason;
+};
+
+function durableSerieResponse(input: {
+  operationId: string;
+  criados: Array<{ id: string; inicio_at: string; fim_at: string }>;
+  falhas: DurableSerieFailure[];
+}) {
+  return {
+    ok: input.falhas.length === 0,
+    serie_id: input.operationId,
+    criados: input.criados,
+    falhas: input.falhas,
+  };
+}
+
+function replayStoredOperation(
+  reply: FastifyReply,
+  operation: agendaBloqueioOperacoes.AgendaBloqueioOperacaoRecovery,
+) {
+  if (
+    operation.status === 'planned' ||
+    operation.status === 'creating' ||
+    operation.status === 'recovery_required'
+  ) {
+    return reply.code(409).send({ error: 'serie_recovery_necessaria', serie_id: operation.id });
+  }
+  if (operation.response_status == null || operation.response_body == null) {
+    return reply.code(409).send({ error: 'serie_resultado_indisponivel' });
+  }
+  return reply
+    .code(operation.response_status)
+    .send({ ...operation.response_body, idempotent: true });
+}
+
+async function persistOperationResult(args: {
+  scope: TenantScope;
+  colaboradorId: number | null;
+  operationId: string;
+  status: Exclude<agendaBloqueioOperacoes.AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
+  responseStatus: number;
+  responseBody: Record<string, unknown>;
+}): Promise<void> {
+  await agendaBloqueioOperacoes.markOperationResult({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    operationId: args.operationId,
+    colaboradorId: args.colaboradorId,
+    status: args.status,
+    responseStatus: args.responseStatus,
+    responseBody: args.responseBody,
+  });
+}
+
+async function ensureLocalDurableOccurrence(args: {
+  scope: TenantScope;
+  target: GcalTarget;
+  operation: agendaBloqueioOperacoes.AgendaBloqueioOperacaoRecovery;
+  occurrence: agendaBloqueioOperacoes.AgendaBloqueioOperacaoOcorrencia;
+}): Promise<void> {
+  try {
+    await agendaBloqueios.create({
+      id: args.occurrence.bloqueio_id,
+      tenantId: args.scope.tenantId,
+      slot: args.scope.slot,
+      colaboradorId: args.target.colaboradorId,
+      serieId: args.operation.id,
+      gcalEventId: args.occurrence.gcal_event_id,
+      inicioAt: args.occurrence.inicio_at,
+      fimAt: args.occurrence.fim_at,
+      timezone: args.operation.timezone,
+      tipo: args.operation.tipo,
+      motivo: args.operation.motivo,
+      createdByRole: args.operation.actor_role,
+      createdByUserId: args.operation.actor_user_id,
+      createdByColaboradorId: args.operation.actor_colaborador_id,
+    });
+  } catch (err) {
+    const existing = await agendaBloqueios.getByIdForRecovery(
+      args.scope.tenantId,
+      args.scope.slot,
+      args.occurrence.bloqueio_id,
+    );
+    if (!existing) throw err;
+  }
+}
+
+async function createDurableGcalEvent(args: {
+  scope: TenantScope;
+  target: GcalTarget;
+  operation: agendaBloqueioOperacoes.AgendaBloqueioOperacaoRecovery;
+  occurrence: agendaBloqueioOperacoes.AgendaBloqueioOperacaoOcorrencia;
+}): Promise<boolean> {
+  try {
+    await args.target.client.createEvent({
+      eventId: args.occurrence.gcal_event_id,
+      summary: blockSummary(args.operation.tipo, args.operation.motivo),
+      startISO: args.occurrence.inicio_at,
+      endISO: args.occurrence.fim_at,
+      timeZone: args.operation.timezone,
+      extendedPropertiesPrivate: {
+        kind: 'bloqueio',
+        bloqueioId: args.occurrence.bloqueio_id,
+        colaboradorId: args.target.colaboradorId == null ? '' : String(args.target.colaboradorId),
+        serie_id: args.operation.id,
+      },
+    });
+    const attached = await agendaBloqueios.attachGcalEventId(
+      args.scope.tenantId,
+      args.scope.slot,
+      args.occurrence.bloqueio_id,
+      args.occurrence.gcal_event_id,
+    );
+    if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
+    await agendaBloqueioOperacoes.markOccurrence({
+      tenantId: args.scope.tenantId,
+      slot: args.scope.slot,
+      operationId: args.operation.id,
+      ordinal: args.occurrence.ordinal,
+      status: 'active',
+    });
+    return true;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isGcalForbiddenOrAuthError(message)) gcal.invalidateGcalCache(args.scope.slot);
+    await agendaBloqueioOperacoes.markOccurrence({
+      tenantId: args.scope.tenantId,
+      slot: args.scope.slot,
+      operationId: args.operation.id,
+      ordinal: args.occurrence.ordinal,
+      status: 'recovery_required',
+      errorCode: isGcalRateLimitError(message) ? 'gcal_rate_limit' : 'gcal_ambiguous',
+    });
+    log.error(
+      {
+        slot: args.scope.slot,
+        operationId: args.operation.id,
+        ordinal: args.occurrence.ordinal,
+        eventId: hashEventIdForLog(args.occurrence.gcal_event_id),
+        err: message,
+      },
+      'criação de bloqueio recorrente ambígua; exige recovery explícito',
+    );
+    return false;
+  }
+}
+
+async function runDurableSerie(args: {
+  scope: TenantScope;
+  target: GcalTarget;
+  operation: agendaBloqueioOperacoes.AgendaBloqueioOperacaoRecovery;
+  colaboradorId: number | null;
+  recovery: boolean;
+}) {
+  const pending = await agendaBloqueioOperacoes.listForRecovery({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    operationId: args.operation.id,
+    colaboradorId: args.colaboradorId,
+  });
+  const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
+  const falhas: DurableSerieFailure[] = [];
+  for (const occurrence of pending) {
+    try {
+      if (occurrence.status === 'planned') {
+        await ensureLocalDurableOccurrence({ ...args, occurrence });
+        const claimed = await agendaBloqueioOperacoes.claimDispatch({
+          tenantId: args.scope.tenantId,
+          slot: args.scope.slot,
+          operationId: args.operation.id,
+          ordinal: occurrence.ordinal,
+        });
+        if (!claimed) continue;
+        if (await createDurableGcalEvent({ ...args, occurrence: claimed })) {
+          criados.push({
+            id: occurrence.bloqueio_id,
+            inicio_at: occurrence.inicio_at,
+            fim_at: occurrence.fim_at,
+          });
+        } else {
+          falhas.push({
+            inicio_at: occurrence.inicio_at,
+            fim_at: occurrence.fim_at,
+            error: 'gcal_falhou',
+            reason: 'erro_gcal',
+          });
+        }
+        continue;
+      }
+      if (!args.recovery) {
+        falhas.push({
+          inicio_at: occurrence.inicio_at,
+          fim_at: occurrence.fim_at,
+          error: 'gcal_falhou',
+          reason: 'erro_gcal',
+        });
+        continue;
+      }
+      try {
+        await args.target.client.getEvent(occurrence.gcal_event_id);
+        const attached = await agendaBloqueios.attachGcalEventId(
+          args.scope.tenantId,
+          args.scope.slot,
+          occurrence.bloqueio_id,
+          occurrence.gcal_event_id,
+        );
+        if (!attached) throw new Error('bloqueio_local_nao_encontrado_apos_gcal');
+        await agendaBloqueioOperacoes.markOccurrence({
+          tenantId: args.scope.tenantId,
+          slot: args.scope.slot,
+          operationId: args.operation.id,
+          ordinal: occurrence.ordinal,
+          status: 'active',
+        });
+        criados.push({
+          id: occurrence.bloqueio_id,
+          inicio_at: occurrence.inicio_at,
+          fim_at: occurrence.fim_at,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/HTTP 404/.test(message)) {
+          if (isGcalForbiddenOrAuthError(message)) gcal.invalidateGcalCache(args.scope.slot);
+          falhas.push({
+            inicio_at: occurrence.inicio_at,
+            fim_at: occurrence.fim_at,
+            error: 'gcal_falhou',
+            reason: 'erro_gcal',
+          });
+          continue;
+        }
+        if (await createDurableGcalEvent({ ...args, occurrence })) {
+          criados.push({
+            id: occurrence.bloqueio_id,
+            inicio_at: occurrence.inicio_at,
+            fim_at: occurrence.fim_at,
+          });
+        } else {
+          falhas.push({
+            inicio_at: occurrence.inicio_at,
+            fim_at: occurrence.fim_at,
+            error: 'gcal_falhou',
+            reason: 'erro_gcal',
+          });
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await agendaBloqueioOperacoes.markOccurrence({
+        tenantId: args.scope.tenantId,
+        slot: args.scope.slot,
+        operationId: args.operation.id,
+        ordinal: occurrence.ordinal,
+        status: 'recovery_required',
+        errorCode: 'local_write_failed',
+      });
+      log.error(
+        {
+          slot: args.scope.slot,
+          operationId: args.operation.id,
+          ordinal: occurrence.ordinal,
+          err: message,
+        },
+        'operação recorrente exige recovery após falha local',
+      );
+      falhas.push({
+        inicio_at: occurrence.inicio_at,
+        fim_at: occurrence.fim_at,
+        error: 'erro_interno',
+        reason: 'erro_interno',
+      });
+    }
+  }
+  const responseBody = durableSerieResponse({ operationId: args.operation.id, criados, falhas });
+  const responseStatus = falhas.length === 0 ? 201 : 207;
+  await persistOperationResult({
+    scope: args.scope,
+    colaboradorId: args.colaboradorId,
+    operationId: args.operation.id,
+    status: falhas.length === 0 ? 'complete' : 'recovery_required',
+    responseStatus,
+    responseBody,
+  });
+  return { responseStatus, responseBody };
+}
+
+async function createDurableSerie(args: {
+  scope: TenantScope;
+  target: GcalTarget;
+  colaboradorId: number | null;
+  sid: string;
+  input: z.infer<typeof criarSerieSchema>;
+  actor: DurableSerieActor;
+  reply: FastifyReply;
+}) {
+  const operationId = randomUUID();
+  const occurrences = expandirOcorrenciasSerie({
+    inicioAt: args.input.inicio_at,
+    fimAt: args.input.fim_at,
+    timeZone: args.input.timezone || args.scope.timezone,
+    periodicidade: args.input.periodicidade,
+    ocorrencias: args.input.ocorrencias,
+  });
+  const claim = await agendaBloqueioOperacoes.createPlan({
+    operationId,
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    colaboradorId: args.colaboradorId,
+    sessionHash: hashReplayPart(args.sid),
+    payloadHash: hashReplayPart(serieReplayPayload(args.input, args.colaboradorId)),
+    actorRole: args.actor.role,
+    actorUserId: args.actor.userId ?? null,
+    actorColaboradorId: args.actor.colaboradorId ?? null,
+    timezone: args.input.timezone || args.scope.timezone,
+    tipo: args.input.tipo,
+    motivo: args.input.motivo ?? null,
+    occurrences: occurrences.map((occurrence, index) => ({
+      ordinal: index + 1,
+      inicioAt: occurrence.inicio_at,
+      fimAt: occurrence.fim_at,
+      bloqueioId: randomUUID(),
+      gcalEventId: gcalEventIdForOperation(operationId, index + 1),
+    })),
+  });
+  const operation = await agendaBloqueioOperacoes.getOperationForRecovery({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    operationId: claim.operation.id,
+    colaboradorId: args.colaboradorId,
+  });
+  if (!operation) throw new Error('agenda_bloqueio_operacao_inconsistente');
+  if (!claim.created) return replayStoredOperation(args.reply, operation);
+  const result = await runDurableSerie({ ...args, operation, recovery: false });
+  return args.reply.code(result.responseStatus).send(result.responseBody);
+}
+
+async function recoverDurableSerie(args: {
+  scope: TenantScope;
+  colaboradorId: number | null;
+  operationId: string;
+  reply: FastifyReply;
+}) {
+  const operation = await agendaBloqueioOperacoes.getOperationForRecovery({
+    tenantId: args.scope.tenantId,
+    slot: args.scope.slot,
+    operationId: args.operationId,
+    colaboradorId: args.colaboradorId,
+  });
+  if (!operation) return args.reply.code(404).send({ error: 'serie_nao_encontrada' });
+  if (
+    operation.status === 'complete' ||
+    operation.status === 'partial' ||
+    operation.status === 'failed_final'
+  ) {
+    return replayStoredOperation(args.reply, operation);
+  }
+  const target = await resolveTarget(args.scope.slot, args.colaboradorId);
+  if (!target) {
+    return args.reply.code(args.colaboradorId == null ? 422 : 404).send({
+      error: args.colaboradorId == null ? 'gcal_nao_configurado' : 'colaborador_nao_encontrado',
+    });
+  }
+  const result = await runDurableSerie({
+    scope: args.scope,
+    target,
+    operation,
+    colaboradorId: args.colaboradorId,
+    recovery: true,
+  });
+  return args.reply.code(result.responseStatus).send(result.responseBody);
+}
+
 async function handleRemove(args: {
   scope: TenantScope;
   id: string;
@@ -739,6 +1138,18 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: 'payload_invalido' });
     }
 
+    return createDurableSerie({
+      scope,
+      target,
+      colaboradorId,
+      sid,
+      input: parsed.data,
+      actor: { role: 'owner', userId },
+      reply,
+    });
+
+    /* Legacy series state machine retained temporarily for rollback archaeology.
+       The durable operation above is the only reachable flow (ADR 0044).
     const claim = await claimSerieReplay({
       scope,
       colaboradorId,
@@ -834,7 +1245,29 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
             };
     await persistSerieResult({ scope, serieId, ...outcome });
     return reply.code(outcome.responseStatus).send(outcome.responseBody);
+    */
   });
+
+  app.post(
+    '/portal/agenda/bloqueios/serie/:serieId/recovery',
+    { preHandler: withTenant },
+    async (req, reply) => {
+      const { slot } = requireTenant(req);
+      if (!gateEnabled(slot, reply)) return reply;
+      const scope = await resolveOwnerScope(slot, reply);
+      if (!scope) return reply;
+      const params = serieParamsSchema.safeParse(req.params ?? {});
+      const body = recoveryBodySchema.safeParse(req.body ?? {});
+      if (!params.success || !body.success)
+        return reply.code(400).send({ error: 'payload_invalido' });
+      return recoverDurableSerie({
+        scope,
+        colaboradorId: body.data.colaborador_id ?? null,
+        operationId: params.data.serieId,
+        reply,
+      });
+    },
+  );
 
   app.delete(
     '/portal/agenda/bloqueios/serie/:serieId',
@@ -1007,6 +1440,18 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const scope = { slot, tenantId, timezone: parsed.data.timezone || 'America/Sao_Paulo' };
+      return createDurableSerie({
+        scope,
+        target,
+        colaboradorId,
+        sid,
+        input: parsed.data,
+        actor: { role: 'colaborador', colaboradorId },
+        reply,
+      });
+
+      /* Legacy series state machine retained temporarily for rollback archaeology.
+         The durable operation above is the only reachable flow (ADR 0044).
       const claim = await claimSerieReplay({
         scope,
         colaboradorId,
@@ -1102,6 +1547,7 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
               };
       await persistSerieResult({ scope, serieId, ...outcome });
       return reply.code(outcome.responseStatus).send(outcome.responseBody);
+      */
     },
   );
 
@@ -1117,6 +1563,23 @@ export const portalAgendaBloqueiosRoutes: FastifyPluginAsync = async (app) => {
         scope: { slot, tenantId, timezone: 'America/Sao_Paulo' },
         id: parsed.data.id,
         colaboradorId,
+        reply,
+      });
+    },
+  );
+
+  app.post(
+    '/portal/colaborador/bloqueios/serie/:serieId/recovery',
+    { preHandler: withColaborador },
+    async (req, reply) => {
+      const { slot, tenantId, colaboradorId } = requireColaborador(req);
+      if (!gateColaboradorEnabled(slot, reply)) return reply;
+      const params = serieParamsSchema.safeParse(req.params ?? {});
+      if (!params.success) return reply.code(400).send({ error: 'serie_invalida' });
+      return recoverDurableSerie({
+        scope: { slot, tenantId, timezone: 'America/Sao_Paulo' },
+        colaboradorId,
+        operationId: params.data.serieId,
         reply,
       });
     },

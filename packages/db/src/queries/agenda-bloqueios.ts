@@ -116,11 +116,22 @@ export async function attachGcalEventId(
   return r.rows[0] ? mapRow(r.rows[0]) : null;
 }
 
-export async function markCreateFailed(
+/** Leitura interna de recuperação: inclui linhas `creating` ainda sem efeito GCal confirmado. */
+export async function getByIdForRecovery(
   tenantId: string,
   slot: string,
   id: string,
-): Promise<void> {
+): Promise<AgendaBloqueioRow | null> {
+  const r = await query<AgendaBloqueioRaw>(
+    `SELECT * FROM agenda_bloqueios
+      WHERE tenant_id=$1 AND slot=$2 AND id=$3
+      LIMIT 1`,
+    [tenantId, slot, id],
+  );
+  return r.rows[0] ? mapRow(r.rows[0]) : null;
+}
+
+export async function markCreateFailed(tenantId: string, slot: string, id: string): Promise<void> {
   await query(
     `UPDATE agenda_bloqueios
         SET status = 'gcal_failed',
@@ -162,18 +173,12 @@ export async function list(input: ListAgendaBloqueiosInput): Promise<AgendaBloqu
   if (input.colaboradorId !== undefined) {
     args.push(input.colaboradorId);
     where.push(
-      input.colaboradorId === null
-        ? `colaborador_id IS NULL`
-        : `colaborador_id = $${args.length}`,
+      input.colaboradorId === null ? 'colaborador_id IS NULL' : `colaborador_id = $${args.length}`,
     );
   }
   if (input.serieId !== undefined) {
     args.push(input.serieId);
-    where.push(
-      input.serieId === null
-        ? `serie_id IS NULL`
-        : `serie_id = $${args.length}`,
-    );
+    where.push(input.serieId === null ? 'serie_id IS NULL' : `serie_id = $${args.length}`);
   }
   if (input.inicioAt) {
     args.push(input.inicioAt);

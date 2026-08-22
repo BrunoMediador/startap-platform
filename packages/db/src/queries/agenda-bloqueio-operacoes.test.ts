@@ -16,6 +16,9 @@ const input = {
   actorRole: 'owner' as const,
   actorUserId: 22,
   actorColaboradorId: null,
+  timezone: 'America/Sao_Paulo',
+  tipo: 'almoco' as const,
+  motivo: 'intervalo',
   occurrences: [
     {
       ordinal: 1,
@@ -51,11 +54,11 @@ describe('agenda-bloqueio-operacoes createPlan', () => {
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     const flat = sql.replace(/\s+/g, ' ');
     expect(flat).toContain('WITH operation_claim AS');
-    expect(flat).toContain('CROSS JOIN jsonb_to_recordset($10::jsonb)');
+    expect(flat).toContain('CROSS JOIN jsonb_to_recordset($13::jsonb)');
     expect(flat).toContain('WHERE operation_claim.created');
     expect(flat).not.toContain('ON CONFLICT (operation_id, ordinal) DO NOTHING');
-    expect(params).toHaveLength(10);
-    expect(params[9]).toBe(
+    expect(params).toHaveLength(13);
+    expect(params[12]).toBe(
       JSON.stringify(
         input.occurrences.map((occurrence) => ({
           ordinal: occurrence.ordinal,

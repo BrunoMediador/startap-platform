@@ -17,6 +17,16 @@ export interface AgendaBloqueioOperacao {
   id: string;
   status: AgendaBloqueioOperacaoStatus;
 }
+export interface AgendaBloqueioOperacaoRecovery extends AgendaBloqueioOperacao {
+  actor_role: 'owner' | 'colaborador';
+  actor_user_id: number | null;
+  actor_colaborador_id: number | null;
+  timezone: string;
+  tipo: 'almoco' | 'ausencia' | 'ferias' | 'indisponivel';
+  motivo: string | null;
+  response_status: number | null;
+  response_body: Record<string, unknown> | null;
+}
 export interface AgendaBloqueioOperacaoOcorrencia {
   operation_id: string;
   ordinal: number;
@@ -38,6 +48,9 @@ export async function createPlan(input: {
   actorRole: 'owner' | 'colaborador';
   actorUserId: number | null;
   actorColaboradorId: number | null;
+  timezone: string;
+  tipo: 'almoco' | 'ausencia' | 'ferias' | 'indisponivel';
+  motivo: string | null;
   occurrences: Array<{
     ordinal: number;
     inicioAt: string;
@@ -56,8 +69,8 @@ export async function createPlan(input: {
     `WITH operation_claim AS (
        INSERT INTO agenda_bloqueio_operacoes (
          id, tenant_id, slot, colaborador_key, session_hash, payload_hash,
-         actor_role, actor_user_id, actor_colaborador_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         actor_role, actor_user_id, actor_colaborador_id, timezone, tipo, motivo
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (tenant_id, slot, colaborador_key, session_hash, payload_hash)
        DO UPDATE SET updated_at = agenda_bloqueio_operacoes.updated_at
        RETURNING id, status, (xmax = 0) AS created
@@ -67,7 +80,7 @@ export async function createPlan(input: {
        SELECT operation_claim.id, plan.ordinal, plan.inicio_at, plan.fim_at,
               plan.bloqueio_id, plan.gcal_event_id
          FROM operation_claim
-         CROSS JOIN jsonb_to_recordset($10::jsonb) AS plan(
+         CROSS JOIN jsonb_to_recordset($13::jsonb) AS plan(
            ordinal integer, inicio_at timestamptz, fim_at timestamptz,
            bloqueio_id uuid, gcal_event_id text
          )
@@ -85,6 +98,9 @@ export async function createPlan(input: {
       input.actorRole,
       input.actorUserId,
       input.actorColaboradorId,
+      input.timezone,
+      input.tipo,
+      input.motivo,
       JSON.stringify(
         input.occurrences.map((o) => ({
           ordinal: o.ordinal,
@@ -148,7 +164,7 @@ export async function listForRecovery(input: {
 }): Promise<AgendaBloqueioOperacaoOcorrencia[]> {
   const r = await query<AgendaBloqueioOperacaoOcorrencia>(
     `SELECT o.* FROM agenda_bloqueio_operacao_ocorrencias o JOIN agenda_bloqueio_operacoes op ON op.id=o.operation_id
-      WHERE op.tenant_id=$1 AND op.slot=$2 AND op.id=$3 AND op.colaborador_key=$4 AND o.status IN ('gcal_dispatch_started','recovery_required') ORDER BY o.ordinal`,
+      WHERE op.tenant_id=$1 AND op.slot=$2 AND op.id=$3 AND op.colaborador_key=$4 AND o.status IN ('planned','gcal_dispatch_started','recovery_required') ORDER BY o.ordinal`,
     [input.tenantId, input.slot, input.operationId, input.colaboradorId ?? 0],
   );
   return r.rows;
@@ -165,4 +181,46 @@ export async function getOperation(input: {
     [input.tenantId, input.slot, input.operationId, input.colaboradorId ?? 0],
   );
   return r.rows[0] ?? null;
+}
+
+export async function getOperationForRecovery(input: {
+  tenantId: string;
+  slot: string;
+  operationId: string;
+  colaboradorId: number | null;
+}): Promise<AgendaBloqueioOperacaoRecovery | null> {
+  const r = await query<AgendaBloqueioOperacaoRecovery>(
+    `SELECT id, status, actor_role, actor_user_id, actor_colaborador_id,
+            timezone, tipo, motivo, response_status, response_body
+       FROM agenda_bloqueio_operacoes
+      WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND colaborador_key=$4
+      LIMIT 1`,
+    [input.tenantId, input.slot, input.operationId, input.colaboradorId ?? 0],
+  );
+  return r.rows[0] ?? null;
+}
+
+export async function markOperationResult(input: {
+  tenantId: string;
+  slot: string;
+  operationId: string;
+  colaboradorId: number | null;
+  status: Exclude<AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
+  responseStatus: number;
+  responseBody: Record<string, unknown>;
+}): Promise<void> {
+  await query(
+    `UPDATE agenda_bloqueio_operacoes
+        SET status=$5, response_status=$6, response_body=$7::jsonb, updated_at=now()
+      WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND colaborador_key=$4`,
+    [
+      input.tenantId,
+      input.slot,
+      input.operationId,
+      input.colaboradorId ?? 0,
+      input.status,
+      input.responseStatus,
+      JSON.stringify(input.responseBody),
+    ],
+  );
 }
