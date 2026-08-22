@@ -109,7 +109,6 @@ export interface AuthMe {
 // O colaborador loga com username (slug do nome) + senha gerada pelo dono no gestão.
 // A sessão nasce com role='colaborador' + colaboradorId; TODA query escopa por
 // (slot + tenant + colaboradorId) DA SESSÃO no backend — o front nunca envia id.
-// Visão só-leitura: a agenda dele e a comissão/faturamento dele. Sem ações do dono.
 
 /** GET /auth/colaborador/me — identidade da sessão do colaborador (server guard). */
 export interface ColaboradorMe {
@@ -129,14 +128,15 @@ export interface ColaboradorMe {
 }
 
 /**
- * GET /portal/colaborador/agenda — agenda do colaborador logado (read-only). MESMO shape
- * de AgendamentosResponse (id/titulo/inicio/fim); `gcal_configured:false` = agenda
- * dele ainda não conectada (pré-setup, estado esperado -> empty, não erro).
+ * GET /portal/colaborador/agenda — agenda do colaborador logado. `agenda_write_enabled`
+ * vem EXPLICITAMENTE do backend: ausente/falso preserva a tela como consulta, o que
+ * permite rollout independente das rotas mutantes. Nunca é inferido no navegador.
  */
 export interface ColaboradorAgendaResponse {
   gcal_configured: boolean;
   count: number;
   agendamentos: Agendamento[];
+  agenda_write_enabled?: boolean;
 }
 
 export type AgendaBloqueioTipo = 'almoco' | 'ausencia' | 'ferias' | 'indisponivel';
@@ -665,6 +665,13 @@ export interface CriarAgendamentoBody {
    */
   colaborador_id?: number;
 }
+
+/**
+ * Corpo das rotas mutantes do colaborador. A identidade do profissional é
+ * deliberadamente AUSENTE: o portal-api a deriva de `withColaborador`, para que
+ * o navegador não possa marcar horários na agenda de um colega.
+ */
+export type CriarAgendamentoColaboradorBody = Omit<CriarAgendamentoBody, 'colaborador_id'>;
 
 /** 201 do POST — `agendamento` no MESMO shape da lista (prepend otimista ok). */
 export interface CriarAgendamentoResponse {

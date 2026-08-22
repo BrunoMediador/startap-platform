@@ -38,9 +38,29 @@ vi.mock('@startap/integrations', () => ({
 // isEstabelecimentoSlot vem de portal-agendamentos.js (reusado pra a grade ser ciente de
 // estabelecimento). Mockado: default FALSE => caminho individual (todos os testes legados
 // inalterados). Os testes de estabelecimento ligam mockResolvedValue(true).
-const { isEstabelecimentoSlotMock } = vi.hoisted(() => ({ isEstabelecimentoSlotMock: vi.fn() }));
+const { isEstabelecimentoSlotMock, colaboradorAgendaGateMock } = vi.hoisted(() => ({
+  isEstabelecimentoSlotMock: vi.fn(),
+  colaboradorAgendaGateMock: vi.fn(),
+}));
 vi.mock('./portal-agendamentos.js', () => ({
   isEstabelecimentoSlot: (...a: unknown[]) => isEstabelecimentoSlotMock(...a),
+  withColaboradorAgendamentos: async (
+    req: { colaborador?: unknown },
+    reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+  ) => {
+    if (!colaboradorAgendaGateMock()) {
+      reply.code(404).send({ error: 'feature_off' });
+      return;
+    }
+    req.colaborador = {
+      slot: injectedSlot,
+      tenantId: 'tenant-xyz',
+      colaboradorId: 7,
+      username: 'bene',
+      nome: 'Bené',
+      sid: 'sid-colaborador',
+    };
+  },
 }));
 
 // loadScheduleConfig mockado (config vem do banco); funções puras REAIS via
@@ -59,6 +79,16 @@ vi.mock('../lib/tenant.js', async () => {
     ...actual,
     withTenant: vi.fn(async (req: { tenant?: unknown }) => {
       req.tenant = { slot: injectedSlot, userId: 7, username: 'dono', sid: 'sid-atual' };
+    }),
+    withColaborador: vi.fn(async (req: { colaborador?: unknown }) => {
+      req.colaborador = {
+        slot: injectedSlot,
+        tenantId: 'tenant-xyz',
+        colaboradorId: 7,
+        username: 'bene',
+        nome: 'Bené',
+        sid: 'sid-colaborador',
+      };
     }),
   };
 });
@@ -115,6 +145,7 @@ beforeEach(() => {
   loadScheduleConfigMock.mockResolvedValue(CONFIG_OK);
   // Default: clone INDIVIDUAL (todos os testes legados seguem byte-a-byte).
   isEstabelecimentoSlotMock.mockResolvedValue(false);
+  colaboradorAgendaGateMock.mockReturnValue(true);
 });
 
 describe('GET /portal/agenda/slots', () => {
@@ -363,6 +394,61 @@ describe('GET /portal/agenda/slots — estabelecimento', () => {
     expect(res.statusCode).toBe(200);
     expect(getGcalForSlotMock).toHaveBeenCalledWith(injectedSlot);
     expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+});
+
+describe('GET /portal/colaborador/agendamentos/slots — somente a própria agenda', () => {
+  it('gate OFF -> 404 antes de carregar configuração ou GCal', async () => {
+    colaboradorAgendaGateMock.mockReturnValue(false);
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/portal/colaborador/agendamentos/slots?data=${FUTURO}&servico=Corte`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(loadScheduleConfigMock).not.toHaveBeenCalled();
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('força colaboradorId da sessão e rejeita tentativa de escolher agenda de colega', async () => {
+    isEstabelecimentoSlotMock.mockResolvedValue(true);
+    const listEventsPropria = vi.fn().mockResolvedValue([]);
+    const listEventsColega = vi.fn().mockResolvedValue([]);
+    getGcalsForSlotMock.mockResolvedValue([
+      {
+        colaboradorId: 7,
+        nome: 'Bené',
+        calendarId: 'cal-7',
+        client: { listEvents: listEventsPropria },
+        servicos: [],
+      },
+      {
+        colaboradorId: 8,
+        nome: 'Colega',
+        calendarId: 'cal-8',
+        client: { listEvents: listEventsColega },
+        servicos: [],
+      },
+    ]);
+    const app = await buildApp();
+
+    const forjado = await app.inject({
+      method: 'GET',
+      url: `/portal/colaborador/agendamentos/slots?data=${FUTURO}&servico=Corte&colaborador_id=8`,
+    });
+    expect(forjado.statusCode).toBe(400);
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+
+    const proprio = await app.inject({
+      method: 'GET',
+      url: `/portal/colaborador/agendamentos/slots?data=${FUTURO}&servico=Corte`,
+    });
+    expect(proprio.statusCode).toBe(200);
+    expect(listEventsPropria).toHaveBeenCalledTimes(1);
+    expect(listEventsColega).not.toHaveBeenCalled();
     await app.close();
   });
 });

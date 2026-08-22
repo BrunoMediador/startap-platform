@@ -20,7 +20,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { configMock } = vi.hoisted(() => ({
-  configMock: { COLABORADOR_PORTAL_ENABLED: false } as Record<string, unknown>,
+  configMock: {
+    COLABORADOR_PORTAL_ENABLED: false,
+    COLABORADOR_AGENDAMENTOS_ENABLED: false,
+    COLABORADOR_AGENDAMENTOS_SLOTS: '',
+  } as Record<string, unknown>,
 }));
 
 vi.mock('../config.js', () => ({ config: configMock }));
@@ -66,6 +70,8 @@ async function buildApp(): Promise<FastifyInstance> {
 beforeEach(() => {
   vi.clearAllMocks();
   configMock.COLABORADOR_PORTAL_ENABLED = true;
+  configMock.COLABORADOR_AGENDAMENTOS_ENABLED = false;
+  configMock.COLABORADOR_AGENDAMENTOS_SLOTS = '';
 });
 
 describe('gating COLABORADOR_PORTAL_ENABLED', () => {
@@ -107,6 +113,22 @@ describe('namespace proxiado /portal/* (não o /colaborador/* colidente)', () =>
 });
 
 describe('GET /portal/colaborador/agenda — só a agenda DELE', () => {
+  it('expõe agenda_write_enabled somente quando os gates de escrita permitem o slot da sessão', async () => {
+    getGcalsMock.mockResolvedValue([]);
+    const app = await buildApp();
+
+    const off = await app.inject({ method: 'GET', url: '/portal/colaborador/agenda' });
+    expect(off.statusCode).toBe(200);
+    expect(off.json().agenda_write_enabled).toBe(false);
+
+    configMock.COLABORADOR_AGENDAMENTOS_ENABLED = true;
+    configMock.COLABORADOR_AGENDAMENTOS_SLOTS = 'clone_seven';
+    const on = await app.inject({ method: 'GET', url: '/portal/colaborador/agenda' });
+    expect(on.statusCode).toBe(200);
+    expect(on.json().agenda_write_enabled).toBe(true);
+    await app.close();
+  });
+
   it('devolve eventos do colaborador da sessão e IGNORA os de outro colaborador', async () => {
     const eventosBene = [
       {

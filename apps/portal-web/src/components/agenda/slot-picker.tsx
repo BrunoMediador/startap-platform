@@ -25,7 +25,12 @@ import {
   podeAvancarSemana,
   podeVoltarSemana,
 } from '@/lib/novo-agendamento';
-import { useAgendaSlots, useHorarios } from '@/lib/queries';
+import {
+  useAgendaSlots,
+  useColaboradorAgendaHorarios,
+  useColaboradorAgendaSlots,
+  useHorarios,
+} from '@/lib/queries';
 import { useMemo, useState } from 'react';
 
 export function SlotPicker({
@@ -37,6 +42,7 @@ export function SlotPicker({
   onPickHora,
   aviso,
   colaboradorId = null,
+  scope = 'owner',
 }: {
   slot: string;
   /** Nome do serviço (define a duração — necessário pra grade). */
@@ -53,9 +59,29 @@ export function SlotPicker({
    * evento entre profissionais, então é sempre o colaborador atual do agendamento.
    */
   colaboradorId?: number | null;
+  /** Colaborador usa somente as rotas que o backend escopa à sessão dele. */
+  scope?: 'owner' | 'colaborador';
 }) {
-  const horariosQ = useHorarios(slot);
-  const slotsQ = useAgendaSlots(slot, dataSel, servico, colaboradorId);
+  // Os hooks são chamados sempre (regras de Hooks); apenas o conjunto do escopo ativo
+  // pode buscar. Assim, passar `scope="colaborador"` jamais chama endpoints do dono.
+  const isColaborador = scope === 'colaborador';
+  const colaboradorIdSeguro = colaboradorId ?? 0;
+  const horariosOwnerQ = useHorarios(slot, !isColaborador);
+  const horariosColaboradorQ = useColaboradorAgendaHorarios(
+    slot,
+    colaboradorIdSeguro,
+    isColaborador && colaboradorId !== null,
+  );
+  const slotsOwnerQ = useAgendaSlots(slot, dataSel, servico, colaboradorId, !isColaborador);
+  const slotsColaboradorQ = useColaboradorAgendaSlots(
+    slot,
+    colaboradorIdSeguro,
+    dataSel,
+    servico,
+    isColaborador && colaboradorId !== null,
+  );
+  const horariosQ = isColaborador ? horariosColaboradorQ : horariosOwnerQ;
+  const slotsQ = isColaborador ? slotsColaboradorQ : slotsOwnerQ;
   const [weekOffset, setWeekOffset] = useState(0);
   const strip = useMemo(
     () => buildWeekStrip(horariosQ.data, weekOffset),

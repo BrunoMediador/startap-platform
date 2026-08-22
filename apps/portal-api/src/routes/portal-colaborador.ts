@@ -1,5 +1,5 @@
 /**
- * Painel do COLABORADOR (barbeiro de estabelecimento) — visão READ-ONLY e ESCOPADA
+ * Painel do COLABORADOR (barbeiro de estabelecimento) — visão escopada à própria agenda
  * (SCRUM-32). O colaborador loga no portal com username (nome) + senha gerada pelo dono
  * no gestão e vê SÓ os dados DELE: a agenda dele e a comissão/faturamento dele.
  *
@@ -13,9 +13,10 @@
  *   - COMISSÃO/FATURAMENTO: getComissaoColaborador escopa por cc.id = colaboradorId DA
  *     SESSÃO; outro colaborador/tenant não casa o WHERE -> 404 (não vaza existência).
  *
- * READ-ONLY: só GET. Nenhuma escrita (sem criar/editar/cancelar agendamento, sem editar
- * atendimento, sem billing). A visão do DONO (todos os colaboradores) vive em rotas que
- * passam por withTenant — barradas a colaborador no chokepoint (403).
+ * ESCRITA DE AGENDA: POST/PATCH/DELETE vivem em portal-agendamentos.ts para reutilizar o
+ * mesmo núcleo de comandos do dono. Exigem COLABORADOR_AGENDAMENTOS_ENABLED + allowlist e
+ * derivam a agenda exclusivamente da sessão; billing, equipe, perfil e demais rotas do dono
+ * continuam barrados por withTenant.
  *
  * GATING: flag COLABORADOR_PORTAL_ENABLED OFF -> TODAS as rotas respondem 404 (feature
  * dormente; não vaza). Defesa em profundidade — o acesso real ainda exige credencial
@@ -28,6 +29,7 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { requireColaborador, withColaborador } from '../lib/tenant.js';
+import { isColaboradorAgendamentosEnabled } from './portal-agendamentos.js';
 
 const log = logger.child({ service: 'portal-api', module: 'colaborador' });
 
@@ -68,6 +70,7 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
   app.get('/portal/colaborador/agenda', { preHandler: withColaborador }, async (req, reply) => {
     if (!gateEnabled(reply)) return reply;
     const { slot, colaboradorId } = requireColaborador(req);
+    const agendaWriteEnabled = isColaboradorAgendamentosEnabled(slot);
 
     const q = req.query as { past?: unknown; ahead?: unknown };
     const pastDays = pastDaysQuery.safeParse(q?.past).success
@@ -99,7 +102,12 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
     if (!alvo) {
       // Sem agenda ativa pra este colaborador (pré-setup / agenda não conectada).
       // Estado esperado, não erro: lista vazia + flag.
-      return reply.code(200).send({ gcal_configured: false, count: 0, agendamentos: [] });
+      return reply.code(200).send({
+        gcal_configured: false,
+        count: 0,
+        agendamentos: [],
+        agenda_write_enabled: agendaWriteEnabled,
+      });
     }
 
     try {
@@ -114,9 +122,12 @@ export const portalColaboradorRoutes: FastifyPluginAsync = async (app) => {
         }))
         .sort((a, b) => (a.inicio ?? '￿').localeCompare(b.inicio ?? '￿'))
         .slice(0, MAX_EVENTS);
-      return reply
-        .code(200)
-        .send({ gcal_configured: true, count: agendamentos.length, agendamentos });
+      return reply.code(200).send({
+        gcal_configured: true,
+        count: agendamentos.length,
+        agendamentos,
+        agenda_write_enabled: agendaWriteEnabled,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'erro';
       if (/40[13]/.test(msg)) gcal.invalidateGcalCache(slot);

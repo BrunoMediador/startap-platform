@@ -11,7 +11,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // estabelecimentoConfig é mutável: cada teste de estabelecimento liga a flag.
 // ATEND_FROM_AGENDA_SLOTS também é mutável: default '' (gancho de billing OFF pra todos).
 const { estabelecimentoConfig } = vi.hoisted(() => ({
-  estabelecimentoConfig: { ESTABELECIMENTO_ENABLED: false, ATEND_FROM_AGENDA_SLOTS: '' },
+  estabelecimentoConfig: {
+    ESTABELECIMENTO_ENABLED: false,
+    ATEND_FROM_AGENDA_SLOTS: '',
+    COLABORADOR_PORTAL_ENABLED: true,
+    COLABORADOR_AGENDAMENTOS_ENABLED: true,
+    COLABORADOR_AGENDAMENTOS_SLOTS: 'clone_teste_a1b2c3',
+  },
 }));
 vi.mock('../config.js', () => ({
   config: {
@@ -24,6 +30,15 @@ vi.mock('../config.js', () => ({
     },
     get ATEND_FROM_AGENDA_SLOTS() {
       return estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS;
+    },
+    get COLABORADOR_PORTAL_ENABLED() {
+      return estabelecimentoConfig.COLABORADOR_PORTAL_ENABLED;
+    },
+    get COLABORADOR_AGENDAMENTOS_ENABLED() {
+      return estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_ENABLED;
+    },
+    get COLABORADOR_AGENDAMENTOS_SLOTS() {
+      return estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_SLOTS;
     },
   },
 }));
@@ -70,6 +85,10 @@ vi.mock('@startap/db', () => ({
   },
   query: vi.fn(),
   portalUsers: { getSlotForActivePortalUser: vi.fn() },
+  portalConfig: {
+    getServicosBySlot: vi.fn(),
+    getHorariosBySlot: vi.fn(),
+  },
   cloneColaboradores: { getScopeBySlot: (...a: unknown[]) => getScopeBySlotMock(...a) },
   atendimentos: {
     upsertAtendimentoFromEvent: (...a: unknown[]) => upsertAtendimentoFromEventMock(...a),
@@ -105,9 +124,20 @@ vi.mock('../lib/tenant.js', async () => {
     withTenant: vi.fn(async (req: { tenant?: unknown }) => {
       req.tenant = { slot: injectedSlot, userId: 7, username: 'dono', sid: 'sid-atual' };
     }),
+    withColaborador: vi.fn(async (req: { colaborador?: unknown }) => {
+      req.colaborador = {
+        slot: injectedSlot,
+        tenantId: 'tenant-xyz',
+        colaboradorId: 7,
+        username: 'bene',
+        nome: 'Bené',
+        sid: 'sid-colaborador',
+      };
+    }),
   };
 });
 
+import { portalConfig } from '@startap/db';
 // O mock acima só troca loadScheduleConfig — estas helpers são as REAIS.
 import { nowPartsInTz, zonedWallTimeToUtc } from '@startap/integrations/scheduling';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -172,10 +202,23 @@ beforeEach(() => {
   // billing derivado DESLIGADO (lista de slots vazia = OFF pra todos, byte-a-byte produção).
   estabelecimentoConfig.ESTABELECIMENTO_ENABLED = false;
   estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = '';
+  estabelecimentoConfig.COLABORADOR_PORTAL_ENABLED = true;
+  estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_ENABLED = true;
+  estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_SLOTS = injectedSlot;
   getScopeBySlotMock.mockResolvedValue({
     product_type: 'individual',
     seat_cap: null,
     tenant_id: null,
+  });
+  vi.mocked(portalConfig.getServicosBySlot).mockResolvedValue([
+    { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
+  ]);
+  vi.mocked(portalConfig.getHorariosBySlot).mockResolvedValue({
+    segunda: { abre: '09:00', fecha: '18:00', fechado: false },
+    terca: { abre: '09:00', fecha: '18:00', fechado: false },
+    quarta: { abre: '09:00', fecha: '18:00', fechado: false },
+    quinta: { abre: '09:00', fecha: '18:00', fechado: false },
+    sexta: { abre: '09:00', fecha: '18:00', fechado: false },
   });
   // Defaults benignos dos helpers de atendimento (só usados quando o slot está na lista).
   upsertAtendimentoFromEventMock.mockResolvedValue({ id: 101, dirty_fields: [] });
@@ -1874,6 +1917,185 @@ describe('PATCH /portal/agendamentos/:eventId — MUDANÇA 3: revalida ao trocar
     // Mesma duração → NÃO recalcula janela (start/end ausentes no patch).
     expect(fields.startISO).toBeUndefined();
     expect(fields.endISO).toBeUndefined();
+    await app.close();
+  });
+});
+
+// ── Escrita de agenda pelo colaborador ──────────────────────────────────────
+// A identidade nunca é recebida do browser: `withColaborador` injeta o 7, e o
+// núcleo compartilhado força a agenda 7 antes de tocar GCal ou faturamento.
+describe('POST/PATCH/DELETE /portal/colaborador/agendamentos — agenda própria', () => {
+  function agendaColaborador(id: number, eventos: Array<{ id: string }> = []) {
+    return {
+      colaboradorId: id,
+      nome: `Profissional ${id}`,
+      calendarId: `cal-${id}`,
+      servicos: [],
+      client: {
+        listEvents: vi.fn().mockResolvedValue(eventos),
+        createEvent: vi.fn().mockResolvedValue({
+          id: `evt-${id}`,
+          summary: 'João - Corte | WhatsApp: 5511999990000',
+          start: { dateTime: `${FUTURO}T10:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T10:30:00-03:00` },
+        }),
+        deleteEvent: vi.fn().mockResolvedValue(undefined),
+        patchEvent: vi.fn().mockResolvedValue({
+          id: 'evt-proprio',
+          summary: 'João - Corte | WhatsApp: 5511999990000',
+          start: { dateTime: `${FUTURO}T11:00:00-03:00` },
+          end: { dateTime: `${FUTURO}T11:30:00-03:00` },
+        }),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    estabelecimentoConfig.ESTABELECIMENTO_ENABLED = true;
+    getScopeBySlotMock.mockResolvedValue({
+      product_type: 'estabelecimento',
+      seat_cap: 5,
+      tenant_id: 'tenant-xyz',
+    });
+  });
+
+  it('gate OFF -> 404 antes de tocar GCal', async () => {
+    estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_ENABLED = false;
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/portal/colaborador/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+    expect(res.statusCode).toBe(404);
+    expect(getGcalsForSlotMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('POST cria somente na agenda da sessão e rejeita colaborador_id forjado', async () => {
+    const propria = agendaColaborador(7);
+    const colega = agendaColaborador(8);
+    getGcalsForSlotMock.mockResolvedValue([propria, colega]);
+
+    const app = await buildApp();
+    const forge = await app.inject({
+      method: 'POST',
+      url: '/portal/colaborador/agendamentos',
+      payload: { ...PAYLOAD_OK, colaborador_id: 8 },
+    });
+    expect(forge.statusCode).toBe(400);
+    expect(propria.client.createEvent).not.toHaveBeenCalled();
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/portal/colaborador/agendamentos',
+      payload: PAYLOAD_OK,
+    });
+    expect(ok.statusCode).toBe(201);
+    expect(propria.client.createEvent).toHaveBeenCalledTimes(1);
+    expect(colega.client.createEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PATCH e DELETE de evento de colega retornam 404 sem listar ou tocar a agenda dele', async () => {
+    const propria = agendaColaborador(7, [evtAtual({ id: 'evt-proprio' })]);
+    const colega = agendaColaborador(8, [evtAtual({ id: 'evt-colega' })]);
+    getGcalsForSlotMock.mockResolvedValue([propria, colega]);
+
+    const app = await buildApp();
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: '/portal/colaborador/agendamentos/evt-colega',
+      payload: { hora: '11:00' },
+    });
+    const remove = await app.inject({
+      method: 'DELETE',
+      url: '/portal/colaborador/agendamentos/evt-colega',
+    });
+
+    expect(patch.statusCode).toBe(404);
+    expect(remove.statusCode).toBe(404);
+    expect(colega.client.listEvents).not.toHaveBeenCalled();
+    expect(colega.client.patchEvent).not.toHaveBeenCalled();
+    expect(colega.client.deleteEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('PATCH próprio preserva o mesmo eventId e não consulta agenda de colega', async () => {
+    const propria = agendaColaborador(7, [evtAtual({ id: 'evt-proprio' })]);
+    const colega = agendaColaborador(8, [evtAtual({ id: 'evt-colega' })]);
+    getGcalsForSlotMock.mockResolvedValue([propria, colega]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/portal/colaborador/agendamentos/evt-proprio',
+      payload: { hora: '11:00' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(propria.client.patchEvent).toHaveBeenCalledWith(
+      'evt-proprio',
+      expect.objectContaining({ startISO: zonedWallTimeToUtc(FUTURO, 11 * 60).toISOString() }),
+    );
+    expect(colega.client.listEvents).not.toHaveBeenCalled();
+    expect(colega.client.patchEvent).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('DELETE próprio preserva espelho total e audita portal:colaborador:<id>', async () => {
+    estabelecimentoConfig.ATEND_FROM_AGENDA_SLOTS = injectedSlot;
+    const propria = agendaColaborador(7, [evtAtual({ id: 'evt-proprio' })]);
+    getGcalsForSlotMock.mockResolvedValue([propria]);
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'DELETE',
+      url: '/portal/colaborador/agendamentos/evt-proprio',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(propria.client.deleteEvent).toHaveBeenCalledWith('evt-proprio');
+    expect(softDeleteAtendimentoByEventMock).toHaveBeenCalledWith(injectedSlot, 'evt-proprio', {
+      reason: 'portal_cancel',
+      by: 'portal:colaborador:7',
+    });
+    await app.close();
+  });
+});
+
+describe('GET /portal/colaborador/agendamentos/{servicos,horarios}', () => {
+  it('gate OFF -> 404 antes de consultar configuração', async () => {
+    estabelecimentoConfig.COLABORADOR_AGENDAMENTOS_ENABLED = false;
+    const app = await buildApp();
+
+    const [servicos, horarios] = await Promise.all([
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/servicos' }),
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/horarios' }),
+    ]);
+
+    expect(servicos.statusCode).toBe(404);
+    expect(horarios.statusCode).toBe(404);
+    expect(portalConfig.getServicosBySlot).not.toHaveBeenCalled();
+    expect(portalConfig.getHorariosBySlot).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('deriva o slot da sessão e expõe o mesmo catálogo/horários do estabelecimento', async () => {
+    const app = await buildApp();
+
+    const [servicos, horarios] = await Promise.all([
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/servicos?slot=forjado' }),
+      app.inject({ method: 'GET', url: '/portal/colaborador/agendamentos/horarios?slot=forjado' }),
+    ]);
+
+    expect(servicos.statusCode).toBe(200);
+    expect(horarios.statusCode).toBe(200);
+    expect(servicos.json().servicos).toEqual([
+      { nome: 'Corte', preco_cents: 5000, duracao_min: 30 },
+    ]);
+    expect(portalConfig.getServicosBySlot).toHaveBeenCalledWith(injectedSlot);
+    expect(portalConfig.getHorariosBySlot).toHaveBeenCalledWith(injectedSlot);
     await app.close();
   });
 });
