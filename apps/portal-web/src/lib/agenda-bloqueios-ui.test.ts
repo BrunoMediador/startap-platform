@@ -4,6 +4,7 @@ import {
   bloqueioEtapaAtual,
   bloqueioResumoAcao,
   bloqueioUsaDiaInteiroPorPadrao,
+  nomeGrupoAgendaBloqueio,
   remocaoSerieProximasDescricao,
 } from './agenda-bloqueios-ui';
 
@@ -18,9 +19,38 @@ describe('fluxo visual de bloqueios', () => {
   });
 
   it('só apresenta a revisão como etapa atual depois de receber a prévia', () => {
-    expect(bloqueioEtapaAtual({ repetir: false, temPrevia: false })).toBe(3);
-    expect(bloqueioEtapaAtual({ repetir: true, temPrevia: false })).toBe(3);
-    expect(bloqueioEtapaAtual({ repetir: true, temPrevia: true })).toBe(4);
+    expect(
+      bloqueioEtapaAtual({
+        canPickProfissional: true,
+        profissionalSelecionado: false,
+        repetir: false,
+        temPrevia: false,
+      }),
+    ).toBe(1);
+    expect(
+      bloqueioEtapaAtual({
+        canPickProfissional: true,
+        profissionalSelecionado: true,
+        repetir: false,
+        temPrevia: false,
+      }),
+    ).toBe(3);
+    expect(
+      bloqueioEtapaAtual({
+        canPickProfissional: false,
+        profissionalSelecionado: true,
+        repetir: true,
+        temPrevia: false,
+      }),
+    ).toBe(3);
+    expect(
+      bloqueioEtapaAtual({
+        canPickProfissional: false,
+        profissionalSelecionado: true,
+        repetir: true,
+        temPrevia: true,
+      }),
+    ).toBe(4);
   });
 
   it('nomeia a ação conforme a progressão sem prometer resultado da prévia', () => {
@@ -43,7 +73,22 @@ describe('fluxo visual de bloqueios', () => {
   });
 
   it('não promete corte por data ao remover as próximas ocorrências de uma série', () => {
-    expect(remocaoSerieProximasDescricao()).toContain('Todas as próximas ocorrências');
+    expect(remocaoSerieProximasDescricao()).toContain(
+      'tentar remover todas as próximas ocorrências',
+    );
     expect(remocaoSerieProximasDescricao()).toContain('Não há escolha de data inicial');
+  });
+
+  it('nomeia a agenda do colaborador sem expor um identificador interno', () => {
+    expect(
+      nomeGrupoAgendaBloqueio({
+        mode: 'colaborador',
+        colaboradorId: 42,
+        nomeProfissional: undefined,
+      }),
+    ).toBe('Minha agenda');
+    expect(
+      nomeGrupoAgendaBloqueio({ mode: 'owner', colaboradorId: 42, nomeProfissional: undefined }),
+    ).toBe('Profissional da equipe');
   });
 });

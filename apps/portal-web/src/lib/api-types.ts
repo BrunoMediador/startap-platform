@@ -186,11 +186,23 @@ export interface RemoverAgendaBloqueioResponse {
 export interface RemoverAgendaBloqueioSerieResponse {
   ok: true;
   serie_id: string;
-  /**
-   * O backend atual devolve a lista de bloqueios futuros afetados. O front só
-   * depende da contagem; por isso o shape interno segue opaco aqui.
-   */
-  removidos: unknown[];
+  removidos: AgendaBloqueioSerieRemovido[];
+  /** Presente na resposta 207 quando parte da remoção no GCal falha. */
+  falhas: AgendaBloqueioSerieRemocaoFalha[];
+}
+
+export interface AgendaBloqueioSerieRemovido {
+  id: string;
+  inicio_at: string;
+  fim_at: string;
+}
+
+export interface AgendaBloqueioSerieRemocaoFalha {
+  id: string;
+  inicio_at: string;
+  fim_at: string;
+  error: string;
+  reason?: string | null;
 }
 
 /** Um balde do relatório de comissão do colaborador (faturado OU previsão). */

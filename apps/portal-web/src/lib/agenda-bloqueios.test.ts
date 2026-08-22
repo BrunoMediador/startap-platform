@@ -10,8 +10,9 @@ import {
   formatDateInputInTimeZone,
   formatTimeInputInTimeZone,
   initRevisaoAgendaBloqueioRecorrencia,
-  isAgendaBloqueioRecorrenciaLivre,
   isAgendaBloqueio,
+  isAgendaBloqueioRecorrenciaLivre,
+  resumoRemocaoAgendaBloqueioSerie,
   resumoResultadoAgendaBloqueioSerie,
   separarAgendamentosDeBloqueios,
   statusAgendaBloqueioRecorrenciaLabel,
@@ -207,9 +208,36 @@ describe('countRemovidosAgendaBloqueioSerie', () => {
     const response: RemoverAgendaBloqueioSerieResponse = {
       ok: true,
       serie_id: 'serie-123',
-      removidos: [{ id: 'a' }, { id: 'b' }],
+      removidos: [
+        { id: 'a', inicio_at: '2026-09-01T12:00:00.000Z', fim_at: '2026-09-01T13:00:00.000Z' },
+        { id: 'b', inicio_at: '2026-09-08T12:00:00.000Z', fim_at: '2026-09-08T13:00:00.000Z' },
+      ],
+      falhas: [],
     };
     expect(countRemovidosAgendaBloqueioSerie(response)).toBe(2);
+  });
+
+  it('resume a resposta HTTP 207 parcial sem garantir remoção total', () => {
+    const response: RemoverAgendaBloqueioSerieResponse = {
+      ok: true,
+      serie_id: 'serie-123',
+      removidos: [
+        { id: 'a', inicio_at: '2026-09-01T12:00:00.000Z', fim_at: '2026-09-01T13:00:00.000Z' },
+      ],
+      falhas: [
+        {
+          id: 'b',
+          inicio_at: '2026-09-08T12:00:00.000Z',
+          fim_at: '2026-09-08T13:00:00.000Z',
+          error: 'gcal_delete_failed',
+          reason: 'erro_gcal',
+        },
+      ],
+    };
+
+    expect(resumoRemocaoAgendaBloqueioSerie(response)).toBe(
+      'Remoção parcial: 1 removidos e 1 falha. A lista foi atualizada.',
+    );
   });
 });
 

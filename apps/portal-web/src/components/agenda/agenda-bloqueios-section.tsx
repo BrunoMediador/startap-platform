@@ -27,6 +27,7 @@ import {
   falhaAgendaBloqueioSerieLabel,
   initRevisaoAgendaBloqueioRecorrencia,
   isAgendaBloqueioRecorrenciaLivre,
+  resumoRemocaoAgendaBloqueioSerie,
   resumoResultadoAgendaBloqueioSerie,
   statusAgendaBloqueioRecorrenciaLabel,
   zonedDateTimeToUtcIso,
@@ -35,6 +36,7 @@ import {
   BLOQUEIO_TIPO_OPTIONS,
   bloqueioEtapaAtual,
   bloqueioUsaDiaInteiroPorPadrao,
+  nomeGrupoAgendaBloqueio,
   remocaoSerieProximasDescricao,
 } from '@/lib/agenda-bloqueios-ui';
 import { ApiError } from '@/lib/api';
@@ -447,6 +449,11 @@ export function AgendaBloqueiosSection({
       onSuccess: (response) => {
         setConfirmRemoveSerie(null);
         const totalRemovidos = countRemovidosAgendaBloqueioSerie(response);
+        void bloqueiosQ.refetch();
+        if (response.falhas.length > 0) {
+          toast.error(resumoRemocaoAgendaBloqueioSerie(response));
+          return;
+        }
         toast.success(
           totalRemovidos === 1
             ? '1 bloqueio futuro removido da Agenda Google'
@@ -516,7 +523,12 @@ export function AgendaBloqueiosSection({
       {openForm && (
         <div className="border-t border-line-soft px-4 py-4 sm:px-5">
           <BloqueioFlowSteps
-            current={bloqueioEtapaAtual({ repetir, temPrevia: Boolean(revisaoSerie) })}
+            current={bloqueioEtapaAtual({
+              canPickProfissional,
+              profissionalSelecionado: Boolean(form.colaboradorId),
+              repetir,
+              temPrevia: Boolean(revisaoSerie),
+            })}
             canPickProfissional={canPickProfissional}
           />
           <div className="mb-4 rounded-field border border-brand/25 bg-brand-soft/50 px-3 py-2.5 text-[12.5px] leading-snug text-ink-soft">
@@ -808,6 +820,7 @@ export function AgendaBloqueiosSection({
         bloqueios={bloqueios}
         timeZone={timeZone}
         nomeByProfissionalId={nomeByProfissionalId}
+        mode={mode}
         onRemove={setConfirmRemove}
         onRemoveSerie={setConfirmRemoveSerie}
       />
@@ -830,22 +843,27 @@ function BloqueiosList({
   bloqueios,
   timeZone,
   nomeByProfissionalId,
+  mode,
   onRemove,
   onRemoveSerie,
 }: {
   bloqueios: AgendaBloqueio[];
   timeZone: string;
   nomeByProfissionalId: Map<number, string>;
+  mode: ScopeMode;
   onRemove: (bloqueio: AgendaBloqueio) => void;
   onRemoveSerie: (serie: RemoveSerieState) => void;
 }) {
   const grupos = new Map<string, AgendaBloqueio[]>();
   for (const bloqueio of bloqueios) {
-    const nome =
-      bloqueio.colaborador_id == null
-        ? 'Agenda principal'
-        : (nomeByProfissionalId.get(bloqueio.colaborador_id) ??
-          `Profissional #${bloqueio.colaborador_id}`);
+    const nome = nomeGrupoAgendaBloqueio({
+      mode,
+      colaboradorId: bloqueio.colaborador_id,
+      nomeProfissional:
+        bloqueio.colaborador_id == null
+          ? undefined
+          : nomeByProfissionalId.get(bloqueio.colaborador_id),
+    });
     grupos.set(nome, [...(grupos.get(nome) ?? []), bloqueio]);
   }
 
@@ -1029,7 +1047,6 @@ function BloqueioFlowSteps({
   const steps = canPickProfissional
     ? ['Quem', 'Tipo', 'Quando', 'Repetir', 'Revisar']
     : ['Tipo', 'Quando', 'Repetir', 'Revisar'];
-  const currentStep = canPickProfissional ? current + 1 : current;
   return (
     <ol
       aria-label="Etapas para declarar indisponibilidade"
@@ -1042,7 +1059,7 @@ function BloqueioFlowSteps({
             <span
               className={cn(
                 'flex size-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold',
-                stepNumber <= currentStep
+                stepNumber <= current
                   ? 'border-brand bg-brand text-white'
                   : 'border-line-strong bg-surface-sunken text-ink-faint',
               )}
