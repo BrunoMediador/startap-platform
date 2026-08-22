@@ -87,9 +87,10 @@ describe('buildEstabelecimentoContext — freebusy batched', () => {
     // shortId estável por ordem: C1, C2.
     expect(ctx.colaboradores.map((c) => c.shortId)).toEqual(['C1', 'C2']);
 
-    // [HORARIOS] rotulado por colaborador (id curto + nome em cada sub-seção).
-    expect(ctx.horariosBlock).toContain('C1 — João S.');
-    expect(ctx.horariosBlock).toContain('C2 — Maria');
+    // [HORARIOS] rotulado pelo nome, sem vazar os IDs internos.
+    expect(ctx.horariosBlock).toContain('### João S.');
+    expect(ctx.horariosBlock).toContain('### Maria');
+    expect(ctx.horariosBlock).not.toMatch(/\bC\d+\b/);
   });
 
   it('a ocupação (busy) de cada colaborador entra na grade dele (não na do outro)', async () => {
@@ -113,8 +114,8 @@ describe('buildEstabelecimentoContext — freebusy batched', () => {
     const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG, TIME);
 
     // Sanidade: a sub-seção de cada colaborador existe e são distintas.
-    const joaoIdx = ctx.horariosBlock.indexOf('C1 — João S.');
-    const mariaIdx = ctx.horariosBlock.indexOf('C2 — Maria');
+    const joaoIdx = ctx.horariosBlock.indexOf('### João S.');
+    const mariaIdx = ctx.horariosBlock.indexOf('### Maria');
     expect(joaoIdx).toBeGreaterThanOrEqual(0);
     expect(mariaIdx).toBeGreaterThan(joaoIdx);
   });
@@ -132,7 +133,7 @@ describe('buildEstabelecimentoContext — freebusy batched', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('buildEstabelecimentoContext — bloco [PROFISSIONAIS] + desambiguação', () => {
-  it('lista cada profissional pelo id curto e impõe a regra de desambiguação', async () => {
+  it('lista cada profissional pelo nome e impõe a regra de desambiguação', async () => {
     const shared = makeClient(() => ({}));
     const colaboradores: ColaboradorGcal[] = [
       colab({ colaboradorId: 1, nome: 'João S.', calendarId: 'cal-1', client: shared }),
@@ -141,9 +142,10 @@ describe('buildEstabelecimentoContext — bloco [PROFISSIONAIS] + desambiguaçã
 
     const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG, TIME);
 
-    // ids curtos com nome (permite distinguir os dois Joãos pelo sobrenome).
-    expect(ctx.profissionaisBlock).toContain('C1 = João S.');
-    expect(ctx.profissionaisBlock).toContain('C2 = João P.');
+    // Nomes completos distinguem os dois Joãos sem expor código interno.
+    expect(ctx.profissionaisBlock).toContain('João S. (faz: Corte)');
+    expect(ctx.profissionaisBlock).toContain('João P. (faz: Corte)');
+    expect(ctx.profissionaisBlock).not.toMatch(/\bC\d+\b/);
     // regra de desambiguação OBRIGATÓRIA presente.
     expect(ctx.profissionaisBlock).toMatch(/homônimos|homonimos/i);
     expect(ctx.profissionaisBlock).toMatch(/SEMPRE pergunte/i);
@@ -174,6 +176,19 @@ describe('resolveColaboradorByShortId — roteamento e rejeição', () => {
 
   it('aceita id numérico do colaborador (validado contra a mesma lista)', () => {
     expect(resolveColaboradorByShortId(decorados, '10')?.calendarId).toBe('cal-joao');
+  });
+
+  it('aceita o nome completo exibido ao cliente', () => {
+    expect(resolveColaboradorByShortId(decorados, ' joão  s. ')?.calendarId).toBe('cal-joao');
+    expect(resolveColaboradorByShortId(decorados, 'Maria')?.calendarId).toBe('cal-maria');
+  });
+
+  it('rejeita nome completo ambíguo', () => {
+    const homonimos = decorateColaboradores([
+      colab({ colaboradorId: 20, nome: 'João', calendarId: 'cal-joao-1' }),
+      colab({ colaboradorId: 21, nome: 'João', calendarId: 'cal-joao-2' }),
+    ]);
+    expect(resolveColaboradorByShortId(homonimos, 'João')).toBeNull();
   });
 
   it('REJEITA id curto inexistente (C3) → null', () => {
@@ -296,8 +311,8 @@ describe('buildProfissionaisBlock — serviços por profissional', () => {
 
     const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG_MULTI, TIME);
 
-    expect(ctx.profissionaisBlock).toContain('C1 = Bruno (faz: Corte, Barba)');
-    expect(ctx.profissionaisBlock).toContain('C2 = Maria (faz: Manicure, Sobrancelha)');
+    expect(ctx.profissionaisBlock).toContain('Bruno (faz: Corte, Barba)');
+    expect(ctx.profissionaisBlock).toContain('Maria (faz: Manicure, Sobrancelha)');
     // Maria NÃO deve aparecer fazendo Corte.
     expect(ctx.profissionaisBlock).not.toMatch(/Maria \(faz:[^)]*Corte/);
     // regra de "não agende serviço que o profissional não faz" presente.
@@ -317,9 +332,7 @@ describe('buildProfissionaisBlock — serviços por profissional', () => {
     ];
 
     const ctx = await buildEstabelecimentoContext(colaboradores, CONFIG_MULTI, TIME);
-    expect(ctx.profissionaisBlock).toContain(
-      'C1 = Curinga (faz: Corte, Barba, Manicure, Sobrancelha)',
-    );
+    expect(ctx.profissionaisBlock).toContain('Curinga (faz: Corte, Barba, Manicure, Sobrancelha)');
   });
 });
 
@@ -352,10 +365,10 @@ describe('buildHorariosBlock — serviços por profissional na grade [HORARIOS]'
 
     // A sub-seção do Bruno traz Corte/Barba; a da Maria traz Manicure/Sobrancelha.
     const brunoSec = ctx.horariosBlock.slice(
-      ctx.horariosBlock.indexOf('C1 — Bruno'),
-      ctx.horariosBlock.indexOf('C2 — Maria'),
+      ctx.horariosBlock.indexOf('### Bruno'),
+      ctx.horariosBlock.indexOf('### Maria'),
     );
-    const mariaSec = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('C2 — Maria'));
+    const mariaSec = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('### Maria'));
 
     expect(brunoSec).toMatch(/Corte \(30min\)/);
     expect(brunoSec).toMatch(/Barba \(30min\)/);
@@ -383,7 +396,7 @@ describe('buildHorariosBlock — serviços por profissional na grade [HORARIOS]'
     });
 
     const ctx = await buildEstabelecimentoContext([curinga], CONFIG_MULTI, TIME);
-    const grade = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('C1 — Curinga'));
+    const grade = ctx.horariosBlock.slice(ctx.horariosBlock.indexOf('### Curinga'));
 
     // Todos os 4 serviços globais aparecem na grade do Curinga (comportamento anterior).
     expect(grade).toMatch(/Corte \(30min\)/);

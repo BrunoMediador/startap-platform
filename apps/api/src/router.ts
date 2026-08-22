@@ -29,6 +29,7 @@ import {
 import type { FlowExecutionLogInput, RoutingRow } from '@startap/db';
 import { waha, whisper } from '@startap/integrations';
 import { isBlockedNumber } from './lib/bot-blocklist.js';
+import { ConversationRunner } from './lib/conversation-runner.js';
 import { HUMAN_REPLY_PAUSE_TTL_MS, isBotEcho, isSelfChat } from './lib/human-reply-pause.js';
 import { checkAndMarkDuplicate } from './lib/idempotency.js';
 import { resolveFromMeIdentity } from './lib/lid-resolver.js';
@@ -42,6 +43,11 @@ import {
   findBotBySession,
   registerBotEntry,
 } from './registry.js';
+
+// A memória do bot é read-after-write por conversa. O webhook pode aceitar uma
+// rajada em paralelo, mas cada conversa precisa concluir a resposta anterior
+// antes de montar o próximo prompt.
+const conversationRunner = new ConversationRunner();
 
 /** Tipo de fábrica de bot clone: recebe slotOverride, retorna instância Bot. */
 export type CloneBotFactory = (slotOverride: string) => Bot;
@@ -1086,28 +1092,33 @@ export async function handleWebhook(
     flowName: route.workflow_name,
   };
   try {
-    await flowExecutionLog.logFlowEvent({
-      ...phoneLog,
-      flowId: route.workflow_id,
-      flowName: route.workflow_name,
-      bot: bot.name,
-      eventType: 'bot.started',
-      status: 'running',
-      message: 'Bot iniciou processamento',
-    });
-    await bot.handle(ctx);
-    log.info({ bot: bot.name, fone: phoneLogTag(telefone) }, 'Mensagem processada');
-    await flowExecutionLog.logFlowEvent({
-      ...phoneLog,
-      flowId: route.workflow_id,
-      flowName: route.workflow_name,
-      bot: bot.name,
-      eventType: 'bot.finished',
-      status: 'success',
-      message: 'Mensagem processada',
-      durationMs: Date.now() - startedAt,
-    });
-    return { status: 'ok' };
+    return await conversationRunner.run(
+      `${route.workflow_id}:${sessao}:${route.workflow_id}:${telefone}`,
+      async () => {
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          bot: bot.name,
+          eventType: 'bot.started',
+          status: 'running',
+          message: 'Bot iniciou processamento',
+        });
+        await bot.handle(ctx);
+        log.info({ bot: bot.name, fone: phoneLogTag(telefone) }, 'Mensagem processada');
+        await flowExecutionLog.logFlowEvent({
+          ...phoneLog,
+          flowId: route.workflow_id,
+          flowName: route.workflow_name,
+          bot: bot.name,
+          eventType: 'bot.finished',
+          status: 'success',
+          message: 'Mensagem processada',
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 'ok' };
+      },
+    );
   } catch (e) {
     log.error({ err: e, bot: bot.name, fone: phoneLogTag(telefone) }, 'Bot falhou');
     await flowExecutionLog.logFlowEvent({

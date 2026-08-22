@@ -1,4 +1,4 @@
-import type { WahaWebhookBody } from '@startap/core/types';
+import type { BotContext, WahaWebhookBody } from '@startap/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerBotEntry } from './registry.js';
 
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getCloneBySession: vi.fn().mockResolvedValue(null),
   getCloneBySlot: vi.fn().mockResolvedValue(null),
   sendSeen: vi.fn(),
+  sendText: vi.fn(),
   downloadMedia: vi.fn(),
   transcribe: vi.fn(),
   // @startap/core/phone — necessário mockar pois o módulo ESM não resolve em Vitest sem build
@@ -33,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   resolveFromMeIdentity: vi.fn(),
   // SCRUM-58: update de ack de outbound mockado (data layer testada em outbound-messages.test.ts).
   applyAck: vi.fn(),
+  recordOutbound: vi.fn(),
+  loadHistory: vi.fn(),
+  appendMessage: vi.fn(),
+  pruneHistory: vi.fn(),
   // SCRUM-144: store durável de pushName. upsert no inbound; get pra snapshotar na human_reply.
   // Default = promises resolvidas (o router usa .catch()/void — precisa de thenable mesmo após
   // clearAllMocks, que NÃO reseta implementação).
@@ -54,6 +59,11 @@ vi.mock('@startap/db', () => ({
   antibot: { logMessage: mocks.logMessage },
   flowControl: { isFlowActive: mocks.isFlowActive },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
+  chatMemory: {
+    loadHistory: mocks.loadHistory,
+    appendMessage: mocks.appendMessage,
+    pruneHistory: mocks.pruneHistory,
+  },
   pausa: {
     isPaused: mocks.isPaused,
     isFlowPaused: mocks.isFlowPaused,
@@ -72,7 +82,7 @@ vi.mock('@startap/db', () => ({
       mocks.csvGate(slot, csv),
   },
   operationalState: { getOperationalSnapshotBySlot: mocks.getCloneBySlot },
-  outboundMessages: { applyAck: mocks.applyAck },
+  outboundMessages: { applyAck: mocks.applyAck, recordOutbound: mocks.recordOutbound },
   contactNames: {
     upsertContactName: mocks.upsertContactName,
     getContactName: mocks.getContactName,
@@ -94,6 +104,7 @@ vi.mock('@startap/db', () => ({
 vi.mock('@startap/integrations', () => ({
   waha: {
     sendSeen: mocks.sendSeen,
+    sendText: mocks.sendText,
     downloadMedia: mocks.downloadMedia,
   },
   whisper: { transcribe: mocks.transcribe },
@@ -128,6 +139,7 @@ vi.mock('@startap/core/phone', () => ({
       ? `+55 ${d.slice(2, 4)} •••••-••${last2}`
       : `+${d.slice(0, 2)} •••••-••${last2}`;
   },
+  phoneHint: (raw: string): string => `••${raw.slice(-2)}`,
 }));
 
 vi.mock('./lib/idempotency.js', () => ({
@@ -139,6 +151,7 @@ vi.mock('./lib/idempotency.js', () => ({
 vi.mock('./lib/human-reply-pause.js', () => ({
   isBotEcho: mocks.isBotEcho,
   isSelfChat: mocks.isSelfChat,
+  registerBotReplyEcho: vi.fn(),
   HUMAN_REPLY_PAUSE_TTL_MS: 60 * 60 * 1000,
 }));
 
@@ -149,6 +162,7 @@ vi.mock('./lib/lid-resolver.js', () => ({
 }));
 
 const { handleWebhook } = await import('./router.js');
+const { BotBase } = await import('./bots/base.js');
 
 // Default global do resolver = passthrough (clearAllMocks NÃO reseta implementação).
 mocks.resolveFromMeIdentity.mockImplementation((_session: string, _body: unknown, phone: string) =>
@@ -198,6 +212,23 @@ function makeBody(session: string): WahaWebhookBody {
   };
 }
 
+class MemoryAwareBot extends BotBase {
+  constructor(private readonly observedHistories: string[][]) {
+    super({
+      name: 'fluxo_memoria_serializada',
+      projectId: 'fluxo_memoria_serializada',
+      pauseTable: null,
+      memoryTable: 'chat_histories',
+    });
+  }
+
+  protected async process(ctx: BotContext): Promise<string> {
+    const history = await this.loadHistory(ctx);
+    this.observedHistories.push(history.map((turn) => `${turn.role}:${turn.content}`));
+    return `resposta: ${ctx.message.texto}`;
+  }
+}
+
 describe('handleWebhook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -222,6 +253,20 @@ describe('handleWebhook', () => {
     mocks.findRouting.mockResolvedValue(null);
     mocks.isFlowActive.mockResolvedValue(true);
     mocks.sendSeen.mockResolvedValue(undefined);
+    mocks.sendText.mockResolvedValue({ messageId: null });
+    mocks.recordOutbound.mockResolvedValue(undefined);
+    mocks.pruneHistory.mockResolvedValue(undefined);
+    const memory: Array<{ sessionId: string; role: string; content: string }> = [];
+    mocks.appendMessage.mockImplementation(
+      async (_table: string, sessionId: string, role: string, content: string) => {
+        memory.push({ sessionId, role, content });
+      },
+    );
+    mocks.loadHistory.mockImplementation(async (_table: string, sessionId: string) =>
+      memory
+        .filter((entry) => entry.sessionId === sessionId)
+        .map(({ role, content }) => ({ role, content })),
+    );
     // Defaults para mocks de @startap/core/phone
     // extractPhone extrai '553598877248' do payload padrão de makeBody()
     mocks.extractPhone.mockReturnValue('553598877248');
@@ -579,6 +624,125 @@ describe('handleWebhook', () => {
     expect(result).toEqual({ status: 'ok' });
     expect(botHandle).toHaveBeenCalledTimes(1);
     expect(mocks.logMessage).toHaveBeenCalled();
+  });
+
+  it('serializa uma rajada da mesma conversa antes de montar a próxima resposta', async () => {
+    const workflowId = 'flow-conversation-serial';
+    const started: string[] = [];
+    const releases: Array<() => void> = [];
+    mocks.findRouting.mockResolvedValue({
+      id: 100,
+      telefone: '553598877248',
+      workflow_id: workflowId,
+      workflow_name: 'fluxo_serializado',
+      webhook_url: null,
+      nome_cliente: 'Cliente Individual',
+      ativo: true,
+      criado_em: new Date(),
+      atualizado_em: new Date(),
+    });
+    const botHandle = vi.fn(async (ctx: { message: { texto: string } }) => {
+      started.push(ctx.message.texto);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    });
+    const { registerBot } = await import('./router.js');
+    registerBot(workflowId, { name: 'fluxo_serializado', handle: botHandle });
+
+    const message = (id: string, texto: string): WahaWebhookBody => ({
+      ...makeBody('TESTE_STARTAP'),
+      payload: {
+        ...makeBody('TESTE_STARTAP').payload!,
+        id,
+        from: '553598877248@c.us',
+        body: texto,
+      },
+    });
+    const one = handleWebhook(message('burst-1', 'amanhã às 10h'), {
+      executionId: 'exec-burst-1',
+      startedAt: 0,
+    });
+    const two = handleWebhook(message('burst-2', 'com o Carlos'), {
+      executionId: 'exec-burst-2',
+      startedAt: 0,
+    });
+    const three = handleWebhook(message('burst-3', 'cabelo e barba'), {
+      executionId: 'exec-burst-3',
+      startedAt: 0,
+    });
+
+    await vi.waitFor(() => expect(started).toEqual(['amanhã às 10h']));
+    expect(botHandle).toHaveBeenCalledTimes(1);
+
+    releases[0]!();
+    await vi.waitFor(() => expect(started).toEqual(['amanhã às 10h', 'com o Carlos']));
+    releases[1]!();
+    await vi.waitFor(() =>
+      expect(started).toEqual(['amanhã às 10h', 'com o Carlos', 'cabelo e barba']),
+    );
+    releases[2]!();
+
+    await expect(Promise.all([one, two, three])).resolves.toEqual([
+      { status: 'ok' },
+      { status: 'ok' },
+      { status: 'ok' },
+    ]);
+  });
+
+  it('na rajada, BotBase vê a resposta persistida do turno anterior antes de processar o próximo', async () => {
+    const workflowId = 'flow-conversation-memory';
+    const observedHistories: string[][] = [];
+    mocks.findRouting.mockResolvedValue({
+      id: 101,
+      telefone: '553598877248',
+      workflow_id: workflowId,
+      workflow_name: 'fluxo_memoria_serializada',
+      webhook_url: null,
+      nome_cliente: 'Cliente Individual',
+      ativo: true,
+      criado_em: new Date(),
+      atualizado_em: new Date(),
+    });
+    const { registerBot } = await import('./router.js');
+    registerBot(workflowId, new MemoryAwareBot(observedHistories));
+
+    const message = (id: string, texto: string): WahaWebhookBody => ({
+      ...makeBody('TESTE_STARTAP'),
+      payload: {
+        ...makeBody('TESTE_STARTAP').payload!,
+        id,
+        from: '553598877248@c.us',
+        body: texto,
+      },
+    });
+    await expect(
+      Promise.all([
+        handleWebhook(message('memory-burst-1', 'amanhã às 10h'), {
+          executionId: 'exec-memory-burst-1',
+          startedAt: 0,
+        }),
+        handleWebhook(message('memory-burst-2', 'com o Carlos'), {
+          executionId: 'exec-memory-burst-2',
+          startedAt: 0,
+        }),
+        handleWebhook(message('memory-burst-3', 'cabelo e barba'), {
+          executionId: 'exec-memory-burst-3',
+          startedAt: 0,
+        }),
+      ]),
+    ).resolves.toEqual([{ status: 'ok' }, { status: 'ok' }, { status: 'ok' }]);
+
+    expect(observedHistories).toEqual([
+      ['human:amanhã às 10h'],
+      ['human:amanhã às 10h', 'ai:resposta: amanhã às 10h', 'human:com o Carlos'],
+      [
+        'human:amanhã às 10h',
+        'ai:resposta: amanhã às 10h',
+        'human:com o Carlos',
+        'ai:resposta: com o Carlos',
+        'human:cabelo e barba',
+      ],
+    ]);
+    expect(mocks.sendText).toHaveBeenCalledTimes(3);
   });
 });
 
