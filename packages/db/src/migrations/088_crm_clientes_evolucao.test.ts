@@ -16,10 +16,8 @@ describe('migration 088 — evolução CRM Clientes', () => {
     expect(statements).not.toMatch(/^\s*(DROP|DELETE|TRUNCATE)\b/im);
   });
 
-  it('cria índices parciais por slot e tenant para as duas fontes elegíveis', () => {
-    expect(SQL).toMatch(/ix_atendimentos_cliente_crm_lista_agenda/i);
-    expect(SQL).toMatch(/ix_atendimentos_cliente_crm_lista_manual/i);
-    expect(SQL).toMatch(/deleted_at IS NULL\s+AND status <> 'cancelado'/i);
-    expect(SQL).toMatch(/ON atendimentos \(slot, tenant_id, cliente_telefone_canonico/i);
+  it('reusa os índices elegíveis da migration 085 sem criar duplicata invertida', () => {
+    expect(SQL).toMatch(/índices parciais de atendimento elegível já existem na migration 085/i);
+    expect(SQL).not.toMatch(/ix_atendimentos_cliente_crm_lista_(agenda|manual)/i);
   });
 });

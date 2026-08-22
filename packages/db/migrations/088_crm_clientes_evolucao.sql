@@ -22,20 +22,8 @@ CREATE INDEX IF NOT EXISTS ix_clientes_crm_slot_tenant_nome_personalizado
   ON clientes (slot, tenant_id, lower(nome_personalizado), id)
   WHERE nome_personalizado IS NOT NULL;
 
--- As duas fontes elegíveis são separadas por origem para o planejador usar os
--- índices parciais tanto no ranking quanto nos filtros da tabela principal.
-CREATE INDEX IF NOT EXISTS ix_atendimentos_cliente_crm_lista_agenda
-  ON atendimentos (slot, tenant_id, cliente_telefone_canonico, COALESCE(fim_at, inicio_at) DESC, id DESC)
-  WHERE deleted_at IS NULL
-    AND status <> 'cancelado'
-    AND origem = 'agenda'
-    AND cliente_telefone_canonico IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS ix_atendimentos_cliente_crm_lista_manual
-  ON atendimentos (slot, tenant_id, cliente_telefone_canonico, data DESC, id DESC)
-  WHERE deleted_at IS NULL
-    AND status <> 'cancelado'
-    AND origem = 'manual'
-    AND cliente_telefone_canonico IS NOT NULL;
+-- Os índices parciais de atendimento elegível já existem na migration 085.
+-- Não criar uma variante invertendo slot/tenant: ambas as colunas são igualdade
+-- no ranking e na tabela, então seria redundante e tornaria o plano instável.
 
 COMMIT;

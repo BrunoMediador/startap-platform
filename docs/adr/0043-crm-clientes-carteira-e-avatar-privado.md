@@ -37,7 +37,7 @@ assinatura JPEG/PNG/WebP e máximo de 1 MB. A resposta é `Cache-Control: privat
 
 Respostas de lista seguem mascarando telefone. Erros e logs não carregam nome, telefone, URL de
 foto ou corpo de mensagem. O avatar não altera a rota/semântica do WhatsApp manual. Migração 088
-é somente aditiva e adiciona índices parciais por `slot + tenant + telefone` para agenda/manual;
+é somente aditiva e reutiliza os índices parciais por `tenant + slot + telefone` da migration 085;
 o manifesto SHA é atualizado. A prova de plano usa PostgreSQL real no CI com `PG_TEST_URL`.
 
 ## Consequências

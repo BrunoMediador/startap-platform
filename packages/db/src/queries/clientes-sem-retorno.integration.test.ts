@@ -126,15 +126,6 @@ describeIf('ranking sem retorno contra Postgres REAL', () => {
         AND status <> 'cancelado'
         AND origem = 'manual'
         AND cliente_telefone_canonico IS NOT NULL`);
-
-    await exec(`CREATE INDEX IF NOT EXISTS ix_atendimentos_cliente_crm_lista_agenda
-      ON atendimentos (slot, tenant_id, cliente_telefone_canonico, COALESCE(fim_at, inicio_at) DESC, id DESC)
-      WHERE deleted_at IS NULL AND status <> 'cancelado' AND origem = 'agenda'
-        AND cliente_telefone_canonico IS NOT NULL`);
-    await exec(`CREATE INDEX IF NOT EXISTS ix_atendimentos_cliente_crm_lista_manual
-      ON atendimentos (slot, tenant_id, cliente_telefone_canonico, data DESC, id DESC)
-      WHERE deleted_at IS NULL AND status <> 'cancelado' AND origem = 'manual'
-        AND cliente_telefone_canonico IS NOT NULL`);
   }
 
   async function dropSchema() {
@@ -358,38 +349,5 @@ describeIf('ranking sem retorno contra Postgres REAL', () => {
         (node) => node['Relation Name'] === 'atendimentos' && node['Node Type'] === 'Seq Scan',
       ),
     ).toBe(false);
-  });
-
-  it('EXPLAIN prova os índices novos da tabela CRM em PostgreSQL real', async () => {
-    const agenda = await exec(
-      `EXPLAIN (FORMAT JSON)
-       SELECT id FROM atendimentos
-        WHERE slot = $1 AND tenant_id = $2 AND cliente_telefone_canonico = $3
-          AND deleted_at IS NULL AND status <> 'cancelado' AND origem = 'agenda'
-          AND COALESCE(fim_at, inicio_at) <= NOW()
-        ORDER BY COALESCE(fim_at, inicio_at) DESC, id DESC LIMIT 20`,
-      [SLOT, TENANT, '553199998888'],
-    );
-    const manual = await exec(
-      `EXPLAIN (FORMAT JSON)
-       SELECT id FROM atendimentos
-        WHERE slot = $1 AND tenant_id = $2 AND cliente_telefone_canonico = $3
-          AND deleted_at IS NULL AND status <> 'cancelado' AND origem = 'manual'
-          AND data <= (NOW() AT TIME ZONE $4)::date
-        ORDER BY data DESC, id DESC LIMIT 20`,
-      [SLOT, TENANT, '553199997777', TZ],
-    );
-    expect(
-      planUsesIndex(
-        agenda.rows[0]['QUERY PLAN'][0].Plan,
-        'ix_atendimentos_cliente_crm_lista_agenda',
-      ),
-    ).toBe(true);
-    expect(
-      planUsesIndex(
-        manual.rows[0]['QUERY PLAN'][0].Plan,
-        'ix_atendimentos_cliente_crm_lista_manual',
-      ),
-    ).toBe(true);
   });
 });
