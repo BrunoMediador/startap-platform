@@ -155,7 +155,7 @@ export function clienteSemRetornoFromApi(
   item: ClienteSemRetornoApiItem,
 ): ClienteSemRetornoItem {
   return {
-    id: item.cliente_id,
+    id: item.id,
     nome: item.nome,
     telefone_masked: item.telefone_masked,
     ultimo_atendimento_at: item.ultimo_atendimento_at,
