@@ -51,6 +51,7 @@ import {
   type ClientesFilters,
   activeClientesFilters,
   clearClientesFilter,
+  hasIncompleteClientesPeriod,
   initialClientesFilters,
   shouldFetchClienteAvatar,
 } from './cliente-filters';
@@ -85,15 +86,22 @@ export function ClientesWorkspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [target, setTarget] = useState<WhatsAppManualTarget | null>(null);
+  const waitingForPeriodEnd = hasIncompleteClientesPeriod(deferredFilters);
 
-  const ownerList = useClientes(slot, page, 20, deferredFilters, mode === 'owner' && crmEnabled);
+  const ownerList = useClientes(
+    slot,
+    page,
+    20,
+    deferredFilters,
+    mode === 'owner' && crmEnabled && !waitingForPeriodEnd,
+  );
   const collaboratorList = useColaboradorClientes(
     slot,
     colaboradorId ?? 0,
     page,
     20,
     deferredFilters,
-    mode === 'colaborador' && crmEnabled,
+    mode === 'colaborador' && crmEnabled && !waitingForPeriodEnd,
   );
   const list = mode === 'owner' ? ownerList : collaboratorList;
   const summary = useClientesResumo(slot, mode === 'owner' && crmEnabled);
@@ -195,7 +203,14 @@ export function ClientesWorkspace({
             </div>
           )}
 
-          {list.isPending ? (
+          {waitingForPeriodEnd ? (
+            <div
+              role="status"
+              className="rounded-card border border-line bg-surface px-4 py-5 text-[13px] text-ink-soft shadow-card"
+            >
+              Escolha a data inicial e a data final para aplicar o período personalizado.
+            </div>
+          ) : list.isPending ? (
             <ClientesLoading />
           ) : list.isError || !data ? (
             <ErrorState

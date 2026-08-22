@@ -82,15 +82,23 @@ export function clientesFiltersSearchParams(
   });
   if (safe.nome) params.set('nome', safe.nome);
   if (safe.telefone) params.set('telefone', safe.telefone);
-  const hasCustomPeriod = Boolean(safe.periodoInicio || safe.periodoFim);
-  if (hasCustomPeriod) {
+  const hasCompleteCustomPeriod = Boolean(safe.periodoInicio && safe.periodoFim);
+  if (hasCompleteCustomPeriod) {
     params.set('ultimo_atendimento', 'periodo');
   } else if (safe.ultimoAtendimento) {
     params.set('ultimo_atendimento', safe.ultimoAtendimento);
   }
-  if (safe.periodoInicio) params.set('periodo_inicio', safe.periodoInicio);
-  if (safe.periodoFim) params.set('periodo_fim', safe.periodoFim);
+  if (hasCompleteCustomPeriod) {
+    params.set('periodo_inicio', safe.periodoInicio);
+    params.set('periodo_fim', safe.periodoFim);
+  }
   return params.toString();
+}
+
+/** A API só aceita período com as duas pontas; enquanto falta uma, a lista aguarda. */
+export function hasIncompleteClientesPeriod(filters: ClientesFilters): boolean {
+  const safe = normalizeClientesFilters(filters);
+  return Boolean(safe.periodoInicio) !== Boolean(safe.periodoFim);
 }
 
 export function shouldFetchClienteAvatar(mode: 'owner' | 'colaborador'): boolean {

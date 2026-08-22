@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   activeClientesFilters,
   clientesFiltersSearchParams,
+  hasIncompleteClientesPeriod,
   initialClientesFilters,
   shouldFetchClienteAvatar,
 } from './cliente-filters';
@@ -34,12 +35,25 @@ describe('cliente filters', () => {
 
   it('mobile usa a mesma serialização de período e só owner busca avatar privado', () => {
     const params = clientesFiltersSearchParams(
-      { ...initialClientesFilters, periodoFim: '2026-08-22' },
+      { ...initialClientesFilters, periodoInicio: '2026-08-01', periodoFim: '2026-08-22' },
       20,
       20,
     );
     expect(params).toContain('ultimo_atendimento=periodo');
     expect(shouldFetchClienteAvatar('owner')).toBe(true);
     expect(shouldFetchClienteAvatar('colaborador')).toBe(false);
+  });
+
+  it('aguarda o início e o fim antes de serializar período no desktop ou mobile', () => {
+    const onlyStart = { ...initialClientesFilters, periodoInicio: '2026-08-01' };
+    const onlyEnd = { ...initialClientesFilters, periodoFim: '2026-08-22' };
+
+    for (const filters of [onlyStart, onlyEnd]) {
+      const params = clientesFiltersSearchParams(filters, 20, 0);
+      expect(params).not.toContain('ultimo_atendimento=periodo');
+      expect(params).not.toContain('periodo_inicio=');
+      expect(params).not.toContain('periodo_fim=');
+      expect(hasIncompleteClientesPeriod(filters)).toBe(true);
+    }
   });
 });
