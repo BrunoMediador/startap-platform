@@ -265,7 +265,19 @@ beforeEach(() => {
     sem_retorno: 1,
   });
   listAniversariantesCalendarioMock.mockResolvedValue({
-    ...ANIVERSARIANTES_LIST,
+    clientes: [
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        nome: 'Ana',
+        telefone_masked: '+55 31 •••••-••55',
+        aniversario_mmdd: '08-21',
+        ocorrencia_local_date: '2026-08-21',
+        ultimo_profissional_nome: 'Bene',
+      },
+    ],
+    total: 1,
+    limit: 20,
+    offset: 0,
     periodo_inicio: '2026-08-17',
     periodo_fim: '2026-08-23',
   });
@@ -447,6 +459,7 @@ describe('owner', () => {
         view: 'semana',
       }),
     );
+    expect(calendario.json().clientes[0]?.ocorrencia_local_date).toBe('2026-08-21');
     await app.close();
   });
 
@@ -716,6 +729,62 @@ describe('colaborador', () => {
     expect(body.clientes[0]?.telefone_masked).toBe('+55 31 •••••-••42');
     expect(body.clientes[0]?.telefone).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('553199998842');
+    await app.close();
+  });
+
+  it('aplica os mesmos filtros, período e ordenação no escopo próprio do colaborador', async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes?nome=ana&telefone=3199&ultimo_atendimento=periodo&periodo_inicio=2026-08-01&periodo_fim=2026-08-20&visitas=seis_a_dez&ordenar_por=visitas&ordem=desc',
+    });
+    expect(res.statusCode).toBe(200);
+    expect(listClientesColaboradorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        colaboradorId: 9,
+        timezone: 'America/Sao_Paulo',
+        nome: 'ana',
+        telefone: '3199',
+        ultimoAtendimento: 'periodo',
+        periodoInicio: '2026-08-01',
+        periodoFim: '2026-08-20',
+        visitas: 'seis_a_dez',
+        ordenarPor: 'visitas',
+        ordem: 'desc',
+      }),
+    );
+    await app.close();
+  });
+
+  it('retorna resumo exato e calendário do colaborador com ocorrência explícita', async () => {
+    const app = await buildApp();
+    const resumo = await app.inject({ method: 'GET', url: '/portal/colaborador/clientes/resumo' });
+    const calendario = await app.inject({
+      method: 'GET',
+      url: '/portal/colaborador/clientes/aniversariantes?modo=calendario&visao=mes&ancora=2026-08-21',
+    });
+    expect(resumo.statusCode).toBe(200);
+    expect(resumo.json()).toEqual({ total_clientes: 1, aniversariantes_hoje: 0, sem_retorno: 1 });
+    expect(getClientesResumoMock).toHaveBeenCalledWith({
+      slot: 'clone_owner',
+      tenantId: 'tid-owner',
+      colaboradorId: 9,
+      timezone: 'America/Sao_Paulo',
+    });
+    expect(calendario.statusCode).toBe(200);
+    expect(listAniversariantesCalendarioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slot: 'clone_owner',
+        tenantId: 'tid-owner',
+        colaboradorId: 9,
+        timezone: 'America/Sao_Paulo',
+        anchor: '2026-08-21',
+        view: 'mes',
+      }),
+    );
+    expect(calendario.json().clientes[0]?.ocorrencia_local_date).toBe('2026-08-21');
     await app.close();
   });
 
