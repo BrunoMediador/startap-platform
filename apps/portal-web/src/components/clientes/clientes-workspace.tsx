@@ -52,6 +52,7 @@ import {
   activeClientesFilters,
   clearClientesFilter,
   initialClientesFilters,
+  shouldFetchClienteAvatar,
 } from './cliente-filters';
 
 type Mode = 'owner' | 'colaborador';
@@ -468,6 +469,7 @@ function ClientesDesktopTable({
                   onChange={(value) =>
                     update({
                       ultimoAtendimento: (value || null) as ClientesFilters['ultimoAtendimento'],
+                      ...(value === 'periodo' ? {} : { periodoInicio: '', periodoFim: '' }),
                     })
                   }
                   label="Período"
@@ -477,18 +479,21 @@ function ClientesDesktopTable({
                     ['7d', 'Últimos 7 dias'],
                     ['30d', 'Últimos 30 dias'],
                     ['sem_historico', 'Sem histórico'],
+                    ['periodo', 'Período personalizado'],
                   ]}
                 />
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <DateInput
                     label="De"
                     value={filters.periodoInicio}
-                    onChange={(periodoInicio) => update({ periodoInicio })}
+                    onChange={(periodoInicio) =>
+                      update({ periodoInicio, ultimoAtendimento: 'periodo' })
+                    }
                   />
                   <DateInput
                     label="Até"
                     value={filters.periodoFim}
-                    onChange={(periodoFim) => update({ periodoFim })}
+                    onChange={(periodoFim) => update({ periodoFim, ultimoAtendimento: 'periodo' })}
                   />
                 </div>
                 <SortButtons
@@ -839,7 +844,7 @@ function ClienteAvatar({
 }: { item: Pick<ClienteListItem, 'id' | 'nome' | 'nome_personalizado'>; mode: Mode }) {
   const [failed, setFailed] = useState(false);
   const name = displayName(item);
-  if (mode === 'owner' && !failed)
+  if (shouldFetchClienteAvatar(mode) && !failed)
     return (
       <span className="relative flex size-10 shrink-0 overflow-hidden rounded-full border border-line-strong bg-surface-sunken">
         <Image
@@ -949,6 +954,7 @@ function MobileFilterSheet({
               onChange({
                 ultimoAtendimento: (ultimoAtendimento ||
                   null) as ClientesFilters['ultimoAtendimento'],
+                ...(ultimoAtendimento === 'periodo' ? {} : { periodoInicio: '', periodoFim: '' }),
               })
             }
             options={[
@@ -957,18 +963,21 @@ function MobileFilterSheet({
               ['7d', 'Últimos 7 dias'],
               ['30d', 'Últimos 30 dias'],
               ['sem_historico', 'Sem histórico'],
+              ['periodo', 'Período personalizado'],
             ]}
           />
           <div className="grid grid-cols-2 gap-3">
             <DateInput
               label="Período inicial"
               value={filters.periodoInicio}
-              onChange={(periodoInicio) => onChange({ periodoInicio })}
+              onChange={(periodoInicio) =>
+                onChange({ periodoInicio, ultimoAtendimento: 'periodo' })
+              }
             />
             <DateInput
               label="Período final"
               value={filters.periodoFim}
-              onChange={(periodoFim) => onChange({ periodoFim })}
+              onChange={(periodoFim) => onChange({ periodoFim, ultimoAtendimento: 'periodo' })}
             />
           </div>
           <FilterSelect
@@ -1214,6 +1223,8 @@ function InsightsPanel({
               ? rankingQuery.data?.clientes.map((item) => (
                   <InsightRow
                     key={item.id}
+                    id={item.id}
+                    mode={mode}
                     name={clienteDisplayName(item.nome)}
                     subtitle={`${item.dias_sem_retorno} dias sem retorno`}
                     onOpen={() => onOpen(item.id)}
@@ -1230,6 +1241,8 @@ function InsightsPanel({
               : birthdayItems?.map((item) => (
                   <InsightRow
                     key={item.id}
+                    id={item.id}
+                    mode={mode}
                     name={clienteDisplayName(item.nome)}
                     subtitle={
                       item.ocorrencia_local_date ??
@@ -1254,12 +1267,16 @@ function InsightsPanel({
   );
 }
 function InsightRow({
+  id,
+  mode,
   name,
   subtitle,
   onOpen,
   canSend,
   onSend,
 }: {
+  id: string;
+  mode: Mode;
   name: string;
   subtitle: string | null;
   onOpen: () => void;
@@ -1268,9 +1285,7 @@ function InsightRow({
 }) {
   return (
     <div className="flex items-center gap-3 rounded-card border border-line bg-surface p-3">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-soft text-[12px] font-semibold text-brand">
-        {initials(name) || <IconUser size={18} />}
-      </span>
+      <ClienteAvatar item={{ id, nome: name }} mode={mode} />
       <button
         type="button"
         onClick={onOpen}

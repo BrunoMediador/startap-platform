@@ -1,4 +1,4 @@
-export type UltimoAtendimentoFilter = 'hoje' | '7d' | '30d' | 'sem_historico';
+export type UltimoAtendimentoFilter = 'hoje' | '7d' | '30d' | 'sem_historico' | 'periodo';
 export type VisitasFilter = 'todas' | 'uma' | '2_5' | '6_10' | '11_mais';
 export type ClientesOrderBy = 'ultimo_atendimento' | 'visitas';
 export type SortOrder = 'asc' | 'desc';
@@ -48,6 +48,7 @@ export function activeClientesFilters(
       '7d': 'Últimos 7 dias',
       '30d': 'Últimos 30 dias',
       sem_historico: 'Sem histórico',
+      periodo: 'Período personalizado',
     };
     active.push({ key: 'ultimoAtendimento', label: labels[safe.ultimoAtendimento] });
   }
@@ -81,10 +82,19 @@ export function clientesFiltersSearchParams(
   });
   if (safe.nome) params.set('nome', safe.nome);
   if (safe.telefone) params.set('telefone', safe.telefone);
-  if (safe.ultimoAtendimento) params.set('ultimo_atendimento', safe.ultimoAtendimento);
+  const hasCustomPeriod = Boolean(safe.periodoInicio || safe.periodoFim);
+  if (hasCustomPeriod) {
+    params.set('ultimo_atendimento', 'periodo');
+  } else if (safe.ultimoAtendimento) {
+    params.set('ultimo_atendimento', safe.ultimoAtendimento);
+  }
   if (safe.periodoInicio) params.set('periodo_inicio', safe.periodoInicio);
   if (safe.periodoFim) params.set('periodo_fim', safe.periodoFim);
   return params.toString();
+}
+
+export function shouldFetchClienteAvatar(mode: 'owner' | 'colaborador'): boolean {
+  return mode === 'owner';
 }
 
 export function clearClientesFilter(filters: ClientesFilters, key: string): ClientesFilters {
