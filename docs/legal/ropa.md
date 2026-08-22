@@ -4,7 +4,7 @@
 > Documento vivo, mínimo e honesto. Descreve o que a plataforma **realmente** faz hoje, não o que se planeja fazer.
 >
 > **Card:** SCRUM-116 · **Área:** legal/LGPD · **Autor:** `18-juridico-lgpd`
-> **Criado:** 2026-07-25 · **Última revisão:** 2026-07-25
+> **Criado:** 2026-07-25 · **Última revisão:** 2026-08-21
 >
 > ⚠️ **NÃO ratificado por advogado humano.** Este RoPA e, em particular, a
 > **posição jurídica de OPERADOR** (art. 5º, VII) que ele assume ainda **precisam de
@@ -38,15 +38,19 @@ barbearia/salão/consultório) é uma organização distinta que decide **por qu
 ### 1.1 Mensagens de WhatsApp (conversa bot ↔ consumidor final)
 
 - **Dados:** conteúdo das mensagens (texto e áudio transcrito), telefone do
-  consumidor final, nome de exibição do WhatsApp, `chatId`, timestamps, status de
-  entrega.
-- **Origem:** webhook do WAHA a cada mensagem recebida/enviada.
+  consumidor final, nome de exibição do WhatsApp, foto de perfil quando
+  disponibilizada pela plataforma, `chatId`, timestamps, status de entrega.
+- **Origem:** webhook do WAHA a cada mensagem recebida/enviada; para a foto, consulta
+  no contexto da sessão do controlador.
 - **Finalidade:** operar o atendimento automatizado (agendar, responder dúvidas,
-  pré-venda) **em nome do controlador**.
+  pré-venda) e, quando o CRM estiver habilitado, identificar o contato na carteira
+  do controlador **em nome do controlador**.
 - **Base legal (art. 7º):** execução de contrato / legítimo interesse **do
   controlador** perante o titular (o consumidor escolheu falar com aquele
   estabelecimento). A empresa executa como operador.
-- **Onde vive:** Postgres (`startap_database`), store do WAHA no mesmo Postgres.
+- **Onde vive:** Postgres (`startap_database`), store do WAHA no mesmo Postgres. A
+  foto do CRM fica somente em cache Redis por até 24 horas, escopado por tenant e
+  cliente, sem URL pública ou persistência em banco; é invalidada na exclusão do contato.
 - **Áudio:** transcrito via OpenAI `gpt-4o-mini-transcribe`; o áudio não é retido
   como arquivo — vira texto e segue o ciclo da mensagem.
 
@@ -131,6 +135,7 @@ ratificação humana.
 | Operação | Base legal (LGPD art. 7º / 11º) | Titular do enquadramento |
 |---|---|---|
 | Mensagens WhatsApp / atendimento | Execução de contrato / legítimo interesse **do controlador** | consumidor final |
+| Foto de perfil do WhatsApp no CRM (quando habilitado) | Mesma base do atendimento do controlador | consumidor final |
 | Agenda / GCal | Execução de contrato do controlador | consumidor final |
 | Agendamento de psicoterapia (§1.5) | ⚠️ Dado de saúde — base do **art. 11** é do controlador (Ingrid) | paciente |
 | Cadastro / conta do portal | Execução de contrato (empresa = controladora) | dono |
@@ -150,6 +155,9 @@ ratificação humana.
   `CHAT_RETENTION_ENABLED=true`, `CHAT_RETENTION_DAYS=90` — histórico de conversa
   é eliminado após **90 dias**, sem dry-run. Revisão jurídica do prazo segue
   recomendada (ver § 9).
+- **Foto de perfil no CRM (quando habilitado):** cache Redis técnico de no máximo 24
+  horas, sem URL pública ou cópia persistida em banco, log, métrica ou backup; exclusão
+  do contato invalida o cache antes do TTL.
 - **Sync GCal (ADR 0031):** espelho **total** da agenda — evento que some do
   Google Calendar sai do Previsto/Faturado, inclusive passado/pago; soft-delete
   com trilha `deleted_reason`/`deleted_by` + id **hasheado** (LGPD art. 12 §2).

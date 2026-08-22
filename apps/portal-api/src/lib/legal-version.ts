@@ -11,7 +11,7 @@
  */
 
 export const TERMS_VERSION = 'v1';
-export const PRIVACY_VERSION = 'v2';
+export const PRIVACY_VERSION = 'v3';
 
 /**
  * Hash de prova (SCRUM-31 / ADR 0029): sha256(conteúdo canônico + versão) de cada
@@ -21,7 +21,7 @@ export const PRIVACY_VERSION = 'v2';
  *
  * Valor é uma CONSTANTE por versão: o conteúdo de uma versão é fixo, logo o hash também.
  * Estes literais são o sha256 do conteúdo PUBLICADO (apps/portal-web/src/lib/legal.ts) —
- * Termos v1, Política v2 —, computado pela serialização canônica de ../lib/legal-hash.ts
+ * Termos v1, Política v3 —, computado pela serialização canônica de ../lib/legal-hash.ts
  * (canonicalizeLegalDoc).
  *
  * ⚠️ AO BUMPAR A VERSÃO (v1 -> v2) E/OU MUDAR O TEXTO LEGAL: recompute estes hashes.
@@ -32,9 +32,9 @@ export const PRIVACY_VERSION = 'v2';
  *   o texto não mude.) MANTER EM SINCRONIA com portal-web — ver legal.ts.
  */
 export const TERMS_HASH = '214f5c8e5230edd9a9b483458ec03ce851ae49b24bb1ce57fc5e414f0db9a7bd';
-// v2 (03/07/2026): recomputado sobre o texto NOVO da Política (append da finalidade de
-// encaminhamento de resumo à equipe — SCRUM-59) já com version=v2 + updatedAt=03/07/2026.
-export const PRIVACY_HASH = '0f1397643d353680ca26681af24af8059e481170947cce8d3ffa8c3fb5322610';
+// v3 (21/08/2026): recomputado sobre a Política que adiciona a foto de perfil do
+// WhatsApp no CRM, já com version=v3 + updatedAt=21/08/2026.
+export const PRIVACY_HASH = '135b542e9e999a8c8f297fe3780dcc93c0a1137b40c2d25db2536f4962e76361';
 
 /** Hashes vigentes (server-authoritative) gravados na prova de aceite. */
 export function currentLegalHashes(): { termsHash: string; privacyHash: string } {

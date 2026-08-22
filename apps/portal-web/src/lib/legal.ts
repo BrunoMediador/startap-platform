@@ -39,18 +39,16 @@ export interface LegalDocument {
 
 // Versões — MANTER EM SINCRONIA com apps/portal-api/src/lib/legal-version.ts.
 export const TERMS_VERSION = 'v1';
-// v2 (03/07/2026): append da finalidade de encaminhamento de resumo à equipe do
-// Estabelecimento (condição LGPD da Fase 1 do modo atendente, SCRUM-59). Bump força
-// re-aceite de 1 clique dos clientes atuais (decisão Bruno 03/07 — prova do texto novo).
-export const PRIVACY_VERSION = 'v2';
+// v3 (21/08/2026): inclui foto de perfil do WhatsApp no CRM, sua finalidade e
+// retenção máxima do cache técnico. Bump preserva prova do texto novo.
+export const PRIVACY_VERSION = 'v3';
 
 // Data de vigência v1 (decisão Bruno/PM).
 const VIGENCIA = '26/06/2026';
 
-// Última atualização da Política de Privacidade (append da finalidade de encaminhamento
-// de resumo de atendimento à equipe do Estabelecimento — condição LGPD da Fase 1 do modo
-// atendente, SCRUM-59). Só a Política mudou; os Termos seguem em VIGENCIA.
-const PRIVACIDADE_ATUALIZADA = '03/07/2026';
+// Última atualização da Política de Privacidade. Só a Política mudou; os Termos seguem
+// em VIGENCIA.
+const PRIVACIDADE_ATUALIZADA = '21/08/2026';
 
 // CPF SEMPRE mascarado nesta página pública (o completo vive só no aceite gravado).
 const CPF_MASCARADO = '136.***.***-70';
@@ -400,6 +398,11 @@ export const POLITICA_PRIVACIDADE: LegalDocument = {
               'conversa com o assistente',
             ],
             [
+              'Foto de perfil',
+              'foto de perfil do WhatsApp, quando disponibilizada pela plataforma',
+              'WhatsApp, no contexto da sessão do Estabelecimento',
+            ],
+            [
               'Conteúdo de comunicação',
               'mensagens de texto trocadas com o assistente; áudios e suas transcrições',
               'conversa com o assistente',
@@ -457,6 +460,7 @@ export const POLITICA_PRIVACIDADE: LegalDocument = {
         p('A Startap trata esses dados sob instrução do Estabelecimento, para as finalidades de:'),
         ul([
           'atender o Cliente Final via WhatsApp, esclarecer dúvidas, realizar/gerenciar agendamentos e, quando o Estabelecimento assim configurar, encaminhar à equipe do Estabelecimento um resumo do atendimento (nome, contato e preferências de horário/serviço/profissional) para que a recepção conclua o atendimento;',
+          'exibir, no CRM do Estabelecimento, a foto de perfil do WhatsApp quando disponibilizada, para identificar o contato e apoiar o atendimento;',
           'transcrever áudios para permitir o atendimento;',
           'enviar comunicações transacionais relacionadas ao agendamento (ex.: confirmação; lembrete, quando ativado pelo Estabelecimento).',
         ]),
@@ -533,6 +537,7 @@ export const POLITICA_PRIVACIDADE: LegalDocument = {
           'Dados de cadastro e conta do Dono: durante a vigência do contrato e por um período razoável após o encerramento (sugerido: até 12 meses; ajustável), salvo prazo legal maior.',
           'Dados de pagamento/faturamento: pelo prazo exigido pela legislação fiscal/contábil (em regra 5 anos).',
           'Dados dos Clientes Finais (conversas, áudios, transcrições, agendamentos): mantidos enquanto necessários à prestação do serviço ao Estabelecimento e conforme instrução deste; eliminados ou anonimizados ao fim do tratamento, mediante solicitação do Controlador, ou após um período razoável de inatividade (ajustável), salvo guarda exigida por lei.',
+          'Foto de perfil do WhatsApp: quando o recurso estiver habilitado, mantida apenas em cache técnico temporário, por no máximo 24 horas, sem URL pública ou persistência em banco; eliminada antes desse prazo quando o contato for excluído.',
         ]),
         p(
           'Findo o prazo, os dados são eliminados ou anonimizados, ressalvadas as hipóteses do art. 16 da LGPD (cumprimento de obrigação legal, estudo por órgão de pesquisa com anonimização, transferência a terceiro com observância da lei, ou uso exclusivo do controlador com anonimização).',
