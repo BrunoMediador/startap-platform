@@ -51,6 +51,35 @@ function parseProfilePictureUrl(payload: unknown): URL | null {
   }
 }
 
+async function readImageWithinLimit(response: Response): Promise<Uint8Array | null> {
+  if (!response.body) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_AVATAR_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total === 0) return null;
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 export interface WahaProfilePicture {
   mime: 'image/jpeg' | 'image/png' | 'image/webp';
   bytes: Uint8Array;
@@ -88,8 +117,7 @@ export async function getProfilePicture(input: {
   const declaredSize = Number(response.headers.get('content-length') ?? '0');
   if (!response.ok || !mime || !Number.isFinite(declaredSize) || declaredSize > MAX_AVATAR_BYTES)
     return null;
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_AVATAR_BYTES || !isAllowedImage(bytes, mime))
-    return null;
+  const bytes = await readImageWithinLimit(response);
+  if (!bytes || !isAllowedImage(bytes, mime)) return null;
   return { mime: mime as WahaProfilePicture['mime'], bytes };
 }

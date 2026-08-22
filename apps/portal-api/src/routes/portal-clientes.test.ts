@@ -486,6 +486,27 @@ describe('owner', () => {
     await app.close();
   });
 
+  it('não consulta cache de avatar quando id não pertence mais ao slot+tenant', async () => {
+    getClienteAvatarTargetMock.mockResolvedValueOnce(null);
+    redisMock.get.mockResolvedValueOnce(
+      JSON.stringify({ mime: 'image/png', base64: 'iVBORw0KGgo=' }),
+    );
+    const app = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/portal/clientes/11111111-1111-4111-8111-111111111111/avatar',
+    });
+    expect(res.statusCode).toBe(204);
+    expect(getClienteAvatarTargetMock).toHaveBeenCalledWith(
+      'clone_owner',
+      'tid-owner',
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(redisMock.get).not.toHaveBeenCalled();
+    expect(getProfilePictureMock).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('perfil owner inclui nota interna e histórico', async () => {
     const app = await buildApp();
     const res = await app.inject({

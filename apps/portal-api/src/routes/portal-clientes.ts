@@ -374,6 +374,15 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     const parsed = clienteIdParamSchema.safeParse(req.params ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'id invalido' });
 
+    // Reautoriza o alvo antes de tocar o cache: cache é uma otimização e nunca uma
+    // prova de acesso a um cliente que possa ter mudado de tenant/slot.
+    const target = await clientes.getClienteAvatarTargetForOwner(
+      gate.slot,
+      gate.tenantId,
+      parsed.data.id,
+    );
+    if (!target) return reply.code(204).send();
+
     const redis = getRedis();
     const cached = await getCachedAvatar(redis, gate.tenantId, parsed.data.id).catch(() => null);
     if (cached === 'none') return reply.code(204).send();
@@ -385,12 +394,6 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
         .send(Buffer.from(cached.bytes));
     }
 
-    const target = await clientes.getClienteAvatarTargetForOwner(
-      gate.slot,
-      gate.tenantId,
-      parsed.data.id,
-    );
-    if (!target) return reply.code(204).send();
     const avatar = await getProfilePicture({
       sessao: target.wahaSessao,
       telefoneCanonico: target.telefoneCanonico,
