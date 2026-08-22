@@ -4,7 +4,7 @@
  * otimista contra ciclos concorrentes; se o send falha (sessão remetente ALERTAS caída etc.),
  * `applyTransition` DESFAZ o carimbo (restoreStateIfUnchanged) pra o próximo ciclo re-tentar —
  * sem pisar numa reserva mais nova de outro ciclo (o predicado do restore é o valor que ESTE
- * ciclo gravou). Cobre up->down e down->down (re-alerta).
+ * ciclo gravou). Cobre a transição up->down; checks já down permanecem silenciosos.
  *
  * Mesma fiação de mocks do monitor.test.ts + `restoreStateIfUnchanged`.
  */
@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
+  claimRecoveryTransition: vi.fn(),
   upsertState: vi.fn(),
   restoreStateIfUnchanged: vi.fn(),
   poolConnect: vi.fn(),
@@ -33,6 +36,9 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
+    claimRecoveryTransition: mocks.claimRecoveryTransition,
     upsertState: mocks.upsertState,
     restoreStateIfUnchanged: mocks.restoreStateIfUnchanged,
   },
@@ -53,7 +59,6 @@ vi.mock('../config.js', () => ({
     ALERTS_API_HEALTH_URL: 'http://startap-api:3040/health',
     ALERTS_MAX_PER_WINDOW: 50,
     ALERTS_WINDOW_MIN: 30,
-    MONITOR_REALERT_HOURS: 24,
     // Flag ON: torna a checagem "up→down falho NÃO avisa o dono" LOAD-BEARING (senão o bloco de
     // notify nunca roda e a asserção clientNotified===0 seria vácua).
     CLIENT_DISCONNECT_ALERT_ENABLED: true,
@@ -102,12 +107,13 @@ function stubWahaSessions(list: Array<{ name: string; status: string }>) {
   );
 }
 
-/** O que o ciclo carimbou no upsertState do check informado (pega o último). */
+/** O que o ciclo carimbou no claim atômico do check informado (pega o último). */
 function lastStampFor(checkKey: string) {
-  const call = [...mocks.upsertState.mock.calls]
+  const call = [...mocks.claimDownTransition.mock.calls]
     .reverse()
     .find((c) => (c[0] as { checkKey: string }).checkKey === checkKey);
-  return call?.[0] as { state: string; lastAlertAt: Date; alertCount: number } | undefined;
+  const input = call?.[0] as { stampedAt: Date } | undefined;
+  return input ? { state: 'down', lastAlertAt: input.stampedAt, alertCount: 1 } : undefined;
 }
 
 beforeEach(() => {
@@ -121,6 +127,9 @@ beforeEach(() => {
   });
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
+  mocks.claimRecoveryTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.restoreStateIfUnchanged.mockResolvedValue(true);
   mocks.notifyClientDisconnect.mockResolvedValue({ ok: true, sent: true });
@@ -129,8 +138,9 @@ beforeEach(() => {
 });
 
 describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha DEFINITIVAMENTE', () => {
-  // Falha DEFINITIVA (certeza de não-entrega): sessão FAILED -> WAHA recusa o /api/sendText com 422.
-  const DEFINITIVE = new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING');
+  // Falha DEFINITIVA do DESTINO (certeza de não-entrega). Falha 422 do REMETENTE é
+  // tratada separadamente como supressão terminal, para não reabrir alerta histórico.
+  const DEFINITIVE = new Error('WAHA /api/sendText -> HTTP 422: destination rejected');
 
   it('up->down + send FALHA DEFINITIVA (recipient rejeita) -> desfaz o carimbo e o ciclo seguinte re-tenta', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
@@ -210,7 +220,7 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
     expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 
-  it('sem sessão remetente -> send é falha -> compensa (quando o remetente voltar, o alerta re-sai)', async () => {
+  it('sem sessão remetente -> suprime terminalmente sem compensar para a reconexão', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.getSenderSession.mockResolvedValue(null); // remetente ALERTAS não mapeado
     mocks.listMonitoredSessions.mockResolvedValue([
@@ -222,16 +232,16 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
 
     expect(r.sent).toBe(0);
     expect(mocks.sendText).not.toHaveBeenCalled();
-    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 
-  it('down->down (re-alerta) + send FALHA -> restaura o last_alert_at ANTERIOR (relógio de re-alerta não reinicia)', async () => {
+  it('down->down, mesmo após 25h: não tenta novo envio nem mexe no carimbo do episódio', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
     const downSince = new Date(Date.now() - 26 * 60 * 60_000); // caído há 26h
-    const prevAlertAt = new Date(Date.now() - 25 * 60 * 60_000); // último aviso 25h atrás (>24h -> re-alerta)
+    const prevAlertAt = new Date(Date.now() - 25 * 60 * 60_000);
     mocks.listStates.mockResolvedValue([
       stateRow('waha:clone_seven_7', {
         state: 'down',
@@ -240,18 +250,11 @@ describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha 
         alert_count: 2,
       }),
     ]);
-    mocks.sendText.mockRejectedValue(DEFINITIVE);
-
     const r = await runMonitor();
 
     expect(r.sent).toBe(0);
-    expect(mocks.restoreStateIfUnchanged).toHaveBeenCalledTimes(1);
-    const comp = mocks.restoreStateIfUnchanged.mock.calls[0][0];
-    // Restaura o carimbo anterior: um re-alerta que não saiu NÃO adianta o relógio de re-alerta,
-    // então o próximo ciclo (ainda >= intervalo) re-tenta.
-    expect(comp.restore.lastAlertAt).toBe(prevAlertAt);
-    expect(comp.restore.alertCount).toBe(2);
-    expect(comp.restore.state).toBe('down');
+    expect(mocks.sendText).not.toHaveBeenCalled();
+    expect(mocks.restoreStateIfUnchanged).not.toHaveBeenCalled();
   });
 });
 
@@ -280,8 +283,7 @@ describe('monitor SCRUM-126 — 422 tardio (colado no SEND_TIMEOUT) classifica D
         () =>
           new Promise((_, reject) =>
             setTimeout(
-              () =>
-                reject(new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING')),
+              () => reject(new Error('WAHA /api/sendText -> HTTP 422: destination rejected')),
               SEND_TIMEOUT_MS + 20,
             ),
           ),

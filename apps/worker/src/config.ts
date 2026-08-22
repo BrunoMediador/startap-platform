@@ -132,15 +132,6 @@ export const WorkerConfigSchema = z.object({
   // janela (spec §4). Protege o numero da Lola num cenario "tudo caiu de uma vez".
   ALERTS_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
   ALERTS_WINDOW_MIN: z.coerce.number().int().positive().default(30),
-  // Intervalo MÍNIMO (horas) entre RE-lembretes "🔴 AINDA CAÍDO" do MESMO check enquanto ele segue
-  // down. O alerta de TRANSIÇÃO (up→down "🔴 CAIU") sai NA HORA e é INTOCADO — isto governa SÓ o
-  // lembrete recorrente. Antes o intervalo vinha de alert_config.cooldown_min (~30 min no banco) e
-  // gerava flood noturno (100+ alertas por sessão caída = risco de BAN do número remetente). Agora o
-  // padrão é 1 lembrete a cada 24h (ordem do Bruno 05/07). NÃO é flag de on/off — o re-alerta segue
-  // existindo, só espaçado; ajustável por env sem deploy (ex.: 12 = 2×/dia). OPCIONAL no boot (lição
-  // #247: nada aqui é obrigatório — worker sobe sem a env, cai no default 24). NUNCA hardcoded.
-  MONITOR_REALERT_HOURS: z.coerce.number().positive().default(24),
-
   // ── Check host:disk (SCRUM-134 — fast-follow da spec 021, "disco fica pra fase 2") ──
   // O worker NÃO mede o disco (containerizado, enxerga cgroup/overlay — spec §1). Quem mede é
   // o script `/opt/automacoes/disco-alerta.sh` (cron 6/6h no HOST), que grava o fato bruto em
@@ -364,7 +355,7 @@ export const WorkerConfigSchema = z.object({
   BILLING_SILENCE_ALERT_CRON: z.string().default('43 * * * *'),
   // Cooldown (min) por CLONE entre alertas do MESMO clone silenciado: enquanto seguir mudo, no máx 1
   // alerta por janela (não 1 por ciclo). Reusa alert_states (chave 'billsilence:<slot>'). Default 1440
-  // (24h) = 1 lembrete/dia enquanto pendente — igual à cadência do "🔴 AINDA CAÍDO" do monitor.
+  // (24h) = 1 lembrete/dia enquanto pendente; é independente do monitor de sessões.
   BILLING_SILENCE_ALERT_COOLDOWN_MIN: z.coerce.number().int().positive().default(1_440),
 
   // ── Rastreio de ENTREGA de outbound + alerta de nack/preso (SCRUM-58) ────────────────────────

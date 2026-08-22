@@ -7,7 +7,7 @@
  *   (a) flag ON + sessão de CLONE (slot != null) indo up->down -> chamado 1x, clientNotified=1;
  *   (b) flag OFF -> nunca chamado, clientNotified=0;
  *   (c) check de INFRA / sessão remetente ALERTAS (slot=null) -> nunca chama (não avisa "dono");
- *   (d) só na transição (up->down): re-alerta down->down NÃO chama de novo.
+ *   (d) só na transição (up->down): checks que seguem down NÃO chamam de novo.
  *
  * `config` é MOCKADO via objeto MUTÁVEL (flag toggla por teste). Demais deps (alerts/waha/pool)
  * mockadas como em monitor.test.ts. A flag OFF é o estado padrão (default do projeto).
@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
+  claimRecoveryTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -45,6 +48,9 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
+    claimRecoveryTransition: mocks.claimRecoveryTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -95,7 +101,7 @@ function wahaPending(sessao: string) {
   return stateRow(`waha:${sessao}`, { pending_down_count: 1 });
 }
 
-/** Sessão já DOWN (estado down) -> próximo down é re-alerta (down->down), NÃO transição. */
+/** Sessão já DOWN (estado down) -> próximo down segue o mesmo episódio, NÃO é transição. */
 function wahaDown(sessao: string) {
   return stateRow(`waha:${sessao}`, {
     state: 'down',
@@ -116,6 +122,9 @@ beforeEach(() => {
   });
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
+  mocks.claimRecoveryTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
   mocks.listEnabledRecipients.mockResolvedValue([recipient(1, '5535999990011')]);
@@ -170,13 +179,12 @@ describe('runMonitor — fiação do auto-aviso de desconexão (gate da feature 
     expect(r.clientNotified).toBe(0);
   });
 
-  it('(d) re-alerta down->down (já estava down) NÃO chama de novo (só na transição)', async () => {
+  it('(d) down->down (já estava down) NÃO chama de novo (só na transição)', async () => {
     mocks.config.CLIENT_DISCONNECT_ALERT_ENABLED = true;
     mocks.listMonitoredSessions.mockResolvedValue([
       { sessao: 'clone_seven_7', label: 'Seven 7 Barber', slot: 'clone_seven_7' },
     ]);
-    // Já estava DOWN há 60 min (cooldown 30 min já passou -> re-alerta interno), mas NÃO é
-    // transição up->down -> o aviso ao cliente NÃO dispara (justWentDown=false).
+    // Já estava DOWN: NÃO é transição up->down -> o aviso ao cliente NÃO dispara (justWentDown=false).
     mocks.listStates.mockResolvedValue([wahaDown('clone_seven_7')]);
 
     const r = await runMonitor();

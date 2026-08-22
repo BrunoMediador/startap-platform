@@ -29,6 +29,9 @@ const {
   resolveMonitorExtraSessions,
   restoreStateIfUnchanged,
   bumpMonitorSendErrors,
+  claimDownTransition,
+  claimRecoveryTransition,
+  suppressClaimedDownTransition,
   getMonitorSendErrorsTotal,
   DEFAULT_MONITOR_EXTRA_SESSIONS,
   TooManyRecipientsError,
@@ -58,6 +61,72 @@ describe('getSenderSession — repoint do remetente (Missão 023 W3)', () => {
   it('degrada gracioso (null) se o slot remetente não tiver waha_sessao mapeado', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     expect(await getSenderSession('alertas')).toBeNull();
+  });
+});
+
+describe('claimDownTransition — claim atômico do episódio DOWN', () => {
+  it('só concede o envio quando o estado ainda é UP com o debounce esperado', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ check_key: 'waha:clone_x' }], rowCount: 1 });
+
+    const claimed = await claimDownTransition({
+      checkKey: 'waha:clone_x',
+      stampedAt: new Date('2026-08-21T12:00:00.000Z'),
+      expectedPendingDownCount: 1,
+    });
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(claimed).toBe(true);
+    expect(sql).toContain('ON CONFLICT (check_key) DO UPDATE SET');
+    expect(sql).toContain("WHERE alert_states.state = 'up'");
+    expect(sql).toContain('alert_states.pending_down_count = $3');
+    expect(params).toEqual(['waha:clone_x', new Date('2026-08-21T12:00:00.000Z'), 1]);
+  });
+
+  it('nega quando outro processo já abriu ou mudou o episódio', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    await expect(
+      claimDownTransition({
+        checkKey: 'waha:clone_x',
+        stampedAt: new Date('2026-08-21T12:00:00.000Z'),
+        expectedPendingDownCount: 1,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('marca supressão apenas no claim DOWN que ainda pertence ao ciclo', async () => {
+    const stampedAt = new Date('2026-08-21T12:00:00.000Z');
+    mockQuery.mockResolvedValueOnce({ rows: [{ check_key: 'waha:clone_x' }], rowCount: 1 });
+
+    await expect(
+      suppressClaimedDownTransition({ checkKey: 'waha:clone_x', stampedAt }),
+    ).resolves.toBe(true);
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('last_alert_at = NULL');
+    expect(sql).toContain("AND state = 'down'");
+    expect(sql).toContain('AND last_alert_at = $2');
+    expect(params).toEqual(['waha:clone_x', stampedAt]);
+  });
+
+  it('concede recovery somente para o snapshot DOWN ainda atual', async () => {
+    const downSince = new Date('2026-08-21T11:00:00.000Z');
+    const alertedAt = new Date('2026-08-21T11:01:00.000Z');
+    mockQuery.mockResolvedValueOnce({ rows: [{ check_key: 'waha:clone_x' }], rowCount: 1 });
+
+    await expect(
+      claimRecoveryTransition({
+        checkKey: 'waha:clone_x',
+        expectedDownSince: downSince,
+        expectedLastAlertAt: alertedAt,
+        expectedAlertCount: 1,
+      }),
+    ).resolves.toBe(true);
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("AND state = 'down'");
+    expect(sql).toContain('down_since IS NOT DISTINCT FROM $2');
+    expect(sql).toContain('last_alert_at IS NOT DISTINCT FROM $3');
+    expect(params).toEqual(['waha:clone_x', downSince, alertedAt, 1]);
   });
 });
 

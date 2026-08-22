@@ -475,6 +475,84 @@ export async function upsertState(input: {
 }
 
 /**
+ * Abre um episódio DOWN somente se o estado ainda for o UP observado por este
+ * ciclo. O predicado no `ON CONFLICT ... WHERE` é o claim atômico que impede
+ * dois workers concorrentes de enviarem a mesma queda.
+ */
+export async function claimDownTransition(input: {
+  checkKey: string;
+  stampedAt: Date;
+  expectedPendingDownCount: number;
+}): Promise<boolean> {
+  const r = await query<{ check_key: string }>(
+    `INSERT INTO alert_states
+       (check_key, state, down_since, last_alert_at, alert_count, pending_down_count, updated_at)
+     VALUES ($1, 'down', $2, $2, 1, 0, NOW())
+     ON CONFLICT (check_key) DO UPDATE SET
+       state              = 'down',
+       down_since         = EXCLUDED.down_since,
+       last_alert_at      = EXCLUDED.last_alert_at,
+       alert_count        = 1,
+       pending_down_count = 0,
+       updated_at         = NOW()
+     WHERE alert_states.state = 'up'
+       AND alert_states.pending_down_count = $3
+     RETURNING check_key`,
+    [input.checkKey, input.stampedAt, input.expectedPendingDownCount],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Converte SOMENTE o claim que este ciclo abriu em supressão terminal. O
+ * predicado evita que um recovery concorrente seja sobrescrito de volta a DOWN.
+ */
+export async function suppressClaimedDownTransition(input: {
+  checkKey: string;
+  stampedAt: Date;
+}): Promise<boolean> {
+  const r = await query<{ check_key: string }>(
+    `UPDATE alert_states
+        SET last_alert_at = NULL,
+            alert_count = 0,
+            updated_at = NOW()
+      WHERE check_key = $1
+        AND state = 'down'
+        AND last_alert_at = $2
+        AND alert_count = 1
+      RETURNING check_key`,
+    [input.checkKey, input.stampedAt],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** Claim atômico do recovery: somente o DOWN observado por este ciclo vira UP e notifica. */
+export async function claimRecoveryTransition(input: {
+  checkKey: string;
+  expectedDownSince: Date | null;
+  expectedLastAlertAt: Date | null;
+  expectedAlertCount: number;
+}): Promise<boolean> {
+  const r = await query<{ check_key: string }>(
+    `UPDATE alert_states
+        SET state = 'up',
+            down_since = NULL,
+            last_alert_at = NULL,
+            alert_count = 0,
+            pending_down_count = 0,
+            updated_at = NOW()
+      WHERE check_key = $1
+        AND state = 'down'
+        AND down_since IS NOT DISTINCT FROM $2
+        AND last_alert_at IS NOT DISTINCT FROM $3
+        AND alert_count = $4
+      RETURNING check_key`,
+    [input.checkKey, input.expectedDownSince, input.expectedLastAlertAt, input.expectedAlertCount],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
  * Heartbeat de liveness do job monitor (SCRUM-54). Carimba last_cycle_at = NOW() na linha
  * sintética DEDICADA '__heartbeat__' a cada tick — pra que "saudável e quieto" deixe de ser
  * indistinguível de "travado" (a prova de vida vira verificável por SELECT). UPSERT idempotente:
