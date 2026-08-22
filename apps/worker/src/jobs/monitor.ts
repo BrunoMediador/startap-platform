@@ -365,7 +365,14 @@ function classifySendFailure(error: unknown): {
   const message = error instanceof Error ? error.message : '';
   const statusMatch = /\bHTTP\s+(\d{3})\b/i.exec(message);
   const statusCode = statusMatch ? Number(statusMatch[1]) : null;
-  if (/\bsession\s+(?:status\s+(?:is\s+)?)?(?:not\s+working|failed|closed)\b/i.test(message)) {
+  const wahaCode =
+    typeof error === 'object' && error !== null && 'wahaCode' in error
+      ? (error as { wahaCode?: unknown }).wahaCode
+      : null;
+  if (
+    wahaCode === 'WAHA_SENDER_UNAVAILABLE' ||
+    /\bsession\s+(?:status\s+(?:is\s+)?)?(?:not\s+working|failed|closed)\b/i.test(message)
+  ) {
     return { failureClass: 'sender_unavailable', statusCode };
   }
   return {
@@ -552,14 +559,13 @@ async function applyTransition(
       const wasSuppressedForUnavailableChannel =
         (prev?.alert_count ?? 0) === 0 && prev?.last_alert_at === null;
       const mins = minutesSince(prev?.down_since ?? null);
-      await alerts.upsertState({
+      const recovered = await alerts.claimRecoveryTransition({
         checkKey: obsItem.key,
-        state: 'up',
-        downSince: null,
-        lastAlertAt: null,
-        alertCount: 0,
-        pendingDownCount: 0,
+        expectedDownSince: prev?.down_since ?? null,
+        expectedLastAlertAt: prev?.last_alert_at ?? null,
+        expectedAlertCount: prev?.alert_count ?? 0,
       });
+      if (!recovered) return { isDown: false, justWentDown: false };
       if (wasSuppressedForUnavailableChannel) {
         return { isDown: false, justWentDown: false };
       }

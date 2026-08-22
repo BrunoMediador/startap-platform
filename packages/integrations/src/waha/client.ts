@@ -32,6 +32,25 @@ function wahaUrl(shardId: number = DEFAULT_WAHA_SHARD_ID): string {
  */
 const BEST_EFFORT_PATHS = new Set(['/api/sendSeen', '/api/startTyping', '/api/stopTyping']);
 
+/** Erro seguro do transporte: metadados operacionais, nunca payload WAHA. */
+export class WahaRequestError extends Error {
+  readonly operation = 'POST';
+
+  constructor(
+    readonly route: string,
+    readonly status: number,
+    readonly wahaCode: string,
+  ) {
+    super(`WAHA request failed: operation=POST route=${route} status=${status} code=${wahaCode}`);
+    this.name = 'WahaRequestError';
+  }
+}
+
+function requestFailureCode(path: string, status: number): string {
+  if (path === '/api/sendText' && status === 422) return 'WAHA_SENDER_UNAVAILABLE';
+  return `WAHA_HTTP_${status}`;
+}
+
 async function wahaPost<T = unknown>(
   path: string,
   body: unknown,
@@ -45,13 +64,14 @@ async function wahaPost<T = unknown>(
     signal,
   });
   if (!res.ok) {
+    const wahaCode = requestFailureCode(path, res.status);
     // A resposta pode ecoar chatId/texto. Não lemos nem registramos o corpo para
     // evitar PII de mensagens outbound em todo caller deste cliente compartilhado.
     // Endpoints cosméticos (visto/presença) não merecem nível error — o callsite
     // já trata como best-effort. Envios reais (sendText/sendMedia) seguem error.
     const level = BEST_EFFORT_PATHS.has(path) ? 'debug' : 'error';
-    log[level]({ path, status: res.status }, 'WAHA error');
-    throw new Error(`WAHA ${path} -> HTTP ${res.status}`);
+    log[level]({ operation: 'POST', route: path, status: res.status, wahaCode }, 'WAHA error');
+    throw new WahaRequestError(path, res.status, wahaCode);
   }
   return (await res.json()) as T;
 }

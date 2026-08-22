@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   reserveGlobalSend: vi.fn(),
   claimDownTransition: vi.fn(),
   suppressClaimedDownTransition: vi.fn(),
+  claimRecoveryTransition: vi.fn(),
   upsertState: vi.fn(),
   restoreStateIfUnchanged: vi.fn(),
   poolConnect: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@startap/db', () => ({
     reserveGlobalSend: mocks.reserveGlobalSend,
     claimDownTransition: mocks.claimDownTransition,
     suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
+    claimRecoveryTransition: mocks.claimRecoveryTransition,
     upsertState: mocks.upsertState,
     restoreStateIfUnchanged: mocks.restoreStateIfUnchanged,
   },
@@ -127,6 +129,7 @@ beforeEach(() => {
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
   mocks.claimDownTransition.mockResolvedValue(true);
   mocks.suppressClaimedDownTransition.mockResolvedValue(true);
+  mocks.claimRecoveryTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.restoreStateIfUnchanged.mockResolvedValue(true);
   mocks.notifyClientDisconnect.mockResolvedValue({ ok: true, sent: true });

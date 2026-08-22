@@ -30,6 +30,7 @@ const {
   restoreStateIfUnchanged,
   bumpMonitorSendErrors,
   claimDownTransition,
+  claimRecoveryTransition,
   suppressClaimedDownTransition,
   getMonitorSendErrorsTotal,
   DEFAULT_MONITOR_EXTRA_SESSIONS,
@@ -105,6 +106,27 @@ describe('claimDownTransition — claim atômico do episódio DOWN', () => {
     expect(sql).toContain("AND state = 'down'");
     expect(sql).toContain('AND last_alert_at = $2');
     expect(params).toEqual(['waha:clone_x', stampedAt]);
+  });
+
+  it('concede recovery somente para o snapshot DOWN ainda atual', async () => {
+    const downSince = new Date('2026-08-21T11:00:00.000Z');
+    const alertedAt = new Date('2026-08-21T11:01:00.000Z');
+    mockQuery.mockResolvedValueOnce({ rows: [{ check_key: 'waha:clone_x' }], rowCount: 1 });
+
+    await expect(
+      claimRecoveryTransition({
+        checkKey: 'waha:clone_x',
+        expectedDownSince: downSince,
+        expectedLastAlertAt: alertedAt,
+        expectedAlertCount: 1,
+      }),
+    ).resolves.toBe(true);
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("AND state = 'down'");
+    expect(sql).toContain('down_since IS NOT DISTINCT FROM $2');
+    expect(sql).toContain('last_alert_at IS NOT DISTINCT FROM $3');
+    expect(params).toEqual(['waha:clone_x', downSince, alertedAt, 1]);
   });
 });
 

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   reserveGlobalSend: vi.fn(),
   claimDownTransition: vi.fn(),
   suppressClaimedDownTransition: vi.fn(),
+  claimRecoveryTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@startap/db', () => ({
     reserveGlobalSend: mocks.reserveGlobalSend,
     claimDownTransition: mocks.claimDownTransition,
     suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
+    claimRecoveryTransition: mocks.claimRecoveryTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -99,6 +101,7 @@ beforeEach(() => {
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
   mocks.claimDownTransition.mockResolvedValue(true);
   mocks.suppressClaimedDownTransition.mockResolvedValue(true);
+  mocks.claimRecoveryTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
   mocks.listMonitoredSessions.mockResolvedValue([
@@ -290,5 +293,26 @@ describe('monitor — alerta único por episódio de queda', () => {
 
     expect(mocks.claimDownTransition).toHaveBeenCalledTimes(2);
     expect(mocks.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('dois ciclos concorrentes de recovery recebem um único claim e enviam um RECUPERADO', async () => {
+    setWahaStatus('WORKING');
+    mocks.listStates.mockResolvedValue([
+      state({
+        state: 'down',
+        down_since: new Date('2026-08-21T11:00:00.000Z'),
+        last_alert_at: new Date('2026-08-21T11:00:00.000Z'),
+        alert_count: 1,
+      }),
+    ]);
+    mocks.claimRecoveryTransition.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await Promise.all([runMonitor(), runMonitor()]);
+
+    expect(mocks.claimRecoveryTransition).toHaveBeenCalledTimes(2);
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+    expect((mocks.sendText.mock.calls[0]?.[0] as { texto: string }).texto).toContain(
+      '🟢 RECUPERADO',
+    );
   });
 });

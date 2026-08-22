@@ -526,6 +526,32 @@ export async function suppressClaimedDownTransition(input: {
   return (r.rowCount ?? 0) > 0;
 }
 
+/** Claim atômico do recovery: somente o DOWN observado por este ciclo vira UP e notifica. */
+export async function claimRecoveryTransition(input: {
+  checkKey: string;
+  expectedDownSince: Date | null;
+  expectedLastAlertAt: Date | null;
+  expectedAlertCount: number;
+}): Promise<boolean> {
+  const r = await query<{ check_key: string }>(
+    `UPDATE alert_states
+        SET state = 'up',
+            down_since = NULL,
+            last_alert_at = NULL,
+            alert_count = 0,
+            pending_down_count = 0,
+            updated_at = NOW()
+      WHERE check_key = $1
+        AND state = 'down'
+        AND down_since IS NOT DISTINCT FROM $2
+        AND last_alert_at IS NOT DISTINCT FROM $3
+        AND alert_count = $4
+      RETURNING check_key`,
+    [input.checkKey, input.expectedDownSince, input.expectedLastAlertAt, input.expectedAlertCount],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 /**
  * Heartbeat de liveness do job monitor (SCRUM-54). Carimba last_cycle_at = NOW() na linha
  * sintética DEDICADA '__heartbeat__' a cada tick — pra que "saudável e quieto" deixe de ser

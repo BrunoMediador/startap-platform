@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   reserveGlobalSend: vi.fn(),
   claimDownTransition: vi.fn(),
   suppressClaimedDownTransition: vi.fn(),
+  claimRecoveryTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('@startap/db', () => ({
     reserveGlobalSend: mocks.reserveGlobalSend,
     claimDownTransition: mocks.claimDownTransition,
     suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
+    claimRecoveryTransition: mocks.claimRecoveryTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -119,6 +121,7 @@ beforeEach(() => {
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
   mocks.claimDownTransition.mockResolvedValue(true);
   mocks.suppressClaimedDownTransition.mockResolvedValue(true);
+  mocks.claimRecoveryTransition.mockResolvedValue(true);
   mocks.listStates.mockResolvedValue([]); // tudo "up" antes -> primeira queda alerta
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
