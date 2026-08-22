@@ -140,7 +140,9 @@ let durablePlan: Array<{
   status: 'planned' | 'gcal_dispatch_started' | 'recovery_required' | 'active';
   error_code: string | null;
   attempt_version: number;
+  operation_attempt_version: number;
 }> = [];
+let durableOperationAttemptVersion = 0;
 
 async function buildApp() {
   const app = Fastify({ logger: false });
@@ -151,6 +153,7 @@ async function buildApp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  durableOperationAttemptVersion = 0;
   configMock.AGENDA_BLOQUEIOS_ENABLED = true;
   configMock.AGENDA_BLOQUEIOS_SLOTS = 'clone_owner';
   configMock.COLABORADOR_PORTAL_ENABLED = true;
@@ -213,6 +216,7 @@ beforeEach(() => {
         status: 'planned',
         error_code: null,
         attempt_version: 0,
+        operation_attempt_version: 0,
       }));
       return {
         created: true,
@@ -238,6 +242,8 @@ beforeEach(() => {
     if (!occurrence || occurrence.status !== 'planned') return null;
     occurrence.status = 'gcal_dispatch_started';
     occurrence.attempt_version += 1;
+    durableOperationAttemptVersion += 1;
+    occurrence.operation_attempt_version = durableOperationAttemptVersion;
     return occurrence;
   });
   agendaOperationClaimRecovery.mockImplementation(async (input: { ordinal: number }) => {
@@ -245,6 +251,8 @@ beforeEach(() => {
     if (!occurrence || occurrence.status !== 'recovery_required') return null;
     occurrence.status = 'gcal_dispatch_started';
     occurrence.attempt_version += 1;
+    durableOperationAttemptVersion += 1;
+    occurrence.operation_attempt_version = durableOperationAttemptVersion;
     return occurrence;
   });
   agendaOperationMarkResult.mockResolvedValue(true);
@@ -1305,6 +1313,79 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
     await app.close();
   });
 
+  it('conclui operação quando recovery v2 é seguido de dispatch v1 e usa o fencing da operação', async () => {
+    const firstEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
+    const secondEventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2';
+    const recovered = {
+      operation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      ordinal: 1,
+      inicio_at: '2026-08-21T15:00:00.000Z',
+      fim_at: '2026-08-21T16:00:00.000Z',
+      bloqueio_id: '11111111-1111-4111-8111-111111111111',
+      gcal_event_id: firstEventId,
+      status: 'gcal_dispatch_started' as const,
+      error_code: null,
+      attempt_version: 2,
+      operation_attempt_version: 2,
+    };
+    const dispatchedSecond = {
+      ...recovered,
+      ordinal: 2,
+      bloqueio_id: '22222222-2222-4222-8222-222222222222',
+      gcal_event_id: secondEventId,
+      inicio_at: '2026-08-28T15:00:00.000Z',
+      fim_at: '2026-08-28T16:00:00.000Z',
+      attempt_version: 1,
+      operation_attempt_version: 3,
+    };
+    getGcalsForSlot.mockResolvedValueOnce([
+      {
+        colaboradorId: 8,
+        nome: 'Outro',
+        calendarId: 'cal-8',
+        client: {
+          getEvent: vi.fn().mockResolvedValue({ id: firstEventId }),
+          createEvent: vi.fn().mockResolvedValue({ id: secondEventId }),
+        },
+        servicos: [],
+      },
+    ]);
+    agendaOperationGet.mockResolvedValueOnce({
+      id: recovered.operation_id,
+      status: 'recovery_required',
+      actor_role: 'owner',
+      actor_user_id: 22,
+      actor_colaborador_id: null,
+      timezone: 'America/Sao_Paulo',
+      tipo: 'almoco',
+      motivo: 'intervalo',
+      response_status: 207,
+      response_body: null,
+    });
+    agendaOperationList.mockResolvedValueOnce([
+      { ...recovered, status: 'recovery_required' as const },
+      { ...dispatchedSecond, status: 'planned' as const },
+    ]);
+    agendaOperationClaimRecovery.mockResolvedValueOnce(recovered);
+    agendaOperationClaimDispatch.mockResolvedValueOnce(dispatchedSecond);
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/portal/agenda/bloqueios/serie/${recovered.operation_id}/recovery`,
+      payload: { colaborador_id: 8 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(agendaOperationMarkResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'complete',
+        expectedOperationAttemptVersion: dispatchedSecond.operation_attempt_version,
+      }),
+    );
+    await app.close();
+  });
+
   it('não chama o GCal quando a reconstrução local da recovery falha', async () => {
     const eventId = 'bloqopaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1';
     const getEvent = vi.fn().mockRejectedValue(new Error('HTTP 404'));
@@ -1340,6 +1421,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       status: 'recovery_required' as const,
       error_code: 'gcal_ambiguous',
       attempt_version: 0,
+      operation_attempt_version: 0,
     };
     agendaOperationList.mockResolvedValueOnce([occurrence]);
     agendaOperationClaimRecovery.mockResolvedValueOnce({
@@ -1459,6 +1541,7 @@ describe('ADR 0044 — operação durável de bloqueios recorrentes', () => {
       status: 'recovery_required' as const,
       error_code: 'gcal_ambiguous',
       attempt_version: 0,
+      operation_attempt_version: 0,
     };
     durablePlan = [occurrence];
     agendaOperationGet.mockResolvedValue({

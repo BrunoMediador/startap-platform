@@ -146,40 +146,58 @@ async function gcalFetch<T = unknown>(
   opts: RequestInit,
   tokenFn: () => Promise<string>,
 ): Promise<T> {
-  const token = await tokenFn();
-  const url = `https://www.googleapis.com/calendar/v3${path}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GCAL_REQUEST_TIMEOUT_MS);
-  let res: Response;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new Error(GCAL_REQUEST_TIMEOUT_SENTINEL));
+    }, GCAL_REQUEST_TIMEOUT_MS);
+  });
+  const withinDeadline = <Result>(promise: Promise<Result>): Promise<Result> =>
+    Promise.race([promise, timeout]);
   try {
-    res = await fetch(url, {
-      ...opts,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...(opts.headers ?? {}),
-      },
-      signal: controller.signal,
-    });
+    // O prazo cobre token, request e leitura do body. Sem isso um executor pode
+    // ultrapassar a lease mesmo se o fetch em si já tiver retornado headers.
+    const token = await withinDeadline(tokenFn());
+    const url = `https://www.googleapis.com/calendar/v3${path}`;
+    const res = await withinDeadline(
+      fetch(url, {
+        ...opts,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(opts.headers ?? {}),
+        },
+        signal: controller.signal,
+      }),
+    );
+    if (!res.ok) {
+      let text = '';
+      try {
+        text = await withinDeadline(res.text());
+      } catch (err) {
+        if (timedOut) throw err;
+      }
+      // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
+      // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
+      const eventId = eventIdFromPath(path);
+      const safePath = redactEventId(path, eventId);
+      const safeBody = redactEventId(text, eventId);
+      log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
+      throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
+    }
+    // DELETE retorna 204 sem corpo
+    if (res.status === 204) return undefined as unknown as T;
+    return (await withinDeadline(res.json())) as T;
   } catch (err) {
-    if (controller.signal.aborted) throw new Error(GCAL_REQUEST_TIMEOUT_SENTINEL);
+    if (timedOut || controller.signal.aborted) throw new Error(GCAL_REQUEST_TIMEOUT_SENTINEL);
     throw err;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
-    // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
-    const eventId = eventIdFromPath(path);
-    const safePath = redactEventId(path, eventId);
-    const safeBody = redactEventId(text, eventId);
-    log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
-    throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
-  }
-  // DELETE retorna 204 sem corpo
-  if (res.status === 204) return undefined as unknown as T;
-  return (await res.json()) as T;
 }
 
 /**

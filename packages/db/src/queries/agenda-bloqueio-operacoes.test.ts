@@ -4,7 +4,9 @@ const { mockQuery } = vi.hoisted(() => ({ mockQuery: vi.fn() }));
 
 vi.mock('../client.js', () => ({ query: (...args: unknown[]) => mockQuery(...args) }));
 
-const { createPlan } = await import('./agenda-bloqueio-operacoes.js');
+const { claimDispatch, createPlan, markOperationResult } = await import(
+  './agenda-bloqueio-operacoes.js'
+);
 
 const input = {
   operationId: '11111111-1111-4111-8111-111111111111',
@@ -101,5 +103,52 @@ describe('agenda-bloqueio-operacoes createPlan', () => {
     );
 
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('agenda-bloqueio-operacoes fencing da operação', () => {
+  it('emite token da operação no claim e o usa no CAS do resultado final', async () => {
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            operation_id: input.operationId,
+            ordinal: 1,
+            attempt_version: 2,
+            operation_attempt_version: 3,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rowCount: 1 });
+
+    await expect(
+      claimDispatch({
+        tenantId: input.tenantId,
+        slot: input.slot,
+        operationId: input.operationId,
+        ordinal: 1,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ operation_attempt_version: 3 }));
+    await expect(
+      markOperationResult({
+        tenantId: input.tenantId,
+        slot: input.slot,
+        operationId: input.operationId,
+        colaboradorId: input.colaboradorId,
+        status: 'complete',
+        responseStatus: 201,
+        responseBody: { ok: true },
+        expectedOperationAttemptVersion: 3,
+      }),
+    ).resolves.toBe(true);
+
+    const [claimSql] = mockQuery.mock.calls[0] as [string];
+    expect(claimSql).toContain('operation_claim AS');
+    expect(claimSql).toContain('SET attempt_version=op.attempt_version+1');
+    expect(claimSql).toContain('operation_attempt_version');
+    const [resultSql, resultParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(resultSql).toContain('OR attempt_version=$8');
+    expect(resultSql).not.toContain('max(o.attempt_version)');
+    expect(resultParams[7]).toBe(3);
   });
 });

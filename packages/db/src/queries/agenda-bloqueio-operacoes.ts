@@ -44,6 +44,8 @@ export interface AgendaBloqueioOperacaoOcorrencia {
   status: AgendaBloqueioOcorrenciaStatus;
   error_code: string | null;
   attempt_version: number;
+  /** Token monotônico da operação emitido junto ao claim desta ocorrência. */
+  operation_attempt_version: number;
 }
 
 export async function createPlan(input: {
@@ -133,11 +135,22 @@ export async function claimDispatch(input: {
   ordinal: number;
 }): Promise<AgendaBloqueioOperacaoOcorrencia | null> {
   const r = await query<AgendaBloqueioOperacaoOcorrencia>(
-    `UPDATE agenda_bloqueio_operacao_ocorrencias o
-        SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
-       FROM agenda_bloqueio_operacoes op
-      WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4 AND o.status='planned'
-      RETURNING o.*`,
+    `WITH claimed_occurrence AS (
+       UPDATE agenda_bloqueio_operacao_ocorrencias o
+          SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
+         FROM agenda_bloqueio_operacoes op
+        WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2
+          AND o.operation_id=$3 AND o.ordinal=$4 AND o.status='planned'
+        RETURNING o.*
+     ), operation_claim AS (
+       UPDATE agenda_bloqueio_operacoes op
+          SET attempt_version=op.attempt_version+1, updated_at=now()
+         FROM claimed_occurrence o
+        WHERE op.id=o.operation_id AND op.tenant_id=$1 AND op.slot=$2
+        RETURNING op.id, op.attempt_version
+     )
+     SELECT o.*, op.attempt_version AS operation_attempt_version
+       FROM claimed_occurrence o JOIN operation_claim op ON op.id=o.operation_id`,
     [input.tenantId, input.slot, input.operationId, input.ordinal],
   );
   return r.rows[0] ?? null;
@@ -154,16 +167,26 @@ export async function claimRecovery(input: {
   ordinal: number;
 }): Promise<AgendaBloqueioOperacaoOcorrencia | null> {
   const r = await query<AgendaBloqueioOperacaoOcorrencia>(
-    `UPDATE agenda_bloqueio_operacao_ocorrencias o
-        SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
-       FROM agenda_bloqueio_operacoes op
-      WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
-        AND (
-          o.status='recovery_required'
-          OR (o.status='gcal_dispatch_started'
-              AND o.updated_at <= now() - make_interval(secs => $5))
-        )
-      RETURNING o.*`,
+    `WITH claimed_occurrence AS (
+       UPDATE agenda_bloqueio_operacao_ocorrencias o
+          SET status='gcal_dispatch_started', attempt_version=o.attempt_version+1, updated_at=now()
+         FROM agenda_bloqueio_operacoes op
+        WHERE o.operation_id=op.id AND op.tenant_id=$1 AND op.slot=$2 AND o.operation_id=$3 AND o.ordinal=$4
+          AND (
+            o.status='recovery_required'
+            OR (o.status='gcal_dispatch_started'
+                AND o.updated_at <= now() - make_interval(secs => $5))
+          )
+        RETURNING o.*
+     ), operation_claim AS (
+       UPDATE agenda_bloqueio_operacoes op
+          SET attempt_version=op.attempt_version+1, updated_at=now()
+         FROM claimed_occurrence o
+        WHERE op.id=o.operation_id AND op.tenant_id=$1 AND op.slot=$2
+        RETURNING op.id, op.attempt_version
+     )
+     SELECT o.*, op.attempt_version AS operation_attempt_version
+       FROM claimed_occurrence o JOIN operation_claim op ON op.id=o.operation_id`,
     [input.tenantId, input.slot, input.operationId, input.ordinal, GCAL_DISPATCH_LEASE_SECONDS],
   );
   return r.rows[0] ?? null;
@@ -250,17 +273,13 @@ export async function markOperationResult(input: {
   status: Exclude<AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
   responseStatus: number;
   responseBody: Record<string, unknown>;
-  expectedAttemptVersion?: number;
+  expectedOperationAttemptVersion?: number;
 }): Promise<boolean> {
   const result = await query(
     `UPDATE agenda_bloqueio_operacoes
         SET status=$5, response_status=$6, response_body=$7::jsonb, updated_at=now()
       WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND colaborador_key=$4
-        AND ($8::integer IS NULL OR $8=(
-          SELECT max(o.attempt_version)
-            FROM agenda_bloqueio_operacao_ocorrencias o
-           WHERE o.operation_id=agenda_bloqueio_operacoes.id
-        ))`,
+        AND ($8::integer IS NULL OR attempt_version=$8)`,
     [
       input.tenantId,
       input.slot,
@@ -269,7 +288,7 @@ export async function markOperationResult(input: {
       input.status,
       input.responseStatus,
       JSON.stringify(input.responseBody),
-      input.expectedAttemptVersion ?? null,
+      input.expectedOperationAttemptVersion ?? null,
     ],
   );
   return result.rowCount === 1;

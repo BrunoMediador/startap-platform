@@ -164,6 +164,31 @@ describe('SCRUM-148 — a redação não estraga o diagnóstico', () => {
 });
 
 describe('ADR 0044 — timeout de request cercado pela lease de dispatch', () => {
+  it('encerra aquisição de token pendurada sem sequer iniciar POST externo', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient();
+      vi.spyOn(
+        client as unknown as { getAccessToken: () => Promise<string> },
+        'getAccessToken',
+      ).mockImplementation(() => new Promise<string>(() => {}));
+      const pending = client.createEvent({
+        eventId: RAW_EVENT_ID,
+        summary: 'Bloqueio',
+        startISO: '2026-07-01T14:00:00-03:00',
+        endISO: '2026-07-01T14:30:00-03:00',
+      });
+      const timeoutExpectation = expect(pending).rejects.toThrow(GCAL_REQUEST_TIMEOUT_SENTINEL);
+
+      await vi.advanceTimersByTimeAsync(GCAL_REQUEST_TIMEOUT_MS);
+
+      await timeoutExpectation;
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('aborta POST pendurado antes de uma lease de 60 segundos poder expirar', async () => {
     vi.useFakeTimers();
     try {
@@ -188,6 +213,36 @@ describe('ADR 0044 — timeout de request cercado pela lease de dispatch', () =>
       await vi.advanceTimersByTimeAsync(GCAL_REQUEST_TIMEOUT_MS);
 
       await timeoutExpectation;
+      expect(GCAL_REQUEST_TIMEOUT_MS).toBeLessThan(60_000);
+      expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('encerra parse de body pendurado antes de uma lease poder expirar', async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => new Promise<unknown>(() => {}),
+      } as unknown as Response);
+      const client = makeClient();
+      const pending = client.createEvent({
+        eventId: RAW_EVENT_ID,
+        summary: 'Bloqueio',
+        startISO: '2026-07-01T14:00:00-03:00',
+        endISO: '2026-07-01T14:30:00-03:00',
+      });
+      const timeoutExpectation = expect(pending).rejects.toThrow(GCAL_REQUEST_TIMEOUT_SENTINEL);
+
+      await vi.advanceTimersByTimeAsync(GCAL_REQUEST_TIMEOUT_MS);
+
+      await timeoutExpectation;
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(GCAL_REQUEST_TIMEOUT_MS).toBeLessThan(60_000);
       expect(fetchMock.mock.calls[0]?.[1]).toEqual(
         expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),

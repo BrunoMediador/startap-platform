@@ -108,6 +108,7 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
       status TEXT NOT NULL DEFAULT 'planned',
       response_status INTEGER,
       response_body JSONB,
+      attempt_version INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (tenant_id, slot, colaborador_key, session_hash, payload_hash)
@@ -652,7 +653,7 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
         status: 'recovery_required',
         responseStatus: 207,
         responseBody: { ok: false },
-        expectedAttemptVersion: oldAttempt.attempt_version,
+        expectedOperationAttemptVersion: oldAttempt.operation_attempt_version,
       }),
     ).resolves.toBe(false);
 
@@ -687,8 +688,107 @@ describeIf('ADR 0044 operação+plano atômicos contra PostgreSQL real', () => {
         status: 'complete',
         responseStatus: 201,
         responseBody: { ok: true },
-        expectedAttemptVersion: newAttempt.attempt_version,
+        expectedOperationAttemptVersion: newAttempt.operation_attempt_version,
       }),
     ).resolves.toBe(true);
+  });
+
+  it('fencing da operação aceita recovery v2 seguido de dispatch v1 e recusa executor anterior', async () => {
+    const plan = input({
+      operationId: '13131313-1313-4313-8313-131313131313',
+      sessionHash: 'o'.repeat(64),
+      payloadHash: 'p'.repeat(64),
+      occurrences: input().occurrences.map((occurrence) => ({
+        ...occurrence,
+        gcalEventId: `bloq-operation-fence-${occurrence.ordinal}`,
+      })),
+    });
+    await agendaBloqueioOperacoes.createPlan(plan);
+    const original = await agendaBloqueioOperacoes.claimDispatch({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+    expect(original).toEqual(
+      expect.objectContaining({ attempt_version: 1, operation_attempt_version: 1 }),
+    );
+    await exec(
+      `UPDATE agenda_bloqueio_operacao_ocorrencias
+          SET status='recovery_required'
+        WHERE operation_id=$1 AND ordinal=1`,
+      [plan.operationId],
+    );
+    const recovered = await agendaBloqueioOperacoes.claimRecovery({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 1,
+    });
+    const dispatchedSecond = await agendaBloqueioOperacoes.claimDispatch({
+      tenantId: plan.tenantId,
+      slot: plan.slot,
+      operationId: plan.operationId,
+      ordinal: 2,
+    });
+    expect(recovered).toEqual(
+      expect.objectContaining({ attempt_version: 2, operation_attempt_version: 2 }),
+    );
+    expect(dispatchedSecond).toEqual(
+      expect.objectContaining({ attempt_version: 1, operation_attempt_version: 3 }),
+    );
+    if (!original || !recovered || !dispatchedSecond) throw new Error('claims de fencing ausentes');
+
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 1,
+        status: 'active',
+        expectedStatus: 'gcal_dispatch_started',
+        attemptVersion: recovered.attempt_version,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      agendaBloqueioOperacoes.markOccurrence({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        ordinal: 2,
+        status: 'active',
+        expectedStatus: 'gcal_dispatch_started',
+        attemptVersion: dispatchedSecond.attempt_version,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      agendaBloqueioOperacoes.markOperationResult({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        colaboradorId: plan.colaboradorId,
+        status: 'complete',
+        responseStatus: 201,
+        responseBody: { ok: true },
+        expectedOperationAttemptVersion: dispatchedSecond.operation_attempt_version,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      agendaBloqueioOperacoes.markOperationResult({
+        tenantId: plan.tenantId,
+        slot: plan.slot,
+        operationId: plan.operationId,
+        colaboradorId: plan.colaboradorId,
+        status: 'recovery_required',
+        responseStatus: 207,
+        responseBody: { ok: false },
+        expectedOperationAttemptVersion: original.operation_attempt_version,
+      }),
+    ).resolves.toBe(false);
+    const operation = await exec<{ status: string; attempt_version: number }>(
+      'SELECT status, attempt_version FROM agenda_bloqueio_operacoes WHERE id=$1',
+      [plan.operationId],
+    );
+    expect(operation.rows[0]).toEqual({ status: 'complete', attempt_version: 3 });
   });
 });

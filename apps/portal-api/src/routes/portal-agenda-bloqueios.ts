@@ -656,7 +656,7 @@ async function persistOperationResult(args: {
   status: Exclude<agendaBloqueioOperacoes.AgendaBloqueioOperacaoStatus, 'planned' | 'creating'>;
   responseStatus: number;
   responseBody: Record<string, unknown>;
-  expectedAttemptVersion?: number;
+  expectedOperationAttemptVersion?: number;
 }): Promise<boolean> {
   return agendaBloqueioOperacoes.markOperationResult({
     tenantId: args.scope.tenantId,
@@ -666,7 +666,7 @@ async function persistOperationResult(args: {
     status: args.status,
     responseStatus: args.responseStatus,
     responseBody: args.responseBody,
-    expectedAttemptVersion: args.expectedAttemptVersion,
+    expectedOperationAttemptVersion: args.expectedOperationAttemptVersion,
   });
 }
 
@@ -810,7 +810,7 @@ async function runDurableSerie(args: {
   const criados: Array<{ id: string; inicio_at: string; fim_at: string }> = [];
   const falhas: DurableSerieFailure[] = [];
   let recoveryClaimUnavailable = false;
-  let latestAttemptVersion: number | undefined;
+  let latestOperationAttemptVersion: number | undefined;
   for (const occurrence of pending) {
     try {
       if (occurrence.status === 'planned') {
@@ -822,7 +822,7 @@ async function runDurableSerie(args: {
           ordinal: occurrence.ordinal,
         });
         if (!claimed) break;
-        latestAttemptVersion = claimed.attempt_version;
+        latestOperationAttemptVersion = claimed.operation_attempt_version;
         if (await createDurableGcalEvent({ ...args, occurrence: claimed })) {
           criados.push({
             id: occurrence.bloqueio_id,
@@ -859,7 +859,7 @@ async function runDurableSerie(args: {
         recoveryClaimUnavailable = true;
         break;
       }
-      latestAttemptVersion = claimed.attempt_version;
+      latestOperationAttemptVersion = claimed.operation_attempt_version;
       let rebuildingLocalOccurrence = false;
       try {
         const absent = await isGcalEventAbsentAfterConsistencyWindow({
@@ -975,7 +975,7 @@ async function runDurableSerie(args: {
     status: falhas.length === 0 ? 'complete' : 'recovery_required',
     responseStatus,
     responseBody,
-    expectedAttemptVersion: latestAttemptVersion,
+    expectedOperationAttemptVersion: latestOperationAttemptVersion,
   });
   if (!persisted) {
     return {
