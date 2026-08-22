@@ -1743,7 +1743,7 @@ export class TesteBarbeariaBot extends BotBase {
         description:
           'Insere um agendamento no Google Calendar do PROFISSIONAL escolhido. Use APENAS apos ' +
           'o cliente confirmar com SIM no CARTAO DE CONFIRMACAO E ter escolhido o profissional ' +
-          '(id curto C1, C2, …). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
+          '(pelo nome completo). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
           'TODO agendamento, inclusive o 2º/3º na mesma conversa. Só agende o servico com um ' +
           'profissional que faz aquele servico (ver [PROFISSIONAIS]). Para REMARCAR um ' +
           'agendamento que JA existe, use remarcar_agendamento — NUNCA crie outro evento aqui. ' +
@@ -1754,8 +1754,8 @@ export class TesteBarbeariaBot extends BotBase {
             colaborador_id: {
               type: 'string',
               description:
-                'Id curto do profissional escolhido pelo cliente (ex.: C1, C2). Obrigatorio. ' +
-                'Use SOMENTE um id que aparece no bloco [PROFISSIONAIS]. Nunca invente nem passe e-mail/agenda.',
+                'Nome completo do profissional escolhido pelo cliente. Obrigatorio. ' +
+                'Use SOMENTE um nome que aparece no bloco [PROFISSIONAIS]. Nunca invente nem passe e-mail/agenda.',
             },
             summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
             start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },

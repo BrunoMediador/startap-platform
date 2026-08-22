@@ -13,16 +13,16 @@
  *     (que já vem ORDER BY ordem, id — estável entre turnos enquanto a equipe não muda).
  *  3. Consulta a ocupação de TODOS de uma vez via freebusy.query batched (1 chamada,
  *     até 50 calendarId — ADR 0024 §5).
- *  4. Monta o bloco [PROFISSIONAIS] (id + nome + serviços DE CADA colaborador, de
+ *  4. Monta o bloco [PROFISSIONAIS] (nome + serviços DE CADA colaborador, de
  *     clone_colaboradores.servicos — migration 057; vazio = faz todos os globais) e o
  *     [HORARIOS DISPONIVEIS]
  *     ROTULADO POR COLABORADOR, reusando a MESMA grade do bot individual
  *     (formatarAgendaComConfig — step = duração, piso de 10min pra hoje, overlap).
  *  5. Inclui a REGRA DE DESAMBIGUAÇÃO obrigatória pra homônimos.
  *
- * O LLM NUNCA recebe calendarId cru — só o id curto (C1…). O servidor resolve o
- * calendarId a partir do id curto via resolveColaboradorByShortId (server-side),
- * validando contra a lista do slot — ver inserir_agendamento no apps/api.
+ * O LLM recebe apenas os nomes dos profissionais. O servidor resolve o nome
+ * escolhido contra a lista ativa do slot, mantendo calendarId e IDs curtos como
+ * detalhes internos — ver inserir_agendamento no apps/api.
  */
 import type { CalendarEvent, FreeBusyResult } from '../google-calendar/client.js';
 import type { ColaboradorGcal } from '../google-calendar/per-clone.js';
@@ -32,11 +32,11 @@ import { type ScheduleConfig, formatarAgendaComConfig } from './free-slots.js';
 export { TZ } from './free-slots.js';
 
 /**
- * Colaborador já decorado com o id curto estável (C1, C2…) que vai pro prompt.
- * `client` e `calendarId` ficam SERVER-SIDE (nunca entram no texto do prompt).
+ * Colaborador decorado com id curto interno estável (C1, C2…). `client`,
+ * `calendarId` e `shortId` nunca entram no texto do prompt.
  */
 export interface ColaboradorAgenda extends ColaboradorGcal {
-  /** Id curto estável exposto ao LLM (C1, C2, …). */
+  /** Id curto estável usado internamente ao resolver a tool (C1, C2, …). */
   shortId: string;
 }
 
@@ -64,12 +64,14 @@ export function decorateColaboradores(colaboradores: ColaboradorGcal[]): Colabor
 }
 
 /**
- * Resolve um id curto (C1…) OU um colaboradorId numérico para o colaborador
- * correspondente, SERVER-SIDE, validando contra a lista decorada daquele slot.
+ * Resolve um id curto (compatibilidade), id numérico ou nome completo para o
+ * colaborador correspondente, SERVER-SIDE, validando contra a lista decorada
+ * daquele slot.
  *
- * Aceita as duas formas porque o LLM pode passar o id curto do bloco (preferido)
- * ou o colaboradorId numérico — ambos são validados contra a MESMA lista do slot;
- * qualquer valor fora da lista retorna null (rejeição). NUNCA aceita calendarId.
+ * O runtime atual passa o nome completo que aparece ao cliente. Os formatos
+ * antigos seguem aceitos para recuperar conversas/modelos que ainda carreguem
+ * o código interno. Nome ambíguo é rejeitado em vez de escolher alguém errado.
+ * NUNCA aceita calendarId.
  *
  * Comparação de shortId é case-insensitive e tolera espaço ("c1", " C1 ").
  */
@@ -88,6 +90,11 @@ export function resolveColaboradorByShortId(
     const byNum = colaboradores.find((c) => c.colaboradorId === idNum);
     if (byNum) return byNum;
   }
+  const normalizedName = v.toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ');
+  const byName = colaboradores.filter(
+    (c) => c.nome.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ') === normalizedName,
+  );
+  if (byName.length === 1) return byName[0] ?? null;
   return null;
 }
 
@@ -168,7 +175,7 @@ export function colaboradorFazServico(
 }
 
 /**
- * Monta o bloco [PROFISSIONAIS]: id curto + nome + serviços que o profissional faz.
+ * Monta o bloco [PROFISSIONAIS]: nome + serviços que o profissional faz.
  *
  * Cada colaborador lista os SEUS serviços (clone_colaboradores.servicos, migration
  * 057). Quando o dono NÃO especificou (servicos vazio), o profissional faz TODOS os
@@ -182,10 +189,10 @@ function buildProfissionaisBlock(
   const linhas = colaboradores.map((c) => {
     const servs = servicosDoColaborador(c, config);
     const lista = servs.join(', ') || 'todos os serviços';
-    return `${c.shortId} = ${nomeLimpo(c.nome)} (faz: ${lista})`;
+    return `${nomeLimpo(c.nome)} (faz: ${lista})`;
   });
   return [
-    'Profissionais disponíveis (use o id curto, ex.: C1, ao agendar):',
+    'Profissionais disponíveis:',
     ...linhas,
     '',
     'REGRA DE ESCOLHA DO PROFISSIONAL (OBRIGATÓRIA):',
@@ -198,8 +205,8 @@ function buildProfissionaisBlock(
     '  nome (homônimos), você DEVE perguntar qual deles, listando as opções pelo nome',
     '  completo. Ex.: "Temos o João S. e o João P., com qual você prefere?".',
     '- NUNCA escolha o profissional por conta própria quando houver ambiguidade.',
-    '- Ao chamar inserir_agendamento, passe colaborador_id com o id curto do',
-    '  profissional escolhido (C1, C2, …). Nunca invente nem passe e-mail/agenda.',
+    '- Ao chamar inserir_agendamento, passe o NOME COMPLETO do profissional escolhido.',
+    '  Nunca use, mencione ou mostre códigos internos, e-mail ou agenda.',
   ].join('\n');
 }
 
@@ -247,7 +254,7 @@ function buildHorariosBlock(
     const events = busyToEvents(freebusy[c.calendarId]);
     // Grade só dos serviços DESTE profissional (fallback = todos os globais → byte-idêntico).
     const agenda = formatarAgendaComConfig(events, scheduleConfigDoColaborador(c, config));
-    partes.push(`### ${c.shortId} — ${nomeLimpo(c.nome)}`);
+    partes.push(`### ${nomeLimpo(c.nome)}`);
     partes.push(agenda);
     partes.push('');
   }
