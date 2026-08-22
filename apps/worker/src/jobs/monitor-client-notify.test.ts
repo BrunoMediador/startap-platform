@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -45,6 +47,8 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -116,6 +120,8 @@ beforeEach(() => {
   });
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
   mocks.listEnabledRecipients.mockResolvedValue([recipient(1, '5535999990011')]);

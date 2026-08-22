@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
   upsertState: vi.fn(),
   recordCycleHeartbeat: vi.fn(),
   getHostDiskReport: vi.fn(),
@@ -43,6 +45,8 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
     upsertState: mocks.upsertState,
     recordCycleHeartbeat: mocks.recordCycleHeartbeat,
     getHostDiskReport: mocks.getHostDiskReport,
@@ -107,6 +111,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
   mocks.listStates.mockResolvedValue([]);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.recordCycleHeartbeat.mockResolvedValue(undefined);
@@ -184,8 +190,8 @@ describe('runMonitor — check host:disk (SCRUM-134)', () => {
     const r = await runMonitor();
 
     expect(r.down).toBe(1);
-    expect(mocks.upsertState).toHaveBeenCalledWith(
-      expect.objectContaining({ checkKey: 'host:disk', state: 'down' }),
+    expect(mocks.claimDownTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ checkKey: 'host:disk', expectedPendingDownCount: 0 }),
     );
   });
 

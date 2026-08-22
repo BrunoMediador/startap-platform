@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -34,6 +36,8 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -113,6 +117,8 @@ beforeEach(() => {
   });
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
   mocks.listStates.mockResolvedValue([]); // tudo "up" antes -> primeira queda alerta
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
@@ -232,11 +238,10 @@ describe('monitor WAHA debounce — mata falso CAIU/RECUPERADO de flap transitó
     expect(r.sent).toBe(1);
     expect(mocks.sendText).toHaveBeenCalledTimes(1);
     expect(mocks.sendText.mock.calls[0][0].texto).toContain('🔴 CAIU');
-    expect(mocks.upsertState).toHaveBeenCalledWith(
+    expect(mocks.claimDownTransition).toHaveBeenCalledWith(
       expect.objectContaining({
         checkKey: 'waha:cirilobarbearia',
-        state: 'down',
-        pendingDownCount: 0,
+        expectedPendingDownCount: 1,
       }),
     );
   });

@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
   upsertState: vi.fn(),
   restoreStateIfUnchanged: vi.fn(),
   poolConnect: vi.fn(),
@@ -33,6 +35,8 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
     upsertState: mocks.upsertState,
     restoreStateIfUnchanged: mocks.restoreStateIfUnchanged,
   },
@@ -101,12 +105,13 @@ function stubWahaSessions(list: Array<{ name: string; status: string }>) {
   );
 }
 
-/** O que o ciclo carimbou no upsertState do check informado (pega o último). */
+/** O que o ciclo carimbou no claim atômico do check informado (pega o último). */
 function lastStampFor(checkKey: string) {
-  const call = [...mocks.upsertState.mock.calls]
+  const call = [...mocks.claimDownTransition.mock.calls]
     .reverse()
     .find((c) => (c[0] as { checkKey: string }).checkKey === checkKey);
-  return call?.[0] as { state: string; lastAlertAt: Date; alertCount: number } | undefined;
+  const input = call?.[0] as { stampedAt: Date } | undefined;
+  return input ? { state: 'down', lastAlertAt: input.stampedAt, alertCount: 1 } : undefined;
 }
 
 beforeEach(() => {
@@ -120,6 +125,8 @@ beforeEach(() => {
   });
   mocks.getSenderSession.mockResolvedValue('ALERTAS');
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.restoreStateIfUnchanged.mockResolvedValue(true);
   mocks.notifyClientDisconnect.mockResolvedValue({ ok: true, sent: true });
@@ -128,8 +135,9 @@ beforeEach(() => {
 });
 
 describe('monitor SCRUM-53 — carimbo NÃO fica consumido quando o envio falha DEFINITIVAMENTE', () => {
-  // Falha DEFINITIVA (certeza de não-entrega): sessão FAILED -> WAHA recusa o /api/sendText com 422.
-  const DEFINITIVE = new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING');
+  // Falha DEFINITIVA do DESTINO (certeza de não-entrega). Falha 422 do REMETENTE é
+  // tratada separadamente como supressão terminal, para não reabrir alerta histórico.
+  const DEFINITIVE = new Error('WAHA /api/sendText -> HTTP 422: destination rejected');
 
   it('up->down + send FALHA DEFINITIVA (recipient rejeita) -> desfaz o carimbo e o ciclo seguinte re-tenta', async () => {
     stubWahaSessions([{ name: 'clone_seven_7', status: 'FAILED' }]);
@@ -272,8 +280,7 @@ describe('monitor SCRUM-126 — 422 tardio (colado no SEND_TIMEOUT) classifica D
         () =>
           new Promise((_, reject) =>
             setTimeout(
-              () =>
-                reject(new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING')),
+              () => reject(new Error('WAHA /api/sendText -> HTTP 422: destination rejected')),
               SEND_TIMEOUT_MS + 20,
             ),
           ),

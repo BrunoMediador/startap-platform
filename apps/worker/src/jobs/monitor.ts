@@ -339,7 +339,7 @@ async function observeHostDisk(alertPct: number, staleHours: number): Promise<Ch
     // Falha de leitura no Postgres (mesmo pool que observePg já testa) — trata como sem
     // dado, não como disco cheio.
     log.warn(
-      { checkKey: HOST_DISK_KEY, err: e instanceof Error ? e.message : String(e) },
+      { checkKey: HOST_DISK_KEY, errorKind: safeErrorKind(e) },
       'monitor: falha ao ler host:disk — tratado como sem coleta',
     );
     return { ...base, obs: 'up', detail: 'falha ao ler estado' };
@@ -353,6 +353,31 @@ async function observeHostDisk(alertPct: number, staleHours: number): Promise<Ch
 /** Normaliza E.164 (só dígitos) -> chatId WhatsApp '<digits>@c.us'. */
 function toChatId(phone: string): string {
   return `${phone.replace(/\D/g, '')}@c.us`;
+}
+
+type SendFailureClass = 'sender_unavailable' | 'destination_rejected' | 'ambiguous';
+
+/** Só extrai metadados seguros para log; nunca propaga corpo/telefone/texto da resposta WAHA. */
+function classifySendFailure(error: unknown): {
+  failureClass: SendFailureClass;
+  statusCode: number | null;
+} {
+  const message = error instanceof Error ? error.message : '';
+  const statusMatch = /\bHTTP\s+(\d{3})\b/i.exec(message);
+  const statusCode = statusMatch ? Number(statusMatch[1]) : null;
+  if (/\bsession\s+(?:status\s+(?:is\s+)?)?(?:not\s+working|failed|closed)\b/i.test(message)) {
+    return { failureClass: 'sender_unavailable', statusCode };
+  }
+  return {
+    failureClass: isDefinitiveNonDelivery(error) ? 'destination_rejected' : 'ambiguous',
+    statusCode,
+  };
+}
+
+/** Erros externos podem conter resposta WAHA; logamos apenas uma categoria fixa. */
+function safeErrorKind(error: unknown): 'abort' | 'error' | 'unknown' {
+  if (error instanceof Error && error.name === 'AbortError') return 'abort';
+  return error instanceof Error ? 'error' : 'unknown';
 }
 
 /**
@@ -431,11 +456,26 @@ async function broadcast(
       anyOk = true;
     } catch (e) {
       result.sendErrors += 1;
-      if (!isDefinitiveNonDelivery(e)) sawAmbiguous = true;
-      // NÃO loga o número (LGPD) — só o id do destinatário e o erro.
+      const failure = classifySendFailure(e);
+      if (failure.failureClass === 'sender_unavailable') {
+        log.warn(
+          {
+            operation: 'sendText',
+            wahaStatus: failure.statusCode,
+            failureClass: failure.failureClass,
+          },
+          'monitor: envio suprimido porque o remetente WAHA ficou indisponível',
+        );
+        return anyOk ? 'delivered' : 'suppressed-channel-unavailable';
+      }
+      if (failure.failureClass === 'ambiguous') sawAmbiguous = true;
       log.error(
-        { recipientId: r.id, err: e instanceof Error ? e.message : String(e) },
-        'monitor: falha ao enviar alerta pela Lola (próximo ciclo re-tenta)',
+        {
+          operation: 'sendText',
+          wahaStatus: failure.statusCode,
+          failureClass: failure.failureClass,
+        },
+        'monitor: falha ao enviar alerta pela Lola',
       );
     }
     // Pausa antes do próximo destinatário (não depois do último).
@@ -460,7 +500,7 @@ function minutesSince(d: Date | null): number {
 
 /**
  * Aplica a transição de UM check e (talvez) enfileira uma mensagem. Toda a
- * persistência de estado acontece aqui (upsertState); o envio é delegado ao
+ * persistência de estado acontece aqui (claim/upsert); o envio é delegado ao
  * `send` callback (que aplica o hard cap). Retorna se ficou DOWN no fim e se ESTE
  * ciclo foi a transição up→down CONFIRMADA (`justWentDown`) — gatilho EXATO (1 vez
  * por episódio) do auto-aviso ao dono do clone. Checks que seguem down ficam em silêncio.
@@ -474,7 +514,7 @@ async function applyTransition(
   const prevPending = prev?.pending_down_count ?? 0;
 
   /**
-   * Compensação SCRUM-53: desfaz o carimbo de alerta (que foi gravado ANTES do envio, como lock
+   * Compensação SCRUM-53: desfaz o carimbo de alerta (que foi claimado atomicamente ANTES do envio,
    * otimista contra ciclos concorrentes) quando o envio FALHOU — restaurando o snapshot anterior
    * pra o próximo ciclo re-tentar. CONDICIONAL ao valor que ESTE ciclo gravou (state='down' +
    * expectCount + stampedAt): se outro ciclo já regravou, NÃO pisa (preserva o anti-duplicata).
@@ -498,7 +538,7 @@ async function applyTransition(
       });
     } catch (e) {
       log.warn(
-        { checkKey: obsItem.key, err: e instanceof Error ? e.message : String(e) },
+        { checkKey: obsItem.key, errorKind: safeErrorKind(e) },
         'monitor: falha ao desfazer carimbo de alerta (rollback) — ciclo segue',
       );
     }
@@ -559,17 +599,18 @@ async function applyTransition(
         return { isDown: false, justWentDown: false };
       }
     }
-    // up → down (confirmado): alerta DOWN. Carimba ANTES do envio (lock otimista contra ciclo
-    // concorrente); se o envio falhar, desfaz o carimbo (SCRUM-53) pra re-tentar no próximo ciclo.
+    // up → down (confirmado): alerta DOWN. Claim atômico ANTES do envio contra ciclos
+    // concorrentes; se o envio falhar, desfaz o carimbo (SCRUM-53) pra re-tentar no próximo ciclo.
     const stampedAt = new Date();
-    await alerts.upsertState({
+    const claimed = await alerts.claimDownTransition({
       checkKey: obsItem.key,
-      state: 'down',
-      downSince: stampedAt,
-      lastAlertAt: stampedAt,
-      alertCount: 1,
-      pendingDownCount: 0,
+      stampedAt,
+      expectedPendingDownCount: prevPending,
     });
+    if (!claimed) {
+      // Outro processo já abriu (ou recuperou) este episódio. Nunca envia sem o claim.
+      return { isDown: true, justWentDown: false };
+    }
     const outcome = await send(`🔴 CAIU: ${obsItem.label} — ${obsItem.detail}.`);
     if (outcome === 'failed-definitive') {
       // Certeza de não-entrega (sessão FAILED/404/conexão recusada): desfaz o carimbo (SCRUM-53) e
@@ -583,13 +624,9 @@ async function applyTransition(
       // Registra que a queda foi OBSERVADA, mas não entregue: `down` preserva a
       // telemetria, enquanto count=0/last_alert_at=NULL distingue este episódio de
       // um alerta enviado e impede uma recuperação histórica após a reconexão.
-      await alerts.upsertState({
+      await alerts.suppressClaimedDownTransition({
         checkKey: obsItem.key,
-        state: 'down',
-        downSince: stampedAt,
-        lastAlertAt: null,
-        alertCount: 0,
-        pendingDownCount: 0,
+        stampedAt,
       });
       log.warn(
         { checkKey: obsItem.key, alertDisposition: 'suppressed_channel_unavailable' },
@@ -685,7 +722,7 @@ export async function runMonitor(): Promise<MonitorResult> {
       // Falha no processamento de UM check nunca derruba os demais.
       result.sendErrors += 1;
       log.error(
-        { checkKey: obsItem.key, err: e instanceof Error ? e.message : String(e) },
+        { checkKey: obsItem.key, errorKind: safeErrorKind(e) },
         'monitor: falha ao processar check (demais seguem)',
       );
     }
@@ -700,7 +737,7 @@ export async function runMonitor(): Promise<MonitorResult> {
   } catch (e) {
     // Fail-safe: uma falha no heartbeat NUNCA derruba o ciclo (o log abaixo ainda dá a prova de vida).
     log.warn(
-      { err: e instanceof Error ? e.message : String(e) },
+      { errorKind: safeErrorKind(e) },
       'monitor: falha ao carimbar last_cycle_at (heartbeat) — ciclo segue',
     );
   }
@@ -713,7 +750,7 @@ export async function runMonitor(): Promise<MonitorResult> {
       await alerts.bumpMonitorSendErrors(result.sendErrors);
     } catch (e) {
       log.warn(
-        { err: e instanceof Error ? e.message : String(e) },
+        { errorKind: safeErrorKind(e) },
         'monitor: falha ao acumular contador de sendErrors — ciclo segue',
       );
     }

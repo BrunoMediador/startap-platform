@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   listMonitoredSessions: vi.fn(),
   listStates: vi.fn(),
   reserveGlobalSend: vi.fn(),
+  claimDownTransition: vi.fn(),
+  suppressClaimedDownTransition: vi.fn(),
   upsertState: vi.fn(),
   poolConnect: vi.fn(),
   sendText: vi.fn(),
@@ -26,6 +28,8 @@ vi.mock('@startap/db', () => ({
     listMonitoredSessions: mocks.listMonitoredSessions,
     listStates: mocks.listStates,
     reserveGlobalSend: mocks.reserveGlobalSend,
+    claimDownTransition: mocks.claimDownTransition,
+    suppressClaimedDownTransition: mocks.suppressClaimedDownTransition,
     upsertState: mocks.upsertState,
   },
 }));
@@ -93,6 +97,8 @@ beforeEach(() => {
     { id: 1, phone: '5535999990011', label: null, enabled: true, created_at: new Date() },
   ]);
   mocks.reserveGlobalSend.mockResolvedValue({ allowed: true, sentInWindow: 1 });
+  mocks.claimDownTransition.mockResolvedValue(true);
+  mocks.suppressClaimedDownTransition.mockResolvedValue(true);
   mocks.upsertState.mockResolvedValue(undefined);
   mocks.sendText.mockResolvedValue(undefined);
   mocks.listMonitoredSessions.mockResolvedValue([
@@ -172,12 +178,9 @@ describe('monitor — alerta único por episódio de queda', () => {
     ]);
     await runMonitor();
     expect(mocks.sendText).not.toHaveBeenCalled();
-    expect(mocks.upsertState).toHaveBeenCalledWith(
+    expect(mocks.suppressClaimedDownTransition).toHaveBeenCalledWith(
       expect.objectContaining({
         checkKey: `waha:${SESSION}`,
-        state: 'down',
-        lastAlertAt: null,
-        alertCount: 0,
       }),
     );
 
@@ -229,5 +232,63 @@ describe('monitor — alerta único por episódio de queda', () => {
 
     const texts = mocks.sendText.mock.calls.map(([input]) => (input as { texto: string }).texto);
     expect(texts.filter((text) => text.startsWith('🔴 CAIU:'))).toHaveLength(1);
+  });
+
+  it('WAHA observado WORKING mas 422 do remetente suprime o episódio e não o drena ao reconectar', async () => {
+    mocks.listMonitoredSessions.mockResolvedValue([
+      { sessao: SESSION, label: 'Barbearia Meduzza', slot: SESSION },
+      { sessao: 'ALERTAS', label: 'Sessão de alertas', slot: null },
+    ]);
+    setWahaStatuses([
+      { name: SESSION, status: 'FAILED' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([state({ pending_down_count: 1 }), stateFor('ALERTAS')]);
+    mocks.sendText.mockRejectedValueOnce(
+      new Error('WAHA /api/sendText -> HTTP 422: Session status is not WORKING'),
+    );
+    await runMonitor();
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+    expect(mocks.suppressClaimedDownTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checkKey: `waha:${SESSION}`,
+      }),
+    );
+
+    mocks.listStates.mockResolvedValueOnce([
+      state({ state: 'down', down_since: new Date(), last_alert_at: null, alert_count: 0 }),
+      stateFor('ALERTAS'),
+    ]);
+    await runMonitor();
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
+
+    setWahaStatuses([
+      { name: SESSION, status: 'WORKING' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([
+      state({ state: 'down', down_since: new Date(), last_alert_at: null, alert_count: 0 }),
+      stateFor('ALERTAS'),
+    ]);
+    await runMonitor();
+
+    setWahaStatuses([
+      { name: SESSION, status: 'FAILED' },
+      { name: 'ALERTAS', status: 'WORKING' },
+    ]);
+    mocks.listStates.mockResolvedValueOnce([state({ pending_down_count: 1 }), stateFor('ALERTAS')]);
+    await runMonitor();
+    expect(mocks.sendText).toHaveBeenCalledTimes(2);
+  });
+
+  it('dois ciclos concorrentes recebem um único claim e fazem um único envio', async () => {
+    setWahaStatus('FAILED');
+    mocks.listStates.mockResolvedValue([state({ pending_down_count: 1 })]);
+    mocks.claimDownTransition.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await Promise.all([runMonitor(), runMonitor()]);
+
+    expect(mocks.claimDownTransition).toHaveBeenCalledTimes(2);
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
   });
 });
