@@ -585,8 +585,8 @@ const DIAS_LABEL = [
  * elimina o "gap aparente" que aparecia quando um step fixo (ex: 20min) era
  * usado para serviços com durações diferentes — Bruno (2026-05-20).
  *
- * Próximo slot do dia atual respeita um piso de 10min sobre o relógio (evita
- * oferecer slot que começa em menos de 10min).
+ * No dia atual, a disponibilidade começa no próximo slot da grade em relação
+ * ao relógio; não há antecedência mínima.
  */
 export function formatarAgendaComConfig(
   events: CalendarEvent[],
@@ -631,11 +631,11 @@ export function formatarAgendaComConfig(
       // Step = duracao do servico — alinhado, sem gap entre fim de um
       // agendamento e inicio do proximo slot oferecido.
       const step = Math.max(1, svc.min);
-      // Piso de hoje: nao oferecer slot que comeca em menos de 10min,
-      // arredondado para multiplo do step do servico.
+      // No dia atual, começa no próximo slot da grade do serviço. A duração
+      // completa ainda precisa caber antes do fechamento no loop abaixo.
       let svcStart = wStart;
       if (offset === 0) {
-        svcStart = Math.max(wStart, Math.ceil((sp.mins + 10) / step) * step);
+        svcStart = Math.max(wStart, Math.ceil(sp.mins / step) * step);
       }
 
       const slots: string[] = [];
@@ -656,12 +656,6 @@ export function formatarAgendaComConfig(
 
 // ---- Slots estruturados por dia (portal — agendamento manual, Missão 020 F4) -
 
-/**
- * Piso sobre o relógio para slots de HOJE (mesma regra do bot em
- * formatarAgendaComConfig): não oferecer slot que começa em menos de 10min.
- */
-const TODAY_FLOOR_MIN = 10;
-
 export interface FreeSlotsDayOpts {
   /** Dia alvo no formato YYYY-MM-DD (calendário do fuso do clone). */
   dateKey: string;
@@ -678,8 +672,8 @@ export interface FreeSlotsDayOpts {
 
 /**
  * Versão ESTRUTURADA do formatarAgendaComConfig para UM dia e UMA duração:
- * mesma regra de step (= duração), mesmo piso de 10min pra hoje, mesmo
- * critério de overlap contra eventos do GCal. Retorna horários 'HH:mm'
+ * mesma regra de step (= duração), começando no próximo slot da grade hoje,
+ * mesmo critério de overlap contra eventos do GCal. Retorna horários 'HH:mm'
  * em ordem crescente. Dia fechado ou no passado → [].
  *
  * Usada pelo portal (GET /portal/agenda/slots) — o que o dono vê na grade é
@@ -723,7 +717,7 @@ export function computeFreeSlotsForDay(
   const step = Math.max(1, durationMin);
   let start = wStart;
   if (dateKey === nowSp.key) {
-    start = Math.max(wStart, Math.ceil((nowSp.mins + TODAY_FLOOR_MIN) / step) * step);
+    start = Math.max(wStart, Math.ceil(nowSp.mins / step) * step);
   }
 
   const slots: string[] = [];

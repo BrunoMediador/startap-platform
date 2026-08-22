@@ -151,8 +151,6 @@ interface AgendamentoOut {
 // verificação server-side do inserir_agendamento do bot). Conflito → 409
 // estruturado; o front recarrega a grade.
 
-/** Piso pra HOJE: não aceitar slot que começa em menos de 10min (regra do bot). */
-const POST_TODAY_FLOOR_MIN = 10;
 /**
  * Mesmo limite do GET /portal/agenda/slots. Teto = 365 dias (Bruno 31/07):
  * "por mais que nossa IA passe horário só para um determinado período, não
@@ -1578,7 +1576,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
         const startMins = horaAlvoMins;
         const endMins = startMins + duracaoMin;
 
-        // Janela hoje..+60d + piso de 10min pra HOJE (mesma regra do POST).
+        // Janela hoje..+60d; para hoje, só início estritamente passado é recusado.
         const agora = nowPartsInTz(new Date(), tz);
         const limite = nowPartsInTz(new Date(Date.now() + POST_MAX_AHEAD_DAYS * 86_400_000), tz);
         if (dataAlvo > limite.dateKey) {
@@ -1586,10 +1584,7 @@ export const portalAgendamentosRoutes: FastifyPluginAsync = async (app) => {
             .code(400)
             .send({ error: 'data_fora_da_janela', max_dias: POST_MAX_AHEAD_DAYS });
         }
-        if (
-          dataAlvo < agora.dateKey ||
-          (dataAlvo === agora.dateKey && startMins < agora.mins + POST_TODAY_FLOOR_MIN)
-        ) {
+        if (dataAlvo < agora.dateKey || (dataAlvo === agora.dateKey && startMins < agora.mins)) {
           return reply.code(409).send({ error: 'conflito', reason: 'horario_passado' });
         }
         const janela = cfg.work[wd];

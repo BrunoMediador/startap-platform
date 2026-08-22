@@ -242,14 +242,64 @@ describe('computeFreeSlotsForDay', () => {
     expect(slots).toEqual(['09:00', '10:30', '11:15']);
   });
 
-  it('HOJE aplica piso de 10min arredondado pro passo do serviço', () => {
-    // Sábado 09:12 BRT: piso = ceil((552+10)/30)*30 = 570 → primeiro slot 09:30.
+  it('HOJE começa no próximo slot da grade, sem antecedência mínima', () => {
+    // Sábado 09:12 BRT: ceil(552/30)*30 = 570 → primeiro slot 09:30.
     const slots = computeFreeSlotsForDay([], WORK_SAB_09_12, {
       dateKey: '2026-06-13',
       durationMin: 30,
       now: new Date('2026-06-13T09:12:00-03:00'),
     });
     expect(slots).toEqual(['09:30', '10:00', '10:30', '11:00', '11:30']);
+  });
+
+  it('às 19:32, oferece corte de 25min que cabe antes do fechamento às 20:00', () => {
+    const slots = computeFreeSlotsForDay(
+      [],
+      { 6: [19 * 60, 20 * 60] },
+      {
+        dateKey: '2026-06-13',
+        durationMin: 25,
+        now: new Date('2026-06-13T19:32:00-03:00'),
+      },
+    );
+
+    expect(slots).toEqual(['19:35']);
+  });
+
+  it('às 19:32, não oferece corte de 30min que terminaria após o fechamento às 20:00', () => {
+    const slots = computeFreeSlotsForDay(
+      [],
+      { 6: [19 * 60, 20 * 60] },
+      {
+        dateKey: '2026-06-13',
+        durationMin: 30,
+        now: new Date('2026-06-13T19:32:00-03:00'),
+      },
+    );
+
+    expect(slots).toEqual([]);
+  });
+
+  it('o bot também oferece o próximo slot sem antecedência mínima', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-13T22:32:00Z')); // 19:32 em São Paulo.
+
+    try {
+      const agenda = formatarAgendaComConfig(
+        [],
+        {
+          work: { 6: [19 * 60, 20 * 60] },
+          services: [{ name: 'Corte', min: 25 }],
+          source: 'flow_clones',
+          timezone: 'America/Sao_Paulo',
+        },
+        { daysAhead: 0 },
+      );
+
+      expect(agenda).toBe('HOJE (13/06):\n  Corte (25min): 19:35');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('eventos de outro dia não afetam a grade do dia alvo', () => {
@@ -386,14 +436,14 @@ describe('fuso por clone — computeFreeSlotsForDay (Cuiabá UTC-4)', () => {
       timeZone: 'America/Sao_Paulo',
     });
     expect(sp).toEqual([]);
-    // Cuiabá: ainda é 23:00 de 12/06 (HOJE) → oferece o slot 23:30.
+    // Cuiabá: ainda é 23:00 de 12/06 (HOJE) → oferece o slot atual e o próximo.
     const cuiaba = computeFreeSlotsForDay([], WORK_SEX_NOITE, {
       dateKey: '2026-06-12',
       durationMin: 30,
       now,
       timeZone: 'America/Cuiaba',
     });
-    expect(cuiaba).toEqual(['23:30']);
+    expect(cuiaba).toEqual(['23:00', '23:30']);
   });
 });
 
@@ -425,9 +475,9 @@ describe('fuso por clone — formatarAgendaComConfig (Cuiabá UTC-4)', () => {
   // Evento 14:00Z–15:00Z: em SP = 11:00–12:00; em Cuiabá = 10:00–11:00.
   const ev = evento('2026-06-15T14:00:00Z', '2026-06-15T15:00:00Z');
 
-  it('SP (default): evento ocupa 11:00 → HOJE oferece 10:00', () => {
+  it('SP (default): evento ocupa 11:00 → HOJE oferece 09:00 e 10:00', () => {
     const out = formatarAgendaComConfig([ev], baseCfg('America/Sao_Paulo'), { daysAhead: 0 });
-    expect(out).toBe('HOJE (15/06):\n  Corte (60min): 10:00');
+    expect(out).toBe('HOJE (15/06):\n  Corte (60min): 09:00, 10:00');
   });
 
   it('Cuiabá: evento ocupa 10:00 → HOJE oferece 09:00 e 11:00', () => {

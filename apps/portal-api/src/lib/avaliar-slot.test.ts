@@ -59,7 +59,7 @@ describe('avaliarJanela (Fase 1 — sem I/O)', () => {
     expect(r.status).toBe('passado');
   });
 
-  it('passado: hoje mas dentro do piso de 10min', () => {
+  it('livre: hoje após o relógio, sem antecedência mínima', () => {
     const r = avaliarJanela({
       config: CONFIG_OK,
       data: '2026-08-05',
@@ -68,7 +68,36 @@ describe('avaliarJanela (Fase 1 — sem I/O)', () => {
       maxAheadDays: 60,
       now: REF_NOW,
     });
+    expect(r.status).toBe('livre');
+  });
+
+  it('passado: hoje antes do relógio atual', () => {
+    const r = avaliarJanela({
+      config: CONFIG_OK,
+      data: '2026-08-05',
+      hora: '11:59',
+      duracaoMin: 30,
+      maxAheadDays: 60,
+      now: REF_NOW,
+    });
     expect(r.status).toBe('passado');
+  });
+
+  it('às 19:32, aceita 19:35 para 25min e rejeita 30min que passa do fechamento às 20:00', () => {
+    const configNoite = {
+      ...CONFIG_OK,
+      work: { 6: [19 * 60, 20 * 60] as [number, number] },
+    };
+    const input = {
+      config: configNoite,
+      data: '2026-08-08',
+      hora: '19:35',
+      maxAheadDays: 60,
+      now: new Date('2026-08-08T19:32:00-03:00'),
+    };
+
+    expect(avaliarJanela({ ...input, duracaoMin: 25 }).status).toBe('livre');
+    expect(avaliarJanela({ ...input, duracaoMin: 30 }).status).toBe('fora_do_horario');
   });
 
   it('fora_do_horario: dia da semana sem janela de funcionamento (domingo) — mesmo status do horario fora da faixa', () => {

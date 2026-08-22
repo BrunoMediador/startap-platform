@@ -14,7 +14,7 @@
  * as dependências de agenda (gcal/scheduling/render-prompt). Não toca rede/DB.
  */
 import type { BotContext } from '@startap/core/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   runAgentConfigured: vi.fn(),
@@ -161,6 +161,8 @@ vi.mock('@startap/integrations/scheduling', async () => {
     servicosDoColaborador: real.servicosDoColaborador,
     // reancoragem de fuso (migration 068) usa a lógica REAL — clone SP = no-op (byte-idêntico).
     reanchorWallTimeToTz: real.reanchorWallTimeToTz,
+    nowPartsInTz: real.nowPartsInTz,
+    weekdayOfDateKey: real.weekdayOfDateKey,
   };
 });
 
@@ -171,6 +173,31 @@ beforeEach(() => {
 });
 
 const { TesteBarbeariaBot } = await import('./teste_barbearia.js');
+
+const TEST_WORK_HOURS: Record<number, [number, number] | null> = {
+  0: [9 * 60, 19 * 60],
+  1: [9 * 60, 19 * 60],
+  2: [9 * 60, 19 * 60],
+  3: [9 * 60, 19 * 60],
+  4: [9 * 60, 19 * 60],
+  5: [9 * 60, 19 * 60],
+  6: [9 * 60, 19 * 60],
+};
+
+const TEST_SERVICES = [
+  { name: 'Corte', min: 30 },
+  { name: 'Corte + barba', min: 45 },
+  { name: 'Hidratação', min: 30 },
+];
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T12:00:00Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function makeCtx(texto: string): BotContext {
   return {
@@ -185,7 +212,8 @@ function setupSchedule() {
   mocks.getGcalForSlot.mockResolvedValue(calClient);
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
-    services: [],
+    work: TEST_WORK_HOURS,
+    services: TEST_SERVICES,
     timezone: 'America/Sao_Paulo',
   });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
@@ -382,7 +410,8 @@ function setupEstabelecimento(
   mocks.getAreaAndPromptCustom.mockResolvedValue({ area: 'barbearia', promptCustom: false });
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
-    services: opts?.services ?? [],
+    work: TEST_WORK_HOURS,
+    services: opts?.services ?? TEST_SERVICES,
     timezone: 'America/Sao_Paulo',
   });
   mocks.renderPrompt.mockResolvedValue('PERSONA');
@@ -560,6 +589,7 @@ describe('TesteBarbeariaBot — estabelecimento (BLOCO 1)', () => {
     const res = await inserir.run({
       colaborador_id: 'C2',
       summary: 'Cliente - Corte',
+      servico: 'Corte',
       start: '2026-06-16T13:00:00-03:00',
       end: '2026-06-16T13:30:00-03:00',
     });
@@ -1151,7 +1181,8 @@ function setupScheduleComCreate(eventId = 'evt-novo') {
   mocks.getGcalForSlot.mockResolvedValue(calClient);
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
-    services: [],
+    work: TEST_WORK_HOURS,
+    services: TEST_SERVICES,
     timezone: 'America/Sao_Paulo',
   });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
@@ -1178,6 +1209,65 @@ async function inserirToolFor(): Promise<{
     run: (a: unknown) => Promise<Record<string, unknown>>;
   };
 }
+
+describe('TesteBarbeariaBot — guarda final de disponibilidade', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cfg.ESTABELECIMENTO_ENABLED = false;
+    cfg.IDEMPOTENCY_ACTION_LOCK = false;
+    cfg.PACOTES_ENABLED = false;
+    vi.setSystemTime(new Date('2026-06-13T22:32:00Z')); // 19:32 em São Paulo.
+  });
+
+  it('aceita 25min às 19:35, rejeita 30min após fechamento e preserva o bloqueio por conflito', async () => {
+    const calClient = setupScheduleComCreate('evt-disponivel');
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [
+        { name: 'Corte 25', min: 25 },
+        { name: 'Corte 30', min: 30 },
+      ],
+      timezone: 'America/Sao_Paulo',
+    });
+    const inserir = await inserirToolFor();
+
+    await expect(
+      inserir.run({
+        summary: 'Fulano - Corte 25',
+        servico: 'Corte 25',
+        start: '2026-06-13T19:35:00-03:00',
+        end: '2026-06-13T20:00:00-03:00',
+      }),
+    ).resolves.toMatchObject({ ok: true, eventId: 'evt-disponivel' });
+
+    await expect(
+      inserir.run({
+        summary: 'Fulano - Corte 30',
+        servico: 'Corte 30',
+        start: '2026-06-13T19:35:00-03:00',
+        end: '2026-06-13T20:05:00-03:00',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'HORARIO_INDISPONIVEL' });
+
+    calClient.listEvents.mockResolvedValue([
+      {
+        id: 'evt-ocupado',
+        summary: 'Outro - Corte 25',
+        start: { dateTime: '2026-06-13T19:35:00-03:00' },
+        end: { dateTime: '2026-06-13T20:00:00-03:00' },
+      },
+    ]);
+    await expect(
+      inserir.run({
+        summary: 'Fulano - Corte 25',
+        servico: 'Corte 25',
+        start: '2026-06-13T19:35:00-03:00',
+        end: '2026-06-13T20:00:00-03:00',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'CONFLITO' });
+  });
+});
 
 describe('TesteBarbeariaBot — dedução de pacote no agendamento (BLOCO 2b)', () => {
   beforeEach(() => {
@@ -1691,7 +1781,16 @@ describe('TesteBarbeariaBot — atendimento sob action-lock + fuso por clone (fi
     // hora-de-parede 22:00 nesse fuso → 02:00Z (em vez do 01:00Z que o offset −03 do LLM dá).
     mocks.loadScheduleConfig.mockResolvedValue({
       source: 'flow_clones',
-      services: [],
+      work: {
+        0: [0, 24 * 60],
+        1: [0, 24 * 60],
+        2: [0, 24 * 60],
+        3: [0, 24 * 60],
+        4: [0, 24 * 60],
+        5: [0, 24 * 60],
+        6: [0, 24 * 60],
+      },
+      services: [{ name: 'Corte', min: 60 }],
       timezone: 'America/Cuiaba',
     });
     const inserir = await inserirToolFor();
@@ -1754,12 +1853,21 @@ describe('TesteBarbeariaBot — atendimento sob action-lock + fuso por clone (fi
     const cBruno = colabClientStub('cal-bruno');
     setupEstabelecimento(
       [{ colaboradorId: 10, nome: 'Bruno', shortId: 'C1', client: cBruno, servicos: ['Corte'] }],
-      { services: [{ name: 'Corte', min: 30 }] },
+      { services: [{ name: 'Corte', min: 60 }] },
     );
     // override do fuso do clone do estabelecimento: Cuiabá (−04)
     mocks.loadScheduleConfig.mockResolvedValue({
       source: 'flow_clones',
-      services: [{ name: 'Corte', min: 30 }],
+      work: {
+        0: [0, 24 * 60],
+        1: [0, 24 * 60],
+        2: [0, 24 * 60],
+        3: [0, 24 * 60],
+        4: [0, 24 * 60],
+        5: [0, 24 * 60],
+        6: [0, 24 * 60],
+      },
+      services: [{ name: 'Corte', min: 60 }],
       timezone: 'America/Cuiaba',
     });
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
@@ -1841,7 +1949,8 @@ function setupScheduleComPatch(existingEvents: unknown[]) {
   mocks.getGcalForSlot.mockResolvedValue(calClient);
   mocks.loadScheduleConfig.mockResolvedValue({
     source: 'flow_clones',
-    services: [],
+    work: TEST_WORK_HOURS,
+    services: TEST_SERVICES,
     timezone: 'America/Sao_Paulo',
   });
   mocks.formatarAgendaComConfig.mockReturnValue('AGENDA');
@@ -2012,6 +2121,116 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (individual)', () =>
     expect(res.error).toBe('PARAMETROS_INVALIDOS');
     expect(calClient.patchEvent).not.toHaveBeenCalled();
   });
+
+  it('aceita 19:35 para Corte 25 quando fecha às 20:00, sem antecedência artificial', async () => {
+    vi.setSystemTime(new Date('2026-06-13T19:32:00-03:00'));
+    const event = {
+      ...EVT_EXISTENTE,
+      summary: 'Fulano - Corte 25 | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-13T19:33:00-03:00' },
+      end: { dateTime: '2026-06-13T19:58:00-03:00' },
+    };
+    const calClient = setupScheduleComPatch([event]);
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte 25', min: 25 }],
+      timezone: 'America/Sao_Paulo',
+    });
+    mocks.servicoFromSummary.mockReturnValue('Corte 25');
+
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-13T19:33:00-03:00',
+      novo_start: '2026-06-13T19:35:00-03:00',
+      novo_end: '2026-06-13T20:00:00-03:00',
+    });
+
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-existente' });
+    expect(calClient.patchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: 'início no passado',
+      novoStart: '2026-06-13T19:31:00-03:00',
+      novoEnd: '2026-06-13T19:56:00-03:00',
+    },
+    {
+      label: 'fim após o fechamento',
+      novoStart: '2026-06-13T19:40:00-03:00',
+      novoEnd: '2026-06-13T20:05:00-03:00',
+    },
+    {
+      label: 'duração diferente do serviço',
+      novoStart: '2026-06-13T19:35:00-03:00',
+      novoEnd: '2026-06-13T19:55:00-03:00',
+    },
+  ])('recusa $label antes de patchar', async ({ novoStart, novoEnd }) => {
+    vi.setSystemTime(new Date('2026-06-13T19:32:00-03:00'));
+    const event = {
+      ...EVT_EXISTENTE,
+      summary: 'Fulano - Corte 25 | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-13T19:33:00-03:00' },
+      end: { dateTime: '2026-06-13T19:58:00-03:00' },
+    };
+    const calClient = setupScheduleComPatch([event]);
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte 25', min: 25 }],
+      timezone: 'America/Sao_Paulo',
+    });
+    mocks.servicoFromSummary.mockReturnValue('Corte 25');
+
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-13T19:33:00-03:00',
+      novo_start: novoStart,
+      novo_end: novoEnd,
+    });
+
+    expect(res).toMatchObject({ ok: false, error: 'HORARIO_INDISPONIVEL' });
+    expect(calClient.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it('mantém o bloqueio de conflito após validar a nova janela', async () => {
+    vi.setSystemTime(new Date('2026-06-13T19:32:00-03:00'));
+    const event = {
+      ...EVT_EXISTENTE,
+      summary: 'Fulano - Corte 25 | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-13T19:33:00-03:00' },
+      end: { dateTime: '2026-06-13T19:58:00-03:00' },
+    };
+    const conflito = {
+      id: 'evt-conflito',
+      summary: 'Outro - Corte 25',
+      start: { dateTime: '2026-06-13T19:35:00-03:00' },
+      end: { dateTime: '2026-06-13T20:00:00-03:00' },
+    };
+    const calClient = setupScheduleComPatch([event]);
+    calClient.listEvents
+      .mockResolvedValueOnce([event]) // carrega agenda para montar o prompt
+      .mockResolvedValueOnce([event]) // resolve o evento atual do cliente
+      .mockResolvedValueOnce([event, conflito]); // rechecagem anti-corrida da nova janela
+    mocks.loadScheduleConfig.mockResolvedValue({
+      source: 'flow_clones',
+      work: { 6: [19 * 60, 20 * 60] },
+      services: [{ name: 'Corte 25', min: 25 }],
+      timezone: 'America/Sao_Paulo',
+    });
+    mocks.servicoFromSummary.mockReturnValue('Corte 25');
+
+    const remarcar = await remarcarToolIndividual();
+    const res = await remarcar.run({
+      start_atual: '2026-06-13T19:33:00-03:00',
+      novo_start: '2026-06-13T19:35:00-03:00',
+      novo_end: '2026-06-13T20:00:00-03:00',
+    });
+
+    expect(res).toMatchObject({ ok: false, error: 'CONFLITO' });
+    expect(calClient.patchEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', () => {
@@ -2079,6 +2298,77 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       // Reancorado no fuso do clone (SP): 17:00−03:00 == 20:00Z (MESMO instante).
       inicioAt: '2026-06-20T20:00:00.000Z',
     });
+  });
+
+  it('recusa remarcação quando o profissional dono não executa mais o serviço do evento', async () => {
+    const event = {
+      id: 'evt-servico-removido',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-20T14:00:00-03:00' },
+      end: { dateTime: '2026-06-20T14:30:00-03:00' },
+    };
+    const cMaria = colabClientStub('cal-maria', [event]);
+    const tools = await estabToolsFor(
+      'quero remarcar',
+      [
+        {
+          colaboradorId: 11,
+          nome: 'Maria',
+          shortId: 'C1',
+          client: cMaria,
+          servicos: ['Barba'],
+        },
+      ],
+      {
+        services: [
+          { name: 'Corte', min: 30 },
+          { name: 'Barba', min: 20 },
+        ],
+      },
+    );
+    const remarcar = tools.find((t) => t.name === 'remarcar_agendamento') as {
+      run: (a: unknown) => Promise<Record<string, unknown>>;
+    };
+
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T17:00:00-03:00',
+      novo_end: '2026-06-20T17:30:00-03:00',
+    });
+
+    expect(res).toMatchObject({ ok: false, error: 'SERVICO_NAO_OFERECIDO' });
+    expect(cMaria.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it('remarca normalmente quando o profissional dono ainda executa o serviço do evento', async () => {
+    const event = {
+      id: 'evt-servico-presente',
+      summary: 'Fulano - Corte | WhatsApp: 5511988887777',
+      start: { dateTime: '2026-06-20T14:00:00-03:00' },
+      end: { dateTime: '2026-06-20T14:30:00-03:00' },
+    };
+    const cMaria = colabClientStub('cal-maria', [event]);
+    const tools = await estabToolsFor('quero remarcar', [
+      {
+        colaboradorId: 11,
+        nome: 'Maria',
+        shortId: 'C1',
+        client: cMaria,
+        servicos: ['Corte'],
+      },
+    ]);
+    const remarcar = tools.find((t) => t.name === 'remarcar_agendamento') as {
+      run: (a: unknown) => Promise<Record<string, unknown>>;
+    };
+
+    const res = await remarcar.run({
+      start_atual: '2026-06-20T14:00:00-03:00',
+      novo_start: '2026-06-20T17:00:00-03:00',
+      novo_end: '2026-06-20T17:30:00-03:00',
+    });
+
+    expect(res).toMatchObject({ ok: true, eventId: 'evt-servico-presente' });
+    expect(cMaria.patchEvent).toHaveBeenCalledWith('evt-servico-presente', expect.any(Object));
   });
 });
 
