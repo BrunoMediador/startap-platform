@@ -8,21 +8,69 @@
  *  - snapshots em `atendimentos` seguem imutáveis; backfill histórico fica fora do GET.
  */
 import { clientes, cloneColaboradores } from '@startap/db';
+import { getProfilePicture } from '@startap/integrations/waha';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from '../config.js';
-import {
-  requireColaborador,
-  requireTenant,
-  withColaborador,
-  withTenant,
-} from '../lib/tenant.js';
+import { cacheAvatar, getCachedAvatar } from '../lib/crm-avatar-cache.js';
+import { getRedis } from '../lib/session.js';
+import { requireColaborador, requireTenant, withColaborador, withTenant } from '../lib/tenant.js';
 
-const listQuerySchema = z.object({
-  q: z.string().trim().max(120).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  offset: z.coerce.number().int().min(0).optional(),
-});
+const isoDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'data deve ser YYYY-MM-DD')
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    );
+  }, 'data deve existir no calendário');
+
+const listQuerySchema = z
+  .object({
+    /** Compatibilidade transitória com a lista já publicada. Novas UIs usam nome/telefone. */
+    q: z.string().trim().max(120).optional(),
+    nome: z.string().trim().min(1).max(120).optional(),
+    telefone: z.string().trim().min(1).max(32).optional(),
+    ultimo_atendimento: z
+      .enum(['todos', 'hoje', 'ultimos_7_dias', 'ultimos_30_dias', 'sem_historico', 'periodo'])
+      .optional(),
+    periodo_inicio: isoDateSchema.optional(),
+    periodo_fim: isoDateSchema.optional(),
+    visitas: z.enum(['todas', 'uma', 'duas_a_cinco', 'seis_a_dez', 'onze_ou_mais']).optional(),
+    ordenar_por: z.enum(['ultimo_atendimento', 'visitas']).optional(),
+    ordem: z.enum(['asc', 'desc']).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    offset: z.coerce.number().int().min(0).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasPeriod = value.periodo_inicio !== undefined || value.periodo_fim !== undefined;
+    if (value.ultimo_atendimento === 'periodo' && (!value.periodo_inicio || !value.periodo_fim)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['periodo_inicio'],
+        message: 'período exige data inicial e final',
+      });
+    }
+    if (value.ultimo_atendimento !== 'periodo' && hasPeriod) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ultimo_atendimento'],
+        message: 'datas exigem ultimo_atendimento=periodo',
+      });
+    }
+    if (value.periodo_inicio && value.periodo_fim && value.periodo_inicio > value.periodo_fim) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['periodo_fim'],
+        message: 'data final anterior à inicial',
+      });
+    }
+  });
 
 const semRetornoQuerySchema = z
   .object({
@@ -49,6 +97,15 @@ const aniversariantesQuerySchema = z.discriminatedUnion('modo', [
       offset: z.coerce.number().int().min(0).max(100).optional(),
     })
     .strict(),
+  z
+    .object({
+      modo: z.literal('calendario'),
+      visao: z.enum(['semana', 'mes']),
+      ancora: isoDateSchema,
+      limit: z.coerce.number().int().min(1).max(50).optional(),
+      offset: z.coerce.number().int().min(0).max(100).optional(),
+    })
+    .strict(),
 ]);
 
 const clienteIdParamSchema = z.object({
@@ -64,14 +121,22 @@ function isValidBirthdayMmdd(value: string): boolean {
   const day = Number(dayStr);
   const date = new Date(Date.UTC(2000, month - 1, day));
   return (
-    date.getUTCFullYear() === 2000 &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
+    date.getUTCFullYear() === 2000 && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
   );
 }
 
 const patchSchema = z
   .object({
+    nome_personalizado: z
+      .union([
+        z
+          .string()
+          .max(120)
+          .transform((value) => value.normalize('NFC').trim()),
+        z.literal(''),
+        z.null(),
+      ])
+      .optional(),
     aniversario_mmdd: z
       .union([
         z
@@ -82,12 +147,8 @@ const patchSchema = z
         z.null(),
       ])
       .optional(),
-    cidade: z
-      .union([z.string().trim().max(80), z.literal(''), z.null()])
-      .optional(),
-    nota_interna: z
-      .union([z.string().trim().max(2000), z.literal(''), z.null()])
-      .optional(),
+    cidade: z.union([z.string().trim().max(80), z.literal(''), z.null()]).optional(),
+    nota_interna: z.union([z.string().trim().max(2000), z.literal(''), z.null()]).optional(),
   })
   .strict();
 
@@ -117,7 +178,7 @@ function normalizeAniversariantesQuery(query: unknown): unknown {
 async function gateClientesOwner(
   req: FastifyRequest,
   reply: FastifyReply,
-) : Promise<{ slot: string; tenantId: string; timezone: string } | null> {
+): Promise<{ slot: string; tenantId: string; timezone: string } | null> {
   if (!config.CRM_CLIENTES_ENABLED) {
     await reply.code(404).send({ error: 'feature_off' });
     return null;
@@ -156,13 +217,19 @@ async function gateAniversariantesOwner(
 async function gateClientesColaborador(
   req: FastifyRequest,
   reply: FastifyReply,
-): Promise<{ slot: string; tenantId: string; colaboradorId: number } | null> {
+): Promise<{ slot: string; tenantId: string; colaboradorId: number; timezone: string } | null> {
   if (!config.CRM_CLIENTES_ENABLED || !config.COLABORADOR_PORTAL_ENABLED) {
     await reply.code(404).send({ error: 'feature_off' });
     return null;
   }
   const c = requireColaborador(req);
-  return { slot: c.slot, tenantId: c.tenantId, colaboradorId: c.colaboradorId };
+  const scope = await cloneColaboradores.getScopeBySlot(c.slot);
+  return {
+    slot: c.slot,
+    tenantId: c.tenantId,
+    colaboradorId: c.colaboradorId,
+    timezone: scope.timezone,
+  };
 }
 
 async function gateRankingColaborador(
@@ -179,8 +246,7 @@ async function gateRankingColaborador(
   }
   const gate = await gateClientesColaborador(req, reply);
   if (!gate) return null;
-  const scope = await cloneColaboradores.getScopeBySlot(gate.slot);
-  return { ...gate, timezone: scope.timezone };
+  return gate;
 }
 
 async function gateAniversariantesColaborador(
@@ -197,8 +263,7 @@ async function gateAniversariantesColaborador(
   }
   const gate = await gateClientesColaborador(req, reply);
   if (!gate) return null;
-  const scope = await cloneColaboradores.getScopeBySlot(gate.slot);
-  return { ...gate, timezone: scope.timezone };
+  return gate;
 }
 
 export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
@@ -216,11 +281,26 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     const result = await clientes.listClientesForOwner({
       slot: gate.slot,
       tenantId: gate.tenantId,
+      timezone: gate.timezone,
       search: parsed.data.q,
+      nome: parsed.data.nome,
+      telefone: parsed.data.telefone,
+      ultimoAtendimento: parsed.data.ultimo_atendimento,
+      periodoInicio: parsed.data.periodo_inicio,
+      periodoFim: parsed.data.periodo_fim,
+      visitas: parsed.data.visitas,
+      ordenarPor: parsed.data.ordenar_por,
+      ordem: parsed.data.ordem,
       limit: parsed.data.limit,
       offset: parsed.data.offset,
     });
     return reply.code(200).send(result);
+  });
+
+  app.get('/portal/clientes/resumo', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateClientesOwner(req, reply);
+    if (!gate) return reply;
+    return reply.code(200).send(await clientes.getClientesResumo(gate));
   });
 
   app.get('/portal/clientes/sem-retorno', { preHandler: withTenant }, async (req, reply) => {
@@ -266,16 +346,64 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
             limit: parsed.data.limit,
             offset: parsed.data.offset,
           })
-        : await clientes.listClientesAniversariantesForOwner({
-            slot: gate.slot,
-            tenantId: gate.tenantId,
-            timezone: gate.timezone,
-            mode: 'mes',
-            mes: parsed.data.mes,
-            limit: parsed.data.limit,
-            offset: parsed.data.offset,
-          });
+        : parsed.data.modo === 'mes'
+          ? await clientes.listClientesAniversariantesForOwner({
+              slot: gate.slot,
+              tenantId: gate.tenantId,
+              timezone: gate.timezone,
+              mode: 'mes',
+              mes: parsed.data.mes,
+              limit: parsed.data.limit,
+              offset: parsed.data.offset,
+            })
+          : await clientes.listClientesAniversariantesCalendario({
+              slot: gate.slot,
+              tenantId: gate.tenantId,
+              timezone: gate.timezone,
+              anchor: parsed.data.ancora,
+              view: parsed.data.visao,
+              limit: parsed.data.limit,
+              offset: parsed.data.offset,
+            });
     return reply.code(200).send(result);
+  });
+
+  app.get('/portal/clientes/:id/avatar', { preHandler: withTenant }, async (req, reply) => {
+    const gate = await gateClientesOwner(req, reply);
+    if (!gate) return reply;
+    const parsed = clienteIdParamSchema.safeParse(req.params ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'id invalido' });
+
+    const redis = getRedis();
+    const cached = await getCachedAvatar(redis, gate.tenantId, parsed.data.id).catch(() => null);
+    if (cached === 'none') return reply.code(204).send();
+    if (cached) {
+      return reply
+        .header('Cache-Control', 'private, no-store')
+        .header('Vary', 'Cookie')
+        .type(cached.mime)
+        .send(Buffer.from(cached.bytes));
+    }
+
+    const target = await clientes.getClienteAvatarTargetForOwner(
+      gate.slot,
+      gate.tenantId,
+      parsed.data.id,
+    );
+    if (!target) return reply.code(204).send();
+    const avatar = await getProfilePicture({
+      sessao: target.wahaSessao,
+      telefoneCanonico: target.telefoneCanonico,
+      shardId: target.wahaShardId,
+      timeoutMs: config.PORTAL_WAHA_TIMEOUT_MS,
+    }).catch(() => null);
+    await cacheAvatar(redis, gate.tenantId, parsed.data.id, avatar ?? 'none').catch(() => {});
+    if (!avatar) return reply.code(204).send();
+    return reply
+      .header('Cache-Control', 'private, no-store')
+      .header('Vary', 'Cookie')
+      .type(avatar.mime)
+      .send(Buffer.from(avatar.bytes));
   });
 
   app.get('/portal/clientes/:id', { preHandler: withTenant }, async (req, reply) => {
@@ -313,7 +441,9 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
     }
     const bodyParsed = patchSchema.safeParse(req.body ?? {});
     if (!bodyParsed.success) {
-      return reply.code(400).send({ error: 'dados invalidos', issues: formatIssues(bodyParsed.error) });
+      return reply
+        .code(400)
+        .send({ error: 'dados invalidos', issues: formatIssues(bodyParsed.error) });
     }
 
     const body = bodyParsed.data;
@@ -326,6 +456,8 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       gate.tenantId,
       idParsed.data.id,
       {
+        nome_personalizado:
+          body.nome_personalizado === '' ? null : (body.nome_personalizado ?? undefined),
         aniversario_mmdd:
           body.aniversario_mmdd === '' ? null : (body.aniversario_mmdd ?? undefined),
         cidade: body.cidade === '' ? null : (body.cidade ?? undefined),
@@ -353,12 +485,31 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
       slot: gate.slot,
       tenantId: gate.tenantId,
       colaboradorId: gate.colaboradorId,
+      timezone: gate.timezone,
       search: parsed.data.q,
+      nome: parsed.data.nome,
+      telefone: parsed.data.telefone,
+      ultimoAtendimento: parsed.data.ultimo_atendimento,
+      periodoInicio: parsed.data.periodo_inicio,
+      periodoFim: parsed.data.periodo_fim,
+      visitas: parsed.data.visitas,
+      ordenarPor: parsed.data.ordenar_por,
+      ordem: parsed.data.ordem,
       limit: parsed.data.limit,
       offset: parsed.data.offset,
     });
     return reply.code(200).send(result);
   });
+
+  app.get(
+    '/portal/colaborador/clientes/resumo',
+    { preHandler: withColaborador },
+    async (req, reply) => {
+      const gate = await gateClientesColaborador(req, reply);
+      if (!gate) return reply;
+      return reply.code(200).send(await clientes.getClientesResumo(gate));
+    },
+  );
 
   app.get(
     '/portal/colaborador/clientes/sem-retorno',
@@ -412,16 +563,27 @@ export const portalClientesRoutes: FastifyPluginAsync = async (app) => {
               limit: parsed.data.limit,
               offset: parsed.data.offset,
             })
-          : await clientes.listClientesAniversariantesForColaborador({
-              slot: gate.slot,
-              tenantId: gate.tenantId,
-              colaboradorId: gate.colaboradorId,
-              timezone: gate.timezone,
-              mode: 'mes',
-              mes: parsed.data.mes,
-              limit: parsed.data.limit,
-              offset: parsed.data.offset,
-            });
+          : parsed.data.modo === 'mes'
+            ? await clientes.listClientesAniversariantesForColaborador({
+                slot: gate.slot,
+                tenantId: gate.tenantId,
+                colaboradorId: gate.colaboradorId,
+                timezone: gate.timezone,
+                mode: 'mes',
+                mes: parsed.data.mes,
+                limit: parsed.data.limit,
+                offset: parsed.data.offset,
+              })
+            : await clientes.listClientesAniversariantesCalendario({
+                slot: gate.slot,
+                tenantId: gate.tenantId,
+                colaboradorId: gate.colaboradorId,
+                timezone: gate.timezone,
+                anchor: parsed.data.ancora,
+                view: parsed.data.visao,
+                limit: parsed.data.limit,
+                offset: parsed.data.offset,
+              });
       return reply.code(200).send(result);
     },
   );
