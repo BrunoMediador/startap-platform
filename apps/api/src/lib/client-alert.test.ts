@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getCloneAlertOwner: vi.fn(),
+  getCloneReceptionAlertTarget: vi.fn(),
   getCloneBySlot: vi.fn(),
   getConfig: vi.fn(),
   getSenderSession: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock('@startap/core/logger', () => {
 vi.mock('@startap/db', () => ({
   flowClones: {
     getCloneAlertOwner: mocks.getCloneAlertOwner,
+    getCloneReceptionAlertTarget: mocks.getCloneReceptionAlertTarget,
     getCloneBySlot: mocks.getCloneBySlot,
     resolveModoAtendenteEnabledForSlot: (slot: string, csv?: string | null) =>
       mocks.csvGate(slot, csv),
@@ -356,6 +358,58 @@ describe('sendOwnerAlert — kinds e transporte', () => {
     expect(arg.sessao).toBe('ALERTAS'); // transporte alertas, não clone_session
     expect(mocks.getCloneBySlot).not.toHaveBeenCalled();
     expect(arg.texto).toContain('CANCELAMENTO');
+  });
+});
+
+describe('sendOwnerAlert — recepção explícita (fail-closed)', () => {
+  const escalation = {
+    slot: 'clone_recepcao_x',
+    clienteTelefone: '5511988887777',
+    kind: 'escalonamento' as const,
+    transport: 'clone_session' as const,
+    recipient: 'reception_only' as const,
+    payload: { motivo: 'fora_do_padrao', resumo: 'precisa de uma pessoa' },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({
+      phone: '5535999991234',
+      enabled: true,
+      displayName: 'Negócio X',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({ waha_sessao: 'clone_session' });
+    mocks.getState.mockResolvedValue(null);
+    mocks.upsertState.mockResolvedValue(undefined);
+    mocks.sendText.mockResolvedValue(undefined);
+  });
+
+  it('usa somente o WhatsApp de recepção canônico, nunca o fallback do cliente', async () => {
+    const r = await sendOwnerAlert(escalation);
+    expect(r).toEqual({ ok: true, escalado: true });
+    expect(mocks.getCloneReceptionAlertTarget).toHaveBeenCalledWith(escalation.slot);
+    expect(mocks.getCloneAlertOwner).not.toHaveBeenCalled();
+    expect(mocks.sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ sessao: 'clone_session', chatId: '5535999991234@c.us' }),
+    );
+  });
+
+  it('recepção ausente falha fechada e não envia/self-send', async () => {
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({
+      phone: null,
+      enabled: true,
+      displayName: 'Negócio X',
+    });
+    const r = await sendOwnerAlert(escalation);
+    expect(r).toEqual({ ok: true, escalado: false, reason: 'no_owner' });
+    expect(mocks.getCloneBySlot).not.toHaveBeenCalled();
+    expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it('erro WAHA retorna falha, sem transformar o envio em êxito', async () => {
+    mocks.sendText.mockRejectedValue(new Error('WAHA /api/sendText -> HTTP 422'));
+    const r = await sendOwnerAlert(escalation);
+    expect(r).toEqual({ ok: false, escalado: false, reason: 'error' });
   });
 });
 

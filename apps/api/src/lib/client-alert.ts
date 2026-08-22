@@ -76,6 +76,9 @@ export type OwnerAlertKind = 'cancelamento' | 'escalonamento' | 'lead';
 /** Como o alerta chega ao dono. Ver nota de cabeçalho (por que é explícito). */
 export type OwnerAlertTransport = 'alertas' | 'clone_session';
 
+/** Como resolver o destinatário: transbordo humano exige a recepção configurada. */
+export type OwnerAlertRecipient = 'owner_with_fallback' | 'reception_only';
+
 /** Payload do kind `cancelamento` (comportamento legado). */
 export interface CancelamentoPayload {
   motivo: string;
@@ -109,6 +112,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'cancelamento';
       payload: CancelamentoPayload;
     }
@@ -116,6 +120,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'escalonamento';
       payload: EscalonamentoPayload;
     }
@@ -123,6 +128,7 @@ export type OwnerAlertInput =
       slot: string;
       clienteTelefone: string;
       transport: OwnerAlertTransport;
+      recipient?: OwnerAlertRecipient;
       kind: 'lead';
       payload: LeadPayload;
     };
@@ -351,7 +357,10 @@ async function resolveTransportSession(
 export async function sendOwnerAlert(input: OwnerAlertInput): Promise<OwnerAlertResult> {
   const { slot, clienteTelefone, kind, transport } = input;
   try {
-    const owner = await flowClones.getCloneAlertOwner(slot);
+    const owner =
+      input.recipient === 'reception_only'
+        ? await flowClones.getCloneReceptionAlertTarget(slot)
+        : await flowClones.getCloneAlertOwner(slot);
     if (!owner || !owner.enabled) {
       log.info({ slot, kind, reason: 'disabled' }, 'owner-alert: alerta desabilitado p/ clone');
       return { ok: true, escalado: false, reason: 'disabled' };

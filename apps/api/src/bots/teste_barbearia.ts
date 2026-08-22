@@ -29,7 +29,11 @@ import {
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
 import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
-import { buildEquipeBlock, buildModoAtendenteBlock } from '../lib/modo-atendente.js';
+import {
+  buildAgendaEscalationBlock,
+  buildEquipeBlock,
+  buildModoAtendenteBlock,
+} from '../lib/modo-atendente.js';
 import {
   buildSeuPacoteBlock,
   clienteFromSummary,
@@ -363,11 +367,14 @@ export class TesteBarbeariaBot extends BotBase {
           clienteTelefone: telefone,
           kind: 'escalonamento',
           transport: 'clone_session',
+          // Transbordo só usa a recepção E.164 salva pelo tenant; jamais o número
+          // de pareamento/fallback nem um telefone vindo do modelo.
+          recipient: 'reception_only',
           payload: { motivo, resumo },
         });
         // SCRUM-62: NÃO auto-pausa. Escalar só alerta o dono; a pausa (temporária, 60min)
         // acontece quando o atendente responde à mão (router.ts) ou por frase de pausa.
-        return { ok: true, escalado: r.escalado };
+        return { ok: r.escalado, escalado: r.escalado };
       },
     };
   }
@@ -425,6 +432,7 @@ export class TesteBarbeariaBot extends BotBase {
           clienteTelefone: telefone,
           kind: 'lead',
           transport: 'clone_session',
+          recipient: 'reception_only',
           payload: {
             nome: typeof a.nome === 'string' ? a.nome : undefined,
             servico: typeof a.servico === 'string' ? a.servico : '',
@@ -433,7 +441,7 @@ export class TesteBarbeariaBot extends BotBase {
             observacao: typeof a.observacao === 'string' ? a.observacao : undefined,
           },
         });
-        return { ok: true, registrado: r.escalado };
+        return { ok: r.escalado, registrado: r.escalado };
       },
     };
   }
@@ -829,7 +837,13 @@ export class TesteBarbeariaBot extends BotBase {
     const cartaoBlock =
       runtimeCartao !== '' ? runtimeCartao : buildCartaoEmojiOverrideBlock(area, temCartaoProprio);
 
-    const systemPrompt = [promptPersona, contextBlock, pacoteBlock, cartaoBlock]
+    const systemPrompt = [
+      promptPersona,
+      contextBlock,
+      pacoteBlock,
+      cartaoBlock,
+      buildAgendaEscalationBlock(),
+    ]
       .filter((b) => b !== '')
       .join('\n\n');
 
@@ -1094,6 +1108,8 @@ export class TesteBarbeariaBot extends BotBase {
     if (config.CANCELAMENTO_ESCALADO_ENABLED) {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
+
+    tools.push(this.buildEscalarParaHumanoTool(telefone));
 
     // ── consultar_pacote (ADR 0025 BLOCO 2a — DORMENTE por flag) ─────────────────
     // Tool READ-ONLY: SÓ é exposta com PACOTES_ENABLED=ON. Com a flag OFF a lista de
@@ -1696,6 +1712,8 @@ export class TesteBarbeariaBot extends BotBase {
       estab.horariosBlock,
       '',
       cartaoEstabelecimentoBlock,
+      '',
+      buildAgendaEscalationBlock(),
       // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
       // systemPrompt byte-a-byte o de hoje. Com pacote: '' (separador) + o bloco.
       ...(pacoteBlock ? ['', pacoteBlock] : []),
@@ -2043,6 +2061,8 @@ export class TesteBarbeariaBot extends BotBase {
     if (config.CANCELAMENTO_ESCALADO_ENABLED) {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
+
+    tools.push(this.buildEscalarParaHumanoTool(telefone));
 
     // ── consultar_pacote no ESTABELECIMENTO (ADR 0025 BLOCO 2a — DORMENTE por flag; SCRUM-68) ──
     // MESMA tool read-only do individual (buildConsultarPacoteTool): SÓ exposta com

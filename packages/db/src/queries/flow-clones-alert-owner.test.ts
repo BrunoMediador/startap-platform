@@ -15,6 +15,7 @@ vi.mock('../client.js', () => ({
 
 const {
   getCloneAlertOwner,
+  getCloneReceptionAlertTarget,
   setCloneAlertOwnerPhoneIfEmpty,
   clearAlertOwnerPhoneBySlot,
   getCloneDisconnectAlertTarget,
@@ -125,6 +126,45 @@ describe('getCloneAlertOwner — fallback alert_owner_phone -> cliente_telefone'
     const owner = await getCloneAlertOwner('clone_nao_existe');
 
     expect(owner).toBeNull();
+  });
+});
+
+describe('getCloneReceptionAlertTarget — sem fallback/self-send', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it('aceita somente o E.164 BR salvo no WhatsApp da recepção', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: '5535999991234',
+          alert_owner_enabled: true,
+          display_name: 'Negócio X',
+        },
+      ],
+    });
+    await expect(getCloneReceptionAlertTarget('clone_x')).resolves.toEqual({
+      phone: '5535999991234',
+      enabled: true,
+      displayName: 'Negócio X',
+    });
+  });
+
+  it('número ausente ou inválido vira null — nunca usa cliente_telefone como fallback', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        {
+          alert_owner_phone: '11999998888',
+          alert_owner_enabled: true,
+          display_name: 'Negócio X',
+        },
+      ],
+    });
+    const target = await getCloneReceptionAlertTarget('clone_x');
+    expect(target?.phone).toBeNull();
+    const [sql] = mockQuery.mock.calls[0] as [string];
+    expect(sql).not.toContain('cliente_telefone');
   });
 });
 

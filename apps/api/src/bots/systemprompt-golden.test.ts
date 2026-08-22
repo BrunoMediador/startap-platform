@@ -299,15 +299,15 @@ describe('systemPrompt golden — clones BAKED de barbearia (SCRUM-92 inc.2, T1)
     assertGolden('systemprompt-baked-barbearia.golden.txt', sp);
   });
 
-  it('o golden NÃO contém nenhum bloco injetado em runtime (baked = só persona + contexto)', async () => {
+  it('o golden preserva o cartão baked e inclui somente o guardrail intencional de transbordo', async () => {
     const sp = await systemPromptFor(SLOTS_BAKED_BARBEARIA.cirilo);
     // Guardas semânticas anti-regressão do increment 2: se a injeção em runtime vazar pro
     // caminho baked, um destes marcadores aparece e o teste quebra (defesa além do byte-a-byte).
     expect(sp).not.toContain('[CARTAO DE CONFIRMACAO - EMOJIS DESTE NEGOCIO]');
     expect(sp).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO');
     expect(sp).not.toContain('[SEU PACOTE]');
-    // A montagem é exatamente persona + '\n\n' + contexto (nada mais no baked barbearia).
-    expect(sp).toBe(`${PERSONA_FIXTURE}\n\n${CONTEXT_FIXTURE}`);
+    const { buildAgendaEscalationBlock } = await import('../lib/modo-atendente.js');
+    expect(sp).toBe(`${PERSONA_FIXTURE}\n\n${CONTEXT_FIXTURE}\n\n${buildAgendaEscalationBlock()}`);
   });
 
   it('buildCartaoEmojiOverrideBlock (peça pura que o inc.2 vai encostar) devolve "" no baked barbearia', async () => {

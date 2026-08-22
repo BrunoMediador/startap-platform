@@ -1186,6 +1186,42 @@ export interface CloneAlertOwner {
 }
 
 /**
+ * Destino EXPLÍCITO do transbordo humano. Diferente de getCloneAlertOwner, este
+ * reader NUNCA cai no telefone de cadastro/pareamento do cliente: o dono precisa
+ * ter salvo um WhatsApp de recepção válido para que a conversa seja encaminhada.
+ */
+export interface CloneReceptionAlertTarget {
+  /** E.164 BR canônico configurado no campo WhatsApp da recepção; null = fail-closed. */
+  phone: string | null;
+  enabled: boolean;
+  displayName: string;
+}
+
+export async function getCloneReceptionAlertTarget(
+  slot: string,
+): Promise<CloneReceptionAlertTarget | null> {
+  const r = await query<{
+    alert_owner_phone: string | null;
+    alert_owner_enabled: boolean | null;
+    display_name: string;
+  }>(
+    `SELECT alert_owner_phone, alert_owner_enabled, display_name
+       FROM flow_clones WHERE slot = $1 LIMIT 1`,
+    [slot],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  const digits = (row.alert_owner_phone ?? '').replace(/\D/g, '');
+  return {
+    // Não aceitar número parcialmente salvo/legado: o envio de transbordo precisa
+    // usar apenas o E.164 validado pelo portal, nunca um fallback ou self-send.
+    phone: ALERT_OWNER_PHONE_RE.test(digits) ? digits : null,
+    enabled: row.alert_owner_enabled !== false,
+    displayName: row.display_name,
+  };
+}
+
+/**
  * Lê o destino do alerta de cancelamento de um clone (migration 050).
  * Sem hardcode de número. Fonte do telefone, em ordem de precedência:
  *   1. flow_clones.alert_owner_phone (coluna dedicada, backfill da migration 050);

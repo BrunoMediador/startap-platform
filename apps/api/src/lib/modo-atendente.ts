@@ -93,6 +93,20 @@ export function buildModoAtendenteBlock(opts: { hasLink: boolean; hasEquipe?: bo
   return linhas.join('\n');
 }
 
+/**
+ * Guardrail compartilhado pelos ramos de agenda: ter agenda não autoriza o modelo
+ * a inventar resposta quando o dado necessário não está no contexto. A tool resolve
+ * o destinatário server-side; nunca recebe telefone do modelo.
+ */
+export function buildAgendaEscalationBlock(): string {
+  return `${[
+    '[TRANSBORDO PARA A RECEPCAO]',
+    '- Se faltar uma informacao necessaria no CONTEXTO, houver reclamacao, negociacao, pedido fora do padrao ou pedido para falar com uma pessoa, chame escalar_para_humano e nao invente resposta.',
+    '- So diga que a recepcao/equipe foi avisada se a ferramenta retornar escalado=true.',
+    '- Se a ferramenta retornar escalado=false, seja honesto: nao prometa que alguem foi avisado.',
+  ].join('\n')}\n`;
+}
+
 /** Profissional pro bloco [EQUIPE] — SÓ nome + serviços vinculados (NADA de gcal/agenda). */
 export interface EquipeMembro {
   nome: string;
