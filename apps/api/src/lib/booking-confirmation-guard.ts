@@ -6,6 +6,7 @@
  */
 import { createHmac, randomUUID } from 'node:crypto';
 import { buildEventSummary, normalizeClientePhone } from '@startap/core/agenda-summary';
+import { logger } from '@startap/core/logger';
 import {
   type BookingConfirmationProposal,
   type CloneConfirmationCardContract,
@@ -19,6 +20,7 @@ import {
 } from './booking-confirmation-template.js';
 
 export const BOOKING_CONFIRMATION_TTL_MS = 15 * 60 * 1000;
+const log = logger.child({ component: 'booking-confirmation-guard' });
 
 type BookingGuardScopeFailure = {
   enabled: false;
@@ -190,10 +192,9 @@ type ConfirmationOutcome =
   | { kind: 'recovery_required' }
   | { kind: 'none' };
 
-function overlaps(
-  events: Awaited<ReturnType<GoogleCalendarClient['listEvents']>>,
-  proposal: BookingConfirmationProposal,
-): boolean {
+type CalendarEvents = Awaited<ReturnType<GoogleCalendarClient['listEvents']>>;
+
+function overlaps(events: CalendarEvents, proposal: BookingConfirmationProposal): boolean {
   const start = new Date(proposal.inicio_at).getTime();
   const end = new Date(proposal.fim_at).getTime();
   return events.some((event) => {
@@ -203,6 +204,18 @@ function overlaps(
     const eventEnd = new Date(event.end.dateTime ?? event.end.date ?? proposal.fim_at).getTime();
     return eventStart < end && eventEnd > start;
   });
+}
+
+/** Classifica sem registrar a mensagem, caminho, calendário ou payload do provedor. */
+function classifyPrecheckFailure(error: unknown): {
+  errorClass: 'gcal_http' | 'gcal_timeout' | 'unexpected';
+  httpStatus?: number;
+} {
+  if (!(error instanceof Error)) return { errorClass: 'unexpected' };
+  if (error.message === '__gcal_request_timeout__') return { errorClass: 'gcal_timeout' };
+  const httpStatus = /\bHTTP ([1-5]\d{2})\b/.exec(error.message)?.[1];
+  if (!httpStatus) return { errorClass: 'unexpected' };
+  return { errorClass: 'gcal_http', httpStatus: Number(httpStatus) };
 }
 
 /** Um GET de recovery só comprova o evento que este proposal criou. */
@@ -284,10 +297,31 @@ export async function confirmPendingProposal(input: {
     return { kind: 'conflict', proposal };
   }
 
-  const existing = await calClient.listEvents({
-    timeMin: proposal.inicio_at,
-    timeMax: proposal.fim_at,
-  });
+  let existing: CalendarEvents;
+  try {
+    existing = await calClient.listEvents({
+      timeMin: proposal.inicio_at,
+      timeMax: proposal.fim_at,
+    });
+  } catch (error) {
+    const failure = classifyPrecheckFailure(error);
+    log.warn(
+      {
+        slot: input.slot,
+        stage: 'availability_precheck',
+        status: 'recovery_required',
+        error_class: failure.errorClass,
+        ...(failure.httpStatus === undefined ? {} : { gcal_http_status: failure.httpStatus }),
+      },
+      'booking confirmation availability precheck failed',
+    );
+    await bookingConfirmations.markRecoveryRequired({
+      tenantId: input.tenantId,
+      slot: input.slot,
+      id: proposal.id,
+    });
+    return { kind: 'recovery_required' };
+  }
   if (overlaps(existing, proposal)) {
     await bookingConfirmations.markConflict({
       tenantId: input.tenantId,

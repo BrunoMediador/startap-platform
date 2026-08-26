@@ -270,6 +270,77 @@ describe('booking confirmation guard', () => {
     expect(conflictClient.createEvent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['HTTP 400', new Error('GCal /events -> HTTP 400: bad request')],
+    ['timeout', new Error('__gcal_request_timeout__')],
+    ['erro inesperado', new Error('calendar transport closed')],
+  ])(
+    'falha de pré-checagem %s termina em recovery_required sem POST ou atendimento',
+    async (_label, precheckError) => {
+      mocks.expirePending.mockResolvedValue(false);
+      mocks.claimForConfirmation.mockResolvedValueOnce(proposal);
+      mocks.markRecoveryRequired.mockResolvedValueOnce(true);
+      const afterBooked = vi.fn();
+      const client = {
+        listEvents: vi.fn().mockRejectedValue(precheckError),
+        createEvent: vi.fn(),
+        getEvent: vi.fn(),
+      };
+
+      await expect(
+        guard.confirmPendingProposal({
+          ...scope,
+          resolveCalClient: () => client as never,
+          nomeCliente: 'Ana',
+          telefone: '5511999999999',
+          afterBooked,
+        }),
+      ).resolves.toEqual({ kind: 'recovery_required' });
+
+      expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
+        tenantId: scope.tenantId,
+        slot: scope.slot,
+        id: proposal.id,
+      });
+      expect(client.createEvent).not.toHaveBeenCalled();
+      expect(client.getEvent).not.toHaveBeenCalled();
+      expect(afterBooked).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retry após falha de pré-checagem não cria evento duplicado', async () => {
+    mocks.expirePending.mockResolvedValue(false);
+    mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
+    mocks.latestForContact.mockResolvedValueOnce({ ...proposal, status: 'recovery_required' });
+    mocks.markRecoveryRequired.mockResolvedValueOnce(true);
+    const client = {
+      listEvents: vi.fn().mockRejectedValue(new Error('GCal /events -> HTTP 400: bad request')),
+      createEvent: vi.fn(),
+      getEvent: vi.fn().mockRejectedValue(new Error('not found')),
+    };
+
+    await expect(
+      guard.confirmPendingProposal({
+        ...scope,
+        resolveCalClient: () => client as never,
+        nomeCliente: 'Ana',
+        telefone: '5511999999999',
+      }),
+    ).resolves.toEqual({ kind: 'recovery_required' });
+    await expect(
+      guard.confirmPendingProposal({
+        ...scope,
+        resolveCalClient: () => client as never,
+        nomeCliente: 'Ana',
+        telefone: '5511999999999',
+      }),
+    ).resolves.toEqual({ kind: 'recovery_required' });
+
+    expect(mocks.markRecoveryRequired).toHaveBeenCalledTimes(1);
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(client.getEvent).toHaveBeenCalledWith(proposal.event_id);
+  });
+
   it('mudança de serviço, duração ou colaborador entre card e SIM bloqueia sem evento', async () => {
     mocks.expirePending.mockResolvedValue(false);
     mocks.claimForConfirmation.mockResolvedValue(proposal);
