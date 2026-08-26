@@ -53,6 +53,16 @@ const mocks = vi.hoisted(() => ({
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
   withActionLock: vi.fn(),
+  bookingConfirmations: {
+    replacePending: vi.fn(),
+    expirePending: vi.fn(),
+    supersedePending: vi.fn(),
+    claimForConfirmation: vi.fn(),
+    latestForContact: vi.fn(),
+    markBooked: vi.fn(),
+    markConflict: vi.fn(),
+    markRecoveryRequired: vi.fn(),
+  },
   csvGate: (slot: string, csv?: string | null): boolean => {
     if (!csv) return false;
     const e = csv
@@ -64,6 +74,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@startap/db', () => ({
+  bookingConfirmations: mocks.bookingConfirmations,
   chatMemory: { loadHistory: mocks.loadHistory },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
   cloneColaboradores: {

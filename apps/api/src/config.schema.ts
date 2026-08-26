@@ -102,7 +102,7 @@ export const ConfigSchema = z.object({
   // Flag-gated, default OFF, OPCIONAL no boot (licao do #247: env nova NUNCA
   // derruba api/worker). OFF = comportamento ATUAL (cria o evento GCal como hoje,
   // sem lock). ON = a criacao do evento GCal e envolvida por um lock distribuido
-  // por chave semantica (actionlock:gcal:<slot>:<telefone>:<inicioISO>): so quem
+  // por chave semântica (actionlock:gcal:<slot>:<contact-hmac>:<inicioISO>): só quem
   // adquire o SET NX PX cria o evento; processamento concorrente da MESMA acao
   // (mesma conversa, mesmo horario) PULA -> 1 evento, nao 2.
   // FAIL-OPEN: Redis inacessivel/timeout ao adquirir o lock -> cria o evento
@@ -113,6 +113,9 @@ export const ConfigSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+  // Segredo exclusivo para pseudonimizar a identidade de contato nas chaves Redis
+  // do action-lock. Ausente não quebra boot: o lock degrada para sem lock.
+  ACTION_LOCK_PHONE_PEPPER: z.string().min(16).optional(),
   // TTL do lock de acao (ms). Cobre a duracao de UMA criacao de evento GCal +
   // margem; expira sozinho (sem lock orfao se a instancia morrer no meio).
   // Default 10000ms (chamada GCal + rede). Ajustavel sem deploy.
@@ -341,6 +344,11 @@ export const ConfigSchema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+
+  // ADR 0046 — confirmação de agendamento server-first. Allowlist por slot,
+  // ausente = OFF; sem pepper exclusivo o guard falha fechado.
+  BOOKING_CONFIRMATION_GUARD_SLOTS: z.string().optional().default(''),
+  BOOKING_CONFIRMATION_PHONE_PEPPER: z.string().min(16).optional(),
 
   SERVICE_NAME: z.string().optional(),
 });

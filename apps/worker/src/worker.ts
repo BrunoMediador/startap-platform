@@ -10,6 +10,7 @@ import { Cron } from 'croner';
 import { config } from './config.js';
 import { runAntibot } from './jobs/antibot.js';
 import { runBillingSilenceAlert } from './jobs/billing-silence-alert.js';
+import { runBookingConfirmationRetention } from './jobs/booking-confirmation-retention.js';
 import { runBotDetectAutopause } from './jobs/bot-detect-autopause.js';
 import { runBotDetect } from './jobs/bot-detect.js';
 import { runChatRetention } from './jobs/chat-retention.js';
@@ -115,6 +116,8 @@ async function main() {
       // CHAT_RETENTION_ENABLED=true + GO do Bruno. Roda DEPOIS do prune por quantidade.
       const retentionResult = await runChatRetention();
       Object.assign(cleanupResult as object, { chatRetention: retentionResult });
+      const bookingConfirmationRetention = await runBookingConfirmationRetention();
+      Object.assign(cleanupResult as object, { bookingConfirmationRetention });
       const prunedLogs = await flowExecutionLog.pruneOldFlowEvents(14);
       // Fecha execuções presas em running há mais de 5 minutos (safety net).
       const closedStale = await flowExecutionLog.closeStaleRunning(5);

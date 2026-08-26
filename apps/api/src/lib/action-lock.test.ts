@@ -22,6 +22,7 @@ vi.mock('../config.js', () => ({
   config: {
     IDEMPOTENCY_ACTION_LOCK_TTL_MS: 10000,
     IDEMPOTENCY_REDIS_TIMEOUT_MS: 500,
+    ACTION_LOCK_PHONE_PEPPER: 'action-lock-pepper-test-32-bytes',
   },
 }));
 
@@ -125,12 +126,21 @@ describe('gcalActionLockKey', () => {
       '+55 (35) 99174-6797@c.us',
       '2026-06-14T10:00:00-03:00',
     );
-    expect(key).toBe('actionlock:gcal:teste_barbearia:5535991746797:2026-06-14T10:00:00-03:00');
+    expect(key).toMatch(/^actionlock:gcal:teste_barbearia:[a-f0-9]{64}:2026-06-14T10:00:00-03:00$/);
+    expect(key).not.toContain('5535991746797');
   });
 
   it('mesma intencao com formatacao diferente gera a MESMA chave', () => {
     const a = gcalActionLockKey('s', '5535991746797', '2026-06-14T10:00:00-03:00');
     const b = gcalActionLockKey('s', '55 35 99174-6797', '2026-06-14T10:00:00-03:00');
     expect(a).toBe(b);
+  });
+
+  it('sem pepper dedicado desliga o lock sem criar chave com telefone em claro', async () => {
+    const { config } = await import('../config.js');
+    const previous = config.ACTION_LOCK_PHONE_PEPPER;
+    (config as { ACTION_LOCK_PHONE_PEPPER?: string }).ACTION_LOCK_PHONE_PEPPER = undefined;
+    expect(gcalActionLockKey('s', '5535991746797', '2026-06-14T10:00:00-03:00')).toBeNull();
+    (config as { ACTION_LOCK_PHONE_PEPPER?: string }).ACTION_LOCK_PHONE_PEPPER = previous;
   });
 });

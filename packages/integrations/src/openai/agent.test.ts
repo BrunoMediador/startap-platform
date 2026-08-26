@@ -174,4 +174,57 @@ describe('runAgent — toolChoice (fix determinístico SCRUM-92)', () => {
     });
     expect(mockCreate.mock.calls[0][0].tool_choice).toBeUndefined();
   });
+
+  it('tool terminal bloqueia side-effect em call posterior do mesmo turno', async () => {
+    mockCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: 'proposta',
+                type: 'function',
+                function: { name: 'propor_agendamento', arguments: '{}' },
+              },
+              {
+                id: 'remarcar',
+                type: 'function',
+                function: { name: 'remarcar_agendamento', arguments: '{}' },
+              },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    });
+    const proposta = {
+      name: 'propor_agendamento',
+      description: 'sem efeito externo',
+      parameters: { type: 'object' },
+      run: vi.fn(async () => ({ pending_confirmation: true })),
+      stopAfterRun: (result: unknown) =>
+        typeof result === 'object' &&
+        result !== null &&
+        'pending_confirmation' in result &&
+        result.pending_confirmation === true,
+    };
+    const remarcar = {
+      name: 'remarcar_agendamento',
+      description: 'mutante',
+      parameters: { type: 'object' },
+      run: vi.fn(async () => ({ ok: true })),
+    };
+
+    const result = await runAgent({
+      ...baseOpts,
+      model: 'gpt-4o',
+      tools: [proposta, remarcar],
+    });
+
+    expect(proposta.run).toHaveBeenCalledTimes(1);
+    expect(remarcar.run).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(result.toolCalls).toEqual([expect.objectContaining({ name: 'propor_agendamento' })]);
+  });
 });

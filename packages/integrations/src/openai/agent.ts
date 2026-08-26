@@ -47,6 +47,8 @@ export interface ToolDefinition<TArgs = unknown, TResult = unknown> {
   description: string;
   parameters: Record<string, unknown>;
   run: (args: TArgs) => Promise<TResult>;
+  /** Resultado terminal: não execute outras tools do mesmo turno nem novos turnos. */
+  stopAfterRun?: (result: TResult) => boolean;
 }
 
 /**
@@ -191,6 +193,11 @@ export async function runAgent(opts: RunAgentOpts): Promise<RunAgentResult> {
               opts.maxToolResultChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS,
             ),
           });
+          // Uma tool terminal é uma barreira de efeito: inclusive calls posteriores que o
+          // modelo tenha incluído na MESMA resposta não podem rodar.
+          if (tool.stopAfterRun?.(result as never)) {
+            return { reply: '', toolCalls: trace, usage };
+          }
         } catch (e) {
           const err = (e as Error).message;
           log.error({ tool: tool.name, err }, 'Tool failed');
