@@ -42,9 +42,9 @@ import {
 } from '../lib/booking-confirmation-guard.js';
 import { hashBakedCard } from '../lib/booking-confirmation-template.js';
 import {
-  BOOKING_PROPOSAL_CLARIFICATION,
   BOOKING_PROPOSAL_DECISION_TOOL,
   BOOKING_PROPOSAL_TOOL,
+  buildBookingProposalClarification,
   decideBookingProposal,
 } from '../lib/booking-proposal-decision.js';
 import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
@@ -200,6 +200,18 @@ const SERVER_FIRST_BOOKING_BLOCK = [
   'Para propor um horário, chame exclusivamente a ferramenta propor_agendamento com profissional, serviço, início e fim.',
   'Nunca escreva, monte ou envie cartão de confirmação, campos de horário/serviço/valor ou convite para SIM.',
   'O servidor valida a proposta e envia o cartão completo. Se não conseguir propor um horário válido, peça os dados que faltam sem confirmar nada.',
+].join('\n');
+
+/**
+ * Conversas que não pedem uma proposta seguem atendidas, mas sem capability mutante. Assim uma
+ * saudação, disponibilidade, pergunta, cancelamento ou remarcação não vira um falso pedido de
+ * horário nem pode produzir um cartão/evento antes da fronteira server-first.
+ */
+const SERVER_FIRST_SAFE_CONVERSATION_BLOCK = [
+  '[CONVERSA SEGURA DE AGENDAMENTO SERVER-FIRST]',
+  'Nesta conversa responda somente saudação, disponibilidade, pergunta geral ou consulta segura.',
+  'Não proponha, confirme, remarque ou cancele horário e nunca diga que criou ou alterou agenda.',
+  'Não existe ferramenta mutante disponível neste turno.',
 ].join('\n');
 
 /**
@@ -2117,6 +2129,46 @@ export class TesteBarbeariaBot extends BotBase {
       pacoteBlock = buildSeuPacoteBlock(credits);
     }
 
+    const fullHistory = await this.loadHistory(ctx);
+    const history = fullHistory.slice(0, -1);
+
+    // A oferta de `propor_agendamento` não é suficiente: com tool_choice auto o modelo pode
+    // responder texto e o guard, corretamente, descarta esse texto sem materializar proposta.
+    // Primeiro classificamos em formato fechado; somente uma intenção completa chega ao agente
+    // que é forçado a chamar a tool server-first. Coleta é determinística; conversa segura segue
+    // para o agente com apenas capabilities read-only, sem forçar tool mutante.
+    let bookingProposalReady = false;
+    let bookingSafeConversation = false;
+    if (bookingGuard.enabled) {
+      const proposalDecision = await decideBookingProposal({
+        slot: this.slot,
+        projectId: this.slot,
+        flowId: ctx.flowId,
+        history,
+        userMessage: texto,
+      });
+      this.log.info(
+        {
+          slot: this.slot,
+          purpose: proposalDecision.purpose,
+          classification: proposalDecision.decision.decisao,
+          toolChoice: 'force_function',
+          toolName: BOOKING_PROPOSAL_DECISION_TOOL,
+          toolResult: proposalDecision.toolResult,
+          latencyMs: proposalDecision.latencyMs,
+          ...(proposalDecision.decision.decisao === 'conversa_segura'
+            ? { conversationTopic: proposalDecision.decision.topico }
+            : {}),
+        },
+        'booking confirmation proposal decision',
+      );
+      if (proposalDecision.decision.decisao === 'coletar_dados') {
+        return buildBookingProposalClarification(proposalDecision.decision.campos_faltantes);
+      }
+      bookingProposalReady = proposalDecision.decision.decisao === 'pronta_para_proposta';
+      bookingSafeConversation = proposalDecision.decision.decisao === 'conversa_segura';
+    }
+
     const systemPrompt = [
       promptPersona,
       '',
@@ -2128,7 +2180,11 @@ export class TesteBarbeariaBot extends BotBase {
       '[HORARIOS DISPONIVEIS POR PROFISSIONAL - ATUALIZADO AGORA]',
       estab.horariosBlock,
       '',
-      bookingGuard.enabled ? SERVER_FIRST_BOOKING_BLOCK : cartaoEstabelecimentoBlock,
+      bookingProposalReady
+        ? SERVER_FIRST_BOOKING_BLOCK
+        : bookingSafeConversation
+          ? SERVER_FIRST_SAFE_CONVERSATION_BLOCK
+          : cartaoEstabelecimentoBlock,
       '',
       transbordoRecepcaoDisponivel ? buildAgendaEscalationBlock() : '',
       // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
@@ -2136,40 +2192,14 @@ export class TesteBarbeariaBot extends BotBase {
       ...(pacoteBlock ? ['', pacoteBlock] : []),
     ].join('\n');
 
-    const fullHistory = await this.loadHistory(ctx);
-    const history = fullHistory.slice(0, -1);
-
-    // A oferta de `propor_agendamento` não é suficiente: com tool_choice auto o modelo pode
-    // responder texto e o guard, corretamente, descarta esse texto sem materializar proposta.
-    // Primeiro classificamos em formato fechado; somente uma intenção completa chega ao agente
-    // que é forçado a chamar a tool server-first. Falha/shape inválido permanece em coleta.
-    if (bookingGuard.enabled) {
-      const proposalDecision = await decideBookingProposal({
-        slot: this.slot,
-        projectId: this.slot,
-        flowId: ctx.flowId,
-        telefone,
-        history,
-        userMessage: texto,
-      });
-      this.log.info(
-        {
-          slot: this.slot,
-          decision: proposalDecision.decision.decisao,
-          toolChoice: 'force_function',
-          toolName: BOOKING_PROPOSAL_DECISION_TOOL,
-          toolResult: proposalDecision.toolResult,
-        },
-        'booking confirmation proposal decision',
-      );
-      if (proposalDecision.decision.decisao !== 'pronta_para_proposta') {
-        return BOOKING_PROPOSAL_CLARIFICATION;
-      }
-    }
     let terminalBookingCard: string | null = null;
 
-    const tools: ToolDefinition[] = [
-      {
+    const tools: ToolDefinition[] = [];
+    // Sob o guard, conversa segura recebe somente as tools read-only adicionadas abaixo.
+    // `propor_agendamento` nunca fica disponível nesse ramo, então o agente não consegue
+    // transformar uma saudação/pergunta em proposta por decisão própria.
+    if (!bookingSafeConversation) {
+      tools.push({
         name: bookingGuard.enabled ? BOOKING_PROPOSAL_TOOL : 'inserir_agendamento',
         description: bookingGuard.enabled
           ? 'Propõe ao servidor o horário, serviço e profissional escolhidos. Não cria evento ' +
@@ -2512,48 +2542,49 @@ export class TesteBarbeariaBot extends BotBase {
           result !== null &&
           'pending_confirmation' in result &&
           result.pending_confirmation === true,
+      });
+    }
+
+    tools.push({
+      name: 'consultar_agendamento',
+      description:
+        'Consulta os agendamentos futuros do PRÓPRIO cliente da conversa nas agendas dos ' +
+        'profissionais. Não precisa de telefone — usa sempre o número de quem está falando.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
       },
-      {
-        name: 'consultar_agendamento',
-        description:
-          'Consulta os agendamentos futuros do PRÓPRIO cliente da conversa nas agendas dos ' +
-          'profissionais. Não precisa de telefone — usa sempre o número de quem está falando.',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-        run: async () => {
-          // SEGURANÇA (IDOR/PII cross-cliente): ignora QUALQUER telefone do LLM; usa SEMPRE
-          // o número da CONVERSA (o remetente) ao cruzar as agendas dos colaboradores.
-          const tMin = new Date().toISOString();
-          const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const matching: Array<{
-            summary?: string;
-            start?: string;
-            end?: string;
-            profissional: string;
-          }> = [];
-          // Cruza nas agendas de TODOS os colaboradores ativos do estabelecimento.
-          for (const c of decorados) {
-            const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
-            for (const e of evs) {
-              if (this.matchEventoPorTelefone(e, telefone)) {
-                matching.push({
-                  summary: e.summary,
-                  start: e.start.dateTime,
-                  end: e.end.dateTime,
-                  profissional: c.nome,
-                });
-              }
+      run: async () => {
+        // SEGURANÇA (IDOR/PII cross-cliente): ignora QUALQUER telefone do LLM; usa SEMPRE
+        // o número da CONVERSA (o remetente) ao cruzar as agendas dos colaboradores.
+        const tMin = new Date().toISOString();
+        const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+        const matching: Array<{
+          summary?: string;
+          start?: string;
+          end?: string;
+          profissional: string;
+        }> = [];
+        // Cruza nas agendas de TODOS os colaboradores ativos do estabelecimento.
+        for (const c of decorados) {
+          const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
+          for (const e of evs) {
+            if (this.matchEventoPorTelefone(e, telefone)) {
+              matching.push({
+                summary: e.summary,
+                start: e.start.dateTime,
+                end: e.end.dateTime,
+                profissional: c.nome,
+              });
             }
           }
-          if (!matching.length)
-            return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
-          return { events: matching };
-        },
+        }
+        if (!matching.length)
+          return { events: [], message: 'Nenhum agendamento futuro encontrado.' };
+        return { events: matching };
       },
-    ];
+    });
 
     // ── Remarcação via patchEvent (estabelecimento) ──────────────────────────────
     // Varre as agendas dos colaboradores ATIVOS (decorados) procurando o agendamento DO
@@ -2647,7 +2678,7 @@ export class TesteBarbeariaBot extends BotBase {
       userMessage: texto,
       tools,
       maxTurns: 5,
-      ...(bookingGuard.enabled
+      ...(bookingProposalReady
         ? { toolChoice: { forceFunction: BOOKING_PROPOSAL_TOOL } as const, temperature: 0 }
         : {}),
     });
@@ -2659,12 +2690,12 @@ export class TesteBarbeariaBot extends BotBase {
       );
       return terminalBookingCard;
     }
-    if (bookingGuard.enabled) {
+    if (bookingProposalReady) {
       this.log.warn(
         { slot: this.slot, status: 'proposal_not_persisted' },
         'booking confirmation blocked unpersisted model reply',
       );
-      return BOOKING_PROPOSAL_CLARIFICATION;
+      return buildBookingProposalClarification(['servico', 'profissional', 'horario']);
     }
     return sanitizarResposta(result.reply);
   }
