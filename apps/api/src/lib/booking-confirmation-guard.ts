@@ -230,6 +230,75 @@ function isOwnedEvent(
   );
 }
 
+type ConfirmationMutationScope = {
+  tenantId: string;
+  slot: string;
+  contactHmac: string;
+  afterBooked?: (proposal: BookingConfirmationProposal, eventId: string) => Promise<void>;
+};
+
+async function transitionToRecoveryRequired(
+  input: ConfirmationMutationScope,
+  proposal: BookingConfirmationProposal,
+): Promise<ConfirmationOutcome> {
+  const markedRecovery = await bookingConfirmations.markRecoveryRequired({
+    tenantId: input.tenantId,
+    slot: input.slot,
+    contactHmac: input.contactHmac,
+    id: proposal.id,
+  });
+  if (markedRecovery) return { kind: 'recovery_required' };
+
+  const latest = await bookingConfirmations.latestForContact(input);
+  if (latest?.id === proposal.id && latest.status === 'booked') {
+    return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+  }
+  return { kind: 'recovery_required' };
+}
+
+async function transitionToBooked(
+  input: ConfirmationMutationScope,
+  proposal: BookingConfirmationProposal,
+): Promise<ConfirmationOutcome> {
+  const markedBooked = await bookingConfirmations.markBooked({
+    tenantId: input.tenantId,
+    slot: input.slot,
+    contactHmac: input.contactHmac,
+    id: proposal.id,
+  });
+  if (!markedBooked) {
+    const latest = await bookingConfirmations.latestForContact(input);
+    if (latest?.id === proposal.id && latest.status === 'booked') {
+      return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+    }
+    return { kind: 'recovery_required' };
+  }
+  await input.afterBooked?.(proposal, proposal.event_id);
+  return { kind: 'booked', proposal, eventId: proposal.event_id };
+}
+
+async function transitionToConflict(
+  input: ConfirmationMutationScope,
+  proposal: BookingConfirmationProposal,
+): Promise<ConfirmationOutcome> {
+  const markedConflict = await bookingConfirmations.markConflict({
+    tenantId: input.tenantId,
+    slot: input.slot,
+    contactHmac: input.contactHmac,
+    id: proposal.id,
+  });
+  if (markedConflict) return { kind: 'conflict', proposal };
+
+  const latest = await bookingConfirmations.latestForContact(input);
+  if (latest?.id === proposal.id && latest.status === 'booked') {
+    return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+  }
+  if (latest?.id === proposal.id && latest.status === 'conflict') {
+    return { kind: 'conflict', proposal: latest };
+  }
+  return { kind: 'recovery_required' };
+}
+
 /**
  * Claim persistido precede GCal. Em timeout/409 a única recovery é GET pelo id
  * determinístico; não há segundo POST sobre estado ambíguo.
@@ -261,14 +330,7 @@ export async function confirmPendingProposal(input: {
     if (latest.status === 'expired') return { kind: 'expired' };
     if (latest.status === 'confirming' || latest.status === 'recovery_required') {
       const markRecoveryRequired = async (): Promise<ConfirmationOutcome> => {
-        if (latest.status === 'confirming') {
-          await bookingConfirmations.markRecoveryRequired({
-            tenantId: input.tenantId,
-            slot: input.slot,
-            contactHmac: input.contactHmac,
-            id: latest.id,
-          });
-        }
+        if (latest.status === 'confirming') return transitionToRecoveryRequired(input, latest);
         return { kind: 'recovery_required' };
       };
 
@@ -286,33 +348,18 @@ export async function confirmPendingProposal(input: {
       } catch {
         return markRecoveryRequired();
       }
-      await bookingConfirmations.markBooked({
-        tenantId: input.tenantId,
-        slot: input.slot,
-        id: latest.id,
-      });
-      return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+      return transitionToBooked(input, latest);
     }
     return { kind: 'none' };
   }
 
   if (!((await input.validateProposal?.(proposal)) ?? true)) {
-    await bookingConfirmations.markConflict({
-      tenantId: input.tenantId,
-      slot: input.slot,
-      id: proposal.id,
-    });
-    return { kind: 'conflict', proposal };
+    return transitionToConflict(input, proposal);
   }
 
   const calClient = await input.resolveCalClient(proposal);
   if (!calClient) {
-    await bookingConfirmations.markConflict({
-      tenantId: input.tenantId,
-      slot: input.slot,
-      id: proposal.id,
-    });
-    return { kind: 'conflict', proposal };
+    return transitionToConflict(input, proposal);
   }
 
   let existing: CalendarEvents;
@@ -333,21 +380,10 @@ export async function confirmPendingProposal(input: {
       },
       'booking confirmation availability precheck failed',
     );
-    await bookingConfirmations.markRecoveryRequired({
-      tenantId: input.tenantId,
-      slot: input.slot,
-      contactHmac: input.contactHmac,
-      id: proposal.id,
-    });
-    return { kind: 'recovery_required' };
+    return transitionToRecoveryRequired(input, proposal);
   }
   if (overlaps(existing, proposal)) {
-    await bookingConfirmations.markConflict({
-      tenantId: input.tenantId,
-      slot: input.slot,
-      id: proposal.id,
-    });
-    return { kind: 'conflict', proposal };
+    return transitionToConflict(input, proposal);
   }
 
   const normalizedPhone = normalizeClientePhone(input.telefone);
@@ -366,33 +402,15 @@ export async function confirmPendingProposal(input: {
       extendedPropertiesPrivate: { kind: 'booking_confirmation', proposal_id: proposal.id },
     });
     if (event.id !== proposal.event_id) {
-      await bookingConfirmations.markRecoveryRequired({
-        tenantId: input.tenantId,
-        slot: input.slot,
-        contactHmac: input.contactHmac,
-        id: proposal.id,
-      });
-      return { kind: 'recovery_required' };
+      return transitionToRecoveryRequired(input, proposal);
     }
   } catch {
     try {
       const event = await calClient.getEvent(proposal.event_id);
       if (!isOwnedEvent(event, proposal)) throw new Error('gcal_event_ownership_mismatch');
     } catch {
-      await bookingConfirmations.markRecoveryRequired({
-        tenantId: input.tenantId,
-        slot: input.slot,
-        contactHmac: input.contactHmac,
-        id: proposal.id,
-      });
-      return { kind: 'recovery_required' };
+      return transitionToRecoveryRequired(input, proposal);
     }
   }
-  await bookingConfirmations.markBooked({
-    tenantId: input.tenantId,
-    slot: input.slot,
-    id: proposal.id,
-  });
-  await input.afterBooked?.(proposal, proposal.event_id);
-  return { kind: 'booked', proposal, eventId: proposal.event_id };
+  return transitionToBooked(input, proposal);
 }

@@ -460,4 +460,123 @@ describe('booking confirmation guard', () => {
       expect(client.createEvent).not.toHaveBeenCalled();
     },
   );
+
+  it('SIM de recovery vence antes do commit e o claimant converge recovery_required para booked', async () => {
+    mocks.expirePending.mockReset();
+    mocks.claimForConfirmation.mockReset();
+    mocks.latestForContact.mockReset();
+    mocks.markRecoveryRequired.mockReset();
+    mocks.markBooked.mockReset();
+    mocks.expirePending.mockResolvedValue(false);
+    mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
+    mocks.latestForContact.mockResolvedValueOnce({ ...proposal, status: 'confirming' });
+    mocks.markRecoveryRequired.mockResolvedValueOnce(true);
+    mocks.markBooked.mockResolvedValueOnce(true);
+    let signalCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      signalCreateStarted = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const waitForCreate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const client = {
+      listEvents: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn(async () => {
+        signalCreateStarted?.();
+        await waitForCreate;
+        return { id: proposal.event_id };
+      }),
+      getEvent: vi.fn().mockRejectedValue(new Error('gcal_get_failed')),
+    };
+    const afterBooked = vi.fn(async () => undefined);
+
+    const claimant = guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    await createStarted;
+    const recovery = await guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    releaseCreate?.();
+
+    await expect(claimant).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    expect(recovery).toEqual({ kind: 'recovery_required' });
+    expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
+      tenantId: scope.tenantId,
+      slot: scope.slot,
+      contactHmac: scope.contactHmac,
+      id: proposal.id,
+    });
+    expect(mocks.markBooked).toHaveBeenCalledWith({
+      tenantId: scope.tenantId,
+      slot: scope.slot,
+      contactHmac: scope.contactHmac,
+      id: proposal.id,
+    });
+    expect(afterBooked).toHaveBeenCalledTimes(1);
+    expect(client.listEvents).toHaveBeenCalledTimes(1);
+    expect(client.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovery com evento próprio vence o CAS e o claimant original não confirma nem duplica atendimento', async () => {
+    mocks.expirePending.mockReset();
+    mocks.claimForConfirmation.mockReset();
+    mocks.latestForContact.mockReset();
+    mocks.markBooked.mockReset();
+    mocks.expirePending.mockResolvedValue(false);
+    mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
+    mocks.latestForContact.mockResolvedValueOnce({ ...proposal, status: 'confirming' });
+    mocks.markBooked.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    let startCreate: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      startCreate = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const waitForCreate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const client = {
+      listEvents: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn(async () => {
+        startCreate?.();
+        await waitForCreate;
+        return { id: proposal.event_id };
+      }),
+      getEvent: vi.fn().mockResolvedValue(ownedEvent),
+    };
+    const afterBooked = vi.fn(async () => undefined);
+
+    const claimant = guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    await createStarted;
+    const recovery = await guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    releaseCreate?.();
+
+    await expect(claimant).resolves.toEqual({ kind: 'recovery_required' });
+    expect(recovery).toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    expect(mocks.markBooked).toHaveBeenCalledTimes(2);
+    expect(afterBooked).toHaveBeenCalledTimes(1);
+    expect(client.listEvents).toHaveBeenCalledTimes(1);
+    expect(client.createEvent).toHaveBeenCalledTimes(1);
+  });
 });
