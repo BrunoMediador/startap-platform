@@ -186,7 +186,13 @@ export async function persistProposal(input: {
 }
 
 type ConfirmationOutcome =
-  | { kind: 'booked'; proposal: BookingConfirmationProposal; eventId: string }
+  | {
+      kind: 'booked';
+      delivery: 'claimed' | 'retry';
+      proposal: BookingConfirmationProposal;
+      eventId: string;
+    }
+  | { kind: 'booked_observed'; proposal: BookingConfirmationProposal; eventId: string }
   | { kind: 'conflict'; proposal: BookingConfirmationProposal }
   | { kind: 'expired' }
   | { kind: 'recovery_required' }
@@ -251,7 +257,7 @@ async function transitionToRecoveryRequired(
 
   const latest = await bookingConfirmations.latestForContact(input);
   if (latest?.id === proposal.id && latest.status === 'booked') {
-    return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+    return { kind: 'booked_observed', proposal: latest, eventId: latest.event_id };
   }
   return { kind: 'recovery_required' };
 }
@@ -269,12 +275,12 @@ async function transitionToBooked(
   if (!markedBooked) {
     const latest = await bookingConfirmations.latestForContact(input);
     if (latest?.id === proposal.id && latest.status === 'booked') {
-      return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+      return { kind: 'booked_observed', proposal: latest, eventId: latest.event_id };
     }
     return { kind: 'recovery_required' };
   }
   await input.afterBooked?.(proposal, proposal.event_id);
-  return { kind: 'booked', proposal, eventId: proposal.event_id };
+  return { kind: 'booked', delivery: 'claimed', proposal, eventId: proposal.event_id };
 }
 
 async function transitionToConflict(
@@ -291,7 +297,7 @@ async function transitionToConflict(
 
   const latest = await bookingConfirmations.latestForContact(input);
   if (latest?.id === proposal.id && latest.status === 'booked') {
-    return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+    return { kind: 'booked_observed', proposal: latest, eventId: latest.event_id };
   }
   if (latest?.id === proposal.id && latest.status === 'conflict') {
     return { kind: 'conflict', proposal: latest };
@@ -326,7 +332,7 @@ export async function confirmPendingProposal(input: {
     const latest = await bookingConfirmations.latestForContact(input);
     if (!latest) return { kind: 'none' };
     if (latest.status === 'booked')
-      return { kind: 'booked', proposal: latest, eventId: latest.event_id };
+      return { kind: 'booked', delivery: 'retry', proposal: latest, eventId: latest.event_id };
     if (latest.status === 'expired') return { kind: 'expired' };
     if (latest.status === 'confirming' || latest.status === 'recovery_required') {
       const markRecoveryRequired = async (): Promise<ConfirmationOutcome> => {

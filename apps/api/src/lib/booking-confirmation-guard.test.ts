@@ -187,8 +187,8 @@ describe('booking confirmation guard', () => {
       nomeCliente: 'Ana',
       telefone: '5511999999999',
     });
-    expect(first.kind).toBe('booked');
-    expect(second.kind).toBe('booked');
+    expect(first).toMatchObject({ kind: 'booked', delivery: 'claimed' });
+    expect(second).toMatchObject({ kind: 'booked', delivery: 'retry' });
     expect(client.createEvent).toHaveBeenCalledTimes(1);
     expect(client.createEvent).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: proposal.event_id }),
@@ -232,7 +232,7 @@ describe('booking confirmation guard', () => {
         nomeCliente: 'Ana',
         telefone: '5511999999999',
       }),
-    ).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    ).resolves.toMatchObject({ kind: 'booked', delivery: 'claimed', eventId: proposal.event_id });
 
     expect(resolveCalClient).toHaveBeenCalledWith(proposal);
     expect(mocks.latestForContact).not.toHaveBeenCalled();
@@ -402,7 +402,7 @@ describe('booking confirmation guard', () => {
         nomeCliente: 'Ana',
         telefone: '5511999999999',
       }),
-    ).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    ).resolves.toMatchObject({ kind: 'booked', delivery: 'claimed', eventId: proposal.event_id });
   });
 
   it.each([
@@ -508,7 +508,11 @@ describe('booking confirmation guard', () => {
     });
     releaseCreate?.();
 
-    await expect(claimant).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    await expect(claimant).resolves.toMatchObject({
+      kind: 'booked',
+      delivery: 'claimed',
+      eventId: proposal.event_id,
+    });
     expect(recovery).toEqual({ kind: 'recovery_required' });
     expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
       tenantId: scope.tenantId,
@@ -534,7 +538,9 @@ describe('booking confirmation guard', () => {
     mocks.markBooked.mockReset();
     mocks.expirePending.mockResolvedValue(false);
     mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
-    mocks.latestForContact.mockResolvedValueOnce({ ...proposal, status: 'confirming' });
+    mocks.latestForContact
+      .mockResolvedValueOnce({ ...proposal, status: 'confirming' })
+      .mockResolvedValueOnce({ ...proposal, status: 'booked' });
     mocks.markBooked.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     let startCreate: (() => void) | undefined;
     const createStarted = new Promise<void>((resolve) => {
@@ -572,8 +578,15 @@ describe('booking confirmation guard', () => {
     });
     releaseCreate?.();
 
-    await expect(claimant).resolves.toEqual({ kind: 'recovery_required' });
-    expect(recovery).toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    await expect(claimant).resolves.toMatchObject({
+      kind: 'booked_observed',
+      eventId: proposal.event_id,
+    });
+    expect(recovery).toMatchObject({
+      kind: 'booked',
+      delivery: 'claimed',
+      eventId: proposal.event_id,
+    });
     expect(mocks.markBooked).toHaveBeenCalledTimes(2);
     expect(afterBooked).toHaveBeenCalledTimes(1);
     expect(client.listEvents).toHaveBeenCalledTimes(1);

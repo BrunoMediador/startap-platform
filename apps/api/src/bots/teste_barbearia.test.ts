@@ -2593,6 +2593,67 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
   });
 
+  it('guard silencia o SIM que perde o CAS para booked já observado', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    cfg.CARTAO_RUNTIME_ENABLED = true;
+    const client = colabClientStub('cal-joao');
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: true,
+      cartaoMode: 'runtime',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    const proposal = {
+      id: 'proposal-observed-booked',
+      tenant_id: 't-estab',
+      slot: 'clone_estab_x',
+      contact_hmac: 'a'.repeat(64),
+      colaborador_id: 10,
+      servico: 'Corte',
+      inicio_at: '2026-06-20T17:00:00-03:00',
+      fim_at: '2026-06-20T17:30:00-03:00',
+      timezone: 'America/Sao_Paulo',
+      usa_pacote: false,
+      event_id: 'stbk-observed-booked',
+      status: 'recovery_required' as const,
+      expires_at: '2026-06-20T17:15:00-03:00',
+      card_sent_at: '2026-06-20T16:55:00-03:00',
+      created_at: '2026-06-20T16:55:00-03:00',
+      updated_at: '2026-06-20T16:55:00-03:00',
+    };
+    client.getEvent.mockResolvedValue({
+      id: proposal.event_id,
+      extendedProperties: {
+        private: { kind: 'booking_confirmation', proposal_id: proposal.id },
+      },
+    });
+    mocks.bookingConfirmations.claimForConfirmation.mockResolvedValueOnce(null);
+    mocks.bookingConfirmations.latestForContact
+      .mockResolvedValueOnce(proposal)
+      .mockResolvedValueOnce({ ...proposal, status: 'booked' });
+    mocks.bookingConfirmations.markBooked.mockResolvedValueOnce(false);
+
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('SIM'));
+
+    expect(reply).toBeNull();
+    expect(mocks.runAgentConfigured).not.toHaveBeenCalled();
+    expect(client.listEvents).not.toHaveBeenCalled();
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    expect(mocks.upsertAtendimentoFromEvent).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['HTTP 400', new Error('GCal /events -> HTTP 400: bad request')],
     ['timeout', new Error('__gcal_request_timeout__')],

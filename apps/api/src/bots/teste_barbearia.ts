@@ -2078,6 +2078,7 @@ export class TesteBarbeariaBot extends BotBase {
         },
       });
       if (outcome.kind === 'booked') return 'Agendamento confirmado! Está na agenda.';
+      if (outcome.kind === 'booked_observed') return null;
       if (outcome.kind === 'conflict')
         return 'Esse horário acabou de ficar indisponível. Posso buscar outro horário para você.';
       if (outcome.kind === 'expired')
