@@ -260,20 +260,38 @@ export async function confirmPendingProposal(input: {
       return { kind: 'booked', proposal: latest, eventId: latest.event_id };
     if (latest.status === 'expired') return { kind: 'expired' };
     if (latest.status === 'confirming' || latest.status === 'recovery_required') {
-      try {
-        const calClient = await input.resolveCalClient(latest);
-        if (!calClient) return { kind: 'recovery_required' };
-        const event = await calClient.getEvent(latest.event_id);
-        if (!isOwnedEvent(event, latest)) return { kind: 'recovery_required' };
-        await bookingConfirmations.markBooked({
-          tenantId: input.tenantId,
-          slot: input.slot,
-          id: latest.id,
-        });
-        return { kind: 'booked', proposal: latest, eventId: latest.event_id };
-      } catch {
+      const markRecoveryRequired = async (): Promise<ConfirmationOutcome> => {
+        if (latest.status === 'confirming') {
+          await bookingConfirmations.markRecoveryRequired({
+            tenantId: input.tenantId,
+            slot: input.slot,
+            contactHmac: input.contactHmac,
+            id: latest.id,
+          });
+        }
         return { kind: 'recovery_required' };
+      };
+
+      let calClient: Awaited<ReturnType<typeof input.resolveCalClient>>;
+      try {
+        calClient = await input.resolveCalClient(latest);
+      } catch {
+        return markRecoveryRequired();
       }
+      if (!calClient) return markRecoveryRequired();
+
+      try {
+        const event = await calClient.getEvent(latest.event_id);
+        if (!isOwnedEvent(event, latest)) return markRecoveryRequired();
+      } catch {
+        return markRecoveryRequired();
+      }
+      await bookingConfirmations.markBooked({
+        tenantId: input.tenantId,
+        slot: input.slot,
+        id: latest.id,
+      });
+      return { kind: 'booked', proposal: latest, eventId: latest.event_id };
     }
     return { kind: 'none' };
   }
@@ -318,6 +336,7 @@ export async function confirmPendingProposal(input: {
     await bookingConfirmations.markRecoveryRequired({
       tenantId: input.tenantId,
       slot: input.slot,
+      contactHmac: input.contactHmac,
       id: proposal.id,
     });
     return { kind: 'recovery_required' };
@@ -350,6 +369,7 @@ export async function confirmPendingProposal(input: {
       await bookingConfirmations.markRecoveryRequired({
         tenantId: input.tenantId,
         slot: input.slot,
+        contactHmac: input.contactHmac,
         id: proposal.id,
       });
       return { kind: 'recovery_required' };
@@ -362,6 +382,7 @@ export async function confirmPendingProposal(input: {
       await bookingConfirmations.markRecoveryRequired({
         tenantId: input.tenantId,
         slot: input.slot,
+        contactHmac: input.contactHmac,
         id: proposal.id,
       });
       return { kind: 'recovery_required' };

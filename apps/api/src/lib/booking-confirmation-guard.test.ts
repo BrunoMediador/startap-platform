@@ -300,6 +300,7 @@ describe('booking confirmation guard', () => {
       expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
         tenantId: scope.tenantId,
         slot: scope.slot,
+        contactHmac: scope.contactHmac,
         id: proposal.id,
       });
       expect(client.createEvent).not.toHaveBeenCalled();
@@ -403,4 +404,60 @@ describe('booking confirmation guard', () => {
       }),
     ).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
   });
+
+  it.each([
+    ['evento inexistente', () => ({ id: 'outro-evento', extendedProperties: { private: {} } })],
+    [
+      'evento de outra proposta',
+      () => ({
+        id: proposal.event_id,
+        extendedProperties: {
+          private: { kind: 'booking_confirmation', proposal_id: 'outra-proposta' },
+        },
+      }),
+    ],
+    ['falha de leitura', () => Promise.reject(new Error('gcal_get_failed'))],
+  ])(
+    'retry legado confirming sem prova própria (%s) persiste recovery sem efeitos externos',
+    async (_scenario, getEventResult) => {
+      mocks.expirePending.mockResolvedValue(false);
+      mocks.claimForConfirmation.mockResolvedValue(null);
+      mocks.latestForContact
+        .mockResolvedValueOnce({ ...proposal, status: 'confirming' })
+        .mockResolvedValueOnce({ ...proposal, status: 'recovery_required' });
+      mocks.markRecoveryRequired.mockResolvedValue(true);
+      const client = {
+        listEvents: vi.fn(),
+        createEvent: vi.fn(),
+        getEvent: vi.fn().mockImplementation(getEventResult),
+      };
+
+      await expect(
+        guard.confirmPendingProposal({
+          ...scope,
+          resolveCalClient: () => client as never,
+          nomeCliente: 'Ana',
+          telefone: '5511999999999',
+        }),
+      ).resolves.toEqual({ kind: 'recovery_required' });
+      await expect(
+        guard.confirmPendingProposal({
+          ...scope,
+          resolveCalClient: () => client as never,
+          nomeCliente: 'Ana',
+          telefone: '5511999999999',
+        }),
+      ).resolves.toEqual({ kind: 'recovery_required' });
+
+      expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
+        tenantId: scope.tenantId,
+        slot: scope.slot,
+        contactHmac: scope.contactHmac,
+        id: proposal.id,
+      });
+      expect(mocks.markRecoveryRequired).toHaveBeenCalledTimes(1);
+      expect(client.listEvents).not.toHaveBeenCalled();
+      expect(client.createEvent).not.toHaveBeenCalled();
+    },
+  );
 });

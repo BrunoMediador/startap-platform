@@ -178,13 +178,14 @@ export async function markConflict(input: {
 export async function markRecoveryRequired(input: {
   tenantId: string;
   slot: string;
+  contactHmac: string;
   id: string;
 }): Promise<boolean> {
   const result = await query(
     `UPDATE booking_confirmation_proposals
         SET status='recovery_required', updated_at=now()
-      WHERE tenant_id=$1 AND slot=$2 AND id=$3 AND status='confirming'`,
-    [input.tenantId, input.slot, input.id],
+      WHERE tenant_id=$1 AND slot=$2 AND contact_hmac=$3 AND id=$4 AND status='confirming'`,
+    [input.tenantId, input.slot, input.contactHmac, input.id],
   );
   return result.rowCount === 1;
 }
