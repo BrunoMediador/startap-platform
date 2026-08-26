@@ -247,6 +247,16 @@ function makeCtx(texto: string): BotContext {
   } as unknown as BotContext;
 }
 
+type AgentToolStub = { name: string; run: (args: unknown) => Promise<unknown> };
+
+/** Executa o primeiro estágio do contrato server-first nos cenários que chegam prontos. */
+async function decideReadyForProposal(input: { tools: AgentToolStub[] }): Promise<boolean> {
+  const decision = input.tools.find((tool) => tool.name === 'decidir_proposta_agendamento');
+  if (!decision) return false;
+  await decision.run({ decisao: 'pronta_para_proposta' });
+  return true;
+}
+
 /** Configura os mocks de agenda p/ um fluxo NÃO-cancelamento completar até o runAgent. */
 function setupSchedule() {
   const calClient = { listEvents: vi.fn().mockResolvedValue([]) };
@@ -2326,11 +2336,26 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       phone: '5511999998888',
       enabled: true,
     });
-    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
-    await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
-      makeCtx('quero marcar'),
+    mocks.runAgentConfigured.mockImplementation(
+      async (input: { tools: AgentToolStub[]; toolChoice?: unknown; temperature?: number }) => {
+        if (await decideReadyForProposal(input)) return { reply: '' };
+        expect(input.toolChoice).toEqual({ forceFunction: 'propor_agendamento' });
+        expect(input.temperature).toBe(0);
+        const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
+        await propor?.run({
+          colaborador_id: 'C1',
+          servico: 'Corte',
+          start: '2026-06-20T17:00:00-03:00',
+          end: '2026-06-20T17:30:00-03:00',
+        });
+        return { reply: 'sem efeito depois da proposta' };
+      },
     );
-    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('Quero corte com João amanhã às 10h'));
+    const tools = mocks.runAgentConfigured.mock.calls[1][0].tools as Array<{
       name: string;
       parameters: { properties: Record<string, unknown> };
       run: (args: unknown) => Promise<Record<string, unknown>>;
@@ -2344,8 +2369,10 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     expect(propor.parameters.properties).not.toHaveProperty('summary');
     expect(propor.parameters.properties).not.toHaveProperty('usa_pacote');
     expect(tools.map((tool) => tool.name)).not.toContain('inserir_agendamento');
-    expect(mocks.runAgentConfigured.mock.calls[0][0].toolChoice).toBeUndefined();
-    const systemPrompt = mocks.runAgentConfigured.mock.calls[0][0].systemPrompt as string;
+    expect(mocks.runAgentConfigured.mock.calls[1][0].toolChoice).toEqual({
+      forceFunction: 'propor_agendamento',
+    });
+    const systemPrompt = mocks.runAgentConfigured.mock.calls[1][0].systemPrompt as string;
     expect(systemPrompt).toContain('[CONFIRMACAO DE AGENDAMENTO SERVER-FIRST]');
     expect(systemPrompt).not.toContain('[CARTAO DE CONFIRMACAO - ESTABELECIMENTO]');
     // A proposta vira uma fronteira terminal. As tools abaixo não estão sequer
@@ -2354,14 +2381,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     expect(tools.map((tool) => tool.name)).not.toContain('remarcar_agendamento');
     expect(tools.map((tool) => tool.name)).not.toContain('escalar_cancelamento');
     expect(tools.map((tool) => tool.name)).not.toContain('escalar_para_humano');
-    await expect(
-      propor.run({
-        colaborador_id: 'C1',
-        servico: 'Corte',
-        start: '2026-06-20T17:00:00-03:00',
-        end: '2026-06-20T17:30:00-03:00',
-      }),
-    ).resolves.toMatchObject({ ok: true, pending_confirmation: true });
+    expect(reply).toMatch(/confirma/i);
     expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
     expect(client.createEvent).not.toHaveBeenCalled();
     expect(client.patchEvent).not.toHaveBeenCalled();
@@ -2387,21 +2407,71 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       tenant_id: 't-estab',
       servicos: [{ nome: 'Corte', preco_cents: 5000 }],
     });
-    mocks.runAgentConfigured.mockResolvedValue({ reply: 'CARTAO_TEXTUAL_NAO_PERSISTIDO' });
+    mocks.runAgentConfigured.mockImplementation(async (input: { tools: AgentToolStub[] }) => {
+      if (await decideReadyForProposal(input)) return { reply: '' };
+      return { reply: 'CARTAO_TEXTUAL_NAO_PERSISTIDO' };
+    });
 
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     const reply = await (
       bot as unknown as { process: (context: BotContext) => Promise<string | null> }
-    ).process(makeCtx('quero marcar'));
+    ).process(makeCtx('Quero corte com João amanhã às 10h'));
 
     expect(reply).toBe(
-      'Não consegui validar esse horário. Me diga o serviço, profissional e horário que prefere.',
+      'Para eu buscar um horário, me diga o serviço, profissional e dia/horário que prefere.',
     );
     expect(reply).not.toContain('CARTAO_TEXTUAL_NAO_PERSISTIDO');
     expect(mocks.bookingConfirmations.replacePending).not.toHaveBeenCalled();
     expect(client.createEvent).not.toHaveBeenCalled();
     expect(client.patchEvent).not.toHaveBeenCalled();
-    expect(mocks.runAgentConfigured.mock.calls[0][0].toolChoice).toBeUndefined();
+    expect(mocks.runAgentConfigured.mock.calls[1][0].toolChoice).toEqual({
+      forceFunction: 'propor_agendamento',
+    });
+  });
+
+  it('guard pronto fecha para coleta quando propor_agendamento recebe argumentos inválidos', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    cfg.CARTAO_RUNTIME_ENABLED = true;
+    const client = colabClientStub('cal-joao');
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: true,
+      cartaoMode: 'runtime',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    mocks.runAgentConfigured.mockImplementation(async (input: { tools: AgentToolStub[] }) => {
+      if (await decideReadyForProposal(input)) return { reply: '' };
+      const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
+      await propor?.run({
+        colaborador_id: 'C1',
+        servico: '',
+        start: '2026-06-20T17:00:00-03:00',
+        end: '2026-06-20T17:30:00-03:00',
+      });
+      return { reply: 'texto da LLM não pode escapar' };
+    });
+
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('Quero corte com João amanhã às 10h'));
+
+    expect(reply).toBe(
+      'Para eu buscar um horário, me diga o serviço, profissional e dia/horário que prefere.',
+    );
+    expect(mocks.bookingConfirmations.replacePending).not.toHaveBeenCalled();
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(mocks.runAgentConfigured.mock.calls[1][0].toolChoice).toEqual({
+      forceFunction: 'propor_agendamento',
+    });
   });
 
   it('guard allowlisted falha fechada se a configuração do cartão não puder ser lida', async () => {
@@ -2503,10 +2573,12 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       ).process(makeCtx(texto));
 
       expect(reply).toBe(
-        'Não consegui validar esse horário. Me diga o serviço, profissional e horário que prefere.',
+        'Para eu buscar um horário, me diga o serviço, profissional e dia/horário que prefere.',
       );
       expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
-      expect(mocks.runAgentConfigured.mock.calls[0][0].toolChoice).toBeUndefined();
+      expect(mocks.runAgentConfigured.mock.calls[0][0].toolChoice).toEqual({
+        forceFunction: 'decidir_proposta_agendamento',
+      });
       expect(mocks.bookingConfirmations.supersedePending).toHaveBeenCalledTimes(1);
       expect(mocks.bookingConfirmations.replacePending).not.toHaveBeenCalled();
       expect(client.createEvent).not.toHaveBeenCalled();
@@ -2514,7 +2586,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     },
   );
 
-  it('guard runtime custom confirma uma proposta uma vez e retry de SIM não duplica evento', async () => {
+  it('guard runtime custom confirma SIM concorrente uma vez e não duplica evento', async () => {
     cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
     cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
     cfg.CARTAO_RUNTIME_ENABLED = true;
@@ -2536,6 +2608,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       async (input: {
         tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
       }) => {
+        if (await decideReadyForProposal(input)) return { reply: '' };
         const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
         await propor?.run({
           colaborador_id: 'C1',
@@ -2576,21 +2649,23 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
 
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
-      makeCtx('quero marcar'),
+      makeCtx('Quero corte com João amanhã às 10h'),
     );
-    const first = await (
-      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
-    ).process(makeCtx('SIM'));
-    const retry = await (
-      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
-    ).process(makeCtx('SIM'));
+    const [first, retry] = await Promise.all([
+      (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
+        makeCtx('SIM'),
+      ),
+      (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
+        makeCtx('SIM'),
+      ),
+    ]);
 
     expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
     expect(first).toBe('Agendamento confirmado! Está na agenda.');
     expect(retry).toBe('Agendamento confirmado! Está na agenda.');
     expect(client.createEvent).toHaveBeenCalledTimes(1);
     expect(mocks.bookingConfirmations.markBooked).toHaveBeenCalledTimes(1);
-    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(2);
   });
 
   it('guard silencia o SIM que perde o CAS para booked já observado', async () => {
@@ -2814,6 +2889,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       async (input: {
         tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
       }) => {
+        if (await decideReadyForProposal(input)) return { reply: '' };
         const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
         await propor?.run({
           colaborador_id: 'C1',
@@ -2827,7 +2903,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     const reply = await (
       bot as unknown as { process: (context: BotContext) => Promise<string | null> }
-    ).process(makeCtx('quero marcar'));
+    ).process(makeCtx('Quero corte com João amanhã às 10h'));
 
     expect(reply).toContain('Copy customizada');
     expect(reply).toContain('Profissional: João');
@@ -2877,6 +2953,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       async (input: {
         tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
       }) => {
+        if (await decideReadyForProposal(input)) return { reply: '' };
         const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
         await propor?.run({
           colaborador_id: 'C1',
@@ -2889,7 +2966,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     );
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
-      makeCtx('quero marcar'),
+      makeCtx('Quero corte com João amanhã às 10h'),
     );
     expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
 
@@ -2907,7 +2984,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     expect(mocks.bookingConfirmations.supersedePending).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: 't-estab', slot: 'clone_estab_x' }),
     );
-    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(2);
     expect(mocks.bookingConfirmations.claimForConfirmation).not.toHaveBeenCalled();
     expect(client.createEvent).not.toHaveBeenCalled();
     expect(client.patchEvent).not.toHaveBeenCalled();
@@ -2954,6 +3031,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       async (input: {
         tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
       }) => {
+        if (await decideReadyForProposal(input)) return { reply: '' };
         const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
         await propor?.run({
           colaborador_id: 'C1',
@@ -2966,7 +3044,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     );
     const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
     await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
-      makeCtx('quero marcar'),
+      makeCtx('Quero corte com João amanhã às 10h'),
     );
     expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
 
@@ -2985,7 +3063,7 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
     expect(mocks.bookingConfirmations.latestForContact).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: 't-estab', slot: 'clone_estab_x' }),
     );
-    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(2);
     expect(mocks.bookingConfirmations.claimForConfirmation).not.toHaveBeenCalled();
     expect(client.createEvent).not.toHaveBeenCalled();
     expect(client.patchEvent).not.toHaveBeenCalled();
