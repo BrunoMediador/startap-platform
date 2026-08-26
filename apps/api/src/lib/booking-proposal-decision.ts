@@ -154,7 +154,7 @@ function redactSensitiveNumericSequences(value: string): string {
   return protectedTemporalValues
     .replace(/\+?\d(?:[\d().\s-]*\d)?/gu, (candidate) => {
       const digitCount = candidate.replace(/\D/g, '').length;
-      return digitCount >= 11 ? '<numero_sensivel>' : candidate;
+      return digitCount >= 10 ? '<numero_sensivel>' : candidate;
     })
     .replace(/[\uE000-\uF8FF]/gu, (marker) => {
       const temporal = temporalValues[marker.codePointAt(0)! - 0xe000];

@@ -76,7 +76,7 @@ pepper não escreve identidade em Redis e degrada como Redis indisponível.
 
 A classificação recebe somente os últimos três turnos `human|ai` e a mensagem atual, com teto de
 caracteres e redação de telefone, e-mail, CPF, URL e apresentação do cliente. Sequências numéricas
-com 11 ou mais dígitos são redigidas mesmo contínuas/internacionais/sem pontuação; datas e horários
+com 10 ou mais dígitos são redigidas mesmo contínuas/internacionais/sem pontuação; datas e horários
 são preservados estruturalmente. Mensagens `system` e histórico anterior não são enviados. Serviço e
 profissional permanecem apenas quando necessários à classificação. O executor é chamado sem
 telefone, portanto o preflight não grava contato em `model_usage`.

@@ -103,17 +103,24 @@ describe('decideBookingProposal', () => {
   });
 
   it('redige telefone contínuo/internacional e CPF sem pontuação antes do provider', async () => {
-    const sensitiveNumbers = ['5511987654321', '11987654321', '12345678901', '98765432100'];
+    const sensitiveNumbers = [
+      '5511987654321',
+      '11987654321',
+      '1132654321',
+      '2132654321',
+      '12345678901',
+      '98765432100',
+    ];
     await decideBookingProposal(
       {
         ...input(
-          'Meu CPF é 98765432100 e meu telefone é 11987654321. Corte com João em 20/06/2026 às 14:30.',
+          'Meu CPF é 98765432100, telefone é 11987654321 e fixo é 2132654321. Corte com João em 20/06/2026 às 14:30.',
         ),
         history: [
           {
             role: 'human',
             content:
-              'Meu telefone internacional é +5511987654321 e CPF 12345678901. Quero Corte com João em 2026-06-20 às 10:30.',
+              'Meu telefone internacional é +5511987654321, fixo é 1132654321 e CPF 12345678901. Quero Corte com João em 2026-06-20 às 10:30.',
           },
         ],
       },
