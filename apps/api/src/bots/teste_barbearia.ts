@@ -196,26 +196,6 @@ const SERVER_FIRST_BOOKING_BLOCK = [
   'O servidor valida a proposta e envia o cartão completo. Se não conseguir propor um horário válido, peça os dados que faltam sem confirmar nada.',
 ].join('\n');
 
-// O gate é propositalmente conservador: ele só deixa o modelo entrar na fronteira de proposta
-// quando o próprio servidor reconhece intenção explícita de agendar. Não é um parser de cartão
-// nem interpreta resposta da LLM; evita forçar tool/custo para saudação, cancelamento ou texto
-// hostil durante o canário.
-const GUARDED_BOOKING_INTENT_TERMS = [
-  'agendar',
-  'marcar',
-  'horário',
-  'horario',
-  'disponibilidade',
-  'disponível',
-  'disponivel',
-  'vaga',
-] as const;
-
-function hasGuardedBookingIntent(texto: string): boolean {
-  const normalized = texto.trim().toLocaleLowerCase('pt-BR');
-  return GUARDED_BOOKING_INTENT_TERMS.some((term) => normalized.includes(term));
-}
-
 /**
  * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno): decide, a partir do
  * CONTEÚDO do bot_prompt já renderizado (não de uma flag), se a persona já contém um
@@ -2106,14 +2086,6 @@ export class TesteBarbeariaBot extends BotBase {
         return 'Ainda estou confirmando esse horário. Não envie outro SIM agora.';
       return 'Não encontrei um cartão pendente. Me diga o serviço, horário e profissional que prefere.';
     }
-    const guardedBookingIntent = bookingGuard.enabled && hasGuardedBookingIntent(texto);
-    if (bookingGuard.enabled && !guardedBookingIntent) {
-      this.log.info(
-        { slot: this.slot, status: 'non_booking_inbound' },
-        'booking confirmation guard evitou runner sem intenção de agendamento',
-      );
-      return 'Olá! Para agendar, me diga o serviço, o profissional e o horário que prefere.';
-    }
     // Mesma regra do ramo individual: só expõe o transbordo quando o clone tem
     // recepção válida/habilitada; falha do reader fecha a feature sem alterar o prompt base.
     const receptionTarget = await Promise.resolve(
@@ -2640,7 +2612,6 @@ export class TesteBarbeariaBot extends BotBase {
       userMessage: texto,
       tools,
       maxTurns: 5,
-      ...(guardedBookingIntent ? { toolChoice: { forceFunction: 'propor_agendamento' } } : {}),
     });
 
     if (terminalBookingCard) {
