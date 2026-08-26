@@ -23,12 +23,23 @@ finaliza `booked`. Conflito, expiração, troca de mensagem e estado ambíguo re
 do servidor. Em timeout/409 a recovery usa `GET eventId`; sem prova do evento não reenvia POST.
 
 Antes de expor `propor_agendamento`, o guard usa uma decisão estruturada e validada por schema:
-`pronta_para_proposta` ou `coletar_dados`. A classificação roda com temperatura zero e tool
-forçada; tool ausente, shape inválido ou falha fecham em coleta de dados. Somente
-`pronta_para_proposta` chama o agente de agenda, também com `tool_choice` forçando
+`pronta_para_proposta`, `coletar_dados(campos_faltantes)` ou
+`conversa_segura(topico=saudacao|disponibilidade|pergunta|cancelamento|remarcacao)`. A
+classificação roda com temperatura zero e tool forçada; tool ausente, shape inválido, erro ou
+deadline fecham em coleta de dados. `coletar_dados` devolve uma pergunta determinística apenas
+para os campos faltantes, sem chamar o agente de agenda. `conversa_segura` pode receber resposta
+normal e apenas capabilities read-only; ela nunca recebe `propor_agendamento`, tools legadas
+mutantes nem `tool_choice` mutante.
+
+Somente `pronta_para_proposta` chama o agente de agenda, também com `tool_choice` forçando
 `propor_agendamento`. Assim, uma intenção completa não depende do comportamento `auto` do
-modelo, e uma saudação, ambiguidade ou dado ausente não recebe fallback genérico nem cria
-proposta.
+modelo; saudação, disponibilidade, pergunta, cancelamento e remarcação não viram proposta, e
+dados ausentes não recebem a mesma resposta genérica.
+
+A classificação tem deadline fixo de quatro segundos e não faz retry. Ela é estritamente
+read-only; o resultado tardio é consumido e não pode acionar nenhuma tool de proposta. A escrita
+continua exclusivamente no fluxo existente de proposta persistida e CAS, preservando a
+idempotência frente a reentrega/concorrência do webhook.
 
 O renderer canônico atual atende `cartao_mode=runtime`. Para baked existe agora o contrato
 explícito `flow_clones.confirmation_card_contract`: uma sequência versionada de segmentos
@@ -61,9 +72,16 @@ Todas as queries carregam `tenant_id + slot + contact_hmac`. Logs só carregam s
 técnicos protegidos. O action-lock passa a usar HMAC com `ACTION_LOCK_PHONE_PEPPER`; sem esse
 pepper não escreve identidade em Redis e degrada como Redis indisponível.
 
-A telemetria da decisão registra somente enum de decisão, tipo de `tool_choice`, nome allowlisted
-de ferramenta e resultado classificado. Texto da conversa, argumentos, contato, calendário e
-payload de terceiro não entram nesses logs.
+A classificação recebe somente os últimos três turnos `human|ai` e a mensagem atual, com teto de
+caracteres e redação de telefone, e-mail, CPF, URL e apresentação do cliente. Mensagens `system`
+e histórico anterior não são enviados. Serviço e profissional permanecem apenas quando
+necessários à classificação. O executor é chamado sem telefone, portanto o preflight não grava
+contato em `model_usage`.
+
+A telemetria da decisão registra somente `purpose`, enum de classificação, tópico seguro quando
+existir, tipo de `tool_choice`, nome allowlisted de ferramenta, resultado classificado e latência.
+Texto da conversa, argumentos,
+histórico, contato, calendário e payload de terceiro não entram nesses logs nem em uso de modelo.
 
 O contrato pode conter copy comercial do próprio clone, portanto não é incluído em telemetria,
 logs, testes de integração ou saída do dry-run. O hash não é fonte de verdade de histórico: é
