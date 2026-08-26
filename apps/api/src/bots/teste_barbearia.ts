@@ -44,6 +44,7 @@ import { hashBakedCard } from '../lib/booking-confirmation-template.js';
 import {
   BOOKING_PROPOSAL_DECISION_TOOL,
   BOOKING_PROPOSAL_TOOL,
+  type BookingSafeConversationTopic,
   buildBookingProposalClarification,
   decideBookingProposal,
 } from '../lib/booking-proposal-decision.js';
@@ -203,18 +204,6 @@ const SERVER_FIRST_BOOKING_BLOCK = [
 ].join('\n');
 
 /**
- * Conversas que não pedem uma proposta seguem atendidas, mas sem capability mutante. Assim uma
- * saudação, disponibilidade, pergunta, cancelamento ou remarcação não vira um falso pedido de
- * horário nem pode produzir um cartão/evento antes da fronteira server-first.
- */
-const SERVER_FIRST_SAFE_CONVERSATION_BLOCK = [
-  '[CONVERSA SEGURA DE AGENDAMENTO SERVER-FIRST]',
-  'Nesta conversa responda somente saudação, disponibilidade, pergunta geral ou consulta segura.',
-  'Não proponha, confirme, remarque ou cancele horário e nunca diga que criou ou alterou agenda.',
-  'Não existe ferramenta mutante disponível neste turno.',
-].join('\n');
-
-/**
  * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno): decide, a partir do
  * CONTEÚDO do bot_prompt já renderizado (não de uma flag), se a persona já contém um
  * cartão de confirmação próprio — sinal de que o estilo/emoji NÃO deve ser sobreposto por
@@ -247,47 +236,23 @@ function sanitizarResposta(text: string): string {
     .trim();
 }
 
-const SAFE_CONVERSATION_REPLY_FALLBACK =
-  'Posso ajudar com informações sobre horários, serviços e valores.';
-
-type SafeConversationReply =
-  | { allowed: true; reply: string }
-  | { allowed: false; reason: 'empty' | 'booking_term' | 'confirmation_cta' };
-
 /**
- * O ramo `conversa_segura` nunca tem capability de escrita. Como a persona e a mensagem são
- * conteúdo não confiável, a resposta textual também precisa fechar antes de parecer um cartão
- * ou uma confirmação. O filtro é deliberadamente conservador: em dúvida retorna o fallback
- * server-side, sem referência ao conteúdo bloqueado.
+ * O ramo `conversa_segura` tem um contrato positivo: não deixa a persona nem texto inbound
+ * produzir resposta livre. A classificação escolhe apenas um tópico allowlisted e o servidor
+ * devolve copy informativa sem prometer, confirmar ou alterar horário.
  */
-function restrictSafeConversationReply(text: string): SafeConversationReply {
-  const reply = sanitizarResposta(text);
-  if (!reply) return { allowed: false, reason: 'empty' };
-  const cardFieldCount = (
-    reply.match(/\b(?:dia|data|hor[aá]rio|servi[cç]o|valor|profissional)\s*:/giu) ?? []
-  ).length;
-
-  if (
-    /\b(?:cart[aã]o|confirma(?:ç(?:a|ã)o|ç(?:o|õ)es|r|do|da)?|agend(?:amento|amentos|ar|ado|ada|ados|adas)?|remarc(?:aç(?:a|ã)o|aç(?:o|õ)es|ar|ado|ada|ados|adas)?|cancel(?:amento|amentos|ar|ado|ada|ados|adas)?)\b/iu.test(
-      reply,
-    ) ||
-    cardFieldCount >= 2 ||
-    /\b(?:hor[aá]rio|atendimento)\s+(?:foi\s+)?marcad[oa]s?\b/iu.test(reply)
-  ) {
-    return { allowed: false, reason: 'booking_term' };
+function buildSafeConversationReply(topic: BookingSafeConversationTopic): string {
+  switch (topic) {
+    case 'saudacao':
+      return 'Olá! Posso ajudar com informações sobre serviços, valores e horários disponíveis.';
+    case 'disponibilidade':
+      return 'Para consultar horários disponíveis, me diga qual profissional e qual dia você procura.';
+    case 'pergunta':
+      return 'Posso ajudar com informações sobre serviços, valores e horários disponíveis.';
+    case 'cancelamento':
+    case 'remarcacao':
+      return 'Para verificar esse horário com segurança, me diga qual é o dia e o horário atuais.';
   }
-
-  if (
-    /\b(?:responda|responder|mande|enviar|envie|digite|diga)\s+(?:com\s+)?["“']?sim\b/iu.test(
-      reply,
-    ) ||
-    /\bsim\s+(?:para\s+)?(?:confirmar|agendar|marcar)\b/iu.test(reply) ||
-    /(?:^|\n)\s*(?:responda\s+)?sim[!. ]*$/imu.test(reply)
-  ) {
-    return { allowed: false, reason: 'confirmation_cta' };
-  }
-
-  return { allowed: true, reply };
 }
 
 export class TesteBarbeariaBot extends BotBase {
@@ -2178,10 +2143,9 @@ export class TesteBarbeariaBot extends BotBase {
     // A oferta de `propor_agendamento` não é suficiente: com tool_choice auto o modelo pode
     // responder texto e o guard, corretamente, descarta esse texto sem materializar proposta.
     // Primeiro classificamos em formato fechado; somente uma intenção completa chega ao agente
-    // que é forçado a chamar a tool server-first. Coleta é determinística; conversa segura segue
-    // para o agente com apenas capabilities read-only, sem forçar tool mutante.
+    // que é forçado a chamar a tool server-first. Coleta e conversa segura são determinísticas:
+    // a última não expõe resposta livre de persona/LLM no ramo sem proposta.
     let bookingProposalReady = false;
-    let bookingSafeConversation = false;
     if (bookingGuard.enabled) {
       const proposalDecision = await decideBookingProposal({
         slot: this.slot,
@@ -2208,8 +2172,10 @@ export class TesteBarbeariaBot extends BotBase {
       if (proposalDecision.decision.decisao === 'coletar_dados') {
         return buildBookingProposalClarification(proposalDecision.decision.campos_faltantes);
       }
-      bookingProposalReady = proposalDecision.decision.decisao === 'pronta_para_proposta';
-      bookingSafeConversation = proposalDecision.decision.decisao === 'conversa_segura';
+      if (proposalDecision.decision.decisao === 'conversa_segura') {
+        return buildSafeConversationReply(proposalDecision.decision.topico);
+      }
+      bookingProposalReady = true;
     }
 
     const systemPrompt = [
@@ -2223,11 +2189,7 @@ export class TesteBarbeariaBot extends BotBase {
       '[HORARIOS DISPONIVEIS POR PROFISSIONAL - ATUALIZADO AGORA]',
       estab.horariosBlock,
       '',
-      bookingProposalReady
-        ? SERVER_FIRST_BOOKING_BLOCK
-        : bookingSafeConversation
-          ? SERVER_FIRST_SAFE_CONVERSATION_BLOCK
-          : cartaoEstabelecimentoBlock,
+      bookingProposalReady ? SERVER_FIRST_BOOKING_BLOCK : cartaoEstabelecimentoBlock,
       '',
       transbordoRecepcaoDisponivel ? buildAgendaEscalationBlock() : '',
       // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
@@ -2238,10 +2200,10 @@ export class TesteBarbeariaBot extends BotBase {
     let terminalBookingCard: string | null = null;
 
     const tools: ToolDefinition[] = [];
-    // Sob o guard, conversa segura recebe somente as tools read-only adicionadas abaixo.
-    // `propor_agendamento` nunca fica disponível nesse ramo, então o agente não consegue
-    // transformar uma saudação/pergunta em proposta por decisão própria.
-    if (!bookingSafeConversation) {
+    // Os ramos guardados retornam antes; a condição torna a fronteira explícita caso este fluxo
+    // receba um novo ramo no futuro.
+    const shouldRunBookingAgent = !bookingGuard.enabled || bookingProposalReady;
+    if (shouldRunBookingAgent) {
       tools.push({
         name: bookingGuard.enabled ? BOOKING_PROPOSAL_TOOL : 'inserir_agendamento',
         description: bookingGuard.enabled
@@ -2739,17 +2701,6 @@ export class TesteBarbeariaBot extends BotBase {
         'booking confirmation blocked unpersisted model reply',
       );
       return buildBookingProposalClarification(['servico', 'profissional', 'horario']);
-    }
-    if (bookingSafeConversation) {
-      const safeReply = restrictSafeConversationReply(result.reply);
-      if (!safeReply.allowed) {
-        this.log.warn(
-          { slot: this.slot, status: 'safe_reply_blocked', reason: safeReply.reason },
-          'booking confirmation blocked unsafe safe-conversation reply',
-        );
-        return SAFE_CONVERSATION_REPLY_FALLBACK;
-      }
-      return safeReply.reply;
     }
     return sanitizarResposta(result.reply);
   }

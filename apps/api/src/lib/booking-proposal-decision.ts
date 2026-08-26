@@ -58,6 +58,7 @@ const proposalDecisionSchema = z.discriminatedUnion('decisao', [
 
 export type BookingProposalDecision = z.infer<typeof proposalDecisionSchema>;
 export type BookingMissingField = z.infer<typeof missingFieldSchema>;
+export type BookingSafeConversationTopic = z.infer<typeof safeConversationTopicSchema>;
 
 export type BookingProposalDecisionResult = {
   decision: BookingProposalDecision;
@@ -134,18 +135,43 @@ export function buildSanitizedBookingProposalDecisionContext(
   };
 }
 
+/**
+ * Datas e horários são necessários para decidir se há uma proposta possível. Protegemo-los antes
+ * de redigir sequências numéricas longas: a redação por contagem cobre CPF/telefone mesmo sem
+ * pontuação, sem confundir uma data ou hora operacional com PII.
+ */
+function redactSensitiveNumericSequences(value: string): string {
+  const temporalValues: string[] = [];
+  const protectedTemporalValues = value.replace(
+    /\b(?:\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}:\d{2}(?::\d{2})?)\b/g,
+    (temporal) => {
+      const marker = String.fromCharCode(0xe000 + temporalValues.length);
+      temporalValues.push(temporal);
+      return marker;
+    },
+  );
+
+  return protectedTemporalValues
+    .replace(/\+?\d(?:[\d().\s-]*\d)?/gu, (candidate) => {
+      const digitCount = candidate.replace(/\D/g, '').length;
+      return digitCount >= 11 ? '<numero_sensivel>' : candidate;
+    })
+    .replace(/[\uE000-\uF8FF]/gu, (marker) => {
+      const temporal = temporalValues[marker.codePointAt(0)! - 0xe000];
+      return temporal ?? marker;
+    });
+}
+
 function sanitizeDecisionText(value: string, maxChars: number): string {
-  const compact = value
+  const redacted = value
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<email>')
     .replace(/\b\d{3}\.\d{3}\.\d{3}-?\d{2}\b/g, '<cpf>')
-    .replace(/(?<!\d)(?:\+?55\s*)?(?:\(?\d{2}\)?[\s-]*)?\d{4,5}[\s-]\d{4}(?!\d)/g, '<telefone>')
     .replace(/https?:\/\/\S+/gi, '<url>')
     .replace(
       /\b(?:meu\s+nome(?:\s+(?:e|é))?|me\s+chamo|sou)\s*:?\s*[A-ZÀ-ÖØ-Ý][\p{L}'-]*(?:\s+(?:(?:da|das|de|do|dos|e)\s+)?[A-ZÀ-ÖØ-Ý][\p{L}'-]*)*/giu,
       '<nome_cliente>',
-    )
-    .replace(/\s+/g, ' ')
-    .trim();
+    );
+  const compact = redactSensitiveNumericSequences(redacted).replace(/\s+/g, ' ').trim();
 
   if (compact.length <= maxChars) return compact;
   return `${compact.slice(0, Math.max(0, maxChars - 1))}…`;
