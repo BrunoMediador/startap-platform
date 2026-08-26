@@ -186,6 +186,37 @@ const DEFAULT_PROMPT_TPL = [
 ].join('\n');
 
 /**
+ * Sob o guard server-first, só uma proposta validada pode produzir um cartão. O modelo recebe
+ * os dados de agenda para chamar a tool estruturada, mas não o molde do cartão legado.
+ */
+const SERVER_FIRST_BOOKING_BLOCK = [
+  '[CONFIRMACAO DE AGENDAMENTO SERVER-FIRST]',
+  'Para propor um horário, chame exclusivamente a ferramenta propor_agendamento com profissional, serviço, início e fim.',
+  'Nunca escreva, monte ou envie cartão de confirmação, campos de horário/serviço/valor ou convite para SIM.',
+  'O servidor valida a proposta e envia o cartão completo. Se não conseguir propor um horário válido, peça os dados que faltam sem confirmar nada.',
+].join('\n');
+
+// O gate é propositalmente conservador: ele só deixa o modelo entrar na fronteira de proposta
+// quando o próprio servidor reconhece intenção explícita de agendar. Não é um parser de cartão
+// nem interpreta resposta da LLM; evita forçar tool/custo para saudação, cancelamento ou texto
+// hostil durante o canário.
+const GUARDED_BOOKING_INTENT_TERMS = [
+  'agendar',
+  'marcar',
+  'horário',
+  'horario',
+  'disponibilidade',
+  'disponível',
+  'disponivel',
+  'vaga',
+] as const;
+
+function hasGuardedBookingIntent(texto: string): boolean {
+  const normalized = texto.trim().toLocaleLowerCase('pt-BR');
+  return GUARDED_BOOKING_INTENT_TERMS.some((term) => normalized.includes(term));
+}
+
+/**
  * ADR 0035 §2.1 (emenda 30/07, corrigido pelo qa-tester + Bruno): decide, a partir do
  * CONTEÚDO do bot_prompt já renderizado (não de uma flag), se a persona já contém um
  * cartão de confirmação próprio — sinal de que o estilo/emoji NÃO deve ser sobreposto por
@@ -1832,8 +1863,35 @@ export class TesteBarbeariaBot extends BotBase {
     // `prompt_custom` da query abaixo continua vivo só pro guard anti-cartão-duplo
     // baked→runtime (fora do escopo desta mudança), por isso a coluna não é removida da
     // SELECT, só não decide mais o estilo do cartão aqui.
-    const { area, promptCustom, cartaoMode, cartaoConfig, confirmationCardContract, nomeNegocio } =
-      await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
+    // A allowlist é uma decisão de segurança independente do estado lido do clone. Para um
+    // slot protegido, não podemos aceitar o fallback baked do reader: perder a identidade ou o
+    // modo do cartão reabriria as tools legadas antes de qualquer proposta persistida.
+    const bookingGuardSlotAllowed = isBookingGuardSlotAllowed(
+      this.slot,
+      config.BOOKING_CONFIRMATION_GUARD_SLOTS,
+    );
+    const confirmationCardSettings = await cloneColaboradores
+      .getAreaPromptCustomCartao(
+        this.slot,
+        bookingGuardSlotAllowed ? { failClosed: true } : undefined,
+      )
+      .catch((error: unknown) => {
+        if (!bookingGuardSlotAllowed) throw error;
+        this.log.error(
+          {
+            slot: this.slot,
+            status: 'configuration_unavailable',
+            errorType: error instanceof Error ? error.name : 'unknown',
+          },
+          'booking confirmation guard bloqueou leitura de configuração',
+        );
+        return null;
+      });
+    if (!confirmationCardSettings) {
+      return 'Não consegui validar a configuração do agendamento agora. Tente novamente em alguns minutos.';
+    }
+    const { area, cartaoMode, cartaoConfig, confirmationCardContract, nomeNegocio } =
+      confirmationCardSettings;
     const temCartaoProprio = cartaoMode !== 'runtime' && cloneTemCartaoProprio(promptPersona);
 
     // ── Cartão em RUNTIME no ESTABELECIMENTO (SCRUM-92 inc.2 / ADR 0032) — gate DUPLO ──
@@ -1861,17 +1919,32 @@ export class TesteBarbeariaBot extends BotBase {
     // contrato explícito de segmentos e SHA do prompt revisado; nunca inferimos copy.
     // tenant é derivado somente do slot no servidor e faz parte do HMAC do contato;
     // slots fora da allowlist não fazem sequer esta leitura adicional.
-    // Persona custom em runtime permanece fora do rollout atual. Baked pode ser elegível,
-    // inclusive custom, somente se o contrato revisado provar a cópia pelo hash.
-    const confirmationCardSource = cartaoMode === 'runtime' && !promptCustom ? 'runtime' : 'baked';
+    // `cartao_mode` é a fonte explícita do renderer. Um clone runtime é necessariamente
+    // prompt_custom para preservar a persona-only; reinterpretá-lo como baked desliga o guard
+    // e devolve o fluxo legado justamente no estado produzido pelo migrador runtime.
+    const confirmationCardSource = cartaoMode;
     const bakedExtract = extractBakedCartao(promptPersona);
     const bakedCardSha256 = bakedExtract.found ? hashBakedCard(bakedExtract.cartao) : '';
-    const bookingScope = isBookingGuardSlotAllowed(
-      this.slot,
-      config.BOOKING_CONFIRMATION_GUARD_SLOTS,
-    )
-      ? await cloneColaboradores.getScopeBySlot(this.slot)
+    const bookingScope = bookingGuardSlotAllowed
+      ? await cloneColaboradores.getScopeBySlot(this.slot).catch((error: unknown) => {
+          this.log.error(
+            {
+              slot: this.slot,
+              status: 'identity_unavailable',
+              errorType: error instanceof Error ? error.name : 'unknown',
+            },
+            'booking confirmation guard bloqueou leitura de identidade',
+          );
+          return null;
+        })
       : null;
+    if (bookingGuardSlotAllowed && !bookingScope?.tenant_id) {
+      this.log.warn(
+        { slot: this.slot, status: 'tenant_unresolved' },
+        'booking confirmation guard bloqueou identidade ausente',
+      );
+      return 'Não consegui validar a configuração do agendamento agora. Tente novamente em alguns minutos.';
+    }
     // A identidade da proposta não depende do renderer. Se a cópia baked mudar depois
     // do cartão, ainda precisamos reconhecer e encerrar a proposta já persistida antes
     // que um SIM possa alcançar as tools legadas mutantes.
@@ -1882,6 +1955,13 @@ export class TesteBarbeariaBot extends BotBase {
       allowedSlots: config.BOOKING_CONFIRMATION_GUARD_SLOTS,
       pepper: config.BOOKING_CONFIRMATION_PHONE_PEPPER,
     });
+    if (bookingGuardSlotAllowed && !bookingGuardScope.enabled) {
+      this.log.warn(
+        { slot: this.slot, status: bookingGuardScope.reason },
+        'booking confirmation guard bloqueou escopo indisponível',
+      );
+      return 'Não consegui validar a configuração do agendamento agora. Tente novamente em alguns minutos.';
+    }
     const bookingGuard = resolveBookingGuardEligibility({
       slot: this.slot,
       tenantId: bookingScope?.tenant_id ?? null,
@@ -1892,6 +1972,16 @@ export class TesteBarbeariaBot extends BotBase {
       bakedContract: confirmationCardContract,
       bakedCardSha256,
     });
+    if (bookingGuardScope.enabled) {
+      this.log.info(
+        {
+          slot: this.slot,
+          status: bookingGuard.enabled ? 'enabled' : bookingGuard.reason,
+          cardSource: confirmationCardSource,
+        },
+        'booking confirmation guard decision',
+      );
+    }
     const bookingClone = bookingGuard.enabled ? await flowClones.getCloneBySlot(this.slot) : null;
 
     // Barreira sticky: um contrato baked que deixa de validar NÃO devolve uma proposta
@@ -2016,6 +2106,14 @@ export class TesteBarbeariaBot extends BotBase {
         return 'Ainda estou confirmando esse horário. Não envie outro SIM agora.';
       return 'Não encontrei um cartão pendente. Me diga o serviço, horário e profissional que prefere.';
     }
+    const guardedBookingIntent = bookingGuard.enabled && hasGuardedBookingIntent(texto);
+    if (bookingGuard.enabled && !guardedBookingIntent) {
+      this.log.info(
+        { slot: this.slot, status: 'non_booking_inbound' },
+        'booking confirmation guard evitou runner sem intenção de agendamento',
+      );
+      return 'Olá! Para agendar, me diga o serviço, o profissional e o horário que prefere.';
+    }
     // Mesma regra do ramo individual: só expõe o transbordo quando o clone tem
     // recepção válida/habilitada; falha do reader fecha a feature sem alterar o prompt base.
     const receptionTarget = await Promise.resolve(
@@ -2051,7 +2149,7 @@ export class TesteBarbeariaBot extends BotBase {
       '[HORARIOS DISPONIVEIS POR PROFISSIONAL - ATUALIZADO AGORA]',
       estab.horariosBlock,
       '',
-      cartaoEstabelecimentoBlock,
+      bookingGuard.enabled ? SERVER_FIRST_BOOKING_BLOCK : cartaoEstabelecimentoBlock,
       '',
       transbordoRecepcaoDisponivel ? buildAgendaEscalationBlock() : '',
       // Append condicional: pacoteBlock vazio (flag OFF / sem pacote) NÃO adiciona linha —
@@ -2086,22 +2184,27 @@ export class TesteBarbeariaBot extends BotBase {
                 'Nome completo do profissional escolhido pelo cliente. Obrigatorio. ' +
                 'Use SOMENTE um nome que aparece no bloco [PROFISSIONAIS]. Nunca invente nem passe e-mail/agenda.',
             },
-            summary: {
-              type: 'string',
-              description: 'Titulo: "Nome - Servico | WhatsApp: numero" (somente legado)',
-            },
             start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
             end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
             servico: {
               type: 'string',
-              description:
-                'Nome do servico agendado. Usado pra checar cobertura de pacote. Vazio = extrai do summary.',
+              description: bookingGuard.enabled
+                ? 'Nome do serviço agendado. Obrigatório para a proposta server-first.'
+                : 'Nome do serviço agendado. Usado pra checar cobertura de pacote. Vazio = extrai do summary.',
             },
-            usa_pacote: {
-              type: 'boolean',
-              description:
-                'SUGESTAO: true se o cliente quer usar o pacote pre-pago. O sistema re-valida e decide.',
-            },
+            ...(bookingGuard.enabled
+              ? {}
+              : {
+                  summary: {
+                    type: 'string',
+                    description: 'Titulo: "Nome - Servico | WhatsApp: numero" (somente legado)',
+                  },
+                  usa_pacote: {
+                    type: 'boolean',
+                    description:
+                      'SUGESTAO: true se o cliente quer usar o pacote pre-pago. O sistema re-valida e decide.',
+                  },
+                }),
           },
           required: bookingGuard.enabled
             ? ['colaborador_id', 'servico', 'start', 'end']
@@ -2537,9 +2640,24 @@ export class TesteBarbeariaBot extends BotBase {
       userMessage: texto,
       tools,
       maxTurns: 5,
+      ...(guardedBookingIntent ? { toolChoice: { forceFunction: 'propor_agendamento' } } : {}),
     });
 
-    return terminalBookingCard ?? sanitizarResposta(result.reply);
+    if (terminalBookingCard) {
+      this.log.info(
+        { slot: this.slot, status: 'proposal_persisted' },
+        'booking confirmation server card emitted',
+      );
+      return terminalBookingCard;
+    }
+    if (bookingGuard.enabled) {
+      this.log.warn(
+        { slot: this.slot, status: 'proposal_not_persisted' },
+        'booking confirmation blocked unpersisted model reply',
+      );
+      return 'Não consegui validar esse horário. Me diga o serviço, profissional e horário que prefere.';
+    }
+    return sanitizarResposta(result.reply);
   }
 }
 
