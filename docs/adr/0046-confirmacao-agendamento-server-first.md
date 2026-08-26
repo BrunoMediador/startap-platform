@@ -22,6 +22,14 @@ confirmação reconsulta a agenda do profissional ativo, cria pelo event id dete
 finaliza `booked`. Conflito, expiração, troca de mensagem e estado ambíguo recebem texto terminal
 do servidor. Em timeout/409 a recovery usa `GET eventId`; sem prova do evento não reenvia POST.
 
+Antes de expor `propor_agendamento`, o guard usa uma decisão estruturada e validada por schema:
+`pronta_para_proposta` ou `coletar_dados`. A classificação roda com temperatura zero e tool
+forçada; tool ausente, shape inválido ou falha fecham em coleta de dados. Somente
+`pronta_para_proposta` chama o agente de agenda, também com `tool_choice` forçando
+`propor_agendamento`. Assim, uma intenção completa não depende do comportamento `auto` do
+modelo, e uma saudação, ambiguidade ou dado ausente não recebe fallback genérico nem cria
+proposta.
+
 O renderer canônico atual atende `cartao_mode=runtime`. Para baked existe agora o contrato
 explícito `flow_clones.confirmation_card_contract`: uma sequência versionada de segmentos
 `literal|field` e o SHA-256 do cartão baked revisado. Os cinco campos fechados (`dia`, `horario`,
@@ -52,6 +60,10 @@ release separada. Não há DELETE/DROP.
 Todas as queries carregam `tenant_id + slot + contact_hmac`. Logs só carregam slot/status/IDs
 técnicos protegidos. O action-lock passa a usar HMAC com `ACTION_LOCK_PHONE_PEPPER`; sem esse
 pepper não escreve identidade em Redis e degrada como Redis indisponível.
+
+A telemetria da decisão registra somente enum de decisão, tipo de `tool_choice`, nome allowlisted
+de ferramenta e resultado classificado. Texto da conversa, argumentos, contato, calendário e
+payload de terceiro não entram nesses logs.
 
 O contrato pode conter copy comercial do próprio clone, portanto não é incluído em telemetria,
 logs, testes de integração ou saída do dry-run. O hash não é fonte de verdade de histórico: é

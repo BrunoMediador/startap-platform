@@ -41,6 +41,12 @@ import {
   resolveBookingGuardScope,
 } from '../lib/booking-confirmation-guard.js';
 import { hashBakedCard } from '../lib/booking-confirmation-template.js';
+import {
+  BOOKING_PROPOSAL_CLARIFICATION,
+  BOOKING_PROPOSAL_DECISION_TOOL,
+  BOOKING_PROPOSAL_TOOL,
+  decideBookingProposal,
+} from '../lib/booking-proposal-decision.js';
 import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
 import {
   buildAgendaEscalationBlock,
@@ -2132,11 +2138,39 @@ export class TesteBarbeariaBot extends BotBase {
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
+
+    // A oferta de `propor_agendamento` não é suficiente: com tool_choice auto o modelo pode
+    // responder texto e o guard, corretamente, descarta esse texto sem materializar proposta.
+    // Primeiro classificamos em formato fechado; somente uma intenção completa chega ao agente
+    // que é forçado a chamar a tool server-first. Falha/shape inválido permanece em coleta.
+    if (bookingGuard.enabled) {
+      const proposalDecision = await decideBookingProposal({
+        slot: this.slot,
+        projectId: this.slot,
+        flowId: ctx.flowId,
+        telefone,
+        history,
+        userMessage: texto,
+      });
+      this.log.info(
+        {
+          slot: this.slot,
+          decision: proposalDecision.decision.decisao,
+          toolChoice: 'force_function',
+          toolName: BOOKING_PROPOSAL_DECISION_TOOL,
+          toolResult: proposalDecision.toolResult,
+        },
+        'booking confirmation proposal decision',
+      );
+      if (proposalDecision.decision.decisao !== 'pronta_para_proposta') {
+        return BOOKING_PROPOSAL_CLARIFICATION;
+      }
+    }
     let terminalBookingCard: string | null = null;
 
     const tools: ToolDefinition[] = [
       {
-        name: bookingGuard.enabled ? 'propor_agendamento' : 'inserir_agendamento',
+        name: bookingGuard.enabled ? BOOKING_PROPOSAL_TOOL : 'inserir_agendamento',
         description: bookingGuard.enabled
           ? 'Propõe ao servidor o horário, serviço e profissional escolhidos. Não cria evento ' +
             'nem confirma o agendamento. O servidor valida e envia o cartão completo; aguarde ' +
@@ -2613,6 +2647,9 @@ export class TesteBarbeariaBot extends BotBase {
       userMessage: texto,
       tools,
       maxTurns: 5,
+      ...(bookingGuard.enabled
+        ? { toolChoice: { forceFunction: BOOKING_PROPOSAL_TOOL } as const, temperature: 0 }
+        : {}),
     });
 
     if (terminalBookingCard) {
@@ -2627,7 +2664,7 @@ export class TesteBarbeariaBot extends BotBase {
         { slot: this.slot, status: 'proposal_not_persisted' },
         'booking confirmation blocked unpersisted model reply',
       );
-      return 'Não consegui validar esse horário. Me diga o serviço, profissional e horário que prefere.';
+      return BOOKING_PROPOSAL_CLARIFICATION;
     }
     return sanitizarResposta(result.reply);
   }
