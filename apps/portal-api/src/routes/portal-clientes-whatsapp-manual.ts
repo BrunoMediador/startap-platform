@@ -29,6 +29,43 @@ const bodySchema = z
   })
   .strict();
 
+const EXPECTED_BODY_KEYS = new Set(['mensagem', 'confirmed']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Contrato rejeitado antes de qualquer acesso a dados ou WAHA. A telemetria é
+ * deliberadamente estrutural: nunca registra valores, chaves inesperadas, IDs,
+ * telefone, texto, headers ou cookies.
+ */
+function logInvalidContract(req: FastifyRequest, paramsValid: boolean, bodyValid: boolean): void {
+  const rawBody: unknown = req.body;
+  const rawParams: unknown = req.params;
+  const bodyIsObject = isRecord(rawBody);
+  const paramsIsObject = isRecord(rawParams);
+  const rawId = paramsIsObject ? rawParams.id : undefined;
+
+  log.warn(
+    {
+      request_id: req.id,
+      body_is_object: bodyIsObject,
+      expected_fields_present: {
+        mensagem: bodyIsObject && Object.hasOwn(rawBody, 'mensagem'),
+        confirmed: bodyIsObject && Object.hasOwn(rawBody, 'confirmed'),
+      },
+      unexpected_key_count: bodyIsObject
+        ? Object.keys(rawBody).filter((key) => !EXPECTED_BODY_KEYS.has(key)).length
+        : 0,
+      id_type: typeof rawId,
+      params_valid: paramsValid,
+      body_valid: bodyValid,
+    },
+    'CRM WhatsApp manual rejeitado por contrato invalido',
+  );
+}
+
 interface OwnerScope {
   slot: string;
   tenantId: string;
@@ -63,6 +100,7 @@ export const portalClientesWhatsAppManualRoutes: FastifyPluginAsync = async (app
       const params = paramsSchema.safeParse(req.params ?? {});
       const body = bodySchema.safeParse(req.body ?? {});
       if (!params.success || !body.success) {
+        logInvalidContract(req, params.success, body.success);
         return reply.code(400).send({ error: 'dados_invalidos' });
       }
 
