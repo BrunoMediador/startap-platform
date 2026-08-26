@@ -102,6 +102,41 @@ describe('decideBookingProposal', () => {
     expect(result.decision).toEqual({ decisao: 'pronta_para_proposta' });
   });
 
+  it('redige telefone contínuo/internacional e CPF sem pontuação antes do provider', async () => {
+    const sensitiveNumbers = ['5511987654321', '11987654321', '12345678901', '98765432100'];
+    await decideBookingProposal(
+      {
+        ...input(
+          'Meu CPF é 98765432100 e meu telefone é 11987654321. Corte com João em 20/06/2026 às 14:30.',
+        ),
+        history: [
+          {
+            role: 'human',
+            content:
+              'Meu telefone internacional é +5511987654321 e CPF 12345678901. Quero Corte com João em 2026-06-20 às 10:30.',
+          },
+        ],
+      },
+      async (opts) => {
+        const classifierInput = JSON.stringify({
+          history: opts.history,
+          userMessage: opts.userMessage,
+        });
+        for (const sensitive of sensitiveNumbers) {
+          expect(classifierInput).not.toContain(sensitive);
+        }
+        expect(classifierInput).toContain('<numero_sensivel>');
+        expect(classifierInput).toContain('2026-06-20');
+        expect(classifierInput).toContain('20/06/2026');
+        expect(classifierInput).toContain('10:30');
+        expect(classifierInput).toContain('14:30');
+        expect(classifierInput).toContain('Corte com João');
+        await opts.tools?.[0]?.run({ decisao: 'pronta_para_proposta' });
+        return { toolCalls: [] };
+      },
+    );
+  });
+
   it.each([
     [
       'Meu nome é Ana Clara da Silva, quero Corte com João amanhã às 10h.',

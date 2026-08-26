@@ -27,11 +27,11 @@ Antes de expor `propor_agendamento`, o guard usa uma decisão estruturada e vali
 `conversa_segura(topico=saudacao|disponibilidade|pergunta|cancelamento|remarcacao)`. A
 classificação roda com temperatura zero e tool forçada; tool ausente, shape inválido, erro ou
 deadline fecham em coleta de dados. `coletar_dados` devolve uma pergunta determinística apenas
-para os campos faltantes, sem chamar o agente de agenda. `conversa_segura` pode receber resposta
-normal e apenas capabilities read-only; ela nunca recebe `propor_agendamento`, tools legadas
-mutantes nem `tool_choice` mutante. Antes de sair, a resposta livre passa por filtro fail-closed:
-cartão, confirmação, agendamento/remarcação/cancelamento, shape de cartão e CTA `SIM` retornam
-um fallback server-side sem alteração. Persona e conteúdo inbound não podem contornar essa barreira.
+para os campos faltantes, sem chamar o agente de agenda. `conversa_segura` não chama o agente de
+agenda: o tópico allowlisted produz copy informativa determinística do servidor. Ela nunca recebe
+`propor_agendamento`, tools legadas mutantes nem resposta livre influenciável por persona/conteúdo
+inbound. Assim cartão, confirmação, agendamento/remarcação/cancelamento e CTA `SIM` não podem
+atravessar essa fronteira sem proposta persistida.
 
 Somente `pronta_para_proposta` chama o agente de agenda, também com `tool_choice` forçando
 `propor_agendamento`. Assim, uma intenção completa não depende do comportamento `auto` do
@@ -75,10 +75,11 @@ técnicos protegidos. O action-lock passa a usar HMAC com `ACTION_LOCK_PHONE_PEP
 pepper não escreve identidade em Redis e degrada como Redis indisponível.
 
 A classificação recebe somente os últimos três turnos `human|ai` e a mensagem atual, com teto de
-caracteres e redação de telefone, e-mail, CPF, URL e apresentação do cliente. Mensagens `system`
-e histórico anterior não são enviados. Serviço e profissional permanecem apenas quando
-necessários à classificação. O executor é chamado sem telefone, portanto o preflight não grava
-contato em `model_usage`.
+caracteres e redação de telefone, e-mail, CPF, URL e apresentação do cliente. Sequências numéricas
+com 11 ou mais dígitos são redigidas mesmo contínuas/internacionais/sem pontuação; datas e horários
+são preservados estruturalmente. Mensagens `system` e histórico anterior não são enviados. Serviço e
+profissional permanecem apenas quando necessários à classificação. O executor é chamado sem
+telefone, portanto o preflight não grava contato em `model_usage`.
 
 A telemetria da decisão registra somente `purpose`, enum de classificação, tópico seguro quando
 existir, tipo de `tool_choice`, nome allowlisted de ferramenta, resultado classificado e latência.
