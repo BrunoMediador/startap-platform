@@ -96,7 +96,7 @@ interface SlotSnapshot {
   events: SnapEvent[];
   complete: boolean;
   pages: number;
-  incompleteReason?: string;
+  incompleteReason?: gcal.GcalListIncompleteReason;
   /**
    * Estabelecimento: conjunto dos colaboradorId que getGcalsForSlot ENTREGOU e cuja listagem
    * chegou (a F4 só é alcançada com `complete=true`, ou seja, todos os ENTREGUES vieram por
@@ -179,19 +179,45 @@ function isBillableEvent(
 }
 
 /**
- * Classifica o motivo de incompletude da listagem para LOG (reusa a taxonomia do gcal-healthcheck /
- * SCRUM-41): 403 rate-limit/quota vs forbidden real, 429/5xx, timeout, truncamento por teto de
- * páginas. Toda incompletude = NÃO deleta (a categoria é só observabilidade). Não vaza corpo cru.
+ * Classifica SOMENTE o contrato fechado do paginador. O caller pode ser mockado ou futuramente
+ * alterado; por isso qualquer shape não allowlisted cai em `unknown`, sem interpolar texto externo.
  */
-function classifyIncomplete(reason?: string): string {
-  if (!reason) return 'unknown';
-  if (reason === 'truncated_max_pages') return 'truncated_max_pages';
-  if (reason === gcal.GCAL_LIST_TIMEOUT_SENTINEL) return 'timeout';
-  const status = reason.match(/HTTP (\d{3})/)?.[1];
-  const googleReason = reason.match(/"reason"\s*:\s*"([^"]+)"/i)?.[1]?.toLowerCase();
-  if (status) return googleReason ? `http_${status}:${googleReason}` : `http_${status}`;
-  if (googleReason) return `error:${googleReason}`;
-  return 'network';
+const SAFE_LIST_ERROR_CLASSES = new Set<gcal.GcalHttpErrorClass>([
+  'bad_request',
+  'unauthenticated',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'rate_limited',
+  'backend_error',
+  'server_error',
+  'unexpected_http',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function classifyIncomplete(reason: unknown): string {
+  if (!isRecord(reason) || typeof reason.code !== 'string') return 'unknown';
+  if (reason.code === 'truncated_max_pages') return 'truncated_max_pages';
+  if (reason.code === gcal.GCAL_LIST_TIMEOUT_SENTINEL) return 'timeout';
+  if (reason.code === 'token_error' || reason.code === 'network_error') return 'network';
+  if (reason.code === 'invalid_response') return 'invalid_response';
+  if (
+    reason.code !== 'http_error' ||
+    reason.endpoint !== 'events_collection' ||
+    reason.operation !== 'read' ||
+    typeof reason.httpStatus !== 'number' ||
+    !Number.isInteger(reason.httpStatus) ||
+    reason.httpStatus < 100 ||
+    reason.httpStatus > 599 ||
+    typeof reason.errorClass !== 'string' ||
+    !SAFE_LIST_ERROR_CLASSES.has(reason.errorClass as gcal.GcalHttpErrorClass)
+  ) {
+    return 'unknown';
+  }
+  return `http_${reason.httpStatus}:${reason.errorClass}`;
 }
 
 /**
@@ -217,7 +243,7 @@ async function buildSlotSnapshot(
     const listedColaboradorIds = new Set<number>();
     let complete = true;
     let pages = 0;
-    let incompleteReason: string | undefined;
+    let incompleteReason: gcal.GcalListIncompleteReason | undefined;
     for (const c of colabs) {
       listedColaboradorIds.add(c.colaboradorId);
       const paged = await c.client.listEventsPaged({

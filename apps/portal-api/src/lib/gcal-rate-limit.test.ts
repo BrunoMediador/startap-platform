@@ -19,6 +19,12 @@ describe('isGcalRateLimitError', () => {
     expect(isGcalRateLimitError(msg)).toBe(true);
   });
 
+  it('detecta enum seguro rate_limited sem depender do corpo externo', () => {
+    expect(isGcalRateLimitError('GCal read:events_collection -> HTTP 403 [rate_limited]')).toBe(
+      true,
+    );
+  });
+
   it('NAO classifica 403 forbidden real (credencial revogada) como rate-limit', () => {
     const msg =
       'GCal /calendars/x/events -> HTTP 403: {"error":{"errors":[{"reason":"forbidden"}]}}';
