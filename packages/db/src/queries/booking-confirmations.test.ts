@@ -68,6 +68,37 @@ describe('booking confirmations queries', () => {
     expect(params).toEqual(['tenant-a', 'clone-a', scope.contactHmac]);
   });
 
+  it('recovery exige o mesmo tenant, slot, contato e estado confirming', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+    await expect(confirmations.markRecoveryRequired({ ...scope, id: 'proposal-a' })).resolves.toBe(
+      true,
+    );
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(
+      "tenant_id=$1 AND slot=$2 AND contact_hmac=$3 AND id=$4 AND status='confirming'",
+    );
+    expect(params).toEqual(['tenant-a', 'clone-a', scope.contactHmac, 'proposal-a']);
+  });
+
+  it('booked converge confirming ou recovery para o mesmo tenant, slot, contato e proposta', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+    await expect(confirmations.markBooked({ ...scope, id: 'proposal-a' })).resolves.toBe(true);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('tenant_id=$1 AND slot=$2 AND contact_hmac=$3 AND id=$4');
+    expect(sql).toContain("status IN ('confirming','recovery_required')");
+    expect(params).toEqual(['tenant-a', 'clone-a', scope.contactHmac, 'proposal-a']);
+  });
+
+  it('conflict exige o mesmo tenant, slot, contato e estado confirming', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+    await expect(confirmations.markConflict({ ...scope, id: 'proposal-a' })).resolves.toBe(true);
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain(
+      "tenant_id=$1 AND slot=$2 AND contact_hmac=$3 AND id=$4 AND status='confirming'",
+    );
+    expect(params).toEqual(['tenant-a', 'clone-a', scope.contactHmac, 'proposal-a']);
+  });
+
   it('retenção só seleciona estados terminais e recebe cutoff parametrizado', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ count: '2' }] });
     await expect(confirmations.countTerminalBefore('2026-07-01T00:00:00.000Z')).resolves.toBe(2);

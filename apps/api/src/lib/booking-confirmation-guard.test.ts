@@ -187,8 +187,8 @@ describe('booking confirmation guard', () => {
       nomeCliente: 'Ana',
       telefone: '5511999999999',
     });
-    expect(first.kind).toBe('booked');
-    expect(second.kind).toBe('booked');
+    expect(first).toMatchObject({ kind: 'booked', delivery: 'claimed' });
+    expect(second).toMatchObject({ kind: 'booked', delivery: 'retry' });
     expect(client.createEvent).toHaveBeenCalledTimes(1);
     expect(client.createEvent).toHaveBeenCalledWith(
       expect.objectContaining({ eventId: proposal.event_id }),
@@ -232,7 +232,7 @@ describe('booking confirmation guard', () => {
         nomeCliente: 'Ana',
         telefone: '5511999999999',
       }),
-    ).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    ).resolves.toMatchObject({ kind: 'booked', delivery: 'claimed', eventId: proposal.event_id });
 
     expect(resolveCalClient).toHaveBeenCalledWith(proposal);
     expect(mocks.latestForContact).not.toHaveBeenCalled();
@@ -300,6 +300,7 @@ describe('booking confirmation guard', () => {
       expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
         tenantId: scope.tenantId,
         slot: scope.slot,
+        contactHmac: scope.contactHmac,
         id: proposal.id,
       });
       expect(client.createEvent).not.toHaveBeenCalled();
@@ -401,6 +402,194 @@ describe('booking confirmation guard', () => {
         nomeCliente: 'Ana',
         telefone: '5511999999999',
       }),
-    ).resolves.toMatchObject({ kind: 'booked', eventId: proposal.event_id });
+    ).resolves.toMatchObject({ kind: 'booked', delivery: 'claimed', eventId: proposal.event_id });
+  });
+
+  it.each([
+    ['evento inexistente', () => ({ id: 'outro-evento', extendedProperties: { private: {} } })],
+    [
+      'evento de outra proposta',
+      () => ({
+        id: proposal.event_id,
+        extendedProperties: {
+          private: { kind: 'booking_confirmation', proposal_id: 'outra-proposta' },
+        },
+      }),
+    ],
+    ['falha de leitura', () => Promise.reject(new Error('gcal_get_failed'))],
+  ])(
+    'retry legado confirming sem prova própria (%s) persiste recovery sem efeitos externos',
+    async (_scenario, getEventResult) => {
+      mocks.expirePending.mockResolvedValue(false);
+      mocks.claimForConfirmation.mockResolvedValue(null);
+      mocks.latestForContact
+        .mockResolvedValueOnce({ ...proposal, status: 'confirming' })
+        .mockResolvedValueOnce({ ...proposal, status: 'recovery_required' });
+      mocks.markRecoveryRequired.mockResolvedValue(true);
+      const client = {
+        listEvents: vi.fn(),
+        createEvent: vi.fn(),
+        getEvent: vi.fn().mockImplementation(getEventResult),
+      };
+
+      await expect(
+        guard.confirmPendingProposal({
+          ...scope,
+          resolveCalClient: () => client as never,
+          nomeCliente: 'Ana',
+          telefone: '5511999999999',
+        }),
+      ).resolves.toEqual({ kind: 'recovery_required' });
+      await expect(
+        guard.confirmPendingProposal({
+          ...scope,
+          resolveCalClient: () => client as never,
+          nomeCliente: 'Ana',
+          telefone: '5511999999999',
+        }),
+      ).resolves.toEqual({ kind: 'recovery_required' });
+
+      expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
+        tenantId: scope.tenantId,
+        slot: scope.slot,
+        contactHmac: scope.contactHmac,
+        id: proposal.id,
+      });
+      expect(mocks.markRecoveryRequired).toHaveBeenCalledTimes(1);
+      expect(client.listEvents).not.toHaveBeenCalled();
+      expect(client.createEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it('SIM de recovery vence antes do commit e o claimant converge recovery_required para booked', async () => {
+    mocks.expirePending.mockReset();
+    mocks.claimForConfirmation.mockReset();
+    mocks.latestForContact.mockReset();
+    mocks.markRecoveryRequired.mockReset();
+    mocks.markBooked.mockReset();
+    mocks.expirePending.mockResolvedValue(false);
+    mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
+    mocks.latestForContact.mockResolvedValueOnce({ ...proposal, status: 'confirming' });
+    mocks.markRecoveryRequired.mockResolvedValueOnce(true);
+    mocks.markBooked.mockResolvedValueOnce(true);
+    let signalCreateStarted: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      signalCreateStarted = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const waitForCreate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const client = {
+      listEvents: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn(async () => {
+        signalCreateStarted?.();
+        await waitForCreate;
+        return { id: proposal.event_id };
+      }),
+      getEvent: vi.fn().mockRejectedValue(new Error('gcal_get_failed')),
+    };
+    const afterBooked = vi.fn(async () => undefined);
+
+    const claimant = guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    await createStarted;
+    const recovery = await guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    releaseCreate?.();
+
+    await expect(claimant).resolves.toMatchObject({
+      kind: 'booked',
+      delivery: 'claimed',
+      eventId: proposal.event_id,
+    });
+    expect(recovery).toEqual({ kind: 'recovery_required' });
+    expect(mocks.markRecoveryRequired).toHaveBeenCalledWith({
+      tenantId: scope.tenantId,
+      slot: scope.slot,
+      contactHmac: scope.contactHmac,
+      id: proposal.id,
+    });
+    expect(mocks.markBooked).toHaveBeenCalledWith({
+      tenantId: scope.tenantId,
+      slot: scope.slot,
+      contactHmac: scope.contactHmac,
+      id: proposal.id,
+    });
+    expect(afterBooked).toHaveBeenCalledTimes(1);
+    expect(client.listEvents).toHaveBeenCalledTimes(1);
+    expect(client.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovery com evento próprio vence o CAS e o claimant original não confirma nem duplica atendimento', async () => {
+    mocks.expirePending.mockReset();
+    mocks.claimForConfirmation.mockReset();
+    mocks.latestForContact.mockReset();
+    mocks.markBooked.mockReset();
+    mocks.expirePending.mockResolvedValue(false);
+    mocks.claimForConfirmation.mockResolvedValueOnce(proposal).mockResolvedValueOnce(null);
+    mocks.latestForContact
+      .mockResolvedValueOnce({ ...proposal, status: 'confirming' })
+      .mockResolvedValueOnce({ ...proposal, status: 'booked' });
+    mocks.markBooked.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    let startCreate: (() => void) | undefined;
+    const createStarted = new Promise<void>((resolve) => {
+      startCreate = resolve;
+    });
+    let releaseCreate: (() => void) | undefined;
+    const waitForCreate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const client = {
+      listEvents: vi.fn().mockResolvedValue([]),
+      createEvent: vi.fn(async () => {
+        startCreate?.();
+        await waitForCreate;
+        return { id: proposal.event_id };
+      }),
+      getEvent: vi.fn().mockResolvedValue(ownedEvent),
+    };
+    const afterBooked = vi.fn(async () => undefined);
+
+    const claimant = guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    await createStarted;
+    const recovery = await guard.confirmPendingProposal({
+      ...scope,
+      resolveCalClient: () => client as never,
+      nomeCliente: 'Ana',
+      telefone: '5511999999999',
+      afterBooked,
+    });
+    releaseCreate?.();
+
+    await expect(claimant).resolves.toMatchObject({
+      kind: 'booked_observed',
+      eventId: proposal.event_id,
+    });
+    expect(recovery).toMatchObject({
+      kind: 'booked',
+      delivery: 'claimed',
+      eventId: proposal.event_id,
+    });
+    expect(mocks.markBooked).toHaveBeenCalledTimes(2);
+    expect(afterBooked).toHaveBeenCalledTimes(1);
+    expect(client.listEvents).toHaveBeenCalledTimes(1);
+    expect(client.createEvent).toHaveBeenCalledTimes(1);
   });
 });
