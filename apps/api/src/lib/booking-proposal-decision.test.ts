@@ -104,6 +104,37 @@ describe('decideBookingProposal', () => {
 
   it.each([
     [
+      'Meu nome é Ana Clara da Silva, quero Corte com João amanhã às 10h.',
+      ['Ana', 'Clara', 'Silva'],
+    ],
+    ['Me chamo Beatriz de Souza; quero Corte com João amanhã às 10h.', ['Beatriz', 'Souza']],
+    ['Sou Luiza dos Santos. Quero Corte com João amanhã às 10h.', ['Luiza', 'Santos']],
+  ])(
+    'remove apresentação composta integral do histórico e da mensagem atual: %s',
+    async (intro, names) => {
+      await decideBookingProposal(
+        {
+          ...input(`${intro} Meu e-mail é cliente@example.com.`),
+          history: [{ role: 'human', content: intro }],
+        },
+        async (opts) => {
+          const classifierInput = `${opts.history[0]?.content ?? ''} ${opts.userMessage}`;
+          for (const name of names) expect(classifierInput).not.toContain(name);
+          expect(classifierInput).not.toMatch(/\b(?:da|das|de|do|dos)\s*[.,;]/iu);
+          expect(opts.history[0]?.content).toContain('Corte com João amanhã às 10h.');
+          expect(opts.userMessage).toContain('Corte com João amanhã às 10h.');
+          expect(opts.userMessage).toContain('<email>');
+          await opts.tools?.[0]?.run({
+            decisao: 'pronta_para_proposta',
+          });
+          return { toolCalls: [] };
+        },
+      );
+    },
+  );
+
+  it.each([
+    [
       'horário relativo específico',
       'Quero Corte com Maria amanhã às 10h',
       { decisao: 'pronta_para_proposta' },

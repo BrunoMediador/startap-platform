@@ -29,7 +29,9 @@ classificação roda com temperatura zero e tool forçada; tool ausente, shape i
 deadline fecham em coleta de dados. `coletar_dados` devolve uma pergunta determinística apenas
 para os campos faltantes, sem chamar o agente de agenda. `conversa_segura` pode receber resposta
 normal e apenas capabilities read-only; ela nunca recebe `propor_agendamento`, tools legadas
-mutantes nem `tool_choice` mutante.
+mutantes nem `tool_choice` mutante. Antes de sair, a resposta livre passa por filtro fail-closed:
+cartão, confirmação, agendamento/remarcação/cancelamento, shape de cartão e CTA `SIM` retornam
+um fallback server-side sem alteração. Persona e conteúdo inbound não podem contornar essa barreira.
 
 Somente `pronta_para_proposta` chama o agente de agenda, também com `tool_choice` forçando
 `propor_agendamento`. Assim, uma intenção completa não depende do comportamento `auto` do

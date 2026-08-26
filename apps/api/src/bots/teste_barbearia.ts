@@ -247,6 +247,49 @@ function sanitizarResposta(text: string): string {
     .trim();
 }
 
+const SAFE_CONVERSATION_REPLY_FALLBACK =
+  'Posso ajudar com informações sobre horários, serviços e valores.';
+
+type SafeConversationReply =
+  | { allowed: true; reply: string }
+  | { allowed: false; reason: 'empty' | 'booking_term' | 'confirmation_cta' };
+
+/**
+ * O ramo `conversa_segura` nunca tem capability de escrita. Como a persona e a mensagem são
+ * conteúdo não confiável, a resposta textual também precisa fechar antes de parecer um cartão
+ * ou uma confirmação. O filtro é deliberadamente conservador: em dúvida retorna o fallback
+ * server-side, sem referência ao conteúdo bloqueado.
+ */
+function restrictSafeConversationReply(text: string): SafeConversationReply {
+  const reply = sanitizarResposta(text);
+  if (!reply) return { allowed: false, reason: 'empty' };
+  const cardFieldCount = (
+    reply.match(/\b(?:dia|data|hor[aá]rio|servi[cç]o|valor|profissional)\s*:/giu) ?? []
+  ).length;
+
+  if (
+    /\b(?:cart[aã]o|confirma(?:ç(?:a|ã)o|ç(?:o|õ)es|r|do|da)?|agend(?:amento|amentos|ar|ado|ada|ados|adas)?|remarc(?:aç(?:a|ã)o|aç(?:o|õ)es|ar|ado|ada|ados|adas)?|cancel(?:amento|amentos|ar|ado|ada|ados|adas)?)\b/iu.test(
+      reply,
+    ) ||
+    cardFieldCount >= 2 ||
+    /\b(?:hor[aá]rio|atendimento)\s+(?:foi\s+)?marcad[oa]s?\b/iu.test(reply)
+  ) {
+    return { allowed: false, reason: 'booking_term' };
+  }
+
+  if (
+    /\b(?:responda|responder|mande|enviar|envie|digite|diga)\s+(?:com\s+)?["“']?sim\b/iu.test(
+      reply,
+    ) ||
+    /\bsim\s+(?:para\s+)?(?:confirmar|agendar|marcar)\b/iu.test(reply) ||
+    /(?:^|\n)\s*(?:responda\s+)?sim[!. ]*$/imu.test(reply)
+  ) {
+    return { allowed: false, reason: 'confirmation_cta' };
+  }
+
+  return { allowed: true, reply };
+}
+
 export class TesteBarbeariaBot extends BotBase {
   constructor(opts?: { slotOverride?: string }) {
     super({
@@ -2696,6 +2739,17 @@ export class TesteBarbeariaBot extends BotBase {
         'booking confirmation blocked unpersisted model reply',
       );
       return buildBookingProposalClarification(['servico', 'profissional', 'horario']);
+    }
+    if (bookingSafeConversation) {
+      const safeReply = restrictSafeConversationReply(result.reply);
+      if (!safeReply.allowed) {
+        this.log.warn(
+          { slot: this.slot, status: 'safe_reply_blocked', reason: safeReply.reason },
+          'booking confirmation blocked unsafe safe-conversation reply',
+        );
+        return SAFE_CONVERSATION_REPLY_FALLBACK;
+      }
+      return safeReply.reply;
     }
     return sanitizarResposta(result.reply);
   }
