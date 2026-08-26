@@ -4,7 +4,6 @@
  * Único modo de operação: instanciar GoogleCalendarClient com { credentialsJson, calendarId }.
  * O JSON deve ter type === "service_account". Token obtido via JWT/SA direto no token endpoint.
  */
-import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'google-calendar' });
@@ -14,51 +13,86 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * SCRUM-148 (LGPD art. 12 §2) — extrai o gcal_event_id do path de um endpoint POR EVENTO
- * (`/calendars/<calendarId>/events/<eventId>`, usado por deleteEvent/patchEvent).
- *
- * Endpoints de COLEÇÃO (`.../events`, `.../events?<qs>`, `/freeBusy`) não têm id e devolvem
- * null — nada a redigir, a mensagem do Google chega inteira pro debug.
- */
-function eventIdFromPath(path: string): string | null {
-  const m = /\/calendars\/[^/]+\/events\/([^/?#]+)/.exec(path);
-  if (!m) return null;
-  const raw = m[1];
-  // O path é montado com o eventId CRU (sem encode) nos dois call sites; decodificar mesmo
-  // assim cobre um id que já venha percent-encoded, pra redigir a forma que o Google ecoa.
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
+/** Categorias fechadas: nenhum identificador ou query do path é observável fora deste módulo. */
+type GcalEndpoint = 'events_collection' | 'event' | 'freebusy' | 'unknown';
+type GcalOperation = 'read' | 'create' | 'update' | 'delete' | 'query' | 'other';
+type GcalHttpErrorClass =
+  | 'bad_request'
+  | 'unauthenticated'
+  | 'forbidden'
+  | 'not_found'
+  | 'conflict'
+  | 'rate_limited'
+  | 'backend_error'
+  | 'server_error'
+  | 'unexpected_http';
+
+interface GcalRequestContext {
+  endpoint: GcalEndpoint;
+  operation: GcalOperation;
+}
+
+/** Erro de borda deliberadamente seguro para callers que registram `err.message`. */
+class GcalSafeRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GcalSafeRequestError';
   }
 }
 
-/** Escapa metacaracteres para montar um RegExp literal a partir de um id arbitrário. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function gcalRequestContext(path: string, method: string | undefined): GcalRequestContext {
+  const pathname = path.split(/[?#]/, 1)[0] ?? '';
+  const endpoint: GcalEndpoint =
+    pathname === '/freeBusy'
+      ? 'freebusy'
+      : /^\/calendars\/[^/]+\/events\/[^/]+$/.test(pathname)
+        ? 'event'
+        : /^\/calendars\/[^/]+\/events$/.test(pathname)
+          ? 'events_collection'
+          : 'unknown';
+  const requestMethod = method?.toUpperCase() ?? 'GET';
+  const operation: GcalOperation =
+    endpoint === 'freebusy'
+      ? 'query'
+      : requestMethod === 'GET'
+        ? 'read'
+        : requestMethod === 'POST'
+          ? 'create'
+          : requestMethod === 'PATCH'
+            ? 'update'
+            : requestMethod === 'DELETE'
+              ? 'delete'
+              : 'other';
+  return { endpoint, operation };
 }
 
-/**
- * SCRUM-148 — ponto ÚNICO de saída da redação do event id.
- *
- * O SCRUM-91 hasheou o CAMPO `eventId` nos logs do portal, mas o caminho de ERRO escapava:
- * a mensagem `GCal ${path} -> HTTP ${status}: ${text}` carrega o id cru DUAS vezes — no path
- * e dentro do corpo que o Google ecoa (`"Event not found: <id>"`). Como o portal loga
- * `{ eventId: hashEventIdForLog(id), err: msg }`, o hash ia no campo certo e o id cru ia no
- * `err` ao lado. Aqui o id é substituído pelo MESMO hash do SCRUM-91 em TODAS as ocorrências
- * do texto, então a correlação cross-serviço continua funcionando e nada cru sai da integração.
- */
-function redactEventId(text: string, eventId: string | null): string {
-  if (!eventId) return text;
-  const hashed = hashEventIdForLog(eventId);
-  let out = text.split(eventId).join(hashed);
-  // O Google pode ecoar a forma percent-encoded do id; redigir as duas grafias.
-  const encoded = encodeURIComponent(eventId);
-  if (encoded !== eventId) out = out.split(encoded).join(hashed);
-  // Defesa em profundidade: se o id ainda aparecer com case diferente, pega também.
-  const re = new RegExp(escapeRegExp(eventId), 'gi');
-  return out.replace(re, hashed);
+function classifyGcalHttpError(status: number, externalBody: string): GcalHttpErrorClass {
+  // O corpo externo só existe transitoriamente para classificar a falha. Nunca é logado ou lançado.
+  const normalized = externalBody.toLowerCase();
+  if (
+    status === 429 ||
+    normalized.includes('ratelimitexceeded') ||
+    normalized.includes('userratelimitexceeded') ||
+    normalized.includes('quotaexceeded')
+  ) {
+    return 'rate_limited';
+  }
+  if (status === 400) return 'bad_request';
+  if (status === 401) return 'unauthenticated';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 409) return 'conflict';
+  if (normalized.includes('backenderror')) return 'backend_error';
+  if (status >= 500) return 'server_error';
+  return 'unexpected_http';
+}
+
+function safeGcalHttpMessage(
+  context: GcalRequestContext,
+  status: number,
+  errorClass: GcalHttpErrorClass,
+): string {
+  return `GCal ${context.operation}:${context.endpoint} -> HTTP ${status} [${errorClass}]`;
 }
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -181,20 +215,29 @@ async function gcalFetch<T = unknown>(
       } catch (err) {
         if (timedOut) throw err;
       }
-      // SCRUM-148: nem o log nem a mensagem lançada podem carregar o event id CRU — os dois
-      // canais passam pela MESMA redação (o `err` que o portal loga é esta mensagem).
-      const eventId = eventIdFromPath(path);
-      const safePath = redactEventId(path, eventId);
-      const safeBody = redactEventId(text, eventId);
-      log.error({ path: safePath, status: res.status, body: safeBody }, 'GCal error');
-      throw new Error(`GCal ${safePath} -> HTTP ${res.status}: ${safeBody}`);
+      const context = gcalRequestContext(path, opts.method);
+      const errorClass = classifyGcalHttpError(res.status, text);
+      // Nunca registrar path, URL, headers ou body: todos podem carregar identificadores/PII externos.
+      log.error(
+        {
+          endpoint: context.endpoint,
+          operation: context.operation,
+          http_status: res.status,
+          error_class: errorClass,
+        },
+        'GCal HTTP error',
+      );
+      throw new GcalSafeRequestError(safeGcalHttpMessage(context, res.status, errorClass));
     }
     // DELETE retorna 204 sem corpo
     if (res.status === 204) return undefined as unknown as T;
     return (await withinDeadline(res.json())) as T;
   } catch (err) {
     if (timedOut || controller.signal.aborted) throw new Error(GCAL_REQUEST_TIMEOUT_SENTINEL);
-    throw err;
+    if (err instanceof GcalSafeRequestError) throw err;
+    // `fetch`, tokenFn e JSON.parse podem trazer texto controlado externamente no erro. O caller
+    // frequentemente registra `err.message`, então a borda converte qualquer causa desconhecida.
+    throw new GcalSafeRequestError('GCal other:unknown -> [network_error]');
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -279,21 +322,33 @@ export class GoogleCalendarClient {
       this.creds.private_key,
     );
 
-    const res = await fetch(tokenUri, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        assertion: jwt,
-      }),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`SA token request failed: HTTP ${res.status}: ${text}`);
+    let res: Response;
+    try {
+      res = await fetch(tokenUri, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion: jwt,
+        }),
+      });
+    } catch {
+      throw new GcalSafeRequestError('GCal auth:token -> [network_error]');
     }
 
-    const json = (await res.json()) as { access_token: string; expires_in: number };
+    if (!res.ok) {
+      throw new GcalSafeRequestError(`GCal auth:token -> HTTP ${res.status} [auth_failed]`);
+    }
+
+    let json: { access_token?: unknown; expires_in?: unknown };
+    try {
+      json = (await res.json()) as { access_token?: unknown; expires_in?: unknown };
+    } catch {
+      throw new GcalSafeRequestError('GCal auth:token -> [invalid_response]');
+    }
+    if (typeof json.access_token !== 'string' || typeof json.expires_in !== 'number') {
+      throw new GcalSafeRequestError('GCal auth:token -> [invalid_response]');
+    }
     this.saTokenCache = {
       token: json.access_token,
       expiresAt: Date.now() + json.expires_in * 1000,

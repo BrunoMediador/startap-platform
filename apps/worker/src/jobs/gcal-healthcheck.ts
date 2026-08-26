@@ -99,8 +99,29 @@ function extractGoogleReasons(errorMessage: string): string[] {
   return Array.from(matches, (m) => m[1].toLowerCase());
 }
 
+const SAFE_GCAL_ERROR_CLASSES = new Set([
+  'bad_request',
+  'unauthenticated',
+  'forbidden',
+  'not_found',
+  'conflict',
+  'rate_limited',
+  'backend_error',
+  'server_error',
+  'unexpected_http',
+]);
+
+/** Enum fechado emitido pelo client, sem depender do corpo externo do Google. */
+function safeGcalErrorClass(errorMessage: string): string | undefined {
+  const match = /\[([a-z_]+)\]$/.exec(errorMessage);
+  if (!match || !SAFE_GCAL_ERROR_CLASSES.has(match[1])) return undefined;
+  return match[1];
+}
+
 /** true se o corpo do erro carrega um `reason` de rate-limit/quota/backend (transitório). */
 function hasTransientGoogleReason(errorMessage: string): boolean {
+  const safeClass = safeGcalErrorClass(errorMessage);
+  if (safeClass === 'rate_limited' || safeClass === 'backend_error') return true;
   return extractGoogleReasons(errorMessage).some((r) => TRANSIENT_GOOGLE_REASONS.has(r));
 }
 
@@ -180,10 +201,9 @@ async function checkOne(
 
   const verdict = classifyFailure(res.error);
   const status = httpStatusFromError(res.error);
-  // Anexa o 1º `reason` do Google à categoria (ex.: `http_403:ratelimitexceeded` vs
-  // `http_403:forbidden`) — torna visível NO LOG por que um 403 demoveu ou foi preservado,
-  // sem vazar o corpo cru. Ajuda a auditar o risco "403 rate-limit rebaixaria agenda boa".
-  const reason = extractGoogleReasons(res.error)[0];
+  // O client novo fornece enum seguro; mocks/versões anteriores seguem no fallback do reason.
+  // Isso mantém visível por que um 403 foi preservado sem registrar corpo externo do Google.
+  const reason = safeGcalErrorClass(res.error) ?? extractGoogleReasons(res.error)[0];
   const reasonTag = reason ? `:${reason}` : '';
   const errorCategory =
     res.error === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL

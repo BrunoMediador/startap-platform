@@ -1,12 +1,9 @@
 /**
- * SCRUM-148 (LGPD, art. 12 §2) — o gcal_event_id NUNCA escapa CRU pelo caminho de ERRO.
+ * LGPD — nenhum identificador, query ou corpo externo do GCal escapa pelo caminho de ERRO.
  *
- * O SCRUM-91 hasheou o `eventId` nos ~16 pontos de log do portal, mas hasheou o CAMPO
- * `eventId` — e não a MENSAGEM DE ERRO que viaja ao lado dele. Como `deleteEvent`/`patchEvent`
- * montam a URL com o eventId CRU no path (`/calendars/<cal>/events/<eventId>`) e o erro HTTP
- * é construído como `GCal ${path} -> HTTP ${status}: ${text}`, todo log do tipo
- * `{ eventId: hashEventIdForLog(id), err: msg }` publicava o hash no campo certo e o ID CRU
- * dentro do `err`. O corpo de resposta do Google (`text`) também ecoa o id.
+ * `deleteEvent`/`patchEvent` montam a URL com calendarId e eventId, e a resposta do Google
+ * pode ecoar qualquer dado externo. Como a exceção atravessa callers que logam `err`, a
+ * integração só pode expor operação/endpoint categorizados, status HTTP e enum fechado.
  *
  * Este teste ataca a CLASSE no ponto de SAÍDA da integração (gcalFetch): nem a mensagem
  * lançada, nem o log do módulo podem conter o id cru — em NENHUM dos dois canais.
@@ -21,7 +18,6 @@ vi.mock('@startap/core/logger', () => ({
   logger: { child: () => logSpies },
 }));
 
-import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import {
   GCAL_REQUEST_TIMEOUT_MS,
   GCAL_REQUEST_TIMEOUT_SENTINEL,
@@ -94,7 +90,7 @@ function loggedPayload(): string {
 }
 
 describe('SCRUM-148 — deleteEvent: id cru não escapa pelo erro', () => {
-  it('a mensagem do erro lançado NÃO contém o eventId cru (vai hasheado)', async () => {
+  it('a mensagem do erro lançado expõe só endpoint categorizado, HTTP e enum', async () => {
     fetchMock.mockResolvedValue(errorResponse(404, GOOGLE_404_BODY));
     const client = makeClient();
 
@@ -108,8 +104,9 @@ describe('SCRUM-148 — deleteEvent: id cru não escapa pelo erro', () => {
     expect(err?.message).toContain('404');
     // …mas o id cru sumiu — do path E do corpo ecoado pelo Google.
     expect(err?.message).not.toContain(RAW_EVENT_ID);
-    // E o hash determinístico do SCRUM-91 continua permitindo correlação cross-serviço.
-    expect(err?.message).toContain(hashEventIdForLog(RAW_EVENT_ID));
+    expect(err?.message).not.toContain(CAL_ID);
+    expect(err?.message).toContain('delete:event');
+    expect(err?.message).toContain('[not_found]');
   });
 
   it('o log do módulo (canal 2) também não carrega o id cru', async () => {
@@ -141,25 +138,72 @@ describe('SCRUM-148 — patchEvent: id cru não escapa pelo erro', () => {
 });
 
 describe('SCRUM-148 — a redação não estraga o diagnóstico', () => {
-  it('erro SEM event id no path (createEvent/list) permanece intacto', async () => {
-    const body = JSON.stringify({ error: { code: 500, message: 'Backend Error' } });
+  it('erro de coleção não registra calendarId, query nem corpo externo', async () => {
+    const externalEmail = 'cliente.sensivel@example.test';
+    const externalPhone = '+5511999999999';
+    const externalToken = 'token-externo-nao-logar';
+    const body = JSON.stringify({
+      error: {
+        code: 400,
+        message: `${externalEmail} ${externalPhone} ${externalToken}`,
+      },
+    });
     fetchMock.mockResolvedValue(errorResponse(500, body));
     const client = makeClient();
 
     const err = await client
-      .createEvent({
-        summary: 'Corte',
-        startISO: '2026-07-01T14:00:00-03:00',
-        endISO: '2026-07-01T14:30:00-03:00',
+      .listEvents({
+        timeMin: '2026-07-01T14:00:00-03:00',
+        timeMax: '2026-07-01T14:30:00-03:00',
       })
       .then(
         () => null,
         (e: unknown) => e as Error,
       );
 
-    // Nada a redigir aqui: a mensagem do Google chega inteira pro debug.
-    expect(err?.message).toContain('Backend Error');
-    expect(err?.message).toContain('500');
+    const output = `${err?.message ?? ''}\n${loggedPayload()}`;
+    for (const marker of [
+      CAL_ID,
+      encodeURIComponent(CAL_ID),
+      externalEmail,
+      externalPhone,
+      externalToken,
+    ]) {
+      expect(output).not.toContain(marker);
+    }
+    expect(err?.message).toContain('read:events_collection');
+    expect(err?.message).toContain('HTTP 500');
+    expect(err?.message).toContain('[server_error]');
+    expect(logSpies.error).toHaveBeenCalledWith(
+      {
+        endpoint: 'events_collection',
+        operation: 'read',
+        http_status: 500,
+        error_class: 'server_error',
+      },
+      'GCal HTTP error',
+    );
+  });
+
+  it('converte falha textual do tokenFn em erro seguro antes de chegar ao caller', async () => {
+    const externalFailure = 'falha externa com marcador que não pode propagar';
+    const client = makeClient();
+    vi.spyOn(
+      client as unknown as { getAccessToken: () => Promise<string> },
+      'getAccessToken',
+    ).mockRejectedValue(new Error(externalFailure));
+
+    const err = await client
+      .listEvents({ timeMin: '2026-07-01T14:00:00Z', timeMax: '2026-07-01T15:00:00Z' })
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(err?.message).toBe('GCal other:unknown -> [network_error]');
+    expect(err?.message).not.toContain(externalFailure);
+    expect(loggedPayload()).not.toContain(externalFailure);
   });
 });
 

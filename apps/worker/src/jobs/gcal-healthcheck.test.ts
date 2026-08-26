@@ -146,6 +146,20 @@ describe('runGcalHealthcheck', () => {
     expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
   });
 
+  it('SCRUM-148: enum seguro rate_limited em HTTP 403 NÃO demove — status preservado', async () => {
+    listActiveIndividualGcals.mockResolvedValue([individual()]);
+    testConnection.mockResolvedValue({
+      ok: false,
+      error: 'GCal read:events_collection -> HTTP 403 [rate_limited]',
+    });
+
+    const { runGcalHealthcheck } = await loadJob();
+    const r = await runGcalHealthcheck();
+
+    expect(setIndividualGcalStatus).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
+  });
+
   it('SCRUM-41: HTTP 403 userRateLimitExceeded / quotaExceeded NÃO demovem (inconclusive)', async () => {
     for (const reason of ['userRateLimitExceeded', 'quotaExceeded']) {
       vi.clearAllMocks();
