@@ -66,37 +66,13 @@ type Verdict = 'active' | 'invalid' | null;
 
 /** Sentinela interno de timeout (não é mensagem do Google) — classificado como inconclusivo. */
 const GCAL_HEALTHCHECK_TIMEOUT_SENTINEL = '__gcal_healthcheck_timeout__';
+/** Mensagens fora do contrato seguro não entram em logs nem influenciam a classificação. */
+const GCAL_HEALTHCHECK_UNEXPECTED_SENTINEL = '__gcal_healthcheck_unexpected__';
 
 /** Extrai o status HTTP de uma mensagem de erro do GoogleCalendarClient, se houver. */
 function httpStatusFromError(msg: string): number | null {
   const m = msg.match(/HTTP (\d{3})/);
   return m ? Number(m[1]) : null;
-}
-
-/**
- * Razões (`error.errors[].reason` no corpo do Google) que indicam causa TRANSITÓRIA:
- * rate-limit / quota / backend momentâneo. O ponto do SCRUM-41: o Google devolve HTTP 403
- * TANTO para "forbidden" real (SA sem acesso — definitivo) QUANTO para rate-limit
- * (`rateLimitExceeded` / `userRateLimitExceeded`) — só o `reason` distingue os dois. Rebaixar
- * por rate-limit derruba uma agenda BOA num pico de tráfego e o bot para de agendar pra um
- * cliente que estava OK. Comparação em lower-case (o Google emite camelCase; normalizamos).
- */
-const TRANSIENT_GOOGLE_REASONS: ReadonlySet<string> = new Set([
-  'ratelimitexceeded',
-  'userratelimitexceeded',
-  'quotaexceeded',
-  'backenderror',
-]);
-
-/**
- * Extrai os `reason` de um corpo de erro do Google embutido na mensagem do client
- * (`... -> HTTP 403: {"error":{"errors":[{"reason":"rateLimitExceeded",...}]}}`). Devolve
- * tudo em lower-case. Sem match (corpo ausente / outro formato) = []. Não faz JSON.parse
- * (o corpo vem concatenado, pode estar truncado) — regex tolerante é suficiente e robusto.
- */
-function extractGoogleReasons(errorMessage: string): string[] {
-  const matches = errorMessage.matchAll(/"reason"\s*:\s*"([^"]+)"/gi);
-  return Array.from(matches, (m) => m[1].toLowerCase());
 }
 
 const SAFE_GCAL_ERROR_CLASSES = new Set([
@@ -109,6 +85,9 @@ const SAFE_GCAL_ERROR_CLASSES = new Set([
   'backend_error',
   'server_error',
   'unexpected_http',
+  'auth_failed',
+  'network_error',
+  'invalid_response',
 ]);
 
 /** Enum fechado emitido pelo client, sem depender do corpo externo do Google. */
@@ -118,11 +97,24 @@ function safeGcalErrorClass(errorMessage: string): string | undefined {
   return match[1];
 }
 
-/** true se o corpo do erro carrega um `reason` de rate-limit/quota/backend (transitório). */
+/** Só classes fechadas emitidas pelo client podem influenciar o veredito. */
 function hasTransientGoogleReason(errorMessage: string): boolean {
   const safeClass = safeGcalErrorClass(errorMessage);
-  if (safeClass === 'rate_limited' || safeClass === 'backend_error') return true;
-  return extractGoogleReasons(errorMessage).some((r) => TRANSIENT_GOOGLE_REASONS.has(r));
+  return safeClass === 'rate_limited' || safeClass === 'backend_error';
+}
+
+function sanitizeHealthcheckError(error: unknown): string {
+  if (error === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL) return error;
+  if (typeof error !== 'string') return GCAL_HEALTHCHECK_UNEXPECTED_SENTINEL;
+  const match =
+    /^GCal (?:read|create|update|delete|query|other|auth):(events_collection|event|freebusy|unknown|token) ->(?: HTTP ([1-5]\d{2}))? \[([a-z_]+)\]$/.exec(
+      error,
+    );
+  if (!match || !SAFE_GCAL_ERROR_CLASSES.has(match[3])) {
+    return GCAL_HEALTHCHECK_UNEXPECTED_SENTINEL;
+  }
+  const status = match[2] ? ` HTTP ${match[2]}` : '';
+  return `GCal healthcheck:unknown ->${status} [${match[3]}]`;
 }
 
 /**
@@ -133,15 +125,14 @@ function hasTransientGoogleReason(errorMessage: string): boolean {
  * (creds/token rejeitados), 403 forbidden REAL (SA sem permissão), 404 (agenda inexistente).
  *
  * TRANSITÓRIA (preserva status + re-tenta no próximo ciclo): timeout/rede; 408/429/5xx; e — o
- * fix do SCRUM-41 — QUALQUER status (inclusive 403) cujo `reason` do Google seja
- * rate-limit/quota/backend. Um pico de rate-limit devolve 403 e NÃO pode rebaixar uma agenda
- * que está OK.
+ * fix do SCRUM-41 — o enum seguro `rate_limited`/`backend_error`, inclusive quando o Google usa
+ * 403. Um pico de rate-limit NÃO pode rebaixar uma agenda que está OK.
  */
 function classifyFailure(errorMessage: string): Verdict {
   if (errorMessage === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL) return null; // timeout = inconclusivo
 
-  // Rate-limit/quota/backend reconhecido pelo `reason` do corpo, ANTES do status: o Google usa
-  // 403 tanto pra rate-limit quanto pra forbidden real, então o status sozinho não decide.
+  // `rate_limited`/`backend_error` são enums seguros, antes do status: o Google usa 403 para
+  // rate-limit e forbidden, então o status sozinho não decide.
   if (hasTransientGoogleReason(errorMessage)) return null;
 
   const status = httpStatusFromError(errorMessage);
@@ -169,11 +160,11 @@ async function testWithTimeout(
     );
   });
   try {
-    return await Promise.race([client.testConnection(), timeout]);
-  } catch (err: unknown) {
-    // testConnection já captura tudo internamente, mas blindamos: erro inesperado -> trata
-    // como falha cujo classificador decide (sem status HTTP -> inconclusivo).
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const result = await Promise.race([client.testConnection(), timeout]);
+    if (result.ok) return result;
+    return { ok: false, error: sanitizeHealthcheckError(result.error) };
+  } catch {
+    return { ok: false, error: GCAL_HEALTHCHECK_UNEXPECTED_SENTINEL };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -201,18 +192,19 @@ async function checkOne(
 
   const verdict = classifyFailure(res.error);
   const status = httpStatusFromError(res.error);
-  // O client novo fornece enum seguro; mocks/versões anteriores seguem no fallback do reason.
-  // Isso mantém visível por que um 403 foi preservado sem registrar corpo externo do Google.
-  const reason = safeGcalErrorClass(res.error) ?? extractGoogleReasons(res.error)[0];
+  // O enum já foi allowlisted pelo sanitizer; qualquer fallback textual virou sentinela fixa.
+  const reason = safeGcalErrorClass(res.error);
   const reasonTag = reason ? `:${reason}` : '';
   const errorCategory =
     res.error === GCAL_HEALTHCHECK_TIMEOUT_SENTINEL
       ? 'timeout'
-      : status
-        ? `http_${status}${reasonTag}`
-        : reason
-          ? `error${reasonTag}`
-          : 'network';
+      : res.error === GCAL_HEALTHCHECK_UNEXPECTED_SENTINEL
+        ? 'unexpected'
+        : status
+          ? `http_${status}${reasonTag}`
+          : reason
+            ? `error${reasonTag}`
+            : 'network';
   return { verdict, errorCategory };
 }
 

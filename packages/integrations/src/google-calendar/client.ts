@@ -8,15 +8,10 @@ import { logger } from '@startap/core/logger';
 
 const log = logger.child({ module: 'google-calendar' });
 
-/** Mensagem de um erro `unknown` (sem vazar stack/objeto cru em log). */
-function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 /** Categorias fechadas: nenhum identificador ou query do path é observável fora deste módulo. */
-type GcalEndpoint = 'events_collection' | 'event' | 'freebusy' | 'unknown';
-type GcalOperation = 'read' | 'create' | 'update' | 'delete' | 'query' | 'other';
-type GcalHttpErrorClass =
+export type GcalEndpoint = 'events_collection' | 'event' | 'freebusy' | 'unknown';
+export type GcalOperation = 'read' | 'create' | 'update' | 'delete' | 'query' | 'other';
+export type GcalHttpErrorClass =
   | 'bad_request'
   | 'unauthenticated'
   | 'forbidden'
@@ -140,6 +135,27 @@ export type FreeBusyResult = Record<string, FreeBusyInterval[]>;
 
 export type TestConnectionResult = { ok: true } | { ok: false; error: string };
 
+/** Sentinela de timeout de PÁGINA do listEventsPaged (não é mensagem do Google). */
+export const GCAL_LIST_TIMEOUT_SENTINEL = '__gcal_list_timeout__';
+
+/**
+ * Motivo de incompletude sanitizado. Nunca carrega erro, URL, query, token, identificador de
+ * calendário ou corpo externo: o consumidor usa somente este contrato fechado para o log.
+ */
+export type GcalListIncompleteReason =
+  | { code: 'truncated_max_pages' }
+  | { code: typeof GCAL_LIST_TIMEOUT_SENTINEL }
+  | { code: 'token_error' }
+  | { code: 'network_error' }
+  | { code: 'invalid_response' }
+  | {
+      code: 'http_error';
+      endpoint: 'events_collection';
+      operation: 'read';
+      httpStatus: number;
+      errorClass: GcalHttpErrorClass;
+    };
+
 /**
  * Resultado da listagem PAGINADA de eventos (SCRUM-89, reconciliação GCal→atendimentos).
  *
@@ -154,16 +170,9 @@ export interface ListEventsPagedResult {
   complete: boolean;
   /** Quantas páginas foram efetivamente buscadas (HTTP round-trips bem-sucedidos). */
   pages: number;
-  /**
-   * Motivo da incompletude (só quando `complete=false`), pra log/observabilidade do caller:
-   *   'truncated_max_pages' | GCAL_LIST_TIMEOUT_SENTINEL | mensagem de erro HTTP/rede.
-   * O caller classifica (403 rate-limit vs forbidden etc.) reusando a taxonomia do gcal-healthcheck.
-   */
-  incompleteReason?: string;
+  /** Motivo fechado da incompletude (só quando `complete=false`). */
+  incompleteReason?: GcalListIncompleteReason;
 }
-
-/** Sentinela de timeout de PÁGINA do listEventsPaged (não é mensagem do Google) — o caller o trata como incompleto. */
-export const GCAL_LIST_TIMEOUT_SENTINEL = '__gcal_list_timeout__';
 
 /**
  * Limite de toda chamada ao Calendar, inclusive POST/GET de evento. Precisa
@@ -387,8 +396,9 @@ export class GoogleCalendarClient {
    * TIMEOUT DURO POR PÁGINA (regra de ouro 7): cada `fetch` corre contra `timeoutMs` via
    * AbortController — nunca aguardar o Google infinito. Timeout = página incompleta = não deleta.
    *
-   * NÃO reusa `gcalFetch` (que não expõe AbortController nem o corpo de erro/nextPageToken de
-   * forma paginável) — faz o fetch localmente. `listEvents` fica intocado.
+   * NÃO reusa `gcalFetch` (o paginador precisa controlar AbortController e nextPageToken por
+   * página) — faz o fetch localmente e expõe somente o contrato de falha sanitizado. `listEvents`
+   * fica intocado.
    */
   async listEventsPaged(opts: {
     timeMin: string;
@@ -407,8 +417,8 @@ export class GoogleCalendarClient {
       let token: string;
       try {
         token = await this.getAccessToken();
-      } catch (err: unknown) {
-        return { events, complete: false, pages, incompleteReason: errMessage(err) };
+      } catch {
+        return { events, complete: false, pages, incompleteReason: { code: 'token_error' } };
       }
 
       const qs = new URLSearchParams({
@@ -431,10 +441,10 @@ export class GoogleCalendarClient {
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           signal: controller.signal,
         });
-      } catch (err: unknown) {
+      } catch {
         // AbortController.abort() → fetch rejeita: timeout se foi o nosso timer; senão erro de rede.
-        const reason = controller.signal.aborted ? GCAL_LIST_TIMEOUT_SENTINEL : errMessage(err);
-        return { events, complete: false, pages, incompleteReason: reason };
+        const code = controller.signal.aborted ? GCAL_LIST_TIMEOUT_SENTINEL : 'network_error';
+        return { events, complete: false, pages, incompleteReason: { code } };
       } finally {
         clearTimeout(timer);
       }
@@ -442,20 +452,37 @@ export class GoogleCalendarClient {
       pages++;
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        log.warn({ status: res.status }, 'GCal listEventsPaged: página com erro HTTP');
+        const endpoint = 'events_collection' as const;
+        const operation = 'read' as const;
+        const errorClass = classifyGcalHttpError(res.status, text);
+        log.warn(
+          {
+            endpoint,
+            operation,
+            http_status: res.status,
+            error_class: errorClass,
+          },
+          'GCal listEventsPaged: página com erro HTTP',
+        );
         return {
           events,
           complete: false,
           pages,
-          incompleteReason: `GCal listEventsPaged -> HTTP ${res.status}: ${text}`,
+          incompleteReason: {
+            code: 'http_error',
+            endpoint,
+            operation,
+            httpStatus: res.status,
+            errorClass,
+          },
         };
       }
 
       let json: { items?: CalendarEvent[]; nextPageToken?: string };
       try {
         json = (await res.json()) as { items?: CalendarEvent[]; nextPageToken?: string };
-      } catch (err: unknown) {
-        return { events, complete: false, pages, incompleteReason: errMessage(err) };
+      } catch {
+        return { events, complete: false, pages, incompleteReason: { code: 'invalid_response' } };
       }
       for (const item of json.items ?? []) events.push(item);
 
@@ -467,7 +494,7 @@ export class GoogleCalendarClient {
     }
 
     // Saiu do while porque bateu no teto de páginas COM token ainda pendente → PARCIAL.
-    return { events, complete: false, pages, incompleteReason: 'truncated_max_pages' };
+    return { events, complete: false, pages, incompleteReason: { code: 'truncated_max_pages' } };
   }
 
   /**

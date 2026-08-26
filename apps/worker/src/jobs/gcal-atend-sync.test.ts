@@ -115,7 +115,7 @@ function pagedClient(result: {
   events: unknown[];
   complete: boolean;
   pages?: number;
-  incompleteReason?: string;
+  incompleteReason?: unknown;
 }) {
   return { listEventsPaged: vi.fn().mockResolvedValue({ pages: 1, ...result }) };
 }
@@ -366,6 +366,34 @@ describe('DELEÇÃO — só sobre listagem completa + auditoria', () => {
     // Nem sequer lê candidatos quando incompleto (fail-safe antes de tocar o banco).
     expect(listAgendaAtendimentosInWindow).not.toHaveBeenCalled();
   });
+
+  it('motivo de incompletude adulterado não é propagado ao log do worker', async () => {
+    const externalMarkers = [
+      'cliente.sensivel@example.test',
+      '+5511999999999',
+      'calendario-externo',
+      'pageToken=externo',
+      'token-externo-nao-logar',
+    ];
+    getGcalForSlot.mockResolvedValue(
+      pagedClient({
+        events: [],
+        complete: false,
+        incompleteReason: externalMarkers.join(' '),
+      }),
+    );
+
+    const { runGcalAtendSync } = await loadJob();
+    const res = await runGcalAtendSync();
+
+    expect(res.skippedIncomplete).toBe(1);
+    const warning = logWarn.mock.calls.find((call) =>
+      String(call[1]).includes('listagem incompleta'),
+    );
+    expect(warning?.[0]).toMatchObject({ reason: 'unknown' });
+    const output = JSON.stringify(warning);
+    for (const marker of externalMarkers) expect(output).not.toContain(marker);
+  });
 });
 
 describe('conjunto PRESENTE — filtros', () => {
@@ -503,7 +531,11 @@ describe('estabelecimento (N calendários)', () => {
       { colaboradorId: 10, client: pagedClient({ events: [ev('a')], complete: true }) },
       {
         colaboradorId: 20,
-        client: pagedClient({ events: [ev('b')], complete: false, incompleteReason: 'timeout' }),
+        client: pagedClient({
+          events: [ev('b')],
+          complete: false,
+          incompleteReason: { code: GCAL_LIST_TIMEOUT_SENTINEL },
+        }),
       },
     ]);
     listAgendaAtendimentosInWindow.mockResolvedValue([

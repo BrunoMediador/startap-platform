@@ -23,6 +23,9 @@ const listActiveColaboradorGcals = vi.fn();
 const setIndividualGcalStatus = vi.fn();
 const setColaboradorGcalStatus = vi.fn();
 const testConnection = vi.fn();
+const { logSpies } = vi.hoisted(() => ({
+  logSpies: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock('@startap/db', () => ({
   gcalHealth: {
@@ -50,7 +53,7 @@ vi.mock('@startap/core', () => ({
   decryptSecret: (s: string) => s,
 }));
 vi.mock('@startap/core/logger', () => ({
-  logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) },
+  logger: { child: () => logSpies },
 }));
 
 async function loadJob() {
@@ -83,6 +86,9 @@ beforeEach(() => {
   listActiveColaboradorGcals.mockResolvedValue([]);
   setIndividualGcalStatus.mockResolvedValue(1);
   setColaboradorGcalStatus.mockResolvedValue(1);
+  logSpies.info.mockClear();
+  logSpies.warn.mockClear();
+  logSpies.error.mockClear();
 });
 
 afterEach(() => {
@@ -105,7 +111,7 @@ describe('runGcalHealthcheck', () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error: 'GCal /calendars/cal/events -> HTTP 403: forbidden',
+      error: 'GCal read:events_collection -> HTTP 403 [forbidden]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -119,7 +125,7 @@ describe('runGcalHealthcheck', () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error: 'GCal /calendars/cal/events -> HTTP 503: backend error',
+      error: 'GCal read:events_collection -> HTTP 503 [server_error]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -130,12 +136,11 @@ describe('runGcalHealthcheck', () => {
   });
 
   // ── SCRUM-41: 403 rate-limit é TRANSITÓRIO (não pode rebaixar agenda boa num pico) ──
-  it('SCRUM-41: HTTP 403 rateLimitExceeded NÃO demove — status preservado (inconclusive)', async () => {
+  it('SCRUM-41: HTTP 403 rate_limited NÃO demove — status preservado (inconclusive)', async () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error:
-        'GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"usageLimits","reason":"rateLimitExceeded","message":"Rate Limit Exceeded"}],"code":403,"message":"Rate Limit Exceeded"}}',
+      error: 'GCal read:events_collection -> HTTP 403 [rate_limited]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -146,11 +151,11 @@ describe('runGcalHealthcheck', () => {
     expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
   });
 
-  it('SCRUM-148: enum seguro rate_limited em HTTP 403 NÃO demove — status preservado', async () => {
+  it('SCRUM-148: fallback hostil vira sentinela fixa e não alcança logs do health-check', async () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error: 'GCal read:events_collection -> HTTP 403 [rate_limited]',
+      error: 'cliente.sensivel@example.test +5511999999999 token-externo-nao-logar',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -158,16 +163,21 @@ describe('runGcalHealthcheck', () => {
 
     expect(setIndividualGcalStatus).not.toHaveBeenCalled();
     expect(r).toMatchObject({ scanned: 1, healthy: 0, demoted: 0, inconclusive: 1 });
+    const output = JSON.stringify(logSpies.info.mock.calls);
+    expect(output).not.toContain('cliente.sensivel@example.test');
+    expect(output).not.toContain('+5511999999999');
+    expect(output).not.toContain('token-externo-nao-logar');
+    expect(output).toContain('unexpected');
   });
 
-  it('SCRUM-41: HTTP 403 userRateLimitExceeded / quotaExceeded NÃO demovem (inconclusive)', async () => {
-    for (const reason of ['userRateLimitExceeded', 'quotaExceeded']) {
+  it('SCRUM-41: enum rate_limited sempre preserva status (inconclusive)', async () => {
+    for (const errorClass of ['rate_limited', 'backend_error']) {
       vi.clearAllMocks();
       listActiveIndividualGcals.mockResolvedValue([individual()]);
       setIndividualGcalStatus.mockResolvedValue(1);
       testConnection.mockResolvedValue({
         ok: false,
-        error: `GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"usageLimits","reason":"${reason}"}],"code":403}}`,
+        error: `GCal read:events_collection -> HTTP 503 [${errorClass}]`,
       });
 
       const { runGcalHealthcheck } = await loadJob();
@@ -182,8 +192,7 @@ describe('runGcalHealthcheck', () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error:
-        'GCal /calendars/cal/events -> HTTP 403: {"error":{"errors":[{"domain":"global","reason":"forbidden","message":"Forbidden"}],"code":403,"message":"Forbidden"}}',
+      error: 'GCal read:events_collection -> HTTP 403 [forbidden]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -197,7 +206,7 @@ describe('runGcalHealthcheck', () => {
     listActiveIndividualGcals.mockResolvedValue([individual()]);
     testConnection.mockResolvedValue({
       ok: false,
-      error: 'GCal /calendars/cal/events -> HTTP 429: rate limited',
+      error: 'GCal read:events_collection -> HTTP 429 [rate_limited]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -218,8 +227,7 @@ describe('runGcalHealthcheck', () => {
     ]);
     testConnection.mockResolvedValue({
       ok: false,
-      error:
-        'GCal /calendars/colab/events -> HTTP 403: {"error":{"errors":[{"reason":"userRateLimitExceeded"}],"code":403}}',
+      error: 'GCal read:events_collection -> HTTP 403 [rate_limited]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
@@ -240,7 +248,7 @@ describe('runGcalHealthcheck', () => {
     ]);
     testConnection.mockResolvedValue({
       ok: false,
-      error: 'GCal /calendars/colab/events -> HTTP 404: notFound',
+      error: 'GCal read:events_collection -> HTTP 404 [not_found]',
     });
 
     const { runGcalHealthcheck } = await loadJob();
