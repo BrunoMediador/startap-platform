@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 /**
  * Lock de acao com efeito externo (ADR 0019, passo 3).
  *
@@ -78,13 +78,19 @@ export interface ActionLockResult<T> {
  * NUNCA lanca por causa do Redis — so propaga erro vindo da PROPRIA `action`
  * (ex.: o GCal retornar 403). Erro de Redis no acquire -> fail-open (executa).
  *
- * @param key    chave semantica da acao (ex.: actionlock:gcal:<slot>:<tel>:<isoInicio>)
+ * @param key    chave semantica pseudonimizada (nunca contém telefone em claro)
  * @param action a operacao idempotente a proteger (criar evento + responder)
  */
 export async function withActionLock<T>(
-  key: string,
+  key: string | null,
   action: () => Promise<T>,
 ): Promise<ActionLockResult<T>> {
+  // Sem pepper dedicado não há identidade pseudonimizada segura para a chave. Degrada
+  // exatamente como indisponibilidade do Redis: executa, mas não persiste PII no Redis.
+  if (key === null) {
+    log.warn({ status: 'disabled_missing_pepper' }, 'action-lock desabilitado: pepper ausente');
+    return { executed: true, value: await action(), degraded: true };
+  }
   const token = randomUUID();
   let acquired = false;
   try {
@@ -96,7 +102,10 @@ export async function withActionLock<T>(
     );
     if (res !== 'OK') {
       // Outro processamento ja segura o lock -> a acao ja foi/esta sendo feita.
-      log.info({ key }, 'action-lock nao adquirido — acao ja em andamento, pulando');
+      log.info(
+        { keyHash: safeKeyHash(key) },
+        'action-lock nao adquirido — acao ja em andamento, pulando',
+      );
       return { executed: false, degraded: false };
     }
     acquired = true;
@@ -104,7 +113,7 @@ export async function withActionLock<T>(
     // Redis indisponivel/timeout no acquire: FAIL-OPEN. Loga warn e executa
     // a acao mesmo assim (sem lock). Nao dropar agendamento legitimo.
     log.warn(
-      { err: err instanceof Error ? err.message : String(err), key },
+      { err: err instanceof Error ? err.message : String(err), keyHash: safeKeyHash(key) },
       'action-lock Redis indisponivel — fail-open (executando acao sem lock)',
     );
     const value = await action();
@@ -126,7 +135,7 @@ export async function withActionLock<T>(
       } catch (err) {
         // Falha ao liberar nao e fatal: o PX faz o lock expirar sozinho.
         log.warn(
-          { err: err instanceof Error ? err.message : String(err), key },
+          { err: err instanceof Error ? err.message : String(err), keyHash: safeKeyHash(key) },
           'action-lock falha ao liberar — expira por TTL',
         );
       }
@@ -141,7 +150,14 @@ export async function withActionLock<T>(
  * batem na mesma chave -> 1 evento. O telefone e normalizado (so digitos) para
  * nao gerar chaves diferentes por formatacao (+55, espacos, @c.us).
  */
-export function gcalActionLockKey(slot: string, telefone: string, startISO: string): string {
+export function gcalActionLockKey(slot: string, telefone: string, startISO: string): string | null {
   const tel = telefone.replace(/\D/g, '');
-  return `actionlock:gcal:${slot}:${tel}:${startISO}`;
+  const pepper = config.ACTION_LOCK_PHONE_PEPPER;
+  if (!pepper || pepper.length < 16 || tel.length < 10) return null;
+  const contactHash = createHmac('sha256', pepper).update(tel, 'utf8').digest('hex');
+  return `actionlock:gcal:${slot}:${contactHash}:${startISO}`;
+}
+
+function safeKeyHash(key: string): string {
+  return createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 12);
 }

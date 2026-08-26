@@ -7,7 +7,7 @@ import {
 import { hashEventIdForLog } from '@startap/core/gcal-event-log';
 import { phoneLogTag } from '@startap/core/phone';
 import type { BotContext } from '@startap/core/types';
-import { atendimentos, cloneColaboradores, flowClones } from '@startap/db';
+import { atendimentos, bookingConfirmations, cloneColaboradores, flowClones } from '@startap/db';
 import { gcal } from '@startap/integrations';
 import type { ToolDefinition } from '@startap/integrations/openai';
 import { buildCartaoRuntimeBlock, extractBakedCartao } from '@startap/integrations/prompt-builder';
@@ -31,6 +31,16 @@ import {
   buildCartaoEmojiOverrideBlock,
   buildCartaoEstabelecimentoBlock,
 } from '../lib/area-emojis.js';
+import {
+  confirmPendingProposal,
+  isBookingGuardSlotAllowed,
+  isExactConfirmation,
+  persistProposal,
+  renderBookingCard,
+  resolveBookingGuardEligibility,
+  resolveBookingGuardScope,
+} from '../lib/booking-confirmation-guard.js';
+import { hashBakedCard } from '../lib/booking-confirmation-template.js';
 import { sendClientCancellationAlert, sendOwnerAlert } from '../lib/client-alert.js';
 import {
   buildAgendaEscalationBlock,
@@ -1822,7 +1832,7 @@ export class TesteBarbeariaBot extends BotBase {
     // `prompt_custom` da query abaixo continua vivo só pro guard anti-cartão-duplo
     // baked→runtime (fora do escopo desta mudança), por isso a coluna não é removida da
     // SELECT, só não decide mais o estilo do cartão aqui.
-    const { area, cartaoMode, cartaoConfig, nomeNegocio } =
+    const { area, promptCustom, cartaoMode, cartaoConfig, confirmationCardContract, nomeNegocio } =
       await cloneColaboradores.getAreaPromptCustomCartao(this.slot);
     const temCartaoProprio = cartaoMode !== 'runtime' && cloneTemCartaoProprio(promptPersona);
 
@@ -1846,6 +1856,166 @@ export class TesteBarbeariaBot extends BotBase {
       runtimeCartao !== ''
         ? runtimeCartao
         : buildCartaoEstabelecimentoBlock(area, temCartaoProprio);
+
+    // ADR 0046: capability estritamente opt-in por slot + pepper. Baked só entra com
+    // contrato explícito de segmentos e SHA do prompt revisado; nunca inferimos copy.
+    // tenant é derivado somente do slot no servidor e faz parte do HMAC do contato;
+    // slots fora da allowlist não fazem sequer esta leitura adicional.
+    // Persona custom em runtime permanece fora do rollout atual. Baked pode ser elegível,
+    // inclusive custom, somente se o contrato revisado provar a cópia pelo hash.
+    const confirmationCardSource = cartaoMode === 'runtime' && !promptCustom ? 'runtime' : 'baked';
+    const bakedExtract = extractBakedCartao(promptPersona);
+    const bakedCardSha256 = bakedExtract.found ? hashBakedCard(bakedExtract.cartao) : '';
+    const bookingScope = isBookingGuardSlotAllowed(
+      this.slot,
+      config.BOOKING_CONFIRMATION_GUARD_SLOTS,
+    )
+      ? await cloneColaboradores.getScopeBySlot(this.slot)
+      : null;
+    // A identidade da proposta não depende do renderer. Se a cópia baked mudar depois
+    // do cartão, ainda precisamos reconhecer e encerrar a proposta já persistida antes
+    // que um SIM possa alcançar as tools legadas mutantes.
+    const bookingGuardScope = resolveBookingGuardScope({
+      slot: this.slot,
+      tenantId: bookingScope?.tenant_id ?? null,
+      telefone,
+      allowedSlots: config.BOOKING_CONFIRMATION_GUARD_SLOTS,
+      pepper: config.BOOKING_CONFIRMATION_PHONE_PEPPER,
+    });
+    const bookingGuard = resolveBookingGuardEligibility({
+      slot: this.slot,
+      tenantId: bookingScope?.tenant_id ?? null,
+      telefone,
+      allowedSlots: config.BOOKING_CONFIRMATION_GUARD_SLOTS,
+      pepper: config.BOOKING_CONFIRMATION_PHONE_PEPPER,
+      cartaoMode: confirmationCardSource,
+      bakedContract: confirmationCardContract,
+      bakedCardSha256,
+    });
+    const bookingClone = bookingGuard.enabled ? await flowClones.getCloneBySlot(this.slot) : null;
+
+    // Barreira sticky: um contrato baked que deixa de validar NÃO devolve uma proposta
+    // existente para `inserir_agendamento`/remarcação. Invalidamos pending; se um CAS
+    // concorrente já a moveu para confirming/recovery, continuamos terminais sem LLM.
+    if (bookingGuardScope.enabled && !bookingGuard.enabled && bookingScope?.tenant_id) {
+      const pendingInvalidated = await bookingConfirmations.supersedePending({
+        tenantId: bookingScope.tenant_id,
+        slot: this.slot,
+        contactHmac: bookingGuardScope.contactHmac,
+      });
+      if (pendingInvalidated) {
+        return 'Esse cartão não pode mais ser confirmado. Me diga novamente o horário que prefere.';
+      }
+      const latestProposal = await bookingConfirmations.latestForContact({
+        tenantId: bookingScope.tenant_id,
+        slot: this.slot,
+        contactHmac: bookingGuardScope.contactHmac,
+      });
+      if (isExactConfirmation(texto) && latestProposal?.status === 'booked') {
+        return 'Agendamento confirmado! Está na agenda.';
+      }
+      if (isExactConfirmation(texto) && latestProposal?.status === 'expired') {
+        return 'Esse cartão expirou. Me diga novamente o horário que prefere.';
+      }
+      if (isExactConfirmation(texto) && latestProposal?.status === 'conflict') {
+        return 'Esse horário acabou de ficar indisponível. Posso buscar outro horário para você.';
+      }
+      if (isExactConfirmation(texto) && latestProposal?.status === 'superseded') {
+        return 'Esse cartão não pode mais ser confirmado. Me diga novamente o horário que prefere.';
+      }
+      if (
+        latestProposal?.status === 'pending' ||
+        latestProposal?.status === 'confirming' ||
+        latestProposal?.status === 'recovery_required'
+      ) {
+        return 'Esse cartão não pode mais ser confirmado. Me diga novamente o horário que prefere.';
+      }
+    }
+
+    // Mudança/ambiguidade invalida a proposta anterior; somente SIM literal é confirmação.
+    if (bookingGuard.enabled && bookingScope?.tenant_id && !isExactConfirmation(texto)) {
+      await bookingConfirmations.supersedePending({
+        tenantId: bookingScope.tenant_id,
+        slot: this.slot,
+        contactHmac: bookingGuard.contactHmac,
+      });
+    }
+
+    // Intercepta SIM antes de construir prompt/chamar LLM. Sem proposta pendente ou sem
+    // tenant resolvido, não há escrita e a resposta é terminal/determinística.
+    if (bookingGuard.enabled && isExactConfirmation(texto)) {
+      if (!bookingScope?.tenant_id) {
+        this.log.warn(
+          { slot: this.slot, status: 'tenant_unresolved' },
+          'booking guard bloqueou confirmação',
+        );
+        return 'Não consegui confirmar esse horário agora. Por favor, peça um novo horário.';
+      }
+      const outcome = await confirmPendingProposal({
+        tenantId: bookingScope.tenant_id,
+        slot: this.slot,
+        contactHmac: bookingGuard.contactHmac,
+        // O client é imutavelmente escolhido pelo proposal que venceu o CAS. Nunca
+        // consultamos latestForContact aqui: uma P2 concorrente não pode deslocar P1.
+        resolveCalClient: (proposal) => {
+          const collaborator = decorados.find(
+            (entry) => entry.colaboradorId === proposal.colaborador_id,
+          );
+          return collaborator?.client ?? null;
+        },
+        nomeCliente: pushName || 'Cliente',
+        telefone,
+        validateProposal: (proposal) => {
+          const collaborator = decorados.find(
+            (entry) => entry.colaboradorId === proposal.colaborador_id,
+          );
+          if (
+            !collaborator ||
+            !colaboradorFazServico(collaborator, scheduleConfig, proposal.servico)
+          ) {
+            return false;
+          }
+          return validateAgendaWrite({
+            scheduleConfig,
+            servico: proposal.servico,
+            startISO: proposal.inicio_at,
+            endISO: proposal.fim_at,
+          }).ok;
+        },
+        afterBooked: async (proposal, eventId) => {
+          const summary = this.normalizeAgendaSummary(
+            buildEventSummary({ nome: pushName || 'Cliente', servico: proposal.servico }),
+            telefone,
+          );
+          const pacote = await this.maybeDeduzirPacote({
+            telefone,
+            eventId,
+            summary,
+            servicoArg: proposal.servico,
+            usaPacoteArg: proposal.usa_pacote,
+            colaboradorId: proposal.colaborador_id,
+          });
+          await this.maybeRegistrarAtendimento({
+            eventId,
+            summary,
+            clienteContato: telefone,
+            servicoArg: proposal.servico,
+            start: proposal.inicio_at,
+            end: proposal.fim_at,
+            colaboradorId: proposal.colaborador_id,
+            formaPagamento: pacote?.descontou_do_pacote ? 'pacote' : null,
+          });
+        },
+      });
+      if (outcome.kind === 'booked') return 'Agendamento confirmado! Está na agenda.';
+      if (outcome.kind === 'conflict')
+        return 'Esse horário acabou de ficar indisponível. Posso buscar outro horário para você.';
+      if (outcome.kind === 'expired')
+        return 'Esse cartão expirou. Me diga novamente o horário que prefere.';
+      if (outcome.kind === 'recovery_required')
+        return 'Ainda estou confirmando esse horário. Não envie outro SIM agora.';
+      return 'Não encontrei um cartão pendente. Me diga o serviço, horário e profissional que prefere.';
+    }
     // Mesma regra do ramo individual: só expõe o transbordo quando o clone tem
     // recepção válida/habilitada; falha do reader fecha a feature sem alterar o prompt base.
     const receptionTarget = await Promise.resolve(
@@ -1891,18 +2061,22 @@ export class TesteBarbeariaBot extends BotBase {
 
     const fullHistory = await this.loadHistory(ctx);
     const history = fullHistory.slice(0, -1);
+    let terminalBookingCard: string | null = null;
 
     const tools: ToolDefinition[] = [
       {
-        name: 'inserir_agendamento',
-        description:
-          'Insere um agendamento no Google Calendar do PROFISSIONAL escolhido. Use APENAS apos ' +
-          'o cliente confirmar com SIM no CARTAO DE CONFIRMACAO E ter escolhido o profissional ' +
-          '(pelo nome completo). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
-          'TODO agendamento, inclusive o 2º/3º na mesma conversa. Só agende o servico com um ' +
-          'profissional que faz aquele servico (ver [PROFISSIONAIS]). Para REMARCAR um ' +
-          'agendamento que JA existe, use remarcar_agendamento — NUNCA crie outro evento aqui. ' +
-          'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
+        name: bookingGuard.enabled ? 'propor_agendamento' : 'inserir_agendamento',
+        description: bookingGuard.enabled
+          ? 'Propõe ao servidor o horário, serviço e profissional escolhidos. Não cria evento ' +
+            'nem confirma o agendamento. O servidor valida e envia o cartão completo; aguarde ' +
+            'o SIM do cliente. Nunca inclua nome, telefone, summary ou texto livre.'
+          : 'Insere um agendamento no Google Calendar do PROFISSIONAL escolhido. Use APENAS apos ' +
+            'o cliente confirmar com SIM no CARTAO DE CONFIRMACAO E ter escolhido o profissional ' +
+            '(pelo nome completo). NUNCA chame sem mostrar o cartao e receber o SIM — vale para ' +
+            'TODO agendamento, inclusive o 2º/3º na mesma conversa. Só agende o servico com um ' +
+            'profissional que faz aquele servico (ver [PROFISSIONAIS]). Para REMARCAR um ' +
+            'agendamento que JA existe, use remarcar_agendamento — NUNCA crie outro evento aqui. ' +
+            'Summary: "[Nome] - [Servico] | WhatsApp: [numero]"',
         parameters: {
           type: 'object',
           properties: {
@@ -1912,7 +2086,10 @@ export class TesteBarbeariaBot extends BotBase {
                 'Nome completo do profissional escolhido pelo cliente. Obrigatorio. ' +
                 'Use SOMENTE um nome que aparece no bloco [PROFISSIONAIS]. Nunca invente nem passe e-mail/agenda.',
             },
-            summary: { type: 'string', description: 'Titulo: "Nome - Servico | WhatsApp: numero"' },
+            summary: {
+              type: 'string',
+              description: 'Titulo: "Nome - Servico | WhatsApp: numero" (somente legado)',
+            },
             start: { type: 'string', description: 'Inicio ISO 8601 com timezone' },
             end: { type: 'string', description: 'Fim ISO 8601 com timezone' },
             servico: {
@@ -1926,7 +2103,9 @@ export class TesteBarbeariaBot extends BotBase {
                 'SUGESTAO: true se o cliente quer usar o pacote pre-pago. O sistema re-valida e decide.',
             },
           },
-          required: ['colaborador_id', 'summary', 'start', 'end'],
+          required: bookingGuard.enabled
+            ? ['colaborador_id', 'servico', 'start', 'end']
+            : ['colaborador_id', 'summary', 'start', 'end'],
         },
         run: async (args: unknown) => {
           const {
@@ -1938,26 +2117,35 @@ export class TesteBarbeariaBot extends BotBase {
             usa_pacote: usaPacoteArg,
           } = args as {
             colaborador_id: string;
-            summary: string;
-            start: string;
-            end: string;
+            summary?: unknown;
+            start?: unknown;
+            end?: unknown;
             servico?: unknown;
             usa_pacote?: unknown;
           };
 
-          if (typeof summary !== 'string' || typeof start !== 'string' || typeof end !== 'string') {
+          const proposalArgsAreValid =
+            typeof start === 'string' &&
+            typeof end === 'string' &&
+            (bookingGuard.enabled
+              ? typeof servicoArg === 'string' && Boolean(servicoArg.trim())
+              : typeof summary === 'string');
+          if (!proposalArgsAreValid) {
             return {
               ok: false,
               error: 'HORARIO_INDISPONIVEL',
               message: 'Esse horário não está disponível. Consulte os horários disponíveis.',
             };
           }
+          const startValue = start as string;
+          const endValue = end as string;
+          const legacySummary = typeof summary === 'string' ? summary : '';
 
           // Reancora o horário-de-parede do LLM no fuso do clone (mesmo do individual). O LLM
           // emite start/end com offset errado chumbado (−03 de SP); reinterpretamos no relógio
           // da barbearia. Clone SP = no-op (byte-idêntico). startISO/endISO = fonte do instante.
-          const startISO = reanchorWallTimeToTz(start, cloneTz) ?? start;
-          const endISO = reanchorWallTimeToTz(end, cloneTz) ?? end;
+          const startISO = reanchorWallTimeToTz(startValue, cloneTz) ?? startValue;
+          const endISO = reanchorWallTimeToTz(endValue, cloneTz) ?? endValue;
 
           // Resolve calendarId SERVER-SIDE a partir do id curto, validando contra a
           // lista ATIVA daquele slot/tenant (decorados). Id inválido / inativo / de
@@ -1989,7 +2177,7 @@ export class TesteBarbeariaBot extends BotBase {
           const servicoPedido =
             typeof servicoArg === 'string' && servicoArg.trim()
               ? servicoArg.trim()
-              : servicoFromSummary(summary);
+              : servicoFromSummary(legacySummary);
           if (!colaboradorFazServico(colaborador, scheduleConfig, servicoPedido)) {
             const oferece = servicosDoColaborador(colaborador, scheduleConfig).join(', ');
             this.log.warn(
@@ -2060,8 +2248,53 @@ export class TesteBarbeariaBot extends BotBase {
             };
           }
 
+          // Sob ADR 0046 esta tool não escreve no GCal: persiste somente a proposta
+          // validada e devolve o cartão que o servidor renderizou. A resposta textual
+          // posterior do LLM é descartada abaixo, portanto não consegue trocar o card.
+          if (bookingGuard.enabled) {
+            if (!bookingScope?.tenant_id) {
+              return { ok: false, error: 'CONFIRMACAO_INDISPONIVEL' };
+            }
+            const service = scheduleConfig.services.find(
+              (entry) => entry.name.toLocaleLowerCase() === servicoPedido.toLocaleLowerCase(),
+            );
+            const pricedService = bookingClone?.servicos?.find(
+              (entry) => entry.nome.toLocaleLowerCase() === servicoPedido.toLocaleLowerCase(),
+            );
+            if (!service || !pricedService) return { ok: false, error: 'SERVICO_INVALIDO' };
+            const renderedCard = renderBookingCard({
+              mode: 'estabelecimento',
+              area,
+              cartaoConfig,
+              bakedContract: confirmationCardSource === 'baked' ? confirmationCardContract : null,
+              bakedCardSha256,
+              nomeNegocio,
+              inicioAt: startISO,
+              timezone: cloneTz,
+              servico: service.name,
+              valorCents: pricedService.preco_cents,
+              profissional: colaborador.nome,
+            });
+            // Defesa em profundidade: contrato inválido/não correspondente nunca gera proposta
+            // pendente sem cartão, mesmo se um caller futuro contornar o eligibility gate.
+            if (!renderedCard) return { ok: false, error: 'CONFIRMACAO_INDISPONIVEL' };
+            await persistProposal({
+              tenantId: bookingScope.tenant_id,
+              slot: this.slot,
+              contactHmac: bookingGuard.contactHmac,
+              colaboradorId: colaborador.colaboradorId,
+              servico: service.name,
+              inicioAt: startISO,
+              fimAt: endISO,
+              timezone: cloneTz,
+              usaPacote: typeof usaPacoteArg === 'boolean' ? usaPacoteArg : null,
+            });
+            terminalBookingCard = renderedCard;
+            return { ok: true, pending_confirmation: true };
+          }
+
           // Normaliza UMA vez (ADR 0028), antes do createEvent — mesma flag do individual.
-          const finalSummary = this.normalizeAgendaSummary(summary, telefone);
+          const finalSummary = this.normalizeAgendaSummary(legacySummary, telefone);
 
           const createEvent = () =>
             colabClient.createEvent({ summary: finalSummary, startISO, endISO, timeZone: cloneTz });
@@ -2164,6 +2397,11 @@ export class TesteBarbeariaBot extends BotBase {
             ...(pacote ? { pacote } : {}),
           };
         },
+        stopAfterRun: (result) =>
+          typeof result === 'object' &&
+          result !== null &&
+          'pending_confirmation' in result &&
+          result.pending_confirmation === true,
       },
       {
         name: 'consultar_agendamento',
@@ -2207,67 +2445,75 @@ export class TesteBarbeariaBot extends BotBase {
       },
     ];
 
-    // ── Remarcação via patchEvent (estabelecimento) — SEMPRE exposta ─────────────
+    // ── Remarcação via patchEvent (estabelecimento) ──────────────────────────────
     // Varre as agendas dos colaboradores ATIVOS (decorados) procurando o agendamento DO
     // cliente (telefone da CONVERSA + inicio ATUAL). Devolve a agenda DONA + o colaborador;
     // patchEvent acontece NELA (eventId preservado) — NÃO move entre colaboradores (v1, igual
     // ao portal). Ambíguo (mesmo telefone+horário em 2 agendas) -> pede pra especificar.
-    tools.push(
-      this.buildRemarcarTool({
-        telefone,
-        scheduleConfig,
-        cloneTz,
-        resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
-          const tMin = new Date().toISOString();
-          const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-          const targetMs = new Date(startAtualISO).getTime();
-          const matches: Array<{
-            client: gcal.GoogleCalendarClient;
-            colaboradorId: number;
-            colaborador: ColaboradorAgenda;
-            event: gcal.CalendarEvent;
-          }> = [];
-          for (const c of decorados) {
-            const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
-            for (const e of evs) {
-              if (
-                this.matchEventoPorTelefone(e, telefone) &&
-                e.start.dateTime != null &&
-                new Date(e.start.dateTime).getTime() === targetMs
-              ) {
-                matches.push({
-                  client: c.client,
-                  colaboradorId: c.colaboradorId,
-                  colaborador: c,
-                  event: e,
-                });
+    // O runner pode pedir várias tools na mesma execução. Enquanto o guard server-first
+    // estiver ligado, expor patchEvent permitiria `propor_agendamento` seguido de
+    // `remarcar_agendamento` antes do cartão/SIM. Não há fallback mutante nesse modo.
+    if (!bookingGuard.enabled) {
+      tools.push(
+        this.buildRemarcarTool({
+          telefone,
+          scheduleConfig,
+          cloneTz,
+          resolveEvent: async (startAtualISO: string): Promise<RemarcarResolve> => {
+            const tMin = new Date().toISOString();
+            const tMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+            const targetMs = new Date(startAtualISO).getTime();
+            const matches: Array<{
+              client: gcal.GoogleCalendarClient;
+              colaboradorId: number;
+              colaborador: ColaboradorAgenda;
+              event: gcal.CalendarEvent;
+            }> = [];
+            for (const c of decorados) {
+              const evs = await c.client.listEvents({ timeMin: tMin, timeMax: tMax });
+              for (const e of evs) {
+                if (
+                  this.matchEventoPorTelefone(e, telefone) &&
+                  e.start.dateTime != null &&
+                  new Date(e.start.dateTime).getTime() === targetMs
+                ) {
+                  matches.push({
+                    client: c.client,
+                    colaboradorId: c.colaboradorId,
+                    colaborador: c,
+                    event: e,
+                  });
+                }
               }
             }
-          }
-          if (matches.length === 0) return { kind: 'not_found' };
-          if (matches.length > 1) return { kind: 'ambiguous' };
-          const m = matches[0];
-          return {
-            kind: 'found',
-            client: m.client,
-            colaboradorId: m.colaboradorId,
-            colaborador: m.colaborador,
-            event: m.event,
-          };
-        },
-      }),
-    );
+            if (matches.length === 0) return { kind: 'not_found' };
+            if (matches.length > 1) return { kind: 'ambiguous' };
+            const m = matches[0];
+            return {
+              kind: 'found',
+              client: m.client,
+              colaboradorId: m.colaboradorId,
+              colaborador: m.colaborador,
+              event: m.event,
+            };
+          },
+        }),
+      );
+    }
 
     // ── Cancelamento escalado (Missão 023 W5 — DORMENTE por flag) ────────────────
     // MESMO comportamento do caminho individual: a tool SÓ é exposta com a flag ON e
     // NÃO toca o GCal — apenas escala o pedido pro dono. Sem isto, um cliente que digita
     // "quero cancelar" (texto, não botão) no estabelecimento fazia o LLM improvisar e
     // podia afirmar que cancelou sem avisar o dono.
-    if (config.CANCELAMENTO_ESCALADO_ENABLED) {
+    // O guard transforma a proposta em fronteira terminal: nenhuma ferramenta com
+    // efeito externo pode executar antes dela, inclusive se o modelo ordenar
+    // `escalar_*` antes de `propor_agendamento` na mesma resposta.
+    if (!bookingGuard.enabled && config.CANCELAMENTO_ESCALADO_ENABLED) {
       tools.push(this.buildEscalarCancelamentoTool(telefone));
     }
 
-    if (transbordoRecepcaoDisponivel) {
+    if (!bookingGuard.enabled && transbordoRecepcaoDisponivel) {
       tools.push(this.buildEscalarParaHumanoTool(telefone));
     }
 
@@ -2293,7 +2539,7 @@ export class TesteBarbeariaBot extends BotBase {
       maxTurns: 5,
     });
 
-    return sanitizarResposta(result.reply);
+    return terminalBookingCard ?? sanitizarResposta(result.reply);
   }
 }
 

@@ -552,6 +552,24 @@ export interface CloneCartaoConfig {
   verbatim?: string;
 }
 
+export type ConfirmationCardField = 'dia' | 'horario' | 'servico' | 'valor' | 'profissional';
+
+export type ConfirmationCardSegment =
+  | { kind: 'literal'; value: string }
+  | { kind: 'field'; field: ConfirmationCardField };
+
+/**
+ * Contrato EXPLÍCITO para o cartão server-first de um clone baked (ADR 0046).
+ * Não é derivado do bot_prompt: o operador revisa os segmentos literais e vincula a cópia
+ * a um SHA-256 exato do cartão baked. O leitor aceita somente esta versão/shape fechado;
+ * sem contrato válido o guard fica OFF.
+ */
+export interface CloneConfirmationCardContract {
+  version: 'confirmation-card-contract/v1';
+  baked_card_sha256: string;
+  segments: ConfirmationCardSegment[];
+}
+
 const CARTAO_EMOJI_KEYS = [
   'marca',
   'dia',
@@ -605,6 +623,70 @@ function parseCartaoConfig(raw: unknown): CloneCartaoConfig | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+const CONFIRMATION_CARD_FIELDS = ['dia', 'horario', 'servico', 'valor', 'profissional'] as const;
+
+function isSha256(value: string): boolean {
+  if (value.length !== 64) return false;
+  for (const char of value) {
+    if (!'0123456789abcdef'.includes(char)) return false;
+  }
+  return true;
+}
+
+/** Parser defensivo do JSONB. A semântica (cada campo uma vez + hash atual) é conferida no API. */
+export function parseConfirmationCardContract(raw: unknown): CloneConfirmationCardContract | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (
+    keys.length !== 3 ||
+    !keys.includes('version') ||
+    !keys.includes('baked_card_sha256') ||
+    !keys.includes('segments') ||
+    obj.version !== 'confirmation-card-contract/v1' ||
+    typeof obj.baked_card_sha256 !== 'string' ||
+    !isSha256(obj.baked_card_sha256) ||
+    !Array.isArray(obj.segments) ||
+    obj.segments.length === 0 ||
+    obj.segments.length > 32
+  ) {
+    return null;
+  }
+  const segments: ConfirmationCardSegment[] = [];
+  let literalChars = 0;
+  for (const rawSegment of obj.segments) {
+    if (!rawSegment || typeof rawSegment !== 'object' || Array.isArray(rawSegment)) return null;
+    const segment = rawSegment as Record<string, unknown>;
+    if (
+      segment.kind === 'literal' &&
+      Object.keys(segment).length === 2 &&
+      typeof segment.value === 'string'
+    ) {
+      literalChars += segment.value.length;
+      if (segment.value.includes('\0') || segment.value.length > 2_000) return null;
+      segments.push({ kind: 'literal', value: segment.value });
+      continue;
+    }
+    if (
+      segment.kind === 'field' &&
+      Object.keys(segment).length === 2 &&
+      typeof segment.field === 'string' &&
+      (CONFIRMATION_CARD_FIELDS as readonly string[]).includes(segment.field)
+    ) {
+      segments.push({ kind: 'field', field: segment.field as ConfirmationCardField });
+      continue;
+    }
+    return null;
+  }
+  return literalChars <= 8_000
+    ? {
+        version: 'confirmation-card-contract/v1',
+        baked_card_sha256: obj.baked_card_sha256,
+        segments,
+      }
+    : null;
+}
+
 /**
  * Reader UNIFICADO do caminho do bot (SCRUM-92 inc.2 / ADR 0032 §2.3): lê área (051) +
  * prompt_custom (070) + cartao_mode/cartao_config (075) do slot numa ÚNICA query por PK —
@@ -635,6 +717,7 @@ export async function getAreaPromptCustomCartao(
   promptCustom: boolean;
   cartaoMode: CartaoMode;
   cartaoConfig: CloneCartaoConfig | null;
+  confirmationCardContract: CloneConfirmationCardContract | null;
   /** Nome AMIGÁVEL do negócio (SCRUM-92 inc.2): cabeado no `<nome do negócio>` do cartão
    *  montado em RUNTIME. Resolvido na MESMA leitura por slot (zero read extra no hot path);
    *  null quando não há linha/erro (o builder cai no placeholder). */
@@ -646,11 +729,13 @@ export async function getAreaPromptCustomCartao(
       prompt_custom: boolean | null;
       cartao_mode: string | null;
       cartao_config: unknown;
+      confirmation_card_contract: unknown;
       display_name: string | null;
       cliente_nome: string | null;
       personalizacao: unknown;
     }>(
-      `SELECT area, prompt_custom, cartao_mode, cartao_config, display_name, cliente_nome, personalizacao
+      `SELECT area, prompt_custom, cartao_mode, cartao_config, confirmation_card_contract,
+              display_name, cliente_nome, personalizacao
          FROM flow_clones WHERE slot = $1 LIMIT 1`,
       [slot],
     );
@@ -673,6 +758,7 @@ export async function getAreaPromptCustomCartao(
       // Só 'runtime' explícito liga o caminho novo; qualquer outra coisa → 'baked' (seguro).
       cartaoMode: row?.cartao_mode === 'runtime' ? 'runtime' : 'baked',
       cartaoConfig: parseCartaoConfig(row?.cartao_config),
+      confirmationCardContract: parseConfirmationCardContract(row?.confirmation_card_contract),
       nomeNegocio,
     };
   } catch (err) {
@@ -691,6 +777,7 @@ export async function getAreaPromptCustomCartao(
       promptCustom: false,
       cartaoMode: 'baked',
       cartaoConfig: null,
+      confirmationCardContract: null,
       nomeNegocio: null,
     };
   }

@@ -13,6 +13,7 @@
  * Estratégia: mocka run-agent.js (captura o array `tools` passado) + client-alert.js +
  * as dependências de agenda (gcal/scheduling/render-prompt). Não toca rede/DB.
  */
+import { createHash } from 'node:crypto';
 import type { BotContext } from '@startap/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,6 +48,16 @@ const mocks = vi.hoisted(() => ({
   upsertAtendimentoFromEvent: vi.fn(),
   syncAtendimentoFromEvent: vi.fn(),
   withActionLock: vi.fn(),
+  bookingConfirmations: {
+    replacePending: vi.fn(),
+    expirePending: vi.fn(),
+    supersedePending: vi.fn(),
+    claimForConfirmation: vi.fn(),
+    latestForContact: vi.fn(),
+    markBooked: vi.fn(),
+    markConflict: vi.fn(),
+    markRecoveryRequired: vi.fn(),
+  },
   // Resolver env→coluna (ADR 0030 D1) mockado como env-only — os testes exercitam o gate por env
   // (cfg.MODO_ATENDENTE_SLOTS / ATEND_FROM_AGENDA_SLOTS); NÃO lê getCloneBySlot (mantém as
   // asserções de "getCloneBySlot não chamado" intactas). Byte-idêntico ao gate de antes.
@@ -62,6 +73,7 @@ const mocks = vi.hoisted(() => ({
 
 // O BotBase.loadHistory chama chatMemory.loadHistory (@startap/db) — mocka para não tocar DB.
 vi.mock('@startap/db', () => ({
+  bookingConfirmations: mocks.bookingConfirmations,
   chatMemory: { loadHistory: mocks.loadHistory },
   flowExecutionLog: { logFlowEvent: mocks.logFlowEvent },
   cloneColaboradores: {
@@ -78,6 +90,8 @@ vi.mock('@startap/db', () => ({
       const base = ((await mocks.getAreaAndPromptCustom(slot)) ?? {}) as {
         area?: string | null;
         promptCustom?: boolean;
+        cartaoMode?: 'baked' | 'runtime';
+        confirmationCardContract?: unknown;
       };
       // Estab historicamente mockava só getArea; individual mockava getAreaAndPromptCustom.
       // Cobre ambos: usa a área do reader unificado quando presente, senão cai no getArea.
@@ -85,8 +99,9 @@ vi.mock('@startap/db', () => ({
       return {
         area: area ?? null,
         promptCustom: base.promptCustom ?? false,
-        cartaoMode: 'baked' as const,
+        cartaoMode: base.cartaoMode ?? 'baked',
         cartaoConfig: null,
+        confirmationCardContract: base.confirmationCardContract ?? null,
       };
     },
     getScopeBySlot: mocks.getScopeBySlot,
@@ -112,6 +127,9 @@ const cfg = {
   IDEMPOTENCY_ACTION_LOCK: false,
   ESTABELECIMENTO_ENABLED: false,
   PACOTES_ENABLED: false,
+  CARTAO_RUNTIME_ENABLED: false,
+  BOOKING_CONFIRMATION_GUARD_SLOTS: '',
+  BOOKING_CONFIRMATION_PHONE_PEPPER: undefined as string | undefined,
   // Gate POR-CLONE (ADR 0027): lista de slots; vazio = OFF pra todos (default seguro).
   ATEND_FROM_AGENDA_SLOTS: '',
   // Gate POR-CLONE do MODO ATENDENTE (SCRUM-59): CSV de slots; vazio = OFF pra todos.
@@ -170,6 +188,9 @@ vi.mock('@startap/integrations/scheduling', async () => {
 // `clearAllMocks` limpa chamadas, não implementations; restaura explicitamente a cada teste.
 beforeEach(() => {
   mocks.getCloneReceptionAlertTarget.mockResolvedValue(null);
+  cfg.CARTAO_RUNTIME_ENABLED = false;
+  cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = '';
+  cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = undefined;
 });
 
 const { TesteBarbeariaBot } = await import('./teste_barbearia.js');
@@ -2258,6 +2279,293 @@ describe('TesteBarbeariaBot — remarcação via patchEvent (estabelecimento)', 
       { colaboradorId: 10, nome: 'João S.', shortId: 'C1', client: colabClientStub('cal-joao') },
     ]);
     expect(tools.map((t) => t.name)).toContain('remarcar_agendamento');
+  });
+
+  it('guard: sequência escalonamento→proposta não expõe ferramentas externas ou mutantes antes do SIM', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    cfg.CARTAO_RUNTIME_ENABLED = true;
+    cfg.CANCELAMENTO_ESCALADO_ENABLED = true;
+    const client = colabClientStub('cal-joao');
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: false,
+      cartaoMode: 'runtime',
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    mocks.getCloneReceptionAlertTarget.mockResolvedValue({
+      phone: '5511999998888',
+      enabled: true,
+    });
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero marcar'),
+    );
+    const tools = mocks.runAgentConfigured.mock.calls[0][0].tools as Array<{
+      name: string;
+      run: (args: unknown) => Promise<Record<string, unknown>>;
+    }>;
+    const propor = tools.find((tool) => tool.name === 'propor_agendamento') as {
+      run: (args: unknown) => Promise<Record<string, unknown>>;
+    };
+
+    expect(propor).toBeDefined();
+    // A proposta vira uma fronteira terminal. As tools abaixo não estão sequer
+    // disponíveis, portanto uma ordem hostil `escalar_* + propor` não consegue
+    // alertar externamente nem mutar a agenda antes do cartão/SIM.
+    expect(tools.map((tool) => tool.name)).not.toContain('remarcar_agendamento');
+    expect(tools.map((tool) => tool.name)).not.toContain('escalar_cancelamento');
+    expect(tools.map((tool) => tool.name)).not.toContain('escalar_para_humano');
+    await expect(
+      propor.run({
+        colaborador_id: 'C1',
+        servico: 'Corte',
+        start: '2026-06-20T17:00:00-03:00',
+        end: '2026-06-20T17:30:00-03:00',
+      }),
+    ).resolves.toMatchObject({ ok: true, pending_confirmation: true });
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(client.patchEvent).not.toHaveBeenCalled();
+    expect(mocks.sendClientCancellationAlert).not.toHaveBeenCalled();
+    expect(mocks.sendOwnerAlert).not.toHaveBeenCalled();
+  });
+
+  it('guard baked: contrato revisado gera cartão literal server-side sem mudar a persona', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    const client = colabClientStub('cal-joao');
+    const bakedCard = '[CARTAO DE CONFIRMACAO]\nCopy baked original para revisão.';
+    const bakedHash = createHash('sha256').update(bakedCard, 'utf8').digest('hex');
+    const contract = {
+      version: 'confirmation-card-contract/v1' as const,
+      baked_card_sha256: bakedHash,
+      segments: [
+        { kind: 'literal' as const, value: 'Copy customizada\nDia: ' },
+        { kind: 'field' as const, field: 'dia' as const },
+        { kind: 'literal' as const, value: '\nHorário: ' },
+        { kind: 'field' as const, field: 'horario' as const },
+        { kind: 'literal' as const, value: '\nServiço: ' },
+        { kind: 'field' as const, field: 'servico' as const },
+        { kind: 'literal' as const, value: '\nValor: ' },
+        { kind: 'field' as const, field: 'valor' as const },
+        { kind: 'literal' as const, value: '\nProfissional: ' },
+        { kind: 'field' as const, field: 'profissional' as const },
+        { kind: 'literal' as const, value: '\nResponda SIM.' },
+      ],
+    };
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.renderPrompt.mockResolvedValue(`PERSONA INTACTA\n${bakedCard}`);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: false,
+      cartaoMode: 'baked',
+      confirmationCardContract: contract,
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    mocks.runAgentConfigured.mockImplementation(
+      async (input: {
+        tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
+      }) => {
+        const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
+        await propor?.run({
+          colaborador_id: 'C1',
+          servico: 'Corte',
+          start: '2026-06-20T17:00:00-03:00',
+          end: '2026-06-20T17:30:00-03:00',
+        });
+        return { reply: 'LLM não pode trocar cartão' };
+      },
+    );
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('quero marcar'));
+
+    expect(reply).toContain('Copy customizada');
+    expect(reply).toContain('Profissional: João');
+    expect(reply).toContain('Responda SIM.');
+    expect(reply).not.toContain('LLM não pode trocar cartão');
+    expect(client.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('guard baked sticky: hash que muda após o cartão invalida o pending e o SIM não alcança o legado', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    const client = colabClientStub('cal-joao');
+    const bakedCard = '[CARTAO DE CONFIRMACAO]\nCopy baked original para revisão.';
+    const contract = {
+      version: 'confirmation-card-contract/v1' as const,
+      baked_card_sha256: createHash('sha256').update(bakedCard, 'utf8').digest('hex'),
+      segments: [
+        { kind: 'literal' as const, value: 'Dia: ' },
+        { kind: 'field' as const, field: 'dia' as const },
+        { kind: 'literal' as const, value: '\nHorário: ' },
+        { kind: 'field' as const, field: 'horario' as const },
+        { kind: 'literal' as const, value: '\nServiço: ' },
+        { kind: 'field' as const, field: 'servico' as const },
+        { kind: 'literal' as const, value: '\nValor: ' },
+        { kind: 'field' as const, field: 'valor' as const },
+        { kind: 'literal' as const, value: '\nProfissional: ' },
+        { kind: 'field' as const, field: 'profissional' as const },
+        { kind: 'literal' as const, value: '\nResponda SIM.' },
+      ],
+    };
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.renderPrompt.mockResolvedValue(`PERSONA INTACTA\n${bakedCard}`);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: false,
+      cartaoMode: 'baked',
+      confirmationCardContract: contract,
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    mocks.runAgentConfigured.mockImplementation(
+      async (input: {
+        tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
+      }) => {
+        const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
+        await propor?.run({
+          colaborador_id: 'C1',
+          servico: 'Corte',
+          start: '2026-06-20T17:00:00-03:00',
+          end: '2026-06-20T17:30:00-03:00',
+        });
+        return { reply: 'LLM não pode trocar cartão' };
+      },
+    );
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero marcar'),
+    );
+    expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
+
+    // Uma alteração posterior da cópia torna o hash incompatível; o pending prévio
+    // continua reconhecível pelo HMAC de escopo e não retorna ao array legado de tools.
+    mocks.renderPrompt.mockResolvedValue(
+      'PERSONA INTACTA\n[CARTAO DE CONFIRMACAO]\nCopy baked alterada sem aprovação.',
+    );
+    mocks.bookingConfirmations.supersedePending.mockResolvedValueOnce(true);
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('SIM'));
+
+    expect(reply).toContain('não pode mais ser confirmado');
+    expect(mocks.bookingConfirmations.supersedePending).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 't-estab', slot: 'clone_estab_x' }),
+    );
+    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.bookingConfirmations.claimForConfirmation).not.toHaveBeenCalled();
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(client.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it('guard baked sticky: SIM repetido de proposta booked após hash mudar não alcança o legado', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    const client = colabClientStub('cal-joao');
+    const bakedCard = '[CARTAO DE CONFIRMACAO]\nCopy baked original para revisão.';
+    const contract = {
+      version: 'confirmation-card-contract/v1' as const,
+      baked_card_sha256: createHash('sha256').update(bakedCard, 'utf8').digest('hex'),
+      segments: [
+        { kind: 'literal' as const, value: 'Dia: ' },
+        { kind: 'field' as const, field: 'dia' as const },
+        { kind: 'literal' as const, value: '\nHorário: ' },
+        { kind: 'field' as const, field: 'horario' as const },
+        { kind: 'literal' as const, value: '\nServiço: ' },
+        { kind: 'field' as const, field: 'servico' as const },
+        { kind: 'literal' as const, value: '\nValor: ' },
+        { kind: 'field' as const, field: 'valor' as const },
+        { kind: 'literal' as const, value: '\nProfissional: ' },
+        { kind: 'field' as const, field: 'profissional' as const },
+        { kind: 'literal' as const, value: '\nResponda SIM.' },
+      ],
+    };
+    setupEstabelecimento([
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    mocks.renderPrompt.mockResolvedValue(`PERSONA INTACTA\n${bakedCard}`);
+    mocks.getAreaAndPromptCustom.mockResolvedValue({
+      area: 'barbearia',
+      promptCustom: false,
+      cartaoMode: 'baked',
+      confirmationCardContract: contract,
+    });
+    mocks.getCloneBySlot.mockResolvedValue({
+      slot: 'clone_estab_x',
+      tenant_id: 't-estab',
+      servicos: [{ nome: 'Corte', preco_cents: 5000 }],
+    });
+    mocks.runAgentConfigured.mockImplementation(
+      async (input: {
+        tools: Array<{ name: string; run: (args: unknown) => Promise<unknown> }>;
+      }) => {
+        const propor = input.tools.find((tool) => tool.name === 'propor_agendamento');
+        await propor?.run({
+          colaborador_id: 'C1',
+          servico: 'Corte',
+          start: '2026-06-20T17:00:00-03:00',
+          end: '2026-06-20T17:30:00-03:00',
+        });
+        return { reply: 'LLM não pode trocar cartão' };
+      },
+    );
+    const bot = new TesteBarbeariaBot({ slotOverride: 'clone_estab_x' });
+    await (bot as unknown as { process: (context: BotContext) => Promise<string | null> }).process(
+      makeCtx('quero marcar'),
+    );
+    expect(mocks.bookingConfirmations.replacePending).toHaveBeenCalledTimes(1);
+
+    // A primeira confirmação já pode ter vencido o CAS e gravado booked quando chega
+    // uma repetição WAHA. Mesmo com a cópia agora incompatível, a resposta é server-side.
+    mocks.renderPrompt.mockResolvedValue(
+      'PERSONA INTACTA\n[CARTAO DE CONFIRMACAO]\nCopy baked alterada sem aprovação.',
+    );
+    mocks.bookingConfirmations.supersedePending.mockResolvedValueOnce(false);
+    mocks.bookingConfirmations.latestForContact.mockResolvedValueOnce({ status: 'booked' });
+    const reply = await (
+      bot as unknown as { process: (context: BotContext) => Promise<string | null> }
+    ).process(makeCtx('SIM'));
+
+    expect(reply).toBe('Agendamento confirmado! Está na agenda.');
+    expect(mocks.bookingConfirmations.latestForContact).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 't-estab', slot: 'clone_estab_x' }),
+    );
+    expect(mocks.runAgentConfigured).toHaveBeenCalledTimes(1);
+    expect(mocks.bookingConfirmations.claimForConfirmation).not.toHaveBeenCalled();
+    expect(client.createEvent).not.toHaveBeenCalled();
+    expect(client.patchEvent).not.toHaveBeenCalled();
+  });
+
+  it('slot baked sem contrato continua no fluxo legado mesmo se estiver na allowlist', async () => {
+    cfg.BOOKING_CONFIRMATION_GUARD_SLOTS = 'clone_estab_x';
+    cfg.BOOKING_CONFIRMATION_PHONE_PEPPER = '0123456789abcdef';
+    const client = colabClientStub('cal-joao');
+    const tools = await estabToolsFor('quero marcar', [
+      { colaboradorId: 10, nome: 'João', shortId: 'C1', client, servicos: ['Corte'] },
+    ]);
+    expect(tools.map((tool) => tool.name)).toContain('inserir_agendamento');
+    expect(tools.map((tool) => tool.name)).not.toContain('propor_agendamento');
+    expect(client.createEvent).not.toHaveBeenCalled();
   });
 
   it('acha o evento na agenda do colaborador DONO, patcha LÁ (mesmo eventId) e não toca o outro', async () => {

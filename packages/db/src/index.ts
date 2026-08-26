@@ -34,6 +34,7 @@ export * as crmWhatsAppManual from './queries/crm-whatsapp-manual.js';
 export * as agendaBloqueios from './queries/agenda-bloqueios.js';
 export * as agendaBloqueioSeries from './queries/agenda-bloqueio-series.js';
 export * as agendaBloqueioOperacoes from './queries/agenda-bloqueio-operacoes.js';
+export * as bookingConfirmations from './queries/booking-confirmations.js';
 export * as reminders from './queries/reminders.js';
 export * as termsAcceptance from './queries/terms-acceptance.js';
 export * as botDetect from './queries/bot-detect.js';
@@ -43,6 +44,10 @@ export * as contactNames from './queries/contact-names.js';
 // Re-exporta tipos para import direto
 export type { OutboundMessageRow, OutboundAckUpdate } from './queries/outbound-messages.js';
 export type { ChatTurn, Role } from './queries/chat-memory.js';
+export type {
+  BookingConfirmationProposal,
+  BookingConfirmationStatus,
+} from './queries/booking-confirmations.js';
 export type { RoutingRow } from './queries/routing.js';
 export type { SuspectRow } from './queries/antibot.js';
 export type { LeadRicardo } from './queries/leads.js';
@@ -75,10 +80,14 @@ export type {
   UpdateColaboradorInput,
   CartaoMode,
   CloneCartaoConfig,
+  CloneConfirmationCardContract,
+  ConfirmationCardField,
+  ConfirmationCardSegment,
 } from './queries/clone-colaboradores.js';
 // Classe de erro de regra (seat_cap/homônimo) — re-export de VALOR para o caller
 // (portal/gestão) usar `instanceof` no tratamento de 409.
 export { ColaboradorRuleError } from './queries/clone-colaboradores.js';
+export { parseConfirmationCardContract } from './queries/clone-colaboradores.js';
 export type { BotCourseRow } from './queries/bot-courses.js';
 export type { PortalPausaRow } from './queries/portal-config.js';
 export type { PortalUserRow, PortalUserAuthRow } from './queries/portal-users.js';

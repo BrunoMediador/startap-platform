@@ -29,6 +29,14 @@ export const WorkerConfigSchema = z.object({
   // (CHAT_RETENTION_FLOOR_DAYS): valor abaixo do piso força DRY-RUN mesmo com ENABLED=true.
   CHAT_RETENTION_DAYS: z.coerce.number().int().positive().default(180),
 
+  // Propostas de confirmação não carregam PII, mas têm retenção finita. O job começa
+  // em DRY-RUN para que a primeira remoção física seja uma decisão explícita de rollout.
+  BOOKING_CONFIRMATION_RETENTION_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+  BOOKING_CONFIRMATION_RETENTION_DAYS: z.coerce.number().int().min(7).default(30),
+
   // ── Allowlist DURA do antibot (SCRUM-4 PR-A) ───────────────────────────────
   // Quando ON, ANTES de o antibot pausar um suspeito de flood, checa se aquele telefone JÁ
   // tem histórico de agendamento NAQUELE clone (atendimentos) — se tem, é cliente real e NÃO

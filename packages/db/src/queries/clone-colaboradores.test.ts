@@ -290,6 +290,7 @@ describe('getAreaPromptCustomCartao — política de falha (SCRUM-143)', () => {
     prompt_custom: true,
     cartao_mode: 'baked',
     cartao_config: null,
+    confirmation_card_contract: null,
     display_name: 'Barbearia X',
     cliente_nome: null,
     personalizacao: null,
@@ -303,6 +304,7 @@ describe('getAreaPromptCustomCartao — política de falha (SCRUM-143)', () => {
       promptCustom: false,
       cartaoMode: 'baked',
       cartaoConfig: null,
+      confirmationCardContract: null,
       nomeNegocio: null,
     });
   });
@@ -366,5 +368,65 @@ describe('getAreaPromptCustomCartao — cartao_config.emojis com o SENTINELA de 
     const r = await getAreaPromptCustomCartao('clone_x');
     // '' descartado no parse → chave nem existe no config → herda default no merge (mergeEmojis).
     expect(r.cartaoConfig?.emojis?.marca).toBeUndefined();
+  });
+});
+
+describe('getAreaPromptCustomCartao — confirmation_card_contract', () => {
+  const HASH = 'a'.repeat(64);
+  const CONTRACT_CLONE_ROW = {
+    area: 'Barbearia',
+    prompt_custom: false,
+    cartao_mode: 'baked',
+    cartao_config: null,
+    display_name: 'Barbearia X',
+    cliente_nome: null,
+    personalizacao: null,
+  };
+
+  it('aceita somente o shape versionado e fechado, sem expor texto em log', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          ...CONTRACT_CLONE_ROW,
+          confirmation_card_contract: {
+            version: 'confirmation-card-contract/v1',
+            baked_card_sha256: HASH,
+            segments: [
+              { kind: 'literal', value: 'Literal customizado' },
+              { kind: 'field', field: 'dia' },
+            ],
+          },
+        },
+      ],
+      rowCount: 1,
+    });
+    const result = await getAreaPromptCustomCartao('clone_x');
+    expect(result.confirmationCardContract).toEqual({
+      version: 'confirmation-card-contract/v1',
+      baked_card_sha256: HASH,
+      segments: [
+        { kind: 'literal', value: 'Literal customizado' },
+        { kind: 'field', field: 'dia' },
+      ],
+    });
+  });
+
+  it('descarta contrato com campo desconhecido, hash inválido ou chave extra (fail closed)', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          ...CONTRACT_CLONE_ROW,
+          confirmation_card_contract: {
+            version: 'confirmation-card-contract/v1',
+            baked_card_sha256: 'not-a-hash',
+            segments: [{ kind: 'field', field: 'telefone' }],
+            extra: true,
+          },
+        },
+      ],
+      rowCount: 1,
+    });
+    const result = await getAreaPromptCustomCartao('clone_x');
+    expect(result.confirmationCardContract).toBeNull();
   });
 });
