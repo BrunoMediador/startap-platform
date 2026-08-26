@@ -141,7 +141,7 @@ function sanitizeDecisionText(value: string, maxChars: number): string {
     .replace(/(?<!\d)(?:\+?55\s*)?(?:\(?\d{2}\)?[\s-]*)?\d{4,5}[\s-]\d{4}(?!\d)/g, '<telefone>')
     .replace(/https?:\/\/\S+/gi, '<url>')
     .replace(
-      /\b(?:meu nome(?:\s+(?:e|é))?|me chamo|sou)\s*:?\s*[A-ZÀ-ÖØ-Ý][\p{L}'-]*/giu,
+      /\b(?:meu\s+nome(?:\s+(?:e|é))?|me\s+chamo|sou)\s*:?\s*[A-ZÀ-ÖØ-Ý][\p{L}'-]*(?:\s+(?:(?:da|das|de|do|dos|e)\s+)?[A-ZÀ-ÖØ-Ý][\p{L}'-]*)*/giu,
       '<nome_cliente>',
     )
     .replace(/\s+/g, ' ')
